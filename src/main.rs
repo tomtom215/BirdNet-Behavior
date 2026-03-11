@@ -1,18 +1,19 @@
-//! BirdNET-Pi: Real-time acoustic bird classification.
+//! BirdNet-Behavior: Real-time acoustic bird classification with behavioral analytics.
 //!
 //! Single binary entry point that starts all subsystems:
 //! - Detection pipeline (audio capture -> ML inference -> reporting)
 //! - Web server (REST API, WebSocket, HTMX)
-//! - Database management (SQLite operational + `DuckDB` analytics)
-//! - External integrations (`BirdWeather`, notifications)
+//! - Database management (SQLite operational + DuckDB analytics)
+//! - Behavioral analytics (duckdb-behavioral extension)
+//! - External integrations (BirdWeather, notifications)
 
 use clap::Parser;
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
-/// BirdNET-Pi bird detection system.
+/// BirdNet-Behavior bird detection and analytics system.
 #[derive(Parser, Debug)]
-#[command(name = "birdnet-pi", version, about)]
+#[command(name = "birdnet-behavior", version, about)]
 struct Cli {
     /// Path to configuration file.
     #[arg(
@@ -46,7 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info,birdnet_pi=debug")),
+                .unwrap_or_else(|_| EnvFilter::new("info,birdnet_behavior=debug")),
         )
         .init();
 
@@ -55,7 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
         config = %cli.config.display(),
-        "starting BirdNET-Pi"
+        "starting BirdNet-Behavior"
     );
 
     // Load configuration
@@ -95,7 +96,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Start web server
     let addr: std::net::SocketAddr = cli.listen.parse()?;
-    let server_config = birdnet_web::server::ServerConfig { addr };
+    let server_config = birdnet_web::server::ServerConfig {
+        addr,
+        db_path: db_path.clone(),
+    };
 
     tracing::info!(addr = %addr, "starting web server");
     birdnet_web::server::start(server_config).await?;
@@ -107,7 +111,7 @@ fn db_path_from_config(config: &birdnet_core::config::Config) -> PathBuf {
     config.get("DB_PATH").map_or_else(
         || {
             let home = std::env::var("HOME").unwrap_or_else(|_| "/home/pi".into());
-            PathBuf::from(format!("{home}/BirdNET-Pi/scripts/birds.db"))
+            PathBuf::from(format!("{home}/BirdNet-Behavior/birds.db"))
         },
         PathBuf::from,
     )

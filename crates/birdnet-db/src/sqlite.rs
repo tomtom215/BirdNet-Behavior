@@ -182,6 +182,172 @@ pub fn species_count(conn: &Connection) -> Result<i64, DbError> {
     Ok(count)
 }
 
+/// Query detections for a specific date.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn detections_by_date(conn: &Connection, date: &str) -> Result<Vec<DetectionRow>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name
+         FROM detections WHERE Date = ?1 ORDER BY Time DESC",
+    )?;
+
+    let rows = stmt
+        .query_map(params![date], |row| {
+            Ok(DetectionRow {
+                date: row.get(0)?,
+                time: row.get(1)?,
+                sci_name: row.get(2)?,
+                com_name: row.get(3)?,
+                confidence: row.get(4)?,
+                lat: row.get(5)?,
+                lon: row.get(6)?,
+                cutoff: row.get(7)?,
+                week: row.get(8)?,
+                sens: row.get(9)?,
+                overlap: row.get(10)?,
+                file_name: row.get(11)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(rows)
+}
+
+/// Query recent detections with a limit.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn recent_detections(conn: &Connection, limit: u32) -> Result<Vec<DetectionRow>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name
+         FROM detections ORDER BY Date DESC, Time DESC LIMIT ?1",
+    )?;
+
+    let rows = stmt
+        .query_map(params![limit], |row| {
+            Ok(DetectionRow {
+                date: row.get(0)?,
+                time: row.get(1)?,
+                sci_name: row.get(2)?,
+                com_name: row.get(3)?,
+                confidence: row.get(4)?,
+                lat: row.get(5)?,
+                lon: row.get(6)?,
+                cutoff: row.get(7)?,
+                week: row.get(8)?,
+                sens: row.get(9)?,
+                overlap: row.get(10)?,
+                file_name: row.get(11)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(rows)
+}
+
+/// Get top species by detection count.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn top_species(conn: &Connection, limit: u32) -> Result<Vec<SpeciesCount>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT Com_Name, Sci_Name, COUNT(*) as count, AVG(Confidence) as avg_conf
+         FROM detections GROUP BY Com_Name, Sci_Name ORDER BY count DESC LIMIT ?1",
+    )?;
+
+    let rows = stmt
+        .query_map(params![limit], |row| {
+            Ok(SpeciesCount {
+                com_name: row.get(0)?,
+                sci_name: row.get(1)?,
+                count: row.get(2)?,
+                avg_confidence: row.get(3)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(rows)
+}
+
+/// Get detections grouped by hour for a given date.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn hourly_activity(conn: &Connection, date: &str) -> Result<Vec<HourlyCount>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT SUBSTR(Time, 1, 2) as hour, COUNT(*) as count
+         FROM detections WHERE Date = ?1
+         GROUP BY hour ORDER BY hour",
+    )?;
+
+    let rows = stmt
+        .query_map(params![date], |row| {
+            Ok(HourlyCount {
+                hour: row.get(0)?,
+                count: row.get(1)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(rows)
+}
+
+/// A detection row from the database.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DetectionRow {
+    /// Detection date.
+    pub date: String,
+    /// Detection time.
+    pub time: String,
+    /// Scientific name.
+    pub sci_name: String,
+    /// Common name.
+    pub com_name: String,
+    /// Confidence score.
+    pub confidence: f64,
+    /// Latitude.
+    pub lat: Option<f64>,
+    /// Longitude.
+    pub lon: Option<f64>,
+    /// Cutoff threshold.
+    pub cutoff: Option<f64>,
+    /// ISO week number.
+    pub week: Option<i32>,
+    /// Sensitivity setting.
+    pub sens: Option<f64>,
+    /// Overlap setting.
+    pub overlap: Option<f64>,
+    /// Extracted audio filename.
+    pub file_name: Option<String>,
+}
+
+/// Species with count and average confidence.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SpeciesCount {
+    /// Common name.
+    pub com_name: String,
+    /// Scientific name.
+    pub sci_name: String,
+    /// Total detection count.
+    pub count: i64,
+    /// Average confidence score.
+    pub avg_confidence: f64,
+}
+
+/// Hourly detection count.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HourlyCount {
+    /// Hour string (00-23).
+    pub hour: String,
+    /// Number of detections.
+    pub count: i64,
+}
+
 /// Run a quick integrity check.
 ///
 /// # Errors
@@ -201,6 +367,23 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let conn = open_or_create(tmp.path()).unwrap();
         (tmp, conn)
+    }
+
+    fn insert_sample_records(conn: &Connection) {
+        let records = [
+            ("2026-03-11", "06:30:00", "Turdus merula", "Eurasian Blackbird", 0.87),
+            ("2026-03-11", "06:45:00", "Erithacus rubecula", "European Robin", 0.92),
+            ("2026-03-11", "07:00:00", "Turdus merula", "Eurasian Blackbird", 0.75),
+            ("2026-03-10", "18:00:00", "Parus major", "Great Tit", 0.80),
+        ];
+        for (date, time, sci, com, conf) in &records {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![date, time, sci, com, conf],
+            )
+            .unwrap();
+        }
     }
 
     #[test]
@@ -245,5 +428,50 @@ mod tests {
     fn open_nonexistent_returns_error() {
         let result = open_connection(&PathBuf::from("/nonexistent/birds.db"));
         assert!(matches!(result, Err(DbError::NotFound(_))));
+    }
+
+    #[test]
+    fn query_detections_by_date() {
+        let (_tmp, conn) = temp_db();
+        insert_sample_records(&conn);
+
+        let rows = detections_by_date(&conn, "2026-03-11").unwrap();
+        assert_eq!(rows.len(), 3);
+        // Should be sorted by time DESC
+        assert_eq!(rows[0].time, "07:00:00");
+    }
+
+    #[test]
+    fn query_recent_detections() {
+        let (_tmp, conn) = temp_db();
+        insert_sample_records(&conn);
+
+        let rows = recent_detections(&conn, 2).unwrap();
+        assert_eq!(rows.len(), 2);
+        // Most recent first
+        assert_eq!(rows[0].date, "2026-03-11");
+    }
+
+    #[test]
+    fn query_top_species() {
+        let (_tmp, conn) = temp_db();
+        insert_sample_records(&conn);
+
+        let species = top_species(&conn, 10).unwrap();
+        assert_eq!(species.len(), 3);
+        // Blackbird has 2 detections, should be first
+        assert_eq!(species[0].com_name, "Eurasian Blackbird");
+        assert_eq!(species[0].count, 2);
+    }
+
+    #[test]
+    fn query_hourly_activity() {
+        let (_tmp, conn) = temp_db();
+        insert_sample_records(&conn);
+
+        let hours = hourly_activity(&conn, "2026-03-11").unwrap();
+        assert_eq!(hours.len(), 2); // 06 and 07
+        assert_eq!(hours[0].hour, "06");
+        assert_eq!(hours[0].count, 2);
     }
 }

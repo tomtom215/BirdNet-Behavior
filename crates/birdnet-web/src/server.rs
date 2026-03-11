@@ -6,22 +6,27 @@
 use axum::Router;
 use std::fmt;
 use std::net::SocketAddr;
-use tower_http::cors::CorsLayer;
+use std::path::PathBuf;
+use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 use crate::routes;
+use crate::state::AppState;
 
 /// Server configuration.
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     /// Listen address (default: 127.0.0.1:8502).
     pub addr: SocketAddr,
+    /// Path to the SQLite database.
+    pub db_path: PathBuf,
 }
 
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             addr: SocketAddr::from(([127, 0, 0, 1], 8502)),
+            db_path: PathBuf::from("birds.db"),
         }
     }
 }
@@ -33,6 +38,8 @@ pub enum ServerError {
     Bind(String),
     /// Server runtime error.
     Runtime(String),
+    /// Database initialization error.
+    Database(String),
 }
 
 impl fmt::Display for ServerError {
@@ -40,6 +47,7 @@ impl fmt::Display for ServerError {
         match self {
             Self::Bind(msg) => write!(f, "bind error: {msg}"),
             Self::Runtime(msg) => write!(f, "runtime error: {msg}"),
+            Self::Database(msg) => write!(f, "database error: {msg}"),
         }
     }
 }
@@ -47,11 +55,17 @@ impl fmt::Display for ServerError {
 impl std::error::Error for ServerError {}
 
 /// Build the axum application router with all middleware and routes.
-pub fn build_router() -> Router {
+pub fn build_router(state: AppState) -> Router {
     Router::new()
         .merge(routes::api_routes())
+        .with_state(state)
         .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::new())
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any),
+        )
 }
 
 /// Start the web server.
@@ -60,7 +74,9 @@ pub fn build_router() -> Router {
 ///
 /// Returns `ServerError` if the server fails to bind or start.
 pub async fn start(config: ServerConfig) -> Result<(), ServerError> {
-    let app = build_router();
+    let state =
+        AppState::new(config.db_path).map_err(|e| ServerError::Database(e.to_string()))?;
+    let app = build_router(state);
 
     tracing::info!(addr = %config.addr, "starting web server");
 

@@ -1,7 +1,7 @@
-//! BirdNET-Pi web server.
+//! BirdNet-Behavior web server.
 //!
 //! REST API, WebSocket, and HTMX page serving via axum.
-//! Replaces FastAPI (`scripts/web/main.py`).
 
 pub mod routes;
 pub mod server;
+pub mod state;
