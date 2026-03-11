@@ -1,6 +1,6 @@
 //! API route definitions.
 //!
-//! Organized by resource, matching the FastAPI router structure.
+//! Organized by resource, matching the `FastAPI` router structure.
 
 pub mod analytics;
 pub mod detections;

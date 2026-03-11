@@ -18,7 +18,7 @@ use crate::state::AppState;
 pub struct ServerConfig {
     /// Listen address (default: 127.0.0.1:8502).
     pub addr: SocketAddr,
-    /// Path to the SQLite database.
+    /// Path to the `SQLite` database.
     pub db_path: PathBuf,
 }
 

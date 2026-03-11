@@ -1,7 +1,7 @@
 //! Database resilience: WAL enforcement, backup, integrity, and recovery.
 //!
 //! Rust equivalent of `scripts/web/db_resilience.py`.
-//! Uses the SQLite backup API for safe hot backups and provides
+//! Uses the `SQLite` backup API for safe hot backups and provides
 //! automatic corruption detection with recovery from backups.
 
 use rusqlite::Connection;
@@ -14,7 +14,7 @@ const MAX_BACKUP_FILES: usize = 5;
 /// Resilience operation errors.
 #[derive(Debug)]
 pub enum ResilienceError {
-    /// SQLite error during resilience operation.
+    /// `SQLite` error during resilience operation.
     Sqlite(rusqlite::Error),
     /// I/O error during backup/restore.
     Io(std::io::Error),
@@ -106,7 +106,7 @@ pub fn full_integrity_check(db_path: &Path) -> Result<bool, ResilienceError> {
     Ok(result == "ok")
 }
 
-/// Create a backup of the database using the SQLite backup API.
+/// Create a backup of the database using the `SQLite` backup API.
 ///
 /// This is safe to call while the database is in use (hot backup).
 /// The backup is created at `{backup_dir}/{db_name}.backup.{timestamp}`.
@@ -338,7 +338,7 @@ mod tests {
         .unwrap();
         drop(conn);
         let backup_dir = tempfile::tempdir().unwrap();
-        (tmp, backup_dir.into_path())
+        (tmp, backup_dir.keep())
     }
 
     #[test]

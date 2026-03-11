@@ -1,7 +1,7 @@
 //! Audio resampling via rubato.
 //!
 //! Resamples audio to the target sample rate required by the ML model.
-//! BirdNET models typically expect 48kHz; Perch expects 32kHz.
+//! `BirdNET` models typically expect 48kHz; Perch expects 32kHz.
 //!
 //! Uses rubato 1.0's `Async` polynomial resampler for high-quality
 //! sample rate conversion with the `audioadapter` buffer system.

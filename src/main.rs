@@ -3,9 +3,9 @@
 //! Single binary entry point that starts all subsystems:
 //! - Detection pipeline (audio capture -> ML inference -> reporting)
 //! - Web server (REST API, WebSocket, HTMX)
-//! - Database management (SQLite operational + DuckDB analytics)
+//! - Database management (`SQLite` operational + `DuckDB` analytics)
 //! - Behavioral analytics (duckdb-behavioral extension)
-//! - External integrations (BirdWeather, notifications)
+//! - External integrations (`BirdWeather`, notifications)
 
 use clap::Parser;
 use std::path::PathBuf;

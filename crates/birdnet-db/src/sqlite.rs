@@ -1,4 +1,4 @@
-//! SQLite operational database.
+//! `SQLite` operational database.
 //!
 //! Provides connection management, WAL mode enforcement, and query helpers
 //! for the birds.db detection database.
@@ -10,7 +10,7 @@ use std::path::Path;
 /// Database errors.
 #[derive(Debug)]
 pub enum DbError {
-    /// SQLite error.
+    /// `SQLite` error.
     Sqlite(rusqlite::Error),
     /// Database file not found.
     NotFound(String),
@@ -43,7 +43,7 @@ impl From<rusqlite::Error> for DbError {
     }
 }
 
-/// Open a SQLite connection with WAL mode and recommended PRAGMAs.
+/// Open a `SQLite` connection with WAL mode and recommended PRAGMAs.
 ///
 /// # Errors
 ///
@@ -67,7 +67,7 @@ pub fn open_connection(path: &Path) -> Result<Connection, DbError> {
     Ok(conn)
 }
 
-/// Open or create a SQLite database with the detections schema.
+/// Open or create a `SQLite` database with the detections schema.
 ///
 /// # Errors
 ///

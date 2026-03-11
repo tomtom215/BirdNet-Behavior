@@ -9,7 +9,7 @@ use std::fmt;
 /// Migration errors.
 #[derive(Debug)]
 pub enum MigrationError {
-    /// SQLite error during migration.
+    /// `SQLite` error during migration.
     Sqlite(rusqlite::Error),
     /// Migration logic error.
     Logic(String),
@@ -87,7 +87,7 @@ pub const MIGRATIONS: &[Migration] = &[
     },
 ];
 
-/// Ensure the schema_version tracking table exists.
+/// Ensure the `schema_version` tracking table exists.
 fn ensure_version_table(conn: &Connection) -> Result<(), MigrationError> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_version (

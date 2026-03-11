@@ -16,7 +16,7 @@ pub struct AppState {
 /// Inner state (wrapped in Arc for sharing).
 #[derive(Debug)]
 struct AppStateInner {
-    /// SQLite connection protected by a mutex for thread safety.
+    /// `SQLite` connection protected by a mutex for thread safety.
     db: Mutex<Connection>,
     /// Path to the database file (for diagnostics).
     db_path: PathBuf,

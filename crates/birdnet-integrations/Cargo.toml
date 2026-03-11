@@ -13,6 +13,7 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 reqwest.workspace = true
+tokio.workspace = true
 
 [lints]
 workspace = true

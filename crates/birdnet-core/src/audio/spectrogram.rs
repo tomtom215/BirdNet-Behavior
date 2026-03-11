@@ -1,7 +1,7 @@
 //! Mel spectrogram generation.
 //!
 //! Will use the `mel_spec` crate for librosa-compatible output.
-//! Critical: BirdNET models were trained on librosa spectrograms,
+//! Critical: `BirdNET` models were trained on librosa spectrograms,
 //! so numerical equivalence is required.
 //!
 //! TODO(phase2): Implement mel spectrogram pipeline with `mel_spec` crate.

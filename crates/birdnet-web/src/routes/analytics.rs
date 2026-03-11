@@ -1,6 +1,6 @@
 //! Analytics API endpoints (DuckDB-powered).
 //!
-//! These endpoints will be backed by DuckDB with the behavioral extension
+//! These endpoints will be backed by `DuckDB` with the behavioral extension
 //! once the birdnet-behavioral crate is fully integrated. For now, they
 //! provide SQLite-based approximations.
 
