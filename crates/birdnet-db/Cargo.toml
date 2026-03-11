@@ -1,0 +1,21 @@
+[package]
+name = "birdnet-db"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Database layer: SQLite (operational) with WAL resilience, backup, and integrity"
+
+[dependencies]
+serde.workspace = true
+tracing.workspace = true
+rusqlite.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+tempfile = "3"
+
+[lints]
+workspace = true

@@ -1,0 +1,43 @@
+=============================================================================
+BirdNet-Behavior is licensed under a Creative Commons
+Attribution-NonCommercial-ShareAlike 4.0 International License
+=============================================================================
+
+BirdNet-Behavior: tomtom215
+  A Rust rewrite of BirdNET-Pi with DuckDB behavioral analytics.
+
+This project is derived from and inspired by the following upstream works,
+all licensed under CC BY-NC-SA 4.0:
+
+  BirdNET-Lite: K. Lisa Yang Center for Conservation Bioacoustics -
+  Cornell Lab of Ornithology, Cornell University
+
+  BirdNET-Pi (original): Patrick McGuire (mcguirepr89)
+    https://github.com/mcguirepr89/BirdNET-Pi
+
+  BirdNET-Pi (Nachtzuster's fork): Nachtzuster
+    https://github.com/Nachtzuster/BirdNET-Pi
+
+  BirdNET-Pi (tomtom215's fork): tomtom215
+    https://github.com/tomtom215/BirdNET-Pi
+
+The full text of the CC BY-NC-SA 4.0 license is included in the file
+LICENSE-UPSTREAM, which was copied from the upstream BirdNET-Pi project.
+
+=============================================================================
+SUMMARY OF CC BY-NC-SA 4.0
+=============================================================================
+
+You are free to:
+  - Share: copy and redistribute the material in any medium or format
+  - Adapt: remix, transform, and build upon the material
+
+Under the following terms:
+  - Attribution: You must give appropriate credit, provide a link to the
+    license, and indicate if changes were made.
+  - NonCommercial: You may not use the material for commercial purposes.
+  - ShareAlike: If you remix, transform, or build upon the material, you
+    must distribute your contributions under the same license.
+
+Full license text: https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode
+Human-readable summary: https://creativecommons.org/licenses/by-nc-sa/4.0/

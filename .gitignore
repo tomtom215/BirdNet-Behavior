@@ -1,0 +1,38 @@
+# Rust build artifacts
+/target/
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Database files (runtime)
+*.db
+*.db-wal
+*.db-shm
+*.duckdb
+*.duckdb.wal
+
+# Audio files (runtime)
+*.wav
+*.flac
+*.mp3
+
+# BirdNET model files
+*.tflite
+*.onnx
+
+# Coverage/profiling
+*.profraw
+lcov.info
+tarpaulin-report.html
