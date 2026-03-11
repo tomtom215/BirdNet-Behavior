@@ -1,0 +1,113 @@
+[workspace]
+members = [
+    "crates/birdnet-core",
+    "crates/birdnet-db",
+    "crates/birdnet-web",
+    "crates/birdnet-integrations",
+    "crates/birdnet-behavioral",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "GPL-3.0"
+repository = "https://github.com/tomtom215/BirdNET-Pi"
+authors = ["tomtom215"]
+
+[workspace.dependencies]
+# Internal crates
+birdnet-core = { path = "crates/birdnet-core" }
+birdnet-db = { path = "crates/birdnet-db" }
+birdnet-web = { path = "crates/birdnet-web" }
+birdnet-integrations = { path = "crates/birdnet-integrations" }
+birdnet-behavioral = { path = "crates/birdnet-behavioral" }
+
+# Serialization
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+
+# Logging
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter", "json"] }
+
+# Async
+tokio = { version = "1.50", features = ["full"] }
+
+# Database
+rusqlite = { version = "0.38", features = ["bundled", "backup"] }
+
+# Web
+axum = { version = "0.8.8", features = ["ws"] }
+tower = "0.5.3"
+tower-http = { version = "0.6.8", features = ["cors", "trace", "fs"] }
+
+# HTTP client
+reqwest = { version = "0.13.2", features = ["json"] }
+
+# Audio
+symphonia = { version = "0.5.5", features = ["wav", "flac", "mp3"] }
+rubato = "1.0.1"
+
+# File watching
+notify = "8"
+
+# Config
+configparser = "3.1"
+
+# CLI
+clap = { version = "4.5", features = ["derive", "env"] }
+
+# Testing
+proptest = "1.10"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+# Pragmatic allowances
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+multiple_crate_versions = "allow"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+# Binary crate
+[package]
+name = "birdnet-pi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "BirdNET-Pi: Real-time acoustic bird classification for Raspberry Pi"
+
+[dependencies]
+birdnet-core.workspace = true
+birdnet-db.workspace = true
+birdnet-web.workspace = true
+birdnet-integrations.workspace = true
+birdnet-behavioral.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,28 @@
+[package]
+name = "birdnet-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Core detection pipeline: audio processing, ML inference, and detection types"
+
+[dependencies]
+serde.workspace = true
+configparser.workspace = true
+tracing.workspace = true
+
+# Audio pipeline (pure Rust, zero C deps)
+symphonia.workspace = true
+rubato.workspace = true
+audioadapter-buffers = "2"
+
+# File watching
+notify.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
