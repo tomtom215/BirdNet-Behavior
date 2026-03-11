@@ -12,8 +12,8 @@ resolver = "2"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-license = "GPL-3.0"
-repository = "https://github.com/tomtom215/BirdNET-Pi"
+license = "CC-BY-NC-SA-4.0"
+repository = "https://github.com/tomtom215/BirdNet-Behavior"
 authors = ["tomtom215"]
 
 [workspace.dependencies]
@@ -89,14 +89,14 @@ debug = true
 
 # Binary crate
 [package]
-name = "birdnet-pi"
+name = "birdnet-behavior"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "BirdNET-Pi: Real-time acoustic bird classification for Raspberry Pi"
+description = "BirdNet-Behavior: Real-time acoustic bird classification with DuckDB behavioral analytics"
 
 [dependencies]
 birdnet-core.workspace = true
