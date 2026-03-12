@@ -156,6 +156,35 @@ async fn stats_endpoint_returns_counts() {
 
     assert_eq!(json["total_detections"], 5);
     assert_eq!(json["unique_species"], 4);
+    assert!(json["latest_detection"].is_object());
+    assert_eq!(json["latest_detection"]["species"], "Great Tit");
+    assert!(json["confidence_distribution"].is_object());
+}
+
+#[tokio::test]
+async fn disk_info_endpoint() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/system/disk")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Should return 200 (or 503 if disk is critical, unlikely in test)
+    assert!(response.status().is_success() || response.status() == StatusCode::SERVICE_UNAVAILABLE);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // Should have disk usage fields
+    assert!(json["total_bytes"].is_number() || json["error"].is_string());
 }
 
 #[tokio::test]
@@ -179,12 +208,42 @@ async fn detections_by_date() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json["total"], 4);
+    assert_eq!(json["count"], 4);
     let detections = json["detections"].as_array().unwrap();
     assert_eq!(detections.len(), 4);
 
     // Should be ordered by time DESC
     assert_eq!(detections[0]["time"], "07:00:00");
+}
+
+#[tokio::test]
+async fn detections_by_species_filter() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/detections?species=Eurasian%20Blackbird")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["count"], 2);
+    let detections = json["detections"].as_array().unwrap();
+    assert!(
+        detections
+            .iter()
+            .all(|d| d["com_name"] == "Eurasian Blackbird")
+    );
 }
 
 #[tokio::test]
@@ -705,4 +764,728 @@ async fn export_species_json() {
 
     assert_eq!(json["total"], 4);
     assert!(json["species"].is_array());
+}
+
+#[tokio::test]
+async fn daily_detections_endpoint() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/detections/daily?days=30")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert!(json["daily"].is_array());
+    assert!(json["total"].as_u64().unwrap() > 0);
+}
+
+#[tokio::test]
+async fn analytics_page_returns_html() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/analytics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(html.contains("Behavioral Analytics"));
+    assert!(html.contains("Activity Sessions"));
+    assert!(html.contains("Species Retention"));
+}
+
+#[tokio::test]
+async fn htmx_hourly_chart_partial() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/hourly-chart")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 16384)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    // Should return either SVG chart or "no detections" message
+    assert!(html.contains("<svg") || html.contains("No detections"));
+}
+
+#[tokio::test]
+async fn htmx_daily_chart_partial() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/daily-chart")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 16384)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    // Should return either SVG chart or "no data" message
+    assert!(html.contains("<svg") || html.contains("No detection data"));
+}
+
+#[tokio::test]
+async fn htmx_analytics_status_partial() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/analytics-status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(html.contains("Analytics Engine"));
+}
+
+#[tokio::test]
+async fn htmx_analytics_config_partial() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/analytics-config")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(html.contains("Version"));
+    assert!(html.contains("SQLite Database"));
+}
+
+#[tokio::test]
+async fn species_image_info_without_cache() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/species/image/Turdus%20merula")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // Without image cache configured, should report disabled
+    assert_eq!(json["status"], "disabled");
+}
+
+#[tokio::test]
+async fn species_detail_api() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/species/detail?name=Eurasian%20Blackbird")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["species"]["com_name"], "Eurasian Blackbird");
+    assert_eq!(json["species"]["sci_name"], "Turdus merula");
+    assert_eq!(json["species"]["count"], 2);
+    assert!(json["hourly_activity"].is_array());
+}
+
+#[tokio::test]
+async fn species_detail_api_not_found() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/species/detail?name=Nonexistent%20Bird")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn species_detail_page_returns_html() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/species/detail?name=Eurasian%20Blackbird")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(html.contains("Eurasian Blackbird"));
+    assert!(html.contains("Turdus merula"));
+    assert!(html.contains("hx-get")); // HTMX partials
+}
+
+#[tokio::test]
+async fn species_detail_page_without_name_shows_error() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/species/detail")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(html.contains("No species specified"));
+}
+
+#[tokio::test]
+async fn htmx_species_summary_partial() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/species-summary?name=Eurasian%20Blackbird")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(html.contains("stat-card"));
+    assert!(html.contains("Detections"));
+    assert!(html.contains("Avg Confidence"));
+}
+
+#[tokio::test]
+async fn htmx_species_detections_partial() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/species-detections?name=Eurasian%20Blackbird")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(html.contains("<table>"));
+    assert!(html.contains("Confidence"));
+}
+
+#[tokio::test]
+async fn htmx_species_hourly_partial() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/species-hourly?name=Eurasian%20Blackbird")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    // Should render SVG chart since we have detections at hours 06 and 07
+    assert!(html.contains("<svg"));
+}
+
+#[tokio::test]
+async fn htmx_species_daily_partial() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/species-daily?name=Eurasian%20Blackbird")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    // Should render SVG chart since we have detection data
+    assert!(html.contains("<svg"));
+}
+
+#[tokio::test]
+async fn htmx_species_info_partial() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/species-info?name=Eurasian%20Blackbird")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    // Without image cache, should show the "no info available" message
+    assert!(html.contains("No additional info available"));
+    assert!(html.contains("--image-cache-dir"));
+}
+
+#[tokio::test]
+async fn species_search_api() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/species/search?q=blackbird")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["total"], 1);
+    let species = json["species"].as_array().unwrap();
+    assert_eq!(species[0]["com_name"], "Eurasian Blackbird");
+}
+
+#[tokio::test]
+async fn species_search_api_no_results() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/species/search?q=nonexistent")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["total"], 0);
+}
+
+#[tokio::test]
+async fn species_search_by_scientific_name() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/species/search?q=turdus")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["total"], 1);
+    let species = json["species"].as_array().unwrap();
+    assert_eq!(species[0]["sci_name"], "Turdus merula");
+}
+
+#[tokio::test]
+async fn detections_pagination() {
+    let app = app();
+
+    // First page: limit 2, offset 0
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/detections?limit=2&offset=0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["count"], 2);
+    assert_eq!(json["limit"], 2);
+    assert_eq!(json["offset"], 0);
+
+    let detections = json["detections"].as_array().unwrap();
+    assert_eq!(detections.len(), 2);
+}
+
+#[tokio::test]
+async fn detections_pagination_second_page() {
+    let app = app();
+
+    // Second page: limit 2, offset 2
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/detections?limit=2&offset=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["count"], 2);
+    assert_eq!(json["offset"], 2);
+}
+
+#[tokio::test]
+async fn detections_pagination_beyond_data() {
+    let app = app();
+
+    // Beyond available data
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/detections?limit=10&offset=100")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["count"], 0);
+}
+
+#[tokio::test]
+async fn htmx_confidence_chart_partial() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/confidence-chart")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    // Should contain SVG chart (test data has detections with various confidence levels)
+    assert!(html.contains("<svg"));
+}
+
+#[tokio::test]
+async fn htmx_species_list_search() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/species-list?q=robin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(html.contains("European Robin"));
+    // Should NOT contain other species
+    assert!(!html.contains("Eurasian Blackbird"));
+    assert!(!html.contains("Great Tit"));
+}
+
+#[tokio::test]
+async fn htmx_species_list_search_no_match() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/species-list?q=flamingo")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(html.contains("No matching species found"));
+}
+
+#[tokio::test]
+async fn detections_invalid_date_returns_400() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/detections?date=not-a-date")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert!(json["error"].as_str().unwrap().contains("invalid date"));
+}
+
+#[tokio::test]
+async fn detections_pagination_includes_total_count() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/detections?limit=2&offset=0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // Paginated responses should include total_count
+    assert_eq!(json["total_count"], 5); // 5 total records in test data
+    assert_eq!(json["count"], 2);
+    assert_eq!(json["limit"], 2);
+    assert_eq!(json["offset"], 0);
+}
+
+#[tokio::test]
+async fn detections_limit_is_capped() {
+    let app = app();
+
+    // Request with very large limit — should be capped to MAX_LIMIT (1000)
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/detections?limit=999999")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // Limit should be capped at 1000
+    assert_eq!(json["limit"], 1000);
+}
+
+#[tokio::test]
+async fn export_detections_invalid_date_returns_400() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/detections/export?from=bad-date")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }

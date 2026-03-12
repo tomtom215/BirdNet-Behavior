@@ -518,6 +518,7 @@ dependencies = [
  "birdnet-behavioral",
  "birdnet-core",
  "birdnet-db",
+ "birdnet-integrations",
  "rusqlite",
  "serde",
  "serde_json",

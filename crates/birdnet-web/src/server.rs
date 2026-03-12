@@ -56,16 +56,32 @@ impl std::error::Error for ServerError {}
 
 /// Build the axum application router with all middleware and routes.
 pub fn build_router(state: AppState) -> Router {
-    Router::new()
-        .merge(routes::api_routes())
-        .with_state(state)
-        .layer(TraceLayer::new_for_http())
-        .layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods(Any)
-                .allow_headers(Any),
-        )
+    build_router_with_auth(state, None)
+}
+
+/// Build the axum application router with optional basic authentication.
+pub fn build_router_with_auth(
+    state: AppState,
+    auth_config: Option<crate::auth::AuthConfig>,
+) -> Router {
+    let router = Router::new().merge(routes::api_routes()).with_state(state);
+
+    let router = if let Some(config) = auth_config {
+        let config = std::sync::Arc::new(config);
+        router.layer(axum::middleware::from_fn(move |req, next| {
+            let config = std::sync::Arc::clone(&config);
+            async move { crate::auth::basic_auth_middleware(req, next, &config).await }
+        }))
+    } else {
+        router
+    };
+
+    router.layer(TraceLayer::new_for_http()).layer(
+        CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any),
+    )
 }
 
 /// Start the web server.

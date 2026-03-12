@@ -1,0 +1,55 @@
+<h1 style="margin-bottom: 1.5rem;">Behavioral Analytics</h1>
+
+<div class="stats-grid">
+    <div class="stat-card" hx-get="/pages/analytics-status" hx-trigger="load" hx-swap="innerHTML">
+        <div class="value">--</div>
+        <div class="label">Analytics Status</div>
+    </div>
+</div>
+
+<div class="grid-2">
+    <div>
+        <!-- Sessions Card -->
+        <div class="card">
+            <h2>Activity Sessions</h2>
+            <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem;">
+                Species activity grouped by time gaps. Shows when birds are actively visiting your area.
+            </p>
+            <div hx-get="/pages/analytics-sessions" hx-trigger="load" hx-swap="innerHTML">
+                <p style="color: var(--text-muted)">Loading sessions...</p>
+            </div>
+        </div>
+
+        <!-- Retention Card -->
+        <div class="card">
+            <h2>Species Retention</h2>
+            <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem;">
+                Which species return day after day? Higher retention means a species is a regular visitor.
+            </p>
+            <div hx-get="/pages/analytics-retention" hx-trigger="load" hx-swap="innerHTML">
+                <p style="color: var(--text-muted)">Loading retention data...</p>
+            </div>
+        </div>
+    </div>
+
+    <div>
+        <!-- Next Species Prediction -->
+        <div class="card">
+            <h2>Next Species Prediction</h2>
+            <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem;">
+                After detecting one species, which species tends to appear next?
+            </p>
+            <div hx-get="/pages/analytics-next" hx-trigger="load" hx-swap="innerHTML">
+                <p style="color: var(--text-muted)">Loading predictions...</p>
+            </div>
+        </div>
+
+        <!-- System Info -->
+        <div class="card">
+            <h2>Analytics Configuration</h2>
+            <div hx-get="/pages/analytics-config" hx-trigger="load" hx-swap="innerHTML">
+                <p style="color: var(--text-muted)">Loading config...</p>
+            </div>
+        </div>
+    </div>
+</div>
