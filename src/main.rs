@@ -9,6 +9,7 @@
 
 use clap::Parser;
 use std::path::PathBuf;
+use std::sync::mpsc;
 use tracing_subscriber::EnvFilter;
 
 /// BirdNet-Behavior bird detection and analytics system.
@@ -39,6 +40,22 @@ struct Cli {
     /// Create database backup and exit.
     #[arg(long)]
     backup_db: bool,
+
+    /// Path to the ONNX model file (overrides config).
+    #[arg(long, env = "BIRDNET_MODEL")]
+    model: Option<PathBuf>,
+
+    /// Path to the species labels file (overrides config).
+    #[arg(long, env = "BIRDNET_LABELS")]
+    labels: Option<PathBuf>,
+
+    /// Directory to watch for new audio files (overrides config).
+    #[arg(long, env = "BIRDNET_WATCH_DIR")]
+    watch_dir: Option<PathBuf>,
+
+    /// Process audio files already present in watch directory on startup.
+    #[arg(long)]
+    process_existing: bool,
 }
 
 #[tokio::main]
@@ -59,38 +76,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "starting BirdNet-Behavior"
     );
 
-    // Load configuration
-    let config = birdnet_core::config::Config::load_from(&cli.config)?;
-    tracing::info!(
-        model = config.get_or("MODEL", "unknown"),
-        "configuration loaded"
-    );
+    // Load configuration (optional -- may not exist in fresh installs)
+    let config = match birdnet_core::config::Config::load_from(&cli.config) {
+        Ok(c) => {
+            tracing::info!(model = c.get_or("MODEL", "unknown"), "configuration loaded");
+            Some(c)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "config not loaded, using defaults");
+            None
+        }
+    };
 
     // Database maintenance commands
     if cli.check_db {
-        return run_integrity_check(&config);
+        return run_integrity_check(config.as_ref());
     }
     if cli.backup_db {
-        return run_backup(&config);
+        return run_backup(config.as_ref());
     }
 
     // Database resilience: check and recover on startup
-    let db_path = db_path_from_config(&config);
+    let db_path = db_path_from_config(config.as_ref());
     let backup_dir = db_path
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))
         .join("backups");
 
-    match birdnet_db::resilience::check_and_recover(&db_path, &backup_dir) {
-        Ok(result) => {
-            if result.action == birdnet_db::resilience::RecoveryAction::Recovered {
-                tracing::warn!(details = %result.details, "database recovered");
-            } else {
-                tracing::info!(details = %result.details, "database healthy");
+    // Only run recovery if the database file exists
+    if db_path.exists() {
+        match birdnet_db::resilience::check_and_recover(&db_path, &backup_dir) {
+            Ok(result) => {
+                if result.action == birdnet_db::resilience::RecoveryAction::Recovered {
+                    tracing::warn!(details = %result.details, "database recovered");
+                } else {
+                    tracing::info!(details = %result.details, "database healthy");
+                }
             }
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "database recovery failed");
+            Err(e) => {
+                tracing::error!(error = %e, "database recovery failed");
+            }
         }
     }
 
@@ -101,14 +126,186 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         db_path: db_path.clone(),
     };
 
-    tracing::info!(addr = %addr, "starting web server");
-    birdnet_web::server::start(server_config).await?;
+    // Create app state (includes WebSocket broadcast channel)
+    let state = birdnet_web::state::AppState::new(server_config.db_path.clone())
+        .map_err(|e| format!("database error: {e}"))?;
 
+    let broadcast = state.detection_broadcast();
+
+    // Start detection daemon if not in web-only mode and model is available
+    let _daemon_handle = if !cli.web_only {
+        start_detection_daemon(&cli, config.as_ref(), state.clone(), broadcast)
+    } else {
+        tracing::info!("running in web-only mode (no detection daemon)");
+        None
+    };
+
+    // Start the web server (blocks until shutdown)
+    tracing::info!(addr = %addr, "starting web server");
+    let app = birdnet_web::server::build_router(state);
+
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+
+    tracing::info!("BirdNet-Behavior stopped");
     Ok(())
 }
 
-fn db_path_from_config(config: &birdnet_core::config::Config) -> PathBuf {
-    config.get("DB_PATH").map_or_else(
+/// Start the detection daemon in a background thread.
+///
+/// Returns the daemon handle, or None if the model/labels are not configured.
+fn start_detection_daemon(
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+    state: birdnet_web::state::AppState,
+    broadcast: birdnet_web::routes::websocket::DetectionBroadcast,
+) -> Option<birdnet_core::detection::daemon::DaemonHandle> {
+    // Resolve paths from CLI flags or config
+    let model_path = cli
+        .model
+        .clone()
+        .or_else(|| config?.get("MODEL_PATH").map(PathBuf::from));
+
+    let labels_path = cli
+        .labels
+        .clone()
+        .or_else(|| config?.get("LABELS_PATH").map(PathBuf::from));
+
+    let watch_dir = cli
+        .watch_dir
+        .clone()
+        .or_else(|| config?.get("RECS_DIR").map(PathBuf::from));
+
+    let (Some(model_path), Some(labels_path), Some(watch_dir)) =
+        (model_path, labels_path, watch_dir)
+    else {
+        tracing::info!("detection daemon not started: model, labels, or watch_dir not configured");
+        tracing::info!(
+            "use --model, --labels, --watch-dir flags or set MODEL_PATH, LABELS_PATH, RECS_DIR in config"
+        );
+        return None;
+    };
+
+    // Build daemon config
+    let sensitivity = config
+        .and_then(|c| c.get_parsed::<f32>("SENSITIVITY").ok())
+        .unwrap_or(1.0);
+
+    let confidence = config
+        .and_then(|c| c.get_parsed::<f32>("CONFIDENCE").ok())
+        .unwrap_or(0.25);
+
+    let daemon_config = birdnet_core::detection::daemon::DaemonConfig {
+        watch_dir: watch_dir.clone(),
+        model_path,
+        labels_path,
+        pipeline: birdnet_core::detection::pipeline::PipelineConfig {
+            watch_dir,
+            ..birdnet_core::detection::pipeline::PipelineConfig::default()
+        },
+        model: birdnet_core::inference::model::ModelConfig {
+            sensitivity,
+            confidence_threshold: confidence,
+            ..birdnet_core::inference::model::ModelConfig::default()
+        },
+        process_existing: cli.process_existing,
+    };
+
+    // Create event channel
+    let (event_tx, event_rx) = mpsc::channel();
+
+    // Start daemon
+    match birdnet_core::detection::daemon::run_daemon(&daemon_config, event_tx) {
+        Ok(handle) => {
+            tracing::info!("detection daemon started");
+
+            // Spawn event processor on a blocking thread (it uses std::mpsc::recv)
+            tokio::task::spawn_blocking(move || {
+                event_processor(event_rx, state, broadcast);
+            });
+
+            Some(handle)
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "failed to start detection daemon");
+            None
+        }
+    }
+}
+
+/// Bridge detection events from the daemon to database inserts and WebSocket broadcasts.
+fn event_processor(
+    event_rx: mpsc::Receiver<birdnet_core::detection::daemon::DetectionEvent>,
+    state: birdnet_web::state::AppState,
+    broadcast: birdnet_web::routes::websocket::DetectionBroadcast,
+) {
+    tracing::debug!("event processor started");
+
+    loop {
+        // Receive from std mpsc (blocking -- but this is in a spawned task)
+        let event = match event_rx.recv() {
+            Ok(event) => event,
+            Err(_) => {
+                tracing::info!("event channel closed, stopping event processor");
+                break;
+            }
+        };
+
+        let detection = &event.detection;
+
+        // Insert into database
+        let week_str = detection.week.to_string();
+        let file_str = event.source_file.to_string_lossy();
+        let record = birdnet_db::sqlite::DetectionRecord {
+            date: &detection.date,
+            time: &detection.time,
+            sci_name: &detection.scientific_name,
+            com_name: &detection.common_name,
+            confidence: f64::from(detection.confidence),
+            lat: "",
+            lon: "",
+            cutoff: "",
+            week: &week_str,
+            sensitivity: "",
+            overlap: "",
+            file_name: &file_str,
+        };
+
+        let db_result = state.with_db(|conn| birdnet_db::sqlite::insert_detection(conn, &record));
+
+        if let Err(e) = db_result {
+            tracing::warn!(error = %e, "failed to insert detection into database");
+        }
+
+        // Broadcast to WebSocket clients
+        let ws_event = birdnet_web::routes::websocket::WsDetectionEvent {
+            event: "detection",
+            common_name: detection.common_name.clone(),
+            scientific_name: detection.scientific_name.clone(),
+            confidence: detection.confidence,
+            date: detection.date.clone(),
+            time: detection.time.clone(),
+            start: detection.start,
+            stop: detection.stop,
+        };
+
+        broadcast.send(&ws_event);
+
+        tracing::debug!(
+            species = %detection.common_name,
+            confidence = format!("{:.0}%", detection.confidence * 100.0),
+            latency_ms = event.latency_ms,
+            ws_clients = broadcast.client_count(),
+            "event processed"
+        );
+    }
+}
+
+fn db_path_from_config(config: Option<&birdnet_core::config::Config>) -> PathBuf {
+    config.and_then(|c| c.get("DB_PATH")).map_or_else(
         || {
             let home = std::env::var("HOME").unwrap_or_else(|_| "/home/pi".into());
             PathBuf::from(format!("{home}/BirdNet-Behavior/birds.db"))
@@ -118,7 +315,7 @@ fn db_path_from_config(config: &birdnet_core::config::Config) -> PathBuf {
 }
 
 fn run_integrity_check(
-    config: &birdnet_core::config::Config,
+    config: Option<&birdnet_core::config::Config>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let db_path = db_path_from_config(config);
     tracing::info!(path = %db_path.display(), "running integrity check");
@@ -136,7 +333,9 @@ fn run_integrity_check(
     }
 }
 
-fn run_backup(config: &birdnet_core::config::Config) -> Result<(), Box<dyn std::error::Error>> {
+fn run_backup(
+    config: Option<&birdnet_core::config::Config>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let db_path = db_path_from_config(config);
     let backup_dir = db_path
         .parent()
@@ -147,4 +346,29 @@ fn run_backup(config: &birdnet_core::config::Config) -> Result<(), Box<dyn std::
     let backup_path = birdnet_db::resilience::backup_database(&db_path, &backup_dir)?;
     tracing::info!(backup = %backup_path.display(), "backup created successfully");
     Ok(())
+}
+
+/// Wait for a shutdown signal (SIGTERM or SIGINT).
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => tracing::info!("received Ctrl+C"),
+        () = terminate => tracing::info!("received SIGTERM"),
+    }
 }

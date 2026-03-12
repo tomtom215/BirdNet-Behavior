@@ -1,10 +1,10 @@
 //! Species API endpoints.
 
 use axum::extract::{Query, State};
-use axum::{routing::get, Json, Router};
+use axum::{Json, Router, routing::get};
 use birdnet_db::sqlite::{DbError, HourlyCount, SpeciesCount};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::state::AppState;
 

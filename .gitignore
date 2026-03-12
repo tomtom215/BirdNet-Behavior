@@ -28,6 +28,9 @@ Thumbs.db
 *.flac
 *.mp3
 
+# But keep test audio fixtures
+!tests/testdata/*.wav
+
 # BirdNET model files
 *.tflite
 *.onnx

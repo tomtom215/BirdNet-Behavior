@@ -74,7 +74,12 @@ pub fn decode_file(path: &Path) -> Result<AudioData, DecodeError> {
     }
 
     let probed = symphonia::default::get_probe()
-        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
         .map_err(|e| DecodeError::Format(e.to_string()))?;
 
     let mut format = probed.format;

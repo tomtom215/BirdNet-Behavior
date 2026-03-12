@@ -1,8 +1,8 @@
 //! System API endpoints: health, version, diagnostics.
 
 use axum::extract::State;
-use axum::{routing::get, Json, Router};
-use serde_json::{json, Value};
+use axum::{Json, Router, routing::get};
+use serde_json::{Value, json};
 
 use crate::state::AppState;
 

@@ -107,11 +107,7 @@ pub struct CaptureProcess {
 impl CaptureProcess {
     /// Check if the capture process is still running.
     pub fn is_running(&mut self) -> bool {
-        self.child
-            .try_wait()
-            .ok()
-            .flatten()
-            .is_none()
+        self.child.try_wait().ok().flatten().is_none()
     }
 
     /// Stop the capture process gracefully.
@@ -141,10 +137,7 @@ impl Drop for CaptureProcess {
 /// Generate a BirdNET-Pi compatible output filename.
 ///
 /// Format: `YYYY-MM-DD-birdnet-[RTSP_ID-]HH:MM:SS.ext`
-fn recording_filename(
-    rtsp_id: Option<&str>,
-    format: AudioFormat,
-) -> String {
+fn recording_filename(rtsp_id: Option<&str>, format: AudioFormat) -> String {
     // Use a simple timestamp pattern for ffmpeg/arecord to fill in
     // The actual timestamping is handled by the calling code
     let ext = format.extension();
@@ -161,9 +154,7 @@ fn recording_filename(
 /// # Errors
 ///
 /// Returns `CaptureError` if `arecord` cannot be started.
-pub fn start_microphone_capture(
-    config: &RecordingConfig,
-) -> Result<CaptureProcess, CaptureError> {
+pub fn start_microphone_capture(config: &RecordingConfig) -> Result<CaptureProcess, CaptureError> {
     let CaptureSource::Microphone {
         ref device,
         sample_rate,
@@ -177,11 +168,16 @@ pub fn start_microphone_capture(
     let output_path = config.output_dir.join(&filename_pattern);
 
     let mut cmd = Command::new("arecord");
-    cmd.arg("-D").arg(device)
-        .arg("-f").arg("S16_LE")
-        .arg("-r").arg(sample_rate.to_string())
-        .arg("-c").arg(channels.to_string())
-        .arg("--max-file-time").arg(config.segment_duration_secs.to_string())
+    cmd.arg("-D")
+        .arg(device)
+        .arg("-f")
+        .arg("S16_LE")
+        .arg("-r")
+        .arg(sample_rate.to_string())
+        .arg("-c")
+        .arg(channels.to_string())
+        .arg("--max-file-time")
+        .arg(config.segment_duration_secs.to_string())
         .arg("--use-strftime")
         .arg(output_path.to_string_lossy().as_ref())
         .stdout(Stdio::null())
@@ -203,9 +199,7 @@ pub fn start_microphone_capture(
 /// # Errors
 ///
 /// Returns `CaptureError` if `ffmpeg` cannot be started.
-pub fn start_rtsp_capture(
-    config: &RecordingConfig,
-) -> Result<CaptureProcess, CaptureError> {
+pub fn start_rtsp_capture(config: &RecordingConfig) -> Result<CaptureProcess, CaptureError> {
     let CaptureSource::Rtsp {
         ref url,
         ref stream_id,
@@ -218,21 +212,33 @@ pub fn start_rtsp_capture(
     let output_path = config.output_dir.join(&filename_pattern);
 
     let mut cmd = Command::new("ffmpeg");
-    cmd.arg("-rtsp_transport").arg("tcp")
-        .arg("-i").arg(url)
+    cmd.arg("-rtsp_transport")
+        .arg("tcp")
+        .arg("-i")
+        .arg(url)
         .arg("-vn") // no video
-        .arg("-acodec").arg("pcm_s16le")
-        .arg("-ar").arg("48000")
-        .arg("-ac").arg("1") // mono
-        .arg("-f").arg("segment")
-        .arg("-segment_time").arg(config.segment_duration_secs.to_string())
-        .arg("-strftime").arg("1")
+        .arg("-acodec")
+        .arg("pcm_s16le")
+        .arg("-ar")
+        .arg("48000")
+        .arg("-ac")
+        .arg("1") // mono
+        .arg("-f")
+        .arg("segment")
+        .arg("-segment_time")
+        .arg(config.segment_duration_secs.to_string())
+        .arg("-strftime")
+        .arg("1")
         .arg(output_path.to_string_lossy().as_ref())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
 
     let child = cmd.spawn()?;
-    tracing::info!(stream_id = stream_id, url = url, "started RTSP capture via ffmpeg");
+    tracing::info!(
+        stream_id = stream_id,
+        url = url,
+        "started RTSP capture via ffmpeg"
+    );
 
     Ok(CaptureProcess {
         child,
@@ -257,10 +263,7 @@ pub fn is_tool_available(tool: &str) -> bool {
 /// # Errors
 ///
 /// Returns `CaptureError` if the directory cannot be read.
-pub fn cleanup_old_recordings(
-    dir: &Path,
-    max_age_days: u32,
-) -> Result<u32, CaptureError> {
+pub fn cleanup_old_recordings(dir: &Path, max_age_days: u32) -> Result<u32, CaptureError> {
     let now = std::time::SystemTime::now();
     let max_age = std::time::Duration::from_secs(u64::from(max_age_days) * 86400);
     let mut removed = 0_u32;

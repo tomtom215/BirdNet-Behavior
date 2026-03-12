@@ -125,26 +125,27 @@ pub struct PreparedChunk {
 /// # Errors
 ///
 /// Returns `PipelineError` if any stage of the pipeline fails.
-#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
 pub fn process_file(
     path: &Path,
     config: &PipelineConfig,
 ) -> Result<Vec<PreparedChunk>, PipelineError> {
-    let recording = RecordingFile::parse(&path.to_string_lossy())
-        .ok_or_else(|| PipelineError::Watch(format!(
+    let recording = RecordingFile::parse(&path.to_string_lossy()).ok_or_else(|| {
+        PipelineError::Watch(format!(
             "cannot parse recording filename: {}",
             path.display()
-        )))?;
+        ))
+    })?;
 
     // Decode audio
     let audio = decode::decode_file(path)?;
 
     // Resample to target rate
-    let samples = resample::resample(
-        &audio.samples,
-        audio.sample_rate,
-        config.target_sample_rate,
-    )?;
+    let samples = resample::resample(&audio.samples, audio.sample_rate, config.target_sample_rate)?;
 
     // Split into chunks
     let chunk_samples = (config.chunk_duration_secs * config.target_sample_rate as f32) as usize;
@@ -182,7 +183,7 @@ pub fn process_file(
         pos += step;
 
         // Don't create a chunk if remaining audio is too short
-        if samples.len() - pos < chunk_samples / 4 && pos < samples.len() {
+        if pos >= samples.len() || samples.len() - pos < chunk_samples / 4 {
             break;
         }
     }
@@ -206,10 +207,7 @@ pub fn watch_directory(
     let mut watcher = RecommendedWatcher::new(
         move |result: Result<Event, notify::Error>| {
             if let Ok(event) = result {
-                if matches!(
-                    event.kind,
-                    EventKind::Create(_) | EventKind::Modify(_)
-                ) {
+                if matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_)) {
                     for path in event.paths {
                         if is_audio_file(&path) {
                             let _ = tx.send(path);
@@ -250,7 +248,9 @@ mod tests {
         assert!(is_audio_file(Path::new("recording.WAV")));
         assert!(is_audio_file(Path::new("recording.flac")));
         assert!(is_audio_file(Path::new("recording.mp3")));
-        assert!(is_audio_file(Path::new("/data/StreamData/2026-03-11-birdnet-08:30:00.wav")));
+        assert!(is_audio_file(Path::new(
+            "/data/StreamData/2026-03-11-birdnet-08:30:00.wav"
+        )));
     }
 
     #[test]
@@ -271,7 +271,10 @@ mod tests {
     #[test]
     fn process_nonexistent_file_returns_error() {
         let config = PipelineConfig::default();
-        let result = process_file(Path::new("/nonexistent/2026-03-11-birdnet-08:30:00.wav"), &config);
+        let result = process_file(
+            Path::new("/nonexistent/2026-03-11-birdnet-08:30:00.wav"),
+            &config,
+        );
         assert!(result.is_err());
     }
 }

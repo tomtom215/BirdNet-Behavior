@@ -72,10 +72,7 @@ impl MelSpectrogram {
         }
 
         // Apply top_db floor
-        let max_db = db_data
-            .iter()
-            .copied()
-            .fold(f32::NEG_INFINITY, f32::max);
+        let max_db = db_data.iter().copied().fold(f32::NEG_INFINITY, f32::max);
 
         let floor = max_db - top_db;
         for val in &mut db_data {
@@ -140,9 +137,7 @@ pub fn mel_spectrogram(
         });
     }
 
-    let fmax = config
-        .fmax
-        .unwrap_or(sample_rate as f32 / 2.0);
+    let fmax = config.fmax.unwrap_or(sample_rate as f32 / 2.0);
 
     // Step 1: Compute STFT (Short-Time Fourier Transform)
     let stft = compute_stft(samples, config.n_fft, config.hop_length)?;
@@ -162,7 +157,13 @@ pub fn mel_spectrogram(
     );
 
     // Step 4: Apply mel filterbank to power spectrogram
-    let mel_data = apply_mel_filters(&mel_filters, &power_spec, config.n_mels, n_fft_bins, n_frames);
+    let mel_data = apply_mel_filters(
+        &mel_filters,
+        &power_spec,
+        config.n_mels,
+        n_fft_bins,
+        n_frames,
+    );
 
     Ok(MelSpectrogram {
         data: mel_data,
@@ -471,10 +472,7 @@ mod tests {
             ..MelConfig::default()
         };
         let result = mel_spectrogram(&samples, 48000, &config);
-        assert!(matches!(
-            result,
-            Err(SpectrogramError::InvalidConfig(_))
-        ));
+        assert!(matches!(result, Err(SpectrogramError::InvalidConfig(_))));
     }
 
     #[test]
@@ -500,7 +498,10 @@ mod tests {
         assert!(max_db.is_finite(), "max dB should be finite");
         assert!(min_db.is_finite(), "min dB should be finite");
         // Floor should be max_db - top_db
-        assert!((min_db - (max_db - 80.0)).abs() < 0.01, "floor should be max_db - top_db");
+        assert!(
+            (min_db - (max_db - 80.0)).abs() < 0.01,
+            "floor should be max_db - top_db"
+        );
     }
 
     #[test]

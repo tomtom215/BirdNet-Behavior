@@ -29,10 +29,9 @@ LOAD behavioral;
 /// Uses `sessionize()` from duckdb-behavioral to group continuous
 /// bird activity into sessions.
 pub fn sessionize_sql(params: &SessionizeParams) -> String {
-    let species_filter = params.species.as_ref().map_or_else(
-        String::new,
-        |s| format!("WHERE Com_Name = '{}'", s.replace('\'', "''")),
-    );
+    let species_filter = params.species.as_ref().map_or_else(String::new, |s| {
+        format!("WHERE Com_Name = '{}'", s.replace('\'', "''"))
+    });
 
     format!(
         "SELECT

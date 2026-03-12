@@ -92,7 +92,12 @@ impl RecordingFile {
             .next()
             .unwrap_or(path)
             .strip_suffix(".wav")
-            .or_else(|| path.rsplit('/').next().unwrap_or(path).strip_suffix(".flac"))
+            .or_else(|| {
+                path.rsplit('/')
+                    .next()
+                    .unwrap_or(path)
+                    .strip_suffix(".flac")
+            })
             .or_else(|| path.rsplit('/').next().unwrap_or(path).strip_suffix(".mp3"))?;
 
         let parts: Vec<&str> = filename.splitn(5, '-').collect();
@@ -185,8 +190,8 @@ mod tests {
 
     #[test]
     fn parse_rtsp_filename() {
-        let rf = RecordingFile::parse("/data/StreamData/2026-03-11-birdnet-cam1-08:30:00.wav")
-            .unwrap();
+        let rf =
+            RecordingFile::parse("/data/StreamData/2026-03-11-birdnet-cam1-08:30:00.wav").unwrap();
         assert_eq!(rf.date, "2026-03-11");
         assert_eq!(rf.time, "08:30:00");
         assert_eq!(rf.rtsp_id.as_deref(), Some("cam1"));

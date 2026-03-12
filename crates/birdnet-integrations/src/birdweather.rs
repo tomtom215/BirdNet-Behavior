@@ -124,10 +124,7 @@ impl Client {
         &self,
         detection: &DetectionPost,
     ) -> Result<ApiResponse, BirdWeatherError> {
-        let url = format!(
-            "{}/stations/{}/detections",
-            API_BASE, self.station_token
-        );
+        let url = format!("{}/stations/{}/detections", API_BASE, self.station_token);
 
         let body = serde_json::json!({
             "timestamp": detection.timestamp,
@@ -150,10 +147,7 @@ impl Client {
         &self,
         soundscape: &SoundscapePost,
     ) -> Result<ApiResponse, BirdWeatherError> {
-        let url = format!(
-            "{}/stations/{}/soundscapes",
-            API_BASE, self.station_token
-        );
+        let url = format!("{}/stations/{}/soundscapes", API_BASE, self.station_token);
 
         let body = serde_json::json!({
             "timestamp": soundscape.timestamp,
@@ -185,7 +179,11 @@ impl Client {
         for attempt in 0..MAX_RETRIES {
             if attempt > 0 {
                 let delay = Duration::from_secs(2_u64.pow(attempt));
-                tracing::debug!(attempt, delay_secs = delay.as_secs(), "retrying BirdWeather POST");
+                tracing::debug!(
+                    attempt,
+                    delay_secs = delay.as_secs(),
+                    "retrying BirdWeather POST"
+                );
                 tokio::time::sleep(delay).await;
             }
 
