@@ -191,38 +191,5 @@ async fn daily_detections(
     }
 }
 
-/// Validate a date string is in YYYY-MM-DD format.
-fn is_valid_date(s: &str) -> bool {
-    if s.len() != 10 {
-        return false;
-    }
-    let bytes = s.as_bytes();
-    bytes[4] == b'-'
-        && bytes[7] == b'-'
-        && bytes[..4].iter().all(u8::is_ascii_digit)
-        && bytes[5..7].iter().all(u8::is_ascii_digit)
-        && bytes[8..10].iter().all(u8::is_ascii_digit)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn valid_date_format() {
-        assert!(is_valid_date("2026-03-12"));
-        assert!(is_valid_date("2020-01-01"));
-        assert!(is_valid_date("1999-12-31"));
-    }
-
-    #[test]
-    fn invalid_date_format() {
-        assert!(!is_valid_date(""));
-        assert!(!is_valid_date("2026"));
-        assert!(!is_valid_date("03-12-2026"));
-        assert!(!is_valid_date("2026/03/12"));
-        assert!(!is_valid_date("not-a-date"));
-        assert!(!is_valid_date("20260312"));
-        assert!(!is_valid_date("2026-3-12"));
-    }
-}
+// Use the shared date validation from the routes module.
+use super::is_valid_date;

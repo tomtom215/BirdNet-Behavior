@@ -11,6 +11,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::fmt::Write;
 
+use super::is_valid_date;
 use crate::state::AppState;
 
 /// Export routes.
@@ -36,6 +37,19 @@ async fn export_detections(
     Query(query): Query<ExportQuery>,
 ) -> impl IntoResponse {
     let format = query.format.as_deref().unwrap_or("csv");
+
+    // Validate date parameters if provided
+    for date in [&query.from, &query.to].into_iter().flatten() {
+        if !is_valid_date(date) {
+            return (
+                StatusCode::BAD_REQUEST,
+                [(header::CONTENT_TYPE, "application/json")],
+                json!({"error": "invalid date format, expected YYYY-MM-DD"}).to_string(),
+            )
+                .into_response();
+        }
+    }
+
     let from = query.from.clone();
     let to = query.to.clone();
 

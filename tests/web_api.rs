@@ -1472,3 +1472,20 @@ async fn detections_limit_is_capped() {
     // Limit should be capped at 1000
     assert_eq!(json["limit"], 1000);
 }
+
+#[tokio::test]
+async fn export_detections_invalid_date_returns_400() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/detections/export?from=bad-date")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
