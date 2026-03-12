@@ -1,0 +1,110 @@
+<!-- Time Series Analytics Dashboard -->
+<h1 style="font-size: 1.5rem; font-weight: 700; margin-bottom: 0.25rem;">Time Series Analytics</h1>
+<p style="color: var(--text-muted); margin-bottom: 1.5rem; font-size: 0.9rem;">
+    DuckDB window function analytics — tumbling, hopping, sliding and session windows.
+    No behavioral extension required.
+</p>
+
+<!-- Row 1: Heatmap + Peak Windows -->
+<div class="grid-2" style="margin-bottom: 1rem;">
+    <div class="card">
+        <h2>Hour-of-Day Activity Heatmap
+            <span style="font-size:0.75rem;color:var(--accent);margin-left:0.5rem;">90-day average</span>
+        </h2>
+        <div hx-get="/pages/ts-heatmap"
+             hx-trigger="load"
+             hx-swap="innerHTML">
+            <span class="htmx-indicator">Loading heatmap…</span>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Peak 15-Minute Windows
+            <span style="font-size:0.75rem;color:var(--accent);margin-left:0.5rem;">today</span>
+        </h2>
+        <div hx-get="/pages/ts-peak"
+             hx-trigger="load"
+             hx-swap="innerHTML">
+            <span class="htmx-indicator">Loading peak windows…</span>
+        </div>
+    </div>
+</div>
+
+<!-- Row 2: Daily Trend + Species Diversity -->
+<div class="grid-2" style="margin-bottom: 1rem;">
+    <div class="card">
+        <h2>Daily Detection Trend
+            <span style="font-size:0.75rem;color:var(--accent);margin-left:0.5rem;">last 60 days · 7-day moving avg</span>
+        </h2>
+        <div hx-get="/pages/ts-daily"
+             hx-trigger="load"
+             hx-swap="innerHTML">
+            <span class="htmx-indicator">Loading trend…</span>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Species Diversity
+            <span style="font-size:0.75rem;color:var(--accent);margin-left:0.5rem;">last 30 days · Shannon H′</span>
+        </h2>
+        <div hx-get="/pages/ts-diversity"
+             hx-trigger="load"
+             hx-swap="innerHTML">
+            <span class="htmx-indicator">Loading diversity…</span>
+        </div>
+    </div>
+</div>
+
+<!-- Row 3: Activity Sessions + Anomaly Detection -->
+<div class="grid-2" style="margin-bottom: 1rem;">
+    <div class="card">
+        <h2>Activity Sessions
+            <span style="font-size:0.75rem;color:var(--accent);margin-left:0.5rem;">last 3 days · gap ≥ 30 min</span>
+        </h2>
+        <p style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 0.75rem;">
+            Continuous-presence windows separated by inactivity gaps.
+        </p>
+        <div hx-get="/pages/ts-sessions"
+             hx-trigger="load"
+             hx-swap="innerHTML">
+            <span class="htmx-indicator">Loading sessions…</span>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Anomaly Detection
+            <span style="font-size:0.75rem;color:var(--accent);margin-left:0.5rem;">90 days · z &gt; 2.0</span>
+        </h2>
+        <p style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 0.75rem;">
+            Days where detection counts deviate &gt; 2 standard deviations from the 30-day rolling mean.
+        </p>
+        <div hx-get="/pages/ts-anomalies"
+             hx-trigger="load"
+             hx-swap="innerHTML">
+            <span class="htmx-indicator">Detecting anomalies…</span>
+        </div>
+    </div>
+</div>
+
+<!-- API reference card -->
+<div class="card">
+    <h2>API Endpoints</h2>
+    <table style="font-size: 0.85rem;">
+        <thead><tr><th>Endpoint</th><th>Description</th><th>Parameters</th></tr></thead>
+        <tbody>
+        <tr><td><code>/api/v2/timeseries/hourly</code></td><td>Hourly tumbling windows</td><td>days=7, species=…</td></tr>
+        <tr><td><code>/api/v2/timeseries/daily</code></td><td>Daily tumbling windows</td><td>days=30, species=…</td></tr>
+        <tr><td><code>/api/v2/timeseries/weekly</code></td><td>Weekly tumbling windows</td><td>weeks=52</td></tr>
+        <tr><td><code>/api/v2/timeseries/heatmap</code></td><td>Hour-of-day average heatmap</td><td>days=90</td></tr>
+        <tr><td><code>/api/v2/timeseries/trend</code></td><td>Moving average trend line</td><td>window=7, from=…, species=…</td></tr>
+        <tr><td><code>/api/v2/timeseries/anomalies</code></td><td>Statistical anomaly detection</td><td>z=2.0, window=30, days=180</td></tr>
+        <tr><td><code>/api/v2/timeseries/year-over-year</code></td><td>Year-over-year weekly comparison</td><td>weeks=52</td></tr>
+        <tr><td><code>/api/v2/timeseries/diversity</code></td><td>Shannon diversity index per day</td><td>days=90, shannon=true</td></tr>
+        <tr><td><code>/api/v2/timeseries/accumulation</code></td><td>Cumulative species discovery curve</td><td>from=…, to=…</td></tr>
+        <tr><td><code>/api/v2/timeseries/peak-windows</code></td><td>Busiest N-minute hopping windows</td><td>window=15, hop=5, days=1, limit=10</td></tr>
+        <tr><td><code>/api/v2/timeseries/sessions</code></td><td>Activity sessions (gap-based)</td><td>gap=30, date=…, days=7, limit=100</td></tr>
+        <tr><td><code>/api/v2/timeseries/gaps</code></td><td>Inactivity gap detection</td><td>date=…, threshold=30, days=7</td></tr>
+        <tr><td><code>/api/v2/timeseries/status</code></td><td>Feature availability status</td><td>—</td></tr>
+        </tbody>
+    </table>
+</div>

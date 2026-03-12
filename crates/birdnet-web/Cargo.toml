@@ -13,10 +13,11 @@ description = "Web server: REST API, WebSocket, and HTMX pages via axum"
 
 [features]
 ## Enable DuckDB-powered behavioral analytics endpoints.
-analytics = ["birdnet-behavioral/analytics"]
+analytics = ["birdnet-behavioral/analytics", "birdnet-timeseries/analytics"]
 
 [dependencies]
 birdnet-behavioral.workspace = true
+birdnet-timeseries.workspace = true
 birdnet-core.workspace = true
 birdnet-db.workspace = true
 birdnet-integrations.workspace = true
