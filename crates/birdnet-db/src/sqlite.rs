@@ -448,6 +448,38 @@ pub fn daily_counts(conn: &Connection, days: u32) -> Result<Vec<DailyCount>, DbE
     Ok(rows)
 }
 
+/// Get daily detection counts for a specific species.
+///
+/// Returns up to `days` most recent days with counts for the given species.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn species_daily_counts(
+    conn: &Connection,
+    com_name: &str,
+    days: u32,
+) -> Result<Vec<DailyCount>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT Date, COUNT(*) as count
+         FROM detections WHERE Com_Name = ?1
+         GROUP BY Date ORDER BY Date DESC LIMIT ?2",
+    )?;
+
+    let mut rows: Vec<DailyCount> = stmt
+        .query_map(params![com_name, days], |row| {
+            Ok(DailyCount {
+                date: row.get(0)?,
+                count: row.get(1)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Reverse so they're in chronological order
+    rows.reverse();
+    Ok(rows)
+}
+
 /// Get recent detections for a specific species.
 ///
 /// Returns detections ordered by date/time descending.
@@ -804,6 +836,17 @@ mod tests {
         assert_eq!(rows.len(), 2);
         // All should be blackbird
         assert!(rows.iter().all(|d| d.com_name == "Eurasian Blackbird"));
+    }
+
+    #[test]
+    fn query_species_daily_counts() {
+        let (_tmp, conn) = temp_db();
+        insert_sample_records(&conn);
+
+        let days = species_daily_counts(&conn, "Eurasian Blackbird", 7).unwrap();
+        assert_eq!(days.len(), 1); // Only 1 date with blackbird detections
+        assert_eq!(days[0].date, "2026-03-11");
+        assert_eq!(days[0].count, 2);
     }
 
     #[test]

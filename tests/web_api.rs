@@ -1053,6 +1053,31 @@ async fn htmx_species_hourly_partial() {
 }
 
 #[tokio::test]
+async fn htmx_species_daily_partial() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/species-daily?name=Eurasian%20Blackbird")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    // Should render SVG chart since we have detection data
+    assert!(html.contains("<svg"));
+}
+
+#[tokio::test]
 async fn htmx_species_info_partial() {
     let app = app();
 

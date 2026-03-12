@@ -50,6 +50,7 @@ pub fn router() -> Router<AppState> {
         .route("/pages/species-summary", get(species_summary_partial))
         .route("/pages/species-hourly", get(species_hourly_partial))
         .route("/pages/species-detections", get(species_detections_partial))
+        .route("/pages/species-daily", get(species_daily_partial))
         .route("/pages/species-info", get(species_info_partial))
 }
 
@@ -607,6 +608,37 @@ async fn species_hourly_partial(
     match result {
         Ok(Ok(hours)) => {
             let html = render_hourly_chart(&hours);
+            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+        }
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading chart</p>".to_string(),
+        ),
+    }
+}
+
+/// HTMX partial: species daily detection trend chart.
+async fn species_daily_partial(
+    State(state): State<AppState>,
+    Query(query): Query<SpeciesQuery>,
+) -> impl IntoResponse {
+    let Some(name) = query.name else {
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>No species specified.</p>".to_string(),
+        );
+    };
+
+    let result = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| birdnet_db::sqlite::species_daily_counts(conn, &name, 14))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(days)) => {
+            let html = render_daily_chart(&days);
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
         _ => (
