@@ -43,6 +43,13 @@
             </div>
         </div>
 
+        <div class="card">
+            <h2>Confidence Distribution</h2>
+            <div hx-get="/pages/confidence-chart" hx-trigger="load, every 300s" hx-swap="innerHTML">
+                <p style="color: var(--text-muted)">Loading chart...</p>
+            </div>
+        </div>
+
         <div hx-get="/pages/disk-status" hx-trigger="load, every 120s" hx-swap="innerHTML">
         </div>
     </div>

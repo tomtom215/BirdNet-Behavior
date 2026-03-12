@@ -248,6 +248,75 @@ pub fn recent_detections(conn: &Connection, limit: u32) -> Result<Vec<DetectionR
     Ok(rows)
 }
 
+/// Query recent detections with limit and offset for pagination.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn recent_detections_page(
+    conn: &Connection,
+    limit: u32,
+    offset: u32,
+) -> Result<Vec<DetectionRow>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name
+         FROM detections ORDER BY Date DESC, Time DESC LIMIT ?1 OFFSET ?2",
+    )?;
+
+    let rows = stmt
+        .query_map(params![limit, offset], |row| {
+            Ok(DetectionRow {
+                date: row.get(0)?,
+                time: row.get(1)?,
+                sci_name: row.get(2)?,
+                com_name: row.get(3)?,
+                confidence: row.get(4)?,
+                lat: row.get(5)?,
+                lon: row.get(6)?,
+                cutoff: row.get(7)?,
+                week: row.get(8)?,
+                sens: row.get(9)?,
+                overlap: row.get(10)?,
+                file_name: row.get(11)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(rows)
+}
+
+/// Search species by name (case-insensitive substring match).
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn search_species(
+    conn: &Connection,
+    query: &str,
+    limit: u32,
+) -> Result<Vec<SpeciesCount>, DbError> {
+    let pattern = format!("%{query}%");
+    let mut stmt = conn.prepare(
+        "SELECT Com_Name, Sci_Name, COUNT(*) as count, AVG(Confidence) as avg_conf
+         FROM detections
+         WHERE Com_Name LIKE ?1 COLLATE NOCASE OR Sci_Name LIKE ?1 COLLATE NOCASE
+         GROUP BY Com_Name, Sci_Name ORDER BY count DESC LIMIT ?2",
+    )?;
+
+    let rows = stmt
+        .query_map(params![pattern, limit], |row| {
+            Ok(SpeciesCount {
+                com_name: row.get(0)?,
+                sci_name: row.get(1)?,
+                count: row.get(2)?,
+                avg_confidence: row.get(3)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(rows)
+}
+
 /// Get top species by detection count.
 ///
 /// # Errors
@@ -958,5 +1027,60 @@ mod tests {
         assert_eq!(buckets[3], 1); // 70-80%
         assert_eq!(buckets[4], 2); // 80-90%
         assert_eq!(buckets[5], 1); // 90-100%
+    }
+
+    #[test]
+    fn query_recent_detections_page() {
+        let (_tmp, conn) = temp_db();
+        insert_sample_records(&conn);
+
+        // First page
+        let page1 = recent_detections_page(&conn, 2, 0).unwrap();
+        assert_eq!(page1.len(), 2);
+
+        // Second page
+        let page2 = recent_detections_page(&conn, 2, 2).unwrap();
+        assert_eq!(page2.len(), 2);
+
+        // Third page (only 4 records total)
+        let page3 = recent_detections_page(&conn, 2, 4).unwrap();
+        assert!(page3.is_empty());
+
+        // Pages should not overlap
+        assert_ne!(page1[0].time, page2[0].time);
+    }
+
+    #[test]
+    fn query_search_species() {
+        let (_tmp, conn) = temp_db();
+        insert_sample_records(&conn);
+
+        // Search by common name
+        let results = search_species(&conn, "blackbird", 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].com_name, "Eurasian Blackbird");
+
+        // Search by scientific name
+        let results = search_species(&conn, "Turdus", 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].sci_name, "Turdus merula");
+
+        // Case-insensitive search
+        let results = search_species(&conn, "ROBIN", 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].com_name, "European Robin");
+
+        // No match
+        let results = search_species(&conn, "flamingo", 10).unwrap();
+        assert!(results.is_empty());
+
+        // Broad match (partial) — "Eurasian" contains "uras"
+        let results = search_species(&conn, "uras", 10).unwrap();
+        // "Eurasian Blackbird" matches
+        assert_eq!(results.len(), 1);
+
+        // Partial match across multiple species — "ur" matches "Turdus" and "Eurasian"
+        let results = search_species(&conn, "ur", 10).unwrap();
+        assert!(results.len() >= 2);
     }
 }

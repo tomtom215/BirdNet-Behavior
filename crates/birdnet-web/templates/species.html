@@ -1,5 +1,11 @@
 <div class="card">
-    <h2>All Species</h2>
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem;">
+        <h2 style="margin: 0;">All Species</h2>
+        <input type="search" name="q" placeholder="Search species..."
+               hx-get="/pages/species-list" hx-trigger="input changed delay:300ms, search"
+               hx-target="#species-list" hx-swap="innerHTML"
+               style="padding: 0.4rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); font-size: 0.9rem; width: 220px;" />
+    </div>
     <div id="species-list" hx-get="/pages/species-list" hx-trigger="load" hx-swap="innerHTML">
         <p style="color: var(--text-muted)">Loading species list...</p>
     </div>

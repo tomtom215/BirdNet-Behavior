@@ -13,6 +13,7 @@ use crate::state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/species/top", get(top_species))
+        .route("/species/search", get(search_species))
         .route("/species/activity", get(hourly_activity))
         .route("/species/detail", get(species_detail))
 }
@@ -31,6 +32,56 @@ async fn top_species(
     let result: Result<Result<Vec<SpeciesCount>, DbError>, _> =
         tokio::task::spawn_blocking(move || {
             state.with_db(|conn| birdnet_db::sqlite::top_species(conn, limit))
+        })
+        .await;
+
+    match result {
+        Ok(Ok(species)) => {
+            let total = species.len();
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "species": species,
+                    "total": total,
+                })),
+            )
+        }
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": e.to_string(),
+                "species": [],
+                "total": 0,
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": format!("internal error: {e}"),
+                "species": [],
+                "total": 0,
+            })),
+        ),
+    }
+}
+
+#[derive(Deserialize)]
+struct SearchSpeciesQuery {
+    q: String,
+    limit: Option<u32>,
+}
+
+/// `GET /api/v2/species/search?q=...` — Search species by name.
+async fn search_species(
+    State(state): State<AppState>,
+    Query(query): Query<SearchSpeciesQuery>,
+) -> (StatusCode, Json<Value>) {
+    let search = query.q;
+    let limit = query.limit.unwrap_or(20);
+
+    let result: Result<Result<Vec<SpeciesCount>, DbError>, _> =
+        tokio::task::spawn_blocking(move || {
+            state.with_db(|conn| birdnet_db::sqlite::search_species(conn, &search, limit))
         })
         .await;
 

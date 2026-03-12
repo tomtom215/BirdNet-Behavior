@@ -46,6 +46,7 @@ pub fn router() -> Router<AppState> {
         // Dashboard charts
         .route("/pages/hourly-chart", get(hourly_chart_partial))
         .route("/pages/daily-chart", get(daily_chart_partial))
+        .route("/pages/confidence-chart", get(confidence_chart_partial))
         // Species detail
         .route("/species/detail", get(species_detail_page))
         .route("/pages/species-summary", get(species_summary_partial))
@@ -296,8 +297,18 @@ async fn top_species_partial(State(state): State<AppState>) -> impl IntoResponse
     }
 }
 
-/// HTMX partial: full species list with confidence stats.
-async fn species_list_partial(State(state): State<AppState>) -> impl IntoResponse {
+/// Query parameters for the species list partial.
+#[derive(Deserialize)]
+struct SpeciesListQuery {
+    /// Optional search term to filter species by name.
+    q: Option<String>,
+}
+
+/// HTMX partial: full species list with confidence stats and optional search.
+async fn species_list_partial(
+    State(state): State<AppState>,
+    Query(query): Query<SpeciesListQuery>,
+) -> impl IntoResponse {
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| birdnet_db::sqlite::top_species(conn, 500))
     })
@@ -305,13 +316,40 @@ async fn species_list_partial(State(state): State<AppState>) -> impl IntoRespons
 
     match result {
         Ok(Ok(species)) => {
+            // Filter by search term if provided
+            let search = query.q.as_deref().unwrap_or("").trim().to_lowercase();
+            let filtered: Vec<_> = if search.is_empty() {
+                species
+            } else {
+                species
+                    .into_iter()
+                    .filter(|s| {
+                        s.com_name.to_lowercase().contains(&search)
+                            || s.sci_name.to_lowercase().contains(&search)
+                    })
+                    .collect()
+            };
+
+            if filtered.is_empty() {
+                let msg = if search.is_empty() {
+                    "No species detected yet."
+                } else {
+                    "No matching species found."
+                };
+                return (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, "text/html")],
+                    format!(r#"<p style="color: var(--text-muted)">{msg}</p>"#),
+                );
+            }
+
             let mut html = String::from(
                 r"<table>
 <thead><tr><th>Species</th><th>Detections</th><th>Avg Confidence</th></tr></thead>
 <tbody>",
             );
 
-            for s in &species {
+            for s in &filtered {
                 let conf_pct = s.avg_confidence * 100.0;
                 let conf_class = if conf_pct >= 80.0 {
                     "high"
@@ -334,11 +372,6 @@ async fn species_list_partial(State(state): State<AppState>) -> impl IntoRespons
             }
 
             html.push_str("</tbody></table>");
-
-            if species.is_empty() {
-                html = "<p style=\"color: var(--text-muted)\">No species detected yet.</p>"
-                    .to_string();
-            }
 
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
@@ -399,6 +432,26 @@ async fn daily_chart_partial(State(state): State<AppState>) -> impl IntoResponse
     match result {
         Ok(Ok(days)) => {
             let html = render_daily_chart(&days);
+            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+        }
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading chart</p>".to_string(),
+        ),
+    }
+}
+
+/// HTMX partial: confidence distribution SVG bar chart.
+async fn confidence_chart_partial(State(state): State<AppState>) -> impl IntoResponse {
+    let result = tokio::task::spawn_blocking(move || {
+        state.with_db(birdnet_db::sqlite::confidence_distribution)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(buckets)) => {
+            let html = render_confidence_chart(&buckets);
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
         _ => (
@@ -590,6 +643,79 @@ fn render_daily_chart(days: &[birdnet_db::sqlite::DailyCount]) -> String {
             ty = chart_h + 14,
             label = escape_html(date_label),
         );
+    }
+
+    svg.push_str("</svg>");
+    svg
+}
+
+/// Render an SVG horizontal bar chart showing confidence distribution.
+///
+/// Buckets: `[0-50%, 50-60%, 60-70%, 70-80%, 80-90%, 90-100%]`.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_lossless
+)]
+fn render_confidence_chart(buckets: &[i64; 6]) -> String {
+    let total: i64 = buckets.iter().sum();
+    if total == 0 {
+        return r#"<p style="color: var(--text-muted)">No detection data yet.</p>"#.to_string();
+    }
+
+    let max_count = buckets.iter().copied().max().unwrap_or(1).max(1);
+    let labels = ["<50%", "50-60%", "60-70%", "70-80%", "80-90%", "90-100%"];
+    let colors = [
+        "#64748b", "#f59e0b", "#eab308", "#84cc16", "#22c55e", "#10b981",
+    ];
+
+    let bar_h = 18;
+    let gap = 6;
+    let label_w = 55;
+    let chart_w = 280;
+    let max_bar_w = chart_w - label_w - 40;
+    let svg_h = 6 * (bar_h + gap);
+
+    let mut svg = format!(
+        r#"<svg viewBox="0 0 {chart_w} {svg_h}" style="width: 100%; height: auto; display: block;" xmlns="http://www.w3.org/2000/svg">"#,
+    );
+
+    for (i, (&count, (&label, &color))) in buckets
+        .iter()
+        .zip(labels.iter().zip(colors.iter()))
+        .enumerate()
+    {
+        let y = i as i32 * (bar_h + gap);
+        let bar_w = if max_count > 0 {
+            (count as f64 / max_count as f64 * max_bar_w as f64) as i32
+        } else {
+            0
+        };
+
+        // Label
+        let _ = write!(
+            svg,
+            r##"<text x="{lx}" y="{ly}" text-anchor="end" fill="#94a3b8" font-size="10" font-family="sans-serif" dominant-baseline="middle">{label}</text>"##,
+            lx = label_w - 4,
+            ly = y + bar_h / 2,
+        );
+
+        // Bar
+        let _ = write!(
+            svg,
+            r#"<rect x="{label_w}" y="{y}" width="{bar_w}" height="{bar_h}" rx="2" fill="{color}"/>"#,
+        );
+
+        // Count label
+        if count > 0 {
+            let _ = write!(
+                svg,
+                r##"<text x="{tx}" y="{ty}" fill="#94a3b8" font-size="9" font-family="sans-serif" dominant-baseline="middle">{count}</text>"##,
+                tx = label_w + bar_w + 4,
+                ty = y + bar_h / 2,
+            );
+        }
     }
 
     svg.push_str("</svg>");
@@ -1451,5 +1577,33 @@ mod tests {
     #[test]
     fn simple_url_encode_preserves_unreserved() {
         assert_eq!(simple_url_encode("a-b_c.d~e"), "a-b_c.d~e");
+    }
+
+    #[test]
+    fn render_confidence_chart_empty() {
+        let result = render_confidence_chart(&[0; 6]);
+        assert!(result.contains("No detection data"));
+    }
+
+    #[test]
+    fn render_confidence_chart_with_data() {
+        let buckets = [5, 10, 20, 30, 25, 15];
+        let svg = render_confidence_chart(&buckets);
+        assert!(svg.contains("<svg"));
+        assert!(svg.contains("</svg>"));
+        // Should contain all 6 labels (in SVG text elements)
+        assert!(svg.contains("<50%"));
+        assert!(svg.contains("90-100%"));
+        // Should contain count values
+        assert!(svg.contains(">30<"));
+        assert!(svg.contains(">25<"));
+    }
+
+    #[test]
+    fn render_confidence_chart_single_bucket() {
+        let buckets = [0, 0, 0, 0, 0, 42];
+        let svg = render_confidence_chart(&buckets);
+        assert!(svg.contains("<svg"));
+        assert!(svg.contains(">42<"));
     }
 }

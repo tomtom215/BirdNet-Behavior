@@ -22,6 +22,7 @@ struct DetectionQuery {
     date: Option<String>,
     species: Option<String>,
     limit: Option<u32>,
+    offset: Option<u32>,
 }
 
 async fn list_detections(
@@ -29,6 +30,7 @@ async fn list_detections(
     Query(query): Query<DetectionQuery>,
 ) -> (StatusCode, Json<Value>) {
     let limit = query.limit.unwrap_or(100);
+    let offset = query.offset.unwrap_or(0);
 
     let result: Result<Result<Vec<DetectionRow>, DbError>, _> = if let Some(species) =
         &query.species
@@ -46,19 +48,21 @@ async fn list_detections(
         .await
     } else {
         tokio::task::spawn_blocking(move || {
-            state.with_db(|conn| birdnet_db::sqlite::recent_detections(conn, limit))
+            state.with_db(|conn| birdnet_db::sqlite::recent_detections_page(conn, limit, offset))
         })
         .await
     };
 
     match result {
         Ok(Ok(detections)) => {
-            let total = detections.len();
+            let count = detections.len();
             (
                 StatusCode::OK,
                 Json(json!({
                     "detections": detections,
-                    "total": total,
+                    "count": count,
+                    "limit": limit,
+                    "offset": offset,
                 })),
             )
         }
@@ -67,7 +71,7 @@ async fn list_detections(
             Json(json!({
                 "error": e.to_string(),
                 "detections": [],
-                "total": 0,
+                "count": 0,
             })),
         ),
         Err(e) => (
@@ -75,7 +79,7 @@ async fn list_detections(
             Json(json!({
                 "error": format!("internal error: {e}"),
                 "detections": [],
-                "total": 0,
+                "count": 0,
             })),
         ),
     }

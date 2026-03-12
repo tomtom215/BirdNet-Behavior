@@ -208,7 +208,7 @@ async fn detections_by_date() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json["total"], 4);
+    assert_eq!(json["count"], 4);
     let detections = json["detections"].as_array().unwrap();
     assert_eq!(detections.len(), 4);
 
@@ -237,7 +237,7 @@ async fn detections_by_species_filter() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json["total"], 2);
+    assert_eq!(json["count"], 2);
     let detections = json["detections"].as_array().unwrap();
     assert!(
         detections
@@ -1160,4 +1160,237 @@ async fn htmx_species_info_partial() {
     // Without image cache, should show the "no info available" message
     assert!(html.contains("No additional info available"));
     assert!(html.contains("--image-cache-dir"));
+}
+
+#[tokio::test]
+async fn species_search_api() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/species/search?q=blackbird")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["total"], 1);
+    let species = json["species"].as_array().unwrap();
+    assert_eq!(species[0]["com_name"], "Eurasian Blackbird");
+}
+
+#[tokio::test]
+async fn species_search_api_no_results() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/species/search?q=nonexistent")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["total"], 0);
+}
+
+#[tokio::test]
+async fn species_search_by_scientific_name() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/species/search?q=turdus")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["total"], 1);
+    let species = json["species"].as_array().unwrap();
+    assert_eq!(species[0]["sci_name"], "Turdus merula");
+}
+
+#[tokio::test]
+async fn detections_pagination() {
+    let app = app();
+
+    // First page: limit 2, offset 0
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/detections?limit=2&offset=0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["count"], 2);
+    assert_eq!(json["limit"], 2);
+    assert_eq!(json["offset"], 0);
+
+    let detections = json["detections"].as_array().unwrap();
+    assert_eq!(detections.len(), 2);
+}
+
+#[tokio::test]
+async fn detections_pagination_second_page() {
+    let app = app();
+
+    // Second page: limit 2, offset 2
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/detections?limit=2&offset=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["count"], 2);
+    assert_eq!(json["offset"], 2);
+}
+
+#[tokio::test]
+async fn detections_pagination_beyond_data() {
+    let app = app();
+
+    // Beyond available data
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/detections?limit=10&offset=100")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["count"], 0);
+}
+
+#[tokio::test]
+async fn htmx_confidence_chart_partial() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/confidence-chart")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    // Should contain SVG chart (test data has detections with various confidence levels)
+    assert!(html.contains("<svg"));
+}
+
+#[tokio::test]
+async fn htmx_species_list_search() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/species-list?q=robin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(html.contains("European Robin"));
+    // Should NOT contain other species
+    assert!(!html.contains("Eurasian Blackbird"));
+    assert!(!html.contains("Great Tit"));
+}
+
+#[tokio::test]
+async fn htmx_species_list_search_no_match() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/species-list?q=flamingo")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(html.contains("No matching species found"));
 }
