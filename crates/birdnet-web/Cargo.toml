@@ -6,9 +6,17 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 description = "Web server: REST API, WebSocket, and HTMX pages via axum"
 
+[features]
+## Enable DuckDB-powered behavioral analytics endpoints.
+analytics = ["birdnet-behavioral/analytics"]
+
 [dependencies]
+birdnet-behavioral.workspace = true
 birdnet-core.workspace = true
 birdnet-db.workspace = true
 serde.workspace = true

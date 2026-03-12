@@ -62,6 +62,26 @@ pub enum ResidencyType {
     Rarity,
 }
 
+impl ResidencyType {
+    /// Classify a species based on its long-term retention rate.
+    ///
+    /// - Resident: > 0.7 (present most days)
+    /// - Regular: 0.3 - 0.7 (seasonal visitor)
+    /// - Migrant: 0.01 - 0.3 (passing through)
+    /// - Rarity: < 0.01 (single-day event)
+    pub fn from_retention_rate(rate: f64) -> Self {
+        if rate > 0.7 {
+            Self::Resident
+        } else if rate > 0.3 {
+            Self::Regular
+        } else if rate > 0.01 {
+            Self::Migrant
+        } else {
+            Self::Rarity
+        }
+    }
+}
+
 /// Dawn chorus funnel result (output of `window_funnel`).
 ///
 /// Tracks how many "steps" of an expected species sequence occur.

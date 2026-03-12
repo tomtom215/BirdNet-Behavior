@@ -1,0 +1,30 @@
+<div class="stats-grid" hx-get="/pages/stats" hx-trigger="load, every 60s" hx-swap="innerHTML">
+    <div class="stat-card">
+        <div class="value">--</div>
+        <div class="label">Total Detections</div>
+    </div>
+    <div class="stat-card">
+        <div class="value">--</div>
+        <div class="label">Unique Species</div>
+    </div>
+    <div class="stat-card">
+        <div class="value">--</div>
+        <div class="label">Today</div>
+    </div>
+</div>
+
+<div class="grid-2">
+    <div class="card">
+        <h2><span class="live-dot"></span> Recent Detections</h2>
+        <div id="detections-table" hx-get="/pages/detections" hx-trigger="load, every 15s" hx-swap="innerHTML">
+            <p style="color: var(--text-muted)">Loading detections...</p>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Top Species</h2>
+        <div id="top-species" hx-get="/pages/top-species" hx-trigger="load, every 60s" hx-swap="innerHTML">
+            <p style="color: var(--text-muted)">Loading species...</p>
+        </div>
+    </div>
+</div>

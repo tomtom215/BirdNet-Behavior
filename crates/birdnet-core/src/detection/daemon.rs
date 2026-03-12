@@ -232,7 +232,7 @@ pub fn run_daemon(
 
     // Start file watcher
     let (_watcher, file_rx) =
-        pipeline::watch_directory(&config.watch_dir).map_err(|e| DaemonError::Pipeline(e))?;
+        pipeline::watch_directory(&config.watch_dir).map_err(DaemonError::Pipeline)?;
 
     let pipeline_config = config.pipeline.clone();
 
@@ -276,7 +276,7 @@ pub fn run_daemon(
                         }
                     }
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     tracing::info!("file watcher disconnected, stopping daemon");
                     break;

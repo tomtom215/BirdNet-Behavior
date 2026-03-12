@@ -1,6 +1,7 @@
 //! Detection API endpoints.
 
 use axum::extract::{Query, State};
+use axum::http::StatusCode;
 use axum::{Json, Router, routing::get};
 use birdnet_db::sqlite::{DbError, DetectionRow};
 use serde::Deserialize;
@@ -24,7 +25,7 @@ struct DetectionQuery {
 async fn list_detections(
     State(state): State<AppState>,
     Query(query): Query<DetectionQuery>,
-) -> Json<Value> {
+) -> (StatusCode, Json<Value>) {
     let limit = query.limit.unwrap_or(100);
 
     let result: Result<Result<Vec<DetectionRow>, DbError>, _> = if let Some(date) = &query.date {
@@ -43,28 +44,37 @@ async fn list_detections(
     match result {
         Ok(Ok(detections)) => {
             let total = detections.len();
-            Json(json!({
-                "detections": detections,
-                "total": total,
-            }))
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "detections": detections,
+                    "total": total,
+                })),
+            )
         }
-        Ok(Err(e)) => Json(json!({
-            "error": e.to_string(),
-            "detections": [],
-            "total": 0,
-        })),
-        Err(e) => Json(json!({
-            "error": format!("internal error: {e}"),
-            "detections": [],
-            "total": 0,
-        })),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": e.to_string(),
+                "detections": [],
+                "total": 0,
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": format!("internal error: {e}"),
+                "detections": [],
+                "total": 0,
+            })),
+        ),
     }
 }
 
 async fn recent_detections(
     State(state): State<AppState>,
     Query(query): Query<DetectionQuery>,
-) -> Json<Value> {
+) -> (StatusCode, Json<Value>) {
     let limit = query.limit.unwrap_or(20);
 
     let result: Result<Result<Vec<DetectionRow>, DbError>, _> =
@@ -76,12 +86,21 @@ async fn recent_detections(
     match result {
         Ok(Ok(detections)) => {
             let total = detections.len();
-            Json(json!({
-                "detections": detections,
-                "total": total,
-            }))
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "detections": detections,
+                    "total": total,
+                })),
+            )
         }
-        Ok(Err(e)) => Json(json!({ "error": e.to_string() })),
-        Err(e) => Json(json!({ "error": format!("internal error: {e}") })),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("internal error: {e}") })),
+        ),
     }
 }
