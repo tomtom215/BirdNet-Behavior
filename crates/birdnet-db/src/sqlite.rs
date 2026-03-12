@@ -598,6 +598,72 @@ pub fn species_hourly_activity(
     Ok(rows)
 }
 
+/// Get the most recent detection timestamp.
+///
+/// Returns `(date, time, com_name)` of the latest detection, or `None` if empty.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn latest_detection(
+    conn: &Connection,
+) -> Result<Option<(String, String, String)>, DbError> {
+    let result = conn.query_row(
+        "SELECT Date, Time, Com_Name FROM detections ORDER BY Date DESC, Time DESC LIMIT 1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    );
+
+    match result {
+        Ok(row) => Ok(Some(row)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(DbError::Sqlite(e)),
+    }
+}
+
+/// Confidence distribution buckets.
+///
+/// Returns counts of detections in each confidence range:
+/// `[0-50%, 50-60%, 60-70%, 70-80%, 80-90%, 90-100%]`.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn confidence_distribution(conn: &Connection) -> Result<[i64; 6], DbError> {
+    let mut buckets = [0i64; 6];
+
+    let mut stmt = conn.prepare(
+        "SELECT
+            CASE
+                WHEN Confidence < 0.5 THEN 0
+                WHEN Confidence < 0.6 THEN 1
+                WHEN Confidence < 0.7 THEN 2
+                WHEN Confidence < 0.8 THEN 3
+                WHEN Confidence < 0.9 THEN 4
+                ELSE 5
+            END as bucket,
+            COUNT(*) as count
+         FROM detections
+         GROUP BY bucket
+         ORDER BY bucket",
+    )?;
+
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+    })?;
+
+    for row in rows {
+        let (bucket, count) = row?;
+        if let Ok(idx) = usize::try_from(bucket) {
+            if let Some(b) = buckets.get_mut(idx) {
+                *b = count;
+            }
+        }
+    }
+
+    Ok(buckets)
+}
+
 /// Run a quick integrity check.
 ///
 /// # Errors
@@ -860,5 +926,41 @@ mod tests {
         assert_eq!(hours[0].count, 1);
         assert_eq!(hours[1].hour, "07");
         assert_eq!(hours[1].count, 1);
+    }
+
+    #[test]
+    fn query_latest_detection() {
+        let (_tmp, conn) = temp_db();
+        insert_sample_records(&conn);
+
+        let latest = latest_detection(&conn).unwrap();
+        assert!(latest.is_some());
+        let (date, time, name) = latest.unwrap();
+        assert_eq!(date, "2026-03-11");
+        assert_eq!(time, "07:00:00");
+        assert_eq!(name, "Eurasian Blackbird");
+    }
+
+    #[test]
+    fn query_latest_detection_empty() {
+        let (_tmp, conn) = temp_db();
+
+        let latest = latest_detection(&conn).unwrap();
+        assert!(latest.is_none());
+    }
+
+    #[test]
+    fn query_confidence_distribution() {
+        let (_tmp, conn) = temp_db();
+        insert_sample_records(&conn);
+
+        let buckets = confidence_distribution(&conn).unwrap();
+        // Sample data: 0.87, 0.92, 0.75, 0.80
+        // 0.75 -> bucket 3 (70-80%)
+        // 0.80, 0.87 -> bucket 4 (80-90%)
+        // 0.92 -> bucket 5 (90-100%)
+        assert_eq!(buckets[3], 1); // 70-80%
+        assert_eq!(buckets[4], 2); // 80-90%
+        assert_eq!(buckets[5], 1); // 90-100%
     }
 }

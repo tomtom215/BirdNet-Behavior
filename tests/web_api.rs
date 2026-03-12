@@ -156,6 +156,9 @@ async fn stats_endpoint_returns_counts() {
 
     assert_eq!(json["total_detections"], 5);
     assert_eq!(json["unique_species"], 4);
+    assert!(json["latest_detection"].is_object());
+    assert_eq!(json["latest_detection"]["species"], "Great Tit");
+    assert!(json["confidence_distribution"].is_object());
 }
 
 #[tokio::test]

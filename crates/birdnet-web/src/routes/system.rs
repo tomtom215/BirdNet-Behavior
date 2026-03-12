@@ -46,23 +46,45 @@ async fn health(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
 }
 
 async fn stats(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
-    let result: Result<(i64, i64), _> = tokio::task::spawn_blocking(move || {
+    let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
             let detections = birdnet_db::sqlite::detection_count(conn).unwrap_or(0);
             let species = birdnet_db::sqlite::species_count(conn).unwrap_or(0);
-            (detections, species)
+            let latest = birdnet_db::sqlite::latest_detection(conn).ok().flatten();
+            let confidence = birdnet_db::sqlite::confidence_distribution(conn)
+                .unwrap_or([0; 6]);
+            (detections, species, latest, confidence)
         })
     })
     .await;
 
     match result {
-        Ok((detections, species)) => (
-            StatusCode::OK,
-            Json(json!({
-                "total_detections": detections,
-                "unique_species": species,
-            })),
-        ),
+        Ok((detections, species, latest, confidence)) => {
+            let latest_json = latest.map_or(json!(null), |(date, time, name)| {
+                json!({
+                    "date": date,
+                    "time": time,
+                    "species": name,
+                })
+            });
+
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "total_detections": detections,
+                    "unique_species": species,
+                    "latest_detection": latest_json,
+                    "confidence_distribution": {
+                        "0-50": confidence[0],
+                        "50-60": confidence[1],
+                        "60-70": confidence[2],
+                        "70-80": confidence[3],
+                        "80-90": confidence[4],
+                        "90-100": confidence[5],
+                    },
+                })),
+            )
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": format!("internal error: {e}") })),

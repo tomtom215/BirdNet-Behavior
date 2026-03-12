@@ -149,13 +149,33 @@ async fn stats_partial(State(state): State<AppState>) -> impl IntoResponse {
             let total = birdnet_db::sqlite::detection_count(conn).unwrap_or(0);
             let species = birdnet_db::sqlite::species_count(conn).unwrap_or(0);
             let today = today_count(conn);
-            (total, species, today)
+            let latest = birdnet_db::sqlite::latest_detection(conn)
+                .ok()
+                .flatten();
+            (total, species, today, latest)
         })
     })
     .await;
 
     match result {
-        Ok((total, species, today)) => {
+        Ok((total, species, today, latest)) => {
+            let latest_html = if let Some((_, time, name)) = latest {
+                format!(
+                    r#"<div class="stat-card">
+    <div class="value" style="font-size: 1.2rem;">{time}</div>
+    <div class="label">Last: {name}</div>
+</div>"#,
+                    time = escape_html(&time),
+                    name = escape_html(&name),
+                )
+            } else {
+                r#"<div class="stat-card">
+    <div class="value">--</div>
+    <div class="label">No Detections</div>
+</div>"#
+                    .to_string()
+            };
+
             let html = format!(
                 r#"<div class="stat-card">
     <div class="value">{total}</div>
@@ -168,7 +188,8 @@ async fn stats_partial(State(state): State<AppState>) -> impl IntoResponse {
 <div class="stat-card">
     <div class="value">{today}</div>
     <div class="label">Today</div>
-</div>"#,
+</div>
+{latest_html}"#,
             );
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
