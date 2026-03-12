@@ -309,32 +309,28 @@ async fn species_list_partial(
     State(state): State<AppState>,
     Query(query): Query<SpeciesListQuery>,
 ) -> impl IntoResponse {
+    let search = query.q.unwrap_or_default();
+    let search_trimmed = search.trim().to_string();
+    let has_search = !search_trimmed.is_empty();
+
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::sqlite::top_species(conn, 500))
+        state.with_db(|conn| {
+            if has_search {
+                birdnet_db::sqlite::search_species(conn, &search_trimmed, 500)
+            } else {
+                birdnet_db::sqlite::top_species(conn, 500)
+            }
+        })
     })
     .await;
 
     match result {
         Ok(Ok(species)) => {
-            // Filter by search term if provided
-            let search = query.q.as_deref().unwrap_or("").trim().to_lowercase();
-            let filtered: Vec<_> = if search.is_empty() {
-                species
-            } else {
-                species
-                    .into_iter()
-                    .filter(|s| {
-                        s.com_name.to_lowercase().contains(&search)
-                            || s.sci_name.to_lowercase().contains(&search)
-                    })
-                    .collect()
-            };
-
-            if filtered.is_empty() {
-                let msg = if search.is_empty() {
-                    "No species detected yet."
-                } else {
+            if species.is_empty() {
+                let msg = if has_search {
                     "No matching species found."
+                } else {
+                    "No species detected yet."
                 };
                 return (
                     StatusCode::OK,
@@ -349,7 +345,7 @@ async fn species_list_partial(
 <tbody>",
             );
 
-            for s in &filtered {
+            for s in &species {
                 let conf_pct = s.avg_confidence * 100.0;
                 let conf_class = if conf_pct >= 80.0 {
                     "high"

@@ -224,6 +224,22 @@
 - `Content-Disposition` header for download prompts
 - 7 unit tests + 5 integration tests
 
+### Species Search and Pagination
+
+- Species list page (`/species`) now includes live search input (HTMX, debounced 300ms)
+- Search filters by common name or scientific name (case-insensitive)
+- `GET /api/v2/species/search?q=...` — REST search endpoint with limit parameter
+- Detection list API (`GET /api/v2/detections`) supports `?offset=` for pagination
+- `search_species()` and `recent_detections_page()` SQLite query functions
+- 14 new tests covering search, pagination, and confidence chart rendering
+
+### Confidence Distribution Chart
+
+- Dashboard includes SVG horizontal bar chart showing confidence distribution
+- 6 buckets: <50%, 50-60%, 60-70%, 70-80%, 80-90%, 90-100%
+- Color-coded bars from gray (low) to green (high)
+- HTMX partial at `/pages/confidence-chart` (polls every 300s)
+
 ## Next Priority Items
 
 1. **RTSP stream management** — Full audio source lifecycle (inspired by LyreBirdAudio)
@@ -235,24 +251,24 @@
 | Crate | Unit Tests | Integration Tests | Status |
 |-------|-----------|------------------|--------|
 | birdnet-core | 64 (config, decode, resample, spectrogram, labels, model, pipeline, daemon, disk) | 19 (audio pipeline + real Pica pica) | All passing |
-| birdnet-db | 32 (sqlite, resilience, migration) | — | All passing |
-| birdnet-web | 36 (websocket, pages, static files, export CSV, auth, url encode) | 38 (HTTP API + HTMX pages + analytics + export + species detail + disk) | All passing |
+| birdnet-db | 34 (sqlite, resilience, migration, search, pagination) | — | All passing |
+| birdnet-web | 39 (websocket, pages, static files, export CSV, auth, url encode, confidence chart) | 48 (HTTP API + HTMX pages + analytics + export + species detail + disk + search + pagination) | All passing |
 | birdnet-integrations | 27 (birdweather + apprise + species images) | — | All passing |
 | birdnet-behavioral | 10 (types, queries) | — | All passing |
-| **Total** | **169** | **57** | **216 tests passing** |
+| **Total** | **174** | **57** | **231 tests passing** |
 
 ## Lines of Code (Rust, excluding tests)
 
 | Crate | ~LOC | Notes |
 |-------|------|-------|
 | birdnet-core | ~1,350 | Audio pipeline + inference + daemon + disk management |
-| birdnet-db | ~700 | Full implementation + species queries + confidence distribution |
-| birdnet-web | ~1,900 | REST API + WebSocket + HTMX pages + analytics + export + auth + images + species detail |
+| birdnet-db | ~760 | Full implementation + species queries + search + pagination |
+| birdnet-web | ~2,050 | REST API + WebSocket + HTMX pages + analytics + export + auth + images + species detail + search |
 | birdnet-integrations | ~1,100 | BirdWeather + Apprise + Wikipedia species images |
 | birdnet-behavioral | ~750 | Types + SQL builders + DuckDB connection |
 | main.rs | ~700 | Entry point + daemon bridge + DuckDB wiring + Apprise + image cache + auth |
-| Integration tests | ~1,100 | audio_pipeline.rs + web_api.rs |
-| **Total** | **~8,100** | Production Rust code |
+| Integration tests | ~1,300 | audio_pipeline.rs + web_api.rs |
+| **Total** | **~8,600** | Production Rust code |
 
 ## Key Dependencies
 

@@ -1394,3 +1394,81 @@ async fn htmx_species_list_search_no_match() {
 
     assert!(html.contains("No matching species found"));
 }
+
+#[tokio::test]
+async fn detections_invalid_date_returns_400() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/detections?date=not-a-date")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert!(json["error"].as_str().unwrap().contains("invalid date"));
+}
+
+#[tokio::test]
+async fn detections_pagination_includes_total_count() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/detections?limit=2&offset=0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // Paginated responses should include total_count
+    assert_eq!(json["total_count"], 5); // 5 total records in test data
+    assert_eq!(json["count"], 2);
+    assert_eq!(json["limit"], 2);
+    assert_eq!(json["offset"], 0);
+}
+
+#[tokio::test]
+async fn detections_limit_is_capped() {
+    let app = app();
+
+    // Request with very large limit — should be capped to MAX_LIMIT (1000)
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/detections?limit=999999")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // Limit should be capped at 1000
+    assert_eq!(json["limit"], 1000);
+}
