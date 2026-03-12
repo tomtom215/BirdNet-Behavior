@@ -271,12 +271,8 @@ async fn hourly_activity() {
 async fn analytics_endpoints_report_unavailable_without_duckdb() {
     let app = app();
 
-    // These endpoints don't require query params
-    for endpoint in &[
-        "/api/v2/analytics/retention",
-        "/api/v2/analytics/funnel",
-        "/api/v2/analytics/patterns",
-    ] {
+    // These endpoints don't require query params and report unavailable without DuckDB
+    for endpoint in &["/api/v2/analytics/retention", "/api/v2/analytics/funnel"] {
         let response = app
             .clone()
             .oneshot(
@@ -319,4 +315,231 @@ async fn analytics_endpoints_report_unavailable_without_duckdb() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["status"], "unavailable");
+
+    // next-species endpoint with optional params (returns unavailable without DuckDB)
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/analytics/next-species?after=Robin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "unavailable");
+}
+
+#[tokio::test]
+async fn analytics_status_endpoint() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/analytics/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // Without analytics feature, should report not compiled
+    assert_eq!(json["analytics_compiled"], false);
+    assert_eq!(json["analytics_configured"], false);
+    assert!(json["endpoints"].is_object());
+}
+
+#[tokio::test]
+async fn dashboard_page_returns_html() {
+    let app = app();
+
+    let response = app
+        .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(html.contains("<!DOCTYPE html>"));
+    assert!(html.contains("BirdNet-Behavior"));
+    assert!(html.contains("htmx.min.js"));
+    assert!(html.contains("Recent Detections"));
+    assert!(html.contains("Top Species"));
+}
+
+#[tokio::test]
+async fn species_page_returns_html() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/species")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(html.contains("All Species"));
+    assert!(html.contains("hx-get"));
+}
+
+#[tokio::test]
+async fn htmx_stats_partial_returns_html() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/stats")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(html.contains("Total Detections"));
+    assert!(html.contains("Unique Species"));
+    assert!(html.contains('5')); // total detections from test data
+    assert!(html.contains('4')); // unique species from test data
+}
+
+#[tokio::test]
+async fn htmx_detections_partial_returns_table() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/detections")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 8192)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(html.contains("<table>"));
+    assert!(html.contains("Eurasian Blackbird"));
+    assert!(html.contains("European Robin"));
+}
+
+#[tokio::test]
+async fn htmx_top_species_partial_returns_list() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/top-species")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(html.contains("Eurasian Blackbird"));
+    assert!(html.contains("species-item"));
+}
+
+#[tokio::test]
+async fn htmx_health_badge_returns_healthy() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/health-badge")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 1024)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(html.contains("Healthy"));
+    assert!(html.contains("ok"));
+}
+
+#[tokio::test]
+async fn static_htmx_js_served() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/static/htmx.min.js")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert_eq!(content_type, "application/javascript");
+
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    assert!(body.len() > 1000); // HTMX is ~50KB
 }

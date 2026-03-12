@@ -293,6 +293,103 @@ impl AnalyticsDb {
         Ok(results)
     }
 
+    /// Execute a retention query to track species return patterns.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails or the behavioral extension
+    /// is not loaded.
+    pub fn retention(
+        &self,
+        params: &crate::types::RetentionParams,
+    ) -> Result<Vec<crate::types::SpeciesRetention>, AnalyticsError> {
+        if !self.extension_loaded {
+            return Err(AnalyticsError::ExtensionLoad(
+                "behavioral extension not loaded".into(),
+            ));
+        }
+
+        let sql = queries::retention_sql(params);
+        let mut stmt = self.conn.prepare(&sql)?;
+
+        // The retention() function returns an array of booleans/rates
+        let rows = stmt.query_map([], |row| {
+            let species: String = row.get(0)?;
+            let rates_raw: Vec<f64> = row.get(1)?;
+
+            Ok((species, rates_raw))
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            let (species, rates_raw) = row?;
+
+            let retention_rates: Vec<crate::types::RetentionRate> = params
+                .intervals
+                .iter()
+                .zip(rates_raw.iter())
+                .map(|(&days, &rate)| crate::types::RetentionRate { days, rate })
+                .collect();
+
+            // Classify residency based on 30-day retention (or last available)
+            let long_term_rate = retention_rates.last().map_or(0.0, |r| r.rate);
+            let classification = crate::types::ResidencyType::from_retention_rate(long_term_rate);
+
+            results.push(crate::types::SpeciesRetention {
+                species,
+                retention_rates,
+                classification,
+            });
+        }
+
+        Ok(results)
+    }
+
+    /// Execute a dawn chorus funnel analysis query.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails or the behavioral extension
+    /// is not loaded.
+    pub fn funnel(
+        &self,
+        params: &crate::types::FunnelParams,
+    ) -> Result<Vec<crate::types::ChorusFunnel>, AnalyticsError> {
+        if !self.extension_loaded {
+            return Err(AnalyticsError::ExtensionLoad(
+                "behavioral extension not loaded".into(),
+            ));
+        }
+
+        let sql = queries::funnel_sql(params);
+        let total_steps = u32::try_from(params.species_sequence.len()).unwrap_or(0);
+        let species_sequence = params.species_sequence.clone();
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?))
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            let (date, steps_completed) = row?;
+            let matched_species: Vec<String> = species_sequence
+                .iter()
+                .take(steps_completed as usize)
+                .cloned()
+                .collect();
+
+            results.push(crate::types::ChorusFunnel {
+                date,
+                steps_completed,
+                total_steps,
+                matched_species,
+            });
+        }
+
+        Ok(results)
+    }
+
     /// Execute a next-species prediction query.
     ///
     /// # Errors
