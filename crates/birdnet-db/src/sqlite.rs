@@ -412,6 +412,42 @@ pub struct HourlyCount {
     pub count: i64,
 }
 
+/// Daily detection count.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DailyCount {
+    /// Date string (YYYY-MM-DD).
+    pub date: String,
+    /// Number of detections on this date.
+    pub count: i64,
+}
+
+/// Get daily detection counts for the last N days.
+///
+/// Returns counts in chronological order (oldest first).
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn daily_counts(conn: &Connection, days: u32) -> Result<Vec<DailyCount>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT Date, COUNT(*) as count
+         FROM detections
+         WHERE Date >= DATE('now', '-' || ?1 || ' days')
+         GROUP BY Date ORDER BY Date ASC",
+    )?;
+
+    let rows = stmt
+        .query_map(params![days], |row| {
+            Ok(DailyCount {
+                date: row.get(0)?,
+                count: row.get(1)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(rows)
+}
+
 /// Run a quick integrity check.
 ///
 /// # Errors
@@ -594,5 +630,26 @@ mod tests {
         assert_eq!(hours.len(), 2); // 06 and 07
         assert_eq!(hours[0].hour, "06");
         assert_eq!(hours[0].count, 2);
+    }
+
+    #[test]
+    fn query_daily_counts() {
+        let (_tmp, conn) = temp_db();
+        insert_sample_records(&conn);
+
+        // Query with a large window to get all days
+        let days = daily_counts(&conn, 365).unwrap();
+        // Sample data has 2 dates: 2026-03-10 and 2026-03-11
+        assert!(days.len() >= 2);
+
+        // Check they're in chronological order
+        if days.len() >= 2 {
+            assert!(days[0].date <= days[1].date);
+        }
+
+        // Check counts are positive
+        for day in &days {
+            assert!(day.count > 0);
+        }
     }
 }

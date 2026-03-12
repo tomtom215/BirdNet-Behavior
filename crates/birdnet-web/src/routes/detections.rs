@@ -3,7 +3,7 @@
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::{Json, Router, routing::get};
-use birdnet_db::sqlite::{DbError, DetectionRow};
+use birdnet_db::sqlite::{DailyCount, DbError, DetectionRow};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -14,6 +14,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/detections", get(list_detections))
         .route("/detections/recent", get(recent_detections))
+        .route("/detections/daily", get(daily_detections))
 }
 
 #[derive(Deserialize)]
@@ -90,6 +91,46 @@ async fn recent_detections(
                 StatusCode::OK,
                 Json(json!({
                     "detections": detections,
+                    "total": total,
+                })),
+            )
+        }
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("internal error: {e}") })),
+        ),
+    }
+}
+
+#[derive(Deserialize)]
+struct DailyQuery {
+    days: Option<u32>,
+}
+
+/// Daily detection counts for trend analysis.
+async fn daily_detections(
+    State(state): State<AppState>,
+    Query(query): Query<DailyQuery>,
+) -> (StatusCode, Json<Value>) {
+    let days = query.days.unwrap_or(7);
+
+    let result: Result<Result<Vec<DailyCount>, DbError>, _> =
+        tokio::task::spawn_blocking(move || {
+            state.with_db(|conn| birdnet_db::sqlite::daily_counts(conn, days))
+        })
+        .await;
+
+    match result {
+        Ok(Ok(daily)) => {
+            let total = daily.len();
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "daily": daily,
                     "total": total,
                 })),
             )

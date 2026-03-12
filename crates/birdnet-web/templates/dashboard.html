@@ -13,6 +13,13 @@
     </div>
 </div>
 
+<div class="card" style="margin-bottom: 1rem;">
+    <h2>Today's Activity</h2>
+    <div hx-get="/pages/hourly-chart" hx-trigger="load, every 60s" hx-swap="innerHTML">
+        <p style="color: var(--text-muted)">Loading chart...</p>
+    </div>
+</div>
+
 <div class="grid-2">
     <div class="card">
         <h2><span class="live-dot"></span> Recent Detections</h2>
@@ -21,10 +28,19 @@
         </div>
     </div>
 
-    <div class="card">
-        <h2>Top Species</h2>
-        <div id="top-species" hx-get="/pages/top-species" hx-trigger="load, every 60s" hx-swap="innerHTML">
-            <p style="color: var(--text-muted)">Loading species...</p>
+    <div>
+        <div class="card">
+            <h2>Top Species</h2>
+            <div id="top-species" hx-get="/pages/top-species" hx-trigger="load, every 60s" hx-swap="innerHTML">
+                <p style="color: var(--text-muted)">Loading species...</p>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>7-Day Trend</h2>
+            <div hx-get="/pages/daily-chart" hx-trigger="load, every 300s" hx-swap="innerHTML">
+                <p style="color: var(--text-muted)">Loading trend...</p>
+            </div>
         </div>
     </div>
 </div>

@@ -40,6 +40,9 @@ pub fn router() -> Router<AppState> {
         )
         .route("/pages/analytics-next", get(analytics_next_partial))
         .route("/pages/analytics-config", get(analytics_config_partial))
+        // Dashboard charts
+        .route("/pages/hourly-chart", get(hourly_chart_partial))
+        .route("/pages/daily-chart", get(daily_chart_partial))
 }
 
 /// Render a full page by inserting content into the layout template.
@@ -290,6 +293,188 @@ async fn health_badge_partial(State(state): State<AppState>) -> impl IntoRespons
     let html = format!(r#"<span class="dot {dot_class}"></span> {label}"#);
 
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+}
+
+/// HTMX partial: hourly activity SVG bar chart for today.
+async fn hourly_chart_partial(State(state): State<AppState>) -> impl IntoResponse {
+    let today = today_date_string();
+    let result = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| birdnet_db::sqlite::hourly_activity(conn, &today))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(hours)) => {
+            let html = render_hourly_chart(&hours);
+            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+        }
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading chart</p>".to_string(),
+        ),
+    }
+}
+
+/// HTMX partial: 7-day daily trend SVG bar chart.
+async fn daily_chart_partial(State(state): State<AppState>) -> impl IntoResponse {
+    let result = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| birdnet_db::sqlite::daily_counts(conn, 7))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(days)) => {
+            let html = render_daily_chart(&days);
+            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+        }
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading chart</p>".to_string(),
+        ),
+    }
+}
+
+/// Render an SVG bar chart showing hourly detection counts.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_lossless
+)]
+fn render_hourly_chart(hours: &[birdnet_db::sqlite::HourlyCount]) -> String {
+    // Build a full 24-hour array
+    let mut counts = [0_i64; 24];
+    for h in hours {
+        if let Ok(hour) = h.hour.parse::<usize>() {
+            if hour < 24 {
+                counts[hour] = h.count;
+            }
+        }
+    }
+
+    let max_count = counts.iter().copied().max().unwrap_or(1).max(1);
+
+    if counts.iter().all(|&c| c == 0) {
+        return r#"<p style="color: var(--text-muted)">No detections today yet.</p>"#.to_string();
+    }
+
+    // SVG dimensions
+    let chart_w = 700;
+    let chart_h = 120;
+    let bar_w = 25;
+    let gap = 4;
+    let left_pad = 5;
+
+    let mut svg = format!(
+        r#"<svg viewBox="0 0 {svg_w} {svg_h}" style="width: 100%; height: auto; display: block;" xmlns="http://www.w3.org/2000/svg">"#,
+        svg_w = chart_w,
+        svg_h = chart_h + 20,
+    );
+
+    for (i, &count) in counts.iter().enumerate() {
+        let x = left_pad + i as i32 * (bar_w + gap);
+        let bar_h = if max_count > 0 {
+            (count as f64 / max_count as f64 * chart_h as f64) as i32
+        } else {
+            0
+        };
+        let y = chart_h - bar_h;
+
+        // Bar color: accent for bars with data, dimmer for zero
+        let color = if count > 0 { "#38bdf8" } else { "#1e293b" };
+
+        let _ = write!(
+            svg,
+            r#"<rect x="{x}" y="{y}" width="{bar_w}" height="{bar_h}" rx="2" fill="{color}"/>"#,
+        );
+
+        // Count label above bar (only for non-zero)
+        if count > 0 {
+            let _ = write!(
+                svg,
+                r##"<text x="{tx}" y="{ty}" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="sans-serif">{count}</text>"##,
+                tx = x + bar_w / 2,
+                ty = y - 3,
+            );
+        }
+
+        // Hour label below (every third hour to avoid crowding)
+        if i % 3 == 0 {
+            let _ = write!(
+                svg,
+                r##"<text x="{tx}" y="{ty}" text-anchor="middle" fill="#64748b" font-size="9" font-family="sans-serif">{i:02}</text>"##,
+                tx = x + bar_w / 2,
+                ty = chart_h + 14,
+            );
+        }
+    }
+
+    svg.push_str("</svg>");
+    svg
+}
+
+/// Render an SVG bar chart showing daily detection counts.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_lossless
+)]
+fn render_daily_chart(days: &[birdnet_db::sqlite::DailyCount]) -> String {
+    if days.is_empty() {
+        return r#"<p style="color: var(--text-muted)">No detection data yet.</p>"#.to_string();
+    }
+
+    let max_count = days.iter().map(|d| d.count).max().unwrap_or(1).max(1);
+
+    let chart_w = 280;
+    let chart_h = 100;
+    let bar_w = 32;
+    let gap = 6;
+    let left_pad = 5;
+
+    let mut svg = format!(
+        r#"<svg viewBox="0 0 {svg_w} {svg_h}" style="width: 100%; height: auto; display: block;" xmlns="http://www.w3.org/2000/svg">"#,
+        svg_w = chart_w,
+        svg_h = chart_h + 22,
+    );
+
+    for (i, day) in days.iter().enumerate() {
+        let x = left_pad + i as i32 * (bar_w + gap);
+        let bar_h = (day.count as f64 / max_count as f64 * chart_h as f64) as i32;
+        let y = chart_h - bar_h;
+
+        let _ = write!(
+            svg,
+            r##"<rect x="{x}" y="{y}" width="{bar_w}" height="{bar_h}" rx="2" fill="#38bdf8"/>"##,
+        );
+
+        // Count above bar
+        if day.count > 0 {
+            let _ = write!(
+                svg,
+                r##"<text x="{tx}" y="{ty}" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="sans-serif">{count}</text>"##,
+                tx = x + bar_w / 2,
+                ty = y - 3,
+                count = day.count,
+            );
+        }
+
+        // Date label (MM-DD)
+        let date_label = day.date.get(5..).unwrap_or(&day.date);
+        let _ = write!(
+            svg,
+            r##"<text x="{tx}" y="{ty}" text-anchor="middle" fill="#64748b" font-size="8" font-family="sans-serif">{label}</text>"##,
+            tx = x + bar_w / 2,
+            ty = chart_h + 14,
+            label = escape_html(date_label),
+        );
+    }
+
+    svg.push_str("</svg>");
+    svg
 }
 
 /// HTMX partial: analytics status card.
@@ -785,5 +970,72 @@ mod tests {
         assert!(html.0.contains("<title>Test - BirdNet-Behavior</title>"));
         assert!(html.0.contains("<p>Hello</p>"));
         assert!(html.0.contains("class=\"active\""));
+    }
+
+    #[test]
+    fn render_hourly_chart_empty() {
+        let result = render_hourly_chart(&[]);
+        assert!(result.contains("No detections today"));
+    }
+
+    #[test]
+    fn render_hourly_chart_with_data() {
+        let hours = vec![
+            birdnet_db::sqlite::HourlyCount {
+                hour: "06".to_string(),
+                count: 5,
+            },
+            birdnet_db::sqlite::HourlyCount {
+                hour: "07".to_string(),
+                count: 12,
+            },
+        ];
+        let svg = render_hourly_chart(&hours);
+        assert!(svg.contains("<svg"));
+        assert!(svg.contains("</svg>"));
+        assert!(svg.contains("rect"));
+    }
+
+    #[test]
+    fn render_daily_chart_empty() {
+        let result = render_daily_chart(&[]);
+        assert!(result.contains("No detection data"));
+    }
+
+    #[test]
+    fn render_daily_chart_with_data() {
+        let days = vec![
+            birdnet_db::sqlite::DailyCount {
+                date: "2026-03-10".to_string(),
+                count: 15,
+            },
+            birdnet_db::sqlite::DailyCount {
+                date: "2026-03-11".to_string(),
+                count: 28,
+            },
+        ];
+        let svg = render_daily_chart(&days);
+        assert!(svg.contains("<svg"));
+        assert!(svg.contains("</svg>"));
+        assert!(svg.contains("03-10"));
+        assert!(svg.contains("03-11"));
+    }
+
+    #[cfg(feature = "analytics")]
+    #[test]
+    fn format_duration_seconds() {
+        assert_eq!(format_duration(45), "45s");
+    }
+
+    #[cfg(feature = "analytics")]
+    #[test]
+    fn format_duration_minutes() {
+        assert_eq!(format_duration(125), "2m 5s");
+    }
+
+    #[cfg(feature = "analytics")]
+    #[test]
+    fn format_duration_hours() {
+        assert_eq!(format_duration(3725), "1h 2m");
     }
 }
