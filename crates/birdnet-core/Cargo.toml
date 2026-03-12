@@ -17,6 +17,7 @@ tracing.workspace = true
 symphonia.workspace = true
 rubato.workspace = true
 audioadapter-buffers = "2"
+realfft = "3"
 
 # File watching
 notify.workspace = true
