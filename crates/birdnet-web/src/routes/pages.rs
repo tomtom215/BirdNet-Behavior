@@ -149,9 +149,7 @@ async fn stats_partial(State(state): State<AppState>) -> impl IntoResponse {
             let total = birdnet_db::sqlite::detection_count(conn).unwrap_or(0);
             let species = birdnet_db::sqlite::species_count(conn).unwrap_or(0);
             let today = today_count(conn);
-            let latest = birdnet_db::sqlite::latest_detection(conn)
-                .ok()
-                .flatten();
+            let latest = birdnet_db::sqlite::latest_detection(conn).ok().flatten();
             (total, species, today, latest)
         })
     })

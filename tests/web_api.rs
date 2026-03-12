@@ -162,6 +162,32 @@ async fn stats_endpoint_returns_counts() {
 }
 
 #[tokio::test]
+async fn disk_info_endpoint() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/system/disk")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Should return 200 (or 503 if disk is critical, unlikely in test)
+    assert!(response.status().is_success() || response.status() == StatusCode::SERVICE_UNAVAILABLE);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // Should have disk usage fields
+    assert!(json["total_bytes"].is_number() || json["error"].is_string());
+}
+
+#[tokio::test]
 async fn detections_by_date() {
     let app = app();
 

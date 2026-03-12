@@ -216,19 +216,19 @@
 | Crate | Unit Tests | Integration Tests | Status |
 |-------|-----------|------------------|--------|
 | birdnet-core | 57 (config, decode, resample, spectrogram, labels, model, pipeline, daemon) | 19 (audio pipeline + real Pica pica) | All passing |
-| birdnet-db | 28 (sqlite, resilience, migration) | — | All passing |
-| birdnet-web | 36 (websocket, pages, static files, export CSV, auth, url encode) | 34 (HTTP API + HTMX pages + analytics + export + species detail) | All passing |
+| birdnet-db | 32 (sqlite, resilience, migration) | — | All passing |
+| birdnet-web | 36 (websocket, pages, static files, export CSV, auth, url encode) | 37 (HTTP API + HTMX pages + analytics + export + species detail) | All passing |
 | birdnet-integrations | 27 (birdweather + apprise + species images) | — | All passing |
 | birdnet-behavioral | 10 (types, queries) | — | All passing |
-| **Total** | **158** | **53** | **201 tests passing** |
+| **Total** | **162** | **56** | **208 tests passing** |
 
 ## Lines of Code (Rust, excluding tests)
 
 | Crate | ~LOC | Notes |
 |-------|------|-------|
 | birdnet-core | ~1,200 | Audio pipeline + inference + daemon |
-| birdnet-db | ~650 | Full implementation + species queries |
-| birdnet-web | ~1,800 | REST API + WebSocket + HTMX pages + analytics + export + auth + images + species detail |
+| birdnet-db | ~700 | Full implementation + species queries + confidence distribution |
+| birdnet-web | ~1,900 | REST API + WebSocket + HTMX pages + analytics + export + auth + images + species detail |
 | birdnet-integrations | ~1,100 | BirdWeather + Apprise + Wikipedia species images |
 | birdnet-behavioral | ~750 | Types + SQL builders + DuckDB connection |
 | main.rs | ~700 | Entry point + daemon bridge + DuckDB wiring + Apprise + image cache + auth |

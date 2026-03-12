@@ -309,6 +309,122 @@ pub fn cleanup_old_recordings(dir: &Path, max_age_days: u32) -> Result<u32, Capt
     Ok(removed)
 }
 
+/// Disk space information for a filesystem.
+#[derive(Debug, Clone, Copy)]
+pub struct DiskUsage {
+    /// Total space in bytes.
+    pub total_bytes: u64,
+    /// Used space in bytes.
+    pub used_bytes: u64,
+    /// Available space in bytes.
+    pub available_bytes: u64,
+}
+
+impl DiskUsage {
+    /// Percentage of disk used (0.0 - 100.0).
+    #[allow(clippy::cast_precision_loss)]
+    pub fn used_percent(&self) -> f64 {
+        if self.total_bytes == 0 {
+            return 0.0;
+        }
+        self.used_bytes as f64 / self.total_bytes as f64 * 100.0
+    }
+
+    /// Whether the disk is critically low (less than 5% available).
+    pub const fn is_critical(&self) -> bool {
+        self.available_bytes < self.total_bytes / 20
+    }
+
+    /// Whether the disk is getting low (less than 10% available).
+    pub const fn is_low(&self) -> bool {
+        self.available_bytes < self.total_bytes / 10
+    }
+}
+
+/// Get disk usage information for the filesystem containing `path`.
+///
+/// Uses the `df` command to query filesystem statistics, avoiding
+/// `unsafe` code and platform-specific `libc` bindings.
+///
+/// # Errors
+///
+/// Returns `CaptureError` if `df` is not available or the path doesn't exist.
+pub fn disk_usage(path: &Path) -> Result<DiskUsage, CaptureError> {
+    let output = Command::new("df")
+        .arg("--output=size,used,avail")
+        .arg("-B1") // bytes
+        .arg(path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .map_err(CaptureError::Spawn)?;
+
+    if !output.status.success() {
+        return Err(CaptureError::Config(format!(
+            "df failed for {}",
+            path.display()
+        )));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let data_line = stdout
+        .lines()
+        .nth(1)
+        .ok_or_else(|| CaptureError::Config("unexpected df output".into()))?;
+
+    let values: Vec<u64> = data_line
+        .split_whitespace()
+        .filter_map(|s| s.parse().ok())
+        .collect();
+
+    if values.len() < 3 {
+        return Err(CaptureError::Config("unexpected df output format".into()));
+    }
+
+    Ok(DiskUsage {
+        total_bytes: values[0],
+        used_bytes: values[1],
+        available_bytes: values[2],
+    })
+}
+
+/// Count audio files in a directory and their total size.
+///
+/// Returns `(file_count, total_size_bytes)`.
+///
+/// # Errors
+///
+/// Returns `CaptureError` if the directory cannot be read.
+pub fn recording_stats(dir: &Path) -> Result<(u32, u64), CaptureError> {
+    let entries = std::fs::read_dir(dir).map_err(|e| CaptureError::Config(e.to_string()))?;
+
+    let mut count = 0_u32;
+    let mut total_size = 0_u64;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+
+        let is_audio = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|ext| {
+                ext.eq_ignore_ascii_case("wav")
+                    || ext.eq_ignore_ascii_case("flac")
+                    || ext.eq_ignore_ascii_case("mp3")
+            });
+
+        if is_audio {
+            count += 1;
+            total_size += entry.metadata().map_or(0, |m| m.len());
+        }
+    }
+
+    Ok((count, total_size))
+}
+
 /// Manages the lifecycle of an audio capture process.
 ///
 /// Starts the appropriate capture subprocess (arecord or ffmpeg),
@@ -494,6 +610,78 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 0);
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn disk_usage_percent() {
+        let usage = DiskUsage {
+            total_bytes: 1_000_000,
+            used_bytes: 750_000,
+            available_bytes: 250_000,
+        };
+        assert!((usage.used_percent() - 75.0).abs() < 0.01);
+        assert!(!usage.is_critical());
+        assert!(!usage.is_low());
+    }
+
+    #[test]
+    fn disk_usage_critical() {
+        let usage = DiskUsage {
+            total_bytes: 1_000_000,
+            used_bytes: 960_000,
+            available_bytes: 40_000,
+        };
+        assert!(usage.is_critical());
+        assert!(usage.is_low());
+    }
+
+    #[test]
+    fn disk_usage_low() {
+        let usage = DiskUsage {
+            total_bytes: 1_000_000,
+            used_bytes: 920_000,
+            available_bytes: 80_000,
+        };
+        assert!(!usage.is_critical());
+        assert!(usage.is_low());
+    }
+
+    #[test]
+    fn disk_usage_empty_total() {
+        let usage = DiskUsage {
+            total_bytes: 0,
+            used_bytes: 0,
+            available_bytes: 0,
+        };
+        assert!((usage.used_percent()).abs() < 0.01);
+    }
+
+    #[test]
+    fn disk_usage_from_df() {
+        // Test actual disk usage query for the temp directory
+        let result = disk_usage(Path::new("/tmp"));
+        assert!(result.is_ok());
+        let usage = result.unwrap();
+        assert!(usage.total_bytes > 0);
+        assert!(usage.available_bytes <= usage.total_bytes);
+    }
+
+    #[test]
+    fn recording_stats_empty_dir() {
+        let dir = std::env::temp_dir().join("birdnet_test_recording_stats");
+        let _ = std::fs::create_dir_all(&dir);
+        let result = recording_stats(&dir);
+        assert!(result.is_ok());
+        let (count, size) = result.unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(size, 0);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn recording_stats_nonexistent_dir() {
+        let result = recording_stats(Path::new("/nonexistent/dir"));
+        assert!(result.is_err());
     }
 
     #[test]

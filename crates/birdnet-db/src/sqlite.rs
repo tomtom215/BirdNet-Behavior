@@ -605,9 +605,7 @@ pub fn species_hourly_activity(
 /// # Errors
 ///
 /// Returns `DbError` on query failure.
-pub fn latest_detection(
-    conn: &Connection,
-) -> Result<Option<(String, String, String)>, DbError> {
+pub fn latest_detection(conn: &Connection) -> Result<Option<(String, String, String)>, DbError> {
     let result = conn.query_row(
         "SELECT Date, Time, Com_Name FROM detections ORDER BY Date DESC, Time DESC LIMIT 1",
         [],
@@ -648,9 +646,7 @@ pub fn confidence_distribution(conn: &Connection) -> Result<[i64; 6], DbError> {
          ORDER BY bucket",
     )?;
 
-    let rows = stmt.query_map([], |row| {
-        Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
-    })?;
+    let rows = stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?;
 
     for row in rows {
         let (bucket, count) = row?;
