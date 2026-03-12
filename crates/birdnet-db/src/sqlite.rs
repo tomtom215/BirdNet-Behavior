@@ -448,6 +448,124 @@ pub fn daily_counts(conn: &Connection, days: u32) -> Result<Vec<DailyCount>, DbE
     Ok(rows)
 }
 
+/// Get recent detections for a specific species.
+///
+/// Returns detections ordered by date/time descending.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn detections_by_species(
+    conn: &Connection,
+    com_name: &str,
+    limit: u32,
+) -> Result<Vec<DetectionRow>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name
+         FROM detections WHERE Com_Name = ?1 ORDER BY Date DESC, Time DESC LIMIT ?2",
+    )?;
+
+    let rows = stmt
+        .query_map(params![com_name, limit], |row| {
+            Ok(DetectionRow {
+                date: row.get(0)?,
+                time: row.get(1)?,
+                sci_name: row.get(2)?,
+                com_name: row.get(3)?,
+                confidence: row.get(4)?,
+                lat: row.get(5)?,
+                lon: row.get(6)?,
+                cutoff: row.get(7)?,
+                week: row.get(8)?,
+                sens: row.get(9)?,
+                overlap: row.get(10)?,
+                file_name: row.get(11)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(rows)
+}
+
+/// Get species summary (count, avg confidence, first/last seen) by common name.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn species_summary(
+    conn: &Connection,
+    com_name: &str,
+) -> Result<Option<SpeciesSummary>, DbError> {
+    let result = conn.query_row(
+        "SELECT Com_Name, Sci_Name, COUNT(*) as count,
+                AVG(Confidence) as avg_conf,
+                MIN(Date) as first_seen,
+                MAX(Date) as last_seen
+         FROM detections WHERE Com_Name = ?1 GROUP BY Com_Name",
+        params![com_name],
+        |row| {
+            Ok(SpeciesSummary {
+                com_name: row.get(0)?,
+                sci_name: row.get(1)?,
+                count: row.get(2)?,
+                avg_confidence: row.get(3)?,
+                first_seen: row.get(4)?,
+                last_seen: row.get(5)?,
+            })
+        },
+    );
+
+    match result {
+        Ok(summary) => Ok(Some(summary)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(DbError::Sqlite(e)),
+    }
+}
+
+/// Species summary with statistics.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SpeciesSummary {
+    /// Common name.
+    pub com_name: String,
+    /// Scientific name.
+    pub sci_name: String,
+    /// Total detection count.
+    pub count: i64,
+    /// Average confidence score.
+    pub avg_confidence: f64,
+    /// First detection date (YYYY-MM-DD).
+    pub first_seen: String,
+    /// Last detection date (YYYY-MM-DD).
+    pub last_seen: String,
+}
+
+/// Get hourly activity for a specific species (across all dates).
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn species_hourly_activity(
+    conn: &Connection,
+    com_name: &str,
+) -> Result<Vec<HourlyCount>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT SUBSTR(Time, 1, 2) as hour, COUNT(*) as count
+         FROM detections WHERE Com_Name = ?1
+         GROUP BY hour ORDER BY hour",
+    )?;
+
+    let rows = stmt
+        .query_map(params![com_name], |row| {
+            Ok(HourlyCount {
+                hour: row.get(0)?,
+                count: row.get(1)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(rows)
+}
+
 /// Run a quick integrity check.
 ///
 /// # Errors
@@ -651,5 +769,53 @@ mod tests {
         for day in &days {
             assert!(day.count > 0);
         }
+    }
+
+    #[test]
+    fn query_species_summary() {
+        let (_tmp, conn) = temp_db();
+        insert_sample_records(&conn);
+
+        let summary = species_summary(&conn, "Eurasian Blackbird").unwrap();
+        assert!(summary.is_some());
+        let s = summary.unwrap();
+        assert_eq!(s.com_name, "Eurasian Blackbird");
+        assert_eq!(s.sci_name, "Turdus merula");
+        assert_eq!(s.count, 2);
+        // Average of 0.87 and 0.75 = 0.81
+        assert!((s.avg_confidence - 0.81).abs() < 0.01);
+    }
+
+    #[test]
+    fn query_species_summary_not_found() {
+        let (_tmp, conn) = temp_db();
+        insert_sample_records(&conn);
+
+        let summary = species_summary(&conn, "Nonexistent Bird").unwrap();
+        assert!(summary.is_none());
+    }
+
+    #[test]
+    fn query_detections_by_species() {
+        let (_tmp, conn) = temp_db();
+        insert_sample_records(&conn);
+
+        let rows = detections_by_species(&conn, "Eurasian Blackbird", 10).unwrap();
+        assert_eq!(rows.len(), 2);
+        // All should be blackbird
+        assert!(rows.iter().all(|d| d.com_name == "Eurasian Blackbird"));
+    }
+
+    #[test]
+    fn query_species_hourly_activity() {
+        let (_tmp, conn) = temp_db();
+        insert_sample_records(&conn);
+
+        let hours = species_hourly_activity(&conn, "Eurasian Blackbird").unwrap();
+        assert_eq!(hours.len(), 2); // 06 and 07
+        assert_eq!(hours[0].hour, "06");
+        assert_eq!(hours[0].count, 1);
+        assert_eq!(hours[1].hour, "07");
+        assert_eq!(hours[1].count, 1);
     }
 }

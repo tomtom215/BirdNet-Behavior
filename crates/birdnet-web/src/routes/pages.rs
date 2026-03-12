@@ -6,10 +6,11 @@
 
 use std::fmt::Write;
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse};
 use axum::{Router, routing::get};
+use serde::Deserialize;
 
 use crate::state::AppState;
 
@@ -18,6 +19,7 @@ const LAYOUT_HTML: &str = include_str!("../../templates/layout.html");
 const DASHBOARD_HTML: &str = include_str!("../../templates/dashboard.html");
 const SPECIES_PAGE_HTML: &str = include_str!("../../templates/species.html");
 const ANALYTICS_PAGE_HTML: &str = include_str!("../../templates/analytics.html");
+const SPECIES_DETAIL_HTML: &str = include_str!("../../templates/species_detail.html");
 
 /// Page and HTMX partial routes.
 pub fn router() -> Router<AppState> {
@@ -43,6 +45,12 @@ pub fn router() -> Router<AppState> {
         // Dashboard charts
         .route("/pages/hourly-chart", get(hourly_chart_partial))
         .route("/pages/daily-chart", get(daily_chart_partial))
+        // Species detail
+        .route("/species/detail", get(species_detail_page))
+        .route("/pages/species-summary", get(species_summary_partial))
+        .route("/pages/species-hourly", get(species_hourly_partial))
+        .route("/pages/species-detections", get(species_detections_partial))
+        .route("/pages/species-info", get(species_info_partial))
 }
 
 /// Render a full page by inserting content into the layout template.
@@ -92,6 +100,45 @@ async fn species_page() -> Html<String> {
 /// Analytics page (full HTML).
 async fn analytics_page() -> Html<String> {
     render_page("Analytics", ANALYTICS_PAGE_HTML, "analytics")
+}
+
+/// Query parameter for species name.
+#[derive(Deserialize)]
+struct SpeciesQuery {
+    name: Option<String>,
+}
+
+/// Species detail page (full HTML).
+async fn species_detail_page(
+    State(state): State<AppState>,
+    Query(query): Query<SpeciesQuery>,
+) -> Html<String> {
+    let Some(name) = query.name else {
+        return render_page("Species", "<p>No species specified.</p>", "species");
+    };
+
+    // Look up the scientific name
+    let com_name = name.clone();
+    let sci_name = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| {
+            conn.query_row(
+                "SELECT Sci_Name FROM detections WHERE Com_Name = ?1 LIMIT 1",
+                [&com_name],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap_or_default()
+        })
+    })
+    .await
+    .unwrap_or_default();
+
+    let encoded = simple_url_encode(&name);
+    let content = SPECIES_DETAIL_HTML
+        .replace("{{species_name}}", &escape_html(&name))
+        .replace("{{scientific_name}}", &escape_html(&sci_name))
+        .replace("{{species_encoded}}", &encoded);
+
+    render_page(&name, &content, "species")
 }
 
 /// HTMX partial: stats cards.
@@ -156,10 +203,11 @@ async fn detections_partial(State(state): State<AppState>) -> impl IntoResponse 
                 } else {
                     "low"
                 };
+                let encoded = simple_url_encode(&d.com_name);
                 let _ = write!(
                     html,
                     r#"<tr>
-    <td class="species-name">{com_name}</td>
+    <td class="species-name"><a href="/species/detail?name={encoded}" style="color: inherit; text-decoration: none;">{com_name}</a></td>
     <td><span class="conf {conf_class}">{conf_pct:.0}%</span></td>
     <td>{time}</td>
     <td>{date}</td>
@@ -198,12 +246,15 @@ async fn top_species_partial(State(state): State<AppState>) -> impl IntoResponse
             let mut html = String::new();
 
             for s in &species {
+                let encoded = simple_url_encode(&s.com_name);
                 let _ = write!(
                     html,
-                    r#"<div class="species-item">
+                    r#"<a href="/species/detail?name={encoded}" style="text-decoration: none; color: inherit;">
+<div class="species-item">
     <span class="species-name">{name}</span>
     <span class="species-count">{count}</span>
-</div>"#,
+</div>
+</a>"#,
                     name = escape_html(&s.com_name),
                     count = s.count,
                 );
@@ -248,10 +299,11 @@ async fn species_list_partial(State(state): State<AppState>) -> impl IntoRespons
                 } else {
                     "low"
                 };
+                let encoded = simple_url_encode(&s.com_name);
                 let _ = write!(
                     html,
                     r#"<tr>
-    <td class="species-name">{name}</td>
+    <td class="species-name"><a href="/species/detail?name={encoded}" style="color: inherit; text-decoration: none;">{name}</a></td>
     <td>{count}</td>
     <td><span class="conf {conf_class}">{conf_pct:.0}%</span></td>
 </tr>"#,
@@ -475,6 +527,232 @@ fn render_daily_chart(days: &[birdnet_db::sqlite::DailyCount]) -> String {
 
     svg.push_str("</svg>");
     svg
+}
+
+/// HTMX partial: species summary stats.
+async fn species_summary_partial(
+    State(state): State<AppState>,
+    Query(query): Query<SpeciesQuery>,
+) -> impl IntoResponse {
+    let Some(name) = query.name else {
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>No species specified.</p>".to_string(),
+        );
+    };
+
+    let result = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| birdnet_db::sqlite::species_summary(conn, &name))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(Some(summary))) => {
+            let conf_pct = summary.avg_confidence * 100.0;
+            let html = format!(
+                r#"<div class="stat-card">
+    <div class="value">{count}</div>
+    <div class="label">Detections</div>
+</div>
+<div class="stat-card">
+    <div class="value">{conf_pct:.0}%</div>
+    <div class="label">Avg Confidence</div>
+</div>
+<div class="stat-card">
+    <div class="value">{first}</div>
+    <div class="label">First Seen</div>
+</div>
+<div class="stat-card">
+    <div class="value">{last}</div>
+    <div class="label">Last Seen</div>
+</div>"#,
+                count = summary.count,
+                first = escape_html(&summary.first_seen),
+                last = escape_html(&summary.last_seen),
+            );
+            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+        }
+        Ok(Ok(None)) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            r#"<p style="color: var(--text-muted)">Species not found.</p>"#.to_string(),
+        ),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading summary</p>".to_string(),
+        ),
+    }
+}
+
+/// HTMX partial: species hourly activity chart.
+async fn species_hourly_partial(
+    State(state): State<AppState>,
+    Query(query): Query<SpeciesQuery>,
+) -> impl IntoResponse {
+    let Some(name) = query.name else {
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>No species specified.</p>".to_string(),
+        );
+    };
+
+    let result = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| birdnet_db::sqlite::species_hourly_activity(conn, &name))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(hours)) => {
+            let html = render_hourly_chart(&hours);
+            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+        }
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading chart</p>".to_string(),
+        ),
+    }
+}
+
+/// HTMX partial: species recent detections table.
+async fn species_detections_partial(
+    State(state): State<AppState>,
+    Query(query): Query<SpeciesQuery>,
+) -> impl IntoResponse {
+    let Some(name) = query.name else {
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>No species specified.</p>".to_string(),
+        );
+    };
+
+    let result = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| birdnet_db::sqlite::detections_by_species(conn, &name, 20))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(detections)) => {
+            if detections.is_empty() {
+                return (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, "text/html")],
+                    r#"<p style="color: var(--text-muted)">No detections found.</p>"#.to_string(),
+                );
+            }
+
+            let mut html = String::from(
+                r"<table>
+<thead><tr><th>Confidence</th><th>Time</th><th>Date</th></tr></thead>
+<tbody>",
+            );
+
+            for d in &detections {
+                let conf_pct = d.confidence * 100.0;
+                let conf_class = if conf_pct >= 80.0 {
+                    "high"
+                } else if conf_pct >= 50.0 {
+                    "mid"
+                } else {
+                    "low"
+                };
+                let _ = write!(
+                    html,
+                    r#"<tr>
+    <td><span class="conf {conf_class}">{conf_pct:.0}%</span></td>
+    <td>{time}</td>
+    <td>{date}</td>
+</tr>"#,
+                    time = escape_html(&d.time),
+                    date = escape_html(&d.date),
+                );
+            }
+
+            html.push_str("</tbody></table>");
+            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+        }
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading detections</p>".to_string(),
+        ),
+    }
+}
+
+/// HTMX partial: species info card (Wikipedia image + description).
+async fn species_info_partial(
+    State(state): State<AppState>,
+    Query(query): Query<SpeciesQuery>,
+) -> impl IntoResponse {
+    let Some(name) = query.name else {
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>No species specified.</p>".to_string(),
+        );
+    };
+
+    // Look up the scientific name
+    let com_name = name.clone();
+    let state_clone = state.clone();
+    let sci_name = tokio::task::spawn_blocking(move || {
+        state_clone.with_db(|conn| {
+            conn.query_row(
+                "SELECT Sci_Name FROM detections WHERE Com_Name = ?1 LIMIT 1",
+                [&com_name],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap_or_default()
+        })
+    })
+    .await
+    .unwrap_or_default();
+
+    let mut html = String::new();
+
+    // Show cached image if available
+    if let Some(cache) = state.image_cache() {
+        if let Some(image) = cache.get_cached(&sci_name) {
+            if image.cached_path.is_some() {
+                let encoded_name = simple_url_encode(&sci_name);
+                let _ = write!(
+                    html,
+                    r#"<img src="/api/v2/species/image/{encoded_name}/file" alt="{alt}" style="width: 100%; border-radius: var(--radius); margin-bottom: 1rem;" />"#,
+                    alt = escape_html(&name),
+                );
+            }
+
+            if let Some(desc) = &image.description {
+                let _ = write!(
+                    html,
+                    r#"<p style="font-size: 0.9rem; line-height: 1.5; margin-bottom: 0.75rem;">{desc}</p>"#,
+                    desc = escape_html(desc),
+                );
+            }
+
+            if let Some(wiki_url) = &image.wiki_url {
+                let _ = write!(
+                    html,
+                    r#"<p><a href="{url}" target="_blank" rel="noopener">View on Wikipedia</a></p>"#,
+                    url = escape_html(wiki_url),
+                );
+            }
+        }
+    }
+
+    if html.is_empty() {
+        html = format!(
+            r#"<p style="color: var(--text-muted)">No additional info available for <em>{name}</em>.</p>
+<p style="color: var(--text-muted); font-size: 0.85rem;">Enable <code>--image-cache-dir</code> to fetch species images from Wikipedia.</p>"#,
+            name = escape_html(&name),
+        );
+    }
+
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
 /// HTMX partial: analytics status card.
@@ -923,6 +1201,24 @@ const fn days_to_date(days_since_epoch: u64) -> (u32, u32, u32) {
     (y, m, d)
 }
 
+/// Minimal percent-encoding for URL path segments and query values.
+///
+/// Encodes characters that are not URL-safe (unreserved per RFC 3986).
+fn simple_url_encode(s: &str) -> String {
+    let mut encoded = String::with_capacity(s.len());
+    for byte in s.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => {
+                let _ = write!(encoded, "%{byte:02X}");
+            }
+        }
+    }
+    encoded
+}
+
 /// Minimal HTML escaping for XSS prevention.
 fn escape_html(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -1037,5 +1333,25 @@ mod tests {
     #[test]
     fn format_duration_hours() {
         assert_eq!(format_duration(3725), "1h 2m");
+    }
+
+    #[test]
+    fn simple_url_encode_plain() {
+        assert_eq!(simple_url_encode("hello"), "hello");
+    }
+
+    #[test]
+    fn simple_url_encode_spaces() {
+        assert_eq!(simple_url_encode("Pica pica"), "Pica%20pica");
+    }
+
+    #[test]
+    fn simple_url_encode_special_chars() {
+        assert_eq!(simple_url_encode("a/b&c=d"), "a%2Fb%26c%3Dd");
+    }
+
+    #[test]
+    fn simple_url_encode_preserves_unreserved() {
+        assert_eq!(simple_url_encode("a-b_c.d~e"), "a-b_c.d~e");
     }
 }

@@ -881,3 +881,155 @@ async fn species_image_info_without_cache() {
     // Without image cache configured, should report disabled
     assert_eq!(json["status"], "disabled");
 }
+
+#[tokio::test]
+async fn species_detail_page_returns_html() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/species/detail?name=Eurasian%20Blackbird")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(html.contains("Eurasian Blackbird"));
+    assert!(html.contains("Turdus merula"));
+    assert!(html.contains("hx-get")); // HTMX partials
+}
+
+#[tokio::test]
+async fn species_detail_page_without_name_shows_error() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/species/detail")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(html.contains("No species specified"));
+}
+
+#[tokio::test]
+async fn htmx_species_summary_partial() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/species-summary?name=Eurasian%20Blackbird")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(html.contains("stat-card"));
+    assert!(html.contains("Detections"));
+    assert!(html.contains("Avg Confidence"));
+}
+
+#[tokio::test]
+async fn htmx_species_detections_partial() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/species-detections?name=Eurasian%20Blackbird")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(html.contains("<table>"));
+    assert!(html.contains("Confidence"));
+}
+
+#[tokio::test]
+async fn htmx_species_hourly_partial() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/species-hourly?name=Eurasian%20Blackbird")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    // Should render SVG chart since we have detections at hours 06 and 07
+    assert!(html.contains("<svg"));
+}
+
+#[tokio::test]
+async fn htmx_species_info_partial() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/species-info?name=Eurasian%20Blackbird")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    // Without image cache, should show the "no info available" message
+    assert!(html.contains("No additional info available"));
+    assert!(html.contains("--image-cache-dir"));
+}

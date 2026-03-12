@@ -1,0 +1,41 @@
+<h1 style="margin-bottom: 0.5rem;">{{species_name}}</h1>
+<p style="color: var(--text-muted); font-style: italic; margin-bottom: 1.5rem;">{{scientific_name}}</p>
+
+<div class="stats-grid" hx-get="/pages/species-summary?name={{species_encoded}}" hx-trigger="load" hx-swap="innerHTML">
+    <div class="stat-card">
+        <div class="value">--</div>
+        <div class="label">Detections</div>
+    </div>
+    <div class="stat-card">
+        <div class="value">--</div>
+        <div class="label">Avg Confidence</div>
+    </div>
+</div>
+
+<div class="grid-2">
+    <div>
+        <div class="card">
+            <h2>Activity Pattern</h2>
+            <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem;">
+                When this species is most active (detections by hour of day, all dates).
+            </p>
+            <div hx-get="/pages/species-hourly?name={{species_encoded}}" hx-trigger="load" hx-swap="innerHTML">
+                <p style="color: var(--text-muted)">Loading chart...</p>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Recent Detections</h2>
+            <div hx-get="/pages/species-detections?name={{species_encoded}}" hx-trigger="load" hx-swap="innerHTML">
+                <p style="color: var(--text-muted)">Loading detections...</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Species Info</h2>
+        <div hx-get="/pages/species-info?name={{species_encoded}}" hx-trigger="load" hx-swap="innerHTML">
+            <p style="color: var(--text-muted)">Loading info...</p>
+        </div>
+    </div>
+</div>
