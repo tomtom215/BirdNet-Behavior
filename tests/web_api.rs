@@ -883,6 +883,50 @@ async fn species_image_info_without_cache() {
 }
 
 #[tokio::test]
+async fn species_detail_api() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/species/detail?name=Eurasian%20Blackbird")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["species"]["com_name"], "Eurasian Blackbird");
+    assert_eq!(json["species"]["sci_name"], "Turdus merula");
+    assert_eq!(json["species"]["count"], 2);
+    assert!(json["hourly_activity"].is_array());
+}
+
+#[tokio::test]
+async fn species_detail_api_not_found() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/species/detail?name=Nonexistent%20Bird")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn species_detail_page_returns_html() {
     let app = app();
 
