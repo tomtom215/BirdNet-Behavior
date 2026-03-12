@@ -50,15 +50,28 @@ import numpy as np
 assert np.allclose(tflite_output, onnx_output, atol=1e-4)
 ```
 
-## Primary Runtime: ort (ONNX Runtime)
+## Preferred Runtime: tract (Pure Rust)
 
-The `ort` crate wraps Microsoft's ONNX Runtime:
+`tract-onnx` v0.22 by Sonos is a pure Rust ONNX inference engine:
+
+- **Zero C/C++ dependencies** -- trivial cross-compilation to any target
+- CPU-only (no GPU), but BirdNET models are small enough for CPU inference
+- Passes ~85% of ONNX backend tests; common operators (conv, dense, sigmoid) well supported
+- Smaller binary than ort (no ONNX Runtime shared library)
+- Works on aarch64, x86_64, and even WebAssembly
+
+**Bridge option:** The `ort-tract` crate provides the `ort` API surface with
+tract as the backend, allowing future backend swaps without API changes.
+
+## Fallback Runtime: ort (ONNX Runtime)
+
+The `ort` crate v2.0.0-rc wraps Microsoft's ONNX Runtime:
 
 - ARM64 with NEON acceleration (XNNPACK backend)
 - FP16 tensor support via `half` feature flag
 - Quantized model support (INT8) for further Pi optimization
 - Thread pool configuration for constrained environments
-- Pre-built aarch64 binaries auto-downloaded
+- For aarch64 Linux: supply ONNX Runtime binaries via `ORT_LIB_PATH` (requires glibc >= 2.35)
 - Model loading from file or embedded bytes
 
 ### Inference Code Pattern
@@ -91,20 +104,17 @@ impl BirdNetModel {
 }
 ```
 
-## Long-term Goal: tract (Pure Rust)
+## Validation Plan
 
-`tract` by Sonos is a pure Rust inference engine that can run ONNX and TFLite
-models. If it handles BirdNET models with equivalent accuracy:
+Before committing to a runtime, validate both tract and ort:
 
-- **Zero C dependencies** in the entire binary
-- **Trivial cross-compilation** (pure `cargo build`)
-- **Smaller binary** (no ONNX Runtime shared library)
-
-Validation needed:
-1. Load converted ONNX model in tract
-2. Run same test inputs as ort
-3. Compare outputs (must match within 1e-4)
-4. Benchmark latency on Pi 4/5
+1. Convert BirdNET TFLite model to ONNX (opset 18)
+2. Load model in both tract and ort
+3. Run same test WAV files through the Rust audio pipeline
+4. Compare inference outputs against Python TFLite (must match within 1e-4)
+5. Benchmark latency on Pi 4/5 (target: <1s per 3-second chunk)
+6. If tract matches accuracy, prefer it (pure Rust, simpler deployment)
+7. If tract has accuracy issues, fall back to ort
 
 ## Inference Chain (Matching Python)
 

@@ -39,17 +39,27 @@
 
 | Option | Crate | Cross-compile | Pure Rust | Recommendation |
 |--------|-------|---------------|-----------|---------------|
-| ONNX Runtime | `ort` v2 | Medium (pre-built aarch64) | No (C++ core) | **Primary** -- production-proven, ARM NEON acceleration |
-| Tract | `tract` | Trivial | **Yes** | **Long-term goal** -- pure Rust, evaluate TFLite/ONNX support |
+| ONNX Runtime | `ort` v2.0.0-rc | Medium (pre-built aarch64) | No (C++ core) | **Primary** -- production-proven, ARM NEON |
+| Tract (pure Rust) | `tract-onnx` 0.22 | Trivial | **Yes** | **Preferred** if accuracy validates |
+| ort-tract bridge | `ort-tract` | Trivial | **Yes** | Use ort API with tract backend |
 | TFLite FFI | `tflite` | Hard (Bazel + TF) | No | **Avoid** -- cross-compile nightmare |
 | TFLite C | `tflitec` | Medium | No | **Avoid** -- pinned to outdated TF 2.9.1 |
 
-**Primary choice: `ort`** (ONNX Runtime). Used by SurrealDB, Google Magika, Bloop.
-Pre-built aarch64 binaries from Microsoft are auto-downloaded.
+**Preferred approach: `tract-onnx`** (pure Rust, Sonos). `tract` passes ~85% of
+ONNX backend tests but handles common operators well. For BirdNET's relatively
+simple model (conv + dense layers), this should be sufficient. Pure Rust means
+zero cross-compilation issues and smaller binaries.
 
-**Long-term aspiration: `tract`** (pure Rust). If `tract` can run the BirdNET ONNX
-model with equivalent accuracy, it would eliminate the last C++ dependency from
-the inference pipeline and make cross-compilation trivial.
+**Bridge option: `ort-tract`** provides the `ort` API surface with `tract` as
+the backend. This allows starting with the ort API and swapping backends later.
+
+**Fallback: `ort`** v2.0.0-rc (ONNX Runtime). Used by SurrealDB, Google Magika.
+For aarch64, you must supply ONNX Runtime binaries manually via `ORT_LIB_PATH`
+(Microsoft provides official aarch64 Linux builds, requires glibc >= 2.35).
+
+**Validation required:** Run the converted BirdNET ONNX model through both
+`tract` and `ort`, compare outputs against Python TFLite on identical inputs.
+If tract matches within 1e-4, prefer it for the pure Rust deployment.
 
 ### Model Conversion
 
