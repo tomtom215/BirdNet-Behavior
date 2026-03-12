@@ -239,7 +239,11 @@ async fn detections_by_species_filter() {
 
     assert_eq!(json["total"], 2);
     let detections = json["detections"].as_array().unwrap();
-    assert!(detections.iter().all(|d| d["com_name"] == "Eurasian Blackbird"));
+    assert!(
+        detections
+            .iter()
+            .all(|d| d["com_name"] == "Eurasian Blackbird")
+    );
 }
 
 #[tokio::test]
