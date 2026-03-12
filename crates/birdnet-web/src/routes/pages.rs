@@ -34,6 +34,7 @@ pub fn router() -> Router<AppState> {
         .route("/pages/top-species", get(top_species_partial))
         .route("/pages/species-list", get(species_list_partial))
         .route("/pages/health-badge", get(health_badge_partial))
+        .route("/pages/disk-status", get(disk_status_partial))
         .route("/pages/analytics-status", get(analytics_status_partial))
         .route("/pages/analytics-sessions", get(analytics_sessions_partial))
         .route(
@@ -404,6 +405,52 @@ async fn daily_chart_partial(State(state): State<AppState>) -> impl IntoResponse
             StatusCode::INTERNAL_SERVER_ERROR,
             [(header::CONTENT_TYPE, "text/html")],
             "<p>Error loading chart</p>".to_string(),
+        ),
+    }
+}
+
+/// HTMX partial: disk usage status card.
+async fn disk_status_partial(State(state): State<AppState>) -> impl IntoResponse {
+    let db_path = state.db_path().to_path_buf();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let dir = db_path.parent().filter(|p| !p.as_os_str().is_empty());
+        let dir = dir.unwrap_or_else(|| std::path::Path::new("."));
+        birdnet_core::audio::capture::disk_usage(dir)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(usage)) => {
+            let pct = usage.used_percent();
+            let css_class = if usage.is_critical() {
+                "err"
+            } else if usage.is_low() {
+                "warn"
+            } else {
+                "ok"
+            };
+
+            #[allow(clippy::cast_precision_loss)]
+            let avail_gb = usage.available_bytes as f64 / 1_073_741_824.0;
+
+            let html = format!(
+                r#"<div class="stat-card">
+    <div class="value"><span class="dot {css_class}"></span> {pct:.0}%</div>
+    <div class="label">Disk Used ({avail_gb:.1} GB free)</div>
+</div>"#,
+            );
+
+            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+        }
+        _ => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            r#"<div class="stat-card">
+    <div class="value">--</div>
+    <div class="label">Disk Status</div>
+</div>"#
+                .to_string(),
         ),
     }
 }

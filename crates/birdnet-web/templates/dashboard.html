@@ -42,5 +42,8 @@
                 <p style="color: var(--text-muted)">Loading trend...</p>
             </div>
         </div>
+
+        <div hx-get="/pages/disk-status" hx-trigger="load, every 120s" hx-swap="innerHTML">
+        </div>
     </div>
 </div>
