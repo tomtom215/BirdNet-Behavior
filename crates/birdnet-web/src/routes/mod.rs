@@ -5,6 +5,7 @@
 
 pub mod analytics;
 pub mod detections;
+pub mod export;
 pub mod pages;
 pub mod species;
 pub mod static_files;
@@ -22,6 +23,7 @@ pub fn api_routes() -> Router<AppState> {
         .nest("/api/v2", species::router())
         .nest("/api/v2", analytics::router())
         .nest("/api/v2", system::router())
+        .nest("/api/v2", export::router())
         .nest("/api/v2", websocket::router())
         .merge(pages::router())
         .merge(static_files::router())

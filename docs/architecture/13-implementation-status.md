@@ -11,8 +11,8 @@
 | 2 | Audio Pipeline | **Complete** | 100% |
 | 3 | ML Inference | **Complete** | 100% |
 | 4 | Detection Daemon | **Complete** | 100% |
-| 5 | Web Server | **Complete** | 95% |
-| 6 | Integrations | **Partial** | 30% |
+| 5 | Web Server | **Complete** | 100% |
+| 6 | Integrations | **Partial** | 50% |
 | 7 | Audio Capture | **Complete** | 100% |
 | 8 | Assembly | **Complete** | 95% |
 
@@ -52,6 +52,7 @@
 | System routes | `routes/system.rs` | **Complete** | Health (503 on degraded), stats, API info |
 | Analytics routes | `routes/analytics.rs` | **Complete** | Sessions, retention, funnel, next-species (DuckDB-backed when analytics feature enabled) |
 | WebSocket | `routes/websocket.rs` | **Complete** | Live detection streaming, broadcast, ping/pong |
+| Export routes | `routes/export.rs` | **Complete** | CSV and JSON bulk export for detections and species, date range filtering |
 | HTMX pages | `routes/pages.rs` | **Complete** | Dashboard, species page, HTMX partials for live updates |
 | Static files | `routes/static_files.rs` | **Complete** | Embedded HTMX JS (air-gapped compatible) |
 
@@ -60,6 +61,7 @@
 | Module | File | Status | Notes |
 |--------|------|--------|-------|
 | BirdWeather | `birdweather.rs` | **Complete** | HTTP client, retry with exponential backoff |
+| Apprise | `apprise.rs` | **Complete** | Push notifications, per-species cooldown, confidence threshold, species watchlist, retry with backoff |
 
 ### birdnet-behavioral
 
@@ -73,7 +75,7 @@
 
 | Module | File | Status | Notes |
 |--------|------|--------|-------|
-| Entry point | `src/main.rs` | **Complete** | CLI, config, DB recovery, detection daemon, WebSocket bridge, DuckDB analytics |
+| Entry point | `src/main.rs` | **Complete** | CLI, config, DB recovery, detection daemon, WebSocket bridge, DuckDB analytics, Apprise notifications |
 
 ## Recent Changes (March 12, 2026)
 
@@ -120,24 +122,43 @@
 - `GET /analytics/status` — Capability and configuration status
 - All endpoints cfg-gated: return "unavailable" without analytics feature
 
+### Apprise Push Notifications
+
+- Full Apprise client (`birdnet-integrations/apprise.rs`) with per-species cooldown
+- `NotifyConfig`: min_confidence, species_watchlist, cooldown period
+- `should_notify()` filter: confidence threshold, watchlist, cooldown deduplication
+- `notify_detection()` / `send_notification()` with retry + exponential backoff
+- Wired into detection event processor via `tokio::sync::Mutex` (async-safe)
+- `--apprise-url` CLI flag and `BIRDNET_APPRISE_URL` env var
+- Config file keys: `APPRISE_URL`, `APPRISE_MIN_CONFIDENCE`, `APPRISE_COOLDOWN`, `APPRISE_WATCHLIST`
+- 9 unit tests covering all filtering logic
+
+### Export Endpoints
+
+- `GET /api/v2/detections/export` — Bulk detection export (CSV default, `?format=json`)
+- `GET /api/v2/species/export` — Species summary export (CSV default, `?format=json`)
+- Date range filtering: `?from=YYYY-MM-DD&to=YYYY-MM-DD`
+- CSV format compatible with BirdNET-Pi `BirdDB.txt` column order
+- RFC 4180 compliant CSV escaping
+- `Content-Disposition` header for download prompts
+- 7 unit tests + 5 integration tests
+
 ## Next Priority Items
 
-1. **Apprise notifications** — Push alerts for rare species
-2. **Flickr/Wikipedia** — Species image caching
-3. **RTSP stream management** — Audio source handling
-4. **Authentication** — Matching current Caddy basic auth setup
-5. **Export endpoints** — CSV, JSON bulk export
+1. **Flickr/Wikipedia** — Species image caching
+2. **RTSP stream management** — Audio source handling
+3. **Authentication** — Matching current Caddy basic auth setup
 
 ## Test Coverage
 
 | Crate | Unit Tests | Integration Tests | Status |
 |-------|-----------|------------------|--------|
 | birdnet-core | 54 (config, decode, resample, spectrogram, labels, model, pipeline, daemon) | 19 (audio pipeline + real Pica pica) | All passing |
-| birdnet-db | 19 (sqlite, resilience, migration) | — | All passing |
-| birdnet-web | 9 (websocket broadcast, pages, static files) | 16 (HTTP API + HTMX pages + analytics status) | All passing |
-| birdnet-integrations | 2 (birdweather client) | — | All passing |
+| birdnet-db | 23 (sqlite, resilience, migration) | — | All passing |
+| birdnet-web | 16 (websocket, pages, static files, export CSV) | 21 (HTTP API + HTMX pages + analytics + export) | All passing |
+| birdnet-integrations | 11 (birdweather + apprise client) | — | All passing |
 | birdnet-behavioral | 10 (types, queries) | — | All passing |
-| **Total** | **94** | **35** | **129 tests passing** |
+| **Total** | **114** | **40** | **154 tests passing** |
 
 ## Lines of Code (Rust, excluding tests)
 
@@ -145,12 +166,12 @@
 |-------|------|-------|
 | birdnet-core | ~1,200 | Audio pipeline + inference + daemon |
 | birdnet-db | ~600 | Full implementation |
-| birdnet-web | ~900 | REST API + WebSocket + HTMX pages + analytics |
-| birdnet-integrations | ~150 | BirdWeather only |
+| birdnet-web | ~1,100 | REST API + WebSocket + HTMX pages + analytics + export |
+| birdnet-integrations | ~400 | BirdWeather + Apprise notifications |
 | birdnet-behavioral | ~750 | Types + SQL builders + DuckDB connection |
-| main.rs | ~430 | Entry point + daemon bridge + DuckDB wiring |
+| main.rs | ~550 | Entry point + daemon bridge + DuckDB wiring + Apprise |
 | Integration tests | ~900 | audio_pipeline.rs + web_api.rs |
-| **Total** | **~4,930** | Production Rust code |
+| **Total** | **~5,600** | Production Rust code |
 
 ## Key Dependencies
 
@@ -184,7 +205,7 @@
 | Web Server | ~7,000+ | 85% replaced |
 | Shell Scripts | ~500 | Not started |
 | Tests | ~19,000 | Rust tests written alongside implementation |
-| **Total** | **~29,000** | **~4,930 LOC Rust replaces ~9,500 LOC Python** |
+| **Total** | **~29,000** | **~5,600 LOC Rust replaces ~9,500 LOC Python** |
 
 ---
 

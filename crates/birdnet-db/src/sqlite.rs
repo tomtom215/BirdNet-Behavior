@@ -297,6 +297,70 @@ pub fn hourly_activity(conn: &Connection, date: &str) -> Result<Vec<HourlyCount>
     Ok(rows)
 }
 
+/// Query all detections, optionally filtered by date range.
+///
+/// When both `from` and `to` are `None`, returns all detections ordered by date/time descending.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn all_detections(
+    conn: &Connection,
+    from: Option<&str>,
+    to: Option<&str>,
+) -> Result<Vec<DetectionRow>, DbError> {
+    let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match (from, to) {
+        (Some(f), Some(t)) => (
+            "SELECT Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name \
+             FROM detections WHERE Date >= ?1 AND Date <= ?2 ORDER BY Date DESC, Time DESC"
+                .to_string(),
+            vec![Box::new(f.to_string()), Box::new(t.to_string())],
+        ),
+        (Some(f), None) => (
+            "SELECT Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name \
+             FROM detections WHERE Date >= ?1 ORDER BY Date DESC, Time DESC"
+                .to_string(),
+            vec![Box::new(f.to_string())],
+        ),
+        (None, Some(t)) => (
+            "SELECT Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name \
+             FROM detections WHERE Date <= ?1 ORDER BY Date DESC, Time DESC"
+                .to_string(),
+            vec![Box::new(t.to_string())],
+        ),
+        (None, None) => (
+            "SELECT Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name \
+             FROM detections ORDER BY Date DESC, Time DESC"
+                .to_string(),
+            vec![],
+        ),
+    };
+
+    let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+        param_values.iter().map(AsRef::as_ref).collect();
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(params_ref.as_slice(), |row| {
+            Ok(DetectionRow {
+                date: row.get(0)?,
+                time: row.get(1)?,
+                sci_name: row.get(2)?,
+                com_name: row.get(3)?,
+                confidence: row.get(4)?,
+                lat: row.get(5)?,
+                lon: row.get(6)?,
+                cutoff: row.get(7)?,
+                week: row.get(8)?,
+                sens: row.get(9)?,
+                overlap: row.get(10)?,
+                file_name: row.get(11)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(rows)
+}
+
 /// A detection row from the database.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DetectionRow {
@@ -480,6 +544,45 @@ mod tests {
         // Blackbird has 2 detections, should be first
         assert_eq!(species[0].com_name, "Eurasian Blackbird");
         assert_eq!(species[0].count, 2);
+    }
+
+    #[test]
+    fn query_all_detections_no_filter() {
+        let (_tmp, conn) = temp_db();
+        insert_sample_records(&conn);
+
+        let rows = all_detections(&conn, None, None).unwrap();
+        assert_eq!(rows.len(), 4);
+        // Most recent date first
+        assert_eq!(rows[0].date, "2026-03-11");
+    }
+
+    #[test]
+    fn query_all_detections_with_date_range() {
+        let (_tmp, conn) = temp_db();
+        insert_sample_records(&conn);
+
+        let rows = all_detections(&conn, Some("2026-03-11"), Some("2026-03-11")).unwrap();
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().all(|r| r.date == "2026-03-11"));
+    }
+
+    #[test]
+    fn query_all_detections_from_only() {
+        let (_tmp, conn) = temp_db();
+        insert_sample_records(&conn);
+
+        let rows = all_detections(&conn, Some("2026-03-11"), None).unwrap();
+        assert_eq!(rows.len(), 3); // only 2026-03-11 records (2026-03-10 excluded)
+    }
+
+    #[test]
+    fn query_all_detections_to_only() {
+        let (_tmp, conn) = temp_db();
+        insert_sample_records(&conn);
+
+        let rows = all_detections(&conn, None, Some("2026-03-10")).unwrap();
+        assert_eq!(rows.len(), 1); // only the 2026-03-10 record
     }
 
     #[test]

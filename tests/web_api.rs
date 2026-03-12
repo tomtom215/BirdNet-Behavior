@@ -543,3 +543,166 @@ async fn static_htmx_js_served() {
         .unwrap();
     assert!(body.len() > 1000); // HTMX is ~50KB
 }
+
+#[tokio::test]
+async fn export_detections_csv() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/detections/export")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(content_type.contains("text/csv"));
+
+    let disposition = response
+        .headers()
+        .get("content-disposition")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(disposition.contains("detections.csv"));
+
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let csv = String::from_utf8_lossy(&body);
+
+    // Header row
+    assert!(csv.starts_with("Date,Time,Sci_Name,Com_Name,Confidence"));
+    // 5 data rows + 1 header = 6 lines
+    assert_eq!(csv.lines().count(), 6);
+    assert!(csv.contains("Eurasian Blackbird"));
+}
+
+#[tokio::test]
+async fn export_detections_csv_with_date_filter() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/detections/export?from=2026-03-12&to=2026-03-12")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let csv = String::from_utf8_lossy(&body);
+
+    // 4 detections on 2026-03-12 + 1 header = 5 lines
+    assert_eq!(csv.lines().count(), 5);
+    // Should NOT contain the 2026-03-11 detection
+    assert!(!csv.contains("2026-03-11"));
+}
+
+#[tokio::test]
+async fn export_detections_json() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/detections/export?format=json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(content_type.contains("application/json"));
+
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["total"], 5);
+    assert!(json["detections"].is_array());
+}
+
+#[tokio::test]
+async fn export_species_csv() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/species/export")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(content_type.contains("text/csv"));
+
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let csv = String::from_utf8_lossy(&body);
+
+    assert!(csv.starts_with("Com_Name,Sci_Name,Count,Avg_Confidence"));
+    // 4 unique species + 1 header = 5 lines
+    assert_eq!(csv.lines().count(), 5);
+}
+
+#[tokio::test]
+async fn export_species_json() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/species/export?format=json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["total"], 4);
+    assert!(json["species"].is_array());
+}
