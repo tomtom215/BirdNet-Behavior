@@ -71,6 +71,9 @@ struct SearchSpeciesQuery {
     limit: Option<u32>,
 }
 
+/// Maximum length of a species search query string.
+const MAX_SEARCH_LEN: usize = 200;
+
 /// `GET /api/v2/species/search?q=...` — Search species by name.
 async fn search_species(
     State(state): State<AppState>,
@@ -78,6 +81,17 @@ async fn search_species(
 ) -> (StatusCode, Json<Value>) {
     let search = query.q;
     let limit = query.limit.unwrap_or(20);
+
+    if search.len() > MAX_SEARCH_LEN {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "search query too long",
+                "species": [],
+                "total": 0,
+            })),
+        );
+    }
 
     let result: Result<Result<Vec<SpeciesCount>, DbError>, _> =
         tokio::task::spawn_blocking(move || {
@@ -182,6 +196,16 @@ async fn hourly_activity(
     Query(query): Query<ActivityQuery>,
 ) -> (StatusCode, Json<Value>) {
     let date = query.date;
+
+    if !super::is_valid_date(&date) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "invalid date format, expected YYYY-MM-DD",
+                "activity": [],
+            })),
+        );
+    }
 
     let result: Result<Result<Vec<HourlyCount>, DbError>, _> =
         tokio::task::spawn_blocking(move || {

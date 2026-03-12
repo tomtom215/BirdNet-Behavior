@@ -342,17 +342,6 @@ fn sigmoid(x: f32) -> f32 {
     1.0 / (1.0 + (-x).exp())
 }
 
-/// Apply softmax to a slice of logits (in-place friendly).
-///
-/// Useful for models that output raw logits requiring softmax normalization.
-#[allow(dead_code)]
-fn softmax(logits: &[f32]) -> Vec<f32> {
-    let max = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-    let exps: Vec<f32> = logits.iter().map(|&x| (x - max).exp()).collect();
-    let sum: f32 = exps.iter().sum();
-    exps.iter().map(|&e| e / sum).collect()
-}
-
 #[cfg(test)]
 #[allow(clippy::cast_precision_loss)]
 mod tests {
@@ -385,22 +374,6 @@ mod tests {
                 "sigmoid not monotonic at index {i}"
             );
         }
-    }
-
-    #[test]
-    fn softmax_sums_to_one() {
-        let logits = vec![1.0, 2.0, 3.0, 4.0];
-        let probs = softmax(&logits);
-        let sum: f32 = probs.iter().sum();
-        assert!((sum - 1.0).abs() < 1e-5, "softmax sum: {sum}");
-    }
-
-    #[test]
-    fn softmax_preserves_ordering() {
-        let logits = vec![1.0, 3.0, 2.0];
-        let probs = softmax(&logits);
-        assert!(probs[1] > probs[2]);
-        assert!(probs[2] > probs[0]);
     }
 
     #[test]

@@ -22,7 +22,6 @@ pub fn router() -> Router<AppState> {
 }
 
 #[derive(Deserialize)]
-#[allow(dead_code)]
 struct ExportQuery {
     /// Output format: "csv" or "json" (default: "csv").
     format: Option<String>,
@@ -106,7 +105,6 @@ async fn export_detections(
 }
 
 #[derive(Deserialize)]
-#[allow(dead_code)]
 struct SpeciesExportQuery {
     /// Output format: "csv" or "json" (default: "csv").
     format: Option<String>,

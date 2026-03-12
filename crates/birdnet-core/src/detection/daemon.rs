@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use crate::audio::capture::is_audio_file;
 use crate::detection::pipeline::{self, PipelineConfig, PreparedChunk};
 use crate::detection::types::Detection;
 use crate::inference::labels::LabelSet;
@@ -316,16 +317,7 @@ fn process_existing_files(
             continue;
         }
 
-        let is_audio = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|ext| {
-                ext.eq_ignore_ascii_case("wav")
-                    || ext.eq_ignore_ascii_case("flac")
-                    || ext.eq_ignore_ascii_case("mp3")
-            });
-
-        if !is_audio {
+        if !is_audio_file(&path) {
             continue;
         }
 
