@@ -12,9 +12,9 @@
 | 3 | ML Inference | **Complete** | 100% |
 | 4 | Detection Daemon | **Complete** | 100% |
 | 5 | Web Server | **Complete** | 100% |
-| 6 | Integrations | **Partial** | 80% |
+| 6 | Integrations | **Partial** | 85% |
 | 7 | Audio Capture | **Complete** | 100% |
-| 8 | Assembly | **Complete** | 95% |
+| 8 | Assembly | **Complete** | 98% |
 
 ## Detailed Status by Crate
 
@@ -132,6 +132,25 @@
 - Pure Rust percent-encoding (`simple_url_encode`) for URL-safe species name parameters
 - 10 new tests (4 unit + 6 integration)
 
+### Disk Usage Monitoring
+
+- `DiskUsage` struct with `is_critical()` (< 5% free) and `is_low()` (< 10% free) thresholds
+- `disk_usage()` queries filesystem via `df` command (no unsafe, no libc dependency)
+- `recording_stats()` counts audio files and total size in a directory
+- `GET /api/v2/system/disk` — Disk usage JSON with 503 on critical space
+- HTMX disk status card on dashboard with color-coded indicator (polls every 120s)
+- 7 unit tests covering disk usage calculations and filesystem queries
+
+### Enhanced Dashboard and Stats
+
+- Dashboard stats card shows last detection time and species name
+- `latest_detection()` query returns most recent detection timestamp
+- `confidence_distribution()` query buckets detections by confidence level
+- Stats API (`GET /api/v2/stats`) now includes `latest_detection` and `confidence_distribution`
+- Species detail page (`/species/detail?name=...`) with clickable navigation from all lists
+- Per-species daily trend chart (14-day window) on species detail page
+- `GET /api/v2/species/detail?name=...` REST endpoint with summary and hourly activity
+
 ### DuckDB Behavioral Analytics Integration
 
 - File-backed DuckDB connection module (`birdnet-behavioral/connection.rs`)
@@ -215,25 +234,25 @@
 
 | Crate | Unit Tests | Integration Tests | Status |
 |-------|-----------|------------------|--------|
-| birdnet-core | 57 (config, decode, resample, spectrogram, labels, model, pipeline, daemon) | 19 (audio pipeline + real Pica pica) | All passing |
+| birdnet-core | 64 (config, decode, resample, spectrogram, labels, model, pipeline, daemon, disk) | 19 (audio pipeline + real Pica pica) | All passing |
 | birdnet-db | 32 (sqlite, resilience, migration) | — | All passing |
-| birdnet-web | 36 (websocket, pages, static files, export CSV, auth, url encode) | 37 (HTTP API + HTMX pages + analytics + export + species detail) | All passing |
+| birdnet-web | 36 (websocket, pages, static files, export CSV, auth, url encode) | 38 (HTTP API + HTMX pages + analytics + export + species detail + disk) | All passing |
 | birdnet-integrations | 27 (birdweather + apprise + species images) | — | All passing |
 | birdnet-behavioral | 10 (types, queries) | — | All passing |
-| **Total** | **162** | **56** | **208 tests passing** |
+| **Total** | **169** | **57** | **216 tests passing** |
 
 ## Lines of Code (Rust, excluding tests)
 
 | Crate | ~LOC | Notes |
 |-------|------|-------|
-| birdnet-core | ~1,200 | Audio pipeline + inference + daemon |
+| birdnet-core | ~1,350 | Audio pipeline + inference + daemon + disk management |
 | birdnet-db | ~700 | Full implementation + species queries + confidence distribution |
 | birdnet-web | ~1,900 | REST API + WebSocket + HTMX pages + analytics + export + auth + images + species detail |
 | birdnet-integrations | ~1,100 | BirdWeather + Apprise + Wikipedia species images |
 | birdnet-behavioral | ~750 | Types + SQL builders + DuckDB connection |
 | main.rs | ~700 | Entry point + daemon bridge + DuckDB wiring + Apprise + image cache + auth |
-| Integration tests | ~1,000 | audio_pipeline.rs + web_api.rs |
-| **Total** | **~7,700** | Production Rust code |
+| Integration tests | ~1,100 | audio_pipeline.rs + web_api.rs |
+| **Total** | **~8,100** | Production Rust code |
 
 ## Key Dependencies
 
