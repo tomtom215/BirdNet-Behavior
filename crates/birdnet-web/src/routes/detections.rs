@@ -20,6 +20,7 @@ pub fn router() -> Router<AppState> {
 #[derive(Deserialize)]
 struct DetectionQuery {
     date: Option<String>,
+    species: Option<String>,
     limit: Option<u32>,
 }
 
@@ -29,7 +30,15 @@ async fn list_detections(
 ) -> (StatusCode, Json<Value>) {
     let limit = query.limit.unwrap_or(100);
 
-    let result: Result<Result<Vec<DetectionRow>, DbError>, _> = if let Some(date) = &query.date {
+    let result: Result<Result<Vec<DetectionRow>, DbError>, _> = if let Some(species) =
+        &query.species
+    {
+        let species = species.clone();
+        tokio::task::spawn_blocking(move || {
+            state.with_db(|conn| birdnet_db::sqlite::detections_by_species(conn, &species, limit))
+        })
+        .await
+    } else if let Some(date) = &query.date {
         let date = date.clone();
         tokio::task::spawn_blocking(move || {
             state.with_db(|conn| birdnet_db::sqlite::detections_by_date(conn, &date))

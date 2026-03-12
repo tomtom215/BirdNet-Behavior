@@ -217,6 +217,32 @@ async fn detections_by_date() {
 }
 
 #[tokio::test]
+async fn detections_by_species_filter() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/detections?species=Eurasian%20Blackbird")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["total"], 2);
+    let detections = json["detections"].as_array().unwrap();
+    assert!(detections.iter().all(|d| d["com_name"] == "Eurasian Blackbird"));
+}
+
+#[tokio::test]
 async fn recent_detections_with_limit() {
     let app = app();
 
