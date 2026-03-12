@@ -11,6 +11,7 @@ pub mod pages;
 pub mod species;
 pub mod static_files;
 pub mod system;
+pub mod timeseries;
 pub mod websocket;
 
 use axum::Router;
@@ -39,6 +40,7 @@ pub fn api_routes() -> Router<AppState> {
         .nest("/api/v2", detections::router())
         .nest("/api/v2", species::router())
         .nest("/api/v2", analytics::router())
+        .nest("/api/v2", timeseries::router())
         .nest("/api/v2", system::router())
         .nest("/api/v2", export::router())
         .nest("/api/v2", websocket::router())

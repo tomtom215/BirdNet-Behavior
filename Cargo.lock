@@ -447,6 +447,7 @@ dependencies = [
  "birdnet-core",
  "birdnet-db",
  "birdnet-integrations",
+ "birdnet-timeseries",
  "birdnet-web",
  "clap",
  "hound",
@@ -511,6 +512,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "birdnet-timeseries"
+version = "0.1.0"
+dependencies = [
+ "duckdb",
+ "serde",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "birdnet-web"
 version = "0.1.0"
 dependencies = [
@@ -519,6 +530,7 @@ dependencies = [
  "birdnet-core",
  "birdnet-db",
  "birdnet-integrations",
+ "birdnet-timeseries",
  "rusqlite",
  "serde",
  "serde_json",

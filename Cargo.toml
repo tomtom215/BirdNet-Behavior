@@ -5,6 +5,7 @@ members = [
     "crates/birdnet-web",
     "crates/birdnet-integrations",
     "crates/birdnet-behavioral",
+    "crates/birdnet-timeseries",
 ]
 resolver = "2"
 
@@ -26,6 +27,7 @@ birdnet-db = { path = "crates/birdnet-db" }
 birdnet-web = { path = "crates/birdnet-web" }
 birdnet-integrations = { path = "crates/birdnet-integrations" }
 birdnet-behavioral = { path = "crates/birdnet-behavioral" }
+birdnet-timeseries = { path = "crates/birdnet-timeseries" }
 
 # Serialization
 serde = { version = "1.0.228", features = ["derive"] }
@@ -113,7 +115,7 @@ description = "BirdNet-Behavior: Real-time acoustic bird classification with Duc
 [features]
 ## Enable DuckDB-powered behavioral analytics (sessionize, retention, funnel, etc.).
 ## Requires ~7 min C++ compilation on first build due to bundled libduckdb.
-analytics = ["birdnet-behavioral/analytics", "birdnet-web/analytics"]
+analytics = ["birdnet-behavioral/analytics", "birdnet-timeseries/analytics", "birdnet-web/analytics"]
 
 [dependencies]
 birdnet-core.workspace = true
@@ -121,6 +123,7 @@ birdnet-db.workspace = true
 birdnet-web.workspace = true
 birdnet-integrations.workspace = true
 birdnet-behavioral.workspace = true
+birdnet-timeseries.workspace = true
 tokio.workspace = true
 axum.workspace = true
 tracing.workspace = true

@@ -212,6 +212,30 @@ impl AppState {
         })
     }
 
+    /// Execute a closure with a `TimeSeriesDb` executor backed by the DuckDB connection.
+    ///
+    /// Returns `None` if the analytics database is not available, or `Some(Err(…))`
+    /// if the executor cannot be initialised (e.g. missing view).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the analytics mutex is poisoned.
+    #[cfg(feature = "analytics")]
+    pub fn with_timeseries<F, T>(
+        &self,
+        f: F,
+    ) -> Option<Result<T, birdnet_timeseries::TimeSeriesError>>
+    where
+        F: FnOnce(
+            birdnet_timeseries::executor::TimeSeriesDb<'_>,
+        ) -> Result<T, birdnet_timeseries::TimeSeriesError>,
+    {
+        self.inner.analytics_db.as_ref().map(|db| {
+            let db = db.lock().expect("analytics mutex poisoned");
+            birdnet_timeseries::executor::TimeSeriesDb::new(db.conn()).and_then(f)
+        })
+    }
+
     /// Whether the `DuckDB` analytics database is available.
     #[cfg(feature = "analytics")]
     pub fn has_analytics(&self) -> bool {

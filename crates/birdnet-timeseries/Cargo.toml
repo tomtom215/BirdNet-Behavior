@@ -1,0 +1,30 @@
+[package]
+name = "birdnet-timeseries"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "DuckDB time-series analytics for bird detection temporal patterns"
+
+[features]
+## Enable the DuckDB executor module for running time-series queries.
+## Requires the detections_ts view to exist (created by birdnet-behavioral).
+## Adds a ~7 min C++ compile for bundled libduckdb on first build.
+analytics = ["dep:duckdb"]
+
+[dependencies]
+duckdb = { workspace = true, optional = true }
+serde.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+duckdb.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true
