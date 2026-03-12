@@ -70,9 +70,7 @@ impl Config {
     /// Returns `ConfigError` if the file is missing, unreadable, or malformed.
     pub fn load_from(path: &Path) -> Result<Self, ConfigError> {
         let content = std::fs::read_to_string(path).map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => {
-                ConfigError::NotFound(path.display().to_string())
-            }
+            std::io::ErrorKind::NotFound => ConfigError::NotFound(path.display().to_string()),
             std::io::ErrorKind::PermissionDenied => {
                 ConfigError::Permission(path.display().to_string())
             }

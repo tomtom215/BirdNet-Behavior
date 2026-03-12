@@ -74,8 +74,7 @@ pub fn build_router(state: AppState) -> Router {
 ///
 /// Returns `ServerError` if the server fails to bind or start.
 pub async fn start(config: ServerConfig) -> Result<(), ServerError> {
-    let state =
-        AppState::new(config.db_path).map_err(|e| ServerError::Database(e.to_string()))?;
+    let state = AppState::new(config.db_path).map_err(|e| ServerError::Database(e.to_string()))?;
     let app = build_router(state);
 
     tracing::info!(addr = %config.addr, "starting web server");

@@ -3,7 +3,7 @@
 //! Provides connection management, WAL mode enforcement, and query helpers
 //! for the birds.db detection database.
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::fmt;
 use std::path::Path;
 
@@ -371,9 +371,27 @@ mod tests {
 
     fn insert_sample_records(conn: &Connection) {
         let records = [
-            ("2026-03-11", "06:30:00", "Turdus merula", "Eurasian Blackbird", 0.87),
-            ("2026-03-11", "06:45:00", "Erithacus rubecula", "European Robin", 0.92),
-            ("2026-03-11", "07:00:00", "Turdus merula", "Eurasian Blackbird", 0.75),
+            (
+                "2026-03-11",
+                "06:30:00",
+                "Turdus merula",
+                "Eurasian Blackbird",
+                0.87,
+            ),
+            (
+                "2026-03-11",
+                "06:45:00",
+                "Erithacus rubecula",
+                "European Robin",
+                0.92,
+            ),
+            (
+                "2026-03-11",
+                "07:00:00",
+                "Turdus merula",
+                "Eurasian Blackbird",
+                0.75,
+            ),
             ("2026-03-10", "18:00:00", "Parus major", "Great Tit", 0.80),
         ];
         for (date, time, sci, com, conf) in &records {

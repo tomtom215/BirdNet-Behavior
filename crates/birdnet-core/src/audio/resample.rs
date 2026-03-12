@@ -39,7 +39,11 @@ impl std::error::Error for ResampleError {}
 /// # Errors
 ///
 /// Returns `ResampleError` if sample rates are zero or resampling fails.
-#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss, clippy::cast_sign_loss)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
 pub fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Result<Vec<f32>, ResampleError> {
     if from_rate == 0 || to_rate == 0 {
         return Err(ResampleError::InvalidParams(

@@ -4,8 +4,8 @@
 //! once the birdnet-behavioral crate is fully integrated. For now, they
 //! provide SQLite-based approximations.
 
-use axum::{routing::get, Json, Router};
-use serde_json::{json, Value};
+use axum::{Json, Router, routing::get};
+use serde_json::{Value, json};
 
 use crate::state::AppState;
 

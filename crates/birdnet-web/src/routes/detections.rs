@@ -1,10 +1,10 @@
 //! Detection API endpoints.
 
 use axum::extract::{Query, State};
-use axum::{routing::get, Json, Router};
+use axum::{Json, Router, routing::get};
 use birdnet_db::sqlite::{DbError, DetectionRow};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::state::AppState;
 
@@ -27,19 +27,18 @@ async fn list_detections(
 ) -> Json<Value> {
     let limit = query.limit.unwrap_or(100);
 
-    let result: Result<Result<Vec<DetectionRow>, DbError>, _> =
-        if let Some(date) = &query.date {
-            let date = date.clone();
-            tokio::task::spawn_blocking(move || {
-                state.with_db(|conn| birdnet_db::sqlite::detections_by_date(conn, &date))
-            })
-            .await
-        } else {
-            tokio::task::spawn_blocking(move || {
-                state.with_db(|conn| birdnet_db::sqlite::recent_detections(conn, limit))
-            })
-            .await
-        };
+    let result: Result<Result<Vec<DetectionRow>, DbError>, _> = if let Some(date) = &query.date {
+        let date = date.clone();
+        tokio::task::spawn_blocking(move || {
+            state.with_db(|conn| birdnet_db::sqlite::detections_by_date(conn, &date))
+        })
+        .await
+    } else {
+        tokio::task::spawn_blocking(move || {
+            state.with_db(|conn| birdnet_db::sqlite::recent_detections(conn, limit))
+        })
+        .await
+    };
 
     match result {
         Ok(Ok(detections)) => {

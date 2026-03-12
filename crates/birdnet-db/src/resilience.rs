@@ -83,10 +83,7 @@ pub fn enforce_wal_mode(db_path: &Path) -> Result<(), ResilienceError> {
 ///
 /// Returns `ResilienceError` on check failure.
 pub fn check_integrity(db_path: &Path) -> Result<bool, ResilienceError> {
-    let conn = Connection::open_with_flags(
-        db_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )?;
+    let conn = Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let result: String = conn.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
     Ok(result == "ok")
 }
@@ -97,12 +94,8 @@ pub fn check_integrity(db_path: &Path) -> Result<bool, ResilienceError> {
 ///
 /// Returns `ResilienceError` on check failure.
 pub fn full_integrity_check(db_path: &Path) -> Result<bool, ResilienceError> {
-    let conn = Connection::open_with_flags(
-        db_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )?;
-    let result: String =
-        conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+    let conn = Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let result: String = conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
     Ok(result == "ok")
 }
 
@@ -128,10 +121,7 @@ pub fn backup_database(db_path: &Path, backup_dir: &Path) -> Result<PathBuf, Res
         .unwrap_or("birds.db");
     let backup_path = backup_dir.join(format!("{db_name}.backup.{timestamp}"));
 
-    let source = Connection::open_with_flags(
-        db_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )?;
+    let source = Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let mut dest = Connection::open(&backup_path)?;
 
     let backup = rusqlite::backup::Backup::new(&source, &mut dest)?;
@@ -215,10 +205,8 @@ pub fn restore_from_backup(backup_path: &Path, db_path: &Path) -> Result<(), Res
         let _ = std::fs::remove_file(shm_path);
     }
 
-    let source = Connection::open_with_flags(
-        backup_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )?;
+    let source =
+        Connection::open_with_flags(backup_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let mut dest = Connection::open(db_path)?;
 
     let backup = rusqlite::backup::Backup::new(&source, &mut dest)?;
