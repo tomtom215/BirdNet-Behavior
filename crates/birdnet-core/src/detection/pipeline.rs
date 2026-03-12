@@ -13,6 +13,7 @@ use std::sync::mpsc;
 
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
+use crate::audio::capture::is_audio_file;
 use crate::audio::decode;
 use crate::audio::resample;
 use crate::audio::spectrogram::{self, MelConfig, MelSpectrogram};
@@ -225,17 +226,6 @@ pub fn watch_directory(
         .map_err(|e| PipelineError::Watch(e.to_string()))?;
 
     Ok((watcher, rx))
-}
-
-/// Check if a path has a supported audio extension.
-fn is_audio_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| {
-            ext.eq_ignore_ascii_case("wav")
-                || ext.eq_ignore_ascii_case("flac")
-                || ext.eq_ignore_ascii_case("mp3")
-        })
 }
 
 #[cfg(test)]

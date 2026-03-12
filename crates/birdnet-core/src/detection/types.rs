@@ -87,18 +87,11 @@ impl RecordingFile {
     /// - `YYYY-MM-DD-birdnet-RTSP_ID-HH:MM:SS.wav` (RTSP stream)
     pub fn parse(path: &str) -> Option<Self> {
         // Extract just the filename (without directory or extension)
-        let filename = path
-            .rsplit('/')
-            .next()
-            .unwrap_or(path)
+        let basename = path.rsplit('/').next().unwrap_or(path);
+        let filename = basename
             .strip_suffix(".wav")
-            .or_else(|| {
-                path.rsplit('/')
-                    .next()
-                    .unwrap_or(path)
-                    .strip_suffix(".flac")
-            })
-            .or_else(|| path.rsplit('/').next().unwrap_or(path).strip_suffix(".mp3"))?;
+            .or_else(|| basename.strip_suffix(".flac"))
+            .or_else(|| basename.strip_suffix(".mp3"))?;
 
         let parts: Vec<&str> = filename.splitn(5, '-').collect();
 

@@ -134,6 +134,19 @@ impl Drop for CaptureProcess {
     }
 }
 
+/// Check if a path has a supported audio extension.
+///
+/// Recognises `.wav`, `.flac`, and `.mp3` (case-insensitive).
+pub(crate) fn is_audio_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            ext.eq_ignore_ascii_case("wav")
+                || ext.eq_ignore_ascii_case("flac")
+                || ext.eq_ignore_ascii_case("mp3")
+        })
+}
+
 /// Generate a BirdNET-Pi compatible output filename.
 ///
 /// Format: `YYYY-MM-DD-birdnet-[RTSP_ID-]HH:MM:SS.ext`
@@ -276,17 +289,7 @@ pub fn cleanup_old_recordings(dir: &Path, max_age_days: u32) -> Result<u32, Capt
             continue;
         }
 
-        // Only remove audio files
-        let is_audio = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|ext| {
-                ext.eq_ignore_ascii_case("wav")
-                    || ext.eq_ignore_ascii_case("flac")
-                    || ext.eq_ignore_ascii_case("mp3")
-            });
-
-        if !is_audio {
+        if !is_audio_file(&path) {
             continue;
         }
 
@@ -407,16 +410,7 @@ pub fn recording_stats(dir: &Path) -> Result<(u32, u64), CaptureError> {
             continue;
         }
 
-        let is_audio = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|ext| {
-                ext.eq_ignore_ascii_case("wav")
-                    || ext.eq_ignore_ascii_case("flac")
-                    || ext.eq_ignore_ascii_case("mp3")
-            });
-
-        if is_audio {
+        if is_audio_file(&path) {
             count += 1;
             total_size += entry.metadata().map_or(0, |m| m.len());
         }
@@ -604,12 +598,10 @@ mod tests {
 
     #[test]
     fn cleanup_empty_dir() {
-        let dir = std::env::temp_dir().join("birdnet_test_cleanup");
-        let _ = std::fs::create_dir_all(&dir);
-        let result = cleanup_old_recordings(&dir, 30);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let result = cleanup_old_recordings(dir.path(), 30);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 0);
-        let _ = std::fs::remove_dir(&dir);
     }
 
     #[test]
@@ -668,14 +660,12 @@ mod tests {
 
     #[test]
     fn recording_stats_empty_dir() {
-        let dir = std::env::temp_dir().join("birdnet_test_recording_stats");
-        let _ = std::fs::create_dir_all(&dir);
-        let result = recording_stats(&dir);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let result = recording_stats(dir.path());
         assert!(result.is_ok());
         let (count, size) = result.unwrap();
         assert_eq!(count, 0);
         assert_eq!(size, 0);
-        let _ = std::fs::remove_dir(&dir);
     }
 
     #[test]
