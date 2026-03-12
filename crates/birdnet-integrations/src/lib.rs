@@ -5,3 +5,4 @@
 
 pub mod apprise;
 pub mod birdweather;
+pub mod species_images;

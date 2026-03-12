@@ -5,6 +5,7 @@
 
 #[cfg(feature = "analytics")]
 use birdnet_behavioral::connection::AnalyticsDb;
+use birdnet_integrations::species_images::ImageCache;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -30,6 +31,8 @@ struct AppStateInner {
     /// `DuckDB` analytics database (file-backed, for behavioral queries).
     #[cfg(feature = "analytics")]
     analytics_db: Option<Mutex<AnalyticsDb>>,
+    /// Species image cache (Wikipedia/Wikimedia Commons).
+    image_cache: Option<Arc<ImageCache>>,
     /// Broadcast channel for live detection WebSocket streaming.
     detection_broadcast: DetectionBroadcast,
 }
@@ -54,6 +57,7 @@ impl AppState {
                 db_path,
                 #[cfg(feature = "analytics")]
                 analytics_db: None,
+                image_cache: None,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
             }),
         })
@@ -117,6 +121,7 @@ impl AppState {
                 db: Mutex::new(conn),
                 db_path,
                 analytics_db,
+                image_cache: None,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
             }),
         })
@@ -130,7 +135,46 @@ impl AppState {
                 db_path,
                 #[cfg(feature = "analytics")]
                 analytics_db: None,
+                image_cache: None,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
+            }),
+        }
+    }
+
+    /// Set the species image cache.
+    ///
+    /// Must be called before the state is shared across threads (before server start).
+    /// Returns a new `AppState` with the image cache configured.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called after the state has been shared (cloned).
+    #[must_use]
+    pub fn with_image_cache(self, cache: ImageCache) -> Self {
+        // We need to recreate the inner since Arc doesn't allow mutation.
+        // This is called once during setup, before the state is shared.
+        let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|arc| {
+            // If there are other references, we need to clone the inner state.
+            // This shouldn't happen during startup, but handle gracefully.
+            let old = &*arc;
+            let db = old
+                .db
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // We can't clone the connection, so this path is a programming error.
+            // In practice, this is only called once during setup.
+            drop(db);
+            panic!("with_image_cache called after state was shared");
+        });
+
+        Self {
+            inner: Arc::new(AppStateInner {
+                db: inner.db,
+                db_path: inner.db_path,
+                #[cfg(feature = "analytics")]
+                analytics_db: inner.analytics_db,
+                image_cache: Some(Arc::new(cache)),
+                detection_broadcast: inner.detection_broadcast,
             }),
         }
     }
@@ -185,6 +229,11 @@ impl AppState {
     /// Get the database file path.
     pub fn db_path(&self) -> &Path {
         &self.inner.db_path
+    }
+
+    /// Get the species image cache, if configured.
+    pub fn image_cache(&self) -> Option<Arc<ImageCache>> {
+        self.inner.image_cache.clone()
     }
 
     /// Get the detection broadcast channel for WebSocket streaming.

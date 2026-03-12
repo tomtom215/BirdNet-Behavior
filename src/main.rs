@@ -91,6 +91,31 @@ struct Cli {
     /// Station longitude for `BirdWeather` uploads.
     #[arg(long, env = "BIRDNET_LONGITUDE")]
     longitude: Option<f64>,
+
+    /// Directory for caching species images from Wikipedia.
+    ///
+    /// When set, species thumbnail images are fetched from Wikipedia and
+    /// cached locally for offline/air-gapped display on the dashboard.
+    #[arg(long, env = "BIRDNET_IMAGE_CACHE_DIR")]
+    image_cache_dir: Option<PathBuf>,
+
+    /// ALSA device for microphone capture (e.g., `plughw:1,0`).
+    ///
+    /// When set, BirdNet-Behavior manages audio recording directly using
+    /// `arecord`, producing segments in the watch directory for analysis.
+    #[arg(long, env = "BIRDNET_ALSA_DEVICE")]
+    alsa_device: Option<String>,
+
+    /// RTSP URL for audio capture (e.g., `rtsp://camera.local:554/stream`).
+    ///
+    /// When set, BirdNet-Behavior captures audio from the RTSP stream via
+    /// `ffmpeg`, producing segments in the watch directory for analysis.
+    #[arg(long, env = "BIRDNET_RTSP_URL")]
+    rtsp_url: Option<String>,
+
+    /// Duration of each recording segment in seconds (default: 15).
+    #[arg(long, default_value = "15", env = "BIRDNET_SEGMENT_DURATION")]
+    segment_duration: u32,
 }
 
 #[tokio::main]
@@ -195,11 +220,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|e| format!("database error: {e}"))?
     };
 
+    // Initialize species image cache (if configured)
+    let state = if let Some(ref cache_dir) = cli
+        .image_cache_dir
+        .clone()
+        .or_else(|| config.as_ref()?.get("IMAGE_CACHE_DIR").map(PathBuf::from))
+    {
+        match birdnet_integrations::species_images::ImageCache::new(cache_dir) {
+            Ok(cache) => {
+                tracing::info!(
+                    path = %cache_dir.display(),
+                    cached = cache.cached_count(),
+                    "species image cache enabled"
+                );
+                state.with_image_cache(cache)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "species image cache not available (non-fatal)");
+                state
+            }
+        }
+    } else {
+        state
+    };
+
     let broadcast = state.detection_broadcast();
 
     // Create integration clients (if configured)
     let apprise_client = create_apprise_client(&cli, config.as_ref());
     let birdweather_client = create_birdweather_client(&cli, config.as_ref());
+
+    // Start audio capture if configured (managed recording)
+    let _capture_manager = start_capture_manager(&cli, config.as_ref());
 
     // Start detection daemon if not in web-only mode and model is available
     let _daemon_handle = if cli.web_only {
@@ -216,9 +268,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
     };
 
+    // Configure authentication (optional)
+    let auth_config = create_auth_config(config.as_ref());
+
     // Start the web server (blocks until shutdown)
     tracing::info!(addr = %addr, "starting web server");
-    let app = birdnet_web::server::build_router(state);
+    let app = birdnet_web::server::build_router_with_auth(state, auth_config);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
@@ -612,6 +667,74 @@ fn create_birdweather_client(
     }
 }
 
+/// Start a managed audio capture process from CLI/config settings.
+///
+/// Returns the `CaptureManager` handle (keeps recording alive until dropped).
+fn start_capture_manager(
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+) -> Option<birdnet_core::audio::capture::CaptureManager> {
+    use birdnet_core::audio::capture::{
+        AudioFormat, CaptureManager, CaptureSource, RecordingConfig,
+    };
+
+    // Determine output directory (same as watch_dir)
+    let output_dir = cli
+        .watch_dir
+        .clone()
+        .or_else(|| config?.get("RECS_DIR").map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("/tmp/StreamData"));
+
+    // Determine capture source from CLI flags
+    let alsa_device = cli
+        .alsa_device
+        .clone()
+        .or_else(|| config?.get("ALSA_CARD").map(String::from));
+
+    let rtsp_url = cli
+        .rtsp_url
+        .clone()
+        .or_else(|| config?.get("RTSP_URL").map(String::from));
+
+    let source = alsa_device.map_or_else(
+        || {
+            rtsp_url.map(|url| CaptureSource::Rtsp {
+                url,
+                stream_id: "rtsp".to_string(),
+            })
+        },
+        |device| {
+            Some(CaptureSource::Microphone {
+                device,
+                sample_rate: 48000,
+                channels: 1,
+            })
+        },
+    );
+
+    let source = source?;
+
+    let recording_config = RecordingConfig {
+        source,
+        output_dir,
+        segment_duration_secs: cli.segment_duration,
+        format: AudioFormat::Wav,
+    };
+
+    let mut manager = CaptureManager::new(recording_config);
+
+    match manager.start() {
+        Ok(()) => {
+            tracing::info!("audio capture started");
+            Some(manager)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "audio capture not started (non-fatal)");
+            None
+        }
+    }
+}
+
 /// Wait for a shutdown signal (SIGTERM or SIGINT).
 async fn shutdown_signal() {
     let ctrl_c = async {
@@ -635,4 +758,22 @@ async fn shutdown_signal() {
         () = ctrl_c => tracing::info!("received Ctrl+C"),
         () = terminate => tracing::info!("received SIGTERM"),
     }
+}
+
+/// Create an authentication config from the config file.
+///
+/// Looks for `CADDY_PWD` (password) and defaults username to "birdnet"
+/// to match the BirdNET-Pi Caddy setup. Returns `None` if no password is set.
+fn create_auth_config(
+    config: Option<&birdnet_core::config::Config>,
+) -> Option<birdnet_web::auth::AuthConfig> {
+    let password = config?.get("CADDY_PWD")?;
+    let username = config
+        .and_then(|c| c.get("CADDY_USER"))
+        .unwrap_or("birdnet");
+
+    let auth = birdnet_web::auth::AuthConfig::new(username, password)?;
+
+    tracing::info!(username = %username, "basic auth enabled");
+    Some(auth)
 }

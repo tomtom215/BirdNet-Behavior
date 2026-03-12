@@ -309,6 +309,143 @@ pub fn cleanup_old_recordings(dir: &Path, max_age_days: u32) -> Result<u32, Capt
     Ok(removed)
 }
 
+/// Manages the lifecycle of an audio capture process.
+///
+/// Starts the appropriate capture subprocess (arecord or ffmpeg),
+/// monitors it, and restarts it if it crashes. Includes a restart
+/// backoff to avoid tight restart loops.
+#[derive(Debug)]
+pub struct CaptureManager {
+    config: RecordingConfig,
+    process: Option<CaptureProcess>,
+    restart_count: u32,
+    max_restarts: u32,
+}
+
+impl CaptureManager {
+    /// Create a new capture manager.
+    ///
+    /// Does not start capture -- call `start()` to begin recording.
+    pub const fn new(config: RecordingConfig) -> Self {
+        Self {
+            config,
+            process: None,
+            restart_count: 0,
+            max_restarts: 10,
+        }
+    }
+
+    /// Start the capture process.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CaptureError` if the process cannot be started or the
+    /// required tool (arecord/ffmpeg) is not available.
+    pub fn start(&mut self) -> Result<(), CaptureError> {
+        // Ensure output directory exists
+        std::fs::create_dir_all(&self.config.output_dir).map_err(CaptureError::Spawn)?;
+
+        let tool = match &self.config.source {
+            CaptureSource::Microphone { .. } => "arecord",
+            CaptureSource::Rtsp { .. } => "ffmpeg",
+        };
+
+        if !is_tool_available(tool) {
+            return Err(CaptureError::Config(format!("{tool} not found in PATH")));
+        }
+
+        let process = match &self.config.source {
+            CaptureSource::Microphone { .. } => start_microphone_capture(&self.config)?,
+            CaptureSource::Rtsp { .. } => start_rtsp_capture(&self.config)?,
+        };
+
+        self.process = Some(process);
+        self.restart_count = 0;
+        tracing::info!("capture started");
+
+        Ok(())
+    }
+
+    /// Stop the capture process.
+    pub fn stop(&mut self) {
+        if let Some(ref mut process) = self.process {
+            if let Err(e) = process.stop() {
+                tracing::warn!(error = %e, "error stopping capture process");
+            }
+        }
+        self.process = None;
+    }
+
+    /// Check if the capture process is still running and restart if needed.
+    ///
+    /// Returns `true` if the process is running (or was successfully restarted).
+    /// Returns `false` if the maximum restart count has been exceeded.
+    pub fn check_and_restart(&mut self) -> bool {
+        let is_running = self
+            .process
+            .as_mut()
+            .is_some_and(CaptureProcess::is_running);
+
+        if is_running {
+            return true;
+        }
+
+        if self.process.is_none() {
+            return false;
+        }
+
+        // Process died -- attempt restart
+        if self.restart_count >= self.max_restarts {
+            tracing::error!(
+                restarts = self.restart_count,
+                max = self.max_restarts,
+                "capture process exceeded max restarts"
+            );
+            return false;
+        }
+
+        self.restart_count += 1;
+        tracing::warn!(
+            restart = self.restart_count,
+            "capture process died, restarting"
+        );
+
+        // Drop the dead process
+        self.process = None;
+
+        match self.start() {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::error!(error = %e, "failed to restart capture");
+                false
+            }
+        }
+    }
+
+    /// Whether the capture process is currently running.
+    pub fn is_running(&mut self) -> bool {
+        self.process
+            .as_mut()
+            .is_some_and(CaptureProcess::is_running)
+    }
+
+    /// Get the restart count.
+    pub const fn restart_count(&self) -> u32 {
+        self.restart_count
+    }
+
+    /// Get the recording configuration.
+    pub const fn config(&self) -> &RecordingConfig {
+        &self.config
+    }
+}
+
+impl Drop for CaptureManager {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -357,5 +494,60 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 0);
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn capture_manager_new() {
+        let config = RecordingConfig {
+            source: CaptureSource::Microphone {
+                device: "plughw:1,0".into(),
+                sample_rate: 48000,
+                channels: 1,
+            },
+            output_dir: PathBuf::from("/tmp/StreamData"),
+            segment_duration_secs: 15,
+            format: AudioFormat::Wav,
+        };
+
+        let manager = CaptureManager::new(config);
+        assert_eq!(manager.restart_count(), 0);
+    }
+
+    #[test]
+    fn capture_manager_start_missing_tool() {
+        let config = RecordingConfig {
+            source: CaptureSource::Rtsp {
+                url: "rtsp://example.com/stream".into(),
+                stream_id: "cam1".into(),
+            },
+            output_dir: std::env::temp_dir().join("birdnet_test_capture_mgr"),
+            segment_duration_secs: 15,
+            format: AudioFormat::Wav,
+        };
+
+        let mut manager = CaptureManager::new(config);
+        // This test depends on ffmpeg availability -- it should fail gracefully
+        // if ffmpeg is missing or succeed if it is available
+        let result = manager.start();
+        if !is_tool_available("ffmpeg") {
+            assert!(result.is_err());
+        }
+    }
+
+    #[test]
+    fn capture_manager_not_running_initially() {
+        let config = RecordingConfig {
+            source: CaptureSource::Microphone {
+                device: "plughw:1,0".into(),
+                sample_rate: 48000,
+                channels: 1,
+            },
+            output_dir: PathBuf::from("/tmp/StreamData"),
+            segment_duration_secs: 15,
+            format: AudioFormat::Wav,
+        };
+
+        let mut manager = CaptureManager::new(config);
+        assert!(!manager.is_running());
     }
 }

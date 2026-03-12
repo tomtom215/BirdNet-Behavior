@@ -12,7 +12,7 @@
 | 3 | ML Inference | **Complete** | 100% |
 | 4 | Detection Daemon | **Complete** | 100% |
 | 5 | Web Server | **Complete** | 100% |
-| 6 | Integrations | **Partial** | 60% |
+| 6 | Integrations | **Partial** | 80% |
 | 7 | Audio Capture | **Complete** | 100% |
 | 8 | Assembly | **Complete** | 95% |
 
@@ -53,7 +53,9 @@
 | Analytics routes | `routes/analytics.rs` | **Complete** | Sessions, retention, funnel, next-species (DuckDB-backed when analytics feature enabled) |
 | WebSocket | `routes/websocket.rs` | **Complete** | Live detection streaming, broadcast, ping/pong |
 | Export routes | `routes/export.rs` | **Complete** | CSV and JSON bulk export for detections and species, date range filtering |
-| HTMX pages | `routes/pages.rs` | **Complete** | Dashboard, species page, HTMX partials for live updates |
+| HTMX pages | `routes/pages.rs` | **Complete** | Dashboard, species, analytics pages, HTMX partials for live updates |
+| Image routes | `routes/images.rs` | **Complete** | Species image metadata and file serving from Wikipedia cache |
+| Auth middleware | `auth.rs` | **Complete** | HTTP Basic Auth, constant-time comparison, pure Rust base64 |
 | Static files | `routes/static_files.rs` | **Complete** | Embedded HTMX JS (air-gapped compatible) |
 
 ### birdnet-integrations
@@ -62,6 +64,7 @@
 |--------|------|--------|-------|
 | BirdWeather | `birdweather.rs` | **Complete** | HTTP client, retry with exponential backoff, wired into event processor |
 | Apprise | `apprise.rs` | **Complete** | Push notifications, per-species cooldown, confidence threshold, species watchlist, retry with backoff |
+| Species images | `species_images.rs` | **Complete** | Wikipedia/Wikimedia image caching, on-disk cache, in-memory index |
 
 ### birdnet-behavioral
 
@@ -75,9 +78,48 @@
 
 | Module | File | Status | Notes |
 |--------|------|--------|-------|
-| Entry point | `src/main.rs` | **Complete** | CLI, config, DB recovery, detection daemon, WebSocket bridge, DuckDB analytics, Apprise + BirdWeather |
+| Entry point | `src/main.rs` | **Complete** | CLI, config, DB recovery, detection daemon, WebSocket bridge, DuckDB analytics, Apprise + BirdWeather, image cache, auth |
 
 ## Recent Changes (March 12, 2026)
+
+### Species Image Caching (Wikipedia/Wikimedia)
+
+- `ImageCache` in `birdnet-integrations/species_images.rs` (720+ lines)
+- Fetches species thumbnails from Wikipedia `MediaWiki` API by scientific name
+- On-disk cache with in-memory index for air-gapped operation
+- `get_image()`, `download_image()`, `is_cached()`, `get_cached()` methods
+- Background download/caching via `tokio::spawn`
+- Pure Rust URL encoding (no external crate)
+- 16 unit tests covering cache operations, URL encoding, Wikipedia response parsing
+
+### Species Image API Endpoints
+
+- `GET /api/v2/species/image/{scientific_name}` — Image metadata JSON (cache status, URL, description)
+- `GET /api/v2/species/image/{scientific_name}/file` — Serve cached image bytes
+- `--image-cache-dir` CLI flag for enabling image cache
+
+### HTTP Basic Authentication
+
+- `AuthConfig` with constant-time credential comparison
+- Pure Rust base64 decoder (no external crate)
+- Excluded paths for health checks and WebSocket endpoints
+- `--auth` support via `CADDY_USER`/`CADDY_PWD` config compatibility
+- 11 unit tests
+
+### Audio Capture Manager
+
+- `CaptureManager` struct for subprocess lifecycle management (arecord/ffmpeg)
+- `start()`, `stop()`, `check_and_restart()`, `is_running()` methods
+- Max restart count (10) with logging
+- `--alsa-device`, `--rtsp-url`, `--segment-duration` CLI flags
+- 3 unit tests
+
+### Analytics HTMX Dashboard Page
+
+- Analytics page (`/analytics`) with sessions, retention, next-species prediction cards
+- 5 HTMX partials: status, sessions, retention, next-species, config
+- Feature-gated: graceful "unavailable" message when analytics not compiled/configured
+- All partials follow existing pattern (spawn_blocking, HTML response, XSS-safe)
 
 ### DuckDB Behavioral Analytics Integration
 
@@ -154,9 +196,9 @@
 
 ## Next Priority Items
 
-1. **Flickr/Wikipedia** — Species image caching
-2. **RTSP stream management** — Audio source handling
-3. **Authentication** — Matching current Caddy basic auth setup
+1. **RTSP stream management** — Full audio source lifecycle (inspired by LyreBirdAudio)
+2. **Spectrogram visualization** — Spectral chart endpoint for web dashboard
+3. **Shell script replacement** — `disk_check.sh`, system management scripts
 
 ## Test Coverage
 
@@ -164,10 +206,10 @@
 |-------|-----------|------------------|--------|
 | birdnet-core | 54 (config, decode, resample, spectrogram, labels, model, pipeline, daemon) | 19 (audio pipeline + real Pica pica) | All passing |
 | birdnet-db | 23 (sqlite, resilience, migration) | — | All passing |
-| birdnet-web | 16 (websocket, pages, static files, export CSV) | 21 (HTTP API + HTMX pages + analytics + export) | All passing |
-| birdnet-integrations | 11 (birdweather + apprise client) | — | All passing |
+| birdnet-web | 28 (websocket, pages, static files, export CSV, auth) | 21 (HTTP API + HTMX pages + analytics + export) | All passing |
+| birdnet-integrations | 27 (birdweather + apprise + species images) | — | All passing |
 | birdnet-behavioral | 10 (types, queries) | — | All passing |
-| **Total** | **114** | **40** | **154 tests passing** |
+| **Total** | **142** | **40** | **182 tests passing** |
 
 ## Lines of Code (Rust, excluding tests)
 
@@ -175,12 +217,12 @@
 |-------|------|-------|
 | birdnet-core | ~1,200 | Audio pipeline + inference + daemon |
 | birdnet-db | ~600 | Full implementation |
-| birdnet-web | ~1,100 | REST API + WebSocket + HTMX pages + analytics + export |
-| birdnet-integrations | ~400 | BirdWeather + Apprise notifications |
+| birdnet-web | ~1,500 | REST API + WebSocket + HTMX pages + analytics + export + auth + images |
+| birdnet-integrations | ~1,100 | BirdWeather + Apprise + Wikipedia species images |
 | birdnet-behavioral | ~750 | Types + SQL builders + DuckDB connection |
-| main.rs | ~550 | Entry point + daemon bridge + DuckDB wiring + Apprise |
+| main.rs | ~700 | Entry point + daemon bridge + DuckDB wiring + Apprise + image cache + auth |
 | Integration tests | ~900 | audio_pipeline.rs + web_api.rs |
-| **Total** | **~5,600** | Production Rust code |
+| **Total** | **~7,250** | Production Rust code |
 
 ## Key Dependencies
 

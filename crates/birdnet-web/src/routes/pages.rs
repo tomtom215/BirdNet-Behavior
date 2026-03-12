@@ -17,6 +17,7 @@ use crate::state::AppState;
 const LAYOUT_HTML: &str = include_str!("../../templates/layout.html");
 const DASHBOARD_HTML: &str = include_str!("../../templates/dashboard.html");
 const SPECIES_PAGE_HTML: &str = include_str!("../../templates/species.html");
+const ANALYTICS_PAGE_HTML: &str = include_str!("../../templates/analytics.html");
 
 /// Page and HTMX partial routes.
 pub fn router() -> Router<AppState> {
@@ -24,12 +25,21 @@ pub fn router() -> Router<AppState> {
         // Full pages
         .route("/", get(dashboard_page))
         .route("/species", get(species_page))
+        .route("/analytics", get(analytics_page))
         // HTMX partials
         .route("/pages/stats", get(stats_partial))
         .route("/pages/detections", get(detections_partial))
         .route("/pages/top-species", get(top_species_partial))
         .route("/pages/species-list", get(species_list_partial))
         .route("/pages/health-badge", get(health_badge_partial))
+        .route("/pages/analytics-status", get(analytics_status_partial))
+        .route("/pages/analytics-sessions", get(analytics_sessions_partial))
+        .route(
+            "/pages/analytics-retention",
+            get(analytics_retention_partial),
+        )
+        .route("/pages/analytics-next", get(analytics_next_partial))
+        .route("/pages/analytics-config", get(analytics_config_partial))
 }
 
 /// Render a full page by inserting content into the layout template.
@@ -74,6 +84,11 @@ async fn dashboard_page() -> Html<String> {
 /// Species page (full HTML).
 async fn species_page() -> Html<String> {
     render_page("Species", SPECIES_PAGE_HTML, "species")
+}
+
+/// Analytics page (full HTML).
+async fn analytics_page() -> Html<String> {
+    render_page("Analytics", ANALYTICS_PAGE_HTML, "analytics")
 }
 
 /// HTMX partial: stats cards.
@@ -275,6 +290,409 @@ async fn health_badge_partial(State(state): State<AppState>) -> impl IntoRespons
     let html = format!(r#"<span class="dot {dot_class}"></span> {label}"#);
 
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+}
+
+/// HTMX partial: analytics status card.
+async fn analytics_status_partial(State(state): State<AppState>) -> impl IntoResponse {
+    let compiled = cfg!(feature = "analytics");
+    let configured = state.has_analytics();
+
+    let (status, css_class) = if configured {
+        ("Active", "ok")
+    } else if compiled {
+        ("Not Configured", "warn")
+    } else {
+        ("Not Compiled", "err")
+    };
+
+    let hint = if configured {
+        "DuckDB behavioral analytics are active."
+    } else if compiled {
+        "Start with <code>--analytics-db</code> to enable."
+    } else {
+        "Rebuild with <code>--features analytics</code> to enable."
+    };
+
+    let html = format!(
+        r#"<div class="value"><span class="dot {css_class}"></span> {status}</div>
+<div class="label">Analytics Engine</div>
+<p style="color: var(--text-muted); font-size: 0.8rem; margin-top: 0.5rem;">{hint}</p>"#,
+    );
+
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+}
+
+/// HTMX partial: activity sessions table.
+#[cfg(feature = "analytics")]
+async fn analytics_sessions_partial(State(state): State<AppState>) -> impl IntoResponse {
+    if !state.has_analytics() {
+        return analytics_unavailable_html("Activity sessions");
+    }
+
+    let params = birdnet_behavioral::types::SessionizeParams::default();
+
+    let result = tokio::task::spawn_blocking(move || {
+        state
+            .with_analytics(|adb| adb.sessionize(&params))
+            .unwrap_or_else(|| {
+                Err(
+                    birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
+                        "analytics not available".into(),
+                    ),
+                )
+            })
+    })
+    .await;
+
+    match result {
+        Ok(Ok(sessions)) => {
+            if sessions.is_empty() {
+                return (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, "text/html")],
+                    r#"<p style="color: var(--text-muted)">No activity sessions detected yet. Sessions appear after enough detections are recorded.</p>"#.to_string(),
+                );
+            }
+
+            let mut html = String::from(
+                r"<table>
+<thead><tr><th>Species</th><th>Detections</th><th>Start</th><th>Duration</th></tr></thead>
+<tbody>",
+            );
+
+            for s in sessions.iter().take(20) {
+                let duration = format_duration(s.duration_secs);
+                let start = escape_html(&s.start_time);
+                let _ = write!(
+                    html,
+                    r#"<tr>
+    <td class="species-name">{species}</td>
+    <td>{count}</td>
+    <td>{start}</td>
+    <td>{duration}</td>
+</tr>"#,
+                    species = escape_html(&s.species),
+                    count = s.detection_count,
+                );
+            }
+
+            html.push_str("</tbody></table>");
+
+            if sessions.len() > 20 {
+                let _ = write!(
+                    html,
+                    r#"<p style="color: var(--text-muted); font-size: 0.8rem; margin-top: 0.5rem;">Showing 20 of {} sessions.</p>"#,
+                    sessions.len(),
+                );
+            }
+
+            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+        }
+        Ok(Err(e)) => extension_error_html("sessions", &e.to_string()),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading sessions</p>".to_string(),
+        ),
+    }
+}
+
+#[cfg(not(feature = "analytics"))]
+async fn analytics_sessions_partial(State(_state): State<AppState>) -> impl IntoResponse {
+    analytics_unavailable_html("Activity sessions")
+}
+
+/// HTMX partial: species retention data.
+#[cfg(feature = "analytics")]
+async fn analytics_retention_partial(State(state): State<AppState>) -> impl IntoResponse {
+    if !state.has_analytics() {
+        return analytics_unavailable_html("Species retention");
+    }
+
+    let params = birdnet_behavioral::types::RetentionParams::default();
+
+    let result = tokio::task::spawn_blocking(move || {
+        state
+            .with_analytics(|adb| adb.retention(&params))
+            .unwrap_or_else(|| {
+                Err(
+                    birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
+                        "analytics not available".into(),
+                    ),
+                )
+            })
+    })
+    .await;
+
+    match result {
+        Ok(Ok(retention)) => {
+            if retention.is_empty() {
+                return (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, "text/html")],
+                    r#"<p style="color: var(--text-muted)">No retention data yet. Retention is calculated after species are detected on multiple days.</p>"#.to_string(),
+                );
+            }
+
+            let mut html = String::from(
+                r"<table>
+<thead><tr><th>Species</th><th>Classification</th><th>Day 1</th><th>Day 7</th><th>Day 30</th></tr></thead>
+<tbody>",
+            );
+
+            for r in &retention {
+                let classification = match r.classification {
+                    birdnet_behavioral::types::ResidencyType::Resident => "Resident",
+                    birdnet_behavioral::types::ResidencyType::Regular => "Regular",
+                    birdnet_behavioral::types::ResidencyType::Migrant => "Migrant",
+                    birdnet_behavioral::types::ResidencyType::Rarity => "Rarity",
+                };
+
+                let class_css = match r.classification {
+                    birdnet_behavioral::types::ResidencyType::Resident => "high",
+                    birdnet_behavioral::types::ResidencyType::Regular => "mid",
+                    _ => "low",
+                };
+
+                // Find retention rates for day 1, 7, 30
+                let day1 = find_rate(&r.retention_rates, 1);
+                let day7 = find_rate(&r.retention_rates, 7);
+                let day30 = find_rate(&r.retention_rates, 30);
+
+                let _ = write!(
+                    html,
+                    r#"<tr>
+    <td class="species-name">{species}</td>
+    <td><span class="conf {class_css}">{classification}</span></td>
+    <td>{day1}</td>
+    <td>{day7}</td>
+    <td>{day30}</td>
+</tr>"#,
+                    species = escape_html(&r.species),
+                );
+            }
+
+            html.push_str("</tbody></table>");
+
+            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+        }
+        Ok(Err(e)) => extension_error_html("retention", &e.to_string()),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading retention data</p>".to_string(),
+        ),
+    }
+}
+
+#[cfg(not(feature = "analytics"))]
+async fn analytics_retention_partial(State(_state): State<AppState>) -> impl IntoResponse {
+    analytics_unavailable_html("Species retention")
+}
+
+/// HTMX partial: next species predictions.
+#[cfg(feature = "analytics")]
+async fn analytics_next_partial(State(state): State<AppState>) -> impl IntoResponse {
+    if !state.has_analytics() {
+        return analytics_unavailable_html("Next species predictions");
+    }
+
+    // Get the most recent species to use as the trigger
+    let trigger_result = tokio::task::spawn_blocking({
+        let state = state.clone();
+        move || {
+            state.with_db(|conn| {
+                conn.query_row(
+                    "SELECT Com_Name FROM detections ORDER BY rowid DESC LIMIT 1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .ok()
+            })
+        }
+    })
+    .await;
+
+    let trigger = match trigger_result {
+        Ok(Some(name)) => name,
+        _ => {
+            return (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/html")],
+                r#"<p style="color: var(--text-muted)">No detections yet. Predictions require detection history.</p>"#.to_string(),
+            );
+        }
+    };
+
+    let trigger_display = trigger.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        state
+            .with_analytics(|adb| adb.next_species(&trigger, 60, 5))
+            .unwrap_or_else(|| {
+                Err(
+                    birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
+                        "analytics not available".into(),
+                    ),
+                )
+            })
+    })
+    .await;
+
+    match result {
+        Ok(Ok(predictions)) => {
+            if predictions.is_empty() {
+                return (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, "text/html")],
+                    format!(
+                        r#"<p style="color: var(--text-muted)">No predictions available for <strong>{}</strong> yet. More detection data is needed.</p>"#,
+                        escape_html(&trigger_display),
+                    ),
+                );
+            }
+
+            let mut html = format!(
+                r#"<p style="font-size: 0.85rem; margin-bottom: 0.75rem;">After detecting <strong>{trigger}</strong>, these species are most likely next:</p>
+<table>
+<thead><tr><th>Species</th><th>Probability</th><th>Observed</th></tr></thead>
+<tbody>"#,
+                trigger = escape_html(&trigger_display),
+            );
+
+            for p in &predictions {
+                let pct = p.probability * 100.0;
+                let conf_class = if pct >= 50.0 {
+                    "high"
+                } else if pct >= 20.0 {
+                    "mid"
+                } else {
+                    "low"
+                };
+                let _ = write!(
+                    html,
+                    r#"<tr>
+    <td class="species-name">{species}</td>
+    <td><span class="conf {conf_class}">{pct:.0}%</span></td>
+    <td>{freq} times</td>
+</tr>"#,
+                    species = escape_html(&p.predicted_species),
+                    freq = p.frequency,
+                );
+            }
+
+            html.push_str("</tbody></table>");
+
+            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+        }
+        Ok(Err(e)) => extension_error_html("next_species", &e.to_string()),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading predictions</p>".to_string(),
+        ),
+    }
+}
+
+#[cfg(not(feature = "analytics"))]
+async fn analytics_next_partial(State(_state): State<AppState>) -> impl IntoResponse {
+    analytics_unavailable_html("Next species predictions")
+}
+
+/// HTMX partial: analytics configuration info.
+async fn analytics_config_partial(State(state): State<AppState>) -> impl IntoResponse {
+    let compiled = cfg!(feature = "analytics");
+    let configured = state.has_analytics();
+    let db_path = state.db_path().display().to_string();
+    let version = env!("CARGO_PKG_VERSION");
+
+    let mut html = String::from(r#"<table style="font-size: 0.85rem;">"#);
+
+    let _ = write!(
+        html,
+        r#"<tr><td style="font-weight: 600;">Version</td><td>{version}</td></tr>
+<tr><td style="font-weight: 600;">SQLite Database</td><td><code>{db_path}</code></td></tr>
+<tr><td style="font-weight: 600;">Analytics Compiled</td><td>{compiled}</td></tr>
+<tr><td style="font-weight: 600;">Analytics Active</td><td>{configured}</td></tr>"#,
+        db_path = escape_html(&db_path),
+    );
+
+    if compiled && !configured {
+        html.push_str(
+            r#"<tr><td colspan="2" style="color: var(--text-muted); padding-top: 0.5rem;">
+Start with <code>--analytics-db &lt;path&gt;</code> to enable behavioral analytics.
+</td></tr>"#,
+        );
+    } else if !compiled {
+        html.push_str(
+            r#"<tr><td colspan="2" style="color: var(--text-muted); padding-top: 0.5rem;">
+Rebuild with <code>--features analytics</code> to enable DuckDB behavioral analytics.
+</td></tr>"#,
+        );
+    }
+
+    html.push_str("</table>");
+
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+}
+
+/// HTML response when analytics is not available (feature disabled or not configured).
+fn analytics_unavailable_html(
+    feature: &str,
+) -> (StatusCode, [(header::HeaderName, &'static str); 1], String) {
+    let message = if cfg!(feature = "analytics") {
+        format!(
+            r#"<p style="color: var(--text-muted)">{feature} requires DuckDB analytics. Start with <code>--analytics-db</code> to enable.</p>"#,
+        )
+    } else {
+        format!(
+            r#"<p style="color: var(--text-muted)">{feature} requires the analytics feature. Rebuild with <code>--features analytics</code>.</p>"#,
+        )
+    };
+
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/html")],
+        message,
+    )
+}
+
+/// HTML error response when the behavioral extension failed.
+#[cfg(feature = "analytics")]
+fn extension_error_html(
+    function: &str,
+    error: &str,
+) -> (StatusCode, [(header::HeaderName, &'static str); 1], String) {
+    let html = format!(
+        r#"<p style="color: var(--text-muted)">The <code>duckdb-behavioral</code> extension is required for {function}.</p>
+<p style="color: var(--text-muted); font-size: 0.8rem;">{error}</p>"#,
+        error = escape_html(error),
+    );
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        [(header::CONTENT_TYPE, "text/html")],
+        html,
+    )
+}
+
+/// Format a duration in seconds as a human-readable string.
+#[cfg(feature = "analytics")]
+fn format_duration(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else {
+        format!("{}h {}m", secs / 3600, (secs % 3600) / 60)
+    }
+}
+
+/// Find a retention rate for a specific day interval.
+#[cfg(feature = "analytics")]
+fn find_rate(rates: &[birdnet_behavioral::types::RetentionRate], days: u32) -> String {
+    rates
+        .iter()
+        .find(|r| r.days == days)
+        .map_or_else(|| "—".to_string(), |r| format!("{:.0}%", r.rate * 100.0))
 }
 
 /// Count detections for today's date.
