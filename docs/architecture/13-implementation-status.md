@@ -12,7 +12,7 @@
 | 3 | ML Inference | **Complete** | 100% |
 | 4 | Detection Daemon | **Complete** | 100% |
 | 5 | Web Server | **Complete** | 100% |
-| 6 | Integrations | **Partial** | 50% |
+| 6 | Integrations | **Partial** | 60% |
 | 7 | Audio Capture | **Complete** | 100% |
 | 8 | Assembly | **Complete** | 95% |
 
@@ -60,7 +60,7 @@
 
 | Module | File | Status | Notes |
 |--------|------|--------|-------|
-| BirdWeather | `birdweather.rs` | **Complete** | HTTP client, retry with exponential backoff |
+| BirdWeather | `birdweather.rs` | **Complete** | HTTP client, retry with exponential backoff, wired into event processor |
 | Apprise | `apprise.rs` | **Complete** | Push notifications, per-species cooldown, confidence threshold, species watchlist, retry with backoff |
 
 ### birdnet-behavioral
@@ -75,7 +75,7 @@
 
 | Module | File | Status | Notes |
 |--------|------|--------|-------|
-| Entry point | `src/main.rs` | **Complete** | CLI, config, DB recovery, detection daemon, WebSocket bridge, DuckDB analytics, Apprise notifications |
+| Entry point | `src/main.rs` | **Complete** | CLI, config, DB recovery, detection daemon, WebSocket bridge, DuckDB analytics, Apprise + BirdWeather |
 
 ## Recent Changes (March 12, 2026)
 
@@ -132,6 +132,15 @@
 - `--apprise-url` CLI flag and `BIRDNET_APPRISE_URL` env var
 - Config file keys: `APPRISE_URL`, `APPRISE_MIN_CONFIDENCE`, `APPRISE_COOLDOWN`, `APPRISE_WATCHLIST`
 - 9 unit tests covering all filtering logic
+
+### BirdWeather Integration Wiring
+
+- BirdWeather client wired into detection event processor
+- Every detection posted to `app.birdweather.com` via async task
+- `--birdweather-token`, `--latitude`, `--longitude` CLI flags
+- `BIRDNET_BIRDWEATHER_TOKEN`, `BIRDNET_LATITUDE`, `BIRDNET_LONGITUDE` env vars
+- Config file keys: `BIRDWEATHER_TOKEN`, `LATITUDE`, `LONGITUDE`
+- ISO 8601 timestamp formatting for API compatibility
 
 ### Export Endpoints
 

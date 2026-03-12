@@ -76,6 +76,21 @@ struct Cli {
     /// Minimum confidence threshold for Apprise notifications (0.0 - 1.0).
     #[arg(long, default_value = "0.8", env = "BIRDNET_NOTIFY_CONFIDENCE")]
     notify_confidence: f32,
+
+    /// `BirdWeather` station token for uploading detections.
+    ///
+    /// When set, every detection is posted to `app.birdweather.com`.
+    /// Get a station token from the `BirdWeather` app settings.
+    #[arg(long, env = "BIRDNET_BIRDWEATHER_TOKEN")]
+    birdweather_token: Option<String>,
+
+    /// Station latitude for `BirdWeather` uploads.
+    #[arg(long, env = "BIRDNET_LATITUDE")]
+    latitude: Option<f64>,
+
+    /// Station longitude for `BirdWeather` uploads.
+    #[arg(long, env = "BIRDNET_LONGITUDE")]
+    longitude: Option<f64>,
 }
 
 #[tokio::main]
@@ -182,8 +197,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let broadcast = state.detection_broadcast();
 
-    // Create Apprise notification client (if configured)
+    // Create integration clients (if configured)
     let apprise_client = create_apprise_client(&cli, config.as_ref());
+    let birdweather_client = create_birdweather_client(&cli, config.as_ref());
 
     // Start detection daemon if not in web-only mode and model is available
     let _daemon_handle = if cli.web_only {
@@ -196,6 +212,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             state.clone(),
             broadcast,
             apprise_client,
+            birdweather_client,
         )
     };
 
@@ -222,6 +239,7 @@ fn start_detection_daemon(
     state: birdnet_web::state::AppState,
     broadcast: birdnet_web::routes::websocket::DetectionBroadcast,
     apprise: Option<AppriseHandle>,
+    birdweather: Option<birdnet_integrations::birdweather::Client>,
 ) -> Option<birdnet_core::detection::daemon::DaemonHandle> {
     // Resolve paths from CLI flags or config
     let model_path = cli
@@ -287,7 +305,7 @@ fn start_detection_daemon(
 
             // Spawn event processor on a blocking thread (it uses std::mpsc::recv)
             tokio::task::spawn_blocking(move || {
-                event_processor(event_rx, state, broadcast, apprise, rt_handle);
+                event_processor(event_rx, state, broadcast, apprise, birdweather, rt_handle);
             });
 
             Some(handle)
@@ -303,12 +321,13 @@ fn start_detection_daemon(
 ///
 /// Takes ownership of `state` and `broadcast` because this function runs on a
 /// `spawn_blocking` thread and needs to own the `Arc`-backed handles.
-#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value, clippy::too_many_lines)]
 fn event_processor(
     event_rx: mpsc::Receiver<birdnet_core::detection::daemon::DetectionEvent>,
     state: birdnet_web::state::AppState,
     broadcast: birdnet_web::routes::websocket::DetectionBroadcast,
     apprise: Option<AppriseHandle>,
+    birdweather: Option<birdnet_integrations::birdweather::Client>,
     rt_handle: tokio::runtime::Handle,
 ) {
     tracing::debug!("event processor started");
@@ -409,6 +428,34 @@ fn event_processor(
                     }
                 });
             }
+        }
+
+        // Post detection to BirdWeather (if configured)
+        if let Some(ref bw) = birdweather {
+            let post = birdnet_integrations::birdweather::DetectionPost {
+                timestamp: format!("{}T{}Z", detection.date, detection.time),
+                common_name: detection.common_name.clone(),
+                scientific_name: detection.scientific_name.clone(),
+                confidence: detection.confidence,
+                lat: bw.coordinates().0,
+                lon: bw.coordinates().1,
+            };
+            let client = bw.clone();
+
+            rt_handle.spawn(async move {
+                if let Err(e) = client.post_detection(&post).await {
+                    tracing::warn!(
+                        error = %e,
+                        species = %post.common_name,
+                        "failed to post detection to BirdWeather"
+                    );
+                } else {
+                    tracing::debug!(
+                        species = %post.common_name,
+                        "detection posted to BirdWeather"
+                    );
+                }
+            });
         }
 
         tracing::debug!(
@@ -524,6 +571,42 @@ fn create_apprise_client(
         }
         Err(e) => {
             tracing::error!(error = %e, "failed to create Apprise client");
+            None
+        }
+    }
+}
+
+/// Create a `BirdWeather` client from CLI flags and/or config file values.
+///
+/// Returns `None` if no station token is configured.
+fn create_birdweather_client(
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+) -> Option<birdnet_integrations::birdweather::Client> {
+    let token = cli
+        .birdweather_token
+        .clone()
+        .or_else(|| config?.get("BIRDWEATHER_TOKEN").map(String::from));
+
+    let token = token?;
+
+    let lat = cli
+        .latitude
+        .or_else(|| config?.get_parsed::<f64>("LATITUDE").ok())
+        .unwrap_or(0.0);
+
+    let lon = cli
+        .longitude
+        .or_else(|| config?.get_parsed::<f64>("LONGITUDE").ok())
+        .unwrap_or(0.0);
+
+    match birdnet_integrations::birdweather::Client::new(&token, lat, lon) {
+        Ok(client) => {
+            tracing::info!(lat = lat, lon = lon, "BirdWeather uploads enabled");
+            Some(client)
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "failed to create BirdWeather client");
             None
         }
     }
