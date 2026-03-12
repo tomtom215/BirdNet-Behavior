@@ -706,3 +706,178 @@ async fn export_species_json() {
     assert_eq!(json["total"], 4);
     assert!(json["species"].is_array());
 }
+
+#[tokio::test]
+async fn daily_detections_endpoint() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/detections/daily?days=30")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert!(json["daily"].is_array());
+    assert!(json["total"].as_u64().unwrap() > 0);
+}
+
+#[tokio::test]
+async fn analytics_page_returns_html() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/analytics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(html.contains("Behavioral Analytics"));
+    assert!(html.contains("Activity Sessions"));
+    assert!(html.contains("Species Retention"));
+}
+
+#[tokio::test]
+async fn htmx_hourly_chart_partial() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/hourly-chart")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 16384)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    // Should return either SVG chart or "no detections" message
+    assert!(html.contains("<svg") || html.contains("No detections"));
+}
+
+#[tokio::test]
+async fn htmx_daily_chart_partial() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/daily-chart")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 16384)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    // Should return either SVG chart or "no data" message
+    assert!(html.contains("<svg") || html.contains("No detection data"));
+}
+
+#[tokio::test]
+async fn htmx_analytics_status_partial() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/analytics-status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(html.contains("Analytics Engine"));
+}
+
+#[tokio::test]
+async fn htmx_analytics_config_partial() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/analytics-config")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(html.contains("Version"));
+    assert!(html.contains("SQLite Database"));
+}
+
+#[tokio::test]
+async fn species_image_info_without_cache() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/species/image/Turdus%20merula")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    // Without image cache configured, should report disabled
+    assert_eq!(json["status"], "disabled");
+}
