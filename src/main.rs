@@ -15,6 +15,7 @@ use tracing_subscriber::EnvFilter;
 /// BirdNet-Behavior bird detection and analytics system.
 #[derive(Parser, Debug)]
 #[command(name = "birdnet-behavior", version, about)]
+#[allow(clippy::struct_excessive_bools)]
 struct Cli {
     /// Path to configuration file.
     #[arg(
@@ -56,6 +57,14 @@ struct Cli {
     /// Process audio files already present in watch directory on startup.
     #[arg(long)]
     process_existing: bool,
+
+    /// Path to the `DuckDB` analytics database file (enables behavioral analytics).
+    ///
+    /// When set, a file-backed `DuckDB` database is opened at this path for
+    /// behavioral analytics queries (sessionize, retention, funnel, etc.).
+    /// The file is created if it doesn't exist.
+    #[arg(long, env = "BIRDNET_ANALYTICS_DB")]
+    analytics_db: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -126,18 +135,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         db_path: db_path.clone(),
     };
 
-    // Create app state (includes WebSocket broadcast channel)
-    let state = birdnet_web::state::AppState::new(server_config.db_path.clone())
-        .map_err(|e| format!("database error: {e}"))?;
+    // Create app state (includes WebSocket broadcast channel and optional DuckDB)
+    #[cfg(feature = "analytics")]
+    let state = {
+        // Resolve analytics DB path from CLI, config, or derive from SQLite path
+        let analytics_path = cli
+            .analytics_db
+            .clone()
+            .or_else(|| config.as_ref()?.get("ANALYTICS_DB_PATH").map(PathBuf::from));
+
+        if let Some(ref analytics_path) = analytics_path {
+            tracing::info!(path = %analytics_path.display(), "enabling DuckDB analytics");
+            birdnet_web::state::AppState::new_with_analytics(
+                server_config.db_path.clone(),
+                analytics_path,
+            )
+            .map_err(|e| format!("database error: {e}"))?
+        } else {
+            birdnet_web::state::AppState::new(server_config.db_path.clone())
+                .map_err(|e| format!("database error: {e}"))?
+        }
+    };
+
+    #[cfg(not(feature = "analytics"))]
+    let state = {
+        if cli.analytics_db.is_some() {
+            tracing::warn!(
+                "DuckDB analytics requested but not compiled in. Rebuild with --features analytics"
+            );
+        }
+        birdnet_web::state::AppState::new(server_config.db_path.clone())
+            .map_err(|e| format!("database error: {e}"))?
+    };
 
     let broadcast = state.detection_broadcast();
 
     // Start detection daemon if not in web-only mode and model is available
-    let _daemon_handle = if !cli.web_only {
-        start_detection_daemon(&cli, config.as_ref(), state.clone(), broadcast)
-    } else {
+    let _daemon_handle = if cli.web_only {
         tracing::info!("running in web-only mode (no detection daemon)");
         None
+    } else {
+        start_detection_daemon(&cli, config.as_ref(), state.clone(), broadcast)
     };
 
     // Start the web server (blocks until shutdown)
@@ -237,6 +275,10 @@ fn start_detection_daemon(
 }
 
 /// Bridge detection events from the daemon to database inserts and WebSocket broadcasts.
+///
+/// Takes ownership of `state` and `broadcast` because this function runs on a
+/// `spawn_blocking` thread and needs to own the `Arc`-backed handles.
+#[allow(clippy::needless_pass_by_value)]
 fn event_processor(
     event_rx: mpsc::Receiver<birdnet_core::detection::daemon::DetectionEvent>,
     state: birdnet_web::state::AppState,
@@ -246,12 +288,9 @@ fn event_processor(
 
     loop {
         // Receive from std mpsc (blocking -- but this is in a spawned task)
-        let event = match event_rx.recv() {
-            Ok(event) => event,
-            Err(_) => {
-                tracing::info!("event channel closed, stopping event processor");
-                break;
-            }
+        let Ok(event) = event_rx.recv() else {
+            tracing::info!("event channel closed, stopping event processor");
+            break;
         };
 
         let detection = &event.detection;
@@ -278,6 +317,24 @@ fn event_processor(
 
         if let Err(e) = db_result {
             tracing::warn!(error = %e, "failed to insert detection into database");
+        }
+
+        // Also insert into DuckDB analytics (if enabled)
+        #[cfg(feature = "analytics")]
+        if state.has_analytics() {
+            let insert_result = state.with_analytics(|adb| {
+                adb.insert_detection(
+                    &detection.date,
+                    &detection.time,
+                    &detection.scientific_name,
+                    &detection.common_name,
+                    f64::from(detection.confidence),
+                    &file_str,
+                )
+            });
+            if let Some(Err(e)) = insert_result {
+                tracing::warn!(error = %e, "failed to insert detection into DuckDB");
+            }
         }
 
         // Broadcast to WebSocket clients

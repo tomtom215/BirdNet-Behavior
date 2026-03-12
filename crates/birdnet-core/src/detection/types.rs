@@ -118,28 +118,21 @@ impl RecordingFile {
         // After "YYYY-MM-DD-" we expect "birdnet-..."
         let remainder = parts[3..].join("-");
 
-        let (rtsp_id, time) = if let Some(rest) = remainder.strip_prefix("birdnet-") {
-            // Check if there's an RTSP ID: "RTSP_ID-HH:MM:SS" vs "HH:MM:SS"
-            if rest.contains('-') {
-                // Could be RTSP_ID-HH:MM:SS
-                if let Some(last_dash) = rest.rfind('-') {
-                    let potential_time = &rest[last_dash + 1..];
-                    let potential_id = &rest[..last_dash];
-                    if potential_time.len() == 8 && potential_time.contains(':') {
-                        (Some(potential_id.to_string()), potential_time.to_string())
-                    } else {
-                        // No valid time after last dash, treat entire rest as time
-                        (None, rest.to_string())
-                    }
+        let rest = remainder.strip_prefix("birdnet-")?;
+
+        // Check if there's an RTSP ID: "RTSP_ID-HH:MM:SS" vs "HH:MM:SS"
+        let (rtsp_id, time) = rest.rfind('-').map_or_else(
+            || (None, rest.to_string()),
+            |last_dash| {
+                let potential_time = &rest[last_dash + 1..];
+                let potential_id = &rest[..last_dash];
+                if potential_time.len() == 8 && potential_time.contains(':') {
+                    (Some(potential_id.to_string()), potential_time.to_string())
                 } else {
                     (None, rest.to_string())
                 }
-            } else {
-                (None, rest.to_string())
-            }
-        } else {
-            return None;
-        };
+            },
+        );
 
         // Validate time format (HH:MM:SS)
         if time.len() != 8 || time.chars().filter(|c| *c == ':').count() != 2 {

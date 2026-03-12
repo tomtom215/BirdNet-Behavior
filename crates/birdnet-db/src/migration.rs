@@ -190,8 +190,9 @@ mod tests {
     fn migrate_applies_all_migrations() {
         let conn = memory_db();
         let applied = migrate(&conn).unwrap();
-        assert_eq!(applied, MIGRATIONS.len() as u32);
-        assert_eq!(current_version(&conn).unwrap(), MIGRATIONS.len() as u32);
+        let expected = u32::try_from(MIGRATIONS.len()).unwrap();
+        assert_eq!(applied, expected);
+        assert_eq!(current_version(&conn).unwrap(), expected);
     }
 
     #[test]

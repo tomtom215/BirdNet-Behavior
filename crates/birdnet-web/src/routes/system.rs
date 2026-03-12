@@ -1,6 +1,7 @@
 //! System API endpoints: health, version, diagnostics.
 
 use axum::extract::State;
+use axum::http::StatusCode;
 use axum::{Json, Router, routing::get};
 use serde_json::{Value, json};
 
@@ -22,20 +23,29 @@ async fn root() -> Json<Value> {
     }))
 }
 
-async fn health(State(state): State<AppState>) -> Json<Value> {
+async fn health(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
     let db_ok: bool = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| birdnet_db::sqlite::quick_check(conn).unwrap_or(false))
     })
     .await
     .unwrap_or(false);
 
-    Json(json!({
-        "status": if db_ok { "healthy" } else { "degraded" },
-        "database": if db_ok { "ok" } else { "error" },
-    }))
+    let status = if db_ok {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+
+    (
+        status,
+        Json(json!({
+            "status": if db_ok { "healthy" } else { "degraded" },
+            "database": if db_ok { "ok" } else { "error" },
+        })),
+    )
 }
 
-async fn stats(State(state): State<AppState>) -> Json<Value> {
+async fn stats(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
     let result: Result<(i64, i64), _> = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
             let detections = birdnet_db::sqlite::detection_count(conn).unwrap_or(0);
@@ -46,10 +56,16 @@ async fn stats(State(state): State<AppState>) -> Json<Value> {
     .await;
 
     match result {
-        Ok((detections, species)) => Json(json!({
-            "total_detections": detections,
-            "unique_species": species,
-        })),
-        Err(e) => Json(json!({ "error": format!("internal error: {e}") })),
+        Ok((detections, species)) => (
+            StatusCode::OK,
+            Json(json!({
+                "total_detections": detections,
+                "unique_species": species,
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("internal error: {e}") })),
+        ),
     }
 }

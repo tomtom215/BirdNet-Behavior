@@ -143,8 +143,7 @@ async fn handle_ws_connection(mut socket: WebSocket, broadcast: DetectionBroadca
                             break;
                         }
                     }
-                    Some(Ok(Message::Close(_))) | None => break,
-                    Some(Err(_)) => break,
+                    Some(Ok(Message::Close(_)) | Err(_)) | None => break,
                     _ => {} // Ignore text/binary from client
                 }
             }
@@ -206,14 +205,15 @@ mod tests {
         let broadcast = DetectionBroadcast::new(16);
         assert_eq!(broadcast.client_count(), 0);
 
-        let _rx1 = broadcast.subscribe();
+        let rx1 = broadcast.subscribe();
         assert_eq!(broadcast.client_count(), 1);
 
-        let _rx2 = broadcast.subscribe();
+        let rx2 = broadcast.subscribe();
         assert_eq!(broadcast.client_count(), 2);
 
-        drop(_rx1);
-        // Note: broadcast::Sender count may not update immediately on drop
+        drop(rx1);
+        // Keep rx2 alive for count assertion above
+        drop(rx2);
     }
 
     #[test]

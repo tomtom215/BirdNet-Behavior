@@ -1,6 +1,6 @@
 //! ONNX model loading and inference via tract (pure Rust).
 //!
-//! Loads BirdNET ONNX models, runs inference on audio chunks (raw f32 samples),
+//! Loads `BirdNET` ONNX models, runs inference on audio chunks (raw f32 samples),
 //! and returns species classification results with confidence scores.
 //!
 //! The inference pipeline:
@@ -43,7 +43,7 @@ impl fmt::Display for InferenceError {
 
 impl std::error::Error for InferenceError {}
 
-/// Configuration for the BirdNET model.
+/// Configuration for the `BirdNET` model.
 #[derive(Debug, Clone)]
 pub struct ModelConfig {
     /// Sensitivity adjustment for sigmoid (higher = more sensitive, range 0.5-1.5).
@@ -67,9 +67,12 @@ impl Default for ModelConfig {
     }
 }
 
-/// A loaded BirdNET ONNX model ready for inference.
+/// Tract model plan type alias to avoid repeating the complex generic type.
+type ModelPlan = SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>;
+
+/// A loaded `BirdNET` ONNX model ready for inference.
 pub struct BirdNetModel {
-    model: SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>,
+    model: ModelPlan,
     labels: LabelSet,
     config: ModelConfig,
     input_shape: Vec<usize>,
@@ -81,7 +84,7 @@ impl fmt::Debug for BirdNetModel {
             .field("labels_count", &self.labels.len())
             .field("config", &self.config)
             .field("input_shape", &self.input_shape)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -124,7 +127,10 @@ impl BirdNetModel {
             .shape
             .dims()
             .iter()
-            .map(|d: &TDim| d.to_i64().unwrap_or(0) as usize)
+            .map(|d: &TDim| {
+                let v = d.to_i64().unwrap_or(0);
+                usize::try_from(v).unwrap_or(0)
+            })
             .collect();
 
         tracing::info!(
@@ -169,7 +175,10 @@ impl BirdNetModel {
             .shape
             .dims()
             .iter()
-            .map(|d: &TDim| d.to_i64().unwrap_or(0) as usize)
+            .map(|d: &TDim| {
+                let v = d.to_i64().unwrap_or(0);
+                usize::try_from(v).unwrap_or(0)
+            })
             .collect();
 
         Ok(Self {
@@ -183,7 +192,7 @@ impl BirdNetModel {
     /// Run inference on raw audio samples.
     ///
     /// The `audio` slice should be mono f32 samples at the model's expected
-    /// sample rate and duration. For BirdNET V2.4, that's 48kHz x 3s = 144,000 samples.
+    /// sample rate and duration. For `BirdNET` V2.4, that's 48kHz x 3s = 144,000 samples.
     ///
     /// Returns detections sorted by confidence (descending), filtered by threshold.
     ///
@@ -302,27 +311,28 @@ impl BirdNetModel {
     }
 
     /// Get the model's expected input shape.
+    #[allow(clippy::missing_const_for_fn)] // Vec deref is not const
     pub fn input_shape(&self) -> &[usize] {
         &self.input_shape
     }
 
     /// Get the label set.
-    pub fn labels(&self) -> &LabelSet {
+    pub const fn labels(&self) -> &LabelSet {
         &self.labels
     }
 
     /// Get the model configuration.
-    pub fn config(&self) -> &ModelConfig {
+    pub const fn config(&self) -> &ModelConfig {
         &self.config
     }
 
     /// Update the sensitivity value.
-    pub fn set_sensitivity(&mut self, sensitivity: f32) {
+    pub const fn set_sensitivity(&mut self, sensitivity: f32) {
         self.config.sensitivity = sensitivity;
     }
 
     /// Update the confidence threshold.
-    pub fn set_confidence_threshold(&mut self, threshold: f32) {
+    pub const fn set_confidence_threshold(&mut self, threshold: f32) {
         self.config.confidence_threshold = threshold;
     }
 }
@@ -344,6 +354,7 @@ fn softmax(logits: &[f32]) -> Vec<f32> {
 }
 
 #[cfg(test)]
+#[allow(clippy::cast_precision_loss)]
 mod tests {
     use super::*;
 

@@ -1,6 +1,6 @@
 //! Species label loading and lookup.
 //!
-//! BirdNET models output logits indexed by species. This module loads
+//! `BirdNET` models output logits indexed by species. This module loads
 //! label files (one `Scientific_Common` pair per line) and provides
 //! bidirectional lookup.
 

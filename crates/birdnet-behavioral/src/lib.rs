@@ -8,9 +8,15 @@
 //! - `sequence_match`: Find specific activity patterns
 //! - `sequence_next_node`: Predict next species
 //!
-//! This crate provides query builders and result types for the behavioral
-//! analytics API. The actual `DuckDB` connection and extension loading will
-//! be integrated when the `duckdb` crate is added as a dependency.
+//! Uses a file-based `DuckDB` database for durable analytics storage,
+//! with data synced from the operational `SQLite` database. The behavioral
+//! extension is loaded at runtime for advanced analytical queries.
+//!
+//! Enable the `analytics` feature to compile the `DuckDB` connection module.
+//! Without it, only the query builders and types are available (useful for
+//! SQL generation and type definitions without the heavy `DuckDB` C++ dependency).
 
+#[cfg(feature = "analytics")]
+pub mod connection;
 pub mod queries;
 pub mod types;

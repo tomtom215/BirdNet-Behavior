@@ -317,7 +317,11 @@ mod tests {
     fn recording_filename_local_mic() {
         let name = recording_filename(None, AudioFormat::Wav);
         assert!(name.contains("birdnet"));
-        assert!(name.ends_with(".wav"));
+        assert!(
+            std::path::Path::new(&name)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"))
+        );
         assert!(!name.contains("cam"));
     }
 
@@ -326,7 +330,11 @@ mod tests {
         let name = recording_filename(Some("cam1"), AudioFormat::Flac);
         assert!(name.contains("birdnet"));
         assert!(name.contains("cam1"));
-        assert!(name.ends_with(".flac"));
+        assert!(
+            std::path::Path::new(&name)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("flac"))
+        );
     }
 
     #[test]

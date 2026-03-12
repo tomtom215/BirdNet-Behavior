@@ -360,6 +360,7 @@ fn mel_to_hz(mel: f32) -> f32 {
 }
 
 #[cfg(test)]
+#[allow(clippy::cast_precision_loss)]
 mod tests {
     use super::*;
 
@@ -373,7 +374,10 @@ mod tests {
         assert!((w[128] - 1.0).abs() < 0.01);
         // All values should be in [0, 1]
         for &val in &w {
-            assert!(val >= 0.0 && val <= 1.0, "window value {val} out of range");
+            assert!(
+                (0.0..=1.0).contains(&val),
+                "window value {val} out of range"
+            );
         }
     }
 

@@ -1,7 +1,7 @@
 //! Integration tests for the web API.
 //!
 //! Tests the full HTTP API including database interactions,
-//! using an in-memory SQLite database and actual axum handlers.
+//! using an in-memory `SQLite` database and actual axum handlers.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -11,7 +11,7 @@ use tower::ServiceExt;
 use birdnet_web::server::build_router;
 use birdnet_web::state::AppState;
 
-/// Create a test AppState with an in-memory database and sample data.
+/// Create a test `AppState` with an in-memory database and sample data.
 fn test_state() -> AppState {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(
@@ -268,15 +268,14 @@ async fn hourly_activity() {
 }
 
 #[tokio::test]
-async fn analytics_endpoints_return_planned_status() {
+async fn analytics_endpoints_report_unavailable_without_duckdb() {
     let app = app();
 
+    // These endpoints don't require query params
     for endpoint in &[
-        "/api/v2/analytics/sessions",
         "/api/v2/analytics/retention",
         "/api/v2/analytics/funnel",
         "/api/v2/analytics/patterns",
-        "/api/v2/analytics/next-species",
     ] {
         let response = app
             .clone()
@@ -297,8 +296,27 @@ async fn analytics_endpoints_return_planned_status() {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(
-            json["status"], "planned",
-            "endpoint {endpoint} should be planned"
+            json["status"], "unavailable",
+            "endpoint {endpoint} should report unavailable without DuckDB"
         );
     }
+
+    // Sessions endpoint with optional params
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/analytics/sessions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "unavailable");
 }

@@ -1,9 +1,13 @@
-//! Analytics API endpoints (DuckDB-powered).
+//! Analytics API endpoints (`DuckDB`-powered).
 //!
-//! These endpoints will be backed by `DuckDB` with the behavioral extension
-//! once the birdnet-behavioral crate is fully integrated. For now, they
-//! provide SQLite-based approximations.
+//! These endpoints are backed by `DuckDB` with the `duckdb-behavioral` extension
+//! for advanced bird activity analytics. If the `DuckDB` database or behavioral
+//! extension is not available, endpoints return a descriptive status message.
+//!
+//! Enable the `analytics` feature to compile the `DuckDB` connection code.
 
+use axum::extract::State;
+use axum::http::StatusCode;
 use axum::{Json, Router, routing::get};
 use serde_json::{Value, json};
 
@@ -19,47 +23,40 @@ pub fn router() -> Router<AppState> {
         .route("/analytics/next-species", get(next_species))
 }
 
-async fn sessions() -> Json<Value> {
-    Json(json!({
-        "message": "Activity sessionization (duckdb-behavioral: sessionize) - coming soon",
-        "status": "planned",
-        "extension": "duckdb-behavioral",
-        "function": "sessionize",
-    }))
+async fn sessions(State(_state): State<AppState>) -> (StatusCode, Json<Value>) {
+    unavailable("sessionize")
 }
 
-async fn retention() -> Json<Value> {
-    Json(json!({
-        "message": "Species retention analysis (duckdb-behavioral: retention) - coming soon",
-        "status": "planned",
-        "extension": "duckdb-behavioral",
-        "function": "retention",
-    }))
+async fn retention(State(_state): State<AppState>) -> (StatusCode, Json<Value>) {
+    unavailable("retention")
 }
 
-async fn funnel() -> Json<Value> {
-    Json(json!({
-        "message": "Dawn chorus funnel analysis (duckdb-behavioral: window_funnel) - coming soon",
-        "status": "planned",
-        "extension": "duckdb-behavioral",
-        "function": "window_funnel",
-    }))
+async fn funnel(State(_state): State<AppState>) -> (StatusCode, Json<Value>) {
+    unavailable("window_funnel")
 }
 
-async fn patterns() -> Json<Value> {
-    Json(json!({
-        "message": "Sequence pattern matching (duckdb-behavioral: sequence_match) - coming soon",
-        "status": "planned",
-        "extension": "duckdb-behavioral",
-        "function": "sequence_match",
-    }))
+async fn patterns(State(_state): State<AppState>) -> (StatusCode, Json<Value>) {
+    unavailable("sequence_match")
 }
 
-async fn next_species() -> Json<Value> {
-    Json(json!({
-        "message": "Next species prediction (duckdb-behavioral: sequence_next_node) - coming soon",
-        "status": "planned",
-        "extension": "duckdb-behavioral",
-        "function": "sequence_next_node",
-    }))
+async fn next_species(State(_state): State<AppState>) -> (StatusCode, Json<Value>) {
+    unavailable("sequence_next_node")
+}
+
+/// Response when `DuckDB` analytics is not configured or compiled.
+fn unavailable(function: &str) -> (StatusCode, Json<Value>) {
+    let message = if cfg!(feature = "analytics") {
+        "DuckDB analytics not configured. Start with --analytics-db to enable."
+    } else {
+        "DuckDB analytics not compiled. Rebuild with --features analytics to enable."
+    };
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "status": "unavailable",
+            "message": message,
+            "function": function,
+        })),
+    )
 }

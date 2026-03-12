@@ -1,6 +1,7 @@
 //! Species API endpoints.
 
 use axum::extract::{Query, State};
+use axum::http::StatusCode;
 use axum::{Json, Router, routing::get};
 use birdnet_db::sqlite::{DbError, HourlyCount, SpeciesCount};
 use serde::Deserialize;
@@ -23,7 +24,7 @@ struct TopSpeciesQuery {
 async fn top_species(
     State(state): State<AppState>,
     Query(query): Query<TopSpeciesQuery>,
-) -> Json<Value> {
+) -> (StatusCode, Json<Value>) {
     let limit = query.limit.unwrap_or(20);
 
     let result: Result<Result<Vec<SpeciesCount>, DbError>, _> =
@@ -35,13 +36,30 @@ async fn top_species(
     match result {
         Ok(Ok(species)) => {
             let total = species.len();
-            Json(json!({
-                "species": species,
-                "total": total,
-            }))
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "species": species,
+                    "total": total,
+                })),
+            )
         }
-        Ok(Err(e)) => Json(json!({ "error": e.to_string() })),
-        Err(e) => Json(json!({ "error": format!("internal error: {e}") })),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": e.to_string(),
+                "species": [],
+                "total": 0,
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": format!("internal error: {e}"),
+                "species": [],
+                "total": 0,
+            })),
+        ),
     }
 }
 
@@ -53,7 +71,7 @@ struct ActivityQuery {
 async fn hourly_activity(
     State(state): State<AppState>,
     Query(query): Query<ActivityQuery>,
-) -> Json<Value> {
+) -> (StatusCode, Json<Value>) {
     let date = query.date;
 
     let result: Result<Result<Vec<HourlyCount>, DbError>, _> =
@@ -63,10 +81,25 @@ async fn hourly_activity(
         .await;
 
     match result {
-        Ok(Ok(hours)) => Json(json!({
-            "activity": hours,
-        })),
-        Ok(Err(e)) => Json(json!({ "error": e.to_string() })),
-        Err(e) => Json(json!({ "error": format!("internal error: {e}") })),
+        Ok(Ok(hours)) => (
+            StatusCode::OK,
+            Json(json!({
+                "activity": hours,
+            })),
+        ),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": e.to_string(),
+                "activity": [],
+            })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": format!("internal error: {e}"),
+                "activity": [],
+            })),
+        ),
     }
 }

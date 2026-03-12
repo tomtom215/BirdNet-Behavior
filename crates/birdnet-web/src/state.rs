@@ -3,8 +3,10 @@
 //! Holds the database connection, WebSocket broadcast channel, and configuration,
 //! shared across all request handlers via axum's State extractor.
 
+#[cfg(feature = "analytics")]
+use birdnet_behavioral::connection::AnalyticsDb;
 use rusqlite::Connection;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::routes::websocket::DetectionBroadcast;
@@ -23,8 +25,11 @@ pub struct AppState {
 struct AppStateInner {
     /// `SQLite` connection protected by a mutex for thread safety.
     db: Mutex<Connection>,
-    /// Path to the database file (for diagnostics).
+    /// Path to the `SQLite` database file (for diagnostics).
     db_path: PathBuf,
+    /// `DuckDB` analytics database (file-backed, for behavioral queries).
+    #[cfg(feature = "analytics")]
+    analytics_db: Option<Mutex<AnalyticsDb>>,
     /// Broadcast channel for live detection WebSocket streaming.
     detection_broadcast: DetectionBroadcast,
 }
@@ -47,6 +52,71 @@ impl AppState {
             inner: Arc::new(AppStateInner {
                 db: Mutex::new(conn),
                 db_path,
+                #[cfg(feature = "analytics")]
+                analytics_db: None,
+                detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
+            }),
+        })
+    }
+
+    /// Create application state with both `SQLite` and `DuckDB` connections.
+    ///
+    /// The `DuckDB` database is opened at the given path for behavioral
+    /// analytics queries. An initial sync from `SQLite` is performed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either database cannot be opened.
+    #[cfg(feature = "analytics")]
+    pub fn new_with_analytics(
+        db_path: PathBuf,
+        analytics_path: &Path,
+    ) -> Result<Self, birdnet_db::sqlite::DbError> {
+        let conn = birdnet_db::sqlite::open_or_create(&db_path)?;
+
+        // Run migrations on startup
+        if let Err(e) = birdnet_db::migration::migrate(&conn) {
+            tracing::warn!(error = %e, "migration warning");
+        }
+
+        // Open DuckDB analytics database
+        let analytics_db = match AnalyticsDb::open(analytics_path) {
+            Ok(mut adb) => {
+                tracing::info!(path = %analytics_path.display(), "DuckDB analytics database opened");
+
+                // Initial sync from SQLite
+                match adb.sync_from_sqlite(&conn) {
+                    Ok(count) => {
+                        if count > 0 {
+                            tracing::info!(rows = count, "initial SQLite → DuckDB sync complete");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "initial DuckDB sync failed (non-fatal)");
+                    }
+                }
+
+                // Try to load the behavioral extension (non-fatal if offline)
+                if let Err(e) = adb.load_extension() {
+                    tracing::warn!(
+                        error = %e,
+                        "duckdb-behavioral extension not loaded (analytics queries unavailable)"
+                    );
+                }
+
+                Some(Mutex::new(adb))
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "DuckDB analytics database not available (non-fatal)");
+                None
+            }
+        };
+
+        Ok(Self {
+            inner: Arc::new(AppStateInner {
+                db: Mutex::new(conn),
+                db_path,
+                analytics_db,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
             }),
         })
@@ -58,12 +128,14 @@ impl AppState {
             inner: Arc::new(AppStateInner {
                 db: Mutex::new(conn),
                 db_path,
+                #[cfg(feature = "analytics")]
+                analytics_db: None,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
             }),
         }
     }
 
-    /// Execute a closure with a reference to the database connection.
+    /// Execute a closure with a reference to the `SQLite` database connection.
     ///
     /// The mutex is held for the duration of the closure.
     ///
@@ -78,8 +150,40 @@ impl AppState {
         f(&conn)
     }
 
+    /// Execute a closure with a reference to the `DuckDB` analytics database.
+    ///
+    /// Returns `None` if the analytics database is not available.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex is poisoned.
+    #[cfg(feature = "analytics")]
+    pub fn with_analytics<F, T>(&self, f: F) -> Option<T>
+    where
+        F: FnOnce(&AnalyticsDb) -> T,
+    {
+        self.inner.analytics_db.as_ref().map(|db| {
+            let db = db.lock().expect("analytics mutex poisoned");
+            f(&db)
+        })
+    }
+
+    /// Whether the `DuckDB` analytics database is available.
+    #[cfg(feature = "analytics")]
+    pub fn has_analytics(&self) -> bool {
+        self.inner.analytics_db.is_some()
+    }
+
+    /// Whether the `DuckDB` analytics database is available.
+    ///
+    /// Always returns `false` when compiled without the `analytics` feature.
+    #[cfg(not(feature = "analytics"))]
+    pub const fn has_analytics(&self) -> bool {
+        false
+    }
+
     /// Get the database file path.
-    pub fn db_path(&self) -> &PathBuf {
+    pub fn db_path(&self) -> &Path {
         &self.inner.db_path
     }
 

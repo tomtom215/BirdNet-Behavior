@@ -15,6 +15,9 @@ rust-version = "1.85"
 license = "CC-BY-NC-SA-4.0"
 repository = "https://github.com/tomtom215/BirdNet-Behavior"
 authors = ["tomtom215"]
+readme = "README.md"
+keywords = ["birdnet", "bird-classification", "acoustic-monitoring", "duckdb", "raspberry-pi"]
+categories = ["science", "multimedia::audio"]
 
 [workspace.dependencies]
 # Internal crates
@@ -37,6 +40,7 @@ tokio = { version = "1.50", features = ["full"] }
 
 # Database
 rusqlite = { version = "0.38", features = ["bundled", "backup"] }
+duckdb = { version = "1.2", features = ["bundled"] }
 
 # Web
 axum = { version = "0.8.8", features = ["ws"] }
@@ -101,7 +105,15 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 description = "BirdNet-Behavior: Real-time acoustic bird classification with DuckDB behavioral analytics"
+
+[features]
+## Enable DuckDB-powered behavioral analytics (sessionize, retention, funnel, etc.).
+## Requires ~7 min C++ compilation on first build due to bundled libduckdb.
+analytics = ["birdnet-behavioral/analytics", "birdnet-web/analytics"]
 
 [dependencies]
 birdnet-core.workspace = true

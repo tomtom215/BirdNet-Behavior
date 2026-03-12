@@ -3,6 +3,14 @@
 //! Generates synthetic WAV files with known characteristics and validates
 //! the entire pipeline produces correct output at each stage.
 
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_lossless
+)]
+
 use std::path::Path;
 
 use birdnet_core::audio::decode;
@@ -121,7 +129,7 @@ fn decode_mono_wav_48khz() {
     assert_eq!(audio.sample_rate, 48000);
 
     // 3 seconds at 48kHz = 144000 samples
-    let expected = 144000;
+    let expected = 144_000;
     let tolerance = 100; // WAV encoding might add/trim a few samples
     assert!(
         (audio.samples.len() as i64 - expected as i64).unsigned_abs() < tolerance,
