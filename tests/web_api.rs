@@ -1158,7 +1158,7 @@ async fn htmx_species_info_partial() {
     let html = String::from_utf8_lossy(&body);
 
     // Without image cache, should show the "no info available" message
-    assert!(html.contains("No additional info available"));
+    assert!(html.contains("No additional info for"), "got: {html}");
     assert!(html.contains("--image-cache-dir"));
 }
 
