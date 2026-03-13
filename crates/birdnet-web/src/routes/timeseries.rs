@@ -9,13 +9,34 @@
 //!
 //! Base path: `/api/v2/timeseries/`
 
-use axum::extract::{Query, State};
+mod helpers;
+mod params;
+#[cfg(not(feature = "analytics"))]
+mod stubs;
+
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::{Json, Router, routing::get};
-use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::state::AppState;
+
+#[cfg(feature = "analytics")]
+use axum::extract::Query;
+#[cfg(feature = "analytics")]
+use helpers::{handle_ts_result, ts_unavailable};
+#[cfg(feature = "analytics")]
+use params::{
+    AccumulationQuery, AnomalyQuery, DailyQuery, DiversityQuery, GapsQuery, HourlyQuery,
+    PeakQuery, SessionQuery, TrendQuery, WeeklyQuery,
+};
+
+// Stub handlers when analytics feature is not compiled.
+#[cfg(not(feature = "analytics"))]
+use stubs::{
+    accumulation, anomalies, daily, diversity, gaps, heatmap, hourly, peak_windows, sessions,
+    trend, weekly, year_over_year,
+};
 
 /// Time-series route definitions.
 pub fn router() -> Router<AppState> {
@@ -33,87 +54,6 @@ pub fn router() -> Router<AppState> {
         .route("/timeseries/sessions", get(sessions))
         .route("/timeseries/gaps", get(gaps))
         .route("/timeseries/status", get(status))
-}
-
-// ---------------------------------------------------------------------------
-// Query parameter types
-// ---------------------------------------------------------------------------
-
-#[derive(Deserialize)]
-#[allow(dead_code)]
-struct HourlyQuery {
-    days: Option<u32>,
-    species: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[allow(dead_code)]
-struct DailyQuery {
-    days: Option<u32>,
-    species: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[allow(dead_code)]
-struct WeeklyQuery {
-    weeks: Option<u32>,
-}
-
-#[derive(Deserialize)]
-#[allow(dead_code)]
-struct TrendQuery {
-    window: Option<u32>,
-    from: Option<String>,
-    to: Option<String>,
-    species: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[allow(dead_code)]
-struct AnomalyQuery {
-    z: Option<f64>,
-    window: Option<u32>,
-    days: Option<u32>,
-}
-
-#[derive(Deserialize)]
-#[allow(dead_code)]
-struct DiversityQuery {
-    days: Option<u32>,
-    shannon: Option<bool>,
-}
-
-#[derive(Deserialize)]
-#[allow(dead_code)]
-struct AccumulationQuery {
-    from: Option<String>,
-    to: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[allow(dead_code)]
-struct PeakQuery {
-    window: Option<u32>,
-    hop: Option<u32>,
-    days: Option<u32>,
-    limit: Option<u32>,
-}
-
-#[derive(Deserialize)]
-#[allow(dead_code)]
-struct SessionQuery {
-    gap: Option<u32>,
-    date: Option<String>,
-    days: Option<u32>,
-    limit: Option<u32>,
-}
-
-#[derive(Deserialize)]
-#[allow(dead_code)]
-struct GapsQuery {
-    date: Option<String>,
-    threshold: Option<u32>,
-    days: Option<u32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -361,106 +301,6 @@ async fn gaps(
 }
 
 // ---------------------------------------------------------------------------
-// Stub handlers (feature not compiled)
-// ---------------------------------------------------------------------------
-
-#[cfg(not(feature = "analytics"))]
-async fn hourly(
-    State(_): State<AppState>,
-    Query(_): Query<HourlyQuery>,
-) -> (StatusCode, Json<Value>) {
-    ts_unavailable("hourly activity")
-}
-
-#[cfg(not(feature = "analytics"))]
-async fn daily(
-    State(_): State<AppState>,
-    Query(_): Query<DailyQuery>,
-) -> (StatusCode, Json<Value>) {
-    ts_unavailable("daily activity")
-}
-
-#[cfg(not(feature = "analytics"))]
-async fn weekly(
-    State(_): State<AppState>,
-    Query(_): Query<WeeklyQuery>,
-) -> (StatusCode, Json<Value>) {
-    ts_unavailable("weekly activity")
-}
-
-#[cfg(not(feature = "analytics"))]
-async fn heatmap(
-    State(_): State<AppState>,
-    Query(_): Query<HourlyQuery>,
-) -> (StatusCode, Json<Value>) {
-    ts_unavailable("hourly heatmap")
-}
-
-#[cfg(not(feature = "analytics"))]
-async fn trend(
-    State(_): State<AppState>,
-    Query(_): Query<TrendQuery>,
-) -> (StatusCode, Json<Value>) {
-    ts_unavailable("moving average trend")
-}
-
-#[cfg(not(feature = "analytics"))]
-async fn anomalies(
-    State(_): State<AppState>,
-    Query(_): Query<AnomalyQuery>,
-) -> (StatusCode, Json<Value>) {
-    ts_unavailable("anomaly detection")
-}
-
-#[cfg(not(feature = "analytics"))]
-async fn year_over_year(
-    State(_): State<AppState>,
-    Query(_): Query<WeeklyQuery>,
-) -> (StatusCode, Json<Value>) {
-    ts_unavailable("year-over-year")
-}
-
-#[cfg(not(feature = "analytics"))]
-async fn diversity(
-    State(_): State<AppState>,
-    Query(_): Query<DiversityQuery>,
-) -> (StatusCode, Json<Value>) {
-    ts_unavailable("diversity")
-}
-
-#[cfg(not(feature = "analytics"))]
-async fn accumulation(
-    State(_): State<AppState>,
-    Query(_): Query<AccumulationQuery>,
-) -> (StatusCode, Json<Value>) {
-    ts_unavailable("accumulation curve")
-}
-
-#[cfg(not(feature = "analytics"))]
-async fn peak_windows(
-    State(_): State<AppState>,
-    Query(_): Query<PeakQuery>,
-) -> (StatusCode, Json<Value>) {
-    ts_unavailable("peak windows")
-}
-
-#[cfg(not(feature = "analytics"))]
-async fn sessions(
-    State(_): State<AppState>,
-    Query(_): Query<SessionQuery>,
-) -> (StatusCode, Json<Value>) {
-    ts_unavailable("activity sessions")
-}
-
-#[cfg(not(feature = "analytics"))]
-async fn gaps(
-    State(_): State<AppState>,
-    Query(_): Query<GapsQuery>,
-) -> (StatusCode, Json<Value>) {
-    ts_unavailable("gap detection")
-}
-
-// ---------------------------------------------------------------------------
 // Status (always available)
 // ---------------------------------------------------------------------------
 
@@ -489,53 +329,4 @@ async fn status(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
             }
         })),
     )
-}
-
-// ---------------------------------------------------------------------------
-// Response helpers
-// ---------------------------------------------------------------------------
-
-fn ts_unavailable(endpoint: &str) -> (StatusCode, Json<Value>) {
-    let message = if cfg!(feature = "analytics") {
-        "DuckDB not configured. Start with --analytics-db to enable time-series analytics."
-    } else {
-        "Time-series analytics not compiled. Rebuild with --features analytics."
-    };
-    (
-        StatusCode::OK,
-        Json(json!({
-            "status": "unavailable",
-            "endpoint": endpoint,
-            "message": message,
-        })),
-    )
-}
-
-#[cfg(feature = "analytics")]
-fn handle_ts_result<T: serde::Serialize>(
-    join_result: Result<
-        Option<Result<T, birdnet_timeseries::TimeSeriesError>>,
-        tokio::task::JoinError,
-    >,
-    key: &str,
-) -> (StatusCode, Json<Value>) {
-    match join_result {
-        Ok(Some(Ok(data))) => {
-            let v = serde_json::to_value(&data).unwrap_or(Value::Null);
-            let total = v.as_array().map_or(0, Vec::len);
-            (
-                StatusCode::OK,
-                Json(json!({ key: v, "total": total })),
-            )
-        }
-        Ok(Some(Err(e))) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
-        ),
-        Ok(None) => ts_unavailable(key),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("task error: {e}") })),
-        ),
-    }
 }

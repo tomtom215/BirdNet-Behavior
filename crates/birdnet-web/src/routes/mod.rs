@@ -3,6 +3,7 @@
 //! Organized by resource, matching the `FastAPI` router structure for API endpoints
 //! and adding HTMX page routes for the web dashboard.
 
+pub mod admin;
 pub mod analytics;
 pub mod detections;
 pub mod export;
@@ -34,7 +35,7 @@ pub(crate) fn is_valid_date(s: &str) -> bool {
         && bytes[8..10].iter().all(u8::is_ascii_digit)
 }
 
-/// Build all routes: API under `/api/v2/` and page routes at the root.
+/// Build all routes: API under `/api/v2/`, admin routes at `/admin`, and page routes at `/`.
 pub fn api_routes() -> Router<AppState> {
     Router::new()
         .nest("/api/v2", detections::router())
@@ -47,6 +48,7 @@ pub fn api_routes() -> Router<AppState> {
         .nest("/api/v2", images::router())
         .merge(pages::router())
         .merge(static_files::router())
+        .merge(admin::router())
 }
 
 #[cfg(test)]
