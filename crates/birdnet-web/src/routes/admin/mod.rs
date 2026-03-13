@@ -13,8 +13,11 @@
 //! | `GET  /admin/migrate/progress` | Poll migration progress (JSON) |
 //! | `GET  /admin/system`       | System status page |
 //! | `POST /admin/system/backup` | Trigger database backup |
+//! | `GET  /admin/notifications` | Notification history log |
+//! | `DELETE /admin/notifications/prune` | Prune old log entries |
 
 pub mod migration;
+pub mod notifications;
 pub mod settings;
 pub mod system;
 
@@ -33,6 +36,8 @@ pub fn router() -> Router<AppState> {
         .merge(migration::router())
         // System
         .merge(system::router())
+        // Notification history
+        .merge(notifications::router())
 }
 
 /// Redirect `/admin` to `/admin/settings`.

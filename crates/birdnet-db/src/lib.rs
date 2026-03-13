@@ -5,6 +5,7 @@
 //! and corruption recovery.
 
 pub mod migration;
+pub mod notifications;
 pub mod resilience;
 pub mod settings;
 pub mod sqlite;

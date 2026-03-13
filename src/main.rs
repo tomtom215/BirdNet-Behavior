@@ -221,7 +221,7 @@ fn init_image_cache(
         return state;
     };
 
-    match birdnet_integrations::species_images::ImageCache::new(cache_dir) {
+    match birdnet_integrations::species_images::ImageCache::with_wikipedia(cache_dir) {
         Ok(cache) => {
             tracing::info!(
                 path = %cache_dir.display(),

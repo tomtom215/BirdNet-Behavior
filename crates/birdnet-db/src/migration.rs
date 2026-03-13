@@ -85,6 +85,37 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "Add date-time composite index for time-range queries",
         up_sql: "CREATE INDEX IF NOT EXISTS idx_detections_datetime ON detections(Date, Time);",
     },
+    Migration {
+        version: 4,
+        description: "Add notification_log table",
+        up_sql: "CREATE TABLE IF NOT EXISTS notification_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sent_at TEXT NOT NULL DEFAULT (datetime('now')),
+            channel TEXT NOT NULL,
+            species_com_name TEXT,
+            species_sci_name TEXT,
+            confidence REAL,
+            detection_date TEXT,
+            detection_time TEXT,
+            status TEXT NOT NULL CHECK(status IN ('sent','failed','skipped')),
+            message TEXT,
+            error TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_notification_log_sent_at
+            ON notification_log(sent_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_notification_log_channel
+            ON notification_log(channel);",
+    },
+    Migration {
+        version: 5,
+        description: "Deduplicate detections and add unique constraint",
+        up_sql: "DELETE FROM detections WHERE rowid NOT IN (
+                     SELECT MIN(rowid) FROM detections
+                     GROUP BY Date, Time, Sci_Name
+                 );
+                 CREATE UNIQUE INDEX IF NOT EXISTS idx_detections_unique
+                     ON detections(Date, Time, Sci_Name);",
+    },
 ];
 
 /// Ensure the `schema_version` tracking table exists.
@@ -235,8 +266,8 @@ mod tests {
             )
             .unwrap();
         assert!(
-            index_count >= 5,
-            "expected at least 5 indexes, got {index_count}"
+            index_count >= 6,
+            "expected at least 6 indexes, got {index_count}"
         );
     }
 

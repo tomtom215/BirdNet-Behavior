@@ -57,25 +57,9 @@ async fn species_image_info(
         );
     }
 
-    // Try to fetch from Wikipedia
+    // Try to fetch from Wikipedia (get_image fetches and caches in one step).
     match cache.get_image(&scientific_name).await {
         Ok(image) => {
-            // Download and cache the image in the background
-            if image.cached_path.is_none() && !image.url.is_empty() {
-                let url = image.url.clone();
-                let name = scientific_name.clone();
-                let cache = cache.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = cache.download_image(&name, &url).await {
-                        tracing::debug!(
-                            species = %name,
-                            error = %e,
-                            "failed to cache species image"
-                        );
-                    }
-                });
-            }
-
             (
                 StatusCode::OK,
                 Json(json!({
