@@ -6,4 +6,5 @@
 
 pub mod migration;
 pub mod resilience;
+pub mod settings;
 pub mod sqlite;

@@ -447,6 +447,7 @@ dependencies = [
  "birdnet-core",
  "birdnet-db",
  "birdnet-integrations",
+ "birdnet-migrate",
  "birdnet-timeseries",
  "birdnet-web",
  "clap",
@@ -512,6 +513,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "birdnet-migrate"
+version = "0.1.0"
+dependencies = [
+ "birdnet-db",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "birdnet-timeseries"
 version = "0.1.0"
 dependencies = [
@@ -530,6 +543,7 @@ dependencies = [
  "birdnet-core",
  "birdnet-db",
  "birdnet-integrations",
+ "birdnet-migrate",
  "birdnet-timeseries",
  "rusqlite",
  "serde",

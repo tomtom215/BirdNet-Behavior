@@ -6,6 +6,7 @@ members = [
     "crates/birdnet-integrations",
     "crates/birdnet-behavioral",
     "crates/birdnet-timeseries",
+    "crates/birdnet-migrate",
 ]
 resolver = "2"
 
@@ -28,6 +29,7 @@ birdnet-web = { path = "crates/birdnet-web" }
 birdnet-integrations = { path = "crates/birdnet-integrations" }
 birdnet-behavioral = { path = "crates/birdnet-behavioral" }
 birdnet-timeseries = { path = "crates/birdnet-timeseries" }
+birdnet-migrate = { path = "crates/birdnet-migrate" }
 
 # Serialization
 serde = { version = "1.0.228", features = ["derive"] }
@@ -45,7 +47,7 @@ rusqlite = { version = "0.38", features = ["bundled", "backup"] }
 duckdb = { version = "1.2", features = ["bundled"] }
 
 # Web
-axum = { version = "0.8.8", features = ["ws"] }
+axum = { version = "0.8.8", features = ["ws", "form"] }
 tower = "0.5.3"
 tower-http = { version = "0.6.8", features = ["cors", "trace", "fs"] }
 
@@ -124,6 +126,7 @@ birdnet-web.workspace = true
 birdnet-integrations.workspace = true
 birdnet-behavioral.workspace = true
 birdnet-timeseries.workspace = true
+birdnet-migrate.workspace = true
 tokio.workspace = true
 axum.workspace = true
 tracing.workspace = true
