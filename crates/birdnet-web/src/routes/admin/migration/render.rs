@@ -1,5 +1,6 @@
 //! HTML rendering helpers for the migration UI.
 
+use birdnet_migrate::MigrationReport;
 use birdnet_migrate::progress::{MigrationProgress, MigrationStage};
 use birdnet_migrate::schema::DetectedSchema;
 use birdnet_migrate::traits::ValidationReport;
@@ -151,11 +152,14 @@ function switchTab(name) {{
 
 /// Render the validation result partial.
 pub fn validation_result(
-    result: Result<(DetectedSchema, ValidationReport), birdnet_migrate::MigrateError>,
+    result: Result<
+        (DetectedSchema, ValidationReport, MigrationReport),
+        birdnet_migrate::MigrateError,
+    >,
     _is_upload: bool,
 ) -> String {
     match result {
-        Ok((schema, report)) => {
+        Ok((schema, report, migration_report)) => {
             let schema_name = schema.name();
             let rows = report.source_rows;
             let ok = report.passed;
@@ -184,12 +188,88 @@ pub fn validation_result(
                 ("#fbbf24", "Validation passed with warnings")
             };
 
+            // Species breakdown table
+            let date_range_html = migration_report
+                .date_range
+                .as_ref()
+                .map(|(start, end)| {
+                    format!("<p><strong>Date range:</strong> {start} → {end}</p>")
+                })
+                .unwrap_or_default();
+
+            let quality_html = if migration_report.null_date_rows > 0 {
+                format!(
+                    r#"<p style="color:#fbbf24;">⚠ {} rows have missing dates</p>"#,
+                    migration_report.null_date_rows
+                )
+            } else if migration_report.duplicate_rows > 0 {
+                format!(
+                    r#"<p style="color:#94a3b8;">ℹ {} duplicate rows will be skipped</p>"#,
+                    migration_report.duplicate_rows
+                )
+            } else {
+                String::new()
+            };
+
+            let top_species_html: String = migration_report
+                .top_species
+                .iter()
+                .take(10)
+                .map(|s| {
+                    format!(
+                        r#"<tr>
+  <td style="padding:.35rem .5rem;">{}</td>
+  <td style="padding:.35rem .5rem;color:#64748b;font-style:italic;font-size:.8rem;">{}</td>
+  <td style="padding:.35rem .5rem;text-align:right;">{}</td>
+  <td style="padding:.35rem .5rem;text-align:right;color:#64748b;">{:.0}%</td>
+</tr>"#,
+                        escape_html(&s.common_name),
+                        escape_html(&s.scientific_name),
+                        s.count,
+                        s.avg_confidence * 100.0,
+                    )
+                })
+                .collect();
+
+            let more_species = if migration_report.unique_species > 10 {
+                format!(
+                    r#"<p style="color:#64748b;font-size:.8rem;margin-top:.5rem;">
+                      … and {} more species
+                    </p>"#,
+                    migration_report.unique_species - 10
+                )
+            } else {
+                String::new()
+            };
+
             format!(
                 r##"<div class="card" style="border-color:{color}">
   <div style="font-weight:600;color:{color};margin-bottom:0.75rem;">{label}</div>
   <p><strong>Schema:</strong> {schema_name}</p>
-  <p><strong>Rows to import:</strong> {rows}</p>
+  <p><strong>Total detections:</strong> {rows}</p>
+  <p><strong>Unique species:</strong> {unique}</p>
+  {date_range_html}
+  {quality_html}
   <ul style="list-style:none;padding:0;margin:0.75rem 0;">{checks_html}</ul>
+
+  <details style="margin:1rem 0;">
+    <summary style="cursor:pointer;color:#94a3b8;font-size:.875rem;">
+      Top species preview (click to expand)
+    </summary>
+    <table style="width:100%;border-collapse:collapse;font-size:.8rem;margin-top:.75rem;">
+      <thead>
+        <tr style="border-bottom:1px solid #334155;">
+          <th style="text-align:left;padding:.35rem .5rem;color:#64748b;">Species</th>
+          <th style="text-align:left;padding:.35rem .5rem;color:#64748b;">Scientific</th>
+          <th style="text-align:right;padding:.35rem .5rem;color:#64748b;">Count</th>
+          <th style="text-align:right;padding:.35rem .5rem;color:#64748b;">Avg Conf</th>
+        </tr>
+      </thead>
+      <tbody>{top_species_html}</tbody>
+    </table>
+    {more_species}
+  </details>
+
   <button class="btn btn-primary"
           hx-post="/admin/migrate/run"
           hx-include="#migrate-source-path"
@@ -197,7 +277,8 @@ pub fn validation_result(
           style="margin-top:0.75rem;">
     Start Import
   </button>
-</div>"##
+</div>"##,
+                unique = migration_report.unique_species,
             )
         }
         Err(e) => format!(

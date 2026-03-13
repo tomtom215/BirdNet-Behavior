@@ -5,10 +5,15 @@
 
 pub mod detector;
 pub mod importer;
+pub mod species_report;
 pub mod validator;
 
 pub use detector::BirdNetPiDetector;
 pub use importer::BirdNetPiImporter;
+pub use species_report::{
+    MigrationReport, PostMigrationReport, SpeciesDiff, SpeciesStats, compare_source_dest,
+    generate_report,
+};
 pub use validator::BirdNetPiValidator;
 
 use std::path::Path;
@@ -69,10 +74,15 @@ pub fn run_migration(
 
 /// Run validation only (without importing).  Used by the web UI pre-flight check.
 ///
+/// Returns a tuple of `(schema, validation_report, migration_report)` for
+/// the admin UI to display a comprehensive pre-migration preview.
+///
 /// # Errors
 ///
 /// Returns `MigrateError` if the source cannot be opened.
-pub fn validate_source(source_path: &Path) -> Result<(DetectedSchema, ValidationReport), MigrateError> {
+pub fn validate_source(
+    source_path: &Path,
+) -> Result<(DetectedSchema, ValidationReport, MigrationReport), MigrateError> {
     use crate::traits::{SchemaDetector, Validator};
 
     let detector = BirdNetPiDetector;
@@ -80,7 +90,8 @@ pub fn validate_source(source_path: &Path) -> Result<(DetectedSchema, Validation
 
     let schema = detector.detect(source_path)?;
     let report = validator.validate_source(source_path)?;
-    Ok((schema, report))
+    let migration_report = generate_report(source_path)?;
+    Ok((schema, report, migration_report))
 }
 
 #[cfg(test)]
@@ -122,7 +133,7 @@ mod tests {
     #[test]
     fn validate_source_returns_schema_and_report() {
         let src = make_source(5);
-        let (schema, report) = validate_source(src.path()).unwrap();
+        let (schema, report, _migration_report) = validate_source(src.path()).unwrap();
         assert!(matches!(schema, DetectedSchema::BirdNetPi { .. }));
         assert!(report.passed);
     }
