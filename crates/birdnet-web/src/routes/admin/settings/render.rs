@@ -2,7 +2,11 @@
 
 use std::collections::HashMap;
 
-pub(super) fn get_setting<'a>(map: &'a HashMap<String, String>, key: &str, default: &'a str) -> &'a str {
+pub(super) fn get_setting<'a>(
+    map: &'a HashMap<String, String>,
+    key: &str,
+    default: &'a str,
+) -> &'a str {
     map.get(key).map_or(default, String::as_str)
 }
 
@@ -165,7 +169,8 @@ fn render_detection_section(out: &mut String, s: &HashMap<String, String>) {
     let conf = get_setting(s, "confidence_threshold", "0.70");
     let sens = get_setting(s, "sensitivity", "1.0");
     let over = get_setting(s, "overlap", "0.0");
-    out.push_str(&format!(r#"
+    out.push_str(&format!(
+        r#"
   <div class="card">
     <div class="section-title">Detection Settings</div>
     <div class="grid-2">
@@ -187,7 +192,8 @@ fn render_detection_section(out: &mut String, s: &HashMap<String, String>) {
       <input id="overlap" name="overlap" type="number"
              value="{over}" min="0" max="2.9" step="0.1" style="max-width:120px">
     </div>
-  </div>"#));
+  </div>"#
+    ));
 }
 
 fn render_notifications_section(out: &mut String, s: &HashMap<String, String>) {
@@ -231,7 +237,8 @@ fn render_notifications_section(out: &mut String, s: &HashMap<String, String>) {
 fn render_species_section(out: &mut String, s: &HashMap<String, String>) {
     let excl = get_setting(s, "species_exclude", "");
     let incl = get_setting(s, "species_include", "");
-    out.push_str(&format!(r#"
+    out.push_str(&format!(
+        r#"
   <div class="card">
     <div class="section-title">Species Filters</div>
     <p class="hint" style="margin-bottom:1rem;">
@@ -250,13 +257,15 @@ fn render_species_section(out: &mut String, s: &HashMap<String, String>) {
                 placeholder="e.g. European Robin, Eurasian Blackbird">{incl}</textarea>
       <p class="hint">When set, only these species are saved or notified</p>
     </div>
-  </div>"#));
+  </div>"#
+    ));
 }
 
 fn render_system_section(out: &mut String, s: &HashMap<String, String>) {
     let days = get_setting(s, "recording_days", "30");
     let imgcache = get_setting(s, "image_cache_dir", "");
-    out.push_str(&format!(r#"
+    out.push_str(&format!(
+        r#"
   <div class="card">
     <div class="section-title">System</div>
     <div class="grid-2">
@@ -273,7 +282,8 @@ fn render_system_section(out: &mut String, s: &HashMap<String, String>) {
         <p class="hint">Leave blank to disable Wikipedia image caching</p>
       </div>
     </div>
-  </div>"#));
+  </div>"#
+    ));
 }
 
 fn render_email_section(out: &mut String, s: &HashMap<String, String>) {

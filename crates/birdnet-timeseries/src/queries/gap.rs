@@ -227,7 +227,10 @@ mod tests {
 
     #[test]
     fn quiet_days_having_clause() {
-        let q = QuietDays { max_detections: 3, lookback_days: 14 };
+        let q = QuietDays {
+            max_detections: 3,
+            lookback_days: 14,
+        };
         let sql = q.sql();
         assert!(sql.contains("HAVING COUNT(*) <= 3"));
     }

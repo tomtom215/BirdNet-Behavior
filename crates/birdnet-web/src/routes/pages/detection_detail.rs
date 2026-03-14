@@ -70,8 +70,8 @@ fn find_detection(
     time: &str,
     com_name: &str,
 ) -> Option<birdnet_db::sqlite::DetectionRow> {
-    use rusqlite::params;
     use birdnet_db::sqlite::DetectionRow;
+    use rusqlite::params;
 
     if com_name.is_empty() {
         conn.query_row(
@@ -122,7 +122,13 @@ fn find_detection(
 
 fn render_detail_page(det: &birdnet_db::sqlite::DetectionRow) -> String {
     let conf_pct = det.confidence * 100.0;
-    let conf_color = if conf_pct >= 80.0 { "#34d399" } else if conf_pct >= 50.0 { "#fbbf24" } else { "#f87171" };
+    let conf_color = if conf_pct >= 80.0 {
+        "#34d399"
+    } else if conf_pct >= 50.0 {
+        "#fbbf24"
+    } else {
+        "#f87171"
+    };
     let enc_name = simple_url_encode(&det.com_name);
     let enc_sci = simple_url_encode(&det.sci_name);
 
@@ -198,8 +204,12 @@ fn render_detail_page(det: &birdnet_db::sqlite::DetectionRow) -> String {
 }
 
 fn build_audio_section(det: &birdnet_db::sqlite::DetectionRow) -> String {
-    let Some(ref fname) = det.file_name else { return String::new() };
-    if fname.is_empty() { return String::new(); }
+    let Some(ref fname) = det.file_name else {
+        return String::new();
+    };
+    if fname.is_empty() {
+        return String::new();
+    }
 
     let basename = std::path::Path::new(fname)
         .file_name()
@@ -224,7 +234,10 @@ fn build_audio_section(det: &birdnet_db::sqlite::DetectionRow) -> String {
 fn build_meta_rows(det: &birdnet_db::sqlite::DetectionRow) -> String {
     let mut out = String::new();
     if let (Some(lat), Some(lon)) = (det.lat, det.lon) {
-        let _ = write!(out, "<tr><td>Location</td><td>{lat:.4}°N, {lon:.4}°E</td></tr>");
+        let _ = write!(
+            out,
+            "<tr><td>Location</td><td>{lat:.4}°N, {lon:.4}°E</td></tr>"
+        );
     }
     if let Some(sens) = det.sens {
         let _ = write!(out, "<tr><td>Sensitivity</td><td>{sens:.2}</td></tr>");
@@ -233,7 +246,11 @@ fn build_meta_rows(det: &birdnet_db::sqlite::DetectionRow) -> String {
         let _ = write!(out, "<tr><td>Overlap</td><td>{overlap:.1}s</td></tr>");
     }
     if let Some(cutoff) = det.cutoff {
-        let _ = write!(out, "<tr><td>Cutoff</td><td>{:.0}%</td></tr>", cutoff * 100.0);
+        let _ = write!(
+            out,
+            "<tr><td>Cutoff</td><td>{:.0}%</td></tr>",
+            cutoff * 100.0
+        );
     }
     out
 }

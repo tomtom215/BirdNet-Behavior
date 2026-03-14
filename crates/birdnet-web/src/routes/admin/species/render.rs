@@ -53,12 +53,22 @@ pub fn render_species_page(exclude: &[String], include: &[String]) -> String {
 
 pub fn render_species_partial(exclude: &[String], include: &[String]) -> String {
     let mut out = String::with_capacity(4096);
-    render_list_card(&mut out, "Exclusion List", "species_exclude", exclude,
+    render_list_card(
+        &mut out,
+        "Exclusion List",
+        "species_exclude",
+        exclude,
         "Species that will <strong>never</strong> be saved or notified.",
-        "exclude");
-    render_list_card(&mut out, "Allow-List (include only)", "species_include", include,
+        "exclude",
+    );
+    render_list_card(
+        &mut out,
+        "Allow-List (include only)",
+        "species_include",
+        include,
         "When non-empty, <strong>only</strong> these species are saved or notified.",
-        "include");
+        "include",
+    );
     out
 }
 

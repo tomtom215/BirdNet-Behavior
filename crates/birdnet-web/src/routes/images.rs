@@ -59,20 +59,18 @@ async fn species_image_info(
 
     // Try to fetch from Wikipedia (get_image fetches and caches in one step).
     match cache.get_image(&scientific_name).await {
-        Ok(image) => {
-            (
-                StatusCode::OK,
-                Json(json!({
-                    "status": "found",
-                    "scientific_name": scientific_name,
-                    "url": image.url,
-                    "cached": image.cached_path.is_some(),
-                    "description": image.description,
-                    "wiki_url": image.wiki_url,
-                    "width": image.width,
-                })),
-            )
-        }
+        Ok(image) => (
+            StatusCode::OK,
+            Json(json!({
+                "status": "found",
+                "scientific_name": scientific_name,
+                "url": image.url,
+                "cached": image.cached_path.is_some(),
+                "description": image.description,
+                "wiki_url": image.wiki_url,
+                "width": image.width,
+            })),
+        ),
         Err(e) => (
             StatusCode::OK,
             Json(json!({

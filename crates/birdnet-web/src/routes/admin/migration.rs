@@ -31,7 +31,10 @@ pub fn router() -> Router<AppState> {
 
     Router::new()
         .route("/admin/migrate", get(migration_page))
-        .route("/admin/migrate/validate", axum::routing::post(validate_handler))
+        .route(
+            "/admin/migrate/validate",
+            axum::routing::post(validate_handler),
+        )
         .route(
             "/admin/migrate/upload",
             axum::routing::post({
@@ -56,7 +59,9 @@ pub fn router() -> Router<AppState> {
 }
 
 async fn migration_page(State(state): State<AppState>) -> Html<String> {
-    Html(render::migration_page(&state.db_path().display().to_string()))
+    Html(render::migration_page(
+        &state.db_path().display().to_string(),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -109,7 +114,9 @@ async fn upload_and_run_handler(
     }
 
     let Some(bytes) = file_bytes else {
-        return Ok(Html(render::upload_error("No file field 'source_file' in upload")));
+        return Ok(Html(render::upload_error(
+            "No file field 'source_file' in upload",
+        )));
     };
     if bytes.is_empty() {
         return Ok(Html(render::upload_error("Uploaded file is empty")));
@@ -213,9 +220,17 @@ async fn run_handler(
     }
     tokio::task::spawn_blocking(move || {
         progress.set_stage(MigrationStage::Detecting, "Detecting schema…");
-        match birdnet_migrate::birdnet_pi::run_migration(&source_path, &dest_path, false, &progress) {
-            Ok(s) => tracing::info!(imported = s.imported_rows, skipped = s.skipped_rows, "migration completed"),
-            Err(e) => { tracing::error!(error = %e, "migration failed"); progress.fail(e.to_string()); }
+        match birdnet_migrate::birdnet_pi::run_migration(&source_path, &dest_path, false, &progress)
+        {
+            Ok(s) => tracing::info!(
+                imported = s.imported_rows,
+                skipped = s.skipped_rows,
+                "migration completed"
+            ),
+            Err(e) => {
+                tracing::error!(error = %e, "migration failed");
+                progress.fail(e.to_string());
+            }
         }
     });
     Ok(Html(render::import_started()))
@@ -233,7 +248,10 @@ async fn progress_handler(migration_state: MigrationState) -> Html<String> {
         guard.as_ref().map(ProgressHandle::snapshot)
     };
     let Some(p) = snap else {
-        return Html(r#"<div id="migrate-progress" style="color:#64748b">No migration in progress.</div>"#.to_string());
+        return Html(
+            r#"<div id="migrate-progress" style="color:#64748b">No migration in progress.</div>"#
+                .to_string(),
+        );
     };
     Html(render::progress_bar(&p))
 }

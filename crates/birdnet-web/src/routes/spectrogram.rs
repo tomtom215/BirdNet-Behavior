@@ -176,10 +176,17 @@ fn viridis(t: f32) -> (u8, u8, u8) {
     ];
 
     let t = t.clamp(0.0, 1.0);
-    let i = cps.partition_point(|cp| cp.0 <= t).saturating_sub(1).min(cps.len() - 2);
+    let i = cps
+        .partition_point(|cp| cp.0 <= t)
+        .saturating_sub(1)
+        .min(cps.len() - 2);
     let (t0, r0, g0, b0) = cps[i];
     let (t1, r1, g1, b1) = cps[i + 1];
-    let frac = if (t1 - t0).abs() < 1e-6 { 0.0 } else { (t - t0) / (t1 - t0) };
+    let frac = if (t1 - t0).abs() < 1e-6 {
+        0.0
+    } else {
+        (t - t0) / (t1 - t0)
+    };
     let lerp = |a: f32, b: f32| (a + frac * (b - a)).clamp(0.0, 255.0) as u8;
     (lerp(r0, r1), lerp(g0, g1), lerp(b0, b1))
 }
@@ -205,11 +212,11 @@ fn write_png_rgba(
         let mut d = Vec::with_capacity(13);
         d.extend_from_slice(&width.to_be_bytes());
         d.extend_from_slice(&height.to_be_bytes());
-        d.push(8);  // bit depth
-        d.push(6);  // colour type: RGBA
-        d.push(0);  // compression
-        d.push(0);  // filter
-        d.push(0);  // interlace
+        d.push(8); // bit depth
+        d.push(6); // colour type: RGBA
+        d.push(0); // compression
+        d.push(0); // filter
+        d.push(0); // interlace
         d
     };
     write_png_chunk(output, b"IHDR", &ihdr)?;
@@ -262,7 +269,7 @@ fn zlib_compress(data: &[u8]) -> Vec<u8> {
     let n_chunks = chunks.len();
     for (i, chunk) in data.chunks(BLOCK).enumerate() {
         let last = i == n_chunks - 1;
-        out.push(u8::from(last));        // BFINAL, BTYPE=00 (store)
+        out.push(u8::from(last)); // BFINAL, BTYPE=00 (store)
         let len = chunk.len() as u16;
         out.extend_from_slice(&len.to_le_bytes());
         out.extend_from_slice(&(!len).to_le_bytes());
@@ -300,7 +307,11 @@ fn build_crc32_table() -> [u32; 256] {
     for i in 0..256u32 {
         let mut c = i;
         for _ in 0..8 {
-            c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+            c = if c & 1 != 0 {
+                0xEDB8_8320 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
         }
         table[i as usize] = c;
     }

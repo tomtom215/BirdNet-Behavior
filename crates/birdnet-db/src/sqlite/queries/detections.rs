@@ -61,9 +61,7 @@ pub fn detection_count_for_date(conn: &Connection, date: &str) -> Result<i64, Db
 ///
 /// Returns `DbError` on query failure.
 pub fn detections_by_date(conn: &Connection, date: &str) -> Result<Vec<DetectionRow>, DbError> {
-    let sql = format!(
-        "SELECT {DETECTION_COLS} FROM detections WHERE Date = ?1 ORDER BY Time DESC"
-    );
+    let sql = format!("SELECT {DETECTION_COLS} FROM detections WHERE Date = ?1 ORDER BY Time DESC");
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
         .query_map(params![date], map_detection_row)?
@@ -77,9 +75,8 @@ pub fn detections_by_date(conn: &Connection, date: &str) -> Result<Vec<Detection
 ///
 /// Returns `DbError` on query failure.
 pub fn recent_detections(conn: &Connection, limit: u32) -> Result<Vec<DetectionRow>, DbError> {
-    let sql = format!(
-        "SELECT {DETECTION_COLS} FROM detections ORDER BY Date DESC, Time DESC LIMIT ?1"
-    );
+    let sql =
+        format!("SELECT {DETECTION_COLS} FROM detections ORDER BY Date DESC, Time DESC LIMIT ?1");
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
         .query_map(params![limit], map_detection_row)?
@@ -122,15 +119,21 @@ pub fn all_detections(
 ) -> Result<Vec<DetectionRow>, DbError> {
     let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match (from, to) {
         (Some(f), Some(t)) => (
-            format!("SELECT {DETECTION_COLS} FROM detections WHERE Date >= ?1 AND Date <= ?2 ORDER BY Date DESC, Time DESC"),
+            format!(
+                "SELECT {DETECTION_COLS} FROM detections WHERE Date >= ?1 AND Date <= ?2 ORDER BY Date DESC, Time DESC"
+            ),
             vec![Box::new(f.to_string()), Box::new(t.to_string())],
         ),
         (Some(f), None) => (
-            format!("SELECT {DETECTION_COLS} FROM detections WHERE Date >= ?1 ORDER BY Date DESC, Time DESC"),
+            format!(
+                "SELECT {DETECTION_COLS} FROM detections WHERE Date >= ?1 ORDER BY Date DESC, Time DESC"
+            ),
             vec![Box::new(f.to_string())],
         ),
         (None, Some(t)) => (
-            format!("SELECT {DETECTION_COLS} FROM detections WHERE Date <= ?1 ORDER BY Date DESC, Time DESC"),
+            format!(
+                "SELECT {DETECTION_COLS} FROM detections WHERE Date <= ?1 ORDER BY Date DESC, Time DESC"
+            ),
             vec![Box::new(t.to_string())],
         ),
         (None, None) => (
@@ -294,29 +297,31 @@ pub fn todays_detection_count(
     date: &str,
     search: Option<&str>,
 ) -> Result<i64, DbError> {
-    let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
-        match search.map(str::trim).filter(|s| !s.is_empty()) {
-            Some(s) if s.len() > 4 && s[..4].eq_ignore_ascii_case("NOT ") => {
-                let pattern = format!("%{}%", &s[4..].trim());
-                (
-                    "SELECT COUNT(*) FROM detections WHERE Date = ?1 AND Com_Name NOT LIKE ?2"
-                        .to_string(),
-                    vec![Box::new(date.to_string()), Box::new(pattern)],
-                )
-            }
-            Some(s) => {
-                let pattern = format!("%{s}%");
-                (
+    let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match search
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(s) if s.len() > 4 && s[..4].eq_ignore_ascii_case("NOT ") => {
+            let pattern = format!("%{}%", &s[4..].trim());
+            (
+                "SELECT COUNT(*) FROM detections WHERE Date = ?1 AND Com_Name NOT LIKE ?2"
+                    .to_string(),
+                vec![Box::new(date.to_string()), Box::new(pattern)],
+            )
+        }
+        Some(s) => {
+            let pattern = format!("%{s}%");
+            (
                     "SELECT COUNT(*) FROM detections WHERE Date = ?1 AND (Com_Name LIKE ?2 OR Sci_Name LIKE ?2)"
                         .to_string(),
                     vec![Box::new(date.to_string()), Box::new(pattern)],
                 )
-            }
-            None => (
-                "SELECT COUNT(*) FROM detections WHERE Date = ?1".to_string(),
-                vec![Box::new(date.to_string())],
-            ),
-        };
+        }
+        None => (
+            "SELECT COUNT(*) FROM detections WHERE Date = ?1".to_string(),
+            vec![Box::new(date.to_string())],
+        ),
+    };
 
     let params_ref: Vec<&dyn rusqlite::types::ToSql> =
         param_values.iter().map(AsRef::as_ref).collect();
@@ -330,9 +335,8 @@ pub fn todays_detection_count(
 ///
 /// Returns `DbError` on query failure.
 pub fn detection_dates(conn: &Connection, limit: u32) -> Result<Vec<String>, DbError> {
-    let mut stmt = conn.prepare(
-        "SELECT DISTINCT Date FROM detections ORDER BY Date DESC LIMIT ?1",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT DISTINCT Date FROM detections ORDER BY Date DESC LIMIT ?1")?;
     let rows = stmt
         .query_map(params![limit], |row| row.get(0))?
         .collect::<Result<Vec<String>, _>>()?;
@@ -369,9 +373,27 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let conn = open_or_create(tmp.path()).unwrap();
         for (date, time, sci, com, conf) in [
-            ("2026-03-11", "06:30:00", "Turdus merula", "Eurasian Blackbird", 0.87),
-            ("2026-03-11", "06:45:00", "Erithacus rubecula", "European Robin", 0.92),
-            ("2026-03-11", "07:00:00", "Turdus merula", "Eurasian Blackbird", 0.75),
+            (
+                "2026-03-11",
+                "06:30:00",
+                "Turdus merula",
+                "Eurasian Blackbird",
+                0.87,
+            ),
+            (
+                "2026-03-11",
+                "06:45:00",
+                "Erithacus rubecula",
+                "European Robin",
+                0.92,
+            ),
+            (
+                "2026-03-11",
+                "07:00:00",
+                "Turdus merula",
+                "Eurasian Blackbird",
+                0.75,
+            ),
             ("2026-03-10", "18:00:00", "Parus major", "Great Tit", 0.80),
         ] {
             conn.execute(
@@ -387,11 +409,18 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let conn = open_or_create(tmp.path()).unwrap();
         let record = DetectionRecord {
-            date: "2026-03-11", time: "08:30:00",
-            sci_name: "Turdus merula", com_name: "Eurasian Blackbird",
-            confidence: 0.87, lat: "42.36", lon: "-71.06",
-            cutoff: "0.7", week: "10", sensitivity: "1.25",
-            overlap: "0.0", file_name: "test.wav",
+            date: "2026-03-11",
+            time: "08:30:00",
+            sci_name: "Turdus merula",
+            com_name: "Eurasian Blackbird",
+            confidence: 0.87,
+            lat: "42.36",
+            lon: "-71.06",
+            cutoff: "0.7",
+            week: "10",
+            sensitivity: "1.25",
+            overlap: "0.0",
+            file_name: "test.wav",
         };
         insert_detection(&conn, &record).unwrap();
         assert_eq!(detection_count(&conn).unwrap(), 1);

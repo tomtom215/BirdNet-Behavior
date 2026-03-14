@@ -54,7 +54,11 @@ fn blocking_stats(state: &AppState) -> String {
     // DB stats row
     let stat_card_total = stat_card("Total Detections", &total.to_string(), "#38bdf8");
     let stat_card_species = stat_card("Unique Species", &species.to_string(), "#34d399");
-    let stat_card_today = stat_card(&format!("Today ({})", today_date_string()), &today.to_string(), "#a78bfa");
+    let stat_card_today = stat_card(
+        &format!("Today ({})", today_date_string()),
+        &today.to_string(),
+        "#a78bfa",
+    );
     out.push_str(&format!(
         r#"<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1rem;margin-bottom:1.5rem;">{stat_card_total}{stat_card_species}{stat_card_today}</div>"#,
         stat_card_total = stat_card_total,

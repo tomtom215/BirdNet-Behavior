@@ -207,7 +207,10 @@ mod tests {
     #[test]
     fn invalid_config_returns_error() {
         let samples = vec![0.0; 4096];
-        let config = MelConfig { n_fft: 0, ..MelConfig::default() };
+        let config = MelConfig {
+            n_fft: 0,
+            ..MelConfig::default()
+        };
         let result = mel_spectrogram(&samples, 48000, &config);
         assert!(matches!(result, Err(SpectrogramError::InvalidConfig(_))));
     }

@@ -1,7 +1,7 @@
 //! Shared response helpers for time-series endpoints.
 
-use axum::http::StatusCode;
 use axum::Json;
+use axum::http::StatusCode;
 use serde_json::{Value, json};
 
 /// Return a standard "unavailable" response for a time-series endpoint.
@@ -34,10 +34,7 @@ pub(super) fn handle_ts_result<T: serde::Serialize>(
         Ok(Some(Ok(data))) => {
             let v = serde_json::to_value(&data).unwrap_or(Value::Null);
             let total = v.as_array().map_or(0, Vec::len);
-            (
-                StatusCode::OK,
-                Json(json!({ key: v, "total": total })),
-            )
+            (StatusCode::OK, Json(json!({ key: v, "total": total })))
         }
         Ok(Some(Err(e))) => (
             StatusCode::INTERNAL_SERVER_ERROR,

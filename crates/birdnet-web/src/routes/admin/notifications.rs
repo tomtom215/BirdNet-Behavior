@@ -193,8 +193,7 @@ fn render_page(entries: &[NotifEntry], stats: (i64, i64, i64)) -> String {
 
 fn render_table_rows(entries: &[NotifEntry]) -> String {
     if entries.is_empty() {
-        return r#"<tr><td colspan="6" class="empty">No notifications yet.</td></tr>"#
-            .to_string();
+        return r#"<tr><td colspan="6" class="empty">No notifications yet.</td></tr>"#.to_string();
     }
     entries
         .iter()

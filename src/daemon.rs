@@ -48,9 +48,7 @@ pub fn start_detection_daemon(
     let (Some(model_path), Some(labels_path), Some(watch_dir)) =
         (model_path, labels_path, watch_dir)
     else {
-        tracing::info!(
-            "detection daemon not started: model, labels, or watch_dir not configured"
-        );
+        tracing::info!("detection daemon not started: model, labels, or watch_dir not configured");
         tracing::info!(
             "use --model, --labels, --watch-dir flags or set MODEL_PATH, LABELS_PATH, RECS_DIR in config"
         );
@@ -256,8 +254,7 @@ fn event_processor(
         };
 
         // Check notification filter (trigger mode + species filter).
-        let passes_filter =
-            notification_filter.should_notify(&detection.scientific_name, None);
+        let passes_filter = notification_filter.should_notify(&detection.scientific_name, None);
 
         // Apprise push notification (with filter and template).
         if let Some(ref apprise) = apprise {

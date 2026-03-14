@@ -62,7 +62,8 @@ impl AnalyticsDb {
                 ])?;
             }
             appender.flush()?;
-            self.conn.execute_batch(queries::CREATE_DETECTIONS_TS_VIEW)?;
+            self.conn
+                .execute_batch(queries::CREATE_DETECTIONS_TS_VIEW)?;
             tracing::info!(rows = count, "synced detections from SQLite to DuckDB");
         }
 
@@ -99,9 +100,9 @@ impl AnalyticsDb {
     ///
     /// Returns an error if the query fails.
     pub fn detection_count(&self) -> Result<u64, AnalyticsError> {
-        let count: i64 =
-            self.conn
-                .query_row("SELECT COUNT(*) FROM detections", [], |row| row.get(0))?;
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM detections", [], |row| row.get(0))?;
         Ok(u64::try_from(count).unwrap_or(0))
     }
 
@@ -191,8 +192,24 @@ mod tests {
     #[test]
     fn insert_and_count() {
         let (db, _tmp) = make_db();
-        db.insert_detection("2026-03-12", "06:30:00", "Turdus merula", "Eurasian Blackbird", 0.87, "t.wav").unwrap();
-        db.insert_detection("2026-03-12", "06:35:00", "Erithacus rubecula", "European Robin", 0.92, "t.wav").unwrap();
+        db.insert_detection(
+            "2026-03-12",
+            "06:30:00",
+            "Turdus merula",
+            "Eurasian Blackbird",
+            0.87,
+            "t.wav",
+        )
+        .unwrap();
+        db.insert_detection(
+            "2026-03-12",
+            "06:35:00",
+            "Erithacus rubecula",
+            "European Robin",
+            0.92,
+            "t.wav",
+        )
+        .unwrap();
         assert_eq!(db.detection_count().unwrap(), 2);
         assert_eq!(db.species_count().unwrap(), 2);
     }
@@ -216,7 +233,15 @@ mod tests {
     #[test]
     fn sync_from_sqlite_incremental() {
         let (db, _tmp) = make_db();
-        db.insert_detection("2026-03-12", "06:30:00", "Turdus merula", "Blackbird", 0.87, "t.wav").unwrap();
+        db.insert_detection(
+            "2026-03-12",
+            "06:30:00",
+            "Turdus merula",
+            "Blackbird",
+            0.87,
+            "t.wav",
+        )
+        .unwrap();
 
         let sqlite_dir = TempDir::new().unwrap();
         let sc = rusqlite::Connection::open(sqlite_dir.path().join("b.db")).unwrap();

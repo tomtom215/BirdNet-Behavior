@@ -50,9 +50,7 @@ impl fmt::Display for MigrateError {
 impl std::error::Error for MigrateError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::SourceOpen(e)
-            | Self::DestinationOpen(e)
-            | Self::DataTransfer(e) => Some(e),
+            Self::SourceOpen(e) | Self::DestinationOpen(e) | Self::DataTransfer(e) => Some(e),
             Self::Io(e) => Some(e),
             _ => None,
         }

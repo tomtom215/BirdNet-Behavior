@@ -286,14 +286,10 @@ fn render_companion_table(companions: &[birdnet_db::sqlite::FollowOn]) -> String
         return r#"<p style="color:#64748b;font-size:.875rem;">
           No companion species found. Try a different name or extend the time window.
         </p>"#
-        .to_string();
+            .to_string();
     }
 
-    let max_days = companions
-        .iter()
-        .map(|c| c.shared_days)
-        .max()
-        .unwrap_or(1);
+    let max_days = companions.iter().map(|c| c.shared_days).max().unwrap_or(1);
 
     let mut html = String::from(
         r"<table>

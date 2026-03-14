@@ -24,7 +24,11 @@ pub trait ImageProvider: Send + Sync {
         &'life0 self,
         scientific_name: &'life1 str,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<SpeciesImage, ImageError>> + Send + 'async_trait>,
+        Box<
+            dyn std::future::Future<Output = Result<SpeciesImage, ImageError>>
+                + Send
+                + 'async_trait,
+        >,
     >
     where
         'life0: 'async_trait,

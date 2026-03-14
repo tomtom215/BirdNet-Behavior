@@ -105,10 +105,7 @@ mod tests {
     #[test]
     fn heartbeat_error_display() {
         let err = HeartbeatError::Http("connection refused".to_string());
-        assert_eq!(
-            err.to_string(),
-            "heartbeat HTTP error: connection refused"
-        );
+        assert_eq!(err.to_string(), "heartbeat HTTP error: connection refused");
 
         let err = HeartbeatError::Server("404".to_string());
         assert_eq!(err.to_string(), "heartbeat server error: 404");

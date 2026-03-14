@@ -187,7 +187,9 @@ mod tests {
     #[test]
     fn sessionize_requires_extension() {
         let (db, _tmp) = make_db();
-        let err = db.sessionize(&types::SessionizeParams::default()).unwrap_err();
+        let err = db
+            .sessionize(&types::SessionizeParams::default())
+            .unwrap_err();
         assert!(err.to_string().contains("extension not loaded"));
     }
 

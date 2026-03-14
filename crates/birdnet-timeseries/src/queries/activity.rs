@@ -28,10 +28,14 @@ impl Default for HourlyActivity {
 impl QueryPlan for HourlyActivity {
     fn sql(&self) -> String {
         let days = self.lookback_days;
-        let species_filter = self.species.as_deref().map(|s| {
-            let esc = s.replace('\'', "''");
-            format!("AND Com_Name = '{esc}'")
-        }).unwrap_or_default();
+        let species_filter = self
+            .species
+            .as_deref()
+            .map(|s| {
+                let esc = s.replace('\'', "''");
+                format!("AND Com_Name = '{esc}'")
+            })
+            .unwrap_or_default();
         format!(
             "SELECT
     time_bucket(INTERVAL 1 HOUR, detection_timestamp) AS window_start,
@@ -69,10 +73,14 @@ impl Default for DailyActivity {
 impl QueryPlan for DailyActivity {
     fn sql(&self) -> String {
         let days = self.lookback_days;
-        let species_filter = self.species.as_deref().map(|s| {
-            let esc = s.replace('\'', "''");
-            format!("AND Com_Name = '{esc}'")
-        }).unwrap_or_default();
+        let species_filter = self
+            .species
+            .as_deref()
+            .map(|s| {
+                let esc = s.replace('\'', "''");
+                format!("AND Com_Name = '{esc}'")
+            })
+            .unwrap_or_default();
         format!(
             "SELECT
     detection_date                AS window_start,
@@ -168,7 +176,10 @@ mod tests {
 
     #[test]
     fn daily_activity_sql() {
-        let q = DailyActivity { lookback_days: 14, species: None };
+        let q = DailyActivity {
+            lookback_days: 14,
+            species: None,
+        };
         let sql = q.sql();
         assert!(sql.contains("INTERVAL 14 DAYS"));
         assert!(sql.contains("detection_date"));

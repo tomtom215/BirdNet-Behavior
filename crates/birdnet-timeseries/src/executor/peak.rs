@@ -10,10 +10,7 @@ impl<'conn> super::TimeSeriesDb<'conn> {
     /// # Errors
     ///
     /// Returns an error if the DuckDB query fails.
-    pub fn peak_windows(
-        &self,
-        params: &PeakParams,
-    ) -> Result<Vec<PeakWindowRow>, TimeSeriesError> {
+    pub fn peak_windows(&self, params: &PeakParams) -> Result<Vec<PeakWindowRow>, TimeSeriesError> {
         let days = params.lookback_days;
         let q = PeakWindows {
             window_minutes: params.window_minutes,

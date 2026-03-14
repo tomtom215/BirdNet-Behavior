@@ -19,10 +19,7 @@ pub fn router() -> Router<AppState> {
         .route("/today", get(today_page))
         .route("/pages/today-list", get(today_partial))
         .route("/pages/today-count", get(today_count_partial))
-        .route(
-            "/pages/today-delete",
-            axum::routing::post(delete_detection),
-        )
+        .route("/pages/today-delete", axum::routing::post(delete_detection))
         .route(
             "/pages/today-relabel",
             axum::routing::post(relabel_detection),
@@ -85,11 +82,7 @@ async fn today_count_partial(
             } else {
                 format!("{count} detections today")
             };
-            (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, "text/html")],
-                label,
-            )
+            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], label)
         }
         _ => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -112,8 +105,13 @@ async fn today_partial(
 
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
-            let rows =
-                birdnet_db::sqlite::todays_detections(conn, &today, search.as_deref(), limit, offset)?;
+            let rows = birdnet_db::sqlite::todays_detections(
+                conn,
+                &today,
+                search.as_deref(),
+                limit,
+                offset,
+            )?;
             let total =
                 birdnet_db::sqlite::todays_detection_count(conn, &today, search.as_deref())?;
             Ok::<_, birdnet_db::sqlite::DbError>((rows, total))

@@ -24,10 +24,7 @@ pub fn router() -> Router<AppState> {
             "/pages/recordings-by-species",
             get(recordings_by_species_partial),
         )
-        .route(
-            "/pages/recordings-by-date",
-            get(recordings_by_date_partial),
-        )
+        .route("/pages/recordings-by-date", get(recordings_by_date_partial))
         .route(
             "/pages/recordings-relabel",
             axum::routing::post(relabel_recording),

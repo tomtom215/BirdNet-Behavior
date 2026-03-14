@@ -50,10 +50,9 @@ async fn ts_heatmap_partial(State(state): State<AppState>) -> impl axum::respons
         lookback_days: 90,
         species: None,
     };
-    let result = tokio::task::spawn_blocking(move || {
-        state.with_timeseries(|ts| ts.hourly_heatmap(&params))
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || state.with_timeseries(|ts| ts.hourly_heatmap(&params)))
+            .await;
 
     match result {
         Ok(Some(Ok(rows))) => {
@@ -85,15 +84,16 @@ async fn ts_daily_partial(State(state): State<AppState>) -> impl axum::response:
         to_date: None,
         species: None,
     };
-    let result = tokio::task::spawn_blocking(move || {
-        state.with_timeseries(|ts| ts.moving_average(&params))
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || state.with_timeseries(|ts| ts.moving_average(&params)))
+            .await;
 
     match result {
-        Ok(Some(Ok(rows))) => {
-            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], render_trend_table(&rows))
-        }
+        Ok(Some(Ok(rows))) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            render_trend_table(&rows),
+        ),
         Ok(Some(Err(e))) => ts_error(&e.to_string()),
         _ => ts_unavailable("daily trend"),
     }
@@ -117,15 +117,16 @@ async fn ts_diversity_partial(State(state): State<AppState>) -> impl axum::respo
         lookback_days: 30,
         include_shannon: true,
     };
-    let result = tokio::task::spawn_blocking(move || {
-        state.with_timeseries(|ts| ts.daily_richness(&params))
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || state.with_timeseries(|ts| ts.daily_richness(&params)))
+            .await;
 
     match result {
-        Ok(Some(Ok(rows))) => {
-            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], render_diversity_table(&rows))
-        }
+        Ok(Some(Ok(rows))) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            render_diversity_table(&rows),
+        ),
         Ok(Some(Err(e))) => ts_error(&e.to_string()),
         _ => ts_unavailable("diversity"),
     }
@@ -157,9 +158,11 @@ async fn ts_sessions_partial(State(state): State<AppState>) -> impl axum::respon
     .await;
 
     match result {
-        Ok(Some(Ok(rows))) => {
-            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], render_sessions_table(&rows))
-        }
+        Ok(Some(Ok(rows))) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            render_sessions_table(&rows),
+        ),
         Ok(Some(Err(e))) => ts_error(&e.to_string()),
         _ => ts_unavailable("activity sessions"),
     }
@@ -184,15 +187,16 @@ async fn ts_anomaly_partial(State(state): State<AppState>) -> impl axum::respons
         window_days: 30,
         lookback_days: 90,
     };
-    let result = tokio::task::spawn_blocking(move || {
-        state.with_timeseries(|ts| ts.anomalies(&params))
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || state.with_timeseries(|ts| ts.anomalies(&params)))
+            .await;
 
     match result {
-        Ok(Some(Ok(rows))) => {
-            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], render_anomaly_table(&rows))
-        }
+        Ok(Some(Ok(rows))) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            render_anomaly_table(&rows),
+        ),
         Ok(Some(Err(e))) => ts_error(&e.to_string()),
         _ => ts_unavailable("anomaly detection"),
     }
@@ -218,15 +222,16 @@ async fn ts_peak_partial(State(state): State<AppState>) -> impl axum::response::
         lookback_days: 1,
         limit: 5,
     };
-    let result = tokio::task::spawn_blocking(move || {
-        state.with_timeseries(|ts| ts.peak_windows(&params))
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || state.with_timeseries(|ts| ts.peak_windows(&params)))
+            .await;
 
     match result {
-        Ok(Some(Ok(rows))) => {
-            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], render_peak_table(&rows))
-        }
+        Ok(Some(Ok(rows))) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            render_peak_table(&rows),
+        ),
         Ok(Some(Err(e))) => ts_error(&e.to_string()),
         _ => ts_unavailable("peak windows"),
     }
@@ -242,13 +247,12 @@ async fn ts_peak_partial(State(_): State<AppState>) -> impl axum::response::Into
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "analytics")]
-fn render_heatmap_table(
-    rows: &[birdnet_timeseries::types::results::HourlyHeatmapRow],
-) -> String {
+fn render_heatmap_table(rows: &[birdnet_timeseries::types::results::HourlyHeatmapRow]) -> String {
     if rows.is_empty() {
         return r#"<p style="color:var(--text-muted)">No heatmap data yet.</p>"#.to_string();
     }
-    let max_avg = rows.iter()
+    let max_avg = rows
+        .iter()
         .map(|r| r.avg_detections_per_day)
         .fold(0.0_f64, f64::max)
         .max(1.0);
@@ -258,7 +262,8 @@ fn render_heatmap_table(
     );
     for row in rows {
         let bar_pct = (row.avg_detections_per_day / max_avg * 100.0) as u32;
-        let _ = write!(html,
+        let _ = write!(
+            html,
             r#"<tr>
 <td style="font-weight:600;">{h:02}:00</td>
 <td>{avg:.1}</td>
@@ -284,9 +289,16 @@ fn render_trend_table(rows: &[birdnet_timeseries::types::results::TrendRow]) -> 
         r"<table><thead><tr><th>Date</th><th>Detections</th><th>7-Day Avg</th></tr></thead><tbody>",
     );
     for row in rows.iter().rev().take(14).rev() {
-        let avg = row.moving_avg_detections.map_or("—".to_string(), |v| format!("{v:.1}"));
-        let _ = write!(html, r#"<tr><td>{}</td><td>{}</td><td>{}</td></tr>"#,
-            escape_html(&row.date), row.daily_detections, avg);
+        let avg = row
+            .moving_avg_detections
+            .map_or("—".to_string(), |v| format!("{v:.1}"));
+        let _ = write!(
+            html,
+            r#"<tr><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+            escape_html(&row.date),
+            row.daily_detections,
+            avg
+        );
     }
     html.push_str("</tbody></table>");
     html
@@ -302,9 +314,17 @@ fn render_diversity_table(rows: &[birdnet_timeseries::types::results::DiversityR
     );
     for row in rows.iter().rev().take(14).rev() {
         let h = row.shannon_h.map_or("—".to_string(), |v| format!("{v:.3}"));
-        let ev = row.pielou_evenness.map_or("—".to_string(), |v| format!("{v:.2}"));
-        let _ = write!(html, r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
-            escape_html(&row.date), row.species_richness, h, ev);
+        let ev = row
+            .pielou_evenness
+            .map_or("—".to_string(), |v| format!("{v:.2}"));
+        let _ = write!(
+            html,
+            r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+            escape_html(&row.date),
+            row.species_richness,
+            h,
+            ev
+        );
     }
     html.push_str("</tbody></table>");
     html
@@ -319,9 +339,14 @@ fn render_sessions_table(rows: &[birdnet_timeseries::types::results::SessionRow]
         r"<table><thead><tr><th>Start</th><th>Duration</th><th>Detections</th><th>Species</th></tr></thead><tbody>",
     );
     for row in rows.iter().take(20) {
-        let _ = write!(html, r#"<tr><td>{}</td><td>{}m</td><td>{}</td><td>{}</td></tr>"#,
-            escape_html(&row.session_start), row.duration_minutes,
-            row.detection_count, row.species_count);
+        let _ = write!(
+            html,
+            r#"<tr><td>{}</td><td>{}m</td><td>{}</td><td>{}</td></tr>"#,
+            escape_html(&row.session_start),
+            row.duration_minutes,
+            row.detection_count,
+            row.species_count
+        );
     }
     html.push_str("</tbody></table>");
     html
@@ -338,10 +363,17 @@ fn render_anomaly_table(rows: &[birdnet_timeseries::types::results::AnomalyRow])
     );
     for row in &anomalous {
         let z = row.z_score.map_or("—".to_string(), |v| format!("{v:.2}"));
-        let cls = if row.anomaly_flag == "high" { "high" } else { "low" };
-        let _ = write!(html,
+        let cls = if row.anomaly_flag == "high" {
+            "high"
+        } else {
+            "low"
+        };
+        let _ = write!(
+            html,
             r#"<tr><td>{d}</td><td>{c}</td><td>{z}</td><td><span class="conf {cls}">{f}</span></td></tr>"#,
-            d = escape_html(&row.date), c = row.detections, f = escape_html(&row.anomaly_flag),
+            d = escape_html(&row.date),
+            c = row.detections,
+            f = escape_html(&row.anomaly_flag),
         );
     }
     html.push_str("</tbody></table>");
@@ -357,9 +389,14 @@ fn render_peak_table(rows: &[birdnet_timeseries::types::results::PeakWindowRow])
         r"<table><thead><tr><th>Window Start</th><th>Window End</th><th>Detections</th><th>Species</th></tr></thead><tbody>",
     );
     for row in rows {
-        let _ = write!(html, r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
-            escape_html(&row.window_start), escape_html(&row.window_end),
-            row.detection_count, row.species_count);
+        let _ = write!(
+            html,
+            r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+            escape_html(&row.window_start),
+            escape_html(&row.window_end),
+            row.detection_count,
+            row.species_count
+        );
     }
     html.push_str("</tbody></table>");
     html
@@ -371,9 +408,13 @@ fn render_peak_table(rows: &[birdnet_timeseries::types::results::PeakWindowRow])
 
 fn ts_unavailable(endpoint: &str) -> (StatusCode, [(header::HeaderName, &'static str); 1], String) {
     let msg = if cfg!(feature = "analytics") {
-        format!(r#"<p style="color:var(--text-muted)">{endpoint}: start with <code>--analytics-db</code> to enable.</p>"#)
+        format!(
+            r#"<p style="color:var(--text-muted)">{endpoint}: start with <code>--analytics-db</code> to enable.</p>"#
+        )
     } else {
-        format!(r#"<p style="color:var(--text-muted)">{endpoint}: rebuild with <code>--features analytics</code>.</p>"#)
+        format!(
+            r#"<p style="color:var(--text-muted)">{endpoint}: rebuild with <code>--features analytics</code>.</p>"#
+        )
     };
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], msg)
 }
@@ -383,6 +424,9 @@ fn ts_error(error: &str) -> (StatusCode, [(header::HeaderName, &'static str); 1]
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         [(header::CONTENT_TYPE, "text/html")],
-        format!(r#"<p style="color:var(--danger)">Error: {}</p>"#, escape_html(error)),
+        format!(
+            r#"<p style="color:var(--danger)">Error: {}</p>"#,
+            escape_html(error)
+        ),
     )
 }

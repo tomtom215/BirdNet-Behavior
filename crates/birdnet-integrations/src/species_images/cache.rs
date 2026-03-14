@@ -48,7 +48,10 @@ impl DiskCache {
     pub fn get(&self, cache_key: &str) -> Option<SpeciesImage> {
         // Check index first.
         {
-            let index = self.index.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let index = self
+                .index
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(img) = index.get(cache_key) {
                 return Some(img.clone());
             }
@@ -75,7 +78,10 @@ impl DiskCache {
     /// Return `true` if a cached image file exists for `cache_key`.
     pub fn contains(&self, cache_key: &str) -> bool {
         {
-            let index = self.index.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let index = self
+                .index
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if index.contains_key(cache_key) {
                 return true;
             }
@@ -92,14 +98,19 @@ impl DiskCache {
         let path = self.path_for(cache_key);
         std::fs::write(&path, bytes)?;
         {
-            let mut index = self.index.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            let entry = index.entry(cache_key.to_string()).or_insert_with(|| SpeciesImage {
-                url: String::new(),
-                cached_path: None,
-                width: self.thumb_width,
-                description: None,
-                wiki_url: None,
-            });
+            let mut index = self
+                .index
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let entry = index
+                .entry(cache_key.to_string())
+                .or_insert_with(|| SpeciesImage {
+                    url: String::new(),
+                    cached_path: None,
+                    width: self.thumb_width,
+                    description: None,
+                    wiki_url: None,
+                });
             entry.cached_path = Some(path.clone());
         }
         Ok(path)
@@ -109,8 +120,13 @@ impl DiskCache {
     ///
     /// Called after a successful fetch to persist the URL alongside the path.
     pub fn update_metadata(&self, cache_key: &str, img: &SpeciesImage) {
-        let mut index = self.index.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let entry = index.entry(cache_key.to_string()).or_insert_with(|| img.clone());
+        let mut index = self
+            .index
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let entry = index
+            .entry(cache_key.to_string())
+            .or_insert_with(|| img.clone());
         entry.url = img.url.clone();
         entry.description = img.description.clone();
         entry.wiki_url = img.wiki_url.clone();
@@ -152,7 +168,10 @@ impl DiskCache {
         };
 
         let mut count = 0_u32;
-        let mut index = self.index.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut index = self
+            .index
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         for entry in entries.flatten() {
             let path = entry.path();

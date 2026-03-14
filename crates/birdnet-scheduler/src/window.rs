@@ -89,7 +89,9 @@ impl RecordingWindow {
     /// Create an all-day window (never inhibited).
     #[must_use]
     pub fn all_day() -> Self {
-        Self { kind: WindowKind::AllDay }
+        Self {
+            kind: WindowKind::AllDay,
+        }
     }
 
     /// Create a fixed window.
@@ -117,7 +119,10 @@ impl RecordingWindow {
     #[must_use]
     pub fn solar(pre_sunrise_min: i32, post_sunset_min: i32) -> Self {
         Self {
-            kind: WindowKind::Solar { pre_sunrise_min, post_sunset_min },
+            kind: WindowKind::Solar {
+                pre_sunrise_min,
+                post_sunset_min,
+            },
         }
     }
 
@@ -126,13 +131,12 @@ impl RecordingWindow {
     /// # Errors
     ///
     /// Returns [`SchedulerError::InvalidWindow`] if the resolved times are out of range.
-    pub fn resolve_solar(
-        &self,
-        sunrise_min: u32,
-        sunset_min: u32,
-    ) -> Result<Self, SchedulerError> {
+    pub fn resolve_solar(&self, sunrise_min: u32, sunset_min: u32) -> Result<Self, SchedulerError> {
         match self.kind {
-            WindowKind::Solar { pre_sunrise_min, post_sunset_min } => {
+            WindowKind::Solar {
+                pre_sunrise_min,
+                post_sunset_min,
+            } => {
                 let start = (sunrise_min as i32 - pre_sunrise_min).max(0) as u32;
                 let end = ((sunset_min as i32) + post_sunset_min).min(1439) as u32;
                 Self::fixed(start, end)

@@ -39,8 +39,14 @@ pub fn router() -> Router<AppState> {
 async fn test_page(State(state): State<AppState>) -> Html<String> {
     let (apprise_configured, bw_configured) = state.with_db(|conn| {
         ensure_settings_table(conn).ok();
-        let apprise = get_setting(conn, "apprise_url").ok().map(|v| !v.is_empty()).unwrap_or(false);
-        let bw = get_setting(conn, "birdweather_token").ok().map(|v| !v.is_empty()).unwrap_or(false);
+        let apprise = get_setting(conn, "apprise_url")
+            .ok()
+            .map(|v| !v.is_empty())
+            .unwrap_or(false);
+        let bw = get_setting(conn, "birdweather_token")
+            .ok()
+            .map(|v| !v.is_empty())
+            .unwrap_or(false);
         (apprise, bw)
     });
 
@@ -48,13 +54,25 @@ async fn test_page(State(state): State<AppState>) -> Html<String> {
 }
 
 fn render_test_page(apprise_ok: bool, bw_ok: bool) -> String {
-    let apprise_status = if apprise_ok { "Configured" } else { "Not configured" };
-    let bw_status = if bw_ok { "Configured" } else { "Not configured" };
+    let apprise_status = if apprise_ok {
+        "Configured"
+    } else {
+        "Not configured"
+    };
+    let bw_status = if bw_ok {
+        "Configured"
+    } else {
+        "Not configured"
+    };
     let apprise_icon = if apprise_ok { "✅" } else { "⚠️" };
     let bw_icon = if bw_ok { "✅" } else { "⚠️" };
     let apprise_disabled = if apprise_ok { "" } else { "disabled" };
     let bw_disabled = if bw_ok { "" } else { "disabled" };
-    let apprise_btn = if apprise_ok { "btn-primary" } else { "btn-disabled" };
+    let apprise_btn = if apprise_ok {
+        "btn-primary"
+    } else {
+        "btn-disabled"
+    };
     let bw_btn = if bw_ok { "btn-primary" } else { "btn-disabled" };
 
     let mut html = String::with_capacity(4096);
@@ -129,7 +147,8 @@ fn render_test_page(apprise_ok: bool, bw_ok: bool) -> String {
     ));
 
     // Test all card
-    html.push_str(r##"  <div class="card">
+    html.push_str(
+        r##"  <div class="card">
     <div class="section-title">Test All Channels</div>
     <form hx-post="/admin/notifications/test" hx-target="#all-result" hx-swap="innerHTML">
       <button type="submit" class="btn btn-primary">Test All Configured Channels</button>
@@ -138,7 +157,8 @@ fn render_test_page(apprise_ok: bool, bw_ok: bool) -> String {
   </div>
 </div>
 </body>
-</html>"##);
+</html>"##,
+    );
 
     html
 }
@@ -150,7 +170,9 @@ fn render_test_page(apprise_ok: bool, bw_ok: bool) -> String {
 async fn test_apprise(State(state): State<AppState>) -> (StatusCode, Html<String>) {
     let apprise_url = state.with_db(|conn| {
         ensure_settings_table(conn).ok();
-        get_setting(conn, "apprise_url").ok().filter(|v| !v.is_empty())
+        get_setting(conn, "apprise_url")
+            .ok()
+            .filter(|v| !v.is_empty())
     });
 
     match apprise_url {
@@ -161,7 +183,10 @@ async fn test_apprise(State(state): State<AppState>) -> (StatusCode, Html<String
         Some(url) => {
             let res = send_apprise_test(&url).await;
             match res {
-                Ok(()) => (StatusCode::OK, Html(result_html(true, "Test notification sent via Apprise ✓"))),
+                Ok(()) => (
+                    StatusCode::OK,
+                    Html(result_html(true, "Test notification sent via Apprise ✓")),
+                ),
                 Err(e) => (StatusCode::OK, Html(result_html(false, &e))),
             }
         }
@@ -171,7 +196,9 @@ async fn test_apprise(State(state): State<AppState>) -> (StatusCode, Html<String
 async fn test_birdweather(State(state): State<AppState>) -> (StatusCode, Html<String>) {
     let token = state.with_db(|conn| {
         ensure_settings_table(conn).ok();
-        get_setting(conn, "birdweather_token").ok().filter(|v| !v.is_empty())
+        get_setting(conn, "birdweather_token")
+            .ok()
+            .filter(|v| !v.is_empty())
     });
 
     match token {
@@ -192,8 +219,12 @@ async fn test_birdweather(State(state): State<AppState>) -> (StatusCode, Html<St
 async fn test_all(State(state): State<AppState>) -> (StatusCode, Html<String>) {
     let (apprise_url, bw_token) = state.with_db(|conn| {
         ensure_settings_table(conn).ok();
-        let a = get_setting(conn, "apprise_url").ok().filter(|v| !v.is_empty());
-        let b = get_setting(conn, "birdweather_token").ok().filter(|v| !v.is_empty());
+        let a = get_setting(conn, "apprise_url")
+            .ok()
+            .filter(|v| !v.is_empty());
+        let b = get_setting(conn, "birdweather_token")
+            .ok()
+            .filter(|v| !v.is_empty());
         (a, b)
     });
 

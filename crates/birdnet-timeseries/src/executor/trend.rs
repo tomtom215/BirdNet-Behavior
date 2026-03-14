@@ -13,10 +13,7 @@ impl<'conn> super::TimeSeriesDb<'conn> {
     /// # Errors
     ///
     /// Returns an error if the DuckDB query fails.
-    pub fn moving_average(
-        &self,
-        params: &TrendParams,
-    ) -> Result<Vec<TrendRow>, TimeSeriesError> {
+    pub fn moving_average(&self, params: &TrendParams) -> Result<Vec<TrendRow>, TimeSeriesError> {
         let q = MovingAverage {
             window_days: params.window_days,
             from_date: params.from_date.clone(),
@@ -69,10 +66,7 @@ impl<'conn> super::TimeSeriesDb<'conn> {
     /// # Errors
     ///
     /// Returns an error if the DuckDB query fails.
-    pub fn anomalies(
-        &self,
-        params: &AnomalyParams,
-    ) -> Result<Vec<AnomalyRow>, TimeSeriesError> {
+    pub fn anomalies(&self, params: &AnomalyParams) -> Result<Vec<AnomalyRow>, TimeSeriesError> {
         let q = AnomalyDetection {
             z_threshold: params.z_threshold,
             window_days: params.window_days,

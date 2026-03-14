@@ -21,8 +21,7 @@ use crate::state::AppState;
 
 /// Mount livestream and i18n routes.
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/languages", get(list_languages))
+    Router::new().route("/languages", get(list_languages))
 }
 
 /// Mount the raw audio stream route (top-level, not under /api/v2).
@@ -96,18 +95,8 @@ async fn livestream(State(state): State<AppState>) -> Response {
         // RTSP source
         tokio::process::Command::new("ffmpeg")
             .args([
-                "-i",
-                &source,
-                "-vn", // no video
-                "-f",
-                "mp3",
-                "-b:a",
-                "128k",
-                "-ar",
-                "44100",
-                "-ac",
-                "1",
-                "pipe:1",
+                "-i", &source, "-vn", // no video
+                "-f", "mp3", "-b:a", "128k", "-ar", "44100", "-ac", "1", "pipe:1",
             ])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -117,19 +106,8 @@ async fn livestream(State(state): State<AppState>) -> Response {
         // ALSA source
         tokio::process::Command::new("ffmpeg")
             .args([
-                "-f",
-                "alsa",
-                "-i",
-                &source,
-                "-f",
-                "mp3",
-                "-b:a",
-                "128k",
-                "-ar",
-                "44100",
-                "-ac",
-                "1",
-                "pipe:1",
+                "-f", "alsa", "-i", &source, "-f", "mp3", "-b:a", "128k", "-ar", "44100", "-ac",
+                "1", "pipe:1",
             ])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())

@@ -118,7 +118,11 @@ impl Extractor {
     ///
     /// Returns [`ExtractionError`] if the source cannot be decoded, the
     /// output directory cannot be created, or writing fails.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss
+    )]
     pub fn extract_detection(
         &self,
         source_file: &Path,
@@ -141,8 +145,8 @@ impl Extractor {
 
         // 3. Extract the relevant samples.
         let start_sample = (safe_start * audio.sample_rate as f32) as usize;
-        let stop_sample = ((safe_stop * audio.sample_rate as f32) as usize)
-            .min(audio.samples.len());
+        let stop_sample =
+            ((safe_stop * audio.sample_rate as f32) as usize).min(audio.samples.len());
 
         if start_sample >= stop_sample || start_sample >= audio.samples.len() {
             return Err(ExtractionError::Decode(format!(
@@ -278,18 +282,15 @@ pub fn generate_spectrogram(
 ) -> Result<MelSpectrogram, ExtractionError> {
     let audio = decode_file(audio_path)?;
 
-    let mel = mel_spectrogram(&audio.samples, audio.sample_rate, mel_config).map_err(|e| {
-        match e {
-            SpectrogramError::InputTooShort { samples, n_fft } => {
-                ExtractionError::Decode(format!(
-                    "audio too short for spectrogram: {samples} samples < {n_fft} n_fft"
-                ))
-            }
+    let mel =
+        mel_spectrogram(&audio.samples, audio.sample_rate, mel_config).map_err(|e| match e {
+            SpectrogramError::InputTooShort { samples, n_fft } => ExtractionError::Decode(format!(
+                "audio too short for spectrogram: {samples} samples < {n_fft} n_fft"
+            )),
             SpectrogramError::InvalidConfig(msg) | SpectrogramError::Fft(msg) => {
                 ExtractionError::Decode(msg)
             }
-        }
-    })?;
+        })?;
 
     // Convert to dB scale for visual rendering.
     Ok(mel.to_db(1.0, 80.0))
@@ -329,7 +330,10 @@ mod tests {
     fn build_filename_without_rtsp() {
         let det = sample_detection();
         let name = build_extraction_filename(&det, "wav");
-        assert_eq!(name, "Eurasian_Blackbird-87-2026-03-14-birdnet-08:30:00.wav");
+        assert_eq!(
+            name,
+            "Eurasian_Blackbird-87-2026-03-14-birdnet-08:30:00.wav"
+        );
     }
 
     #[test]

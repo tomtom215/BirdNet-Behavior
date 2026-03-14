@@ -25,9 +25,7 @@ pub enum DetectedSchema {
         row_count: u64,
     },
     /// Identical schema to BirdNet-Behavior (already migrated or same format).
-    BirdNetBehavior {
-        row_count: u64,
-    },
+    BirdNetBehavior { row_count: u64 },
 }
 
 impl DetectedSchema {
@@ -57,9 +55,18 @@ impl DetectedSchema {
 
 /// Known column sets for fingerprinting (lowercase).
 const BIRDNET_PI_COLUMNS: &[&str] = &[
-    "date", "time", "sci_name", "com_name",
-    "confidence", "lat", "lon", "cutoff",
-    "week", "sens", "overlap", "file_name",
+    "date",
+    "time",
+    "sci_name",
+    "com_name",
+    "confidence",
+    "lat",
+    "lon",
+    "cutoff",
+    "week",
+    "sens",
+    "overlap",
+    "file_name",
 ];
 
 /// Open a SQLite file read-only and return the connection.
@@ -168,7 +175,10 @@ pub fn detect_schema(path: &Path) -> Result<DetectedSchema, MigrateError> {
     if has_required_columns(&cols, BIRDNET_PI_COLUMNS) {
         // BirdNet-Behavior uses the same column set — distinguish by checking
         // for a 'schema_version' table (only present in BirdNet-Behavior dbs).
-        if tables.iter().any(|t| t.eq_ignore_ascii_case("schema_version")) {
+        if tables
+            .iter()
+            .any(|t| t.eq_ignore_ascii_case("schema_version"))
+        {
             Ok(DetectedSchema::BirdNetBehavior { row_count: count })
         } else {
             Ok(DetectedSchema::BirdNetPi { row_count: count })
@@ -214,7 +224,8 @@ mod tests {
     fn unknown_schema_no_detections_table() {
         let tmp = NamedTempFile::new().unwrap();
         let conn = Connection::open(tmp.path()).unwrap();
-        conn.execute_batch("CREATE TABLE foo (id INTEGER);").unwrap();
+        conn.execute_batch("CREATE TABLE foo (id INTEGER);")
+            .unwrap();
         drop(conn);
 
         let err = detect_schema(tmp.path()).unwrap_err();

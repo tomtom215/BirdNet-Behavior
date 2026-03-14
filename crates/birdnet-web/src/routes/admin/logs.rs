@@ -112,15 +112,16 @@ pub fn router() -> Router<AppState> {
 // GET /admin/system/logs — SSE stream
 // ---------------------------------------------------------------------------
 
-async fn log_stream(State(state): State<AppState>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+async fn log_stream(
+    State(state): State<AppState>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let broadcaster = state.log_broadcaster();
     let recent = broadcaster.recent(50);
     let rx = broadcaster.subscribe();
 
     // Build the stream: first drain recent lines, then follow live
-    let recent_stream = tokio_stream::iter(recent).map(|line| {
-        Ok::<Event, Infallible>(log_line_to_event(&line))
-    });
+    let recent_stream =
+        tokio_stream::iter(recent).map(|line| Ok::<Event, Infallible>(log_line_to_event(&line)));
 
     let live_stream = BroadcastStream::new(rx)
         .filter_map(|result| result.ok())

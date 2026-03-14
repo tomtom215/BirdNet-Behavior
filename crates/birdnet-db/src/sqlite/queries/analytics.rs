@@ -220,9 +220,7 @@ pub fn range_daily_counts(
 ///
 /// Returns `DbError` on query failure.
 pub fn distinct_detection_dates(conn: &Connection) -> Result<Vec<String>, DbError> {
-    let mut stmt = conn.prepare(
-        "SELECT DISTINCT Date FROM detections ORDER BY Date ASC",
-    )?;
+    let mut stmt = conn.prepare("SELECT DISTINCT Date FROM detections ORDER BY Date ASC")?;
     let dates = stmt
         .query_map([], |row| row.get(0))?
         .collect::<Result<Vec<String>, _>>()?;
@@ -239,9 +237,27 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let conn = open_or_create(tmp.path()).unwrap();
         for (date, time, sci, com, conf) in [
-            ("2026-03-11", "06:30:00", "Turdus merula", "Eurasian Blackbird", 0.87),
-            ("2026-03-11", "06:45:00", "Erithacus rubecula", "European Robin", 0.92),
-            ("2026-03-11", "07:00:00", "Turdus merula", "Eurasian Blackbird", 0.75),
+            (
+                "2026-03-11",
+                "06:30:00",
+                "Turdus merula",
+                "Eurasian Blackbird",
+                0.87,
+            ),
+            (
+                "2026-03-11",
+                "06:45:00",
+                "Erithacus rubecula",
+                "European Robin",
+                0.92,
+            ),
+            (
+                "2026-03-11",
+                "07:00:00",
+                "Turdus merula",
+                "Eurasian Blackbird",
+                0.75,
+            ),
             ("2026-03-10", "18:00:00", "Parus major", "Great Tit", 0.80),
         ] {
             conn.execute(

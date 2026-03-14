@@ -112,22 +112,10 @@ fn substitute(template: &str, ctx: &NotificationContext) -> String {
         .replace("$latitude", &format!("{:.6}", ctx.latitude))
         .replace("$longitude", &format!("{:.6}", ctx.longitude))
         .replace("$reason", &ctx.reason)
-        .replace(
-            "$listenurl",
-            ctx.listen_url.as_deref().unwrap_or(""),
-        )
-        .replace(
-            "$friendlyurl",
-            ctx.station_url.as_deref().unwrap_or(""),
-        )
-        .replace(
-            "$flickrimage",
-            ctx.image_url.as_deref().unwrap_or(""),
-        )
-        .replace(
-            "$image",
-            ctx.image_url.as_deref().unwrap_or(""),
-        )
+        .replace("$listenurl", ctx.listen_url.as_deref().unwrap_or(""))
+        .replace("$friendlyurl", ctx.station_url.as_deref().unwrap_or(""))
+        .replace("$flickrimage", ctx.image_url.as_deref().unwrap_or(""))
+        .replace("$image", ctx.image_url.as_deref().unwrap_or(""))
         // Placeholders for settings that may not be available in context
         .replace("$cutoff", "")
         .replace("$sens", "")
@@ -240,11 +228,7 @@ impl NotificationFilter {
     ///
     /// `counter` is used for `NewSpecies` and `NewSpeciesDaily` trigger modes
     /// to query historical detection counts.
-    pub fn should_notify(
-        &self,
-        sci_name: &str,
-        counter: Option<&dyn DetectionCounter>,
-    ) -> bool {
+    pub fn should_notify(&self, sci_name: &str, counter: Option<&dyn DetectionCounter>) -> bool {
         // Species filter check.
         if !self.species_filter.is_allowed(sci_name) {
             return false;
@@ -263,9 +247,7 @@ impl NotificationFilter {
                 count < 5
             }
             TriggerMode::NewSpeciesDaily => {
-                let count = counter
-                    .map(|c| c.todays_count_for(sci_name))
-                    .unwrap_or(0);
+                let count = counter.map(|c| c.todays_count_for(sci_name)).unwrap_or(0);
                 // First detection of the day for this species.
                 count == 0
             }
@@ -316,7 +298,8 @@ mod tests {
     fn custom_template_renders() {
         let template = NotificationTemplate::new(
             "$comname spotted!".to_string(),
-            "A $comname ($sciname) was detected at $time with $confidencepct% confidence.".to_string(),
+            "A $comname ($sciname) was detected at $time with $confidencepct% confidence."
+                .to_string(),
         );
         let ctx = sample_context();
         let (title, body) = template.render(&ctx);
@@ -405,7 +388,10 @@ mod tests {
             trigger: TriggerMode::EachDetection,
             species_filter: SpeciesFilter::new(None, None),
         };
-        let counter = MockCounter { daily: 100, weekly: 500 };
+        let counter = MockCounter {
+            daily: 100,
+            weekly: 500,
+        };
         assert!(filter.should_notify("Any", Some(&counter)));
     }
 
@@ -415,10 +401,16 @@ mod tests {
             trigger: TriggerMode::NewSpecies,
             species_filter: SpeciesFilter::new(None, None),
         };
-        let counter_low = MockCounter { daily: 0, weekly: 3 };
+        let counter_low = MockCounter {
+            daily: 0,
+            weekly: 3,
+        };
         assert!(filter.should_notify("Robin", Some(&counter_low)));
 
-        let counter_high = MockCounter { daily: 0, weekly: 5 };
+        let counter_high = MockCounter {
+            daily: 0,
+            weekly: 5,
+        };
         assert!(!filter.should_notify("Robin", Some(&counter_high)));
     }
 
@@ -428,10 +420,16 @@ mod tests {
             trigger: TriggerMode::NewSpeciesDaily,
             species_filter: SpeciesFilter::new(None, None),
         };
-        let counter_zero = MockCounter { daily: 0, weekly: 50 };
+        let counter_zero = MockCounter {
+            daily: 0,
+            weekly: 50,
+        };
         assert!(filter.should_notify("Robin", Some(&counter_zero)));
 
-        let counter_nonzero = MockCounter { daily: 1, weekly: 50 };
+        let counter_nonzero = MockCounter {
+            daily: 1,
+            weekly: 50,
+        };
         assert!(!filter.should_notify("Robin", Some(&counter_nonzero)));
     }
 

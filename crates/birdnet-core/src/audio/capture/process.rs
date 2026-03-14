@@ -86,10 +86,14 @@ pub fn start_microphone_capture(config: &RecordingConfig) -> Result<CaptureProce
     let mut cmd = Command::new("arecord");
     cmd.arg("-D")
         .arg(device)
-        .arg("-f").arg("S16_LE")
-        .arg("-r").arg(sample_rate.to_string())
-        .arg("-c").arg(channels.to_string())
-        .arg("--max-file-time").arg(config.segment_duration_secs.to_string())
+        .arg("-f")
+        .arg("S16_LE")
+        .arg("-r")
+        .arg(sample_rate.to_string())
+        .arg("-c")
+        .arg(channels.to_string())
+        .arg("--max-file-time")
+        .arg(config.segment_duration_secs.to_string())
         .arg("--use-strftime")
         .arg(output_path.to_string_lossy().as_ref())
         .stdout(Stdio::null())
@@ -97,7 +101,10 @@ pub fn start_microphone_capture(config: &RecordingConfig) -> Result<CaptureProce
 
     let child = cmd.spawn()?;
     tracing::info!(device = device, "started microphone capture via arecord");
-    Ok(CaptureProcess { child, source: config.source.clone() })
+    Ok(CaptureProcess {
+        child,
+        source: config.source.clone(),
+    })
 }
 
 /// Start an audio capture process for an RTSP stream via `ffmpeg`.
@@ -118,22 +125,37 @@ pub fn start_rtsp_capture(config: &RecordingConfig) -> Result<CaptureProcess, Ca
     let output_path = config.output_dir.join(&filename_pattern);
 
     let child = Command::new("ffmpeg")
-        .arg("-rtsp_transport").arg("tcp")
-        .arg("-i").arg(url)
+        .arg("-rtsp_transport")
+        .arg("tcp")
+        .arg("-i")
+        .arg(url)
         .arg("-vn")
-        .arg("-acodec").arg("pcm_s16le")
-        .arg("-ar").arg("48000")
-        .arg("-ac").arg("1")
-        .arg("-f").arg("segment")
-        .arg("-segment_time").arg(config.segment_duration_secs.to_string())
-        .arg("-strftime").arg("1")
+        .arg("-acodec")
+        .arg("pcm_s16le")
+        .arg("-ar")
+        .arg("48000")
+        .arg("-ac")
+        .arg("1")
+        .arg("-f")
+        .arg("segment")
+        .arg("-segment_time")
+        .arg(config.segment_duration_secs.to_string())
+        .arg("-strftime")
+        .arg("1")
         .arg(output_path.to_string_lossy().as_ref())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()?;
 
-    tracing::info!(stream_id = stream_id, url = url, "started RTSP capture via ffmpeg");
-    Ok(CaptureProcess { child, source: config.source.clone() })
+    tracing::info!(
+        stream_id = stream_id,
+        url = url,
+        "started RTSP capture via ffmpeg"
+    );
+    Ok(CaptureProcess {
+        child,
+        source: config.source.clone(),
+    })
 }
 
 /// Spawn the appropriate capture process based on the source type.
@@ -158,8 +180,8 @@ pub fn required_tool(source: &CaptureSource) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::types::AudioFormat;
+    use super::*;
 
     #[test]
     fn is_audio_file_wav() {

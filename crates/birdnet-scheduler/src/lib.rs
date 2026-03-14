@@ -26,14 +26,14 @@
 //! ```
 
 pub mod error;
+pub mod inhibit;
+pub mod schedule;
 pub mod solar;
 pub mod traits;
 pub mod window;
-pub mod inhibit;
-pub mod schedule;
 
 pub use error::SchedulerError;
-pub use solar::{Location, SolarDay};
-pub use window::{RecordingWindow, TimeOfDay, WindowKind};
 pub use inhibit::NightInhibit;
 pub use schedule::{DailySchedule, ScheduleConfig};
+pub use solar::{Location, SolarDay};
+pub use window::{RecordingWindow, TimeOfDay, WindowKind};

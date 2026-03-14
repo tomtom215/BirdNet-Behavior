@@ -86,11 +86,7 @@ impl ImageCache {
     /// Returns `ImageError` if the HTTP client or cache directory cannot be created.
     pub fn with_wikipedia(cache_dir: &Path) -> Result<Self, ImageError> {
         let client = WikipediaClient::new()?;
-        Self::new(
-            cache_dir,
-            Arc::new(client),
-            wikipedia::DEFAULT_THUMB_WIDTH,
-        )
+        Self::new(cache_dir, Arc::new(client), wikipedia::DEFAULT_THUMB_WIDTH)
     }
 
     /// Create a `WikipediaClient`-backed cache with a custom thumbnail width.

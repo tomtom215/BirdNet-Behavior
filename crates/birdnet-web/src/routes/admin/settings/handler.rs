@@ -1,9 +1,9 @@
 //! Settings route handlers (GET / POST).
 
+use axum::Form;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::Html;
-use axum::Form;
 use std::collections::HashMap;
 
 use birdnet_db::settings::{SettingsCategory, ensure_settings_table, list, set_many};
@@ -16,9 +16,7 @@ use crate::state::AppState;
 // GET /admin/settings — full page
 // ---------------------------------------------------------------------------
 
-pub async fn settings_page(
-    State(state): State<AppState>,
-) -> Result<Html<String>, StatusCode> {
+pub async fn settings_page(State(state): State<AppState>) -> Result<Html<String>, StatusCode> {
     let settings_map = load_all_settings(&state);
     Ok(Html(render_settings_page(&settings_map)))
 }
@@ -27,9 +25,7 @@ pub async fn settings_page(
 // GET /admin/settings/partial — HTMX partial (form body only)
 // ---------------------------------------------------------------------------
 
-pub async fn settings_partial(
-    State(state): State<AppState>,
-) -> Result<Html<String>, StatusCode> {
+pub async fn settings_partial(State(state): State<AppState>) -> Result<Html<String>, StatusCode> {
     let settings_map = load_all_settings(&state);
     Ok(Html(render_settings_form(&settings_map)))
 }
@@ -91,9 +87,7 @@ pub(super) fn load_all_settings(state: &AppState) -> HashMap<String, String> {
 
 /// Convert the flat form into a list of `(key, value, category)` triples
 /// for storage, filtering out any `None` fields.
-fn build_settings_items(
-    form: &SettingsForm,
-) -> Vec<(&'static str, String, SettingsCategory)> {
+fn build_settings_items(form: &SettingsForm) -> Vec<(&'static str, String, SettingsCategory)> {
     let mut items: Vec<(&'static str, String, SettingsCategory)> = Vec::new();
 
     macro_rules! push {
@@ -106,34 +100,126 @@ fn build_settings_items(
 
     push!(form.alsa_device, "alsa_device", SettingsCategory::Audio);
     push!(form.rtsp_url, "rtsp_url", SettingsCategory::Audio);
-    push!(form.segment_duration, "segment_duration", SettingsCategory::Audio);
+    push!(
+        form.segment_duration,
+        "segment_duration",
+        SettingsCategory::Audio
+    );
     push!(form.latitude, "latitude", SettingsCategory::Location);
     push!(form.longitude, "longitude", SettingsCategory::Location);
-    push!(form.station_name, "station_name", SettingsCategory::Location);
-    push!(form.night_inhibit, "night_inhibit", SettingsCategory::Location);
-    push!(form.pre_sunrise_offset, "pre_sunrise_offset", SettingsCategory::Location);
-    push!(form.post_sunset_offset, "post_sunset_offset", SettingsCategory::Location);
-    push!(form.confidence_threshold, "confidence_threshold", SettingsCategory::Detection);
+    push!(
+        form.station_name,
+        "station_name",
+        SettingsCategory::Location
+    );
+    push!(
+        form.night_inhibit,
+        "night_inhibit",
+        SettingsCategory::Location
+    );
+    push!(
+        form.pre_sunrise_offset,
+        "pre_sunrise_offset",
+        SettingsCategory::Location
+    );
+    push!(
+        form.post_sunset_offset,
+        "post_sunset_offset",
+        SettingsCategory::Location
+    );
+    push!(
+        form.confidence_threshold,
+        "confidence_threshold",
+        SettingsCategory::Detection
+    );
     push!(form.sensitivity, "sensitivity", SettingsCategory::Detection);
     push!(form.overlap, "overlap", SettingsCategory::Detection);
-    push!(form.apprise_url, "apprise_url", SettingsCategory::Notifications);
-    push!(form.birdweather_token, "birdweather_token", SettingsCategory::Notifications);
-    push!(form.notify_confidence, "notify_confidence", SettingsCategory::Notifications);
-    push!(form.notify_cooldown, "notify_cooldown", SettingsCategory::Notifications);
-    push!(form.species_exclude, "species_exclude", SettingsCategory::Species);
-    push!(form.species_include, "species_include", SettingsCategory::Species);
-    push!(form.recording_days, "recording_days", SettingsCategory::System);
-    push!(form.image_cache_dir, "image_cache_dir", SettingsCategory::System);
-    push!(form.email_smtp_host, "email_smtp_host", SettingsCategory::Notifications);
-    push!(form.email_smtp_port, "email_smtp_port", SettingsCategory::Notifications);
-    push!(form.email_smtp_user, "email_smtp_user", SettingsCategory::Notifications);
-    push!(form.email_smtp_pass, "email_smtp_pass", SettingsCategory::Notifications);
-    push!(form.email_from, "email_from", SettingsCategory::Notifications);
+    push!(
+        form.apprise_url,
+        "apprise_url",
+        SettingsCategory::Notifications
+    );
+    push!(
+        form.birdweather_token,
+        "birdweather_token",
+        SettingsCategory::Notifications
+    );
+    push!(
+        form.notify_confidence,
+        "notify_confidence",
+        SettingsCategory::Notifications
+    );
+    push!(
+        form.notify_cooldown,
+        "notify_cooldown",
+        SettingsCategory::Notifications
+    );
+    push!(
+        form.species_exclude,
+        "species_exclude",
+        SettingsCategory::Species
+    );
+    push!(
+        form.species_include,
+        "species_include",
+        SettingsCategory::Species
+    );
+    push!(
+        form.recording_days,
+        "recording_days",
+        SettingsCategory::System
+    );
+    push!(
+        form.image_cache_dir,
+        "image_cache_dir",
+        SettingsCategory::System
+    );
+    push!(
+        form.email_smtp_host,
+        "email_smtp_host",
+        SettingsCategory::Notifications
+    );
+    push!(
+        form.email_smtp_port,
+        "email_smtp_port",
+        SettingsCategory::Notifications
+    );
+    push!(
+        form.email_smtp_user,
+        "email_smtp_user",
+        SettingsCategory::Notifications
+    );
+    push!(
+        form.email_smtp_pass,
+        "email_smtp_pass",
+        SettingsCategory::Notifications
+    );
+    push!(
+        form.email_from,
+        "email_from",
+        SettingsCategory::Notifications
+    );
     push!(form.email_to, "email_to", SettingsCategory::Notifications);
-    push!(form.email_from_name, "email_from_name", SettingsCategory::Notifications);
-    push!(form.email_starttls, "email_starttls", SettingsCategory::Notifications);
-    push!(form.email_min_confidence, "email_min_confidence", SettingsCategory::Notifications);
-    push!(form.email_cooldown_secs, "email_cooldown_secs", SettingsCategory::Notifications);
+    push!(
+        form.email_from_name,
+        "email_from_name",
+        SettingsCategory::Notifications
+    );
+    push!(
+        form.email_starttls,
+        "email_starttls",
+        SettingsCategory::Notifications
+    );
+    push!(
+        form.email_min_confidence,
+        "email_min_confidence",
+        SettingsCategory::Notifications
+    );
+    push!(
+        form.email_cooldown_secs,
+        "email_cooldown_secs",
+        SettingsCategory::Notifications
+    );
 
     items
 }

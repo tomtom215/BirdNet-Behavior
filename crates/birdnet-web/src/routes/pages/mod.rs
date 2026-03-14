@@ -38,10 +38,8 @@ pub(crate) const LAYOUT_HTML: &str = include_str!("../../../templates/layout.htm
 pub(crate) const DASHBOARD_HTML: &str = include_str!("../../../templates/dashboard.html");
 pub(crate) const SPECIES_PAGE_HTML: &str = include_str!("../../../templates/species.html");
 pub(crate) const ANALYTICS_PAGE_HTML: &str = include_str!("../../../templates/analytics.html");
-pub(crate) const SPECIES_DETAIL_HTML: &str =
-    include_str!("../../../templates/species_detail.html");
-pub(crate) const TIMESERIES_PAGE_HTML: &str =
-    include_str!("../../../templates/timeseries.html");
+pub(crate) const SPECIES_DETAIL_HTML: &str = include_str!("../../../templates/species_detail.html");
+pub(crate) const TIMESERIES_PAGE_HTML: &str = include_str!("../../../templates/timeseries.html");
 pub(crate) const TODAY_PAGE_HTML: &str = include_str!("../../../templates/today.html");
 pub(crate) const RECORDINGS_PAGE_HTML: &str = include_str!("../../../templates/recordings.html");
 
@@ -66,11 +64,7 @@ pub fn router() -> Router<AppState> {
 pub(crate) fn render_page(title: &str, content: &str, active_nav: &str) -> Html<String> {
     let version = env!("CARGO_PKG_VERSION");
     let nav = |key| {
-        if active_nav == key {
-            "active"
-        } else {
-            ""
-        }
+        if active_nav == key { "active" } else { "" }
     };
     let html = LAYOUT_HTML
         .replace("{{title}}", title)

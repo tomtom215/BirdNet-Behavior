@@ -59,9 +59,7 @@ impl Migrator for CsvImporter {
     ) -> Result<MigrationSummary, MigrateError> {
         progress.set_stage(MigrationStage::Importing, "Opening CSV source file");
 
-        let file = std::fs::File::open(source_path).map_err(|e| {
-            MigrateError::Io(e)
-        })?;
+        let file = std::fs::File::open(source_path).map_err(|e| MigrateError::Io(e))?;
 
         let reader = BufReader::new(file);
         let mut lines = reader.lines();
@@ -94,16 +92,15 @@ impl Migrator for CsvImporter {
         let _ = lines2.next();
 
         // Open (or create) destination database and run schema migrations.
-        let dest_conn =
-            birdnet_db::sqlite::open_or_create(dest_path).map_err(|e| {
-                MigrateError::DestinationOpen(rusqlite::Error::SqliteFailure(
-                    rusqlite::ffi::Error {
-                        code: rusqlite::ffi::ErrorCode::CannotOpen,
-                        extended_code: 0,
-                    },
-                    Some(e.to_string()),
-                ))
-            })?;
+        let dest_conn = birdnet_db::sqlite::open_or_create(dest_path).map_err(|e| {
+            MigrateError::DestinationOpen(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error {
+                    code: rusqlite::ffi::ErrorCode::CannotOpen,
+                    extended_code: 0,
+                },
+                Some(e.to_string()),
+            ))
+        })?;
         birdnet_db::migration::migrate(&dest_conn).map_err(|e| {
             MigrateError::DestinationOpen(rusqlite::Error::SqliteFailure(
                 rusqlite::ffi::Error {
@@ -182,20 +179,33 @@ fn parse_line(line: &str, delim: char) -> Result<CsvRow, MigrateError> {
 
     let parse_opt_f64 = |s: &str| -> Option<f64> {
         let s = s.trim();
-        if s.is_empty() || s == "\\N" || s == "NULL" { None } else { s.parse().ok() }
+        if s.is_empty() || s == "\\N" || s == "NULL" {
+            None
+        } else {
+            s.parse().ok()
+        }
     };
     let parse_opt_i64 = |s: &str| -> Option<i64> {
         let s = s.trim();
-        if s.is_empty() || s == "\\N" || s == "NULL" { None } else { s.parse().ok() }
+        if s.is_empty() || s == "\\N" || s == "NULL" {
+            None
+        } else {
+            s.parse().ok()
+        }
     };
     let parse_opt_str = |s: &str| -> Option<String> {
         let s = s.trim();
-        if s.is_empty() || s == "\\N" || s == "NULL" { None } else { Some(s.to_string()) }
+        if s.is_empty() || s == "\\N" || s == "NULL" {
+            None
+        } else {
+            Some(s.to_string())
+        }
     };
 
-    let confidence: f64 = fields[4].trim().parse().map_err(|_| {
-        MigrateError::CsvParse(format!("invalid confidence: '{}'", fields[4]))
-    })?;
+    let confidence: f64 = fields[4]
+        .trim()
+        .parse()
+        .map_err(|_| MigrateError::CsvParse(format!("invalid confidence: '{}'", fields[4])))?;
 
     Ok(CsvRow {
         date: fields[0].trim().to_string(),
@@ -215,7 +225,9 @@ fn parse_line(line: &str, delim: char) -> Result<CsvRow, MigrateError> {
 
 /// Insert a batch of rows into the destination, returning (inserted, skipped).
 fn flush_batch(conn: &Connection, batch: &[CsvRow]) -> Result<(u64, u64), MigrateError> {
-    let tx = conn.unchecked_transaction().map_err(MigrateError::DataTransfer)?;
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(MigrateError::DataTransfer)?;
     let mut inserted = 0u64;
     let mut skipped = 0u64;
 
@@ -233,7 +245,11 @@ fn flush_batch(conn: &Connection, batch: &[CsvRow]) -> Result<(u64, u64), Migrat
             )
             .map_err(MigrateError::DataTransfer)?;
 
-        if rows_changed == 0 { skipped += 1; } else { inserted += 1; }
+        if rows_changed == 0 {
+            skipped += 1;
+        } else {
+            inserted += 1;
+        }
     }
 
     tx.commit().map_err(MigrateError::DataTransfer)?;
@@ -244,7 +260,10 @@ fn flush_batch(conn: &Connection, batch: &[CsvRow]) -> Result<(u64, u64), Migrat
 fn count_lines(path: &Path) -> Result<usize, MigrateError> {
     let file = std::fs::File::open(path).map_err(MigrateError::Io)?;
     let reader = BufReader::new(file);
-    Ok(reader.lines().filter(|l| l.as_ref().map_or(false, |s| !s.trim().is_empty())).count())
+    Ok(reader
+        .lines()
+        .filter(|l| l.as_ref().map_or(false, |s| !s.trim().is_empty()))
+        .count())
 }
 
 // ---------------------------------------------------------------------------
@@ -297,7 +316,9 @@ mod tests {
         let dst = NamedTempFile::new().unwrap();
         let progress = crate::progress::ProgressHandle::new();
 
-        let summary = CsvImporter.migrate(src.path(), dst.path(), &progress).unwrap();
+        let summary = CsvImporter
+            .migrate(src.path(), dst.path(), &progress)
+            .unwrap();
         assert_eq!(summary.imported_rows, 2);
         assert_eq!(summary.schema_name, "BirdNET-Pi CSV");
     }

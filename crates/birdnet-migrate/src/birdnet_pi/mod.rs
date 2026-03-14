@@ -126,9 +126,7 @@ pub fn validate_source(
 }
 
 /// Cheap CSV validation: check file exists, is readable, has ≥1 data line.
-fn validate_csv_source(
-    path: &Path,
-) -> Result<(DetectedSchema, ValidationReport), MigrateError> {
+fn validate_csv_source(path: &Path) -> Result<(DetectedSchema, ValidationReport), MigrateError> {
     use crate::traits::{ValidationCheck, ValidationReport};
     use std::io::{BufRead, BufReader};
 
@@ -141,9 +139,15 @@ fn validate_csv_source(
         _ => {
             return Ok((
                 DetectedSchema::BirdNetPiCsv { row_count: 0 },
-                ValidationReport::new("BirdNET-Pi CSV", 0, vec![
-                    ValidationCheck::fail("readable", "file is empty or unreadable", true),
-                ]),
+                ValidationReport::new(
+                    "BirdNET-Pi CSV",
+                    0,
+                    vec![ValidationCheck::fail(
+                        "readable",
+                        "file is empty or unreadable",
+                        true,
+                    )],
+                ),
             ));
         }
     };
@@ -162,7 +166,11 @@ fn validate_csv_source(
         if has_expected_header {
             ValidationCheck::pass("header", "header row matches expected format")
         } else {
-            ValidationCheck::fail("header", "header does not match expected BirdNET-Pi CSV format", false)
+            ValidationCheck::fail(
+                "header",
+                "header does not match expected BirdNET-Pi CSV format",
+                false,
+            )
         },
         if row_count > 0 {
             ValidationCheck::pass("row_count", format!("{row_count} data rows found"))
@@ -204,17 +212,19 @@ fn is_csv_file(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::progress::ProgressHandle;
     use rusqlite::Connection;
     use tempfile::NamedTempFile;
-    use crate::progress::ProgressHandle;
 
     fn make_sqlite_source(n: usize) -> NamedTempFile {
         let tmp = NamedTempFile::new().unwrap();
         let conn = Connection::open(tmp.path()).unwrap();
-        conn.execute_batch("CREATE TABLE detections (
+        conn.execute_batch(
+            "CREATE TABLE detections (
             Date TEXT, Time TEXT, Sci_Name TEXT, Com_Name TEXT,
             Confidence REAL, Lat REAL, Lon REAL, Cutoff REAL,
-            Week INTEGER, Sens REAL, Overlap REAL, File_Name TEXT);")
+            Week INTEGER, Sens REAL, Overlap REAL, File_Name TEXT);",
+        )
         .unwrap();
         for i in 0..n {
             conn.execute(
