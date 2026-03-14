@@ -85,8 +85,17 @@ pub struct Cli {
     pub alsa_device: Option<String>,
 
     /// RTSP URL for audio capture (e.g., `rtsp://camera.local:554/stream`).
+    ///
+    /// For a single stream. Use `--rtsp-urls` for multiple streams.
     #[arg(long, env = "BIRDNET_RTSP_URL")]
     pub rtsp_url: Option<String>,
+
+    /// Comma-separated RTSP URLs for multi-stream capture.
+    ///
+    /// Each URL gets its own independent capture pipeline with filenames
+    /// prefixed `RTSP_1-`, `RTSP_2-`, etc. Overrides `--rtsp-url` if set.
+    #[arg(long, env = "BIRDNET_RTSP_URLS", value_delimiter = ',')]
+    pub rtsp_urls: Vec<String>,
 
     /// Duration of each recording segment in seconds (default: 15).
     #[arg(long, default_value = "15", env = "BIRDNET_SEGMENT_DURATION")]

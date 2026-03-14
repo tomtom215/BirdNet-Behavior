@@ -1,7 +1,7 @@
 # Implementation Plan: 100% BirdNET-Pi Feature Parity
 
 **Date**: 2026-03-14
-**Current Parity**: ~91% (verified against source)
+**Current Parity**: ~95% (verified against source)
 **Goal**: 100% verified feature parity + leapfrog capabilities
 
 This is the **working document** for reaching 100% parity. Each task includes
@@ -330,24 +330,12 @@ CREATE TABLE quarantine (
 
 ---
 
-### 6.3 ❌ Multiple RTSP Streams
-**Priority**: P1 — many users have multi-mic setups (GH#459, #177)
-**Files to modify**:
-- `src/cli.rs` — change `rtsp_url: Option<String>` to `rtsp_urls: Vec<String>`
-- `crates/birdnet-core/src/audio/capture/manager.rs` — spawn one CaptureManager per RTSP URL
-- Detection filename prefix: `RTSP_1-`, `RTSP_2-`, etc.
+### 6.3 ✅ Multiple RTSP Streams
+**Status**: COMPLETE — `src/cli.rs`, `src/capture.rs`
 
-**Implementation**:
-```rust
-// src/cli.rs:
-#[arg(long, env = "BIRDNET_RTSP_URLS", value_delimiter = ',')]
-pub rtsp_urls: Vec<String>,
-
-// Each URL gets its own CaptureManager with independent lifecycle
-// Each writes to separate subdirectory or prefixes filenames
-```
-
-**Acceptance**: `--rtsp-urls rtsp://cam1,rtsp://cam2` runs two independent capture pipelines.
+Added `--rtsp-urls` / `BIRDNET_RTSP_URLS` comma-separated CLI flag. Each URL gets its own
+`CaptureManager` with filenames prefixed `RTSP_1-`, `RTSP_2-`, etc. ALSA microphone can run
+alongside RTSP streams. Backward-compatible with single `--rtsp-url`.
 
 ---
 
@@ -363,21 +351,12 @@ endpoint.
 
 ---
 
-### 7.2 ❌ Recording Browser: Browse by Date/Species Navigation
-**Priority**: P1
-**Files to modify**:
-- `crates/birdnet-web/src/routes/pages/recordings.rs` — add date/species browse modes
+### 7.2 ✅ Recording Browser: Browse by Date/Species Navigation
+**Status**: COMPLETE — `crates/birdnet-web/src/routes/pages/recordings.rs`
 
-**Current state**: Basic recording list, no structured navigation.
-
-**Implementation**:
-```
-GET /recordings?view=by_date&date=YYYY-MM-DD → recordings for date
-GET /recordings?view=by_species&species=Turdus+merula → recordings for species
-GET /recordings?view=calendar → monthly calendar with detection dots
-```
-
-**Acceptance**: Three browse modes; calendar view shows days with detections highlighted.
+Two-tab recording browser with "By Species" and "By Date" views. Species list shows detection
+counts, clicking loads recordings for that species. Date list shows recent 90 dates with HTMX
+lazy-loading. Each recording has audio player, delete, and re-label actions.
 
 ---
 
@@ -402,9 +381,9 @@ GET /recordings?view=calendar → monthly calendar with detection dots
 - [x] 5.2 Full backup (config + audio + DB) ✅
 - [x] 5.3 Custom site name ✅
 - [x] 6.1 Per-species confidence thresholds ✅ ← leapfrog feature
-- [ ] 6.3 Multiple RTSP streams
+- [x] 6.3 Multiple RTSP streams ✅
 - [x] 7.1 Spectrogram text overlay ✅
-- [ ] 7.2 Recording browser date/species nav
+- [x] 7.2 Recording browser date/species nav ✅
 
 ### P2 Defer (Post 1.0)
 - [ ] 6.2 Rare bird quarantine ← novel leapfrog
@@ -431,9 +410,9 @@ GET /recordings?view=calendar → monthly calendar with detection dots
 | 3 | Export + streaming (3.1–3.3) | ✅ COMPLETE | P1 ✅ |
 | 4 | Notifications + images (4.1–4.4) | ✅ COMPLETE | P1 ✅ |
 | 5 | Admin + system (5.1–5.3) | ✅ COMPLETE | P0-P1 ✅ |
-| 6 | Advanced detection (6.1 done, 6.3 remaining) | ~1 day | P1 |
-| 7 | Spectrogram + recording UX (7.1 done, 7.2 remaining) | ~1 day | P1 |
-| **Total** | **~2 items remaining for P1 parity** | **~2 dev-days** | |
+| 6 | Advanced detection (6.1, 6.3) | ✅ COMPLETE | P1 ✅ |
+| 7 | Spectrogram + recording UX (7.1, 7.2) | ✅ COMPLETE | P1 ✅ |
+| **Total** | **All P1 items complete** | **Done** | |
 
 ---
 

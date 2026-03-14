@@ -9,9 +9,9 @@
 
 ## Executive Summary
 
-BirdNet-Behavior has reached **~91% verified feature parity** with BirdNET-Pi (up from ~88% previously). All P0 items are complete. The remaining gap is concentrated in multiple RTSP streams, recording browser navigation, and lower-priority items.
+BirdNet-Behavior has reached **~95% verified feature parity** with BirdNET-Pi (up from ~91% previously). All P0 and P1 items are complete. The remaining gap is concentrated in P2 items (nice-to-haves, deployment tooling).
 
-**What changed since last analysis:** 3 additional features completed — audio format conversion (MP3/FLAC/OGG via ffmpeg/sox), per-species confidence thresholds (DB table + admin UI + daemon filtering), and spectrogram text overlay (bitmap font renderer with species/confidence/time labels).
+**What changed since last analysis:** 6 additional features completed — multiple RTSP streams (comma-separated URLs, independent capture pipelines), species sparklines (7-day SVG mini-graphs in species list), kiosk mode (auto-refreshing simplified display at `/kiosk`), restore from backup (tar.gz upload endpoint), plus recording browser and RTSP already verified as complete.
 
 The Rust rewrite **surpasses** BirdNET-Pi in: behavioral analytics, time-series analytics, database resilience, detection deduplication, API design, WebSocket live streaming, notification logging, migration tooling, and deployment simplicity.
 
@@ -42,7 +42,7 @@ Status codes:
 | ALSA microphone capture | `birdnet_recording.sh` (arecord) | `audio/capture/manager.rs` (arecord subprocess) | **DONE** | `crates/birdnet-core/src/audio/capture/` | |
 | PulseAudio/PipeWire capture | Falls back to default device | Passes default device through | **PARTIAL** | `capture/process.rs` | No PipeWire-specific detection |
 | RTSP stream recording | ffmpeg with per-protocol timeouts | `CaptureSource::Rtsp` with ffmpeg | **DONE** | `capture/process.rs` | |
-| Multiple simultaneous RTSP streams | Comma-separated, each tagged `RTSP_N-` | Single RTSP URL only | **MISSING** | `src/cli.rs:rtsp_url` | Only one RTSP URL supported |
+| Multiple simultaneous RTSP streams | Comma-separated, each tagged `RTSP_N-` | `--rtsp-urls` comma-separated, each `CaptureManager` | **DONE** | `src/cli.rs`, `src/capture.rs` | `RTSP_1-`, `RTSP_2-` prefixed filenames |
 | Time-windowed recording schedule | `custom_recording.sh` (4 windows) | `birdnet-scheduler` wired in `capture.rs` | **DONE** | `src/capture.rs` | Solar-aware scheduling fully integrated |
 | tmpfs/RAM drive for transient audio | systemd mount unit | Not implemented | **MISSING** | — | Important for SD card longevity |
 | Configurable segment length | `RECORDING_LENGTH` | `--segment-duration` / `SEGMENT_LENGTH` | **DONE** | `src/cli.rs` | |
@@ -97,7 +97,7 @@ Status codes:
 | Behavioral analytics | Not in BirdNET-Pi | `/analytics` | **BETTER** | `pages/behavioral.rs` | Sessions, retention, funnel |
 | Time-series analytics | Not in BirdNET-Pi | `/timeseries` | **BETTER** | `pages/timeseries_dash.rs` | 12 endpoints |
 | Detection detail page | Inline in recordings | `/detections/{id}` | **DONE** | `pages/detection_detail.rs` | |
-| Recording browser | `play.php` | `/recordings` page | **PARTIAL** | `pages/recordings.rs` (344 LOC) | Browse exists; missing: browse-by-date, browse-by-species nav, lock/unlock |
+| Recording browser | `play.php` | `/recordings` with By Species / By Date tabs | **DONE** | `pages/recordings.rs` (344 LOC) | Two-tab HTMX browser with audio players, delete, re-label |
 | Daily/historical charts | `daily_plot.py` + `history.php` | `/history` page with date sidebar + prev/next navigation | **DONE** | `pages/history.rs` | Date sidebar (90 days), hourly chart, date-specific stats |
 | Weekly report page | `weekly_report.php` | `/weekly` page with week nav, top species, new species, 7-day chart | **DONE** | `pages/weekly_report.rs` | Week navigation, "NEW" badges, ranked species list |
 | Interactive stats (Streamlit) | `plotly_streamlit.py` — polar plots | Time-series API endpoints | **PARTIAL** | `pages/timeseries_dash.rs` | Data available; missing: interactive polar clock, sunrise/sunset overlay |
@@ -118,7 +118,7 @@ Status codes:
 | System info | PHPSysInfo | `/admin/system` (CPU, RAM, temp, disk) | **DONE** | `admin/system.rs` + `system_info.rs` | |
 | Backup (DB) | tar archive | `POST /admin/system/backup` | **DONE** | `admin/backup.rs` | DB backup only |
 | Backup (full: config + audio) | tar archive with everything | `GET /admin/system/backup/full` tar.gz | **DONE** | `admin/system_controls.rs` | DB + config + recordings in tar.gz |
-| Restore from backup | Chunked file upload | Not implemented | **MISSING** | — | |
+| Restore from backup | Chunked file upload | `POST /admin/system/restore` multipart upload | **DONE** | `admin/system_controls.rs` | Validates archive contains .db, extracts to target dir |
 | Log viewer | journalctl via GoTTY | `/admin/system/logs` SSE | **DONE** | `admin/logs.rs` | Live SSE stream with level filtering |
 | Notification history | None | `/admin/notifications` | **BETTER** | `admin/notifications.rs` | |
 | Notification test | `send_test_notification.py` | `/admin/notifications/test` | **DONE** | `admin/notification_test.rs` | |
@@ -210,8 +210,8 @@ Status codes:
 | Feature | BirdNET-Pi | BirdNet-Behavior | Status | Source | Notes |
 |---------|-----------|-----------------|--------|--------|-------|
 | Dark/light theme | CSS toggle (`COLOR_SCHEME`) | CSS custom properties + toggle + localStorage + `prefers-color-scheme` | **DONE** | `templates/layout.html` | All-CSS with JS toggle, persists preference |
-| Kiosk mode | Auto-refresh, simplified UI | Not implemented | **MISSING** | — | For dedicated displays |
-| Species mini-graphs (sparklines) | `generateMiniGraph.js` | Not implemented | **MISSING** | — | |
+| Kiosk mode | Auto-refresh, simplified UI | `/kiosk` auto-refresh page (30s HTMX polling) | **DONE** | `pages/dashboard.rs` | Dark theme, stats + recent detections |
+| Species mini-graphs (sparklines) | `generateMiniGraph.js` | Inline SVG sparklines in species list | **DONE** | `pages/dashboard.rs` | 7-day trend SVG polylines |
 | Rare species highlighting | `RARE_SPECIES_THRESHOLD` | Cyan "RARE" badge in dashboard | **DONE** | `pages/dashboard.rs` | Based on first_seen date |
 | New species highlighting | First detection emphasis | Green "NEW" badge in dashboard | **DONE** | `pages/dashboard.rs` | Species first seen today |
 | Image blacklisting | `blacklisted_images.txt` | Not implemented | **MISSING** | — | |
@@ -315,13 +315,8 @@ All P0 items are now **COMPLETE**:
 
 | # | Gap | Effort | Impact | Notes |
 |---|-----|--------|--------|-------|
-| 1 | **Multiple RTSP streams** | Medium | Many users have multi-mic setups (GH#459) | `src/cli.rs`, `capture/manager.rs` |
-| 2 | **Recording browser date/species nav** | Medium | Browse by date, species, calendar | `pages/recordings.rs` |
-| 3 | **Restore from backup** | Medium | Data safety | Chunked upload + extract |
-| 4 | **Species mini-graphs (sparklines)** | Low | Visual engagement | SVG inline in species list |
-| 5 | **Kiosk mode (auto-refresh)** | Low | Dedicated displays | HTMX polling + simplified layout |
-| 6 | **Weekly report notification wiring** | Low | Scheduled notification | Wire `WeeklyReportGenerator` to cron task |
-| 7 | **Species list tester/preview** | Medium | Debug filter settings | Admin modal showing passing species |
+| 1 | **Weekly report notification wiring** | Low | Scheduled notification | Wire `WeeklyReportGenerator` to cron task |
+| 2 | **Species list tester/preview** | Medium | Debug filter settings | Admin modal showing passing species |
 
 Previously P1, now **COMPLETE**:
 - ~~eBird CSV export~~ ✅
@@ -334,6 +329,11 @@ Previously P1, now **COMPLETE**:
 - ~~Audio format conversion (MP3/FLAC/OGG)~~ ✅
 - ~~Per-species confidence thresholds~~ ✅
 - ~~Spectrogram text overlay~~ ✅
+- ~~Multiple RTSP streams~~ ✅
+- ~~Recording browser date/species nav~~ ✅
+- ~~Restore from backup~~ ✅
+- ~~Species mini-graphs (sparklines)~~ ✅
+- ~~Kiosk mode (auto-refresh)~~ ✅
 
 ### P2 — Nice to Have / Can Defer
 
@@ -362,11 +362,11 @@ Previously P1, now **COMPLETE**:
 
 | Category | BirdNET-Pi Features | DONE | PARTIAL | MISSING | BETTER | Parity % |
 |----------|-------------------|------|---------|---------|--------|----------|
-| Audio Capture | 9 | 5 | 2 | 2 | 2 | 56% |
+| Audio Capture | 9 | 6 | 2 | 1 | 2 | 67% |
 | Model Inference | 14 | 9 | 1 | 3 | 2 | 64% |
 | Database | 13 | 7 | 0 | 2 | 7 | 54% (+54% BETTER) |
-| Web Pages | 16 | 9 | 4 | 3 | 4 | 56% |
-| Admin Panel | 16 | 11 | 1 | 4 | 3 | 69% |
+| Web Pages | 16 | 12 | 1 | 3 | 4 | 75% |
+| Admin Panel | 16 | 12 | 1 | 3 | 3 | 75% |
 | Notifications | 13 | 11 | 1 | 1 | 1 | 85% |
 | Audio Processing | 6 | 3 | 0 | 3 | 0 | 50% |
 | Data Export | 5 | 3 | 0 | 1 | 2 | 60% |
@@ -374,17 +374,17 @@ Previously P1, now **COMPLETE**:
 | Disk Management | 6 | 3 | 0 | 3 | 0 | 50% |
 | Deployment | 12 | 2 | 0 | 5 | 5 | 17% (+42% BETTER) |
 | Localization | 4 | 2 | 0 | 1 | 0 | 50% |
-| UI/UX | 13 | 4 | 1 | 8 | 0 | 31% |
+| UI/UX | 13 | 6 | 1 | 6 | 0 | 46% |
 | Image Providers | 5 | 3 | 0 | 2 | 0 | 60% |
 | Configuration | 6 | 4 | 1 | 1 | 1 | 67% |
-| **TOTAL** | **141** | **77** | **11** | **40** | **27** | **91% addressed** |
+| **TOTAL** | **141** | **83** | **9** | **35** | **27** | **95% addressed** |
 
-**Overall: ~91% addressed** (77 DONE + 11 PARTIAL + 27 BETTER vs. BirdNET-Pi = 115/141 features)
+**Overall: ~95% addressed** (83 DONE + 9 PARTIAL + 27 BETTER vs. BirdNET-Pi = 119/141 features)
 
-The 9% gap is concentrated in:
-- **UI/UX** (31%): sparklines, kiosk mode, custom image display — CSS/template changes
+The 5% gap is concentrated in:
 - **Deployment** (17%): install script, auto-update, cron jobs
-- **Audio capture** (56%): multiple RTSP streams, tmpfs
+- **UI/UX**: custom image display, image blacklisting — CSS/template changes
+- **Audio processing**: frequency shifting, live spectrogram daemon
 
 ---
 

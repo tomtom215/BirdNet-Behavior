@@ -189,6 +189,69 @@ pub fn recent_by_species(
     Ok(rows)
 }
 
+/// Get 7-day sparkline data for all species (daily counts per common name).
+///
+/// Returns a map from common name to a vector of 7 daily counts (oldest first).
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn species_sparklines(
+    conn: &Connection,
+    days: u32,
+) -> Result<std::collections::HashMap<String, Vec<i64>>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT Com_Name, Date, COUNT(*) as count
+         FROM detections
+         WHERE Date >= date('now', '-' || ?1 || ' days')
+         GROUP BY Com_Name, Date
+         ORDER BY Com_Name, Date",
+    )?;
+
+    let mut map: std::collections::HashMap<String, Vec<(String, i64)>> =
+        std::collections::HashMap::new();
+    let rows = stmt.query_map(params![days], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+        ))
+    })?;
+
+    for row in rows {
+        let (name, date, count) = row?;
+        map.entry(name).or_default().push((date, count));
+    }
+
+    // Build date list for the last N days.
+    let mut date_set: Vec<String> = Vec::new();
+    let mut date_stmt = conn.prepare(
+        "WITH RECURSIVE dates(d) AS (
+             SELECT date('now', '-' || (?1 - 1) || ' days')
+             UNION ALL
+             SELECT date(d, '+1 day') FROM dates WHERE d < date('now')
+         ) SELECT d FROM dates",
+    )?;
+    let date_rows = date_stmt.query_map(params![days], |row| row.get::<_, String>(0))?;
+    for d in date_rows {
+        date_set.push(d?);
+    }
+
+    // Normalize: fill in zeros for missing dates.
+    let mut result: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
+    for (name, counts) in &map {
+        let count_map: std::collections::HashMap<&str, i64> =
+            counts.iter().map(|(d, c)| (d.as_str(), *c)).collect();
+        let sparkline: Vec<i64> = date_set
+            .iter()
+            .map(|d| count_map.get(d.as_str()).copied().unwrap_or(0))
+            .collect();
+        result.insert(name.clone(), sparkline);
+    }
+
+    Ok(result)
+}
+
 /// Get the first-seen date for each species (by scientific name).
 ///
 /// Returns a map from scientific name to its first detection date.

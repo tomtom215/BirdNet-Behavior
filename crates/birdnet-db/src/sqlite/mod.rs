@@ -32,9 +32,9 @@ pub use queries::{
     insert_detection, latest_detection, range_daily_counts, recent_by_species, recent_detections,
     recent_detections_page, relabel_detection, search_species, set_species_threshold,
     species_count, species_daily_counts, species_daily_heatmap, species_first_seen,
-    species_for_date, species_hourly_activity, species_summary, temporal_cooccurrence,
-    todays_detection_count, todays_detections, top_cooccurrence_pairs, top_species,
-    weekly_detection_count, weekly_heatmap, weekly_new_species, weekly_top_species,
+    species_for_date, species_hourly_activity, species_sparklines, species_summary,
+    temporal_cooccurrence, todays_detection_count, todays_detections, top_cooccurrence_pairs,
+    top_species, weekly_detection_count, weekly_heatmap, weekly_new_species, weekly_top_species,
 };
 pub use types::{
     DailyCount, DetectionRecord, DetectionRow, HourlyCount, SpeciesCount, SpeciesSummary,

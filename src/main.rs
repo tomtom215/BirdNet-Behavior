@@ -126,7 +126,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let notification_template = integrations::create_notification_template(&cli, config.as_ref());
 
     // Start audio capture (with recording schedule integration).
-    let _capture_manager = capture::start_capture_manager(&cli, config.as_ref());
+    let _capture_managers = capture::start_capture_manager(&cli, config.as_ref());
 
     // Start detection daemon (unless in web-only mode).
     let _daemon_handle = if cli.web_only {
