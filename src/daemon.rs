@@ -56,6 +56,36 @@ pub fn start_detection_daemon(
         .and_then(|c| c.get_parsed::<f32>("CONFIDENCE").ok())
         .unwrap_or(0.25);
 
+    // Resolve metadata model path from CLI or config
+    let metadata_model_path = cli
+        .metadata_model
+        .clone()
+        .or_else(|| config?.get("METADATA_MODEL_PATH").map(PathBuf::from));
+
+    // Resolve species filter threshold
+    let sf_thresh = if (cli.sf_thresh - 0.03).abs() < f32::EPSILON {
+        // CLI default; check config file
+        config
+            .and_then(|c| c.get_parsed::<f32>("SF_THRESH").ok())
+            .unwrap_or(cli.sf_thresh)
+    } else {
+        cli.sf_thresh
+    };
+
+    // Resolve privacy threshold
+    let privacy_threshold = if cli.privacy_threshold.abs() < f32::EPSILON {
+        config
+            .and_then(|c| c.get_parsed::<f32>("PRIVACY_THRESHOLD").ok())
+            .unwrap_or(0.0)
+    } else {
+        cli.privacy_threshold
+    };
+
+    let species_filter_config = birdnet_core::inference::species_filter::SpeciesFilterConfig {
+        sf_thresh,
+        ..birdnet_core::inference::species_filter::SpeciesFilterConfig::default()
+    };
+
     let daemon_config = birdnet_core::detection::daemon::DaemonConfig {
         watch_dir: watch_dir.clone(),
         model_path,
@@ -70,6 +100,11 @@ pub fn start_detection_daemon(
             ..birdnet_core::inference::model::ModelConfig::default()
         },
         process_existing: cli.process_existing,
+        metadata_model_path,
+        species_filter: species_filter_config,
+        privacy_threshold,
+        latitude: cli.latitude,
+        longitude: cli.longitude,
     };
 
     let (event_tx, event_rx) = mpsc::channel();

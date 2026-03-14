@@ -22,6 +22,9 @@ rubato.workspace = true
 audioadapter-buffers = "2"
 realfft = "3"
 
+# Audio writing (WAV extraction)
+hound.workspace = true
+
 # ML Inference (pure Rust ONNX runtime)
 tract-onnx.workspace = true
 
@@ -30,8 +33,8 @@ notify.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
-hound.workspace = true
 tempfile = "3"
+filetime = "0.2"
 
 [lints]
 workspace = true
