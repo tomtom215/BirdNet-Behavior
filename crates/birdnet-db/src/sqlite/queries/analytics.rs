@@ -104,6 +104,131 @@ pub fn confidence_distribution(conn: &Connection) -> Result<[i64; 6], DbError> {
     Ok(buckets)
 }
 
+/// Top species by detection count within a date range `[week_start, week_end]`.
+///
+/// Returns `(sci_name, com_name, count)` tuples, most-detected first.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn weekly_top_species(
+    conn: &Connection,
+    week_start: &str,
+    week_end: &str,
+    limit: usize,
+) -> Result<Vec<(String, String, i64)>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT Sci_Name, Com_Name, COUNT(*) as cnt
+         FROM detections
+         WHERE Date >= ?1 AND Date <= ?2
+         GROUP BY Sci_Name, Com_Name
+         ORDER BY cnt DESC
+         LIMIT ?3",
+    )?;
+    let rows = stmt
+        .query_map(params![week_start, week_end, limit as i64], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Species detected for the first time within `[week_start, week_end]`.
+///
+/// Returns `(sci_name, com_name, first_date)` tuples ordered by first detection date.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn weekly_new_species(
+    conn: &Connection,
+    week_start: &str,
+    week_end: &str,
+) -> Result<Vec<(String, String, String)>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT d.Sci_Name, d.Com_Name, MIN(d.Date) as first_date
+         FROM detections d
+         WHERE d.Date >= ?1 AND d.Date <= ?2
+         GROUP BY d.Sci_Name, d.Com_Name
+         HAVING MIN(d.Date) >= ?1
+         AND NOT EXISTS (
+             SELECT 1 FROM detections e
+             WHERE e.Sci_Name = d.Sci_Name AND e.Date < ?1
+         )
+         ORDER BY first_date ASC",
+    )?;
+    let rows = stmt
+        .query_map(params![week_start, week_end], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Total detection count within `[week_start, week_end]`.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn weekly_detection_count(
+    conn: &Connection,
+    week_start: &str,
+    week_end: &str,
+) -> Result<i64, DbError> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM detections WHERE Date >= ?1 AND Date <= ?2",
+        params![week_start, week_end],
+        |row| row.get(0),
+    )
+    .map_err(DbError::Sqlite)
+}
+
+/// Daily detection counts for a date range `[start, end]` in chronological order.
+///
+/// Used for weekly trend bars.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn range_daily_counts(
+    conn: &Connection,
+    start: &str,
+    end: &str,
+) -> Result<Vec<DailyCount>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT Date, COUNT(*) as count
+         FROM detections
+         WHERE Date >= ?1 AND Date <= ?2
+         GROUP BY Date ORDER BY Date ASC",
+    )?;
+    let rows = stmt
+        .query_map(params![start, end], |row| {
+            Ok(DailyCount {
+                date: row.get(0)?,
+                count: row.get(1)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Distinct dates that have at least one detection, ordered chronologically.
+///
+/// Used for date navigation in charts.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn distinct_detection_dates(conn: &Connection) -> Result<Vec<String>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT Date FROM detections ORDER BY Date ASC",
+    )?;
+    let dates = stmt
+        .query_map([], |row| row.get(0))?
+        .collect::<Result<Vec<String>, _>>()?;
+    Ok(dates)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

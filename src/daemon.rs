@@ -95,12 +95,22 @@ pub fn start_detection_daemon(
         ..birdnet_core::inference::species_filter::SpeciesFilterConfig::default()
     };
 
+    // Resolve overlap from CLI or config
+    let overlap = if cli.overlap.abs() < f32::EPSILON {
+        config
+            .and_then(|c| c.get_parsed::<f32>("OVERLAP").ok())
+            .unwrap_or(0.0)
+    } else {
+        cli.overlap
+    };
+
     let daemon_config = birdnet_core::detection::daemon::DaemonConfig {
         watch_dir: watch_dir.clone(),
         model_path,
         labels_path,
         pipeline: birdnet_core::detection::pipeline::PipelineConfig {
             watch_dir,
+            chunk_overlap_secs: overlap,
             ..birdnet_core::detection::pipeline::PipelineConfig::default()
         },
         model: birdnet_core::inference::model::ModelConfig {

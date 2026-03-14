@@ -149,4 +149,12 @@ pub struct Cli {
     /// with adjacent chunks. Typical values: 0.01-0.03.
     #[arg(long, default_value = "0.0", env = "BIRDNET_PRIVACY_THRESHOLD")]
     pub privacy_threshold: f32,
+
+    /// Analysis window overlap in seconds (0.0-2.9, default 0.0).
+    ///
+    /// Controls how much consecutive 3-second analysis windows overlap.
+    /// Higher overlap increases sensitivity at the cost of more CPU time.
+    /// BirdNET-Pi equivalent: OVERLAP config option.
+    #[arg(long, default_value = "0.0", env = "BIRDNET_OVERLAP")]
+    pub overlap: f32,
 }
