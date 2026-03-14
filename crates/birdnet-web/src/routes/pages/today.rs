@@ -138,7 +138,7 @@ async fn today_partial(
 
             // "Load more" button if there are more results
             let shown = offset + limit;
-            #[allow(clippy::cast_sign_loss)]
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
             let total_u = total as u32;
             if shown < total_u {
                 let search_param = search2
