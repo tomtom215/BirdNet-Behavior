@@ -33,6 +33,7 @@ pub mod overview;
 pub mod settings;
 pub mod species;
 pub mod system;
+pub mod system_controls;
 
 use axum::{Router, routing::get};
 
@@ -61,6 +62,8 @@ pub fn router() -> Router<AppState> {
         .merge(notification_test::router())
         // Backup management
         .merge(backup::router())
+        // System controls (clear data)
+        .merge(system_controls::router())
 }
 
 /// Redirect `/admin` to `/admin/overview`.

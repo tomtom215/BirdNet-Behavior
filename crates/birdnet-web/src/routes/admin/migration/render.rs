@@ -192,9 +192,7 @@ pub fn validation_result(
             let date_range_html = migration_report
                 .date_range
                 .as_ref()
-                .map(|(start, end)| {
-                    format!("<p><strong>Date range:</strong> {start} → {end}</p>")
-                })
+                .map(|(start, end)| format!("<p><strong>Date range:</strong> {start} → {end}</p>"))
                 .unwrap_or_default();
 
             let quality_html = if migration_report.null_date_rows > 0 {
@@ -315,7 +313,7 @@ pub fn import_started() -> String {
     </div>
   </div>
 </div>"#
-    .to_string()
+        .to_string()
 }
 
 /// Render the progress bar partial.
@@ -325,8 +323,7 @@ pub fn progress_bar(p: &MigrationProgress) -> String {
     let trigger = if p.is_terminal() {
         String::new()
     } else {
-        r#" hx-get="/admin/migrate/progress" hx-trigger="every 2s" hx-swap="outerHTML""#
-            .to_string()
+        r#" hx-get="/admin/migrate/progress" hx-trigger="every 2s" hx-swap="outerHTML""#.to_string()
     };
     let color = match p.stage {
         MigrationStage::Complete => "#4ade80",

@@ -222,8 +222,12 @@ impl SpeciesFilter {
 
         // Apply include list (if non-empty, intersect)
         if !self.config.include_list.is_empty() {
-            let include_set: HashSet<&str> =
-                self.config.include_list.iter().map(String::as_str).collect();
+            let include_set: HashSet<&str> = self
+                .config
+                .include_list
+                .iter()
+                .map(String::as_str)
+                .collect();
             species.retain(|s| include_set.contains(s.as_str()));
         }
 

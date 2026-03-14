@@ -1,7 +1,9 @@
 //! Diversity metrics query methods.
 
 use crate::error::TimeSeriesError;
-use crate::queries::diversity::{AccumulationCurve, DailyRichness, DailyShannon, TopSpeciesByCount};
+use crate::queries::diversity::{
+    AccumulationCurve, DailyRichness, DailyShannon, TopSpeciesByCount,
+};
 use crate::types::{
     params::DiversityParams,
     results::{AccumulationRow, DiversityRow, PeakWindowRow},

@@ -170,7 +170,12 @@ where
 /// # Errors
 ///
 /// Returns `SettingsError` on SQLite failure.
-pub fn set(conn: &Connection, key: &str, value: &str, category: SettingsCategory) -> Result<(), SettingsError> {
+pub fn set(
+    conn: &Connection,
+    key: &str,
+    value: &str,
+    category: SettingsCategory,
+) -> Result<(), SettingsError> {
     conn.execute(
         "INSERT INTO settings (key, value, category, updated_at)
          VALUES (?1, ?2, ?3, datetime('now'))

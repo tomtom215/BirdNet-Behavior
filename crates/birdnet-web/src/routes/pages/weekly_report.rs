@@ -52,31 +52,27 @@ async fn weekly_partial(
 
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
-            let total =
-                birdnet_db::sqlite::weekly_detection_count(conn, &week_start, &week_end)?;
+            let total = birdnet_db::sqlite::weekly_detection_count(conn, &week_start, &week_end)?;
             let top = birdnet_db::sqlite::weekly_top_species(conn, &week_start, &week_end, 10)?;
             let new = birdnet_db::sqlite::weekly_new_species(conn, &week_start, &week_end)?;
-            let daily =
-                birdnet_db::sqlite::range_daily_counts(conn, &week_start, &week_end)?;
+            let daily = birdnet_db::sqlite::range_daily_counts(conn, &week_start, &week_end)?;
             Ok::<_, birdnet_db::sqlite::DbError>((total, top, new, daily))
         })
     })
     .await;
 
     let html = match result {
-        Ok(Ok((total, top, new_species, daily))) => {
-            render_weekly_content(
-                &week_start2,
-                &week_end2,
-                &prev_week,
-                &next_week,
-                total,
-                &top,
-                &new_species,
-                &daily,
-                is_current,
-            )
-        }
+        Ok(Ok((total, top, new_species, daily))) => render_weekly_content(
+            &week_start2,
+            &week_end2,
+            &prev_week,
+            &next_week,
+            total,
+            &top,
+            &new_species,
+            &daily,
+            is_current,
+        ),
         _ => "<p class='error'>Failed to load weekly report.</p>".to_string(),
     };
 

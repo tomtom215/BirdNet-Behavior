@@ -74,7 +74,10 @@ mod tests {
     fn granularity_intervals() {
         assert_eq!(Granularity::Hour.interval_sql(), "INTERVAL 1 HOUR");
         assert_eq!(Granularity::Day.interval_sql(), "INTERVAL 1 DAY");
-        assert_eq!(Granularity::QuarterHour.interval_sql(), "INTERVAL 15 MINUTE");
+        assert_eq!(
+            Granularity::QuarterHour.interval_sql(),
+            "INTERVAL 15 MINUTE"
+        );
     }
 
     #[test]

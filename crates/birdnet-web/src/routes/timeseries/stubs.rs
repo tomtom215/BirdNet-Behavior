@@ -3,17 +3,17 @@
 //! Each stub returns the standard "unavailable" JSON response with a hint
 //! to rebuild with `--features analytics`.
 
+use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
-use axum::Json;
 use serde_json::Value;
 
 use crate::state::AppState;
 
 use super::helpers::ts_unavailable;
 use super::params::{
-    AccumulationQuery, AnomalyQuery, DailyQuery, DiversityQuery, GapsQuery, HourlyQuery,
-    PeakQuery, SessionQuery, TrendQuery, WeeklyQuery,
+    AccumulationQuery, AnomalyQuery, DailyQuery, DiversityQuery, GapsQuery, HourlyQuery, PeakQuery,
+    SessionQuery, TrendQuery, WeeklyQuery,
 };
 
 pub(super) async fn hourly(

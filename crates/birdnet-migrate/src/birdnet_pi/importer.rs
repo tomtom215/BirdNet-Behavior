@@ -90,11 +90,12 @@ impl Migrator for BirdNetPiImporter {
 
 /// Open (or create) the destination BirdNet-Behavior database.
 fn open_or_create_destination(path: &Path) -> Result<Connection, MigrateError> {
-    birdnet_db::sqlite::open_or_create(path)
-        .map_err(|e| MigrateError::DestinationOpen(rusqlite::Error::SqliteFailure(
+    birdnet_db::sqlite::open_or_create(path).map_err(|e| {
+        MigrateError::DestinationOpen(rusqlite::Error::SqliteFailure(
             rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CANTOPEN),
             Some(e.to_string()),
-        )))
+        ))
+    })
 }
 
 /// Perform the batched read-from-source / write-to-dest loop.
@@ -155,28 +156,22 @@ fn fetch_batch(
         .map_err(MigrateError::DataTransfer)?;
 
     let rows = stmt
-        .query_map(
-            params![limit as i64, offset as i64],
-            |row| {
-                Ok(DetectionRow {
-                    date: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
-                    time: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                    sci_name: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
-                    com_name: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
-                    confidence: row
-                        .get::<_, Option<f64>>(4)?
-                        .unwrap_or(0.0)
-                        .clamp(0.0, 1.0),
-                    lat: row.get(5)?,
-                    lon: row.get(6)?,
-                    cutoff: row.get(7)?,
-                    week: row.get(8)?,
-                    sens: row.get(9)?,
-                    overlap: row.get(10)?,
-                    file_name: row.get(11)?,
-                })
-            },
-        )
+        .query_map(params![limit as i64, offset as i64], |row| {
+            Ok(DetectionRow {
+                date: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                time: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                sci_name: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                com_name: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                confidence: row.get::<_, Option<f64>>(4)?.unwrap_or(0.0).clamp(0.0, 1.0),
+                lat: row.get(5)?,
+                lon: row.get(6)?,
+                cutoff: row.get(7)?,
+                week: row.get(8)?,
+                sens: row.get(9)?,
+                overlap: row.get(10)?,
+                file_name: row.get(11)?,
+            })
+        })
         .map_err(MigrateError::DataTransfer)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(MigrateError::DataTransfer)?;
@@ -188,13 +183,8 @@ fn fetch_batch(
 ///
 /// Uses `INSERT OR IGNORE` so duplicate rows are silently skipped.
 /// Returns `(inserted, skipped)`.
-fn insert_batch(
-    conn: &mut Connection,
-    rows: &[DetectionRow],
-) -> Result<(u64, u64), MigrateError> {
-    let tx = conn
-        .transaction()
-        .map_err(MigrateError::DataTransfer)?;
+fn insert_batch(conn: &mut Connection, rows: &[DetectionRow]) -> Result<(u64, u64), MigrateError> {
+    let tx = conn.transaction().map_err(MigrateError::DataTransfer)?;
 
     let mut inserted = 0_u64;
 
@@ -285,9 +275,7 @@ mod tests {
         importer.migrate(src.path(), dst.path(), &handle).unwrap();
 
         // Second import of the same source → all rows skipped
-        let summary2 = importer
-            .migrate(src.path(), dst.path(), &handle)
-            .unwrap();
+        let summary2 = importer.migrate(src.path(), dst.path(), &handle).unwrap();
         assert_eq!(summary2.skipped_rows, 5);
         assert_eq!(summary2.imported_rows, 0);
     }

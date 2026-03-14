@@ -88,6 +88,10 @@ pub struct DaemonConfig {
     pub latitude: Option<f64>,
     /// Station longitude (for species occurrence filtering).
     pub longitude: Option<f64>,
+    /// Per-species confidence threshold overrides (sci_name → threshold).
+    ///
+    /// Species in this map use the specified threshold instead of the global one.
+    pub species_thresholds: std::collections::HashMap<String, f64>,
 }
 
 /// A detection event produced by the daemon.
@@ -279,6 +283,9 @@ pub fn process_and_infer_filtered(
                     continue;
                 }
             }
+
+            // Apply per-species confidence threshold (checked in event_processor instead)
+            // The daemon produces raw events; threshold filtering is done downstream.
 
             tracing::info!(
                 species = %detection.common_name,
@@ -535,11 +542,13 @@ mod tests {
             privacy_threshold: 0.0,
             latitude: None,
             longitude: None,
+            species_thresholds: std::collections::HashMap::new(),
         };
         assert_eq!(config.watch_dir, PathBuf::from("/tmp/StreamData"));
         assert!(!config.process_existing);
         assert!(config.metadata_model_path.is_none());
         assert!((config.privacy_threshold).abs() < f32::EPSILON);
+        assert!(config.species_thresholds.is_empty());
     }
 
     #[test]

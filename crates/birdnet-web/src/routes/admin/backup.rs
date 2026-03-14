@@ -65,11 +65,7 @@ async fn list_backups(State(state): State<AppState>) -> Html<String> {
         };
         let mut entries: Vec<BackupEntry> = rd
             .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .ends_with(".db")
-            })
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".db"))
             .filter_map(|e| {
                 let name = e.file_name().to_string_lossy().to_string();
                 let meta = e.metadata().ok()?;
@@ -79,7 +75,11 @@ async fn list_backups(State(state): State<AppState>) -> Html<String> {
                     .ok()
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                     .map_or(0, |d| d.as_secs());
-                Some(BackupEntry { name, size, modified_secs: modified })
+                Some(BackupEntry {
+                    name,
+                    size,
+                    modified_secs: modified,
+                })
             })
             .collect();
         entries.sort_by(|a, b| b.modified_secs.cmp(&a.modified_secs));
@@ -149,10 +149,7 @@ fn render_backup_list(entries: &[BackupEntry]) -> String {
 // GET /admin/system/backups/{name} — download backup file
 // ---------------------------------------------------------------------------
 
-async fn download_backup(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-) -> Response {
+async fn download_backup(State(state): State<AppState>, Path(name): Path<String>) -> Response {
     if !is_safe_backup_name(&name) {
         return StatusCode::BAD_REQUEST.into_response();
     }
@@ -193,10 +190,7 @@ async fn download_backup(
 // DELETE /admin/system/backups/{name} — delete a backup
 // ---------------------------------------------------------------------------
 
-async fn delete_backup(
-    State(state): State<AppState>,
-    Path(name): Path<String>,
-) -> Response {
+async fn delete_backup(State(state): State<AppState>, Path(name): Path<String>) -> Response {
     if !is_safe_backup_name(&name) {
         return StatusCode::BAD_REQUEST.into_response();
     }

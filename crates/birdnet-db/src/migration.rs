@@ -116,6 +116,15 @@ pub const MIGRATIONS: &[Migration] = &[
                  CREATE UNIQUE INDEX IF NOT EXISTS idx_detections_unique
                      ON detections(Date, Time, Sci_Name);",
     },
+    Migration {
+        version: 6,
+        description: "Create species confidence thresholds table",
+        up_sql: "CREATE TABLE IF NOT EXISTS species_thresholds (
+            sci_name TEXT PRIMARY KEY,
+            confidence_threshold REAL NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );",
+    },
 ];
 
 /// Ensure the `schema_version` tracking table exists.

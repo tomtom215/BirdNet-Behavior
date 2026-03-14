@@ -80,9 +80,7 @@ impl WindowSpec for SessionSpec {
             where_clauses.push(format!("detection_date = '{escaped}'"));
         }
         if let (Some(hs), Some(he)) = (self.hour_start, self.hour_end) {
-            where_clauses.push(format!(
-                "hour(detection_timestamp) BETWEEN {hs} AND {he}"
-            ));
+            where_clauses.push(format!("hour(detection_timestamp) BETWEEN {hs} AND {he}"));
         }
         if let Some(sp) = &self.species {
             let escaped = sp.replace('\'', "''");

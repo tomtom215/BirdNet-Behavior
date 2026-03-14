@@ -27,12 +27,20 @@ pub fn router() -> Router<AppState> {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/v2/spectrogram/{filename}
+// GET /api/v2/spectrogram/{filename}?species=...&confidence=...&time=...
 // ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct SpectrogramQuery {
+    species: Option<String>,
+    confidence: Option<u32>,
+    time: Option<String>,
+}
 
 async fn serve_spectrogram(
     State(state): State<AppState>,
     Path(filename): Path<String>,
+    axum::extract::Query(query): axum::extract::Query<SpectrogramQuery>,
 ) -> Response {
     if !is_safe_filename(&filename) {
         return (StatusCode::BAD_REQUEST, "invalid filename").into_response();
@@ -54,8 +62,18 @@ async fn serve_spectrogram(
         }
     }
 
+    // Build optional label from query parameters.
+    let label = query.species.map(|species| SpectrogramLabel {
+        species,
+        confidence_pct: query.confidence.unwrap_or(0),
+        time: query.time.unwrap_or_default(),
+    });
+
     // Generate spectrogram in a blocking task.
-    let result = tokio::task::spawn_blocking(move || generate_spectrogram_png(&file_path)).await;
+    let result = tokio::task::spawn_blocking(move || {
+        generate_spectrogram_png_with_label(&file_path, label.as_ref())
+    })
+    .await;
 
     match result {
         Ok(Ok(png_bytes)) => {
@@ -82,10 +100,17 @@ async fn serve_spectrogram(
 // Spectrogram generation
 // ---------------------------------------------------------------------------
 
-/// Generate a PNG-encoded spectrogram from a WAV file.
-///
-/// Returns raw PNG bytes on success.
+/// Generate a PNG-encoded spectrogram from a WAV file (no label).
+#[cfg(test)]
 fn generate_spectrogram_png(path: &std::path::Path) -> Result<Vec<u8>, String> {
+    generate_spectrogram_png_with_label(path, None)
+}
+
+/// Generate a PNG spectrogram with an optional text overlay.
+fn generate_spectrogram_png_with_label(
+    path: &std::path::Path,
+    label: Option<&SpectrogramLabel>,
+) -> Result<Vec<u8>, String> {
     use birdnet_core::audio::decode::decode_file;
     use birdnet_core::audio::spectrogram::{MelConfig, mel_spectrogram};
 
@@ -117,14 +142,32 @@ fn generate_spectrogram_png(path: &std::path::Path) -> Result<Vec<u8>, String> {
         .map(|m| (0..mel_db.n_frames).map(|f| mel_db.get(m, f)).collect())
         .collect();
 
-    // Encode to PNG.
-    encode_spectrogram_png(&spec)
+    // Encode to PNG with optional label.
+    encode_spectrogram_png_labeled(&spec, label)
 }
 
-/// Encode a 2D mel spectrogram (rows = mel bins, cols = frames) as PNG.
-///
-/// Uses a simple grayscale palette (higher energy = brighter).
+/// Optional label to overlay on the spectrogram.
+#[derive(Debug)]
+pub struct SpectrogramLabel {
+    /// Species name.
+    pub species: String,
+    /// Confidence percentage (0–100).
+    pub confidence_pct: u32,
+    /// Detection time.
+    pub time: String,
+}
+
+/// Encode a 2D mel spectrogram as PNG (no label).
+#[cfg(test)]
 fn encode_spectrogram_png(spec: &[Vec<f32>]) -> Result<Vec<u8>, String> {
+    encode_spectrogram_png_labeled(spec, None)
+}
+
+/// Encode a spectrogram with an optional text overlay.
+fn encode_spectrogram_png_labeled(
+    spec: &[Vec<f32>],
+    label: Option<&SpectrogramLabel>,
+) -> Result<Vec<u8>, String> {
     if spec.is_empty() || spec[0].is_empty() {
         return Err("empty spectrogram".to_string());
     }
@@ -153,11 +196,219 @@ fn encode_spectrogram_png(spec: &[Vec<f32>]) -> Result<Vec<u8>, String> {
         }
     }
 
+    // Overlay text label if provided.
+    if let Some(lbl) = label {
+        let text = format!("{} ({}%) {}", lbl.species, lbl.confidence_pct, lbl.time);
+        draw_text(&mut pixels, width, height, 4, 4, &text);
+    }
+
     // Encode to PNG using a minimal hand-rolled writer to avoid adding a heavy dependency.
     let mut output = Vec::new();
     write_png_rgba(&mut output, width, height, &pixels)
         .map_err(|e| format!("PNG encode error: {e}"))?;
     Ok(output)
+}
+
+// ---------------------------------------------------------------------------
+// Minimal 5x7 bitmap font renderer (ASCII printable only)
+// ---------------------------------------------------------------------------
+
+/// Draw text onto an RGBA pixel buffer using a minimal 5x7 bitmap font.
+///
+/// Text is white with a 50% transparent dark background for readability.
+fn draw_text(pixels: &mut [u8], img_w: u32, img_h: u32, x: u32, y: u32, text: &str) {
+    let char_w = 6u32; // 5 pixels + 1 spacing
+    let char_h = 8u32; // 7 pixels + 1 spacing
+
+    // Draw semi-transparent background bar.
+    let text_width = text.len() as u32 * char_w + 4;
+    let bg_h = char_h + 4;
+    for by in y.saturating_sub(2)..((y + bg_h).min(img_h)) {
+        for bx in x.saturating_sub(2)..((x + text_width).min(img_w)) {
+            let idx = ((by * img_w + bx) * 4) as usize;
+            if idx + 3 < pixels.len() {
+                // Darken the existing pixel.
+                pixels[idx] = pixels[idx] / 3;
+                pixels[idx + 1] = pixels[idx + 1] / 3;
+                pixels[idx + 2] = pixels[idx + 2] / 3;
+            }
+        }
+    }
+
+    // Draw each character.
+    for (ci, ch) in text.chars().enumerate() {
+        let glyph = get_glyph(ch);
+        let cx = x + ci as u32 * char_w;
+        for (row, &glyph_row) in glyph.iter().enumerate() {
+            let py = y + row as u32;
+            if py >= img_h {
+                break;
+            }
+            for bit in 0..5u32 {
+                let px = cx + bit;
+                if px >= img_w {
+                    break;
+                }
+                if glyph_row & (1 << (4 - bit)) != 0 {
+                    let idx = ((py * img_w + px) * 4) as usize;
+                    if idx + 3 < pixels.len() {
+                        pixels[idx] = 255;
+                        pixels[idx + 1] = 255;
+                        pixels[idx + 2] = 255;
+                        pixels[idx + 3] = 255;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 5x7 bitmap font data for ASCII 32–126.
+///
+/// Each glyph is 7 rows of 5 bits (stored in the low 5 bits of a u8).
+fn get_glyph(ch: char) -> [u8; 7] {
+    #[allow(clippy::match_same_arms)]
+    match ch {
+        ' ' => [0, 0, 0, 0, 0, 0, 0],
+        '!' => [
+            0b00100, 0b00100, 0b00100, 0b00100, 0b00000, 0b00100, 0b00000,
+        ],
+        '(' => [
+            0b00010, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00010,
+        ],
+        ')' => [
+            0b01000, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01000,
+        ],
+        '%' => [
+            0b11001, 0b11010, 0b00100, 0b01000, 0b01011, 0b10011, 0b00000,
+        ],
+        '+' => [
+            0b00000, 0b00100, 0b00100, 0b11111, 0b00100, 0b00100, 0b00000,
+        ],
+        '-' => [
+            0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000,
+        ],
+        '.' => [
+            0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00100, 0b00000,
+        ],
+        ':' => [
+            0b00000, 0b00100, 0b00000, 0b00000, 0b00100, 0b00000, 0b00000,
+        ],
+        '/' => [
+            0b00001, 0b00010, 0b00100, 0b00100, 0b01000, 0b10000, 0b00000,
+        ],
+        '0' => [
+            0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110,
+        ],
+        '1' => [
+            0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+        ],
+        '2' => [
+            0b01110, 0b10001, 0b00001, 0b00110, 0b01000, 0b10000, 0b11111,
+        ],
+        '3' => [
+            0b01110, 0b10001, 0b00001, 0b00110, 0b00001, 0b10001, 0b01110,
+        ],
+        '4' => [
+            0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010,
+        ],
+        '5' => [
+            0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110,
+        ],
+        '6' => [
+            0b01110, 0b10000, 0b11110, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        '7' => [
+            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000,
+        ],
+        '8' => [
+            0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110,
+        ],
+        '9' => [
+            0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b01110,
+        ],
+        'A' | 'a' => [
+            0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ],
+        'B' | 'b' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110,
+        ],
+        'C' | 'c' => [
+            0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110,
+        ],
+        'D' | 'd' => [
+            0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110,
+        ],
+        'E' | 'e' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111,
+        ],
+        'F' | 'f' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000,
+        ],
+        'G' | 'g' => [
+            0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01110,
+        ],
+        'H' | 'h' => [
+            0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ],
+        'I' | 'i' => [
+            0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+        ],
+        'J' | 'j' => [
+            0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100,
+        ],
+        'K' | 'k' => [
+            0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001,
+        ],
+        'L' | 'l' => [
+            0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111,
+        ],
+        'M' | 'm' => [
+            0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001,
+        ],
+        'N' | 'n' => [
+            0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001,
+        ],
+        'O' | 'o' => [
+            0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        'P' | 'p' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000,
+        ],
+        'Q' | 'q' => [
+            0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101,
+        ],
+        'R' | 'r' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001,
+        ],
+        'S' | 's' => [
+            0b01110, 0b10001, 0b10000, 0b01110, 0b00001, 0b10001, 0b01110,
+        ],
+        'T' | 't' => [
+            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100,
+        ],
+        'U' | 'u' => [
+            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        'V' | 'v' => [
+            0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b01010, 0b00100,
+        ],
+        'W' | 'w' => [
+            0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001,
+        ],
+        'X' | 'x' => [
+            0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001,
+        ],
+        'Y' | 'y' => [
+            0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100,
+        ],
+        'Z' | 'z' => [
+            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111,
+        ],
+        _ => [
+            0b01110, 0b01010, 0b01010, 0b01010, 0b01010, 0b01110, 0b00000,
+        ], // box for unknown
+    }
 }
 
 /// Approximate viridis colormap: maps t∈[0,1] to (R,G,B).
@@ -176,10 +427,17 @@ fn viridis(t: f32) -> (u8, u8, u8) {
     ];
 
     let t = t.clamp(0.0, 1.0);
-    let i = cps.partition_point(|cp| cp.0 <= t).saturating_sub(1).min(cps.len() - 2);
+    let i = cps
+        .partition_point(|cp| cp.0 <= t)
+        .saturating_sub(1)
+        .min(cps.len() - 2);
     let (t0, r0, g0, b0) = cps[i];
     let (t1, r1, g1, b1) = cps[i + 1];
-    let frac = if (t1 - t0).abs() < 1e-6 { 0.0 } else { (t - t0) / (t1 - t0) };
+    let frac = if (t1 - t0).abs() < 1e-6 {
+        0.0
+    } else {
+        (t - t0) / (t1 - t0)
+    };
     let lerp = |a: f32, b: f32| (a + frac * (b - a)).clamp(0.0, 255.0) as u8;
     (lerp(r0, r1), lerp(g0, g1), lerp(b0, b1))
 }
@@ -205,11 +463,11 @@ fn write_png_rgba(
         let mut d = Vec::with_capacity(13);
         d.extend_from_slice(&width.to_be_bytes());
         d.extend_from_slice(&height.to_be_bytes());
-        d.push(8);  // bit depth
-        d.push(6);  // colour type: RGBA
-        d.push(0);  // compression
-        d.push(0);  // filter
-        d.push(0);  // interlace
+        d.push(8); // bit depth
+        d.push(6); // colour type: RGBA
+        d.push(0); // compression
+        d.push(0); // filter
+        d.push(0); // interlace
         d
     };
     write_png_chunk(output, b"IHDR", &ihdr)?;
@@ -262,7 +520,7 @@ fn zlib_compress(data: &[u8]) -> Vec<u8> {
     let n_chunks = chunks.len();
     for (i, chunk) in data.chunks(BLOCK).enumerate() {
         let last = i == n_chunks - 1;
-        out.push(u8::from(last));        // BFINAL, BTYPE=00 (store)
+        out.push(u8::from(last)); // BFINAL, BTYPE=00 (store)
         let len = chunk.len() as u16;
         out.extend_from_slice(&len.to_le_bytes());
         out.extend_from_slice(&(!len).to_le_bytes());
@@ -300,7 +558,11 @@ fn build_crc32_table() -> [u32; 256] {
     for i in 0..256u32 {
         let mut c = i;
         for _ in 0..8 {
-            c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+            c = if c & 1 != 0 {
+                0xEDB8_8320 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
         }
         table[i as usize] = c;
     }

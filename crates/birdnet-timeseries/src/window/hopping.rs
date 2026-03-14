@@ -104,12 +104,20 @@ impl WindowSpec for HoppingSpec {
         let range_start = &self.range_start;
         let range_end = &self.range_end;
         let limit = self.limit;
-        let order_dir = if self.order_by_count_desc { "DESC" } else { "ASC" };
+        let order_dir = if self.order_by_count_desc {
+            "DESC"
+        } else {
+            "ASC"
+        };
 
-        let species_filter = self.species.as_deref().map(|s| {
-            let escaped = s.replace('\'', "''");
-            format!("AND d.Com_Name = '{escaped}'")
-        }).unwrap_or_default();
+        let species_filter = self
+            .species
+            .as_deref()
+            .map(|s| {
+                let escaped = s.replace('\'', "''");
+                format!("AND d.Com_Name = '{escaped}'")
+            })
+            .unwrap_or_default();
 
         format!(
             "WITH time_range AS (

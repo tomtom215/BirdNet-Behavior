@@ -82,9 +82,9 @@ impl WindowSpec for SlidingSpec {
             SlidingDirection::Centred => format!(
                 "RANGE BETWEEN INTERVAL {half} DAYS PRECEDING AND INTERVAL {half} DAYS FOLLOWING"
             ),
-            SlidingDirection::Trailing => format!(
-                "RANGE BETWEEN INTERVAL {half} DAYS PRECEDING AND CURRENT ROW"
-            ),
+            SlidingDirection::Trailing => {
+                format!("RANGE BETWEEN INTERVAL {half} DAYS PRECEDING AND CURRENT ROW")
+            }
         };
 
         let mut where_clauses = Vec::new();

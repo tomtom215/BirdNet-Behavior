@@ -36,10 +36,7 @@ pub fn router() -> Router<AppState> {
 /// Security: filename components are validated — only basename characters
 /// allowed (no `..` or path separators) so callers cannot escape the
 /// recording directory.
-async fn serve_recording(
-    State(state): State<AppState>,
-    Path(filename): Path<String>,
-) -> Response {
+async fn serve_recording(State(state): State<AppState>, Path(filename): Path<String>) -> Response {
     if !is_safe_filename(&filename) {
         return (StatusCode::BAD_REQUEST, "invalid filename").into_response();
     }
@@ -127,7 +124,11 @@ async fn list_recordings(
 
     match result {
         Ok(recordings) => Json(recordings).into_response(),
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "failed to list recordings").into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to list recordings",
+        )
+            .into_response(),
     }
 }
 
@@ -323,11 +324,7 @@ mod tests {
     fn collect_recordings_pagination() {
         let tmp = tempfile::tempdir().unwrap();
         for i in 0..10_u8 {
-            std::fs::write(
-                tmp.path().join(format!("clip-{i:02}.wav")),
-                b"RIFF",
-            )
-            .unwrap();
+            std::fs::write(tmp.path().join(format!("clip-{i:02}.wav")), b"RIFF").unwrap();
         }
         let page1 = collect_recordings(&tmp.path().to_path_buf(), None, 3, 0);
         let page2 = collect_recordings(&tmp.path().to_path_buf(), None, 3, 3);

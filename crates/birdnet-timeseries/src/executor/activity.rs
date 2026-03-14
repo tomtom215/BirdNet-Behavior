@@ -29,10 +29,7 @@ impl<'conn> super::TimeSeriesDb<'conn> {
     /// # Errors
     ///
     /// Returns an error if the DuckDB query fails.
-    pub fn daily_activity(
-        &self,
-        params: &DailyParams,
-    ) -> Result<Vec<WindowRow>, TimeSeriesError> {
+    pub fn daily_activity(&self, params: &DailyParams) -> Result<Vec<WindowRow>, TimeSeriesError> {
         let q = DailyActivity {
             lookback_days: params.lookback_days,
             species: params.species.clone(),

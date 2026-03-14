@@ -171,7 +171,11 @@ impl ImageProvider for WikipediaClient {
         &'life0 self,
         scientific_name: &'life1 str,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<SpeciesImage, ImageError>> + Send + 'async_trait>,
+        Box<
+            dyn std::future::Future<Output = Result<SpeciesImage, ImageError>>
+                + Send
+                + 'async_trait,
+        >,
     >
     where
         'life0: 'async_trait,
@@ -248,10 +252,12 @@ mod tests {
                 }]
             }
         });
-        let (url, desc, wiki) =
-            WikipediaClient::parse_response(&json, "Turdus merula").unwrap();
+        let (url, desc, wiki) = WikipediaClient::parse_response(&json, "Turdus merula").unwrap();
         assert!(url.contains("wikimedia.org"));
-        assert_eq!(desc.unwrap(), "The common blackbird is a species of true thrush.");
+        assert_eq!(
+            desc.unwrap(),
+            "The common blackbird is a species of true thrush."
+        );
         assert!(wiki.unwrap().contains("wikipedia.org"));
     }
 

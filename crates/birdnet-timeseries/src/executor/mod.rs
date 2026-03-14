@@ -20,8 +20,8 @@ mod trend;
 use duckdb::Connection;
 
 use crate::error::TimeSeriesError;
-use crate::types::results::WindowRow;
 use crate::queries::ENSURE_TS_VIEW;
+use crate::types::results::WindowRow;
 
 /// Executes time-series analytics queries against a DuckDB connection.
 ///

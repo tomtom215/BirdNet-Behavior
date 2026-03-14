@@ -222,10 +222,7 @@ pub fn notifications_by_channel(
 /// # Errors
 ///
 /// Returns `NotifError` on query failure.
-pub fn notification_stats(
-    conn: &Connection,
-    days: u32,
-) -> Result<(i64, i64, i64), NotifError> {
+pub fn notification_stats(conn: &Connection, days: u32) -> Result<(i64, i64, i64), NotifError> {
     let mut sent = 0i64;
     let mut failed = 0i64;
     let mut skipped = 0i64;
@@ -266,8 +263,8 @@ pub fn prune_old_notifications(conn: &Connection, days: u32) -> Result<u64, Noti
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sqlite::connection::open_or_create;
     use crate::migration::migrate;
+    use crate::sqlite::connection::open_or_create;
 
     fn test_db() -> Connection {
         let tmp = tempfile::NamedTempFile::new().unwrap();

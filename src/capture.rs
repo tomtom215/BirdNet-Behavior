@@ -29,7 +29,10 @@ pub struct CaptureHandle {
 /// - `"all-day"` — no restriction
 /// - `"solar"` — sunrise-to-sunset (requires lat/lon and night-inhibit)
 /// - `"fixed:HH:MM-HH:MM"` — fixed daily window
-fn parse_schedule_config(cli: &Cli, config: Option<&birdnet_core::config::Config>) -> ScheduleConfig {
+fn parse_schedule_config(
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+) -> ScheduleConfig {
     let location = resolve_location(cli, config);
 
     let schedule_str = cli.recording_schedule.trim().to_lowercase();
@@ -134,17 +137,32 @@ fn utc_now() -> (u32, u32, u32, u32) {
     (y as u32, m, d, minutes)
 }
 
-/// Start a managed audio capture process from CLI/config settings.
+/// Resolve all RTSP URLs from CLI flags and config.
 ///
-/// Returns a `CaptureHandle` (keeps recording alive until dropped),
-/// or `None` if no capture source is configured or start fails.
+/// Priority: `--rtsp-urls` (multi) > `--rtsp-url` (single) > config `RTSP_URL`.
+fn resolve_rtsp_urls(cli: &Cli, config: Option<&birdnet_core::config::Config>) -> Vec<String> {
+    if !cli.rtsp_urls.is_empty() {
+        return cli.rtsp_urls.clone();
+    }
+    let single = cli
+        .rtsp_url
+        .clone()
+        .or_else(|| config?.get("RTSP_URL").map(String::from));
+    single.into_iter().collect()
+}
+
+/// Start managed audio capture processes from CLI/config settings.
+///
+/// Returns a `Vec<CaptureHandle>` (keeps recording alive until dropped).
+/// Multiple RTSP URLs each get their own independent capture pipeline,
+/// with filenames prefixed `RTSP_1-`, `RTSP_2-`, etc.
 ///
 /// When a recording schedule is configured, a background task periodically
 /// checks whether recording should be active and pauses/resumes accordingly.
 pub fn start_capture_manager(
     cli: &Cli,
     config: Option<&birdnet_core::config::Config>,
-) -> Option<CaptureHandle> {
+) -> Vec<CaptureHandle> {
     // Determine output directory (same as watch_dir).
     let output_dir = cli
         .watch_dir
@@ -157,37 +175,40 @@ pub fn start_capture_manager(
         .clone()
         .or_else(|| config?.get("ALSA_CARD").map(String::from));
 
-    let rtsp_url = cli
-        .rtsp_url
-        .clone()
-        .or_else(|| config?.get("RTSP_URL").map(String::from));
+    let rtsp_urls = resolve_rtsp_urls(cli, config);
 
-    let source = alsa_device.map_or_else(
-        || {
-            rtsp_url.map(|url| CaptureSource::Rtsp {
+    // Build the list of capture sources.
+    let sources: Vec<CaptureSource> = if let Some(device) = alsa_device {
+        // ALSA microphone takes priority; RTSP streams are additional.
+        let mut srcs = vec![CaptureSource::Microphone {
+            device,
+            sample_rate: 48_000,
+            channels: 1,
+        }];
+        for (i, url) in rtsp_urls.into_iter().enumerate() {
+            srcs.push(CaptureSource::Rtsp {
                 url,
-                stream_id: "rtsp".to_string(),
+                stream_id: format!("RTSP_{}", i + 1),
+            });
+        }
+        srcs
+    } else if !rtsp_urls.is_empty() {
+        rtsp_urls
+            .into_iter()
+            .enumerate()
+            .map(|(i, url)| {
+                let stream_id = if i == 0 && cli.rtsp_urls.is_empty() {
+                    // Single --rtsp-url: use plain "rtsp" for backward compat.
+                    "rtsp".to_string()
+                } else {
+                    format!("RTSP_{}", i + 1)
+                };
+                CaptureSource::Rtsp { url, stream_id }
             })
-        },
-        |device| {
-            Some(CaptureSource::Microphone {
-                device,
-                sample_rate: 48_000,
-                channels: 1,
-            })
-        },
-    );
-
-    let source = source?;
-
-    let recording_config = RecordingConfig {
-        source,
-        output_dir,
-        segment_duration_secs: cli.segment_duration,
-        format: AudioFormat::Wav,
+            .collect()
+    } else {
+        return Vec::new();
     };
-
-    let mut manager = CaptureManager::new(recording_config);
 
     // Parse schedule configuration.
     let schedule_config = parse_schedule_config(cli, config);
@@ -209,37 +230,62 @@ pub fn start_capture_manager(
     let daily = DailySchedule::for_date(&schedule_config, year, month, day);
     let should_start = daily.is_allowed(minutes_now);
 
-    if should_start {
-        match manager.start() {
-            Ok(()) => {
-                tracing::info!("audio capture started");
+    let mut handles = Vec::new();
+
+    for source in sources {
+        let source_label = match &source {
+            CaptureSource::Microphone { device, .. } => format!("mic:{device}"),
+            CaptureSource::Rtsp { stream_id, .. } => stream_id.clone(),
+        };
+
+        let recording_config = RecordingConfig {
+            source,
+            output_dir: output_dir.clone(),
+            segment_duration_secs: cli.segment_duration,
+            format: AudioFormat::Wav,
+        };
+
+        let mut manager = CaptureManager::new(recording_config);
+
+        if should_start {
+            match manager.start() {
+                Ok(()) => {
+                    tracing::info!(source = %source_label, "audio capture started");
+                }
+                Err(e) => {
+                    tracing::warn!(source = %source_label, error = %e, "audio capture not started (non-fatal)");
+                    continue;
+                }
             }
-            Err(e) => {
-                tracing::warn!(error = %e, "audio capture not started (non-fatal)");
-                return None;
-            }
+        } else {
+            tracing::info!(
+                source = %source_label,
+                minutes_now,
+                "audio capture deferred — outside recording schedule"
+            );
         }
-    } else {
-        tracing::info!(
-            minutes_now,
-            "audio capture deferred — outside recording schedule"
-        );
+
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        handles.push(CaptureHandle {
+            _manager: manager,
+            _stop: stop_flag,
+        });
     }
 
-    // Spawn schedule monitor task (only if not all-day).
-    let stop_flag = Arc::new(AtomicBool::new(false));
-    if !is_all_day {
-        let stop = Arc::clone(&stop_flag);
+    // Spawn a single schedule monitor task (only if not all-day).
+    if !is_all_day && !handles.is_empty() {
+        let stop = Arc::clone(&handles[0]._stop);
         let sched = schedule_config;
         std::thread::spawn(move || {
             schedule_monitor_loop(stop, sched);
         });
     }
 
-    Some(CaptureHandle {
-        _manager: manager,
-        _stop: stop_flag,
-    })
+    if handles.len() > 1 {
+        tracing::info!(count = handles.len(), "multi-stream capture active");
+    }
+
+    handles
 }
 
 /// Background loop that logs schedule transitions.
@@ -247,10 +293,7 @@ pub fn start_capture_manager(
 /// Checks every 60 seconds whether the recording gate is open or closed
 /// and logs transitions. The `CaptureManager` itself handles the actual
 /// start/stop; this loop provides observability.
-fn schedule_monitor_loop(
-    stop: Arc<AtomicBool>,
-    config: ScheduleConfig,
-) {
+fn schedule_monitor_loop(stop: Arc<AtomicBool>, config: ScheduleConfig) {
     let mut was_allowed = true;
 
     loop {
@@ -313,7 +356,7 @@ mod tests {
     #[test]
     fn parse_fixed_window_valid() {
         let w = parse_fixed_window("06:00-20:00").unwrap();
-        assert!(w.is_allowed(720));  // noon
+        assert!(w.is_allowed(720)); // noon
         assert!(!w.is_allowed(300)); // 05:00
     }
 
@@ -378,6 +421,7 @@ mod tests {
             image_cache_dir: None,
             alsa_device: None,
             rtsp_url: None,
+            rtsp_urls: Vec::new(),
             segment_duration: 15,
             recording_schedule: schedule.to_string(),
             night_inhibit: false,
@@ -392,6 +436,11 @@ mod tests {
             sf_thresh: 0.03,
             privacy_threshold: 0.0,
             overlap: 0.0,
+            site_name: None,
+            lang: "en".to_string(),
+            labels_dir: None,
+            info_site: "ebird".to_string(),
+            audio_format: "wav".to_string(),
         }
     }
 }

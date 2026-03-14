@@ -10,8 +10,8 @@ use axum::response::{Html, IntoResponse};
 use axum::{Router, routing::get};
 use serde::Deserialize;
 
-use super::{escape_html, render_page, today_date_string};
 use super::charts::render_hourly_chart;
+use super::{escape_html, render_page, today_date_string};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {

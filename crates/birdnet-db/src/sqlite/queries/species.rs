@@ -3,7 +3,10 @@
 use rusqlite::{Connection, params};
 
 use crate::sqlite::connection::DbError;
-use crate::sqlite::types::{DETECTION_COLS, DetectionRow, DailyCount, HourlyCount, SpeciesCount, SpeciesSummary, map_detection_row};
+use crate::sqlite::types::{
+    DETECTION_COLS, DailyCount, DetectionRow, HourlyCount, SpeciesCount, SpeciesSummary,
+    map_detection_row,
+};
 
 /// Get the number of unique species (by scientific name).
 ///
@@ -186,6 +189,172 @@ pub fn recent_by_species(
     Ok(rows)
 }
 
+/// Get 7-day sparkline data for all species (daily counts per common name).
+///
+/// Returns a map from common name to a vector of 7 daily counts (oldest first).
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn species_sparklines(
+    conn: &Connection,
+    days: u32,
+) -> Result<std::collections::HashMap<String, Vec<i64>>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT Com_Name, Date, COUNT(*) as count
+         FROM detections
+         WHERE Date >= date('now', '-' || ?1 || ' days')
+         GROUP BY Com_Name, Date
+         ORDER BY Com_Name, Date",
+    )?;
+
+    let mut map: std::collections::HashMap<String, Vec<(String, i64)>> =
+        std::collections::HashMap::new();
+    let rows = stmt.query_map(params![days], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+        ))
+    })?;
+
+    for row in rows {
+        let (name, date, count) = row?;
+        map.entry(name).or_default().push((date, count));
+    }
+
+    // Build date list for the last N days.
+    let mut date_set: Vec<String> = Vec::new();
+    let mut date_stmt = conn.prepare(
+        "WITH RECURSIVE dates(d) AS (
+             SELECT date('now', '-' || (?1 - 1) || ' days')
+             UNION ALL
+             SELECT date(d, '+1 day') FROM dates WHERE d < date('now')
+         ) SELECT d FROM dates",
+    )?;
+    let date_rows = date_stmt.query_map(params![days], |row| row.get::<_, String>(0))?;
+    for d in date_rows {
+        date_set.push(d?);
+    }
+
+    // Normalize: fill in zeros for missing dates.
+    let mut result: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
+    for (name, counts) in &map {
+        let count_map: std::collections::HashMap<&str, i64> =
+            counts.iter().map(|(d, c)| (d.as_str(), *c)).collect();
+        let sparkline: Vec<i64> = date_set
+            .iter()
+            .map(|d| count_map.get(d.as_str()).copied().unwrap_or(0))
+            .collect();
+        result.insert(name.clone(), sparkline);
+    }
+
+    Ok(result)
+}
+
+/// Get the first-seen date for each species (by scientific name).
+///
+/// Returns a map from scientific name to its first detection date.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn species_first_seen(
+    conn: &Connection,
+) -> Result<std::collections::HashMap<String, String>, DbError> {
+    let mut stmt = conn.prepare("SELECT Sci_Name, MIN(Date) FROM detections GROUP BY Sci_Name")?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<std::collections::HashMap<String, String>, _>>()?;
+    Ok(rows)
+}
+
+// ---------------------------------------------------------------------------
+// Per-species confidence thresholds
+// ---------------------------------------------------------------------------
+
+/// A per-species confidence threshold override.
+#[derive(Debug, Clone)]
+pub struct SpeciesThreshold {
+    /// Scientific name of the species.
+    pub sci_name: String,
+    /// Custom confidence threshold (0.0–1.0).
+    pub confidence_threshold: f64,
+    /// When this threshold was created.
+    pub created_at: String,
+}
+
+/// Get all per-species confidence thresholds.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn get_species_thresholds(conn: &Connection) -> Result<Vec<SpeciesThreshold>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT sci_name, confidence_threshold, created_at FROM species_thresholds ORDER BY sci_name",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(SpeciesThreshold {
+                sci_name: row.get(0)?,
+                confidence_threshold: row.get(1)?,
+                created_at: row.get(2)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Get all per-species confidence thresholds as a map (`sci_name` → threshold).
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn get_species_threshold_map(
+    conn: &Connection,
+) -> Result<std::collections::HashMap<String, f64>, DbError> {
+    let mut stmt = conn.prepare("SELECT sci_name, confidence_threshold FROM species_thresholds")?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+        })?
+        .collect::<Result<std::collections::HashMap<String, f64>, _>>()?;
+    Ok(rows)
+}
+
+/// Set a per-species confidence threshold (upsert).
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn set_species_threshold(
+    conn: &Connection,
+    sci_name: &str,
+    threshold: f64,
+) -> Result<(), DbError> {
+    conn.execute(
+        "INSERT INTO species_thresholds (sci_name, confidence_threshold) VALUES (?1, ?2)
+         ON CONFLICT(sci_name) DO UPDATE SET confidence_threshold = ?2",
+        params![sci_name, threshold],
+    )?;
+    Ok(())
+}
+
+/// Remove a per-species confidence threshold.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn delete_species_threshold(conn: &Connection, sci_name: &str) -> Result<(), DbError> {
+    conn.execute(
+        "DELETE FROM species_thresholds WHERE sci_name = ?1",
+        params![sci_name],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,9 +365,27 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let conn = open_or_create(tmp.path()).unwrap();
         for (date, time, sci, com, conf) in [
-            ("2026-03-11", "06:30:00", "Turdus merula", "Eurasian Blackbird", 0.87),
-            ("2026-03-11", "06:45:00", "Erithacus rubecula", "European Robin", 0.92),
-            ("2026-03-11", "07:00:00", "Turdus merula", "Eurasian Blackbird", 0.75),
+            (
+                "2026-03-11",
+                "06:30:00",
+                "Turdus merula",
+                "Eurasian Blackbird",
+                0.87,
+            ),
+            (
+                "2026-03-11",
+                "06:45:00",
+                "Erithacus rubecula",
+                "European Robin",
+                0.92,
+            ),
+            (
+                "2026-03-11",
+                "07:00:00",
+                "Turdus merula",
+                "Eurasian Blackbird",
+                0.75,
+            ),
             ("2026-03-10", "18:00:00", "Parus major", "Great Tit", 0.80),
         ] {
             conn.execute(
@@ -250,7 +437,9 @@ mod tests {
     #[test]
     fn species_summary_found() {
         let (_tmp, conn) = temp_db_with_data();
-        let s = species_summary(&conn, "Eurasian Blackbird").unwrap().unwrap();
+        let s = species_summary(&conn, "Eurasian Blackbird")
+            .unwrap()
+            .unwrap();
         assert_eq!(s.count, 2);
         assert!((s.avg_confidence - 0.81).abs() < 0.01);
     }

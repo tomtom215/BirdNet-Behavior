@@ -265,7 +265,9 @@ fn parse_labels(content: &str) -> Result<HashMap<String, String>, I18nError> {
         }
     }
     if map.is_empty() {
-        return Err(I18nError::Parse("no valid entries found in labels file".to_owned()));
+        return Err(I18nError::Parse(
+            "no valid entries found in labels file".to_owned(),
+        ));
     }
     Ok(map)
 }
@@ -343,10 +345,7 @@ mod tests {
         // the scientific name (which contains a space).
         let content = "Turdus merula_Eurasian_Blackbird\n";
         let map = parse_labels(content).unwrap();
-        assert_eq!(
-            map.get("Turdus merula").unwrap(),
-            "Eurasian_Blackbird"
-        );
+        assert_eq!(map.get("Turdus merula").unwrap(), "Eurasian_Blackbird");
     }
 
     #[test]
@@ -431,10 +430,7 @@ mod tests {
         // Default language
         assert_eq!(mgr.translate("Turdus merula", None), "Eurasian Blackbird");
         // Explicit language
-        assert_eq!(
-            mgr.translate("Turdus merula", Some("de")),
-            "Amsel"
-        );
+        assert_eq!(mgr.translate("Turdus merula", Some("de")), "Amsel");
         // Unknown species falls back
         assert_eq!(mgr.translate("Unknown sp", None), "Unknown sp");
         // Unknown language falls back

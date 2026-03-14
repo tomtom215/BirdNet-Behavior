@@ -18,7 +18,7 @@ use axum::response::Html;
 use axum::routing::get;
 use serde::Deserialize;
 
-use birdnet_db::sqlite::{HeatmapCell, weekly_heatmap, hourly_totals};
+use birdnet_db::sqlite::{HeatmapCell, hourly_totals, weekly_heatmap};
 
 use crate::state::AppState;
 
@@ -129,10 +129,8 @@ async fn heatmap_grid_partial(
     Query(query): Query<HeatmapQuery>,
 ) -> impl axum::response::IntoResponse {
     let days = query.days.unwrap_or(7).min(365);
-    let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| weekly_heatmap(conn, days))
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || state.with_db(|conn| weekly_heatmap(conn, days))).await;
 
     match result {
         Ok(Ok(cells)) => (
@@ -157,10 +155,8 @@ async fn hourly_totals_partial(
     Query(query): Query<HeatmapQuery>,
 ) -> impl axum::response::IntoResponse {
     let days = query.days.unwrap_or(7).min(365);
-    let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| hourly_totals(conn, days))
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || state.with_db(|conn| hourly_totals(conn, days))).await;
 
     match result {
         Ok(Ok(totals)) => (
@@ -187,7 +183,7 @@ fn render_heatmap_svg(cells: &[HeatmapCell]) -> String {
         return r#"<p style="color:#64748b;text-align:center;padding:2rem;">
             No data available for the selected period.
         </p>"#
-        .to_string();
+            .to_string();
     }
 
     // Build lookup: (dow, hour) → count
@@ -335,7 +331,7 @@ fn render_hourly_bars(totals: &[birdnet_db::sqlite::HourTotal]) -> String {
         return r#"<p style="color:#64748b;text-align:center;padding:2rem;">
             No data available for the selected period.
         </p>"#
-        .to_string();
+            .to_string();
     }
 
     let max = totals.iter().map(|h| h.count).max().unwrap_or(1);
@@ -431,8 +427,16 @@ mod tests {
     #[test]
     fn render_heatmap_svg_with_cells() {
         let cells = vec![
-            HeatmapCell { dow: 1, hour: 7, count: 10 },
-            HeatmapCell { dow: 2, hour: 8, count: 5 },
+            HeatmapCell {
+                dow: 1,
+                hour: 7,
+                count: 10,
+            },
+            HeatmapCell {
+                dow: 2,
+                hour: 8,
+                count: 5,
+            },
         ];
         let svg = render_heatmap_svg(&cells);
         assert!(svg.contains("<svg"));

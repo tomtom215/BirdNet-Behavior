@@ -94,14 +94,15 @@ pub fn compare_source_dest(
     dest_path: &std::path::Path,
 ) -> Result<PostMigrationReport, MigrateError> {
     let src = open_source_readonly(source_path)?;
-    let dst_conn = rusqlite::Connection::open(dest_path)
-        .map_err(MigrateError::DestinationOpen)?;
+    let dst_conn = rusqlite::Connection::open(dest_path).map_err(MigrateError::DestinationOpen)?;
 
     let src_total = count_total(&src)?;
 
     // Count rows in destination that came from the migration window
     let dst_total: i64 = dst_conn
-        .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get::<_, i64>(0))
+        .query_row("SELECT COUNT(*) FROM detections", [], |r| {
+            r.get::<_, i64>(0)
+        })
         .unwrap_or(0);
 
     // Per-species comparison
@@ -161,28 +162,31 @@ pub struct SpeciesDiff {
 // ---------------------------------------------------------------------------
 
 fn count_total(conn: &Connection) -> Result<i64, MigrateError> {
-    conn.query_row("SELECT COUNT(*) FROM detections", [], |r| r.get::<_, i64>(0))
-        .map_err(|e| MigrateError::Query(e.to_string()))
+    conn.query_row("SELECT COUNT(*) FROM detections", [], |r| {
+        r.get::<_, i64>(0)
+    })
+    .map_err(|e| MigrateError::Query(e.to_string()))
 }
 
 fn count_unique_species(conn: &Connection) -> Result<usize, MigrateError> {
     let n: i64 = conn
-        .query_row(
-            "SELECT COUNT(DISTINCT Com_Name) FROM detections",
-            [],
-            |r| r.get(0),
-        )
+        .query_row("SELECT COUNT(DISTINCT Com_Name) FROM detections", [], |r| {
+            r.get(0)
+        })
         .map_err(|e| MigrateError::Query(e.to_string()))?;
     Ok(n.max(0) as usize)
 }
 
-fn query_date_range(
-    conn: &Connection,
-) -> Result<Option<(String, String)>, MigrateError> {
+fn query_date_range(conn: &Connection) -> Result<Option<(String, String)>, MigrateError> {
     let result = conn.query_row(
         "SELECT MIN(Date), MAX(Date) FROM detections WHERE Date IS NOT NULL",
         [],
-        |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?)),
+        |r| {
+            Ok((
+                r.get::<_, Option<String>>(0)?,
+                r.get::<_, Option<String>>(1)?,
+            ))
+        },
     );
     match result {
         Ok((Some(min), Some(max))) => Ok(Some((min, max))),
@@ -190,10 +194,7 @@ fn query_date_range(
     }
 }
 
-fn query_top_species(
-    conn: &Connection,
-    limit: usize,
-) -> Result<Vec<SpeciesStats>, MigrateError> {
+fn query_top_species(conn: &Connection, limit: usize) -> Result<Vec<SpeciesStats>, MigrateError> {
     let limit_i64 = i64::try_from(limit).unwrap_or(i64::MAX);
     let mut stmt = conn
         .prepare(
@@ -235,7 +236,9 @@ fn query_species_counts(
         .map_err(|e| MigrateError::Query(e.to_string()))?;
 
     let map: std::collections::HashMap<String, i64> = stmt
-        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
         .map_err(|e| MigrateError::Query(e.to_string()))?
         .filter_map(|r| r.ok())
         .collect();
@@ -263,7 +266,9 @@ fn count_invalid_confidence(conn: &Connection) -> Result<i64, MigrateError> {
 
 fn count_duplicates(conn: &Connection) -> Result<i64, MigrateError> {
     let total: i64 = conn
-        .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get::<_, i64>(0))
+        .query_row("SELECT COUNT(*) FROM detections", [], |r| {
+            r.get::<_, i64>(0)
+        })
         .map_err(|e| MigrateError::Query(e.to_string()))?;
 
     let distinct: i64 = conn
@@ -376,11 +381,9 @@ mod tests {
         // Run migration
         use crate::traits::Migrator as _;
         let progress = crate::progress::ProgressHandle::new();
-        crate::birdnet_pi::importer::BirdNetPiImporter.migrate(
-            src.path(),
-            dst_tmp.path(),
-            &progress,
-        ).unwrap();
+        crate::birdnet_pi::importer::BirdNetPiImporter
+            .migrate(src.path(), dst_tmp.path(), &progress)
+            .unwrap();
 
         let rpt = compare_source_dest(src.path(), dst_tmp.path()).unwrap();
         assert_eq!(rpt.source_total, 2);

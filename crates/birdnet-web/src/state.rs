@@ -45,6 +45,10 @@ struct AppStateInner {
     i18n: Option<RwLock<I18nManager>>,
     /// Audio source configuration for live streaming (ALSA device or RTSP URL).
     audio_source: Option<String>,
+    /// Custom site name for branding.
+    site_name: Option<String>,
+    /// Species info link site: "ebird", "allaboutbirds", or "none".
+    info_site: String,
 }
 
 impl AppState {
@@ -78,6 +82,8 @@ impl AppState {
                 log_broadcaster: LogBroadcaster::new(),
                 i18n: None,
                 audio_source: None,
+                site_name: None,
+                info_site: "ebird".to_string(),
             }),
         })
     }
@@ -151,6 +157,8 @@ impl AppState {
                 log_broadcaster: LogBroadcaster::new(),
                 i18n: None,
                 audio_source: None,
+                site_name: None,
+                info_site: "ebird".to_string(),
             }),
         })
     }
@@ -173,6 +181,8 @@ impl AppState {
                 log_broadcaster: LogBroadcaster::new(),
                 i18n: None,
                 audio_source: None,
+                site_name: None,
+                info_site: "ebird".to_string(),
             }),
         }
     }
@@ -215,6 +225,8 @@ impl AppState {
                 log_broadcaster: inner.log_broadcaster,
                 i18n: inner.i18n,
                 audio_source: inner.audio_source,
+                site_name: inner.site_name,
+                info_site: inner.info_site,
             }),
         }
     }
@@ -319,6 +331,8 @@ impl AppState {
                 log_broadcaster: inner.log_broadcaster,
                 i18n: inner.i18n,
                 audio_source: inner.audio_source,
+                site_name: inner.site_name,
+                info_site: inner.info_site,
             }),
         }
     }
@@ -343,6 +357,8 @@ impl AppState {
                 log_broadcaster: inner.log_broadcaster,
                 i18n: Some(RwLock::new(manager)),
                 audio_source: inner.audio_source,
+                site_name: inner.site_name,
+                info_site: inner.info_site,
             }),
         }
     }
@@ -367,6 +383,8 @@ impl AppState {
                 log_broadcaster: inner.log_broadcaster,
                 i18n: inner.i18n,
                 audio_source: Some(source),
+                site_name: inner.site_name,
+                info_site: inner.info_site,
             }),
         }
     }
@@ -402,5 +420,66 @@ impl AppState {
     /// Get the audio source for live streaming, if configured.
     pub fn audio_source(&self) -> Option<&str> {
         self.inner.audio_source.as_deref()
+    }
+
+    /// Set the custom site name for branding.
+    #[must_use]
+    pub fn with_site_name(self, name: String) -> Self {
+        let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|_| {
+            panic!("with_site_name called after state was shared");
+        });
+        Self {
+            inner: Arc::new(AppStateInner {
+                db: inner.db,
+                db_path: inner.db_path,
+                recording_dir: inner.recording_dir,
+                #[cfg(feature = "analytics")]
+                analytics_db: inner.analytics_db,
+                image_cache: inner.image_cache,
+                detection_broadcast: inner.detection_broadcast,
+                log_broadcaster: inner.log_broadcaster,
+                i18n: inner.i18n,
+                audio_source: inner.audio_source,
+                site_name: Some(name),
+                info_site: inner.info_site,
+            }),
+        }
+    }
+
+    /// Set the species info link site.
+    #[must_use]
+    pub fn with_info_site(self, site: String) -> Self {
+        let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|_| {
+            panic!("with_info_site called after state was shared");
+        });
+        Self {
+            inner: Arc::new(AppStateInner {
+                db: inner.db,
+                db_path: inner.db_path,
+                recording_dir: inner.recording_dir,
+                #[cfg(feature = "analytics")]
+                analytics_db: inner.analytics_db,
+                image_cache: inner.image_cache,
+                detection_broadcast: inner.detection_broadcast,
+                log_broadcaster: inner.log_broadcaster,
+                i18n: inner.i18n,
+                audio_source: inner.audio_source,
+                site_name: inner.site_name,
+                info_site: site,
+            }),
+        }
+    }
+
+    /// Get the custom site name, defaulting to "BirdNet-Behavior".
+    pub fn site_name(&self) -> &str {
+        self.inner
+            .site_name
+            .as_deref()
+            .unwrap_or("BirdNet-Behavior")
+    }
+
+    /// Get the species info link site ("ebird", "allaboutbirds", or "none").
+    pub fn info_site(&self) -> &str {
+        &self.inner.info_site
     }
 }

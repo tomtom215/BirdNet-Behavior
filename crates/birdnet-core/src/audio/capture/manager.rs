@@ -3,7 +3,7 @@
 //! Starts the appropriate subprocess (arecord / ffmpeg), monitors it for
 //! unexpected exits, and restarts it up to `max_restarts` times.
 
-use super::process::{is_tool_available, required_tool, spawn_capture, CaptureProcess};
+use super::process::{CaptureProcess, is_tool_available, required_tool, spawn_capture};
 use super::types::{CaptureError, RecordingConfig};
 
 /// Maximum number of automatic restarts before giving up.
@@ -102,7 +102,10 @@ impl CaptureManager {
         }
 
         self.restart_count += 1;
-        tracing::warn!(restart = self.restart_count, "capture process died, restarting");
+        tracing::warn!(
+            restart = self.restart_count,
+            "capture process died, restarting"
+        );
         self.process = None;
 
         match self.start() {

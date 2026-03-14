@@ -117,11 +117,13 @@ impl SolarCalculator for SolarDay {
     }
 
     fn civil_dawn_minutes(&self) -> Result<u32, SchedulerError> {
-        self.civil_dawn_utc_min.ok_or(SchedulerError::PolarCondition)
+        self.civil_dawn_utc_min
+            .ok_or(SchedulerError::PolarCondition)
     }
 
     fn civil_dusk_minutes(&self) -> Result<u32, SchedulerError> {
-        self.civil_dusk_utc_min.ok_or(SchedulerError::PolarCondition)
+        self.civil_dusk_utc_min
+            .ok_or(SchedulerError::PolarCondition)
     }
 }
 
@@ -149,16 +151,13 @@ fn compute_sunrise_sunset(
 
     // Equation of time (minutes)
     let eqtime = 229.18
-        * (0.000_075
-            + 0.001_868 * gamma.cos()
+        * (0.000_075 + 0.001_868 * gamma.cos()
             - 0.032_077 * gamma.sin()
             - 0.014_615 * (2.0 * gamma).cos()
             - 0.040_849 * (2.0 * gamma).sin());
 
     // Solar declination (radians)
-    let decl = 0.006_918
-        - 0.399_912 * gamma.cos()
-        + 0.070_257 * gamma.sin()
+    let decl = 0.006_918 - 0.399_912 * gamma.cos() + 0.070_257 * gamma.sin()
         - 0.006_758 * (2.0 * gamma).cos()
         + 0.000_907 * (2.0 * gamma).sin()
         - 0.002_697 * (3.0 * gamma).cos()

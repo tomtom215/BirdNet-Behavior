@@ -48,9 +48,7 @@ pub fn start_detection_daemon(
     let (Some(model_path), Some(labels_path), Some(watch_dir)) =
         (model_path, labels_path, watch_dir)
     else {
-        tracing::info!(
-            "detection daemon not started: model, labels, or watch_dir not configured"
-        );
+        tracing::info!("detection daemon not started: model, labels, or watch_dir not configured");
         tracing::info!(
             "use --model, --labels, --watch-dir flags or set MODEL_PATH, LABELS_PATH, RECS_DIR in config"
         );
@@ -104,6 +102,17 @@ pub fn start_detection_daemon(
         cli.overlap
     };
 
+    // Load per-species confidence thresholds from database
+    let species_thresholds = state
+        .with_db(|conn| birdnet_db::sqlite::get_species_threshold_map(conn).unwrap_or_default());
+
+    if !species_thresholds.is_empty() {
+        tracing::info!(
+            count = species_thresholds.len(),
+            "loaded per-species confidence thresholds"
+        );
+    }
+
     let daemon_config = birdnet_core::detection::daemon::DaemonConfig {
         watch_dir: watch_dir.clone(),
         model_path,
@@ -124,9 +133,13 @@ pub fn start_detection_daemon(
         privacy_threshold,
         latitude: cli.latitude,
         longitude: cli.longitude,
+        species_thresholds,
     };
 
     let (event_tx, event_rx) = mpsc::channel();
+
+    let thresholds_for_processor = daemon_config.species_thresholds.clone();
+    let global_confidence = confidence;
 
     match birdnet_core::detection::daemon::run_daemon(&daemon_config, event_tx) {
         Ok(handle) => {
@@ -144,6 +157,8 @@ pub fn start_detection_daemon(
                     notification_filter,
                     notification_template,
                     rt_handle,
+                    thresholds_for_processor,
+                    global_confidence,
                 );
             });
             Some(handle)
@@ -168,6 +183,8 @@ fn event_processor(
     notification_filter: NotificationFilter,
     notification_template: NotificationTemplate,
     rt_handle: tokio::runtime::Handle,
+    species_thresholds: std::collections::HashMap<String, f64>,
+    global_confidence: f32,
 ) {
     tracing::debug!("event processor started");
 
@@ -178,6 +195,22 @@ fn event_processor(
         };
 
         let detection = &event.detection;
+
+        // Apply per-species confidence threshold.
+        if let Some(&threshold) = species_thresholds.get(&detection.scientific_name) {
+            if f64::from(detection.confidence) < threshold {
+                tracing::debug!(
+                    species = %detection.scientific_name,
+                    confidence = detection.confidence,
+                    threshold,
+                    "detection below per-species threshold, skipping"
+                );
+                continue;
+            }
+        } else if detection.confidence < global_confidence {
+            // Global threshold is already applied by the model, but double-check.
+            continue;
+        }
 
         // Insert into SQLite.
         let week_str = detection.week.to_string();
@@ -256,8 +289,7 @@ fn event_processor(
         };
 
         // Check notification filter (trigger mode + species filter).
-        let passes_filter =
-            notification_filter.should_notify(&detection.scientific_name, None);
+        let passes_filter = notification_filter.should_notify(&detection.scientific_name, None);
 
         // Apprise push notification (with filter and template).
         if let Some(ref apprise) = apprise {

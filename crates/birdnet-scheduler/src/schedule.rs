@@ -159,7 +159,7 @@ mod tests {
             ..Default::default()
         };
         let schedule = DailySchedule::for_date(&config, 2026, 3, 14);
-        assert!(schedule.is_allowed(600));  // 10:00 — within window
+        assert!(schedule.is_allowed(600)); // 10:00 — within window
         assert!(!schedule.is_allowed(479)); // just before window
         assert!(!schedule.is_allowed(1080)); // at end (exclusive)
     }

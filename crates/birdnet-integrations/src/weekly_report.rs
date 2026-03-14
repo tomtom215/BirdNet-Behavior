@@ -66,22 +66,15 @@ impl WeeklyReport {
         out.push('\n');
 
         // Summary.
-        out.push_str(&format!(
-            "\nTotal detections: {}\n",
-            self.total_detections
-        ));
+        out.push_str(&format!("\nTotal detections: {}\n", self.total_detections));
         if let Some(trend) = self.detection_trend_pct() {
             let arrow = if trend > 0.0 { "+" } else { "" };
             out.push_str(&format!("  vs last week: {arrow}{trend:.1}%\n"));
         }
 
-        out.push_str(&format!(
-            "Unique species: {}\n",
-            self.unique_species
-        ));
+        out.push_str(&format!("Unique species: {}\n", self.unique_species));
         if self.unique_species_last_week > 0 {
-            let diff =
-                i64::from(self.unique_species) - i64::from(self.unique_species_last_week);
+            let diff = i64::from(self.unique_species) - i64::from(self.unique_species_last_week);
             let arrow = if diff > 0 { "+" } else { "" };
             out.push_str(&format!("  vs last week: {arrow}{diff}\n"));
         }

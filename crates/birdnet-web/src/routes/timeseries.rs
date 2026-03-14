@@ -27,8 +27,8 @@ use axum::extract::Query;
 use helpers::{handle_ts_result, ts_unavailable};
 #[cfg(feature = "analytics")]
 use params::{
-    AccumulationQuery, AnomalyQuery, DailyQuery, DiversityQuery, GapsQuery, HourlyQuery,
-    PeakQuery, SessionQuery, TrendQuery, WeeklyQuery,
+    AccumulationQuery, AnomalyQuery, DailyQuery, DiversityQuery, GapsQuery, HourlyQuery, PeakQuery,
+    SessionQuery, TrendQuery, WeeklyQuery,
 };
 
 // Stub handlers when analytics feature is not compiled.
@@ -91,10 +91,9 @@ async fn daily(
         lookback_days: q.days.unwrap_or(30),
         species: q.species,
     };
-    let result = tokio::task::spawn_blocking(move || {
-        state.with_timeseries(|ts| ts.daily_activity(&params))
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || state.with_timeseries(|ts| ts.daily_activity(&params)))
+            .await;
     handle_ts_result(result, "daily")
 }
 
@@ -128,10 +127,9 @@ async fn heatmap(
         lookback_days: q.days.unwrap_or(90),
         species: q.species,
     };
-    let result = tokio::task::spawn_blocking(move || {
-        state.with_timeseries(|ts| ts.hourly_heatmap(&params))
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || state.with_timeseries(|ts| ts.hourly_heatmap(&params)))
+            .await;
     handle_ts_result(result, "heatmap")
 }
 
@@ -145,16 +143,15 @@ async fn trend(
     }
     let params = birdnet_timeseries::types::params::TrendParams {
         window_days: q.window.unwrap_or(7),
-        from_date: q.from.or_else(|| {
-            Some("CURRENT_DATE - INTERVAL 90 DAYS".into())
-        }),
+        from_date: q
+            .from
+            .or_else(|| Some("CURRENT_DATE - INTERVAL 90 DAYS".into())),
         to_date: q.to,
         species: q.species,
     };
-    let result = tokio::task::spawn_blocking(move || {
-        state.with_timeseries(|ts| ts.moving_average(&params))
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || state.with_timeseries(|ts| ts.moving_average(&params)))
+            .await;
     handle_ts_result(result, "trend")
 }
 
@@ -171,10 +168,9 @@ async fn anomalies(
         window_days: q.window.unwrap_or(30),
         lookback_days: q.days.unwrap_or(180),
     };
-    let result = tokio::task::spawn_blocking(move || {
-        state.with_timeseries(|ts| ts.anomalies(&params))
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || state.with_timeseries(|ts| ts.anomalies(&params)))
+            .await;
     handle_ts_result(result, "anomalies")
 }
 
@@ -189,10 +185,9 @@ async fn year_over_year(
     let params = birdnet_timeseries::types::params::WeeklyParams {
         lookback_weeks: q.weeks.unwrap_or(52),
     };
-    let result = tokio::task::spawn_blocking(move || {
-        state.with_timeseries(|ts| ts.year_over_year(&params))
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || state.with_timeseries(|ts| ts.year_over_year(&params)))
+            .await;
     handle_ts_result(result, "year_over_year")
 }
 
@@ -208,10 +203,9 @@ async fn diversity(
         lookback_days: q.days.unwrap_or(90),
         include_shannon: q.shannon.unwrap_or(true),
     };
-    let result = tokio::task::spawn_blocking(move || {
-        state.with_timeseries(|ts| ts.daily_richness(&params))
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || state.with_timeseries(|ts| ts.daily_richness(&params)))
+            .await;
     handle_ts_result(result, "diversity")
 }
 
@@ -246,10 +240,9 @@ async fn peak_windows(
         lookback_days: q.days.unwrap_or(1),
         limit: q.limit.unwrap_or(10),
     };
-    let result = tokio::task::spawn_blocking(move || {
-        state.with_timeseries(|ts| ts.peak_windows(&params))
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || state.with_timeseries(|ts| ts.peak_windows(&params)))
+            .await;
     handle_ts_result(result, "peak_windows")
 }
 

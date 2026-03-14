@@ -36,10 +36,7 @@ pub trait Validator: Send + Sync {
     /// # Errors
     ///
     /// Returns `MigrateError` only if the database cannot be opened at all.
-    fn validate_source(
-        &self,
-        source_path: &Path,
-    ) -> Result<ValidationReport, MigrateError>;
+    fn validate_source(&self, source_path: &Path) -> Result<ValidationReport, MigrateError>;
 
     /// Run post-migration checks comparing source and destination row counts.
     ///
@@ -87,7 +84,11 @@ pub struct ValidationReport {
 
 impl ValidationReport {
     /// Create a new report, computing `passed` from the checks.
-    pub fn new(schema_name: impl Into<String>, source_rows: u64, checks: Vec<ValidationCheck>) -> Self {
+    pub fn new(
+        schema_name: impl Into<String>,
+        source_rows: u64,
+        checks: Vec<ValidationCheck>,
+    ) -> Self {
         let passed = checks.iter().all(|c| c.passed || !c.required);
         Self {
             passed,

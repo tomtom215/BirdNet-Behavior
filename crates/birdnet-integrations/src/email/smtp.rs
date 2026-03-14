@@ -10,8 +10,8 @@ use lettre::message::{Mailbox, MultiPart, SinglePart, header};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{Address, AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
-use super::types::{DetectionEmail, EmailConfig, EmailError};
 use super::templates;
+use super::types::{DetectionEmail, EmailConfig, EmailError};
 
 /// Send a detection email using SMTP.
 ///
@@ -49,10 +49,9 @@ pub async fn send_detection_email(
 // ---------------------------------------------------------------------------
 
 fn build_message(config: &EmailConfig, detection: &DetectionEmail) -> Result<Message, EmailError> {
-    let from_addr: Address = config
-        .from_address
-        .parse()
-        .map_err(|_| EmailError::Address(format!("invalid from address: {}", config.from_address)))?;
+    let from_addr: Address = config.from_address.parse().map_err(|_| {
+        EmailError::Address(format!("invalid from address: {}", config.from_address))
+    })?;
 
     let to_addr: Address = config
         .to_address
@@ -91,9 +90,7 @@ fn build_message(config: &EmailConfig, detection: &DetectionEmail) -> Result<Mes
         .map_err(|e| EmailError::Build(e.to_string()))
 }
 
-fn build_transport(
-    config: &EmailConfig,
-) -> Result<AsyncSmtpTransport<Tokio1Executor>, EmailError> {
+fn build_transport(config: &EmailConfig) -> Result<AsyncSmtpTransport<Tokio1Executor>, EmailError> {
     let creds = Credentials::new(config.username.clone(), config.password.clone());
 
     let transport = if config.use_starttls {
@@ -115,8 +112,8 @@ fn build_transport(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::types::EmailConfig;
+    use super::*;
 
     fn sample_config() -> EmailConfig {
         EmailConfig {

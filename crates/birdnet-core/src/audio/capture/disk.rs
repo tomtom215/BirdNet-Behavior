@@ -8,8 +8,8 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use super::types::CaptureError;
 use super::process::is_audio_file;
+use super::types::CaptureError;
 
 /// Disk space information for a filesystem.
 #[derive(Debug, Clone, Copy)]
@@ -276,8 +276,10 @@ impl DiskManager {
         let mut total_removed = 0_u32;
 
         // Collect all species directories across all dates.
-        let mut species_files: std::collections::HashMap<String, Vec<(PathBuf, std::time::SystemTime)>> =
-            std::collections::HashMap::new();
+        let mut species_files: std::collections::HashMap<
+            String,
+            Vec<(PathBuf, std::time::SystemTime)>,
+        > = std::collections::HashMap::new();
 
         let date_entries =
             std::fs::read_dir(&by_date_dir).map_err(|e| CaptureError::Config(e.to_string()))?;
@@ -297,10 +299,7 @@ impl DiskManager {
                     continue;
                 }
 
-                let species_name = species_entry
-                    .file_name()
-                    .to_string_lossy()
-                    .into_owned();
+                let species_name = species_entry.file_name().to_string_lossy().into_owned();
 
                 let Ok(file_entries) = std::fs::read_dir(&species_dir) else {
                     continue;
@@ -439,10 +438,7 @@ fn purge_oldest_files(base_dir: &Path) -> u32 {
 }
 
 /// Recursively collect audio files and their modification times.
-fn collect_audio_files_recursive(
-    dir: &Path,
-    out: &mut Vec<(PathBuf, std::time::SystemTime)>,
-) {
+fn collect_audio_files_recursive(dir: &Path, out: &mut Vec<(PathBuf, std::time::SystemTime)>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -719,11 +715,11 @@ mod tests {
         header.extend_from_slice(b"WAVE");
         header.extend_from_slice(b"fmt ");
         header.extend_from_slice(&16_u32.to_le_bytes()); // fmt chunk size
-        header.extend_from_slice(&1_u16.to_le_bytes());  // PCM
-        header.extend_from_slice(&1_u16.to_le_bytes());  // mono
+        header.extend_from_slice(&1_u16.to_le_bytes()); // PCM
+        header.extend_from_slice(&1_u16.to_le_bytes()); // mono
         header.extend_from_slice(&48000_u32.to_le_bytes()); // sample rate
         header.extend_from_slice(&96000_u32.to_le_bytes()); // byte rate
-        header.extend_from_slice(&2_u16.to_le_bytes());  // block align
+        header.extend_from_slice(&2_u16.to_le_bytes()); // block align
         header.extend_from_slice(&16_u16.to_le_bytes()); // bits per sample
         header.extend_from_slice(b"data");
         header.extend_from_slice(&0_u32.to_le_bytes()); // data size

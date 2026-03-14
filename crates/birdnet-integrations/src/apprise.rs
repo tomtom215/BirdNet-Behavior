@@ -64,8 +64,10 @@ pub struct NotifyConfig {
     pub min_confidence: f32,
     /// Species watchlist (empty = notify for all species).
     pub species_watchlist: Vec<String>,
-    /// Cooldown period between notifications for the same species.
+    /// Default cooldown period between notifications for the same species.
     pub cooldown: Duration,
+    /// Per-species cooldown overrides (scientific name → duration).
+    pub per_species_cooldown: HashMap<String, Duration>,
 }
 
 impl Default for NotifyConfig {
@@ -74,6 +76,7 @@ impl Default for NotifyConfig {
             min_confidence: 0.8,
             species_watchlist: Vec::new(),
             cooldown: Duration::from_secs(DEFAULT_COOLDOWN_SECS),
+            per_species_cooldown: HashMap::new(),
         }
     }
 }
@@ -137,10 +140,16 @@ impl Client {
             return false;
         }
 
-        // Per-species cooldown
+        // Per-species cooldown (use species-specific override if available)
+        let cooldown = self
+            .config
+            .per_species_cooldown
+            .get(species)
+            .copied()
+            .unwrap_or(self.config.cooldown);
         let now = Instant::now();
         if let Some(last) = self.last_notified.get(species) {
-            if now.duration_since(*last) < self.config.cooldown {
+            if now.duration_since(*last) < cooldown {
                 return false;
             }
         }
@@ -189,13 +198,33 @@ impl Client {
         body: &str,
         notify_type: NotifyType,
     ) -> Result<(), AppriseError> {
+        self.send_notification_with_image(title, body, notify_type, None)
+            .await
+    }
+
+    /// Send a notification with an optional image attachment.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AppriseError` on network or server failure.
+    pub async fn send_notification_with_image(
+        &self,
+        title: &str,
+        body: &str,
+        notify_type: NotifyType,
+        image_url: Option<&str>,
+    ) -> Result<(), AppriseError> {
         let url = format!("{}/notify", self.base_url);
 
-        let payload = serde_json::json!({
+        let mut payload = serde_json::json!({
             "title": title,
             "body": body,
             "type": notify_type,
         });
+
+        if let Some(img) = image_url {
+            payload["image"] = serde_json::json!(img);
+        }
 
         self.post_with_retry(&url, &payload).await
     }
