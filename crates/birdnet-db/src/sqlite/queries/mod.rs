@@ -20,6 +20,6 @@ pub use detections::{
 };
 pub use heatmap::{hourly_totals, species_daily_heatmap, weekly_heatmap};
 pub use species::{
-    recent_by_species, search_species, species_count, species_daily_counts,
+    recent_by_species, search_species, species_count, species_daily_counts, species_first_seen,
     species_hourly_activity, species_summary, top_species,
 };

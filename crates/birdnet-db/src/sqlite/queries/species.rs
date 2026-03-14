@@ -3,7 +3,10 @@
 use rusqlite::{Connection, params};
 
 use crate::sqlite::connection::DbError;
-use crate::sqlite::types::{DETECTION_COLS, DetectionRow, DailyCount, HourlyCount, SpeciesCount, SpeciesSummary, map_detection_row};
+use crate::sqlite::types::{
+    DETECTION_COLS, DailyCount, DetectionRow, HourlyCount, SpeciesCount, SpeciesSummary,
+    map_detection_row,
+};
 
 /// Get the number of unique species (by scientific name).
 ///
@@ -186,6 +189,25 @@ pub fn recent_by_species(
     Ok(rows)
 }
 
+/// Get the first-seen date for each species (by scientific name).
+///
+/// Returns a map from scientific name to its first detection date.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn species_first_seen(
+    conn: &Connection,
+) -> Result<std::collections::HashMap<String, String>, DbError> {
+    let mut stmt = conn.prepare("SELECT Sci_Name, MIN(Date) FROM detections GROUP BY Sci_Name")?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<std::collections::HashMap<String, String>, _>>()?;
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,9 +218,27 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let conn = open_or_create(tmp.path()).unwrap();
         for (date, time, sci, com, conf) in [
-            ("2026-03-11", "06:30:00", "Turdus merula", "Eurasian Blackbird", 0.87),
-            ("2026-03-11", "06:45:00", "Erithacus rubecula", "European Robin", 0.92),
-            ("2026-03-11", "07:00:00", "Turdus merula", "Eurasian Blackbird", 0.75),
+            (
+                "2026-03-11",
+                "06:30:00",
+                "Turdus merula",
+                "Eurasian Blackbird",
+                0.87,
+            ),
+            (
+                "2026-03-11",
+                "06:45:00",
+                "Erithacus rubecula",
+                "European Robin",
+                0.92,
+            ),
+            (
+                "2026-03-11",
+                "07:00:00",
+                "Turdus merula",
+                "Eurasian Blackbird",
+                0.75,
+            ),
             ("2026-03-10", "18:00:00", "Parus major", "Great Tit", 0.80),
         ] {
             conn.execute(
@@ -250,7 +290,9 @@ mod tests {
     #[test]
     fn species_summary_found() {
         let (_tmp, conn) = temp_db_with_data();
-        let s = species_summary(&conn, "Eurasian Blackbird").unwrap().unwrap();
+        let s = species_summary(&conn, "Eurasian Blackbird")
+            .unwrap()
+            .unwrap();
         assert_eq!(s.count, 2);
         assert!((s.avg_confidence - 0.81).abs() < 0.01);
     }

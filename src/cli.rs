@@ -157,4 +157,27 @@ pub struct Cli {
     /// BirdNET-Pi equivalent: OVERLAP config option.
     #[arg(long, default_value = "0.0", env = "BIRDNET_OVERLAP")]
     pub overlap: f32,
+
+    /// Custom site name displayed in page titles and header.
+    ///
+    /// Replaces the default "BirdNet-Behavior" branding in the web UI.
+    #[arg(long, env = "BIRDNET_SITENAME")]
+    pub site_name: Option<String>,
+
+    /// Language code for species name translation (e.g., "de", "fr", "ja").
+    ///
+    /// When set, species common names are translated to the specified language
+    /// using BirdNET label files. Default: "en" (English).
+    #[arg(long, default_value = "en", env = "BIRDNET_LANG")]
+    pub lang: String,
+
+    /// Directory containing BirdNET language label files for i18n.
+    ///
+    /// Label files should be named like `labels_de.txt`, `labels_fr.txt`, etc.
+    #[arg(long, env = "BIRDNET_LABELS_DIR")]
+    pub labels_dir: Option<PathBuf>,
+
+    /// eBird/AllAboutBirds species info links: "ebird", "allaboutbirds", or "none".
+    #[arg(long, default_value = "ebird", env = "BIRDNET_INFO_SITE")]
+    pub info_site: String,
 }

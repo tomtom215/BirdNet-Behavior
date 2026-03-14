@@ -25,12 +25,12 @@ pub use connection::{DbError, open_connection, open_or_create, quick_check};
 pub use queries::correlation::{FollowOn, SpeciesPair};
 pub use queries::heatmap::{HeatmapCell, HourTotal};
 pub use queries::{
-    all_detections, companion_species, confidence_distribution, daily_counts,
-    delete_detection, detection_count, detection_count_for_date, detection_dates,
-    detections_by_date, detections_by_species, distinct_detection_dates, hourly_activity,
-    hourly_totals, insert_detection, latest_detection, range_daily_counts, recent_by_species,
-    recent_detections, recent_detections_page, relabel_detection, search_species, species_count,
-    species_daily_counts, species_daily_heatmap, species_for_date, species_hourly_activity,
+    all_detections, companion_species, confidence_distribution, daily_counts, delete_detection,
+    detection_count, detection_count_for_date, detection_dates, detections_by_date,
+    detections_by_species, distinct_detection_dates, hourly_activity, hourly_totals,
+    insert_detection, latest_detection, range_daily_counts, recent_by_species, recent_detections,
+    recent_detections_page, relabel_detection, search_species, species_count, species_daily_counts,
+    species_daily_heatmap, species_first_seen, species_for_date, species_hourly_activity,
     species_summary, temporal_cooccurrence, todays_detection_count, todays_detections,
     top_cooccurrence_pairs, top_species, weekly_detection_count, weekly_heatmap,
     weekly_new_species, weekly_top_species,

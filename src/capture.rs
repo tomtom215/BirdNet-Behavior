@@ -29,7 +29,10 @@ pub struct CaptureHandle {
 /// - `"all-day"` — no restriction
 /// - `"solar"` — sunrise-to-sunset (requires lat/lon and night-inhibit)
 /// - `"fixed:HH:MM-HH:MM"` — fixed daily window
-fn parse_schedule_config(cli: &Cli, config: Option<&birdnet_core::config::Config>) -> ScheduleConfig {
+fn parse_schedule_config(
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+) -> ScheduleConfig {
     let location = resolve_location(cli, config);
 
     let schedule_str = cli.recording_schedule.trim().to_lowercase();
@@ -247,10 +250,7 @@ pub fn start_capture_manager(
 /// Checks every 60 seconds whether the recording gate is open or closed
 /// and logs transitions. The `CaptureManager` itself handles the actual
 /// start/stop; this loop provides observability.
-fn schedule_monitor_loop(
-    stop: Arc<AtomicBool>,
-    config: ScheduleConfig,
-) {
+fn schedule_monitor_loop(stop: Arc<AtomicBool>, config: ScheduleConfig) {
     let mut was_allowed = true;
 
     loop {
@@ -313,7 +313,7 @@ mod tests {
     #[test]
     fn parse_fixed_window_valid() {
         let w = parse_fixed_window("06:00-20:00").unwrap();
-        assert!(w.is_allowed(720));  // noon
+        assert!(w.is_allowed(720)); // noon
         assert!(!w.is_allowed(300)); // 05:00
     }
 
@@ -392,6 +392,10 @@ mod tests {
             sf_thresh: 0.03,
             privacy_threshold: 0.0,
             overlap: 0.0,
+            site_name: None,
+            lang: "en".to_string(),
+            labels_dir: None,
+            info_site: "ebird".to_string(),
         }
     }
 }

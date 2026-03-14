@@ -99,6 +99,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize species image cache.
     let state = init_image_cache(state, &cli, config.as_ref());
 
+    // Wire audio source for live streaming (/stream endpoint).
+    let state = init_audio_source(state, &cli, config.as_ref());
+
+    // Wire custom site name (displayed in page titles).
+    let state = init_site_name(state, &cli, config.as_ref());
+
+    // Wire species info link site (eBird/AllAboutBirds).
+    let state = if cli.info_site != "ebird" {
+        state.with_info_site(cli.info_site.clone())
+    } else {
+        state
+    };
+
+    // Wire i18n language if not English.
+    let state = init_i18n(state, &cli, config.as_ref());
+
     let broadcast = state.detection_broadcast();
 
     // Create integration clients.
@@ -242,6 +258,87 @@ fn init_image_cache(
             tracing::warn!(error = %e, "species image cache not available (non-fatal)");
             state
         }
+    }
+}
+
+fn init_i18n(
+    state: birdnet_web::state::AppState,
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+) -> birdnet_web::state::AppState {
+    let lang = if cli.lang == "en" {
+        config
+            .and_then(|c| c.get("DATABASE_LANG"))
+            .map_or_else(|| "en".to_string(), |v| v.to_string())
+    } else {
+        cli.lang.clone()
+    };
+
+    if lang == "en" {
+        return state;
+    }
+
+    let labels_dir = cli
+        .labels_dir
+        .clone()
+        .or_else(|| config?.get("LABELS_DIR").map(PathBuf::from));
+
+    let Some(labels_dir) = labels_dir else {
+        tracing::warn!(lang = %lang, "language set but no --labels-dir configured");
+        return state;
+    };
+
+    let mut mgr = birdnet_core::i18n::I18nManager::new(&lang);
+    match mgr.load_language(&lang, &labels_dir) {
+        Ok(()) => {
+            tracing::info!(lang = %lang, "i18n language loaded");
+            state.with_i18n(mgr)
+        }
+        Err(e) => {
+            tracing::warn!(lang = %lang, error = %e, "failed to load language pack");
+            state
+        }
+    }
+}
+
+fn init_audio_source(
+    state: birdnet_web::state::AppState,
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+) -> birdnet_web::state::AppState {
+    // Prefer RTSP URL, then ALSA device, then config values.
+    let source = cli
+        .rtsp_url
+        .clone()
+        .or_else(|| cli.alsa_device.clone())
+        .or_else(|| config?.get("RTSP_STREAM").map(String::from))
+        .or_else(|| config?.get("REC_CARD").map(String::from));
+
+    match source {
+        Some(src) => {
+            tracing::info!(source = %src, "live audio stream source configured");
+            state.with_audio_source(src)
+        }
+        None => state,
+    }
+}
+
+fn init_site_name(
+    state: birdnet_web::state::AppState,
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+) -> birdnet_web::state::AppState {
+    let name = cli
+        .site_name
+        .clone()
+        .or_else(|| config?.get("SITENAME").map(String::from));
+
+    match name {
+        Some(n) if !n.is_empty() => {
+            tracing::info!(site_name = %n, "custom site name configured");
+            state.with_site_name(n)
+        }
+        _ => state,
     }
 }
 

@@ -8,8 +8,8 @@ use axum::response::Html;
 use axum::{Router, routing::get};
 use serde::Deserialize;
 
-use super::{SPECIES_DETAIL_HTML, SPECIES_PAGE_HTML, escape_html, simple_url_encode};
 use super::charts::{render_daily_chart, render_hourly_chart};
+use super::{SPECIES_DETAIL_HTML, SPECIES_PAGE_HTML, escape_html, simple_url_encode};
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -67,7 +67,11 @@ async fn species_summary_partial(
     Query(query): Query<SpeciesQuery>,
 ) -> impl axum::response::IntoResponse {
     let Some(name) = query.name else {
-        return (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], "<p>No species specified.</p>".to_string());
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>No species specified.</p>".to_string(),
+        );
     };
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| birdnet_db::sqlite::species_summary(conn, &name))
@@ -88,10 +92,16 @@ async fn species_summary_partial(
             );
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
-        Ok(Ok(None)) => (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")],
-            r#"<p style="color:var(--text-muted)">Species not found.</p>"#.to_string()),
-        _ => (StatusCode::INTERNAL_SERVER_ERROR, [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading summary</p>".to_string()),
+        Ok(Ok(None)) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            r#"<p style="color:var(--text-muted)">Species not found.</p>"#.to_string(),
+        ),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading summary</p>".to_string(),
+        ),
     }
 }
 
@@ -100,15 +110,27 @@ async fn species_hourly_partial(
     Query(query): Query<SpeciesQuery>,
 ) -> impl axum::response::IntoResponse {
     let Some(name) = query.name else {
-        return (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], "<p>No species specified.</p>".to_string());
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>No species specified.</p>".to_string(),
+        );
     };
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| birdnet_db::sqlite::species_hourly_activity(conn, &name))
     })
     .await;
     match result {
-        Ok(Ok(hours)) => (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], render_hourly_chart(&hours)),
-        _ => (StatusCode::INTERNAL_SERVER_ERROR, [(header::CONTENT_TYPE, "text/html")], "<p>Error loading chart</p>".to_string()),
+        Ok(Ok(hours)) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            render_hourly_chart(&hours),
+        ),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading chart</p>".to_string(),
+        ),
     }
 }
 
@@ -117,15 +139,27 @@ async fn species_daily_partial(
     Query(query): Query<SpeciesQuery>,
 ) -> impl axum::response::IntoResponse {
     let Some(name) = query.name else {
-        return (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], "<p>No species specified.</p>".to_string());
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>No species specified.</p>".to_string(),
+        );
     };
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| birdnet_db::sqlite::species_daily_counts(conn, &name, 14))
     })
     .await;
     match result {
-        Ok(Ok(days)) => (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], render_daily_chart(&days)),
-        _ => (StatusCode::INTERNAL_SERVER_ERROR, [(header::CONTENT_TYPE, "text/html")], "<p>Error loading chart</p>".to_string()),
+        Ok(Ok(days)) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            render_daily_chart(&days),
+        ),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading chart</p>".to_string(),
+        ),
     }
 }
 
@@ -134,7 +168,11 @@ async fn species_detections_partial(
     Query(query): Query<SpeciesQuery>,
 ) -> impl axum::response::IntoResponse {
     let Some(name) = query.name else {
-        return (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], "<p>No species specified.</p>".to_string());
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>No species specified.</p>".to_string(),
+        );
     };
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| birdnet_db::sqlite::detections_by_species(conn, &name, 20))
@@ -144,25 +182,39 @@ async fn species_detections_partial(
     match result {
         Ok(Ok(detections)) => {
             if detections.is_empty() {
-                return (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")],
-                    r#"<p style="color:var(--text-muted)">No detections found.</p>"#.to_string());
+                return (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, "text/html")],
+                    r#"<p style="color:var(--text-muted)">No detections found.</p>"#.to_string(),
+                );
             }
             let mut html = String::from(
                 r"<table><thead><tr><th>Confidence</th><th>Time</th><th>Date</th></tr></thead><tbody>",
             );
             for d in &detections {
                 let conf_pct = d.confidence * 100.0;
-                let cls = if conf_pct >= 80.0 { "high" } else if conf_pct >= 50.0 { "mid" } else { "low" };
-                let _ = write!(html,
+                let cls = if conf_pct >= 80.0 {
+                    "high"
+                } else if conf_pct >= 50.0 {
+                    "mid"
+                } else {
+                    "low"
+                };
+                let _ = write!(
+                    html,
                     r#"<tr><td><span class="conf {cls}">{conf_pct:.0}%</span></td><td>{t}</td><td>{dt}</td></tr>"#,
-                    t = escape_html(&d.time), dt = escape_html(&d.date),
+                    t = escape_html(&d.time),
+                    dt = escape_html(&d.date),
                 );
             }
             html.push_str("</tbody></table>");
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
-        _ => (StatusCode::INTERNAL_SERVER_ERROR, [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading detections</p>".to_string()),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading detections</p>".to_string(),
+        ),
     }
 }
 
@@ -171,7 +223,11 @@ async fn species_info_partial(
     Query(query): Query<SpeciesQuery>,
 ) -> impl axum::response::IntoResponse {
     let Some(name) = query.name else {
-        return (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], "<p>No species specified.</p>".to_string());
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>No species specified.</p>".to_string(),
+        );
     };
 
     let com_name = name.clone();
@@ -195,19 +251,22 @@ async fn species_info_partial(
         if let Some(image) = cache.get_cached(&sci_name) {
             if image.cached_path.is_some() {
                 let enc = simple_url_encode(&sci_name);
-                let _ = write!(html,
+                let _ = write!(
+                    html,
                     r#"<img src="/api/v2/species/image/{enc}/file" alt="{alt}" style="width:100%;border-radius:var(--radius);margin-bottom:1rem;" />"#,
                     alt = escape_html(&name),
                 );
             }
             if let Some(desc) = &image.description {
-                let _ = write!(html,
+                let _ = write!(
+                    html,
                     r#"<p style="font-size:0.9rem;line-height:1.5;margin-bottom:0.75rem;">{}</p>"#,
                     escape_html(desc),
                 );
             }
             if let Some(url) = &image.wiki_url {
-                let _ = write!(html,
+                let _ = write!(
+                    html,
                     r#"<p><a href="{}" target="_blank" rel="noopener">View on Wikipedia</a></p>"#,
                     escape_html(url),
                 );
@@ -222,5 +281,28 @@ async fn species_info_partial(
             escape_html(&name),
         );
     }
+
+    // Add species info links (eBird/AllAboutBirds) — always shown
+    let info_site = state.info_site();
+    if info_site != "none" {
+        let encoded_sci = simple_url_encode(&sci_name);
+        let encoded_com = simple_url_encode(&name);
+        match info_site {
+            "allaboutbirds" => {
+                let _ = write!(
+                    html,
+                    r#"<p style="margin-top:0.75rem;"><a href="https://www.allaboutbirds.org/guide/{encoded_com}" target="_blank" rel="noopener" style="color:var(--accent,#89b4fa);">View on All About Birds</a></p>"#,
+                );
+            }
+            _ => {
+                // Default to eBird
+                let _ = write!(
+                    html,
+                    r#"<p style="margin-top:0.75rem;"><a href="https://ebird.org/species/{encoded_sci}" target="_blank" rel="noopener" style="color:var(--accent,#89b4fa);">View on eBird</a></p>"#,
+                );
+            }
+        }
+    }
+
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }

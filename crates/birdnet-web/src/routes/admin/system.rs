@@ -21,10 +21,7 @@ use crate::system_info;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/admin/system", get(system_page))
-        .route(
-            "/admin/system/backup",
-            axum::routing::post(trigger_backup),
-        )
+        .route("/admin/system/backup", axum::routing::post(trigger_backup))
         .route("/admin/system/status", get(system_status_partial))
 }
 
@@ -101,8 +98,39 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
                 color:#94a3b8;font-size:.875rem;text-decoration:none;font-weight:600;">
         Manage Backups
       </a>
+      <a href="/admin/system/backup/full"
+         download="birdnet-backup.tar.gz"
+         style="padding:.5rem 1.5rem;border-radius:.375rem;border:1px solid #334155;
+                color:#94a3b8;font-size:.875rem;text-decoration:none;font-weight:600;">
+        Full Backup (DB + Audio + Config)
+      </a>
     </div>
     <div id="backup-result" style="margin-top:1rem;"></div>
+  </div>
+
+  <!-- Danger Zone -->
+  <div class="card" style="border-color:#7f1d1d;">
+    <div class="section-title" style="color:#f87171;">Danger Zone</div>
+    <p style="color:#94a3b8;font-size:.85rem;margin-bottom:1rem;">
+      These actions cannot be undone. Create a backup first.
+    </p>
+    <div style="display:flex;gap:1rem;flex-wrap:wrap;">
+      <button class="btn btn-danger"
+              hx-post="/admin/system/clear-detections"
+              hx-target="#clear-result"
+              hx-swap="innerHTML"
+              hx-confirm="Are you sure you want to delete ALL detections and notification logs? This cannot be undone.">
+        Clear All Detections
+      </button>
+      <button class="btn btn-danger"
+              hx-post="/admin/system/clear-extracted"
+              hx-target="#clear-result"
+              hx-swap="innerHTML"
+              hx-confirm="Are you sure you want to delete ALL extracted audio clips? This cannot be undone.">
+        Clear Extracted Audio
+      </button>
+    </div>
+    <div id="clear-result" style="margin-top:1rem;"></div>
   </div>
 </div>
 </body>
@@ -186,9 +214,7 @@ async fn render_status_partial(state: &AppState) -> String {
     });
 
     // System CPU/memory snapshot (run in parallel with disk query)
-    let sys_snap = tokio::task::spawn_blocking(system_info::sample)
-        .await
-        .ok();
+    let sys_snap = tokio::task::spawn_blocking(system_info::sample).await.ok();
 
     let sys_html = sys_snap.map_or_else(
         || r#"<p style="color:#64748b">System info unavailable</p>"#.to_string(),
