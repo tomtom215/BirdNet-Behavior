@@ -2,6 +2,19 @@
 
 > Pure Rust, zero C dependencies. Decode, resample, and generate mel spectrograms.
 
+## Table of Contents
+
+- [Pipeline Overview](#pipeline-overview)
+- [Audio Decoding (symphonia)](#audio-decoding-symphonia)
+- [Resampling (rubato)](#resampling-rubato)
+- [Mel Spectrogram](#mel-spectrogram)
+- [Audio Capture](#audio-capture)
+- [Detection Pipeline](#detection-pipeline)
+- [Model-Specific Parameters](#model-specific-parameters)
+- [Performance Targets](#performance-targets)
+
+---
+
 ## Pipeline Overview
 
 ```
@@ -9,15 +22,15 @@ Microphone/RTSP → arecord/ffmpeg → WAV files in StreamData/
                                         │
                     notify watches ──────┘
                                         │
-                    symphonia decode → f32 samples (mono)
+                    symphonia decode → f32 samples (mono)   ✅ IMPLEMENTED
                                         │
-                    rubato resample → target sample rate (48kHz → 16kHz/32kHz)
+                    rubato resample → target sample rate     ✅ IMPLEMENTED
                                         │
-                    mel spectrogram → f32 matrix (n_mels × time_frames)
+                    mel spectrogram → f32 matrix             ⚠️ STUBBED
                                         │
-                    ort/tract inference → species + confidence scores
+                    ort/tract inference → species + confidence scores  ❌ TODO
                                         │
-                    SQLite INSERT + BirdWeather POST + notifications
+                    SQLite INSERT + BirdWeather POST + email/Apprise   ✅ IMPLEMENTED
 ```
 
 The entire audio pipeline (symphonia + rubato + mel spectrogram) cross-compiles
@@ -25,7 +38,7 @@ trivially to aarch64 with **zero system dependencies**.
 
 ## Audio Decoding (symphonia)
 
-**Status: Implemented** -- `crates/birdnet-core/src/audio/decode.rs`
+**Status: ✅ Implemented** — `crates/birdnet-core/src/audio/decode.rs`
 
 - Pure Rust decoder supporting WAV, FLAC, MP3
 - Automatic mono downmix (multi-channel → mono via averaging)
@@ -34,7 +47,7 @@ trivially to aarch64 with **zero system dependencies**.
 
 ## Resampling (rubato)
 
-**Status: Implemented** -- `crates/birdnet-core/src/audio/resample.rs`
+**Status: ✅ Implemented** — `crates/birdnet-core/src/audio/resample.rs`
 
 - Async polynomial resampler for high-quality rate conversion
 - Handles chunk-based processing with zero-padded remainder
@@ -43,7 +56,7 @@ trivially to aarch64 with **zero system dependencies**.
 
 ## Mel Spectrogram
 
-**Status: To implement** -- `crates/birdnet-core/src/audio/spectrogram.rs`
+**Status: ⚠️ Stubbed** — `crates/birdnet-core/src/audio/spectrogram.rs`
 
 This is the most critical component for model accuracy. The mel spectrogram
 must produce output numerically equivalent to librosa's `melspectrogram()`,
@@ -78,7 +91,7 @@ power:        2.0 (power spectrogram)
 - Feed identical WAV files through Python (librosa) and Rust pipelines
 - Compare mel spectrogram matrices element-wise
 - Must be within 1e-4 tolerance for model accuracy
-- Benchmark: expect 5-10x speedup over librosa on equivalent hardware
+- Benchmark: expect 5–10x speedup over librosa on equivalent hardware
 
 ### Key Implementation Notes
 
@@ -89,7 +102,7 @@ power:        2.0 (power spectrogram)
 
 ## Audio Capture
 
-**Status: Stubbed** -- `crates/birdnet-core/src/audio/capture.rs`
+**Status: ⚠️ Stubbed** — `crates/birdnet-core/src/audio/capture.rs`
 
 Audio capture uses subprocess management rather than direct ALSA bindings:
 
@@ -99,6 +112,33 @@ Audio capture uses subprocess management rather than direct ALSA bindings:
 - **Disk management**: Rotate old recordings, enforce space limits
 
 This avoids the `cpal` crate dependency and leverages battle-tested system tools.
+
+## Detection Pipeline
+
+**Status: ✅ Implemented** — `crates/birdnet-core/src/detection/pipeline.rs`
+
+The file watcher and event-to-detection pipeline is implemented:
+
+```rust
+pub trait DetectionHandler: Send + 'static {
+    fn handle(&self, detection: Detection, file: &Path) -> Result<(), HandlerError>;
+}
+```
+
+- `notify`-based file watcher watches the `StreamData/` directory
+- New WAV files trigger the decode → resample → spectrogram → infer → report chain
+- `DetectionHandler` trait allows swapping backends (SQLite, test doubles)
+- Daemon integration in `src/daemon.rs` wires the pipeline to SQLite + integrations
+
+### Event Processor
+
+The `event_processor` in `src/daemon.rs` handles each detection:
+
+1. Insert into SQLite via `birdnet-db`
+2. Post to BirdWeather (if configured)
+3. Send email alert (if configured + confidence threshold met)
+4. Send Apprise notification (if configured)
+5. Broadcast to SSE stream for live dashboard updates
 
 ## Model-Specific Parameters
 
@@ -112,11 +152,13 @@ This avoids the `cpal` crate dependency and leverages battle-tested system tools
 
 | Metric | Python (librosa) | Rust (target) |
 |--------|-----------------|---------------|
-| Decode + resample (3s clip) | ~100ms | ~10ms |
-| Mel spectrogram (3s clip) | ~50ms | ~5ms |
-| Total audio pipeline | ~150ms | ~15ms |
+| Decode + resample (3s clip) | ~100 ms | ~10 ms |
+| Mel spectrogram (3s clip) | ~50 ms | ~5 ms |
+| Total audio pipeline | ~150 ms | ~15 ms |
 | Memory per clip | ~50 MB (numpy arrays) | ~1 MB (stack + heap) |
 
 ---
+
+*Last updated: 2026-03-14*
 
 [← Dependencies](04-dependencies.md) | [Back to Index](../RUST_ARCHITECTURE_PLAN.md) | [Next: ML Inference →](06-ml-inference.md)

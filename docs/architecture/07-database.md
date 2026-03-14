@@ -2,6 +2,15 @@
 
 > Dual-database design: SQLite for operations, DuckDB for analytics.
 
+## Table of Contents
+
+- [Dual-Database Architecture](#dual-database-architecture)
+- [SQLite (Operational Database)](#sqlite-operational-database)
+- [DuckDB (Analytics Database)](#duckdb-analytics-database)
+- [Cross-Compilation Notes](#cross-compilation-notes)
+
+---
+
 ## Dual-Database Architecture
 
 ```
@@ -9,27 +18,29 @@ SQLite (OLTP)                    DuckDB (OLAP)
 ─────────────                    ──────────────
 Real-time writes                 Analytical queries
 Detection inserts                Trend analysis
-Live detection feed              Species aggregations
-Web API read queries             Confidence distributions
+Settings storage                 Species aggregations
+Live detection feed              Confidence distributions
+Web API read queries             Heatmap / co-occurrence
 Small, fast, embedded            Columnar, vectorized
 WAL for crash safety             Append-only analysis
 ```
 
 ## SQLite (Operational Database)
 
-**Status: Fully implemented** in `crates/birdnet-db/`
+**Status: ✅ Fully implemented** in `crates/birdnet-db/src/sqlite/`
 
 ### Connection Management
 
 - WAL mode enforced on every connection
 - PRAGMAs: `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5000`,
-  `cache_size=-2000` (2MB), `foreign_keys=ON`
+  `cache_size=-2000` (2 MB), `foreign_keys=ON`
 - Single connection wrapped in `Arc<Mutex<Connection>>`
 - No connection pool needed for embedded single-binary use
 
 ### Schema
 
 ```sql
+-- Detections (migration v1)
 CREATE TABLE IF NOT EXISTS detections (
     Date     TEXT NOT NULL,
     Time     TEXT NOT NULL,
@@ -45,22 +56,53 @@ CREATE TABLE IF NOT EXISTS detections (
     File_Name TEXT
 );
 
--- Performance indexes
-CREATE INDEX idx_detections_date ON detections(Date);
-CREATE INDEX idx_detections_com_name ON detections(Com_Name);
-CREATE INDEX idx_detections_sci_name ON detections(Sci_Name);
-CREATE INDEX idx_detections_confidence ON detections(Confidence);
-CREATE INDEX idx_detections_datetime ON detections(Date, Time);
+-- Settings key-value store (migration v4)
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY NOT NULL,
+    value TEXT NOT NULL
+);
+
+-- Performance indexes (migrations v2-v3)
+CREATE INDEX idx_detections_date        ON detections(Date);
+CREATE INDEX idx_detections_com_name    ON detections(Com_Name);
+CREATE INDEX idx_detections_sci_name    ON detections(Sci_Name);
+CREATE INDEX idx_detections_confidence  ON detections(Confidence);
+CREATE INDEX idx_detections_datetime    ON detections(Date, Time);
 ```
 
 ### Migration Framework
 
 Sequential migration system with `schema_version` tracking table:
-- Version 1: Create detections table
-- Version 2: Add performance indexes
-- Version 3: Add composite datetime index
+- **Version 1**: Create detections table
+- **Version 2**: Add performance indexes
+- **Version 3**: Add composite datetime index
+- **Version 4**: Create settings key-value table
 
 Migrations are idempotent and run automatically on startup.
+
+### Settings Module
+
+`crates/birdnet-db/src/sqlite/settings.rs` provides:
+
+```rust
+pub fn get_or(conn: &Connection, key: &str, default: &str)
+    -> Result<String, SettingsError>;
+
+pub fn set(conn: &Connection, key: &str, value: &str)
+    -> Result<(), SettingsError>;
+```
+
+Settings used across the application:
+
+| Category | Setting Keys |
+|----------|-------------|
+| Station | `latitude`, `longitude`, `location_name` |
+| Audio | `microphone_device`, `recording_length`, `overlap`, `sensitivity` |
+| Detection | `minimum_confidence`, `species_occurrence_threshold` |
+| BirdWeather | `birdweather_id`, `birdweather_enabled` |
+| Email | `email_smtp_host`, `email_smtp_port`, `email_smtp_user`, `email_smtp_pass`, `email_from`, `email_to`, `email_from_name`, `email_starttls`, `email_min_confidence`, `email_cooldown_secs` |
+| Apprise | `apprise_enabled`, `apprise_url` |
+| System | `backup_count`, `disk_limit_percent` |
 
 ### Resilience
 
@@ -82,8 +124,37 @@ Migrations are idempotent and run automatically on startup.
 | `recent_detections()` | Last N detections |
 | `top_species()` | Species ranked by count with avg confidence |
 | `hourly_activity()` | Detection count by hour |
+| `species_on_date()` | All species detected on a given date |
+| `confidence_histogram()` | Confidence score distribution |
+| `co_occurrence_matrix()` | Species co-occurrence with `COUNT(DISTINCT a.Date)` fix |
+
+### Co-occurrence SQL Fix
+
+The self-join pattern for co-occurrence naturally double-counts:
+
+```sql
+-- Self-join generates 2 rows per pair per date (A→B and B→A)
+-- After canonicalization to (min, max) species, both land in same GROUP BY bucket
+-- COUNT(*) = 2×days; COUNT(DISTINCT a.Date) = correct days
+
+WITH daily AS (
+    SELECT DISTINCT Date, Com_Name FROM detections
+),
+pairs AS (
+    SELECT
+        MIN(a.Com_Name, b.Com_Name) AS species_a,
+        MAX(a.Com_Name, b.Com_Name) AS species_b,
+        COUNT(DISTINCT a.Date) AS shared_days   -- ← not COUNT(*)
+    FROM daily a
+    JOIN daily b ON a.Date = b.Date AND a.Com_Name != b.Com_Name
+    GROUP BY species_a, species_b
+)
+SELECT * FROM pairs ORDER BY shared_days DESC;
+```
 
 ## DuckDB (Analytics Database)
+
+**Status: ✅ Queries implemented** in `crates/birdnet-db/src/duckdb/`
 
 ### Why DuckDB for Analytics
 
@@ -116,23 +187,26 @@ DETACH sqlite_db;
 
 Sync runs periodically (configurable interval, default: every 5 minutes).
 
-### Analytics Endpoints
+### Analytics Queries Implemented
+
+| Query | Module | Description |
+|-------|--------|-------------|
+| Activity heatmap | `duckdb/queries/heatmap.rs` | Hour × day-of-week SVG heat map |
+| Daily trends | `duckdb/queries/trends.rs` | Detections per day with 7-day moving average |
+| Species correlation | `sqlite/queries/correlation.rs` | Co-occurrence shared-day count |
+| Top species by period | `duckdb/queries/species.rs` | Ranked species for week/month/year |
+| Confidence distribution | `duckdb/queries/confidence.rs` | Histogram by species |
+| Seasonal patterns | `duckdb/queries/seasonal.rs` | Month-by-month species activity |
+
+### Analytics API Endpoints
 
 ```
-GET /api/v2/analytics/trends
-  → Detections per hour/day/week with moving averages
-
-GET /api/v2/analytics/species-activity
-  → Activity heatmap (species × hour-of-day)
-
-GET /api/v2/analytics/confidence-distribution
-  → Histogram of confidence scores by species
-
-GET /api/v2/analytics/seasonal-patterns
-  → Species arrival/departure dates across years
-
-GET /api/v2/analytics/site-comparison
-  → Multi-station comparison (for fleet deployments)
+GET /api/v2/analytics/trends         → daily count + 7-day MA
+GET /api/v2/analytics/heatmap        → hour×weekday SVG (or JSON data)
+GET /api/v2/analytics/top-species    → species ranked by period
+GET /api/v2/analytics/confidence     → confidence histogram
+GET /api/v2/analytics/correlation    → species co-occurrence matrix
+GET /api/v2/analytics/seasonal       → month×species activity grid
 ```
 
 ## Cross-Compilation Notes
@@ -142,5 +216,7 @@ GET /api/v2/analytics/site-comparison
 - Alternative: DuckDB queries run server-side only, so native compilation on Pi is viable
 
 ---
+
+*Last updated: 2026-03-14*
 
 [← ML Inference](06-ml-inference.md) | [Back to Index](../RUST_ARCHITECTURE_PLAN.md) | [Next: Behavioral Analytics →](08-behavioral-analytics.md)

@@ -3,6 +3,19 @@
 > Derived from tomtom215's established Rust patterns across duckdb-behavioral,
 > quack-rs, and mallardmetrics.
 
+## Table of Contents
+
+- [Release Profile](#release-profile)
+- [Linting](#linting)
+- [Error Handling](#error-handling)
+- [Async Convention](#async-convention)
+- [Modularity Rules](#modularity-rules)
+- [Testing Philosophy](#testing-philosophy)
+- [CI/CD](#cicd-github-actions)
+- [Code Style](#code-style)
+
+---
+
 ## Release Profile
 
 ```toml
@@ -41,7 +54,7 @@ system that must run unattended for months.
 
 ## Error Handling
 
-- **Hand-rolled error types** -- no `anyhow` or `thiserror` in library crates
+- **Hand-rolled error types** — no `anyhow` or `thiserror` in library crates
 - Custom enum-based errors with `Display` and `Error` trait implementations
 - `Result<T, E>` throughout; never panic across FFI or async boundaries
 - Application code (`main.rs`) may use `Box<dyn Error>` for convenience
@@ -84,6 +97,75 @@ impl std::error::Error for DecodeError {
 
 This keeps library crates portable and testable without an async runtime.
 
+## Modularity Rules
+
+These rules are **hard requirements**, not suggestions:
+
+### 1. No file over 500 lines
+
+If a file approaches 500 lines, split it using Rust's module system:
+
+```
+routes/admin/mod.rs      → sub-module declarations + router assembly
+routes/admin/settings.rs → settings form logic only
+routes/admin/backup.rs   → backup list/download/delete only
+routes/admin/system.rs   → system info + backup trigger only
+routes/admin/logs.rs     → log streaming only
+```
+
+### 2. Single responsibility per module
+
+Each `.rs` file has one clear purpose. Examples:
+- `sqlite/settings.rs` — only key-value settings CRUD
+- `sqlite/migrations.rs` — only schema migration logic
+- `email.rs` — only SMTP email composition and delivery
+
+### 3. Trait-based abstraction at every boundary
+
+```rust
+// ✅ Good: trait boundary enables testing and swapping implementations
+pub trait Migrator {
+    type Source;
+    type Report;
+    fn validate_source(&self, source: &Self::Source)
+        -> Result<(SchemaInfo, SourceReport, MigrationReport), MigrateError>;
+    fn migrate(&self, source: &Self::Source, target: &Connection)
+        -> Result<MigrationReport, MigrateError>;
+}
+
+// ✅ Good: integration trait
+pub trait NotificationSink: Send + Sync {
+    fn notify(&self, detection: &Detection) -> impl Future<Output = Result<bool, Error>>;
+}
+```
+
+### 4. Sub-modules for grouped functionality
+
+```rust
+// In birdnet-db/src/sqlite/mod.rs
+pub mod connection;
+pub mod migrations;
+pub mod settings;
+pub mod queries;          // further sub-modules inside
+
+// In birdnet-db/src/sqlite/queries/mod.rs
+pub mod detections;
+pub mod species;
+pub mod correlation;
+pub mod analytics;
+```
+
+### 5. Re-export via `pub use` at crate root
+
+Consumers use the crate's public API, not internal module paths:
+
+```rust
+// birdnet-db/src/lib.rs
+pub use sqlite::connection::DbConnection;
+pub use sqlite::settings::{get_or, set};
+pub use sqlite::queries::detections::insert_detection;
+```
+
 ## Testing Philosophy
 
 - Unit tests within modules (`#[cfg(test)]` pattern)
@@ -93,6 +175,20 @@ This keeps library crates portable and testable without an async runtime.
 - **Mutation testing** via `cargo-mutants` (target: >85% kill rate)
 - Coverage tracked via `cargo-tarpaulin` + Codecov
 - MSRV explicitly specified (1.85) and CI-enforced
+- **Current test count**: ~420 passing across all crates
+
+### Raw String Literals in HTML/SVG
+
+When format strings contain HTML attributes with hex colors (e.g., `fill="#0f172a">`),
+the `"#` sequence terminates `r#"..."#` raw strings. Always use `r##"..."##`:
+
+```rust
+// ❌ WRONG: "# in fill="#0f172a"> terminates the raw string
+write!(f, r#"<rect fill="#0f172a" rx="8"/>"#)?;
+
+// ✅ CORRECT: r##"..."## is not terminated by "#
+write!(f, r##"<rect fill="#0f172a" rx="8"/>"##)?;
+```
 
 ## CI/CD (GitHub Actions)
 
@@ -113,10 +209,14 @@ Concurrency cancellation for redundant PR runs.
 - Prefer `impl` blocks close to their type definitions
 - Use `Self` over repeating the type name
 - Prefer iterators and combinators over manual loops where readable
-- Keep functions short -- if a function exceeds ~40 lines, consider splitting
+- Keep functions short — if a function exceeds ~40 lines, consider splitting
 - No `unwrap()` in library code; `expect()` only with descriptive messages in app code
 - Prefer returning `Result` over panicking
+- Use `tracing::{debug, info, warn, error}` instead of `println!` / `eprintln!`
+- Structured logging: `tracing::info!(species = %name, confidence = conf, "detection");`
 
 ---
+
+*Last updated: 2026-03-14*
 
 [← Architecture](02-architecture.md) | [Back to Index](../RUST_ARCHITECTURE_PLAN.md) | [Next: Dependencies →](04-dependencies.md)
