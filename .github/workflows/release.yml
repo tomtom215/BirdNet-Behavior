@@ -1,0 +1,114 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]*"
+
+permissions:
+  contents: write   # needed to create GitHub Releases and upload assets
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ubuntu-24.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Raspberry Pi 4 / 5  (64-bit Raspberry Pi OS Bullseye / Bookworm)
+          - target: aarch64-unknown-linux-gnu
+            glibc: "2.28"
+            asset_name: birdnet-behavior-aarch64-unknown-linux-gnu
+
+          # Standard 64-bit Linux (x86_64)
+          - target: x86_64-unknown-linux-gnu
+            glibc: "2.28"
+            asset_name: birdnet-behavior-x86_64-unknown-linux-gnu
+
+          # Raspberry Pi 3 / 32-bit Pi OS (armv7)
+          - target: armv7-unknown-linux-gnueabihf
+            glibc: "2.28"
+            asset_name: birdnet-behavior-armv7-unknown-linux-gnueabihf
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Zig is the cross-linker — available as a pip package, no Docker needed.
+      - name: Install Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.14.0
+
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild --locked --quiet
+
+      # Cache the Cargo registry and compiled deps between runs.
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.target }}-
+
+      - name: Build (release)
+        run: |
+          cargo zigbuild \
+            --release \
+            --target ${{ matrix.target }}.${{ matrix.glibc }} \
+            --bin birdnet-behavior
+
+      - name: Rename binary
+        run: |
+          cp target/${{ matrix.target }}/release/birdnet-behavior \
+             ${{ matrix.asset_name }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: ${{ matrix.asset_name }}
+          retention-days: 7
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      # Flatten the per-matrix subdirectories that download-artifact creates.
+      - name: Flatten artifacts
+        run: |
+          find artifacts/ -type f -exec mv {} artifacts/ \;
+          find artifacts/ -mindepth 1 -type d -delete
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "BirdNet-Behavior ${{ github.ref_name }}"
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          files: |
+            artifacts/birdnet-behavior-aarch64-unknown-linux-gnu
+            artifacts/birdnet-behavior-x86_64-unknown-linux-gnu
+            artifacts/birdnet-behavior-armv7-unknown-linux-gnueabihf
+            install.sh
