@@ -20,11 +20,13 @@ pub mod dashboard;
 pub mod detection_detail;
 pub mod health;
 pub mod heatmap;
+pub mod history;
 pub mod livestream;
 pub mod recordings;
 pub mod species_pages;
 pub mod timeseries_dash;
 pub mod today;
+pub mod weekly_report;
 
 use axum::Router;
 use axum::response::Html;
@@ -56,6 +58,8 @@ pub fn router() -> Router<AppState> {
         .merge(today::router())
         .merge(recordings::router())
         .merge(livestream::router())
+        .merge(weekly_report::router())
+        .merge(history::router())
 }
 
 /// Render a full page by substituting content into the layout template.
@@ -77,7 +81,9 @@ pub(crate) fn render_page(title: &str, content: &str, active_nav: &str) -> Html<
         .replace("{{nav_species}}", nav("species"))
         .replace("{{nav_recordings}}", nav("recordings"))
         .replace("{{nav_analytics}}", nav("analytics"))
-        .replace("{{nav_timeseries}}", nav("timeseries"));
+        .replace("{{nav_timeseries}}", nav("timeseries"))
+        .replace("{{nav_history}}", nav("history"))
+        .replace("{{nav_weekly}}", nav("weekly"));
     Html(html)
 }
 

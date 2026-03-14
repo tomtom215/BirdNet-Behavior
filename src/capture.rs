@@ -391,6 +391,7 @@ mod tests {
             metadata_model: None,
             sf_thresh: 0.03,
             privacy_threshold: 0.0,
+            overlap: 0.0,
         }
     }
 }

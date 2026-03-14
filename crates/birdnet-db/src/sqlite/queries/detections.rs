@@ -41,6 +41,20 @@ pub fn detection_count(conn: &Connection) -> Result<i64, DbError> {
     Ok(count)
 }
 
+/// Get the total number of detections for a specific date.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn detection_count_for_date(conn: &Connection, date: &str) -> Result<i64, DbError> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM detections WHERE Date = ?1",
+        params![date],
+        |row| row.get(0),
+    )
+    .map_err(DbError::Sqlite)
+}
+
 /// Query detections for a specific date, ordered by time descending.
 ///
 /// # Errors
