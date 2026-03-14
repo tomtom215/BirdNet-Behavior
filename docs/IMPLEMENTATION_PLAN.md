@@ -1,7 +1,7 @@
 # Implementation Plan: 100% BirdNET-Pi Feature Parity
 
 **Date**: 2026-03-14
-**Current Parity**: ~88% (verified against source)
+**Current Parity**: ~91% (verified against source)
 **Goal**: 100% verified feature parity + leapfrog capabilities
 
 This is the **working document** for reaching 100% parity. Each task includes
@@ -214,29 +214,12 @@ then config values.
 
 ---
 
-### 3.3 ❌ Audio Format Conversion (MP3/FLAC/OGG)
-**Priority**: P1 — extraction currently WAV only
-**Files to modify**:
-- `crates/birdnet-core/src/audio/extraction.rs` — add sox/ffmpeg subprocess for format conversion
+### 3.3 ✅ Audio Format Conversion (MP3/FLAC/OGG)
+**Status**: COMPLETE — `crates/birdnet-core/src/audio/extraction.rs`, `src/cli.rs`
 
-**Implementation**:
-```rust
-// Add to ExtractionConfig:
-pub audio_format: AudioFormat, // WAV | Mp3 | Flac | Ogg
-
-// Post-extraction conversion:
-fn convert_to_format(wav_path: &Path, target: AudioFormat) -> Result<PathBuf, ExtractionError> {
-    let output = wav_path.with_extension(target.extension());
-    Command::new("sox")
-        .arg(wav_path)
-        .arg(&output)
-        .status()?;
-    fs::remove_file(wav_path)?;
-    Ok(output)
-}
-```
-
-**Acceptance**: `--audio-format mp3` produces MP3 extraction files.
+Added `AudioFormat` enum (Wav/Mp3/Flac/Ogg) with `target_format` field in `ExtractionConfig`.
+Post-extraction conversion via ffmpeg (preferred) or sox (fallback). CLI flag `--audio-format` /
+`BIRDNET_AUDIO_FORMAT` env var. Falls back to WAV if conversion tools unavailable.
 
 ---
 
@@ -310,32 +293,12 @@ Initialized from CLI or config `SITENAME` key via `init_site_name()` in main.
 
 ## Sprint 6: Advanced Detection (Effort: High, Leapfrog)
 
-### 6.1 ❌ Per-Species Confidence Thresholds
-**Priority**: P1 — #1 community request not in BirdNET-Pi
-**Files to create/modify**:
-- `crates/birdnet-db/src/sqlite/` — add `species_thresholds` table
-- `crates/birdnet-core/src/inference/model.rs` — accept per-species override map
-- `crates/birdnet-web/src/routes/admin/species/` — threshold editor UI
+### 6.1 ✅ Per-Species Confidence Thresholds
+**Status**: COMPLETE — `crates/birdnet-db/` (migration v6 + queries), `crates/birdnet-web/src/routes/admin/species/`, `src/daemon.rs`
 
-**Schema**:
-```sql
-CREATE TABLE species_thresholds (
-    sci_name TEXT PRIMARY KEY,
-    confidence_threshold REAL NOT NULL,
-    created_at TEXT NOT NULL
-);
-```
-
-**Implementation**:
-```rust
-// In detection pipeline, after inference:
-let threshold = species_thresholds.get(&detection.sci_name)
-    .copied()
-    .unwrap_or(global_threshold);
-if detection.confidence >= threshold { ... }
-```
-
-**Acceptance**: Robin can be set to 80% threshold while rare warbler defaults to global 25%.
+Added `species_thresholds` table (migration v6) with CRUD queries. Admin UI with HTMX lazy-loading
+for threshold management. Daemon loads thresholds at startup and filters detections per-species
+before applying global threshold fallback.
 
 ---
 
@@ -390,25 +353,13 @@ pub rtsp_urls: Vec<String>,
 
 ## Sprint 7: Spectrogram & Audio UX (Effort: Medium)
 
-### 7.1 🔧 Spectrogram Text Overlay
-**Priority**: P1
-**Files to modify**:
-- `crates/birdnet-core/src/audio/spectrogram.rs` — add text rendering via tiny_skia or image crate
+### 7.1 ✅ Spectrogram Text Overlay
+**Status**: COMPLETE — `crates/birdnet-web/src/routes/spectrogram.rs`
 
-**Current state**: Generates raw mel spectrogram PNG without labels.
-
-**Implementation**:
-```
-Add SpectrogramConfig::label: Option<SpectrogramLabel> {
-    species_name: String,
-    confidence: f32,
-    timestamp: String,
-}
-
-Render using imageproc or embed font bytes + blit text
-```
-
-**Acceptance**: Spectrogram PNG shows species name, confidence %, and timestamp as overlay.
+Added `SpectrogramLabel` struct and `encode_spectrogram_png_labeled()` with minimal 5x7 bitmap font
+renderer (no external dependencies). Species name, confidence %, and timestamp rendered as white text
+on darkened background strip. Activated via `?species=&confidence=&time=` query params on spectrogram
+endpoint.
 
 ---
 
@@ -443,16 +394,16 @@ GET /recordings?view=calendar → monthly calendar with detection dots
 ### P1 Important (Ship before competitive comparison)
 - [x] 2.5 Language/i18n wiring ✅
 - [x] 3.1 eBird CSV export ✅
-- [ ] 3.3 Audio format conversion
+- [x] 3.3 Audio format conversion ✅
 - [x] 4.1 Per-species cooldown ✅
 - [x] 4.2 New/rare species highlighting ✅
 - [x] 4.3 Image in notifications ✅
 - [x] 4.4 eBird/AllAboutBirds links ✅
 - [x] 5.2 Full backup (config + audio + DB) ✅
 - [x] 5.3 Custom site name ✅
-- [ ] 6.1 Per-species confidence thresholds ← leapfrog feature
+- [x] 6.1 Per-species confidence thresholds ✅ ← leapfrog feature
 - [ ] 6.3 Multiple RTSP streams
-- [ ] 7.1 Spectrogram text overlay
+- [x] 7.1 Spectrogram text overlay ✅
 - [ ] 7.2 Recording browser date/species nav
 
 ### P2 Defer (Post 1.0)
@@ -477,12 +428,12 @@ GET /recordings?view=calendar → monthly calendar with detection dots
 |--------|-------|--------|----------|
 | 1 | Already done (1.1–1.10) | 0 | P0 ✅ |
 | 2 | UI gaps (2.1–2.5) | ✅ COMPLETE | P0-P1 ✅ |
-| 3 | Export + streaming (3.1–3.2 done, 3.3 remaining) | ~1 day | P1 |
+| 3 | Export + streaming (3.1–3.3) | ✅ COMPLETE | P1 ✅ |
 | 4 | Notifications + images (4.1–4.4) | ✅ COMPLETE | P1 ✅ |
 | 5 | Admin + system (5.1–5.3) | ✅ COMPLETE | P0-P1 ✅ |
-| 6 | Advanced detection (6.1–6.3) | ~3 days | P1 |
-| 7 | Spectrogram + recording UX (7.1–7.2) | ~2 days | P1 |
-| **Total** | **~4 items remaining for P1 parity** | **~6 dev-days** | |
+| 6 | Advanced detection (6.1 done, 6.3 remaining) | ~1 day | P1 |
+| 7 | Spectrogram + recording UX (7.1 done, 7.2 remaining) | ~1 day | P1 |
+| **Total** | **~2 items remaining for P1 parity** | **~2 dev-days** | |
 
 ---
 

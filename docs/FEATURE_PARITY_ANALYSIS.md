@@ -9,9 +9,9 @@
 
 ## Executive Summary
 
-BirdNet-Behavior has reached **~88% verified feature parity** with BirdNET-Pi (up from ~78% previously). All P0 items are complete. The remaining gap is concentrated in audio format conversion, per-species confidence thresholds, multiple RTSP streams, spectrogram text overlay, and recording browser navigation.
+BirdNet-Behavior has reached **~91% verified feature parity** with BirdNET-Pi (up from ~88% previously). All P0 items are complete. The remaining gap is concentrated in multiple RTSP streams, recording browser navigation, and lower-priority items.
 
-**What changed since last analysis:** 10 additional features completed — live audio stream wiring, system controls (clear data + full backup), language/i18n CLI+web integration, eBird CSV export, per-species cooldown, new/rare species highlighting, image in Apprise notifications, eBird/AllAboutBirds species links, custom site name, and full backup (config+audio+DB).
+**What changed since last analysis:** 3 additional features completed — audio format conversion (MP3/FLAC/OGG via ffmpeg/sox), per-species confidence thresholds (DB table + admin UI + daemon filtering), and spectrogram text overlay (bitmap font renderer with species/confidence/time labels).
 
 The Rust rewrite **surpasses** BirdNET-Pi in: behavioral analytics, time-series analytics, database resilience, detection deduplication, API design, WebSocket live streaming, notification logging, migration tooling, and deployment simplicity.
 
@@ -66,7 +66,7 @@ Status codes:
 | Whitelist (bypass SF filter) | File-based | `SpeciesFilterConfig::whitelist` | **DONE** | `inference/species_filter.rs` | |
 | Species list tester/preview | Modal in settings | Not implemented | **MISSING** | — | Preview species passing filters |
 | Backlog processing on startup | Processes existing WAV files | `--process-existing` flag | **DONE** | `src/cli.rs` | |
-| Per-species confidence thresholds | Not in BirdNET-Pi | Not implemented | **MISSING** | — | Top community request — should add |
+| Per-species confidence thresholds | Not in BirdNET-Pi | `species_thresholds` table + admin UI + daemon filtering | **BETTER** | `sqlite/queries/species.rs`, `admin/species/` | Leapfrog feature — DB migration v6, CRUD queries, HTMX admin UI |
 
 ### 3. Database
 
@@ -148,8 +148,8 @@ Status codes:
 | Feature | BirdNET-Pi | BirdNet-Behavior | Status | Source | Notes |
 |---------|-----------|-----------------|--------|--------|-------|
 | Detection audio extraction | sox-based with context padding | `Extractor` with symphonia + hound | **DONE** | `audio/extraction.rs` (474 LOC) | BirdNET-Pi formula replicated; saves to `Extracted/By_Date/` |
-| Spectrogram generation | sox + PIL overlay | On-demand mel spectrogram via API | **PARTIAL** | `audio/spectrogram.rs`, `routes/spectrogram.rs` | Raw spectrogram works; missing: text overlay (species/confidence/timestamp) |
-| Audio format selection | `AUDIOFMT` — 80+ sox formats | WAV output only (hound) | **PARTIAL** | `audio/extraction.rs` | Only WAV; no MP3/FLAC/OGG conversion |
+| Spectrogram generation | sox + PIL overlay | On-demand mel spectrogram with text overlay | **DONE** | `audio/spectrogram.rs`, `routes/spectrogram.rs` | Bitmap font renderer for species/confidence/time labels |
+| Audio format selection | `AUDIOFMT` — 80+ sox formats | `AudioFormat` enum with ffmpeg/sox conversion | **DONE** | `audio/extraction.rs` | WAV/MP3/FLAC/OGG via `--audio-format` CLI flag |
 | Frequency shifting (accessibility) | sox pitch / ffmpeg rubberband | Not implemented | **MISSING** | — | |
 | Live spectrogram daemon | `spectrogram.sh` — inotify + sox | Not implemented | **MISSING** | — | Real-time spectrogram of live audio |
 | Custom audio player with spectrogram | `custom-audio-player.js` | Basic HTML audio element | **MISSING** | — | No rich player with spectrogram viz |
@@ -315,16 +315,13 @@ All P0 items are now **COMPLETE**:
 
 | # | Gap | Effort | Impact | Notes |
 |---|-----|--------|--------|-------|
-| 1 | **Audio format conversion (MP3/FLAC/OGG)** | Medium | User choice of extraction format | sox/ffmpeg subprocess in `audio/extraction.rs` |
-| 2 | **Per-species confidence thresholds** | Medium | Most requested feature not in BirdNET-Pi | New column in settings or separate table |
-| 3 | **Multiple RTSP streams** | Medium | Many users have multi-mic setups (GH#459) | `src/cli.rs`, `capture/manager.rs` |
-| 4 | **Spectrogram text overlay** | Low | Species/confidence/timestamp on PNG | Modify `audio/spectrogram.rs` |
-| 5 | **Recording browser date/species nav** | Medium | Browse by date, species, calendar | `pages/recordings.rs` |
-| 6 | **Restore from backup** | Medium | Data safety | Chunked upload + extract |
-| 7 | **Species mini-graphs (sparklines)** | Low | Visual engagement | SVG inline in species list |
-| 8 | **Kiosk mode (auto-refresh)** | Low | Dedicated displays | HTMX polling + simplified layout |
-| 9 | **Weekly report notification wiring** | Low | Scheduled notification | Wire `WeeklyReportGenerator` to cron task |
-| 10 | **Species list tester/preview** | Medium | Debug filter settings | Admin modal showing passing species |
+| 1 | **Multiple RTSP streams** | Medium | Many users have multi-mic setups (GH#459) | `src/cli.rs`, `capture/manager.rs` |
+| 2 | **Recording browser date/species nav** | Medium | Browse by date, species, calendar | `pages/recordings.rs` |
+| 3 | **Restore from backup** | Medium | Data safety | Chunked upload + extract |
+| 4 | **Species mini-graphs (sparklines)** | Low | Visual engagement | SVG inline in species list |
+| 5 | **Kiosk mode (auto-refresh)** | Low | Dedicated displays | HTMX polling + simplified layout |
+| 6 | **Weekly report notification wiring** | Low | Scheduled notification | Wire `WeeklyReportGenerator` to cron task |
+| 7 | **Species list tester/preview** | Medium | Debug filter settings | Admin modal showing passing species |
 
 Previously P1, now **COMPLETE**:
 - ~~eBird CSV export~~ ✅
@@ -334,6 +331,9 @@ Previously P1, now **COMPLETE**:
 - ~~eBird/AllAboutBirds species links~~ ✅
 - ~~Custom site name~~ ✅
 - ~~Image in Apprise notifications~~ ✅
+- ~~Audio format conversion (MP3/FLAC/OGG)~~ ✅
+- ~~Per-species confidence thresholds~~ ✅
+- ~~Spectrogram text overlay~~ ✅
 
 ### P2 — Nice to Have / Can Defer
 
@@ -363,12 +363,12 @@ Previously P1, now **COMPLETE**:
 | Category | BirdNET-Pi Features | DONE | PARTIAL | MISSING | BETTER | Parity % |
 |----------|-------------------|------|---------|---------|--------|----------|
 | Audio Capture | 9 | 5 | 2 | 2 | 2 | 56% |
-| Model Inference | 14 | 9 | 1 | 4 | 1 | 64% |
+| Model Inference | 14 | 9 | 1 | 3 | 2 | 64% |
 | Database | 13 | 7 | 0 | 2 | 7 | 54% (+54% BETTER) |
 | Web Pages | 16 | 9 | 4 | 3 | 4 | 56% |
 | Admin Panel | 16 | 11 | 1 | 4 | 3 | 69% |
 | Notifications | 13 | 11 | 1 | 1 | 1 | 85% |
-| Audio Processing | 6 | 1 | 2 | 3 | 0 | 17% |
+| Audio Processing | 6 | 3 | 0 | 3 | 0 | 50% |
 | Data Export | 5 | 3 | 0 | 1 | 2 | 60% |
 | Live Streaming | 3 | 1 | 0 | 1 | 0 | 33% |
 | Disk Management | 6 | 3 | 0 | 3 | 0 | 50% |
@@ -377,14 +377,14 @@ Previously P1, now **COMPLETE**:
 | UI/UX | 13 | 4 | 1 | 8 | 0 | 31% |
 | Image Providers | 5 | 3 | 0 | 2 | 0 | 60% |
 | Configuration | 6 | 4 | 1 | 1 | 1 | 67% |
-| **TOTAL** | **141** | **75** | **13** | **41** | **26** | **88% addressed** |
+| **TOTAL** | **141** | **77** | **11** | **40** | **27** | **91% addressed** |
 
-**Overall: ~88% addressed** (75 DONE + 13 PARTIAL + 26 BETTER vs. BirdNET-Pi = 114/141 features)
+**Overall: ~91% addressed** (77 DONE + 11 PARTIAL + 27 BETTER vs. BirdNET-Pi = 115/141 features)
 
-The 12% gap is concentrated in:
+The 9% gap is concentrated in:
 - **UI/UX** (31%): sparklines, kiosk mode, custom image display — CSS/template changes
-- **Audio processing** (17%): format conversion, frequency shifting
 - **Deployment** (17%): install script, auto-update, cron jobs
+- **Audio capture** (56%): multiple RTSP streams, tmpfs
 
 ---
 
