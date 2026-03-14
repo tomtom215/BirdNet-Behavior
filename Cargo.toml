@@ -7,6 +7,7 @@ members = [
     "crates/birdnet-behavioral",
     "crates/birdnet-timeseries",
     "crates/birdnet-migrate",
+    "crates/birdnet-scheduler",
 ]
 resolver = "2"
 
@@ -30,6 +31,7 @@ birdnet-integrations = { path = "crates/birdnet-integrations" }
 birdnet-behavioral = { path = "crates/birdnet-behavioral" }
 birdnet-timeseries = { path = "crates/birdnet-timeseries" }
 birdnet-migrate = { path = "crates/birdnet-migrate" }
+birdnet-scheduler = { path = "crates/birdnet-scheduler" }
 
 # Serialization
 serde = { version = "1.0.228", features = ["derive"] }
@@ -139,6 +141,7 @@ birdnet-integrations.workspace = true
 birdnet-behavioral.workspace = true
 birdnet-timeseries.workspace = true
 birdnet-migrate.workspace = true
+birdnet-scheduler.workspace = true
 tokio.workspace = true
 axum.workspace = true
 tracing.workspace = true

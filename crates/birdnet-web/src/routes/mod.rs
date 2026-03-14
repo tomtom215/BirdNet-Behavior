@@ -10,6 +10,7 @@ pub mod export;
 pub mod images;
 pub mod pages;
 pub mod recordings;
+pub mod spectrogram;
 pub mod species;
 pub mod static_files;
 pub mod system;
@@ -48,6 +49,7 @@ pub fn api_routes() -> Router<AppState> {
         .nest("/api/v2", websocket::router())
         .nest("/api/v2", images::router())
         .nest("/api/v2", recordings::router())
+        .nest("/api/v2", spectrogram::router())
         .merge(pages::router())
         .merge(static_files::router())
         .merge(admin::router())

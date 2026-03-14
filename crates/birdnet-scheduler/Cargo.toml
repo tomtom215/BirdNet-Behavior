@@ -1,0 +1,17 @@
+[package]
+name = "birdnet-scheduler"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Recording schedule, sunrise/sunset calculation, and night-inhibit for BirdNet-Behavior"
+
+[dependencies]
+serde = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
