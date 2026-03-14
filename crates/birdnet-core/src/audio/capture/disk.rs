@@ -3,8 +3,10 @@
 //! Replaces `disk_check.sh` from BirdNET-Pi.  Uses the `df` command to
 //! query filesystem statistics without `unsafe` code or `libc` bindings.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::time::Duration;
 
 use super::types::CaptureError;
 use super::process::is_audio_file;

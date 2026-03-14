@@ -16,9 +16,11 @@ use std::time::{Duration, Instant};
 
 use crate::audio::capture::is_audio_file;
 use crate::detection::pipeline::{self, PipelineConfig, PreparedChunk};
+use crate::detection::privacy::PrivacyFilter;
 use crate::detection::types::Detection;
 use crate::inference::labels::LabelSet;
 use crate::inference::model::{BirdNetModel, InferenceError, ModelConfig};
+use crate::inference::species_filter::SpeciesFilter;
 
 /// Errors from the detection daemon.
 #[derive(Debug)]
@@ -76,6 +78,16 @@ pub struct DaemonConfig {
     pub model: ModelConfig,
     /// Whether to process files already present in the watch directory on startup.
     pub process_existing: bool,
+    /// Optional path to the metadata ONNX model for species filtering.
+    pub metadata_model_path: Option<PathBuf>,
+    /// Species filter configuration (threshold, whitelist, include/exclude).
+    pub species_filter: crate::inference::species_filter::SpeciesFilterConfig,
+    /// Privacy filter threshold (0.0 = disabled).
+    pub privacy_threshold: f32,
+    /// Station latitude (for species occurrence filtering).
+    pub latitude: Option<f64>,
+    /// Station longitude (for species occurrence filtering).
+    pub longitude: Option<f64>,
 }
 
 /// A detection event produced by the daemon.
@@ -189,6 +201,104 @@ pub fn process_and_infer(
         detections = events.len(),
         total_ms = total.as_millis(),
         "file processing complete"
+    );
+
+    Ok(events)
+}
+
+/// Process a single audio file with privacy and species occurrence filters.
+///
+/// After running inference, applies the privacy filter (suppressing chunks
+/// with human voice) and the species occurrence filter (only keeping species
+/// that are likely present at the given location and time of year).
+///
+/// # Errors
+///
+/// Returns `DaemonError` if any stage fails.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub fn process_and_infer_filtered(
+    path: &Path,
+    pipeline_config: &PipelineConfig,
+    model: &BirdNetModel,
+    privacy_filter: &PrivacyFilter,
+    species_filter: &mut SpeciesFilter,
+    lat: Option<f64>,
+    lon: Option<f64>,
+    week: u32,
+) -> Result<Vec<DetectionEvent>, DaemonError> {
+    let start = Instant::now();
+
+    let chunks = pipeline::process_file(path, pipeline_config)?;
+    let pipeline_elapsed = start.elapsed();
+
+    tracing::debug!(
+        file = %path.display(),
+        chunks = chunks.len(),
+        pipeline_ms = pipeline_elapsed.as_millis(),
+        "audio pipeline complete"
+    );
+
+    // Run inference on all chunks first to collect raw predictions
+    let mut all_predictions: Vec<Vec<Detection>> = Vec::with_capacity(chunks.len());
+
+    for chunk in &chunks {
+        let detections = model.predict(
+            &chunk.spectrogram.data,
+            &chunk.recording.date,
+            &chunk.recording.time,
+            chunk.start_secs,
+            chunk.end_secs,
+            week,
+        )?;
+        all_predictions.push(detections);
+    }
+
+    // Apply privacy filter
+    let filtered_predictions = privacy_filter.filter_predictions(&all_predictions);
+
+    // Build the allowed species set from the species filter
+    let allowed_species = if let (Some(lat), Some(lon)) = (lat, lon) {
+        Some(species_filter.filter_species(lat, lon, week, model.labels())?)
+    } else {
+        None
+    };
+
+    // Collect events, applying species filter
+    let mut events = Vec::new();
+    let total_ms = start.elapsed().as_millis() as u64;
+
+    for (chunk, detections) in chunks.iter().zip(filtered_predictions.iter()) {
+        for detection in detections {
+            // Apply species filter if we have one
+            if let Some(ref allowed) = allowed_species {
+                if !allowed.contains(&detection.scientific_name) {
+                    continue;
+                }
+            }
+
+            tracing::info!(
+                species = %detection.common_name,
+                confidence = format!("{:.1}%", detection.confidence * 100.0),
+                chunk = format!("{:.1}s-{:.1}s", chunk.start_secs, chunk.end_secs),
+                "detection (filtered)"
+            );
+
+            events.push(DetectionEvent {
+                detection: detection.clone(),
+                source_file: path.to_path_buf(),
+                latency_ms: total_ms,
+            });
+        }
+    }
+
+    let total = start.elapsed();
+    tracing::info!(
+        file = %path.display(),
+        detections = events.len(),
+        total_ms = total.as_millis(),
+        privacy = privacy_filter.is_enabled(),
+        species_filter = species_filter.has_model(),
+        "filtered file processing complete"
     );
 
     Ok(events)

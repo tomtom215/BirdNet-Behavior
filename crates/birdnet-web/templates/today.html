@@ -1,0 +1,43 @@
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:0.5rem;">
+    <div>
+        <h1 style="font-size:1.5rem;font-weight:700;margin-bottom:0.25rem;">Today's Detections</h1>
+        <p style="color:var(--text-muted);font-size:0.9rem;" id="today-date"></p>
+    </div>
+    <div id="today-count" style="font-size:1.1rem;font-weight:600;color:var(--accent);"
+         hx-get="/pages/today-count" hx-trigger="load, every 15s" hx-swap="innerHTML">
+        Loading...
+    </div>
+</div>
+
+<div class="card" style="margin-bottom:1rem;">
+    <form id="search-form" style="display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;">
+        <input type="text" name="search" id="today-search"
+               placeholder="Search species... (prefix NOT to exclude)"
+               style="flex:1;min-width:200px;padding:0.5rem 0.75rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:0.9rem;"
+               hx-get="/pages/today-list"
+               hx-trigger="input changed delay:300ms, search"
+               hx-target="#today-results"
+               hx-swap="innerHTML"
+               hx-include="[name='search']">
+        <span class="htmx-indicator" style="color:var(--text-muted);font-size:0.85rem;">Searching...</span>
+    </form>
+</div>
+
+<div id="today-results"
+     hx-get="/pages/today-list"
+     hx-trigger="load, every 15s"
+     hx-swap="innerHTML"
+     hx-include="#today-search">
+    <p style="color:var(--text-muted)">Loading detections...</p>
+</div>
+
+<script>
+(function() {
+    var d = new Date();
+    var ds = d.getFullYear() + '-' +
+        String(d.getMonth()+1).padStart(2,'0') + '-' +
+        String(d.getDate()).padStart(2,'0');
+    var el = document.getElementById('today-date');
+    if (el) el.textContent = ds;
+})();
+</script>
