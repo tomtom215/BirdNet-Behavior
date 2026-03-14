@@ -11,6 +11,7 @@ mod capture;
 mod cli;
 mod daemon;
 mod integrations;
+mod weekly_report;
 
 use clap::Parser;
 use std::path::PathBuf;
@@ -99,6 +100,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize species image cache.
     let state = init_image_cache(state, &cli, config.as_ref());
 
+    // Wire custom image directory (shown before Wikipedia cache).
+    let state = if let Some(ref dir) = cli.custom_image_dir {
+        tracing::info!(path = %dir.display(), "custom species image directory configured");
+        state.with_custom_image_dir(dir.clone())
+    } else {
+        state
+    };
+
     // Wire audio source for live streaming (/stream endpoint).
     let state = init_audio_source(state, &cli, config.as_ref());
 
@@ -124,6 +133,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let heartbeat_client = integrations::create_heartbeat_client(&cli, config.as_ref());
     let notification_filter = integrations::create_notification_filter(&cli);
     let notification_template = integrations::create_notification_template(&cli, config.as_ref());
+
+    // Start weekly report scheduler (if Apprise is configured).
+    if let Some(ref apprise) = apprise_client {
+        weekly_report::start_weekly_report_scheduler(
+            &cli.weekly_report_schedule,
+            std::sync::Arc::clone(apprise),
+            state.clone(),
+        );
+    }
+
+    // Start disk manager (monitors and purges old recordings).
+    let _disk_manager_thread = start_disk_manager(&cli, config.as_ref(), &state);
 
     // Start audio capture (with recording schedule integration).
     let _capture_managers = capture::start_capture_manager(&cli, config.as_ref());
@@ -340,6 +361,74 @@ fn init_site_name(
         }
         _ => state,
     }
+}
+
+/// Start the disk manager as a background thread.
+///
+/// Resolves the monitored directory from CLI/config, populates `exclude_paths`
+/// and `locked_file_names` from CLI flags and the database, then starts a
+/// background thread running the disk manager loop.
+///
+/// Returns the thread handle (kept alive until dropped).
+fn start_disk_manager(
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+    state: &birdnet_web::state::AppState,
+) -> Option<std::thread::JoinHandle<()>> {
+    use birdnet_core::audio::capture::{DiskManager, DiskManagerConfig, FullDiskAction};
+
+    let monitored_dir = cli
+        .watch_dir
+        .clone()
+        .or_else(|| config?.get("RECS_DIR").map(PathBuf::from))?;
+
+    // Resolve per-species limit from CLI or config.
+    let max_files_per_species = if cli.max_files_per_species > 0 {
+        cli.max_files_per_species
+    } else {
+        config
+            .and_then(|c| c.get_parsed::<u32>("MAX_FILES_SPECIES").ok())
+            .unwrap_or(0)
+    };
+
+    // Resolve purge threshold from config (default 95).
+    let purge_threshold = config
+        .and_then(|c| c.get_parsed::<u8>("DISK_PURGE_THRESHOLD").ok())
+        .unwrap_or(95);
+
+    // Load locked file names from the database to protect them from purge.
+    let locked_file_names = state
+        .with_db(|conn| birdnet_db::sqlite::locked_file_names(conn).unwrap_or_default());
+
+    let config_obj = DiskManagerConfig {
+        monitored_dir: monitored_dir.clone(),
+        purge_threshold,
+        full_disk_action: FullDiskAction::Purge,
+        max_files_per_species,
+        check_interval_secs: 60,
+        exclude_paths: cli.disk_exclude.clone(),
+        locked_file_names,
+    };
+
+    tracing::info!(
+        dir = %monitored_dir.display(),
+        max_files_per_species,
+        purge_threshold,
+        excluded_paths = cli.disk_exclude.len(),
+        "disk manager configured"
+    );
+
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+    let manager = DiskManager::new(config_obj);
+
+    let handle = std::thread::spawn(move || {
+        manager.run(&stop_rx);
+    });
+
+    // Leak the sender so the manager runs until process exit.
+    std::mem::forget(stop_tx);
+
+    Some(handle)
 }
 
 /// Wait for a shutdown signal (SIGTERM or SIGINT).

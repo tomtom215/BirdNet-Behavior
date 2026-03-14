@@ -125,6 +125,25 @@ pub const MIGRATIONS: &[Migration] = &[
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );",
     },
+    Migration {
+        version: 7,
+        description: "Add is_locked column to detections for purge protection",
+        up_sql: "ALTER TABLE detections ADD COLUMN is_locked INTEGER NOT NULL DEFAULT 0;
+                 CREATE INDEX IF NOT EXISTS idx_detections_locked ON detections(is_locked);",
+    },
+    Migration {
+        version: 8,
+        description: "Create image_blacklist table for blocking inappropriate species images",
+        up_sql: "CREATE TABLE IF NOT EXISTS image_blacklist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sci_name TEXT NOT NULL,
+            url TEXT NOT NULL,
+            reason TEXT,
+            blacklisted_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(sci_name, url)
+        );
+        CREATE INDEX IF NOT EXISTS idx_image_blacklist_sci_name ON image_blacklist(sci_name);",
+    },
 ];
 
 /// Ensure the `schema_version` tracking table exists.
@@ -275,8 +294,8 @@ mod tests {
             )
             .unwrap();
         assert!(
-            index_count >= 6,
-            "expected at least 6 indexes, got {index_count}"
+            index_count >= 7,
+            "expected at least 7 indexes, got {index_count}"
         );
     }
 
