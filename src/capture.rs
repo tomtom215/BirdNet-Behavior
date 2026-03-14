@@ -292,6 +292,7 @@ fn schedule_monitor_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use birdnet_scheduler::traits::RecordingGate;
 
     #[test]
     fn parse_hhmm_valid() {

@@ -127,72 +127,13 @@ async fn today_partial(
 
             if detections.is_empty() && offset == 0 {
                 html.push_str(
-                    r#"<p style="color:var(--text-muted);text-align:center;padding:2rem;">No detections found today.</p>"#,
+                    "<p style=\"color:var(--text-muted);text-align:center;padding:2rem;\">No detections found today.</p>",
                 );
                 return (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html);
             }
 
             for d in &detections {
-                let conf_pct = d.confidence * 100.0;
-                let cls = conf_class(conf_pct);
-                let enc_name = simple_url_encode(&d.com_name);
-                let enc_sci = simple_url_encode(&d.sci_name);
-
-                // Audio player
-                let audio = d
-                    .file_name
-                    .as_deref()
-                    .filter(|f| !f.is_empty())
-                    .map(|f| {
-                        let basename = std::path::Path::new(f)
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_default();
-                        let safe = escape_html(&basename);
-                        format!(
-                            r#"<audio controls preload="none" style="width:100%;height:32px;margin-top:0.5rem;">
-                              <source src="/api/v2/recordings/{safe}" type="audio/wav">
-                            </audio>"#
-                        )
-                    })
-                    .unwrap_or_default();
-
-                let _ = write!(
-                    html,
-                    r##"<div class="card" style="display:flex;gap:1rem;align-items:flex-start;padding:0.75rem 1rem;">
-  <div style="flex:1;min-width:0;">
-    <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
-      <a href="/species/detail?name={enc_name}" style="font-weight:600;color:var(--text);text-decoration:none;font-size:1rem;">{com_name}</a>
-      <span class="conf {cls}">{conf_pct:.0}%</span>
-    </div>
-    <div style="color:var(--text-muted);font-size:0.8rem;font-style:italic;">{sci_name}</div>
-    <div style="color:var(--text-muted);font-size:0.8rem;margin-top:0.25rem;">
-      <a href="/detections/detail?date={date_enc}&time={time_enc}&name={enc_name}" style="color:var(--text-muted);text-decoration:none;">{time}</a>
-    </div>
-    {audio}
-  </div>
-  <div style="display:flex;flex-direction:column;gap:0.25rem;flex-shrink:0;">
-    <button hx-post="/pages/today-delete"
-            hx-vals='{{"date":"{date_raw}","time":"{time_raw}","sci_name":"{sci_name_raw}"}}'
-            hx-target="#today-results"
-            hx-swap="innerHTML"
-            hx-include="#today-search"
-            hx-confirm="Delete detection of {com_name} at {time}?"
-            style="background:none;border:1px solid var(--danger);color:var(--danger);padding:0.2rem 0.5rem;border-radius:var(--radius);cursor:pointer;font-size:0.75rem;"
-            title="Delete this detection">
-      Delete
-    </button>
-  </div>
-</div>"##,
-                    com_name = escape_html(&d.com_name),
-                    sci_name = escape_html(&d.sci_name),
-                    time = escape_html(&d.time),
-                    date_enc = simple_url_encode(&d.date),
-                    time_enc = simple_url_encode(&d.time),
-                    date_raw = escape_html(&d.date),
-                    time_raw = escape_html(&d.time),
-                    sci_name_raw = escape_html(&d.sci_name),
-                );
+                render_detection_card(&mut html, d);
             }
 
             // "Load more" button if there are more results
@@ -205,18 +146,16 @@ async fn today_partial(
                     .filter(|s| !s.trim().is_empty())
                     .map(|s| format!("&search={}", simple_url_encode(s)))
                     .unwrap_or_default();
+                let remaining = total_u.saturating_sub(shown);
                 let _ = write!(
                     html,
-                    r#"<div style="text-align:center;padding:1rem;">
-  <button hx-get="/pages/today-list?offset={next_offset}&limit={limit}{search_param}"
-          hx-target="#today-results"
-          hx-swap="innerHTML"
-          style="background:var(--bg-hover);border:1px solid var(--border);color:var(--text);padding:0.5rem 1.5rem;border-radius:var(--radius);cursor:pointer;font-size:0.9rem;">
-    Load {limit} more ({remaining} remaining)
-  </button>
-</div>"#,
-                    next_offset = shown,
-                    remaining = total_u.saturating_sub(shown),
+                    "<div style=\"text-align:center;padding:1rem;\">\
+                     <button hx-get=\"/pages/today-list?offset={shown}&limit={limit}{search_param}\" \
+                     hx-target=\"#today-results\" hx-swap=\"innerHTML\" \
+                     style=\"background:var(--bg-hover);border:1px solid var(--border);color:var(--text);\
+                     padding:0.5rem 1.5rem;border-radius:var(--radius);cursor:pointer;font-size:0.9rem;\">\
+                     Load {limit} more ({remaining} remaining)\
+                     </button></div>",
                 );
             }
 
@@ -228,6 +167,68 @@ async fn today_partial(
             "<p>Error loading detections</p>".to_string(),
         ),
     }
+}
+
+/// Render a single detection card into the HTML buffer.
+fn render_detection_card(html: &mut String, d: &birdnet_db::sqlite::DetectionRow) {
+    let conf_pct = d.confidence * 100.0;
+    let cls = conf_class(conf_pct);
+    let enc_name = simple_url_encode(&d.com_name);
+
+    // Audio player
+    let audio = d
+        .file_name
+        .as_deref()
+        .filter(|f| !f.is_empty())
+        .map(|f| {
+            let basename = std::path::Path::new(f)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let safe = escape_html(&basename);
+            format!(
+                "<audio controls preload=\"none\" style=\"width:100%;height:32px;margin-top:0.5rem;\">\
+                 <source src=\"/api/v2/recordings/{safe}\" type=\"audio/wav\">\
+                 </audio>"
+            )
+        })
+        .unwrap_or_default();
+
+    let com_name = escape_html(&d.com_name);
+    let sci_name = escape_html(&d.sci_name);
+    let time = escape_html(&d.time);
+    let date_enc = simple_url_encode(&d.date);
+    let time_enc = simple_url_encode(&d.time);
+    let date_raw = escape_html(&d.date);
+    let time_raw = escape_html(&d.time);
+    let sci_name_raw = escape_html(&d.sci_name);
+
+    let _ = write!(
+        html,
+        "<div class=\"card\" style=\"display:flex;gap:1rem;align-items:flex-start;padding:0.75rem 1rem;\">\
+         <div style=\"flex:1;min-width:0;\">\
+         <div style=\"display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;\">\
+         <a href=\"/species/detail?name={enc_name}\" style=\"font-weight:600;color:var(--text);text-decoration:none;font-size:1rem;\">{com_name}</a>\
+         <span class=\"conf {cls}\">{conf_pct:.0}%</span>\
+         </div>\
+         <div style=\"color:var(--text-muted);font-size:0.8rem;font-style:italic;\">{sci_name}</div>\
+         <div style=\"color:var(--text-muted);font-size:0.8rem;margin-top:0.25rem;\">\
+         <a href=\"/detections/detail?date={date_enc}&time={time_enc}&name={enc_name}\" \
+         style=\"color:var(--text-muted);text-decoration:none;\">{time}</a>\
+         </div>\
+         {audio}\
+         </div>\
+         <div style=\"display:flex;flex-direction:column;gap:0.25rem;flex-shrink:0;\">\
+         <button hx-post=\"/pages/today-delete\" \
+         hx-vals='{{\"date\":\"{date_raw}\",\"time\":\"{time_raw}\",\"sci_name\":\"{sci_name_raw}\"}}' \
+         hx-target=\"#today-results\" hx-swap=\"innerHTML\" hx-include=\"#today-search\" \
+         hx-confirm=\"Delete detection of {com_name} at {time}?\" \
+         style=\"background:none;border:1px solid var(--danger);color:var(--danger);padding:0.2rem 0.5rem;\
+         border-radius:var(--radius);cursor:pointer;font-size:0.75rem;\" \
+         title=\"Delete this detection\">\
+         Delete</button>\
+         </div></div>",
+    );
 }
 
 /// Delete a detection and re-render the list.
@@ -244,13 +245,11 @@ async fn delete_detection(
     })
     .await;
 
-    // Return an HTMX redirect header to reload the today list
+    // Return an HTMX trigger to reload the today list
     (
         StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, "text/html"),
-        ],
-        r#"<div hx-get="/pages/today-list" hx-trigger="load" hx-target="#today-results" hx-swap="innerHTML" hx-include="#today-search"></div>"#.to_string(),
+        [(header::CONTENT_TYPE, "text/html")],
+        "<div hx-get=\"/pages/today-list\" hx-trigger=\"load\" hx-target=\"#today-results\" hx-swap=\"innerHTML\" hx-include=\"#today-search\"></div>".to_string(),
     )
 }
 
@@ -276,7 +275,7 @@ async fn relabel_detection(
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/html")],
-        r#"<div hx-get="/pages/today-list" hx-trigger="load" hx-target="#today-results" hx-swap="innerHTML" hx-include="#today-search"></div>"#.to_string(),
+        "<div hx-get=\"/pages/today-list\" hx-trigger=\"load\" hx-target=\"#today-results\" hx-swap=\"innerHTML\" hx-include=\"#today-search\"></div>".to_string(),
     )
 }
 

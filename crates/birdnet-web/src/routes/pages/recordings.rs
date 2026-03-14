@@ -64,15 +64,15 @@ async fn species_list_partial(State(state): State<AppState>) -> impl IntoRespons
                 let enc = simple_url_encode(&s.com_name);
                 let _ = write!(
                     html,
-                    r#"<div class="species-item" style="cursor:pointer;"
+                    r##"<div class="species-item" style="cursor:pointer;"
                          hx-get="/pages/recordings-by-species?name={enc}"
                          hx-target="#recordings-detail-content"
                          hx-swap="innerHTML"
-                         onclick="document.getElementById('recordings-detail').style.display=''">
+                         onclick="document.getElementById(&quot;recordings-detail&quot;).style.display=&quot;&quot;">
   <span class="species-name">{name}</span>
   <span style="color:var(--text-muted);font-size:0.8rem;font-style:italic;margin-left:0.5rem;">{sci}</span>
   <span class="species-count">{count}</span>
-</div>"#,
+</div>"##,
                     name = escape_html(&s.com_name),
                     sci = escape_html(&s.sci_name),
                     count = s.count,
@@ -110,13 +110,13 @@ async fn date_list_partial(State(state): State<AppState>) -> impl IntoResponse {
                 let enc = simple_url_encode(date);
                 let _ = write!(
                     html,
-                    r#"<div class="species-item" style="cursor:pointer;"
+                    r##"<div class="species-item" style="cursor:pointer;"
                          hx-get="/pages/recordings-by-date?date={enc}"
                          hx-target="#recordings-detail-content"
                          hx-swap="innerHTML"
-                         onclick="document.getElementById('recordings-detail').style.display=''">
+                         onclick="document.getElementById(&quot;recordings-detail&quot;).style.display=&quot;&quot;">
   <span class="species-name">{date}</span>
-</div>"#,
+</div>"##,
                     date = escape_html(date),
                 );
             }
