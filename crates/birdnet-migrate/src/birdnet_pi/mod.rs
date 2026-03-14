@@ -1,13 +1,21 @@
 //! BirdNET-Pi source support.
 //!
 //! Provides `SchemaDetector`, `Migrator`, and `Validator` implementations
-//! for the BirdNET-Pi `BirdDB.txt` SQLite format.
+//! for the BirdNET-Pi `BirdDB.txt` SQLite format **and** the CSV/TSV
+//! detection log export.
+//!
+//! | Format | Extension(s) | Importer |
+//! |--------|-------------|----------|
+//! | SQLite | `.db`, `.txt`, `.sqlite` | [`BirdNetPiImporter`] |
+//! | CSV/TSV | `.csv`, `.tsv`, `.txt` (tab-delimited) | [`CsvImporter`] |
 
+pub mod csv_importer;
 pub mod detector;
 pub mod importer;
 pub mod species_report;
 pub mod validator;
 
+pub use csv_importer::CsvImporter;
 pub use detector::BirdNetPiDetector;
 pub use importer::BirdNetPiImporter;
 pub use species_report::{
@@ -23,7 +31,8 @@ use crate::progress::ProgressHandle;
 use crate::schema::DetectedSchema;
 use crate::traits::{MigrationSummary, ValidationReport};
 
-/// High-level entry point: detect, validate, and import a BirdNET-Pi database.
+/// High-level entry point: detect, validate, and import a BirdNET-Pi database
+/// **or** CSV/TSV detection log.
 ///
 /// This is the function called by the web admin migration endpoint.
 /// All three steps are run in sequence; validation failures are non-fatal
@@ -42,6 +51,11 @@ pub fn run_migration(
     progress: &ProgressHandle,
 ) -> Result<MigrationSummary, MigrateError> {
     use crate::traits::{Migrator, SchemaDetector, Validator};
+
+    // CSV/TSV path — if the file is not a SQLite database, try CSV import.
+    if is_csv_file(source_path) {
+        return CsvImporter.migrate(source_path, dest_path, progress);
+    }
 
     let detector = BirdNetPiDetector;
     let validator = BirdNetPiValidator;
@@ -77,6 +91,8 @@ pub fn run_migration(
 /// Returns a tuple of `(schema, validation_report, migration_report)` for
 /// the admin UI to display a comprehensive pre-migration preview.
 ///
+/// For CSV files, returns an estimated schema and a minimal validation report.
+///
 /// # Errors
 ///
 /// Returns `MigrateError` if the source cannot be opened.
@@ -84,6 +100,21 @@ pub fn validate_source(
     source_path: &Path,
 ) -> Result<(DetectedSchema, ValidationReport, MigrationReport), MigrateError> {
     use crate::traits::{SchemaDetector, Validator};
+
+    if is_csv_file(source_path) {
+        let (schema, report) = validate_csv_source(source_path)?;
+        let migration_report = MigrationReport {
+            total_rows: schema.row_count() as i64,
+            unique_species: 0,
+            date_range: None,
+            top_species: vec![],
+            null_date_rows: 0,
+            invalid_confidence_rows: 0,
+            duplicate_rows: 0,
+            quality_ok: report.passed,
+        };
+        return Ok((schema, report, migration_report));
+    }
 
     let detector = BirdNetPiDetector;
     let validator = BirdNetPiValidator;
@@ -94,6 +125,82 @@ pub fn validate_source(
     Ok((schema, report, migration_report))
 }
 
+/// Cheap CSV validation: check file exists, is readable, has ≥1 data line.
+fn validate_csv_source(
+    path: &Path,
+) -> Result<(DetectedSchema, ValidationReport), MigrateError> {
+    use crate::traits::{ValidationCheck, ValidationReport};
+    use std::io::{BufRead, BufReader};
+
+    let file = std::fs::File::open(path).map_err(MigrateError::Io)?;
+    let reader = BufReader::new(file);
+    let mut lines = reader.lines();
+
+    let header = match lines.next() {
+        Some(Ok(h)) => h,
+        _ => {
+            return Ok((
+                DetectedSchema::BirdNetPiCsv { row_count: 0 },
+                ValidationReport::new("BirdNET-Pi CSV", 0, vec![
+                    ValidationCheck::fail("readable", "file is empty or unreadable", true),
+                ]),
+            ));
+        }
+    };
+
+    let delim = if header.contains('\t') { '\t' } else { ',' };
+    let fields: Vec<&str> = header.splitn(6, delim).collect();
+    let has_expected_header = fields.len() >= 5
+        && fields[0].trim().eq_ignore_ascii_case("date")
+        && fields[3].trim().eq_ignore_ascii_case("com_name");
+
+    let row_count = lines
+        .filter(|l| l.as_ref().map_or(false, |s| !s.trim().is_empty()))
+        .count() as u64;
+
+    let checks = vec![
+        if has_expected_header {
+            ValidationCheck::pass("header", "header row matches expected format")
+        } else {
+            ValidationCheck::fail("header", "header does not match expected BirdNET-Pi CSV format", false)
+        },
+        if row_count > 0 {
+            ValidationCheck::pass("row_count", format!("{row_count} data rows found"))
+        } else {
+            ValidationCheck::fail("row_count", "no data rows found", true)
+        },
+    ];
+
+    let schema = DetectedSchema::BirdNetPiCsv { row_count };
+    let report = ValidationReport::new("BirdNET-Pi CSV", row_count, checks);
+    Ok((schema, report))
+}
+
+/// Return `true` if the path extension suggests CSV/TSV.
+///
+/// We also try to peek at the first bytes to distinguish SQLite (magic `SQLite format 3`)
+/// from plain text.
+fn is_csv_file(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_lowercase);
+
+    if matches!(ext.as_deref(), Some("csv") | Some("tsv")) {
+        return true;
+    }
+
+    // Peek: SQLite files begin with "SQLite format 3\0"
+    if let Ok(mut f) = std::fs::File::open(path) {
+        use std::io::Read;
+        let mut magic = [0u8; 16];
+        if f.read_exact(&mut magic).is_ok() {
+            return &magic[..15] != b"SQLite format 3";
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,7 +208,7 @@ mod tests {
     use tempfile::NamedTempFile;
     use crate::progress::ProgressHandle;
 
-    fn make_source(n: usize) -> NamedTempFile {
+    fn make_sqlite_source(n: usize) -> NamedTempFile {
         let tmp = NamedTempFile::new().unwrap();
         let conn = Connection::open(tmp.path()).unwrap();
         conn.execute_batch("CREATE TABLE detections (
@@ -120,8 +227,8 @@ mod tests {
     }
 
     #[test]
-    fn run_migration_end_to_end() {
-        let src = make_source(20);
+    fn run_migration_sqlite_end_to_end() {
+        let src = make_sqlite_source(20);
         let dst = NamedTempFile::new().unwrap();
         let progress = ProgressHandle::new();
 
@@ -132,9 +239,18 @@ mod tests {
 
     #[test]
     fn validate_source_returns_schema_and_report() {
-        let src = make_source(5);
-        let (schema, report, _migration_report) = validate_source(src.path()).unwrap();
+        let src = make_sqlite_source(5);
+        let (schema, report, _) = validate_source(src.path()).unwrap();
         assert!(matches!(schema, DetectedSchema::BirdNetPi { .. }));
         assert!(report.passed);
+    }
+
+    #[test]
+    fn csv_detected_by_extension() {
+        use std::io::Write as _;
+        let mut tmp = NamedTempFile::with_suffix(".csv").unwrap();
+        writeln!(tmp, "Date\tTime\tSci_Name\tCom_Name\tConfidence").unwrap();
+        writeln!(tmp, "2026-01-01\t06:00:00\tTurdus merula\tBlackbird\t0.9").unwrap();
+        assert!(is_csv_file(tmp.path()));
     }
 }

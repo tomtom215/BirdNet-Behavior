@@ -38,6 +38,11 @@ impl SchemaDetector for BirdNetPiDetector {
                 );
                 Ok(schema)
             }
+            DetectedSchema::BirdNetPiCsv { .. } => {
+                // CSV files are handled upstream — should not reach here
+                // via the SQLite detector, but return as-is.
+                Ok(schema)
+            }
         }
     }
 }

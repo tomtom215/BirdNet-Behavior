@@ -14,9 +14,14 @@ use crate::error::MigrateError;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum DetectedSchema {
-    /// BirdNET-Pi `BirdDB.txt` (all known versions share the same schema).
+    /// BirdNET-Pi `BirdDB.txt` / SQLite (all known versions share the same schema).
     BirdNetPi {
         /// Row count in the `detections` table.
+        row_count: u64,
+    },
+    /// BirdNET-Pi CSV/TSV detection log export.
+    BirdNetPiCsv {
+        /// Estimated row count (lines minus header).
         row_count: u64,
     },
     /// Identical schema to BirdNet-Behavior (already migrated or same format).
@@ -29,16 +34,24 @@ impl DetectedSchema {
     /// Human-readable name for this schema.
     pub fn name(&self) -> &'static str {
         match self {
-            Self::BirdNetPi { .. } => "BirdNET-Pi (BirdDB.txt)",
+            Self::BirdNetPi { .. } => "BirdNET-Pi (BirdDB.txt / SQLite)",
+            Self::BirdNetPiCsv { .. } => "BirdNET-Pi CSV/TSV detection log",
             Self::BirdNetBehavior { .. } => "BirdNet-Behavior",
         }
     }
 
-    /// Row count in the detections table.
+    /// Row count in the detections table (or estimated line count for CSV).
     pub fn row_count(&self) -> u64 {
         match self {
-            Self::BirdNetPi { row_count } | Self::BirdNetBehavior { row_count } => *row_count,
+            Self::BirdNetPi { row_count }
+            | Self::BirdNetPiCsv { row_count }
+            | Self::BirdNetBehavior { row_count } => *row_count,
         }
+    }
+
+    /// Whether this schema requires CSV import.
+    pub fn is_csv(&self) -> bool {
+        matches!(self, Self::BirdNetPiCsv { .. })
     }
 }
 

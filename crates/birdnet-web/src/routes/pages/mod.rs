@@ -17,6 +17,7 @@ pub mod behavioral;
 pub mod charts;
 pub mod correlation;
 pub mod dashboard;
+pub mod detection_detail;
 pub mod health;
 pub mod heatmap;
 pub mod species_pages;
@@ -41,6 +42,7 @@ pub(crate) const TIMESERIES_PAGE_HTML: &str =
 pub fn router() -> Router<AppState> {
     dashboard::router()
         .merge(health::router())
+        .merge(detection_detail::router())
         .merge(species_pages::router())
         .merge(behavioral::router())
         .merge(timeseries_dash::router())

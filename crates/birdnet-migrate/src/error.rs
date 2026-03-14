@@ -25,6 +25,8 @@ pub enum MigrateError {
     Io(std::io::Error),
     /// A query or aggregation failed during report generation.
     Query(String),
+    /// CSV/TSV parse error.
+    CsvParse(String),
 }
 
 impl fmt::Display for MigrateError {
@@ -40,6 +42,7 @@ impl fmt::Display for MigrateError {
             Self::Aborted(reason) => write!(f, "migration aborted: {reason}"),
             Self::Io(e) => write!(f, "I/O error: {e}"),
             Self::Query(msg) => write!(f, "query error: {msg}"),
+            Self::CsvParse(msg) => write!(f, "CSV parse error: {msg}"),
         }
     }
 }
