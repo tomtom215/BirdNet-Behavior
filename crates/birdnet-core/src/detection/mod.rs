@@ -4,4 +4,5 @@
 
 pub mod daemon;
 pub mod pipeline;
+pub mod privacy;
 pub mod types;

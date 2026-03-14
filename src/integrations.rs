@@ -1,7 +1,8 @@
 //! Integration client construction helpers.
 //!
-//! Creates `Apprise` and `BirdWeather` clients from CLI flags and/or config
-//! file values.  Returns `None` when the integration is not configured.
+//! Creates `Apprise`, `BirdWeather`, heartbeat, and notification filter
+//! clients from CLI flags and/or config file values.
+//! Returns `None` when the integration is not configured.
 
 use std::sync::Arc;
 
@@ -12,6 +13,9 @@ pub type AppriseHandle = Arc<tokio::sync::Mutex<birdnet_integrations::apprise::C
 
 /// Type alias for the shared email notifier handle.
 pub type EmailHandle = Arc<birdnet_integrations::email::EmailNotifier>;
+
+/// Type alias for the heartbeat client handle.
+pub type HeartbeatHandle = Arc<birdnet_integrations::heartbeat::HeartbeatClient>;
 
 /// Create an Apprise notification client from CLI flags and/or config file values.
 ///
@@ -103,6 +107,88 @@ pub fn create_birdweather_client(
             tracing::error!(error = %e, "failed to create BirdWeather client");
             None
         }
+    }
+}
+
+/// Create a heartbeat client from CLI flags and/or config file values.
+///
+/// Returns `None` if no heartbeat URL is configured.
+pub fn create_heartbeat_client(
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+) -> Option<HeartbeatHandle> {
+    let url = cli
+        .heartbeat_url
+        .clone()
+        .or_else(|| config?.get("HEARTBEAT_URL").map(String::from))?;
+
+    match birdnet_integrations::heartbeat::HeartbeatClient::new(&url) {
+        Ok(client) => {
+            tracing::info!(url = %url, "heartbeat monitoring enabled");
+            Some(Arc::new(client))
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "heartbeat client not created");
+            None
+        }
+    }
+}
+
+/// Create a notification filter from CLI flags.
+pub fn create_notification_filter(
+    cli: &Cli,
+) -> birdnet_integrations::notification::NotificationFilter {
+    use birdnet_integrations::notification::{NotificationFilter, SpeciesFilter, TriggerMode};
+
+    let trigger = TriggerMode::parse(&cli.notify_trigger);
+    let species_filter = SpeciesFilter::new(
+        cli.notify_species_exclude.as_deref(),
+        cli.notify_species_only.as_deref(),
+    );
+
+    tracing::info!(
+        trigger = %trigger,
+        "notification filter configured"
+    );
+
+    NotificationFilter {
+        trigger,
+        species_filter,
+    }
+}
+
+/// Create a notification template from CLI flags and/or config.
+pub fn create_notification_template(
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+) -> birdnet_integrations::notification::NotificationTemplate {
+    use birdnet_integrations::notification::NotificationTemplate;
+
+    let title = cli
+        .notify_title_template
+        .clone()
+        .or_else(|| config?.get("APPRISE_TITLE_TEMPLATE").map(String::from));
+
+    let body = cli
+        .notify_body_template
+        .clone()
+        .or_else(|| config?.get("APPRISE_BODY_TEMPLATE").map(String::from));
+
+    match (title, body) {
+        (Some(t), Some(b)) => {
+            tracing::debug!("custom notification template configured");
+            NotificationTemplate::new(t, b)
+        }
+        (Some(t), None) => NotificationTemplate::new(
+            t,
+            "$comname ($sciname) detected ($confidencepct% confidence) at $time on $date"
+                .to_string(),
+        ),
+        (None, Some(b)) => NotificationTemplate::new(
+            "Bird Detection: $comname".to_string(),
+            b,
+        ),
+        (None, None) => NotificationTemplate::default(),
     }
 }
 

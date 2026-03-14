@@ -155,6 +155,197 @@ pub fn detections_by_species(
     Ok(rows)
 }
 
+/// Delete a detection by date, time, and scientific name.
+///
+/// Returns `true` if a row was deleted, `false` if no match was found.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn delete_detection(
+    conn: &Connection,
+    date: &str,
+    time: &str,
+    sci_name: &str,
+) -> Result<bool, DbError> {
+    let changed = conn.execute(
+        "DELETE FROM detections WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3",
+        params![date, time, sci_name],
+    )?;
+    Ok(changed > 0)
+}
+
+/// Re-label a detection by changing its species identification.
+///
+/// Returns `true` if a row was updated, `false` if no match was found.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn relabel_detection(
+    conn: &Connection,
+    date: &str,
+    time: &str,
+    old_sci_name: &str,
+    new_sci_name: &str,
+    new_com_name: &str,
+) -> Result<bool, DbError> {
+    let changed = conn.execute(
+        "UPDATE detections SET Sci_Name = ?4, Com_Name = ?5 \
+         WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3",
+        params![date, time, old_sci_name, new_sci_name, new_com_name],
+    )?;
+    Ok(changed > 0)
+}
+
+/// Search today's detections with optional text filter, limit, and offset.
+///
+/// If `search` starts with "NOT " (case-insensitive), the rest is used as an
+/// exclusion filter (species name NOT LIKE pattern). Otherwise it is an
+/// inclusion filter.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn todays_detections(
+    conn: &Connection,
+    date: &str,
+    search: Option<&str>,
+    limit: u32,
+    offset: u32,
+) -> Result<Vec<DetectionRow>, DbError> {
+    let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
+        match search.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(s) if s.len() > 4 && s[..4].eq_ignore_ascii_case("NOT ") => {
+                let pattern = format!("%{}%", &s[4..].trim());
+                (
+                    format!(
+                        "SELECT {DETECTION_COLS} FROM detections \
+                         WHERE Date = ?1 AND Com_Name NOT LIKE ?2 \
+                         ORDER BY Time DESC LIMIT ?3 OFFSET ?4"
+                    ),
+                    vec![
+                        Box::new(date.to_string()),
+                        Box::new(pattern),
+                        Box::new(limit),
+                        Box::new(offset),
+                    ],
+                )
+            }
+            Some(s) => {
+                let pattern = format!("%{s}%");
+                (
+                    format!(
+                        "SELECT {DETECTION_COLS} FROM detections \
+                         WHERE Date = ?1 AND (Com_Name LIKE ?2 OR Sci_Name LIKE ?2) \
+                         ORDER BY Time DESC LIMIT ?3 OFFSET ?4"
+                    ),
+                    vec![
+                        Box::new(date.to_string()),
+                        Box::new(pattern),
+                        Box::new(limit),
+                        Box::new(offset),
+                    ],
+                )
+            }
+            None => (
+                format!(
+                    "SELECT {DETECTION_COLS} FROM detections \
+                     WHERE Date = ?1 ORDER BY Time DESC LIMIT ?2 OFFSET ?3"
+                ),
+                vec![
+                    Box::new(date.to_string()),
+                    Box::new(limit),
+                    Box::new(offset),
+                ],
+            ),
+        };
+
+    let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+        param_values.iter().map(AsRef::as_ref).collect();
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(params_ref.as_slice(), map_detection_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Count today's detections with an optional text filter.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn todays_detection_count(
+    conn: &Connection,
+    date: &str,
+    search: Option<&str>,
+) -> Result<i64, DbError> {
+    let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
+        match search.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(s) if s.len() > 4 && s[..4].eq_ignore_ascii_case("NOT ") => {
+                let pattern = format!("%{}%", &s[4..].trim());
+                (
+                    "SELECT COUNT(*) FROM detections WHERE Date = ?1 AND Com_Name NOT LIKE ?2"
+                        .to_string(),
+                    vec![Box::new(date.to_string()), Box::new(pattern)],
+                )
+            }
+            Some(s) => {
+                let pattern = format!("%{s}%");
+                (
+                    "SELECT COUNT(*) FROM detections WHERE Date = ?1 AND (Com_Name LIKE ?2 OR Sci_Name LIKE ?2)"
+                        .to_string(),
+                    vec![Box::new(date.to_string()), Box::new(pattern)],
+                )
+            }
+            None => (
+                "SELECT COUNT(*) FROM detections WHERE Date = ?1".to_string(),
+                vec![Box::new(date.to_string())],
+            ),
+        };
+
+    let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+        param_values.iter().map(AsRef::as_ref).collect();
+    let count: i64 = conn.query_row(&sql, params_ref.as_slice(), |row| row.get(0))?;
+    Ok(count)
+}
+
+/// Get a list of distinct dates that have detections, ordered descending.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn detection_dates(conn: &Connection, limit: u32) -> Result<Vec<String>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT Date FROM detections ORDER BY Date DESC LIMIT ?1",
+    )?;
+    let rows = stmt
+        .query_map(params![limit], |row| row.get(0))?
+        .collect::<Result<Vec<String>, _>>()?;
+    Ok(rows)
+}
+
+/// Get species list with counts for a given date.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn species_for_date(
+    conn: &Connection,
+    date: &str,
+) -> Result<Vec<(String, String, i64)>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT Com_Name, Sci_Name, COUNT(*) as cnt FROM detections \
+         WHERE Date = ?1 GROUP BY Com_Name, Sci_Name ORDER BY cnt DESC",
+    )?;
+    let rows = stmt
+        .query_map(params![date], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

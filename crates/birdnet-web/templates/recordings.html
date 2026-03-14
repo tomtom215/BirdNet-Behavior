@@ -1,0 +1,60 @@
+<h1 style="font-size:1.5rem;font-weight:700;margin-bottom:1rem;">Recording Browser</h1>
+
+<div class="card" style="margin-bottom:1rem;">
+    <div style="display:flex;gap:0.5rem;margin-bottom:1rem;">
+        <button class="tab-btn active" id="tab-by-species"
+                onclick="switchTab('species')"
+                style="padding:0.4rem 1rem;border-radius:var(--radius);border:1px solid var(--border);background:var(--bg-hover);color:var(--text);cursor:pointer;font-size:0.9rem;">
+            By Species
+        </button>
+        <button class="tab-btn" id="tab-by-date"
+                onclick="switchTab('date')"
+                style="padding:0.4rem 1rem;border-radius:var(--radius);border:1px solid var(--border);background:var(--bg-card);color:var(--text-muted);cursor:pointer;font-size:0.9rem;">
+            By Date
+        </button>
+    </div>
+
+    <div id="view-species"
+         hx-get="/pages/recordings-species-list"
+         hx-trigger="load"
+         hx-swap="innerHTML">
+        <p style="color:var(--text-muted)">Loading species...</p>
+    </div>
+
+    <div id="view-date" style="display:none;"
+         hx-get="/pages/recordings-date-list"
+         hx-trigger="revealed"
+         hx-swap="innerHTML">
+        <p style="color:var(--text-muted)">Loading dates...</p>
+    </div>
+</div>
+
+<div id="recordings-detail" class="card" style="display:none;">
+    <div id="recordings-detail-content">
+    </div>
+</div>
+
+<script>
+function switchTab(tab) {
+    var speciesView = document.getElementById('view-species');
+    var dateView = document.getElementById('view-date');
+    var btnSpecies = document.getElementById('tab-by-species');
+    var btnDate = document.getElementById('tab-by-date');
+    if (tab === 'species') {
+        speciesView.style.display = '';
+        dateView.style.display = 'none';
+        btnSpecies.style.background = 'var(--bg-hover)';
+        btnSpecies.style.color = 'var(--text)';
+        btnDate.style.background = 'var(--bg-card)';
+        btnDate.style.color = 'var(--text-muted)';
+    } else {
+        speciesView.style.display = 'none';
+        dateView.style.display = '';
+        btnDate.style.background = 'var(--bg-hover)';
+        btnDate.style.color = 'var(--text)';
+        btnSpecies.style.background = 'var(--bg-card)';
+        btnSpecies.style.color = 'var(--text-muted)';
+        htmx.trigger(dateView, 'revealed');
+    }
+}
+</script>

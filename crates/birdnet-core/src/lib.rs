@@ -6,4 +6,5 @@
 pub mod audio;
 pub mod config;
 pub mod detection;
+pub mod i18n;
 pub mod inference;

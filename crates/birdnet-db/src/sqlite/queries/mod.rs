@@ -11,8 +11,9 @@ pub use analytics::{
 };
 pub use correlation::{companion_species, temporal_cooccurrence, top_cooccurrence_pairs};
 pub use detections::{
-    all_detections, detection_count, detections_by_date, detections_by_species,
-    insert_detection, recent_detections, recent_detections_page,
+    all_detections, delete_detection, detection_count, detection_dates, detections_by_date,
+    detections_by_species, insert_detection, recent_detections, recent_detections_page,
+    relabel_detection, species_for_date, todays_detection_count, todays_detections,
 };
 pub use heatmap::{hourly_totals, species_daily_heatmap, weekly_heatmap};
 pub use species::{

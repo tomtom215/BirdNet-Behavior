@@ -16,9 +16,11 @@ use std::time::{Duration, Instant};
 
 use crate::audio::capture::is_audio_file;
 use crate::detection::pipeline::{self, PipelineConfig, PreparedChunk};
+use crate::detection::privacy::PrivacyFilter;
 use crate::detection::types::Detection;
 use crate::inference::labels::LabelSet;
 use crate::inference::model::{BirdNetModel, InferenceError, ModelConfig};
+use crate::inference::species_filter::SpeciesFilter;
 
 /// Errors from the detection daemon.
 #[derive(Debug)]
@@ -76,6 +78,16 @@ pub struct DaemonConfig {
     pub model: ModelConfig,
     /// Whether to process files already present in the watch directory on startup.
     pub process_existing: bool,
+    /// Optional path to the metadata ONNX model for species filtering.
+    pub metadata_model_path: Option<PathBuf>,
+    /// Species filter configuration (threshold, whitelist, include/exclude).
+    pub species_filter: crate::inference::species_filter::SpeciesFilterConfig,
+    /// Privacy filter threshold (0.0 = disabled).
+    pub privacy_threshold: f32,
+    /// Station latitude (for species occurrence filtering).
+    pub latitude: Option<f64>,
+    /// Station longitude (for species occurrence filtering).
+    pub longitude: Option<f64>,
 }
 
 /// A detection event produced by the daemon.
@@ -194,6 +206,108 @@ pub fn process_and_infer(
     Ok(events)
 }
 
+/// Process a single audio file with privacy and species occurrence filters.
+///
+/// After running inference, applies the privacy filter (suppressing chunks
+/// with human voice) and the species occurrence filter (only keeping species
+/// that are likely present at the given location and time of year).
+///
+/// # Errors
+///
+/// Returns `DaemonError` if any stage fails.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::too_many_arguments
+)]
+pub fn process_and_infer_filtered(
+    path: &Path,
+    pipeline_config: &PipelineConfig,
+    model: &BirdNetModel,
+    privacy_filter: &PrivacyFilter,
+    species_filter: &mut SpeciesFilter,
+    lat: Option<f64>,
+    lon: Option<f64>,
+    week: u32,
+) -> Result<Vec<DetectionEvent>, DaemonError> {
+    let start = Instant::now();
+
+    let chunks = pipeline::process_file(path, pipeline_config)?;
+    let pipeline_elapsed = start.elapsed();
+
+    tracing::debug!(
+        file = %path.display(),
+        chunks = chunks.len(),
+        pipeline_ms = pipeline_elapsed.as_millis(),
+        "audio pipeline complete"
+    );
+
+    // Run inference on all chunks first to collect raw predictions
+    let mut all_predictions: Vec<Vec<Detection>> = Vec::with_capacity(chunks.len());
+
+    for chunk in &chunks {
+        let detections = model.predict(
+            &chunk.spectrogram.data,
+            &chunk.recording.date,
+            &chunk.recording.time,
+            chunk.start_secs,
+            chunk.end_secs,
+            week,
+        )?;
+        all_predictions.push(detections);
+    }
+
+    // Apply privacy filter
+    let filtered_predictions = privacy_filter.filter_predictions(&all_predictions);
+
+    // Build the allowed species set from the species filter
+    let allowed_species = if let (Some(lat), Some(lon)) = (lat, lon) {
+        Some(species_filter.filter_species(lat, lon, week, model.labels())?)
+    } else {
+        None
+    };
+
+    // Collect events, applying species filter
+    let mut events = Vec::new();
+    let total_ms = start.elapsed().as_millis() as u64;
+
+    for (chunk, detections) in chunks.iter().zip(filtered_predictions.iter()) {
+        for detection in detections {
+            // Apply species filter if we have one
+            if let Some(ref allowed) = allowed_species {
+                if !allowed.contains(&detection.scientific_name) {
+                    continue;
+                }
+            }
+
+            tracing::info!(
+                species = %detection.common_name,
+                confidence = format!("{:.1}%", detection.confidence * 100.0),
+                chunk = format!("{:.1}s-{:.1}s", chunk.start_secs, chunk.end_secs),
+                "detection (filtered)"
+            );
+
+            events.push(DetectionEvent {
+                detection: detection.clone(),
+                source_file: path.to_path_buf(),
+                latency_ms: total_ms,
+            });
+        }
+    }
+
+    let total = start.elapsed();
+    tracing::info!(
+        file = %path.display(),
+        detections = events.len(),
+        total_ms = total.as_millis(),
+        privacy = privacy_filter.is_enabled(),
+        species_filter = species_filter.has_model(),
+        "filtered file processing complete"
+    );
+
+    Ok(events)
+}
+
 /// Run the detection daemon loop.
 ///
 /// Watches `watch_dir` for new audio files and processes them through
@@ -228,6 +342,34 @@ pub fn run_daemon(
         "model loaded, starting daemon"
     );
 
+    // Load species filter (metadata model)
+    let mut species_filter = config.metadata_model_path.as_ref().map_or_else(
+        || SpeciesFilter::new_passthrough(config.species_filter.clone()),
+        |mdata_path| match SpeciesFilter::load(mdata_path, config.species_filter.clone()) {
+            Ok(sf) => sf,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "failed to load metadata model, falling back to passthrough"
+                );
+                SpeciesFilter::new_passthrough(config.species_filter.clone())
+            }
+        },
+    );
+
+    // Create privacy filter
+    let privacy_filter = PrivacyFilter::new(config.privacy_threshold);
+
+    if privacy_filter.is_enabled() {
+        tracing::info!(
+            threshold = config.privacy_threshold,
+            "privacy filter enabled"
+        );
+    }
+
+    let lat = config.latitude;
+    let lon = config.longitude;
+
     // Create stop channel
     let (stop_tx, stop_rx) = mpsc::channel();
 
@@ -239,7 +381,16 @@ pub fn run_daemon(
 
     // Process existing files if requested
     if config.process_existing {
-        process_existing_files(&config.watch_dir, &pipeline_config, &model, &event_tx);
+        process_existing_files(
+            &config.watch_dir,
+            &pipeline_config,
+            &model,
+            &privacy_filter,
+            &mut species_filter,
+            lat,
+            lon,
+            &event_tx,
+        );
     }
 
     // Main daemon loop -- runs on current thread
@@ -259,7 +410,16 @@ pub fn run_daemon(
                     // Small delay to let the file finish writing
                     std::thread::sleep(Duration::from_millis(200));
 
-                    match process_and_infer(&path, &pipeline_config, &model) {
+                    match process_and_infer_filtered(
+                        &path,
+                        &pipeline_config,
+                        &model,
+                        &privacy_filter,
+                        &mut species_filter,
+                        lat,
+                        lon,
+                        0, // week will be computed by caller
+                    ) {
                         Ok(events) => {
                             for event in events {
                                 if event_tx.send(event).is_err() {
@@ -292,10 +452,15 @@ pub fn run_daemon(
 }
 
 /// Process any audio files already present in the watch directory.
+#[allow(clippy::too_many_arguments)]
 fn process_existing_files(
     dir: &Path,
     pipeline_config: &PipelineConfig,
     model: &BirdNetModel,
+    privacy_filter: &PrivacyFilter,
+    species_filter: &mut SpeciesFilter,
+    lat: Option<f64>,
+    lon: Option<f64>,
     event_tx: &mpsc::Sender<DetectionEvent>,
 ) {
     let entries = match std::fs::read_dir(dir) {
@@ -321,7 +486,16 @@ fn process_existing_files(
             continue;
         }
 
-        match process_and_infer(&path, pipeline_config, model) {
+        match process_and_infer_filtered(
+            &path,
+            pipeline_config,
+            model,
+            privacy_filter,
+            species_filter,
+            lat,
+            lon,
+            0,
+        ) {
             Ok(events) => {
                 for event in events {
                     let _ = event_tx.send(event);
@@ -356,9 +530,16 @@ mod tests {
             pipeline: PipelineConfig::default(),
             model: ModelConfig::default(),
             process_existing: false,
+            metadata_model_path: None,
+            species_filter: crate::inference::species_filter::SpeciesFilterConfig::default(),
+            privacy_threshold: 0.0,
+            latitude: None,
+            longitude: None,
         };
         assert_eq!(config.watch_dir, PathBuf::from("/tmp/StreamData"));
         assert!(!config.process_existing);
+        assert!(config.metadata_model_path.is_none());
+        assert!((config.privacy_threshold).abs() < f32::EPSILON);
     }
 
     #[test]

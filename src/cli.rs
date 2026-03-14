@@ -91,4 +91,62 @@ pub struct Cli {
     /// Duration of each recording segment in seconds (default: 15).
     #[arg(long, default_value = "15", env = "BIRDNET_SEGMENT_DURATION")]
     pub segment_duration: u32,
+
+    /// Recording schedule mode: "all-day" (24/7), "solar" (sunrise-to-sunset),
+    /// or "fixed:HH:MM-HH:MM" (e.g., "fixed:06:00-20:00").
+    #[arg(long, default_value = "all-day", env = "BIRDNET_RECORDING_SCHEDULE")]
+    pub recording_schedule: String,
+
+    /// Inhibit recording during night hours (requires --latitude and --longitude).
+    #[arg(long, env = "BIRDNET_NIGHT_INHIBIT")]
+    pub night_inhibit: bool,
+
+    /// Minutes offset from sunrise/sunset for twilight recording (default: 30).
+    #[arg(long, default_value = "30", env = "BIRDNET_TWILIGHT_OFFSET")]
+    pub twilight_offset: u32,
+
+    /// Heartbeat URL to ping after each analysis cycle (e.g., uptime monitoring).
+    #[arg(long, env = "BIRDNET_HEARTBEAT_URL")]
+    pub heartbeat_url: Option<String>,
+
+    /// Notification trigger mode: "each", "new-species", "new-species-daily".
+    #[arg(long, default_value = "each", env = "BIRDNET_NOTIFY_TRIGGER")]
+    pub notify_trigger: String,
+
+    /// Species to exclude from notifications (comma-separated scientific names).
+    #[arg(long, env = "BIRDNET_NOTIFY_SPECIES_EXCLUDE")]
+    pub notify_species_exclude: Option<String>,
+
+    /// Only notify for these species (comma-separated scientific names).
+    #[arg(long, env = "BIRDNET_NOTIFY_SPECIES_ONLY")]
+    pub notify_species_only: Option<String>,
+
+    /// Custom notification title template (supports $comname, $sciname, $confidence, etc.).
+    #[arg(long, env = "BIRDNET_NOTIFY_TITLE_TEMPLATE")]
+    pub notify_title_template: Option<String>,
+
+    /// Custom notification body template (supports $comname, $sciname, $confidence, etc.).
+    #[arg(long, env = "BIRDNET_NOTIFY_BODY_TEMPLATE")]
+    pub notify_body_template: Option<String>,
+
+    /// Path to the metadata ONNX model for species occurrence filtering.
+    ///
+    /// When set, the metadata model predicts which species are likely present
+    /// at the station's location and time of year, filtering out unlikely species.
+    #[arg(long, env = "BIRDNET_METADATA_MODEL")]
+    pub metadata_model: Option<PathBuf>,
+
+    /// Species frequency threshold for the metadata model filter (0.0-1.0).
+    ///
+    /// Species with occurrence probability below this threshold are filtered out.
+    /// Lower values allow more species through; higher values are more restrictive.
+    #[arg(long, default_value = "0.03", env = "BIRDNET_SF_THRESH")]
+    pub sf_thresh: f32,
+
+    /// Privacy filter threshold for human voice detection (0.0 = disabled).
+    ///
+    /// When enabled, audio chunks containing human voice are suppressed along
+    /// with adjacent chunks. Typical values: 0.01-0.03.
+    #[arg(long, default_value = "0.0", env = "BIRDNET_PRIVACY_THRESHOLD")]
+    pub privacy_threshold: f32,
 }
