@@ -20,6 +20,7 @@ pub mod dashboard;
 pub mod detection_detail;
 pub mod health;
 pub mod heatmap;
+pub mod livestream;
 pub mod recordings;
 pub mod species_pages;
 pub mod timeseries_dash;
@@ -54,6 +55,7 @@ pub fn router() -> Router<AppState> {
         .merge(correlation::router())
         .merge(today::router())
         .merge(recordings::router())
+        .merge(livestream::router())
 }
 
 /// Render a full page by substituting content into the layout template.

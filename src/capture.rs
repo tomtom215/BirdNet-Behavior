@@ -387,6 +387,9 @@ mod tests {
             notify_species_only: None,
             notify_title_template: None,
             notify_body_template: None,
+            metadata_model: None,
+            sf_thresh: 0.03,
+            privacy_threshold: 0.0,
         }
     }
 }

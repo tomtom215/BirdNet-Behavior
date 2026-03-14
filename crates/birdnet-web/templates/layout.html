@@ -1,12 +1,16 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{title}} - BirdNet-Behavior</title>
     <script src="/static/htmx.min.js"></script>
     <style>
-        :root {
+        /* ------------------------------------------------------------------ */
+        /* Theme: Dark (default)                                              */
+        /* ------------------------------------------------------------------ */
+        :root,
+        [data-theme="dark"] {
             --bg: #0f172a;
             --bg-card: #1e293b;
             --bg-hover: #334155;
@@ -19,7 +23,33 @@
             --danger: #ef4444;
             --border: #334155;
             --radius: 8px;
+            --conf-high-bg: rgba(34,197,94,0.15);
+            --conf-mid-bg: rgba(245,158,11,0.15);
+            --conf-low-bg: rgba(239,68,68,0.15);
+            --input-bg: #0f172a;
         }
+
+        /* ------------------------------------------------------------------ */
+        /* Theme: Light                                                        */
+        /* ------------------------------------------------------------------ */
+        [data-theme="light"] {
+            --bg: #f8fafc;
+            --bg-card: #ffffff;
+            --bg-hover: #f1f5f9;
+            --text: #1e293b;
+            --text-muted: #64748b;
+            --accent: #0284c7;
+            --accent-dim: #0369a1;
+            --success: #16a34a;
+            --warning: #d97706;
+            --danger: #dc2626;
+            --border: #e2e8f0;
+            --conf-high-bg: rgba(22,163,74,0.12);
+            --conf-mid-bg: rgba(217,119,6,0.12);
+            --conf-low-bg: rgba(220,38,38,0.12);
+            --input-bg: #ffffff;
+        }
+
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
@@ -38,7 +68,8 @@
             padding: 0.75rem 1.5rem;
             display: flex;
             align-items: center;
-            gap: 2rem;
+            gap: 1.5rem;
+            flex-wrap: wrap;
         }
         nav .brand {
             font-size: 1.25rem;
@@ -50,13 +81,15 @@
         }
         nav .links {
             display: flex;
-            gap: 1rem;
+            gap: 0.5rem;
+            flex-wrap: wrap;
         }
         nav .links a {
             color: var(--text-muted);
             padding: 0.25rem 0.75rem;
             border-radius: var(--radius);
             transition: background 0.2s, color 0.2s;
+            font-size: 0.9rem;
         }
         nav .links a:hover,
         nav .links a.active {
@@ -64,8 +97,13 @@
             color: var(--text);
             text-decoration: none;
         }
-        nav .status {
+        nav .nav-right {
             margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+        nav .status {
             font-size: 0.85rem;
             color: var(--text-muted);
         }
@@ -78,6 +116,23 @@
         }
         nav .status .dot.ok { background: var(--success); }
         nav .status .dot.err { background: var(--danger); }
+
+        /* Theme toggle */
+        .theme-toggle {
+            background: none;
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            padding: 0.3rem 0.5rem;
+            border-radius: var(--radius);
+            cursor: pointer;
+            font-size: 1rem;
+            line-height: 1;
+            transition: background 0.2s, color 0.2s;
+        }
+        .theme-toggle:hover {
+            background: var(--bg-hover);
+            color: var(--text);
+        }
 
         /* Layout */
         main {
@@ -136,6 +191,8 @@
         }
         @media (max-width: 768px) {
             .grid-2 { grid-template-columns: 1fr; }
+            nav .links { gap: 0.25rem; }
+            nav .links a { padding: 0.25rem 0.5rem; font-size: 0.8rem; }
         }
 
         /* Tables */
@@ -166,9 +223,9 @@
             font-size: 0.8rem;
             font-weight: 600;
         }
-        .conf.high { background: rgba(34,197,94,0.15); color: var(--success); }
-        .conf.mid { background: rgba(245,158,11,0.15); color: var(--warning); }
-        .conf.low { background: rgba(239,68,68,0.15); color: var(--danger); }
+        .conf.high { background: var(--conf-high-bg); color: var(--success); }
+        .conf.mid { background: var(--conf-mid-bg); color: var(--warning); }
+        .conf.low { background: var(--conf-low-bg); color: var(--danger); }
 
         /* Live indicator */
         .live-dot {
@@ -229,12 +286,19 @@
         <div class="brand">BirdNet-Behavior</div>
         <div class="links">
             <a href="/" class="{{nav_dashboard}}">Dashboard</a>
+            <a href="/today" class="{{nav_today}}">Today</a>
             <a href="/species" class="{{nav_species}}">Species</a>
+            <a href="/recordings" class="{{nav_recordings}}">Recordings</a>
             <a href="/analytics" class="{{nav_analytics}}">Analytics</a>
             <a href="/timeseries" class="{{nav_timeseries}}">Time Series</a>
         </div>
-        <div class="status" hx-get="/pages/health-badge" hx-trigger="load, every 30s" hx-swap="innerHTML">
-            <span class="dot"></span> Loading...
+        <div class="nav-right">
+            <button class="theme-toggle" id="theme-toggle" title="Toggle light/dark theme" aria-label="Toggle theme">
+                <span id="theme-icon"></span>
+            </button>
+            <div class="status" hx-get="/pages/health-badge" hx-trigger="load, every 30s" hx-swap="innerHTML">
+                <span class="dot"></span> Loading...
+            </div>
         </div>
     </nav>
     <main>
@@ -243,5 +307,34 @@
     <footer>
         BirdNet-Behavior v{{version}} &middot; Acoustic bird classification with behavioral analytics
     </footer>
+    <script>
+    (function() {
+        var DARK_ICON = '\u263D';
+        var LIGHT_ICON = '\u2600';
+        var html = document.documentElement;
+        var btn = document.getElementById('theme-toggle');
+        var icon = document.getElementById('theme-icon');
+
+        function getPreferred() {
+            var stored = localStorage.getItem('theme');
+            if (stored === 'light' || stored === 'dark') return stored;
+            return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        }
+
+        function apply(theme) {
+            html.setAttribute('data-theme', theme);
+            icon.textContent = theme === 'dark' ? LIGHT_ICON : DARK_ICON;
+        }
+
+        apply(getPreferred());
+
+        btn.addEventListener('click', function() {
+            var current = html.getAttribute('data-theme') || 'dark';
+            var next = current === 'dark' ? 'light' : 'dark';
+            localStorage.setItem('theme', next);
+            apply(next);
+        });
+    })();
+    </script>
 </body>
 </html>

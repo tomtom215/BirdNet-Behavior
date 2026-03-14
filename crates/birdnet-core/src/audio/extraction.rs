@@ -6,9 +6,8 @@
 
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
 
-use super::decode::{AudioData, DecodeError, decode_file};
+use super::decode::{DecodeError, decode_file};
 use super::spectrogram::{MelConfig, MelSpectrogram, SpectrogramError, mel_spectrogram};
 use crate::detection::types::Detection;
 
@@ -56,7 +55,8 @@ impl From<DecodeError> for ExtractionError {
     fn from(e: DecodeError) -> Self {
         match e {
             DecodeError::Io(io_err) => Self::Io(io_err),
-            DecodeError::Format(msg) | DecodeError::NoTracks => Self::Decode(msg),
+            DecodeError::Format(msg) => Self::Decode(msg),
+            DecodeError::NoTracks => Self::Decode(String::from("no audio tracks found")),
         }
     }
 }
