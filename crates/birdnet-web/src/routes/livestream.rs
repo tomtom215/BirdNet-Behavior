@@ -185,7 +185,7 @@ async fn livestream(State(state): State<AppState>) -> Response {
     );
     // ICY-compatible metadata
     headers.insert(
-        HeaderValue::from_static("icy-name").into(),
+        axum::http::HeaderName::from_static("icy-name"),
         HeaderValue::from_static("BirdNet-Behavior Live"),
     );
 

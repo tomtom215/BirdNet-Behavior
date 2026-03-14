@@ -1,6 +1,6 @@
 //! Species occurrence frequency filter using a metadata ONNX model.
 //!
-//! BirdNET provides a metadata model that takes `(latitude, longitude, week_number)`
+//! `BirdNET` provides a metadata model that takes `(latitude, longitude, week_number)`
 //! as input and outputs a probability vector for each of ~6000 species. Species
 //! below the configurable `sf_thresh` threshold are filtered out. A whitelist,
 //! include list, and exclude list allow fine-grained control over which species
@@ -49,7 +49,7 @@ struct CacheKey {
 }
 
 impl CacheKey {
-    fn new(lat: f64, lon: f64, week: u32) -> Self {
+    const fn new(lat: f64, lon: f64, week: u32) -> Self {
         Self {
             lat: lat.to_bits(),
             lon: lon.to_bits(),
@@ -80,7 +80,7 @@ impl fmt::Debug for SpeciesFilter {
             .field("has_model", &self.model.is_some())
             .field("config", &self.config)
             .field("cached", &self.cache_key.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -141,6 +141,7 @@ impl SpeciesFilter {
     /// # Errors
     ///
     /// Returns `InferenceError` if metadata model inference fails.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
     pub fn filter_species(
         &mut self,
         lat: f64,

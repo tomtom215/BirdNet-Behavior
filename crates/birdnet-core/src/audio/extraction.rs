@@ -266,7 +266,7 @@ fn write_wav_clip(
 /// Generate a mel spectrogram for an extracted audio clip.
 ///
 /// Returns the computed [`MelSpectrogram`] in dB scale, suitable for PNG
-/// rendering. Uses the same mel configuration as the BirdNET model pipeline.
+/// rendering. Uses the same mel configuration as the `BirdNET` model pipeline.
 ///
 /// # Errors
 ///

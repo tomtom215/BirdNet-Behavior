@@ -93,7 +93,7 @@ impl PrivacyFilter {
 /// Check if a chunk's top-N predictions contain a human label.
 fn chunk_contains_human(detections: &[Detection], cutoff: usize) -> bool {
     let check_count = detections.len().min(cutoff);
-    detections[..check_count].iter().any(|d| is_human_label(d))
+    detections[..check_count].iter().any(is_human_label)
 }
 
 /// Check if a detection is a human voice label.

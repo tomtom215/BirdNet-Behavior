@@ -50,7 +50,8 @@ impl NightInhibit {
     pub fn disabled() -> Self {
         Self {
             allow_from_min: 0,
-            allow_until_min: 1439,
+            // 1440 so that `m < 1440` holds for all valid minutes (0..=1439).
+            allow_until_min: 1440,
         }
     }
 

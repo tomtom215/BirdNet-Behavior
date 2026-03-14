@@ -1,17 +1,23 @@
 //! Detection daemon startup and event processing bridge.
 //!
 //! Starts the background detection daemon and bridges its `std::mpsc` event
-//! channel to WebSocket broadcasts and external integrations.
+//! channel to WebSocket broadcasts and external integrations. Now also supports
+//! heartbeat pings, notification templates, species filters, and trigger modes.
 
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
 
+use birdnet_integrations::notification::{
+    NotificationContext, NotificationFilter, NotificationTemplate,
+};
+
 use crate::cli::Cli;
-use crate::integrations::{AppriseHandle, EmailHandle};
+use crate::integrations::{AppriseHandle, EmailHandle, HeartbeatHandle};
 
 /// Start the detection daemon in a background thread.
 ///
 /// Returns the daemon handle, or `None` if the model/labels are not configured.
+#[allow(clippy::too_many_arguments)]
 pub fn start_detection_daemon(
     cli: &Cli,
     config: Option<&birdnet_core::config::Config>,
@@ -20,6 +26,9 @@ pub fn start_detection_daemon(
     apprise: Option<AppriseHandle>,
     birdweather: Option<birdnet_integrations::birdweather::Client>,
     email: Option<EmailHandle>,
+    heartbeat: Option<HeartbeatHandle>,
+    notification_filter: NotificationFilter,
+    notification_template: NotificationTemplate,
 ) -> Option<birdnet_core::detection::daemon::DaemonHandle> {
     let model_path = cli
         .model
@@ -114,7 +123,18 @@ pub fn start_detection_daemon(
             tracing::info!("detection daemon started");
             let rt_handle = tokio::runtime::Handle::current();
             tokio::task::spawn_blocking(move || {
-                event_processor(event_rx, state, broadcast, apprise, birdweather, email, rt_handle);
+                event_processor(
+                    event_rx,
+                    state,
+                    broadcast,
+                    apprise,
+                    birdweather,
+                    email,
+                    heartbeat,
+                    notification_filter,
+                    notification_template,
+                    rt_handle,
+                );
             });
             Some(handle)
         }
@@ -126,7 +146,7 @@ pub fn start_detection_daemon(
 }
 
 /// Bridge detection events from the daemon to database inserts and WebSocket broadcasts.
-#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 fn event_processor(
     event_rx: mpsc::Receiver<birdnet_core::detection::daemon::DetectionEvent>,
     state: birdnet_web::state::AppState,
@@ -134,6 +154,9 @@ fn event_processor(
     apprise: Option<AppriseHandle>,
     birdweather: Option<birdnet_integrations::birdweather::Client>,
     email: Option<EmailHandle>,
+    heartbeat: Option<HeartbeatHandle>,
+    notification_filter: NotificationFilter,
+    notification_template: NotificationTemplate,
     rt_handle: tokio::runtime::Handle,
 ) {
     tracing::debug!("event processor started");
@@ -199,27 +222,56 @@ fn event_processor(
         };
         broadcast.send(&ws_event);
 
-        // Apprise push notification.
+        // Build notification context for template rendering.
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss
+        )]
+        let confidence_pct = (detection.confidence * 100.0) as u32;
+        let notify_ctx = NotificationContext {
+            sci_name: detection.scientific_name.clone(),
+            com_name: detection.common_name.clone(),
+            confidence: detection.confidence,
+            confidence_pct,
+            date: detection.date.clone(),
+            time: detection.time.clone(),
+            week: detection.week,
+            latitude: 0.0,
+            longitude: 0.0,
+            reason: String::new(),
+            listen_url: None,
+            image_url: None,
+            station_url: None,
+        };
+
+        // Check notification filter (trigger mode + species filter).
+        let passes_filter =
+            notification_filter.should_notify(&detection.scientific_name, None);
+
+        // Apprise push notification (with filter and template).
         if let Some(ref apprise) = apprise {
-            let should_send = apprise
-                .blocking_lock()
-                .should_notify(&detection.common_name, detection.confidence);
+            let should_send = passes_filter
+                && apprise
+                    .blocking_lock()
+                    .should_notify(&detection.common_name, detection.confidence);
 
             if should_send {
-                let species = detection.common_name.clone();
-                let confidence = detection.confidence;
-                let date = detection.date.clone();
-                let time = detection.time.clone();
+                let (title, body) = notification_template.render(&notify_ctx);
                 let client = Arc::clone(apprise);
 
                 rt_handle.spawn(async move {
                     let result = client
                         .lock()
                         .await
-                        .notify_detection(&species, confidence, &date, &time)
+                        .send_notification(
+                            &title,
+                            &body,
+                            birdnet_integrations::apprise::NotifyType::Info,
+                        )
                         .await;
                     if let Err(e) = result {
-                        tracing::warn!(error = %e, species = %species, "Apprise notification failed");
+                        tracing::warn!(error = %e, "Apprise notification failed");
                     }
                 });
             }
@@ -260,6 +312,16 @@ fn event_processor(
                     Ok(true) => tracing::debug!(species = %alert.common_name, "email alert sent"),
                     Ok(false) => {}
                     Err(e) => tracing::warn!(error = %e, species = %alert.common_name, "email alert failed"),
+                }
+            });
+        }
+
+        // Heartbeat ping after processing.
+        if let Some(ref hb) = heartbeat {
+            let hb = Arc::clone(hb);
+            rt_handle.spawn(async move {
+                if let Err(e) = hb.ping().await {
+                    tracing::debug!(error = %e, "heartbeat ping failed");
                 }
             });
         }

@@ -215,7 +215,11 @@ pub fn process_and_infer(
 /// # Errors
 ///
 /// Returns `DaemonError` if any stage fails.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::too_many_arguments
+)]
 pub fn process_and_infer_filtered(
     path: &Path,
     pipeline_config: &PipelineConfig,
@@ -339,8 +343,9 @@ pub fn run_daemon(
     );
 
     // Load species filter (metadata model)
-    let mut species_filter = if let Some(ref mdata_path) = config.metadata_model_path {
-        match SpeciesFilter::load(mdata_path, config.species_filter.clone()) {
+    let mut species_filter = config.metadata_model_path.as_ref().map_or_else(
+        || SpeciesFilter::new_passthrough(config.species_filter.clone()),
+        |mdata_path| match SpeciesFilter::load(mdata_path, config.species_filter.clone()) {
             Ok(sf) => sf,
             Err(e) => {
                 tracing::warn!(
@@ -349,10 +354,8 @@ pub fn run_daemon(
                 );
                 SpeciesFilter::new_passthrough(config.species_filter.clone())
             }
-        }
-    } else {
-        SpeciesFilter::new_passthrough(config.species_filter.clone())
-    };
+        },
+    );
 
     // Create privacy filter
     let privacy_filter = PrivacyFilter::new(config.privacy_threshold);

@@ -246,7 +246,7 @@ impl DiskManager {
                 "disk full: stopping recording (full_disk_action=Keep)".into(),
             )),
             FullDiskAction::Purge => {
-                let removed = purge_oldest_files(&self.config.monitored_dir)?;
+                let removed = purge_oldest_files(&self.config.monitored_dir);
                 cleanup_empty_dirs(&self.config.monitored_dir);
                 Ok(removed)
             }
@@ -287,9 +287,8 @@ impl DiskManager {
                 continue;
             }
 
-            let species_entries = match std::fs::read_dir(date_entry.path()) {
-                Ok(entries) => entries,
-                Err(_) => continue,
+            let Ok(species_entries) = std::fs::read_dir(date_entry.path()) else {
+                continue;
             };
 
             for species_entry in species_entries.flatten() {
@@ -303,9 +302,8 @@ impl DiskManager {
                     .to_string_lossy()
                     .into_owned();
 
-                let file_entries = match std::fs::read_dir(&species_dir) {
-                    Ok(entries) => entries,
-                    Err(_) => continue,
+                let Ok(file_entries) = std::fs::read_dir(&species_dir) else {
+                    continue;
                 };
 
                 let files = species_files.entry(species_name).or_default();
@@ -364,7 +362,7 @@ impl DiskManager {
     ///
     /// Periodically checks disk usage and enforces species limits until a
     /// stop signal is received on `stop_rx`.
-    pub fn run(&self, stop_rx: mpsc::Receiver<()>) {
+    pub fn run(&self, stop_rx: &mpsc::Receiver<()>) {
         tracing::info!(
             dir = %self.config.monitored_dir.display(),
             interval_secs = self.config.check_interval_secs,
@@ -406,17 +404,17 @@ impl DiskManager {
 /// oldest 10% (minimum 1 file).
 ///
 /// Returns the number of files removed.
-fn purge_oldest_files(base_dir: &Path) -> Result<u32, CaptureError> {
+fn purge_oldest_files(base_dir: &Path) -> u32 {
     let by_date_dir = base_dir.join("By_Date");
     if !by_date_dir.is_dir() {
-        return Ok(0);
+        return 0;
     }
 
     let mut all_files: Vec<(PathBuf, std::time::SystemTime)> = Vec::new();
     collect_audio_files_recursive(&by_date_dir, &mut all_files);
 
     if all_files.is_empty() {
-        return Ok(0);
+        return 0;
     }
 
     // Sort by modification time, oldest first.
@@ -437,7 +435,7 @@ fn purge_oldest_files(base_dir: &Path) -> Result<u32, CaptureError> {
         tracing::info!(count = removed, "purged oldest audio files");
     }
 
-    Ok(removed)
+    removed
 }
 
 /// Recursively collect audio files and their modification times.
@@ -445,9 +443,8 @@ fn collect_audio_files_recursive(
     dir: &Path,
     out: &mut Vec<(PathBuf, std::time::SystemTime)>,
 ) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
     };
 
     for entry in entries.flatten() {
@@ -467,9 +464,8 @@ fn collect_audio_files_recursive(
 
 /// Remove empty directories under `base_dir` (depth-first).
 fn cleanup_empty_dirs(base_dir: &Path) {
-    let entries = match std::fs::read_dir(base_dir) {
-        Ok(e) => e,
-        Err(_) => return,
+    let Ok(entries) = std::fs::read_dir(base_dir) else {
+        return;
     };
 
     for entry in entries.flatten() {
@@ -676,7 +672,7 @@ mod tests {
             filetime::set_file_mtime(&wav_path, mtime).expect("set mtime");
         }
 
-        let removed = purge_oldest_files(dir.path()).expect("purge");
+        let removed = purge_oldest_files(dir.path());
         // 10% of 20 = 2
         assert_eq!(removed, 2);
     }
@@ -708,7 +704,7 @@ mod tests {
 
         // Run in a thread and immediately send stop.
         let handle = std::thread::spawn(move || {
-            manager.run(rx);
+            manager.run(&rx);
         });
 
         tx.send(()).expect("send stop");
