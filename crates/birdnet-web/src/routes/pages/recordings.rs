@@ -240,7 +240,7 @@ fn render_detection_list(
 
         let _ = write!(
             html,
-            r##"<div style="display:flex;gap:1rem;align-items:flex-start;padding:0.6rem 0;border-bottom:1px solid var(--border);">
+            r#"<div style="display:flex;gap:1rem;align-items:flex-start;padding:0.6rem 0;border-bottom:1px solid var(--border);">
   <div style="flex:1;min-width:0;">
     <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
       <a href="/species/detail?name={enc_name}" style="font-weight:500;color:var(--text);text-decoration:none;">{com_name}</a>
@@ -260,7 +260,7 @@ fn render_detection_list(
       Delete
     </button>
   </div>
-</div>"##,
+</div>"#,
             com_name = escape_html(&d.com_name),
             sci_name = escape_html(&d.sci_name),
             time = escape_html(&d.time),

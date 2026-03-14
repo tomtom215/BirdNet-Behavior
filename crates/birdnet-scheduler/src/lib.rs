@@ -16,11 +16,13 @@
 //! ```rust
 //! use birdnet_scheduler::{Location, SolarDay, RecordingWindow, NightInhibit};
 //!
-//! let loc = Location::new(51.5, -0.1);
+//! let loc = Location::new(51.5, -0.1).unwrap();
 //! let day = SolarDay::for_date(loc, 2026, 3, 14).unwrap();
 //! println!("Sunrise: {:?}", day.sunrise_minutes());
 //!
-//! let inhibit = NightInhibit::new(day.sunrise_minutes(), day.sunset_minutes(), 0, 0);
+//! let rise = day.sunrise_minutes().unwrap();
+//! let set = day.sunset_minutes().unwrap();
+//! let inhibit = NightInhibit::new(rise, set, 0, 0);
 //! // At noon (720 minutes) recording should be allowed.
 //! assert!(inhibit.is_recording_allowed(720));
 //! ```
