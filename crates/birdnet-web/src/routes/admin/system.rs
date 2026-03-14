@@ -15,6 +15,7 @@ use birdnet_core::audio::capture::{disk_usage, recording_stats};
 use birdnet_db::resilience::backup_database;
 
 use crate::state::AppState;
+use crate::system_info;
 
 /// Mount system routes.
 pub fn router() -> Router<AppState> {
@@ -95,6 +96,11 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
               hx-swap="innerHTML">
         Create Backup Now
       </button>
+      <a href="/admin/system/backups"
+         style="padding:.5rem 1.5rem;border-radius:.375rem;border:1px solid #334155;
+                color:#94a3b8;font-size:.875rem;text-decoration:none;font-weight:600;">
+        Manage Backups
+      </a>
     </div>
     <div id="backup-result" style="margin-top:1rem;"></div>
   </div>
@@ -179,6 +185,56 @@ async fn render_status_partial(state: &AppState) -> String {
         (err.clone(), err)
     });
 
+    // System CPU/memory snapshot (run in parallel with disk query)
+    let sys_snap = tokio::task::spawn_blocking(system_info::sample)
+        .await
+        .ok();
+
+    let sys_html = sys_snap.map_or_else(
+        || r#"<p style="color:#64748b">System info unavailable</p>"#.to_string(),
+        |snap| {
+            let cpu_color = if snap.is_cpu_high() { "#f87171" } else { "#4ade80" };
+            let mem_color = if snap.is_memory_critical() { "#f87171" } else { "#4ade80" };
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let cpu_pct = snap.cpu_usage_pct as u32;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let mem_pct = snap.memory_usage_pct as u32;
+            let uptime = system_info::format_uptime(snap.uptime_secs);
+            let temp_html = snap
+                .cpu_temp_celsius
+                .map(|t| {
+                    let tc = t as u32;
+                    let c = if tc > 80 { "#f87171" } else if tc > 65 { "#fbbf24" } else { "#4ade80" };
+                    format!(r#"<p style="font-size:.8rem;margin:.25rem 0;">CPU Temp: <span style="color:{c};font-weight:600;">{tc}°C</span></p>"#)
+                })
+                .unwrap_or_default();
+
+            format!(
+                r#"<p style="font-size:.8rem;color:#64748b;margin-bottom:.5rem;">
+                  {cores} cores · uptime {uptime}
+                </p>
+                <div style="display:flex;justify-content:space-between;margin-bottom:.25rem;">
+                  <span style="font-size:.8rem;">CPU</span>
+                  <span style="color:{cpu_color};font-weight:600;font-size:.8rem;">{cpu_pct}%</span>
+                </div>
+                <div style="background:#0f172a;border-radius:9999px;height:6px;margin-bottom:.75rem;overflow:hidden;">
+                  <div style="background:{cpu_color};height:100%;width:{cpu_pct}%;"></div>
+                </div>
+                <div style="display:flex;justify-content:space-between;margin-bottom:.25rem;">
+                  <span style="font-size:.8rem;">Memory</span>
+                  <span style="color:{mem_color};font-weight:600;font-size:.8rem;">{mem_pct}%</span>
+                </div>
+                <div style="background:#0f172a;border-radius:9999px;height:6px;margin-bottom:.5rem;overflow:hidden;">
+                  <div style="background:{mem_color};height:100%;width:{mem_pct}%;"></div>
+                </div>
+                <p style="font-size:.75rem;color:#64748b;margin:0;">{mem_summary}</p>
+                {temp_html}"#,
+                cores = snap.cpu_count,
+                mem_summary = snap.memory_summary(),
+            )
+        },
+    );
+
     format!(
         r#"<div class="stat-grid" style="margin-bottom:1.5rem;">
           <div class="card">{disk_html}</div>
@@ -186,6 +242,15 @@ async fn render_status_partial(state: &AppState) -> String {
             <div class="stat-label">Recordings</div>
             {rec_html}
           </div>
+          <div class="card">
+            <div class="stat-label">System Resources</div>
+            {sys_html}
+          </div>
+        </div>
+        <div style="text-align:right;margin-top:.5rem;">
+          <a href="/admin/system/logs/page" style="color:#64748b;font-size:.8rem;text-decoration:none;">
+            📋 Live Logs →
+          </a>
         </div>"#
     )
 }

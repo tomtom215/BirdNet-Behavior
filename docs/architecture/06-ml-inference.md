@@ -2,6 +2,24 @@
 
 > Running BirdNET model inference in Rust.
 
+## Table of Contents
+
+- [Inference Pipeline](#inference-pipeline)
+- [Model Variants](#model-variants)
+- [Model Conversion](#model-conversion-tflite--onnx)
+- [Preferred Runtime: tract](#preferred-runtime-tract-pure-rust)
+- [Fallback Runtime: ort](#fallback-runtime-ort-onnx-runtime)
+- [Inference Code Pattern](#inference-code-pattern)
+- [Validation Plan](#validation-plan)
+- [Performance Targets](#performance-targets)
+- [Hot Reload](#hot-reload)
+
+---
+
+**Status: ❌ Not yet implemented** — the inference integration is the final
+major technical milestone before full feature parity with BirdNET-Pi Python.
+The surrounding pipeline (decode, resample, detect, store, notify) is complete.
+
 ## Inference Pipeline
 
 ```
@@ -22,7 +40,7 @@ Mel spectrogram (f32 matrix)
         │
     Filter by confidence threshold
         │
-    Detection results
+    Detection results → daemon event processor
 ```
 
 ## Model Variants
@@ -54,7 +72,7 @@ assert np.allclose(tflite_output, onnx_output, atol=1e-4)
 
 `tract-onnx` v0.22 by Sonos is a pure Rust ONNX inference engine:
 
-- **Zero C/C++ dependencies** -- trivial cross-compilation to any target
+- **Zero C/C++ dependencies** — trivial cross-compilation to any target
 - CPU-only (no GPU), but BirdNET models are small enough for CPU inference
 - Passes ~85% of ONNX backend tests; common operators (conv, dense, sigmoid) well supported
 - Smaller binary than ort (no ONNX Runtime shared library)
@@ -74,7 +92,7 @@ The `ort` crate v2.0.0-rc wraps Microsoft's ONNX Runtime:
 - For aarch64 Linux: supply ONNX Runtime binaries via `ORT_LIB_PATH` (requires glibc >= 2.35)
 - Model loading from file or embedded bytes
 
-### Inference Code Pattern
+## Inference Code Pattern
 
 ```rust
 use ort::{Session, Value};
@@ -100,9 +118,13 @@ impl BirdNetModel {
         let outputs = self.session.run(ort::inputs![input]?)?;
         let logits = outputs[0].try_extract_tensor::<f32>()?;
         // Apply sigmoid with sensitivity, filter, return top-N
+        todo!()
     }
 }
 ```
+
+The `BirdNetModel` is designed to be wrapped in `Arc<RwLock<BirdNetModel>>`
+for safe concurrent access across the async detection daemon.
 
 ## Validation Plan
 
@@ -119,25 +141,25 @@ Before committing to a runtime, validate both tract and ort:
 ## Inference Chain (Matching Python)
 
 ```
-1. Load audio file → f32 samples (symphonia)
-2. Resample to model sample rate (rubato)
-3. Split into chunks (3s for BirdNET, 5s for Perch) with overlap
-4. Pad short chunks with zeros
-5. Generate mel spectrogram for each chunk
-6. Run inference → raw logits
-7. sigmoid(sensitivity * logits) → confidence scores
-8. Top-10 species per chunk
-9. Filter by confidence threshold
-10. Optional: metadata model filters rare species by location
+1. Load audio file → f32 samples (symphonia)              ✅
+2. Resample to model sample rate (rubato)                  ✅
+3. Split into chunks (3s for BirdNET, 5s for Perch)       ✅
+4. Pad short chunks with zeros                             ✅
+5. Generate mel spectrogram for each chunk                 ⚠️ stubbed
+6. Run inference → raw logits                              ❌ TODO
+7. sigmoid(sensitivity * logits) → confidence scores      ❌ TODO
+8. Top-10 species per chunk                                ❌ TODO
+9. Filter by confidence threshold                          ❌ TODO
+10. Optional: metadata model filters by location           ❌ TODO
 ```
 
 ## Performance Targets
 
 | Metric | Python (TFLite) | Rust (target) |
 |--------|----------------|---------------|
-| Model load time | 2-5 seconds | <1 second |
-| Inference (3s clip, Pi 5) | 1-2 seconds | 0.3-0.8 seconds |
-| Inference (3s clip, Pi 4) | 2-4 seconds | 0.8-1.5 seconds |
+| Model load time | 2–5 seconds | <1 second |
+| Inference (3s clip, Pi 5) | 1–2 seconds | 0.3–0.8 seconds |
+| Inference (3s clip, Pi 4) | 2–4 seconds | 0.8–1.5 seconds |
 | Memory (model loaded) | ~200 MB | ~50 MB |
 
 ## Hot Reload
@@ -149,5 +171,7 @@ Support model updates without restarting the service:
 - Validate new model produces reasonable output before committing
 
 ---
+
+*Last updated: 2026-03-14*
 
 [← Audio Pipeline](05-audio-pipeline.md) | [Back to Index](../RUST_ARCHITECTURE_PLAN.md) | [Next: Database →](07-database.md)

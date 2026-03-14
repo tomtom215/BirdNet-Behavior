@@ -136,8 +136,8 @@ async fn upload_and_run_handler(
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let (schema, report) = match val_result {
-        Ok(pair) => pair,
+    let (schema, report, _migration_report) = match val_result {
+        Ok(triple) => triple,
         Err(e) => {
             return Ok(Html(render::upload_error(&format!(
                 "Validation failed for {file_name}: {e}"

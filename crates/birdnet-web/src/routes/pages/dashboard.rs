@@ -81,15 +81,31 @@ async fn detections_partial(State(state): State<AppState>) -> impl axum::respons
         Ok(Ok(detections)) => {
             let mut html = String::from(
                 r"<table>
-<thead><tr><th>Species</th><th>Confidence</th><th>Time</th><th>Date</th></tr></thead>
+<thead><tr><th>Species</th><th>Confidence</th><th>Time</th><th>Date</th><th>Audio</th></tr></thead>
 <tbody>",
             );
             for d in &detections {
                 let conf_pct = d.confidence * 100.0;
                 let cls = conf_class(conf_pct);
                 let enc = simple_url_encode(&d.com_name);
+                // Derive recording filename from file_name field if present.
+                let audio_cell = d.file_name.as_deref()
+                    .filter(|f| !f.is_empty())
+                    .map(|f| {
+                        let basename = std::path::Path::new(f)
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        let safe = escape_html(&basename);
+                        format!(
+                            r#"<audio controls preload="none" style="height:24px;max-width:160px;vertical-align:middle;">
+                              <source src="/api/v2/recordings/{safe}" type="audio/wav">
+                            </audio>"#
+                        )
+                    })
+                    .unwrap_or_else(|| "—".to_string());
                 let _ = write!(html,
-                    r#"<tr><td><a href="/species/detail?name={enc}" style="color:inherit;text-decoration:none;">{n}</a></td><td><span class="conf {cls}">{conf_pct:.0}%</span></td><td>{t}</td><td>{d2}</td></tr>"#,
+                    r#"<tr><td><a href="/species/detail?name={enc}" style="color:inherit;text-decoration:none;">{n}</a></td><td><span class="conf {cls}">{conf_pct:.0}%</span></td><td>{t}</td><td>{d2}</td><td>{audio_cell}</td></tr>"#,
                     n = escape_html(&d.com_name),
                     t = escape_html(&d.time),
                     d2 = escape_html(&d.date),

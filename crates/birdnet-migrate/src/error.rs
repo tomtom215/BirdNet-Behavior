@@ -23,6 +23,8 @@ pub enum MigrateError {
     Aborted(String),
     /// I/O error (file copy, temp file, etc.).
     Io(std::io::Error),
+    /// A query or aggregation failed during report generation.
+    Query(String),
 }
 
 impl fmt::Display for MigrateError {
@@ -37,6 +39,7 @@ impl fmt::Display for MigrateError {
             Self::ValidationFailed(msg) => write!(f, "validation failed: {msg}"),
             Self::Aborted(reason) => write!(f, "migration aborted: {reason}"),
             Self::Io(e) => write!(f, "I/O error: {e}"),
+            Self::Query(msg) => write!(f, "query error: {msg}"),
         }
     }
 }

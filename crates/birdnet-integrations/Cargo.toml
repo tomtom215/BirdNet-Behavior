@@ -17,6 +17,7 @@ serde_json.workspace = true
 tracing.workspace = true
 reqwest.workspace = true
 tokio.workspace = true
+lettre.workspace = true
 
 [lints]
 workspace = true

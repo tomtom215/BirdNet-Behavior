@@ -3,7 +3,7 @@
 > A phased plan to rewrite BirdNET-Pi's core in Rust for reliability, efficiency,
 > and sustainability on resource-constrained field deployments.
 >
-> **Author:** tomtom215 | **Updated:** 2026-03-12
+> **Author:** tomtom215 | **Updated:** 2026-03-13
 
 ## Overview
 

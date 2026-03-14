@@ -74,6 +74,17 @@ pub struct SettingsForm {
     // System
     recording_days: Option<String>,
     image_cache_dir: Option<String>,
+    // Email
+    email_smtp_host: Option<String>,
+    email_smtp_port: Option<String>,
+    email_smtp_user: Option<String>,
+    email_smtp_pass: Option<String>,
+    email_from: Option<String>,
+    email_to: Option<String>,
+    email_from_name: Option<String>,
+    email_starttls: Option<String>,
+    email_min_confidence: Option<String>,
+    email_cooldown_secs: Option<String>,
 }
 
 async fn save_settings(
@@ -109,6 +120,16 @@ async fn save_settings(
         push_if_set!(form.species_include, "species_include", SettingsCategory::Species);
         push_if_set!(form.recording_days, "recording_days", SettingsCategory::System);
         push_if_set!(form.image_cache_dir, "image_cache_dir", SettingsCategory::System);
+        push_if_set!(form.email_smtp_host, "email_smtp_host", SettingsCategory::Notifications);
+        push_if_set!(form.email_smtp_port, "email_smtp_port", SettingsCategory::Notifications);
+        push_if_set!(form.email_smtp_user, "email_smtp_user", SettingsCategory::Notifications);
+        push_if_set!(form.email_smtp_pass, "email_smtp_pass", SettingsCategory::Notifications);
+        push_if_set!(form.email_from, "email_from", SettingsCategory::Notifications);
+        push_if_set!(form.email_to, "email_to", SettingsCategory::Notifications);
+        push_if_set!(form.email_from_name, "email_from_name", SettingsCategory::Notifications);
+        push_if_set!(form.email_starttls, "email_starttls", SettingsCategory::Notifications);
+        push_if_set!(form.email_min_confidence, "email_min_confidence", SettingsCategory::Notifications);
+        push_if_set!(form.email_cooldown_secs, "email_cooldown_secs", SettingsCategory::Notifications);
 
         // Convert to the slice format set_many expects
         let refs: Vec<(&str, &str, SettingsCategory)> = items
@@ -242,6 +263,19 @@ fn render_settings_form(settings: &HashMap<String, String>) -> String {
     let species_include = get_setting(settings, "species_include", "");
     let recording_days = get_setting(settings, "recording_days", "30");
     let image_cache_dir = get_setting(settings, "image_cache_dir", "");
+    let email_smtp_host = get_setting(settings, "email_smtp_host", "");
+    let email_smtp_port = get_setting(settings, "email_smtp_port", "587");
+    let email_smtp_user = get_setting(settings, "email_smtp_user", "");
+    let email_smtp_pass = get_setting(settings, "email_smtp_pass", "");
+    let email_from = get_setting(settings, "email_from", "");
+    let email_to = get_setting(settings, "email_to", "");
+    let email_from_name = get_setting(settings, "email_from_name", "BirdNet-Behavior");
+    let email_starttls = get_setting(settings, "email_starttls", "true");
+    let email_min_conf = get_setting(settings, "email_min_confidence", "0.80");
+    let email_cooldown = get_setting(settings, "email_cooldown_secs", "300");
+
+    let starttls_sel_true = if email_starttls != "false" { " selected" } else { "" };
+    let starttls_sel_false = if email_starttls == "false" { " selected" } else { "" };
 
     format!(r##"<form hx-post="/admin/settings" hx-target="#settings-feedback"
                hx-swap="innerHTML" hx-indicator="#save-spinner">
@@ -374,6 +408,67 @@ fn render_settings_form(settings: &HashMap<String, String>) -> String {
     </div>
   </div>
 
+  <!-- Email Alerts -->
+  <div class="card">
+    <div class="section-title">Email Alerts (SMTP)</div>
+    <p class="hint" style="margin-bottom:1rem;">Leave SMTP host blank to disable email alerts.</p>
+    <div class="grid-2">
+      <div>
+        <label for="email_smtp_host">SMTP Host</label>
+        <input id="email_smtp_host" name="email_smtp_host" value="{email_smtp_host}" placeholder="smtp.gmail.com">
+      </div>
+      <div>
+        <label for="email_smtp_port">SMTP Port</label>
+        <input id="email_smtp_port" name="email_smtp_port" type="number" value="{email_smtp_port}" min="1" max="65535" style="max-width:120px">
+      </div>
+    </div>
+    <div class="grid-2">
+      <div>
+        <label for="email_smtp_user">SMTP Username</label>
+        <input id="email_smtp_user" name="email_smtp_user" value="{email_smtp_user}" placeholder="you@gmail.com">
+      </div>
+      <div>
+        <label for="email_smtp_pass">SMTP Password / App Password</label>
+        <input id="email_smtp_pass" name="email_smtp_pass" type="password" value="{email_smtp_pass}" placeholder="app-specific password">
+      </div>
+    </div>
+    <div class="grid-2">
+      <div>
+        <label for="email_from">From Address</label>
+        <input id="email_from" name="email_from" value="{email_from}" placeholder="alerts@example.com">
+      </div>
+      <div>
+        <label for="email_to">To Address</label>
+        <input id="email_to" name="email_to" value="{email_to}" placeholder="you@example.com">
+      </div>
+    </div>
+    <div class="grid-2">
+      <div>
+        <label for="email_from_name">From Name</label>
+        <input id="email_from_name" name="email_from_name" value="{email_from_name}" placeholder="BirdNet-Behavior">
+      </div>
+      <div>
+        <label for="email_starttls">Use STARTTLS</label>
+        <select id="email_starttls" name="email_starttls" style="max-width:180px">
+          <option value="true"{starttls_sel_true}>Yes (port 587)</option>
+          <option value="false"{starttls_sel_false}>No — implicit TLS (port 465)</option>
+        </select>
+      </div>
+    </div>
+    <div class="grid-2">
+      <div>
+        <label for="email_min_confidence">Alert Min Confidence</label>
+        <input id="email_min_confidence" name="email_min_confidence" type="number" value="{email_min_conf}" min="0" max="1" step="0.05">
+        <p class="hint">Only email for detections above this threshold</p>
+      </div>
+      <div>
+        <label for="email_cooldown_secs">Alert Cooldown (seconds)</label>
+        <input id="email_cooldown_secs" name="email_cooldown_secs" type="number" value="{email_cooldown}" min="0" step="60">
+        <p class="hint">Min time between emails per species</p>
+      </div>
+    </div>
+  </div>
+
   <div style="display:flex; align-items:center; gap:1rem;">
     <button type="submit" class="btn btn-primary">Save Settings</button>
     <span id="save-spinner" class="htmx-indicator" style="color:#94a3b8; font-size:0.875rem;">
@@ -411,5 +506,7 @@ mod tests {
         assert!(html.contains("confidence_threshold"));
         assert!(html.contains("apprise_url"));
         assert!(html.contains("birdweather_token"));
+        assert!(html.contains("email_smtp_host"));
+        assert!(html.contains("email_to"));
     }
 }

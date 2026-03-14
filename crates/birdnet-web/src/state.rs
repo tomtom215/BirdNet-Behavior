@@ -10,6 +10,7 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use crate::routes::admin::logs::LogBroadcaster;
 use crate::routes::websocket::DetectionBroadcast;
 
 /// Default WebSocket broadcast channel capacity.
@@ -28,6 +29,8 @@ struct AppStateInner {
     db: Mutex<Connection>,
     /// Path to the `SQLite` database file (for diagnostics).
     db_path: PathBuf,
+    /// Directory containing extracted audio recording clips.
+    recording_dir: PathBuf,
     /// `DuckDB` analytics database (file-backed, for behavioral queries).
     #[cfg(feature = "analytics")]
     analytics_db: Option<Mutex<AnalyticsDb>>,
@@ -35,6 +38,8 @@ struct AppStateInner {
     image_cache: Option<Arc<ImageCache>>,
     /// Broadcast channel for live detection WebSocket streaming.
     detection_broadcast: DetectionBroadcast,
+    /// Broadcast channel for live log SSE streaming.
+    log_broadcaster: LogBroadcaster,
 }
 
 impl AppState {
@@ -51,14 +56,21 @@ impl AppState {
             tracing::warn!(error = %e, "migration warning");
         }
 
+        let recording_dir = db_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("recordings");
+
         Ok(Self {
             inner: Arc::new(AppStateInner {
                 db: Mutex::new(conn),
                 db_path,
+                recording_dir,
                 #[cfg(feature = "analytics")]
                 analytics_db: None,
                 image_cache: None,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
+                log_broadcaster: LogBroadcaster::new(),
             }),
         })
     }
@@ -84,6 +96,11 @@ impl AppState {
         }
 
         // Open DuckDB analytics database
+        let recording_dir = db_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("recordings");
+
         let analytics_db = match AnalyticsDb::open(analytics_path) {
             Ok(mut adb) => {
                 tracing::info!(path = %analytics_path.display(), "DuckDB analytics database opened");
@@ -120,23 +137,31 @@ impl AppState {
             inner: Arc::new(AppStateInner {
                 db: Mutex::new(conn),
                 db_path,
+                recording_dir,
                 analytics_db,
                 image_cache: None,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
+                log_broadcaster: LogBroadcaster::new(),
             }),
         })
     }
 
     /// Create application state from an existing connection (for testing).
     pub fn from_connection(conn: Connection, db_path: PathBuf) -> Self {
+        let recording_dir = db_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("recordings");
         Self {
             inner: Arc::new(AppStateInner {
                 db: Mutex::new(conn),
                 db_path,
+                recording_dir,
                 #[cfg(feature = "analytics")]
                 analytics_db: None,
                 image_cache: None,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
+                log_broadcaster: LogBroadcaster::new(),
             }),
         }
     }
@@ -171,10 +196,12 @@ impl AppState {
             inner: Arc::new(AppStateInner {
                 db: inner.db,
                 db_path: inner.db_path,
+                recording_dir: inner.recording_dir,
                 #[cfg(feature = "analytics")]
                 analytics_db: inner.analytics_db,
                 image_cache: Some(Arc::new(cache)),
                 detection_broadcast: inner.detection_broadcast,
+                log_broadcaster: inner.log_broadcaster,
             }),
         }
     }
@@ -255,6 +282,32 @@ impl AppState {
         &self.inner.db_path
     }
 
+    /// Get the directory where extracted audio recordings are stored.
+    pub fn recording_dir(&self) -> PathBuf {
+        self.inner.recording_dir.clone()
+    }
+
+    /// Override the recording directory (for testing or custom deployments).
+    #[must_use]
+    pub fn with_recording_dir(self, dir: PathBuf) -> Self {
+        let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|arc| {
+            drop(arc.db.lock().ok());
+            panic!("with_recording_dir called after state was shared");
+        });
+        Self {
+            inner: Arc::new(AppStateInner {
+                db: inner.db,
+                db_path: inner.db_path,
+                recording_dir: dir,
+                #[cfg(feature = "analytics")]
+                analytics_db: inner.analytics_db,
+                image_cache: inner.image_cache,
+                detection_broadcast: inner.detection_broadcast,
+                log_broadcaster: inner.log_broadcaster,
+            }),
+        }
+    }
+
     /// Get the species image cache, if configured.
     pub fn image_cache(&self) -> Option<Arc<ImageCache>> {
         self.inner.image_cache.clone()
@@ -263,5 +316,10 @@ impl AppState {
     /// Get the detection broadcast channel for WebSocket streaming.
     pub fn detection_broadcast(&self) -> DetectionBroadcast {
         self.inner.detection_broadcast.clone()
+    }
+
+    /// Get the log broadcaster for SSE admin log streaming.
+    pub fn log_broadcaster(&self) -> LogBroadcaster {
+        self.inner.log_broadcaster.clone()
     }
 }

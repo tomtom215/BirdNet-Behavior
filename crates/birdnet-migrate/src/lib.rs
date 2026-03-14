@@ -39,6 +39,9 @@ pub mod progress;
 pub mod schema;
 pub mod traits;
 
+pub use birdnet_pi::species_report::{
+    MigrationReport, PostMigrationReport, SpeciesDiff, SpeciesStats,
+};
 pub use error::MigrateError;
 pub use progress::{MigrationProgress, MigrationStage, ProgressHandle};
 pub use traits::{MigrationSummary, ValidationReport};

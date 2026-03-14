@@ -10,11 +10,15 @@
 //! | `species_pages`  | Species list, detail page, species partials     |
 //! | `behavioral`     | Behavioral analytics HTMX partials              |
 //! | `timeseries_dash`| Time-series analytics page and partials         |
+//! | `heatmap`        | 24h × 7-day activity heatmap page               |
+//! | `correlation`    | Species co-occurrence correlation page          |
 
 pub mod behavioral;
 pub mod charts;
+pub mod correlation;
 pub mod dashboard;
 pub mod health;
+pub mod heatmap;
 pub mod species_pages;
 pub mod timeseries_dash;
 
@@ -40,6 +44,8 @@ pub fn router() -> Router<AppState> {
         .merge(species_pages::router())
         .merge(behavioral::router())
         .merge(timeseries_dash::router())
+        .merge(heatmap::router())
+        .merge(correlation::router())
 }
 
 /// Render a full page by substituting content into the layout template.

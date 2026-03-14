@@ -104,6 +104,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create integration clients.
     let apprise_client = integrations::create_apprise_client(&cli, config.as_ref());
     let birdweather_client = integrations::create_birdweather_client(&cli, config.as_ref());
+    let email_notifier = integrations::create_email_notifier(&state);
 
     // Start audio capture.
     let _capture_manager = capture::start_capture_manager(&cli, config.as_ref());
@@ -120,6 +121,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             broadcast,
             apprise_client,
             birdweather_client,
+            email_notifier,
         )
     };
 
