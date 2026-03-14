@@ -24,6 +24,8 @@ pub enum ExtractionError {
     Decode(String),
     /// Audio writing error.
     Write(String),
+    /// Audio format conversion error (ffmpeg/sox subprocess).
+    Conversion(String),
 }
 
 impl fmt::Display for ExtractionError {
@@ -32,6 +34,7 @@ impl fmt::Display for ExtractionError {
             Self::Io(e) => write!(f, "I/O error: {e}"),
             Self::Decode(msg) => write!(f, "decode error: {msg}"),
             Self::Write(msg) => write!(f, "write error: {msg}"),
+            Self::Conversion(msg) => write!(f, "format conversion error: {msg}"),
         }
     }
 }
@@ -40,7 +43,7 @@ impl std::error::Error for ExtractionError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io(e) => Some(e),
-            Self::Decode(_) | Self::Write(_) => None,
+            Self::Decode(_) | Self::Write(_) | Self::Conversion(_) => None,
         }
     }
 }
@@ -62,6 +65,58 @@ impl From<DecodeError> for ExtractionError {
 }
 
 // ---------------------------------------------------------------------------
+// Audio format
+// ---------------------------------------------------------------------------
+
+/// Supported audio output formats for extracted clips.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioFormat {
+    /// WAV (PCM 16-bit) — no external tools required.
+    Wav,
+    /// MP3 — requires ffmpeg or sox.
+    Mp3,
+    /// FLAC — requires ffmpeg or sox.
+    Flac,
+    /// OGG Vorbis — requires ffmpeg or sox.
+    Ogg,
+}
+
+impl AudioFormat {
+    /// File extension for this format.
+    pub const fn extension(self) -> &'static str {
+        match self {
+            Self::Wav => "wav",
+            Self::Mp3 => "mp3",
+            Self::Flac => "flac",
+            Self::Ogg => "ogg",
+        }
+    }
+
+    /// Parse a format string (case-insensitive).
+    ///
+    /// Returns `Wav` for unrecognized formats.
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_lowercase().as_str() {
+            "mp3" => Self::Mp3,
+            "flac" => Self::Flac,
+            "ogg" | "vorbis" => Self::Ogg,
+            _ => Self::Wav,
+        }
+    }
+
+    /// Whether this format requires external conversion from WAV.
+    pub const fn needs_conversion(self) -> bool {
+        !matches!(self, Self::Wav)
+    }
+}
+
+impl fmt::Display for AudioFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.extension())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
@@ -74,6 +129,8 @@ pub struct ExtractionConfig {
     pub output_dir: PathBuf,
     /// Audio output format extension (e.g., "wav").
     pub audio_format: String,
+    /// Target audio format for extraction output.
+    pub target_format: AudioFormat,
     /// Recording segment length in seconds, used for `safe_stop` clamping.
     pub recording_length: f32,
 }
@@ -84,6 +141,7 @@ impl Default for ExtractionConfig {
             extraction_length: 6.0,
             output_dir: PathBuf::from("BirdSongs/Extracted"),
             audio_format: String::from("wav"),
+            target_format: AudioFormat::Wav,
             recording_length: 15.0,
         }
     }
@@ -167,16 +225,25 @@ impl Extractor {
 
         std::fs::create_dir_all(&output_dir)?;
 
-        // 5. Build filename: Common_Name-Confidence_Pct-Date-birdnet-RTSP_ID-Time.wav
-        let filename = build_extraction_filename(detection, &self.config.audio_format);
+        // 5. Build filename with target format extension.
+        let ext = self.config.target_format.extension();
+        let filename = build_extraction_filename(detection, ext);
         let output_path = output_dir.join(&filename);
 
         // 6. Write the WAV file using hound.
-        write_wav_clip(clip_samples, audio.sample_rate, &output_path)?;
+        if self.config.target_format.needs_conversion() {
+            // Write to a temporary WAV, then convert.
+            let wav_path = output_path.with_extension("wav");
+            write_wav_clip(clip_samples, audio.sample_rate, &wav_path)?;
+            convert_audio_format(&wav_path, &output_path, self.config.target_format)?;
+        } else {
+            write_wav_clip(clip_samples, audio.sample_rate, &output_path)?;
+        }
 
         tracing::info!(
             path = %output_path.display(),
             species = %detection.common_name,
+            format = %ext,
             "extracted detection clip"
         );
 
@@ -220,6 +287,115 @@ fn build_extraction_filename(detection: &Detection, format: &str) -> String {
         .unwrap_or_default();
 
     format!("{name_safe}-{conf_pct}-{date}-birdnet-{rtsp_part}{time}.{format}")
+}
+
+// ---------------------------------------------------------------------------
+// Audio format conversion
+// ---------------------------------------------------------------------------
+
+/// Convert a WAV file to the target format using ffmpeg (preferred) or sox.
+///
+/// On success the source WAV file is removed.
+///
+/// # Errors
+///
+/// Returns [`ExtractionError::Conversion`] if neither ffmpeg nor sox is
+/// available or the conversion process fails.
+fn convert_audio_format(
+    wav_path: &Path,
+    output_path: &Path,
+    format: AudioFormat,
+) -> Result<(), ExtractionError> {
+    // Try ffmpeg first, fall back to sox.
+    let result = convert_with_ffmpeg(wav_path, output_path, format)
+        .or_else(|_| convert_with_sox(wav_path, output_path));
+
+    match result {
+        Ok(()) => {
+            // Remove the intermediate WAV file.
+            let _ = std::fs::remove_file(wav_path);
+            Ok(())
+        }
+        Err(e) => {
+            // Clean up the intermediate WAV (rename it to the target as fallback).
+            tracing::warn!(
+                error = %e,
+                format = %format,
+                "format conversion failed, keeping WAV"
+            );
+            std::fs::rename(wav_path, output_path)?;
+            Ok(())
+        }
+    }
+}
+
+/// Convert WAV to target format using ffmpeg.
+fn convert_with_ffmpeg(
+    wav_path: &Path,
+    output_path: &Path,
+    format: AudioFormat,
+) -> Result<(), ExtractionError> {
+    use std::process::Command;
+
+    let mut cmd = Command::new("ffmpeg");
+    cmd.arg("-y") // overwrite
+        .arg("-i")
+        .arg(wav_path)
+        .arg("-loglevel")
+        .arg("error");
+
+    // Format-specific encoding options.
+    match format {
+        AudioFormat::Mp3 => {
+            cmd.args(["-codec:a", "libmp3lame", "-q:a", "2"]);
+        }
+        AudioFormat::Flac => {
+            cmd.args(["-codec:a", "flac"]);
+        }
+        AudioFormat::Ogg => {
+            cmd.args(["-codec:a", "libvorbis", "-q:a", "4"]);
+        }
+        AudioFormat::Wav => return Ok(()),
+    }
+
+    cmd.arg(output_path);
+
+    let output = cmd
+        .output()
+        .map_err(|e| ExtractionError::Conversion(format!("ffmpeg: {e}")))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(ExtractionError::Conversion(format!(
+            "ffmpeg exited {}: {}",
+            output.status,
+            stderr.trim()
+        )))
+    }
+}
+
+/// Convert WAV to target format using sox.
+fn convert_with_sox(wav_path: &Path, output_path: &Path) -> Result<(), ExtractionError> {
+    use std::process::Command;
+
+    let output = Command::new("sox")
+        .arg(wav_path)
+        .arg(output_path)
+        .output()
+        .map_err(|e| ExtractionError::Conversion(format!("sox: {e}")))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(ExtractionError::Conversion(format!(
+            "sox exited {}: {}",
+            output.status,
+            stderr.trim()
+        )))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -423,6 +599,7 @@ mod tests {
             extraction_length: 3.0, // no padding so spacer = 0
             output_dir: dir.path().to_path_buf(),
             audio_format: "wav".into(),
+            target_format: AudioFormat::Wav,
             recording_length: 3.0,
         };
 

@@ -42,4 +42,16 @@ pub fn router() -> Router<AppState> {
             "/admin/species/include/remove",
             axum::routing::post(handler::remove_include),
         )
+        .route(
+            "/admin/species/thresholds",
+            get(handler::thresholds_partial),
+        )
+        .route(
+            "/admin/species/thresholds/set",
+            axum::routing::post(handler::set_threshold),
+        )
+        .route(
+            "/admin/species/thresholds/delete",
+            axum::routing::post(handler::delete_threshold),
+        )
 }

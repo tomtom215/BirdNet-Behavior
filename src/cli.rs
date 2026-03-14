@@ -180,4 +180,11 @@ pub struct Cli {
     /// eBird/AllAboutBirds species info links: "ebird", "allaboutbirds", or "none".
     #[arg(long, default_value = "ebird", env = "BIRDNET_INFO_SITE")]
     pub info_site: String,
+
+    /// Audio format for extracted detection clips: "wav", "mp3", "flac", or "ogg".
+    ///
+    /// Non-WAV formats require ffmpeg or sox to be installed.
+    /// BirdNET-Pi equivalent: AUDIOFMT config option.
+    #[arg(long, default_value = "wav", env = "BIRDNET_AUDIO_FORMAT")]
+    pub audio_format: String,
 }

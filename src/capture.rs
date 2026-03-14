@@ -396,6 +396,7 @@ mod tests {
             lang: "en".to_string(),
             labels_dir: None,
             info_site: "ebird".to_string(),
+            audio_format: "wav".to_string(),
         }
     }
 }

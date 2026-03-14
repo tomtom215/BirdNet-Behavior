@@ -69,6 +69,10 @@ pub fn render_species_partial(exclude: &[String], include: &[String]) -> String 
         "When non-empty, <strong>only</strong> these species are saved or notified.",
         "include",
     );
+    // Per-species thresholds section (loaded via HTMX)
+    out.push_str(
+        r#"<div id="thresholds-section" hx-get="/admin/species/thresholds" hx-trigger="load" hx-swap="innerHTML"></div>"#,
+    );
     out
 }
 
@@ -119,6 +123,54 @@ fn render_list_card(
   </form>
 </div>"##
     );
+}
+
+/// Render the per-species confidence thresholds section as an HTMX partial.
+pub fn render_thresholds_partial(thresholds: &[birdnet_db::sqlite::SpeciesThreshold]) -> String {
+    let mut out = String::with_capacity(2048);
+    out.push_str(r#"<div class="card">
+  <div class="section-title">Per-Species Confidence Thresholds</div>
+  <p class="hint">Override the global confidence threshold for specific species. Detections below the species threshold will be discarded.</p>"#);
+
+    if thresholds.is_empty() {
+        out.push_str(
+            r#"<p style="color:#475569;font-size:0.85rem;margin-bottom:1rem;">No per-species thresholds configured. The global threshold applies to all species.</p>"#,
+        );
+    } else {
+        out.push_str(
+            r#"<table style="width:100%;margin-bottom:1rem;"><thead><tr><th style="text-align:left;">Species</th><th>Threshold</th><th></th></tr></thead><tbody>"#,
+        );
+        for t in thresholds {
+            let esc = escape_html(&t.sci_name);
+            let pct = t.confidence_threshold * 100.0;
+            let _ = write!(
+                out,
+                r##"<tr>
+  <td>{esc}</td>
+  <td style="text-align:center;">{pct:.0}%</td>
+  <td style="text-align:right;">
+    <form hx-post="/admin/species/thresholds/delete" hx-target="#thresholds-section" hx-swap="innerHTML" style="display:inline;margin:0;">
+      <input type="hidden" name="sci_name" value="{esc}">
+      <button type="submit" class="btn btn-danger" style="padding:0.2rem 0.6rem;font-size:0.75rem;">Remove</button>
+    </form>
+  </td>
+</tr>"##
+            );
+        }
+        out.push_str("</tbody></table>");
+    }
+
+    out.push_str(
+        r##"<form hx-post="/admin/species/thresholds/set" hx-target="#thresholds-section" hx-swap="innerHTML"
+      style="display:flex;gap:0.5rem;align-items:center;">
+    <input type="text" name="sci_name" placeholder="Scientific name (e.g. Turdus merula)" style="flex:2;margin:0;">
+    <input type="number" name="threshold" min="0" max="1" step="0.05" value="0.50" placeholder="0.0–1.0" style="flex:1;margin:0;max-width:100px;">
+    <button type="submit" class="btn btn-primary">Set</button>
+  </form>
+</div>"##,
+    );
+
+    out
 }
 
 #[cfg(test)]

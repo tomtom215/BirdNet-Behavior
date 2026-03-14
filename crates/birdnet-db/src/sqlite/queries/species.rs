@@ -208,6 +208,90 @@ pub fn species_first_seen(
     Ok(rows)
 }
 
+// ---------------------------------------------------------------------------
+// Per-species confidence thresholds
+// ---------------------------------------------------------------------------
+
+/// A per-species confidence threshold override.
+#[derive(Debug, Clone)]
+pub struct SpeciesThreshold {
+    /// Scientific name of the species.
+    pub sci_name: String,
+    /// Custom confidence threshold (0.0–1.0).
+    pub confidence_threshold: f64,
+    /// When this threshold was created.
+    pub created_at: String,
+}
+
+/// Get all per-species confidence thresholds.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn get_species_thresholds(conn: &Connection) -> Result<Vec<SpeciesThreshold>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT sci_name, confidence_threshold, created_at FROM species_thresholds ORDER BY sci_name",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(SpeciesThreshold {
+                sci_name: row.get(0)?,
+                confidence_threshold: row.get(1)?,
+                created_at: row.get(2)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Get all per-species confidence thresholds as a map (`sci_name` → threshold).
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn get_species_threshold_map(
+    conn: &Connection,
+) -> Result<std::collections::HashMap<String, f64>, DbError> {
+    let mut stmt = conn.prepare("SELECT sci_name, confidence_threshold FROM species_thresholds")?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+        })?
+        .collect::<Result<std::collections::HashMap<String, f64>, _>>()?;
+    Ok(rows)
+}
+
+/// Set a per-species confidence threshold (upsert).
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn set_species_threshold(
+    conn: &Connection,
+    sci_name: &str,
+    threshold: f64,
+) -> Result<(), DbError> {
+    conn.execute(
+        "INSERT INTO species_thresholds (sci_name, confidence_threshold) VALUES (?1, ?2)
+         ON CONFLICT(sci_name) DO UPDATE SET confidence_threshold = ?2",
+        params![sci_name, threshold],
+    )?;
+    Ok(())
+}
+
+/// Remove a per-species confidence threshold.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn delete_species_threshold(conn: &Connection, sci_name: &str) -> Result<(), DbError> {
+    conn.execute(
+        "DELETE FROM species_thresholds WHERE sci_name = ?1",
+        params![sci_name],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 use birdnet_db::settings::{SettingsCategory, ensure_settings_table, get, set};
 
-use super::render::{render_species_page, render_species_partial};
+use super::render::{render_species_page, render_species_partial, render_thresholds_partial};
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -68,6 +68,55 @@ pub async fn remove_include(
     modify_list(&state, "species_include", &form.name, ListAction::Remove)?;
     let (exclude, include) = load_lists(&state);
     Ok(Html(render_species_partial(&exclude, &include)))
+}
+
+// ---------------------------------------------------------------------------
+// Threshold handlers
+// ---------------------------------------------------------------------------
+
+pub async fn thresholds_partial(State(state): State<AppState>) -> Html<String> {
+    let thresholds =
+        state.with_db(|conn| birdnet_db::sqlite::get_species_thresholds(conn).unwrap_or_default());
+    Html(render_thresholds_partial(&thresholds))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ThresholdForm {
+    pub sci_name: String,
+    pub threshold: f64,
+}
+
+pub async fn set_threshold(
+    State(state): State<AppState>,
+    Form(form): Form<ThresholdForm>,
+) -> Result<Html<String>, StatusCode> {
+    let sci_name = form.sci_name.trim().to_string();
+    if sci_name.is_empty() || !(0.0..=1.0).contains(&form.threshold) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    state.with_db(|conn| {
+        birdnet_db::sqlite::set_species_threshold(conn, &sci_name, form.threshold).ok();
+    });
+    let thresholds =
+        state.with_db(|conn| birdnet_db::sqlite::get_species_thresholds(conn).unwrap_or_default());
+    Ok(Html(render_thresholds_partial(&thresholds)))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ThresholdDeleteForm {
+    pub sci_name: String,
+}
+
+pub async fn delete_threshold(
+    State(state): State<AppState>,
+    Form(form): Form<ThresholdDeleteForm>,
+) -> Result<Html<String>, StatusCode> {
+    state.with_db(|conn| {
+        birdnet_db::sqlite::delete_species_threshold(conn, &form.sci_name).ok();
+    });
+    let thresholds =
+        state.with_db(|conn| birdnet_db::sqlite::get_species_thresholds(conn).unwrap_or_default());
+    Ok(Html(render_thresholds_partial(&thresholds)))
 }
 
 // ---------------------------------------------------------------------------
