@@ -17,7 +17,11 @@
 //! | `GET  /admin/system/logs/page` | Live log viewer page |
 //! | `GET  /admin/notifications` | Notification history log |
 //! | `DELETE /admin/notifications/prune` | Prune old log entries |
+//! | `GET  /admin/system/backups`        | List database backups |
+//! | `GET  /admin/system/backups/{name}` | Download a backup file |
+//! | `DELETE /admin/system/backups/{name}` | Delete a backup file |
 
+pub mod backup;
 pub mod logs;
 pub mod migration;
 pub mod notifications;
@@ -43,6 +47,8 @@ pub fn router() -> Router<AppState> {
         .merge(logs::router())
         // Notification history
         .merge(notifications::router())
+        // Backup management
+        .merge(backup::router())
 }
 
 /// Redirect `/admin` to `/admin/settings`.

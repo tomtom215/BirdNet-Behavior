@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
 
 use crate::cli::Cli;
-use crate::integrations::AppriseHandle;
+use crate::integrations::{AppriseHandle, EmailHandle};
 
 /// Start the detection daemon in a background thread.
 ///
@@ -19,6 +19,7 @@ pub fn start_detection_daemon(
     broadcast: birdnet_web::routes::websocket::DetectionBroadcast,
     apprise: Option<AppriseHandle>,
     birdweather: Option<birdnet_integrations::birdweather::Client>,
+    email: Option<EmailHandle>,
 ) -> Option<birdnet_core::detection::daemon::DaemonHandle> {
     let model_path = cli
         .model
@@ -78,7 +79,7 @@ pub fn start_detection_daemon(
             tracing::info!("detection daemon started");
             let rt_handle = tokio::runtime::Handle::current();
             tokio::task::spawn_blocking(move || {
-                event_processor(event_rx, state, broadcast, apprise, birdweather, rt_handle);
+                event_processor(event_rx, state, broadcast, apprise, birdweather, email, rt_handle);
             });
             Some(handle)
         }
@@ -97,6 +98,7 @@ fn event_processor(
     broadcast: birdnet_web::routes::websocket::DetectionBroadcast,
     apprise: Option<AppriseHandle>,
     birdweather: Option<birdnet_integrations::birdweather::Client>,
+    email: Option<EmailHandle>,
     rt_handle: tokio::runtime::Handle,
 ) {
     tracing::debug!("event processor started");
@@ -202,6 +204,27 @@ fn event_processor(
             rt_handle.spawn(async move {
                 if let Err(e) = client.post_detection(&post).await {
                     tracing::warn!(error = %e, species = %post.common_name, "BirdWeather post failed");
+                }
+            });
+        }
+
+        // Email alert.
+        if let Some(ref notifier) = email {
+            let notifier = std::sync::Arc::clone(notifier);
+            let alert = birdnet_integrations::email::DetectionEmail {
+                common_name: detection.common_name.clone(),
+                scientific_name: detection.scientific_name.clone(),
+                confidence: f64::from(detection.confidence),
+                date: detection.date.clone(),
+                time: detection.time.clone(),
+                station_name: None,
+                detection_url: None,
+            };
+            rt_handle.spawn(async move {
+                match notifier.notify(&alert).await {
+                    Ok(true) => tracing::debug!(species = %alert.common_name, "email alert sent"),
+                    Ok(false) => {}
+                    Err(e) => tracing::warn!(error = %e, species = %alert.common_name, "email alert failed"),
                 }
             });
         }

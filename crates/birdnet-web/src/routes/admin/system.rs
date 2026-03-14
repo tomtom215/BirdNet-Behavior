@@ -96,6 +96,11 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
               hx-swap="innerHTML">
         Create Backup Now
       </button>
+      <a href="/admin/system/backups"
+         style="padding:.5rem 1.5rem;border-radius:.375rem;border:1px solid #334155;
+                color:#94a3b8;font-size:.875rem;text-decoration:none;font-weight:600;">
+        Manage Backups
+      </a>
     </div>
     <div id="backup-result" style="margin-top:1rem;"></div>
   </div>
