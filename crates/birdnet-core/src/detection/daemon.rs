@@ -343,11 +343,27 @@ pub fn run_daemon(
     // Load model
     let model = BirdNetModel::load(&config.model_path, labels, config.model.clone())?;
 
+    // Auto-detect the sample rate the model expects from its input shape.
+    // V2.4 → [1, 144_000] = 48 kHz × 3 s; V3.0 → [1, 96_000] = 32 kHz × 3 s.
+    let model_sample_rate = model.infer_sample_rate();
+
     tracing::info!(
         model_path = %config.model_path.display(),
         input_shape = ?model.input_shape(),
+        sample_rate = model_sample_rate,
         "model loaded, starting daemon"
     );
+
+    // Build pipeline config, overriding sample rate to match the model.
+    let mut pipeline_config = config.pipeline.clone();
+    if pipeline_config.target_sample_rate != model_sample_rate {
+        tracing::info!(
+            configured = pipeline_config.target_sample_rate,
+            model = model_sample_rate,
+            "adjusting pipeline sample rate to match model"
+        );
+        pipeline_config.target_sample_rate = model_sample_rate;
+    }
 
     // Load species filter (metadata model)
     let mut species_filter = config.metadata_model_path.as_ref().map_or_else(
@@ -383,8 +399,6 @@ pub fn run_daemon(
     // Start file watcher
     let (_watcher, file_rx) =
         pipeline::watch_directory(&config.watch_dir).map_err(DaemonError::Pipeline)?;
-
-    let pipeline_config = config.pipeline.clone();
 
     // Process existing files if requested
     if config.process_existing {

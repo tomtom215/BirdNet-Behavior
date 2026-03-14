@@ -58,20 +58,34 @@ impl From<std::io::Error> for LabelError {
 }
 
 impl LabelSet {
-    /// Load labels from a text file.
+    /// Load labels from a file, auto-detecting the format.
     ///
-    /// Each line should contain `Scientific_Common` (underscore-separated).
-    /// Empty lines and lines starting with `#` are skipped.
+    /// Two formats are supported:
+    ///
+    /// - **V2.4 txt**: one `Scientific name_Common name` entry per line.
+    /// - **V3.0 CSV**: comma-separated with a header row containing at least
+    ///   `sci_name` and `com_name` columns (BirdNET+ V3.0 / Zenodo format).
+    ///
+    /// The format is detected from the first non-blank line: if it contains a
+    /// comma and the word `sci_name`, CSV mode is used; otherwise txt mode.
     ///
     /// # Errors
     ///
     /// Returns `LabelError` if the file cannot be read or has invalid format.
     pub fn load(path: &Path) -> Result<Self, LabelError> {
         let content = std::fs::read_to_string(path)?;
-        Self::parse(&content)
+        let first = content.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+        if first.contains(',') && first.to_lowercase().contains("sci_name") {
+            Self::parse_csv(&content)
+        } else {
+            Self::parse(&content)
+        }
     }
 
-    /// Parse labels from a string.
+    /// Parse labels from a V2.4-style text file.
+    ///
+    /// Each line should contain `Scientific_Common` (underscore-separated).
+    /// Empty lines and lines starting with `#` are skipped.
     ///
     /// # Errors
     ///
@@ -101,6 +115,73 @@ impl LabelSet {
 
         if labels.is_empty() {
             return Err(LabelError::Format("no labels found".into()));
+        }
+
+        Ok(Self { labels })
+    }
+
+    /// Parse labels from a V3.0 CSV file.
+    ///
+    /// Expects a header row with at least `sci_name` and `com_name` columns.
+    /// Column order is detected from the header, so extra columns are ignored.
+    ///
+    /// # Errors
+    ///
+    /// Returns `LabelError::Format` if the header is missing required columns
+    /// or any data row cannot be parsed.
+    pub fn parse_csv(content: &str) -> Result<Self, LabelError> {
+        let mut lines = content.lines();
+
+        // Find and parse the header row.
+        let header_line = lines
+            .find(|l| !l.trim().is_empty())
+            .ok_or_else(|| LabelError::Format("CSV file is empty".into()))?;
+
+        let headers: Vec<&str> = header_line.split(',').map(str::trim).collect();
+
+        let sci_col = headers
+            .iter()
+            .position(|h| *h == "sci_name")
+            .ok_or_else(|| LabelError::Format("CSV missing 'sci_name' column".into()))?;
+
+        let com_col = headers
+            .iter()
+            .position(|h| *h == "com_name")
+            .ok_or_else(|| LabelError::Format("CSV missing 'com_name' column".into()))?;
+
+        let mut labels = Vec::new();
+
+        for line in lines {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+
+            let fields: Vec<&str> = line.split(',').collect();
+            let sci = fields
+                .get(sci_col)
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    LabelError::Format(format!("missing sci_name in row: {line}"))
+                })?;
+            let com = fields
+                .get(com_col)
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    LabelError::Format(format!("missing com_name in row: {line}"))
+                })?;
+
+            labels.push(SpeciesLabel {
+                index: labels.len(),
+                scientific_name: sci.to_string(),
+                common_name: com.to_string(),
+            });
+        }
+
+        if labels.is_empty() {
+            return Err(LabelError::Format("no labels found in CSV".into()));
         }
 
         Ok(Self { labels })
@@ -199,6 +280,48 @@ mod tests {
         assert!(labels.find_by_common_name("european robin").is_some());
         assert!(labels.find_by_scientific_name("Turdus merula").is_some());
         assert!(labels.find_by_common_name("nonexistent").is_none());
+    }
+
+    #[test]
+    fn parse_csv_v3_format() {
+        let csv = "idx,id,sci_name,com_name,class,order\n\
+                   0,abc,Turdus merula,Eurasian Blackbird,Aves,Passeriformes\n\
+                   1,def,Erithacus rubecula,European Robin,Aves,Passeriformes\n";
+        let labels = LabelSet::parse_csv(csv).unwrap();
+        assert_eq!(labels.len(), 2);
+        assert_eq!(labels.get(0).unwrap().scientific_name, "Turdus merula");
+        assert_eq!(labels.get(0).unwrap().common_name, "Eurasian Blackbird");
+        assert_eq!(labels.get(1).unwrap().scientific_name, "Erithacus rubecula");
+        assert_eq!(labels.get(1).unwrap().common_name, "European Robin");
+    }
+
+    #[test]
+    fn load_auto_detects_csv() {
+        let csv = "idx,id,sci_name,com_name,class,order\n\
+                   0,abc,Turdus merula,Eurasian Blackbird,Aves,Passeriformes\n";
+        let labels = LabelSet::parse_csv(csv).unwrap();
+        assert_eq!(labels.len(), 1);
+    }
+
+    #[test]
+    fn parse_csv_missing_sci_name_column_errors() {
+        let csv = "idx,com_name\n0,Eurasian Blackbird\n";
+        assert!(LabelSet::parse_csv(csv).is_err());
+    }
+
+    #[test]
+    fn parse_csv_missing_com_name_column_errors() {
+        let csv = "idx,sci_name\n0,Turdus merula\n";
+        assert!(LabelSet::parse_csv(csv).is_err());
+    }
+
+    #[test]
+    fn parse_csv_columns_in_any_order() {
+        // com_name before sci_name — column detection must use header positions
+        let csv = "com_name,sci_name\nEurasian Blackbird,Turdus merula\n";
+        let labels = LabelSet::parse_csv(csv).unwrap();
+        assert_eq!(labels.get(0).unwrap().scientific_name, "Turdus merula");
+        assert_eq!(labels.get(0).unwrap().common_name, "Eurasian Blackbird");
     }
 
     #[test]

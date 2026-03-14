@@ -29,10 +29,18 @@ CONFIG_FILE="${CONFIG_DIR}/birdnet.conf"
 DATA_DIR="${HOME}/BirdNet-Behavior"
 RECS_DIR="${DATA_DIR}/recordings"
 IMAGE_CACHE_DIR="${DATA_DIR}/image_cache"
+MODEL_DIR="${DATA_DIR}/models"
 DB_PATH="${DATA_DIR}/birds.db"
 SERVICE_FILE="/etc/systemd/system/birdnet-behavior.service"
 SERVICE_USER="${SUDO_USER:-${USER}}"
 LISTEN_ADDR="0.0.0.0:8502"
+
+# BirdNET+ V3.0 model files (Zenodo — direct download, no login required).
+# FP16 recommended: same accuracy as FP32, half the size (259 MB vs 541 MB).
+ZENODO_RECORD="18247420"
+MODEL_FILE="BirdNET+_V3.0-preview3_Global_11K_FP16.onnx"
+LABELS_FILE="BirdNET+_V3.0-preview3_Global_11K_Labels.csv"
+ZENODO_BASE="https://zenodo.org/records/${ZENODO_RECORD}/files"
 
 # Colour codes (used only when stdout is a terminal)
 if [ -t 1 ]; then
@@ -146,6 +154,42 @@ install_binary() {
 }
 
 # ---------------------------------------------------------------------------
+# Download BirdNET+ V3.0 model from Zenodo
+# ---------------------------------------------------------------------------
+
+download_model() {
+    local model_dest="${MODEL_DIR}/${MODEL_FILE}"
+    local labels_dest="${MODEL_DIR}/${LABELS_FILE}"
+
+    # Skip if already present (re-running installer).
+    if [ -f "${model_dest}" ] && [ -f "${labels_dest}" ]; then
+        success "Model already downloaded at ${MODEL_DIR} — skipping."
+        return
+    fi
+
+    info "Downloading BirdNET+ V3.0 model (~259 MB FP16 ONNX) from Zenodo…"
+    info "  This may take a few minutes on a slow connection."
+
+    install -d -m 0755 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${MODEL_DIR}"
+
+    # Model
+    if [ ! -f "${model_dest}" ]; then
+        download "${ZENODO_BASE}/${MODEL_FILE}?download=1" "${model_dest}" \
+            || fatal "Model download failed. Check your internet connection and retry."
+        chown "${SERVICE_USER}:${SERVICE_USER}" "${model_dest}"
+        success "Model downloaded to ${model_dest}"
+    fi
+
+    # Labels
+    if [ ! -f "${labels_dest}" ]; then
+        download "${ZENODO_BASE}/${LABELS_FILE}?download=1" "${labels_dest}" \
+            || fatal "Labels download failed."
+        chown "${SERVICE_USER}:${SERVICE_USER}" "${labels_dest}"
+        success "Labels downloaded to ${labels_dest}"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Create directories
 # ---------------------------------------------------------------------------
 
@@ -156,6 +200,7 @@ create_directories() {
         "${DATA_DIR}" \
         "${RECS_DIR}" \
         "${IMAGE_CACHE_DIR}" \
+        "${MODEL_DIR}" \
         "${DATA_DIR}/backups"
     install -d -m 0755 "${CONFIG_DIR}"
     success "Directories created under ${DATA_DIR}"
@@ -183,9 +228,9 @@ DB_PATH=${DB_PATH}
 RECS_DIR=${RECS_DIR}
 IMAGE_CACHE_DIR=${IMAGE_CACHE_DIR}
 
-# --- Model (download from https://github.com/kahst/BirdNET-Analyzer) ---
-# MODEL=/home/${SERVICE_USER}/BirdNET-Analyzer/checkpoints/V2.4/BirdNET_GLOBAL_6K_V2.4_Model_FP32.tflite
-# LABELS=/home/${SERVICE_USER}/BirdNET-Analyzer/checkpoints/V2.4/BirdNET_GLOBAL_6K_V2.4_Labels.txt
+# --- Model (BirdNET+ V3.0, downloaded automatically by installer) ---
+MODEL_PATH=${MODEL_DIR}/${MODEL_FILE}
+LABELS_PATH=${MODEL_DIR}/${LABELS_FILE}
 
 # --- Audio source ---
 # Use one of: ALSA microphone, RTSP stream, or an existing recordings directory.
@@ -289,21 +334,17 @@ print_summary() {
     echo -e "  ${BOLD}Web UI:${RESET}  http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost'):8502"
     echo
     echo -e "${BOLD}Next steps:${RESET}"
-    echo "  1. Download the BirdNET model and labels:"
-    echo "       https://github.com/kahst/BirdNET-Analyzer/releases"
-    echo "     Then update MODEL= and LABELS= in ${CONFIG_FILE}"
-    echo
-    echo "  2. Configure your audio source in ${CONFIG_FILE}:"
+    echo "  1. Configure your audio source in ${CONFIG_FILE}:"
     echo "       REC_CARD=plughw:1,0   (ALSA microphone)"
     echo "       RTSP_STREAM=rtsp://…  (RTSP camera)"
     echo
-    echo "  3. (Optional) Set LATITUDE and LONGITUDE for species frequency filtering."
+    echo "  2. (Optional) Set LATITUDE and LONGITUDE for location-based species filtering."
     echo
-    echo "  4. Start the service:"
+    echo "  3. Start the service:"
     echo "       sudo systemctl start birdnet-behavior"
     echo "       sudo systemctl status birdnet-behavior"
     echo
-    echo "  5. Open the web UI at http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost'):8502"
+    echo "  4. Open the web UI at http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost'):8502"
     echo
     echo "  To view logs:"
     echo "       sudo journalctl -u birdnet-behavior -f"
@@ -351,6 +392,7 @@ main() {
 
     install_binary "${version}" "${arch}"
     create_directories
+    download_model
     write_config
     install_service
     check_audio_devices
