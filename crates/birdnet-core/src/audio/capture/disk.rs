@@ -560,4 +560,177 @@ mod tests {
         let removed = cleanup_old_recordings(dir.path(), 30).unwrap();
         assert_eq!(removed, 0);
     }
+
+    // -----------------------------------------------------------------------
+    // DiskManager tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn default_disk_manager_config() {
+        let config = DiskManagerConfig::default();
+        assert_eq!(config.purge_threshold, 95);
+        assert_eq!(config.full_disk_action, FullDiskAction::Purge);
+        assert_eq!(config.max_files_per_species, 0);
+        assert_eq!(config.check_interval_secs, 60);
+    }
+
+    #[test]
+    fn full_disk_action_equality() {
+        assert_eq!(FullDiskAction::Purge, FullDiskAction::Purge);
+        assert_ne!(FullDiskAction::Purge, FullDiskAction::Keep);
+    }
+
+    #[test]
+    fn check_and_purge_below_threshold() {
+        // Use /tmp which should be well below 95%.
+        let config = DiskManagerConfig {
+            monitored_dir: PathBuf::from("/tmp"),
+            purge_threshold: 99, // very high threshold
+            full_disk_action: FullDiskAction::Purge,
+            max_files_per_species: 0,
+            check_interval_secs: 60,
+        };
+        let manager = DiskManager::new(config);
+        let result = manager.check_and_purge();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[test]
+    fn enforce_species_limits_unlimited() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = DiskManagerConfig {
+            monitored_dir: dir.path().to_path_buf(),
+            max_files_per_species: 0, // unlimited
+            ..DiskManagerConfig::default()
+        };
+        let manager = DiskManager::new(config);
+        let result = manager.enforce_species_limits();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[test]
+    fn enforce_species_limits_removes_excess() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        // Create By_Date/2026-03-14/Test_Bird/ with 5 wav files.
+        let species_dir = dir.path().join("By_Date/2026-03-14/Test_Bird");
+        std::fs::create_dir_all(&species_dir).expect("create dirs");
+
+        for i in 0..5 {
+            let wav_path = species_dir.join(format!("clip_{i}.wav"));
+            // Write a minimal valid WAV header (44 bytes).
+            let header = create_minimal_wav_header();
+            std::fs::write(&wav_path, &header).expect("write wav");
+            // Stagger modification times so we have a deterministic oldest.
+            let mtime = filetime::FileTime::from_unix_time(1_000_000 + i64::from(i), 0);
+            filetime::set_file_mtime(&wav_path, mtime).expect("set mtime");
+        }
+
+        let config = DiskManagerConfig {
+            monitored_dir: dir.path().to_path_buf(),
+            max_files_per_species: 3,
+            ..DiskManagerConfig::default()
+        };
+        let manager = DiskManager::new(config);
+        let removed = manager.enforce_species_limits().expect("enforce limits");
+        assert_eq!(removed, 2); // 5 - 3 = 2
+
+        // Verify 3 files remain.
+        let remaining: Vec<_> = std::fs::read_dir(&species_dir)
+            .expect("read dir")
+            .flatten()
+            .filter(|e| e.path().is_file())
+            .collect();
+        assert_eq!(remaining.len(), 3);
+    }
+
+    #[test]
+    fn enforce_species_limits_no_by_date_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = DiskManagerConfig {
+            monitored_dir: dir.path().to_path_buf(),
+            max_files_per_species: 5,
+            ..DiskManagerConfig::default()
+        };
+        let manager = DiskManager::new(config);
+        let result = manager.enforce_species_limits();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 0);
+    }
+
+    #[test]
+    fn purge_oldest_files_removes_oldest() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        // Create By_Date directory with 20 files.
+        let species_dir = dir.path().join("By_Date/2026-03-14/Test_Bird");
+        std::fs::create_dir_all(&species_dir).expect("create dirs");
+
+        for i in 0..20 {
+            let wav_path = species_dir.join(format!("clip_{i:02}.wav"));
+            let header = create_minimal_wav_header();
+            std::fs::write(&wav_path, &header).expect("write wav");
+            let mtime = filetime::FileTime::from_unix_time(1_000_000 + i64::from(i), 0);
+            filetime::set_file_mtime(&wav_path, mtime).expect("set mtime");
+        }
+
+        let removed = purge_oldest_files(dir.path()).expect("purge");
+        // 10% of 20 = 2
+        assert_eq!(removed, 2);
+    }
+
+    #[test]
+    fn cleanup_empty_dirs_removes_empty() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let nested = dir.path().join("a/b/c");
+        std::fs::create_dir_all(&nested).expect("create dirs");
+
+        cleanup_empty_dirs(dir.path());
+
+        // All empty nested dirs should be gone.
+        assert!(!dir.path().join("a").exists());
+    }
+
+    #[test]
+    fn disk_manager_run_stops_on_signal() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = DiskManagerConfig {
+            monitored_dir: dir.path().to_path_buf(),
+            check_interval_secs: 1,
+            purge_threshold: 99,
+            ..DiskManagerConfig::default()
+        };
+        let manager = DiskManager::new(config);
+
+        let (tx, rx) = mpsc::channel();
+
+        // Run in a thread and immediately send stop.
+        let handle = std::thread::spawn(move || {
+            manager.run(rx);
+        });
+
+        tx.send(()).expect("send stop");
+        handle.join().expect("join");
+    }
+
+    /// Create a minimal valid WAV file (44-byte header, no data).
+    fn create_minimal_wav_header() -> Vec<u8> {
+        let mut header = Vec::with_capacity(44);
+        header.extend_from_slice(b"RIFF");
+        header.extend_from_slice(&36_u32.to_le_bytes()); // file size - 8
+        header.extend_from_slice(b"WAVE");
+        header.extend_from_slice(b"fmt ");
+        header.extend_from_slice(&16_u32.to_le_bytes()); // fmt chunk size
+        header.extend_from_slice(&1_u16.to_le_bytes());  // PCM
+        header.extend_from_slice(&1_u16.to_le_bytes());  // mono
+        header.extend_from_slice(&48000_u32.to_le_bytes()); // sample rate
+        header.extend_from_slice(&96000_u32.to_le_bytes()); // byte rate
+        header.extend_from_slice(&2_u16.to_le_bytes());  // block align
+        header.extend_from_slice(&16_u16.to_le_bytes()); // bits per sample
+        header.extend_from_slice(b"data");
+        header.extend_from_slice(&0_u32.to_le_bytes()); // data size
+        header
+    }
 }

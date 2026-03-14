@@ -20,8 +20,10 @@ pub mod dashboard;
 pub mod detection_detail;
 pub mod health;
 pub mod heatmap;
+pub mod recordings;
 pub mod species_pages;
 pub mod timeseries_dash;
+pub mod today;
 
 use axum::Router;
 use axum::response::Html;
@@ -37,6 +39,8 @@ pub(crate) const SPECIES_DETAIL_HTML: &str =
     include_str!("../../../templates/species_detail.html");
 pub(crate) const TIMESERIES_PAGE_HTML: &str =
     include_str!("../../../templates/timeseries.html");
+pub(crate) const TODAY_PAGE_HTML: &str = include_str!("../../../templates/today.html");
+pub(crate) const RECORDINGS_PAGE_HTML: &str = include_str!("../../../templates/recordings.html");
 
 /// Build all page and partial routes.
 pub fn router() -> Router<AppState> {
@@ -48,6 +52,8 @@ pub fn router() -> Router<AppState> {
         .merge(timeseries_dash::router())
         .merge(heatmap::router())
         .merge(correlation::router())
+        .merge(today::router())
+        .merge(recordings::router())
 }
 
 /// Render a full page by substituting content into the layout template.
@@ -65,7 +71,9 @@ pub(crate) fn render_page(title: &str, content: &str, active_nav: &str) -> Html<
         .replace("{{content}}", content)
         .replace("{{version}}", version)
         .replace("{{nav_dashboard}}", nav("dashboard"))
+        .replace("{{nav_today}}", nav("today"))
         .replace("{{nav_species}}", nav("species"))
+        .replace("{{nav_recordings}}", nav("recordings"))
         .replace("{{nav_analytics}}", nav("analytics"))
         .replace("{{nav_timeseries}}", nav("timeseries"));
     Html(html)
