@@ -338,6 +338,35 @@ pub fn run_daemon(
         "model loaded, starting daemon"
     );
 
+    // Load species filter (metadata model)
+    let mut species_filter = if let Some(ref mdata_path) = config.metadata_model_path {
+        match SpeciesFilter::load(mdata_path, config.species_filter.clone()) {
+            Ok(sf) => sf,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "failed to load metadata model, falling back to passthrough"
+                );
+                SpeciesFilter::new_passthrough(config.species_filter.clone())
+            }
+        }
+    } else {
+        SpeciesFilter::new_passthrough(config.species_filter.clone())
+    };
+
+    // Create privacy filter
+    let privacy_filter = PrivacyFilter::new(config.privacy_threshold);
+
+    if privacy_filter.is_enabled() {
+        tracing::info!(
+            threshold = config.privacy_threshold,
+            "privacy filter enabled"
+        );
+    }
+
+    let lat = config.latitude;
+    let lon = config.longitude;
+
     // Create stop channel
     let (stop_tx, stop_rx) = mpsc::channel();
 
@@ -349,7 +378,16 @@ pub fn run_daemon(
 
     // Process existing files if requested
     if config.process_existing {
-        process_existing_files(&config.watch_dir, &pipeline_config, &model, &event_tx);
+        process_existing_files(
+            &config.watch_dir,
+            &pipeline_config,
+            &model,
+            &privacy_filter,
+            &mut species_filter,
+            lat,
+            lon,
+            &event_tx,
+        );
     }
 
     // Main daemon loop -- runs on current thread
@@ -369,7 +407,16 @@ pub fn run_daemon(
                     // Small delay to let the file finish writing
                     std::thread::sleep(Duration::from_millis(200));
 
-                    match process_and_infer(&path, &pipeline_config, &model) {
+                    match process_and_infer_filtered(
+                        &path,
+                        &pipeline_config,
+                        &model,
+                        &privacy_filter,
+                        &mut species_filter,
+                        lat,
+                        lon,
+                        0, // week will be computed by caller
+                    ) {
                         Ok(events) => {
                             for event in events {
                                 if event_tx.send(event).is_err() {
@@ -402,10 +449,15 @@ pub fn run_daemon(
 }
 
 /// Process any audio files already present in the watch directory.
+#[allow(clippy::too_many_arguments)]
 fn process_existing_files(
     dir: &Path,
     pipeline_config: &PipelineConfig,
     model: &BirdNetModel,
+    privacy_filter: &PrivacyFilter,
+    species_filter: &mut SpeciesFilter,
+    lat: Option<f64>,
+    lon: Option<f64>,
     event_tx: &mpsc::Sender<DetectionEvent>,
 ) {
     let entries = match std::fs::read_dir(dir) {
@@ -431,7 +483,16 @@ fn process_existing_files(
             continue;
         }
 
-        match process_and_infer(&path, pipeline_config, model) {
+        match process_and_infer_filtered(
+            &path,
+            pipeline_config,
+            model,
+            privacy_filter,
+            species_filter,
+            lat,
+            lon,
+            0,
+        ) {
             Ok(events) => {
                 for event in events {
                     let _ = event_tx.send(event);
@@ -466,9 +527,16 @@ mod tests {
             pipeline: PipelineConfig::default(),
             model: ModelConfig::default(),
             process_existing: false,
+            metadata_model_path: None,
+            species_filter: crate::inference::species_filter::SpeciesFilterConfig::default(),
+            privacy_threshold: 0.0,
+            latitude: None,
+            longitude: None,
         };
         assert_eq!(config.watch_dir, PathBuf::from("/tmp/StreamData"));
         assert!(!config.process_existing);
+        assert!(config.metadata_model_path.is_none());
+        assert!((config.privacy_threshold).abs() < f32::EPSILON);
     }
 
     #[test]

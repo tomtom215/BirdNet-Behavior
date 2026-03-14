@@ -5,10 +5,11 @@
 
 #[cfg(feature = "analytics")]
 use birdnet_behavioral::connection::AnalyticsDb;
+use birdnet_core::i18n::I18nManager;
 use birdnet_integrations::species_images::ImageCache;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use crate::routes::admin::logs::LogBroadcaster;
 use crate::routes::websocket::DetectionBroadcast;
@@ -40,6 +41,10 @@ struct AppStateInner {
     detection_broadcast: DetectionBroadcast,
     /// Broadcast channel for live log SSE streaming.
     log_broadcaster: LogBroadcaster,
+    /// Localization manager for species common names.
+    i18n: Option<RwLock<I18nManager>>,
+    /// Audio source configuration for live streaming (ALSA device or RTSP URL).
+    audio_source: Option<String>,
 }
 
 impl AppState {
@@ -71,6 +76,8 @@ impl AppState {
                 image_cache: None,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 log_broadcaster: LogBroadcaster::new(),
+                i18n: None,
+                audio_source: None,
             }),
         })
     }
@@ -142,6 +149,8 @@ impl AppState {
                 image_cache: None,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 log_broadcaster: LogBroadcaster::new(),
+                i18n: None,
+                audio_source: None,
             }),
         })
     }
@@ -162,6 +171,8 @@ impl AppState {
                 image_cache: None,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 log_broadcaster: LogBroadcaster::new(),
+                i18n: None,
+                audio_source: None,
             }),
         }
     }
@@ -202,6 +213,8 @@ impl AppState {
                 image_cache: Some(Arc::new(cache)),
                 detection_broadcast: inner.detection_broadcast,
                 log_broadcaster: inner.log_broadcaster,
+                i18n: inner.i18n,
+                audio_source: inner.audio_source,
             }),
         }
     }
@@ -304,6 +317,56 @@ impl AppState {
                 image_cache: inner.image_cache,
                 detection_broadcast: inner.detection_broadcast,
                 log_broadcaster: inner.log_broadcaster,
+                i18n: inner.i18n,
+                audio_source: inner.audio_source,
+            }),
+        }
+    }
+
+    /// Set the i18n manager for species name translation.
+    ///
+    /// Must be called before the state is shared across threads (before server start).
+    #[must_use]
+    pub fn with_i18n(self, manager: I18nManager) -> Self {
+        let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|_| {
+            panic!("with_i18n called after state was shared");
+        });
+        Self {
+            inner: Arc::new(AppStateInner {
+                db: inner.db,
+                db_path: inner.db_path,
+                recording_dir: inner.recording_dir,
+                #[cfg(feature = "analytics")]
+                analytics_db: inner.analytics_db,
+                image_cache: inner.image_cache,
+                detection_broadcast: inner.detection_broadcast,
+                log_broadcaster: inner.log_broadcaster,
+                i18n: Some(RwLock::new(manager)),
+                audio_source: inner.audio_source,
+            }),
+        }
+    }
+
+    /// Set the audio source for live streaming (ALSA device name or RTSP URL).
+    ///
+    /// Must be called before the state is shared across threads (before server start).
+    #[must_use]
+    pub fn with_audio_source(self, source: String) -> Self {
+        let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|_| {
+            panic!("with_audio_source called after state was shared");
+        });
+        Self {
+            inner: Arc::new(AppStateInner {
+                db: inner.db,
+                db_path: inner.db_path,
+                recording_dir: inner.recording_dir,
+                #[cfg(feature = "analytics")]
+                analytics_db: inner.analytics_db,
+                image_cache: inner.image_cache,
+                detection_broadcast: inner.detection_broadcast,
+                log_broadcaster: inner.log_broadcaster,
+                i18n: inner.i18n,
+                audio_source: Some(source),
             }),
         }
     }
@@ -321,5 +384,23 @@ impl AppState {
     /// Get the log broadcaster for SSE admin log streaming.
     pub fn log_broadcaster(&self) -> LogBroadcaster {
         self.inner.log_broadcaster.clone()
+    }
+
+    /// Execute a closure with a reference to the i18n manager.
+    ///
+    /// Returns `None` if no i18n manager is configured.
+    pub fn with_i18n_ref<F, T>(&self, f: F) -> Option<T>
+    where
+        F: FnOnce(&I18nManager) -> T,
+    {
+        self.inner.i18n.as_ref().map(|lock| {
+            let mgr = lock.read().expect("i18n rwlock poisoned");
+            f(&mgr)
+        })
+    }
+
+    /// Get the audio source for live streaming, if configured.
+    pub fn audio_source(&self) -> Option<&str> {
+        self.inner.audio_source.as_deref()
     }
 }
