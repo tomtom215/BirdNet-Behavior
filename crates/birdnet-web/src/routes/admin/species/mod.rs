@@ -25,6 +25,7 @@ use crate::state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/admin/species", get(handler::species_page))
+        .route("/admin/species/test", get(handler::filter_test_page))
         .route("/admin/species/partial", get(handler::species_partial))
         .route(
             "/admin/species/exclude/add",

@@ -8,7 +8,10 @@ use serde::Deserialize;
 
 use birdnet_db::settings::{SettingsCategory, ensure_settings_table, get, set};
 
-use super::render::{render_species_page, render_species_partial, render_thresholds_partial};
+use super::render::{
+    render_filter_test_page, render_species_page, render_species_partial,
+    render_thresholds_partial,
+};
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -23,6 +26,19 @@ pub async fn species_page(State(state): State<AppState>) -> Html<String> {
 pub async fn species_partial(State(state): State<AppState>) -> Html<String> {
     let (exclude, include) = load_lists(&state);
     Html(render_species_partial(&exclude, &include))
+}
+
+pub async fn filter_test_page(State(state): State<AppState>) -> Html<String> {
+    let (exclude, include) = load_lists(&state);
+    let species = state.with_db(|conn| {
+        birdnet_db::sqlite::top_species(conn, 10_000).unwrap_or_default()
+    });
+    #[allow(clippy::cast_sign_loss)]
+    let rows: Vec<(String, String, u64)> = species
+        .into_iter()
+        .map(|s| (s.sci_name, s.com_name, s.count.max(0) as u64))
+        .collect();
+    Html(render_filter_test_page(&exclude, &include, &rows))
 }
 
 // ---------------------------------------------------------------------------
