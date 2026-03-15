@@ -1,18 +1,19 @@
-//! ONNX model loading and inference via tract (pure Rust).
+//! ONNX model loading and inference via ort (ONNX Runtime).
 //!
 //! Loads `BirdNET` ONNX models, runs inference on audio chunks (raw f32 samples),
 //! and returns species classification results with confidence scores.
 //!
 //! The inference pipeline:
 //! 1. Accept raw audio f32 samples (already resampled to model sample rate)
-//! 2. Feed into tract ONNX model
+//! 2. Feed into ONNX Runtime session
 //! 3. Apply sigmoid with sensitivity adjustment
 //! 4. Return top-N species above confidence threshold
 
 use std::fmt;
 use std::path::Path;
 
-use tract_onnx::prelude::*;
+use ort::session::Session;
+use ort::value::{Tensor, ValueType};
 
 use crate::detection::types::Detection;
 use crate::inference::labels::LabelSet;
@@ -52,7 +53,7 @@ pub struct ModelConfig {
     pub confidence_threshold: f32,
     /// Maximum number of detections per chunk.
     pub top_n: usize,
-    /// Number of inference threads (for tract thread pool).
+    /// Number of inference threads.
     pub num_threads: usize,
 }
 
@@ -67,12 +68,9 @@ impl Default for ModelConfig {
     }
 }
 
-/// Tract model plan type alias to avoid repeating the complex generic type.
-type ModelPlan = SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>;
-
 /// A loaded `BirdNET` ONNX model ready for inference.
 pub struct BirdNetModel {
-    model: ModelPlan,
+    session: Session,
     labels: LabelSet,
     config: ModelConfig,
     input_shape: Vec<usize>,
@@ -85,6 +83,35 @@ impl fmt::Debug for BirdNetModel {
             .field("config", &self.config)
             .field("input_shape", &self.input_shape)
             .finish_non_exhaustive()
+    }
+}
+
+/// Extract the input shape from a loaded session.
+///
+/// Dynamic dimensions (-1) are mapped to 1 for batch axes, preserving fixed
+/// dimensions (e.g. 96_000 sample points) for sample-rate auto-detection.
+fn extract_input_shape(session: &Session) -> Result<Vec<usize>, InferenceError> {
+    let input = session
+        .inputs()
+        .first()
+        .ok_or_else(|| InferenceError::Shape("model has no inputs".into()))?;
+
+    match input.dtype() {
+        ValueType::Tensor { shape, .. } => Ok(shape
+            .iter()
+            .map(|&d| {
+                if d > 0 {
+                    // Fixed dimension — use it directly
+                    d as usize
+                } else {
+                    // Dynamic dimension (-1 in ONNX) — treat as batch size 1
+                    1
+                }
+            })
+            .collect()),
+        other => Err(InferenceError::Shape(format!(
+            "expected Tensor input, got {other:?}"
+        ))),
     }
 }
 
@@ -109,29 +136,14 @@ impl BirdNetModel {
             "loading ONNX model"
         );
 
-        let model = tract_onnx::onnx()
-            .model_for_path(model_path)
+        let session = Session::builder()
             .map_err(|e| InferenceError::Model(e.to_string()))?
-            .into_optimized()
-            .map_err(|e| InferenceError::Model(format!("optimization failed: {e}")))?
-            .into_runnable()
-            .map_err(|e| InferenceError::Model(format!("plan creation failed: {e}")))?;
+            .with_intra_threads(config.num_threads)
+            .map_err(|e| InferenceError::Model(e.to_string()))?
+            .commit_from_file(model_path)
+            .map_err(|e| InferenceError::Model(e.to_string()))?;
 
-        // Extract input shape from the model
-        let input_fact = model
-            .model()
-            .input_fact(0)
-            .map_err(|e| InferenceError::Model(format!("cannot read input shape: {e}")))?;
-
-        let input_shape: Vec<usize> = input_fact
-            .shape
-            .dims()
-            .iter()
-            .map(|d: &TDim| {
-                let v = d.to_i64().unwrap_or(0);
-                usize::try_from(v).unwrap_or(0)
-            })
-            .collect();
+        let input_shape = extract_input_shape(&session)?;
 
         tracing::info!(
             input_shape = ?input_shape,
@@ -139,7 +151,7 @@ impl BirdNetModel {
         );
 
         Ok(Self {
-            model,
+            session,
             labels,
             config,
             input_shape,
@@ -156,33 +168,15 @@ impl BirdNetModel {
         labels: LabelSet,
         config: ModelConfig,
     ) -> Result<Self, InferenceError> {
-        let cursor = std::io::Cursor::new(bytes);
-
-        let model = tract_onnx::onnx()
-            .model_for_read(&mut cursor.clone())
+        let session = Session::builder()
             .map_err(|e| InferenceError::Model(e.to_string()))?
-            .into_optimized()
-            .map_err(|e| InferenceError::Model(format!("optimization failed: {e}")))?
-            .into_runnable()
-            .map_err(|e| InferenceError::Model(format!("plan creation failed: {e}")))?;
+            .commit_from_memory(bytes)
+            .map_err(|e| InferenceError::Model(e.to_string()))?;
 
-        let input_fact = model
-            .model()
-            .input_fact(0)
-            .map_err(|e| InferenceError::Model(format!("cannot read input shape: {e}")))?;
-
-        let input_shape: Vec<usize> = input_fact
-            .shape
-            .dims()
-            .iter()
-            .map(|d: &TDim| {
-                let v = d.to_i64().unwrap_or(0);
-                usize::try_from(v).unwrap_or(0)
-            })
-            .collect();
+        let input_shape = extract_input_shape(&session)?;
 
         Ok(Self {
-            model,
+            session,
             labels,
             config,
             input_shape,
@@ -192,7 +186,7 @@ impl BirdNetModel {
     /// Run inference on raw audio samples.
     ///
     /// The `audio` slice should be mono f32 samples at the model's expected
-    /// sample rate and duration. For `BirdNET` V2.4, that's 48kHz x 3s = 144,000 samples.
+    /// sample rate and duration. For `BirdNET` V3.0, that's 32kHz x 3s = 96,000 samples.
     ///
     /// Returns detections sorted by confidence (descending), filtered by threshold.
     ///
@@ -205,7 +199,7 @@ impl BirdNetModel {
         clippy::cast_sign_loss
     )]
     pub fn predict(
-        &self,
+        &mut self,
         audio: &[f32],
         date: &str,
         time: &str,
@@ -213,25 +207,24 @@ impl BirdNetModel {
         end_secs: f32,
         week: u32,
     ) -> Result<Vec<Detection>, InferenceError> {
-        // Build input tensor matching the model's expected shape
         let input_tensor = self.build_input_tensor(audio)?;
 
-        // Run inference
         let outputs = self
-            .model
-            .run(tvec![input_tensor.into()])
+            .session
+            .run(ort::inputs![input_tensor])
             .map_err(|e| InferenceError::Runtime(e.to_string()))?;
 
-        // Extract logits from first output
-        let logits = outputs[0]
-            .to_array_view::<f32>()
+        // BirdNET+ V3.0 has two outputs:
+        //   [0] "embeddings"   → [batch, 1280]   (internal representation)
+        //   [1] "predictions"  → [batch, 11560]  (species classification logits)
+        // Use "predictions" if it exists (V3.0), else fall back to output 0 (V2.4).
+        let output_idx = if outputs.len() > 1 { 1 } else { 0 };
+        let (_shape, flat_logits) = outputs[output_idx]
+            .try_extract_tensor::<f32>()
             .map_err(|e| InferenceError::Runtime(format!("cannot extract logits: {e}")))?;
 
         // Apply sigmoid with sensitivity and collect results
         let mut detections = Vec::new();
-        let flat_logits = logits
-            .as_slice()
-            .ok_or_else(|| InferenceError::Runtime("logits not contiguous".into()))?;
 
         for (i, &logit) in flat_logits.iter().enumerate() {
             let confidence = sigmoid(self.config.sensitivity * logit);
@@ -268,46 +261,26 @@ impl BirdNetModel {
 
     /// Build the input tensor from audio samples.
     ///
-    /// Handles shape matching: if the model expects [1, N], wraps accordingly.
     /// Pads or truncates audio to match expected input length.
-    fn build_input_tensor(&self, audio: &[f32]) -> Result<Tensor, InferenceError> {
-        match self.input_shape.as_slice() {
-            // Shape [batch, samples] -- most BirdNET models
-            [1, expected_len] => {
-                let expected = *expected_len;
-                let mut padded = vec![0.0_f32; expected];
-                let copy_len = audio.len().min(expected);
-                padded[..copy_len].copy_from_slice(&audio[..copy_len]);
-
-                let tensor = tract_ndarray::Array2::from_shape_vec((1, expected), padded)
-                    .map_err(|e| InferenceError::Shape(e.to_string()))?;
-
-                Ok(tensor.into_tensor())
+    /// For fully-dynamic shapes (V3.0 preview), defaults to 96 000 samples (32 kHz × 3 s).
+    fn build_input_tensor(&self, audio: &[f32]) -> Result<Tensor<f32>, InferenceError> {
+        let expected_len = match self.input_shape.as_slice() {
+            [_, n] | [_, _, n] if *n > 1 => *n,
+            // All-dynamic or rank-1 shape → use V3.0 default chunk size
+            [1] | [1, 1] | [1, 1, 1] => 96_000,
+            other => {
+                return Err(InferenceError::Shape(format!(
+                    "unsupported input shape: {other:?}, expected [1, N] or [1, 1, N]"
+                )))
             }
-            // Shape [batch, channels, samples] -- some model variants
-            [1, 1, expected_len] => {
-                let expected = *expected_len;
-                let mut padded = vec![0.0_f32; expected];
-                let copy_len = audio.len().min(expected);
-                padded[..copy_len].copy_from_slice(&audio[..copy_len]);
+        };
 
-                let tensor = tract_ndarray::Array3::from_shape_vec((1, 1, expected), padded)
-                    .map_err(|e| InferenceError::Shape(e.to_string()))?;
+        let mut padded = vec![0.0_f32; expected_len];
+        let copy_len = audio.len().min(expected_len);
+        padded[..copy_len].copy_from_slice(&audio[..copy_len]);
 
-                Ok(tensor.into_tensor())
-            }
-            // Dynamic shape (0 means dynamic dimension)
-            shape if shape.len() == 2 && shape[0] <= 1 => {
-                let len = audio.len();
-                let tensor = tract_ndarray::Array2::from_shape_vec((1, len), audio.to_vec())
-                    .map_err(|e| InferenceError::Shape(e.to_string()))?;
-
-                Ok(tensor.into_tensor())
-            }
-            other => Err(InferenceError::Shape(format!(
-                "unsupported input shape: {other:?}, expected [1, N] or [1, 1, N]"
-            ))),
-        }
+        Tensor::<f32>::from_array(([1usize, expected_len], padded))
+            .map_err(|e| InferenceError::Shape(e.to_string()))
     }
 
     /// Get the model's expected input shape.
@@ -322,18 +295,32 @@ impl BirdNetModel {
     /// - V2.4 `[1, 144_000]` → 48 kHz × 3 s
     /// - V3.0 `[1,  96_000]` → 32 kHz × 3 s
     ///
-    /// Returns 48 000 if the shape is not recognised (safe default).
+    /// V3.0 preview models may report fully-dynamic shapes (all dims = 1 after
+    /// mapping -1 → 1). In that case we default to 32 kHz (V3.0 standard).
+    ///
+    /// Returns 32 000 for fully-dynamic shapes (V3.0), 48 000 otherwise.
     #[must_use]
     pub fn infer_sample_rate(&self) -> u32 {
         let n_samples = match self.input_shape.as_slice() {
-            [_, n] | [_, _, n] => *n,
-            _ => return 48_000,
+            [_, n] | [_, _, n] if *n > 1 => *n,
+            // All-dynamic shape → assume BirdNET+ V3.0 (32 kHz)
+            _ => return 32_000,
         };
         match n_samples {
             96_000 => 32_000,   // BirdNET+ V3.0 (32 kHz × 3 s)
             144_000 => 48_000,  // BirdNET   V2.4 (48 kHz × 3 s)
             _ => 48_000,
         }
+    }
+
+    /// Returns `true` if this model expects raw audio samples as input.
+    ///
+    /// BirdNET+ V3.0 models perform internal feature extraction from the raw
+    /// waveform (`infer_sample_rate() == 32_000`).  V2.4 models require a
+    /// pre-computed mel spectrogram.
+    #[must_use]
+    pub fn expects_raw_audio(&self) -> bool {
+        self.infer_sample_rate() == 32_000
     }
 
     /// Get the label set.
@@ -407,10 +394,6 @@ mod tests {
 
     #[test]
     fn infer_sample_rate_v24() {
-        // Simulate V2.4 model: input shape [1, 144_000]
-        let labels = LabelSet::from_entries(vec![("A_b".into(), "A B".into())]);
-        // Build a minimal BirdNetModel with a fake input_shape for testing.
-        // We can't load a real model, so test the logic directly.
         let shape_48k: &[usize] = &[1, 144_000];
         let rate = match shape_48k {
             [_, n] | [_, _, n] => match *n {
@@ -421,12 +404,10 @@ mod tests {
             _ => 48_000_u32,
         };
         assert_eq!(rate, 48_000);
-        drop(labels);
     }
 
     #[test]
     fn infer_sample_rate_v30() {
-        // Simulate V3.0 model: input shape [1, 96_000]
         let shape_32k: &[usize] = &[1, 96_000];
         let rate = match shape_32k {
             [_, n] | [_, _, n] => match *n {

@@ -74,8 +74,23 @@ impl LabelSet {
     /// Returns `LabelError` if the file cannot be read or has invalid format.
     pub fn load(path: &Path) -> Result<Self, LabelError> {
         let content = std::fs::read_to_string(path)?;
-        let first = content.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
-        if first.contains(',') && first.to_lowercase().contains("sci_name") {
+        Self::load_from_str(&content)
+    }
+
+    /// Parse labels from a string, auto-detecting the format.
+    ///
+    /// Same format detection as [`load`] but accepts an in-memory string.
+    /// Useful for testing and embedded label data.
+    ///
+    /// # Errors
+    ///
+    /// Returns `LabelError::Format` if no labels can be parsed.
+    pub fn load_from_str(content: &str) -> Result<Self, LabelError> {
+        // Strip BOM for detection.
+        let check = content.trim_start_matches('\u{feff}');
+        let first = check.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+        // CSV if the header contains sci_name with any delimiter.
+        if (first.contains(',') || first.contains(';')) && first.to_lowercase().contains("sci_name") {
             Self::parse_csv(&content)
         } else {
             Self::parse(&content)
@@ -130,6 +145,9 @@ impl LabelSet {
     /// Returns `LabelError::Format` if the header is missing required columns
     /// or any data row cannot be parsed.
     pub fn parse_csv(content: &str) -> Result<Self, LabelError> {
+        // Strip UTF-8 BOM if present.
+        let content = content.strip_prefix('\u{feff}').unwrap_or(content);
+
         let mut lines = content.lines();
 
         // Find and parse the header row.
@@ -137,7 +155,11 @@ impl LabelSet {
             .find(|l| !l.trim().is_empty())
             .ok_or_else(|| LabelError::Format("CSV file is empty".into()))?;
 
-        let headers: Vec<&str> = header_line.split(',').map(str::trim).collect();
+        // Auto-detect delimiter: prefer ';' (used by Zenodo BirdNET+ export),
+        // fall back to ',' for standard CSV.
+        let delim = if header_line.contains(';') { ';' } else { ',' };
+
+        let headers: Vec<&str> = header_line.split(delim).map(str::trim).collect();
 
         let sci_col = headers
             .iter()
@@ -157,7 +179,7 @@ impl LabelSet {
                 continue;
             }
 
-            let fields: Vec<&str> = line.split(',').collect();
+            let fields: Vec<&str> = line.split(delim).collect();
             let sci = fields
                 .get(sci_col)
                 .map(|s| s.trim())
@@ -283,10 +305,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_csv_v3_format() {
-        let csv = "idx,id,sci_name,com_name,class,order\n\
-                   0,abc,Turdus merula,Eurasian Blackbird,Aves,Passeriformes\n\
-                   1,def,Erithacus rubecula,European Robin,Aves,Passeriformes\n";
+    fn parse_csv_v3_semicolon_format() {
+        // Real BirdNET+ V3.0 Zenodo format uses semicolons and has a BOM.
+        let csv = "\u{feff}idx;id;sci_name;com_name;class;order\n\
+                   0;abc;Turdus merula;Eurasian Blackbird;Aves;Passeriformes\n\
+                   1;def;Erithacus rubecula;European Robin;Aves;Passeriformes\n";
         let labels = LabelSet::parse_csv(csv).unwrap();
         assert_eq!(labels.len(), 2);
         assert_eq!(labels.get(0).unwrap().scientific_name, "Turdus merula");
@@ -296,32 +319,48 @@ mod tests {
     }
 
     #[test]
-    fn load_auto_detects_csv() {
+    fn parse_csv_comma_format_also_works() {
         let csv = "idx,id,sci_name,com_name,class,order\n\
                    0,abc,Turdus merula,Eurasian Blackbird,Aves,Passeriformes\n";
         let labels = LabelSet::parse_csv(csv).unwrap();
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels.get(0).unwrap().scientific_name, "Turdus merula");
+    }
+
+    #[test]
+    fn load_auto_detects_semicolon_csv() {
+        let csv = "\u{feff}idx;id;sci_name;com_name;class;order\n\
+                   0;abc;Turdus merula;Eurasian Blackbird;Aves;Passeriformes\n";
+        let labels = LabelSet::load_from_str(csv).unwrap();
         assert_eq!(labels.len(), 1);
     }
 
     #[test]
     fn parse_csv_missing_sci_name_column_errors() {
-        let csv = "idx,com_name\n0,Eurasian Blackbird\n";
+        let csv = "idx;com_name\n0;Eurasian Blackbird\n";
         assert!(LabelSet::parse_csv(csv).is_err());
     }
 
     #[test]
     fn parse_csv_missing_com_name_column_errors() {
-        let csv = "idx,sci_name\n0,Turdus merula\n";
+        let csv = "idx;sci_name\n0;Turdus merula\n";
         assert!(LabelSet::parse_csv(csv).is_err());
     }
 
     #[test]
     fn parse_csv_columns_in_any_order() {
         // com_name before sci_name — column detection must use header positions
-        let csv = "com_name,sci_name\nEurasian Blackbird,Turdus merula\n";
+        let csv = "com_name;sci_name\nEurasian Blackbird;Turdus merula\n";
         let labels = LabelSet::parse_csv(csv).unwrap();
         assert_eq!(labels.get(0).unwrap().scientific_name, "Turdus merula");
         assert_eq!(labels.get(0).unwrap().common_name, "Eurasian Blackbird");
+    }
+
+    #[test]
+    fn parse_csv_strips_bom() {
+        let csv_with_bom = "\u{feff}sci_name;com_name\nPica pica;Eurasian Magpie\n";
+        let labels = LabelSet::parse_csv(csv_with_bom).unwrap();
+        assert_eq!(labels.get(0).unwrap().scientific_name, "Pica pica");
     }
 
     #[test]

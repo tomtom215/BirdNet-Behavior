@@ -10,7 +10,8 @@ use std::collections::HashSet;
 use std::fmt;
 use std::path::Path;
 
-use tract_onnx::prelude::*;
+use ort::session::Session;
+use ort::value::Tensor;
 
 use crate::inference::labels::LabelSet;
 use crate::inference::model::InferenceError;
@@ -58,17 +59,13 @@ impl CacheKey {
     }
 }
 
-/// Tract model plan type alias for the metadata model.
-type MetadataModelPlan =
-    SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>;
-
 /// Species occurrence frequency filter.
 ///
 /// Optionally loads a metadata ONNX model that predicts species occurrence
 /// probability given location and time of year. When loaded, only species
 /// above the threshold (plus whitelisted species) pass through.
 pub struct SpeciesFilter {
-    model: Option<MetadataModelPlan>,
+    session: Option<Session>,
     config: SpeciesFilterConfig,
     cache_key: Option<CacheKey>,
     cache_result: Option<HashSet<String>>,
@@ -77,7 +74,7 @@ pub struct SpeciesFilter {
 impl fmt::Debug for SpeciesFilter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SpeciesFilter")
-            .field("has_model", &self.model.is_some())
+            .field("has_model", &self.session.is_some())
             .field("config", &self.config)
             .field("cached", &self.cache_key.is_some())
             .finish_non_exhaustive()
@@ -88,7 +85,7 @@ impl SpeciesFilter {
     /// Create a species filter without a metadata model (no filtering).
     pub fn new_passthrough(config: SpeciesFilterConfig) -> Self {
         Self {
-            model: None,
+            session: None,
             config,
             cache_key: None,
             cache_result: None,
@@ -111,18 +108,15 @@ impl SpeciesFilter {
             "loading metadata ONNX model for species filtering"
         );
 
-        let model = tract_onnx::onnx()
-            .model_for_path(path)
+        let session = Session::builder()
             .map_err(|e| InferenceError::Model(e.to_string()))?
-            .into_optimized()
-            .map_err(|e| InferenceError::Model(format!("optimization failed: {e}")))?
-            .into_runnable()
-            .map_err(|e| InferenceError::Model(format!("plan creation failed: {e}")))?;
+            .commit_from_file(path)
+            .map_err(|e| InferenceError::Model(e.to_string()))?;
 
         tracing::info!("metadata model loaded successfully");
 
         Ok(Self {
-            model: Some(model),
+            session: Some(session),
             config,
             cache_key: None,
             cache_result: None,
@@ -149,7 +143,7 @@ impl SpeciesFilter {
         week: u32,
         labels: &LabelSet,
     ) -> Result<HashSet<String>, InferenceError> {
-        let Some(ref model) = self.model else {
+        let Some(ref mut session) = self.session else {
             return Ok(self.apply_lists(all_scientific_names(labels)));
         };
 
@@ -165,24 +159,25 @@ impl SpeciesFilter {
 
         // Run metadata model: input shape [1, 3] -> output [1, N]
         let input_data = vec![lat as f32, lon as f32, week as f32];
-        let input_tensor = tract_ndarray::Array2::from_shape_vec((1, 3), input_data)
+        let input_tensor = Tensor::<f32>::from_array(([1usize, 3], input_data))
             .map_err(|e| InferenceError::Shape(e.to_string()))?;
 
-        let outputs = model
-            .run(tvec![input_tensor.into_tensor().into()])
+        let outputs = session
+            .run(ort::inputs![input_tensor])
             .map_err(|e| InferenceError::Runtime(e.to_string()))?;
 
-        let probabilities = outputs[0]
-            .to_array_view::<f32>()
-            .map_err(|e| InferenceError::Runtime(format!("cannot extract probabilities: {e}")))?;
-
-        let flat = probabilities
-            .as_slice()
-            .ok_or_else(|| InferenceError::Runtime("probabilities not contiguous".into()))?;
+        // Collect probabilities into a Vec to release the borrow on session/outputs.
+        let probabilities: Vec<f32> = {
+            let (_, flat) = outputs[0]
+                .try_extract_tensor::<f32>()
+                .map_err(|e| InferenceError::Runtime(format!("cannot extract probabilities: {e}")))?;
+            flat.to_vec()
+        };
+        drop(outputs);
 
         // Collect species above threshold
         let mut passing = HashSet::new();
-        for (i, &prob) in flat.iter().enumerate() {
+        for (i, &prob) in probabilities.iter().enumerate() {
             if prob >= self.config.sf_thresh {
                 if let Some(label) = labels.get(i) {
                     passing.insert(label.scientific_name.clone());
@@ -246,7 +241,7 @@ impl SpeciesFilter {
 
     /// Check if a metadata model is loaded.
     pub const fn has_model(&self) -> bool {
-        self.model.is_some()
+        self.session.is_some()
     }
 
     /// Update the species frequency threshold.

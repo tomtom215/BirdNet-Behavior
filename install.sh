@@ -36,11 +36,12 @@ SERVICE_USER="${SUDO_USER:-${USER}}"
 LISTEN_ADDR="0.0.0.0:8502"
 
 # BirdNET+ V3.0 model files (Zenodo — direct download, no login required).
-# FP16 recommended: same accuracy as FP32, half the size (259 MB vs 541 MB).
+# FP32 ONNX (~541 MB): same model used by BirdNET-Pi, works on all platforms.
 ZENODO_RECORD="18247420"
-MODEL_FILE="BirdNET+_V3.0-preview3_Global_11K_FP16.onnx"
+MODEL_FILE="BirdNET+_V3.0-preview3_Global_11K_FP32.onnx"
 LABELS_FILE="BirdNET+_V3.0-preview3_Global_11K_Labels.csv"
-ZENODO_BASE="https://zenodo.org/records/${ZENODO_RECORD}/files"
+# Use the Zenodo API content endpoint (handles + in filenames correctly).
+ZENODO_API="https://zenodo.org/api/records/${ZENODO_RECORD}/files"
 
 # Colour codes (used only when stdout is a terminal)
 if [ -t 1 ]; then
@@ -95,7 +96,7 @@ download() {
     local url="$1"
     local dest="$2"
     if command -v curl &>/dev/null; then
-        curl -fsSL --retry 3 --retry-delay 2 -o "${dest}" "${url}"
+        curl -fsSL -L --retry 3 --retry-delay 2 -o "${dest}" "${url}"
     elif command -v wget &>/dev/null; then
         wget -q --tries=3 -O "${dest}" "${url}"
     else
@@ -167,14 +168,14 @@ download_model() {
         return
     fi
 
-    info "Downloading BirdNET+ V3.0 model (~259 MB FP16 ONNX) from Zenodo…"
+    info "Downloading BirdNET+ V3.0 model (~541 MB FP32 ONNX) from Zenodo…"
     info "  This may take a few minutes on a slow connection."
 
     install -d -m 0755 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${MODEL_DIR}"
 
-    # Model
+    # Model (Zenodo API /content endpoint handles + in filenames correctly)
     if [ ! -f "${model_dest}" ]; then
-        download "${ZENODO_BASE}/${MODEL_FILE}?download=1" "${model_dest}" \
+        download "${ZENODO_API}/${MODEL_FILE}/content" "${model_dest}" \
             || fatal "Model download failed. Check your internet connection and retry."
         chown "${SERVICE_USER}:${SERVICE_USER}" "${model_dest}"
         success "Model downloaded to ${model_dest}"
@@ -182,7 +183,7 @@ download_model() {
 
     # Labels
     if [ ! -f "${labels_dest}" ]; then
-        download "${ZENODO_BASE}/${LABELS_FILE}?download=1" "${labels_dest}" \
+        download "${ZENODO_API}/${LABELS_FILE}/content" "${labels_dest}" \
             || fatal "Labels download failed."
         chown "${SERVICE_USER}:${SERVICE_USER}" "${labels_dest}"
         success "Labels downloaded to ${labels_dest}"
