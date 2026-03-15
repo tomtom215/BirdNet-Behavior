@@ -196,4 +196,39 @@ pub struct Cli {
     /// BirdNET-Pi equivalent: AUDIOFMT config option.
     #[arg(long, default_value = "wav", env = "BIRDNET_AUDIO_FORMAT")]
     pub audio_format: String,
+
+    /// Maximum number of extracted recordings kept per species (0 = unlimited).
+    ///
+    /// When set, the oldest files beyond this limit are deleted automatically.
+    /// BirdNET-Pi equivalent: MAX_FILES_SPECIES config option.
+    #[arg(long, default_value = "0", env = "BIRDNET_MAX_FILES_PER_SPECIES")]
+    pub max_files_per_species: u32,
+
+    /// Comma-separated paths to exclude from disk usage monitoring.
+    ///
+    /// Files under these paths are never auto-purged.
+    #[arg(long, env = "BIRDNET_DISK_EXCLUDE", value_delimiter = ',')]
+    pub disk_exclude: Vec<std::path::PathBuf>,
+
+    /// Directory containing custom species images (checked before Wikipedia cache).
+    ///
+    /// Files should be named `{lowercase_sci_name_with_underscores}.jpg`, e.g.
+    /// `turdus_merula.jpg`. BirdNET-Pi equivalent: CUSTOM_IMAGE directory.
+    #[arg(long, env = "BIRDNET_CUSTOM_IMAGE_DIR")]
+    pub custom_image_dir: Option<PathBuf>,
+
+    /// Path to Apprise config file (alternative/addition to --apprise-url).
+    ///
+    /// When set, uses the `apprise` CLI tool with `-c <file>` for notifications.
+    /// BirdNET-Pi equivalent: APPRISE_CONFIG_FILE config option.
+    #[arg(long, env = "BIRDNET_APPRISE_CONFIG")]
+    pub apprise_config: Option<PathBuf>,
+
+    /// Weekly report notification schedule.
+    ///
+    /// Send a weekly summary via Apprise on a fixed weekday.
+    /// Values: "monday", "tuesday", ..., "sunday", or "disabled".
+    /// BirdNET-Pi equivalent: weekly_report cron job.
+    #[arg(long, default_value = "monday", env = "BIRDNET_WEEKLY_REPORT_SCHEDULE")]
+    pub weekly_report_schedule: String,
 }

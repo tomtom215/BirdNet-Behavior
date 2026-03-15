@@ -73,8 +73,9 @@ symphonia = { version = "0.5.5", features = ["wav", "flac", "mp3"] }
 rubato = "1.0.1"
 hound = "3.5"
 
-# ML Inference (pure Rust ONNX runtime)
-tract-onnx = "0.22"
+# ML Inference (ONNX Runtime via ort — supports all ONNX opsets)
+ort = { version = "2.0.0-rc.12", features = ["download-binaries"] }
+ndarray = "0.16"
 
 # File watching
 notify = "8"

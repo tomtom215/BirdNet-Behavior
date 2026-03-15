@@ -343,6 +343,84 @@ pub fn detection_dates(conn: &Connection, limit: u32) -> Result<Vec<String>, DbE
     Ok(rows)
 }
 
+/// Lock a detection (protect it from disk purge).
+///
+/// Returns `true` if a row was updated.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn lock_detection(
+    conn: &Connection,
+    date: &str,
+    time: &str,
+    sci_name: &str,
+) -> Result<bool, DbError> {
+    let changed = conn.execute(
+        "UPDATE detections SET is_locked = 1 WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3",
+        params![date, time, sci_name],
+    )?;
+    Ok(changed > 0)
+}
+
+/// Unlock a detection (allow disk purge again).
+///
+/// Returns `true` if a row was updated.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn unlock_detection(
+    conn: &Connection,
+    date: &str,
+    time: &str,
+    sci_name: &str,
+) -> Result<bool, DbError> {
+    let changed = conn.execute(
+        "UPDATE detections SET is_locked = 0 WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3",
+        params![date, time, sci_name],
+    )?;
+    Ok(changed > 0)
+}
+
+/// Get all file names that are locked (for purge protection).
+///
+/// Returns distinct non-null file names for locked detections.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn locked_file_names(conn: &Connection) -> Result<Vec<String>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT File_Name FROM detections \
+         WHERE is_locked = 1 AND File_Name IS NOT NULL",
+    )?;
+    let rows = stmt
+        .query_map([], |row| row.get(0))?
+        .collect::<Result<Vec<String>, _>>()?;
+    Ok(rows)
+}
+
+/// Check if a detection is locked.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn is_detection_locked(
+    conn: &Connection,
+    date: &str,
+    time: &str,
+    sci_name: &str,
+) -> Result<bool, DbError> {
+    let locked: i64 = conn.query_row(
+        "SELECT COALESCE(is_locked, 0) FROM detections \
+         WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3",
+        params![date, time, sci_name],
+        |row| row.get(0),
+    )?;
+    Ok(locked != 0)
+}
+
 /// Get species list with counts for a given date.
 ///
 /// # Errors

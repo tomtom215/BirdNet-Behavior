@@ -49,6 +49,10 @@ struct AppStateInner {
     site_name: Option<String>,
     /// Species info link site: "ebird", "allaboutbirds", or "none".
     info_site: String,
+    /// Custom species image directory (checked before Wikipedia cache).
+    ///
+    /// Files should be named `{lowercase_sci_name_with_underscores}.jpg`.
+    custom_image_dir: Option<PathBuf>,
 }
 
 impl AppState {
@@ -84,6 +88,7 @@ impl AppState {
                 audio_source: None,
                 site_name: None,
                 info_site: "ebird".to_string(),
+                custom_image_dir: None,
             }),
         })
     }
@@ -159,6 +164,7 @@ impl AppState {
                 audio_source: None,
                 site_name: None,
                 info_site: "ebird".to_string(),
+                custom_image_dir: None,
             }),
         })
     }
@@ -183,6 +189,7 @@ impl AppState {
                 audio_source: None,
                 site_name: None,
                 info_site: "ebird".to_string(),
+                custom_image_dir: None,
             }),
         }
     }
@@ -227,6 +234,7 @@ impl AppState {
                 audio_source: inner.audio_source,
                 site_name: inner.site_name,
                 info_site: inner.info_site,
+                custom_image_dir: inner.custom_image_dir,
             }),
         }
     }
@@ -333,6 +341,7 @@ impl AppState {
                 audio_source: inner.audio_source,
                 site_name: inner.site_name,
                 info_site: inner.info_site,
+                custom_image_dir: inner.custom_image_dir,
             }),
         }
     }
@@ -359,6 +368,7 @@ impl AppState {
                 audio_source: inner.audio_source,
                 site_name: inner.site_name,
                 info_site: inner.info_site,
+                custom_image_dir: inner.custom_image_dir,
             }),
         }
     }
@@ -385,6 +395,7 @@ impl AppState {
                 audio_source: Some(source),
                 site_name: inner.site_name,
                 info_site: inner.info_site,
+                custom_image_dir: inner.custom_image_dir,
             }),
         }
     }
@@ -442,6 +453,7 @@ impl AppState {
                 audio_source: inner.audio_source,
                 site_name: Some(name),
                 info_site: inner.info_site,
+                custom_image_dir: inner.custom_image_dir,
             }),
         }
     }
@@ -466,8 +478,43 @@ impl AppState {
                 audio_source: inner.audio_source,
                 site_name: inner.site_name,
                 info_site: site,
+                custom_image_dir: inner.custom_image_dir,
             }),
         }
+    }
+
+    /// Set the custom species image directory.
+    ///
+    /// When set, `{lowercase_sci_name}.jpg` files in this directory are served
+    /// before falling back to the Wikipedia image cache.
+    /// BirdNET-Pi equivalent: `CUSTOM_IMAGE` directory.
+    #[must_use]
+    pub fn with_custom_image_dir(self, dir: PathBuf) -> Self {
+        let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|_| {
+            panic!("with_custom_image_dir called after state was shared");
+        });
+        Self {
+            inner: Arc::new(AppStateInner {
+                db: inner.db,
+                db_path: inner.db_path,
+                recording_dir: inner.recording_dir,
+                #[cfg(feature = "analytics")]
+                analytics_db: inner.analytics_db,
+                image_cache: inner.image_cache,
+                detection_broadcast: inner.detection_broadcast,
+                log_broadcaster: inner.log_broadcaster,
+                i18n: inner.i18n,
+                audio_source: inner.audio_source,
+                site_name: inner.site_name,
+                info_site: inner.info_site,
+                custom_image_dir: Some(dir),
+            }),
+        }
+    }
+
+    /// Get the custom species image directory, if configured.
+    pub fn custom_image_dir(&self) -> Option<&Path> {
+        self.inner.custom_image_dir.as_deref()
     }
 
     /// Get the custom site name, defaulting to "BirdNet-Behavior".

@@ -24,6 +24,8 @@ pub fn router() -> Router<AppState> {
             "/pages/today-relabel",
             axum::routing::post(relabel_detection),
         )
+        .route("/pages/today-lock", axum::routing::post(lock_detection))
+        .route("/pages/today-unlock", axum::routing::post(unlock_detection))
 }
 
 /// Query parameters for the today list partial.
@@ -40,6 +42,14 @@ pub struct TodayParams {
 /// Form data for deleting a detection.
 #[derive(Debug, Deserialize)]
 pub struct DeleteForm {
+    pub date: String,
+    pub time: String,
+    pub sci_name: String,
+}
+
+/// Form data for locking/unlocking a detection.
+#[derive(Debug, Deserialize)]
+pub struct LockForm {
     pub date: String,
     pub time: String,
     pub sci_name: String,
@@ -217,6 +227,12 @@ fn render_detection_card(html: &mut String, d: &birdnet_db::sqlite::DetectionRow
          {audio}\
          </div>\
          <div style=\"display:flex;flex-direction:column;gap:0.25rem;flex-shrink:0;\">\
+         <button hx-post=\"/pages/today-lock\" \
+         hx-vals='{{\"date\":\"{date_raw}\",\"time\":\"{time_raw}\",\"sci_name\":\"{sci_name_raw}\"}}' \
+         hx-target=\"#today-results\" hx-swap=\"innerHTML\" hx-include=\"#today-search\" \
+         style=\"background:none;border:1px solid var(--text-muted);color:var(--text-muted);padding:0.2rem 0.5rem;\
+         border-radius:var(--radius);cursor:pointer;font-size:0.75rem;\" \
+         title=\"Lock this detection (protect from auto-purge)\">🔒 Lock</button>\
          <button hx-post=\"/pages/today-delete\" \
          hx-vals='{{\"date\":\"{date_raw}\",\"time\":\"{time_raw}\",\"sci_name\":\"{sci_name_raw}\"}}' \
          hx-target=\"#today-results\" hx-swap=\"innerHTML\" hx-include=\"#today-search\" \
@@ -266,6 +282,44 @@ async fn relabel_detection(
                 &form.new_sci_name,
                 &form.new_com_name,
             )
+        })
+    })
+    .await;
+
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/html")],
+        "<div hx-get=\"/pages/today-list\" hx-trigger=\"load\" hx-target=\"#today-results\" hx-swap=\"innerHTML\" hx-include=\"#today-search\"></div>".to_string(),
+    )
+}
+
+/// Lock a detection to protect it from disk purge.
+async fn lock_detection(
+    State(state): State<AppState>,
+    Form(form): Form<LockForm>,
+) -> impl IntoResponse {
+    let _ = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| {
+            birdnet_db::sqlite::lock_detection(conn, &form.date, &form.time, &form.sci_name)
+        })
+    })
+    .await;
+
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/html")],
+        "<div hx-get=\"/pages/today-list\" hx-trigger=\"load\" hx-target=\"#today-results\" hx-swap=\"innerHTML\" hx-include=\"#today-search\"></div>".to_string(),
+    )
+}
+
+/// Unlock a detection (allow disk purge again).
+async fn unlock_detection(
+    State(state): State<AppState>,
+    Form(form): Form<LockForm>,
+) -> impl IntoResponse {
+    let _ = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| {
+            birdnet_db::sqlite::unlock_detection(conn, &form.date, &form.time, &form.sci_name)
         })
     })
     .await;

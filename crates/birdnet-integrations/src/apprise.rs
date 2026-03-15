@@ -11,6 +11,7 @@
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 /// Default request timeout for the Apprise server.
@@ -31,6 +32,8 @@ pub enum AppriseError {
     Server(String),
     /// No Apprise URL configured.
     NoUrl,
+    /// Apprise CLI invocation failed.
+    Cli(String),
 }
 
 impl fmt::Display for AppriseError {
@@ -39,6 +42,7 @@ impl fmt::Display for AppriseError {
             Self::Http(msg) => write!(f, "Apprise HTTP error: {msg}"),
             Self::Server(msg) => write!(f, "Apprise server error: {msg}"),
             Self::NoUrl => write!(f, "Apprise server URL not configured"),
+            Self::Cli(msg) => write!(f, "Apprise CLI error: {msg}"),
         }
     }
 }
@@ -83,8 +87,11 @@ impl Default for NotifyConfig {
 
 /// Apprise notification client.
 ///
-/// Sends notifications to an Apprise API server. Includes a per-species
-/// cooldown to prevent notification flooding during active bird sessions.
+/// Sends notifications to an Apprise API server (or via the `apprise` CLI
+/// when `--apprise-config` is configured). Includes a per-species cooldown
+/// to prevent notification flooding during active bird sessions.
+///
+/// BirdNET-Pi equivalent: `birdnet_analysis.sh` invokes `apprise -c <file>`.
 #[derive(Debug)]
 pub struct Client {
     /// Apprise API server base URL (e.g., `http://localhost:8000`).
@@ -95,10 +102,16 @@ pub struct Client {
     config: NotifyConfig,
     /// Per-species last-notification timestamps for cooldown.
     last_notified: HashMap<String, Instant>,
+    /// Optional path to an Apprise config file (uses `apprise` CLI).
+    ///
+    /// When set, `send_notification` invokes `apprise -c <path> -t <title> -b <body>`
+    /// in addition to (or instead of) the HTTP server.
+    /// BirdNET-Pi equivalent: `APPRISE_CONFIG_FILE` setting.
+    config_file: Option<PathBuf>,
 }
 
 impl Client {
-    /// Create a new Apprise notification client.
+    /// Create a new Apprise notification client with an HTTP server URL.
     ///
     /// # Errors
     ///
@@ -118,6 +131,33 @@ impl Client {
             http,
             config,
             last_notified: HashMap::new(),
+            config_file: None,
+        })
+    }
+
+    /// Create a CLI-only Apprise client (no HTTP server URL).
+    ///
+    /// Used when only `--apprise-config` is set (no `--apprise-url`).
+    /// All notifications are sent via `apprise -c <config_file>`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AppriseError` if the HTTP client cannot be built.
+    pub fn new_cli_only(
+        config_file: PathBuf,
+        notify_config: NotifyConfig,
+    ) -> Result<Self, AppriseError> {
+        let http = reqwest::Client::builder()
+            .timeout(DEFAULT_TIMEOUT)
+            .build()
+            .map_err(|e| AppriseError::Http(e.to_string()))?;
+
+        Ok(Self {
+            base_url: String::new(), // no HTTP server
+            http,
+            config: notify_config,
+            last_notified: HashMap::new(),
+            config_file: Some(config_file),
         })
     }
 
@@ -204,6 +244,8 @@ impl Client {
 
     /// Send a notification with an optional image attachment.
     ///
+    /// If a config file is configured, also sends via `apprise` CLI.
+    ///
     /// # Errors
     ///
     /// Returns `AppriseError` on network or server failure.
@@ -214,6 +256,18 @@ impl Client {
         notify_type: NotifyType,
         image_url: Option<&str>,
     ) -> Result<(), AppriseError> {
+        // Send via CLI if config file is configured.
+        if self.config_file.is_some() {
+            if let Err(e) = self.send_via_cli(title, body).await {
+                tracing::warn!(error = %e, "Apprise CLI notification failed");
+            }
+        }
+
+        // If no HTTP server URL, we're done.
+        if self.base_url.is_empty() {
+            return Ok(());
+        }
+
         let url = format!("{}/notify", self.base_url);
 
         let mut payload = serde_json::json!({
@@ -227,6 +281,63 @@ impl Client {
         }
 
         self.post_with_retry(&url, &payload).await
+    }
+
+    /// Configure an Apprise config file for CLI-based notifications.
+    ///
+    /// When set, notifications are sent via `apprise -c <path> -t <title> -b <body>`
+    /// in addition to the HTTP server (if a URL is also configured).
+    /// BirdNET-Pi equivalent: `APPRISE_CONFIG_FILE` config option.
+    #[must_use]
+    pub fn with_config_file(mut self, path: PathBuf) -> Self {
+        self.config_file = Some(path);
+        self
+    }
+
+    /// Send a notification via the `apprise` CLI tool.
+    ///
+    /// Invokes `apprise -c <config_file> -t <title> -b <body>`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AppriseError::Cli` if the command fails or is not available.
+    pub async fn send_via_cli(&self, title: &str, body: &str) -> Result<(), AppriseError> {
+        let Some(ref config_path) = self.config_file else {
+            return Err(AppriseError::Cli("no config file configured".into()));
+        };
+
+        let config_path = config_path.clone();
+        let title = title.to_string();
+        let body = body.to_string();
+
+        tokio::task::spawn_blocking(move || {
+            let output = std::process::Command::new("apprise")
+                .arg("-c")
+                .arg(&config_path)
+                .arg("-t")
+                .arg(&title)
+                .arg("-b")
+                .arg(&body)
+                .output()
+                .map_err(|e| AppriseError::Cli(format!("apprise CLI not found: {e}")))?;
+
+            if output.status.success() {
+                Ok(())
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                Err(AppriseError::Cli(format!(
+                    "apprise CLI exited {}: {stderr}",
+                    output.status
+                )))
+            }
+        })
+        .await
+        .map_err(|e| AppriseError::Cli(e.to_string()))?
+    }
+
+    /// Whether an Apprise config file is configured.
+    pub fn has_config_file(&self) -> bool {
+        self.config_file.is_some()
     }
 
     /// Get the configured base URL.

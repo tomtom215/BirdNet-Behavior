@@ -441,6 +441,11 @@ mod tests {
             labels_dir: None,
             info_site: "ebird".to_string(),
             audio_format: "wav".to_string(),
+            max_files_per_species: 0,
+            disk_exclude: Vec::new(),
+            custom_image_dir: None,
+            apprise_config: None,
+            weekly_report_schedule: "monday".to_string(),
         }
     }
 }

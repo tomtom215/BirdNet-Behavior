@@ -84,12 +84,34 @@ async fn species_image_info(
 
 /// Serve the cached species image file.
 ///
+/// Checks custom image directory first, then falls back to the Wikipedia cache.
 /// Returns the image bytes with the appropriate content type.
 /// If the image is not cached, returns 404.
 async fn species_image_file(
     State(state): State<AppState>,
     Path(scientific_name): Path<String>,
 ) -> impl IntoResponse {
+    // Check custom image directory first (BirdNET-Pi: CUSTOM_IMAGE).
+    if let Some(custom_dir) = state.custom_image_dir() {
+        let key = scientific_name.to_lowercase().replace(' ', "_");
+        for ext in &["jpg", "jpeg", "png", "webp"] {
+            let candidate = custom_dir.join(format!("{key}.{ext}"));
+            if let Ok(bytes) = std::fs::read(&candidate) {
+                let content_type = match *ext {
+                    "png" => "image/png",
+                    "webp" => "image/webp",
+                    _ => "image/jpeg",
+                };
+                return (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, content_type)],
+                    bytes,
+                )
+                    .into_response();
+            }
+        }
+    }
+
     let Some(cache) = state.image_cache() else {
         return (
             StatusCode::NOT_FOUND,

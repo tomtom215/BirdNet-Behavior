@@ -179,6 +179,15 @@ pub struct DiskManagerConfig {
     pub max_files_per_species: u32,
     /// Interval between checks in seconds (default 60).
     pub check_interval_secs: u64,
+    /// Paths to exclude from disk monitoring and purge (never deleted).
+    ///
+    /// Any file whose path starts with one of these prefixes is protected.
+    /// BirdNET-Pi equivalent: `disk_check_exclude.txt`.
+    pub exclude_paths: Vec<PathBuf>,
+    /// File names to protect from purge (locked recordings from DB).
+    ///
+    /// Populated at runtime from the `is_locked` column in the detections table.
+    pub locked_file_names: Vec<String>,
 }
 
 impl Default for DiskManagerConfig {
@@ -189,6 +198,8 @@ impl Default for DiskManagerConfig {
             full_disk_action: FullDiskAction::Purge,
             max_files_per_species: 0,
             check_interval_secs: 60,
+            exclude_paths: Vec::new(),
+            locked_file_names: Vec::new(),
         }
     }
 }
@@ -246,7 +257,11 @@ impl DiskManager {
                 "disk full: stopping recording (full_disk_action=Keep)".into(),
             )),
             FullDiskAction::Purge => {
-                let removed = purge_oldest_files(&self.config.monitored_dir);
+                let removed = purge_oldest_files(
+                    &self.config.monitored_dir,
+                    &self.config.exclude_paths,
+                    &self.config.locked_file_names,
+                );
                 cleanup_empty_dirs(&self.config.monitored_dir);
                 Ok(removed)
             }
@@ -333,7 +348,14 @@ impl DiskManager {
             files.sort_by_key(|(_, modified)| *modified);
 
             let to_remove = files.len() - limit;
-            for (path, _) in files.iter().take(to_remove) {
+            let mut removed_this_species = 0;
+            for (path, _) in &files {
+                if removed_this_species >= to_remove {
+                    break;
+                }
+                if is_protected(path, &self.config.exclude_paths, &self.config.locked_file_names) {
+                    continue;
+                }
                 if std::fs::remove_file(path).is_ok() {
                     tracing::debug!(
                         path = %path.display(),
@@ -341,6 +363,7 @@ impl DiskManager {
                         "removed file (species limit)"
                     );
                     total_removed += 1;
+                    removed_this_species += 1;
                 }
             }
         }
@@ -397,13 +420,36 @@ impl DiskManager {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+/// Check whether a file is protected from purge.
+///
+/// A file is protected if its path starts with any of `exclude_paths`,
+/// or its filename appears in `locked_file_names`.
+fn is_protected(path: &Path, exclude_paths: &[PathBuf], locked_file_names: &[String]) -> bool {
+    for prefix in exclude_paths {
+        if path.starts_with(prefix) {
+            return true;
+        }
+    }
+    if let Some(name) = path.file_name().map(|n| n.to_string_lossy()) {
+        if locked_file_names.iter().any(|l| l == name.as_ref()) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Purge the oldest audio files under `base_dir/By_Date/` to free space.
 ///
 /// Collects all audio files, sorts by modification time, and deletes the
-/// oldest 10% (minimum 1 file).
+/// oldest 10% (minimum 1 file). Files under `exclude_paths` or with names
+/// in `locked_file_names` are skipped.
 ///
 /// Returns the number of files removed.
-fn purge_oldest_files(base_dir: &Path) -> u32 {
+fn purge_oldest_files(
+    base_dir: &Path,
+    exclude_paths: &[PathBuf],
+    locked_file_names: &[String],
+) -> u32 {
     let by_date_dir = base_dir.join("By_Date");
     if !by_date_dir.is_dir() {
         return 0;
@@ -419,11 +465,17 @@ fn purge_oldest_files(base_dir: &Path) -> u32 {
     // Sort by modification time, oldest first.
     all_files.sort_by_key(|(_, modified)| *modified);
 
-    // Delete oldest 10% (minimum 1).
+    // Delete oldest 10% (minimum 1), skipping protected files.
     let to_remove = (all_files.len() / 10).max(1);
     let mut removed = 0_u32;
 
-    for (path, _) in all_files.iter().take(to_remove) {
+    for (path, _) in &all_files {
+        if removed >= to_remove as u32 {
+            break;
+        }
+        if is_protected(path, exclude_paths, locked_file_names) {
+            continue;
+        }
         if std::fs::remove_file(path).is_ok() {
             tracing::debug!(path = %path.display(), "purged old file");
             removed += 1;
@@ -578,9 +630,7 @@ mod tests {
         let config = DiskManagerConfig {
             monitored_dir: PathBuf::from("/tmp"),
             purge_threshold: 99, // very high threshold
-            full_disk_action: FullDiskAction::Purge,
-            max_files_per_species: 0,
-            check_interval_secs: 60,
+            ..DiskManagerConfig::default()
         };
         let manager = DiskManager::new(config);
         let result = manager.check_and_purge();
@@ -668,7 +718,7 @@ mod tests {
             filetime::set_file_mtime(&wav_path, mtime).expect("set mtime");
         }
 
-        let removed = purge_oldest_files(dir.path());
+        let removed = purge_oldest_files(dir.path(), &[], &[]);
         // 10% of 20 = 2
         assert_eq!(removed, 2);
     }
@@ -683,6 +733,65 @@ mod tests {
 
         // All empty nested dirs should be gone.
         assert!(!dir.path().join("a").exists());
+    }
+
+    #[test]
+    fn purge_skips_locked_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let species_dir = dir.path().join("By_Date/2026-03-14/Test_Bird");
+        std::fs::create_dir_all(&species_dir).expect("create dirs");
+
+        // Create 20 files; lock the 5 oldest.
+        for i in 0..20_u32 {
+            let wav_path = species_dir.join(format!("clip_{i:02}.wav"));
+            let header = create_minimal_wav_header();
+            std::fs::write(&wav_path, &header).expect("write wav");
+            let mtime = filetime::FileTime::from_unix_time(1_000_000 + i64::from(i), 0);
+            filetime::set_file_mtime(&wav_path, mtime).expect("set mtime");
+        }
+
+        // Lock the 5 oldest (clip_00 through clip_04).
+        let locked: Vec<String> = (0..5_u32).map(|i| format!("clip_{i:02}.wav")).collect();
+
+        let removed = purge_oldest_files(dir.path(), &[], &locked);
+        // 10% of 20 = 2, but oldest 2 are locked so it should skip them
+        // and remove the next 2 unlocked.
+        assert_eq!(removed, 2);
+
+        // Locked files must still exist.
+        for name in &locked {
+            assert!(species_dir.join(name).exists(), "{name} should be locked");
+        }
+    }
+
+    #[test]
+    fn is_protected_by_exclude_path() {
+        let exclude = vec![PathBuf::from("/protected")];
+        assert!(is_protected(
+            Path::new("/protected/subdir/file.wav"),
+            &exclude,
+            &[]
+        ));
+        assert!(!is_protected(
+            Path::new("/other/subdir/file.wav"),
+            &exclude,
+            &[]
+        ));
+    }
+
+    #[test]
+    fn is_protected_by_locked_name() {
+        let locked = vec!["important.wav".to_string()];
+        assert!(is_protected(
+            Path::new("/any/dir/important.wav"),
+            &[],
+            &locked
+        ));
+        assert!(!is_protected(
+            Path::new("/any/dir/other.wav"),
+            &[],
+            &locked
+        ));
     }
 
     #[test]

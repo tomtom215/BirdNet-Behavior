@@ -24,4 +24,8 @@ pub fn router() -> Router<AppState> {
             get(handler::settings_page).post(handler::save_settings),
         )
         .route("/admin/settings/partial", get(handler::settings_partial))
+        .route(
+            "/admin/settings/detect-location",
+            get(handler::detect_location),
+        )
 }

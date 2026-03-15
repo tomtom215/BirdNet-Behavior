@@ -19,7 +19,7 @@ pub type HeartbeatHandle = Arc<birdnet_integrations::heartbeat::HeartbeatClient>
 
 /// Create an Apprise notification client from CLI flags and/or config file values.
 ///
-/// Returns `None` if no Apprise URL is configured.
+/// Returns `None` if neither an Apprise URL nor config file is configured.
 pub fn create_apprise_client(
     cli: &Cli,
     config: Option<&birdnet_core::config::Config>,
@@ -29,7 +29,19 @@ pub fn create_apprise_client(
         .clone()
         .or_else(|| config?.get("APPRISE_URL").map(String::from));
 
-    let url = apprise_url?;
+    let apprise_config_file = cli.apprise_config.clone().or_else(|| {
+        config?
+            .get("APPRISE_CONFIG_FILE")
+            .map(std::path::PathBuf::from)
+    });
+
+    // Need at least one of: URL or config file.
+    if apprise_url.is_none() && apprise_config_file.is_none() {
+        return None;
+    }
+
+    // Use the URL if present, or a placeholder for CLI-only mode.
+    let url = apprise_url.unwrap_or_default();
 
     let min_confidence = if (cli.notify_confidence - 0.8).abs() > f32::EPSILON {
         cli.notify_confidence
@@ -60,16 +72,41 @@ pub fn create_apprise_client(
         per_species_cooldown: std::collections::HashMap::new(),
     };
 
-    match birdnet_integrations::apprise::Client::new(&url, notify_config) {
-        Ok(client) => {
-            tracing::info!(
-                url = %url,
-                min_confidence = %min_confidence,
-                cooldown_secs,
-                "Apprise notifications enabled"
-            );
-            Some(Arc::new(tokio::sync::Mutex::new(client)))
-        }
+    let client_result = if url.is_empty() {
+        // CLI-only mode: no HTTP server configured.
+        let cfg_path = apprise_config_file
+            .clone()
+            .expect("config file required when no URL");
+        tracing::info!(
+            path = %cfg_path.display(),
+            "Apprise CLI-only notifications enabled"
+        );
+        birdnet_integrations::apprise::Client::new_cli_only(cfg_path, notify_config)
+    } else {
+        birdnet_integrations::apprise::Client::new(&url, notify_config).map(|c| {
+            if let Some(ref cfg_path) = apprise_config_file {
+                tracing::info!(
+                    url = %url,
+                    path = %cfg_path.display(),
+                    min_confidence = %min_confidence,
+                    cooldown_secs,
+                    "Apprise notifications enabled (HTTP + CLI config)"
+                );
+                c.with_config_file(cfg_path.clone())
+            } else {
+                tracing::info!(
+                    url = %url,
+                    min_confidence = %min_confidence,
+                    cooldown_secs,
+                    "Apprise notifications enabled"
+                );
+                c
+            }
+        })
+    };
+
+    match client_result {
+        Ok(client) => Some(Arc::new(tokio::sync::Mutex::new(client))),
         Err(e) => {
             tracing::error!(error = %e, "failed to create Apprise client");
             None

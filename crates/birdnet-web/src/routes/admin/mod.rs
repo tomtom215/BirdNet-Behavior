@@ -25,6 +25,7 @@
 //! | `DELETE /admin/system/backups/{name}` | Delete a backup file |
 
 pub mod backup;
+pub mod images;
 pub mod logs;
 pub mod migration;
 pub mod notification_test;
@@ -64,6 +65,8 @@ pub fn router() -> Router<AppState> {
         .merge(backup::router())
         // System controls (clear data)
         .merge(system_controls::router())
+        // Image blacklist management
+        .merge(images::router())
 }
 
 /// Redirect `/admin` to `/admin/overview`.

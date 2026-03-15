@@ -1,9 +1,11 @@
 //! Settings route handlers (GET / POST).
 
 use axum::Form;
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::Html;
+use serde::Serialize;
 use std::collections::HashMap;
 
 use birdnet_db::settings::{SettingsCategory, ensure_settings_table, list, set_many};
@@ -70,6 +72,83 @@ pub async fn save_settings(
             )))
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// GET /admin/settings/detect-location — auto-detect lat/lon from IP
+// ---------------------------------------------------------------------------
+
+/// Response body for the detect-location endpoint.
+#[derive(Serialize)]
+pub struct LocationResult {
+    pub lat: f64,
+    pub lon: f64,
+    pub city: String,
+    pub country: String,
+}
+
+/// Detect the station's approximate location using the public ip-api.com service.
+///
+/// Returns `{"lat": ..., "lon": ..., "city": ..., "country": ...}` on success,
+/// or `500` with an error message on failure.
+///
+/// BirdNET-Pi equivalent: `birdnet_analysis.sh` calls `curl ipinfo.io` on startup
+/// to auto-populate `LATITUDE` / `LONGITUDE` when not configured.
+pub async fn detect_location() -> Result<Json<LocationResult>, (StatusCode, String)> {
+    #[derive(serde::Deserialize)]
+    struct IpApiResponse {
+        lat: f64,
+        lon: f64,
+        #[serde(default)]
+        city: String,
+        #[serde(default)]
+        country: String,
+        status: String,
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let resp = client
+        .get("http://ip-api.com/json/")
+        .send()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("location lookup failed: {e}"),
+            )
+        })?;
+
+    let data: IpApiResponse = resp.json().await.map_err(|e| {
+        (
+            StatusCode::BAD_GATEWAY,
+            format!("invalid location response: {e}"),
+        )
+    })?;
+
+    if data.status != "success" {
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            "ip-api.com returned non-success status".into(),
+        ));
+    }
+
+    tracing::info!(
+        lat = data.lat,
+        lon = data.lon,
+        city = %data.city,
+        "auto-detected location via ip-api.com"
+    );
+
+    Ok(Json(LocationResult {
+        lat: data.lat,
+        lon: data.lon,
+        city: data.city,
+        country: data.country,
+    }))
 }
 
 // ---------------------------------------------------------------------------

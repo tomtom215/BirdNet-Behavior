@@ -151,7 +151,7 @@ pub fn process_file_pipeline_only(
 pub fn process_and_infer(
     path: &Path,
     pipeline_config: &PipelineConfig,
-    model: &BirdNetModel,
+    model: &mut BirdNetModel,
 ) -> Result<Vec<DetectionEvent>, DaemonError> {
     let start = Instant::now();
 
@@ -227,7 +227,7 @@ pub fn process_and_infer(
 pub fn process_and_infer_filtered(
     path: &Path,
     pipeline_config: &PipelineConfig,
-    model: &BirdNetModel,
+    model: &mut BirdNetModel,
     privacy_filter: &PrivacyFilter,
     species_filter: &mut SpeciesFilter,
     lat: Option<f64>,
@@ -341,13 +341,38 @@ pub fn run_daemon(
     );
 
     // Load model
-    let model = BirdNetModel::load(&config.model_path, labels, config.model.clone())?;
+    let mut model = BirdNetModel::load(&config.model_path, labels, config.model.clone())?;
+
+    // Auto-detect the sample rate the model expects from its input shape.
+    // V2.4 → [1, 144_000] = 48 kHz × 3 s; V3.0 → [1, 96_000] = 32 kHz × 3 s.
+    let model_sample_rate = model.infer_sample_rate();
 
     tracing::info!(
         model_path = %config.model_path.display(),
         input_shape = ?model.input_shape(),
+        sample_rate = model_sample_rate,
         "model loaded, starting daemon"
     );
+
+    // Build pipeline config, overriding sample rate and input mode to match the model.
+    let mut pipeline_config = config.pipeline.clone();
+    if pipeline_config.target_sample_rate != model_sample_rate {
+        tracing::info!(
+            configured = pipeline_config.target_sample_rate,
+            model = model_sample_rate,
+            "adjusting pipeline sample rate to match model"
+        );
+        pipeline_config.target_sample_rate = model_sample_rate;
+    }
+    // V3.0 models expect raw audio; V2.4 models expect a mel spectrogram.
+    let raw_mode = model.infer_sample_rate() == 32_000;
+    if raw_mode != pipeline_config.raw_audio_input {
+        tracing::info!(
+            raw_audio_input = raw_mode,
+            "adjusting pipeline input mode to match model"
+        );
+        pipeline_config.raw_audio_input = raw_mode;
+    }
 
     // Load species filter (metadata model)
     let mut species_filter = config.metadata_model_path.as_ref().map_or_else(
@@ -384,14 +409,12 @@ pub fn run_daemon(
     let (_watcher, file_rx) =
         pipeline::watch_directory(&config.watch_dir).map_err(DaemonError::Pipeline)?;
 
-    let pipeline_config = config.pipeline.clone();
-
     // Process existing files if requested
     if config.process_existing {
         process_existing_files(
             &config.watch_dir,
             &pipeline_config,
-            &model,
+            &mut model,
             &privacy_filter,
             &mut species_filter,
             lat,
@@ -420,7 +443,7 @@ pub fn run_daemon(
                     match process_and_infer_filtered(
                         &path,
                         &pipeline_config,
-                        &model,
+                        &mut model,
                         &privacy_filter,
                         &mut species_filter,
                         lat,
@@ -463,7 +486,7 @@ pub fn run_daemon(
 fn process_existing_files(
     dir: &Path,
     pipeline_config: &PipelineConfig,
-    model: &BirdNetModel,
+    model: &mut BirdNetModel,
     privacy_filter: &PrivacyFilter,
     species_filter: &mut SpeciesFilter,
     lat: Option<f64>,

@@ -82,7 +82,7 @@ pub struct PipelineConfig {
     pub watch_dir: PathBuf,
     /// Target sample rate for the ML model.
     pub target_sample_rate: u32,
-    /// Mel spectrogram configuration.
+    /// Mel spectrogram configuration (only used when `raw_audio_input` is false).
     pub mel_config: MelConfig,
     /// Duration of each audio chunk in seconds.
     pub chunk_duration_secs: f32,
@@ -90,6 +90,13 @@ pub struct PipelineConfig {
     pub chunk_overlap_secs: f32,
     /// Minimum confidence threshold for reporting.
     pub confidence_threshold: f32,
+    /// Feed raw audio samples directly to the model instead of a mel spectrogram.
+    ///
+    /// Set automatically by the daemon when a V3.0-style model is detected
+    /// (input shape `[1, 96_000]`). V2.4 models expect a mel spectrogram
+    /// (`[1, 144_000]` = 128 mel bands × 1125 frames); V3.0 models perform
+    /// their own internal feature extraction from the raw waveform.
+    pub raw_audio_input: bool,
 }
 
 impl Default for PipelineConfig {
@@ -101,6 +108,7 @@ impl Default for PipelineConfig {
             chunk_duration_secs: 3.0,
             chunk_overlap_secs: 0.0,
             confidence_threshold: 0.25,
+            raw_audio_input: false,
         }
     }
 }
@@ -165,17 +173,25 @@ pub fn process_file(
             chunk_data.resize(chunk_samples, 0.0);
         }
 
-        let mel = spectrogram::mel_spectrogram(
-            &chunk_data,
-            config.target_sample_rate,
-            &config.mel_config,
-        )?;
-
         let start_secs = pos as f32 / config.target_sample_rate as f32;
         let end_secs = end as f32 / config.target_sample_rate as f32;
 
+        // V3.0 models (raw_audio_input=true) take the raw waveform directly.
+        // Store as a "1 × N" MelSpectrogram so the rest of the pipeline is unchanged.
+        // V2.4 models compute a proper mel spectrogram.
+        let spectrogram = if config.raw_audio_input {
+            let n = chunk_data.len();
+            MelSpectrogram { n_mels: 1, n_frames: n, data: chunk_data }
+        } else {
+            spectrogram::mel_spectrogram(
+                &chunk_data,
+                config.target_sample_rate,
+                &config.mel_config,
+            )?
+        };
+
         chunks.push(PreparedChunk {
-            spectrogram: mel,
+            spectrogram,
             start_secs,
             end_secs,
             recording: recording.clone(),

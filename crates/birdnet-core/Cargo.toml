@@ -25,8 +25,9 @@ realfft = "3"
 # Audio writing (WAV extraction)
 hound.workspace = true
 
-# ML Inference (pure Rust ONNX runtime)
-tract-onnx.workspace = true
+# ML Inference (ONNX Runtime)
+ort.workspace = true
+ndarray.workspace = true
 
 # File watching
 notify.workspace = true
