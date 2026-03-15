@@ -18,6 +18,18 @@ pub fn router() -> Router<AppState> {
         .route("/admin/system/clear-extracted", post(clear_extracted))
         .route("/admin/system/backup/full", axum::routing::get(full_backup))
         .route("/admin/system/restore", post(restore_backup))
+        .route(
+            "/admin/system/service/restart",
+            post(service_restart),
+        )
+        .route(
+            "/admin/system/service/status",
+            axum::routing::get(service_status),
+        )
+        .route(
+            "/admin/system/update/check",
+            axum::routing::get(check_update),
+        )
 }
 
 // ---------------------------------------------------------------------------
@@ -321,10 +333,263 @@ async fn restore_backup(
     }
 }
 
+// ---------------------------------------------------------------------------
+// POST /admin/system/service/restart — graceful restart of the binary
+// ---------------------------------------------------------------------------
+
+/// Restart the birdnet-behavior service.
+///
+/// Strategy (in order of preference):
+/// 1. If running as a systemd service (`INVOCATION_ID` set), attempt `systemctl restart`
+/// 2. Otherwise, send SIGTERM to self (systemd with `Restart=on-failure` will restart it)
+///
+/// BirdNET-Pi equivalent: the 9 individual `systemctl restart birdnet_*` buttons
+/// in the admin web interface.
+async fn service_restart() -> Html<String> {
+    let result = tokio::task::spawn_blocking(|| {
+        // Check if we are running under systemd.
+        let under_systemd = std::env::var("INVOCATION_ID").is_ok()
+            || std::env::var("JOURNAL_STREAM").is_ok();
+
+        if under_systemd {
+            // Try systemctl restart of our own unit.
+            let status = std::process::Command::new("systemctl")
+                .args(["restart", "birdnet-behavior"])
+                .status();
+            match status {
+                Ok(s) if s.success() => {
+                    return Ok::<String, String>("Service restart initiated via systemctl.".to_string())
+                }
+                Ok(s) => {
+                    tracing::warn!(status = %s, "systemctl restart returned non-zero, falling back to SIGTERM");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "systemctl not available, falling back to SIGTERM");
+                }
+            }
+        }
+
+        // Fallback: send SIGTERM to self via the system kill command.
+        // systemd (Restart=on-failure) or a process manager will restart us.
+        let pid = std::process::id().to_string();
+        tracing::info!(%pid, "sending SIGTERM to self for graceful restart");
+        // Spawn a thread to deliver signal after response is sent.
+        let pid_clone = pid.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let _ = std::process::Command::new("kill")
+                .args(["-TERM", &pid_clone])
+                .status();
+        });
+        Ok("Restart signal sent. Service will restart momentarily.".to_string())
+    })
+    .await;
+
+    match result {
+        Ok(Ok(msg)) => Html(format!(r#"<p style="color:#4ade80;">{msg} Reconnect in a few seconds.</p>"#)),
+        Ok(Err(e)) => Html(format!(r#"<p style="color:#f87171;">Restart failed: {e}</p>"#)),
+        Err(e) => Html(format!(r#"<p style="color:#f87171;">Internal error: {e}</p>"#)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GET /admin/system/service/status — service process status
+// ---------------------------------------------------------------------------
+
+/// Return HTML with current process status (PID, uptime, memory, version).
+async fn service_status() -> Html<String> {
+    let pid = std::process::id();
+    let uptime_secs = get_process_uptime_secs(pid);
+    let memory_mb = get_process_memory_mb(pid);
+    let service_active = check_systemd_service_active("birdnet-behavior");
+    let version = env!("CARGO_PKG_VERSION");
+
+    let uptime_str = if uptime_secs >= 3600 {
+        format!("{}h {}m", uptime_secs / 3600, (uptime_secs % 3600) / 60)
+    } else if uptime_secs >= 60 {
+        format!("{}m {}s", uptime_secs / 60, uptime_secs % 60)
+    } else {
+        format!("{uptime_secs}s")
+    };
+
+    let systemd_badge = if service_active {
+        r#"<span style="color:#4ade80;font-weight:600;">● active</span>"#
+    } else {
+        r#"<span style="color:#94a3b8;">○ not managed by systemd</span>"#
+    };
+
+    Html(format!(
+        r#"<table style="width:100%;border-collapse:collapse;font-size:.875rem;">
+          <tr><td style="color:#64748b;padding:.25rem 0;">Version</td><td style="font-weight:600;">v{version}</td></tr>
+          <tr><td style="color:#64748b;padding:.25rem 0;">PID</td><td>{pid}</td></tr>
+          <tr><td style="color:#64748b;padding:.25rem 0;">Uptime</td><td>{uptime_str}</td></tr>
+          <tr><td style="color:#64748b;padding:.25rem 0;">Memory (RSS)</td><td>{memory_mb:.1} MB</td></tr>
+          <tr><td style="color:#64748b;padding:.25rem 0;">systemd service</td><td>{systemd_badge}</td></tr>
+        </table>"#
+    ))
+}
+
+fn get_process_uptime_secs(_pid: u32) -> u64 {
+    // Read process start time from /proc/self/stat on Linux.
+    // Field 22 (0-indexed: 21) is starttime in jiffies since boot.
+    #[cfg(target_os = "linux")]
+    {
+        if let (Ok(stat), Ok(uptime_str)) = (
+            std::fs::read_to_string("/proc/self/stat"),
+            std::fs::read_to_string("/proc/uptime"),
+        ) {
+            // Get Hz via `getconf CLK_TCK` (avoids libc dependency).
+            let hz: u64 = std::process::Command::new("getconf")
+                .arg("CLK_TCK")
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .and_then(|s| s.trim().parse().ok())
+                .unwrap_or(100);
+
+            if let (Some(start_field), Some(uptime_field)) = (
+                stat.split_whitespace().nth(21),
+                uptime_str.split_whitespace().next(),
+            ) {
+                if let (Ok(start_jiffies), Ok(sys_uptime)) =
+                    (start_field.parse::<u64>(), uptime_field.parse::<f64>())
+                {
+                    if hz > 0 {
+                        let proc_uptime = sys_uptime - (start_jiffies / hz) as f64;
+                        return proc_uptime.max(0.0) as u64;
+                    }
+                }
+            }
+        }
+    }
+    0
+}
+
+fn get_process_memory_mb(pid: u32) -> f64 {
+    #[cfg(target_os = "linux")]
+    {
+        let status_path = format!("/proc/{pid}/status");
+        if let Ok(content) = std::fs::read_to_string(&status_path) {
+            for line in content.lines() {
+                if line.starts_with("VmRSS:") {
+                    if let Some(kb_str) = line.split_whitespace().nth(1) {
+                        if let Ok(kb) = kb_str.parse::<f64>() {
+                            return kb / 1024.0;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let _ = pid;
+    0.0
+}
+
+fn check_systemd_service_active(service: &str) -> bool {
+    std::process::Command::new("systemctl")
+        .args(["is-active", "--quiet", service])
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+// ---------------------------------------------------------------------------
+// GET /admin/system/update/check — check GitHub for newer release
+// ---------------------------------------------------------------------------
+
+/// Check GitHub Releases API for a newer version of birdnet-behavior.
+///
+/// Returns JSON: `{ "current": "0.3.0", "latest": "0.4.0", "update_available": true, "release_url": "…" }`
+///
+/// BirdNET-Pi equivalent: `update_birdnet.sh` (git pull + pip reinstall).
+async fn check_update() -> axum::response::Response {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+
+    let current = env!("CARGO_PKG_VERSION");
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .user_agent(format!("birdnet-behavior/{current}"))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+    };
+
+    let api_url = "https://api.github.com/repos/tomtom215/BirdNet-Behavior/releases/latest";
+    let resp = client.get(api_url).send().await;
+
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            #[derive(serde::Deserialize)]
+            struct Release {
+                tag_name: String,
+                html_url: String,
+                published_at: Option<String>,
+            }
+            match r.json::<Release>().await {
+                Ok(release) => {
+                    let latest = release.tag_name.trim_start_matches('v').to_string();
+                    let update_available = is_newer_version(&latest, current);
+                    let published = release.published_at.unwrap_or_default();
+                    let html = if update_available {
+                        format!(
+                            r#"<div style="color:#4ade80;font-weight:600;">
+                              ⬆ Update available: v{latest} (published {published})<br>
+                              <a href="{url}" target="_blank" rel="noopener"
+                                 style="color:#38bdf8;">View release notes →</a><br>
+                              <span style="color:#94a3b8;font-size:.8rem;">
+                                Run: <code>curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash</code>
+                              </span>
+                            </div>"#,
+                            url = release.html_url
+                        )
+                    } else {
+                        format!(
+                            r#"<div style="color:#94a3b8;">
+                              ✓ Up to date (v{current}). Latest: v{latest} ({published}).
+                            </div>"#
+                        )
+                    };
+                    Html(html).into_response()
+                }
+                Err(e) => Html(format!(r#"<p style="color:#f87171;">Parse error: {e}</p>"#))
+                    .into_response(),
+            }
+        }
+        Ok(r) => Html(format!(
+            r#"<p style="color:#f87171;">GitHub API returned {}</p>"#,
+            r.status()
+        ))
+        .into_response(),
+        Err(e) => Html(format!(r#"<p style="color:#f87171;">Network error: {e}</p>"#))
+            .into_response(),
+    }
+}
+
+/// Compare version strings (simple semver-like: "0.4.0" > "0.3.2").
+fn is_newer_version(latest: &str, current: &str) -> bool {
+    let parse = |v: &str| -> [u32; 3] {
+        let mut parts = v.split('.');
+        let major = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+        let minor = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+        let patch = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+        [major, minor, patch]
+    };
+    parse(latest) > parse(current)
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
-    fn module_compiles() {
-        // Verifies the module compiles without errors.
+    fn version_comparison() {
+        assert!(is_newer_version("0.4.0", "0.3.2"));
+        assert!(!is_newer_version("0.3.2", "0.4.0"));
+        assert!(!is_newer_version("0.3.2", "0.3.2"));
+        assert!(is_newer_version("1.0.0", "0.99.99"));
     }
 }

@@ -83,7 +83,57 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
     {status_html}
   </div>
 
-  <!-- Actions -->
+  <!-- Service Controls -->
+  <div class="card">
+    <div class="section-title">Service Controls</div>
+    <p style="color:#94a3b8;font-size:.85rem;margin-bottom:1rem;">
+      Control the BirdNet-Behavior detection service. The service restarts automatically
+      when managed by systemd (Restart=on-failure). Reconnect after ~5 seconds.
+    </p>
+    <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:center;">
+      <button class="btn btn-secondary"
+              hx-post="/admin/system/service/restart"
+              hx-target="#service-result"
+              hx-swap="innerHTML"
+              hx-confirm="Restart the service? Detection will pause briefly during restart.">
+        Restart Service
+      </button>
+      <button class="btn btn-secondary"
+              hx-get="/admin/system/service/status"
+              hx-target="#service-status-box"
+              hx-swap="innerHTML">
+        Refresh Status
+      </button>
+    </div>
+    <div id="service-result" style="margin-top:1rem;"></div>
+    <div id="service-status-box"
+         hx-get="/admin/system/service/status"
+         hx-trigger="load"
+         style="margin-top:1rem;font-size:.85rem;color:#94a3b8;">
+      Loading service status…
+    </div>
+  </div>
+
+  <!-- Update Check -->
+  <div class="card">
+    <div class="section-title">Software Update</div>
+    <p style="color:#94a3b8;font-size:.85rem;margin-bottom:1rem;">
+      Check GitHub Releases for a newer version. If an update is available,
+      download and replace the binary with: <code style="background:#0f172a;padding:.1rem .4rem;border-radius:.25rem;">
+      sudo install.sh</code> or pull the latest binary from Releases.
+    </p>
+    <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:center;">
+      <button class="btn btn-secondary"
+              hx-get="/admin/system/update/check"
+              hx-target="#update-result"
+              hx-swap="innerHTML">
+        Check for Updates
+      </button>
+    </div>
+    <div id="update-result" style="margin-top:1rem;font-size:.85rem;"></div>
+  </div>
+
+  <!-- Database Actions -->
   <div class="card">
     <div class="section-title">Database Actions</div>
     <div style="display:flex;gap:1rem;flex-wrap:wrap;">

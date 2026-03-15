@@ -231,4 +231,13 @@ pub struct Cli {
     /// BirdNET-Pi equivalent: weekly_report cron job.
     #[arg(long, default_value = "monday", env = "BIRDNET_WEEKLY_REPORT_SCHEDULE")]
     pub weekly_report_schedule: String,
+
+    /// Frequency shift applied to extracted audio clips in Hz (0 = disabled).
+    ///
+    /// Shifts the pitch of saved detection clips upward by the given number of Hz,
+    /// making high-frequency bird calls accessible to people with high-frequency
+    /// hearing loss. Requires ffmpeg or sox. Typical values: 1000–4000 Hz.
+    /// BirdNET-Pi equivalent: FREQ_SHIFT + FREQ_SHIFT_AMOUNT config options.
+    #[arg(long, default_value = "0", env = "BIRDNET_FREQ_SHIFT_HZ")]
+    pub freq_shift_hz: i32,
 }

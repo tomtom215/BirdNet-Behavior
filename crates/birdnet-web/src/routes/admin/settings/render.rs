@@ -72,7 +72,7 @@ pub(super) fn render_settings_page(settings: &HashMap<String, String>) -> String
 }
 
 pub(super) fn render_settings_form(settings: &HashMap<String, String>) -> String {
-    let mut out = String::with_capacity(8192);
+    let mut out = String::with_capacity(16_384);
     render_form_open(&mut out);
     render_audio_section(&mut out, settings);
     render_location_section(&mut out, settings);
@@ -95,7 +95,15 @@ fn render_form_open(out: &mut String) {
 fn render_audio_section(out: &mut String, s: &HashMap<String, String>) {
     let alsa = get_setting(s, "alsa_device", "");
     let rtsp = get_setting(s, "rtsp_url", "");
+    let rtsp_urls = get_setting(s, "rtsp_urls", "");
     let seg = get_setting(s, "segment_duration", "15");
+    let channels = get_setting(s, "audio_channels", "1");
+    let fmt = get_setting(s, "audio_format", "wav");
+    let fmt_wav = if fmt == "wav" { " selected" } else { "" };
+    let fmt_mp3 = if fmt == "mp3" { " selected" } else { "" };
+    let fmt_flac = if fmt == "flac" { " selected" } else { "" };
+    let fmt_ogg = if fmt == "ogg" { " selected" } else { "" };
+    let freq_shift = get_setting(s, "freq_shift_hz", "0");
     out.push_str(&format!(r#"
   <div class="card">
     <div class="section-title">Audio Capture</div>
@@ -103,17 +111,48 @@ fn render_audio_section(out: &mut String, s: &HashMap<String, String>) {
       <div>
         <label for="alsa_device">ALSA Device</label>
         <input id="alsa_device" name="alsa_device" value="{alsa}" placeholder="e.g. plughw:1,0">
-        <p class="hint">Leave blank to disable managed microphone capture</p>
+        <p class="hint">Leave blank to disable managed microphone capture. PulseAudio/PipeWire users: use "default" or leave blank and set ALSA_CARD env var.</p>
       </div>
       <div>
-        <label for="rtsp_url">RTSP URL</label>
+        <label for="rtsp_url">RTSP URL (single stream)</label>
         <input id="rtsp_url" name="rtsp_url" value="{rtsp}" placeholder="rtsp://camera.local:554/stream">
         <p class="hint">IP camera audio stream (requires ffmpeg)</p>
       </div>
     </div>
     <div>
-      <label for="segment_duration">Segment Duration (seconds)</label>
-      <input id="segment_duration" name="segment_duration" type="number" value="{seg}" min="5" max="60" style="max-width:120px">
+      <label for="rtsp_urls">Multiple RTSP URLs (comma-separated)</label>
+      <input id="rtsp_urls" name="rtsp_urls" value="{rtsp_urls}" placeholder="rtsp://cam1:554/stream,rtsp://cam2:554/stream">
+      <p class="hint">Each URL becomes an independent capture pipeline (RTSP_1-, RTSP_2- prefixed filenames). Overrides single RTSP URL above when set.</p>
+    </div>
+    <div class="grid-2">
+      <div>
+        <label for="segment_duration">Segment Duration (seconds)</label>
+        <input id="segment_duration" name="segment_duration" type="number" value="{seg}" min="5" max="60" style="max-width:120px">
+        <p class="hint">Length of each recording chunk for analysis (BirdNET-Pi: RECORDING_LENGTH)</p>
+      </div>
+      <div>
+        <label for="audio_channels">Audio Channels</label>
+        <input id="audio_channels" name="audio_channels" type="number" value="{channels}" min="1" max="2" style="max-width:80px">
+        <p class="hint">1 = mono (recommended), 2 = stereo (BirdNET-Pi: CHANNELS)</p>
+      </div>
+    </div>
+    <div class="grid-2">
+      <div>
+        <label for="audio_format">Extracted Clip Format</label>
+        <select id="audio_format" name="audio_format" style="max-width:180px">
+          <option value="wav"{fmt_wav}>WAV (lossless, default)</option>
+          <option value="mp3"{fmt_mp3}>MP3 (requires ffmpeg)</option>
+          <option value="flac"{fmt_flac}>FLAC (lossless compressed, requires ffmpeg)</option>
+          <option value="ogg"{fmt_ogg}>OGG (requires ffmpeg)</option>
+        </select>
+        <p class="hint">Format for saved detection audio clips (BirdNET-Pi: AUDIOFMT)</p>
+      </div>
+      <div>
+        <label for="freq_shift_hz">Frequency Shift (Hz, 0 = disabled)</label>
+        <input id="freq_shift_hz" name="freq_shift_hz" type="number" value="{freq_shift}"
+               min="-12000" max="12000" step="500" style="max-width:120px">
+        <p class="hint">Shift pitch of saved clips for accessibility (BirdNET-Pi: FREQ_SHIFT). Requires ffmpeg or sox. Typical: 1000–4000.</p>
+      </div>
     </div>
   </div>"#));
 }
@@ -169,6 +208,8 @@ fn render_detection_section(out: &mut String, s: &HashMap<String, String>) {
     let conf = get_setting(s, "confidence_threshold", "0.70");
     let sens = get_setting(s, "sensitivity", "1.0");
     let over = get_setting(s, "overlap", "0.0");
+    let sf = get_setting(s, "sf_thresh", "0.03");
+    let priv_t = get_setting(s, "privacy_threshold", "0.0");
     out.push_str(&format!(
         r#"
   <div class="card">
@@ -178,19 +219,34 @@ fn render_detection_section(out: &mut String, s: &HashMap<String, String>) {
         <label for="confidence_threshold">Minimum Confidence (0–1)</label>
         <input id="confidence_threshold" name="confidence_threshold" type="number"
                value="{conf}" min="0" max="1" step="0.05">
-        <p class="hint">Detections below this threshold are discarded</p>
+        <p class="hint">Detections below this threshold are discarded (BirdNET-Pi: CONFIDENCE)</p>
       </div>
       <div>
-        <label for="sensitivity">Sensitivity</label>
+        <label for="sensitivity">Sensitivity (0.5–1.5)</label>
         <input id="sensitivity" name="sensitivity" type="number"
                value="{sens}" min="0.5" max="1.5" step="0.05">
-        <p class="hint">Higher = more sensitive (more false positives)</p>
+        <p class="hint">Higher = more sensitive, more false positives (BirdNET-Pi: SENSITIVITY)</p>
+      </div>
+    </div>
+    <div class="grid-2">
+      <div>
+        <label for="overlap">Analysis Overlap (0–2.9 seconds)</label>
+        <input id="overlap" name="overlap" type="number"
+               value="{over}" min="0" max="2.9" step="0.1" style="max-width:120px">
+        <p class="hint">Overlap between 3-second analysis windows. Higher = more CPU (BirdNET-Pi: OVERLAP)</p>
+      </div>
+      <div>
+        <label for="sf_thresh">Species Frequency Threshold (0–1)</label>
+        <input id="sf_thresh" name="sf_thresh" type="number"
+               value="{sf}" min="0" max="1" step="0.01" style="max-width:120px">
+        <p class="hint">Filter unlikely species by occurrence frequency. Lower = more species. 0 = disabled (BirdNET-Pi: SF_THRESH)</p>
       </div>
     </div>
     <div>
-      <label for="overlap">Overlap (0–2.9 seconds)</label>
-      <input id="overlap" name="overlap" type="number"
-             value="{over}" min="0" max="2.9" step="0.1" style="max-width:120px">
+      <label for="privacy_threshold">Privacy Threshold (0 = disabled)</label>
+      <input id="privacy_threshold" name="privacy_threshold" type="number"
+             value="{priv_t}" min="0" max="1" step="0.01" style="max-width:120px">
+      <p class="hint">Suppress detections when human voice is detected. Typical: 0.01–0.03. 0 = disabled (BirdNET-Pi: PRIVACY_THRESHOLD)</p>
     </div>
   </div>"#
     ));
@@ -198,37 +254,118 @@ fn render_detection_section(out: &mut String, s: &HashMap<String, String>) {
 
 fn render_notifications_section(out: &mut String, s: &HashMap<String, String>) {
     let apprise = get_setting(s, "apprise_url", "");
+    let apprise_cfg = get_setting(s, "apprise_config", "");
     let bw = get_setting(s, "birdweather_token", "");
     let nconf = get_setting(s, "notify_confidence", "0.80");
     let ncool = get_setting(s, "notify_cooldown", "300");
+    let trigger = get_setting(s, "notify_trigger", "each");
+    let t_each = if trigger == "each" { " selected" } else { "" };
+    let t_new = if trigger == "new-species" { " selected" } else { "" };
+    let t_daily = if trigger == "new-species-daily" { " selected" } else { "" };
+    let only = get_setting(s, "notify_species_only", "");
+    let nexcl = get_setting(s, "notify_species_exclude", "");
+    let title_tmpl = get_setting(s, "notify_title_template", "");
+    let body_tmpl = get_setting(s, "notify_body_template", "");
+    let img = get_setting(s, "notify_image", "true");
+    let img_yes = if img != "false" { " selected" } else { "" };
+    let img_no = if img == "false" { " selected" } else { "" };
+    let weekly = get_setting(s, "weekly_report_schedule", "monday");
+    let days = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday","disabled"];
+    let mut weekly_opts = String::new();
+    for d in days {
+        let sel = if weekly == d { " selected" } else { "" };
+        weekly_opts.push_str(&format!("<option value=\"{d}\"{sel}>{}</option>",
+            d.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default() + &d[1..]));
+    }
     out.push_str(&format!(r#"
   <div class="card">
-    <div class="section-title">Notifications</div>
-    <div>
-      <label for="apprise_url">Apprise URL</label>
-      <input id="apprise_url" name="apprise_url" value="{apprise}" placeholder="http://localhost:8000">
-      <p class="hint">Leave blank to disable push notifications</p>
+    <div class="section-title">Notifications (Apprise)</div>
+    <div class="grid-2">
+      <div>
+        <label for="apprise_url">Apprise Server URL</label>
+        <input id="apprise_url" name="apprise_url" value="{apprise}" placeholder="http://localhost:8000">
+        <p class="hint">Leave blank to disable HTTP push notifications (BirdNET-Pi: APPRISE_URL)</p>
+      </div>
+      <div>
+        <label for="apprise_config">Apprise Config File (CLI mode)</label>
+        <input id="apprise_config" name="apprise_config" value="{apprise_cfg}" placeholder="/etc/birdnet/apprise.yml">
+        <p class="hint">Use apprise CLI with -c flag for 80+ notification services (BirdNET-Pi: APPRISE_CONFIG_FILE)</p>
+      </div>
     </div>
     <div style="margin-top:0.5rem;">
       <a href="/admin/notifications/test" class="btn btn-primary" style="font-size:0.8rem;padding:0.3rem 0.8rem;text-decoration:none;">
         Test Notifications
       </a>
     </div>
-    <div style="margin-top:1rem;">
-      <label for="birdweather_token">BirdWeather Station Token</label>
-      <input id="birdweather_token" name="birdweather_token" value="{bw}" placeholder="Token from BirdWeather app">
+    <div class="grid-2" style="margin-top:1rem;">
+      <div>
+        <label for="notify_trigger">Notification Trigger</label>
+        <select id="notify_trigger" name="notify_trigger">
+          <option value="each"{t_each}>Each detection</option>
+          <option value="new-species"{t_new}>New species (this week)</option>
+          <option value="new-species-daily"{t_daily}>New species (each day)</option>
+        </select>
+        <p class="hint">When to send notifications (BirdNET-Pi: APPRISE_NOTIFY_EACH_DETECTION etc.)</p>
+      </div>
+      <div>
+        <label for="notify_image">Include Species Image</label>
+        <select id="notify_image" name="notify_image" style="max-width:180px">
+          <option value="true"{img_yes}>Yes — attach image</option>
+          <option value="false"{img_no}>No — text only</option>
+        </select>
+        <p class="hint">Attach species photo to Telegram/Discord/etc. notifications</p>
+      </div>
     </div>
     <div class="grid-2">
       <div>
         <label for="notify_confidence">Notification Min Confidence</label>
         <input id="notify_confidence" name="notify_confidence" type="number"
                value="{nconf}" min="0" max="1" step="0.05">
+        <p class="hint">Only notify above this confidence (BirdNET-Pi: APPRISE_MIN_CONFIDENCE)</p>
       </div>
       <div>
         <label for="notify_cooldown">Notification Cooldown (seconds)</label>
         <input id="notify_cooldown" name="notify_cooldown" type="number"
                value="{ncool}" min="0" step="60">
-        <p class="hint">Minimum time between notifications for the same species</p>
+        <p class="hint">Minimum time between notifications per species (BirdNET-Pi: MIN_SECONDS_BETWEEN_NOTIFICATIONS_PER_SPECIES)</p>
+      </div>
+    </div>
+    <div>
+      <label for="notify_species_only">Notify only for these species (comma-separated common names)</label>
+      <textarea id="notify_species_only" name="notify_species_only" rows="2"
+                placeholder="e.g. European Robin, Great Spotted Woodpecker">{only}</textarea>
+      <p class="hint">Leave empty to notify for all species (BirdNET-Pi: APPRISE_ONLY_NOTIFY_SPECIES_NAMES)</p>
+    </div>
+    <div>
+      <label for="notify_species_exclude">Never notify for these species (comma-separated common names)</label>
+      <textarea id="notify_species_exclude" name="notify_species_exclude" rows="2"
+                placeholder="e.g. House Sparrow, Feral Pigeon">{nexcl}</textarea>
+      <p class="hint">Species excluded from all notifications (dual-filter with notify-only list above)</p>
+    </div>
+    <div>
+      <label for="notify_title_template">Notification Title Template</label>
+      <input id="notify_title_template" name="notify_title_template" value="{title_tmpl}"
+             placeholder="Bird Detection: $comname">
+      <p class="hint">Variables: $comname $sciname $confidence $confidencepct $date $time $week $latitude $longitude. Leave blank for default. (BirdNET-Pi: APPRISE_TITLE_TEMPLATE)</p>
+    </div>
+    <div>
+      <label for="notify_body_template">Notification Body Template</label>
+      <textarea id="notify_body_template" name="notify_body_template" rows="2"
+                placeholder="$comname ($sciname) detected ($confidencepct% confidence) at $time on $date">{body_tmpl}</textarea>
+      <p class="hint">Leave blank for default template. (BirdNET-Pi: APPRISE_BODY_TEMPLATE)</p>
+    </div>
+    <div class="grid-2">
+      <div>
+        <label for="birdweather_token">BirdWeather Station Token</label>
+        <input id="birdweather_token" name="birdweather_token" value="{bw}" placeholder="Token from BirdWeather app">
+        <p class="hint">Uploads detections to BirdWeather community map (BirdNET-Pi: BIRDWEATHER_ID)</p>
+      </div>
+      <div>
+        <label for="weekly_report_schedule">Weekly Report Day</label>
+        <select id="weekly_report_schedule" name="weekly_report_schedule">
+          {weekly_opts}
+        </select>
+        <p class="hint">Day to send weekly summary via Apprise. "Disabled" to turn off.</p>
       </div>
     </div>
   </div>"#));
@@ -264,22 +401,86 @@ fn render_species_section(out: &mut String, s: &HashMap<String, String>) {
 fn render_system_section(out: &mut String, s: &HashMap<String, String>) {
     let days = get_setting(s, "recording_days", "30");
     let imgcache = get_setting(s, "image_cache_dir", "");
+    let customimg = get_setting(s, "custom_image_dir", "");
+    let maxfiles = get_setting(s, "max_files_per_species", "0");
+    let purge = get_setting(s, "purge_threshold", "95");
+    let site = get_setting(s, "site_name", "");
+    let isite = get_setting(s, "info_site", "ebird");
+    let is_ebird = if isite == "ebird" { " selected" } else { "" };
+    let is_aab = if isite == "allaboutbirds" { " selected" } else { "" };
+    let is_none = if isite == "none" { " selected" } else { "" };
+    let auth_user = get_setting(s, "auth_username", "");
+    let auth_pass = get_setting(s, "auth_password", "");
     out.push_str(&format!(
         r#"
   <div class="card">
-    <div class="section-title">System</div>
+    <div class="section-title">System &amp; Display</div>
+    <div class="grid-2">
+      <div>
+        <label for="site_name">Site Name</label>
+        <input id="site_name" name="site_name" value="{site}" placeholder="My Bird Station">
+        <p class="hint">Shown in page titles and headers (BirdNET-Pi: SITENAME)</p>
+      </div>
+      <div>
+        <label for="info_site">Species Info Links</label>
+        <select id="info_site" name="info_site">
+          <option value="ebird"{is_ebird}>eBird</option>
+          <option value="allaboutbirds"{is_aab}>AllAboutBirds</option>
+          <option value="none"{is_none}>None</option>
+        </select>
+        <p class="hint">Species detail page links to external info (BirdNET-Pi: INFO_SITE)</p>
+      </div>
+    </div>
     <div class="grid-2">
       <div>
         <label for="recording_days">Keep Recordings (days)</label>
         <input id="recording_days" name="recording_days" type="number"
                value="{days}" min="1" max="365">
-        <p class="hint">Audio files older than this are deleted automatically</p>
+        <p class="hint">Audio files older than this are deleted automatically (BirdNET-Pi: PROCESSED_DAYS)</p>
       </div>
+      <div>
+        <label for="max_files_per_species">Max Files Per Species (0 = unlimited)</label>
+        <input id="max_files_per_species" name="max_files_per_species" type="number"
+               value="{maxfiles}" min="0" step="10">
+        <p class="hint">Oldest files beyond this limit are auto-deleted (BirdNET-Pi: MAX_FILES_SPECIES)</p>
+      </div>
+    </div>
+    <div>
+      <label for="purge_threshold">Disk Purge Threshold (%)</label>
+      <input id="purge_threshold" name="purge_threshold" type="number"
+             value="{purge}" min="50" max="99" style="max-width:120px">
+      <p class="hint">Start purging old recordings when disk usage exceeds this % (BirdNET-Pi: DISK_PURGE_THRESHOLD)</p>
+    </div>
+    <div class="grid-2">
       <div>
         <label for="image_cache_dir">Species Image Cache Directory</label>
         <input id="image_cache_dir" name="image_cache_dir" value="{imgcache}"
                placeholder="/var/lib/birdnet/images">
         <p class="hint">Leave blank to disable Wikipedia image caching</p>
+      </div>
+      <div>
+        <label for="custom_image_dir">Custom Species Image Directory</label>
+        <input id="custom_image_dir" name="custom_image_dir" value="{customimg}"
+               placeholder="/home/pi/BirdNet-Behavior/custom_images">
+        <p class="hint">Override Wikipedia images with custom photos (BirdNET-Pi: CUSTOM_IMAGE). Files: sci_name.jpg</p>
+      </div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="section-title">Web Authentication</div>
+    <p class="hint" style="margin-bottom:1rem;">Leave blank to disable HTTP Basic Auth (allow open access).</p>
+    <div class="grid-2">
+      <div>
+        <label for="auth_username">Username</label>
+        <input id="auth_username" name="auth_username" value="{auth_user}" placeholder="birdnet"
+               autocomplete="username">
+        <p class="hint">Web UI login username (BirdNET-Pi: CADDY_USER)</p>
+      </div>
+      <div>
+        <label for="auth_password">Password</label>
+        <input id="auth_password" name="auth_password" type="password" value="{auth_pass}"
+               placeholder="leave blank to keep current" autocomplete="new-password">
+        <p class="hint">Web UI login password (BirdNET-Pi: CADDY_PWD)</p>
       </div>
     </div>
   </div>"#
@@ -397,13 +598,38 @@ mod tests {
     fn render_settings_form_contains_fields() {
         let settings = HashMap::new();
         let html = render_settings_form(&settings);
+        // Audio
         assert!(html.contains("alsa_device"));
+        assert!(html.contains("audio_format"));
+        assert!(html.contains("audio_channels"));
+        assert!(html.contains("rtsp_urls"));
+        // Location
         assert!(html.contains("latitude"));
+        assert!(html.contains("night_inhibit"));
+        // Detection
         assert!(html.contains("confidence_threshold"));
+        assert!(html.contains("sf_thresh"));
+        assert!(html.contains("privacy_threshold"));
+        // Notifications
         assert!(html.contains("apprise_url"));
+        assert!(html.contains("apprise_config"));
+        assert!(html.contains("notify_trigger"));
+        assert!(html.contains("notify_species_only"));
+        assert!(html.contains("notify_species_exclude"));
+        assert!(html.contains("notify_title_template"));
+        assert!(html.contains("notify_body_template"));
+        assert!(html.contains("weekly_report_schedule"));
         assert!(html.contains("birdweather_token"));
+        // System
+        assert!(html.contains("max_files_per_species"));
+        assert!(html.contains("purge_threshold"));
+        assert!(html.contains("custom_image_dir"));
+        assert!(html.contains("site_name"));
+        assert!(html.contains("info_site"));
+        assert!(html.contains("auth_username"));
+        assert!(html.contains("auth_password"));
+        // Email
         assert!(html.contains("email_smtp_host"));
         assert!(html.contains("email_to"));
-        assert!(html.contains("night_inhibit"));
     }
 }

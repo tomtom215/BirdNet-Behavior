@@ -133,6 +133,14 @@ pub struct ExtractionConfig {
     pub target_format: AudioFormat,
     /// Recording segment length in seconds, used for `safe_stop` clamping.
     pub recording_length: f32,
+    /// Frequency shift in Hz applied to extracted clips (0 = disabled).
+    ///
+    /// Shifts the audio pitch upward by the specified Hz, making high-frequency
+    /// bird calls accessible to people with high-frequency hearing loss.
+    /// Implemented via ffmpeg `asetrate`+`aresample` filter or sox `pitch` effect.
+    ///
+    /// BirdNET-Pi equivalent: `FREQ_SHIFT` config option with sox/rubberband.
+    pub freq_shift_hz: i32,
 }
 
 impl Default for ExtractionConfig {
@@ -143,6 +151,7 @@ impl Default for ExtractionConfig {
             audio_format: String::from("wav"),
             target_format: AudioFormat::Wav,
             recording_length: 15.0,
+            freq_shift_hz: 0,
         }
     }
 }
@@ -230,12 +239,44 @@ impl Extractor {
         let filename = build_extraction_filename(detection, ext);
         let output_path = output_dir.join(&filename);
 
-        // 6. Write the WAV file using hound.
-        if self.config.target_format.needs_conversion() {
-            // Write to a temporary WAV, then convert.
+        // 6. Write the WAV file using hound (with optional frequency shifting).
+        if self.config.freq_shift_hz != 0 || self.config.target_format.needs_conversion() {
+            // Write to a temporary WAV first, then apply shift and/or convert.
             let wav_path = output_path.with_extension("wav");
             write_wav_clip(clip_samples, audio.sample_rate, &wav_path)?;
-            convert_audio_format(&wav_path, &output_path, self.config.target_format)?;
+
+            if self.config.freq_shift_hz != 0 {
+                // Apply frequency shift: write shifted WAV, then convert if needed.
+                let shifted_path = wav_path.with_file_name(format!(
+                    "_shifted_{}",
+                    wav_path.file_name().unwrap_or_default().to_string_lossy()
+                ));
+                let shift_ok = apply_freq_shift(
+                    &wav_path,
+                    &shifted_path,
+                    audio.sample_rate,
+                    self.config.freq_shift_hz,
+                );
+                if shift_ok {
+                    let _ = std::fs::remove_file(&wav_path);
+                    if self.config.target_format.needs_conversion() {
+                        convert_audio_format(&shifted_path, &output_path, self.config.target_format)?;
+                    } else {
+                        std::fs::rename(&shifted_path, &output_path)?;
+                    }
+                } else {
+                    // Shift failed — fall back to unshifted.
+                    tracing::warn!(freq_shift_hz = self.config.freq_shift_hz, "frequency shift failed, using original");
+                    let _ = std::fs::remove_file(&shifted_path);
+                    if self.config.target_format.needs_conversion() {
+                        convert_audio_format(&wav_path, &output_path, self.config.target_format)?;
+                    } else {
+                        std::fs::rename(&wav_path, &output_path)?;
+                    }
+                }
+            } else {
+                convert_audio_format(&wav_path, &output_path, self.config.target_format)?;
+            }
         } else {
             write_wav_clip(clip_samples, audio.sample_rate, &output_path)?;
         }
@@ -396,6 +437,63 @@ fn convert_with_sox(wav_path: &Path, output_path: &Path) -> Result<(), Extractio
             stderr.trim()
         )))
     }
+}
+
+// ---------------------------------------------------------------------------
+// Frequency shifting
+// ---------------------------------------------------------------------------
+
+/// Apply frequency shifting to a WAV file using ffmpeg (preferred) or sox.
+///
+/// Uses the `asetrate` + `aresample` ffmpeg filter to shift pitch by the given
+/// number of Hz, or the sox `pitch` effect as a fallback.
+///
+/// Returns `true` on success, `false` if both tools fail or are unavailable.
+/// BirdNET-Pi equivalent: `FREQ_SHIFT` config applied via sox/rubberband.
+fn apply_freq_shift(
+    input_path: &Path,
+    output_path: &Path,
+    sample_rate: u32,
+    shift_hz: i32,
+) -> bool {
+    use std::process::Command;
+
+    // ffmpeg approach: use asetrate to shift the sample rate, then resample back.
+    // This is equivalent to speeding up/slowing down, shifting all frequencies.
+    // shift_hz > 0 shifts up (makes calls accessible to those with high-freq hearing loss).
+    #[allow(clippy::cast_precision_loss)]
+    let new_rate = (sample_rate as f64 * (1.0 + shift_hz as f64 / sample_rate as f64)) as u32;
+    let filter = format!("asetrate={new_rate},aresample={sample_rate}");
+
+    let ffmpeg_ok = Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-i",
+            &input_path.to_string_lossy(),
+            "-af",
+            &filter,
+            "-loglevel",
+            "error",
+            &output_path.to_string_lossy(),
+        ])
+        .status()
+        .is_ok_and(|s| s.success());
+
+    if ffmpeg_ok {
+        return true;
+    }
+
+    // sox fallback: use pitch effect (shift in cents, ~100 cents = 1 semitone).
+    // 1 Hz shift ≈ 100 * log2(1 + shift_hz / sample_rate) * 100 cents (approximation).
+    #[allow(clippy::cast_precision_loss)]
+    let cents = (1200.0f64 * (1.0 + shift_hz as f64 / sample_rate as f64).log2()) as i32;
+
+    Command::new("sox")
+        .arg(input_path)
+        .arg(output_path)
+        .args(["pitch", &cents.to_string()])
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 // ---------------------------------------------------------------------------

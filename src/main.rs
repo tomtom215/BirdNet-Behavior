@@ -168,6 +168,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
     };
 
+    // Register Avahi mDNS service for zero-config local discovery.
+    let site_name = cli.site_name.as_deref().unwrap_or("BirdNet-Behavior");
+    maybe_install_avahi_service(addr.port(), site_name);
+
     // Start the web server.
     let auth_config = integrations::create_auth_config(config.as_ref());
     tracing::info!(addr = %addr, "starting web server");
@@ -429,6 +433,59 @@ fn start_disk_manager(
     std::mem::forget(stop_tx);
 
     Some(handle)
+}
+
+/// Generate an Avahi mDNS service file so that the station is discoverable
+/// as `birdnet.local` on the local network without any DNS configuration.
+///
+/// Creates `/etc/avahi/services/birdnet-behavior.service` if Avahi is installed
+/// and the file doesn't already exist.  Silently skips on failure (non-critical).
+///
+/// BirdNET-Pi equivalent: 6 `.local` Avahi alias configurations.
+fn maybe_install_avahi_service(port: u16, site_name: &str) {
+    let avahi_dir = std::path::Path::new("/etc/avahi/services");
+    if !avahi_dir.exists() {
+        // Avahi not installed — skip silently.
+        return;
+    }
+
+    let service_file = avahi_dir.join("birdnet-behavior.service");
+    if service_file.exists() {
+        // Already installed — don't overwrite.
+        return;
+    }
+
+    let name = if site_name.is_empty() || site_name == "BirdNet-Behavior" {
+        "BirdNet-Behavior".to_string()
+    } else {
+        site_name.to_string()
+    };
+
+    let xml = format!(
+        r#"<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name replace-wildcards="yes">{name} on %h</name>
+  <service>
+    <type>_http._tcp</type>
+    <port>{port}</port>
+    <txt-record>path=/</txt-record>
+    <txt-record>software=BirdNet-Behavior</txt-record>
+  </service>
+</service-group>
+"#
+    );
+
+    match std::fs::write(&service_file, xml) {
+        Ok(()) => tracing::info!(
+            path = %service_file.display(),
+            "Avahi mDNS service file written — station discoverable as birdnet.local"
+        ),
+        Err(e) => tracing::debug!(
+            error = %e,
+            "Could not write Avahi service file (non-fatal, run as root to enable mDNS)"
+        ),
+    }
 }
 
 /// Wait for a shutdown signal (SIGTERM or SIGINT).
