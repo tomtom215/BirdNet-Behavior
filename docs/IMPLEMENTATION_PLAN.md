@@ -385,19 +385,33 @@ lazy-loading. Each recording has audio player, delete, and re-label actions.
 - [x] 7.1 Spectrogram text overlay ✅
 - [x] 7.2 Recording browser date/species nav ✅
 
+### Sprint 9 (completed 2026-03-15):
+- [x] 9.1 Audio extraction wired in daemon ✅ — `src/daemon.rs` `event_processor()` now calls `Extractor::extract_detection()`
+- [x] 9.2 Frequency shifting ✅ — `--freq-shift-hz` CLI, `apply_freq_shift()` ffmpeg+sox, end-to-end wired
+- [x] 9.3 Service restart controls ✅ — `POST /admin/system/service/restart`, `GET /admin/system/service/status`
+- [x] 9.4 Auto-update check ✅ — `GET /admin/system/update/check` via GitHub Releases API semver comparison
+- [x] 9.5 Avahi/mDNS discovery ✅ — `maybe_install_avahi_service()` writes `_http._tcp` XML on startup
+- [x] 9.6 Settings UI expanded ✅ — 20+ new fields in SettingsForm, render.rs, build_settings_items()
+
 ### P2 Defer (Post 1.0)
 - [ ] 6.2 Rare bird quarantine ← novel leapfrog
-- [ ] 4.1 Frequency shifting
-- [ ] Lock/unlock recordings
-- [ ] Per-species file limits
-- [ ] tmpfs for transient audio
-- [ ] mDNS discovery
-- [ ] Auto-update mechanism
-- [ ] Installation script
-- [ ] BirdDB.txt flat file export
-- [ ] Image blacklisting
-- [ ] ZRAM setup script
-- [ ] Perch model support
+- [ ] tmpfs for transient audio (systemd mount unit)
+- [ ] ZRAM setup script (Pi Zero 2W)
+- [ ] Live spectrogram daemon (inotify + WebSocket mel spectrogram push)
+- [ ] Binary auto-update (GitHub Releases download + atomic replace)
+- [ ] Installation script (new Pi setup)
+- [ ] Perch model support (different chunk size + SR)
+- [ ] BirdNET V1 model (legacy; low demand)
+
+---
+
+## Sprint 8 Additions (2026-03-14)
+
+### 8.1 ✅ Lock/Unlock Recordings + Per-Species File Limits + BirdDB.txt Export
+Completed as part of Sprint 8 feature push. See FEATURE_PARITY_ANALYSIS.md Sprint 8 section.
+
+### 8.2 ✅ Auto-Detect Location + Image Blacklisting + Custom Image Display
+Completed as part of Sprint 8. Full disk management suite wired in `src/main.rs`.
 
 ---
 
@@ -412,9 +426,11 @@ lazy-loading. Each recording has audio player, delete, and re-label actions.
 | 5 | Admin + system (5.1–5.3) | ✅ COMPLETE | P0-P1 ✅ |
 | 6 | Advanced detection (6.1, 6.3) | ✅ COMPLETE | P1 ✅ |
 | 7 | Spectrogram + recording UX (7.1, 7.2) | ✅ COMPLETE | P1 ✅ |
-| **Total** | **All P1 items complete** | **Done** | |
+| 8 | Feature parity push (lock, disk, export, migrate) | ✅ COMPLETE | P2 ✅ |
+| 9 | Feature parity push (extraction, freq-shift, controls, mDNS) | ✅ COMPLETE | P2 ✅ |
+| **Total** | **~99% parity — 5 MISSING remain (all P2/niche)** | **~Done** | |
 
 ---
 
 *This is a living document. Update sprint status as items are completed.
-Verified against source on 2026-03-14. Branch: `claude/birdnet-pi-feature-parity-0Npie`.*
+Verified against source on 2026-03-15. Branch: `claude/birdnet-pi-feature-parity-217bo`.*

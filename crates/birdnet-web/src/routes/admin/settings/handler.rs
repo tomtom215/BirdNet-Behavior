@@ -177,128 +177,65 @@ fn build_settings_items(form: &SettingsForm) -> Vec<(&'static str, String, Setti
         };
     }
 
+    // Audio
     push!(form.alsa_device, "alsa_device", SettingsCategory::Audio);
     push!(form.rtsp_url, "rtsp_url", SettingsCategory::Audio);
-    push!(
-        form.segment_duration,
-        "segment_duration",
-        SettingsCategory::Audio
-    );
+    push!(form.rtsp_urls, "rtsp_urls", SettingsCategory::Audio);
+    push!(form.segment_duration, "segment_duration", SettingsCategory::Audio);
+    push!(form.audio_channels, "audio_channels", SettingsCategory::Audio);
+    push!(form.audio_format, "audio_format", SettingsCategory::Audio);
+    push!(form.freq_shift_hz, "freq_shift_hz", SettingsCategory::Audio);
+    // Location
     push!(form.latitude, "latitude", SettingsCategory::Location);
     push!(form.longitude, "longitude", SettingsCategory::Location);
-    push!(
-        form.station_name,
-        "station_name",
-        SettingsCategory::Location
-    );
-    push!(
-        form.night_inhibit,
-        "night_inhibit",
-        SettingsCategory::Location
-    );
-    push!(
-        form.pre_sunrise_offset,
-        "pre_sunrise_offset",
-        SettingsCategory::Location
-    );
-    push!(
-        form.post_sunset_offset,
-        "post_sunset_offset",
-        SettingsCategory::Location
-    );
-    push!(
-        form.confidence_threshold,
-        "confidence_threshold",
-        SettingsCategory::Detection
-    );
+    push!(form.station_name, "station_name", SettingsCategory::Location);
+    push!(form.night_inhibit, "night_inhibit", SettingsCategory::Location);
+    push!(form.pre_sunrise_offset, "pre_sunrise_offset", SettingsCategory::Location);
+    push!(form.post_sunset_offset, "post_sunset_offset", SettingsCategory::Location);
+    // Detection
+    push!(form.confidence_threshold, "confidence_threshold", SettingsCategory::Detection);
     push!(form.sensitivity, "sensitivity", SettingsCategory::Detection);
     push!(form.overlap, "overlap", SettingsCategory::Detection);
-    push!(
-        form.apprise_url,
-        "apprise_url",
-        SettingsCategory::Notifications
-    );
-    push!(
-        form.birdweather_token,
-        "birdweather_token",
-        SettingsCategory::Notifications
-    );
-    push!(
-        form.notify_confidence,
-        "notify_confidence",
-        SettingsCategory::Notifications
-    );
-    push!(
-        form.notify_cooldown,
-        "notify_cooldown",
-        SettingsCategory::Notifications
-    );
-    push!(
-        form.species_exclude,
-        "species_exclude",
-        SettingsCategory::Species
-    );
-    push!(
-        form.species_include,
-        "species_include",
-        SettingsCategory::Species
-    );
-    push!(
-        form.recording_days,
-        "recording_days",
-        SettingsCategory::System
-    );
-    push!(
-        form.image_cache_dir,
-        "image_cache_dir",
-        SettingsCategory::System
-    );
-    push!(
-        form.email_smtp_host,
-        "email_smtp_host",
-        SettingsCategory::Notifications
-    );
-    push!(
-        form.email_smtp_port,
-        "email_smtp_port",
-        SettingsCategory::Notifications
-    );
-    push!(
-        form.email_smtp_user,
-        "email_smtp_user",
-        SettingsCategory::Notifications
-    );
-    push!(
-        form.email_smtp_pass,
-        "email_smtp_pass",
-        SettingsCategory::Notifications
-    );
-    push!(
-        form.email_from,
-        "email_from",
-        SettingsCategory::Notifications
-    );
+    push!(form.sf_thresh, "sf_thresh", SettingsCategory::Detection);
+    push!(form.privacy_threshold, "privacy_threshold", SettingsCategory::Detection);
+    // Notifications
+    push!(form.apprise_url, "apprise_url", SettingsCategory::Notifications);
+    push!(form.apprise_config, "apprise_config", SettingsCategory::Notifications);
+    push!(form.birdweather_token, "birdweather_token", SettingsCategory::Notifications);
+    push!(form.notify_confidence, "notify_confidence", SettingsCategory::Notifications);
+    push!(form.notify_cooldown, "notify_cooldown", SettingsCategory::Notifications);
+    push!(form.notify_trigger, "notify_trigger", SettingsCategory::Notifications);
+    push!(form.notify_species_only, "notify_species_only", SettingsCategory::Notifications);
+    push!(form.notify_species_exclude, "notify_species_exclude", SettingsCategory::Notifications);
+    push!(form.notify_title_template, "notify_title_template", SettingsCategory::Notifications);
+    push!(form.notify_body_template, "notify_body_template", SettingsCategory::Notifications);
+    push!(form.notify_image, "notify_image", SettingsCategory::Notifications);
+    push!(form.weekly_report_schedule, "weekly_report_schedule", SettingsCategory::Notifications);
+    // Species
+    push!(form.species_exclude, "species_exclude", SettingsCategory::Species);
+    push!(form.species_include, "species_include", SettingsCategory::Species);
+    // System
+    push!(form.recording_days, "recording_days", SettingsCategory::System);
+    push!(form.image_cache_dir, "image_cache_dir", SettingsCategory::System);
+    push!(form.custom_image_dir, "custom_image_dir", SettingsCategory::System);
+    push!(form.max_files_per_species, "max_files_per_species", SettingsCategory::System);
+    push!(form.purge_threshold, "purge_threshold", SettingsCategory::System);
+    push!(form.site_name, "site_name", SettingsCategory::System);
+    push!(form.info_site, "info_site", SettingsCategory::System);
+    // Auth
+    push!(form.auth_username, "auth_username", SettingsCategory::System);
+    push!(form.auth_password, "auth_password", SettingsCategory::System);
+    // Email
+    push!(form.email_smtp_host, "email_smtp_host", SettingsCategory::Notifications);
+    push!(form.email_smtp_port, "email_smtp_port", SettingsCategory::Notifications);
+    push!(form.email_smtp_user, "email_smtp_user", SettingsCategory::Notifications);
+    push!(form.email_smtp_pass, "email_smtp_pass", SettingsCategory::Notifications);
+    push!(form.email_from, "email_from", SettingsCategory::Notifications);
     push!(form.email_to, "email_to", SettingsCategory::Notifications);
-    push!(
-        form.email_from_name,
-        "email_from_name",
-        SettingsCategory::Notifications
-    );
-    push!(
-        form.email_starttls,
-        "email_starttls",
-        SettingsCategory::Notifications
-    );
-    push!(
-        form.email_min_confidence,
-        "email_min_confidence",
-        SettingsCategory::Notifications
-    );
-    push!(
-        form.email_cooldown_secs,
-        "email_cooldown_secs",
-        SettingsCategory::Notifications
-    );
+    push!(form.email_from_name, "email_from_name", SettingsCategory::Notifications);
+    push!(form.email_starttls, "email_starttls", SettingsCategory::Notifications);
+    push!(form.email_min_confidence, "email_min_confidence", SettingsCategory::Notifications);
+    push!(form.email_cooldown_secs, "email_cooldown_secs", SettingsCategory::Notifications);
 
     items
 }

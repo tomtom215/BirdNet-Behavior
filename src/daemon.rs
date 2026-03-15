@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
 
+use birdnet_core::audio::extraction::{AudioFormat, ExtractionConfig, Extractor};
 use birdnet_integrations::notification::{
     NotificationContext, NotificationFilter, NotificationTemplate,
 };
@@ -141,6 +142,23 @@ pub fn start_detection_daemon(
     let thresholds_for_processor = daemon_config.species_thresholds.clone();
     let global_confidence = confidence;
 
+    // Build audio extraction config from CLI args.
+    let audio_format = AudioFormat::parse(&cli.audio_format);
+    let extraction_output_dir = daemon_config
+        .watch_dir
+        .parent()
+        .map(|p| p.join("Extracted"))
+        .unwrap_or_else(|| PathBuf::from("BirdSongs/Extracted"));
+    let extraction_config = ExtractionConfig {
+        target_format: audio_format,
+        audio_format: cli.audio_format.clone(),
+        output_dir: extraction_output_dir,
+        recording_length: cli.segment_duration as f32,
+        freq_shift_hz: cli.freq_shift_hz,
+        ..ExtractionConfig::default()
+    };
+    let extractor = Extractor::new(extraction_config);
+
     match birdnet_core::detection::daemon::run_daemon(&daemon_config, event_tx) {
         Ok(handle) => {
             tracing::info!("detection daemon started");
@@ -159,6 +177,7 @@ pub fn start_detection_daemon(
                     rt_handle,
                     thresholds_for_processor,
                     global_confidence,
+                    extractor,
                 );
             });
             Some(handle)
@@ -185,6 +204,7 @@ fn event_processor(
     rt_handle: tokio::runtime::Handle,
     species_thresholds: std::collections::HashMap<String, f64>,
     global_confidence: f32,
+    extractor: Extractor,
 ) {
     tracing::debug!("event processor started");
 
@@ -232,6 +252,20 @@ fn event_processor(
 
         if let Err(e) = state.with_db(|conn| birdnet_db::sqlite::insert_detection(conn, &record)) {
             tracing::warn!(error = %e, "failed to insert detection into database");
+        }
+
+        // Extract audio clip to disk.
+        match extractor.extract_detection(&event.source_file, detection) {
+            Ok(path) => tracing::debug!(
+                species = %detection.common_name,
+                path = %path.display(),
+                "audio clip extracted"
+            ),
+            Err(e) => tracing::warn!(
+                error = %e,
+                species = %detection.common_name,
+                "audio clip extraction failed"
+            ),
         }
 
         // Also insert into DuckDB analytics (if enabled).
