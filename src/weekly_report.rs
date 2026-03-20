@@ -84,7 +84,7 @@ async fn weekly_report_loop(
 
         match build_weekly_report(&state) {
             Ok((title, body)) => {
-                let mut client = apprise.lock().await;
+                let client = apprise.lock().await;
                 if let Err(e) = client
                     .send_notification(&title, &body, NotifyType::Info)
                     .await
@@ -156,7 +156,8 @@ fn days_to_date_str(days: u64) -> String {
     let y = if m <= 2 { y + 1 } else { y };
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    format!("{:04}-{:02}-{:02}", y as u32, m, d)
+    let y_u32 = y as u32;
+    format!("{y_u32:04}-{m:02}-{d:02}")
 }
 
 /// Return today's ISO date string and ISO weekday (0 = Mon, 6 = Sun).

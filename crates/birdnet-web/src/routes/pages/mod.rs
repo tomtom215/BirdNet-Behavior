@@ -13,6 +13,7 @@
 //! | `heatmap`        | 24h × 7-day activity heatmap page               |
 //! | `correlation`    | Species co-occurrence correlation page          |
 
+pub mod audio_player;
 pub mod behavioral;
 pub mod charts;
 pub mod correlation;
@@ -46,6 +47,7 @@ pub(crate) const RECORDINGS_PAGE_HTML: &str = include_str!("../../../templates/r
 /// Build all page and partial routes.
 pub fn router() -> Router<AppState> {
     dashboard::router()
+        .merge(audio_player::router())
         .merge(health::router())
         .merge(detection_detail::router())
         .merge(species_pages::router())

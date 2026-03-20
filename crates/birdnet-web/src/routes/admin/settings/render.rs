@@ -260,8 +260,16 @@ fn render_notifications_section(out: &mut String, s: &HashMap<String, String>) {
     let ncool = get_setting(s, "notify_cooldown", "300");
     let trigger = get_setting(s, "notify_trigger", "each");
     let t_each = if trigger == "each" { " selected" } else { "" };
-    let t_new = if trigger == "new-species" { " selected" } else { "" };
-    let t_daily = if trigger == "new-species-daily" { " selected" } else { "" };
+    let t_new = if trigger == "new-species" {
+        " selected"
+    } else {
+        ""
+    };
+    let t_daily = if trigger == "new-species-daily" {
+        " selected"
+    } else {
+        ""
+    };
     let only = get_setting(s, "notify_species_only", "");
     let nexcl = get_setting(s, "notify_species_exclude", "");
     let title_tmpl = get_setting(s, "notify_title_template", "");
@@ -270,12 +278,27 @@ fn render_notifications_section(out: &mut String, s: &HashMap<String, String>) {
     let img_yes = if img != "false" { " selected" } else { "" };
     let img_no = if img == "false" { " selected" } else { "" };
     let weekly = get_setting(s, "weekly_report_schedule", "monday");
-    let days = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday","disabled"];
+    let days = [
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+        "disabled",
+    ];
     let mut weekly_opts = String::new();
     for d in days {
         let sel = if weekly == d { " selected" } else { "" };
-        weekly_opts.push_str(&format!("<option value=\"{d}\"{sel}>{}</option>",
-            d.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default() + &d[1..]));
+        weekly_opts.push_str(&format!(
+            "<option value=\"{d}\"{sel}>{}</option>",
+            d.chars()
+                .next()
+                .map(|c| c.to_uppercase().to_string())
+                .unwrap_or_default()
+                + &d[1..]
+        ));
     }
     out.push_str(&format!(r#"
   <div class="card">
@@ -407,7 +430,11 @@ fn render_system_section(out: &mut String, s: &HashMap<String, String>) {
     let site = get_setting(s, "site_name", "");
     let isite = get_setting(s, "info_site", "ebird");
     let is_ebird = if isite == "ebird" { " selected" } else { "" };
-    let is_aab = if isite == "allaboutbirds" { " selected" } else { "" };
+    let is_aab = if isite == "allaboutbirds" {
+        " selected"
+    } else {
+        ""
+    };
     let is_none = if isite == "none" { " selected" } else { "" };
     let auth_user = get_setting(s, "auth_username", "");
     let auth_pass = get_setting(s, "auth_password", "");

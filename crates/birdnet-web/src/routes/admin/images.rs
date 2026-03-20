@@ -44,8 +44,8 @@ pub struct BlacklistForm {
 
 /// Render the image blacklist admin page.
 async fn images_page(State(state): State<AppState>) -> Html<String> {
-    let entries = state
-        .with_db(|conn| birdnet_db::sqlite::list_image_blacklist(conn).unwrap_or_default());
+    let entries =
+        state.with_db(|conn| birdnet_db::sqlite::list_image_blacklist(conn).unwrap_or_default());
 
     let mut rows = String::new();
     for entry in &entries {
@@ -156,10 +156,7 @@ async fn add_blacklist(
 }
 
 /// Remove a URL from the image blacklist.
-async fn remove_blacklist(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-) -> impl IntoResponse {
+async fn remove_blacklist(State(state): State<AppState>, Path(id): Path<i64>) -> impl IntoResponse {
     let _ = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| birdnet_db::sqlite::remove_image_blacklist(conn, id))
     })

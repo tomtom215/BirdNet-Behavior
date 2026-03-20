@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
 use crate::routes::admin::logs::LogBroadcaster;
+use crate::routes::spectrogram_ws::SpectrogramBroadcast;
 use crate::routes::websocket::DetectionBroadcast;
 
 /// Default WebSocket broadcast channel capacity.
@@ -41,6 +42,8 @@ struct AppStateInner {
     detection_broadcast: DetectionBroadcast,
     /// Broadcast channel for live log SSE streaming.
     log_broadcaster: LogBroadcaster,
+    /// Broadcast channel for live spectrogram WebSocket streaming.
+    spectrogram_broadcast: SpectrogramBroadcast,
     /// Localization manager for species common names.
     i18n: Option<RwLock<I18nManager>>,
     /// Audio source configuration for live streaming (ALSA device or RTSP URL).
@@ -84,6 +87,7 @@ impl AppState {
                 image_cache: None,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 log_broadcaster: LogBroadcaster::new(),
+                spectrogram_broadcast: SpectrogramBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 i18n: None,
                 audio_source: None,
                 site_name: None,
@@ -160,6 +164,7 @@ impl AppState {
                 image_cache: None,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 log_broadcaster: LogBroadcaster::new(),
+                spectrogram_broadcast: SpectrogramBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 i18n: None,
                 audio_source: None,
                 site_name: None,
@@ -185,6 +190,7 @@ impl AppState {
                 image_cache: None,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 log_broadcaster: LogBroadcaster::new(),
+                spectrogram_broadcast: SpectrogramBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 i18n: None,
                 audio_source: None,
                 site_name: None,
@@ -230,6 +236,7 @@ impl AppState {
                 image_cache: Some(Arc::new(cache)),
                 detection_broadcast: inner.detection_broadcast,
                 log_broadcaster: inner.log_broadcaster,
+                spectrogram_broadcast: inner.spectrogram_broadcast,
                 i18n: inner.i18n,
                 audio_source: inner.audio_source,
                 site_name: inner.site_name,
@@ -337,6 +344,7 @@ impl AppState {
                 image_cache: inner.image_cache,
                 detection_broadcast: inner.detection_broadcast,
                 log_broadcaster: inner.log_broadcaster,
+                spectrogram_broadcast: inner.spectrogram_broadcast,
                 i18n: inner.i18n,
                 audio_source: inner.audio_source,
                 site_name: inner.site_name,
@@ -364,6 +372,7 @@ impl AppState {
                 image_cache: inner.image_cache,
                 detection_broadcast: inner.detection_broadcast,
                 log_broadcaster: inner.log_broadcaster,
+                spectrogram_broadcast: inner.spectrogram_broadcast,
                 i18n: Some(RwLock::new(manager)),
                 audio_source: inner.audio_source,
                 site_name: inner.site_name,
@@ -391,6 +400,7 @@ impl AppState {
                 image_cache: inner.image_cache,
                 detection_broadcast: inner.detection_broadcast,
                 log_broadcaster: inner.log_broadcaster,
+                spectrogram_broadcast: inner.spectrogram_broadcast,
                 i18n: inner.i18n,
                 audio_source: Some(source),
                 site_name: inner.site_name,
@@ -413,6 +423,11 @@ impl AppState {
     /// Get the log broadcaster for SSE admin log streaming.
     pub fn log_broadcaster(&self) -> LogBroadcaster {
         self.inner.log_broadcaster.clone()
+    }
+
+    /// Get the spectrogram broadcast channel for WebSocket streaming.
+    pub fn spectrogram_broadcast(&self) -> SpectrogramBroadcast {
+        self.inner.spectrogram_broadcast.clone()
     }
 
     /// Execute a closure with a reference to the i18n manager.
@@ -449,6 +464,7 @@ impl AppState {
                 image_cache: inner.image_cache,
                 detection_broadcast: inner.detection_broadcast,
                 log_broadcaster: inner.log_broadcaster,
+                spectrogram_broadcast: inner.spectrogram_broadcast,
                 i18n: inner.i18n,
                 audio_source: inner.audio_source,
                 site_name: Some(name),
@@ -474,6 +490,7 @@ impl AppState {
                 image_cache: inner.image_cache,
                 detection_broadcast: inner.detection_broadcast,
                 log_broadcaster: inner.log_broadcaster,
+                spectrogram_broadcast: inner.spectrogram_broadcast,
                 i18n: inner.i18n,
                 audio_source: inner.audio_source,
                 site_name: inner.site_name,
@@ -503,6 +520,7 @@ impl AppState {
                 image_cache: inner.image_cache,
                 detection_broadcast: inner.detection_broadcast,
                 log_broadcaster: inner.log_broadcaster,
+                spectrogram_broadcast: inner.spectrogram_broadcast,
                 i18n: inner.i18n,
                 audio_source: inner.audio_source,
                 site_name: inner.site_name,

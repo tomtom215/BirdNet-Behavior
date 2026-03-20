@@ -1,6 +1,6 @@
 # Implementation Status
 
-> Current state of the Rust implementation. Last updated: **2026-03-13**.
+> Current state of the Rust implementation. Last updated: **2026-03-20**.
 
 ## Table of Contents
 
@@ -35,7 +35,7 @@
 | 7 | Audio Capture | **Complete** | 100% |
 | 8 | BirdNET-Pi Migration | **Complete** | 100% |
 | 9 | Analytics Dashboards | **Complete** | 100% |
-| 10 | Assembly + Polish | **Complete** | 98% |
+| 10 | Assembly + Polish | **Complete** | 100% |
 
 ---
 
@@ -55,7 +55,10 @@
 | Detection daemon | `detection/daemon.rs` | **Complete** | File watcher, inference loop, event broadcasting |
 | Inference labels | `inference/labels.rs` | **Complete** | BirdNET label format parser, lookup by sci/common name |
 | Inference model | `inference/model.rs` | **Complete** | tract-onnx ONNX inference, sigmoid/softmax, multi-model |
-| Disk management | `audio/capture/disk.rs` | **Complete** | Disk usage, recording stats, auto-cleanup |
+| Disk management | `audio/capture/disk/` | **Complete** | Disk usage, recording stats, auto-cleanup (split: mod, manager, purge) |
+| Live spectrogram | `audio/spectrogram/live.rs` | **Complete** | inotify watcher, mel spectrogram push, WebSocket broadcast |
+| tmpfs support | `audio/capture/tmpfs.rs` | **Complete** | Transient audio tmpfs mount/unmount, systemd unit generation |
+| Audio extraction | `audio/extraction/` | **Complete** | Modular: config, format, extractor, convert, wav (6 sub-modules) |
 
 ### birdnet-db
 
@@ -100,6 +103,11 @@
 | Admin backups | `routes/admin/backup.rs` | **Complete** | List/download/delete backup files with path-traversal protection |
 | Admin logs | `routes/admin/logs.rs` | **Complete** | SSE live log stream, ring buffer warm-up, full log viewer page |
 | Admin notifications | `routes/admin/notifications.rs` | **Complete** | Notification history log + stats + prune |
+| Admin update | `routes/admin/update.rs` | **Complete** | Update check + apply (GitHub Releases) |
+| Admin species tester | `routes/admin/species_tester.rs` | **Complete** | Filter preview: include/exclude/SF thresh simulation |
+| Spectrogram routes | `routes/spectrogram/` | **Complete** | Modular: render, font, png, colormap (split from monolith) |
+| Spectrogram WS | `routes/spectrogram_ws.rs` | **Complete** | Live spectrogram WebSocket broadcast |
+| Audio player page | `routes/pages/audio_player.rs` | **Complete** | Custom player with spectrogram, playhead, speed control |
 
 ### birdnet-integrations
 
@@ -109,6 +117,7 @@
 | Apprise | `apprise.rs` | **Complete** | 80+ notification channels, cooldown, watchlist, retry backoff |
 | BirdWeather | `birdweather.rs` | **Complete** | Detection + soundscape uploads, retry with exponential backoff |
 | Species images | `species_images/` | **Complete** | Wikipedia/Wikimedia cache, on-disk + in-memory index, background download |
+| Auto-update | `auto_update.rs` | **Complete** | GitHub Releases version check, binary download + atomic replace |
 
 ### birdnet-migrate
 
@@ -155,6 +164,44 @@
 ---
 
 ## Recent Changes
+
+### 2026-03-20
+
+#### File Modularity Refactoring
+- Split `spectrogram.rs` (621 lines) → `spectrogram/` module (mod, render, font, png, colormap)
+- Split `extraction.rs` (753 lines) → `extraction/` module (mod, format, config, extractor, convert, wav)
+- Split `disk.rs` (837 lines) → `disk/` module (mod, manager, purge)
+- Split `web_api.rs` (1491 lines) → `web_api.rs` + `web_api_detections.rs`
+- All source files now under 650 lines for maintainability
+
+#### Live Spectrogram Daemon
+- `birdnet-core::audio::spectrogram::live` — inotify file watcher + mel spectrogram computation
+- `SpectrogramFrame` struct with normalized data for WebSocket transmission
+- `birdnet-web::routes::spectrogram_ws` — WebSocket endpoint at `/api/v2/ws/spectrogram`
+- `SpectrogramBroadcast` channel integrated into `AppState`
+
+#### Binary Auto-Update
+- `birdnet-integrations::auto_update` — check GitHub Releases for new versions
+- Semver comparison (hand-rolled, no external crate)
+- Atomic binary replace: download → temp file → chmod → rename
+- Admin endpoints: `GET /admin/update/check`, `POST /admin/update/apply`
+
+#### tmpfs Transient Audio Support
+- `birdnet-core::audio::capture::tmpfs` — mount/unmount tmpfs for transient audio
+- `is_tmpfs_mounted()` checks `/proc/mounts`
+- `generate_systemd_mount_unit()` for persistent configuration
+- Reduces SD card write wear on Raspberry Pi deployments
+
+#### Species Filter Tester
+- `GET /admin/species/test?include=...&exclude=...&sf_thresh=...`
+- Returns JSON with filtered species count, sample list, and filter summary
+- Preview filter changes before applying to production settings
+
+#### Custom Audio Player
+- `GET /player/{filename}` — standalone player page with spectrogram visualization
+- Playhead canvas overlay on spectrogram image (synced to audio position)
+- Playback speed control (0.5x–2x), volume slider, download button
+- Dark theme styling consistent with dashboard
 
 ### 2026-03-13
 
@@ -216,15 +263,16 @@
 
 | Crate | ~LOC | Notes |
 |-------|------|-------|
-| birdnet-core | ~1,600 | Audio pipeline + inference + daemon + capture + disk |
-| birdnet-db | ~900 | CRUD + heatmap + correlation + settings + notifications + resilience |
-| birdnet-web | ~3,200 | REST API + WS + HTMX pages + admin + backup + system_info |
-| birdnet-integrations | ~1,500 | Email + Apprise + BirdWeather + species images |
-| birdnet-migrate | ~800 | Traits + schema + validator + importer + species_report |
-| birdnet-behavioral | ~750 | Types + SQL builders + DuckDB connection |
-| birdnet-timeseries | ~600 | All time-series analytics |
-| Binary (`src/`) | ~400 | main.rs + daemon.rs + capture.rs + integrations.rs + cli.rs |
-| **Total** | **~9,750** | Production Rust, excluding tests |
+| birdnet-core | ~6,900 | Audio pipeline + inference + daemon + capture + disk + spectrogram + tmpfs |
+| birdnet-db | ~3,800 | CRUD + heatmap + correlation + settings + notifications + resilience |
+| birdnet-web | ~15,700 | REST API + WS + HTMX pages + admin + player + spectrogram + update |
+| birdnet-integrations | ~3,500 | Email + Apprise + BirdWeather + species images + auto-update |
+| birdnet-migrate | ~2,300 | Traits + schema + validator + importer + species_report |
+| birdnet-behavioral | ~1,100 | Types + SQL builders + DuckDB connection |
+| birdnet-timeseries | ~2,900 | All time-series analytics + windowing |
+| birdnet-scheduler | ~900 | Solar calculations + window management |
+| Binary (`src/`) | ~2,200 | main.rs + daemon.rs + capture.rs + integrations.rs + cli.rs |
+| **Total** | **~39,300** | Production Rust (including inline tests) |
 
 ---
 

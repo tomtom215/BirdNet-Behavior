@@ -23,6 +23,7 @@
 //! | `GET  /admin/system/backups`        | List database backups |
 //! | `GET  /admin/system/backups/{name}` | Download a backup file |
 //! | `DELETE /admin/system/backups/{name}` | Delete a backup file |
+//! | `GET  /admin/species/test`            | Test/preview species filter (JSON) |
 
 pub mod backup;
 pub mod images;
@@ -33,8 +34,10 @@ pub mod notifications;
 pub mod overview;
 pub mod settings;
 pub mod species;
+pub mod species_tester;
 pub mod system;
 pub mod system_controls;
+pub mod update;
 
 use axum::{Router, routing::get};
 
@@ -67,6 +70,10 @@ pub fn router() -> Router<AppState> {
         .merge(system_controls::router())
         // Image blacklist management
         .merge(images::router())
+        // Software update
+        .merge(update::router())
+        // Species filter tester
+        .merge(species_tester::router())
 }
 
 /// Redirect `/admin` to `/admin/overview`.

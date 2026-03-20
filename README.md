@@ -100,6 +100,13 @@ BirdNet-Behavior is a ground-up Rust rewrite of [BirdNET-Pi](https://github.com/
 - Database backup management (list, download, delete)
 - System resource monitoring (CPU, memory, temperature, uptime)
 - Email alert settings with SMTP test connection
+- Species filter tester/preview (validate include/exclude lists before applying)
+- Binary auto-update (check GitHub Releases + one-click atomic update)
+
+**Audio & Spectrogram:**
+- Custom audio player with spectrogram visualization and playhead overlay
+- Live spectrogram WebSocket push (real-time mel spectrogram streaming)
+- tmpfs transient audio support (reduce SD card wear on Raspberry Pi)
 
 ---
 
@@ -133,7 +140,8 @@ birdnet-behavior (single binary)
 │   ├── Email          — SMTP via lettre + rustls (no OpenSSL)
 │   ├── Apprise        — push notifications (80+ channels), cooldown tracking
 │   ├── BirdWeather    — station detection uploads with retry backoff
-│   └── Species Images — Wikipedia/Wikimedia image caching
+│   ├── Species Images — Wikipedia/Wikimedia image caching
+│   └── Auto-Update   — GitHub Releases check + atomic binary replace
 │
 ├── Behavioral   (birdnet-behavioral, feature: analytics)
 │   ├── Sessionize     — gap-based activity window detection
@@ -163,6 +171,8 @@ birdnet-behavior (single binary)
 | `/correlation` | Species co-occurrence pairs and companion species lookup |
 | `/analytics` | Behavioral analytics dashboard (requires `--analytics-db`) |
 | `/health` | System health page |
+| `/player/{filename}` | Custom audio player with spectrogram visualization |
+| `/live` | Live audio stream page |
 
 ---
 
@@ -176,6 +186,8 @@ birdnet-behavior (single binary)
 | `/admin/system/backups` | List, download, and delete database backups |
 | `/admin/system/logs/page` | Live SSE log viewer with filtering and pause |
 | `/admin/notifications` | Notification history log (all channels) |
+| `/admin/species/test` | Species filter tester/preview |
+| `/admin/update/check` | Check for binary updates (GitHub Releases) |
 
 ---
 

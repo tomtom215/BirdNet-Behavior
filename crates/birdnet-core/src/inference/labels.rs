@@ -90,7 +90,8 @@ impl LabelSet {
         let check = content.trim_start_matches('\u{feff}');
         let first = check.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
         // CSV if the header contains sci_name with any delimiter.
-        if (first.contains(',') || first.contains(';')) && first.to_lowercase().contains("sci_name") {
+        if (first.contains(',') || first.contains(';')) && first.to_lowercase().contains("sci_name")
+        {
             Self::parse_csv(&content)
         } else {
             Self::parse(&content)
@@ -184,16 +185,12 @@ impl LabelSet {
                 .get(sci_col)
                 .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
-                .ok_or_else(|| {
-                    LabelError::Format(format!("missing sci_name in row: {line}"))
-                })?;
+                .ok_or_else(|| LabelError::Format(format!("missing sci_name in row: {line}")))?;
             let com = fields
                 .get(com_col)
                 .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
-                .ok_or_else(|| {
-                    LabelError::Format(format!("missing com_name in row: {line}"))
-                })?;
+                .ok_or_else(|| LabelError::Format(format!("missing com_name in row: {line}")))?;
 
             labels.push(SpeciesLabel {
                 index: labels.len(),

@@ -7,6 +7,7 @@
 //! Uses `realfft` for the FFT computation (pure Rust, no C dependencies).
 
 mod compute;
+pub mod live;
 
 use std::fmt;
 

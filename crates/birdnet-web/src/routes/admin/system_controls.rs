@@ -18,10 +18,7 @@ pub fn router() -> Router<AppState> {
         .route("/admin/system/clear-extracted", post(clear_extracted))
         .route("/admin/system/backup/full", axum::routing::get(full_backup))
         .route("/admin/system/restore", post(restore_backup))
-        .route(
-            "/admin/system/service/restart",
-            post(service_restart),
-        )
+        .route("/admin/system/service/restart", post(service_restart))
         .route(
             "/admin/system/service/status",
             axum::routing::get(service_status),
@@ -386,9 +383,15 @@ async fn service_restart() -> Html<String> {
     .await;
 
     match result {
-        Ok(Ok(msg)) => Html(format!(r#"<p style="color:#4ade80;">{msg} Reconnect in a few seconds.</p>"#)),
-        Ok(Err(e)) => Html(format!(r#"<p style="color:#f87171;">Restart failed: {e}</p>"#)),
-        Err(e) => Html(format!(r#"<p style="color:#f87171;">Internal error: {e}</p>"#)),
+        Ok(Ok(msg)) => Html(format!(
+            r#"<p style="color:#4ade80;">{msg} Reconnect in a few seconds.</p>"#
+        )),
+        Ok(Err(e)) => Html(format!(
+            r#"<p style="color:#f87171;">Restart failed: {e}</p>"#
+        )),
+        Err(e) => Html(format!(
+            r#"<p style="color:#f87171;">Internal error: {e}</p>"#
+        )),
     }
 }
 
@@ -564,8 +567,10 @@ async fn check_update() -> axum::response::Response {
             r.status()
         ))
         .into_response(),
-        Err(e) => Html(format!(r#"<p style="color:#f87171;">Network error: {e}</p>"#))
-            .into_response(),
+        Err(e) => Html(format!(
+            r#"<p style="color:#f87171;">Network error: {e}</p>"#
+        ))
+        .into_response(),
     }
 }
 

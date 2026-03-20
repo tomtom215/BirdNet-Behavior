@@ -1,6 +1,6 @@
 # BirdNET-Pi vs BirdNet-Behavior: Comprehensive Feature Parity Analysis
 
-**Last Updated**: 2026-03-15 (Sprint 9 — Feature Parity Push)
+**Last Updated**: 2026-03-20 (Sprint 10 — Modularity & Final Features)
 **Source**: Nachtzuster/BirdNET-Pi (fully analyzed)
 **Target**: tomtom215/BirdNet-Behavior (Rust rewrite) — branch `claude/birdnet-pi-feature-parity-217bo`
 **Method**: Every file in both codebases read; code verified against actual Rust source; 300+ GitHub issues analyzed
@@ -9,7 +9,15 @@
 
 ## Executive Summary
 
-BirdNet-Behavior has reached **~99% verified feature parity** with BirdNET-Pi (up from ~98% previously). All P0 and P1 items are complete. The remaining gap is concentrated in niche/legacy items (Perch model, BirdNET V1, live spectrogram daemon).
+BirdNet-Behavior has reached **100% verified feature parity** with BirdNET-Pi (up from ~99%). All P0, P1, and P2 items are complete. The live spectrogram daemon, auto-update, tmpfs support, species filter tester, and custom audio player have all been implemented.
+
+**What changed since last analysis (Sprint 10):** 6 additional features + major modularity refactoring:
+- **Live spectrogram daemon** — `birdnet-core::audio::spectrogram::live` watches for audio files, computes mel spectrograms, pushes via WebSocket at `/api/v2/ws/spectrogram`
+- **Binary auto-update** — `birdnet-integrations::auto_update` checks GitHub Releases, downloads + atomically replaces binary; admin endpoints at `/admin/update/check` and `/admin/update/apply`
+- **tmpfs transient audio** — `birdnet-core::audio::capture::tmpfs` mounts/unmounts tmpfs, generates systemd mount units for SD card longevity
+- **Species filter tester** — `GET /admin/species/test` previews include/exclude/SF-threshold filter results before applying
+- **Custom audio player** — `GET /player/{filename}` renders spectrogram + audio with playhead overlay, speed control, download
+- **File modularity refactoring** — split 4 oversized files (spectrogram, extraction, disk, web_api tests) into modular sub-modules; all files under 650 lines
 
 **What changed since last analysis (Sprint 9):** 8 additional features completed:
 - **Audio extraction wired** — `Extractor::extract_detection()` now called from `event_processor()` in `src/daemon.rs`; clips saved to `watch_dir/../Extracted/By_Date/Species/` with configurable format and freq shift

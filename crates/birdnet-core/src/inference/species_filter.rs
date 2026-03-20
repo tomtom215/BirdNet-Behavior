@@ -168,9 +168,9 @@ impl SpeciesFilter {
 
         // Collect probabilities into a Vec to release the borrow on session/outputs.
         let probabilities: Vec<f32> = {
-            let (_, flat) = outputs[0]
-                .try_extract_tensor::<f32>()
-                .map_err(|e| InferenceError::Runtime(format!("cannot extract probabilities: {e}")))?;
+            let (_, flat) = outputs[0].try_extract_tensor::<f32>().map_err(|e| {
+                InferenceError::Runtime(format!("cannot extract probabilities: {e}"))
+            })?;
             flat.to_vec()
         };
         drop(outputs);

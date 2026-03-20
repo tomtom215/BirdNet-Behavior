@@ -5,6 +5,7 @@
 //! heartbeat monitoring, notification templates, and weekly reports.
 
 pub mod apprise;
+pub mod auto_update;
 pub mod birdweather;
 pub mod email;
 pub mod heartbeat;
