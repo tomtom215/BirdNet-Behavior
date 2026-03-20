@@ -9,8 +9,7 @@ use serde::Deserialize;
 use birdnet_db::settings::{SettingsCategory, ensure_settings_table, get, set};
 
 use super::render::{
-    render_filter_test_page, render_species_page, render_species_partial,
-    render_thresholds_partial,
+    render_filter_test_page, render_species_page, render_species_partial, render_thresholds_partial,
 };
 use crate::state::AppState;
 
@@ -30,9 +29,8 @@ pub async fn species_partial(State(state): State<AppState>) -> Html<String> {
 
 pub async fn filter_test_page(State(state): State<AppState>) -> Html<String> {
     let (exclude, include) = load_lists(&state);
-    let species = state.with_db(|conn| {
-        birdnet_db::sqlite::top_species(conn, 10_000).unwrap_or_default()
-    });
+    let species =
+        state.with_db(|conn| birdnet_db::sqlite::top_species(conn, 10_000).unwrap_or_default());
     #[allow(clippy::cast_sign_loss)]
     let rows: Vec<(String, String, u64)> = species
         .into_iter()

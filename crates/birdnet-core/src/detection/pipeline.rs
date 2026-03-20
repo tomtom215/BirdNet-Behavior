@@ -181,7 +181,11 @@ pub fn process_file(
         // V2.4 models compute a proper mel spectrogram.
         let spectrogram = if config.raw_audio_input {
             let n = chunk_data.len();
-            MelSpectrogram { n_mels: 1, n_frames: n, data: chunk_data }
+            MelSpectrogram {
+                n_mels: 1,
+                n_frames: n,
+                data: chunk_data,
+            }
         } else {
             spectrogram::mel_spectrogram(
                 &chunk_data,

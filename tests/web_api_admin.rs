@@ -1,7 +1,4 @@
-//! Integration tests for the web API — shared setup and basic API tests.
-//!
-//! Tests the full HTTP API including database interactions,
-//! using an in-memory `SQLite` database and actual axum handlers.
+//! Integration tests for species HTMX partials and species list search.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -33,7 +30,6 @@ fn test_state() -> AppState {
     )
     .unwrap();
 
-    // Insert sample detection data
     let records = [
         (
             "2026-03-12",
@@ -84,13 +80,13 @@ fn app() -> axum::Router {
 }
 
 #[tokio::test]
-async fn root_returns_api_info() {
+async fn htmx_species_detections_partial() {
     let app = app();
 
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/api/v2")
+                .uri("/pages/species-detections?name=Eurasian%20Blackbird")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -102,20 +98,20 @@ async fn root_returns_api_info() {
     let body = axum::body::to_bytes(response.into_body(), 4096)
         .await
         .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let html = String::from_utf8_lossy(&body);
 
-    assert_eq!(json["name"], "BirdNet-Behavior API");
-    assert_eq!(json["status"], "running");
+    assert!(html.contains("<table>"));
+    assert!(html.contains("Confidence"));
 }
 
 #[tokio::test]
-async fn health_endpoint_returns_healthy() {
+async fn htmx_species_hourly_partial() {
     let app = app();
 
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/api/v2/health")
+                .uri("/pages/species-hourly?name=Eurasian%20Blackbird")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -127,20 +123,20 @@ async fn health_endpoint_returns_healthy() {
     let body = axum::body::to_bytes(response.into_body(), 4096)
         .await
         .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let html = String::from_utf8_lossy(&body);
 
-    assert_eq!(json["status"], "healthy");
-    assert_eq!(json["database"], "ok");
+    // Should render SVG chart since we have detections at hours 06 and 07
+    assert!(html.contains("<svg"));
 }
 
 #[tokio::test]
-async fn stats_endpoint_returns_counts() {
+async fn htmx_species_daily_partial() {
     let app = app();
 
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/api/v2/stats")
+                .uri("/pages/species-daily?name=Eurasian%20Blackbird")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -152,49 +148,20 @@ async fn stats_endpoint_returns_counts() {
     let body = axum::body::to_bytes(response.into_body(), 4096)
         .await
         .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let html = String::from_utf8_lossy(&body);
 
-    assert_eq!(json["total_detections"], 5);
-    assert_eq!(json["unique_species"], 4);
-    assert!(json["latest_detection"].is_object());
-    assert_eq!(json["latest_detection"]["species"], "Great Tit");
-    assert!(json["confidence_distribution"].is_object());
+    // Should render SVG chart since we have detection data
+    assert!(html.contains("<svg"));
 }
 
 #[tokio::test]
-async fn disk_info_endpoint() {
+async fn htmx_species_list_search() {
     let app = app();
 
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/api/v2/system/disk")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    // Should return 200 (or 503 if disk is critical, unlikely in test)
-    assert!(response.status().is_success() || response.status() == StatusCode::SERVICE_UNAVAILABLE);
-
-    let body = axum::body::to_bytes(response.into_body(), 4096)
-        .await
-        .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-
-    // Should have disk usage fields
-    assert!(json["total_bytes"].is_number() || json["error"].is_string());
-}
-
-#[tokio::test]
-async fn static_htmx_js_served() {
-    let app = app();
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/static/htmx.min.js")
+                .uri("/pages/species-list?q=robin")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -203,16 +170,37 @@ async fn static_htmx_js_served() {
 
     assert_eq!(response.status(), StatusCode::OK);
 
-    let content_type = response
-        .headers()
-        .get("content-type")
-        .unwrap()
-        .to_str()
-        .unwrap();
-    assert_eq!(content_type, "application/javascript");
-
-    let body = axum::body::to_bytes(response.into_body(), 65536)
+    let body = axum::body::to_bytes(response.into_body(), 4096)
         .await
         .unwrap();
-    assert!(body.len() > 1000); // HTMX is ~50KB
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(html.contains("European Robin"));
+    // Should NOT contain other species
+    assert!(!html.contains("Eurasian Blackbird"));
+    assert!(!html.contains("Great Tit"));
+}
+
+#[tokio::test]
+async fn htmx_species_list_search_no_match() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/species-list?q=flamingo")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(html.contains("No matching species found"));
 }

@@ -19,15 +19,18 @@ See `LICENSE` and `LICENSE-UPSTREAM` for full attribution and license terms.
 
 ## Architecture
 
-Single Rust binary with 5 workspace crates:
+Single Rust binary with 8 workspace crates:
 
 | Crate | Purpose |
 |-------|---------|
-| `birdnet-core` | Audio capture, decode, resample, mel spectrogram, ML inference, detection pipeline |
+| `birdnet-core` | Audio capture, decode, resample, mel spectrogram, ML inference, detection pipeline, tmpfs, live spectrogram |
 | `birdnet-db` | SQLite (OLTP) + DuckDB (OLAP), resilience, migrations |
-| `birdnet-web` | axum web server, REST API, WebSocket, HTMX templates |
-| `birdnet-integrations` | BirdWeather, Apprise, Flickr/Wikipedia, RTSP |
+| `birdnet-web` | axum web server, REST API, WebSocket, HTMX templates, audio player, admin |
+| `birdnet-integrations` | BirdWeather, Apprise, Wikipedia images, email, auto-update |
 | `birdnet-behavioral` | DuckDB behavioral analytics for bird activity patterns |
+| `birdnet-timeseries` | Time-series analytics (activity, diversity, trend, peak, gap, sessions) |
+| `birdnet-migrate` | BirdNET-Pi migration: schema detection, validation, import |
+| `birdnet-scheduler` | Solar calculations, recording window scheduling |
 
 See `docs/RUST_ARCHITECTURE_PLAN.md` for the full phased implementation plan.
 
@@ -90,4 +93,4 @@ Rust 1.85 (edition 2024)
 
 ---
 
-*Modular reference for BirdNet-Behavior. Last updated: 2026-03-11*
+*Modular reference for BirdNet-Behavior. Last updated: 2026-03-20*

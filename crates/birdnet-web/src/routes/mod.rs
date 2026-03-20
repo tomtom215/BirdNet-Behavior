@@ -13,6 +13,7 @@ pub mod pages;
 pub mod recordings;
 pub mod species;
 pub mod spectrogram;
+pub mod spectrogram_ws;
 pub mod static_files;
 pub mod system;
 pub mod timeseries;
@@ -51,6 +52,7 @@ pub fn api_routes() -> Router<AppState> {
         .nest("/api/v2", images::router())
         .nest("/api/v2", recordings::router())
         .nest("/api/v2", spectrogram::router())
+        .nest("/api/v2", spectrogram_ws::router())
         .nest("/api/v2", livestream::router())
         .merge(livestream::stream_router())
         .merge(pages::router())

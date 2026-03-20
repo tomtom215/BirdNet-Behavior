@@ -446,6 +446,7 @@ mod tests {
             custom_image_dir: None,
             apprise_config: None,
             weekly_report_schedule: "monday".to_string(),
+            freq_shift_hz: 0,
         }
     }
 }

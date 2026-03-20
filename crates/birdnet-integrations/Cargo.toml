@@ -15,7 +15,7 @@ description = "External service integrations: BirdWeather, Apprise, Flickr, Wiki
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["blocking"] }
 tokio.workspace = true
 lettre.workspace = true
 

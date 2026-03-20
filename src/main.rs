@@ -401,8 +401,8 @@ fn start_disk_manager(
         .unwrap_or(95);
 
     // Load locked file names from the database to protect them from purge.
-    let locked_file_names = state
-        .with_db(|conn| birdnet_db::sqlite::locked_file_names(conn).unwrap_or_default());
+    let locked_file_names =
+        state.with_db(|conn| birdnet_db::sqlite::locked_file_names(conn).unwrap_or_default());
 
     let config_obj = DiskManagerConfig {
         monitored_dir: monitored_dir.clone(),

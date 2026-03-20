@@ -101,11 +101,7 @@ pub fn blacklisted_urls_for_species(
 /// # Errors
 ///
 /// Returns `DbError` on query failure.
-pub fn is_image_blacklisted(
-    conn: &Connection,
-    sci_name: &str,
-    url: &str,
-) -> Result<bool, DbError> {
+pub fn is_image_blacklisted(conn: &Connection, sci_name: &str, url: &str) -> Result<bool, DbError> {
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM image_blacklist WHERE sci_name = ?1 AND url = ?2",
         params![sci_name, url],
@@ -130,7 +126,13 @@ mod tests {
     #[test]
     fn add_and_list_blacklist() {
         let (_tmp, conn) = temp_db();
-        let added = add_image_blacklist(&conn, "Turdus merula", "https://example.com/img.jpg", Some("test")).unwrap();
+        let added = add_image_blacklist(
+            &conn,
+            "Turdus merula",
+            "https://example.com/img.jpg",
+            Some("test"),
+        )
+        .unwrap();
         assert!(added);
         let list = list_image_blacklist(&conn).unwrap();
         assert_eq!(list.len(), 1);
@@ -142,8 +144,12 @@ mod tests {
     #[test]
     fn add_duplicate_returns_false() {
         let (_tmp, conn) = temp_db();
-        let first = add_image_blacklist(&conn, "Turdus merula", "https://example.com/img.jpg", None).unwrap();
-        let second = add_image_blacklist(&conn, "Turdus merula", "https://example.com/img.jpg", None).unwrap();
+        let first =
+            add_image_blacklist(&conn, "Turdus merula", "https://example.com/img.jpg", None)
+                .unwrap();
+        let second =
+            add_image_blacklist(&conn, "Turdus merula", "https://example.com/img.jpg", None)
+                .unwrap();
         assert!(first);
         assert!(!second);
     }

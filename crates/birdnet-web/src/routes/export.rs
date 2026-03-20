@@ -537,7 +537,10 @@ mod tests {
         };
         let out = detections_to_birddb(&[row]);
         let line = out.lines().next().unwrap();
-        assert!(line.contains(';'), "BirdDB.txt should use semicolon delimiters");
+        assert!(
+            line.contains(';'),
+            "BirdDB.txt should use semicolon delimiters"
+        );
         let parts: Vec<&str> = line.split(';').collect();
         assert_eq!(parts.len(), 12, "BirdDB.txt should have 12 fields");
         assert_eq!(parts[0], "2026-03-12");

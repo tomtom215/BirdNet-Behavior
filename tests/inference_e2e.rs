@@ -70,7 +70,11 @@ fn e2e_labels_load_pica_pica_present() {
     };
 
     let labels = LabelSet::load(Path::new(&labels_path)).expect("failed to load labels");
-    assert!(labels.len() > 1000, "expected >1000 species, got {}", labels.len());
+    assert!(
+        labels.len() > 1000,
+        "expected >1000 species, got {}",
+        labels.len()
+    );
 
     let pica = labels.find_by_scientific_name("Pica pica");
     assert!(
@@ -87,7 +91,9 @@ fn e2e_labels_load_pica_pica_present() {
 
 #[test]
 fn e2e_model_detects_pica_pica() {
-    let Some(mut model) = load_model() else { return };
+    let Some(mut model) = load_model() else {
+        return;
+    };
 
     let wav_path = Path::new(PICA_PICA_WAV);
     assert!(wav_path.exists(), "test WAV not found at {PICA_PICA_WAV}");
@@ -110,11 +116,7 @@ fn e2e_model_detects_pica_pica() {
         resample::resample(&audio.samples, audio.sample_rate, target_rate)
             .expect("resampling failed")
     };
-    eprintln!(
-        "Resampled: {} samples at {}Hz",
-        samples.len(),
-        target_rate
-    );
+    eprintln!("Resampled: {} samples at {}Hz", samples.len(), target_rate);
 
     // Split into 3-second chunks and run inference on each.
     let chunk_samples = (3.0 * target_rate as f64) as usize;
@@ -130,7 +132,14 @@ fn e2e_model_detects_pica_pica() {
         }
 
         let detections = model
-            .predict(&chunk, "2026-03-15", "06:30:00", chunk_start as f32 / target_rate as f32, chunk_end as f32 / target_rate as f32, 11)
+            .predict(
+                &chunk,
+                "2026-03-15",
+                "06:30:00",
+                chunk_start as f32 / target_rate as f32,
+                chunk_end as f32 / target_rate as f32,
+                11,
+            )
             .expect("inference failed");
 
         for d in &detections {
@@ -168,7 +177,12 @@ fn e2e_model_detects_pica_pica() {
         all_detections
             .iter()
             .take(10)
-            .map(|d| format!("  {:.1}%  {} ({})", d.confidence * 100.0, d.common_name, d.scientific_name))
+            .map(|d| format!(
+                "  {:.1}%  {} ({})",
+                d.confidence * 100.0,
+                d.common_name,
+                d.scientific_name
+            ))
             .collect::<Vec<_>>()
             .join("\n")
     );

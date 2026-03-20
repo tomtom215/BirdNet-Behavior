@@ -1,7 +1,4 @@
-//! Integration tests for the web API — shared setup and basic API tests.
-//!
-//! Tests the full HTTP API including database interactions,
-//! using an in-memory `SQLite` database and actual axum handlers.
+//! Integration tests for analytics endpoints.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -33,7 +30,6 @@ fn test_state() -> AppState {
     )
     .unwrap();
 
-    // Insert sample detection data
     let records = [
         (
             "2026-03-12",
@@ -84,13 +80,82 @@ fn app() -> axum::Router {
 }
 
 #[tokio::test]
-async fn root_returns_api_info() {
+async fn analytics_endpoints_report_unavailable_without_duckdb() {
+    let app = app();
+
+    // These endpoints don't require query params and report unavailable without DuckDB
+    for endpoint in &["/api/v2/analytics/retention", "/api/v2/analytics/funnel"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(*endpoint)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK, "failed: {endpoint}");
+
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(
+            json["status"], "unavailable",
+            "endpoint {endpoint} should report unavailable without DuckDB"
+        );
+    }
+
+    // Sessions endpoint with optional params
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/analytics/sessions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "unavailable");
+
+    // next-species endpoint with optional params (returns unavailable without DuckDB)
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/analytics/next-species?after=Robin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "unavailable");
+}
+
+#[tokio::test]
+async fn analytics_status_endpoint() {
     let app = app();
 
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/api/v2")
+                .uri("/api/v2/analytics/status")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -104,115 +169,8 @@ async fn root_returns_api_info() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json["name"], "BirdNet-Behavior API");
-    assert_eq!(json["status"], "running");
-}
-
-#[tokio::test]
-async fn health_endpoint_returns_healthy() {
-    let app = app();
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/api/v2/health")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let body = axum::body::to_bytes(response.into_body(), 4096)
-        .await
-        .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-
-    assert_eq!(json["status"], "healthy");
-    assert_eq!(json["database"], "ok");
-}
-
-#[tokio::test]
-async fn stats_endpoint_returns_counts() {
-    let app = app();
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/api/v2/stats")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let body = axum::body::to_bytes(response.into_body(), 4096)
-        .await
-        .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-
-    assert_eq!(json["total_detections"], 5);
-    assert_eq!(json["unique_species"], 4);
-    assert!(json["latest_detection"].is_object());
-    assert_eq!(json["latest_detection"]["species"], "Great Tit");
-    assert!(json["confidence_distribution"].is_object());
-}
-
-#[tokio::test]
-async fn disk_info_endpoint() {
-    let app = app();
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/api/v2/system/disk")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    // Should return 200 (or 503 if disk is critical, unlikely in test)
-    assert!(response.status().is_success() || response.status() == StatusCode::SERVICE_UNAVAILABLE);
-
-    let body = axum::body::to_bytes(response.into_body(), 4096)
-        .await
-        .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-
-    // Should have disk usage fields
-    assert!(json["total_bytes"].is_number() || json["error"].is_string());
-}
-
-#[tokio::test]
-async fn static_htmx_js_served() {
-    let app = app();
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri("/static/htmx.min.js")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
-
-    let content_type = response
-        .headers()
-        .get("content-type")
-        .unwrap()
-        .to_str()
-        .unwrap();
-    assert_eq!(content_type, "application/javascript");
-
-    let body = axum::body::to_bytes(response.into_body(), 65536)
-        .await
-        .unwrap();
-    assert!(body.len() > 1000); // HTMX is ~50KB
+    // Without analytics feature, should report not compiled
+    assert_eq!(json["analytics_compiled"], false);
+    assert_eq!(json["analytics_configured"], false);
+    assert!(json["endpoints"].is_object());
 }

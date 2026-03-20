@@ -271,7 +271,7 @@ impl BirdNetModel {
             other => {
                 return Err(InferenceError::Shape(format!(
                     "unsupported input shape: {other:?}, expected [1, N] or [1, 1, N]"
-                )))
+                )));
             }
         };
 
@@ -307,8 +307,8 @@ impl BirdNetModel {
             _ => return 32_000,
         };
         match n_samples {
-            96_000 => 32_000,   // BirdNET+ V3.0 (32 kHz × 3 s)
-            144_000 => 48_000,  // BirdNET   V2.4 (48 kHz × 3 s)
+            96_000 => 32_000,  // BirdNET+ V3.0 (32 kHz × 3 s)
+            144_000 => 48_000, // BirdNET   V2.4 (48 kHz × 3 s)
             _ => 48_000,
         }
     }
