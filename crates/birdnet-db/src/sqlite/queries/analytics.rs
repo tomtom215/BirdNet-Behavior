@@ -362,7 +362,11 @@ pub fn detection_quality_by_hour(conn: &Connection) -> Result<Vec<(u8, i64, f64)
     let rows = stmt
         .query_map([], |row| {
             let hour: i64 = row.get(0)?;
-            Ok((u8::try_from(hour.clamp(0, 23)).unwrap_or(0), row.get(1)?, row.get(2)?))
+            Ok((
+                u8::try_from(hour.clamp(0, 23)).unwrap_or(0),
+                row.get(1)?,
+                row.get(2)?,
+            ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)

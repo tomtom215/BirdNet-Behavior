@@ -57,7 +57,7 @@ async fn quality_summary_partial(State(state): State<AppState>) -> Html<String> 
     let data = tokio::task::spawn_blocking(move || load_quality_data(&state))
         .await
         .unwrap_or_else(|_| QualityData::empty());
-    Html(render_summary_cards(&data.summary))
+    Html(render_summary_cards(data.summary.as_ref()))
 }
 
 async fn quality_trend_partial(State(state): State<AppState>) -> Html<String> {
@@ -80,7 +80,7 @@ struct QualityData {
 }
 
 impl QualityData {
-    fn empty() -> Self {
+    const fn empty() -> Self {
         Self {
             summary: None,
             conf_buckets: [0; 6],
@@ -106,15 +106,16 @@ fn load_quality_data(state: &AppState) -> QualityData {
 // Rendering
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_lines)]
 fn render_quality_page(data: &QualityData) -> String {
-    let summary_html = render_summary_cards(&data.summary);
+    let summary_html = render_summary_cards(data.summary.as_ref());
     let dist_html = render_confidence_distribution(&data.conf_buckets);
     let trend_html = render_confidence_trend(&data.trend);
     let hour_html = render_hourly_quality(&data.by_hour);
     let low_conf_html = render_low_confidence_species(&data.low_conf);
 
     format!(
-        r##"<!DOCTYPE html>
+        r#"<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -227,16 +228,11 @@ fn render_quality_page(data: &QualityData) -> String {
   </div>
 </div>
 </body>
-</html>"##,
-        summary_html = summary_html,
-        dist_html = dist_html,
-        trend_html = trend_html,
-        hour_html = hour_html,
-        low_conf_html = low_conf_html,
+</html>"#
     )
 }
 
-fn render_summary_cards(summary: &Option<QualitySummary>) -> String {
+fn render_summary_cards(summary: Option<&QualitySummary>) -> String {
     let Some(s) = summary else {
         return r#"<p style="color:#64748b;">No detections in database.</p>"#.to_string();
     };
@@ -333,7 +329,8 @@ fn render_confidence_trend(trend: &[(String, f64)]) -> String {
     let mut html =
         String::from(r#"<div class="trend-bars" title="Daily average confidence (last 30 days)">"#);
     for (date, conf) in trend {
-        let height_pct = (conf / max_conf * 100.0) as u32;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let height_pct = (conf / max_conf * 100.0).clamp(0.0, 100.0) as u32;
         let color = conf_to_color(*conf);
         write!(
             html,
@@ -444,7 +441,8 @@ fn render_low_confidence_species(low: &[(String, String, i64, f64)]) -> String {
         } else {
             r#"<span class="badge badge-warn">Raise threshold</span>"#
         };
-        let bar_pct = pct as u32;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let bar_pct = pct.clamp(0.0, 100.0) as u32;
         write!(
             html,
             r#"<tr>

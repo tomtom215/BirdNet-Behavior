@@ -184,9 +184,9 @@ async fn toggle_rule_handler(
 // HTML rendering
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_lines)]
 fn render_page(_rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
-    format!(
-        r##"<!DOCTYPE html>
+    r##"<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -194,41 +194,41 @@ fn render_page(_rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
     <title>Alert Rules — BirdNet-Behavior Admin</title>
     <script src="/static/htmx.min.js"></script>
     <style>
-      body {{ background:#0f172a; color:#e2e8f0; font-family:system-ui,sans-serif; margin:0; }}
-      .container {{ max-width:960px; margin:0 auto; padding:2rem 1rem; }}
-      nav {{ margin-bottom:2rem; }}
-      nav a {{ color:#94a3b8; text-decoration:none; margin-right:1.5rem; font-size:.9rem; }}
-      nav a:hover {{ color:#38bdf8; }}
-      h1 {{ font-size:1.5rem; font-weight:700; color:#f8fafc; margin-bottom:.25rem; }}
-      .subtitle {{ color:#64748b; font-size:.875rem; margin-bottom:2rem; }}
-      .card {{ background:#1e293b; border:1px solid #334155; border-radius:.75rem; padding:1.5rem; margin-bottom:1.5rem; }}
-      .card h2 {{ font-size:1.1rem; color:#38bdf8; margin:0 0 1rem; }}
-      label {{ display:block; font-size:.8rem; color:#94a3b8; margin-bottom:.25rem; margin-top:.75rem; }}
-      label:first-of-type {{ margin-top:0; }}
-      input,select,textarea {{ width:100%; background:#0f172a; border:1px solid #334155; border-radius:.375rem;
-                               color:#e2e8f0; padding:.5rem .75rem; font-size:.875rem; box-sizing:border-box; }}
-      input:focus,select:focus,textarea:focus {{ outline:none; border-color:#38bdf8; }}
-      .form-grid {{ display:grid; grid-template-columns:1fr 1fr; gap:1rem; }}
-      .form-grid-3 {{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:1rem; }}
-      .btn {{ padding:.5rem 1.25rem; border-radius:.375rem; border:none; cursor:pointer; font-weight:600; font-size:.875rem; }}
-      .btn-primary {{ background:#0ea5e9; color:#fff; }}
-      .btn-primary:hover {{ background:#0284c7; }}
-      .btn-danger {{ background:#dc2626; color:#fff; }}
-      .btn-danger:hover {{ background:#b91c1c; }}
-      .btn-sm {{ padding:.25rem .75rem; font-size:.8rem; }}
-      table {{ width:100%; border-collapse:collapse; font-size:.875rem; }}
-      th {{ text-align:left; color:#64748b; font-weight:600; font-size:.75rem; text-transform:uppercase;
-             padding:.5rem .75rem; border-bottom:1px solid #334155; }}
-      td {{ padding:.6rem .75rem; border-bottom:1px solid #1e293b; vertical-align:middle; }}
-      tr:hover td {{ background:#1e293b55; }}
-      .badge {{ display:inline-block; padding:.15rem .5rem; border-radius:.25rem; font-size:.75rem; font-weight:600; }}
-      .badge-green {{ background:#14532d; color:#4ade80; }}
-      .badge-gray  {{ background:#1e293b; color:#64748b; border:1px solid #334155; }}
-      .badge-blue  {{ background:#1e3a5f; color:#60a5fa; }}
-      .badge-red   {{ background:#450a0a; color:#f87171; }}
-      .badge-yellow{{ background:#422006; color:#fbbf24; }}
-      #webhook-fields {{ display:none; }}
-      .hint {{ color:#64748b; font-size:.75rem; margin-top:.25rem; }}
+      body { background:#0f172a; color:#e2e8f0; font-family:system-ui,sans-serif; margin:0; }
+      .container { max-width:960px; margin:0 auto; padding:2rem 1rem; }
+      nav { margin-bottom:2rem; }
+      nav a { color:#94a3b8; text-decoration:none; margin-right:1.5rem; font-size:.9rem; }
+      nav a:hover { color:#38bdf8; }
+      h1 { font-size:1.5rem; font-weight:700; color:#f8fafc; margin-bottom:.25rem; }
+      .subtitle { color:#64748b; font-size:.875rem; margin-bottom:2rem; }
+      .card { background:#1e293b; border:1px solid #334155; border-radius:.75rem; padding:1.5rem; margin-bottom:1.5rem; }
+      .card h2 { font-size:1.1rem; color:#38bdf8; margin:0 0 1rem; }
+      label { display:block; font-size:.8rem; color:#94a3b8; margin-bottom:.25rem; margin-top:.75rem; }
+      label:first-of-type { margin-top:0; }
+      input,select,textarea { width:100%; background:#0f172a; border:1px solid #334155; border-radius:.375rem;
+                               color:#e2e8f0; padding:.5rem .75rem; font-size:.875rem; box-sizing:border-box; }
+      input:focus,select:focus,textarea:focus { outline:none; border-color:#38bdf8; }
+      .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
+      .form-grid-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:1rem; }
+      .btn { padding:.5rem 1.25rem; border-radius:.375rem; border:none; cursor:pointer; font-weight:600; font-size:.875rem; }
+      .btn-primary { background:#0ea5e9; color:#fff; }
+      .btn-primary:hover { background:#0284c7; }
+      .btn-danger { background:#dc2626; color:#fff; }
+      .btn-danger:hover { background:#b91c1c; }
+      .btn-sm { padding:.25rem .75rem; font-size:.8rem; }
+      table { width:100%; border-collapse:collapse; font-size:.875rem; }
+      th { text-align:left; color:#64748b; font-weight:600; font-size:.75rem; text-transform:uppercase;
+             padding:.5rem .75rem; border-bottom:1px solid #334155; }
+      td { padding:.6rem .75rem; border-bottom:1px solid #1e293b; vertical-align:middle; }
+      tr:hover td { background:#1e293b55; }
+      .badge { display:inline-block; padding:.15rem .5rem; border-radius:.25rem; font-size:.75rem; font-weight:600; }
+      .badge-green { background:#14532d; color:#4ade80; }
+      .badge-gray  { background:#1e293b; color:#64748b; border:1px solid #334155; }
+      .badge-blue  { background:#1e3a5f; color:#60a5fa; }
+      .badge-red   { background:#450a0a; color:#f87171; }
+      .badge-yellow{ background:#422006; color:#fbbf24; }
+      #webhook-fields { display:none; }
+      .hint { color:#64748b; font-size:.75rem; margin-top:.25rem; }
     </style>
 </head>
 <body>
@@ -322,7 +322,7 @@ fn render_page(_rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
             <label for="action_webhook_body">Body Template (optional)</label>
             <input id="action_webhook_body" name="action_webhook_body" type="text"
                    placeholder='&#123;"bird":"&#123;&#123;species&#125;&#125;"&#125;'>
-            <div class="hint">Placeholders: {{species}}, {{sci_name}}, {{confidence}}, {{date}}, {{time}}</div>
+            <div class="hint">Placeholders: {species}, {sci_name}, {confidence}, {date}, {time}</div>
           </div>
         </div>
       </div>
@@ -347,7 +347,7 @@ fn render_page(_rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
 </div>
 </body>
 </html>"##
-    )
+    .to_owned()
 }
 
 fn render_rules_table(rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
@@ -360,7 +360,7 @@ fn render_rules_table(rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
 
     let mut html = String::with_capacity(2048);
     html.push_str(
-        r#"<table>
+        r"<table>
 <thead>
   <tr>
     <th>Name</th>
@@ -372,7 +372,7 @@ fn render_rules_table(rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
     <th>Actions</th>
   </tr>
 </thead>
-<tbody>"#,
+<tbody>",
     );
 
     for rule in rules {
@@ -382,11 +382,10 @@ fn render_rules_table(rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
             r#"<span class="badge badge-gray">Disabled</span>"#
         };
 
-        let species_display = rule
-            .species_pattern
-            .as_deref()
-            .map(escape_html)
-            .unwrap_or_else(|| "<em style='color:#64748b'>any</em>".to_string());
+        let species_display = rule.species_pattern.as_deref().map_or_else(
+            || "<em style='color:#64748b'>any</em>".to_string(),
+            escape_html,
+        );
 
         let conf_display = format!(
             "{:.0}%–{:.0}%",
