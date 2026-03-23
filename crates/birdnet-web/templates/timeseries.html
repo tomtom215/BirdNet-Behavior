@@ -86,6 +86,178 @@
     </div>
 </div>
 
+<!-- Row 4: Polar Activity Clock + Species Accumulation -->
+<div class="grid-2" style="margin-bottom: 1rem;">
+    <div class="card">
+        <h2>Polar Activity Clock
+            <span style="font-size:0.75rem;color:var(--accent);margin-left:0.5rem;">90-day hourly average</span>
+        </h2>
+        <p style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 0.75rem;">
+            Radial chart showing bird activity intensity by hour of day. Each spoke = 1 hour (0–23).
+        </p>
+        <div id="polar-clock-container" style="display:flex;justify-content:center;">
+            <svg id="polar-clock" width="320" height="320" viewBox="0 0 320 320"
+                 aria-label="Polar activity clock" role="img">
+                <text x="160" y="170" text-anchor="middle" fill="var(--text-muted)"
+                      font-size="12">Loading…</text>
+            </svg>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Species Accumulation
+            <span style="font-size:0.75rem;color:var(--accent);margin-left:0.5rem;">cumulative discovery</span>
+        </h2>
+        <p style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 0.75rem;">
+            Cumulative new species discovered over time — species accumulation curve.
+        </p>
+        <div hx-get="/pages/ts-accumulation"
+             hx-trigger="load"
+             hx-swap="innerHTML">
+            <span class="htmx-indicator">Loading accumulation…</span>
+        </div>
+    </div>
+</div>
+
+<script>
+(function () {
+    // Polar activity clock — renders hour-of-day heatmap data as a radial SVG.
+    // Fetches from /api/v2/timeseries/heatmap and renders 24 spokes.
+    var SVG_NS = 'http://www.w3.org/2000/svg';
+    var CX = 160, CY = 160, R_MAX = 130, R_MIN = 28;
+
+    function polarToXY(angleDeg, r) {
+        var rad = (angleDeg - 90) * Math.PI / 180;
+        return [CX + r * Math.cos(rad), CY + r * Math.sin(rad)];
+    }
+
+    function hexToRgb(hex) {
+        var n = parseInt(hex.replace('#', ''), 16);
+        return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    }
+
+    function lerpColor(a, b, t) {
+        return 'rgb(' +
+            Math.round(a[0] + (b[0] - a[0]) * t) + ',' +
+            Math.round(a[1] + (b[1] - a[1]) * t) + ',' +
+            Math.round(a[2] + (b[2] - a[2]) * t) + ')';
+    }
+
+    function renderPolarClock(hourData) {
+        // hourData: array of {hour: 0..23, avg_detections: float}
+        var svg = document.getElementById('polar-clock');
+        while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+        var maxVal = hourData.reduce(function (m, d) { return Math.max(m, d.avg_detections); }, 0.001);
+        var colorLow = hexToRgb('0ea5e9');   // accent-dim blue
+        var colorHigh = hexToRgb('22c55e');  // success green
+
+        var HOURS = 24;
+        var sliceAngle = 360 / HOURS;
+
+        // Draw concentric reference rings
+        [0.25, 0.5, 0.75, 1.0].forEach(function (frac) {
+            var r = R_MIN + (R_MAX - R_MIN) * frac;
+            var circle = document.createElementNS(SVG_NS, 'circle');
+            circle.setAttribute('cx', CX);
+            circle.setAttribute('cy', CY);
+            circle.setAttribute('r', r);
+            circle.setAttribute('fill', 'none');
+            circle.setAttribute('stroke', 'var(--border)');
+            circle.setAttribute('stroke-width', '0.5');
+            svg.appendChild(circle);
+        });
+
+        // Draw each hour wedge
+        hourData.forEach(function (d) {
+            var frac = d.avg_detections / maxVal;
+            var r = R_MIN + (R_MAX - R_MIN) * frac;
+            var startAngle = d.hour * sliceAngle - sliceAngle / 2;
+            var endAngle = startAngle + sliceAngle;
+
+            var p1 = polarToXY(startAngle, R_MIN);
+            var p2 = polarToXY(startAngle, r);
+            var p3 = polarToXY(endAngle, r);
+            var p4 = polarToXY(endAngle, R_MIN);
+
+            var largeArc = sliceAngle > 180 ? 1 : 0;
+            var d_attr = [
+                'M', p1[0], p1[1],
+                'L', p2[0], p2[1],
+                'A', r, r, 0, largeArc, 1, p3[0], p3[1],
+                'L', p4[0], p4[1],
+                'A', R_MIN, R_MIN, 0, largeArc, 0, p1[0], p1[1],
+                'Z'
+            ].join(' ');
+
+            var path = document.createElementNS(SVG_NS, 'path');
+            path.setAttribute('d', d_attr);
+            path.setAttribute('fill', lerpColor(colorLow, colorHigh, frac));
+            path.setAttribute('opacity', frac < 0.05 ? '0.2' : '0.85');
+            path.setAttribute('stroke', 'var(--bg)');
+            path.setAttribute('stroke-width', '1');
+            svg.appendChild(path);
+
+            // Hour labels at N, 3, 6, 9, 12, 15, 18, 21
+            if (d.hour % 3 === 0) {
+                var labelPt = polarToXY(d.hour * sliceAngle, R_MAX + 16);
+                var text = document.createElementNS(SVG_NS, 'text');
+                text.setAttribute('x', labelPt[0]);
+                text.setAttribute('y', labelPt[1]);
+                text.setAttribute('text-anchor', 'middle');
+                text.setAttribute('dominant-baseline', 'middle');
+                text.setAttribute('fill', 'var(--text-muted)');
+                text.setAttribute('font-size', '10');
+                text.textContent = d.hour + 'h';
+                svg.appendChild(text);
+            }
+        });
+
+        // Centre label
+        var centre = document.createElementNS(SVG_NS, 'text');
+        centre.setAttribute('x', CX);
+        centre.setAttribute('y', CY + 4);
+        centre.setAttribute('text-anchor', 'middle');
+        centre.setAttribute('fill', 'var(--text-muted)');
+        centre.setAttribute('font-size', '9');
+        centre.textContent = '90d avg';
+        svg.appendChild(centre);
+    }
+
+    // Fetch heatmap data and render
+    fetch('/api/v2/timeseries/heatmap?days=90')
+        .then(function (r) { return r.json(); })
+        .then(function (json) {
+            // Normalise: API returns {data: [{hour, avg_detections}]} or similar
+            var rows = json.data || json.rows || json;
+            if (!Array.isArray(rows) || rows.length === 0) {
+                // Synthesise empty data so the clock still renders
+                rows = Array.from({length: 24}, function (_, i) {
+                    return {hour: i, avg_detections: 0};
+                });
+            }
+            // Fill missing hours with 0
+            var byHour = {};
+            rows.forEach(function (r) { byHour[r.hour] = r; });
+            var full = Array.from({length: 24}, function (_, i) {
+                return byHour[i] || {hour: i, avg_detections: 0};
+            });
+            renderPolarClock(full);
+        })
+        .catch(function () {
+            var svg = document.getElementById('polar-clock');
+            var t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            t.setAttribute('x', '160'); t.setAttribute('y', '170');
+            t.setAttribute('text-anchor', 'middle');
+            t.setAttribute('fill', 'var(--text-muted)');
+            t.setAttribute('font-size', '12');
+            t.textContent = 'No data';
+            while (svg.firstChild) svg.removeChild(svg.firstChild);
+            svg.appendChild(t);
+        });
+})();
+</script>
+
 <!-- API reference card -->
 <div class="card">
     <h2>API Endpoints</h2>

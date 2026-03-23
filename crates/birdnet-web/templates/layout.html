@@ -4,6 +4,20 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{title}} - BirdNet-Behavior</title>
+    <!--
+      Noto Sans: covers Latin, CJK, Arabic, Devanagari, Hebrew, Cyrillic, Greek,
+      Thai, and 100+ other scripts — ensures correct rendering of all 36 BirdNET
+      language label packs. Loaded with display=swap so text is visible immediately.
+    -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;700&family=Noto+Sans+JP:wght@400;700&family=Noto+Sans+KR:wght@400;700&family=Noto+Sans+Devanagari:wght@400;700&display=swap"
+          media="print" onload="this.media='all'">
+    <noscript>
+        <link rel="stylesheet"
+              href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&display=swap">
+    </noscript>
     <script src="/static/htmx.min.js"></script>
     <style>
         /* ------------------------------------------------------------------ */
@@ -52,7 +66,7 @@
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            font-family: 'Noto Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
             background: var(--bg);
             color: var(--text);
             line-height: 1.6;
@@ -189,10 +203,44 @@
             grid-template-columns: 2fr 1fr;
             gap: 1rem;
         }
+
+        /* ------------------------------------------------------------------ */
+        /* Responsive / Mobile                                                 */
+        /* ------------------------------------------------------------------ */
+
+        /* Tablet: collapse 2-column grids, tighten nav */
+        @media (max-width: 900px) {
+            main { padding: 1rem; }
+        }
+
         @media (max-width: 768px) {
             .grid-2 { grid-template-columns: 1fr; }
             nav .links { gap: 0.25rem; }
             nav .links a { padding: 0.25rem 0.5rem; font-size: 0.8rem; }
+            .stats-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+            .stat-card .value { font-size: 1.5rem; }
+        }
+
+        /* Phone: single-column everything, collapsible nav overflow */
+        @media (max-width: 520px) {
+            nav { padding: 0.5rem 0.75rem; gap: 0.5rem; }
+            nav .brand { font-size: 1rem; }
+            nav .links a { padding: 0.2rem 0.4rem; font-size: 0.75rem; }
+            nav .nav-right { gap: 0.4rem; }
+            nav .status { display: none; } /* hide status badge on tiny screens */
+            main { padding: 0.75rem; }
+            .card { padding: 0.9rem; }
+            h1 { font-size: 1.25rem !important; }
+            table { font-size: 0.8rem; }
+            th, td { padding: 0.35rem 0.5rem; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 0.5rem; }
+            .stat-card { padding: 0.75rem; }
+            .stat-card .value { font-size: 1.25rem; }
+        }
+
+        /* Prevent horizontal scroll on narrow screens */
+        @media (max-width: 600px) {
+            table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
         }
 
         /* Tables */

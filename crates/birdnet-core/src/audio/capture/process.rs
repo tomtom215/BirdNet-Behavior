@@ -107,6 +107,68 @@ pub fn start_microphone_capture(config: &RecordingConfig) -> Result<CaptureProce
     })
 }
 
+/// Detect whether a PipeWire or PulseAudio server is running.
+///
+/// Returns `true` if `pw-cli` (PipeWire) or `pactl` (PulseAudio / PipeWire-pulse compat)
+/// is available on the system.
+pub fn detect_pipewire_or_pulseaudio() -> bool {
+    is_tool_available("pw-cli") || is_tool_available("pactl")
+}
+
+/// Start an audio capture process for a PipeWire/PulseAudio source via `ffmpeg -f pulse`.
+///
+/// Works with both native PulseAudio and PipeWire (via `pipewire-pulse`).
+///
+/// # Errors
+///
+/// Returns `CaptureError` if `ffmpeg` cannot be started.
+pub fn start_pipewire_capture(config: &RecordingConfig) -> Result<CaptureProcess, CaptureError> {
+    let CaptureSource::PipeWire {
+        ref device,
+        sample_rate,
+        channels,
+    } = config.source
+    else {
+        return Err(CaptureError::Config("expected PipeWire source".into()));
+    };
+
+    // PipeWire's pipewire-pulse layer exposes PulseAudio compatibility.
+    // An empty device string means "use the system default source".
+    let pulse_device = if device.is_empty() { "default" } else { device.as_str() };
+
+    let filename_pattern = recording_filename(None, config.format);
+    let output_path = config.output_dir.join(&filename_pattern);
+
+    let child = Command::new("ffmpeg")
+        .arg("-f")
+        .arg("pulse")
+        .arg("-i")
+        .arg(pulse_device)
+        .arg("-ar")
+        .arg(sample_rate.to_string())
+        .arg("-ac")
+        .arg(channels.to_string())
+        .arg("-f")
+        .arg("segment")
+        .arg("-segment_time")
+        .arg(config.segment_duration_secs.to_string())
+        .arg("-strftime")
+        .arg("1")
+        .arg(output_path.to_string_lossy().as_ref())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    tracing::info!(
+        device = pulse_device,
+        "started PipeWire/PulseAudio capture via ffmpeg pulse"
+    );
+    Ok(CaptureProcess {
+        child,
+        source: config.source.clone(),
+    })
+}
+
 /// Start an audio capture process for an RTSP stream via `ffmpeg`.
 ///
 /// # Errors
@@ -166,6 +228,7 @@ pub fn start_rtsp_capture(config: &RecordingConfig) -> Result<CaptureProcess, Ca
 pub fn spawn_capture(config: &RecordingConfig) -> Result<CaptureProcess, CaptureError> {
     match &config.source {
         CaptureSource::Microphone { .. } => start_microphone_capture(config),
+        CaptureSource::PipeWire { .. } => start_pipewire_capture(config),
         CaptureSource::Rtsp { .. } => start_rtsp_capture(config),
     }
 }
@@ -174,7 +237,7 @@ pub fn spawn_capture(config: &RecordingConfig) -> Result<CaptureProcess, Capture
 pub const fn required_tool(source: &CaptureSource) -> &'static str {
     match source {
         CaptureSource::Microphone { .. } => "arecord",
-        CaptureSource::Rtsp { .. } => "ffmpeg",
+        CaptureSource::PipeWire { .. } | CaptureSource::Rtsp { .. } => "ffmpeg",
     }
 }
 

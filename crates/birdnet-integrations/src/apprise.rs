@@ -66,8 +66,17 @@ pub enum NotifyType {
 pub struct NotifyConfig {
     /// Minimum confidence to trigger a notification (0.0 - 1.0).
     pub min_confidence: f32,
-    /// Species watchlist (empty = notify for all species).
+    /// Species include-list (empty = notify for all species).
+    ///
+    /// When non-empty, only species in this list trigger notifications.
+    /// BirdNET-Pi equivalent: `APPRISE_ONLY_NOTIFY_SPECIES_NAMES`.
     pub species_watchlist: Vec<String>,
+    /// Species exclude-list — species that should never trigger notifications.
+    ///
+    /// Applied after `species_watchlist` (exclusion wins). Supports the
+    /// dual-filter pattern: notify only for watchlist species except excluded ones.
+    /// BirdNET-Pi equivalent: `APPRISE_WATCHLIST_EXCLUDE` (BirdNet-Behavior addition).
+    pub species_notify_exclude: Vec<String>,
     /// Default cooldown period between notifications for the same species.
     pub cooldown: Duration,
     /// Per-species cooldown overrides (scientific name → duration).
@@ -79,6 +88,7 @@ impl Default for NotifyConfig {
         Self {
             min_confidence: 0.8,
             species_watchlist: Vec::new(),
+            species_notify_exclude: Vec::new(),
             cooldown: Duration::from_secs(DEFAULT_COOLDOWN_SECS),
             per_species_cooldown: HashMap::new(),
         }
@@ -173,9 +183,19 @@ impl Client {
             return false;
         }
 
-        // Species watchlist filter (empty = all species)
+        // Species include-list (empty = all species pass)
         if !self.config.species_watchlist.is_empty()
             && !self.config.species_watchlist.iter().any(|s| s == species)
+        {
+            return false;
+        }
+
+        // Species exclude-list — exclusion always wins, even for watchlist members
+        if self
+            .config
+            .species_notify_exclude
+            .iter()
+            .any(|s| s == species)
         {
             return false;
         }
@@ -461,6 +481,39 @@ mod tests {
         .unwrap();
 
         assert!(client.should_notify("Any Species", 0.9));
+    }
+
+    #[test]
+    fn should_notify_exclude_list_blocks_notification() {
+        let mut client = Client::new(
+            "http://localhost:8000",
+            NotifyConfig {
+                min_confidence: 0.5,
+                species_notify_exclude: vec!["European Starling".into()],
+                ..NotifyConfig::default()
+            },
+        )
+        .unwrap();
+
+        assert!(!client.should_notify("European Starling", 0.99)); // excluded
+        assert!(client.should_notify("European Robin", 0.9)); // not excluded
+    }
+
+    #[test]
+    fn should_notify_exclude_wins_over_watchlist() {
+        // Species on both watchlist and exclude list → excluded wins.
+        let mut client = Client::new(
+            "http://localhost:8000",
+            NotifyConfig {
+                min_confidence: 0.5,
+                species_watchlist: vec!["European Starling".into()],
+                species_notify_exclude: vec!["European Starling".into()],
+                ..NotifyConfig::default()
+            },
+        )
+        .unwrap();
+
+        assert!(!client.should_notify("European Starling", 0.99));
     }
 
     #[test]
