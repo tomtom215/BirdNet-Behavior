@@ -240,4 +240,67 @@ pub struct Cli {
     /// BirdNET-Pi equivalent: FREQ_SHIFT + FREQ_SHIFT_AMOUNT config options.
     #[arg(long, default_value = "0", env = "BIRDNET_FREQ_SHIFT_HZ")]
     pub freq_shift_hz: i32,
+
+    // -----------------------------------------------------------------------
+    // MQTT integration
+    // -----------------------------------------------------------------------
+    /// MQTT broker hostname or IP address for IoT detection events.
+    ///
+    /// When set, each bird detection is published as a JSON payload to the
+    /// configured broker.  Compatible with Home Assistant, Node-RED, Mosquitto,
+    /// and any MQTT 3.1.1-compatible broker.
+    /// Example: `--mqtt-host mqtt.local`
+    #[arg(long, env = "BIRDNET_MQTT_HOST")]
+    pub mqtt_host: Option<String>,
+
+    /// MQTT broker port (default: 1883; TLS: 8883).
+    #[arg(long, default_value = "1883", env = "BIRDNET_MQTT_PORT")]
+    pub mqtt_port: u16,
+
+    /// MQTT client identifier published in CONNECT packets.
+    ///
+    /// Must be unique per active connection on the broker.
+    #[arg(
+        long,
+        default_value = "birdnet-behavior",
+        env = "BIRDNET_MQTT_CLIENT_ID"
+    )]
+    pub mqtt_client_id: String,
+
+    /// MQTT broker username for authentication.
+    #[arg(long, env = "BIRDNET_MQTT_USERNAME")]
+    pub mqtt_username: Option<String>,
+
+    /// MQTT broker password for authentication.
+    #[arg(long, env = "BIRDNET_MQTT_PASSWORD")]
+    pub mqtt_password: Option<String>,
+
+    /// MQTT topic prefix for published messages (default: "birdnet").
+    ///
+    /// Detections are published to `{prefix}/detection/{species}`.
+    /// Status heartbeat is published to `{prefix}/status`.
+    #[arg(long, default_value = "birdnet", env = "BIRDNET_MQTT_TOPIC_PREFIX")]
+    pub mqtt_topic_prefix: String,
+
+    /// Set the RETAIN flag on MQTT detection messages.
+    ///
+    /// When set, the broker stores the last detection per topic and delivers
+    /// it immediately to new subscribers.  Useful for Home Assistant sensors.
+    #[arg(long, env = "BIRDNET_MQTT_RETAIN")]
+    pub mqtt_retain: bool,
+
+    /// Enable audio quality pre-filtering before ML inference.
+    ///
+    /// When enabled, audio chunks are assessed for SNR, spectral flatness,
+    /// and rain/wind interference before being passed to the ML model.
+    /// Chunks below the quality threshold are discarded, reducing false
+    /// positives in noisy environments at the cost of some sensitivity.
+    #[arg(long, env = "BIRDNET_QUALITY_FILTER")]
+    pub quality_filter: bool,
+
+    /// Minimum SNR (dB) for audio quality pre-filtering (default: 3.0).
+    ///
+    /// Only used when --quality-filter is set.
+    #[arg(long, default_value = "3.0", env = "BIRDNET_QUALITY_MIN_SNR")]
+    pub quality_min_snr_db: f32,
 }

@@ -447,6 +447,15 @@ mod tests {
             apprise_config: None,
             weekly_report_schedule: "monday".to_string(),
             freq_shift_hz: 0,
+            mqtt_host: None,
+            mqtt_port: 1883,
+            mqtt_client_id: "birdnet-behavior".to_string(),
+            mqtt_username: None,
+            mqtt_password: None,
+            mqtt_topic_prefix: "birdnet".to_string(),
+            mqtt_retain: false,
+            quality_filter: false,
+            quality_min_snr_db: 3.0,
         }
     }
 }

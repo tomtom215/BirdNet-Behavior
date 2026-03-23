@@ -125,6 +125,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let birdweather_client = integrations::create_birdweather_client(&cli, config.as_ref());
     let email_notifier = integrations::create_email_notifier(&state);
     let heartbeat_client = integrations::create_heartbeat_client(&cli, config.as_ref());
+    let mqtt_client = integrations::create_mqtt_client(&cli, config.as_ref());
     let notification_filter = integrations::create_notification_filter(&cli);
     let notification_template = integrations::create_notification_template(&cli, config.as_ref());
 
@@ -154,6 +155,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             birdweather_client,
             email_notifier,
             heartbeat_client,
+            mqtt_client,
             notification_filter,
             notification_template,
         )

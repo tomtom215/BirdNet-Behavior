@@ -95,6 +95,28 @@ BirdNet-Behavior is a ground-up Rust rewrite of [BirdNET-Pi](https://github.com/
 - Post-migration verification (per-species count comparison)
 - Server-path mode for on-disk migrations
 
+**IoT / Home Automation:**
+- MQTT 3.1.1 publisher — pure Rust, no external library, detections published as JSON to `{prefix}/detection/{species}`
+- Compatible with Home Assistant, Mosquitto, Node-RED, any MQTT 3.1.1 broker
+- Optional RETAIN flag for Home Assistant sensor persistence
+- Full CLI/env var configuration: `--mqtt-host`, `--mqtt-port`, `--mqtt-username`, `--mqtt-password`, `--mqtt-topic-prefix`, `--mqtt-retain`
+
+**Audio Quality Pre-Filtering:**
+- Four-stage pipeline: SNR estimation, spectral flatness (Wiener entropy), adaptive noise-floor tracking, rain/wind detection
+- Purely time-domain rain/wind detection via first-order IIR filters — O(N), suitable for Raspberry Pi
+- Optional pre-ML-inference gate: `--quality-filter`, `--quality-min-snr-db`
+
+**Migration Phenology Analytics:**
+- Weekly relative abundance index normalized to peak week
+- Migration window timing via `percentile_cont` (arrival/departure date ranges)
+- Inter-annual trend analysis with year-over-year detection change (DuckDB)
+- Species richness and effort-corrected abundance queries
+
+**Performance Benchmarks:**
+- Criterion benchmark suite for audio pipeline (mel spectrogram, SNR, rain detection, noise floor)
+- Criterion benchmark suite for database queries (insert, batch transaction, aggregation, search)
+- HTML benchmark reports for regression tracking
+
 **Observability:**
 - Prometheus metrics endpoint (`/api/v2/metrics`)
 - Health check endpoint (`/api/v2/health`)
@@ -119,12 +141,13 @@ BirdNet-Behavior is a ground-up Rust rewrite of [BirdNET-Pi](https://github.com/
 ```
 birdnet-behavior (single binary)
 ├── Core Engine  (birdnet-core)
-│   ├── Audio Capture  — mic (arecord) or RTSP (ffmpeg) subprocess management
-│   ├── Audio Decode   — symphonia (WAV/FLAC/MP3/OGG, pure Rust)
-│   ├── Resample       — rubato (high-quality polynomial resampler)
+│   ├── Audio Capture   — mic (arecord) or RTSP (ffmpeg) subprocess management
+│   ├── Audio Decode    — symphonia (WAV/FLAC/MP3/OGG, pure Rust)
+│   ├── Resample        — rubato (high-quality polynomial resampler)
 │   ├── Mel Spectrogram — pure Rust FFT + 128 mel bands (librosa-compatible)
-│   ├── ML Inference   — tract-onnx ONNX runtime (pure Rust, no C++)
-│   └── Detection Daemon — file watcher → inference → event channel
+│   ├── Audio Quality   — SNR, spectral flatness, noise-floor tracker, rain/wind IIR
+│   ├── ML Inference    — tract-onnx ONNX runtime (pure Rust, no C++)
+│   └── Detection Daemon — file watcher → quality gate → inference → event channel
 │
 ├── Data Layer   (birdnet-db)
 │   ├── SQLite OLTP    — WAL mode, CRUD, aggregation queries, migrations
@@ -146,13 +169,15 @@ birdnet-behavior (single binary)
 │   ├── Apprise        — push notifications (80+ channels), cooldown tracking
 │   ├── BirdWeather    — station detection uploads with retry backoff
 │   ├── Species Images — Wikipedia/Wikimedia image caching
-│   └── Auto-Update   — GitHub Releases check + atomic binary replace
+│   ├── Auto-Update   — GitHub Releases check + atomic binary replace
+│   └── MQTT           — pure-Rust MQTT 3.1.1 (Home Assistant, Node-RED, Mosquitto)
 │
 ├── Behavioral   (birdnet-behavioral, feature: analytics)
 │   ├── Sessionize     — gap-based activity window detection
 │   ├── Retention      — species return interval analysis
 │   ├── Funnels        — dawn chorus sequence validation
-│   └── Predictions    — next-species likelihood
+│   ├── Predictions    — next-species likelihood
+│   └── Phenology      — migration timing, weekly abundance index, inter-annual trends
 │
 ├── Migration    (birdnet-migrate)
 │   ├── Validators     — schema detection, data quality checks
@@ -328,6 +353,11 @@ Priority order: CLI flags > environment variables > settings DB > config file > 
 | `email_to` | Email alert recipient | — |
 | `latitude` / `longitude` | Station location (for BirdWeather) | — |
 | `recording_days` | Days to keep audio files | `30` |
+| `mqtt_host` | MQTT broker host (enables MQTT publishing) | — |
+| `mqtt_port` | MQTT broker port | `1883` |
+| `mqtt_topic_prefix` | MQTT topic prefix for detection events | `birdnet` |
+| `quality_filter` | Enable audio quality pre-filtering | `false` |
+| `quality_min_snr_db` | Minimum SNR threshold for quality filter | `3.0` |
 
 ---
 

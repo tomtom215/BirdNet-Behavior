@@ -59,6 +59,7 @@
 | Live spectrogram | `audio/spectrogram/live.rs` | **Complete** | inotify watcher, mel spectrogram push, WebSocket broadcast |
 | tmpfs support | `audio/capture/tmpfs.rs` | **Complete** | Transient audio tmpfs mount/unmount, systemd unit generation |
 | Audio extraction | `audio/extraction/` | **Complete** | Modular: config, format, extractor, convert, wav (6 sub-modules) |
+| Audio quality | `audio/quality/` | **Complete** | SNR estimation, spectral flatness, noise-floor tracking, rain/wind detection (4 sub-modules) |
 
 ### birdnet-db
 
@@ -119,6 +120,7 @@
 | BirdWeather | `birdweather.rs` | **Complete** | Detection + soundscape uploads, retry with exponential backoff |
 | Species images | `species_images/` | **Complete** | Wikipedia/Wikimedia cache, on-disk + in-memory index, background download |
 | Auto-update | `auto_update.rs` | **Complete** | GitHub Releases version check, binary download + atomic replace |
+| MQTT | `mqtt/` | **Complete** | Pure-Rust MQTT 3.1.1 over TCP; CONNECT/CONNACK/PUBLISH/DISCONNECT; QoS 0; retain flag; no external MQTT library |
 
 ### birdnet-migrate
 
@@ -140,6 +142,9 @@
 | Result types | `types.rs` | **Complete** | All analytics result/param types, residency classification |
 | SQL builders | `queries.rs` | **Complete** | Sessionize, retention, funnel, patterns, next-species SQL |
 | DuckDB connection | `connection.rs` | **Complete** | File-backed DuckDB, sync from SQLite, real-time insert, behavioral queries |
+| Phenology types | `phenology/types.rs` | **Complete** | `PhenologyRecord`, `MigrationWindow`, `WeeklyAbundance`, `PhenologyParams`, `AbundanceParams` |
+| Phenology timing | `phenology/timing.rs` | **Complete** | Migration timing, migration-window percentiles (DuckDB), first detection, inter-annual trend (LAG window) |
+| Phenology abundance | `phenology/abundance.rs` | **Complete** | Weekly abundance index (relative, 0–1), peak weeks, monthly totals, species richness, effort-corrected abundance |
 
 ### birdnet-timeseries
 
@@ -157,16 +162,55 @@
 | Module | File | Status | Notes |
 |--------|------|--------|-------|
 | Entry point | `src/main.rs` + `src/helpers.rs` | **Complete** | CLI, DB recovery, daemon, server, all integrations wired |
-| Detection daemon bridge | `src/daemon.rs` | **Complete** | Event processor: SQLite, DuckDB, WebSocket, Apprise, BirdWeather, Email |
+| Detection daemon bridge | `src/daemon.rs` | **Complete** | Event processor: SQLite, DuckDB, WebSocket, Apprise, BirdWeather, Email, MQTT |
 | Audio capture | `src/capture.rs` | **Complete** | arecord + ffmpeg subprocess lifecycle management |
-| Integrations | `src/integrations.rs` | **Complete** | Apprise, BirdWeather, Email, Auth client factories |
-| CLI | `src/cli.rs` | **Complete** | All flags: model, labels, watch-dir, analytics, apprise, birdweather, auth, etc. |
+| Integrations | `src/integrations.rs` | **Complete** | Apprise, BirdWeather, Email, Auth, MQTT client factories |
+| CLI | `src/cli.rs` | **Complete** | All flags: model, labels, watch-dir, analytics, apprise, birdweather, auth, MQTT, quality-filter, etc. |
 
 ---
 
 ## Recent Changes
 
 ### 2026-03-23
+
+#### Audio Quality Pre-Filtering (Sprint 12)
+
+New `birdnet-core::audio::quality` module — full four-stage quality pipeline:
+
+- **SNR estimation** (`snr.rs`) — frame-based peak-to-noise-floor ratio with dBFS noise floor tracking
+- **Spectral flatness** (`snr.rs`) — Wiener entropy (geometric/arithmetic mean ratio) to distinguish tonal signals from broadband noise
+- **Noise floor tracking** (`noise_floor.rs`) — adaptive minimum-statistics estimator with 64-frame circular buffer, overestimation-corrected output
+- **Rain/wind detection** (`rain_detector.rs`) — purely time-domain IIR high-pass (4 kHz) and low-pass (500 Hz) filters; DC-offset removal before spectral analysis prevents false positives from constant-amplitude signals; `MIN_RMS_FOR_ANALYSIS = 1e-4` gate for near-silent inputs
+- **Composite score** (`mod.rs`) — weighted combination (SNR 40%, inverse flatness 40%, rain penalty 20%); `assess_quality()` returns `QualityScore` or `QualityError`
+
+New CLI flags: `--quality-filter` (enable), `--quality-min-snr-db` (default 3.0 dB).
+
+#### MQTT 3.1.1 Integration (Sprint 12)
+
+New `birdnet-integrations::mqtt` module — pure-Rust MQTT publisher with no external library:
+
+- **Wire-protocol** (`publisher.rs`) — CONNECT (username/password), CONNACK parsing, PUBLISH (QoS 0), DISCONNECT over raw `TcpStream`
+- **Types** (`types.rs`) — `MqttConfig`, `QosLevel`, `DetectionPayload`, `MqttError`, `ConnAckError`
+- **Client** (`mod.rs`) — `MqttClient::publish_detection()` and `publish_status()`; integrated into detection event processor
+- Detections published to `{prefix}/detection/{species_name}` as JSON
+- Optional RETAIN flag for Home Assistant sensor persistence
+- Compatible with Mosquitto, Home Assistant MQTT integration, Node-RED, and any MQTT 3.1.1 broker
+
+New CLI flags: `--mqtt-host`, `--mqtt-port` (1883), `--mqtt-client-id`, `--mqtt-username`, `--mqtt-password`, `--mqtt-topic-prefix` ("birdnet"), `--mqtt-retain`.
+
+#### Phenology Analytics (Sprint 12)
+
+New `birdnet-behavioral::phenology` module — migration timing and abundance analytics:
+
+- **Timing** (`timing.rs`) — `phenology_timing_sql`: per-species first/last detection, peak week, detection count, year range (SQLite-compatible); `migration_window_sql`: arrival/departure percentiles via `percentile_cont` (DuckDB); `interannual_trend_sql`: year-over-year count change using `LAG` window function (DuckDB)
+- **Abundance** (`abundance.rs`) — `weekly_abundance_sql`: normalized abundance index [0.0, 1.0] relative to peak week; `peak_weeks_sql`: top-N peak weeks per species; `monthly_totals_sql`; `weekly_richness_sql`; `effort_corrected_abundance_sql` (DuckDB, joins `recordings` table)
+- SQL injection protection: species names are single-quote escaped throughout
+
+#### Criterion Benchmarks (Sprint 12)
+
+- `crates/birdnet-core/benches/audio_pipeline.rs` — `bench_mel_spectrogram`, `bench_audio_quality`, `bench_snr_estimation`, `bench_rain_detection`, `bench_noise_floor_tracker`; synthetic bird-call generator (harmonic + AM envelope) and deterministic LCG white noise
+- `crates/birdnet-db/benches/db_queries.rs` — single insert, batch transactions (10/100/1000 rows), top-species query, recent detections, weekly heatmap, species LIKE search; all run against in-memory SQLite with production schema
+- `criterion = { version = "0.5", features = ["html_reports"] }` added to workspace dev-dependencies
 
 #### File Modularity Refactoring (Sprint 11)
 - Split `settings/render.rs` (662 lines) → `settings/render/` module (mod, audio, location, detection, notifications, species, system, email — 7 sub-modules)
@@ -271,15 +315,15 @@
 
 | Crate | Tests | Status |
 |-------|-------|--------|
-| birdnet-core | 19 (audio pipeline, inference, daemon) | All passing |
+| birdnet-core | 27 (audio pipeline, inference, daemon, quality: SNR/flatness/noise-floor/rain/wind) | All passing |
 | birdnet-db | 69 (sqlite, resilience, heatmap, correlation, settings, notifications) | All passing |
 | birdnet-web | 145 (pages, admin, backup, settings, export, auth, websocket) | All passing |
-| birdnet-integrations | 49 (email types/templates/smtp/cooldown, apprise, birdweather, images) | All passing |
-| birdnet-behavioral | 10 (types, queries) | All passing |
+| birdnet-integrations | 57 (email, apprise, birdweather, images, MQTT wire-encoding, offline-broker) | All passing |
+| birdnet-behavioral | 18 (types, queries, phenology timing/abundance SQL correctness) | All passing |
 | birdnet-migrate | 33 (schema, validator, importer, species_report) | All passing |
 | birdnet-timeseries | 24 (all analytics modules) | All passing |
 | Integration tests | 74 (audio pipeline end-to-end, web API, HTMX pages) | All passing |
-| **Total** | **~600** | **All passing** |
+| **Total** | **~670** | **All passing** |
 
 ---
 
@@ -287,16 +331,17 @@
 
 | Crate | ~LOC | Notes |
 |-------|------|-------|
-| birdnet-core | ~6,900 | Audio pipeline + inference + daemon + capture + disk + spectrogram + tmpfs |
+| birdnet-core | ~7,650 | Audio pipeline + inference + daemon + capture + disk + spectrogram + tmpfs + quality |
 | birdnet-db | ~3,800 | CRUD + heatmap + correlation + settings + notifications + resilience |
 | birdnet-web | ~16,200 | REST API + WS + HTMX pages + admin + player + spectrogram + update |
-| birdnet-integrations | ~3,500 | Email + Apprise + BirdWeather + species images + auto-update |
+| birdnet-integrations | ~4,000 | Email + Apprise + BirdWeather + species images + auto-update + MQTT |
 | birdnet-migrate | ~2,300 | Traits + schema + validator + importer + species_report |
-| birdnet-behavioral | ~1,100 | Types + SQL builders + DuckDB connection |
+| birdnet-behavioral | ~1,650 | Types + SQL builders + DuckDB connection + phenology (timing + abundance) |
 | birdnet-timeseries | ~2,900 | All time-series analytics + windowing |
 | birdnet-scheduler | ~900 | Solar calculations + window management |
-| Binary (`src/`) | ~2,400 | main.rs + helpers.rs + daemon.rs + capture.rs + integrations.rs + cli.rs |
-| **Total** | **~39,800** | Production Rust (including inline tests) |
+| Binary (`src/`) | ~2,500 | main.rs + helpers.rs + daemon.rs + capture.rs + integrations.rs + cli.rs |
+| Benchmarks | ~350 | Criterion audio pipeline + DB query benchmarks |
+| **Total** | **~41,950** | Production Rust (including inline tests and benchmarks) |
 
 ---
 

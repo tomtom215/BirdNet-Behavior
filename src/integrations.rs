@@ -307,6 +307,67 @@ pub fn create_email_notifier(state: &birdnet_web::state::AppState) -> Option<Ema
     }
 }
 
+/// Type alias for the shared MQTT client handle.
+pub type MqttHandle = Arc<birdnet_integrations::mqtt::MqttClient>;
+
+/// Create an MQTT client from CLI flags and/or config file values.
+///
+/// Returns `None` if no MQTT broker host is configured.
+pub fn create_mqtt_client(
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+) -> Option<MqttHandle> {
+    let host = cli
+        .mqtt_host
+        .clone()
+        .or_else(|| config?.get("MQTT_HOST").map(String::from))?;
+
+    let port = config
+        .and_then(|c| c.get_parsed::<u16>("MQTT_PORT").ok())
+        .unwrap_or(cli.mqtt_port);
+
+    let username = cli
+        .mqtt_username
+        .clone()
+        .or_else(|| config?.get("MQTT_USERNAME").map(String::from));
+
+    let password = cli
+        .mqtt_password
+        .clone()
+        .or_else(|| config?.get("MQTT_PASSWORD").map(String::from));
+
+    let topic_prefix = config
+        .and_then(|c| c.get("MQTT_TOPIC_PREFIX"))
+        .map(String::from)
+        .unwrap_or_else(|| cli.mqtt_topic_prefix.clone());
+
+    let retain = cli.mqtt_retain
+        || config
+            .and_then(|c| c.get_parsed::<bool>("MQTT_RETAIN").ok())
+            .unwrap_or(false);
+
+    let cfg = birdnet_integrations::mqtt::MqttConfig {
+        host: host.clone(),
+        port,
+        client_id: cli.mqtt_client_id.clone(),
+        username,
+        password,
+        topic_prefix,
+        qos: birdnet_integrations::mqtt::QosLevel::AtMostOnce,
+        retain,
+        timeout_ms: 5_000,
+    };
+
+    tracing::info!(
+        host = %host,
+        port,
+        topic_prefix = %cfg.topic_prefix,
+        "MQTT integration enabled"
+    );
+
+    Some(Arc::new(birdnet_integrations::mqtt::MqttClient::new(cfg)))
+}
+
 /// Create an HTTP Basic Auth config from the config file.
 ///
 /// Looks for `CADDY_PWD` (password) and defaults username to "birdnet"
