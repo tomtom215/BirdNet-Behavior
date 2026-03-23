@@ -1,6 +1,7 @@
 //! Location & recording schedule settings section.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 
 use super::get_setting;
 
@@ -12,8 +13,8 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let pre = get_setting(s, "pre_sunrise_offset", "0");
     let post = get_setting(s, "post_sunset_offset", "0");
     let inh_yes = if inhibit == "true" { " selected" } else { "" };
-    let inh_no = if inhibit != "true" { " selected" } else { "" };
-    out.push_str(&format!(r#"
+    let inh_no = if inhibit == "true" { "" } else { " selected" };
+    write!(out, r#"
   <div class="card">
     <div class="section-title">Location &amp; Recording Schedule</div>
     <div class="grid-2">
@@ -48,5 +49,5 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         <input id="post_sunset_offset" name="post_sunset_offset" type="number" value="{post}" min="0" max="120" style="max-width:120px">
       </div>
     </div>
-  </div>"#));
+  </div>"#).unwrap_or_default();
 }

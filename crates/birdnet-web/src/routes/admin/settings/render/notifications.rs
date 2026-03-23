@@ -1,9 +1,11 @@
-//! Apprise + BirdWeather notification settings section.
+//! Apprise + `BirdWeather` notification settings section.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 
 use super::get_setting;
 
+#[allow(clippy::too_many_lines)]
 pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let apprise = get_setting(s, "apprise_url", "");
     let apprise_cfg = get_setting(s, "apprise_config", "");
@@ -27,11 +29,11 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let title_tmpl = get_setting(s, "notify_title_template", "");
     let body_tmpl = get_setting(s, "notify_body_template", "");
     let img = get_setting(s, "notify_image", "true");
-    let img_yes = if img != "false" { " selected" } else { "" };
+    let img_yes = if img == "false" { "" } else { " selected" };
     let img_no = if img == "false" { " selected" } else { "" };
     let weekly = get_setting(s, "weekly_report_schedule", "monday");
     let weekly_opts = render_weekly_options(weekly);
-    out.push_str(&format!(r#"
+    write!(out, r#"
   <div class="card">
     <div class="section-title">Notifications (Apprise)</div>
     <div class="grid-2">
@@ -122,7 +124,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         <p class="hint">Day to send weekly summary via Apprise. "Disabled" to turn off.</p>
       </div>
     </div>
-  </div>"#));
+  </div>"#).unwrap_or_default();
 }
 
 fn render_weekly_options(selected: &str) -> String {
@@ -145,7 +147,7 @@ fn render_weekly_options(selected: &str) -> String {
             .map(|c| c.to_uppercase().to_string())
             .unwrap_or_default()
             + &d[1..];
-        opts.push_str(&format!("<option value=\"{d}\"{sel}>{label}</option>"));
+        write!(opts, "<option value=\"{d}\"{sel}>{label}</option>").unwrap_or_default();
     }
     opts
 }

@@ -32,9 +32,17 @@ pub trait SolarCalculator: Send + Sync {
     fn sunset_minutes(&self) -> Result<u32, SchedulerError>;
 
     /// Civil twilight start (minutes before sunrise).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SchedulerError::PolarCondition`] under polar conditions.
     fn civil_dawn_minutes(&self) -> Result<u32, SchedulerError>;
 
     /// Civil twilight end (minutes after sunset).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SchedulerError::PolarCondition`] under polar conditions.
     fn civil_dusk_minutes(&self) -> Result<u32, SchedulerError>;
 }
 

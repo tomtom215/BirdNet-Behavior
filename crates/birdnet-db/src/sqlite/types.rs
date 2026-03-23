@@ -1,4 +1,4 @@
-//! Row types shared across SQLite query modules.
+//! Row types shared across `SQLite` query modules.
 
 /// A detection record for database insertion.
 #[derive(Debug, Clone)]

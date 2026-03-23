@@ -1,7 +1,7 @@
 //! BirdNET-Pi source support.
 //!
 //! Provides `SchemaDetector`, `Migrator`, and `Validator` implementations
-//! for the BirdNET-Pi `BirdDB.txt` SQLite format **and** the CSV/TSV
+//! for the BirdNET-Pi `BirdDB.txt` `SQLite` format **and** the CSV/TSV
 //! detection log export.
 //!
 //! | Format | Extension(s) | Importer |
@@ -104,7 +104,7 @@ pub fn validate_source(
     if is_csv_file(source_path) {
         let (schema, report) = validate_csv_source(source_path)?;
         let migration_report = MigrationReport {
-            total_rows: schema.row_count() as i64,
+            total_rows: i64::try_from(schema.row_count()).unwrap_or(i64::MAX),
             unique_species: 0,
             date_range: None,
             top_species: vec![],
@@ -134,22 +134,19 @@ fn validate_csv_source(path: &Path) -> Result<(DetectedSchema, ValidationReport)
     let reader = BufReader::new(file);
     let mut lines = reader.lines();
 
-    let header = match lines.next() {
-        Some(Ok(h)) => h,
-        _ => {
-            return Ok((
-                DetectedSchema::BirdNetPiCsv { row_count: 0 },
-                ValidationReport::new(
-                    "BirdNET-Pi CSV",
-                    0,
-                    vec![ValidationCheck::fail(
-                        "readable",
-                        "file is empty or unreadable",
-                        true,
-                    )],
-                ),
-            ));
-        }
+    let Some(Ok(header)) = lines.next() else {
+        return Ok((
+            DetectedSchema::BirdNetPiCsv { row_count: 0 },
+            ValidationReport::new(
+                "BirdNET-Pi CSV",
+                0,
+                vec![ValidationCheck::fail(
+                    "readable",
+                    "file is empty or unreadable",
+                    true,
+                )],
+            ),
+        ));
     };
 
     let delim = if header.contains('\t') { '\t' } else { ',' };
@@ -159,7 +156,7 @@ fn validate_csv_source(path: &Path) -> Result<(DetectedSchema, ValidationReport)
         && fields[3].trim().eq_ignore_ascii_case("com_name");
 
     let row_count = lines
-        .filter(|l| l.as_ref().map_or(false, |s| !s.trim().is_empty()))
+        .filter(|l| l.as_ref().is_ok_and(|s| !s.trim().is_empty()))
         .count() as u64;
 
     let checks = vec![
@@ -186,7 +183,7 @@ fn validate_csv_source(path: &Path) -> Result<(DetectedSchema, ValidationReport)
 
 /// Return `true` if the path extension suggests CSV/TSV.
 ///
-/// We also try to peek at the first bytes to distinguish SQLite (magic `SQLite format 3`)
+/// We also try to peek at the first bytes to distinguish `SQLite` (magic `SQLite format 3`)
 /// from plain text.
 fn is_csv_file(path: &Path) -> bool {
     let ext = path
@@ -194,7 +191,7 @@ fn is_csv_file(path: &Path) -> bool {
         .and_then(|e| e.to_str())
         .map(str::to_lowercase);
 
-    if matches!(ext.as_deref(), Some("csv") | Some("tsv")) {
+    if matches!(ext.as_deref(), Some("csv" | "tsv")) {
         return true;
     }
 

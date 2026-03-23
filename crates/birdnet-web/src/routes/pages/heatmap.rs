@@ -43,7 +43,7 @@ async fn heatmap_page() -> Html<String> {
     Html(HEATMAP_PAGE.to_string())
 }
 
-const HEATMAP_PAGE: &str = r##"<!DOCTYPE html>
+const HEATMAP_PAGE: &str = r#"<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -118,7 +118,7 @@ function loadDays(days, btn) {
 }
 </script>
 </body>
-</html>"##;
+</html>"#;
 
 // ---------------------------------------------------------------------------
 // GET /pages/heatmap-grid — SVG heatmap partial
@@ -178,6 +178,7 @@ async fn hourly_totals_partial(
 
 const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
+#[allow(clippy::too_many_lines)]
 fn render_heatmap_svg(cells: &[HeatmapCell]) -> String {
     if cells.is_empty() {
         return r#"<p style="color:#64748b;text-align:center;padding:2rem;">
@@ -238,8 +239,14 @@ fn render_heatmap_svg(cells: &[HeatmapCell]) -> String {
             day = DAYS[dow],
         );
 
-        for hour in 0..24_usize {
-            let count = grid[dow][hour];
+        for (hour, &count) in grid[dow].iter().enumerate() {
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                clippy::cast_precision_loss,
+                clippy::cast_possible_wrap,
+                clippy::cast_lossless
+            )]
             let intensity = if max_count > 0 {
                 count as f64 / max_count as f64
             } else {
@@ -263,26 +270,29 @@ fn render_heatmap_svg(cells: &[HeatmapCell]) -> String {
 
     // Legend
     let legend_y = label_h + 7 * cell_h + 10;
-    let _ = write!(
+    let _ = writeln!(
         svg,
-        r##"  <text x="{lx}" y="{legend_y}" font-size="9" fill="#64748b">Low</text>
-"##,
-        lx = label_w,
+        r##"  <text x="{label_w}" y="{legend_y}" font-size="9" fill="#64748b">Low</text>"##,
     );
     for i in 0..20_usize {
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss,
+            clippy::cast_possible_wrap,
+            clippy::cast_lossless
+        )]
         let color = heat_color(i as f64 / 19.0);
         let lx = label_w + 30 + i * 12;
-        let _ = write!(
+        let _ = writeln!(
             svg,
-            r#"  <rect x="{lx}" y="{ly}" width="12" height="10" fill="{color}"/>
-"#,
+            r#"  <rect x="{lx}" y="{ly}" width="12" height="10" fill="{color}"/>"#,
             ly = legend_y - 8,
         );
     }
-    let _ = write!(
+    let _ = writeln!(
         svg,
-        r##"  <text x="{lx}" y="{legend_y}" font-size="9" fill="#64748b">High</text>
-"##,
+        r##"  <text x="{lx}" y="{legend_y}" font-size="9" fill="#64748b">High</text>"##,
         lx = label_w + 30 + 20 * 12 + 4,
     );
 
@@ -313,10 +323,10 @@ fn heat_color(t: f64) -> String {
     format!("#{r:02x}{g:02x}{b:02x}")
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn lerp_rgb(a: (u8, u8, u8), b: (u8, u8, u8), t: f64) -> (u8, u8, u8) {
     let lerp = |a: u8, b: u8| -> u8 {
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let v = a as f64 + (b as f64 - a as f64) * t;
+        let v = (f64::from(b) - f64::from(a)).mul_add(t, f64::from(a));
         v.round() as u8
     };
     (lerp(a.0, b.0), lerp(a.1, b.1), lerp(a.2, b.2))
@@ -354,9 +364,14 @@ fn render_hourly_bars(totals: &[birdnet_db::sqlite::HourTotal]) -> String {
         by_hour[h.hour as usize] = h.count;
     }
 
-    for hour in 0..24_usize {
-        let count = by_hour[hour];
-        #[allow(clippy::cast_precision_loss)]
+    for (hour, &count) in by_hour.iter().enumerate() {
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss,
+            clippy::cast_possible_wrap,
+            clippy::cast_lossless
+        )]
         let bar_h = if max > 0 {
             (count as f64 / max as f64 * chart_h as f64).round() as u32
         } else {

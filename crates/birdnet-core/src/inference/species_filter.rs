@@ -83,7 +83,7 @@ impl fmt::Debug for SpeciesFilter {
 
 impl SpeciesFilter {
     /// Create a species filter without a metadata model (no filtering).
-    pub fn new_passthrough(config: SpeciesFilterConfig) -> Self {
+    pub const fn new_passthrough(config: SpeciesFilterConfig) -> Self {
         Self {
             session: None,
             config,

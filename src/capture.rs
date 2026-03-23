@@ -20,7 +20,7 @@ pub struct CaptureHandle {
     /// The underlying capture manager (keeps recording alive until dropped).
     _manager: CaptureManager,
     /// Shared flag to stop the schedule loop.
-    _stop: Arc<AtomicBool>,
+    stop_signal: Arc<AtomicBool>,
 }
 
 /// Parse a schedule string from CLI into a `ScheduleConfig`.
@@ -106,7 +106,7 @@ fn resolve_location(cli: &Cli, config: Option<&birdnet_core::config::Config>) ->
     Location::new(lat, lon).ok()
 }
 
-/// Get the current UTC time as (year, month, day, minutes_since_midnight).
+/// Get the current UTC time as `(year, month, day, minutes_since_midnight)`.
 fn utc_now() -> (u32, u32, u32, u32) {
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -122,11 +122,17 @@ fn utc_now() -> (u32, u32, u32, u32) {
 
     // Convert days since epoch to (year, month, day).
     // Algorithm from http://howardhinnant.github.io/date_algorithms.html
+    #[allow(
+        clippy::cast_possible_wrap,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
     let z = days as i64 + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let doe = (z - era * 146_097) as u32;
     let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let y = (yoe as i64) + era * 400;
+    let y = i64::from(yoe) + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
     let d = doy - (153 * mp + 2) / 5 + 1;
@@ -159,6 +165,7 @@ fn resolve_rtsp_urls(cli: &Cli, config: Option<&birdnet_core::config::Config>) -
 ///
 /// When a recording schedule is configured, a background task periodically
 /// checks whether recording should be active and pauses/resumes accordingly.
+#[allow(clippy::too_many_lines)]
 pub fn start_capture_manager(
     cli: &Cli,
     config: Option<&birdnet_core::config::Config>,
@@ -268,13 +275,13 @@ pub fn start_capture_manager(
         let stop_flag = Arc::new(AtomicBool::new(false));
         handles.push(CaptureHandle {
             _manager: manager,
-            _stop: stop_flag,
+            stop_signal: stop_flag,
         });
     }
 
     // Spawn a single schedule monitor task (only if not all-day).
     if !is_all_day && !handles.is_empty() {
-        let stop = Arc::clone(&handles[0]._stop);
+        let stop = Arc::clone(&handles[0].stop_signal);
         let sched = schedule_config;
         std::thread::spawn(move || {
             schedule_monitor_loop(stop, sched);
@@ -293,6 +300,7 @@ pub fn start_capture_manager(
 /// Checks every 60 seconds whether the recording gate is open or closed
 /// and logs transitions. The `CaptureManager` itself handles the actual
 /// start/stop; this loop provides observability.
+#[allow(clippy::needless_pass_by_value)]
 fn schedule_monitor_loop(stop: Arc<AtomicBool>, config: ScheduleConfig) {
     let mut was_allowed = true;
 
@@ -454,6 +462,7 @@ mod tests {
             mqtt_password: None,
             mqtt_topic_prefix: "birdnet".to_string(),
             mqtt_retain: false,
+            mqtt_ha_discovery: false,
             quality_filter: false,
             quality_min_snr_db: 3.0,
         }

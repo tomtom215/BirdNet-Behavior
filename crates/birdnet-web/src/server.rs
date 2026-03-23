@@ -1,15 +1,17 @@
 //! Axum server setup and lifecycle.
 //!
-//! Configures the axum Router with Tower middleware (CORS, tracing),
-//! mounts API routes, and manages graceful shutdown.
+//! Configures the axum Router with Tower middleware (`CORS`, tracing,
+//! rate limiting), mounts API routes, and manages graceful shutdown.
 
 use axum::Router;
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
+use crate::rate_limit::{RateLimitConfig, RateLimiter};
 use crate::routes;
 use crate::state::AppState;
 
@@ -60,28 +62,42 @@ pub fn build_router(state: AppState) -> Router {
 }
 
 /// Build the axum application router with optional basic authentication.
+///
+/// Applies a per-IP token-bucket rate limiter (30 req/s, burst 60) to
+/// protect the API from overload.  Static assets and WebSocket connections
+/// share the same limit bucket as API calls but are lightweight by nature.
 pub fn build_router_with_auth(
     state: AppState,
     auth_config: Option<crate::auth::AuthConfig>,
 ) -> Router {
+    // Rate limiter: 30 req/s sustained, 60-request burst per IP.
+    let limiter = Arc::new(RateLimiter::new(RateLimitConfig::default()));
+
     let router = Router::new().merge(routes::api_routes()).with_state(state);
 
     let router = if let Some(config) = auth_config {
-        let config = std::sync::Arc::new(config);
+        let config = Arc::new(config);
         router.layer(axum::middleware::from_fn(move |req, next| {
-            let config = std::sync::Arc::clone(&config);
+            let config = Arc::clone(&config);
             async move { crate::auth::basic_auth_middleware(req, next, &config).await }
         }))
     } else {
         router
     };
 
-    router.layer(TraceLayer::new_for_http()).layer(
-        CorsLayer::new()
-            .allow_origin(Any)
-            .allow_methods(Any)
-            .allow_headers(Any),
-    )
+    // Apply rate limiting before auth so the IP is still available.
+    router
+        .layer(axum::middleware::from_fn(move |req, next| {
+            let limiter = Arc::clone(&limiter);
+            crate::rate_limit::rate_limit_middleware(limiter, req, next)
+        }))
+        .layer(TraceLayer::new_for_http())
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any),
+        )
 }
 
 /// Start the web server.

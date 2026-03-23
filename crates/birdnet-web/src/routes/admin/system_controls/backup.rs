@@ -167,7 +167,12 @@ pub(super) async fn restore_backup(
         }
 
         let listing = String::from_utf8_lossy(&list_output.stdout);
-        let has_db = listing.lines().any(|l| l.ends_with(".db"));
+        let has_db = listing.lines().any(|l| {
+            std::path::Path::new(l)
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("db"))
+        });
 
         if !has_db {
             let _ = std::fs::remove_file(&tmp);

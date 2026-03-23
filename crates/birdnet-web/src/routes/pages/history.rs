@@ -99,21 +99,21 @@ fn render_chart_content(
     // Navigation row
     let next_btn = if next <= today {
         format!(
-            r##"<a href='#' hx-get='/pages/history-chart?date={next}' hx-target='#chart-content' hx-swap='innerHTML'
-               style='padding:0.3rem 0.75rem;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-muted);'>&#8594;</a>"##,
-            next = next,
+            r"<a href='#' hx-get='/pages/history-chart?date={next}' hx-target='#chart-content' hx-swap='innerHTML'
+               style='padding:0.3rem 0.75rem;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-muted);'>&#8594;</a>",
         )
     } else {
-        r#"<span style='padding:0.3rem 0.75rem;color:var(--text-muted);opacity:0.4;'>&#8594;</span>"#.to_string()
+        r"<span style='padding:0.3rem 0.75rem;color:var(--text-muted);opacity:0.4;'>&#8594;</span>"
+            .to_string()
     };
     let today_badge = if is_today {
-        r#"<span style='margin-left:0.5rem;font-size:0.8rem;background:var(--accent);color:#fff;padding:0.1rem 0.4rem;border-radius:4px;'>Today</span>"#
+        r"<span style='margin-left:0.5rem;font-size:0.8rem;background:var(--accent);color:#fff;padding:0.1rem 0.4rem;border-radius:4px;'>Today</span>"
     } else {
         ""
     };
     let _ = write!(
         html,
-        r##"<div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem;">
+        r#"<div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem;">
   <a href='#' hx-get='/pages/history-chart?date={prev}' hx-target='#chart-content' hx-swap='innerHTML'
      style="padding:0.3rem 0.75rem;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-muted);">&#8592;</a>
   <div style="flex:1;text-align:center;">
@@ -121,7 +121,7 @@ fn render_chart_content(
     {today_badge}
   </div>
   {next_btn}
-</div>"##,
+</div>"#,
         prev = prev,
         date = escape_html(date),
         today_badge = today_badge,
@@ -137,12 +137,10 @@ fn render_chart_content(
     <span style="color:var(--text-muted);margin-left:0.5rem;font-size:0.9rem;">detections</span>
   </div>
   <div style="background:var(--bg-card);padding:0.75rem 1.25rem;border-radius:var(--radius);border:1px solid var(--border);">
-    <span style="font-size:1.5rem;font-weight:700;color:var(--success);">{species}</span>
+    <span style="font-size:1.5rem;font-weight:700;color:var(--success);">{species_count}</span>
     <span style="color:var(--text-muted);margin-left:0.5rem;font-size:0.9rem;">species</span>
   </div>
 </div>"#,
-        total = total,
-        species = species_count,
     );
 
     // Hourly chart
@@ -172,8 +170,8 @@ fn render_date_list(dates: &[String]) -> String {
     for date in dates.iter().rev().take(90) {
         let _ = write!(
             html,
-            r##"<li><a href='#' hx-get='/pages/history-chart?date={date}' hx-target='#chart-content' hx-swap='innerHTML'
-               style="display:block;padding:0.3rem 0.75rem;color:var(--text-muted);font-size:0.9rem;">{date}</a></li>"##,
+            r#"<li><a href='#' hx-get='/pages/history-chart?date={date}' hx-target='#chart-content' hx-swap='innerHTML'
+               style="display:block;padding:0.3rem 0.75rem;color:var(--text-muted);font-size:0.9rem;">{date}</a></li>"#,
             date = escape_html(date),
         );
     }
@@ -202,6 +200,13 @@ fn add_days(date: &str, delta: i64) -> String {
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     let epoch_days = era * 146_097 + doe - 719_468;
 
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        clippy::cast_possible_wrap,
+        clippy::cast_lossless
+    )]
     let new_days = (epoch_days as i64 + delta).max(0) as u64;
     let (ny, nm, nd) = days_to_date(new_days);
     format!("{ny}-{nm:02}-{nd:02}")

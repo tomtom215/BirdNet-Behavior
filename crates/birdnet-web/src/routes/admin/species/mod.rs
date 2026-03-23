@@ -1,7 +1,7 @@
 //! Admin species list management.
 //!
 //! Provides interactive management of the species exclusion and allow-lists.
-//! Changes are stored as comma-separated values in the SQLite settings table
+//! Changes are stored as comma-separated values in the `SQLite` settings table
 //! under `species_exclude` and `species_include`.
 //!
 //! Routes:

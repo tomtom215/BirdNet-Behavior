@@ -8,7 +8,7 @@ pub enum TimeSeriesError {
     /// The underlying DuckDB query failed.
     #[cfg(feature = "analytics")]
     Database(duckdb::Error),
-    /// A required view or table was not found in the DuckDB database.
+    /// A required view or table was not found in the `DuckDB` database.
     MissingView(String),
     /// A query parameter was invalid (e.g., end before start).
     InvalidParam(String),

@@ -15,9 +15,9 @@ pub struct PeakWindows {
     pub window_minutes: u32,
     /// Hop size in minutes (default: 5).
     pub hop_minutes: u32,
-    /// Range start as a DuckDB timestamp expression.
+    /// Range start as a `DuckDB` timestamp expression.
     pub range_start: String,
-    /// Range end as a DuckDB timestamp expression.
+    /// Range end as a `DuckDB` timestamp expression.
     pub range_end: String,
     /// Maximum windows to return (default: 10).
     pub limit: u32,
@@ -96,7 +96,7 @@ pub struct DawnChorusPeak {
 
 impl DawnChorusPeak {
     /// Create for a specific date with defaults.
-    pub fn for_date(date: String) -> Self {
+    pub const fn for_date(date: String) -> Self {
         Self {
             date,
             window_minutes: 15,

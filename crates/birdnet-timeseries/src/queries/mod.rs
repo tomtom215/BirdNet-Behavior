@@ -1,9 +1,9 @@
 //! SQL query builders for time-series analytics goals.
 //!
-//! Each sub-module produces a complete, runnable DuckDB SQL string
+//! Each sub-module produces a complete, runnable `DuckDB` SQL string
 //! targeted at a specific analytics question. All queries read from the
 //! `detections_ts` view (requires `birdnet-behavioral` to have set up
-//! the DuckDB database).
+//! the `DuckDB` database).
 //!
 //! Sub-modules are organised by *analytics goal*, not by window type:
 //!

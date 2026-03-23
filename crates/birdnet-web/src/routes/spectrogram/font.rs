@@ -3,11 +3,18 @@
 /// Draw text onto an RGBA pixel buffer using a minimal 5x7 bitmap font.
 ///
 /// Text is white with a 50% transparent dark background for readability.
-pub(crate) fn draw_text(pixels: &mut [u8], img_w: u32, img_h: u32, x: u32, y: u32, text: &str) {
+pub fn draw_text(pixels: &mut [u8], img_w: u32, img_h: u32, x: u32, y: u32, text: &str) {
     let char_w = 6u32; // 5 pixels + 1 spacing
     let char_h = 8u32; // 7 pixels + 1 spacing
 
     // Draw semi-transparent background bar.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        clippy::cast_possible_wrap,
+        clippy::cast_lossless
+    )]
     let text_width = text.len() as u32 * char_w + 4;
     let bg_h = char_h + 4;
     for by in y.saturating_sub(2)..((y + bg_h).min(img_h)) {
@@ -15,9 +22,9 @@ pub(crate) fn draw_text(pixels: &mut [u8], img_w: u32, img_h: u32, x: u32, y: u3
             let idx = ((by * img_w + bx) * 4) as usize;
             if idx + 3 < pixels.len() {
                 // Darken the existing pixel.
-                pixels[idx] = pixels[idx] / 3;
-                pixels[idx + 1] = pixels[idx + 1] / 3;
-                pixels[idx + 2] = pixels[idx + 2] / 3;
+                pixels[idx] /= 3;
+                pixels[idx + 1] /= 3;
+                pixels[idx + 2] /= 3;
             }
         }
     }
@@ -25,8 +32,22 @@ pub(crate) fn draw_text(pixels: &mut [u8], img_w: u32, img_h: u32, x: u32, y: u3
     // Draw each character.
     for (ci, ch) in text.chars().enumerate() {
         let glyph = get_glyph(ch);
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss,
+            clippy::cast_possible_wrap,
+            clippy::cast_lossless
+        )]
         let cx = x + ci as u32 * char_w;
         for (row, &glyph_row) in glyph.iter().enumerate() {
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                clippy::cast_precision_loss,
+                clippy::cast_possible_wrap,
+                clippy::cast_lossless
+            )]
             let py = y + row as u32;
             if py >= img_h {
                 break;
@@ -53,8 +74,9 @@ pub(crate) fn draw_text(pixels: &mut [u8], img_w: u32, img_h: u32, x: u32, y: u3
 /// 5x7 bitmap font data for ASCII 32-126.
 ///
 /// Each glyph is 7 rows of 5 bits (stored in the low 5 bits of a u8).
+#[allow(clippy::too_many_lines)]
 #[allow(clippy::match_same_arms)]
-fn get_glyph(ch: char) -> [u8; 7] {
+const fn get_glyph(ch: char) -> [u8; 7] {
     match ch {
         ' ' => [0, 0, 0, 0, 0, 0, 0],
         '!' => [

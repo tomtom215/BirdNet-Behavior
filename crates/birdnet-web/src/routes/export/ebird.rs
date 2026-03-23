@@ -110,7 +110,7 @@ fn detections_to_ebird_csv(
             .push(row);
     }
 
-    for (_, group) in &species_groups {
+    for group in species_groups.values() {
         let first = group[0];
         let count = group.len();
         let (genus, species) = first
@@ -124,6 +124,13 @@ fn detections_to_ebird_csv(
             .min()
             .unwrap_or(&first.time);
 
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss,
+            clippy::cast_possible_wrap,
+            clippy::cast_lossless
+        )]
         let avg_conf: f64 = group.iter().map(|d| d.confidence).sum::<f64>() / count as f64;
         let comment = format!("BirdNET avg confidence: {:.0}%", avg_conf * 100.0);
 

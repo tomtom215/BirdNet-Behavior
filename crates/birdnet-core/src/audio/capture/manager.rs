@@ -36,7 +36,8 @@ impl CaptureManager {
     }
 
     /// Override the maximum number of automatic restarts (default: 10).
-    pub fn with_max_restarts(mut self, n: u32) -> Self {
+    #[must_use]
+    pub const fn with_max_restarts(mut self, n: u32) -> Self {
         self.max_restarts = n;
         self
     }

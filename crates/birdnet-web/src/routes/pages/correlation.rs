@@ -214,7 +214,13 @@ fn render_pairs_table(pairs: &[birdnet_db::sqlite::SpeciesPair], days: u32) -> S
     );
 
     for pair in pairs {
-        #[allow(clippy::cast_precision_loss)]
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss,
+            clippy::cast_possible_wrap,
+            clippy::cast_lossless
+        )]
         let bar_pct = (pair.co_occurrence_days as f64 / max_days as f64 * 100.0).round() as u64;
         let enc_a = simple_url_encode(&pair.species_a);
         let enc_b = simple_url_encode(&pair.species_b);
@@ -305,8 +311,21 @@ fn render_companion_table(companions: &[birdnet_db::sqlite::FollowOn]) -> String
     );
 
     for c in companions {
-        #[allow(clippy::cast_precision_loss)]
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss,
+            clippy::cast_possible_wrap,
+            clippy::cast_lossless
+        )]
         let bar_pct = (c.shared_days as f64 / max_days as f64 * 100.0).round() as u64;
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss,
+            clippy::cast_possible_wrap,
+            clippy::cast_lossless
+        )]
         let conf_pct = (c.avg_confidence * 100.0).round() as u32;
         let enc = simple_url_encode(&c.companion);
         let _ = write!(
@@ -352,7 +371,7 @@ mod tests {
         let html = render_pairs_table(&pairs, 30);
         assert!(html.contains("Robin"));
         assert!(html.contains("Wren"));
-        assert!(html.contains("5"));
+        assert!(html.contains('5'));
     }
 
     #[test]

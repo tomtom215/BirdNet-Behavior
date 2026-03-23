@@ -1,7 +1,7 @@
 //! Notification log database queries.
 //!
-//! Provides a structured log of all notification attempts — BirdWeather uploads,
-//! Apprise pushes, and any future channels — stored in the local SQLite database.
+//! Provides a structured log of all notification attempts — `BirdWeather` uploads,
+//! Apprise pushes, and any future channels — stored in the local `SQLite` database.
 //! The log is append-only and kept for 90 days by default.
 
 use rusqlite::{Connection, params};
@@ -49,7 +49,7 @@ pub enum NotifStatus {
 }
 
 impl NotifStatus {
-    fn as_str(&self) -> &'static str {
+    const fn as_str(&self) -> &'static str {
         match self {
             Self::Sent => "sent",
             Self::Failed => "failed",

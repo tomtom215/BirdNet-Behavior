@@ -1,18 +1,18 @@
 //! End-to-end inference test: decode → resample → model → detect Pica pica.
 //!
-//! Requires the BirdNET+ V3.0 model and labels to be present at the paths
+//! Requires the `BirdNET+` V3.0 model and labels to be present at the paths
 //! set by the environment variables:
 //!
-//!   BIRDNET_TEST_MODEL  — path to the .onnx file
-//!   BIRDNET_TEST_LABELS — path to the labels .csv file
+//!   `BIRDNET_TEST_MODEL`  — path to the .onnx file
+//!   `BIRDNET_TEST_LABELS` — path to the labels .csv file
 //!
 //! The test is automatically skipped when those variables are unset, so the
 //! regular CI suite is not affected.
 //!
 //! Run manually with:
-//!   BIRDNET_TEST_MODEL=/tmp/birdnet_models/BirdNET_V3_FP32.onnx \
-//!   BIRDNET_TEST_LABELS=/tmp/birdnet_labels.csv \
-//!   cargo test --test inference_e2e -- --nocapture
+//!   `BIRDNET_TEST_MODEL=/tmp/birdnet_models/BirdNET_V3_FP32.onnx \`
+//!   `BIRDNET_TEST_LABELS=/tmp/birdnet_labels.csv \`
+//!   `cargo test --test inference_e2e -- --nocapture`
 
 use std::path::Path;
 
@@ -61,12 +61,9 @@ fn load_model() -> Option<BirdNetModel> {
 
 #[test]
 fn e2e_labels_load_pica_pica_present() {
-    let labels_path = match std::env::var("BIRDNET_TEST_LABELS") {
-        Ok(p) => p,
-        Err(_) => {
-            eprintln!("SKIP: BIRDNET_TEST_LABELS not set");
-            return;
-        }
+    let Ok(labels_path) = std::env::var("BIRDNET_TEST_LABELS") else {
+        eprintln!("SKIP: BIRDNET_TEST_LABELS not set");
+        return;
     };
 
     let labels = LabelSet::load(Path::new(&labels_path)).expect("failed to load labels");
@@ -90,6 +87,7 @@ fn e2e_labels_load_pica_pica_present() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn e2e_model_detects_pica_pica() {
     let Some(mut model) = load_model() else {
         return;
@@ -101,17 +99,19 @@ fn e2e_model_detects_pica_pica() {
     // Decode the 30-second recording.
     let audio = decode::decode_file(wav_path).expect("failed to decode WAV");
     assert_eq!(audio.sample_rate, 48_000);
+    #[allow(clippy::cast_precision_loss)]
+    let decoded_secs = audio.samples.len() as f64 / f64::from(audio.sample_rate);
     eprintln!(
         "Decoded: {} samples ({:.1}s at {}Hz)",
         audio.samples.len(),
-        audio.samples.len() as f64 / audio.sample_rate as f64,
+        decoded_secs,
         audio.sample_rate
     );
 
     // Resample to the rate the model expects (auto-detected from input shape).
     let target_rate = model.infer_sample_rate();
     let samples = if audio.sample_rate == target_rate {
-        audio.samples.clone()
+        audio.samples
     } else {
         resample::resample(&audio.samples, audio.sample_rate, target_rate)
             .expect("resampling failed")
@@ -119,7 +119,8 @@ fn e2e_model_detects_pica_pica() {
     eprintln!("Resampled: {} samples at {}Hz", samples.len(), target_rate);
 
     // Split into 3-second chunks and run inference on each.
-    let chunk_samples = (3.0 * target_rate as f64) as usize;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let chunk_samples = (3.0 * f64::from(target_rate)) as usize;
     let mut all_detections = Vec::new();
 
     let start = std::time::Instant::now();
@@ -131,23 +132,26 @@ fn e2e_model_detects_pica_pica() {
             chunk.resize(chunk_samples, 0.0); // zero-pad last chunk
         }
 
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_lossless
+        )]
+        let (start_secs, end_secs) = (
+            chunk_start as f32 / target_rate as f32,
+            chunk_end as f32 / target_rate as f32,
+        );
         let detections = model
-            .predict(
-                &chunk,
-                "2026-03-15",
-                "06:30:00",
-                chunk_start as f32 / target_rate as f32,
-                chunk_end as f32 / target_rate as f32,
-                11,
-            )
+            .predict(&chunk, "2026-03-15", "06:30:00", start_secs, end_secs, 11)
             .expect("inference failed");
 
         for d in &detections {
             eprintln!(
                 "  chunk {:2}: {:.1}s-{:.1}s  {:.1}%  {} ({})",
                 i,
-                chunk_start as f32 / target_rate as f32,
-                chunk_end as f32 / target_rate as f32,
+                start_secs,
+                end_secs,
                 d.confidence * 100.0,
                 d.common_name,
                 d.scientific_name
@@ -157,11 +161,13 @@ fn e2e_model_detects_pica_pica() {
     }
 
     let elapsed = start.elapsed();
+    #[allow(clippy::cast_precision_loss)]
+    let num_chunks = (samples.len() / chunk_samples) as f64;
     eprintln!(
         "\nInference complete: {} total detections in {:.1}ms ({:.1}ms/chunk)",
         all_detections.len(),
         elapsed.as_secs_f64() * 1000.0,
-        elapsed.as_secs_f64() * 1000.0 / (samples.len() / chunk_samples) as f64
+        elapsed.as_secs_f64() * 1000.0 / num_chunks
     );
 
     // The recording is a Eurasian Magpie (Pica pica) — it must be detected.

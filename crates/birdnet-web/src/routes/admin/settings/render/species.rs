@@ -1,13 +1,15 @@
 //! Species filter settings section.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 
 use super::get_setting;
 
 pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let excl = get_setting(s, "species_exclude", "");
     let incl = get_setting(s, "species_include", "");
-    out.push_str(&format!(
+    write!(
+        out,
         r#"
   <div class="card">
     <div class="section-title">Species Filters</div>
@@ -28,5 +30,6 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
       <p class="hint">When set, only these species are saved or notified</p>
     </div>
   </div>"#
-    ));
+    )
+    .unwrap_or_default();
 }

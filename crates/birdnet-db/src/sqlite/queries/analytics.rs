@@ -126,9 +126,14 @@ pub fn weekly_top_species(
          LIMIT ?3",
     )?;
     let rows = stmt
-        .query_map(params![week_start, week_end, limit as i64], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-        })?
+        .query_map(
+            params![
+                week_start,
+                week_end,
+                i64::try_from(limit).unwrap_or(i64::MAX)
+            ],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }

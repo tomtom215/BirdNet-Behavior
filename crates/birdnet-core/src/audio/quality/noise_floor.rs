@@ -34,7 +34,7 @@ const OVERESTIMATION: f32 = 1.6;
 /// Adaptive minimum-statistics noise floor tracker.
 ///
 /// Call [`update`](Self::update) once per audio frame.
-/// After [`WINDOW_FRAMES`] frames the tracker is *calibrated* and
+/// After `WINDOW_FRAMES` frames the tracker is *calibrated* and
 /// [`noise_floor_dbfs`](Self::noise_floor_dbfs) returns a reliable
 /// estimate.
 #[derive(Debug, Clone)]
@@ -52,8 +52,8 @@ pub struct NoiseFloorTracker {
 impl NoiseFloorTracker {
     /// Create a new, uncalibrated tracker.
     ///
-    /// Call [`update`](Self::update) at least [`WINDOW_FRAMES`] times
-    /// before relying on the noise floor estimate.
+    /// Call [`update`](Self::update) at least `WINDOW_FRAMES` times
+    /// before relying on the noise-floor estimate.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -66,9 +66,9 @@ impl NoiseFloorTracker {
 
     /// Update the tracker with the next audio frame.
     ///
-    /// Only the first [`FRAME_SAMPLES`] samples of `samples` are used;
+    /// Only the first `FRAME_SAMPLES` samples of `samples` are used;
     /// extra samples are ignored.  If `samples` is shorter than
-    /// [`FRAME_SAMPLES`] all samples are used.
+    /// `FRAME_SAMPLES`, all samples are used.
     ///
     /// Returns the current noise floor estimate in linear RMS amplitude.
     #[allow(clippy::cast_precision_loss)]
@@ -159,6 +159,13 @@ mod tests {
         vec![amplitude; n]
     }
 
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_possible_wrap,
+        clippy::cast_lossless
+    )]
     fn tone(freq_hz: f32, amplitude: f32, n_samples: usize, sample_rate: u32) -> Vec<f32> {
         (0..n_samples)
             .map(|i| amplitude * (2.0 * PI * freq_hz * i as f32 / sample_rate as f32).sin())

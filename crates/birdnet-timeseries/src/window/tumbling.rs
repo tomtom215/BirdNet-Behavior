@@ -3,7 +3,7 @@
 //! Tumbling windows divide the time axis into equal, non-overlapping
 //! intervals. Each detection falls in exactly one bucket.
 //!
-//! Uses DuckDB's `time_bucket` function for sub-day granularities and
+//! Uses `DuckDB`'s `time_bucket` function for sub-day granularities and
 //! `date_trunc` for day/week/month. Gaps in the series are preserved
 //! (empty buckets are not synthesised).
 

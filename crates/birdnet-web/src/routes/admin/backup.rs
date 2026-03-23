@@ -41,7 +41,13 @@ fn backup_dir(state: &AppState) -> std::path::PathBuf {
 
 /// Validate that a filename is safe (no path traversal, `.db` extension).
 fn is_safe_backup_name(name: &str) -> bool {
-    !name.contains('/') && !name.contains('\\') && !name.contains("..") && name.ends_with(".db")
+    !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains("..")
+        && std::path::Path::new(name)
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("db"))
 }
 
 /// Basic HTML escape for untrusted strings rendered into HTML.
@@ -64,7 +70,7 @@ async fn list_backups(State(state): State<AppState>) -> Html<String> {
             return Vec::new();
         };
         let mut entries: Vec<BackupEntry> = rd
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
             .filter(|e| e.file_name().to_string_lossy().ends_with(".db"))
             .filter_map(|e| {
                 let name = e.file_name().to_string_lossy().to_string();
@@ -101,12 +107,16 @@ fn render_backup_list(entries: &[BackupEntry]) -> String {
     let rows = if entries.is_empty() {
         "<tr><td colspan=\"3\" style=\"color:#64748b;text-align:center;\">No backups found</td></tr>".to_string()
     } else {
-        entries.iter().map(|e| {
-            let name_esc = html_escape(&e.name);
-            let size_str = format_bytes(e.size);
-            let date_str = format_unix_ts(e.modified_secs);
-            format!(
-                r#"<tr>
+        {
+            use std::fmt::Write as _;
+            let mut buf = String::new();
+            for e in entries {
+                let name_esc = html_escape(&e.name);
+                let size_str = format_bytes(e.size);
+                let date_str = format_unix_ts(e.modified_secs);
+                let _ = write!(
+                    buf,
+                    r#"<tr>
                   <td style="font-family:monospace;font-size:.8rem;">{name_esc}</td>
                   <td style="color:#94a3b8;">{size_str}</td>
                   <td style="color:#64748b;">{date_str}</td>
@@ -123,8 +133,10 @@ fn render_backup_list(entries: &[BackupEntry]) -> String {
                     </button>
                   </td>
                 </tr>"#
-            )
-        }).collect::<String>()
+                );
+            }
+            buf
+        }
     };
 
     format!(
@@ -157,21 +169,18 @@ async fn download_backup(State(state): State<AppState>, Path(name): Path<String>
     let path = backup_dir(&state).join(&name);
 
     // Verify the canonical path is still inside the backup directory.
-    let backup_dir_canon = match backup_dir(&state).canonicalize() {
-        Ok(p) => p,
-        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    let Ok(backup_dir_canon) = backup_dir(&state).canonicalize() else {
+        return StatusCode::NOT_FOUND.into_response();
     };
-    let file_canon = match path.canonicalize() {
-        Ok(p) => p,
-        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    let Ok(file_canon) = path.canonicalize() else {
+        return StatusCode::NOT_FOUND.into_response();
     };
     if !file_canon.starts_with(&backup_dir_canon) {
         return StatusCode::FORBIDDEN.into_response();
     }
 
-    let file = match tokio::fs::File::open(&file_canon).await {
-        Ok(f) => f,
-        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    let Ok(file) = tokio::fs::File::open(&file_canon).await else {
+        return StatusCode::NOT_FOUND.into_response();
     };
     let size = file.metadata().await.map(|m| m.len()).unwrap_or(0);
     let stream = ReaderStream::new(file);
@@ -238,6 +247,13 @@ fn format_unix_ts(secs: u64) -> String {
     let mm = (time_of_day % 3600) / 60;
 
     // Convert days since Unix epoch to Gregorian date.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        clippy::cast_possible_wrap,
+        clippy::cast_lossless
+    )]
     let z = days as i64 + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = z - era * 146_097;

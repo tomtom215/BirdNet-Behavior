@@ -23,11 +23,11 @@ use crate::phenology::types::AbundanceParams;
 
 /// Build SQL for weekly relative abundance per species.
 ///
-/// Returns one row per (species, year, iso_week) with:
+/// Returns one row per (species, year, `iso_week`) with:
 /// - `detection_count` — raw count for the week
 /// - `relative_abundance` — count divided by the peak week count
 ///
-/// Compatible with both SQLite 3.x and DuckDB 1.x.
+/// Compatible with both `SQLite` 3.x and `DuckDB` 1.x.
 pub fn weekly_abundance_sql(params: &AbundanceParams) -> String {
     let species_filter = species_clause(params.species.as_deref(), "WHERE");
     let min_clause = if params.min_weekly_count > 1 {
@@ -155,7 +155,7 @@ pub fn weekly_richness_sql(year: u32) -> String {
     )
 }
 
-/// Build SQL for effort-corrected abundance (DuckDB only).
+/// Build SQL for effort-corrected abundance (`DuckDB` only).
 ///
 /// When recording effort data is available (e.g., from a separate
 /// `recordings` table with `date` and `duration_hours` columns), this

@@ -4,6 +4,7 @@
 //! suitable for sending via notification (Apprise, email, etc.).
 
 use std::fmt;
+use std::fmt::Write as FmtWrite;
 
 /// A single species entry in the weekly report.
 #[derive(Debug, Clone)]
@@ -58,32 +59,34 @@ impl WeeklyReport {
     pub fn format_text(&self) -> String {
         let mut out = String::with_capacity(1024);
 
-        out.push_str(&format!(
-            "Weekly Bird Report - Week {} ({})\n",
+        writeln!(
+            out,
+            "Weekly Bird Report - Week {} ({})",
             self.week_number, self.year
-        ));
+        )
+        .unwrap_or_default();
         out.push_str(&"=".repeat(40));
         out.push('\n');
 
         // Summary.
-        out.push_str(&format!("\nTotal detections: {}\n", self.total_detections));
+        write!(out, "\nTotal detections: {}\n", self.total_detections).unwrap_or_default();
         if let Some(trend) = self.detection_trend_pct() {
             let arrow = if trend > 0.0 { "+" } else { "" };
-            out.push_str(&format!("  vs last week: {arrow}{trend:.1}%\n"));
+            writeln!(out, "  vs last week: {arrow}{trend:.1}%").unwrap_or_default();
         }
 
-        out.push_str(&format!("Unique species: {}\n", self.unique_species));
+        writeln!(out, "Unique species: {}", self.unique_species).unwrap_or_default();
         if self.unique_species_last_week > 0 {
             let diff = i64::from(self.unique_species) - i64::from(self.unique_species_last_week);
             let arrow = if diff > 0 { "+" } else { "" };
-            out.push_str(&format!("  vs last week: {arrow}{diff}\n"));
+            writeln!(out, "  vs last week: {arrow}{diff}").unwrap_or_default();
         }
 
         // First-time species.
         if !self.first_time_species.is_empty() {
             out.push_str("\nNew species this week:\n");
             for sp in &self.first_time_species {
-                out.push_str(&format!("  * {sp}\n"));
+                writeln!(out, "  * {sp}").unwrap_or_default();
             }
         }
 
@@ -91,13 +94,15 @@ impl WeeklyReport {
         if !self.top_species.is_empty() {
             out.push_str("\nTop species:\n");
             for (i, sc) in self.top_species.iter().enumerate() {
-                out.push_str(&format!(
-                    "  {}. {} ({}) - {} detections\n",
+                writeln!(
+                    out,
+                    "  {}. {} ({}) - {} detections",
                     i + 1,
                     sc.common_name,
                     sc.scientific_name,
                     sc.count
-                ));
+                )
+                .unwrap_or_default();
             }
         }
 

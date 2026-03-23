@@ -124,7 +124,7 @@ async fn log_stream(
         tokio_stream::iter(recent).map(|line| Ok::<Event, Infallible>(log_line_to_event(&line)));
 
     let live_stream = BroadcastStream::new(rx)
-        .filter_map(|result| result.ok())
+        .filter_map(std::result::Result::ok)
         .map(|line| Ok::<Event, Infallible>(log_line_to_event(&line)));
 
     let combined = recent_stream.chain(live_stream);
@@ -175,7 +175,7 @@ async fn log_page(_: State<AppState>) -> Html<String> {
     Html(LOG_PAGE_HTML.to_string())
 }
 
-const LOG_PAGE_HTML: &str = r##"<!DOCTYPE html>
+const LOG_PAGE_HTML: &str = r#"<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -286,7 +286,7 @@ const LOG_PAGE_HTML: &str = r##"<!DOCTYPE html>
   }
 </script>
 </body>
-</html>"##;
+</html>"#;
 
 #[cfg(test)]
 mod tests {

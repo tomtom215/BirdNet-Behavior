@@ -1,7 +1,7 @@
 //! Window specification traits and common enumerations.
 //!
 //! A `WindowSpec` knows how to emit the SQL fragment that defines
-//! the time boundary for one type of DuckDB window.
+//! the time boundary for one type of `DuckDB` window.
 
 pub mod hopping;
 pub mod session;
@@ -29,7 +29,7 @@ pub enum Granularity {
 }
 
 impl Granularity {
-    /// DuckDB `INTERVAL` literal for the bucket size.
+    /// `DuckDB` `INTERVAL` literal for the bucket size.
     pub const fn interval_sql(self) -> &'static str {
         match self {
             Self::QuarterHour => "INTERVAL 15 MINUTE",
@@ -40,7 +40,7 @@ impl Granularity {
         }
     }
 
-    /// DuckDB `date_trunc` precision string (used for display labels).
+    /// `DuckDB` `date_trunc` precision string (used for display labels).
     pub const fn trunc_unit(self) -> &'static str {
         match self {
             Self::QuarterHour | Self::Hour => "hour",
@@ -54,11 +54,11 @@ impl Granularity {
 /// A window specification that can produce a SQL fragment.
 ///
 /// Implementors describe the temporal boundaries (start expression,
-/// end expression, grouping logic) for one type of DuckDB window query.
+/// end expression, grouping logic) for one type of `DuckDB` window query.
 pub trait WindowSpec {
     /// Return the SQL `SELECT … FROM … GROUP BY` body for this window.
     ///
-    /// The returned string should be a complete, runnable DuckDB query
+    /// The returned string should be a complete, runnable `DuckDB` query
     /// that selects from `detections_ts`.
     fn build_sql(&self) -> String;
 

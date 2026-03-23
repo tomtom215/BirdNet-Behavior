@@ -4,7 +4,7 @@
 //! tumbling windows (hourly/daily/weekly), moving averages, peak windows,
 //! activity sessions, diversity indices, and anomaly detection.
 //!
-//! All endpoints use `birdnet-timeseries` which runs standard DuckDB SQL
+//! All endpoints use `birdnet-timeseries` which runs standard `DuckDB` SQL
 //! window functions — **no behavioral extension required**.
 //!
 //! Base path: `/api/v2/timeseries/`

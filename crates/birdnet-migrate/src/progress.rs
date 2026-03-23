@@ -61,13 +61,18 @@ impl MigrationProgress {
         if self.rows_total == 0 {
             return 0;
         }
-        #[allow(clippy::cast_precision_loss)]
+        // Precision loss from u64→f64 is acceptable for a display percentage.
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss
+        )]
         let pct = (self.rows_imported as f64 / self.rows_total as f64 * 100.0) as u8;
         pct.min(100)
     }
 
     /// Whether the migration is finished (success or failure).
-    pub fn is_terminal(&self) -> bool {
+    pub const fn is_terminal(&self) -> bool {
         matches!(
             self.stage,
             MigrationStage::Complete | MigrationStage::Failed | MigrationStage::Cancelled

@@ -89,7 +89,7 @@ impl fmt::Debug for BirdNetModel {
 /// Extract the input shape from a loaded session.
 ///
 /// Dynamic dimensions (-1) are mapped to 1 for batch axes, preserving fixed
-/// dimensions (e.g. 96_000 sample points) for sample-rate auto-detection.
+/// dimensions (e.g. `96_000` sample points) for sample-rate auto-detection.
 fn extract_input_shape(session: &Session) -> Result<Vec<usize>, InferenceError> {
     let input = session
         .inputs()
@@ -97,6 +97,13 @@ fn extract_input_shape(session: &Session) -> Result<Vec<usize>, InferenceError> 
         .ok_or_else(|| InferenceError::Shape("model has no inputs".into()))?;
 
     match input.dtype() {
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_possible_wrap,
+            clippy::cast_lossless
+        )]
         ValueType::Tensor { shape, .. } => Ok(shape
             .iter()
             .map(|&d| {
@@ -218,7 +225,7 @@ impl BirdNetModel {
         //   [0] "embeddings"   → [batch, 1280]   (internal representation)
         //   [1] "predictions"  → [batch, 11560]  (species classification logits)
         // Use "predictions" if it exists (V3.0), else fall back to output 0 (V2.4).
-        let output_idx = if outputs.len() > 1 { 1 } else { 0 };
+        let output_idx = usize::from(outputs.len() > 1);
         let (_shape, flat_logits) = outputs[output_idx]
             .try_extract_tensor::<f32>()
             .map_err(|e| InferenceError::Runtime(format!("cannot extract logits: {e}")))?;
@@ -291,7 +298,7 @@ impl BirdNetModel {
 
     /// Infer the expected audio sample rate from the model's input shape.
     ///
-    /// BirdNET models use fixed-length audio windows:
+    /// `BirdNET` models use fixed-length audio windows:
     /// - V2.4 `[1, 144_000]` → 48 kHz × 3 s
     /// - V3.0 `[1,  96_000]` → 32 kHz × 3 s
     ///
@@ -307,15 +314,14 @@ impl BirdNetModel {
             _ => return 32_000,
         };
         match n_samples {
-            96_000 => 32_000,  // BirdNET+ V3.0 (32 kHz × 3 s)
-            144_000 => 48_000, // BirdNET   V2.4 (48 kHz × 3 s)
-            _ => 48_000,
+            96_000 => 32_000, // BirdNET+ V3.0 (32 kHz × 3 s)
+            _ => 48_000,      // BirdNET   V2.4 (48 kHz × 3 s) or unknown
         }
     }
 
     /// Returns `true` if this model expects raw audio samples as input.
     ///
-    /// BirdNET+ V3.0 models perform internal feature extraction from the raw
+    /// `BirdNET`+ V3.0 models perform internal feature extraction from the raw
     /// waveform (`infer_sample_rate() == 32_000`).  V2.4 models require a
     /// pre-computed mel spectrogram.
     #[must_use]
@@ -398,7 +404,6 @@ mod tests {
         let rate = match shape_48k {
             [_, n] | [_, _, n] => match *n {
                 96_000 => 32_000_u32,
-                144_000 => 48_000_u32,
                 _ => 48_000_u32,
             },
             _ => 48_000_u32,
@@ -412,7 +417,6 @@ mod tests {
         let rate = match shape_32k {
             [_, n] | [_, _, n] => match *n {
                 96_000 => 32_000_u32,
-                144_000 => 48_000_u32,
                 _ => 48_000_u32,
             },
             _ => 48_000_u32,

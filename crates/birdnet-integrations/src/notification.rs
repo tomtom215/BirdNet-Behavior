@@ -11,7 +11,7 @@ use std::fmt;
 
 /// Context for rendering notification templates.
 ///
-/// Contains all the variables that BirdNET-Pi supports for notification
+/// Contains all the variables that `BirdNET-Pi` supports for notification
 /// template substitution.
 #[derive(Debug, Clone)]
 pub struct NotificationContext {
@@ -45,7 +45,7 @@ pub struct NotificationContext {
 
 /// A notification message template with variable substitution.
 ///
-/// Templates use BirdNET-Pi-compatible `$variable` syntax:
+/// Templates use `BirdNET-Pi`-compatible `$variable` syntax:
 /// `$sciname`, `$comname`, `$confidence`, `$confidencepct`, `$listenurl`,
 /// `$friendlyurl`, `$date`, `$time`, `$week`, `$latitude`, `$longitude`,
 /// `$cutoff`, `$sens`, `$overlap`, `$flickrimage`/`$image`, `$reason`.
@@ -71,7 +71,7 @@ impl Default for NotificationTemplate {
 impl NotificationTemplate {
     /// Create a new template with the given title and body patterns.
     #[must_use]
-    pub fn new(title_template: String, body_template: String) -> Self {
+    pub const fn new(title_template: String, body_template: String) -> Self {
         Self {
             title_template,
             body_template,
@@ -238,16 +238,14 @@ impl NotificationFilter {
         match self.trigger {
             TriggerMode::EachDetection => true,
             TriggerMode::NewSpecies => {
-                let count = counter
-                    .map(|c| c.this_weeks_count_for(sci_name))
-                    .unwrap_or(0);
+                let count = counter.map_or(0, |c| c.this_weeks_count_for(sci_name));
                 // Notify when species has fewer than 5 detections this week.
                 // The current detection has not been inserted yet, so count
                 // represents previous detections.
                 count < 5
             }
             TriggerMode::NewSpeciesDaily => {
-                let count = counter.map(|c| c.todays_count_for(sci_name)).unwrap_or(0);
+                let count = counter.map_or(0, |c| c.todays_count_for(sci_name));
                 // First detection of the day for this species.
                 count == 0
             }

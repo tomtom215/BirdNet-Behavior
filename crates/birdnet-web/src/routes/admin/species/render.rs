@@ -178,6 +178,7 @@ pub fn render_thresholds_partial(thresholds: &[birdnet_db::sqlite::SpeciesThresh
 ///
 /// Shows all species seen in the detection history alongside their current
 /// filter status (Pass / Blocked) based on the loaded exclude/include lists.
+#[allow(clippy::too_many_lines)]
 pub fn render_filter_test_page(
     exclude: &[String],
     include: &[String],
@@ -204,19 +205,22 @@ pub fn render_filter_test_page(
             None
         };
 
-        let (badge, reason_txt) = if let Some(reason) = blocked_reason {
-            block_count += 1;
-            (
-                r#"<span style="background:#ef4444;color:#fff;padding:0.15rem 0.5rem;border-radius:999px;font-size:0.75rem;font-weight:700;">Blocked</span>"#,
-                reason,
-            )
-        } else {
-            pass_count += 1;
-            (
-                r#"<span style="background:#22c55e;color:#fff;padding:0.15rem 0.5rem;border-radius:999px;font-size:0.75rem;font-weight:700;">Pass</span>"#,
-                "—",
-            )
-        };
+        let (badge, reason_txt) = blocked_reason.map_or_else(
+            || {
+                pass_count += 1;
+                (
+                    r#"<span style="background:#22c55e;color:#fff;padding:0.15rem 0.5rem;border-radius:999px;font-size:0.75rem;font-weight:700;">Pass</span>"#,
+                    "—",
+                )
+            },
+            |reason| {
+                block_count += 1;
+                (
+                    r#"<span style="background:#ef4444;color:#fff;padding:0.15rem 0.5rem;border-radius:999px;font-size:0.75rem;font-weight:700;">Blocked</span>"#,
+                    reason,
+                )
+            },
+        );
 
         let esc_com = escape_html(com_name);
         let esc_sci = escape_html(sci_name);
@@ -316,18 +320,18 @@ pub fn render_filter_test_page(
 
 fn pills_or_none(list: &[String]) -> String {
     if list.is_empty() {
-        "<span style=\"color:#64748b;font-size:0.85rem;\">None</span>".to_string()
-    } else {
-        list.iter()
-            .map(|s| {
-                format!(
-                    "<span style=\"display:inline-block;background:#0f172a;border:1px solid #334155;border-radius:999px;padding:0.15rem 0.6rem;font-size:0.8rem;margin:0.15rem;\">{}</span>",
-                    escape_html(s)
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("")
+        return "<span style=\"color:#64748b;font-size:0.85rem;\">None</span>".to_string();
     }
+    let mut out = String::new();
+    for s in list {
+        write!(
+            out,
+            "<span style=\"display:inline-block;background:#0f172a;border:1px solid #334155;border-radius:999px;padding:0.15rem 0.6rem;font-size:0.8rem;margin:0.15rem;\">{}</span>",
+            escape_html(s)
+        )
+        .unwrap_or_default();
+    }
+    out
 }
 
 #[cfg(test)]

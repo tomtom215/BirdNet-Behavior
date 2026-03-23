@@ -4,7 +4,7 @@
 //! - **window size**: how much time each window covers
 //! - **hop size**: how often a new window starts (hop ≤ window → overlap)
 //!
-//! Implemented by generating all window boundaries with DuckDB's `range()`
+//! Implemented by generating all window boundaries with `DuckDB`'s `range()`
 //! table function and joining the detection data into each interval.
 //! Empty windows (zero detections) are included via `LEFT JOIN`.
 //!
@@ -58,9 +58,9 @@ pub struct HoppingSpec {
     pub window_size: HopUnit,
     /// How much the window advances each step.
     pub hop_size: HopUnit,
-    /// Start of the candidate range (DuckDB expression string).
+    /// Start of the candidate range (`DuckDB` expression string).
     pub range_start: String,
-    /// End of the candidate range (DuckDB expression string).
+    /// End of the candidate range (`DuckDB` expression string).
     pub range_end: String,
     /// Optional species filter.
     pub species: Option<String>,

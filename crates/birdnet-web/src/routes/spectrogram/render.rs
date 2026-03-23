@@ -6,7 +6,7 @@ use super::png::write_png_rgba;
 
 /// Optional label to overlay on the spectrogram.
 #[derive(Debug)]
-pub(crate) struct SpectrogramLabel {
+pub struct SpectrogramLabel {
     /// Species name.
     pub species: String,
     /// Confidence percentage (0-100).
@@ -17,12 +17,13 @@ pub(crate) struct SpectrogramLabel {
 
 /// Generate a PNG-encoded spectrogram from a WAV file (no label).
 #[cfg(test)]
+#[allow(dead_code)]
 pub(super) fn generate_spectrogram_png(path: &std::path::Path) -> Result<Vec<u8>, String> {
     generate_spectrogram_png_with_label(path, None)
 }
 
 /// Generate a PNG spectrogram with an optional text overlay.
-pub(crate) fn generate_spectrogram_png_with_label(
+pub fn generate_spectrogram_png_with_label(
     path: &std::path::Path,
     label: Option<&SpectrogramLabel>,
 ) -> Result<Vec<u8>, String> {
@@ -42,6 +43,13 @@ pub(crate) fn generate_spectrogram_png_with_label(
         hop_length: 128,
         n_mels: 128,
         fmin: 0.0,
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss,
+            clippy::cast_possible_wrap,
+            clippy::cast_lossless
+        )]
         fmax: Some(audio.sample_rate as f32 / 2.0),
         power: 2.0,
     };
@@ -63,6 +71,7 @@ pub(crate) fn generate_spectrogram_png_with_label(
 
 /// Encode a 2D mel spectrogram as PNG (no label).
 #[cfg(test)]
+#[allow(dead_code)]
 pub(super) fn encode_spectrogram_png(spec: &[Vec<f32>]) -> Result<Vec<u8>, String> {
     encode_spectrogram_png_labeled(spec, None)
 }
@@ -76,7 +85,21 @@ fn encode_spectrogram_png_labeled(
         return Err("empty spectrogram".to_string());
     }
 
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        clippy::cast_possible_wrap,
+        clippy::cast_lossless
+    )]
     let height = spec.len() as u32;
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        clippy::cast_possible_wrap,
+        clippy::cast_lossless
+    )]
     let width = spec[0].len() as u32;
 
     // Find global min/max for normalisation.

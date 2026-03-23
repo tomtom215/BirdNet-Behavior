@@ -127,16 +127,13 @@ async fn livestream(State(state): State<AppState>) -> Response {
         }
     };
 
-    let stdout = match child.stdout.take() {
-        Some(s) => s,
-        None => {
-            tracing::error!("ffmpeg process has no stdout handle");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to capture audio stream",
-            )
-                .into_response();
-        }
+    let Some(stdout) = child.stdout.take() else {
+        tracing::error!("ffmpeg process has no stdout handle");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to capture audio stream",
+        )
+            .into_response();
     };
 
     tracing::info!(source = %source, "starting live audio stream");

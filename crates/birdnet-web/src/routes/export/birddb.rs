@@ -1,6 +1,6 @@
 //! BirdDB.txt legacy flat-file export.
 //!
-//! Many external tools (Gravel, BirdDB viewers, custom scripts) consume this format.
+//! Many external tools (Gravel, `BirdDB` viewers, custom scripts) consume this format.
 //! Each line: `Date;Time;Sci_Name;Com_Name;Confidence;Lat;Lon;Cutoff;Week;Sens;Overlap;File_Name`
 
 use axum::extract::{Query, State};

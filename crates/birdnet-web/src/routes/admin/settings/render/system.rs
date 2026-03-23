@@ -1,6 +1,7 @@
 //! System, display, and authentication settings section.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 
 use super::get_setting;
 
@@ -21,7 +22,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let is_none = if isite == "none" { " selected" } else { "" };
     let auth_user = get_setting(s, "auth_username", "");
     let auth_pass = get_setting(s, "auth_password", "");
-    out.push_str(&format!(
+    write!(out,
         r#"
   <div class="card">
     <div class="section-title">System &amp; Display</div>
@@ -94,5 +95,5 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
       </div>
     </div>
   </div>"#
-    ));
+    ).unwrap_or_default();
 }

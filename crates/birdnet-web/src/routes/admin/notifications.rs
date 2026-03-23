@@ -4,6 +4,8 @@
 //! `GET /admin/notifications/partial` — HTMX partial (table rows only) for polling.
 //! `DELETE /admin/notifications/prune` — prune entries older than 90 days.
 
+use std::fmt::Write as _;
+
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::Html;
@@ -28,6 +30,7 @@ pub fn router() -> Router<AppState> {
 // GET /admin/notifications
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::similar_names)]
 async fn notifications_page(State(state): State<AppState>) -> Html<String> {
     let (entries, stats) = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
@@ -80,6 +83,7 @@ async fn prune_handler(State(state): State<AppState>) -> Result<Html<String>, St
 // Rendering
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_lines)]
 fn render_page(entries: &[NotifEntry], stats: (i64, i64, i64)) -> String {
     let (sent, failed, skipped) = stats;
     let rows_html = render_table_rows(entries);
@@ -195,39 +199,37 @@ fn render_table_rows(entries: &[NotifEntry]) -> String {
     if entries.is_empty() {
         return r#"<tr><td colspan="6" class="empty">No notifications yet.</td></tr>"#.to_string();
     }
-    entries
-        .iter()
-        .map(|e| {
-            let badge_class = match e.status.as_str() {
-                "sent" => "badge-sent",
-                "failed" => "badge-failed",
-                _ => "badge-skipped",
-            };
-            let species = e
-                .species_com_name
-                .as_deref()
-                .unwrap_or("—")
-                .replace('<', "&lt;")
-                .replace('>', "&gt;");
-            let confidence = e
-                .confidence
-                .map_or("—".to_string(), |c| format!("{:.0}%", c * 100.0));
-            let msg = e
-                .message
-                .as_deref()
-                .unwrap_or("")
-                .replace('<', "&lt;")
-                .replace('>', "&gt;");
-            let error_html = if let Some(err) = &e.error {
-                format!(
-                    r#"<br><span style="color:#f87171;font-size:0.75rem;">{}</span>"#,
-                    err.replace('<', "&lt;").replace('>', "&gt;")
-                )
-            } else {
-                String::new()
-            };
+    let mut out = String::new();
+    for e in entries {
+        let badge_class = match e.status.as_str() {
+            "sent" => "badge-sent",
+            "failed" => "badge-failed",
+            _ => "badge-skipped",
+        };
+        let species = e
+            .species_com_name
+            .as_deref()
+            .unwrap_or("—")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        let confidence = e
+            .confidence
+            .map_or_else(|| "—".to_string(), |c| format!("{:.0}%", c * 100.0));
+        let msg = e
+            .message
+            .as_deref()
+            .unwrap_or("")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        let error_html = e.error.as_ref().map_or_else(String::new, |err| {
             format!(
-                r#"<tr>
+                r#"<br><span style="color:#f87171;font-size:0.75rem;">{}</span>"#,
+                err.replace('<', "&lt;").replace('>', "&gt;")
+            )
+        });
+        write!(
+            out,
+            r#"<tr>
                   <td style="white-space:nowrap;color:#94a3b8;">{sent_at}</td>
                   <td><code style="font-size:0.8rem;">{channel}</code></td>
                   <td>{species}</td>
@@ -235,12 +237,13 @@ fn render_table_rows(entries: &[NotifEntry]) -> String {
                   <td><span class="badge {badge_class}">{status}</span></td>
                   <td style="color:#94a3b8;">{msg}{error_html}</td>
                 </tr>"#,
-                sent_at = &e.sent_at[..16], // trim seconds
-                channel = e.channel,
-                status = e.status,
-            )
-        })
-        .collect()
+            sent_at = &e.sent_at[..16], // trim seconds
+            channel = e.channel,
+            status = e.status,
+        )
+        .unwrap_or_default();
+    }
+    out
 }
 
 #[cfg(test)]

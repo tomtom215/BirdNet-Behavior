@@ -125,7 +125,9 @@ fn count_bad_dates(conn: &rusqlite::Connection) -> rusqlite::Result<u64> {
         params![],
         |row| row.get(0),
     )?;
-    Ok(count.max(0) as u64)
+    #[allow(clippy::cast_sign_loss)]
+    let result = count.max(0) as u64;
+    Ok(result)
 }
 
 /// Count rows with confidence outside [0, 1].
@@ -135,7 +137,9 @@ fn count_out_of_range_confidence(conn: &rusqlite::Connection) -> rusqlite::Resul
         params![],
         |row| row.get(0),
     )?;
-    Ok(count.max(0) as u64)
+    #[allow(clippy::cast_sign_loss)]
+    let result = count.max(0) as u64;
+    Ok(result)
 }
 
 #[cfg(test)]

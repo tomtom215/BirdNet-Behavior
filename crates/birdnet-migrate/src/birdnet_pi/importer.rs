@@ -1,6 +1,6 @@
 //! BirdNET-Pi → BirdNet-Behavior data importer.
 //!
-//! Reads all detections from a BirdNET-Pi `BirdDB.txt` SQLite database and
+//! Reads all detections from a BirdNET-Pi `BirdDB.txt` `SQLite` database and
 //! inserts them (batch by batch) into the destination `birds.db`.
 //!
 //! The source file is opened **read-only** and is never modified.
@@ -156,22 +156,28 @@ fn fetch_batch(
         .map_err(MigrateError::DataTransfer)?;
 
     let rows = stmt
-        .query_map(params![limit as i64, offset as i64], |row| {
-            Ok(DetectionRow {
-                date: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
-                time: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                sci_name: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
-                com_name: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
-                confidence: row.get::<_, Option<f64>>(4)?.unwrap_or(0.0).clamp(0.0, 1.0),
-                lat: row.get(5)?,
-                lon: row.get(6)?,
-                cutoff: row.get(7)?,
-                week: row.get(8)?,
-                sens: row.get(9)?,
-                overlap: row.get(10)?,
-                file_name: row.get(11)?,
-            })
-        })
+        .query_map(
+            params![
+                i64::try_from(limit).unwrap_or(i64::MAX),
+                i64::try_from(offset).unwrap_or(i64::MAX)
+            ],
+            |row| {
+                Ok(DetectionRow {
+                    date: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                    time: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    sci_name: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    com_name: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                    confidence: row.get::<_, Option<f64>>(4)?.unwrap_or(0.0).clamp(0.0, 1.0),
+                    lat: row.get(5)?,
+                    lon: row.get(6)?,
+                    cutoff: row.get(7)?,
+                    week: row.get(8)?,
+                    sens: row.get(9)?,
+                    overlap: row.get(10)?,
+                    file_name: row.get(11)?,
+                })
+            },
+        )
         .map_err(MigrateError::DataTransfer)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(MigrateError::DataTransfer)?;

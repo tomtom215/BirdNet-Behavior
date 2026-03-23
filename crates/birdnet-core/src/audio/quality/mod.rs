@@ -125,7 +125,7 @@ fn composite_score(snr_db: f32, spectral_flatness_val: f32, rain: bool) -> f32 {
     0.20_f32
         .mul_add(
             rain_penalty,
-            0.40_f32.mul_add(snr_score, 0.40 * flatness_score),
+            snr_score.mul_add(0.40_f32, flatness_score.mul_add(0.40_f32, 0.0_f32)),
         )
         .clamp(0.0, 1.0)
 }
@@ -135,6 +135,7 @@ mod tests {
     use super::*;
     use std::f32::consts::PI;
 
+    #[allow(clippy::cast_precision_loss)]
     fn sine_chunk(freq_hz: f32, n_samples: usize, amplitude: f32) -> Vec<f32> {
         (0..n_samples)
             .map(|i| amplitude * (2.0 * PI * freq_hz * i as f32 / 48_000.0).sin())
@@ -188,12 +189,19 @@ mod tests {
 
         // Noise-like: deterministic pseudo-random (LCG, wrapping arithmetic)
         let mut state: u64 = 0xDEAD_C0DE_CAFE_BABE_u64;
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_possible_wrap,
+            clippy::cast_lossless
+        )]
         let noisy: Vec<f32> = (0..MIN_SAMPLES * 3)
             .map(|_| {
                 state = state
                     .wrapping_mul(6_364_136_223_846_793_005)
                     .wrapping_add(1_442_695_040_888_963_407);
-                ((state >> 33) as f32 / u32::MAX as f32) * 2.0 - 1.0
+                ((state >> 33) as f32 / u32::MAX as f32).mul_add(2.0, -1.0)
             })
             .collect();
         let noisy_score = assess_quality(&noisy, 48_000).unwrap();

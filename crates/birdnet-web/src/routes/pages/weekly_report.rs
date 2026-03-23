@@ -83,6 +83,7 @@ async fn weekly_partial(
 // HTML rendering helpers
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 fn render_weekly_content(
     week_start: &str,
     week_end: &str,
@@ -98,36 +99,30 @@ fn render_weekly_content(
 
     // Week navigation header
     let current_badge = if is_current {
-        r#"<span style='margin-left:0.5rem;font-size:0.8rem;background:var(--accent);color:#fff;padding:0.1rem 0.4rem;border-radius:4px;'>Current Week</span>"#
+        r"<span style='margin-left:0.5rem;font-size:0.8rem;background:var(--accent);color:#fff;padding:0.1rem 0.4rem;border-radius:4px;'>Current Week</span>"
     } else {
         ""
     };
     let today_s = today_string();
     let next_btn = if next_week <= today_s.as_str() {
         format!(
-            r##"<a href='#' hx-get='/pages/weekly-content?week={next}' hx-target='#weekly-content' hx-swap='innerHTML'
-               style="padding:0.3rem 0.75rem;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-muted);">Next &#8594;</a>"##,
-            next = next_week
+            r#"<a href='#' hx-get='/pages/weekly-content?week={next_week}' hx-target='#weekly-content' hx-swap='innerHTML'
+               style="padding:0.3rem 0.75rem;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-muted);">Next &#8594;</a>"#
         )
     } else {
         r#"<span style="padding:0.3rem 0.75rem;color:var(--text-muted);opacity:0.4;">Next &#8594;</span>"#.to_string()
     };
     let _ = write!(
         html,
-        r##"<div class="week-nav" style="display:flex;align-items:center;gap:1rem;margin-bottom:1.5rem;">
-  <a href='#' hx-get='/pages/weekly-content?week={prev}' hx-target='#weekly-content' hx-swap='innerHTML'
+        r#"<div class="week-nav" style="display:flex;align-items:center;gap:1rem;margin-bottom:1.5rem;">
+  <a href='#' hx-get='/pages/weekly-content?week={prev_week}' hx-target='#weekly-content' hx-swap='innerHTML'
      style="padding:0.3rem 0.75rem;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-muted);">&#8592; Prev</a>
   <div style="flex:1;text-align:center;">
-    <strong style="font-size:1.1rem;">{start} &ndash; {end}</strong>
+    <strong style="font-size:1.1rem;">{week_start} &ndash; {week_end}</strong>
     {current_badge}
   </div>
   {next_btn}
-</div>"##,
-        prev = prev_week,
-        start = week_start,
-        end = week_end,
-        current_badge = current_badge,
-        next_btn = next_btn,
+</div>"#,
     );
 
     // Summary stats
@@ -178,8 +173,15 @@ fn render_weekly_content(
         html.push_str(r#"<p style="color:var(--text-muted)">No detections this week.</p>"#);
     } else {
         html.push_str(r#"<ol style="padding-left:1.25rem;">"#);
-        let max_count = top.first().map(|(_, _, c)| *c).unwrap_or(1).max(1);
+        let max_count = top.first().map_or(1, |(_, _, c)| *c).max(1);
         for (sci, com, count) in top {
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                clippy::cast_precision_loss,
+                clippy::cast_possible_wrap,
+                clippy::cast_lossless
+            )]
             let pct = (*count as f64 / max_count as f64 * 100.0) as u32;
             let _ = write!(
                 html,
@@ -269,6 +271,13 @@ fn render_weekly_chart(week_start: &str, daily: &[birdnet_db::sqlite::DailyCount
     );
 
     for (i, &count) in counts.iter().enumerate() {
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss,
+            clippy::cast_possible_wrap,
+            clippy::cast_lossless
+        )]
         let x = left_pad + i as i32 * (bar_w + gap);
         let bar_h = (count as f64 / max_count as f64 * chart_h as f64) as i32;
         let y = chart_h - bar_h;
@@ -318,6 +327,13 @@ fn render_weekly_chart(week_start: &str, daily: &[birdnet_db::sqlite::DailyCount
 // ---------------------------------------------------------------------------
 
 /// Get the 7 date strings for the week starting on `week_start`.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_lossless
+)]
 fn week_dates(week_start: &str) -> [String; 7] {
     let mut result: [String; 7] = Default::default();
     for (i, item) in result.iter_mut().enumerate() {
@@ -329,6 +345,13 @@ fn week_dates(week_start: &str) -> [String; 7] {
 /// Add `delta` days to a YYYY-MM-DD date string. Returns the new date string.
 fn add_days(date: &str, delta: i64) -> String {
     let epoch = date_to_epoch_days(date);
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        clippy::cast_possible_wrap,
+        clippy::cast_lossless
+    )]
     let new_epoch = (epoch as i64 + delta).max(0) as u64;
     let (y, m, d) = days_to_date(new_epoch);
     format!("{y}-{m:02}-{d:02}")
@@ -360,14 +383,13 @@ fn current_week_monday() -> String {
     // We need offset back to Monday (weekday 4 in this system)
     let dow = days % 7; // 0=Thu
     let offset_to_monday: i64 = match dow {
-        4 => 0, // already Monday
         5 => -1,
         6 => -2,
         0 => -3, // Thursday → -3
         1 => -4, // Friday → -4
         2 => -5, // Saturday → -5
         3 => -6, // Sunday → -6
-        _ => 0,
+        _ => 0,  // 4=Monday (already correct) or unexpected value
     };
     add_days(&today, offset_to_monday)
 }

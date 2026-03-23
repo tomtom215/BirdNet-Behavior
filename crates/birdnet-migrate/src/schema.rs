@@ -14,7 +14,7 @@ use crate::error::MigrateError;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum DetectedSchema {
-    /// BirdNET-Pi `BirdDB.txt` / SQLite (all known versions share the same schema).
+    /// BirdNET-Pi `BirdDB.txt` / `SQLite` (all known versions share the same schema).
     BirdNetPi {
         /// Row count in the `detections` table.
         row_count: u64,
@@ -30,7 +30,7 @@ pub enum DetectedSchema {
 
 impl DetectedSchema {
     /// Human-readable name for this schema.
-    pub fn name(&self) -> &'static str {
+    pub const fn name(&self) -> &'static str {
         match self {
             Self::BirdNetPi { .. } => "BirdNET-Pi (BirdDB.txt / SQLite)",
             Self::BirdNetPiCsv { .. } => "BirdNET-Pi CSV/TSV detection log",
@@ -39,7 +39,7 @@ impl DetectedSchema {
     }
 
     /// Row count in the detections table (or estimated line count for CSV).
-    pub fn row_count(&self) -> u64 {
+    pub const fn row_count(&self) -> u64 {
         match self {
             Self::BirdNetPi { row_count }
             | Self::BirdNetPiCsv { row_count }
@@ -48,7 +48,7 @@ impl DetectedSchema {
     }
 
     /// Whether this schema requires CSV import.
-    pub fn is_csv(&self) -> bool {
+    pub const fn is_csv(&self) -> bool {
         matches!(self, Self::BirdNetPiCsv { .. })
     }
 }
@@ -69,7 +69,7 @@ const BIRDNET_PI_COLUMNS: &[&str] = &[
     "file_name",
 ];
 
-/// Open a SQLite file read-only and return the connection.
+/// Open a `SQLite` file read-only and return the connection.
 ///
 /// # Errors
 ///
@@ -146,7 +146,7 @@ pub fn row_count(conn: &Connection, table: &str) -> Result<u64, MigrateError> {
     let count: i64 = conn
         .query_row(&sql, [], |row| row.get(0))
         .map_err(MigrateError::SourceOpen)?;
-    Ok(count.max(0) as u64)
+    Ok(u64::try_from(count.max(0)).unwrap_or(0))
 }
 
 /// Detect the schema of the database at `path`.
@@ -240,7 +240,10 @@ mod tests {
 
     #[test]
     fn has_required_columns_pass() {
-        let actual: Vec<String> = BIRDNET_PI_COLUMNS.iter().map(|s| s.to_string()).collect();
+        let actual: Vec<String> = BIRDNET_PI_COLUMNS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
         assert!(has_required_columns(&actual, BIRDNET_PI_COLUMNS));
     }
 

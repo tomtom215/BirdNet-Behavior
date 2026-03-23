@@ -1,0 +1,139 @@
+name: CI
+
+on:
+  push:
+    branches: ["master", "main", "claude/**"]
+  pull_request:
+    branches: ["master", "main"]
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ── fmt ────────────────────────────────────────────────────────────────────
+  fmt:
+    name: Format (rustfmt)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain (stable + rustfmt)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Check formatting
+        run: cargo fmt --check --all
+
+  # ── clippy ─────────────────────────────────────────────────────────────────
+  clippy:
+    name: Clippy (pedantic + nursery)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain (stable + clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-clippy-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-clippy-
+      - name: Run Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  # ── test ───────────────────────────────────────────────────────────────────
+  test:
+    name: Tests (x86_64)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-test-
+      - name: Run unit and integration tests
+        run: cargo test --workspace --lib --bins
+      - name: Run doc tests
+        run: cargo test --workspace --doc
+
+  # ── doc ────────────────────────────────────────────────────────────────────
+  doc:
+    name: Rustdoc (no broken links)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-doc-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-doc-
+      - name: Build docs (deny broken intra-doc links)
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --workspace --no-deps --document-private-items
+
+  # ── build-check ────────────────────────────────────────────────────────────
+  build:
+    name: Build (debug, all features)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-build-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-build-
+      - name: Build workspace (debug)
+        run: cargo build --workspace
+      - name: Build with analytics feature
+        run: cargo build --workspace --features birdnet-web/analytics
+
+  # ── msrv ───────────────────────────────────────────────────────────────────
+  msrv:
+    name: MSRV (Rust 1.85)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install MSRV toolchain
+        uses: dtolnay/rust-toolchain@1.85
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-msrv-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-msrv-
+      - name: Check MSRV build
+        run: cargo check --workspace

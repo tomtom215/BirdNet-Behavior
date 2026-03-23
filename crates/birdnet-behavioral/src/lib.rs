@@ -18,7 +18,7 @@
 //!
 //! The [`phenology`] module provides SQL query builders for migration timing,
 //! seasonal abundance indices, and inter-annual trend analysis.  These queries
-//! are compatible with both SQLite and DuckDB (see module-level docs for
+//! are compatible with both `SQLite` and `DuckDB` (see module-level docs for
 //! per-function compatibility notes).
 
 #[cfg(feature = "analytics")]

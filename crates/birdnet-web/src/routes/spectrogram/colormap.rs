@@ -1,7 +1,7 @@
 //! Viridis colormap for spectrogram rendering.
 
 /// Approximate viridis colormap: maps t in [0,1] to (R,G,B).
-pub(crate) fn viridis(t: f32) -> (u8, u8, u8) {
+pub fn viridis(t: f32) -> (u8, u8, u8) {
     // Control points: (t, R, G, B)
     let cps: &[(f32, f32, f32, f32)] = &[
         (0.000, 68.0, 1.0, 84.0),
@@ -27,6 +27,13 @@ pub(crate) fn viridis(t: f32) -> (u8, u8, u8) {
     } else {
         (t - t0) / (t1 - t0)
     };
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        clippy::cast_possible_wrap,
+        clippy::cast_lossless
+    )]
     let lerp = |a: f32, b: f32| (a + frac * (b - a)).clamp(0.0, 255.0) as u8;
     (lerp(r0, r1), lerp(g0, g1), lerp(b0, b1))
 }

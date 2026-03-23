@@ -58,7 +58,7 @@ async fn serve_spectrogram(
     // Confirm the path is within the recording directory.
     match file_path.canonicalize() {
         Ok(canonical) => {
-            let rec_canonical = rec_dir.canonicalize().unwrap_or(rec_dir.clone());
+            let rec_canonical = rec_dir.canonicalize().unwrap_or_else(|_| rec_dir.clone());
             if !canonical.starts_with(&rec_canonical) {
                 return (StatusCode::FORBIDDEN, "path traversal denied").into_response();
             }

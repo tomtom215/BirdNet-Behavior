@@ -176,11 +176,11 @@ pub struct Cli {
     /// Language code for species name translation (e.g., "de", "fr", "ja").
     ///
     /// When set, species common names are translated to the specified language
-    /// using BirdNET label files. Default: "en" (English).
+    /// using `BirdNET` label files. Default: "en" (English).
     #[arg(long, default_value = "en", env = "BIRDNET_LANG")]
     pub lang: String,
 
-    /// Directory containing BirdNET language label files for i18n.
+    /// Directory containing `BirdNET` language label files for i18n.
     ///
     /// Label files should be named like `labels_de.txt`, `labels_fr.txt`, etc.
     #[arg(long, env = "BIRDNET_LABELS_DIR")]
@@ -200,7 +200,7 @@ pub struct Cli {
     /// Maximum number of extracted recordings kept per species (0 = unlimited).
     ///
     /// When set, the oldest files beyond this limit are deleted automatically.
-    /// BirdNET-Pi equivalent: MAX_FILES_SPECIES config option.
+    /// `BirdNET-Pi` equivalent: `MAX_FILES_SPECIES` config option.
     #[arg(long, default_value = "0", env = "BIRDNET_MAX_FILES_PER_SPECIES")]
     pub max_files_per_species: u32,
 
@@ -213,14 +213,14 @@ pub struct Cli {
     /// Directory containing custom species images (checked before Wikipedia cache).
     ///
     /// Files should be named `{lowercase_sci_name_with_underscores}.jpg`, e.g.
-    /// `turdus_merula.jpg`. BirdNET-Pi equivalent: CUSTOM_IMAGE directory.
+    /// `turdus_merula.jpg`. `BirdNET-Pi` equivalent: `CUSTOM_IMAGE` directory.
     #[arg(long, env = "BIRDNET_CUSTOM_IMAGE_DIR")]
     pub custom_image_dir: Option<PathBuf>,
 
     /// Path to Apprise config file (alternative/addition to --apprise-url).
     ///
     /// When set, uses the `apprise` CLI tool with `-c <file>` for notifications.
-    /// BirdNET-Pi equivalent: APPRISE_CONFIG_FILE config option.
+    /// `BirdNET-Pi` equivalent: `APPRISE_CONFIG_FILE` config option.
     #[arg(long, env = "BIRDNET_APPRISE_CONFIG")]
     pub apprise_config: Option<PathBuf>,
 
@@ -228,7 +228,7 @@ pub struct Cli {
     ///
     /// Send a weekly summary via Apprise on a fixed weekday.
     /// Values: "monday", "tuesday", ..., "sunday", or "disabled".
-    /// BirdNET-Pi equivalent: weekly_report cron job.
+    /// `BirdNET-Pi` equivalent: `weekly_report` cron job.
     #[arg(long, default_value = "monday", env = "BIRDNET_WEEKLY_REPORT_SCHEDULE")]
     pub weekly_report_schedule: String,
 
@@ -237,14 +237,14 @@ pub struct Cli {
     /// Shifts the pitch of saved detection clips upward by the given number of Hz,
     /// making high-frequency bird calls accessible to people with high-frequency
     /// hearing loss. Requires ffmpeg or sox. Typical values: 1000–4000 Hz.
-    /// BirdNET-Pi equivalent: FREQ_SHIFT + FREQ_SHIFT_AMOUNT config options.
+    /// `BirdNET-Pi` equivalent: `FREQ_SHIFT` + `FREQ_SHIFT_AMOUNT` config options.
     #[arg(long, default_value = "0", env = "BIRDNET_FREQ_SHIFT_HZ")]
     pub freq_shift_hz: i32,
 
     // -----------------------------------------------------------------------
     // MQTT integration
     // -----------------------------------------------------------------------
-    /// MQTT broker hostname or IP address for IoT detection events.
+    /// MQTT broker hostname or IP address for `IoT` detection events.
     ///
     /// When set, each bird detection is published as a JSON payload to the
     /// configured broker.  Compatible with Home Assistant, Node-RED, Mosquitto,
@@ -288,6 +288,16 @@ pub struct Cli {
     /// it immediately to new subscribers.  Useful for Home Assistant sensors.
     #[arg(long, env = "BIRDNET_MQTT_RETAIN")]
     pub mqtt_retain: bool,
+
+    /// Publish Home Assistant MQTT auto-discovery messages at startup.
+    ///
+    /// When enabled, BirdNet-Behavior publishes MQTT discovery payloads to
+    /// `homeassistant/<component>/<uid>/config` so Home Assistant automatically
+    /// creates sensors without manual `configuration.yaml` entries.
+    ///
+    /// Requires `--mqtt-host` to be set.  Harmless if HA is not running.
+    #[arg(long, env = "BIRDNET_MQTT_HA_DISCOVERY")]
+    pub mqtt_ha_discovery: bool,
 
     /// Enable audio quality pre-filtering before ML inference.
     ///

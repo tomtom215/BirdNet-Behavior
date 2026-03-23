@@ -61,7 +61,7 @@ pub(super) fn purge_oldest_files(
     let mut removed = 0_u32;
 
     for (path, _) in &all_files {
-        if removed >= to_remove as u32 {
+        if removed >= u32::try_from(to_remove).unwrap_or(u32::MAX) {
             break;
         }
         if is_protected(path, exclude_paths, locked_file_names) {

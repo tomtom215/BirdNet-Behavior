@@ -39,7 +39,7 @@ ORDER BY detection_date"
 
 /// Shannon diversity index per day.
 ///
-/// Uses DuckDB's `entropy` aggregate (available in DuckDB 0.8+) which
+/// Uses `DuckDB`'s `entropy` aggregate (available in `DuckDB` 0.8+) which
 /// computes the Shannon entropy of a distribution given a column of values.
 /// Falls back to a manual formula if needed.
 #[derive(Debug, Clone)]
@@ -94,21 +94,12 @@ ORDER BY sd.detection_date"
 ///
 /// Shows how species discoveries accumulate — useful for assessing how long
 /// it takes to characterise a site's avifauna.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AccumulationCurve {
     /// Start date (ISO-8601), or earliest available if `None`.
     pub from_date: Option<String>,
     /// End date (ISO-8601), or today if `None`.
     pub to_date: Option<String>,
-}
-
-impl Default for AccumulationCurve {
-    fn default() -> Self {
-        Self {
-            from_date: None,
-            to_date: None,
-        }
-    }
 }
 
 impl QueryPlan for AccumulationCurve {

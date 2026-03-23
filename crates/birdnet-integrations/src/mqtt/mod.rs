@@ -40,9 +40,11 @@
 //!       value_template: "{{ value_json.common_name }}"
 //! ```
 
+pub mod discovery;
 pub mod publisher;
 pub mod types;
 
+pub use discovery::{HaDiscovery, HaDiscoveryConfig};
 pub use publisher::publish;
 pub use types::{ConnAckError, DetectionPayload, MqttConfig, MqttError, QosLevel};
 
@@ -88,6 +90,20 @@ impl MqttClient {
     pub fn publish_status(&self, message: &str) -> Result<(), MqttError> {
         let topic = self.config.status_topic();
         publish(&self.config, &topic, message.as_bytes())
+    }
+
+    /// Publish a JSON `stats/today` payload for the Home Assistant discovery sensor.
+    ///
+    /// Sends `{"count": N}` to `{prefix}/stats/today`.  Call this once per
+    /// hour (or whenever the count changes) to keep the HA entity current.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MqttError`] if the connection or publish fails.
+    pub fn publish_daily_stats(&self, detection_count: i64) -> Result<(), MqttError> {
+        let topic = format!("{}/stats/today", self.config.topic_prefix);
+        let payload = format!(r#"{{"count":{detection_count}}}"#);
+        publish(&self.config, &topic, payload.as_bytes())
     }
 
     /// Return a reference to the underlying configuration.

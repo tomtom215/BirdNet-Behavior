@@ -64,7 +64,7 @@ pub fn generate_report(source_path: &std::path::Path) -> Result<MigrationReport,
     let total_rows = count_total(&conn)?;
     let top_species = query_top_species(&conn, 20)?;
     let unique_species = count_unique_species(&conn)?;
-    let date_range = query_date_range(&conn)?;
+    let date_range = query_date_range(&conn);
     let null_date_rows = count_null_dates(&conn)?;
     let invalid_confidence_rows = count_invalid_confidence(&conn)?;
     let duplicate_rows = count_duplicates(&conn)?;
@@ -174,10 +174,11 @@ fn count_unique_species(conn: &Connection) -> Result<usize, MigrateError> {
             r.get(0)
         })
         .map_err(|e| MigrateError::Query(e.to_string()))?;
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     Ok(n.max(0) as usize)
 }
 
-fn query_date_range(conn: &Connection) -> Result<Option<(String, String)>, MigrateError> {
+fn query_date_range(conn: &Connection) -> Option<(String, String)> {
     let result = conn.query_row(
         "SELECT MIN(Date), MAX(Date) FROM detections WHERE Date IS NOT NULL",
         [],
@@ -189,8 +190,8 @@ fn query_date_range(conn: &Connection) -> Result<Option<(String, String)>, Migra
         },
     );
     match result {
-        Ok((Some(min), Some(max))) => Ok(Some((min, max))),
-        _ => Ok(None),
+        Ok((Some(min), Some(max))) => Some((min, max)),
+        _ => None,
     }
 }
 
@@ -240,7 +241,7 @@ fn query_species_counts(
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
         })
         .map_err(|e| MigrateError::Query(e.to_string()))?
-        .filter_map(|r| r.ok())
+        .filter_map(std::result::Result::ok)
         .collect();
 
     Ok(map)
@@ -287,6 +288,7 @@ fn count_duplicates(conn: &Connection) -> Result<i64, MigrateError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::traits::Migrator as _;
     use rusqlite::Connection;
     use tempfile::NamedTempFile;
 
@@ -379,7 +381,6 @@ mod tests {
         drop(dst);
 
         // Run migration
-        use crate::traits::Migrator as _;
         let progress = crate::progress::ProgressHandle::new();
         crate::birdnet_pi::importer::BirdNetPiImporter
             .migrate(src.path(), dst_tmp.path(), &progress)

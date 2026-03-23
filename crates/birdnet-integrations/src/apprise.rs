@@ -336,7 +336,7 @@ impl Client {
     }
 
     /// Whether an Apprise config file is configured.
-    pub fn has_config_file(&self) -> bool {
+    pub const fn has_config_file(&self) -> bool {
         self.config_file.is_some()
     }
 
