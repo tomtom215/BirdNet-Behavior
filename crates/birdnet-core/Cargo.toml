@@ -36,6 +36,11 @@ notify.workspace = true
 proptest.workspace = true
 tempfile = "3"
 filetime = "0.2"
+criterion.workspace = true
+
+[[bench]]
+name = "audio_pipeline"
+harness = false
 
 [lints]
 workspace = true

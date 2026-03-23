@@ -15,8 +15,14 @@
 //! Enable the `analytics` feature to compile the `DuckDB` connection module.
 //! Without it, only the query builders and types are available (useful for
 //! SQL generation and type definitions without the heavy `DuckDB` C++ dependency).
+//!
+//! The [`phenology`] module provides SQL query builders for migration timing,
+//! seasonal abundance indices, and inter-annual trend analysis.  These queries
+//! are compatible with both SQLite and DuckDB (see module-level docs for
+//! per-function compatibility notes).
 
 #[cfg(feature = "analytics")]
 pub mod connection;
+pub mod phenology;
 pub mod queries;
 pub mod types;

@@ -25,6 +25,7 @@ tracing.workspace = true
 duckdb.workspace = true
 rusqlite.workspace = true
 tempfile.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

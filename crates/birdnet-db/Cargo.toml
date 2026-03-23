@@ -19,6 +19,12 @@ rusqlite.workspace = true
 [dev-dependencies]
 proptest.workspace = true
 tempfile = "3"
+criterion.workspace = true
+rusqlite.workspace = true
+
+[[bench]]
+name = "db_queries"
+harness = false
 
 [lints]
 workspace = true

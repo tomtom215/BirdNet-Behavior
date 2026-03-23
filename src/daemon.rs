@@ -13,7 +13,7 @@ use birdnet_integrations::notification::{
 };
 
 use crate::cli::Cli;
-use crate::integrations::{AppriseHandle, EmailHandle, HeartbeatHandle};
+use crate::integrations::{AppriseHandle, EmailHandle, HeartbeatHandle, MqttHandle};
 
 /// Start the detection daemon in a background thread.
 ///
@@ -28,6 +28,7 @@ pub fn start_detection_daemon(
     birdweather: Option<birdnet_integrations::birdweather::Client>,
     email: Option<EmailHandle>,
     heartbeat: Option<HeartbeatHandle>,
+    mqtt: Option<MqttHandle>,
     notification_filter: NotificationFilter,
     notification_template: NotificationTemplate,
 ) -> Option<birdnet_core::detection::daemon::DaemonHandle> {
@@ -172,6 +173,7 @@ pub fn start_detection_daemon(
                     birdweather,
                     email,
                     heartbeat,
+                    mqtt,
                     notification_filter,
                     notification_template,
                     rt_handle,
@@ -199,6 +201,7 @@ fn event_processor(
     birdweather: Option<birdnet_integrations::birdweather::Client>,
     email: Option<EmailHandle>,
     heartbeat: Option<HeartbeatHandle>,
+    mqtt: Option<MqttHandle>,
     notification_filter: NotificationFilter,
     notification_template: NotificationTemplate,
     rt_handle: tokio::runtime::Handle,
@@ -400,6 +403,35 @@ fn event_processor(
                     tracing::debug!(error = %e, "heartbeat ping failed");
                 }
             });
+        }
+
+        // MQTT publish (blocking I/O, handled in spawn_blocking thread).
+        if let Some(ref mqtt_client) = mqtt {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let payload = birdnet_integrations::mqtt::DetectionPayload {
+                timestamp: format!("{}T{}", detection.date, detection.time),
+                scientific_name: detection.scientific_name.clone(),
+                common_name: detection.common_name.clone(),
+                confidence: detection.confidence,
+                confidence_pct: (detection.confidence * 100.0).round() as u32,
+                file_name: detection.file_name_extr.clone(),
+                rtsp_id: event
+                    .source_file
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .and_then(|n| {
+                        birdnet_core::detection::types::RecordingFile::parse(n)
+                            .and_then(|rf| rf.rtsp_id)
+                    }),
+            };
+            let client = Arc::clone(mqtt_client);
+            if let Err(e) = client.publish_detection(&payload) {
+                tracing::debug!(
+                    error = %e,
+                    species = %detection.common_name,
+                    "MQTT publish failed (broker may be offline)"
+                );
+            }
         }
 
         tracing::debug!(
