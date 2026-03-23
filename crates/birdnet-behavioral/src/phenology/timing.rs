@@ -1,6 +1,6 @@
 //! SQL query builders for phenological timing analysis.
 //!
-//! Generates standard SQL (compatible with both SQLite and DuckDB) that
+//! Generates standard SQL (compatible with both `SQLite` and `DuckDB`) that
 //! extracts first and last detection dates per species per year, computes
 //! day-of-year values, and derives multi-year migration windows.
 //!
@@ -21,7 +21,7 @@ use crate::phenology::types::PhenologyParams;
 /// - `presence_days` (approximate number of days between first and last)
 /// - `detection_count`
 ///
-/// Compatible with both SQLite 3.x and DuckDB 1.x.
+/// Compatible with both `SQLite` 3.x and `DuckDB` 1.x.
 pub fn phenology_timing_sql(params: &PhenologyParams) -> String {
     let species_filter = species_where_clause(params.species.as_deref(), "WHERE");
     let year_conditions = year_conditions(params.year_start, params.year_end);
@@ -61,9 +61,9 @@ pub fn phenology_timing_sql(params: &PhenologyParams) -> String {
 /// window estimate insensitive to outlier years.
 ///
 /// Requires at least `min_years` years of observations per species.
-/// Uses DuckDB `percentile_cont` window functions.
+/// Uses `DuckDB` `percentile_cont` window functions.
 ///
-/// **Note:** This query requires DuckDB.  For SQLite-only deployments
+/// **Note:** This query requires `DuckDB`.  For SQLite-only deployments
 /// use [`phenology_timing_sql`] and compute percentiles client-side.
 pub fn migration_window_sql(min_years: u32, params: &PhenologyParams) -> String {
     let species_filter = species_where_clause(params.species.as_deref(), "WHERE");
@@ -130,7 +130,7 @@ pub fn first_detection_sql(params: &PhenologyParams) -> String {
 /// Returns detection counts per species per year, plus year-over-year
 /// change percentage (`yoy_change_pct`).  Useful for trend analysis.
 ///
-/// **Note:** Uses DuckDB `LAG` window function; not compatible with SQLite.
+/// **Note:** Uses `DuckDB` `LAG` window function; not compatible with `SQLite`.
 pub fn interannual_trend_sql(params: &PhenologyParams) -> String {
     let species_filter = species_where_clause(params.species.as_deref(), "WHERE");
     format!(

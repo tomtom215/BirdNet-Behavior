@@ -25,7 +25,7 @@ pub struct IntraDay {
 
 impl IntraDay {
     /// Create for the given date with the default 30-minute threshold.
-    pub fn for_date(date: String) -> Self {
+    pub const fn for_date(date: String) -> Self {
         Self {
             date,
             threshold_minutes: 30,
@@ -157,7 +157,7 @@ pub struct AbsenceStreak {
 
 impl AbsenceStreak {
     /// Build for the given species.
-    pub fn for_species(species: String) -> Self {
+    pub const fn for_species(species: String) -> Self {
         Self {
             species,
             lookback_days: 90,

@@ -130,8 +130,15 @@ pub(super) fn apply_freq_shift(
     // ffmpeg approach: use asetrate to shift the sample rate, then resample back.
     // This is equivalent to speeding up/slowing down, shifting all frequencies.
     // shift_hz > 0 shifts up (makes calls accessible to those with high-freq hearing loss).
-    #[allow(clippy::cast_precision_loss)]
-    let new_rate = (sample_rate as f64 * (1.0 + shift_hz as f64 / sample_rate as f64)) as u32;
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_possible_wrap,
+        clippy::cast_lossless
+    )]
+    let new_rate =
+        (f64::from(sample_rate) * (1.0 + f64::from(shift_hz) / f64::from(sample_rate))) as u32;
     let filter = format!("asetrate={new_rate},aresample={sample_rate}");
 
     let ffmpeg_ok = Command::new("ffmpeg")
@@ -154,8 +161,14 @@ pub(super) fn apply_freq_shift(
 
     // sox fallback: use pitch effect (shift in cents, ~100 cents = 1 semitone).
     // 1 Hz shift ~ 100 * log2(1 + shift_hz / sample_rate) * 100 cents (approximation).
-    #[allow(clippy::cast_precision_loss)]
-    let cents = (1200.0f64 * (1.0 + shift_hz as f64 / sample_rate as f64).log2()) as i32;
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_possible_wrap,
+        clippy::cast_lossless
+    )]
+    let cents = (1200.0f64 * (1.0 + f64::from(shift_hz) / f64::from(sample_rate)).log2()) as i32;
 
     Command::new("sox")
         .arg(input_path)

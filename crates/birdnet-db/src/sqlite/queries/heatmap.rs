@@ -11,7 +11,7 @@ use crate::sqlite::connection::DbError;
 /// One cell in the hour × day-of-week heatmap.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct HeatmapCell {
-    /// Day of week: 0 = Sunday … 6 = Saturday (SQLite `strftime('%w')`).
+    /// Day of week: 0 = Sunday … 6 = Saturday (`SQLite` `strftime('%w')`).
     pub dow: u8,
     /// Hour of day: 0-23.
     pub hour: u8,
@@ -34,7 +34,7 @@ pub struct HourTotal {
 ///
 /// # Errors
 ///
-/// Returns [`DbError`] on SQLite failure.
+/// Returns [`DbError`] on `SQLite` failure.
 pub fn weekly_heatmap(conn: &Connection, days: u32) -> Result<Vec<HeatmapCell>, DbError> {
     let mut stmt = conn.prepare(
         "SELECT
@@ -66,7 +66,7 @@ pub fn weekly_heatmap(conn: &Connection, days: u32) -> Result<Vec<HeatmapCell>, 
 ///
 /// # Errors
 ///
-/// Returns [`DbError`] on SQLite failure.
+/// Returns [`DbError`] on `SQLite` failure.
 pub fn hourly_totals(conn: &Connection, days: u32) -> Result<Vec<HourTotal>, DbError> {
     let mut stmt = conn.prepare(
         "SELECT
@@ -97,7 +97,7 @@ pub fn hourly_totals(conn: &Connection, days: u32) -> Result<Vec<HourTotal>, DbE
 ///
 /// # Errors
 ///
-/// Returns [`DbError`] on SQLite failure.
+/// Returns [`DbError`] on `SQLite` failure.
 pub fn species_daily_heatmap(
     conn: &Connection,
     days: u32,

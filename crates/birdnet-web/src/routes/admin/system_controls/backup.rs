@@ -25,18 +25,18 @@ pub(super) async fn full_backup(State(state): State<AppState>) -> axum::response
 
         let mut args = vec!["czf".to_string(), tmp.to_string_lossy().to_string()];
 
-        if db_path.exists() {
-            if let Some(name) = db_path.file_name() {
-                args.push("-C".to_string());
-                args.push(
-                    db_path
-                        .parent()
-                        .unwrap_or_else(|| std::path::Path::new("."))
-                        .to_string_lossy()
-                        .to_string(),
-                );
-                args.push(name.to_string_lossy().to_string());
-            }
+        if db_path.exists()
+            && let Some(name) = db_path.file_name()
+        {
+            args.push("-C".to_string());
+            args.push(
+                db_path
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .to_string_lossy()
+                    .to_string(),
+            );
+            args.push(name.to_string_lossy().to_string());
         }
 
         let conf_path = base_dir.join("birdnet.conf");
@@ -46,18 +46,18 @@ pub(super) async fn full_backup(State(state): State<AppState>) -> axum::response
             args.push("birdnet.conf".to_string());
         }
 
-        if rec_dir.exists() {
-            if let Some(name) = rec_dir.file_name() {
-                args.push("-C".to_string());
-                args.push(
-                    rec_dir
-                        .parent()
-                        .unwrap_or_else(|| std::path::Path::new("."))
-                        .to_string_lossy()
-                        .to_string(),
-                );
-                args.push(name.to_string_lossy().to_string());
-            }
+        if rec_dir.exists()
+            && let Some(name) = rec_dir.file_name()
+        {
+            args.push("-C".to_string());
+            args.push(
+                rec_dir
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .to_string_lossy()
+                    .to_string(),
+            );
+            args.push(name.to_string_lossy().to_string());
         }
 
         let status = std::process::Command::new("tar").args(&args).status();
@@ -167,7 +167,12 @@ pub(super) async fn restore_backup(
         }
 
         let listing = String::from_utf8_lossy(&list_output.stdout);
-        let has_db = listing.lines().any(|l| l.ends_with(".db"));
+        let has_db = listing.lines().any(|l| {
+            std::path::Path::new(l)
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("db"))
+        });
 
         if !has_db {
             let _ = std::fs::remove_file(&tmp);

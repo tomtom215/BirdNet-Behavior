@@ -83,7 +83,7 @@ impl fmt::Debug for SpeciesFilter {
 
 impl SpeciesFilter {
     /// Create a species filter without a metadata model (no filtering).
-    pub fn new_passthrough(config: SpeciesFilterConfig) -> Self {
+    pub const fn new_passthrough(config: SpeciesFilterConfig) -> Self {
         Self {
             session: None,
             config,
@@ -149,12 +149,11 @@ impl SpeciesFilter {
 
         // Check cache
         let key = CacheKey::new(lat, lon, week);
-        if let Some(ref cached_key) = self.cache_key {
-            if *cached_key == key {
-                if let Some(ref cached) = self.cache_result {
-                    return Ok(cached.clone());
-                }
-            }
+        if let Some(ref cached_key) = self.cache_key
+            && *cached_key == key
+            && let Some(ref cached) = self.cache_result
+        {
+            return Ok(cached.clone());
         }
 
         // Run metadata model: input shape [1, 3] -> output [1, N]
@@ -178,10 +177,10 @@ impl SpeciesFilter {
         // Collect species above threshold
         let mut passing = HashSet::new();
         for (i, &prob) in probabilities.iter().enumerate() {
-            if prob >= self.config.sf_thresh {
-                if let Some(label) = labels.get(i) {
-                    passing.insert(label.scientific_name.clone());
-                }
+            if prob >= self.config.sf_thresh
+                && let Some(label) = labels.get(i)
+            {
+                passing.insert(label.scientific_name.clone());
             }
         }
 

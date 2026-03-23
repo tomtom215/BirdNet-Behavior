@@ -48,38 +48,58 @@ pub struct SpeciesNameForm {
     pub name: String,
 }
 
+/// Add a species to the exclusion list and return the updated partial.
+///
+/// # Errors
+///
+/// This function currently always returns `Ok`.
 pub async fn add_exclude(
     State(state): State<AppState>,
     Form(form): Form<SpeciesNameForm>,
 ) -> Result<Html<String>, StatusCode> {
-    modify_list(&state, "species_exclude", &form.name, ListAction::Add)?;
+    modify_list(&state, "species_exclude", &form.name, &ListAction::Add);
     let (exclude, include) = load_lists(&state);
     Ok(Html(render_species_partial(&exclude, &include)))
 }
 
+/// Remove a species from the exclusion list and return the updated partial.
+///
+/// # Errors
+///
+/// This function currently always returns `Ok`.
 pub async fn remove_exclude(
     State(state): State<AppState>,
     Form(form): Form<SpeciesNameForm>,
 ) -> Result<Html<String>, StatusCode> {
-    modify_list(&state, "species_exclude", &form.name, ListAction::Remove)?;
+    modify_list(&state, "species_exclude", &form.name, &ListAction::Remove);
     let (exclude, include) = load_lists(&state);
     Ok(Html(render_species_partial(&exclude, &include)))
 }
 
+/// Add a species to the allow-list and return the updated partial.
+///
+/// # Errors
+///
+/// This function currently always returns `Ok`.
 pub async fn add_include(
     State(state): State<AppState>,
     Form(form): Form<SpeciesNameForm>,
 ) -> Result<Html<String>, StatusCode> {
-    modify_list(&state, "species_include", &form.name, ListAction::Add)?;
+    modify_list(&state, "species_include", &form.name, &ListAction::Add);
     let (exclude, include) = load_lists(&state);
     Ok(Html(render_species_partial(&exclude, &include)))
 }
 
+/// Remove a species from the allow-list and return the updated partial.
+///
+/// # Errors
+///
+/// This function currently always returns `Ok`.
 pub async fn remove_include(
     State(state): State<AppState>,
     Form(form): Form<SpeciesNameForm>,
 ) -> Result<Html<String>, StatusCode> {
-    modify_list(&state, "species_include", &form.name, ListAction::Remove)?;
+    modify_list(&state, "species_include", &form.name, &ListAction::Remove);
     let (exclude, include) = load_lists(&state);
     Ok(Html(render_species_partial(&exclude, &include)))
 }
@@ -100,6 +120,11 @@ pub struct ThresholdForm {
     pub threshold: f64,
 }
 
+/// Set a per-species confidence threshold and return the updated thresholds partial.
+///
+/// # Errors
+///
+/// Returns `StatusCode::BAD_REQUEST` if the species name is empty or the threshold is out of range.
 pub async fn set_threshold(
     State(state): State<AppState>,
     Form(form): Form<ThresholdForm>,
@@ -121,6 +146,11 @@ pub struct ThresholdDeleteForm {
     pub sci_name: String,
 }
 
+/// Delete a per-species confidence threshold and return the updated thresholds partial.
+///
+/// # Errors
+///
+/// Returns `StatusCode::INTERNAL_SERVER_ERROR` if the database operation fails.
 pub async fn delete_threshold(
     State(state): State<AppState>,
     Form(form): Form<ThresholdDeleteForm>,
@@ -160,15 +190,10 @@ fn parse_list(val: Option<&str>) -> Vec<String> {
         .collect()
 }
 
-fn modify_list(
-    state: &AppState,
-    key: &'static str,
-    name: &str,
-    action: ListAction,
-) -> Result<(), StatusCode> {
+fn modify_list(state: &AppState, key: &'static str, name: &str, action: &ListAction) {
     let name = name.trim().to_string();
     if name.is_empty() {
-        return Ok(());
+        return;
     }
 
     state.with_db(|conn| {
@@ -187,6 +212,4 @@ fn modify_list(
         let joined = list.join(", ");
         set(conn, key, &joined, SettingsCategory::Species).ok();
     });
-
-    Ok(())
 }

@@ -1,7 +1,7 @@
 //! Localization framework for species common names.
 //!
-//! BirdNET supports 36 languages for species common names. This module loads
-//! and manages language packs from BirdNET label files, providing translation
+//! `BirdNET` supports 36 languages for species common names. This module loads
+//! and manages language packs from `BirdNET` label files, providing translation
 //! from scientific names to localized common names.
 
 use std::collections::HashMap;
@@ -57,7 +57,7 @@ pub struct LanguagePack {
 }
 
 impl LanguagePack {
-    /// Load a language pack from a BirdNET labels file.
+    /// Load a language pack from a `BirdNET` labels file.
     ///
     /// Searches for the labels file in the given directory, trying:
     /// 1. `{labels_dir}/{lang_code}_labels.txt`
@@ -236,7 +236,7 @@ fn is_supported_language(code: &str) -> bool {
     SUPPORTED_LANGUAGES.iter().any(|(c, _)| *c == code)
 }
 
-/// Parse a BirdNET labels file into a map of scientific name to common name.
+/// Parse a `BirdNET` labels file into a map of scientific name to common name.
 ///
 /// Each line is `"Scientific Name_Common Name"`. Lines that are empty, start with
 /// `#`, or lack an underscore separator are skipped.
@@ -273,9 +273,9 @@ fn parse_labels(content: &str) -> Result<HashMap<String, String>, I18nError> {
 }
 
 /// Find the position of the underscore that separates the scientific name from the
-/// common name in a BirdNET label line.
+/// common name in a `BirdNET` label line.
 ///
-/// BirdNET label format: `"Genus species_Common Name"`.
+/// `BirdNET` label format: `"Genus species_Common Name"`.
 /// We look for the first underscore that follows the "Genus species" pattern (i.e.,
 /// after at least one space and one more word).
 fn find_label_separator(line: &str) -> Option<usize> {

@@ -46,7 +46,7 @@ async fn player_page(
     let date_safe = escape_html(date);
 
     let content = format!(
-        r##"<div class="player-container">
+        r#"<div class="player-container">
   <div class="player-header">
     <h2>{species_safe}</h2>
     <div class="player-meta">
@@ -105,7 +105,7 @@ async fn player_page(
       </button>
     </div>
   </div>
-</div>"##
+</div>"#
     );
 
     let html = format!(
@@ -157,7 +157,7 @@ body { background:#0f172a; color:#e2e8f0; font-family:system-ui,sans-serif; }
 .btn-small:hover { background:#475569; }
 "#;
 
-const PLAYER_JS: &str = r#"
+const PLAYER_JS: &str = r"
 const audio = document.getElementById('detection-audio');
 const playBtn = document.getElementById('play-btn');
 const playIcon = document.getElementById('play-icon');
@@ -251,7 +251,7 @@ audio.addEventListener('ended', function() {
 });
 
 audio.addEventListener('loadedmetadata', updateProgress);
-"#;
+";
 
 #[cfg(test)]
 mod tests {

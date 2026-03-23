@@ -279,6 +279,10 @@ impl AppState {
     // -----------------------------------------------------------------------
 
     /// Execute a closure with a reference to the `SQLite` database connection.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex is poisoned.
     pub fn with_db<F, T>(&self, f: F) -> T
     where
         F: FnOnce(&Connection) -> T,
@@ -288,6 +292,10 @@ impl AppState {
     }
 
     /// Execute a closure with a reference to the `DuckDB` analytics database.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex is poisoned.
     #[cfg(feature = "analytics")]
     pub fn with_analytics<F, T>(&self, f: F) -> Option<T>
     where
@@ -300,6 +308,10 @@ impl AppState {
     }
 
     /// Execute a closure with a `TimeSeriesDb` executor backed by the DuckDB connection.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex is poisoned.
     #[cfg(feature = "analytics")]
     pub fn with_timeseries<F, T>(
         &self,
@@ -359,6 +371,10 @@ impl AppState {
     }
 
     /// Execute a closure with a reference to the i18n manager.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex is poisoned.
     pub fn with_i18n_ref<F, T>(&self, f: F) -> Option<T>
     where
         F: FnOnce(&I18nManager) -> T,

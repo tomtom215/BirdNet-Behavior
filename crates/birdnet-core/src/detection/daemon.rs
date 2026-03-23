@@ -88,7 +88,7 @@ pub struct DaemonConfig {
     pub latitude: Option<f64>,
     /// Station longitude (for species occurrence filtering).
     pub longitude: Option<f64>,
-    /// Per-species confidence threshold overrides (sci_name → threshold).
+    /// Per-species confidence threshold overrides (`sci_name` → threshold).
     ///
     /// Species in this map use the specified threshold instead of the global one.
     pub species_thresholds: std::collections::HashMap<String, f64>,
@@ -278,10 +278,10 @@ pub fn process_and_infer_filtered(
     for (chunk, detections) in chunks.iter().zip(filtered_predictions.iter()) {
         for detection in detections {
             // Apply species filter if we have one
-            if let Some(ref allowed) = allowed_species {
-                if !allowed.contains(&detection.scientific_name) {
-                    continue;
-                }
+            if let Some(ref allowed) = allowed_species
+                && !allowed.contains(&detection.scientific_name)
+            {
+                continue;
             }
 
             // Apply per-species confidence threshold (checked in event_processor instead)
@@ -326,6 +326,7 @@ pub fn process_and_infer_filtered(
 /// # Errors
 ///
 /// Returns `DaemonError` if the model cannot be loaded or the watcher fails.
+#[allow(clippy::too_many_lines)]
 pub fn run_daemon(
     config: &DaemonConfig,
     event_tx: mpsc::Sender<DetectionEvent>,

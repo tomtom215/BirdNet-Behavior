@@ -1,4 +1,4 @@
-//! Persistent settings store backed by SQLite.
+//! Persistent settings store backed by `SQLite`.
 //!
 //! Settings are key-value pairs stored in a `settings` table alongside
 //! detections.  The web admin panel reads and writes settings through this
@@ -12,7 +12,7 @@ use std::fmt;
 /// Settings-specific errors.
 #[derive(Debug)]
 pub enum SettingsError {
-    /// SQLite error.
+    /// `SQLite` error.
     Sqlite(rusqlite::Error),
     /// Requested setting not found.
     NotFound(String),
@@ -46,7 +46,7 @@ impl From<rusqlite::Error> for SettingsError {
 }
 
 /// A setting category for grouping in the admin UI.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SettingsCategory {
     Audio,
@@ -59,7 +59,7 @@ pub enum SettingsCategory {
 }
 
 impl SettingsCategory {
-    fn as_str(&self) -> &str {
+    const fn as_str(&self) -> &str {
         match self {
             Self::Audio => "audio",
             Self::Location => "location",
@@ -106,7 +106,7 @@ pub struct Setting {
 ///
 /// # Errors
 ///
-/// Returns `SettingsError` on SQLite failure.
+/// Returns `SettingsError` on `SQLite` failure.
 pub fn ensure_settings_table(conn: &Connection) -> Result<(), SettingsError> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS settings (
@@ -142,7 +142,7 @@ pub fn get(conn: &Connection, key: &str) -> Result<String, SettingsError> {
 ///
 /// # Errors
 ///
-/// Returns `SettingsError` on SQLite failure.
+/// Returns `SettingsError` on `SQLite` failure.
 pub fn get_or(conn: &Connection, key: &str, default: &str) -> Result<String, SettingsError> {
     match get(conn, key) {
         Ok(v) => Ok(v),
@@ -169,7 +169,7 @@ where
 ///
 /// # Errors
 ///
-/// Returns `SettingsError` on SQLite failure.
+/// Returns `SettingsError` on `SQLite` failure.
 pub fn set(
     conn: &Connection,
     key: &str,
@@ -192,7 +192,7 @@ pub fn set(
 ///
 /// # Errors
 ///
-/// Returns `SettingsError` on SQLite failure.
+/// Returns `SettingsError` on `SQLite` failure.
 pub fn delete(conn: &Connection, key: &str) -> Result<bool, SettingsError> {
     let n = conn.execute("DELETE FROM settings WHERE key = ?1", params![key])?;
     Ok(n > 0)
@@ -202,7 +202,7 @@ pub fn delete(conn: &Connection, key: &str) -> Result<bool, SettingsError> {
 ///
 /// # Errors
 ///
-/// Returns `SettingsError` on SQLite failure.
+/// Returns `SettingsError` on `SQLite` failure.
 pub fn list(
     conn: &Connection,
     category: Option<&SettingsCategory>,
@@ -245,7 +245,7 @@ pub fn list(
 ///
 /// # Errors
 ///
-/// Returns `SettingsError` on any SQLite failure; the transaction is rolled back.
+/// Returns `SettingsError` on any `SQLite` failure; the transaction is rolled back.
 pub fn set_many(
     conn: &Connection,
     items: &[(&str, &str, SettingsCategory)],

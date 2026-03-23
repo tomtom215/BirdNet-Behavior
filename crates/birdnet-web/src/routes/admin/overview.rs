@@ -11,6 +11,8 @@ use axum::http::StatusCode;
 use axum::response::Html;
 use axum::{Router, routing::get};
 
+use std::fmt::Write as _;
+
 use crate::routes::pages::{escape_html, today_count, today_date_string};
 use crate::state::AppState;
 use crate::system_info::sample as sample_system;
@@ -59,12 +61,11 @@ fn blocking_stats(state: &AppState) -> String {
         &today.to_string(),
         "#a78bfa",
     );
-    out.push_str(&format!(
+    write!(
+        out,
         r#"<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1rem;margin-bottom:1.5rem;">{stat_card_total}{stat_card_species}{stat_card_today}</div>"#,
-        stat_card_total = stat_card_total,
-        stat_card_species = stat_card_species,
-        stat_card_today = stat_card_today,
-    ));
+    )
+    .unwrap_or_default();
 
     // System health row
     let cpu = format!("{:.0}%", sys.cpu_usage_pct);
@@ -75,18 +76,16 @@ fn blocking_stats(state: &AppState) -> String {
     );
     let temp = sys
         .cpu_temp_celsius
-        .map(|t| format!("{t:.1}\u{b0}C"))
-        .unwrap_or_else(|| "N/A".to_string());
+        .map_or_else(|| "N/A".to_string(), |t| format!("{t:.1}\u{b0}C"));
 
     let cpu_card = stat_card("CPU", &cpu, "#fb923c");
     let mem_card = stat_card("Memory", &mem, "#60a5fa");
     let temp_card = stat_card("Temperature", &temp, "#f472b6");
-    out.push_str(&format!(
+    write!(
+        out,
         r#"<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1rem;">{cpu_card}{mem_card}{temp_card}</div>"#,
-        cpu_card = cpu_card,
-        mem_card = mem_card,
-        temp_card = temp_card,
-    ));
+    )
+    .unwrap_or_default();
 
     out
 }
@@ -102,6 +101,7 @@ fn stat_card(label: &str, value: &str, color: &str) -> String {
     )
 }
 
+#[allow(clippy::too_many_lines)]
 fn render_overview_page(stats_html: &str) -> String {
     format!(
         r#"<!DOCTYPE html>

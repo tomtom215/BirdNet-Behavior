@@ -190,7 +190,13 @@ mod tests {
         // Create a source WAV file with 3 seconds of audio.
         let sample_rate = 48_000_u32;
         let duration_secs = 3.0_f32;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_possible_wrap,
+            clippy::cast_lossless
+        )]
         let num_samples = (duration_secs * sample_rate as f32) as usize;
         let samples: Vec<f32> = (0..num_samples)
             .map(|i| {

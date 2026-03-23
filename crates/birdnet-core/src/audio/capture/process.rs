@@ -171,7 +171,7 @@ pub fn spawn_capture(config: &RecordingConfig) -> Result<CaptureProcess, Capture
 }
 
 /// Return the system tool name required for the given source.
-pub fn required_tool(source: &CaptureSource) -> &'static str {
+pub const fn required_tool(source: &CaptureSource) -> &'static str {
     match source {
         CaptureSource::Microphone { .. } => "arecord",
         CaptureSource::Rtsp { .. } => "ffmpeg",
@@ -182,6 +182,7 @@ pub fn required_tool(source: &CaptureSource) -> &'static str {
 mod tests {
     use super::super::types::AudioFormat;
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn is_audio_file_wav() {
@@ -230,7 +231,6 @@ mod tests {
         if is_tool_available("arecord") {
             return; // skip if arecord is present (would actually start recording)
         }
-        use std::path::PathBuf;
         let config = RecordingConfig {
             source: CaptureSource::Microphone {
                 device: "plughw:1,0".into(),

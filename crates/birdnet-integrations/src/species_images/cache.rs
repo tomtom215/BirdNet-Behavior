@@ -94,6 +94,7 @@ impl DiskCache {
     /// # Errors
     ///
     /// Returns `ImageError::Io` on write failure.
+    #[allow(clippy::significant_drop_tightening)]
     pub fn store(&self, cache_key: &str, bytes: &[u8]) -> Result<PathBuf, ImageError> {
         let path = self.path_for(cache_key);
         std::fs::write(&path, bytes)?;
@@ -119,6 +120,7 @@ impl DiskCache {
     /// Update the remote URL and metadata for an entry already in the index.
     ///
     /// Called after a successful fetch to persist the URL alongside the path.
+    #[allow(clippy::significant_drop_tightening)]
     pub fn update_metadata(&self, cache_key: &str, img: &SpeciesImage) {
         let mut index = self
             .index
@@ -127,11 +129,11 @@ impl DiskCache {
         let entry = index
             .entry(cache_key.to_string())
             .or_insert_with(|| img.clone());
-        entry.url = img.url.clone();
-        entry.description = img.description.clone();
-        entry.wiki_url = img.wiki_url.clone();
+        entry.url.clone_from(&img.url);
+        entry.description.clone_from(&img.description);
+        entry.wiki_url.clone_from(&img.wiki_url);
         if entry.cached_path.is_none() {
-            entry.cached_path = img.cached_path.clone();
+            entry.cached_path.clone_from(&img.cached_path);
         }
     }
 

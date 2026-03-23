@@ -117,7 +117,7 @@ pub fn init_i18n(
     let lang = if cli.lang == "en" {
         config
             .and_then(|c| c.get("DATABASE_LANG"))
-            .map_or_else(|| "en".to_string(), |v| v.to_string())
+            .map_or_else(|| "en".to_string(), std::string::ToString::to_string)
     } else {
         cli.lang.clone()
     };

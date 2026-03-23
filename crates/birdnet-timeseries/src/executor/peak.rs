@@ -1,6 +1,7 @@
 //! Peak activity window query methods.
 
 use crate::error::TimeSeriesError;
+use crate::queries::QueryPlan;
 use crate::queries::peak::{PeakWindows, SpeciesPeak};
 use crate::types::{params::PeakParams, results::PeakWindowRow};
 

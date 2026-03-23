@@ -11,7 +11,7 @@ use crate::error::MigrateError;
 use crate::progress::ProgressHandle;
 use crate::schema::DetectedSchema;
 
-/// Detects whether a SQLite file uses a known source schema.
+/// Detects whether a `SQLite` file uses a known source schema.
 pub trait SchemaDetector: Send + Sync {
     /// Test whether the database at `path` matches this schema.
     ///

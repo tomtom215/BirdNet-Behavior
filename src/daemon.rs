@@ -18,7 +18,7 @@ use crate::integrations::{AppriseHandle, EmailHandle, HeartbeatHandle, MqttHandl
 /// Start the detection daemon in a background thread.
 ///
 /// Returns the daemon handle, or `None` if the model/labels are not configured.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub fn start_detection_daemon(
     cli: &Cli,
     config: Option<&birdnet_core::config::Config>,
@@ -145,15 +145,15 @@ pub fn start_detection_daemon(
 
     // Build audio extraction config from CLI args.
     let audio_format = AudioFormat::parse(&cli.audio_format);
-    let extraction_output_dir = daemon_config
-        .watch_dir
-        .parent()
-        .map(|p| p.join("Extracted"))
-        .unwrap_or_else(|| PathBuf::from("BirdSongs/Extracted"));
+    let extraction_output_dir = daemon_config.watch_dir.parent().map_or_else(
+        || PathBuf::from("BirdSongs/Extracted"),
+        |p| p.join("Extracted"),
+    );
     let extraction_config = ExtractionConfig {
         target_format: audio_format,
         audio_format: cli.audio_format.clone(),
         output_dir: extraction_output_dir,
+        #[allow(clippy::cast_precision_loss)]
         recording_length: cli.segment_duration as f32,
         freq_shift_hz: cli.freq_shift_hz,
         ..ExtractionConfig::default()
@@ -192,7 +192,11 @@ pub fn start_detection_daemon(
 }
 
 /// Bridge detection events from the daemon to database inserts and WebSocket broadcasts.
-#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)]
 fn event_processor(
     event_rx: mpsc::Receiver<birdnet_core::detection::daemon::DetectionEvent>,
     state: birdnet_web::state::AppState,

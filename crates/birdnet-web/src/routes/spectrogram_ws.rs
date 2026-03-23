@@ -100,14 +100,13 @@ async fn handle_ws_connection(mut socket: WebSocket, broadcast: SpectrogramBroad
         "version": env!("CARGO_PKG_VERSION"),
     });
 
-    if let Ok(welcome_json) = serde_json::to_string(&welcome) {
-        if socket
+    if let Ok(welcome_json) = serde_json::to_string(&welcome)
+        && socket
             .send(Message::Text(welcome_json.into()))
             .await
             .is_err()
-        {
-            return;
-        }
+    {
+        return;
     }
 
     loop {

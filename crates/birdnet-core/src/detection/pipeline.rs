@@ -227,12 +227,12 @@ pub fn watch_directory(
 
     let mut watcher = RecommendedWatcher::new(
         move |result: Result<Event, notify::Error>| {
-            if let Ok(event) = result {
-                if matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_)) {
-                    for path in event.paths {
-                        if is_audio_file(&path) {
-                            let _ = tx.send(path);
-                        }
+            if let Ok(event) = result
+                && matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_))
+            {
+                for path in event.paths {
+                    if is_audio_file(&path) {
+                        let _ = tx.send(path);
                     }
                 }
             }

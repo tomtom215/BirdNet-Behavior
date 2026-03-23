@@ -17,9 +17,9 @@ pub struct SpeciesPair {
     pub species_b: String,
     /// Number of dates on which both species were detected.
     pub co_occurrence_days: i64,
-    /// Total detections of species_a across all dates.
+    /// Total detections of `species_a` across all dates.
     pub count_a: i64,
-    /// Total detections of species_b across all dates.
+    /// Total detections of `species_b` across all dates.
     pub count_b: i64,
 }
 
@@ -43,7 +43,7 @@ pub struct FollowOn {
 ///
 /// # Errors
 ///
-/// Returns [`DbError`] on SQLite failure.
+/// Returns [`DbError`] on `SQLite` failure.
 pub fn top_cooccurrence_pairs(
     conn: &Connection,
     days: u32,
@@ -100,7 +100,7 @@ pub fn top_cooccurrence_pairs(
 ///
 /// # Errors
 ///
-/// Returns [`DbError`] on SQLite failure.
+/// Returns [`DbError`] on `SQLite` failure.
 pub fn companion_species(
     conn: &Connection,
     trigger_species: &str,
@@ -149,7 +149,7 @@ pub fn companion_species(
 ///
 /// # Errors
 ///
-/// Returns [`DbError`] on SQLite failure.
+/// Returns [`DbError`] on `SQLite` failure.
 pub fn temporal_cooccurrence(
     conn: &Connection,
     window_minutes: u32,

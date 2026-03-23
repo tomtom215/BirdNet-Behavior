@@ -9,6 +9,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::{Router, routing::get};
+use std::fmt::Write as _;
 use std::time::SystemTime;
 
 use crate::state::AppState;
@@ -54,34 +55,32 @@ async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoResponse 
     // Standard Prometheus format.
     out.push_str("# HELP birdnet_info Build information.\n");
     out.push_str("# TYPE birdnet_info gauge\n");
-    out.push_str(&format!("birdnet_info{{version=\"{version}\"}} 1\n"));
+    writeln!(out, "birdnet_info{{version=\"{version}\"}} 1").unwrap_or_default();
 
     out.push_str("# HELP birdnet_uptime_seconds Process uptime in seconds.\n");
     out.push_str("# TYPE birdnet_uptime_seconds gauge\n");
-    out.push_str(&format!("birdnet_uptime_seconds {uptime_secs}\n"));
+    writeln!(out, "birdnet_uptime_seconds {uptime_secs}").unwrap_or_default();
 
     out.push_str("# HELP birdnet_detections_total Total number of bird detections in database.\n");
     out.push_str("# TYPE birdnet_detections_total gauge\n");
-    out.push_str(&format!("birdnet_detections_total {detection_count}\n"));
+    writeln!(out, "birdnet_detections_total {detection_count}").unwrap_or_default();
 
     out.push_str("# HELP birdnet_species_total Total number of distinct species detected.\n");
     out.push_str("# TYPE birdnet_species_total gauge\n");
-    out.push_str(&format!("birdnet_species_total {species_count}\n"));
+    writeln!(out, "birdnet_species_total {species_count}").unwrap_or_default();
 
     out.push_str("# HELP birdnet_process_resident_memory_bytes Resident memory size in bytes.\n");
     out.push_str("# TYPE birdnet_process_resident_memory_bytes gauge\n");
-    out.push_str(&format!(
-        "birdnet_process_resident_memory_bytes {rss_bytes}\n"
-    ));
+    writeln!(out, "birdnet_process_resident_memory_bytes {rss_bytes}").unwrap_or_default();
 
     out.push_str("# HELP birdnet_cpu_count Number of CPU cores available.\n");
     out.push_str("# TYPE birdnet_cpu_count gauge\n");
-    out.push_str(&format!("birdnet_cpu_count {cpu_count}\n"));
+    writeln!(out, "birdnet_cpu_count {cpu_count}").unwrap_or_default();
 
-    let has_analytics: u8 = if state.has_analytics() { 1 } else { 0 };
+    let has_analytics: u8 = u8::from(state.has_analytics());
     out.push_str("# HELP birdnet_analytics_enabled Whether DuckDB analytics is enabled.\n");
     out.push_str("# TYPE birdnet_analytics_enabled gauge\n");
-    out.push_str(&format!("birdnet_analytics_enabled {has_analytics}\n"));
+    writeln!(out, "birdnet_analytics_enabled {has_analytics}").unwrap_or_default();
 
     (
         StatusCode::OK,
@@ -105,13 +104,13 @@ fn get_process_uptime() -> u64 {
             if let (Some(start_field), Some(uptime_field)) = (
                 stat.split_whitespace().nth(21),
                 uptime_str.split_whitespace().next(),
-            ) {
-                if let (Ok(start_jiffies), Ok(sys_uptime)) =
-                    (start_field.parse::<u64>(), uptime_field.parse::<f64>())
-                {
-                    let proc_uptime = sys_uptime - (start_jiffies / hz) as f64;
-                    return proc_uptime.max(0.0) as u64;
-                }
+            ) && let (Ok(start_jiffies), Ok(sys_uptime)) =
+                (start_field.parse::<u64>(), uptime_field.parse::<f64>())
+            {
+                #[allow(clippy::cast_precision_loss)] // hz division is small enough
+                let proc_uptime = sys_uptime - (start_jiffies / hz) as f64;
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                return proc_uptime.max(0.0) as u64;
             }
         }
     }
@@ -132,12 +131,11 @@ fn process_metrics() -> (u64, u32) {
         // RSS from /proc/self/status
         if let Ok(content) = std::fs::read_to_string("/proc/self/status") {
             for line in content.lines() {
-                if line.starts_with("VmRSS:") {
-                    if let Some(kb_str) = line.split_whitespace().nth(1) {
-                        if let Ok(kb) = kb_str.parse::<u64>() {
-                            rss_bytes = kb * 1024;
-                        }
-                    }
+                if line.starts_with("VmRSS:")
+                    && let Some(kb_str) = line.split_whitespace().nth(1)
+                    && let Ok(kb) = kb_str.parse::<u64>()
+                {
+                    rss_bytes = kb * 1024;
                 }
             }
         }
@@ -148,7 +146,7 @@ fn process_metrics() -> (u64, u32) {
                 .filter(|l| l.starts_with("processor"))
                 .count();
             if count > 0 {
-                cpu_count = count as u32;
+                cpu_count = u32::try_from(count).unwrap_or(1);
             }
         }
     }

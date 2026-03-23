@@ -12,6 +12,8 @@
 //! BirdNET-Pi equivalent: No direct equivalent, but BirdNET-Pi had a manual
 //! process for hiding bad images. This provides a proper admin UI for it.
 
+use std::fmt::Write as _;
+
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse};
@@ -58,7 +60,8 @@ async fn images_page(State(state): State<AppState>) -> Html<String> {
             .map(super::super::pages::escape_html)
             .unwrap_or_default();
         let at = super::super::pages::escape_html(&entry.blacklisted_at);
-        rows.push_str(&format!(
+        write!(
+            rows,
             "<tr>\
              <td style=\"padding:0.5rem;\">{sci}</td>\
              <td style=\"padding:0.5rem;word-break:break-all;\">{url}</td>\
@@ -72,7 +75,8 @@ async fn images_page(State(state): State<AppState>) -> Html<String> {
              padding:0.2rem 0.5rem;border-radius:var(--radius);cursor:pointer;font-size:0.8rem;\">\
              Remove</button>\
              </td></tr>"
-        ));
+        )
+        .unwrap_or_default();
     }
 
     let count = entries.len();

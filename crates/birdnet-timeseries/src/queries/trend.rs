@@ -14,7 +14,7 @@ use super::QueryPlan;
 pub struct MovingAverage {
     /// Total window width in days (must be odd for a symmetric centre; default: 7).
     pub window_days: u32,
-    /// Date range start (DuckDB expression or ISO-8601 literal).
+    /// Date range start (`DuckDB` expression or ISO-8601 literal).
     pub from_date: Option<String>,
     /// Date range end.
     pub to_date: Option<String>,

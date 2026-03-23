@@ -13,6 +13,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::Html;
 use axum::{Router, routing::get};
+use std::fmt::Write as _;
 
 use birdnet_db::settings::ensure_settings_table;
 use birdnet_db::settings::get as get_setting;
@@ -41,12 +42,10 @@ async fn test_page(State(state): State<AppState>) -> Html<String> {
         ensure_settings_table(conn).ok();
         let apprise = get_setting(conn, "apprise_url")
             .ok()
-            .map(|v| !v.is_empty())
-            .unwrap_or(false);
+            .is_some_and(|v| !v.is_empty());
         let bw = get_setting(conn, "birdweather_token")
             .ok()
-            .map(|v| !v.is_empty())
-            .unwrap_or(false);
+            .is_some_and(|v| !v.is_empty());
         (apprise, bw)
     });
 
@@ -109,7 +108,8 @@ fn render_test_page(apprise_ok: bool, bw_ok: bool) -> String {
 "#);
 
     // Apprise card
-    html.push_str(&format!(
+    write!(
+        html,
         r##"  <div class="card">
     <div class="section-title">Apprise Push Notifications</div>
     <p class="hint" style="margin-bottom:1rem;">{apprise_icon} Status: {apprise_status}<br>
@@ -121,14 +121,12 @@ fn render_test_page(apprise_ok: bool, bw_ok: bool) -> String {
     <div id="apprise-result"></div>
   </div>
 "##,
-        apprise_icon = apprise_icon,
-        apprise_status = apprise_status,
-        apprise_btn = apprise_btn,
-        apprise_disabled = apprise_disabled,
-    ));
+    )
+    .unwrap_or_default();
 
     // BirdWeather card
-    html.push_str(&format!(
+    write!(
+        html,
         r##"  <div class="card">
     <div class="section-title">BirdWeather Station Ping</div>
     <p class="hint" style="margin-bottom:1rem;">{bw_icon} Status: {bw_status}<br>
@@ -140,11 +138,8 @@ fn render_test_page(apprise_ok: bool, bw_ok: bool) -> String {
     <div id="birdweather-result"></div>
   </div>
 "##,
-        bw_icon = bw_icon,
-        bw_status = bw_status,
-        bw_btn = bw_btn,
-        bw_disabled = bw_disabled,
-    ));
+    )
+    .unwrap_or_default();
 
     // Test all card
     html.push_str(
@@ -313,10 +308,5 @@ fn result_html(ok: bool, msg: &str) -> String {
     let icon = if ok { "&#x2713;" } else { "&#x2717;" };
     format!(
         r#"<div style="background:{bg};border:1px solid {border};border-radius:0.375rem;padding:0.75rem;margin-top:0.75rem;color:{color};">{icon} {msg}</div>"#,
-        bg = bg,
-        border = border,
-        color = color,
-        icon = icon,
-        msg = msg,
     )
 }

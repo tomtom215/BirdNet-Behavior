@@ -83,6 +83,13 @@ pub fn is_tmpfs_mounted(path: &Path) -> bool {
 /// Creates the directory if it does not already exist. Returns
 /// [`TmpfsError::AlreadyMounted`] if a tmpfs is already present at the
 /// mount point. Requires root or sudo privileges.
+///
+/// # Errors
+///
+/// Returns `Err(TmpfsError::AlreadyMounted)` if a tmpfs is already mounted
+/// at the configured mount point. Returns `Err(TmpfsError::Io)` if the
+/// directory cannot be created. Returns `Err(TmpfsError::MountFailed)` if
+/// the `mount` command fails.
 pub fn mount_tmpfs(config: &TmpfsConfig) -> Result<(), TmpfsError> {
     if is_tmpfs_mounted(&config.mount_point) {
         return Err(TmpfsError::AlreadyMounted);
@@ -112,6 +119,12 @@ pub fn mount_tmpfs(config: &TmpfsConfig) -> Result<(), TmpfsError> {
 ///
 /// Returns an error if the umount command fails. Does **not** check
 /// whether the path is actually a tmpfs mount first.
+///
+/// # Errors
+///
+/// Returns `Err(TmpfsError::Io)` if the `umount` command cannot be spawned.
+/// Returns `Err(TmpfsError::MountFailed)` if the `umount` command exits
+/// with a non-zero status.
 pub fn unmount_tmpfs(path: &Path) -> Result<(), TmpfsError> {
     let mount_path = path.to_string_lossy();
 
@@ -156,7 +169,7 @@ pub fn generate_systemd_mount_unit(config: &TmpfsConfig) -> String {
         .replace('.', "\\x2e");
 
     format!(
-        r#"# Systemd mount unit for BirdNet-Behavior transient audio tmpfs.
+        r"# Systemd mount unit for BirdNet-Behavior transient audio tmpfs.
 # Install as: /etc/systemd/system/{unit_name}.mount
 # Then run:   systemctl enable --now {unit_name}.mount
 
@@ -174,7 +187,7 @@ Options=size={size}m,mode=0755,nodev,nosuid,noexec
 
 [Install]
 WantedBy=local-fs.target
-"#,
+",
         unit_name = unit_name,
         path = mount_path,
         size = config.size_mb,

@@ -1,7 +1,7 @@
 //! SMTP email notification integration.
 //!
 //! Sends rich HTML + plain-text bird detection alerts via any SMTP server
-//! (Gmail, SendGrid, local Postfix, etc.).  Supports per-species cooldown to
+//! (`Gmail`, `SendGrid`, local Postfix, etc.).  Supports per-species cooldown to
 //! avoid notification spam.
 //!
 //! # Quick start
@@ -44,7 +44,7 @@ use tracing::debug;
 #[derive(Debug)]
 pub struct EmailNotifier {
     config: EmailConfig,
-    /// Maps common_name → last email sent time.
+    /// Maps `common_name` → last email sent time.
     last_sent: Mutex<HashMap<String, Instant>>,
 }
 
@@ -102,7 +102,7 @@ impl EmailNotifier {
         }
         let map = self.last_sent.lock().expect("cooldown mutex poisoned");
         map.get(species)
-            .map_or(false, |last| last.elapsed() < cooldown)
+            .is_some_and(|last| last.elapsed() < cooldown)
     }
 
     /// Record that an email was sent for `species` right now.
@@ -112,18 +112,22 @@ impl EmailNotifier {
     }
 
     /// Reset the cooldown for a specific species (useful for testing).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the cooldown mutex is poisoned.
     pub fn reset_cooldown(&self, species: &str) {
         let mut map = self.last_sent.lock().expect("cooldown mutex poisoned");
         map.remove(species);
     }
 
     /// Return the configured minimum confidence threshold.
-    pub fn min_confidence(&self) -> f64 {
+    pub const fn min_confidence(&self) -> f64 {
         self.config.min_confidence
     }
 
     /// Return the configured cooldown in seconds.
-    pub fn cooldown_secs(&self) -> u64 {
+    pub const fn cooldown_secs(&self) -> u64 {
         self.config.cooldown_secs
     }
 }

@@ -144,6 +144,10 @@ impl WikipediaClient {
     }
 
     /// Download bytes from a URL with retry.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ImageError::Http` on network failures or non-success HTTP responses.
     pub async fn download_bytes(&self, url: &str) -> Result<Vec<u8>, ImageError> {
         let mut last_error = ImageError::Http("no attempts made".into());
         for attempt in 0..MAX_RETRIES {

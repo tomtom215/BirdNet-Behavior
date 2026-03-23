@@ -1,6 +1,7 @@
 //! Trend analysis query methods: moving average, year-over-year, anomalies.
 
 use crate::error::TimeSeriesError;
+use crate::queries::QueryPlan;
 use crate::queries::trend::{AnomalyDetection, MovingAverage, YearOverYear};
 use crate::types::{
     params::{AnomalyParams, TrendParams, WeeklyParams},

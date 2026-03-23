@@ -6,6 +6,7 @@
 //!
 //! BirdNET-Pi equivalent: `weekly_report.sh` cron job.
 
+use std::fmt::Write as FmtWrite;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -51,7 +52,6 @@ fn parse_weekday(schedule: &str) -> Option<u8> {
         "friday" => Some(4),
         "saturday" => Some(5),
         "sunday" => Some(6),
-        "disabled" | "" => None,
         _ => None,
     }
 }
@@ -121,7 +121,7 @@ fn build_weekly_report(
         "Bird Detection Weekly Summary\n\nPeriod: {week_start} to {week_end}\nTotal detections: {total}\n\nTop species:\n"
     );
     for (i, (_, com_name, count)) in top_species.iter().enumerate() {
-        body.push_str(&format!("{}. {} — {count} detections\n", i + 1, com_name));
+        writeln!(body, "{}. {} — {count} detections", i + 1, com_name).unwrap_or_default();
     }
 
     Ok((title, body))
@@ -143,12 +143,17 @@ fn week_range_strings() -> (String, String) {
 }
 
 /// Convert days since Unix epoch to `"YYYY-MM-DD"`.
+#[allow(
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 fn days_to_date_str(days: u64) -> String {
     let z = days as i64 + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = (z - era * 146_097) as u32;
     let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let y = (yoe as i64) + era * 400;
+    let y = i64::from(yoe) + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
     let d = doy - (153 * mp + 2) / 5 + 1;
@@ -172,11 +177,17 @@ fn today_weekday() -> (String, u8) {
     let days = secs / 86400;
 
     // Convert days since epoch to (year, month, day) — same algorithm as capture.rs.
+    #[allow(
+        clippy::cast_possible_wrap,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
     let z = days as i64 + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let doe = (z - era * 146_097) as u32;
     let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let y = (yoe as i64) + era * 400;
+    let y = i64::from(yoe) + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
     let d = doy - (153 * mp + 2) / 5 + 1;

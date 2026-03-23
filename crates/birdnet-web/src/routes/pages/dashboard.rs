@@ -35,7 +35,7 @@ async fn kiosk_page() -> Html<String> {
     Html(KIOSK_HTML.to_string())
 }
 
-const KIOSK_HTML: &str = r##"<!DOCTYPE html>
+const KIOSK_HTML: &str = r#"<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -70,7 +70,7 @@ const KIOSK_HTML: &str = r##"<!DOCTYPE html>
 </div>
 <script src="/static/htmx.min.js"></script>
 </body>
-</html>"##;
+</html>"#;
 
 async fn stats_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {
     let result = tokio::task::spawn_blocking(move || {
@@ -153,7 +153,7 @@ async fn detections_partial(State(state): State<AppState>) -> impl axum::respons
                 // Derive recording filename from file_name field if present.
                 let audio_cell = d.file_name.as_deref()
                     .filter(|f| !f.is_empty())
-                    .map(|f| {
+                    .map_or_else(|| "—".to_string(), |f| {
                         let basename = std::path::Path::new(f)
                             .file_name()
                             .map(|n| n.to_string_lossy().to_string())
@@ -164,8 +164,7 @@ async fn detections_partial(State(state): State<AppState>) -> impl axum::respons
                               <source src="/api/v2/recordings/{safe}" type="audio/wav">
                             </audio>"#
                         )
-                    })
-                    .unwrap_or_else(|| "—".to_string());
+                    });
                 let _ = write!(
                     html,
                     r#"<tr><td><a href="/species/detail?name={enc}" style="color:inherit;text-decoration:none;">{n}</a>{badge}</td><td><span class="conf {cls}">{conf_pct:.0}%</span></td><td>{t}</td><td>{d2}</td><td>{audio_cell}</td></tr>"#,
@@ -290,6 +289,7 @@ async fn species_list_partial(
 }
 
 /// Render an inline SVG sparkline from daily count data.
+#[allow(clippy::many_single_char_names)]
 fn render_sparkline_svg(data: &[i64]) -> String {
     if data.is_empty() {
         return String::new();
@@ -297,17 +297,38 @@ fn render_sparkline_svg(data: &[i64]) -> String {
 
     let w = 60.0_f64;
     let h = 20.0_f64;
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        clippy::cast_possible_wrap,
+        clippy::cast_lossless
+    )]
     let max_val = data.iter().copied().max().unwrap_or(1).max(1) as f64;
     let n = data.len();
 
     let mut points = String::new();
     for (i, &val) in data.iter().enumerate() {
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss,
+            clippy::cast_possible_wrap,
+            clippy::cast_lossless
+        )]
         let x = if n > 1 {
             (i as f64) / ((n - 1) as f64) * w
         } else {
             w / 2.0
         };
-        let y = h - (val as f64 / max_val * (h - 2.0)) - 1.0;
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss,
+            clippy::cast_possible_wrap,
+            clippy::cast_lossless
+        )]
+        let y = (val as f64 / max_val).mul_add(-(h - 2.0), h) - 1.0;
         if !points.is_empty() {
             points.push(' ');
         }

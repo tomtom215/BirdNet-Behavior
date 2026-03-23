@@ -24,6 +24,7 @@ use helpers::{
 };
 
 #[tokio::main]
+#[allow(clippy::too_many_lines)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -111,10 +112,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let state = init_audio_source(state, &cli, config.as_ref());
     let state = init_site_name(state, &cli, config.as_ref());
-    let state = if cli.info_site != "ebird" {
-        state.with_info_site(cli.info_site.clone())
-    } else {
+    let state = if cli.info_site == "ebird" {
         state
+    } else {
+        state.with_info_site(cli.info_site.clone())
     };
     let state = init_i18n(state, &cli, config.as_ref());
 
@@ -170,10 +171,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(addr = %addr, "starting web server");
     let app = birdnet_web::server::build_router_with_auth(state, auth_config);
 
+    // Publish Home Assistant MQTT auto-discovery if configured.
+    if let Some(ref mqtt) = integrations::get_mqtt_client_ref(&cli, config.as_ref()) {
+        integrations::publish_ha_discovery(mqtt, &cli, config.as_ref());
+    }
+
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    // Use `into_make_service_with_connect_info` so the per-IP rate limiter
+    // can read the client socket address from request extensions.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
 
     tracing::info!("BirdNet-Behavior stopped");
     Ok(())

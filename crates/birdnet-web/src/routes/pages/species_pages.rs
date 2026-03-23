@@ -247,30 +247,30 @@ async fn species_info_partial(
 
     let mut html = String::new();
 
-    if let Some(cache) = state.image_cache() {
-        if let Some(image) = cache.get_cached(&sci_name) {
-            if image.cached_path.is_some() {
-                let enc = simple_url_encode(&sci_name);
-                let _ = write!(
-                    html,
-                    r#"<img src="/api/v2/species/image/{enc}/file" alt="{alt}" style="width:100%;border-radius:var(--radius);margin-bottom:1rem;" />"#,
-                    alt = escape_html(&name),
-                );
-            }
-            if let Some(desc) = &image.description {
-                let _ = write!(
-                    html,
-                    r#"<p style="font-size:0.9rem;line-height:1.5;margin-bottom:0.75rem;">{}</p>"#,
-                    escape_html(desc),
-                );
-            }
-            if let Some(url) = &image.wiki_url {
-                let _ = write!(
-                    html,
-                    r#"<p><a href="{}" target="_blank" rel="noopener">View on Wikipedia</a></p>"#,
-                    escape_html(url),
-                );
-            }
+    if let Some(cache) = state.image_cache()
+        && let Some(image) = cache.get_cached(&sci_name)
+    {
+        if image.cached_path.is_some() {
+            let enc = simple_url_encode(&sci_name);
+            let _ = write!(
+                html,
+                r#"<img src="/api/v2/species/image/{enc}/file" alt="{alt}" style="width:100%;border-radius:var(--radius);margin-bottom:1rem;" />"#,
+                alt = escape_html(&name),
+            );
+        }
+        if let Some(desc) = &image.description {
+            let _ = write!(
+                html,
+                r#"<p style="font-size:0.9rem;line-height:1.5;margin-bottom:0.75rem;">{}</p>"#,
+                escape_html(desc),
+            );
+        }
+        if let Some(url) = &image.wiki_url {
+            let _ = write!(
+                html,
+                r#"<p><a href="{}" target="_blank" rel="noopener">View on Wikipedia</a></p>"#,
+                escape_html(url),
+            );
         }
     }
 

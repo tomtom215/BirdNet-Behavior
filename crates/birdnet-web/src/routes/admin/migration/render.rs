@@ -14,6 +14,7 @@ pub fn escape_html(s: &str) -> String {
 }
 
 /// Render the full migration page.
+#[allow(clippy::too_many_lines)]
 pub fn migration_page(dest_db_path: &str) -> String {
     format!(
         r##"<!DOCTYPE html>
@@ -151,6 +152,7 @@ function switchTab(name) {{
 }
 
 /// Render the validation result partial.
+#[allow(clippy::too_many_lines)]
 pub fn validation_result(
     result: Result<
         (DetectedSchema, ValidationReport, MigrationReport),
@@ -163,10 +165,10 @@ pub fn validation_result(
             let schema_name = schema.name();
             let rows = report.source_rows;
             let ok = report.passed;
-            let checks_html: String = report
-                .checks
-                .iter()
-                .map(|c| {
+            let checks_html: String = {
+                use std::fmt::Write as _;
+                let mut buf = String::new();
+                for c in &report.checks {
                     let icon = if c.passed {
                         r#"<span style="color:#4ade80">✔</span>"#
                     } else if c.required {
@@ -174,13 +176,15 @@ pub fn validation_result(
                     } else {
                         r#"<span style="color:#fbbf24">⚠</span>"#
                     };
-                    format!(
+                    let _ = write!(
+                        buf,
                         r#"<li style="margin-bottom:0.4rem">{icon} <strong>{}</strong>: {}</li>"#,
                         escape_html(&c.name),
                         escape_html(&c.detail),
-                    )
-                })
-                .collect();
+                    );
+                }
+                buf
+            };
 
             let (color, label) = if ok {
                 ("#4ade80", "Validation passed")
@@ -209,12 +213,12 @@ pub fn validation_result(
                 String::new()
             };
 
-            let top_species_html: String = migration_report
-                .top_species
-                .iter()
-                .take(10)
-                .map(|s| {
-                    format!(
+            let top_species_html: String = {
+                use std::fmt::Write as _;
+                let mut buf = String::new();
+                for s in migration_report.top_species.iter().take(10) {
+                    let _ = write!(
+                        buf,
                         r#"<tr>
   <td style="padding:.35rem .5rem;">{}</td>
   <td style="padding:.35rem .5rem;color:#64748b;font-style:italic;font-size:.8rem;">{}</td>
@@ -225,9 +229,10 @@ pub fn validation_result(
                         escape_html(&s.scientific_name),
                         s.count,
                         s.avg_confidence * 100.0,
-                    )
-                })
-                .collect();
+                    );
+                }
+                buf
+            };
 
             let more_species = if migration_report.unique_species > 10 {
                 format!(

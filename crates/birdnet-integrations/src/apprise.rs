@@ -188,10 +188,10 @@ impl Client {
             .copied()
             .unwrap_or(self.config.cooldown);
         let now = Instant::now();
-        if let Some(last) = self.last_notified.get(species) {
-            if now.duration_since(*last) < cooldown {
-                return false;
-            }
+        if let Some(last) = self.last_notified.get(species)
+            && now.duration_since(*last) < cooldown
+        {
+            return false;
         }
 
         // Update last-notified timestamp
@@ -257,10 +257,10 @@ impl Client {
         image_url: Option<&str>,
     ) -> Result<(), AppriseError> {
         // Send via CLI if config file is configured.
-        if self.config_file.is_some() {
-            if let Err(e) = self.send_via_cli(title, body).await {
-                tracing::warn!(error = %e, "Apprise CLI notification failed");
-            }
+        if self.config_file.is_some()
+            && let Err(e) = self.send_via_cli(title, body).await
+        {
+            tracing::warn!(error = %e, "Apprise CLI notification failed");
         }
 
         // If no HTTP server URL, we're done.
@@ -336,7 +336,7 @@ impl Client {
     }
 
     /// Whether an Apprise config file is configured.
-    pub fn has_config_file(&self) -> bool {
+    pub const fn has_config_file(&self) -> bool {
         self.config_file.is_some()
     }
 

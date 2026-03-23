@@ -1,6 +1,6 @@
 //! Time-series analytics for bird detection temporal patterns.
 //!
-//! Implements DuckDB window function analytics (tumbling, hopping, sliding,
+//! Implements `DuckDB` window function analytics (tumbling, hopping, sliding,
 //! and session windows) for bird activity data. Designed to complement the
 //! behavioural extension in `birdnet-behavioral` with pure-SQL temporal queries.
 //!
@@ -15,8 +15,8 @@
 //!
 //! # Features
 //!
-//! Enable the `analytics` feature to compile the [`executor`] module which
-//! runs queries against a live DuckDB connection. Without it, only the query
+//! Enable the `analytics` feature to compile the `executor` module which
+//! runs queries against a live `DuckDB` connection. Without it, only the query
 //! builders, type definitions, and window specifications are available.
 //!
 //! ```toml

@@ -59,7 +59,7 @@ impl Migrator for CsvImporter {
     ) -> Result<MigrationSummary, MigrateError> {
         progress.set_stage(MigrationStage::Importing, "Opening CSV source file");
 
-        let file = std::fs::File::open(source_path).map_err(|e| MigrateError::Io(e))?;
+        let file = std::fs::File::open(source_path).map_err(MigrateError::Io)?;
 
         let reader = BufReader::new(file);
         let mut lines = reader.lines();
@@ -168,6 +168,7 @@ impl Migrator for CsvImporter {
 // ---------------------------------------------------------------------------
 
 /// Parse one data line into a `CsvRow`.
+#[allow(clippy::similar_names)]
 fn parse_line(line: &str, delim: char) -> Result<CsvRow, MigrateError> {
     let fields: Vec<&str> = line.splitn(12, delim).collect();
     if fields.len() < MIN_FIELDS {
@@ -178,19 +179,19 @@ fn parse_line(line: &str, delim: char) -> Result<CsvRow, MigrateError> {
     }
 
     let parse_opt_f64 = |s: &str| -> Option<f64> {
-        let s = s.trim();
-        if s.is_empty() || s == "\\N" || s == "NULL" {
+        let trimmed = s.trim();
+        if trimmed.is_empty() || trimmed == "\\N" || trimmed == "NULL" {
             None
         } else {
-            s.parse().ok()
+            trimmed.parse().ok()
         }
     };
     let parse_opt_i64 = |s: &str| -> Option<i64> {
-        let s = s.trim();
-        if s.is_empty() || s == "\\N" || s == "NULL" {
+        let trimmed = s.trim();
+        if trimmed.is_empty() || trimmed == "\\N" || trimmed == "NULL" {
             None
         } else {
-            s.parse().ok()
+            trimmed.parse().ok()
         }
     };
     let parse_opt_str = |s: &str| -> Option<String> {
@@ -262,7 +263,7 @@ fn count_lines(path: &Path) -> Result<usize, MigrateError> {
     let reader = BufReader::new(file);
     Ok(reader
         .lines()
-        .filter(|l| l.as_ref().map_or(false, |s| !s.trim().is_empty()))
+        .filter(|l| l.as_ref().is_ok_and(|s| !s.trim().is_empty()))
         .count())
 }
 

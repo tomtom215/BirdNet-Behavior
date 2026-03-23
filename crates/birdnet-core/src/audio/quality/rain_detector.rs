@@ -288,6 +288,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cast_precision_loss)]
     fn probabilities_within_range() {
         let s: Vec<f32> = (0..required_len())
             .map(|i| 0.1 * ((i as f32) * 0.01).sin())
@@ -298,6 +299,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cast_precision_loss)]
     fn high_frequency_dominant_raises_rain_score() {
         // Simulate a HF-dominated signal (high-frequency content)
         let s: Vec<f32> = (0..required_len())
@@ -311,6 +313,13 @@ mod tests {
     #[test]
     fn highpass_attenuates_low_frequencies() {
         // 100 Hz sine at 48kHz → should be heavily attenuated by 4kHz HPF
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_possible_wrap,
+            clippy::cast_lossless
+        )]
         let samples: Vec<f32> = (0..4096)
             .map(|i| (2.0 * PI * 100.0 * i as f32 / 48_000.0).sin())
             .collect();
@@ -326,6 +335,13 @@ mod tests {
     #[test]
     fn lowpass_attenuates_high_frequencies() {
         // 10 kHz sine at 48kHz → should be heavily attenuated by 500 Hz LPF
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_possible_wrap,
+            clippy::cast_lossless
+        )]
         let samples: Vec<f32> = (0..4096)
             .map(|i| (2.0 * PI * 10_000.0 * i as f32 / 48_000.0).sin())
             .collect();

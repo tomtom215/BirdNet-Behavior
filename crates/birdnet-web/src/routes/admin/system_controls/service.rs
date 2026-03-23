@@ -33,7 +33,7 @@ pub(super) async fn service_restart() -> Html<String> {
 
         let pid = std::process::id().to_string();
         tracing::info!(%pid, "sending SIGTERM to self for graceful restart");
-        let pid_clone = pid.clone();
+        let pid_clone = pid;
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(500));
             let _ = std::process::Command::new("kill")
@@ -108,15 +108,26 @@ fn get_process_uptime_secs(_pid: u32) -> u64 {
             if let (Some(start_field), Some(uptime_field)) = (
                 stat.split_whitespace().nth(21),
                 uptime_str.split_whitespace().next(),
-            ) {
-                if let (Ok(start_jiffies), Ok(sys_uptime)) =
-                    (start_field.parse::<u64>(), uptime_field.parse::<f64>())
-                {
-                    if hz > 0 {
-                        let proc_uptime = sys_uptime - (start_jiffies / hz) as f64;
-                        return proc_uptime.max(0.0) as u64;
-                    }
-                }
+            ) && let (Ok(start_jiffies), Ok(sys_uptime)) =
+                (start_field.parse::<u64>(), uptime_field.parse::<f64>())
+                && hz > 0
+            {
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    clippy::cast_precision_loss,
+                    clippy::cast_possible_wrap,
+                    clippy::cast_lossless
+                )]
+                let proc_uptime = sys_uptime - (start_jiffies / hz) as f64;
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    clippy::cast_precision_loss,
+                    clippy::cast_possible_wrap,
+                    clippy::cast_lossless
+                )]
+                return proc_uptime.max(0.0) as u64;
             }
         }
     }
@@ -129,12 +140,11 @@ fn get_process_memory_mb(pid: u32) -> f64 {
         let status_path = format!("/proc/{pid}/status");
         if let Ok(content) = std::fs::read_to_string(&status_path) {
             for line in content.lines() {
-                if line.starts_with("VmRSS:") {
-                    if let Some(kb_str) = line.split_whitespace().nth(1) {
-                        if let Ok(kb) = kb_str.parse::<f64>() {
-                            return kb / 1024.0;
-                        }
-                    }
+                if line.starts_with("VmRSS:")
+                    && let Some(kb_str) = line.split_whitespace().nth(1)
+                    && let Ok(kb) = kb_str.parse::<f64>()
+                {
+                    return kb / 1024.0;
                 }
             }
         }

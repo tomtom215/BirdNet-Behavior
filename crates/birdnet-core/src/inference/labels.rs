@@ -64,7 +64,7 @@ impl LabelSet {
     ///
     /// - **V2.4 txt**: one `Scientific name_Common name` entry per line.
     /// - **V3.0 CSV**: comma-separated with a header row containing at least
-    ///   `sci_name` and `com_name` columns (BirdNET+ V3.0 / Zenodo format).
+    ///   `sci_name` and `com_name` columns (`BirdNET+` V3.0 / Zenodo format).
     ///
     /// The format is detected from the first non-blank line: if it contains a
     /// comma and the word `sci_name`, CSV mode is used; otherwise txt mode.
@@ -79,7 +79,7 @@ impl LabelSet {
 
     /// Parse labels from a string, auto-detecting the format.
     ///
-    /// Same format detection as [`load`] but accepts an in-memory string.
+    /// Same format detection as [`Self::load`] but accepts an in-memory string.
     /// Useful for testing and embedded label data.
     ///
     /// # Errors
@@ -92,9 +92,9 @@ impl LabelSet {
         // CSV if the header contains sci_name with any delimiter.
         if (first.contains(',') || first.contains(';')) && first.to_lowercase().contains("sci_name")
         {
-            Self::parse_csv(&content)
+            Self::parse_csv(content)
         } else {
-            Self::parse(&content)
+            Self::parse(content)
         }
     }
 
@@ -226,12 +226,12 @@ impl LabelSet {
     }
 
     /// Number of labels (species count).
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.labels.len()
     }
 
     /// Whether the label set is empty.
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.labels.is_empty()
     }
 

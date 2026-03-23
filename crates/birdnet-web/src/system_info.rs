@@ -75,7 +75,8 @@ pub fn sample() -> SystemSnapshot {
     sys.refresh_memory();
 
     let cpus = sys.cpus();
-    let cpu_cores: Vec<f32> = cpus.iter().map(|c| c.cpu_usage()).collect();
+    let cpu_cores: Vec<f32> = cpus.iter().map(sysinfo::Cpu::cpu_usage).collect();
+    #[allow(clippy::cast_precision_loss)]
     let cpu_usage_pct = if cpu_cores.is_empty() {
         0.0
     } else {

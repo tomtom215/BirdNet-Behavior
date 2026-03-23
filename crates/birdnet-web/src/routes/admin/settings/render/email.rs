@@ -1,6 +1,7 @@
 //! SMTP email alert settings section.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 
 use super::get_setting;
 
@@ -13,11 +14,11 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let to = get_setting(s, "email_to", "");
     let name = get_setting(s, "email_from_name", "BirdNet-Behavior");
     let tls = get_setting(s, "email_starttls", "true");
-    let tls_yes = if tls != "false" { " selected" } else { "" };
+    let tls_yes = if tls == "false" { "" } else { " selected" };
     let tls_no = if tls == "false" { " selected" } else { "" };
     let econf = get_setting(s, "email_min_confidence", "0.80");
     let ecool = get_setting(s, "email_cooldown_secs", "300");
-    out.push_str(&format!(r#"
+    write!(out, r#"
   <div class="card">
     <div class="section-title">Email Alerts (SMTP)</div>
     <p class="hint" style="margin-bottom:1rem;">Leave SMTP host blank to disable email alerts.</p>
@@ -76,5 +77,5 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         <p class="hint">Min time between emails per species</p>
       </div>
     </div>
-  </div>"#));
+  </div>"#).unwrap_or_default();
 }

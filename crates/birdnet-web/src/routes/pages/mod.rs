@@ -142,7 +142,7 @@ pub(crate) const fn days_to_date(days_since_epoch: u64) -> (u32, u32, u32) {
     (y, m, d)
 }
 
-/// Count detections for today's date in SQLite.
+/// Count detections for today's date in `SQLite`.
 pub(crate) fn today_count(conn: &rusqlite::Connection) -> i64 {
     let today = today_date_string();
     conn.query_row(

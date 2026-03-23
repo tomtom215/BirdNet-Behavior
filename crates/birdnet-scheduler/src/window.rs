@@ -5,7 +5,7 @@
 //! - **Fixed** — absolute clock times (e.g. 06:00–22:00 every day)
 //! - **Solar** — relative to sunrise/sunset (e.g. 30 min before sunrise
 //!   to 30 min after sunset)
-//! - **AllDay** — no restriction (always record)
+//! - **`AllDay`** — no restriction (always record)
 
 use serde::{Deserialize, Serialize};
 
@@ -88,7 +88,7 @@ pub struct RecordingWindow {
 impl RecordingWindow {
     /// Create an all-day window (never inhibited).
     #[must_use]
-    pub fn all_day() -> Self {
+    pub const fn all_day() -> Self {
         Self {
             kind: WindowKind::AllDay,
         }
@@ -117,7 +117,7 @@ impl RecordingWindow {
 
     /// Create a solar-relative window.
     #[must_use]
-    pub fn solar(pre_sunrise_min: i32, post_sunset_min: i32) -> Self {
+    pub const fn solar(pre_sunrise_min: i32, post_sunset_min: i32) -> Self {
         Self {
             kind: WindowKind::Solar {
                 pre_sunrise_min,
@@ -137,7 +137,21 @@ impl RecordingWindow {
                 pre_sunrise_min,
                 post_sunset_min,
             } => {
+                #[allow(
+                    clippy::cast_precision_loss,
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    clippy::cast_possible_wrap,
+                    clippy::cast_lossless
+                )]
                 let start = (sunrise_min as i32 - pre_sunrise_min).max(0) as u32;
+                #[allow(
+                    clippy::cast_precision_loss,
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    clippy::cast_possible_wrap,
+                    clippy::cast_lossless
+                )]
                 let end = ((sunset_min as i32) + post_sunset_min).min(1439) as u32;
                 Self::fixed(start, end)
             }
@@ -150,12 +164,9 @@ impl RecordingGate for RecordingWindow {
     fn is_allowed(&self, minutes_since_midnight: u32) -> bool {
         let m = minutes_since_midnight;
         match self.kind {
-            WindowKind::AllDay => true,
+            // Unresolved solar window: allow everything (caller must resolve first).
+            WindowKind::AllDay | WindowKind::Solar { .. } => true,
             WindowKind::Fixed { start_min, end_min } => m >= start_min && m < end_min,
-            WindowKind::Solar { .. } => {
-                // Unresolved solar window: allow everything (caller must resolve first).
-                true
-            }
         }
     }
 }

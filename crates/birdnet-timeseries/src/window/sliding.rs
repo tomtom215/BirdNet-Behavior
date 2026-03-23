@@ -1,4 +1,4 @@
-//! Sliding window specification using DuckDB RANGE framing.
+//! Sliding window specification using `DuckDB` RANGE framing.
 //!
 //! Sliding windows are dynamically generated from the data itself using
 //! the SQL `OVER (ORDER BY … RANGE BETWEEN … PRECEDING AND … FOLLOWING)`

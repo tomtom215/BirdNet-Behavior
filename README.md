@@ -9,6 +9,7 @@ Real-time acoustic bird classification with behavioral analytics, written in Rus
   <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/"><img src="https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg"></a>
   <img src="https://img.shields.io/badge/Rust-1.85%2B-orange">
   <img src="https://img.shields.io/badge/platform-aarch64%20%7C%20x86__64-blue">
+  <img src="https://img.shields.io/badge/clippy-pedantic%20%2B%20nursery-green">
 </p>
 
 <h2 align="center"><a href="LICENSE">Review the license!</a></h2>
@@ -99,7 +100,8 @@ BirdNet-Behavior is a ground-up Rust rewrite of [BirdNET-Pi](https://github.com/
 - MQTT 3.1.1 publisher — pure Rust, no external library, detections published as JSON to `{prefix}/detection/{species}`
 - Compatible with Home Assistant, Mosquitto, Node-RED, any MQTT 3.1.1 broker
 - Optional RETAIN flag for Home Assistant sensor persistence
-- Full CLI/env var configuration: `--mqtt-host`, `--mqtt-port`, `--mqtt-username`, `--mqtt-password`, `--mqtt-topic-prefix`, `--mqtt-retain`
+- **Home Assistant auto-discovery** — `--mqtt-ha-discovery` publishes discovery messages at startup; HA creates sensors automatically (last species, confidence, station status, daily count) — no `configuration.yaml` edits required
+- Full CLI/env var configuration: `--mqtt-host`, `--mqtt-port`, `--mqtt-username`, `--mqtt-password`, `--mqtt-topic-prefix`, `--mqtt-retain`, `--mqtt-ha-discovery`
 
 **Audio Quality Pre-Filtering:**
 - Four-stage pipeline: SNR estimation, spectral flatness (Wiener entropy), adaptive noise-floor tracking, rain/wind detection
@@ -116,6 +118,12 @@ BirdNet-Behavior is a ground-up Rust rewrite of [BirdNET-Pi](https://github.com/
 - Criterion benchmark suite for audio pipeline (mel spectrogram, SNR, rain detection, noise floor)
 - Criterion benchmark suite for database queries (insert, batch transaction, aggregation, search)
 - HTML benchmark reports for regression tracking
+
+**Rate Limiting:**
+- Per-IP token-bucket rate limiter — pure Rust, no external crates
+- Configurable sustained rate (`requests_per_second`) and burst capacity
+- HTTP 429 responses with `Retry-After` header (RFC 6585)
+- Optional `X-Forwarded-For` support for reverse-proxy deployments
 
 **Observability:**
 - Prometheus metrics endpoint (`/api/v2/metrics`)
@@ -160,6 +168,7 @@ birdnet-behavior (single binary)
 │   ├── REST API       — /api/v2/* (detections, species, analytics, export)
 │   ├── Metrics        — /api/v2/metrics (Prometheus), /api/v2/health
 │   ├── WebSocket      — live detection streaming (JSON events)
+│   ├── Rate Limiter   — per-IP token-bucket, 429 + Retry-After (pure Rust)
 │   ├── HTMX UI        — server-rendered dark-theme dashboard
 │   ├── Admin Panel    — settings, migration, system, logs, backups
 │   └── Static files   — embedded HTMX JS (air-gapped compatible)
@@ -170,7 +179,8 @@ birdnet-behavior (single binary)
 │   ├── BirdWeather    — station detection uploads with retry backoff
 │   ├── Species Images — Wikipedia/Wikimedia image caching
 │   ├── Auto-Update   — GitHub Releases check + atomic binary replace
-│   └── MQTT           — pure-Rust MQTT 3.1.1 (Home Assistant, Node-RED, Mosquitto)
+│   ├── MQTT           — pure-Rust MQTT 3.1.1 (Home Assistant, Node-RED, Mosquitto)
+│   └── HA Discovery   — MQTT auto-discovery (sensor/binary_sensor, device grouping)
 │
 ├── Behavioral   (birdnet-behavioral, feature: analytics)
 │   ├── Sessionize     — gap-based activity window detection
@@ -356,6 +366,7 @@ Priority order: CLI flags > environment variables > settings DB > config file > 
 | `mqtt_host` | MQTT broker host (enables MQTT publishing) | — |
 | `mqtt_port` | MQTT broker port | `1883` |
 | `mqtt_topic_prefix` | MQTT topic prefix for detection events | `birdnet` |
+| `mqtt_ha_discovery` | Publish Home Assistant auto-discovery messages | `false` |
 | `quality_filter` | Enable audio quality pre-filtering | `false` |
 | `quality_min_snr_db` | Minimum SNR threshold for quality filter | `3.0` |
 

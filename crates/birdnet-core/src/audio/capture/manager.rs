@@ -36,7 +36,8 @@ impl CaptureManager {
     }
 
     /// Override the maximum number of automatic restarts (default: 10).
-    pub fn with_max_restarts(mut self, n: u32) -> Self {
+    #[must_use]
+    pub const fn with_max_restarts(mut self, n: u32) -> Self {
         self.max_restarts = n;
         self
     }
@@ -66,10 +67,10 @@ impl CaptureManager {
 
     /// Stop the capture process.
     pub fn stop(&mut self) {
-        if let Some(ref mut process) = self.process {
-            if let Err(e) = process.stop() {
-                tracing::warn!(error = %e, "error stopping capture process");
-            }
+        if let Some(ref mut process) = self.process
+            && let Err(e) = process.stop()
+        {
+            tracing::warn!(error = %e, "error stopping capture process");
         }
         self.process = None;
     }

@@ -18,6 +18,11 @@ use crate::state::AppState;
 // GET /admin/settings — full page
 // ---------------------------------------------------------------------------
 
+/// Render the full settings admin page.
+///
+/// # Errors
+///
+/// Returns `StatusCode` on internal rendering failures.
 pub async fn settings_page(State(state): State<AppState>) -> Result<Html<String>, StatusCode> {
     let settings_map = load_all_settings(&state);
     Ok(Html(render_settings_page(&settings_map)))
@@ -27,6 +32,11 @@ pub async fn settings_page(State(state): State<AppState>) -> Result<Html<String>
 // GET /admin/settings/partial — HTMX partial (form body only)
 // ---------------------------------------------------------------------------
 
+/// Render the settings form partial for HTMX requests.
+///
+/// # Errors
+///
+/// Returns `StatusCode` on internal rendering failures.
 pub async fn settings_partial(State(state): State<AppState>) -> Result<Html<String>, StatusCode> {
     let settings_map = load_all_settings(&state);
     Ok(Html(render_settings_form(&settings_map)))
@@ -36,6 +46,11 @@ pub async fn settings_partial(State(state): State<AppState>) -> Result<Html<Stri
 // POST /admin/settings — save and return feedback partial
 // ---------------------------------------------------------------------------
 
+/// Save submitted settings and return an HTMX feedback partial.
+///
+/// # Errors
+///
+/// Returns `StatusCode` on database or internal failures.
 pub async fn save_settings(
     State(state): State<AppState>,
     Form(form): Form<SettingsForm>,
@@ -43,10 +58,8 @@ pub async fn save_settings(
     let result = state.with_db(|conn| {
         ensure_settings_table(conn)?;
         let items = build_settings_items(&form);
-        let refs: Vec<(&str, &str, SettingsCategory)> = items
-            .iter()
-            .map(|(k, v, c)| (*k, v.as_str(), c.clone()))
-            .collect();
+        let refs: Vec<(&str, &str, SettingsCategory)> =
+            items.iter().map(|(k, v, c)| (*k, v.as_str(), *c)).collect();
         set_many(conn, &refs)?;
         Ok::<usize, birdnet_db::settings::SettingsError>(refs.len())
     });
@@ -94,6 +107,11 @@ pub struct LocationResult {
 ///
 /// BirdNET-Pi equivalent: `birdnet_analysis.sh` calls `curl ipinfo.io` on startup
 /// to auto-populate `LATITUDE` / `LONGITUDE` when not configured.
+///
+/// # Errors
+///
+/// Returns `(StatusCode, String)` on HTTP client build failure, network errors,
+/// JSON decode failure, or when ip-api.com returns a non-success status.
 pub async fn detect_location() -> Result<Json<LocationResult>, (StatusCode, String)> {
     #[derive(serde::Deserialize)]
     struct IpApiResponse {
@@ -166,6 +184,7 @@ pub(super) fn load_all_settings(state: &AppState) -> HashMap<String, String> {
 
 /// Convert the flat form into a list of `(key, value, category)` triples
 /// for storage, filtering out any `None` fields.
+#[allow(clippy::too_many_lines)]
 fn build_settings_items(form: &SettingsForm) -> Vec<(&'static str, String, SettingsCategory)> {
     let mut items: Vec<(&'static str, String, SettingsCategory)> = Vec::new();
 

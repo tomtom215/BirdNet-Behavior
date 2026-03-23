@@ -16,6 +16,8 @@ use axum::extract::State;
 use axum::http::{StatusCode, header};
 use axum::response::Html;
 use axum::{Router, routing::get};
+#[cfg(feature = "analytics")]
+use std::fmt::Write as _;
 
 use super::TIMESERIES_PAGE_HTML;
 #[cfg(feature = "analytics")]

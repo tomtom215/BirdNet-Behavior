@@ -29,6 +29,7 @@ pub fn router() -> Router<AppState> {
 // GET /admin/system
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_lines)]
 async fn system_page(State(state): State<AppState>) -> Html<String> {
     let status_html = render_status_partial(&state).await;
     Html(format!(
@@ -196,6 +197,7 @@ async fn system_status_partial(State(state): State<AppState>) -> Html<String> {
     Html(render_status_partial(&state).await)
 }
 
+#[allow(clippy::too_many_lines)]
 async fn render_status_partial(state: &AppState) -> String {
     let db_path = state.db_path().to_path_buf();
 
@@ -279,6 +281,7 @@ async fn render_status_partial(state: &AppState) -> String {
             let temp_html = snap
                 .cpu_temp_celsius
                 .map(|t| {
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss, clippy::cast_possible_wrap, clippy::cast_lossless)]
                     let tc = t as u32;
                     let c = if tc > 80 { "#f87171" } else if tc > 65 { "#fbbf24" } else { "#4ade80" };
                     format!(r#"<p style="font-size:.8rem;margin:.25rem 0;">CPU Temp: <span style="color:{c};font-weight:600;">{tc}°C</span></p>"#)

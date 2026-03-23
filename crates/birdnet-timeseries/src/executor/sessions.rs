@@ -1,12 +1,13 @@
 //! Activity session and inactivity gap query methods.
 
 use crate::error::TimeSeriesError;
+use crate::queries::QueryPlan;
 use crate::queries::gap::{DailyMaxGap, IntraDay, QuietDays};
 use crate::types::{
     params::SessionParams,
     results::{GapRow, SessionRow, WindowRow},
 };
-use crate::window::SessionSpec;
+use crate::window::{SessionSpec, WindowSpec};
 
 impl<'conn> super::TimeSeriesDb<'conn> {
     /// Group detections into activity sessions separated by inactivity gaps.

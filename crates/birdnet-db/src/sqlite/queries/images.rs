@@ -7,7 +7,7 @@ use rusqlite::{Connection, params};
 
 use crate::sqlite::connection::DbError;
 
-/// A row from the image_blacklist table.
+/// A row from the `image_blacklist` table.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ImageBlacklist {
     /// Row ID.

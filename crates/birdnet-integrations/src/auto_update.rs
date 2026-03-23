@@ -122,6 +122,12 @@ fn is_newer(current: &str, latest: &str) -> Result<bool, UpdateError> {
 ///
 /// Performs a synchronous HTTP GET to the GitHub Releases API and compares
 /// the latest tag against `current_version`.
+///
+/// # Errors
+///
+/// Returns `UpdateError::Network` on HTTP or connection failures, `UpdateError::Parse`
+/// if the API response cannot be decoded, or `UpdateError::NotAvailable` if the
+/// current version is already up-to-date.
 pub fn check_for_update(current_version: &str) -> Result<UpdateInfo, UpdateError> {
     let client = reqwest::blocking::Client::builder()
         .user_agent(USER_AGENT)

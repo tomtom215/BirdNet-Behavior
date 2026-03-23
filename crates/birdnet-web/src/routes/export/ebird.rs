@@ -32,15 +32,15 @@ pub(super) async fn export_ebird(
     let date = query.date.clone();
     let date_for_filename = date.clone();
 
-    if let Some(ref d) = date {
-        if !is_valid_date(d) {
-            return (
-                StatusCode::BAD_REQUEST,
-                [(header::CONTENT_TYPE, "application/json")],
-                json!({"error": "invalid date format, expected YYYY-MM-DD"}).to_string(),
-            )
-                .into_response();
-        }
+    if let Some(ref d) = date
+        && !is_valid_date(d)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            [(header::CONTENT_TYPE, "application/json")],
+            json!({"error": "invalid date format, expected YYYY-MM-DD"}).to_string(),
+        )
+            .into_response();
     }
 
     let lat = query.lat.unwrap_or(0.0);
@@ -110,7 +110,7 @@ fn detections_to_ebird_csv(
             .push(row);
     }
 
-    for (_, group) in &species_groups {
+    for group in species_groups.values() {
         let first = group[0];
         let count = group.len();
         let (genus, species) = first
@@ -124,6 +124,13 @@ fn detections_to_ebird_csv(
             .min()
             .unwrap_or(&first.time);
 
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss,
+            clippy::cast_possible_wrap,
+            clippy::cast_lossless
+        )]
         let avg_conf: f64 = group.iter().map(|d| d.confidence).sum::<f64>() / count as f64;
         let comment = format!("BirdNET avg confidence: {:.0}%", avg_conf * 100.0);
 

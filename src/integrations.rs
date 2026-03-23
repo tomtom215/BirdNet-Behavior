@@ -74,6 +74,7 @@ pub fn create_apprise_client(
 
     let client_result = if url.is_empty() {
         // CLI-only mode: no HTTP server configured.
+        #[allow(clippy::redundant_clone)] // else branch also borrows apprise_config_file
         let cfg_path = apprise_config_file
             .clone()
             .expect("config file required when no URL");
@@ -227,7 +228,7 @@ pub fn create_notification_template(
     }
 }
 
-/// Create an email notifier from settings stored in the SQLite database.
+/// Create an email notifier from settings stored in the `SQLite` database.
 ///
 /// Returns `None` if no SMTP host is configured or construction fails.
 pub fn create_email_notifier(state: &birdnet_web::state::AppState) -> Option<EmailHandle> {
@@ -338,8 +339,7 @@ pub fn create_mqtt_client(
 
     let topic_prefix = config
         .and_then(|c| c.get("MQTT_TOPIC_PREFIX"))
-        .map(String::from)
-        .unwrap_or_else(|| cli.mqtt_topic_prefix.clone());
+        .map_or_else(|| cli.mqtt_topic_prefix.clone(), String::from);
 
     let retain = cli.mqtt_retain
         || config
@@ -383,4 +383,94 @@ pub fn create_auth_config(
     let auth = birdnet_web::auth::AuthConfig::new(username, password)?;
     tracing::info!(username = %username, "basic auth enabled");
     Some(auth)
+}
+
+/// Return a cloned `MqttClient` when MQTT is configured (used by HA discovery).
+///
+/// This is a lightweight helper used at startup only.
+pub fn get_mqtt_client_ref(
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+) -> Option<birdnet_integrations::mqtt::MqttClient> {
+    let host = cli
+        .mqtt_host
+        .clone()
+        .or_else(|| config?.get("MQTT_HOST").map(String::from))?;
+
+    let port = config
+        .and_then(|c| c.get_parsed::<u16>("MQTT_PORT").ok())
+        .unwrap_or(cli.mqtt_port);
+
+    let username = cli
+        .mqtt_username
+        .clone()
+        .or_else(|| config?.get("MQTT_USERNAME").map(String::from));
+
+    let password = cli
+        .mqtt_password
+        .clone()
+        .or_else(|| config?.get("MQTT_PASSWORD").map(String::from));
+
+    let topic_prefix = config
+        .and_then(|c| c.get("MQTT_TOPIC_PREFIX"))
+        .map_or_else(|| cli.mqtt_topic_prefix.clone(), String::from);
+
+    let retain = cli.mqtt_retain
+        || config
+            .and_then(|c| c.get_parsed::<bool>("MQTT_RETAIN").ok())
+            .unwrap_or(false);
+
+    Some(birdnet_integrations::mqtt::MqttClient::new(
+        birdnet_integrations::mqtt::MqttConfig {
+            host,
+            port,
+            client_id: cli.mqtt_client_id.clone(),
+            username,
+            password,
+            topic_prefix,
+            qos: birdnet_integrations::mqtt::QosLevel::AtMostOnce,
+            retain,
+            timeout_ms: 5_000,
+        },
+    ))
+}
+
+/// Publish Home Assistant MQTT auto-discovery messages if enabled.
+///
+/// Reads the station name from CLI / config and publishes four entities:
+/// last-species sensor, confidence sensor, connectivity binary sensor,
+/// and detections-today sensor.  Failures are logged as warnings (non-fatal).
+pub fn publish_ha_discovery(
+    client: &birdnet_integrations::mqtt::MqttClient,
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+) {
+    if !cli.mqtt_ha_discovery {
+        return;
+    }
+
+    let station_name = cli
+        .site_name
+        .clone()
+        .or_else(|| config?.get("STATION_NAME").map(String::from))
+        .unwrap_or_else(|| "BirdNet-Behavior".to_string());
+
+    let discovery = birdnet_integrations::mqtt::HaDiscovery::new(
+        client.config().clone(),
+        birdnet_integrations::mqtt::HaDiscoveryConfig {
+            station_name: station_name.clone(),
+            ..birdnet_integrations::mqtt::HaDiscoveryConfig::default()
+        },
+    );
+
+    match discovery.publish_all() {
+        Ok(()) => tracing::info!(
+            station = %station_name,
+            "Home Assistant MQTT auto-discovery published"
+        ),
+        Err(e) => tracing::warn!(
+            error = %e,
+            "Home Assistant MQTT auto-discovery failed (broker may be offline)"
+        ),
+    }
 }

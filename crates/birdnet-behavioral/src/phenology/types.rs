@@ -119,7 +119,7 @@ pub struct AbundanceParams {
 impl AbundanceParams {
     /// Construct parameters for a specific year.
     #[must_use]
-    pub fn for_year(year: u32) -> Self {
+    pub const fn for_year(year: u32) -> Self {
         Self {
             year,
             species: None,

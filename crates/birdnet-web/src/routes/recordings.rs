@@ -45,11 +45,8 @@ async fn serve_recording(State(state): State<AppState>, Path(filename): Path<Str
     let file_path = rec_dir.join(&filename);
 
     // Security: resolve canonical path and confirm it is inside rec_dir.
-    let canonical = match file_path.canonicalize() {
-        Ok(p) => p,
-        Err(_) => {
-            return (StatusCode::NOT_FOUND, "recording not found").into_response();
-        }
+    let Ok(canonical) = file_path.canonicalize() else {
+        return (StatusCode::NOT_FOUND, "recording not found").into_response();
     };
 
     let rec_dir_canonical = rec_dir.canonicalize().unwrap_or_else(|_| rec_dir.clone());
@@ -57,9 +54,8 @@ async fn serve_recording(State(state): State<AppState>, Path(filename): Path<Str
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
 
-    let file = match File::open(&canonical).await {
-        Ok(f) => f,
-        Err(_) => return (StatusCode::NOT_FOUND, "recording not found").into_response(),
+    let Ok(file) = File::open(&canonical).await else {
+        return (StatusCode::NOT_FOUND, "recording not found").into_response();
     };
 
     let content_type = content_type_for(&filename);
@@ -122,14 +118,16 @@ async fn list_recordings(
     })
     .await;
 
-    match result {
-        Ok(recordings) => Json(recordings).into_response(),
-        Err(_) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "failed to list recordings",
-        )
-            .into_response(),
-    }
+    result.map_or_else(
+        |_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to list recordings",
+            )
+                .into_response()
+        },
+        |recordings| Json(recordings).into_response(),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -153,19 +151,17 @@ fn is_safe_filename(name: &str) -> bool {
 
 /// Return the MIME content-type for an audio filename.
 fn content_type_for(filename: &str) -> &'static str {
-    let lower = filename.to_ascii_lowercase();
-    if lower.ends_with(".wav") {
-        "audio/wav"
-    } else if lower.ends_with(".mp3") {
-        "audio/mpeg"
-    } else if lower.ends_with(".flac") {
-        "audio/flac"
-    } else if lower.ends_with(".ogg") || lower.ends_with(".oga") {
-        "audio/ogg"
-    } else if lower.ends_with(".m4a") || lower.ends_with(".aac") {
-        "audio/aac"
-    } else {
-        "application/octet-stream"
+    let ext = std::path::Path::new(filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    match ext.as_deref() {
+        Some("wav") => "audio/wav",
+        Some("mp3") => "audio/mpeg",
+        Some("flac") => "audio/flac",
+        Some("ogg" | "oga") => "audio/ogg",
+        Some("m4a" | "aac") => "audio/aac",
+        _ => "application/octet-stream",
     }
 }
 
@@ -188,10 +184,10 @@ fn collect_recordings(
             if !is_audio_extension(&filename) {
                 return None;
             }
-            if let Some(filter) = species_filter {
-                if !filename.to_lowercase().contains(filter) {
-                    return None;
-                }
+            if let Some(filter) = species_filter
+                && !filename.to_lowercase().contains(filter)
+            {
+                return None;
             }
             let meta = e.metadata().ok()?;
             let size_bytes = meta.len();
@@ -218,14 +214,14 @@ fn collect_recordings(
 
 /// Return true if the filename has a known audio extension.
 fn is_audio_extension(filename: &str) -> bool {
-    let lower = filename.to_ascii_lowercase();
-    lower.ends_with(".wav")
-        || lower.ends_with(".mp3")
-        || lower.ends_with(".flac")
-        || lower.ends_with(".ogg")
-        || lower.ends_with(".oga")
-        || lower.ends_with(".m4a")
-        || lower.ends_with(".aac")
+    let ext = std::path::Path::new(filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    matches!(
+        ext.as_deref(),
+        Some("wav" | "mp3" | "flac" | "ogg" | "oga" | "m4a" | "aac")
+    )
 }
 
 #[cfg(test)]
@@ -306,7 +302,11 @@ mod tests {
 
         let result = collect_recordings(&tmp.path().to_path_buf(), None, 50, 0);
         assert_eq!(result.len(), 2);
-        assert!(result.iter().all(|r| r.filename.ends_with(".wav")));
+        assert!(
+            result
+                .iter()
+                .all(|r| r.filename.to_ascii_lowercase().ends_with(".wav"))
+        );
     }
 
     #[test]

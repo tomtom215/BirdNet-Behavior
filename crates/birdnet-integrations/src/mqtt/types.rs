@@ -1,7 +1,7 @@
 //! MQTT integration types.
 //!
 //! Configuration, payload schemas, and error types for the lightweight
-//! MQTT 3.1.1 publisher used to broadcast bird detection events to IoT (Internet of Things)
+//! MQTT 3.1.1 publisher used to broadcast bird detection events to `IoT` (Internet of Things)
 //! brokers (Home Assistant, Node-RED, Mosquitto, etc.).
 
 use std::fmt;
@@ -83,7 +83,7 @@ pub enum QosLevel {
 
 impl From<QosLevel> for u8 {
     fn from(q: QosLevel) -> Self {
-        q as u8
+        q as Self
     }
 }
 

@@ -1,4 +1,4 @@
-//! SQLite connection helpers and error types.
+//! `SQLite` connection helpers and error types.
 //!
 //! Provides WAL-mode-enforced connection opening for both existing and new
 //! databases, plus `quick_check` for integrity verification.

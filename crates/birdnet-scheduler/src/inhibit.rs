@@ -3,7 +3,7 @@
 //! [`NightInhibit`] wraps sunrise/sunset times and optional offset margins
 //! to produce a simple "is recording allowed right now?" answer.
 //!
-//! Unlike [`RecordingWindow`] this type is constructed directly from solar
+//! Unlike [`crate::RecordingWindow`] this type is constructed directly from solar
 //! event minutes (as returned by [`crate::solar::SolarDay`]) with offset
 //! minutes supplied by the user configuration.
 
@@ -47,7 +47,7 @@ impl NightInhibit {
 
     /// Convenience: always allow recording (disables night inhibit).
     #[must_use]
-    pub fn disabled() -> Self {
+    pub const fn disabled() -> Self {
         Self {
             allow_from_min: 0,
             // 1440 so that `m < 1440` holds for all valid minutes (0..=1439).
@@ -57,7 +57,7 @@ impl NightInhibit {
 
     /// Is recording currently permitted at `minutes_since_midnight`?
     #[must_use]
-    pub fn is_recording_allowed(&self, minutes_since_midnight: u32) -> bool {
+    pub const fn is_recording_allowed(&self, minutes_since_midnight: u32) -> bool {
         let m = minutes_since_midnight;
         m >= self.allow_from_min && m < self.allow_until_min
     }

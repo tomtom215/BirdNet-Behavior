@@ -1,6 +1,7 @@
 //! Diversity metrics query methods.
 
 use crate::error::TimeSeriesError;
+use crate::queries::QueryPlan;
 use crate::queries::diversity::{
     AccumulationCurve, DailyRichness, DailyShannon, TopSpeciesByCount,
 };

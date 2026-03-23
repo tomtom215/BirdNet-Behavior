@@ -8,10 +8,10 @@ use crate::error::MigrateError;
 use crate::schema::{DetectedSchema, detect_schema};
 use crate::traits::SchemaDetector;
 
-/// Detects the BirdNET-Pi `BirdDB.txt` SQLite schema.
+/// Detects the BirdNET-Pi `BirdDB.txt` `SQLite` schema.
 ///
 /// BirdNET-Pi stores detections in a file commonly named `BirdDB.txt` or
-/// `birds.db` (it is a plain SQLite file despite the `.txt` extension).
+/// `birds.db` (it is a plain `SQLite` file despite the `.txt` extension).
 /// All known BirdNET-Pi versions share the same 12-column `detections` table.
 #[derive(Debug, Clone, Default)]
 pub struct BirdNetPiDetector;

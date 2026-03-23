@@ -140,11 +140,11 @@ where
     let (tx, rx) = std::sync::mpsc::channel();
 
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        if let Ok(event) = res {
-            if matches!(event.kind, EventKind::Create(_)) {
-                for path in event.paths {
-                    let _ = tx.send(path);
-                }
+        if let Ok(event) = res
+            && matches!(event.kind, EventKind::Create(_))
+        {
+            for path in event.paths {
+                let _ = tx.send(path);
             }
         }
     })
@@ -198,7 +198,7 @@ where
                     }
                 }
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }

@@ -204,6 +204,7 @@ async fn upload_and_run_handler(
 // POST /admin/migrate/run  (server-side path → run)
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::unused_async)] // required by axum Handler trait
 async fn run_handler(
     State(state): State<AppState>,
     Form(form): Form<MigrateForm>,
@@ -240,6 +241,7 @@ async fn run_handler(
 // GET /admin/migrate/progress
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::unused_async)] // required by axum Handler trait
 async fn progress_handler(migration_state: MigrationState) -> Html<String> {
     let snap: Option<MigrationProgress> = {
         let guard = migration_state

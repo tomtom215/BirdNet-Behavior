@@ -1,4 +1,4 @@
-//! SQLite query modules grouped by concern.
+//! `SQLite` query modules grouped by concern.
 
 pub mod analytics;
 pub mod correlation;

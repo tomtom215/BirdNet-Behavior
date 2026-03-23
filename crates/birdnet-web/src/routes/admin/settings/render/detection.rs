@@ -1,6 +1,7 @@
 //! Detection thresholds settings section.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 
 use super::get_setting;
 
@@ -10,7 +11,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let over = get_setting(s, "overlap", "0.0");
     let sf = get_setting(s, "sf_thresh", "0.03");
     let priv_t = get_setting(s, "privacy_threshold", "0.0");
-    out.push_str(&format!(
+    write!(out,
         r#"
   <div class="card">
     <div class="section-title">Detection Settings</div>
@@ -49,5 +50,5 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
       <p class="hint">Suppress detections when human voice is detected. Typical: 0.01–0.03. 0 = disabled (BirdNET-Pi: PRIVACY_THRESHOLD)</p>
     </div>
   </div>"#
-    ));
+    ).unwrap_or_default();
 }

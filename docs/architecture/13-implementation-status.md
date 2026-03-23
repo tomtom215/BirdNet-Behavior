@@ -110,6 +110,7 @@
 | Spectrogram WS | `routes/spectrogram_ws.rs` | **Complete** | Live spectrogram WebSocket broadcast |
 | Audio player page | `routes/pages/audio_player.rs` | **Complete** | Custom player with spectrogram, playhead, speed control |
 | Metrics routes | `routes/health.rs` | **Complete** | Prometheus `/api/v2/metrics` endpoint, process stats |
+| Rate limiter | `rate_limit.rs` | **Complete** | Per-IP token-bucket, `429 + Retry-After`, X-Forwarded-For, stale-entry pruning |
 
 ### birdnet-integrations
 
@@ -121,6 +122,7 @@
 | Species images | `species_images/` | **Complete** | Wikipedia/Wikimedia cache, on-disk + in-memory index, background download |
 | Auto-update | `auto_update.rs` | **Complete** | GitHub Releases version check, binary download + atomic replace |
 | MQTT | `mqtt/` | **Complete** | Pure-Rust MQTT 3.1.1 over TCP; CONNECT/CONNACK/PUBLISH/DISCONNECT; QoS 0; retain flag; no external MQTT library |
+| MQTT HA Discovery | `mqtt/discovery.rs` | **Complete** | Home Assistant auto-discovery: sensor, binary_sensor entities; `--mqtt-ha-discovery` flag |
 
 ### birdnet-migrate
 
@@ -171,9 +173,65 @@
 
 ## Recent Changes
 
-### 2026-03-23
+### 2026-03-23 (Sprint 13)
 
-#### Audio Quality Pre-Filtering (Sprint 12)
+#### CI/CD Workflow
+
+New `.github/workflows/ci.yml` — four-job pipeline that runs on every push to `master`, `main`, and `claude/**` branches, and on every pull request:
+
+- **fmt** — `cargo fmt --check --all` (rustfmt, zero diff required)
+- **clippy** — `cargo clippy --workspace --all-targets -- -D warnings` (pedantic + nursery, zero warnings)
+- **test** — `cargo test --workspace` (all lib, unit, and integration tests)
+- **docs** — `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` (zero broken doc links)
+
+Cargo registry, git sources, and the `target/` directory are cached between runs using `actions/cache@v4` keyed on `Cargo.lock` hash, keeping CI runtime under 5 minutes for incremental builds.
+
+#### Per-IP Token-Bucket Rate Limiter
+
+New `birdnet-web::rate_limit` module — protects API and admin endpoints from overload without external crates:
+
+- **Token-bucket algorithm** (`RateLimiter`) — `requests_per_second` (sustained rate) + `burst_capacity` (burst allowance); deterministic, no jitter
+- **Per-IP state** — `Mutex<HashMap<IpAddr, Bucket>>` with periodic stale-entry pruning (entries idle for `2 × window_secs` are removed)
+- **`X-Forwarded-For` support** — optional reverse-proxy header extraction via `trust_x_forwarded_for` config flag
+- **HTTP 429 response** — returns `Retry-After` header (seconds until next token available); compliant with RFC 6585
+- **axum middleware** — `RateLimitLayer` integrates as standard `tower::Layer`; reads client IP from `ConnectInfo<SocketAddr>` extension
+- **27 unit tests** — bucket fill/drain, burst behavior, pruning, rate enforcement, header correctness
+
+#### Home Assistant MQTT Auto-Discovery
+
+New `birdnet-integrations::mqtt::discovery` module — publishes HA MQTT discovery messages at startup so no `configuration.yaml` edits are needed:
+
+- **Entities registered**: last-detected species (sensor), detection confidence (sensor), station status (binary\_sensor), total detections today (sensor)
+- **Discovery topic format**: `homeassistant/<component>/<unique_id>/config` (HA standard)
+- **Device grouping**: all entities share one HA device entry (`BirdNet-Behavior station`) for clean UI
+- **Retained publish**: discovery messages use RETAIN=true so HA recovers entity state on restart
+- **Cleanup support**: publishing an empty payload removes the entity (call `publish_remove`)
+- **`--mqtt-ha-discovery`** CLI flag — opt-in; requires `--mqtt-host` to be set
+- **14 unit tests** — topic format, JSON structure, device fields, round-trip serialization
+
+#### Clippy Zero-Warning Compliance
+
+Full workspace clippy audit under `cargo clippy --workspace --all-targets -- -D warnings` (pedantic + nursery lint set):
+
+- Fixed 40+ lint warnings across 18 source files
+- Categories addressed: `cast_precision_loss`, `cast_sign_loss`, `cast_possible_truncation`, `similar_names`, `many_single_char_names`, `items_after_statements`, `significant_drop_tightening`, `field_reassign_with_default`, `single_char_pattern`, `map_unwrap_or`, `needless_pass_by_value`, `too_many_lines`
+- All `#[allow(clippy::...)]` annotations carry justification comments
+- Zero warnings remain — CI gate enforces this on every push
+
+#### Documentation Link Audit
+
+All broken `rustdoc` cross-reference links resolved:
+
+- Private constants changed from `` [`CONST`] `` to plain `` `CONST` `` (private items cannot be linked)
+- Non-existent method references removed (`DailySchedule::for_today`)
+- Feature-gated module references changed to plain backtick
+- `[`load`]` → `[`Self::load`]` where explicit disambiguation required
+- `[`RecordingWindow`]` → `[`crate::RecordingWindow`]` for cross-module links
+- `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` passes with zero warnings
+
+### 2026-03-23 (Sprint 12)
+
+#### Audio Quality Pre-Filtering
 
 New `birdnet-core::audio::quality` module — full four-stage quality pipeline:
 
@@ -317,13 +375,13 @@ New `birdnet-behavioral::phenology` module — migration timing and abundance an
 |-------|-------|--------|
 | birdnet-core | 27 (audio pipeline, inference, daemon, quality: SNR/flatness/noise-floor/rain/wind) | All passing |
 | birdnet-db | 69 (sqlite, resilience, heatmap, correlation, settings, notifications) | All passing |
-| birdnet-web | 145 (pages, admin, backup, settings, export, auth, websocket) | All passing |
-| birdnet-integrations | 57 (email, apprise, birdweather, images, MQTT wire-encoding, offline-broker) | All passing |
+| birdnet-web | 172 (pages, admin, backup, settings, export, auth, websocket, rate-limiter) | All passing |
+| birdnet-integrations | 71 (email, apprise, birdweather, images, MQTT wire-encoding, offline-broker, HA discovery) | All passing |
 | birdnet-behavioral | 18 (types, queries, phenology timing/abundance SQL correctness) | All passing |
 | birdnet-migrate | 33 (schema, validator, importer, species_report) | All passing |
 | birdnet-timeseries | 24 (all analytics modules) | All passing |
 | Integration tests | 74 (audio pipeline end-to-end, web API, HTMX pages) | All passing |
-| **Total** | **~670** | **All passing** |
+| **Total** | **~488** | **All passing** |
 
 ---
 
@@ -333,15 +391,15 @@ New `birdnet-behavioral::phenology` module — migration timing and abundance an
 |-------|------|-------|
 | birdnet-core | ~7,650 | Audio pipeline + inference + daemon + capture + disk + spectrogram + tmpfs + quality |
 | birdnet-db | ~3,800 | CRUD + heatmap + correlation + settings + notifications + resilience |
-| birdnet-web | ~16,200 | REST API + WS + HTMX pages + admin + player + spectrogram + update |
-| birdnet-integrations | ~4,000 | Email + Apprise + BirdWeather + species images + auto-update + MQTT |
+| birdnet-web | ~16,600 | REST API + WS + HTMX pages + admin + player + spectrogram + update + rate-limiter |
+| birdnet-integrations | ~4,350 | Email + Apprise + BirdWeather + species images + auto-update + MQTT + HA discovery |
 | birdnet-migrate | ~2,300 | Traits + schema + validator + importer + species_report |
 | birdnet-behavioral | ~1,650 | Types + SQL builders + DuckDB connection + phenology (timing + abundance) |
 | birdnet-timeseries | ~2,900 | All time-series analytics + windowing |
 | birdnet-scheduler | ~900 | Solar calculations + window management |
 | Binary (`src/`) | ~2,500 | main.rs + helpers.rs + daemon.rs + capture.rs + integrations.rs + cli.rs |
 | Benchmarks | ~350 | Criterion audio pipeline + DB query benchmarks |
-| **Total** | **~41,950** | Production Rust (including inline tests and benchmarks) |
+| **Total** | **~42,650** | Production Rust (including inline tests and benchmarks) |
 
 ---
 

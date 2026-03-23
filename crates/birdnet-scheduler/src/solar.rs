@@ -76,7 +76,7 @@ impl SolarDay {
         month: u32,
         day: u32,
     ) -> Result<Self, SchedulerError> {
-        if month < 1 || month > 12 || day < 1 || day > 31 {
+        if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
             return Err(SchedulerError::InvalidDate { year, month, day });
         }
 
@@ -84,6 +84,13 @@ impl SolarDay {
         let (rise, set) = compute_sunrise_sunset(location.lat, location.lon, doy, year, 0.833_f64);
         let (dawn, dusk) = compute_sunrise_sunset(location.lat, location.lon, doy, year, 6.0_f64);
 
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_possible_wrap,
+            clippy::cast_lossless
+        )]
         Ok(Self {
             location,
             day_of_year: doy,
@@ -97,12 +104,12 @@ impl SolarDay {
     /// Return sunrise in minutes since midnight UTC (local-solar time convenience).
     ///
     /// Callers may add a UTC offset (in minutes) to convert to local wall time.
-    pub fn sunrise_minutes(&self) -> Option<u32> {
+    pub const fn sunrise_minutes(&self) -> Option<u32> {
         self.sunrise_utc_min
     }
 
     /// Return sunset in minutes since midnight UTC.
-    pub fn sunset_minutes(&self) -> Option<u32> {
+    pub const fn sunset_minutes(&self) -> Option<u32> {
         self.sunset_utc_min
     }
 }
@@ -151,21 +158,33 @@ fn compute_sunrise_sunset(
 
     // Equation of time (minutes)
     let eqtime = 229.18
-        * (0.000_075 + 0.001_868 * gamma.cos()
-            - 0.032_077 * gamma.sin()
-            - 0.014_615 * (2.0 * gamma).cos()
-            - 0.040_849 * (2.0 * gamma).sin());
+        * 0.040_849f64.mul_add(
+            -(2.0 * gamma).sin(),
+            0.014_615f64.mul_add(
+                -(2.0 * gamma).cos(),
+                0.032_077f64.mul_add(-gamma.sin(), 0.001_868f64.mul_add(gamma.cos(), 0.000_075)),
+            ),
+        );
 
     // Solar declination (radians)
-    let decl = 0.006_918 - 0.399_912 * gamma.cos() + 0.070_257 * gamma.sin()
-        - 0.006_758 * (2.0 * gamma).cos()
-        + 0.000_907 * (2.0 * gamma).sin()
-        - 0.002_697 * (3.0 * gamma).cos()
-        + 0.001_480 * (3.0 * gamma).sin();
+    let decl = 0.002_697f64.mul_add(
+        -(3.0 * gamma).cos(),
+        0.001_480f64.mul_add(
+            (3.0 * gamma).sin(),
+            0.000_907f64.mul_add(
+                (2.0 * gamma).sin(),
+                0.006_758f64.mul_add(
+                    -(2.0 * gamma).cos(),
+                    0.070_257f64
+                        .mul_add(gamma.sin(), 0.399_912f64.mul_add(-gamma.cos(), 0.006_918)),
+                ),
+            ),
+        ),
+    );
 
     // Hour angle (degrees): cos(ha) = (cos(90+zenith) - sin(lat)*sin(decl)) / (cos(lat)*cos(decl))
     let zenith_rad = (90.0 + zenith_offset).to_radians();
-    let cos_ha = (zenith_rad.cos() - lat.sin() * decl.sin()) / (lat.cos() * decl.cos());
+    let cos_ha = lat.sin().mul_add(-decl.sin(), zenith_rad.cos()) / (lat.cos() * decl.cos());
 
     if cos_ha < -1.0 {
         // Polar day — sun never sets
@@ -179,25 +198,25 @@ fn compute_sunrise_sunset(
     let ha = cos_ha.acos().to_degrees();
 
     // Solar noon in minutes UTC
-    let solar_noon = 720.0 - 4.0 * lon - eqtime;
+    let solar_noon = 4.0f64.mul_add(-lon, 720.0) - eqtime;
 
-    let sunrise_min = solar_noon - 4.0 * ha;
-    let sunset_min = solar_noon + 4.0 * ha;
+    let sunrise_min = 4.0f64.mul_add(-ha, solar_noon);
+    let sunset_min = 4.0f64.mul_add(ha, solar_noon);
 
     (Some(sunrise_min / 60.0), Some(sunset_min / 60.0))
 }
 
 /// Compute day-of-year (1-based) for a Gregorian date.
 fn day_of_year(year: u32, month: u32, day: u32) -> u32 {
-    let leap = u32::from(is_leap_year(year));
     // Days in each month (Jan=1..Dec=12)
     const DAYS_BEFORE: [u32; 13] = [0, 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+    let leap = u32::from(is_leap_year(year));
     let extra_leap = if month > 2 { leap } else { 0 };
     DAYS_BEFORE[month as usize] + day + extra_leap
 }
 
-fn is_leap_year(year: u32) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+const fn is_leap_year(year: u32) -> bool {
+    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
 }
 
 // ---------------------------------------------------------------------------

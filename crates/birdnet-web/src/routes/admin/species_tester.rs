@@ -78,8 +78,8 @@ struct FilterResult {
 /// ```
 async fn test_species_filter(Query(params): Query<FilterParams>) -> Json<FilterResult> {
     // Parse comma-separated lists into lowercase tokens.
-    let include_list = parse_csv(&params.include);
-    let exclude_list = parse_csv(&params.exclude);
+    let include_list = parse_csv(params.include.as_deref());
+    let exclude_list = parse_csv(params.exclude.as_deref());
     let sf_thresh = params.sf_thresh.unwrap_or(0.0).clamp(0.0, 1.0);
 
     // Load the full label set. In production this would come from the ONNX
@@ -146,9 +146,8 @@ async fn test_species_filter(Query(params): Query<FilterParams>) -> Json<FilterR
 
 /// Parse an optional comma-separated string into a `Vec` of lowercase,
 /// trimmed, non-empty tokens.
-fn parse_csv(input: &Option<String>) -> Vec<String> {
+fn parse_csv(input: Option<&str>) -> Vec<String> {
     input
-        .as_deref()
         .unwrap_or("")
         .split(',')
         .map(|s| s.trim().to_lowercase())
@@ -205,7 +204,7 @@ fn build_summary(
 
 /// Built-in test species list.
 ///
-/// In a production deployment this would be loaded from the BirdNET ONNX
+/// In a production deployment this would be loaded from the `BirdNET` ONNX
 /// model labels file. This representative list covers common species for
 /// filter testing.
 fn built_in_species_list() -> Vec<String> {
@@ -303,14 +302,14 @@ mod tests {
 
     #[test]
     fn parse_csv_empty() {
-        assert!(parse_csv(&None).is_empty());
-        assert!(parse_csv(&Some(String::new())).is_empty());
+        assert!(parse_csv(None).is_empty());
+        assert!(parse_csv(Some("")).is_empty());
     }
 
     #[test]
     fn parse_csv_values() {
-        let input = Some("Robin, Blackbird , sparrow".to_string());
-        let result = parse_csv(&input);
+        let input = "Robin, Blackbird , sparrow";
+        let result = parse_csv(Some(input));
         assert_eq!(result, vec!["robin", "blackbird", "sparrow"]);
     }
 

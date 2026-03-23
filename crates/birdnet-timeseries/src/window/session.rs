@@ -4,7 +4,7 @@
 //! shorter than a configurable threshold. When the gap between two detections
 //! exceeds the threshold a new session begins.
 //!
-//! Implementation follows the DuckDB pattern:
+//! Implementation follows the `DuckDB` pattern:
 //! 1. Compute `LAG(detection_timestamp)` for each row
 //! 2. Mark rows where the gap ≥ threshold as session boundaries
 //! 3. Assign a monotonically increasing `session_id` via cumulative SUM
@@ -49,7 +49,7 @@ impl Default for SessionSpec {
 
 impl SessionSpec {
     /// Dawn-chorus sessions (04:00 – 09:00, gap threshold 10 min).
-    pub fn dawn_chorus(date: Option<String>) -> Self {
+    pub const fn dawn_chorus(date: Option<String>) -> Self {
         Self {
             gap_threshold_minutes: 10,
             date_filter: date,
