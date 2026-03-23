@@ -8,6 +8,7 @@ mod config;
 mod convert;
 mod extractor;
 mod format;
+pub mod metadata;
 mod wav;
 
 use std::fmt;
@@ -18,6 +19,7 @@ use crate::audio::decode::DecodeError;
 pub use config::ExtractionConfig;
 pub use extractor::Extractor;
 pub use format::AudioFormat;
+pub use metadata::{DetectionMeta, MetaError, embed_wav_metadata};
 pub use wav::generate_spectrogram;
 
 // ---------------------------------------------------------------------------

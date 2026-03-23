@@ -4,6 +4,7 @@
 //! backup/restore via the `SQLite` backup API, integrity checking,
 //! and corruption recovery.
 
+pub mod alert_rules;
 pub mod migration;
 pub mod notifications;
 pub mod resilience;

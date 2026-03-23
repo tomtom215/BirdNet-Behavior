@@ -6,6 +6,7 @@ use crate::audio::decode::decode_file;
 use crate::detection::types::Detection;
 
 use super::convert::{apply_freq_shift, convert_audio_format};
+use super::metadata::{DetectionMeta, embed_wav_metadata};
 use super::wav::write_wav_clip;
 use super::{ExtractionConfig, ExtractionError};
 
@@ -135,6 +136,24 @@ impl Extractor {
             }
         } else {
             write_wav_clip(clip_samples, audio.sample_rate, &output_path)?;
+        }
+
+        // Embed RIFF INFO metadata into WAV files (best-effort, non-fatal).
+        if self.config.target_format == super::format::AudioFormat::Wav {
+            let meta = DetectionMeta {
+                common_name: detection.common_name.clone(),
+                scientific_name: detection.scientific_name.clone(),
+                confidence: detection.confidence,
+                date: detection.date.clone(),
+                time: detection.time.clone(),
+            };
+            if let Err(e) = embed_wav_metadata(&output_path, &meta) {
+                tracing::debug!(
+                    error = %e,
+                    path = %output_path.display(),
+                    "WAV metadata embedding failed (non-fatal)"
+                );
+            }
         }
 
         tracing::info!(

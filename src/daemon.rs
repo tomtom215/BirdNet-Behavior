@@ -293,6 +293,78 @@ fn event_processor(
             }
         }
 
+        // Evaluate alert rules (loaded fresh for each detection to reflect UI changes).
+        let rule_suppressed = state.with_db(|conn| {
+            let rules = birdnet_db::alert_rules::list_rules(conn).unwrap_or_default();
+            let matched = birdnet_db::alert_rules::evaluate_rules(
+                &rules,
+                &detection.common_name,
+                f64::from(detection.confidence),
+                &detection.time,
+            );
+
+            let mut suppressed = false;
+            for rule in matched {
+                match &rule.action {
+                    birdnet_db::alert_rules::AlertAction::Log => {
+                        tracing::info!(
+                            rule = %rule.name,
+                            species = %detection.common_name,
+                            sci_name = %detection.scientific_name,
+                            confidence = detection.confidence,
+                            date = %detection.date,
+                            time = %detection.time,
+                            "alert rule matched (log action)"
+                        );
+                    }
+                    birdnet_db::alert_rules::AlertAction::Suppress => {
+                        tracing::debug!(
+                            rule = %rule.name,
+                            species = %detection.common_name,
+                            "alert rule suppressing notifications"
+                        );
+                        suppressed = true;
+                    }
+                    birdnet_db::alert_rules::AlertAction::Webhook {
+                        url,
+                        method,
+                        body_template,
+                    } => {
+                        let body = body_template.as_deref().map(|tmpl| {
+                            birdnet_db::alert_rules::render_webhook_body(
+                                tmpl,
+                                &detection.common_name,
+                                &detection.scientific_name,
+                                f64::from(detection.confidence),
+                                &detection.date,
+                                &detection.time,
+                            )
+                        });
+                        let url = url.clone();
+                        let method = method.clone();
+                        let rule_name = rule.name.clone();
+                        rt_handle.spawn(async move {
+                            dispatch_webhook(&url, &method, body.as_deref(), &rule_name).await;
+                        });
+                    }
+                }
+            }
+            suppressed
+        });
+
+        // Check if this is the first detection of this species today
+        // (to power the rare-species celebration in the dashboard).
+        let is_new_today = state.with_db(|conn| {
+            let today_count = birdnet_db::sqlite::detection_count_for_species_date(
+                conn,
+                &detection.date,
+                &detection.scientific_name,
+            )
+            .unwrap_or(1);
+            // If count is 1, the row we just inserted is the only one today.
+            today_count <= 1
+        });
+
         // Broadcast to WebSocket clients.
         let ws_event = birdnet_web::routes::websocket::WsDetectionEvent {
             event: "detection",
@@ -303,6 +375,7 @@ fn event_processor(
             time: detection.time.clone(),
             start: detection.start,
             stop: detection.stop,
+            is_new_today,
         };
         broadcast.send(&ws_event);
 
@@ -330,7 +403,9 @@ fn event_processor(
         };
 
         // Check notification filter (trigger mode + species filter).
-        let passes_filter = notification_filter.should_notify(&detection.scientific_name, None);
+        // Also respect Suppress alert rules.
+        let passes_filter =
+            !rule_suppressed && notification_filter.should_notify(&detection.scientific_name, None);
 
         // Apprise push notification (with filter and template).
         if let Some(ref apprise) = apprise {
@@ -445,5 +520,53 @@ fn event_processor(
             ws_clients = broadcast.client_count(),
             "event processed"
         );
+    }
+}
+
+/// Fire an alert-rule webhook request.
+///
+/// Dispatched as a background tokio task; errors are logged but not propagated.
+async fn dispatch_webhook(url: &str, method: &str, body: Option<&str>, rule_name: &str) {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build();
+
+    let Ok(client) = client else {
+        tracing::warn!(rule = rule_name, "failed to build HTTP client for webhook");
+        return;
+    };
+
+    let request = if method.eq_ignore_ascii_case("GET") {
+        client.get(url)
+    } else {
+        let builder = client.post(url);
+        if let Some(b) = body {
+            builder
+                .header("Content-Type", "application/json")
+                .body(b.to_owned())
+        } else {
+            builder
+                .header("Content-Type", "application/json")
+                .body("{}")
+        }
+    };
+
+    match request.send().await {
+        Ok(resp) => {
+            tracing::debug!(
+                rule = rule_name,
+                url,
+                status = resp.status().as_u16(),
+                "webhook dispatched"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                rule = rule_name,
+                url,
+                error = %e,
+                "webhook dispatch failed"
+            );
+        }
     }
 }

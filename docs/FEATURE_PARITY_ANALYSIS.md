@@ -1,6 +1,6 @@
 # BirdNET-Pi vs BirdNet-Behavior: Comprehensive Feature Parity Analysis
 
-**Last Updated**: 2026-03-23 (Sprint 11 — Modularity + Observability)
+**Last Updated**: 2026-03-23 (Sprint 14 — Alert Rules, Data Quality, WAV Metadata)
 **Source**: Nachtzuster/BirdNET-Pi (fully analyzed)
 **Target**: tomtom215/BirdNet-Behavior (Rust rewrite) — branch `claude/birdnet-pi-feature-parity-217bo`
 **Method**: Every file in both codebases read; code verified against actual Rust source; 300+ GitHub issues analyzed
@@ -10,6 +10,15 @@
 ## Executive Summary
 
 BirdNet-Behavior has reached **100% verified feature parity** with BirdNET-Pi (up from ~99%). All P0, P1, and P2 items are complete. The live spectrogram daemon, auto-update, tmpfs support, species filter tester, and custom audio player have all been implemented.
+
+**What changed since last analysis (Sprint 14):** Alert rules engine + data quality + WAV metadata:
+- **Alert rules engine** — `birdnet-db::alert_rules` module: per-rule species glob matching (case-insensitive `*` wildcard), confidence range, hour window (midnight-wrapping), day-of-week filter; three action types: `Webhook` (async reqwest dispatch with body templates), `Log`, `Suppress`; migration v9 `alert_rules` table; CRUD API; `evaluate_rules()` called in `daemon.rs` before broadcast
+- **Admin alert rules UI** — `GET /admin/rules` HTMX page: inline create form (species pattern, confidence min/max, hour window, days, action type, webhook URL/method/body); live table with per-row toggle and delete; double-hash raw strings (`r##"..."##`) to safely embed HTMX `hx-target` attributes
+- **Data quality dashboard** — `GET /admin/quality` HTMX page: confidence distribution bar chart (10 buckets), 30-day daily average trend, 24-hour quality profile, low-confidence species ranking table; `QualitySummary` aggregate; color-coded bars (`#ef4444` → `#8b5cf6`)
+- **Quality SQL queries** — `birdnet-db::sqlite::quality_summary()`, `confidence_trend()`, `detection_quality_by_hour()`, `low_confidence_species()` added to `analytics.rs`
+- **WAV metadata embedding** — `birdnet-core::audio::extraction::metadata`: pure Rust RIFF INFO LIST chunk writer; tags: `INAM` (common name), `IART`, `IPRD` (sci name), `ICMT` (confidence + timestamp), `ICRD`, `ISFT`; appended to extracted WAV files in-place with RIFF size field update; non-fatal (errors logged at DEBUG)
+- **`is_new_today` WebSocket field** — `WsDetectionEvent.is_new_today: bool` populated via `detection_count_for_species_date()`; set `true` when the species has not been detected earlier that calendar day
+- **Webhook body templates** — `render_webhook_body()` supports `{{species}}`, `{{sci_name}}`, `{{confidence}}`, `{{date}}`, `{{time}}` placeholders; dispatched async via `reqwest` with 10-second timeout
 
 **What changed since last analysis (Sprint 11):** Modularity refactoring + observability:
 - **Prometheus metrics endpoint** — `GET /api/v2/metrics` exports `birdnet_info`, `birdnet_uptime_seconds`, `birdnet_detections_total`, `birdnet_species_total`, `birdnet_process_resident_memory_bytes`, `birdnet_cpu_count`, `birdnet_analytics_enabled` in Prometheus text exposition format
@@ -46,7 +55,7 @@ BirdNet-Behavior has reached **100% verified feature parity** with BirdNET-Pi (u
 - **Weekly report notifications** — `src/weekly_report.rs` tokio task, sends top-10 species + total count via Apprise on configured weekday
 - **Disk manager startup** — `start_disk_manager()` in `main.rs` wires all disk config from CLI and starts background monitoring thread
 
-The Rust rewrite **surpasses** BirdNET-Pi in: behavioral analytics, time-series analytics, database resilience, detection deduplication, API design, WebSocket live streaming, notification logging, migration tooling, and deployment simplicity.
+The Rust rewrite **surpasses** BirdNET-Pi in: behavioral analytics, time-series analytics, database resilience, detection deduplication, API design, WebSocket live streaming (with `is_new_today`), notification logging, migration tooling, deployment simplicity, alert rules engine (conditional webhook/suppress actions), data quality dashboard, and WAV metadata enrichment.
 
 ---
 

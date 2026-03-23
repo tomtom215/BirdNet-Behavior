@@ -480,6 +480,7 @@ dependencies = [
  "birdnet-web",
  "clap",
  "hound",
+ "reqwest 0.13.2",
  "rusqlite",
  "serde_json",
  "tempfile",

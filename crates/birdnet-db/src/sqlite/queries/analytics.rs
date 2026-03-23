@@ -232,6 +232,142 @@ pub fn distinct_detection_dates(conn: &Connection) -> Result<Vec<String>, DbErro
     Ok(dates)
 }
 
+// ---------------------------------------------------------------------------
+// Data quality queries
+// ---------------------------------------------------------------------------
+
+/// Overall detection quality summary statistics.
+#[derive(Debug, Clone)]
+pub struct QualitySummary {
+    /// Total number of detections in the database.
+    pub total_detections: i64,
+    /// Average confidence across all detections (0.0–1.0).
+    pub avg_confidence: f64,
+    /// Minimum confidence seen.
+    pub min_confidence: f64,
+    /// Maximum confidence seen.
+    pub max_confidence: f64,
+    /// Number of detections with confidence < 0.5 (potential false positives).
+    pub low_confidence_count: i64,
+    /// Number of distinct species detected.
+    pub distinct_species: i64,
+    /// Date of earliest detection, or empty string if none.
+    pub earliest_date: String,
+    /// Date of most recent detection, or empty string if none.
+    pub latest_date: String,
+}
+
+/// Compute a high-level data quality summary.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn quality_summary(conn: &Connection) -> Result<QualitySummary, DbError> {
+    let row = conn.query_row(
+        "SELECT
+            COUNT(*) as total,
+            COALESCE(AVG(Confidence), 0.0) as avg_conf,
+            COALESCE(MIN(Confidence), 0.0) as min_conf,
+            COALESCE(MAX(Confidence), 0.0) as max_conf,
+            SUM(CASE WHEN Confidence < 0.5 THEN 1 ELSE 0 END) as low_count,
+            COUNT(DISTINCT Sci_Name) as species,
+            COALESCE(MIN(Date), '') as earliest,
+            COALESCE(MAX(Date), '') as latest
+         FROM detections",
+        [],
+        |row| {
+            Ok(QualitySummary {
+                total_detections: row.get(0)?,
+                avg_confidence: row.get(1)?,
+                min_confidence: row.get(2)?,
+                max_confidence: row.get(3)?,
+                low_confidence_count: row.get(4)?,
+                distinct_species: row.get(5)?,
+                earliest_date: row.get(6)?,
+                latest_date: row.get(7)?,
+            })
+        },
+    )?;
+    Ok(row)
+}
+
+/// Species with a high rate of low-confidence detections (potential false positives).
+///
+/// Returns `(common_name, sci_name, detection_count, avg_confidence)` tuples
+/// for species whose average confidence is below `threshold`, sorted by average
+/// confidence ascending (worst offenders first).  Only species with at least
+/// `min_count` detections are included.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn low_confidence_species(
+    conn: &Connection,
+    threshold: f64,
+    min_count: u32,
+) -> Result<Vec<(String, String, i64, f64)>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT Com_Name, Sci_Name, COUNT(*) as cnt, AVG(Confidence) as avg_conf
+         FROM detections
+         GROUP BY Sci_Name, Com_Name
+         HAVING avg_conf < ?1 AND cnt >= ?2
+         ORDER BY avg_conf ASC
+         LIMIT 20",
+    )?;
+    let rows = stmt
+        .query_map(params![threshold, min_count], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Daily average confidence trend over the last `days` days.
+///
+/// Returns `(date, avg_confidence)` pairs in chronological order.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn confidence_trend(conn: &Connection, days: u32) -> Result<Vec<(String, f64)>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT Date, AVG(Confidence) as avg_conf
+         FROM detections
+         WHERE Date >= DATE('now', '-' || ?1 || ' days')
+         GROUP BY Date
+         ORDER BY Date ASC",
+    )?;
+    let rows = stmt
+        .query_map(params![days], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Detection count and average confidence broken down by hour-of-day (0–23).
+///
+/// Returns `(hour, count, avg_confidence)` tuples covering all time.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn detection_quality_by_hour(conn: &Connection) -> Result<Vec<(u8, i64, f64)>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT CAST(SUBSTR(Time, 1, 2) AS INTEGER) as hour,
+                COUNT(*) as cnt,
+                AVG(Confidence) as avg_conf
+         FROM detections
+         GROUP BY hour
+         ORDER BY hour ASC",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            let hour: i64 = row.get(0)?;
+            Ok((hour.clamp(0, 23) as u8, row.get(1)?, row.get(2)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,5 +452,42 @@ mod tests {
         assert_eq!(buckets[3], 1);
         assert_eq!(buckets[4], 2);
         assert_eq!(buckets[5], 1);
+    }
+
+    #[test]
+    fn quality_summary_returns_stats() {
+        let (_tmp, conn) = temp_db_with_data();
+        let qs = quality_summary(&conn).unwrap();
+        assert_eq!(qs.total_detections, 4);
+        assert!(qs.avg_confidence > 0.0);
+        assert!(qs.avg_confidence <= 1.0);
+    }
+
+    #[test]
+    fn low_confidence_species_empty_when_none_low() {
+        let (_tmp, conn) = temp_db_with_data();
+        // all detections have conf >= 0.75; threshold 0.5 means none qualify
+        let low = low_confidence_species(&conn, 0.5, 5).unwrap();
+        assert!(low.is_empty());
+    }
+
+    #[test]
+    fn confidence_trend_covers_last_30_days() {
+        let (_tmp, conn) = temp_db_with_data();
+        let trend = confidence_trend(&conn, 30).unwrap();
+        // Should have at least one data point (we have 2026-03-11 data)
+        assert!(!trend.is_empty());
+        for (_, avg_conf) in &trend {
+            assert!(*avg_conf >= 0.0 && *avg_conf <= 1.0);
+        }
+    }
+
+    #[test]
+    fn detection_quality_by_hour_totals_match() {
+        let (_tmp, conn) = temp_db_with_data();
+        let by_hour = detection_quality_by_hour(&conn).unwrap();
+        let total: i64 = by_hour.iter().map(|(_, cnt, _)| cnt).sum();
+        // 4 total detections
+        assert_eq!(total, 4);
     }
 }

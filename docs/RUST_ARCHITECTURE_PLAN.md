@@ -3,7 +3,7 @@
 > A phased plan to rewrite BirdNET-Pi's core in Rust for reliability, efficiency,
 > and sustainability on resource-constrained field deployments.
 >
-> **Author:** tomtom215 | **Updated:** 2026-03-13
+> **Author:** tomtom215 | **Updated:** 2026-03-23
 
 ## Overview
 
@@ -46,13 +46,17 @@ Detailed documentation is organized into focused modules:
 |-------|------------|--------|
 | 0 | Scaffolding | **Complete** |
 | 1 | Data Layer (SQLite) | **Complete** |
-| 2 | Audio Pipeline | Partial (mel spectrogram pending) |
-| 3 | ML Inference | Not started |
-| 4 | Detection Daemon | Not started |
-| 5 | Web Server | Partial (core API done) |
-| 6 | Integrations | Partial (BirdWeather done) |
-| 7 | Audio Capture | Not started |
-| 8 | Single Binary | Partial (main.rs + CLI done) |
+| 2 | Audio Pipeline | **Complete** (decode, resample, mel spectrogram, tmpfs, extraction, WAV metadata) |
+| 3 | ML Inference | **Complete** (ONNX Runtime via `ort`, model loading, inference pipeline) |
+| 4 | Detection Daemon | **Complete** (file-watcher loop, DB insert, alert rules, broadcast, suppression) |
+| 5 | Web Server | **Complete** (REST API, WebSocket, HTMX admin, quality dashboard, alert rules UI) |
+| 6 | Integrations | **Complete** (BirdWeather, Apprise, Wikipedia, auto-update, weekly reports) |
+| 7 | Audio Capture | **Complete** (ALSA/RTSP/PipeWire, scheduler, tmpfs, multi-source) |
+| 8 | Single Binary | **Complete** (main.rs, CLI, systemd, mDNS, Prometheus metrics) |
+| — | Alert Rules Engine | **Complete** (Sprint 14 — glob match, webhook/log/suppress, HTMX UI) |
+| — | Data Quality Dashboard | **Complete** (Sprint 14 — confidence distribution, daily trend, hourly profile) |
+| — | WAV Metadata Embedding | **Complete** (Sprint 14 — RIFF INFO LIST chunk, in-place file update) |
+| — | Behavioral Analytics | **Complete** (`birdnet-behavioral`, `birdnet-timeseries` — sessionization, diversity, peaks) |
 
 See [Implementation Status](architecture/13-implementation-status.md) for details.
 
