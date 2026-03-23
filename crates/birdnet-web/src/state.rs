@@ -53,9 +53,24 @@ struct AppStateInner {
     /// Species info link site: "ebird", "allaboutbirds", or "none".
     info_site: String,
     /// Custom species image directory (checked before Wikipedia cache).
-    ///
-    /// Files should be named `{lowercase_sci_name_with_underscores}.jpg`.
     custom_image_dir: Option<PathBuf>,
+}
+
+/// Unwrap the `Arc<AppStateInner>`, panicking if shared (called during setup only).
+fn unwrap_inner(inner: Arc<AppStateInner>, method: &str) -> AppStateInner {
+    Arc::try_unwrap(inner).unwrap_or_else(|_| {
+        panic!("{method} called after state was shared");
+    })
+}
+
+/// Rebuild `AppStateInner` from parts, applying one field mutation via a closure.
+fn rebuild_inner<F>(old: AppStateInner, mutate: F) -> Arc<AppStateInner>
+where
+    F: FnOnce(&mut AppStateInner),
+{
+    let mut inner = old;
+    mutate(&mut inner);
+    Arc::new(inner)
 }
 
 impl AppState {
@@ -67,7 +82,6 @@ impl AppState {
     pub fn new(db_path: PathBuf) -> Result<Self, birdnet_db::sqlite::DbError> {
         let conn = birdnet_db::sqlite::open_or_create(&db_path)?;
 
-        // Run migrations on startup
         if let Err(e) = birdnet_db::migration::migrate(&conn) {
             tracing::warn!(error = %e, "migration warning");
         }
@@ -99,9 +113,6 @@ impl AppState {
 
     /// Create application state with both `SQLite` and `DuckDB` connections.
     ///
-    /// The `DuckDB` database is opened at the given path for behavioral
-    /// analytics queries. An initial sync from `SQLite` is performed.
-    ///
     /// # Errors
     ///
     /// Returns an error if either database cannot be opened.
@@ -112,12 +123,10 @@ impl AppState {
     ) -> Result<Self, birdnet_db::sqlite::DbError> {
         let conn = birdnet_db::sqlite::open_or_create(&db_path)?;
 
-        // Run migrations on startup
         if let Err(e) = birdnet_db::migration::migrate(&conn) {
             tracing::warn!(error = %e, "migration warning");
         }
 
-        // Open DuckDB analytics database
         let recording_dir = db_path
             .parent()
             .unwrap_or_else(|| Path::new("."))
@@ -127,7 +136,6 @@ impl AppState {
             Ok(mut adb) => {
                 tracing::info!(path = %analytics_path.display(), "DuckDB analytics database opened");
 
-                // Initial sync from SQLite
                 match adb.sync_from_sqlite(&conn) {
                     Ok(count) => {
                         if count > 0 {
@@ -139,7 +147,6 @@ impl AppState {
                     }
                 }
 
-                // Try to load the behavioral extension (non-fatal if offline)
                 if let Err(e) = adb.load_extension() {
                     tracing::warn!(
                         error = %e,
@@ -200,59 +207,78 @@ impl AppState {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Builder methods (called once during startup, before sharing)
+    // -----------------------------------------------------------------------
+
     /// Set the species image cache.
-    ///
-    /// Must be called before the state is shared across threads (before server start).
-    /// Returns a new `AppState` with the image cache configured.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called after the state has been shared (cloned).
     #[must_use]
     pub fn with_image_cache(self, cache: ImageCache) -> Self {
-        // We need to recreate the inner since Arc doesn't allow mutation.
-        // This is called once during setup, before the state is shared.
-        let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|arc| {
-            // If there are other references, we need to clone the inner state.
-            // This shouldn't happen during startup, but handle gracefully.
-            let old = &*arc;
-            let db = old
-                .db
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            // We can't clone the connection, so this path is a programming error.
-            // In practice, this is only called once during setup.
-            drop(db);
-            panic!("with_image_cache called after state was shared");
-        });
-
+        let inner = unwrap_inner(self.inner, "with_image_cache");
         Self {
-            inner: Arc::new(AppStateInner {
-                db: inner.db,
-                db_path: inner.db_path,
-                recording_dir: inner.recording_dir,
-                #[cfg(feature = "analytics")]
-                analytics_db: inner.analytics_db,
-                image_cache: Some(Arc::new(cache)),
-                detection_broadcast: inner.detection_broadcast,
-                log_broadcaster: inner.log_broadcaster,
-                spectrogram_broadcast: inner.spectrogram_broadcast,
-                i18n: inner.i18n,
-                audio_source: inner.audio_source,
-                site_name: inner.site_name,
-                info_site: inner.info_site,
-                custom_image_dir: inner.custom_image_dir,
-            }),
+            inner: rebuild_inner(inner, |s| s.image_cache = Some(Arc::new(cache))),
         }
     }
 
+    /// Override the recording directory.
+    #[must_use]
+    pub fn with_recording_dir(self, dir: PathBuf) -> Self {
+        let inner = unwrap_inner(self.inner, "with_recording_dir");
+        Self {
+            inner: rebuild_inner(inner, |s| s.recording_dir = dir),
+        }
+    }
+
+    /// Set the i18n manager for species name translation.
+    #[must_use]
+    pub fn with_i18n(self, manager: I18nManager) -> Self {
+        let inner = unwrap_inner(self.inner, "with_i18n");
+        Self {
+            inner: rebuild_inner(inner, |s| s.i18n = Some(RwLock::new(manager))),
+        }
+    }
+
+    /// Set the audio source for live streaming.
+    #[must_use]
+    pub fn with_audio_source(self, source: String) -> Self {
+        let inner = unwrap_inner(self.inner, "with_audio_source");
+        Self {
+            inner: rebuild_inner(inner, |s| s.audio_source = Some(source)),
+        }
+    }
+
+    /// Set the custom site name for branding.
+    #[must_use]
+    pub fn with_site_name(self, name: String) -> Self {
+        let inner = unwrap_inner(self.inner, "with_site_name");
+        Self {
+            inner: rebuild_inner(inner, |s| s.site_name = Some(name)),
+        }
+    }
+
+    /// Set the species info link site.
+    #[must_use]
+    pub fn with_info_site(self, site: String) -> Self {
+        let inner = unwrap_inner(self.inner, "with_info_site");
+        Self {
+            inner: rebuild_inner(inner, |s| s.info_site = site),
+        }
+    }
+
+    /// Set the custom species image directory.
+    #[must_use]
+    pub fn with_custom_image_dir(self, dir: PathBuf) -> Self {
+        let inner = unwrap_inner(self.inner, "with_custom_image_dir");
+        Self {
+            inner: rebuild_inner(inner, |s| s.custom_image_dir = Some(dir)),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Accessors
+    // -----------------------------------------------------------------------
+
     /// Execute a closure with a reference to the `SQLite` database connection.
-    ///
-    /// The mutex is held for the duration of the closure.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the mutex is poisoned (indicates a prior panic while holding the lock).
     pub fn with_db<F, T>(&self, f: F) -> T
     where
         F: FnOnce(&Connection) -> T,
@@ -262,12 +288,6 @@ impl AppState {
     }
 
     /// Execute a closure with a reference to the `DuckDB` analytics database.
-    ///
-    /// Returns `None` if the analytics database is not available.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the mutex is poisoned.
     #[cfg(feature = "analytics")]
     pub fn with_analytics<F, T>(&self, f: F) -> Option<T>
     where
@@ -280,13 +300,6 @@ impl AppState {
     }
 
     /// Execute a closure with a `TimeSeriesDb` executor backed by the DuckDB connection.
-    ///
-    /// Returns `None` if the analytics database is not available, or `Some(Err(…))`
-    /// if the executor cannot be initialised (e.g. missing view).
-    ///
-    /// # Panics
-    ///
-    /// Panics if the analytics mutex is poisoned.
     #[cfg(feature = "analytics")]
     pub fn with_timeseries<F, T>(
         &self,
@@ -310,8 +323,6 @@ impl AppState {
     }
 
     /// Whether the `DuckDB` analytics database is available.
-    ///
-    /// Always returns `false` when compiled without the `analytics` feature.
     #[cfg(not(feature = "analytics"))]
     pub const fn has_analytics(&self) -> bool {
         false
@@ -325,89 +336,6 @@ impl AppState {
     /// Get the directory where extracted audio recordings are stored.
     pub fn recording_dir(&self) -> PathBuf {
         self.inner.recording_dir.clone()
-    }
-
-    /// Override the recording directory (for testing or custom deployments).
-    #[must_use]
-    pub fn with_recording_dir(self, dir: PathBuf) -> Self {
-        let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|arc| {
-            drop(arc.db.lock().ok());
-            panic!("with_recording_dir called after state was shared");
-        });
-        Self {
-            inner: Arc::new(AppStateInner {
-                db: inner.db,
-                db_path: inner.db_path,
-                recording_dir: dir,
-                #[cfg(feature = "analytics")]
-                analytics_db: inner.analytics_db,
-                image_cache: inner.image_cache,
-                detection_broadcast: inner.detection_broadcast,
-                log_broadcaster: inner.log_broadcaster,
-                spectrogram_broadcast: inner.spectrogram_broadcast,
-                i18n: inner.i18n,
-                audio_source: inner.audio_source,
-                site_name: inner.site_name,
-                info_site: inner.info_site,
-                custom_image_dir: inner.custom_image_dir,
-            }),
-        }
-    }
-
-    /// Set the i18n manager for species name translation.
-    ///
-    /// Must be called before the state is shared across threads (before server start).
-    #[must_use]
-    pub fn with_i18n(self, manager: I18nManager) -> Self {
-        let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|_| {
-            panic!("with_i18n called after state was shared");
-        });
-        Self {
-            inner: Arc::new(AppStateInner {
-                db: inner.db,
-                db_path: inner.db_path,
-                recording_dir: inner.recording_dir,
-                #[cfg(feature = "analytics")]
-                analytics_db: inner.analytics_db,
-                image_cache: inner.image_cache,
-                detection_broadcast: inner.detection_broadcast,
-                log_broadcaster: inner.log_broadcaster,
-                spectrogram_broadcast: inner.spectrogram_broadcast,
-                i18n: Some(RwLock::new(manager)),
-                audio_source: inner.audio_source,
-                site_name: inner.site_name,
-                info_site: inner.info_site,
-                custom_image_dir: inner.custom_image_dir,
-            }),
-        }
-    }
-
-    /// Set the audio source for live streaming (ALSA device name or RTSP URL).
-    ///
-    /// Must be called before the state is shared across threads (before server start).
-    #[must_use]
-    pub fn with_audio_source(self, source: String) -> Self {
-        let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|_| {
-            panic!("with_audio_source called after state was shared");
-        });
-        Self {
-            inner: Arc::new(AppStateInner {
-                db: inner.db,
-                db_path: inner.db_path,
-                recording_dir: inner.recording_dir,
-                #[cfg(feature = "analytics")]
-                analytics_db: inner.analytics_db,
-                image_cache: inner.image_cache,
-                detection_broadcast: inner.detection_broadcast,
-                log_broadcaster: inner.log_broadcaster,
-                spectrogram_broadcast: inner.spectrogram_broadcast,
-                i18n: inner.i18n,
-                audio_source: Some(source),
-                site_name: inner.site_name,
-                info_site: inner.info_site,
-                custom_image_dir: inner.custom_image_dir,
-            }),
-        }
     }
 
     /// Get the species image cache, if configured.
@@ -431,8 +359,6 @@ impl AppState {
     }
 
     /// Execute a closure with a reference to the i18n manager.
-    ///
-    /// Returns `None` if no i18n manager is configured.
     pub fn with_i18n_ref<F, T>(&self, f: F) -> Option<T>
     where
         F: FnOnce(&I18nManager) -> T,
@@ -446,88 +372,6 @@ impl AppState {
     /// Get the audio source for live streaming, if configured.
     pub fn audio_source(&self) -> Option<&str> {
         self.inner.audio_source.as_deref()
-    }
-
-    /// Set the custom site name for branding.
-    #[must_use]
-    pub fn with_site_name(self, name: String) -> Self {
-        let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|_| {
-            panic!("with_site_name called after state was shared");
-        });
-        Self {
-            inner: Arc::new(AppStateInner {
-                db: inner.db,
-                db_path: inner.db_path,
-                recording_dir: inner.recording_dir,
-                #[cfg(feature = "analytics")]
-                analytics_db: inner.analytics_db,
-                image_cache: inner.image_cache,
-                detection_broadcast: inner.detection_broadcast,
-                log_broadcaster: inner.log_broadcaster,
-                spectrogram_broadcast: inner.spectrogram_broadcast,
-                i18n: inner.i18n,
-                audio_source: inner.audio_source,
-                site_name: Some(name),
-                info_site: inner.info_site,
-                custom_image_dir: inner.custom_image_dir,
-            }),
-        }
-    }
-
-    /// Set the species info link site.
-    #[must_use]
-    pub fn with_info_site(self, site: String) -> Self {
-        let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|_| {
-            panic!("with_info_site called after state was shared");
-        });
-        Self {
-            inner: Arc::new(AppStateInner {
-                db: inner.db,
-                db_path: inner.db_path,
-                recording_dir: inner.recording_dir,
-                #[cfg(feature = "analytics")]
-                analytics_db: inner.analytics_db,
-                image_cache: inner.image_cache,
-                detection_broadcast: inner.detection_broadcast,
-                log_broadcaster: inner.log_broadcaster,
-                spectrogram_broadcast: inner.spectrogram_broadcast,
-                i18n: inner.i18n,
-                audio_source: inner.audio_source,
-                site_name: inner.site_name,
-                info_site: site,
-                custom_image_dir: inner.custom_image_dir,
-            }),
-        }
-    }
-
-    /// Set the custom species image directory.
-    ///
-    /// When set, `{lowercase_sci_name}.jpg` files in this directory are served
-    /// before falling back to the Wikipedia image cache.
-    /// BirdNET-Pi equivalent: `CUSTOM_IMAGE` directory.
-    #[must_use]
-    pub fn with_custom_image_dir(self, dir: PathBuf) -> Self {
-        let inner = Arc::try_unwrap(self.inner).unwrap_or_else(|_| {
-            panic!("with_custom_image_dir called after state was shared");
-        });
-        Self {
-            inner: Arc::new(AppStateInner {
-                db: inner.db,
-                db_path: inner.db_path,
-                recording_dir: inner.recording_dir,
-                #[cfg(feature = "analytics")]
-                analytics_db: inner.analytics_db,
-                image_cache: inner.image_cache,
-                detection_broadcast: inner.detection_broadcast,
-                log_broadcaster: inner.log_broadcaster,
-                spectrogram_broadcast: inner.spectrogram_broadcast,
-                i18n: inner.i18n,
-                audio_source: inner.audio_source,
-                site_name: inner.site_name,
-                info_site: inner.info_site,
-                custom_image_dir: Some(dir),
-            }),
-        }
     }
 
     /// Get the custom species image directory, if configured.

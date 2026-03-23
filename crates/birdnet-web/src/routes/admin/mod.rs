@@ -72,8 +72,7 @@ pub fn router() -> Router<AppState> {
         .merge(images::router())
         // Software update
         .merge(update::router())
-        // Species filter tester
-        .merge(species_tester::router())
+    // Species filter tester (integrated into species::router via /admin/species/test)
 }
 
 /// Redirect `/admin` to `/admin/overview`.

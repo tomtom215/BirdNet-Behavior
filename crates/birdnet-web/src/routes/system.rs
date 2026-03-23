@@ -25,8 +25,9 @@ async fn root() -> Json<Value> {
 }
 
 async fn health(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
-    let db_ok: bool = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::sqlite::quick_check(conn).unwrap_or(false))
+    let db_ok: bool = tokio::task::spawn_blocking({
+        let state = state.clone();
+        move || state.with_db(|conn| birdnet_db::sqlite::quick_check(conn).unwrap_or(false))
     })
     .await
     .unwrap_or(false);
@@ -41,7 +42,9 @@ async fn health(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
         status,
         Json(json!({
             "status": if db_ok { "healthy" } else { "degraded" },
+            "version": env!("CARGO_PKG_VERSION"),
             "database": if db_ok { "ok" } else { "error" },
+            "analytics": state.has_analytics(),
         })),
     )
 }
