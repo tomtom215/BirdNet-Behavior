@@ -118,18 +118,11 @@ fn build_info_chunk(tags: &[(&[u8; 4], &str)]) -> Vec<u8> {
         // null-terminated, padded to even length
         let mut data: Vec<u8> = value.bytes().take(255).collect();
         data.push(0); // null terminator
-        if data.len() % 2 != 0 {
+        if !data.len().is_multiple_of(2) {
             data.push(0); // padding byte
         }
         // chunk id (4 bytes)
         sub.extend_from_slice(id);
-        // chunk size as u32 LE (size of data including null, excluding pad)
-        let payload_len = data.len()
-            - if data.len() % 2 == 0 && *data.last().unwrap_or(&1) == 0 {
-                0
-            } else {
-                0
-            };
         // The chunk size field stores the actual content size (including null terminator)
         // padding byte is written but not counted in the size field
         let content_len = value.len().min(255) + 1; // value + null
@@ -137,7 +130,6 @@ fn build_info_chunk(tags: &[(&[u8; 4], &str)]) -> Vec<u8> {
         // value bytes + null
         sub.extend_from_slice(&data[..content_len]);
         // padding to even offset
-        let _ = payload_len;
         if content_len % 2 != 0 {
             sub.push(0);
         }
@@ -159,7 +151,7 @@ fn build_info_chunk(tags: &[(&[u8; 4], &str)]) -> Vec<u8> {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Embed BirdNet detection metadata into an existing WAV file in-place.
+/// Embed `BirdNet` detection metadata into an existing WAV file in-place.
 ///
 /// Appends a RIFF `LIST INFO` chunk to the file and updates the RIFF chunk
 /// size field.  The file must be a valid WAV file written by `hound` (or
@@ -335,7 +327,7 @@ mod tests {
         let mut file = std::fs::File::open(&path).unwrap();
         let mut buf = [0u8; 8];
         file.read_exact(&mut buf).unwrap();
-        let riff_size = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]) as u64;
+        let riff_size = u64::from(u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]));
         // RIFF size = total file size - 8 (RIFF header + size field)
         assert_eq!(
             riff_size,

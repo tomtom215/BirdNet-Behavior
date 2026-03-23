@@ -7,7 +7,7 @@
 //! - **Action** — what to do when triggered: fire a webhook, emit an extra
 //!   structured log entry, or suppress all other notifications for this event.
 //!
-//! Rules are stored in the `alert_rules` SQLite table (migration v9) and are
+//! Rules are stored in the `alert_rules` `SQLite` table (migration v9) and are
 //! evaluated in the detection event processor after each successful DB insert.
 //!
 //! # Example
@@ -46,7 +46,7 @@ use std::fmt;
 /// Errors from alert-rule operations.
 #[derive(Debug)]
 pub enum AlertRuleError {
-    /// SQLite error.
+    /// `SQLite` error.
     Sqlite(rusqlite::Error),
     /// Data serialization/validation error.
     Data(String),
@@ -81,7 +81,7 @@ impl From<rusqlite::Error> for AlertRuleError {
 // ---------------------------------------------------------------------------
 
 /// The action executed when a rule's conditions are met.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AlertAction {
     /// Send an HTTP request to a webhook URL.
     Webhook {
@@ -102,7 +102,7 @@ pub enum AlertAction {
 impl AlertAction {
     /// Serialise to the `action_type` column value.
     #[must_use]
-    pub fn type_str(&self) -> &'static str {
+    pub const fn type_str(&self) -> &'static str {
         match self {
             Self::Webhook { .. } => "webhook",
             Self::Log => "log",
@@ -170,8 +170,8 @@ pub struct NewAlertRule {
 #[must_use]
 pub fn glob_match(pattern: &str, text: &str) -> bool {
     let pat = pattern.to_lowercase();
-    let txt = text.to_lowercase();
-    glob_match_inner(pat.as_bytes(), txt.as_bytes())
+    let text_lc = text.to_lowercase();
+    glob_match_inner(pat.as_bytes(), text_lc.as_bytes())
 }
 
 fn glob_match_inner(pattern: &[u8], text: &[u8]) -> bool {
@@ -213,10 +213,10 @@ pub fn matches_rule(
     }
 
     // Species pattern
-    if let Some(ref pattern) = rule.species_pattern {
-        if !glob_match(pattern, common_name) {
-            return false;
-        }
+    if let Some(ref pattern) = rule.species_pattern
+        && !glob_match(pattern, common_name)
+    {
+        return false;
     }
 
     // Confidence range
@@ -315,8 +315,12 @@ pub fn list_rules(conn: &Connection) -> Result<Vec<AlertRule>, AlertRuleError> {
                 species_pattern: row.get(3)?,
                 confidence_min: row.get(4)?,
                 confidence_max: row.get(5)?,
-                hour_start: row.get::<_, Option<i64>>(6)?.map(|v| v.clamp(0, 23) as u8),
-                hour_end: row.get::<_, Option<i64>>(7)?.map(|v| v.clamp(0, 23) as u8),
+                hour_start: row
+                    .get::<_, Option<i64>>(6)?
+                    .map(|v| u8::try_from(v.clamp(0, 23)).unwrap_or(0)),
+                hour_end: row
+                    .get::<_, Option<i64>>(7)?
+                    .map(|v| u8::try_from(v.clamp(0, 23)).unwrap_or(0)),
                 days_of_week: row.get(8)?,
                 action,
             })
