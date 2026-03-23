@@ -65,14 +65,14 @@ pub fn create_apprise_client(
 
     let species_watchlist = config
         .and_then(|c| c.get("APPRISE_WATCHLIST"))
-        .map(|list| parse_species_list(&list))
+        .map(parse_species_list)
         .unwrap_or_default();
 
     // Dual-filter: exclude list from config file OR CLI --notify-species-exclude.
     let species_notify_exclude = {
         let from_config = config
             .and_then(|c| c.get("APPRISE_WATCHLIST_EXCLUDE"))
-            .map(|list| parse_species_list(&list))
+            .map(parse_species_list)
             .unwrap_or_default();
         let from_cli = cli
             .notify_species_exclude

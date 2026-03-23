@@ -16,9 +16,9 @@ pub enum CaptureSource {
         /// Number of channels.
         channels: u16,
     },
-    /// PipeWire or PulseAudio microphone via `ffmpeg -f pulse`.
+    /// `PipeWire` or `PulseAudio` microphone via `ffmpeg -f pulse`.
     ///
-    /// Works with both native PulseAudio and PipeWire (via `pipewire-pulse`).
+    /// Works with both native `PulseAudio` and `PipeWire` (via `pipewire-pulse` compatibility layer).
     /// Use an empty string for the system default device.
     PipeWire {
         /// PulseAudio/PipeWire source name (empty = system default).

@@ -107,17 +107,17 @@ pub fn start_microphone_capture(config: &RecordingConfig) -> Result<CaptureProce
     })
 }
 
-/// Detect whether a PipeWire or PulseAudio server is running.
+/// Detect whether a `PipeWire` or `PulseAudio` server is running.
 ///
-/// Returns `true` if `pw-cli` (PipeWire) or `pactl` (PulseAudio / PipeWire-pulse compat)
+/// Returns `true` if `pw-cli` (`PipeWire`) or `pactl` (`PulseAudio` / `pipewire-pulse` compat)
 /// is available on the system.
 pub fn detect_pipewire_or_pulseaudio() -> bool {
     is_tool_available("pw-cli") || is_tool_available("pactl")
 }
 
-/// Start an audio capture process for a PipeWire/PulseAudio source via `ffmpeg -f pulse`.
+/// Start an audio capture process for a `PipeWire`/`PulseAudio` source via `ffmpeg -f pulse`.
 ///
-/// Works with both native PulseAudio and PipeWire (via `pipewire-pulse`).
+/// Works with both native `PulseAudio` and `PipeWire` (via `pipewire-pulse` compatibility layer).
 ///
 /// # Errors
 ///
@@ -134,7 +134,11 @@ pub fn start_pipewire_capture(config: &RecordingConfig) -> Result<CaptureProcess
 
     // PipeWire's pipewire-pulse layer exposes PulseAudio compatibility.
     // An empty device string means "use the system default source".
-    let pulse_device = if device.is_empty() { "default" } else { device.as_str() };
+    let pulse_device = if device.is_empty() {
+        "default"
+    } else {
+        device.as_str()
+    };
 
     let filename_pattern = recording_filename(None, config.format);
     let output_path = config.output_dir.join(&filename_pattern);

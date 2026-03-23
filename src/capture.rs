@@ -259,7 +259,14 @@ pub fn start_capture_manager(
     for source in sources {
         let source_label = match &source {
             CaptureSource::Microphone { device, .. } => format!("mic:{device}"),
-            CaptureSource::PipeWire { device, .. } => format!("pulse:{}", if device.is_empty() { "default" } else { device.as_str() }),
+            CaptureSource::PipeWire { device, .. } => format!(
+                "pulse:{}",
+                if device.is_empty() {
+                    "default"
+                } else {
+                    device.as_str()
+                }
+            ),
             CaptureSource::Rtsp { stream_id, .. } => stream_id.clone(),
         };
 

@@ -20,6 +20,9 @@ use tokio_util::io::ReaderStream;
 
 use crate::state::AppState;
 
+/// Sample rate used for the live audio stream output (Hz).
+const STREAM_SAMPLE_RATE: u32 = 44_100;
+
 /// Query parameters for the live audio stream.
 #[derive(Debug, Deserialize)]
 pub struct StreamParams {
@@ -51,7 +54,10 @@ fn freq_shift_filter(base_rate: u32, shift_hz: i32) -> Option<String> {
     if shift_hz == 0 {
         return None;
     }
-    let shifted_rate = (base_rate as i64 + shift_hz as i64).max(8000) as u32;
+    // Use i64 arithmetic to avoid overflow then clamp to a safe minimum.
+    let shifted = i64::from(base_rate) + i64::from(shift_hz);
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    let shifted_rate = shifted.max(8000) as u32;
     Some(format!(
         "asetrate={shifted_rate},aresample={base_rate}:resampler=swr"
     ))
@@ -111,10 +117,7 @@ async fn list_languages(State(state): State<AppState>) -> Json<Value> {
 /// `asetrate`+`aresample` technique as the extraction pipeline.
 ///
 /// If no audio source is configured, returns `503 Service Unavailable`.
-async fn livestream(
-    State(state): State<AppState>,
-    Query(params): Query<StreamParams>,
-) -> Response {
+async fn livestream(State(state): State<AppState>, Query(params): Query<StreamParams>) -> Response {
     let Some(source) = state.audio_source() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -123,13 +126,12 @@ async fn livestream(
             .into_response();
     };
 
-    const BASE_RATE: u32 = 44_100;
     let source = source.to_owned();
     let is_rtsp = source.starts_with("rtsp://") || source.starts_with("rtsps://");
     let is_pulse = source.starts_with("pulse://") || source == "pulse" || source == "default";
 
     // Build the audio filter chain: optional freq shift + format conversion.
-    let audio_filter = freq_shift_filter(BASE_RATE, params.freq_shift_hz);
+    let audio_filter = freq_shift_filter(STREAM_SAMPLE_RATE, params.freq_shift_hz);
 
     let mut cmd = tokio::process::Command::new("ffmpeg");
 
@@ -147,7 +149,17 @@ async fn livestream(
         cmd.args(["-af", filter.as_str()]);
     }
 
-    cmd.args(["-f", "mp3", "-b:a", "128k", "-ar", &BASE_RATE.to_string(), "-ac", "1", "pipe:1"]);
+    cmd.args([
+        "-f",
+        "mp3",
+        "-b:a",
+        "128k",
+        "-ar",
+        &STREAM_SAMPLE_RATE.to_string(),
+        "-ac",
+        "1",
+        "pipe:1",
+    ]);
 
     let child = cmd
         .stdout(std::process::Stdio::piped())
