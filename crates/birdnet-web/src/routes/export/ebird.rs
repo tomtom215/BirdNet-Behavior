@@ -32,15 +32,15 @@ pub(super) async fn export_ebird(
     let date = query.date.clone();
     let date_for_filename = date.clone();
 
-    if let Some(ref d) = date {
-        if !is_valid_date(d) {
-            return (
-                StatusCode::BAD_REQUEST,
-                [(header::CONTENT_TYPE, "application/json")],
-                json!({"error": "invalid date format, expected YYYY-MM-DD"}).to_string(),
-            )
-                .into_response();
-        }
+    if let Some(ref d) = date
+        && !is_valid_date(d)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            [(header::CONTENT_TYPE, "application/json")],
+            json!({"error": "invalid date format, expected YYYY-MM-DD"}).to_string(),
+        )
+            .into_response();
     }
 
     let lat = query.lat.unwrap_or(0.0);

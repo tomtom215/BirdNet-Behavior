@@ -20,10 +20,6 @@ use std::path::{Path, PathBuf};
 
 use crate::queries;
 
-// Re-export sub-module items at this level for backwards compatibility.
-pub use analytics::*;
-pub use sync::*;
-
 /// Errors from `DuckDB` operations.
 #[derive(Debug)]
 pub enum AnalyticsError {

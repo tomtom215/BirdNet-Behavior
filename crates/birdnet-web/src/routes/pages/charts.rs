@@ -17,10 +17,10 @@ use std::fmt::Write as _;
 pub(crate) fn render_hourly_chart(hours: &[birdnet_db::sqlite::HourlyCount]) -> String {
     let mut counts = [0_i64; 24];
     for h in hours {
-        if let Ok(hour) = h.hour.parse::<usize>() {
-            if hour < 24 {
-                counts[hour] = h.count;
-            }
+        if let Ok(hour) = h.hour.parse::<usize>()
+            && hour < 24
+        {
+            counts[hour] = h.count;
         }
     }
 

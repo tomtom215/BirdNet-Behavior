@@ -4,6 +4,8 @@
 //! window_funnel, sequence_next_node) with typed Rust APIs.
 //! All methods require `extension_loaded == true`.
 
+use duckdb::types::Value;
+
 use super::{AnalyticsDb, AnalyticsError};
 use crate::{queries, types};
 
@@ -55,7 +57,17 @@ impl AnalyticsDb {
 
         let rows = stmt.query_map([], |row| {
             let species: String = row.get(0)?;
-            let rates_raw: Vec<f64> = row.get(1)?;
+            let rates_value: Value = row.get(1)?;
+            let rates_raw: Vec<f64> = match rates_value {
+                Value::List(list) => list
+                    .into_iter()
+                    .map(|v| match v {
+                        Value::Double(f) => f,
+                        _ => 0.0,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
             Ok((species, rates_raw))
         })?;
 

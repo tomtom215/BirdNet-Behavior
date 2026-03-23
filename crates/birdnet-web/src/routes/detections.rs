@@ -36,17 +36,17 @@ async fn list_detections(
     let offset = query.offset.unwrap_or(0);
 
     // Validate date format if provided
-    if let Some(ref date) = query.date {
-        if !is_valid_date(date) {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "error": "invalid date format, expected YYYY-MM-DD",
-                    "detections": [],
-                    "count": 0,
-                })),
-            );
-        }
+    if let Some(ref date) = query.date
+        && !is_valid_date(date)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "invalid date format, expected YYYY-MM-DD",
+                "detections": [],
+                "count": 0,
+            })),
+        );
     }
 
     // Track whether this is a paginated query (for including total_count)
@@ -91,10 +91,8 @@ async fn list_detections(
                 "limit": limit,
                 "offset": offset,
             });
-            if is_paginated {
-                if let Some(total) = total_count {
-                    response["total_count"] = json!(total);
-                }
+            if is_paginated && let Some(total) = total_count {
+                response["total_count"] = json!(total);
             }
             (StatusCode::OK, Json(response))
         }

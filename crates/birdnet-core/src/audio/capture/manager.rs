@@ -67,10 +67,10 @@ impl CaptureManager {
 
     /// Stop the capture process.
     pub fn stop(&mut self) {
-        if let Some(ref mut process) = self.process {
-            if let Err(e) = process.stop() {
-                tracing::warn!(error = %e, "error stopping capture process");
-            }
+        if let Some(ref mut process) = self.process
+            && let Err(e) = process.stop()
+        {
+            tracing::warn!(error = %e, "error stopping capture process");
         }
         self.process = None;
     }

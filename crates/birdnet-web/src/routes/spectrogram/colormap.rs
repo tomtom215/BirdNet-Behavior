@@ -1,6 +1,6 @@
 //! Viridis colormap for spectrogram rendering.
 
-/// Approximate viridis colormap: maps t in [0,1] to (R,G,B).
+/// Approximate viridis colormap: maps t in \[0,1\] to (R,G,B).
 pub fn viridis(t: f32) -> (u8, u8, u8) {
     // Control points: (t, R, G, B)
     let cps: &[(f32, f32, f32, f32)] = &[

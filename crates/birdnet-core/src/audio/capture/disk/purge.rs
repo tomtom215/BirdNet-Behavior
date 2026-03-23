@@ -21,10 +21,10 @@ pub(super) fn is_protected(
             return true;
         }
     }
-    if let Some(name) = path.file_name().map(|n| n.to_string_lossy()) {
-        if locked_file_names.iter().any(|l| l == name.as_ref()) {
-            return true;
-        }
+    if let Some(name) = path.file_name().map(|n| n.to_string_lossy())
+        && locked_file_names.iter().any(|l| l == name.as_ref())
+    {
+        return true;
     }
     false
 }

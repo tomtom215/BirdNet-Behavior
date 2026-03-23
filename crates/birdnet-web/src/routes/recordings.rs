@@ -184,10 +184,10 @@ fn collect_recordings(
             if !is_audio_extension(&filename) {
                 return None;
             }
-            if let Some(filter) = species_filter {
-                if !filename.to_lowercase().contains(filter) {
-                    return None;
-                }
+            if let Some(filter) = species_filter
+                && !filename.to_lowercase().contains(filter)
+            {
+                return None;
             }
             let meta = e.metadata().ok()?;
             let size_bytes = meta.len();

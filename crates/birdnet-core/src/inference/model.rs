@@ -236,20 +236,20 @@ impl BirdNetModel {
         for (i, &logit) in flat_logits.iter().enumerate() {
             let confidence = sigmoid(self.config.sensitivity * logit);
 
-            if confidence >= self.config.confidence_threshold {
-                if let Some(label) = self.labels.get(i) {
-                    detections.push(Detection {
-                        date: date.to_string(),
-                        time: time.to_string(),
-                        scientific_name: label.scientific_name.clone(),
-                        common_name: label.common_name.clone(),
-                        confidence,
-                        start: start_secs,
-                        stop: end_secs,
-                        week,
-                        file_name_extr: None,
-                    });
-                }
+            if confidence >= self.config.confidence_threshold
+                && let Some(label) = self.labels.get(i)
+            {
+                detections.push(Detection {
+                    date: date.to_string(),
+                    time: time.to_string(),
+                    scientific_name: label.scientific_name.clone(),
+                    common_name: label.common_name.clone(),
+                    confidence,
+                    start: start_secs,
+                    stop: end_secs,
+                    week,
+                    file_name_extr: None,
+                });
             }
         }
 

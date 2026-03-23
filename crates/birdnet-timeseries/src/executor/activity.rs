@@ -1,6 +1,7 @@
 //! Hourly, daily, and weekly activity query methods.
 
 use crate::error::TimeSeriesError;
+use crate::queries::QueryPlan;
 use crate::queries::activity::{DailyActivity, HourlyActivity, HourlyHeatmap, WeeklyActivity};
 use crate::types::{
     params::{DailyParams, HourlyParams, WeeklyParams},

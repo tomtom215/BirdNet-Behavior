@@ -95,10 +95,10 @@ pub fn confidence_distribution(conn: &Connection) -> Result<[i64; 6], DbError> {
     let rows = stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?;
     for row in rows {
         let (bucket, count) = row?;
-        if let Ok(idx) = usize::try_from(bucket) {
-            if let Some(b) = buckets.get_mut(idx) {
-                *b = count;
-            }
+        if let Ok(idx) = usize::try_from(bucket)
+            && let Some(b) = buckets.get_mut(idx)
+        {
+            *b = count;
         }
     }
     Ok(buckets)

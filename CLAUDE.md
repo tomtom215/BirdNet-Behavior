@@ -89,7 +89,7 @@ cross build --release --target aarch64-unknown-linux-gnu
 
 ### MSRV
 
-Rust 1.85 (edition 2024)
+Rust 1.88 (edition 2024)
 
 ---
 

@@ -210,16 +210,13 @@ pub async fn rate_limit_middleware(
 ///
 /// Prefers `X-Forwarded-For` when `trust_xff` is enabled.
 fn extract_ip(req: &Request<Body>, trust_xff: bool) -> IpAddr {
-    if trust_xff {
-        if let Some(xff) = req.headers().get("x-forwarded-for") {
-            if let Ok(val) = xff.to_str() {
-                if let Some(first) = val.split(',').next() {
-                    if let Ok(ip) = first.trim().parse::<IpAddr>() {
-                        return ip;
-                    }
-                }
-            }
-        }
+    if trust_xff
+        && let Some(xff) = req.headers().get("x-forwarded-for")
+        && let Ok(val) = xff.to_str()
+        && let Some(first) = val.split(',').next()
+        && let Ok(ip) = first.trim().parse::<IpAddr>()
+    {
+        return ip;
     }
 
     // Fall back to the socket address from axum's `ConnectInfo`.
@@ -290,16 +287,17 @@ mod tests {
 
     #[test]
     fn tokens_refill_over_time() {
+        // 100 rps → 1 token per 10 ms. Back-to-back calls (<< 10 ms apart) won't refill.
         let limiter = RateLimiter::new(RateLimitConfig {
-            requests_per_second: 1_000_000.0, // Fast replenishment for test.
+            requests_per_second: 100.0,
             burst_capacity: 1,
             trust_x_forwarded_for: false,
         });
         let ip = test_ip(42);
         assert!(limiter.check(ip)); // Consume the one token.
-        assert!(!limiter.check(ip)); // Now exhausted.
-        // At 1 000 000 rps the next call should refill immediately.
-        std::thread::sleep(Duration::from_micros(2));
+        assert!(!limiter.check(ip)); // Still exhausted (< 10 ms elapsed).
+        // After 20 ms, at least one token has refilled.
+        std::thread::sleep(Duration::from_millis(20));
         assert!(limiter.check(ip)); // Refilled.
     }
 }

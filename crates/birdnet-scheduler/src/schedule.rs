@@ -63,28 +63,26 @@ impl DailySchedule {
         }
 
         // 2. Solar-based night inhibit.
-        if config.night_inhibit {
-            if let Some(loc) = config.location {
-                if let Ok(solar) = SolarDay::for_date(loc, year, month, day) {
-                    let inhibit = if let (Some(rise), Some(set)) =
-                        (solar.sunrise_utc_min, solar.sunset_utc_min)
-                    {
-                        NightInhibit::new(
-                            rise,
-                            set,
-                            config.pre_sunrise_offset_min,
-                            config.post_sunset_offset_min,
-                        )
-                    } else {
-                        // Polar condition — allow all day.
-                        NightInhibit::disabled()
-                    };
-                    return Self {
-                        gate: ScheduleGate::Inhibit(inhibit),
-                        solar: Some(solar),
-                    };
-                }
-            }
+        if config.night_inhibit
+            && let Some(loc) = config.location
+            && let Ok(solar) = SolarDay::for_date(loc, year, month, day)
+        {
+            let inhibit =
+                if let (Some(rise), Some(set)) = (solar.sunrise_utc_min, solar.sunset_utc_min) {
+                    NightInhibit::new(
+                        rise,
+                        set,
+                        config.pre_sunrise_offset_min,
+                        config.post_sunset_offset_min,
+                    )
+                } else {
+                    // Polar condition — allow all day.
+                    NightInhibit::disabled()
+                };
+            return Self {
+                gate: ScheduleGate::Inhibit(inhibit),
+                solar: Some(solar),
+            };
         }
 
         // 3. All-day.

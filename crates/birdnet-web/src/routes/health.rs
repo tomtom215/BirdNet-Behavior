@@ -104,15 +104,13 @@ fn get_process_uptime() -> u64 {
             if let (Some(start_field), Some(uptime_field)) = (
                 stat.split_whitespace().nth(21),
                 uptime_str.split_whitespace().next(),
-            ) {
-                if let (Ok(start_jiffies), Ok(sys_uptime)) =
-                    (start_field.parse::<u64>(), uptime_field.parse::<f64>())
-                {
-                    #[allow(clippy::cast_precision_loss)] // hz division is small enough
-                    let proc_uptime = sys_uptime - (start_jiffies / hz) as f64;
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    return proc_uptime.max(0.0) as u64;
-                }
+            ) && let (Ok(start_jiffies), Ok(sys_uptime)) =
+                (start_field.parse::<u64>(), uptime_field.parse::<f64>())
+            {
+                #[allow(clippy::cast_precision_loss)] // hz division is small enough
+                let proc_uptime = sys_uptime - (start_jiffies / hz) as f64;
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                return proc_uptime.max(0.0) as u64;
             }
         }
     }
@@ -133,12 +131,11 @@ fn process_metrics() -> (u64, u32) {
         // RSS from /proc/self/status
         if let Ok(content) = std::fs::read_to_string("/proc/self/status") {
             for line in content.lines() {
-                if line.starts_with("VmRSS:") {
-                    if let Some(kb_str) = line.split_whitespace().nth(1) {
-                        if let Ok(kb) = kb_str.parse::<u64>() {
-                            rss_bytes = kb * 1024;
-                        }
-                    }
+                if line.starts_with("VmRSS:")
+                    && let Some(kb_str) = line.split_whitespace().nth(1)
+                    && let Ok(kb) = kb_str.parse::<u64>()
+                {
+                    rss_bytes = kb * 1024;
                 }
             }
         }

@@ -250,10 +250,10 @@ fn render_weekly_chart(week_start: &str, daily: &[birdnet_db::sqlite::DailyCount
     day_labels.copy_from_slice(&day_names);
 
     for dc in daily {
-        if let Some(idx) = dates.iter().position(|d| d == &dc.date) {
-            if idx < 7 {
-                counts[idx] = dc.count;
-            }
+        if let Some(idx) = dates.iter().position(|d| d == &dc.date)
+            && idx < 7
+        {
+            counts[idx] = dc.count;
         }
     }
 

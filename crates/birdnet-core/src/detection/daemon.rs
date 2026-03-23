@@ -278,10 +278,10 @@ pub fn process_and_infer_filtered(
     for (chunk, detections) in chunks.iter().zip(filtered_predictions.iter()) {
         for detection in detections {
             // Apply species filter if we have one
-            if let Some(ref allowed) = allowed_species {
-                if !allowed.contains(&detection.scientific_name) {
-                    continue;
-                }
+            if let Some(ref allowed) = allowed_species
+                && !allowed.contains(&detection.scientific_name)
+            {
+                continue;
             }
 
             // Apply per-species confidence threshold (checked in event_processor instead)

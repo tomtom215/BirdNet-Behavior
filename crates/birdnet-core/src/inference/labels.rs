@@ -226,12 +226,12 @@ impl LabelSet {
     }
 
     /// Number of labels (species count).
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.labels.len()
     }
 
     /// Whether the label set is empty.
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.labels.is_empty()
     }
 
