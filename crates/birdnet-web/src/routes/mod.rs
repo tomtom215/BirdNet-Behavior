@@ -7,6 +7,7 @@ pub mod admin;
 pub mod analytics;
 pub mod detections;
 pub mod export;
+pub mod health;
 pub mod images;
 pub mod livestream;
 pub mod pages;
@@ -54,6 +55,7 @@ pub fn api_routes() -> Router<AppState> {
         .nest("/api/v2", spectrogram::router())
         .nest("/api/v2", spectrogram_ws::router())
         .nest("/api/v2", livestream::router())
+        .nest("/api/v2", health::router())
         .merge(livestream::stream_router())
         .merge(pages::router())
         .merge(static_files::router())

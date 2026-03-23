@@ -93,4 +93,4 @@ Rust 1.85 (edition 2024)
 
 ---
 
-*Modular reference for BirdNet-Behavior. Last updated: 2026-03-20*
+*Modular reference for BirdNet-Behavior. Last updated: 2026-03-23*

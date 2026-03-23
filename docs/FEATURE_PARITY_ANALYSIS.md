@@ -1,6 +1,6 @@
 # BirdNET-Pi vs BirdNet-Behavior: Comprehensive Feature Parity Analysis
 
-**Last Updated**: 2026-03-20 (Sprint 10 — Modularity & Final Features)
+**Last Updated**: 2026-03-23 (Sprint 11 — Modularity + Observability)
 **Source**: Nachtzuster/BirdNET-Pi (fully analyzed)
 **Target**: tomtom215/BirdNet-Behavior (Rust rewrite) — branch `claude/birdnet-pi-feature-parity-217bo`
 **Method**: Every file in both codebases read; code verified against actual Rust source; 300+ GitHub issues analyzed
@@ -10,6 +10,12 @@
 ## Executive Summary
 
 BirdNet-Behavior has reached **100% verified feature parity** with BirdNET-Pi (up from ~99%). All P0, P1, and P2 items are complete. The live spectrogram daemon, auto-update, tmpfs support, species filter tester, and custom audio player have all been implemented.
+
+**What changed since last analysis (Sprint 11):** Modularity refactoring + observability:
+- **Prometheus metrics endpoint** — `GET /api/v2/metrics` exports `birdnet_info`, `birdnet_uptime_seconds`, `birdnet_detections_total`, `birdnet_species_total`, `birdnet_process_resident_memory_bytes`, `birdnet_cpu_count`, `birdnet_analytics_enabled` in Prometheus text exposition format
+- **Enhanced health check** — `GET /api/v2/health` now returns `version`, `analytics` status fields alongside `database` health
+- **File modularity refactoring** — split 5 oversized files (settings/render, export, system_controls, main, state) into 20 focused sub-modules; all files under 600 lines
+- **Bug fixes** — resolved duplicate route registration (`/admin/species/test`), fixed doctest failure
 
 **What changed since last analysis (Sprint 10):** 6 additional features + major modularity refactoring:
 - **Live spectrogram daemon** — `birdnet-core::audio::spectrogram::live` watches for audio files, computes mel spectrograms, pushes via WebSocket at `/api/v2/ws/spectrogram`

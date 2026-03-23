@@ -1,6 +1,6 @@
 # Implementation Status
 
-> Current state of the Rust implementation. Last updated: **2026-03-20**.
+> Current state of the Rust implementation. Last updated: **2026-03-23**.
 
 ## Table of Contents
 
@@ -108,6 +108,7 @@
 | Spectrogram routes | `routes/spectrogram/` | **Complete** | Modular: render, font, png, colormap (split from monolith) |
 | Spectrogram WS | `routes/spectrogram_ws.rs` | **Complete** | Live spectrogram WebSocket broadcast |
 | Audio player page | `routes/pages/audio_player.rs` | **Complete** | Custom player with spectrogram, playhead, speed control |
+| Metrics routes | `routes/health.rs` | **Complete** | Prometheus `/api/v2/metrics` endpoint, process stats |
 
 ### birdnet-integrations
 
@@ -155,7 +156,7 @@
 
 | Module | File | Status | Notes |
 |--------|------|--------|-------|
-| Entry point | `src/main.rs` | **Complete** | CLI, DB recovery, daemon, server, all integrations wired |
+| Entry point | `src/main.rs` + `src/helpers.rs` | **Complete** | CLI, DB recovery, daemon, server, all integrations wired |
 | Detection daemon bridge | `src/daemon.rs` | **Complete** | Event processor: SQLite, DuckDB, WebSocket, Apprise, BirdWeather, Email |
 | Audio capture | `src/capture.rs` | **Complete** | arecord + ffmpeg subprocess lifecycle management |
 | Integrations | `src/integrations.rs` | **Complete** | Apprise, BirdWeather, Email, Auth client factories |
@@ -164,6 +165,29 @@
 ---
 
 ## Recent Changes
+
+### 2026-03-23
+
+#### File Modularity Refactoring (Sprint 11)
+- Split `settings/render.rs` (662 lines) → `settings/render/` module (mod, audio, location, detection, notifications, species, system, email — 7 sub-modules)
+- Split `export.rs` (601 lines) → `export/` module (mod, csv, birddb, ebird — 4 sub-modules)
+- Split `system_controls.rs` (600 lines) → `system_controls/` module (mod, data, backup, service, update — 5 sub-modules)
+- Split `main.rs` (514 lines) → `main.rs` + `helpers.rs` (startup initialization, disk manager, Avahi mDNS)
+- Refactored `state.rs` (550→~320 lines) — eliminated builder pattern duplication with `unwrap_inner`/`rebuild_inner` helpers
+- All source files now under 600 lines (down from 8 files over 500)
+
+#### Prometheus Metrics Endpoint
+- `GET /api/v2/metrics` — Prometheus text exposition format
+- Exports: `birdnet_info`, `birdnet_uptime_seconds`, `birdnet_detections_total`, `birdnet_species_total`, `birdnet_process_resident_memory_bytes`, `birdnet_cpu_count`, `birdnet_analytics_enabled`
+- Compatible with Prometheus, Grafana Agent, Victoria Metrics scrapers
+
+#### Enhanced Health Check
+- `GET /api/v2/health` now includes `version`, `analytics` fields
+- Returns 200 OK (healthy) or 503 Service Unavailable (degraded)
+
+#### Bug Fixes
+- Fixed pre-existing route conflict: duplicate `GET /admin/species/test` registration
+- Fixed doctest failure in `tmpfs::generate_systemd_mount_unit`
 
 ### 2026-03-20
 
@@ -249,13 +273,13 @@
 |-------|-------|--------|
 | birdnet-core | 19 (audio pipeline, inference, daemon) | All passing |
 | birdnet-db | 69 (sqlite, resilience, heatmap, correlation, settings, notifications) | All passing |
-| birdnet-web | 103 (pages, admin, backup, settings, export, auth, websocket) | All passing |
+| birdnet-web | 145 (pages, admin, backup, settings, export, auth, websocket) | All passing |
 | birdnet-integrations | 49 (email types/templates/smtp/cooldown, apprise, birdweather, images) | All passing |
 | birdnet-behavioral | 10 (types, queries) | All passing |
 | birdnet-migrate | 33 (schema, validator, importer, species_report) | All passing |
 | birdnet-timeseries | 24 (all analytics modules) | All passing |
-| Integration tests | 52 (audio pipeline end-to-end, web API, HTMX pages) | All passing |
-| **Total** | **~420** | **All passing** |
+| Integration tests | 74 (audio pipeline end-to-end, web API, HTMX pages) | All passing |
+| **Total** | **~600** | **All passing** |
 
 ---
 
@@ -265,14 +289,14 @@
 |-------|------|-------|
 | birdnet-core | ~6,900 | Audio pipeline + inference + daemon + capture + disk + spectrogram + tmpfs |
 | birdnet-db | ~3,800 | CRUD + heatmap + correlation + settings + notifications + resilience |
-| birdnet-web | ~15,700 | REST API + WS + HTMX pages + admin + player + spectrogram + update |
+| birdnet-web | ~16,200 | REST API + WS + HTMX pages + admin + player + spectrogram + update |
 | birdnet-integrations | ~3,500 | Email + Apprise + BirdWeather + species images + auto-update |
 | birdnet-migrate | ~2,300 | Traits + schema + validator + importer + species_report |
 | birdnet-behavioral | ~1,100 | Types + SQL builders + DuckDB connection |
 | birdnet-timeseries | ~2,900 | All time-series analytics + windowing |
 | birdnet-scheduler | ~900 | Solar calculations + window management |
-| Binary (`src/`) | ~2,200 | main.rs + daemon.rs + capture.rs + integrations.rs + cli.rs |
-| **Total** | **~39,300** | Production Rust (including inline tests) |
+| Binary (`src/`) | ~2,400 | main.rs + helpers.rs + daemon.rs + capture.rs + integrations.rs + cli.rs |
+| **Total** | **~39,800** | Production Rust (including inline tests) |
 
 ---
 

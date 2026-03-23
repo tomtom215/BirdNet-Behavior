@@ -95,6 +95,10 @@ BirdNet-Behavior is a ground-up Rust rewrite of [BirdNET-Pi](https://github.com/
 - Post-migration verification (per-species count comparison)
 - Server-path mode for on-disk migrations
 
+**Observability:**
+- Prometheus metrics endpoint (`/api/v2/metrics`)
+- Health check endpoint (`/api/v2/health`)
+
 **Admin Improvements:**
 - SSE live log viewer with level filtering, pause, auto-scroll
 - Database backup management (list, download, delete)
@@ -131,6 +135,7 @@ birdnet-behavior (single binary)
 │
 ├── Web Server   (birdnet-web)
 │   ├── REST API       — /api/v2/* (detections, species, analytics, export)
+│   ├── Metrics        — /api/v2/metrics (Prometheus), /api/v2/health
 │   ├── WebSocket      — live detection streaming (JSON events)
 │   ├── HTMX UI        — server-rendered dark-theme dashboard
 │   ├── Admin Panel    — settings, migration, system, logs, backups
@@ -173,6 +178,8 @@ birdnet-behavior (single binary)
 | `/health` | System health page |
 | `/player/{filename}` | Custom audio player with spectrogram visualization |
 | `/live` | Live audio stream page |
+| `/api/v2/metrics` | Prometheus metrics endpoint |
+| `/api/v2/health` | Health check endpoint (JSON) |
 
 ---
 

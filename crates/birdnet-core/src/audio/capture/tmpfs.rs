@@ -141,7 +141,8 @@ pub fn unmount_tmpfs(path: &Path) -> Result<(), TmpfsError> {
 ///     size_mb: 64,
 /// };
 /// let unit = generate_systemd_mount_unit(&config);
-/// assert!(unit.contains("What=/tmp/birdnet-audio"));
+/// assert!(unit.contains("What=tmpfs"));
+/// assert!(unit.contains("Where=/tmp/birdnet-audio"));
 /// ```
 pub fn generate_systemd_mount_unit(config: &TmpfsConfig) -> String {
     let mount_path = config.mount_point.to_string_lossy();
