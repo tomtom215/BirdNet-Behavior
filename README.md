@@ -7,7 +7,7 @@ Real-time acoustic bird classification with behavioral analytics, written in Rus
 
 <p align="center">
   <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/"><img src="https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg"></a>
-  <img src="https://img.shields.io/badge/Rust-1.85%2B-orange">
+  <img src="https://img.shields.io/badge/Rust-1.88%2B-orange">
   <img src="https://img.shields.io/badge/platform-aarch64%20%7C%20x86__64-blue">
   <img src="https://img.shields.io/badge/clippy-pedantic%20%2B%20nursery-green">
 </p>
@@ -269,39 +269,46 @@ Safe, non-destructive import from an existing BirdNET-Pi installation:
 ## Installation
 
 ```bash
-# Download the latest release for your platform
-curl -L https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/birdnet-behavior-aarch64 \
-  -o /usr/local/bin/birdnet-behavior
-chmod +x /usr/local/bin/birdnet-behavior
-
-# Run with minimal config
-birdnet-behavior \
-  --model /path/to/BirdNET_GLOBAL_6K_V2.4_Model_FP32.tflite \
-  --labels /path/to/labels.txt \
-  --watch-dir /home/pi/BirdSongs/Extracted/By_Date
-
-# Web-only mode (no detection, just the web UI against an existing DB)
-birdnet-behavior --web-only --listen 0.0.0.0:8502
+curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash
 ```
 
-**Systemd service:**
+That's it. The installer:
 
-```ini
-[Unit]
-Description=BirdNet-Behavior
-After=network.target sound.target
+1. **Auto-detects** your architecture (aarch64 / x86_64 / armv7)
+2. **Downloads** the pre-built binary from the latest GitHub Release
+3. **Downloads** the BirdNET+ V3.0 model (~541 MB) from Zenodo automatically
+4. **Creates** all data, recording, and config directories
+5. **Installs and enables** a systemd service (`birdnet-behavior.service`)
+6. **Detects** your ALSA microphone and pre-fills the audio source
 
-[Service]
-ExecStart=/usr/local/bin/birdnet-behavior \
-  --model /etc/birdnet/BirdNET_GLOBAL_6K_V2.4_Model_FP32.tflite \
-  --labels /etc/birdnet/labels.txt \
-  --watch-dir /home/pi/BirdSongs/Extracted/By_Date \
-  --listen 0.0.0.0:8502
-Restart=on-failure
-User=pi
+After install, open the web UI at `http://<your-pi-ip>:8502`.
 
-[Install]
-WantedBy=multi-user.target
+**Optional post-install tweaks** (edit `/etc/birdnet/birdnet.conf`):
+
+```bash
+# Set your location for species frequency filtering
+LATITUDE=51.5074
+LONGITUDE=-0.1278
+
+# Override audio source if auto-detection picked the wrong card
+REC_CARD=plughw:1,0
+
+# Or use an RTSP stream instead of a microphone
+RTSP_STREAM=rtsp://camera.local:554/stream
+```
+
+Then restart: `sudo systemctl restart birdnet-behavior`
+
+**Install a specific version:**
+
+```bash
+VERSION=0.2.0 bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh)
+```
+
+**Uninstall** (preserves your data and config):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash -s uninstall
 ```
 
 ---

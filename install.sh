@@ -298,26 +298,54 @@ EOF
 
     systemctl daemon-reload
     systemctl enable birdnet-behavior.service
-    success "Service installed and enabled (but not started — edit config first)."
+    success "Service installed and enabled."
 }
 
 # ---------------------------------------------------------------------------
-# Check for audio devices (informational)
+# Detect and configure audio device
 # ---------------------------------------------------------------------------
 
-check_audio_devices() {
-    if command -v arecord &>/dev/null; then
-        local cards
-        cards="$(arecord -l 2>/dev/null | grep '^card' || true)"
-        if [ -n "${cards}" ]; then
-            info "Detected ALSA recording devices:"
-            echo "${cards}" | while IFS= read -r line; do
-                echo "    ${line}"
-            done
-            info "Set REC_CARD in ${CONFIG_FILE} (format: plughw:<card>,<device>)."
-        else
-            warn "No ALSA recording devices found. Use an RTSP stream instead."
-        fi
+# Returns the first detected ALSA capture device as "plughw:<card>,<device>",
+# or an empty string if none found / arecord not available.
+detect_first_audio_device() {
+    command -v arecord &>/dev/null || return 0
+    # arecord -l output looks like: card 1: Device [USB Audio Device], device 0: ...
+    local first_card first_device
+    first_card="$(arecord -l 2>/dev/null | awk '/^card/{print $2; exit}' | tr -d ':')"
+    first_device="$(arecord -l 2>/dev/null | awk '/^card/{match($0,/device ([0-9]+)/,a); print a[1]; exit}')"
+    if [ -n "${first_card}" ]; then
+        echo "plughw:${first_card},${first_device:-0}"
+    fi
+}
+
+configure_audio() {
+    local device
+    device="$(detect_first_audio_device)"
+
+    if [ -n "${device}" ]; then
+        info "Auto-detected ALSA device: ${device}"
+        # Uncomment and set REC_CARD in the config file.
+        sed -i "s|# REC_CARD=plughw:1,0|REC_CARD=${device}|" "${CONFIG_FILE}"
+        success "Audio source set to ${device} in ${CONFIG_FILE}"
+    else
+        warn "No ALSA recording devices found."
+        warn "Edit ${CONFIG_FILE} to set REC_CARD or RTSP_STREAM before starting."
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Start service if audio is configured
+# ---------------------------------------------------------------------------
+
+maybe_start_service() {
+    # Check whether an audio source was written into the config.
+    if grep -qE '^(REC_CARD|RTSP_STREAM)=' "${CONFIG_FILE}" 2>/dev/null; then
+        info "Audio source detected in config — starting service now…"
+        systemctl start birdnet-behavior.service
+        success "Service started."
+    else
+        warn "No audio source configured yet."
+        warn "Edit ${CONFIG_FILE}, then: sudo systemctl start birdnet-behavior"
     fi
 }
 
@@ -326,29 +354,31 @@ check_audio_devices() {
 # ---------------------------------------------------------------------------
 
 print_summary() {
+    local ip
+    ip="$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost')"
+
     echo
     echo -e "${BOLD}${GREEN}Installation complete!${RESET}"
     echo
     echo -e "  ${BOLD}Binary:${RESET}  ${INSTALL_DIR}/${BINARY_NAME}"
     echo -e "  ${BOLD}Config:${RESET}  ${CONFIG_FILE}"
     echo -e "  ${BOLD}Data:${RESET}    ${DATA_DIR}"
-    echo -e "  ${BOLD}Web UI:${RESET}  http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost'):8502"
+    echo -e "  ${BOLD}Web UI:${RESET}  http://${ip}:8502"
     echo
-    echo -e "${BOLD}Next steps:${RESET}"
-    echo "  1. Configure your audio source in ${CONFIG_FILE}:"
-    echo "       REC_CARD=plughw:1,0   (ALSA microphone)"
-    echo "       RTSP_STREAM=rtsp://…  (RTSP camera)"
+    if systemctl is-active --quiet birdnet-behavior.service 2>/dev/null; then
+        echo -e "${GREEN}Service is running.${RESET} Open http://${ip}:8502 in your browser."
+    else
+        echo -e "${BOLD}Next steps:${RESET}"
+        echo "  1. Set your audio source in ${CONFIG_FILE}:"
+        echo "       REC_CARD=plughw:1,0       (ALSA microphone)"
+        echo "       RTSP_STREAM=rtsp://…      (RTSP camera)"
+        echo
+        echo "  2. (Optional) Set LATITUDE and LONGITUDE for species filtering."
+        echo
+        echo "  3. sudo systemctl start birdnet-behavior"
+    fi
     echo
-    echo "  2. (Optional) Set LATITUDE and LONGITUDE for location-based species filtering."
-    echo
-    echo "  3. Start the service:"
-    echo "       sudo systemctl start birdnet-behavior"
-    echo "       sudo systemctl status birdnet-behavior"
-    echo
-    echo "  4. Open the web UI at http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost'):8502"
-    echo
-    echo "  To view logs:"
-    echo "       sudo journalctl -u birdnet-behavior -f"
+    echo "  Logs:  sudo journalctl -u birdnet-behavior -f"
     echo
 }
 
@@ -395,8 +425,9 @@ main() {
     create_directories
     download_model
     write_config
+    configure_audio
     install_service
-    check_audio_devices
+    maybe_start_service
     print_summary
 }
 
