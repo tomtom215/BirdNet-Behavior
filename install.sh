@@ -67,8 +67,15 @@ fatal()   { error "$*"; exit 1; }
 
 require_root() {
     if [ "$(id -u)" -ne 0 ]; then
-        fatal "This installer must be run as root (use sudo)."
+        fatal "This installer must be run as root. Try: curl ... | sudo bash"
     fi
+    # Determine who to run the service as.  When invoked via `sudo`, $SUDO_USER
+    # is the original (non-root) user.  Refuse to run as root directly so the
+    # service doesn't end up owned by root.
+    if [ -z "${SUDO_USER:-}" ] || [ "${SUDO_USER}" = "root" ]; then
+        fatal "Run the installer with sudo from a normal user account, not as root directly."
+    fi
+    SERVICE_USER="${SUDO_USER}"
 }
 
 # ---------------------------------------------------------------------------
@@ -263,7 +270,7 @@ LABELS_PATH=${MODEL_DIR}/${LABELS_FILE}
 # --- Site name shown in web UI ---
 # SITENAME=My Bird Station
 EOF
-    chmod 0640 "${CONFIG_FILE}"
+    chmod 0644 "${CONFIG_FILE}"
     success "Default config written — edit ${CONFIG_FILE} to configure your station."
 }
 
