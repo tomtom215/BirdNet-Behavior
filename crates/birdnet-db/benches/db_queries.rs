@@ -1,4 +1,4 @@
-//! Criterion benchmarks for the birdnet-db SQLite query layer.
+//! Criterion benchmarks for the `birdnet-db` `SQLite` query layer.
 //!
 //! Measures throughput of the most performance-sensitive operations:
 //! - Single detection insert
@@ -21,7 +21,7 @@ use std::hint::black_box;
 // Test database helpers
 // ---------------------------------------------------------------------------
 
-/// Open an in-memory SQLite database with the production schema applied.
+/// Open an in-memory `SQLite` database with the production schema applied.
 fn open_db() -> Connection {
     let conn = Connection::open_in_memory().expect("in-memory SQLite");
     conn.execute_batch(SCHEMA_SQL).expect("apply schema");
@@ -46,7 +46,9 @@ fn populate(conn: &Connection, n: usize) {
         let date = format!("2026-01-{:02}", (i % 28) + 1);
         let hour = i % 24;
         let time = format!("{hour:02}:00:00");
-        let confidence = 0.5 + (i % 50) as f64 * 0.01;
+        #[allow(clippy::cast_precision_loss)]
+        let confidence = ((i % 50) as f64).mul_add(0.01, 0.5);
+        #[allow(clippy::cast_possible_truncation)]
         let week = (i % 52) as u32 + 1;
         let filename = format!("{date}-birdnet-{time}.wav");
 
@@ -183,7 +185,7 @@ fn bench_top_species(c: &mut Criterion) {
             let rows: Vec<(String, i64, f64)> = stmt
                 .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
                 .unwrap()
-                .filter_map(|r| r.ok())
+                .filter_map(std::result::Result::ok)
                 .collect();
             black_box(rows)
         });
@@ -219,7 +221,7 @@ fn bench_recent_detections(c: &mut Criterion) {
                     ))
                 })
                 .unwrap()
-                .filter_map(|r| r.ok())
+                .filter_map(std::result::Result::ok)
                 .collect();
             black_box(rows)
         });
@@ -251,7 +253,7 @@ fn bench_weekly_heatmap(c: &mut Criterion) {
             let rows: Vec<(String, i64, i64)> = stmt
                 .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
                 .unwrap()
-                .filter_map(|r| r.ok())
+                .filter_map(std::result::Result::ok)
                 .collect();
             black_box(rows)
         });
@@ -279,7 +281,7 @@ fn bench_species_search(c: &mut Criterion) {
             let rows: Vec<(String, String)> = stmt
                 .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
                 .unwrap()
-                .filter_map(|r| r.ok())
+                .filter_map(std::result::Result::ok)
                 .collect();
             black_box(rows)
         });
