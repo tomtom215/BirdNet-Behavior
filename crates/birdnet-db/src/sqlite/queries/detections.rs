@@ -55,6 +55,26 @@ pub fn detection_count_for_date(conn: &Connection, date: &str) -> Result<i64, Db
     .map_err(DbError::Sqlite)
 }
 
+/// Get the number of detections for a specific species on a specific date.
+///
+/// Used to detect "first detection of species today" (count == 1 after insert).
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn detection_count_for_species_date(
+    conn: &Connection,
+    date: &str,
+    sci_name: &str,
+) -> Result<i64, DbError> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM detections WHERE Date = ?1 AND Sci_Name = ?2",
+        params![date, sci_name],
+        |row| row.get(0),
+    )
+    .map_err(DbError::Sqlite)
+}
+
 /// Query detections for a specific date, ordered by time descending.
 ///
 /// # Errors

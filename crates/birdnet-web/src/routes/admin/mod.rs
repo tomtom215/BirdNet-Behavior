@@ -24,6 +24,11 @@
 //! | `GET  /admin/system/backups/{name}` | Download a backup file |
 //! | `DELETE /admin/system/backups/{name}` | Delete a backup file |
 //! | `GET  /admin/species/test`            | Test/preview species filter (JSON) |
+//! | `GET  /admin/rules`                   | Alert rules management |
+//! | `POST /admin/rules`                   | Create new alert rule |
+//! | `POST /admin/rules/{id}/delete`       | Delete an alert rule |
+//! | `POST /admin/rules/{id}/toggle`       | Enable / disable an alert rule |
+//! | `GET  /admin/quality`                 | Data quality metrics dashboard |
 
 pub mod backup;
 pub mod images;
@@ -32,6 +37,8 @@ pub mod migration;
 pub mod notification_test;
 pub mod notifications;
 pub mod overview;
+pub mod quality;
+pub mod rules;
 pub mod settings;
 pub mod species;
 pub mod species_tester;
@@ -72,6 +79,10 @@ pub fn router() -> Router<AppState> {
         .merge(images::router())
         // Software update
         .merge(update::router())
+        // Alert rules engine
+        .merge(rules::router())
+        // Data quality dashboard
+        .merge(quality::router())
     // Species filter tester (integrated into species::router via /admin/species/test)
 }
 

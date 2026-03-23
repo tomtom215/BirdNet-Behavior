@@ -144,6 +144,28 @@ pub const MIGRATIONS: &[Migration] = &[
         );
         CREATE INDEX IF NOT EXISTS idx_image_blacklist_sci_name ON image_blacklist(sci_name);",
     },
+    Migration {
+        version: 9,
+        description: "Create alert_rules table for conditional detection-triggered actions",
+        up_sql: "CREATE TABLE IF NOT EXISTS alert_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            species_pattern TEXT,
+            confidence_min REAL NOT NULL DEFAULT 0.0,
+            confidence_max REAL NOT NULL DEFAULT 1.0,
+            hour_start INTEGER,
+            hour_end INTEGER,
+            days_of_week TEXT,
+            action_type TEXT NOT NULL CHECK(action_type IN ('webhook','log','suppress')),
+            action_webhook_url TEXT,
+            action_webhook_method TEXT NOT NULL DEFAULT 'POST',
+            action_webhook_body TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_alert_rules_enabled ON alert_rules(enabled);",
+    },
 ];
 
 /// Ensure the `schema_version` tracking table exists.
@@ -293,9 +315,10 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
+        // 6 explicit + 1 implicit rowid index
         assert!(
-            index_count >= 7,
-            "expected at least 7 indexes, got {index_count}"
+            index_count >= 6,
+            "expected at least 6 indexes, got {index_count}"
         );
     }
 

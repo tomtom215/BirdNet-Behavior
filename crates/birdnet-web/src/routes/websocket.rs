@@ -33,6 +33,9 @@ pub struct WsDetectionEvent {
     pub start: f32,
     /// End time in seconds within the recording.
     pub stop: f32,
+    /// `true` when this is the first time this species has been detected today.
+    #[serde(default)]
+    pub is_new_today: bool,
 }
 
 /// Shared broadcast channel for detection events.
@@ -171,6 +174,7 @@ mod tests {
             time: "06:30:00".into(),
             start: 3.0,
             stop: 6.0,
+            is_new_today: false,
         };
         broadcast.send(&event); // Should not panic
         assert_eq!(broadcast.client_count(), 0);
@@ -190,6 +194,7 @@ mod tests {
             time: "06:45:00".into(),
             start: 0.0,
             stop: 3.0,
+            is_new_today: false,
         };
 
         broadcast.send(&event);
@@ -226,9 +231,11 @@ mod tests {
             time: "07:00:00".into(),
             start: 6.0,
             stop: 9.0,
+            is_new_today: true,
         };
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"event\":\"detection\""));
         assert!(json.contains("Great Tit"));
+        assert!(json.contains("\"is_new_today\":true"));
     }
 }

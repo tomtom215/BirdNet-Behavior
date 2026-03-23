@@ -1,6 +1,6 @@
 # Implementation Status
 
-> Current state of the Rust implementation. Last updated: **2026-03-23**.
+> Current state of the Rust implementation. Last updated: **2026-03-23 (Sprint 14)**.
 
 ## Table of Contents
 
@@ -58,7 +58,8 @@
 | Disk management | `audio/capture/disk/` | **Complete** | Disk usage, recording stats, auto-cleanup (split: mod, manager, purge) |
 | Live spectrogram | `audio/spectrogram/live.rs` | **Complete** | inotify watcher, mel spectrogram push, WebSocket broadcast |
 | tmpfs support | `audio/capture/tmpfs.rs` | **Complete** | Transient audio tmpfs mount/unmount, systemd unit generation |
-| Audio extraction | `audio/extraction/` | **Complete** | Modular: config, format, extractor, convert, wav (6 sub-modules) |
+| Audio extraction | `audio/extraction/` | **Complete** | Modular: config, format, extractor, convert, wav, metadata (7 sub-modules) |
+| WAV metadata | `audio/extraction/metadata.rs` | **Complete** | RIFF INFO LIST chunk embedding (INAM/IART/IPRD/ICMT/ICRD/ISFT); pure Rust |
 | Audio quality | `audio/quality/` | **Complete** | SNR estimation, spectral flatness, noise-floor tracking, rain/wind detection (4 sub-modules) |
 
 ### birdnet-db
@@ -71,7 +72,8 @@
 | Settings | `settings.rs` | **Complete** | SQLite-backed key/value, categories, bulk update |
 | Notification log | `notifications.rs` | **Complete** | Per-channel log, stats, prune, status enum |
 | Resilience | `resilience.rs` | **Complete** | Backup, restore, integrity check, auto-recovery |
-| Migrations | `migration.rs` | **Complete** | 3 schema migrations, idempotent, version tracking |
+| Migrations | `migration.rs` | **Complete** | 9 schema migrations, idempotent, version tracking |
+| Alert rules | `alert_rules.rs` | **Complete** | Conditional detection-triggered actions (webhook/log/suppress); glob matching; CRUD |
 
 ### birdnet-web
 
@@ -111,6 +113,10 @@
 | Audio player page | `routes/pages/audio_player.rs` | **Complete** | Custom player with spectrogram, playhead, speed control |
 | Metrics routes | `routes/health.rs` | **Complete** | Prometheus `/api/v2/metrics` endpoint, process stats |
 | Rate limiter | `rate_limit.rs` | **Complete** | Per-IP token-bucket, `429 + Retry-After`, X-Forwarded-For, stale-entry pruning |
+| Admin alert rules | `routes/admin/rules.rs` | **Complete** | Create/delete/toggle rules UI; HTMX live table; species glob + confidence + time window |
+| Admin data quality | `routes/admin/quality.rs` | **Complete** | Confidence distribution, daily trend, hourly profile, low-confidence species ranking |
+| Quality SQL queries | `sqlite/queries/analytics.rs` | **Complete** | `quality_summary`, `confidence_trend`, `detection_quality_by_hour`, `low_confidence_species` |
+| WS new-species flag | `routes/websocket.rs` | **Complete** | `is_new_today` field on `WsDetectionEvent`; populated per detection |
 
 ### birdnet-integrations
 
