@@ -55,19 +55,44 @@ pub fn create_apprise_client(
         .and_then(|c| c.get_parsed::<u64>("APPRISE_COOLDOWN").ok())
         .unwrap_or(300);
 
+    // Helper to split a comma-separated config value into a Vec<String>.
+    let parse_species_list = |list: &str| -> Vec<String> {
+        list.split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    };
+
     let species_watchlist = config
         .and_then(|c| c.get("APPRISE_WATCHLIST"))
-        .map(|list| {
-            list.split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect()
-        })
+        .map(parse_species_list)
         .unwrap_or_default();
+
+    // Dual-filter: exclude list from config file OR CLI --notify-species-exclude.
+    let species_notify_exclude = {
+        let from_config = config
+            .and_then(|c| c.get("APPRISE_WATCHLIST_EXCLUDE"))
+            .map(parse_species_list)
+            .unwrap_or_default();
+        let from_cli = cli
+            .notify_species_exclude
+            .as_deref()
+            .map(parse_species_list)
+            .unwrap_or_default();
+        // Merge both sources; dedup not strictly necessary but keeps it clean.
+        let mut merged = from_config;
+        for s in from_cli {
+            if !merged.contains(&s) {
+                merged.push(s);
+            }
+        }
+        merged
+    };
 
     let notify_config = birdnet_integrations::apprise::NotifyConfig {
         min_confidence,
         species_watchlist,
+        species_notify_exclude,
         cooldown: std::time::Duration::from_secs(cooldown_secs),
         per_species_cooldown: std::collections::HashMap::new(),
     };

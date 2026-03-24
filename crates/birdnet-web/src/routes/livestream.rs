@@ -9,15 +9,31 @@
 //! | `GET /api/v2/languages` | List available i18n languages |
 
 use axum::body::Body;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router, routing::get};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_stream::StreamExt;
 use tokio_util::io::ReaderStream;
 
 use crate::state::AppState;
+
+/// Sample rate used for the live audio stream output (Hz).
+const STREAM_SAMPLE_RATE: u32 = 44_100;
+
+/// Query parameters for the live audio stream.
+#[derive(Debug, Deserialize)]
+pub struct StreamParams {
+    /// Frequency shift in Hz applied to the live stream (positive = shift up).
+    ///
+    /// Uses ffmpeg `asetrate` + `aresample` filter chain. Useful for accessibility
+    /// (hearing loss compensation) or monitoring bat calls shifted into audible range.
+    /// BirdNET-Pi equivalent: rubberband pitch shift filter.
+    #[serde(default)]
+    pub freq_shift_hz: i32,
+}
 
 /// Mount livestream and i18n routes.
 pub fn router() -> Router<AppState> {
@@ -27,6 +43,24 @@ pub fn router() -> Router<AppState> {
 /// Mount the raw audio stream route (top-level, not under /api/v2).
 pub fn stream_router() -> Router<AppState> {
     Router::new().route("/stream", get(livestream))
+}
+
+/// Build the ffmpeg filter string for an optional frequency shift.
+///
+/// A non-zero shift applies `asetrate` (reinterpret sample rate) followed by
+/// `aresample` (resample back to 44100 Hz), which shifts the perceived pitch
+/// without stretching duration — equivalent to BirdNET-Pi's rubberband filter.
+fn freq_shift_filter(base_rate: u32, shift_hz: i32) -> Option<String> {
+    if shift_hz == 0 {
+        return None;
+    }
+    // Use i64 arithmetic to avoid overflow then clamp to a safe minimum.
+    let shifted = i64::from(base_rate) + i64::from(shift_hz);
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    let shifted_rate = shifted.max(8000) as u32;
+    Some(format!(
+        "asetrate={shifted_rate},aresample={base_rate}:resampler=swr"
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -75,11 +109,15 @@ async fn list_languages(State(state): State<AppState>) -> Json<Value> {
 
 /// Stream live audio as MP3 via HTTP chunked transfer.
 ///
-/// Uses `ffmpeg` to capture from ALSA or RTSP and encode to MP3, streaming
-/// stdout directly as the HTTP response body with `Content-Type: audio/mpeg`.
+/// Uses `ffmpeg` to capture from ALSA, PulseAudio/PipeWire, or RTSP and encode
+/// to MP3, streaming stdout directly as the HTTP response body.
+///
+/// Supports optional frequency shifting via `?freq_shift_hz=<N>` query param
+/// (positive = shift up, negative = shift down). Uses the same
+/// `asetrate`+`aresample` technique as the extraction pipeline.
 ///
 /// If no audio source is configured, returns `503 Service Unavailable`.
-async fn livestream(State(state): State<AppState>) -> Response {
+async fn livestream(State(state): State<AppState>, Query(params): Query<StreamParams>) -> Response {
     let Some(source) = state.audio_source() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -90,30 +128,44 @@ async fn livestream(State(state): State<AppState>) -> Response {
 
     let source = source.to_owned();
     let is_rtsp = source.starts_with("rtsp://") || source.starts_with("rtsps://");
+    let is_pulse = source.starts_with("pulse://") || source == "pulse" || source == "default";
 
-    let child = if is_rtsp {
-        // RTSP source
-        tokio::process::Command::new("ffmpeg")
-            .args([
-                "-i", &source, "-vn", // no video
-                "-f", "mp3", "-b:a", "128k", "-ar", "44100", "-ac", "1", "pipe:1",
-            ])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .kill_on_drop(true)
-            .spawn()
+    // Build the audio filter chain: optional freq shift + format conversion.
+    let audio_filter = freq_shift_filter(STREAM_SAMPLE_RATE, params.freq_shift_hz);
+
+    let mut cmd = tokio::process::Command::new("ffmpeg");
+
+    if is_rtsp {
+        cmd.args(["-rtsp_transport", "tcp", "-i", &source, "-vn"]);
+    } else if is_pulse {
+        let pulse_src = source.trim_start_matches("pulse://");
+        cmd.args(["-f", "pulse", "-i", pulse_src]);
     } else {
-        // ALSA source
-        tokio::process::Command::new("ffmpeg")
-            .args([
-                "-f", "alsa", "-i", &source, "-f", "mp3", "-b:a", "128k", "-ar", "44100", "-ac",
-                "1", "pipe:1",
-            ])
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .kill_on_drop(true)
-            .spawn()
-    };
+        // ALSA source (default)
+        cmd.args(["-f", "alsa", "-i", &source]);
+    }
+
+    if let Some(ref filter) = audio_filter {
+        cmd.args(["-af", filter.as_str()]);
+    }
+
+    cmd.args([
+        "-f",
+        "mp3",
+        "-b:a",
+        "128k",
+        "-ar",
+        &STREAM_SAMPLE_RATE.to_string(),
+        "-ac",
+        "1",
+        "pipe:1",
+    ]);
+
+    let child = cmd
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn();
 
     let mut child = match child {
         Ok(c) => c,
@@ -136,7 +188,11 @@ async fn livestream(State(state): State<AppState>) -> Response {
             .into_response();
     };
 
-    tracing::info!(source = %source, "starting live audio stream");
+    tracing::info!(
+        source = %source,
+        freq_shift_hz = params.freq_shift_hz,
+        "starting live audio stream"
+    );
 
     let stream = ReaderStream::new(stdout).map(|result| {
         result.map_err(|e| {

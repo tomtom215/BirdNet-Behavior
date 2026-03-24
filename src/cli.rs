@@ -84,6 +84,15 @@ pub struct Cli {
     #[arg(long, env = "BIRDNET_ALSA_DEVICE")]
     pub alsa_device: Option<String>,
 
+    /// PipeWire/PulseAudio source for microphone capture.
+    ///
+    /// Uses `ffmpeg -f pulse` which works with both native `PulseAudio` and
+    /// `PipeWire` (via `pipewire-pulse`). Leave empty or use `default` for the
+    /// system default source. Takes precedence over `--alsa-device` when set.
+    /// BirdNET-Pi equivalent: ALSA device pointing to a `PulseAudio` sink.
+    #[arg(long, env = "BIRDNET_PIPEWIRE_DEVICE")]
+    pub pipewire_device: Option<String>,
+
     /// RTSP URL for audio capture (e.g., `rtsp://camera.local:554/stream`).
     ///
     /// For a single stream. Use `--rtsp-urls` for multiple streams.

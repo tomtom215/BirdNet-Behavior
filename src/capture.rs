@@ -177,6 +177,8 @@ pub fn start_capture_manager(
         .or_else(|| config?.get("RECS_DIR").map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from("/tmp/StreamData"));
 
+    let pipewire_device = cli.pipewire_device.clone();
+
     let alsa_device = cli
         .alsa_device
         .clone()
@@ -185,8 +187,23 @@ pub fn start_capture_manager(
     let rtsp_urls = resolve_rtsp_urls(cli, config);
 
     // Build the list of capture sources.
-    let sources: Vec<CaptureSource> = if let Some(device) = alsa_device {
-        // ALSA microphone takes priority; RTSP streams are additional.
+    // Priority: PipeWire > ALSA > RTSP
+    let sources: Vec<CaptureSource> = if let Some(device) = pipewire_device {
+        // PipeWire/PulseAudio microphone (ffmpeg -f pulse).
+        let mut srcs = vec![CaptureSource::PipeWire {
+            device,
+            sample_rate: 48_000,
+            channels: 1,
+        }];
+        for (i, url) in rtsp_urls.into_iter().enumerate() {
+            srcs.push(CaptureSource::Rtsp {
+                url,
+                stream_id: format!("RTSP_{}", i + 1),
+            });
+        }
+        srcs
+    } else if let Some(device) = alsa_device {
+        // ALSA microphone; RTSP streams are additional.
         let mut srcs = vec![CaptureSource::Microphone {
             device,
             sample_rate: 48_000,
@@ -242,6 +259,14 @@ pub fn start_capture_manager(
     for source in sources {
         let source_label = match &source {
             CaptureSource::Microphone { device, .. } => format!("mic:{device}"),
+            CaptureSource::PipeWire { device, .. } => format!(
+                "pulse:{}",
+                if device.is_empty() {
+                    "default"
+                } else {
+                    device.as_str()
+                }
+            ),
             CaptureSource::Rtsp { stream_id, .. } => stream_id.clone(),
         };
 
@@ -428,6 +453,7 @@ mod tests {
             longitude: None,
             image_cache_dir: None,
             alsa_device: None,
+            pipewire_device: None,
             rtsp_url: None,
             rtsp_urls: Vec::new(),
             segment_duration: 15,
