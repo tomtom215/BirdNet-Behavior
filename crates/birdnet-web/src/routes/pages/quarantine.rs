@@ -85,49 +85,79 @@ pub struct ActionForm {
 // ---------------------------------------------------------------------------
 
 /// Render the full Quarantine Review page (server-side HTML, HTMX-enhanced).
-async fn quarantine_page() -> Html<String> {
-    let content = build_page_html();
+///
+/// Accepts an optional `filter` query parameter so that direct links like
+/// `/quarantine?filter=all` correctly pre-select the active filter and load
+/// the matching list via the initial HTMX trigger.
+async fn quarantine_page(Query(params): Query<ListParams>) -> Html<String> {
+    let filter = params.filter.as_deref().unwrap_or("pending");
+    let content = build_page_html(filter);
     super::render_page("Quarantine Review", &content, "quarantine")
 }
 
-fn build_page_html() -> String {
-    r#"<div style="margin-bottom:1.5rem;">
-  <h1 style="font-size:1.5rem;font-weight:700;margin-bottom:0.25rem;">
-    &#128269; Rare Bird Quarantine
-  </h1>
-  <p style="color:var(--text-muted);font-size:0.9rem;">
-    Detections that passed the global confidence threshold but failed a stricter
-    per-species threshold are held here for manual review. Approve to admit into
-    the detection log; reject or delete to discard.
-  </p>
-</div>
+fn build_page_html(active_filter: &str) -> String {
+    // Active filter tab style — highlighted vs plain.
+    let active_style = "font-size:0.9rem;font-weight:700;color:var(--primary);\
+                        border-bottom:2px solid var(--primary);padding-bottom:0.1rem;";
+    let plain_style = "font-size:0.9rem;color:var(--text-muted);";
 
-<div id="quarantine-stats"
-     hx-get="/pages/quarantine-stats"
-     hx-trigger="load"
-     hx-swap="innerHTML">
-  <p style="color:var(--text-muted);">Loading stats…</p>
-</div>
+    let s_pending = if active_filter == "pending" {
+        active_style
+    } else {
+        plain_style
+    };
+    let s_approved = if active_filter == "approved" {
+        active_style
+    } else {
+        plain_style
+    };
+    let s_rejected = if active_filter == "rejected" {
+        active_style
+    } else {
+        plain_style
+    };
+    let s_all = if active_filter == "all" {
+        active_style
+    } else {
+        plain_style
+    };
 
-<div class="card" style="margin-top:1rem;">
-  <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;margin-bottom:1rem;">
-    <strong style="color:var(--text-muted);font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;">
-      Filter
-    </strong>
-    <a href="/quarantine" style="font-size:0.9rem;">Pending</a>
-    <a href="/quarantine?filter=approved" style="font-size:0.9rem;">Approved</a>
-    <a href="/quarantine?filter=rejected" style="font-size:0.9rem;">Rejected</a>
-    <a href="/quarantine?filter=all" style="font-size:0.9rem;">All</a>
-  </div>
-
-  <div id="quarantine-list"
-       hx-get="/pages/quarantine-list"
-       hx-trigger="load"
-       hx-swap="innerHTML">
-    <p style="color:var(--text-muted);text-align:center;padding:2rem;">Loading…</p>
-  </div>
-</div>"#
-    .to_string()
+    // Initial HTMX load passes the active filter so the list matches the URL.
+    format!(
+        "<div style=\"margin-bottom:1.5rem;\">\
+  <h1 style=\"font-size:1.5rem;font-weight:700;margin-bottom:0.25rem;\">\
+    &#128269; Rare Bird Quarantine\
+  </h1>\
+  <p style=\"color:var(--text-muted);font-size:0.9rem;\">\
+    Detections that passed the global confidence threshold but failed a stricter \
+    per-species threshold are held here for manual review. Approve to admit into \
+    the detection log; reject or delete to discard.\
+  </p>\
+</div>\
+<div id=\"quarantine-stats\" \
+     hx-get=\"/pages/quarantine-stats\" \
+     hx-trigger=\"load\" \
+     hx-swap=\"innerHTML\">\
+  <p style=\"color:var(--text-muted);\">Loading stats\u{2026}</p>\
+</div>\
+<div class=\"card\" style=\"margin-top:1rem;\">\
+  <div style=\"display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;\
+               margin-bottom:1rem;border-bottom:1px solid var(--border);padding-bottom:0.75rem;\">\
+    <strong style=\"color:var(--text-muted);font-size:0.85rem;text-transform:uppercase;\
+                    letter-spacing:0.05em;\">Filter</strong>\
+    <a href=\"/quarantine\" style=\"{s_pending}\">Pending</a>\
+    <a href=\"/quarantine?filter=approved\" style=\"{s_approved}\">Approved</a>\
+    <a href=\"/quarantine?filter=rejected\" style=\"{s_rejected}\">Rejected</a>\
+    <a href=\"/quarantine?filter=all\" style=\"{s_all}\">All</a>\
+  </div>\
+  <div id=\"quarantine-list\" \
+       hx-get=\"/pages/quarantine-list?filter={active_filter}\" \
+       hx-trigger=\"load\" \
+       hx-swap=\"innerHTML\">\
+    <p style=\"color:var(--text-muted);text-align:center;padding:2rem;\">Loading\u{2026}</p>\
+  </div>\
+</div>"
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -579,7 +609,7 @@ mod tests {
 
     #[test]
     fn build_page_html_contains_key_elements() {
-        let html = build_page_html();
+        let html = build_page_html("pending");
         assert!(html.contains("quarantine-stats"));
         assert!(html.contains("quarantine-list"));
         assert!(html.contains("Pending Review") || html.contains("Filter"));
