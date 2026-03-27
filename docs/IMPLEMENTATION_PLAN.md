@@ -302,31 +302,27 @@ before applying global threshold fallback.
 
 ---
 
-### 6.2 ❌ Rare Bird Quarantine
-**Priority**: P1 — novel feature (BirdNET-Pi doesn't have this)
-**Concept**: Instead of silently discarding species filtered by SF_THRESH, quarantine low-confidence/low-frequency detections for manual review.
+### 6.2 ✅ Rare Bird Quarantine
+**Status**: COMPLETE — Sprint 16 (2026-03-27)
+**Concept**: Instead of silently discarding detections that fail per-species thresholds,
+quarantine them for manual review. Users can approve (move to detections), reject, or delete.
 
-**Files to create**:
-- `crates/birdnet-db/src/sqlite/` — add `quarantine` table
-- `crates/birdnet-web/src/routes/pages/quarantine.rs` — review page
+**Files created**:
+- `crates/birdnet-db/src/sqlite/queries/quarantine.rs` — full CRUD + stats + prune
+- `crates/birdnet-web/src/routes/pages/quarantine.rs` — review page + HTMX partials + actions
+- `tests/web_api_quarantine.rs` — 14 integration tests
 
-**Schema**:
-```sql
-CREATE TABLE quarantine (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    date TEXT NOT NULL,
-    time TEXT NOT NULL,
-    sci_name TEXT NOT NULL,
-    com_name TEXT NOT NULL,
-    confidence REAL NOT NULL,
-    sf_probability REAL,  -- metadata model output
-    reason TEXT NOT NULL, -- "below_sf_thresh" | "low_confidence" | "manual"
-    reviewed INTEGER NOT NULL DEFAULT 0,
-    file_name TEXT
-);
-```
+**Files modified**:
+- `crates/birdnet-db/src/migration.rs` — migration v10 (quarantine table)
+- `crates/birdnet-db/src/sqlite/queries/mod.rs` — quarantine module + re-exports
+- `crates/birdnet-db/src/sqlite/mod.rs` — flat re-exports
+- `crates/birdnet-web/src/routes/pages/mod.rs` — quarantine module + router merge + render_page
+- `crates/birdnet-web/templates/layout.html` — Quarantine nav link with live badge
+- `src/daemon.rs` — per-species threshold failures quarantined instead of silently dropped
 
-**Acceptance**: Filtered species appear in quarantine page; user can approve or discard.
+**Acceptance**: ✅ Filtered species appear in `/quarantine` page with badge count in nav;
+user can approve (admits to detections table), reject, or delete entries; audio playback
+available inline; stats card shows pending/approved/rejected/total counts.
 
 ---
 
@@ -394,7 +390,7 @@ lazy-loading. Each recording has audio player, delete, and re-label actions.
 - [x] 9.6 Settings UI expanded ✅ — 20+ new fields in SettingsForm, render.rs, build_settings_items()
 
 ### P2 Defer (Post 1.0)
-- [ ] 6.2 Rare bird quarantine ← novel leapfrog
+- [x] 6.2 Rare bird quarantine ✅ (Sprint 16)
 - [ ] tmpfs for transient audio (systemd mount unit)
 - [ ] ZRAM setup script (Pi Zero 2W)
 - [ ] Live spectrogram daemon (inotify + WebSocket mel spectrogram push)

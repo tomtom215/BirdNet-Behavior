@@ -224,14 +224,42 @@ fn event_processor(
         let detection = &event.detection;
 
         // Apply per-species confidence threshold.
+        // Detections that pass the global threshold but fail a stricter
+        // per-species threshold are quarantined for manual review rather
+        // than silently dropped.
         if let Some(&threshold) = species_thresholds.get(&detection.scientific_name) {
             if f64::from(detection.confidence) < threshold {
                 tracing::debug!(
                     species = %detection.scientific_name,
                     confidence = detection.confidence,
                     threshold,
-                    "detection below per-species threshold, skipping"
+                    "detection below per-species threshold — quarantining for review"
                 );
+                let week_str = detection.week.to_string();
+                let file_str = event.source_file.to_string_lossy();
+                let q_record = birdnet_db::sqlite::QuarantineRecord {
+                    date: &detection.date,
+                    time: &detection.time,
+                    sci_name: &detection.scientific_name,
+                    com_name: &detection.common_name,
+                    confidence: f64::from(detection.confidence),
+                    sf_probability: None,
+                    reason: birdnet_db::sqlite::QuarantineReason::LowConfidence,
+                    file_name: if file_str.is_empty() {
+                        None
+                    } else {
+                        Some(file_str.as_ref())
+                    },
+                    lat: None,
+                    lon: None,
+                    week: week_str.parse::<i32>().ok(),
+                };
+                if let Err(e) =
+                    state.with_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
+                {
+                    tracing::warn!(error = %e, species = %detection.scientific_name,
+                        "failed to quarantine detection");
+                }
                 continue;
             }
         } else if detection.confidence < global_confidence {

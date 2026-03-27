@@ -372,6 +372,90 @@ pub fn detection_quality_by_hour(conn: &Connection) -> Result<Vec<(u8, i64, f64)
     Ok(rows)
 }
 
+/// Number of detections in the rolling 60-minute window ending now.
+///
+/// Concatenates `Date` and `Time` into an ISO-8601 datetime string and compares
+/// against `datetime('now', '-1 hour')`, so results are relative to UTC.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn last_hour_count(conn: &Connection) -> Result<i64, DbError> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM detections
+         WHERE datetime(Date || ' ' || Time) >= datetime('now', '-1 hour')",
+        [],
+        |row| row.get(0),
+    )
+    .map_err(DbError::Sqlite)
+}
+
+/// Per-species, per-hour detection counts for the top `limit` species on `date`.
+///
+/// Returns `(common_name, hour_0_23, count)` tuples.  Species are ordered by
+/// their total detection count for that day (most-detected first); hours are
+/// sorted ascending within each species.  Only the top `limit` species appear.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn today_species_hour_heatmap(
+    conn: &Connection,
+    date: &str,
+    limit: u32,
+) -> Result<Vec<(String, u8, i64)>, DbError> {
+    let mut stmt = conn.prepare(
+        "WITH top_sp AS (
+            SELECT Com_Name
+            FROM detections
+            WHERE Date = ?1
+            GROUP BY Com_Name
+            ORDER BY COUNT(*) DESC
+            LIMIT ?2
+         )
+         SELECT d.Com_Name,
+                CAST(SUBSTR(d.Time, 1, 2) AS INTEGER) AS hour,
+                COUNT(*) AS cnt
+         FROM detections d
+         INNER JOIN top_sp ON d.Com_Name = top_sp.Com_Name
+         WHERE d.Date = ?1
+         GROUP BY d.Com_Name, hour
+         ORDER BY d.Com_Name, hour",
+    )?;
+    let rows = stmt
+        .query_map(params![date, i64::from(limit)], |row| {
+            let hour: i64 = row.get(1)?;
+            Ok((
+                row.get::<_, String>(0)?,
+                u8::try_from(hour.clamp(0, 23)).unwrap_or(0),
+                row.get::<_, i64>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Most recent detection with full field detail, for the dashboard "Latest" card.
+///
+/// Returns `None` if the detections table is empty.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn latest_detection_full(
+    conn: &Connection,
+) -> Result<Option<crate::sqlite::types::DetectionRow>, DbError> {
+    use crate::sqlite::types::{DETECTION_COLS, map_detection_row};
+    let sql =
+        format!("SELECT {DETECTION_COLS} FROM detections ORDER BY Date DESC, Time DESC LIMIT 1");
+    let result = conn.query_row(&sql, [], map_detection_row);
+    match result {
+        Ok(row) => Ok(Some(row)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(DbError::Sqlite(e)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -493,5 +577,58 @@ mod tests {
         let total: i64 = by_hour.iter().map(|(_, cnt, _)| cnt).sum();
         // 4 total detections
         assert_eq!(total, 4);
+    }
+
+    #[test]
+    fn last_hour_count_returns_non_negative() {
+        // Historical seed data won't match 'now'; tests the query compiles and runs.
+        let (_tmp, conn) = temp_db_with_data();
+        let count = last_hour_count(&conn).unwrap();
+        assert!(count >= 0);
+    }
+
+    #[test]
+    fn today_species_hour_heatmap_returns_cells_for_date() {
+        let (_tmp, conn) = temp_db_with_data();
+        let cells = today_species_hour_heatmap(&conn, "2026-03-11", 10).unwrap();
+        // Seed: Blackbird at 06 & 07, Robin at 06 → 3 (species, hour) pairs
+        assert!(!cells.is_empty());
+        for (_, hour, cnt) in &cells {
+            assert!(*hour < 24, "hour must be 0–23");
+            assert!(*cnt > 0, "count must be positive");
+        }
+    }
+
+    #[test]
+    fn today_species_hour_heatmap_respects_limit() {
+        let (_tmp, conn) = temp_db_with_data();
+        let cells_limit1 = today_species_hour_heatmap(&conn, "2026-03-11", 1).unwrap();
+        // Only 1 species (most-detected) × at most 24 hours
+        let species: std::collections::HashSet<_> = cells_limit1
+            .iter()
+            .map(|(name, _, _)| name.clone())
+            .collect();
+        assert_eq!(
+            species.len(),
+            1,
+            "limit=1 should return exactly one species"
+        );
+    }
+
+    #[test]
+    fn latest_detection_full_returns_most_recent() {
+        let (_tmp, conn) = temp_db_with_data();
+        let det = latest_detection_full(&conn).unwrap().unwrap();
+        assert_eq!(det.date, "2026-03-11");
+        assert_eq!(det.time, "07:00:00");
+        assert_eq!(det.com_name, "Eurasian Blackbird");
+        assert!(det.confidence > 0.0 && det.confidence <= 1.0);
+    }
+
+    #[test]
+    fn latest_detection_full_empty_table() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_or_create(tmp.path()).unwrap();
+        assert!(latest_detection_full(&conn).unwrap().is_none());
     }
 }

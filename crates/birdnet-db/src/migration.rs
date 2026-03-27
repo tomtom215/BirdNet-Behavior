@@ -166,6 +166,31 @@ pub const MIGRATIONS: &[Migration] = &[
         );
         CREATE INDEX IF NOT EXISTS idx_alert_rules_enabled ON alert_rules(enabled);",
     },
+    Migration {
+        version: 10,
+        description: "Create quarantine table for rare/uncertain detections pending manual review",
+        up_sql: "CREATE TABLE IF NOT EXISTS quarantine (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            time TEXT NOT NULL,
+            sci_name TEXT NOT NULL,
+            com_name TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            sf_probability REAL,
+            reason TEXT NOT NULL CHECK(reason IN ('below_sf_thresh','low_confidence','manual')),
+            reviewed INTEGER NOT NULL DEFAULT 0,
+            approved INTEGER NOT NULL DEFAULT 0,
+            file_name TEXT,
+            lat REAL,
+            lon REAL,
+            week INTEGER,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(date, time, sci_name)
+        );
+        CREATE INDEX IF NOT EXISTS idx_quarantine_reviewed ON quarantine(reviewed);
+        CREATE INDEX IF NOT EXISTS idx_quarantine_date ON quarantine(date);
+        CREATE INDEX IF NOT EXISTS idx_quarantine_sci_name ON quarantine(sci_name);",
+    },
 ];
 
 /// Ensure the `schema_version` tracking table exists.
