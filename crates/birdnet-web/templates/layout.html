@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
+    <!-- FOUC guard: read localStorage before first paint so theme is correct immediately. -->
+    <script>(function(){var t=localStorage.getItem('theme');if(!t)t=window.matchMedia('(prefers-color-scheme:light)').matches?'light':'dark';document.documentElement.setAttribute('data-theme',t);})();</script>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{title}} - BirdNet-Behavior</title>
@@ -32,6 +34,7 @@
             --text-muted: #94a3b8;
             --accent: #38bdf8;
             --accent-dim: #0ea5e9;
+            --accent-rgb: 56, 189, 248;
             --success: #22c55e;
             --warning: #f59e0b;
             --danger: #ef4444;
@@ -54,6 +57,7 @@
             --text-muted: #64748b;
             --accent: #0284c7;
             --accent-dim: #0369a1;
+            --accent-rgb: 2, 132, 199;
             --success: #16a34a;
             --warning: #d97706;
             --danger: #dc2626;

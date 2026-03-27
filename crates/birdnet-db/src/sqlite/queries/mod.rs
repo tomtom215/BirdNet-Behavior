@@ -10,9 +10,10 @@ pub mod species;
 
 pub use analytics::{
     QualitySummary, confidence_distribution, confidence_trend, daily_counts,
-    detection_quality_by_hour, distinct_detection_dates, hourly_activity, latest_detection,
-    low_confidence_species, quality_summary, range_daily_counts, weekly_detection_count,
-    weekly_new_species, weekly_top_species,
+    detection_quality_by_hour, distinct_detection_dates, hourly_activity, last_hour_count,
+    latest_detection, latest_detection_full, low_confidence_species, quality_summary,
+    range_daily_counts, today_species_hour_heatmap, weekly_detection_count, weekly_new_species,
+    weekly_top_species,
 };
 pub use correlation::{companion_species, temporal_cooccurrence, top_cooccurrence_pairs};
 pub use detections::{

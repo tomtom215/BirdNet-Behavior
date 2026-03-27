@@ -24,6 +24,8 @@ pub fn router() -> Router<AppState> {
         .route("/pages/daily-chart", get(daily_chart_partial))
         .route("/pages/confidence-chart", get(confidence_chart_partial))
         .route("/pages/kiosk-content", get(kiosk_content_partial))
+        .route("/pages/most-recent", get(most_recent_partial))
+        .route("/pages/activity-heatmap", get(activity_heatmap_partial))
 }
 
 async fn dashboard_page() -> Html<String> {
@@ -78,32 +80,48 @@ async fn stats_partial(State(state): State<AppState>) -> impl axum::response::In
             let total = birdnet_db::sqlite::detection_count(conn).unwrap_or(0);
             let species = birdnet_db::sqlite::species_count(conn).unwrap_or(0);
             let today = today_count(conn);
+            let last_hour = birdnet_db::sqlite::last_hour_count(conn).unwrap_or(0);
             let latest = birdnet_db::sqlite::latest_detection(conn).ok().flatten();
-            (total, species, today, latest)
+            (total, species, today, last_hour, latest)
         })
     })
     .await;
 
     match result {
-        Ok((total, species, today, latest)) => {
+        Ok((total, species, today, last_hour, latest)) => {
             let latest_html = if let Some((_, time, name)) = latest {
                 format!(
-                    r#"<div class="stat-card">
-    <div class="value" style="font-size: 1.2rem;">{time}</div>
-    <div class="label">Last: {name}</div>
-</div>"#,
+                    "<div class=\"stat-card\">\
+                      <div class=\"value\" style=\"font-size:1.2rem;\">{time}</div>\
+                      <div class=\"label\">Last: {name}</div>\
+                    </div>",
                     time = escape_html(&time),
                     name = escape_html(&name),
                 )
             } else {
-                r#"<div class="stat-card"><div class="value">--</div><div class="label">No Detections</div></div>"#.to_string()
+                "<div class=\"stat-card\"><div class=\"value\">--</div>\
+                 <div class=\"label\">No Detections</div></div>"
+                    .to_string()
             };
 
             let html = format!(
-                r#"<div class="stat-card"><div class="value">{total}</div><div class="label">Total Detections</div></div>
-<div class="stat-card"><div class="value">{species}</div><div class="label">Unique Species</div></div>
-<div class="stat-card"><div class="value">{today}</div><div class="label">Today</div></div>
-{latest_html}"#,
+                "<div class=\"stat-card\">\
+                   <div class=\"value\">{total}</div>\
+                   <div class=\"label\">Total Detections</div>\
+                 </div>\
+                 <div class=\"stat-card\">\
+                   <div class=\"value\">{species}</div>\
+                   <div class=\"label\">Unique Species</div>\
+                 </div>\
+                 <div class=\"stat-card\">\
+                   <div class=\"value\">{today}</div>\
+                   <div class=\"label\">Today</div>\
+                 </div>\
+                 <div class=\"stat-card\">\
+                   <div class=\"value\" style=\"color:var(--warning);\">{last_hour}</div>\
+                   <div class=\"label\">Last Hour</div>\
+                 </div>\
+                 {latest_html}",
             );
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
@@ -454,6 +472,157 @@ async fn kiosk_content_partial(State(state): State<AppState>) -> impl axum::resp
             "<p>Error loading kiosk data</p>".to_string(),
         ),
     }
+}
+
+/// Most recent detection card with audio player and species link.
+async fn most_recent_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {
+    let result = tokio::task::spawn_blocking(move || {
+        state.with_db(birdnet_db::sqlite::latest_detection_full)
+    })
+    .await;
+
+    let Ok(Ok(Some(det))) = result else {
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p style=\"color:var(--text-muted);text-align:center;padding:1.5rem 0;\">No detections yet.</p>"
+                .to_string(),
+        );
+    };
+
+    let conf_pct = det.confidence * 100.0;
+    let cls = conf_class(conf_pct);
+    let com_safe = escape_html(&det.com_name);
+    let sci_safe = escape_html(&det.sci_name);
+    let date_safe = escape_html(&det.date);
+    let time_safe = escape_html(&det.time);
+    let enc = simple_url_encode(&det.com_name);
+
+    let audio_html = det
+        .file_name
+        .as_deref()
+        .filter(|f| !f.is_empty())
+        .map(|f| {
+            let basename = std::path::Path::new(f)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let safe_b = escape_html(&basename);
+            format!(
+                "<audio controls preload=\"metadata\" \
+                    style=\"width:100%;margin-top:0.6rem;height:32px;\">\
+                  <source src=\"/api/v2/recordings/{safe_b}\" type=\"audio/wav\">\
+                </audio>",
+            )
+        })
+        .unwrap_or_default();
+
+    let html = format!(
+        "<div style=\"display:flex;align-items:flex-start;gap:1rem;flex-wrap:wrap;\">\
+           <div style=\"flex:1;min-width:200px;\">\
+             <div style=\"display:flex;align-items:center;gap:0.5rem;margin-bottom:0.2rem;\">\
+               <a href=\"/species/detail?name={enc}\" \
+                  style=\"font-size:1.1rem;font-weight:700;color:var(--text);\">{com_safe}</a>\
+               <span class=\"conf {cls}\">{conf_pct:.0}%</span>\
+             </div>\
+             <div style=\"color:var(--text-muted);font-size:0.85rem;font-style:italic;\">{sci_safe}</div>\
+             <div style=\"color:var(--text-muted);font-size:0.8rem;margin-top:0.2rem;\">\
+               {date_safe} &nbsp;&#9679;&nbsp; {time_safe}\
+             </div>\
+             {audio_html}\
+           </div>\
+         </div>",
+    );
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+}
+
+/// Species × hour activity heatmap for today (top 12 species, 24-hour grid).
+async fn activity_heatmap_partial(
+    State(state): State<AppState>,
+) -> impl axum::response::IntoResponse {
+    let today = today_date_string();
+    let result = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| birdnet_db::sqlite::today_species_hour_heatmap(conn, &today, 12))
+    })
+    .await;
+
+    let cells = match result {
+        Ok(Ok(c)) if !c.is_empty() => c,
+        _ => {
+            return (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/html")],
+                "<p style=\"color:var(--text-muted);text-align:center;padding:1rem 0;\">No activity recorded today.</p>"
+                    .to_string(),
+            );
+        }
+    };
+
+    // Collect species in query order (already sorted by total desc), build hour arrays.
+    let mut species_order: Vec<String> = Vec::new();
+    let mut species_map: std::collections::HashMap<String, [i64; 24]> =
+        std::collections::HashMap::new();
+    for (name, hour, count) in &cells {
+        let entry = species_map.entry(name.clone()).or_insert([0i64; 24]);
+        entry[usize::from(*hour)] = *count;
+        if !species_order.contains(name) {
+            species_order.push(name.clone());
+        }
+    }
+    let max_count = cells.iter().map(|(_, _, c)| *c).max().unwrap_or(1).max(1);
+
+    let mut html = String::with_capacity(8192);
+    html.push_str(
+        "<style>\
+        .ah{display:grid;grid-template-columns:9rem repeat(24,1fr);gap:2px;overflow-x:auto;}\
+        .ah-lbl{font-size:.75rem;color:var(--text);overflow:hidden;text-overflow:ellipsis;\
+                white-space:nowrap;padding-right:.25rem;align-self:center;}\
+        .ah-hr{font-size:.6rem;color:var(--text-muted);text-align:center;padding:.1rem 0;}\
+        .ah-cell{height:20px;border-radius:3px;transition:opacity .15s;cursor:default;}\
+        .ah-cell:hover{outline:1px solid var(--accent);z-index:1;position:relative;}\
+        </style>\
+        <div class=\"ah\">",
+    );
+
+    // Header row: empty label + hour columns 0..23
+    html.push_str("<div></div>");
+    for h in 0u8..24 {
+        let _ = write!(html, "<div class=\"ah-hr\">{h}</div>");
+    }
+
+    // Species rows
+    for name in &species_order {
+        let hours = species_map.get(name).copied().unwrap_or([0i64; 24]);
+        let safe_name = escape_html(name);
+        let _ = write!(
+            html,
+            "<div class=\"ah-lbl\" title=\"{safe_name}\">{safe_name}</div>"
+        );
+        for (h, &count) in hours.iter().enumerate() {
+            if count == 0 {
+                let _ = write!(
+                    html,
+                    "<div class=\"ah-cell\" style=\"background:var(--bg-hover);\"></div>",
+                );
+            } else {
+                // alpha: 0.12 minimum so even 1 detection is clearly visible; scales to 0.92
+                #[allow(clippy::cast_precision_loss)]
+                let ratio = count as f64 / max_count as f64;
+                let alpha = ratio.mul_add(0.80, 0.12);
+                let title = format!("{name} {h:02}:00 — {count}");
+                let safe_title = escape_html(&title);
+                let _ = write!(
+                    html,
+                    "<div class=\"ah-cell\" \
+                       style=\"background:rgba(var(--accent-rgb),{alpha:.2});\" \
+                       title=\"{safe_title}\"></div>",
+                );
+            }
+        }
+    }
+
+    html.push_str("</div>");
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
 fn conf_class(pct: f64) -> &'static str {

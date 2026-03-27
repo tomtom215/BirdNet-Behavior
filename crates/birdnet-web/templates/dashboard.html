@@ -11,12 +11,34 @@
         <div class="value">--</div>
         <div class="label">Today</div>
     </div>
+    <div class="stat-card">
+        <div class="value">--</div>
+        <div class="label">Last Hour</div>
+    </div>
+    <div class="stat-card">
+        <div class="value">--</div>
+        <div class="label">Last Detection</div>
+    </div>
+</div>
+
+<div class="card" style="margin-bottom: 1rem;">
+    <h2><span class="live-dot"></span> Most Recent Detection</h2>
+    <div hx-get="/pages/most-recent" hx-trigger="load, every 15s" hx-swap="innerHTML">
+        <p style="color: var(--text-muted)">Loading...</p>
+    </div>
 </div>
 
 <div class="card" style="margin-bottom: 1rem;">
     <h2>Today's Activity</h2>
     <div hx-get="/pages/hourly-chart" hx-trigger="load, every 60s" hx-swap="innerHTML">
         <p style="color: var(--text-muted)">Loading chart...</p>
+    </div>
+</div>
+
+<div class="card" style="margin-bottom: 1rem;">
+    <h2>Species × Hour Heatmap (Today)</h2>
+    <div hx-get="/pages/activity-heatmap" hx-trigger="load, every 60s" hx-swap="innerHTML">
+        <p style="color: var(--text-muted)">Loading heatmap...</p>
     </div>
 </div>
 
