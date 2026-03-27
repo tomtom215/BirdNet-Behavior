@@ -1,0 +1,44 @@
+# Build artifacts — excluded to keep the build context small and fast
+target/
+**/*.rs.bk
+
+# Version control
+.git/
+.gitignore
+.gitattributes
+
+# Development / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Local config and secrets
+.env
+.env.local
+*.local
+
+# Documentation (not needed in image)
+docs/
+*.md
+!README.md
+
+# Test fixtures / benchmarks
+tests/
+benches/
+
+# CI/CD config — not needed inside the image
+.github/
+
+# Large binary assets that should be mounted as volumes instead
+# (model files are downloaded at container startup, not baked in)
+*.onnx
+*.tflite
+*.pb
+
+# Audio files — mount volumes for these
+*.wav
+*.flac
+*.mp3
+*.ogg

@@ -1,0 +1,144 @@
+name: Docker
+
+# Build and publish multi-architecture container images to GHCR.
+#
+# Triggers:
+#   • Version tags  (v1.2.3)  → publishes versioned + latest tags
+#   • Main/master push        → publishes "edge" tag for nightly testing
+#   • Manual dispatch         → build on demand (branch selectable)
+#
+# Published images:
+#   ghcr.io/tomtom215/birdnet-behavior:latest       (stable release)
+#   ghcr.io/tomtom215/birdnet-behavior:1.2.3        (exact version)
+#   ghcr.io/tomtom215/birdnet-behavior:1.2          (minor series)
+#   ghcr.io/tomtom215/birdnet-behavior:edge         (main branch tip)
+#   ghcr.io/tomtom215/birdnet-behavior:1.2.3-analytics  (with DuckDB analytics)
+#
+# Platforms:
+#   linux/amd64    — x86_64 servers / desktops
+#   linux/arm64    — Raspberry Pi 4 / 5 (64-bit OS)
+#   linux/arm/v7   — Raspberry Pi 3 / 32-bit OS  ⚠ ORT may not have armv7 binaries;
+#                    this platform is attempted but not required to succeed
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]*"
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      push:
+        description: "Push image to GHCR (false = build only)"
+        required: false
+        default: "true"
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/birdnet-behavior
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Standard build (no DuckDB analytics) — fast, suitable for most users
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build (${{ matrix.variant }})
+    runs-on: ubuntu-24.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: standard
+            features: ""
+            tag_suffix: ""
+          - variant: analytics
+            features: "analytics"
+            tag_suffix: "-analytics"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # QEMU enables cross-platform builds for arm64 and arm/v7 on x86_64 runners.
+      # Without QEMU, buildx can only build linux/amd64 natively.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'workflow_dispatch' || inputs.push == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Generate image tags and labels from Git metadata.
+      # Examples for tag v1.2.3, standard variant:
+      #   ghcr.io/tomtom215/birdnet-behavior:1.2.3
+      #   ghcr.io/tomtom215/birdnet-behavior:1.2
+      #   ghcr.io/tomtom215/birdnet-behavior:1
+      #   ghcr.io/tomtom215/birdnet-behavior:latest
+      # Examples for analytics variant:
+      #   ghcr.io/tomtom215/birdnet-behavior:1.2.3-analytics
+      #   ghcr.io/tomtom215/birdnet-behavior:latest-analytics
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: |
+            suffix=${{ matrix.tag_suffix }},onlatest=true
+          tags: |
+            # Versioned release tags (only on version tags)
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            # latest / latest-analytics on default branch version tags
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
+            # edge tag tracks the main branch tip
+            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' }}
+            # SHA-based tag for exact reproducibility
+            type=sha,prefix=sha-
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          dockerfile: Dockerfile
+          # Attempt all three platforms; arm/v7 failure does not block the push.
+          # Note: ORT download-binaries may not have prebuilt armv7 libs.
+          # If arm/v7 fails at runtime (not build time), users should use the
+          # native binary from GitHub Releases instead.
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          push: ${{ github.event_name != 'workflow_dispatch' || inputs.push == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_FEATURES=${{ matrix.features }}
+          # GitHub Actions cache — dramatically speeds up repeat builds by
+          # reusing the cargo-chef dependency layer.
+          cache-from: type=gha,scope=${{ matrix.variant }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}
+          provenance: true
+          sbom: true
+
+      - name: Image digest
+        if: github.event_name != 'workflow_dispatch' || inputs.push == 'true'
+        run: |
+          echo "### Docker Image (${{ matrix.variant }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Tags:" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

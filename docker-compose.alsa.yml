@@ -1,0 +1,61 @@
+# =============================================================================
+# BirdNet-Behavior — ALSA microphone overlay
+#
+# Extends the base docker-compose.yml to pass the host's ALSA sound devices
+# into the container.  Use this for USB microphones and built-in sound cards
+# on Raspberry Pi and Linux desktops.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.alsa.yml up -d
+#
+# Before running, set BIRDNET_ALSA_DEVICE in your .env file:
+#   BIRDNET_ALSA_DEVICE=plughw:1,0
+#
+# Find the right device name with:
+#   arecord -l
+#   # Look for: card 1: <Your USB Mic> [USB Audio Device], device 0: ...
+#   # The device string is: plughw:<card>,<device>   →  e.g. plughw:1,0
+#
+# Tip: run `arecord -D plughw:1,0 -d 3 /tmp/test.wav && aplay /tmp/test.wav`
+#      on the host to verify the device works before starting the container.
+#
+# =============================================================================
+#
+# USB microphone passthrough notes
+# ─────────────────────────────────
+# Docker accesses ALSA through the /dev/snd device nodes, not via raw USB.
+# This means:
+#   ✓ Works automatically once /dev/snd is exposed (no USB passthrough needed)
+#   ✓ The `audio` group membership grants permission without running as root
+#   ✓ Hot-plug: if the mic is connected BEFORE the container starts it is visible
+#   ✗ Hot-plug AFTER start: restart the container for a newly connected mic
+#
+# If your device is accessible via USB but not appearing in /dev/snd, ensure
+# the `snd-usb-audio` kernel module is loaded on the host:
+#   lsmod | grep snd_usb_audio
+#   sudo modprobe snd-usb-audio
+#
+# =============================================================================
+
+services:
+  birdnet:
+    # Pass the entire ALSA device tree into the container.
+    # /dev/snd contains control and PCM nodes for all sound cards.
+    devices:
+      - /dev/snd:/dev/snd
+
+    # Grant membership in the host's `audio` group so the non-root birdnet
+    # user can open /dev/snd nodes without CAP_SYS_ADMIN.
+    # The GID is resolved by name; if your host uses a different GID for the
+    # audio group, set it explicitly here, e.g. "29" (Debian default).
+    group_add:
+      - audio
+
+    # Override the default memory limit — ALSA capture adds minimal overhead
+    # but DuckDB analytics can use more RAM on intensive queries.
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+        reservations:
+          memory: 128M
