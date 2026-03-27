@@ -1,6 +1,6 @@
 # Implementation Status
 
-> Current state of the Rust implementation. Last updated: **2026-03-23 (Sprint 14)**.
+> Current state of the Rust implementation. Last updated: **2026-03-27 (Sprint 16)**.
 
 ## Table of Contents
 
@@ -72,8 +72,9 @@
 | Settings | `settings.rs` | **Complete** | SQLite-backed key/value, categories, bulk update |
 | Notification log | `notifications.rs` | **Complete** | Per-channel log, stats, prune, status enum |
 | Resilience | `resilience.rs` | **Complete** | Backup, restore, integrity check, auto-recovery |
-| Migrations | `migration.rs` | **Complete** | 9 schema migrations, idempotent, version tracking |
+| Migrations | `migration.rs` | **Complete** | 10 schema migrations (v10 adds quarantine table), idempotent, version tracking |
 | Alert rules | `alert_rules.rs` | **Complete** | Conditional detection-triggered actions (webhook/log/suppress); glob matching; CRUD |
+| Quarantine queries | `sqlite/queries/quarantine.rs` | **Complete** | `insert_quarantine`, `approve_quarantine` (atomic TX), `reject_quarantine`, `delete_quarantine`, `prune_quarantine`, `list_quarantine`, `quarantine_stats`, `quarantine_pending_count` |
 
 ### birdnet-web
 
@@ -117,6 +118,7 @@
 | Admin data quality | `routes/admin/quality.rs` | **Complete** | Confidence distribution, daily trend, hourly profile, low-confidence species ranking |
 | Quality SQL queries | `sqlite/queries/analytics.rs` | **Complete** | `quality_summary`, `confidence_trend`, `detection_quality_by_hour`, `low_confidence_species` |
 | WS new-species flag | `routes/websocket.rs` | **Complete** | `is_new_today` field on `WsDetectionEvent`; populated per detection |
+| Quarantine page | `routes/pages/quarantine.rs` | **Complete** | Rare-bird review page: stats, paginated HTMX list, approve/reject/delete actions, pending badge |
 
 ### birdnet-integrations
 
@@ -170,7 +172,7 @@
 | Module | File | Status | Notes |
 |--------|------|--------|-------|
 | Entry point | `src/main.rs` + `src/helpers.rs` | **Complete** | CLI, DB recovery, daemon, server, all integrations wired |
-| Detection daemon bridge | `src/daemon.rs` | **Complete** | Event processor: SQLite, DuckDB, WebSocket, Apprise, BirdWeather, Email, MQTT |
+| Detection daemon bridge | `src/daemon.rs` | **Complete** | Event processor: SQLite, DuckDB, WebSocket, Apprise, BirdWeather, Email, MQTT; per-species threshold failures quarantined instead of dropped |
 | Audio capture | `src/capture.rs` | **Complete** | arecord + ffmpeg subprocess lifecycle management |
 | Integrations | `src/integrations.rs` | **Complete** | Apprise, BirdWeather, Email, Auth, MQTT client factories |
 | CLI | `src/cli.rs` | **Complete** | All flags: model, labels, watch-dir, analytics, apprise, birdweather, auth, MQTT, quality-filter, etc. |
@@ -178,6 +180,54 @@
 ---
 
 ## Recent Changes
+
+### 2026-03-27 (Sprint 16)
+
+#### Rare Bird Quarantine System
+
+Implements the last planned novel feature (Sprint 6.2 from IMPLEMENTATION_PLAN.md) — a full
+triage workflow for detections that are uncertain but too interesting to silently discard.
+
+**Database layer** (`crates/birdnet-db/`):
+- **Migration v10** — new `quarantine` table: `id`, `date`, `time`, `sci_name`, `com_name`,
+  `confidence`, `sf_probability`, `reason` (`below_sf_thresh` | `low_confidence` | `manual`),
+  `reviewed`, `approved`, `file_name`, `lat`, `lon`, `week`, `created_at`.
+  Three indexes: `reviewed`, `date`, `sci_name`.
+- **`QuarantineReason` enum** — `BelowSfThresh`, `LowConfidence`, `Manual`; stores as
+  `&'static str`, parses from DB strings, exposes human-readable `label()`.
+- **Full CRUD**: `insert_quarantine` (deduplicates via `INSERT OR IGNORE`),
+  `approve_quarantine` (atomic `INSERT OR IGNORE INTO detections … SELECT … FROM quarantine` +
+  `UPDATE reviewed/approved` in a single transaction), `reject_quarantine`, `delete_quarantine`,
+  `prune_quarantine` (removes reviewed entries older than N days to prevent unbounded growth).
+- **Read queries**: `list_quarantine` (paginated, filtered by `QuarantineFilter`),
+  `get_quarantine`, `count_quarantine`, `quarantine_pending_count`, `quarantine_stats`
+  (pending / approved / rejected / total).
+- **14 unit tests** in `quarantine.rs` covering all operations including approve idempotency,
+  dedup behaviour, prune, and `QuarantineReason` round-tripping.
+
+**Detection daemon** (`src/daemon.rs`):
+- Per-species threshold failures now quarantine instead of silently dropping the detection.
+  The `continue` path now calls `birdnet_db::sqlite::insert_quarantine` with `reason = LowConfidence`
+  before continuing, so no detection data is lost when users set strict per-species thresholds.
+
+**Web layer** (`crates/birdnet-web/`):
+- **`/quarantine`** page — full HTMX page with:
+  - Stats bar (pending / approved / rejected / total counts via `quarantine-stats` partial)
+  - Filter tabs (Pending / Approved / Rejected / All) via query parameter
+  - Paginated table with species link, confidence badge, reason, date/time, status, and action buttons
+  - Audio player for associated recording (if file_name present)
+  - Action buttons: **Approve** (confirm dialog, copies to detections), **Reject**, **Delete**
+  - Reviewed entries only offer Delete to clean up history
+- **`/pages/quarantine-pending-count`** — tiny partial polled every 60 s from the nav badge
+  (renders empty string when count = 0, coloured badge span when > 0)
+- **Nav badge** — Quarantine link added to `layout.html`; badge auto-refreshes every 60 s to
+  alert users when new entries arrive
+- **`render_page` updated** — handles `{{nav_quarantine}}` placeholder
+
+**Tests** — `tests/web_api_quarantine.rs` (14 integration tests):
+- Page render, nav link, stats partial (empty + seeded), list partial (empty + pending + all filter),
+  pending count badge (zero + non-zero), approve / reject / delete action handlers including
+  DB-state verification after each action.
 
 ### 2026-03-23 (Sprint 13)
 
@@ -380,14 +430,14 @@ New `birdnet-behavioral::phenology` module — migration timing and abundance an
 | Crate | Tests | Status |
 |-------|-------|--------|
 | birdnet-core | 27 (audio pipeline, inference, daemon, quality: SNR/flatness/noise-floor/rain/wind) | All passing |
-| birdnet-db | 69 (sqlite, resilience, heatmap, correlation, settings, notifications) | All passing |
+| birdnet-db | 83 (sqlite, resilience, heatmap, correlation, settings, notifications, quarantine CRUD) | All passing |
 | birdnet-web | 172 (pages, admin, backup, settings, export, auth, websocket, rate-limiter) | All passing |
 | birdnet-integrations | 71 (email, apprise, birdweather, images, MQTT wire-encoding, offline-broker, HA discovery) | All passing |
 | birdnet-behavioral | 18 (types, queries, phenology timing/abundance SQL correctness) | All passing |
 | birdnet-migrate | 33 (schema, validator, importer, species_report) | All passing |
 | birdnet-timeseries | 24 (all analytics modules) | All passing |
-| Integration tests | 74 (audio pipeline end-to-end, web API, HTMX pages) | All passing |
-| **Total** | **~488** | **All passing** |
+| Integration tests | 88 (audio pipeline end-to-end, web API, HTMX pages, quarantine routes) | All passing |
+| **Total** | **~516** | **All passing** |
 
 ---
 

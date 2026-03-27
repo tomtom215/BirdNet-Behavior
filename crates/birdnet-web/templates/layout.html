@@ -341,6 +341,11 @@
             <a href="/recordings" class="{{nav_recordings}}">Recordings</a>
             <a href="/analytics" class="{{nav_analytics}}">Analytics</a>
             <a href="/timeseries" class="{{nav_timeseries}}">Time Series</a>
+            <a href="/quarantine" class="{{nav_quarantine}}" style="display:inline-flex;align-items:center;">
+                Quarantine<span hx-get="/pages/quarantine-pending-count"
+                                hx-trigger="load, every 60s"
+                                hx-swap="innerHTML"></span>
+            </a>
         </div>
         <div class="nav-right">
             <button class="theme-toggle" id="theme-toggle" title="Toggle light/dark theme" aria-label="Toggle theme">

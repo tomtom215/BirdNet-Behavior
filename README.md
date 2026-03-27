@@ -196,6 +196,18 @@ A four-stage pipeline runs before ML inference: SNR estimation, spectral flatnes
 - Prometheus metrics at `/api/v2/metrics`
 - JSON health check at `/api/v2/health`
 
+### Rare Bird Quarantine
+
+When you set a strict per-species confidence threshold (e.g., 90% for a locally rare warbler),
+detections that pass the global threshold but miss the per-species bar are no longer silently
+discarded — they are held in a **quarantine queue** for your review.
+
+- `/quarantine` — review page with approve / reject / delete actions
+- **Approve** copies the detection into your detections log
+- **Reject** marks it as reviewed without admitting it
+- Live badge in the nav bar shows pending count (updates every 60 s)
+- Inline audio playback from the review table
+
 ### Admin Improvements
 
 - Live log viewer (SSE, level filtering, pause, auto-scroll)
@@ -259,11 +271,17 @@ BIRDNET_BIRDWEATHER_TOKEN=abc123 systemctl restart birdnet-behavior
 | URL | Description |
 |---|---|
 | `/` | Live dashboard — detection feed with audio player, top species, activity stats |
+| `/today` | Today's detections — searchable, paginated, with delete / lock / re-label |
+| `/history` | Detection history browser — by date with hourly bar chart |
+| `/weekly` | Weekly report — top 10 species, new species, 7-day SVG chart |
 | `/species` | All detected species with live search, detection counts, and confidence |
 | `/species/detail?name=…` | Per-species page: hourly chart, 14-day trend, Wikipedia image, recent detections |
+| `/recordings` | Recording browser by species or date with inline audio player |
 | `/heatmap` | Hour × day-of-week SVG heatmap + hourly bar chart |
 | `/correlation` | Species co-occurrence pairs and companion species lookup |
 | `/analytics` | Behavioral analytics dashboard (requires `--analytics-db`) |
+| `/timeseries` | Time-series analytics dashboard (activity, diversity, trends, peaks, gaps) |
+| `/quarantine` | Rare bird quarantine queue — review, approve, reject, or delete flagged detections |
 | `/player/{filename}` | Audio player with spectrogram visualization |
 | `/live` | Live audio stream |
 

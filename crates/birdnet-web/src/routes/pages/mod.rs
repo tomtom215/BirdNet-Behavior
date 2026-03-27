@@ -12,6 +12,7 @@
 //! | `timeseries_dash`| Time-series analytics page and partials         |
 //! | `heatmap`        | 24h × 7-day activity heatmap page               |
 //! | `correlation`    | Species co-occurrence correlation page          |
+//! | `quarantine`     | Rare-bird quarantine review page and actions    |
 
 pub mod audio_player;
 pub mod behavioral;
@@ -23,6 +24,7 @@ pub mod health;
 pub mod heatmap;
 pub mod history;
 pub mod livestream;
+pub mod quarantine;
 pub mod recordings;
 pub mod species_pages;
 pub mod timeseries_dash;
@@ -55,6 +57,7 @@ pub fn router() -> Router<AppState> {
         .merge(timeseries_dash::router())
         .merge(heatmap::router())
         .merge(correlation::router())
+        .merge(quarantine::router())
         .merge(today::router())
         .merge(recordings::router())
         .merge(livestream::router())
@@ -79,7 +82,8 @@ pub(crate) fn render_page(title: &str, content: &str, active_nav: &str) -> Html<
         .replace("{{nav_analytics}}", nav("analytics"))
         .replace("{{nav_timeseries}}", nav("timeseries"))
         .replace("{{nav_history}}", nav("history"))
-        .replace("{{nav_weekly}}", nav("weekly"));
+        .replace("{{nav_weekly}}", nav("weekly"))
+        .replace("{{nav_quarantine}}", nav("quarantine"));
     Html(html)
 }
 

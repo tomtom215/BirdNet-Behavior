@@ -5,6 +5,7 @@ pub mod correlation;
 pub mod detections;
 pub mod heatmap;
 pub mod images;
+pub mod quarantine;
 pub mod species;
 
 pub use analytics::{
@@ -25,6 +26,12 @@ pub use heatmap::{hourly_totals, species_daily_heatmap, weekly_heatmap};
 pub use images::{
     ImageBlacklist, add_image_blacklist, blacklisted_urls_for_species, is_image_blacklisted,
     list_image_blacklist, remove_image_blacklist,
+};
+pub use quarantine::{
+    QuarantineFilter, QuarantineReason, QuarantineRecord, QuarantineRow, QuarantineStats,
+    approve_quarantine, count_quarantine, delete_quarantine, get_quarantine, insert_quarantine,
+    list_quarantine, prune_quarantine, quarantine_pending_count, quarantine_stats,
+    reject_quarantine,
 };
 pub use species::{
     SpeciesThreshold, delete_species_threshold, get_species_threshold_map, get_species_thresholds,
