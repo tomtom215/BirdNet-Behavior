@@ -1,0 +1,154 @@
+# =============================================================================
+# BirdNet-Behavior — Docker Compose (base configuration)
+#
+# This file works out-of-the-box for:
+#   • File-watch mode  — drop WAV files into ./data/recordings
+#   • RTSP stream      — set BIRDNET_RTSP_URL in your .env
+#
+# For live microphone capture, layer an override on top:
+#
+#   USB / ALSA microphone (most Raspberry Pi users):
+#     docker compose -f docker-compose.yml -f docker-compose.alsa.yml up -d
+#
+#   PulseAudio or PipeWire (desktop Linux):
+#     docker compose -f docker-compose.yml -f docker-compose.pulse.yml up -d
+#
+# Quick start:
+#   cp .env.example .env        # edit at minimum BIRDNET_LATITUDE/LONGITUDE
+#   docker compose up -d
+#   open http://localhost:8502
+#
+# The BirdNET+ V3.0 model (~541 MB) is downloaded automatically on first run.
+# Set BIRDNET_SKIP_MODEL_DOWNLOAD=1 and mount your own model to skip this.
+# =============================================================================
+
+services:
+  birdnet:
+    image: ghcr.io/tomtom215/birdnet-behavior:latest
+    # To build locally instead of pulling from GHCR:
+    #   docker compose build
+    #   docker compose up -d
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Pass BUILD_FEATURES=analytics to enable DuckDB behavioral analytics
+        # ⚠ Adds ~7 min to the first build (bundled libduckdb C++ compilation)
+        BUILD_FEATURES: ${BUILD_FEATURES:-}
+
+    container_name: birdnet-behavior
+
+    restart: unless-stopped
+
+    # -------------------------------------------------------------------------
+    # Environment
+    # All BIRDNET_* variables can be set here or in your .env file.
+    # -------------------------------------------------------------------------
+    env_file:
+      - path: .env
+        required: false    # .env is optional; variables below are the defaults
+
+    environment:
+      # Web server — must bind to all interfaces inside the container
+      BIRDNET_LISTEN: ${BIRDNET_LISTEN:-0.0.0.0:8502}
+
+      # Data paths inside the container (change only if you remap the volumes)
+      BIRDNET_WATCH_DIR: /data/recordings
+      BIRDNET_ANALYTICS_DB: /data/analytics.db
+      BIRDNET_IMAGE_CACHE_DIR: /data/cache
+
+      # Station location (set in .env — required for solar schedule & BirdWeather)
+      BIRDNET_LATITUDE: ${BIRDNET_LATITUDE:-}
+      BIRDNET_LONGITUDE: ${BIRDNET_LONGITUDE:-}
+
+      # Audio source — set ONE in .env (see .env.example for details)
+      BIRDNET_ALSA_DEVICE: ${BIRDNET_ALSA_DEVICE:-}
+      BIRDNET_PIPEWIRE_DEVICE: ${BIRDNET_PIPEWIRE_DEVICE:-}
+      BIRDNET_RTSP_URL: ${BIRDNET_RTSP_URL:-}
+      BIRDNET_RTSP_URLS: ${BIRDNET_RTSP_URLS:-}
+
+      # Detection
+      BIRDNET_OVERLAP: ${BIRDNET_OVERLAP:-0.0}
+      BIRDNET_SF_THRESH: ${BIRDNET_SF_THRESH:-0.03}
+      BIRDNET_PRIVACY_THRESHOLD: ${BIRDNET_PRIVACY_THRESHOLD:-0.0}
+      BIRDNET_LANG: ${BIRDNET_LANG:-en}
+      BIRDNET_RECORDING_SCHEDULE: ${BIRDNET_RECORDING_SCHEDULE:-all-day}
+      BIRDNET_SEGMENT_DURATION: ${BIRDNET_SEGMENT_DURATION:-15}
+
+      # Integrations (set in .env)
+      BIRDNET_BIRDWEATHER_TOKEN: ${BIRDNET_BIRDWEATHER_TOKEN:-}
+      BIRDNET_APPRISE_URL: ${BIRDNET_APPRISE_URL:-}
+      BIRDNET_MQTT_HOST: ${BIRDNET_MQTT_HOST:-}
+      BIRDNET_MQTT_PORT: ${BIRDNET_MQTT_PORT:-1883}
+      BIRDNET_MQTT_TOPIC_PREFIX: ${BIRDNET_MQTT_TOPIC_PREFIX:-birdnet}
+      BIRDNET_MQTT_HA_DISCOVERY: ${BIRDNET_MQTT_HA_DISCOVERY:-}
+      BIRDNET_HEARTBEAT_URL: ${BIRDNET_HEARTBEAT_URL:-}
+      BIRDNET_SITENAME: ${BIRDNET_SITENAME:-}
+
+      # Model — entrypoint downloads automatically; override to bring your own
+      BIRDNET_SKIP_MODEL_DOWNLOAD: ${BIRDNET_SKIP_MODEL_DOWNLOAD:-}
+      BIRDNET_MODEL: ${BIRDNET_MODEL:-}
+      BIRDNET_LABELS: ${BIRDNET_LABELS:-}
+
+    # -------------------------------------------------------------------------
+    # Ports
+    # -------------------------------------------------------------------------
+    ports:
+      # Web UI — http://localhost:8502 (or your Pi's IP)
+      # Change the left side to use a different host port, e.g. "8080:8502"
+      - "${BIRDNET_PORT:-8502}:8502"
+
+    # -------------------------------------------------------------------------
+    # Volumes
+    # -------------------------------------------------------------------------
+    volumes:
+      # Single named volume for all persistent data.
+      # For finer control, replace with bind mounts:
+      #   - ./data/model:/data/model
+      #   - ./data/recordings:/data/recordings
+      #   - ./data/cache:/data/cache
+      #   - ./birdnet.db:/data/birdnet.db
+      - birdnet-data:/data
+
+    # -------------------------------------------------------------------------
+    # Resource limits — conservative defaults suitable for Raspberry Pi 4
+    # Adjust or remove if running on a server with more headroom
+    # -------------------------------------------------------------------------
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+
+    # -------------------------------------------------------------------------
+    # Health check — verifies the web UI is responding
+    # -------------------------------------------------------------------------
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent",
+             "http://localhost:8502/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s    # allow time for model download on first run
+
+    # -------------------------------------------------------------------------
+    # Logging — structured JSON, rotated to avoid filling the disk
+    # -------------------------------------------------------------------------
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+# =============================================================================
+# Named volumes
+# =============================================================================
+volumes:
+  birdnet-data:
+    driver: local
+    # To use a specific host directory instead of a Docker-managed volume:
+    #   driver_opts:
+    #     type: none
+    #     o: bind
+    #     device: /opt/birdnet/data

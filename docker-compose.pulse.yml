@@ -1,0 +1,71 @@
+# =============================================================================
+# BirdNet-Behavior — PulseAudio / PipeWire overlay
+#
+# Extends the base docker-compose.yml to give the container access to the
+# host's PulseAudio or PipeWire (via pipewire-pulse) audio server.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.pulse.yml up -d
+#
+# Before running, set BIRDNET_PIPEWIRE_DEVICE in your .env:
+#   BIRDNET_PIPEWIRE_DEVICE=default          # system default source
+#   BIRDNET_PIPEWIRE_DEVICE=alsa_input.usb   # specific source (pactl list short sources)
+#
+# =============================================================================
+#
+# PulseAudio / PipeWire passthrough notes
+# ────────────────────────────────────────
+# The audio server socket is a Unix domain socket on the host.  We bind-mount
+# it into the container and point libpulse at it via PULSE_SERVER.
+#
+# PulseAudio (classic):
+#   Socket: /run/user/<UID>/pulse/native     (session-scoped, typical UID=1000)
+#          /var/run/pulse/native             (system-mode PulseAudio, rare)
+#
+# PipeWire (via pipewire-pulse):
+#   Socket: /run/user/<UID>/pulse/native     (same path — PipeWire emulates PA)
+#
+# If your user ID is not 1000, set PULSE_UID in your .env:
+#   PULSE_UID=1001
+#
+# Troubleshooting:
+#   • "Connection refused": PulseAudio must be running on the host and the
+#     socket must exist before starting the container.
+#     Check: ls -la /run/user/1000/pulse/native
+#   • "Access denied": The container user needs permission.
+#     Add a PulseAudio auth cookie:
+#       docker run --rm -v ~/.config/pulse:/root/.config/pulse:ro birdnet ...
+#   • PipeWire users: ensure pipewire-pulse is running:
+#       systemctl --user status pipewire-pulse
+#
+# =============================================================================
+
+# Host UID whose PulseAudio socket to mount (default: 1000)
+# Override in .env:   PULSE_UID=1001
+x-pulse-socket: &pulse-socket /run/user/${PULSE_UID:-1000}/pulse/native
+
+services:
+  birdnet:
+    volumes:
+      # Mount the PulseAudio / PipeWire-pulse socket read-only.
+      # The container process opens it as a client; it never writes to the socket.
+      - type: bind
+        source: /run/user/${PULSE_UID:-1000}/pulse/native
+        target: /run/pulse/native
+        read_only: false    # libpulse needs write access to the socket
+
+    environment:
+      # Tell libpulse where to find the server socket inside the container
+      PULSE_SERVER: unix:/run/pulse/native
+
+      # Optional: mount the PA auth cookie to avoid "Connection refused" errors
+      # when PulseAudio cookie-based auth is enabled (uncomment if needed):
+      # PULSE_COOKIE: /run/pulse/cookie
+
+    # PulseAudio/PipeWire capture adds minimal CPU overhead
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+        reservations:
+          memory: 128M
