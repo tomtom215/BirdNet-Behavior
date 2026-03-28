@@ -47,7 +47,8 @@
 | Purpose | Crate | Why C binding is needed |
 |---------|-------|----------------------|
 | SQLite | `rusqlite` (bundled) | Bundles SQLite C source; no system dependency required |
-| ML inference | `ort` | ONNX Runtime for BirdNET model inference |
+| DuckDB | `duckdb` (bundled, optional) | Bundles DuckDB v1.5.1 C++ source; `analytics` feature flag; ~7 min compile |
+| ML inference | `ort` (tls-rustls) | ONNX Runtime for BirdNET model inference; uses rustls for binary download |
 
 ### Key Version Notes
 
@@ -101,7 +102,7 @@ python -m tf2onnx.convert --tflite BirdNET_model.tflite --output BirdNET_model.o
 | `image` | Spectrogram PNG generation deferred; not needed for core detection pipeline |
 | `cpal` | Direct audio capture avoided; subprocess `arecord`/`ffmpeg` is simpler and proven |
 | `chrono` | Pure-Rust timestamp formatting hand-rolled for Unix → date conversion; avoids chrono's known time zone complexity |
-| `openssl` | All TLS done via `rustls` (in reqwest and lettre); no system OpenSSL dependency |
+| `openssl` | All TLS done via `rustls` (in reqwest, lettre, and ort); no system OpenSSL dependency |
 
 ## Actual Dependency Count by Crate
 
@@ -109,12 +110,12 @@ Direct dependencies (excluding universal `serde` and `tracing`):
 
 | Crate | Direct deps | Key deps |
 |-------|------------|---------|
-| `birdnet-core` | 4 | symphonia, rubato, notify, configparser |
-| `birdnet-db` | 2 | rusqlite, duckdb |
+| `birdnet-core` | 5 | symphonia, rubato, notify, configparser, ort |
+| `birdnet-db` | 1 | rusqlite |
 | `birdnet-web` | 7 | axum, tower, tower-http, tokio, tokio-util, sysinfo, serde_json |
 | `birdnet-integrations` | 3 | reqwest, tokio, lettre |
-| `birdnet-behavioral` | 0 | Types and SQL builders only |
-| `birdnet-timeseries` | 0 | Pure math, no external deps |
+| `birdnet-behavioral` | 2 | duckdb + rusqlite (optional, `analytics` feature) |
+| `birdnet-timeseries` | 1 | duckdb (optional, `analytics` feature) |
 | `birdnet-migrate` | 2 | rusqlite, birdnet-db |
 
 ## Supply Chain Security
@@ -127,6 +128,6 @@ All dependencies audited via `cargo-deny`:
 
 ---
 
-*Last updated: 2026-03-14*
+*Last updated: 2026-03-28*
 
 [← Coding Standards](03-coding-standards.md) | [Back to Index](../RUST_ARCHITECTURE_PLAN.md) | [Next: Audio Pipeline →](05-audio-pipeline.md)

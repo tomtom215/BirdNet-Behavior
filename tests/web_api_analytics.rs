@@ -169,8 +169,12 @@ async fn analytics_status_endpoint() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    // Without analytics feature, should report not compiled
+    // analytics_compiled reflects whether the feature flag is active
+    #[cfg(feature = "analytics")]
+    assert_eq!(json["analytics_compiled"], true);
+    #[cfg(not(feature = "analytics"))]
     assert_eq!(json["analytics_compiled"], false);
+    // Without a DuckDB path configured, analytics is not configured
     assert_eq!(json["analytics_configured"], false);
     assert!(json["endpoints"].is_object());
 }

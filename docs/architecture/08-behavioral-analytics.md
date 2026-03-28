@@ -16,9 +16,10 @@
 
 ## Concept
 
-[duckdb-behavioral](https://github.com/tomtom215/duckdb-behavioral) provides
-ClickHouse-inspired behavioral analytics functions. Applied to bird detections,
-these reveal ecological patterns invisible to simple aggregation queries.
+[duckdb-behavioral](https://github.com/tomtom215/duckdb-behavioral) (v0.4.0,
+compatible with DuckDB v1.5.1) provides ClickHouse-inspired behavioral analytics
+functions. Applied to bird detections, these reveal ecological patterns invisible
+to simple aggregation queries.
 
 The `birdnet-behavioral` crate provides **types and SQL builders** for the
 behavioral analytics layer. The queries run against DuckDB via `birdnet-db`.
@@ -77,18 +78,19 @@ Month-by-month species activity grid showing peak months per species.
 
 ## duckdb-behavioral Functions
 
-These behavioral analytics functions are planned for the next phase. Types and
-SQL builders are ready in `birdnet-behavioral`; execution requires loading the
-DuckDB behavioral extension.
+These behavioral analytics functions use the `duckdb-behavioral` community
+extension (v0.4.0). Types, SQL builders, and API endpoints are implemented
+in `birdnet-behavioral`; the extension is loaded at startup when the
+`analytics` feature is enabled.
 
 | Function | Bird Behavior Use | Status |
 |----------|------------------|--------|
-| `sessionize` | Group continuous bird activity into sessions | ⚠️ SQL ready, not wired |
-| `retention` | Track species return patterns (resident vs. migrant) | ⚠️ SQL ready, not wired |
-| `window_funnel` | Analyze dawn chorus ordering and sequences | ⚠️ SQL ready, not wired |
+| `sessionize` | Group continuous bird activity into sessions | ✅ Complete |
+| `retention` | Track species return patterns (resident vs. migrant) | ✅ Complete |
+| `window_funnel` | Analyze dawn chorus ordering and sequences | ✅ Complete |
 | `sequence_match` | Find days matching specific bird activity patterns | ⚠️ SQL ready, not wired |
 | `sequence_count` | Count pattern occurrences over time | ⚠️ SQL ready, not wired |
-| `sequence_next_node` | Predict which species follows a detected bird | ⚠️ SQL ready, not wired |
+| `sequence_next_node` | Predict which species follows a detected bird | ✅ Complete |
 
 ### 1. Activity Sessionization
 
@@ -188,10 +190,11 @@ LIMIT 10;
 | Seasonal patterns (month × species) | ✅ Complete |
 | DuckDB connection and execution | ✅ Complete |
 | API endpoint handlers | ✅ Complete |
-| duckdb-behavioral extension loading | ❌ Not started |
-| Sessionization endpoint | ❌ Not started |
-| Retention analysis endpoint | ❌ Not started |
-| Dawn chorus funnel endpoint | ❌ Not started |
+| duckdb-behavioral extension loading | ✅ Complete |
+| Sessionization endpoint | ✅ Complete |
+| Retention analysis endpoint | ✅ Complete |
+| Dawn chorus funnel endpoint | ✅ Complete |
+| Next species prediction endpoint | ✅ Complete |
 
 ## API Endpoints
 
@@ -201,10 +204,10 @@ GET /api/v2/analytics/heatmap          → hour×weekday data                 �
 GET /api/v2/analytics/top-species      → species ranked by period          ✅
 GET /api/v2/analytics/correlation      → co-occurrence matrix              ✅
 GET /api/v2/analytics/seasonal         → month×species activity            ✅
-GET /api/v2/analytics/sessions         → activity sessionization           ❌
-GET /api/v2/analytics/retention        → species retention rates           ❌
-GET /api/v2/analytics/funnel           → dawn chorus funnel                ❌
-GET /api/v2/analytics/next-species     → "what's coming next" prediction   ❌
+GET /api/v2/analytics/sessions         → activity sessionization           ✅
+GET /api/v2/analytics/retention        → species retention rates           ✅
+GET /api/v2/analytics/funnel           → dawn chorus funnel                ✅
+GET /api/v2/analytics/next-species     → "what's coming next" prediction   ✅
 ```
 
 ## Web UI Visualizations
@@ -231,6 +234,6 @@ FROM detections;
 
 ---
 
-*Last updated: 2026-03-14*
+*Last updated: 2026-03-28*
 
 [← Database](07-database.md) | [Back to Index](../RUST_ARCHITECTURE_PLAN.md) | [Next: Web Server →](09-web-server.md)
