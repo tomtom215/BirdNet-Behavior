@@ -1,6 +1,6 @@
 # Implementation Status
 
-> Current state of the Rust implementation. Last updated: **2026-03-27 (Sprint 16)**.
+> Current state of the Rust implementation. Last updated: **2026-03-28 (Sprint 17)**.
 
 ## Table of Contents
 
@@ -93,8 +93,12 @@
 | Recording routes | `routes/recordings.rs` | **Complete** | Audio file listing + secure streaming, path-traversal protection |
 | Image routes | `routes/images.rs` | **Complete** | Species image metadata + file serving from Wikipedia cache |
 | Static files | `routes/static_files.rs` | **Complete** | Embedded HTMX JS + SSE extension (air-gapped) |
-| Dashboard page | `routes/pages/dashboard.rs` | **Complete** | Live detections with inline audio player, top species, stats |
-| Species pages | `routes/pages/species_pages.rs` | **Complete** | List, search, detail with hourly chart + Wikipedia image |
+| Dashboard page | `routes/pages/dashboard/` | **Complete** | Split: mod, stats, partials, kiosk, heatmap_widget; live detections, top species, quick links |
+| Species pages | `routes/pages/species_pages.rs` | **Complete** | List, search, detail with hourly chart + companion species + Wikipedia image |
+| Species gallery | `routes/pages/gallery.rs` | **Complete** | Photo grid with search, sort, lazy-load images |
+| Life list | `routes/pages/life_list.rs` | **Complete** | Birding journal: all species, first-seen dates, monthly discovery timeline |
+| System dashboard | `routes/pages/system_dashboard.rs` | **Complete** | CPU/memory/temp gauges, disk, database, audio pipeline status |
+| Notification center | `routes/pages/notification_center.rs` | **Complete** | Notification history table, channel stats (sent/failed/skipped) |
 | Heatmap page | `routes/pages/heatmap.rs` | **Complete** | SVG hour×day grid + hourly bar chart (HTMX partials) |
 | Correlation page | `routes/pages/correlation.rs` | **Complete** | Co-occurrence pairs + companion species lookup |
 | Analytics page | `routes/pages/behavioral.rs` | **Complete** | Sessions, retention, funnel, next-species (feature-gated) |
@@ -180,6 +184,47 @@
 ---
 
 ## Recent Changes
+
+### 2026-03-28 (Sprint 17)
+
+#### New Pages & Features
+
+- **Life List page** (`/life-list`) — birding journal showing every detected species with first-seen dates, detection counts, monthly discovery timeline SVG chart, searchable/sortable table
+- **Species Gallery** (`/gallery`) — photo card grid with lazy-loaded images, search, and sort (count/name/newest)
+- **System Health Dashboard** (`/system`) — live CPU/memory/temperature gauges with progress bars, disk usage, database integrity check, audio pipeline status, version info
+- **Notification Center** (`/notifications`) — notification history table (sent/failed/skipped), 30-day channel stats summary
+- **Species Companion Section** — species detail page now shows co-occurrence companion species table
+
+#### Dashboard Enhancements
+
+- Quick links card with one-click navigation to Life List, Co-occurrence, Notifications, System
+- Dashboard module split into 5 sub-modules for better maintainability
+
+#### UI/UX Polish
+
+- **Global species search** added to navigation bar with auto-focus width transition
+- **Skip-to-content** accessibility link for keyboard navigation
+- **ARIA landmarks** (`role="navigation"`, `role="main"`, `role="contentinfo"`)
+- **Button component** classes (`.btn`, `.btn-primary`) for consistent styling
+- **Input focus states** with accent-colored box-shadow
+- **Badge components** (`.badge-success`, `.badge-warning`, `.badge-danger`)
+- **Custom scrollbar** styling for dark/light themes
+- **Footer redesign** with System Health, Admin, and Kiosk Mode quick links
+- **HTMX swap transitions** (opacity fade on swap/settle)
+- **Empty state** component for consistent "no data" UIs
+- **Progress bar** component for visual gauges
+
+#### Modularity Refactoring
+
+- Split `dashboard.rs` (636 lines) → `dashboard/` module: `mod.rs`, `stats.rs`, `partials.rs`, `kiosk.rs`, `heatmap_widget.rs`
+- All new files under 300 lines each
+
+#### Code Quality
+
+- Zero clippy warnings (pedantic + nursery)
+- All `pub(crate)` in private modules corrected to `pub(super)`
+- `cargo fmt --check` passes with zero diffs
+- Navigation updated with 3 new nav items (Life List, Notifications, System)
 
 ### 2026-03-27 (Sprint 16)
 
@@ -447,7 +492,7 @@ New `birdnet-behavioral::phenology` module — migration timing and abundance an
 |-------|------|-------|
 | birdnet-core | ~7,650 | Audio pipeline + inference + daemon + capture + disk + spectrogram + tmpfs + quality |
 | birdnet-db | ~3,800 | CRUD + heatmap + correlation + settings + notifications + resilience |
-| birdnet-web | ~16,600 | REST API + WS + HTMX pages + admin + player + spectrogram + update + rate-limiter |
+| birdnet-web | ~19,400 | REST API + WS + HTMX pages + admin + player + spectrogram + update + rate-limiter + gallery + life-list + system + notifications |
 | birdnet-integrations | ~4,350 | Email + Apprise + BirdWeather + species images + auto-update + MQTT + HA discovery |
 | birdnet-migrate | ~2,300 | Traits + schema + validator + importer + species_report |
 | birdnet-behavioral | ~1,650 | Types + SQL builders + DuckDB connection + phenology (timing + abundance) |
@@ -455,7 +500,7 @@ New `birdnet-behavioral::phenology` module — migration timing and abundance an
 | birdnet-scheduler | ~900 | Solar calculations + window management |
 | Binary (`src/`) | ~2,500 | main.rs + helpers.rs + daemon.rs + capture.rs + integrations.rs + cli.rs |
 | Benchmarks | ~350 | Criterion audio pipeline + DB query benchmarks |
-| **Total** | **~42,650** | Production Rust (including inline tests and benchmarks) |
+| **Total** | **~52,850** | Production Rust (including inline tests and benchmarks) |
 
 ---
 

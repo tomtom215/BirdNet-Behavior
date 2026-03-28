@@ -35,6 +35,16 @@
         </div>
 
         <div class="card">
+            <h2>Companion Species</h2>
+            <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem;">
+                Species commonly detected on the same day.
+            </p>
+            <div hx-get="/pages/species-companions?name={{species_encoded}}" hx-trigger="load" hx-swap="innerHTML">
+                <p style="color: var(--text-muted)">Loading companions...</p>
+            </div>
+        </div>
+
+        <div class="card">
             <h2>Recent Detections</h2>
             <div hx-get="/pages/species-detections?name={{species_encoded}}" hx-trigger="load" hx-swap="innerHTML">
                 <p style="color: var(--text-muted)">Loading detections...</p>

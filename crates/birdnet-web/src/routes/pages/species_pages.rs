@@ -26,6 +26,7 @@ pub fn router() -> Router<AppState> {
         .route("/pages/species-detections", get(species_detections_partial))
         .route("/pages/species-daily", get(species_daily_partial))
         .route("/pages/species-info", get(species_info_partial))
+        .route("/pages/species-companions", get(species_companions_partial))
 }
 
 async fn species_page() -> Html<String> {
@@ -305,4 +306,55 @@ async fn species_info_partial(
     }
 
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+}
+
+/// HTMX partial: companion species (co-occurrence).
+async fn species_companions_partial(
+    State(state): State<AppState>,
+    Query(query): Query<SpeciesQuery>,
+) -> impl axum::response::IntoResponse {
+    let Some(name) = query.name else {
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>No species specified.</p>".to_string(),
+        );
+    };
+
+    let result = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| birdnet_db::sqlite::companion_species(conn, &name, 30, 10))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(companions)) => {
+            if companions.is_empty() {
+                return (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, "text/html")],
+                    r#"<p style="color:var(--text-muted)">No companion species data yet.</p>"#
+                        .to_string(),
+                );
+            }
+            let mut html = String::from(
+                r"<table><thead><tr><th>Companion</th><th>Co-occurrence Days</th></tr></thead><tbody>",
+            );
+            for c in &companions {
+                let enc = simple_url_encode(&c.companion);
+                let _ = write!(
+                    html,
+                    r#"<tr><td><a href="/species/detail?name={enc}" style="color:inherit;">{name}</a></td><td>{count}</td></tr>"#,
+                    name = escape_html(&c.companion),
+                    count = c.shared_days,
+                );
+            }
+            html.push_str("</tbody></table>");
+            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+        }
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading companion species</p>".to_string(),
+        ),
+    }
 }

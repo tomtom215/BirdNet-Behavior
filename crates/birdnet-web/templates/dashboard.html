@@ -36,17 +36,19 @@
 </div>
 
 <div class="card" style="margin-bottom: 1rem;">
-    <h2>Species × Hour Heatmap (Today)</h2>
+    <h2>Species &times; Hour Heatmap (Today)</h2>
     <div hx-get="/pages/activity-heatmap" hx-trigger="load, every 60s" hx-swap="innerHTML">
         <p style="color: var(--text-muted)">Loading heatmap...</p>
     </div>
 </div>
 
 <div class="grid-2">
-    <div class="card">
-        <h2><span class="live-dot"></span> Recent Detections</h2>
-        <div id="detections-table" hx-get="/pages/detections" hx-trigger="load, every 15s" hx-swap="innerHTML">
-            <p style="color: var(--text-muted)">Loading detections...</p>
+    <div>
+        <div class="card">
+            <h2><span class="live-dot"></span> Recent Detections</h2>
+            <div id="detections-table" hx-get="/pages/detections" hx-trigger="load, every 15s" hx-swap="innerHTML">
+                <p style="color: var(--text-muted)">Loading detections...</p>
+            </div>
         </div>
     </div>
 
@@ -69,6 +71,16 @@
             <h2>Confidence Distribution</h2>
             <div hx-get="/pages/confidence-chart" hx-trigger="load, every 300s" hx-swap="innerHTML">
                 <p style="color: var(--text-muted)">Loading chart...</p>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Quick Links</h2>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;">
+                <a href="/life-list" class="btn" style="justify-content:center;">Life List</a>
+                <a href="/correlation" class="btn" style="justify-content:center;">Co-occurrence</a>
+                <a href="/notifications" class="btn" style="justify-content:center;">Notifications</a>
+                <a href="/system" class="btn" style="justify-content:center;">System</a>
             </div>
         </div>
 

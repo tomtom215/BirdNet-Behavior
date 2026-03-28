@@ -2,17 +2,20 @@
 //!
 //! Split into focused sub-modules by concern:
 //!
-//! | Module           | Responsibility                                  |
-//! |------------------|-------------------------------------------------|
-//! | `dashboard`      | Main dashboard page and stats/detection partials|
-//! | `charts`         | SVG chart rendering helpers                     |
-//! | `health`         | Health badge and disk status partials           |
-//! | `species_pages`  | Species list, detail page, species partials     |
-//! | `behavioral`     | Behavioral analytics HTMX partials              |
-//! | `timeseries_dash`| Time-series analytics page and partials         |
-//! | `heatmap`        | 24h × 7-day activity heatmap page               |
-//! | `correlation`    | Species co-occurrence correlation page          |
-//! | `quarantine`     | Rare-bird quarantine review page and actions    |
+//! | Module                | Responsibility                                  |
+//! |-----------------------|-------------------------------------------------|
+//! | `dashboard`           | Main dashboard page and stats/detection partials|
+//! | `charts`              | SVG chart rendering helpers                     |
+//! | `health`              | Health badge and disk status partials           |
+//! | `species_pages`       | Species list, detail page, species partials     |
+//! | `behavioral`          | Behavioral analytics HTMX partials              |
+//! | `timeseries_dash`     | Time-series analytics page and partials         |
+//! | `heatmap`             | 24h × 7-day activity heatmap page               |
+//! | `correlation`         | Species co-occurrence correlation page          |
+//! | `quarantine`          | Rare-bird quarantine review page and actions    |
+//! | `life_list`           | Life list / birding journal page                |
+//! | `system_dashboard`    | System health monitoring dashboard              |
+//! | `notification_center` | Notification history and channel status          |
 
 pub mod audio_player;
 pub mod behavioral;
@@ -20,13 +23,17 @@ pub mod charts;
 pub mod correlation;
 pub mod dashboard;
 pub mod detection_detail;
+pub mod gallery;
 pub mod health;
 pub mod heatmap;
 pub mod history;
+pub mod life_list;
 pub mod livestream;
+pub mod notification_center;
 pub mod quarantine;
 pub mod recordings;
 pub mod species_pages;
+pub mod system_dashboard;
 pub mod timeseries_dash;
 pub mod today;
 pub mod weekly_report;
@@ -63,6 +70,10 @@ pub fn router() -> Router<AppState> {
         .merge(livestream::router())
         .merge(weekly_report::router())
         .merge(history::router())
+        .merge(life_list::router())
+        .merge(gallery::router())
+        .merge(system_dashboard::router())
+        .merge(notification_center::router())
 }
 
 /// Render a full page by substituting content into the layout template.
@@ -83,7 +94,10 @@ pub(crate) fn render_page(title: &str, content: &str, active_nav: &str) -> Html<
         .replace("{{nav_timeseries}}", nav("timeseries"))
         .replace("{{nav_history}}", nav("history"))
         .replace("{{nav_weekly}}", nav("weekly"))
-        .replace("{{nav_quarantine}}", nav("quarantine"));
+        .replace("{{nav_quarantine}}", nav("quarantine"))
+        .replace("{{nav_life_list}}", nav("life-list"))
+        .replace("{{nav_system}}", nav("system"))
+        .replace("{{nav_notifications}}", nav("notifications"));
     Html(html)
 }
 

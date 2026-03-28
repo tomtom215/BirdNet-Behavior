@@ -327,14 +327,128 @@
         /* Footer */
         footer {
             text-align: center;
-            padding: 2rem;
+            padding: 2rem 1.5rem;
             color: var(--text-muted);
             font-size: 0.8rem;
+            border-top: 1px solid var(--border);
+            margin-top: 2rem;
         }
+        footer a { color: var(--text-muted); }
+        footer a:hover { color: var(--accent); }
+
+        /* Buttons */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            padding: 0.4rem 0.9rem;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--bg-card);
+            color: var(--text);
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+        }
+        .btn:hover {
+            background: var(--bg-hover);
+            text-decoration: none;
+        }
+        .btn-primary {
+            background: var(--accent);
+            color: #fff;
+            border-color: var(--accent-dim);
+        }
+        .btn-primary:hover {
+            background: var(--accent-dim);
+        }
+
+        /* Inputs */
+        input[type="text"],
+        input[type="search"],
+        input[type="date"],
+        select {
+            padding: 0.4rem 0.75rem;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--input-bg);
+            color: var(--text);
+            font-size: 0.9rem;
+            transition: border-color 0.2s;
+        }
+        input[type="text"]:focus,
+        input[type="search"]:focus,
+        select:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.15);
+        }
+
+        /* Tooltips */
+        [title] { cursor: help; }
+
+        /* Transitions for HTMX swaps */
+        .htmx-swapping { opacity: 0.5; transition: opacity 0.15s; }
+        .htmx-settling { opacity: 1; transition: opacity 0.25s; }
+
+        /* Progress bars */
+        .progress { height: 6px; background: var(--bg-hover); border-radius: 3px; overflow: hidden; }
+        .progress-bar { height: 100%; border-radius: 3px; transition: width 0.3s; }
+
+        /* Badges */
+        .badge {
+            display: inline-block;
+            padding: 0.1rem 0.5rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .badge-success { background: var(--conf-high-bg); color: var(--success); }
+        .badge-warning { background: var(--conf-mid-bg); color: var(--warning); }
+        .badge-danger { background: var(--conf-low-bg); color: var(--danger); }
+
+        /* Empty state */
+        .empty-state {
+            text-align: center;
+            padding: 3rem 1.5rem;
+            color: var(--text-muted);
+        }
+        .empty-state svg {
+            width: 48px;
+            height: 48px;
+            margin-bottom: 0.75rem;
+            opacity: 0.5;
+        }
+
+        /* Scrollbar styling */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+        /* Focus visible for keyboard nav */
+        :focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+        }
+
+        /* Skip-to-content for accessibility */
+        .skip-link {
+            position: absolute;
+            top: -40px;
+            left: 0;
+            background: var(--accent);
+            color: #fff;
+            padding: 0.5rem 1rem;
+            z-index: 100;
+            transition: top 0.2s;
+        }
+        .skip-link:focus { top: 0; }
     </style>
 </head>
 <body>
-    <nav>
+    <a href="#main-content" class="skip-link">Skip to content</a>
+    <nav role="navigation" aria-label="Main navigation">
         <div class="brand">BirdNet-Behavior</div>
         <div class="links">
             <a href="/" class="{{nav_dashboard}}">Dashboard</a>
@@ -342,6 +456,7 @@
             <a href="/history" class="{{nav_history}}">History</a>
             <a href="/weekly" class="{{nav_weekly}}">Weekly</a>
             <a href="/species" class="{{nav_species}}">Species</a>
+            <a href="/life-list" class="{{nav_life_list}}">Life List</a>
             <a href="/recordings" class="{{nav_recordings}}">Recordings</a>
             <a href="/analytics" class="{{nav_analytics}}">Analytics</a>
             <a href="/timeseries" class="{{nav_timeseries}}">Time Series</a>
@@ -350,8 +465,16 @@
                                 hx-trigger="load, every 60s"
                                 hx-swap="innerHTML"></span>
             </a>
+            <a href="/notifications" class="{{nav_notifications}}">Notifications</a>
+            <a href="/system" class="{{nav_system}}">System</a>
         </div>
         <div class="nav-right">
+            <form action="/species" method="get" class="nav-search" role="search">
+                <input type="text" name="q" placeholder="Search species..."
+                       aria-label="Search species"
+                       style="padding:0.3rem 0.6rem;border:1px solid var(--border);border-radius:var(--radius);background:var(--input-bg);color:var(--text);font-size:0.8rem;width:140px;transition:width 0.2s;"
+                       onfocus="this.style.width='200px'" onblur="this.style.width='140px'">
+            </form>
             <button class="theme-toggle" id="theme-toggle" title="Toggle light/dark theme" aria-label="Toggle theme">
                 <span id="theme-icon"></span>
             </button>
@@ -360,11 +483,18 @@
             </div>
         </div>
     </nav>
-    <main>
+    <main id="main-content" role="main">
         {{content}}
     </main>
-    <footer>
-        BirdNet-Behavior v{{version}} &middot; Acoustic bird classification with behavioral analytics
+    <footer role="contentinfo">
+        <div style="margin-bottom:0.5rem;">
+            BirdNet-Behavior v{{version}} &middot; Acoustic bird classification with behavioral analytics
+        </div>
+        <div>
+            <a href="/system">System Health</a> &middot;
+            <a href="/admin">Admin</a> &middot;
+            <a href="/kiosk">Kiosk Mode</a>
+        </div>
     </footer>
     <script>
     (function() {

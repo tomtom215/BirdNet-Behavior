@@ -270,20 +270,25 @@ BIRDNET_BIRDWEATHER_TOKEN=abc123 systemctl restart birdnet-behavior
 
 | URL | Description |
 |---|---|
-| `/` | Live dashboard — detection feed with audio player, top species, activity stats |
+| `/` | Live dashboard — detection feed, top species, activity heatmap, quick links |
 | `/today` | Today's detections — searchable, paginated, with delete / lock / re-label |
 | `/history` | Detection history browser — by date with hourly bar chart |
 | `/weekly` | Weekly report — top 10 species, new species, 7-day SVG chart |
 | `/species` | All detected species with live search, detection counts, and confidence |
-| `/species/detail?name=…` | Per-species page: hourly chart, 14-day trend, Wikipedia image, recent detections |
+| `/species/detail?name=…` | Per-species page: hourly chart, 14-day trend, companion species, Wikipedia image |
+| `/gallery` | Species photo gallery — card grid with lazy-loaded images, search, sort |
+| `/life-list` | Life list — every species ever detected, first-seen dates, monthly discovery timeline |
 | `/recordings` | Recording browser by species or date with inline audio player |
 | `/heatmap` | Hour × day-of-week SVG heatmap + hourly bar chart |
 | `/correlation` | Species co-occurrence pairs and companion species lookup |
 | `/analytics` | Behavioral analytics dashboard (requires `--analytics-db`) |
 | `/timeseries` | Time-series analytics dashboard (activity, diversity, trends, peaks, gaps) |
 | `/quarantine` | Rare bird quarantine queue — review, approve, reject, or delete flagged detections |
+| `/notifications` | Notification center — history, channel stats (sent/failed/skipped) |
+| `/system` | System health — CPU/memory/temperature gauges, database integrity, audio pipeline |
 | `/player/{filename}` | Audio player with spectrogram visualization |
 | `/live` | Live audio stream |
+| `/kiosk` | Kiosk mode — simplified auto-refreshing display for dedicated screens |
 
 ### Admin
 
