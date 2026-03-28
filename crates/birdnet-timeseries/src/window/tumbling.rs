@@ -74,8 +74,8 @@ impl WindowSpec for TumblingSpec {
                 format!("time_bucket({interval}, detection_timestamp)")
             }
             Granularity::Day => "detection_date".to_string(),
-            Granularity::Week => "date_trunc('week', detection_date)".to_string(),
-            Granularity::Month => "date_trunc('month', detection_date)".to_string(),
+            Granularity::Week => "date_trunc('week', detection_date)::DATE".to_string(),
+            Granularity::Month => "date_trunc('month', detection_date)::DATE".to_string(),
         };
 
         let mut where_clauses = Vec::new();

@@ -46,7 +46,7 @@ tokio = { version = "1.50", features = ["full"] }
 
 # Database
 rusqlite = { version = "0.38", features = ["bundled", "backup"] }
-duckdb = { version = "1.2", features = ["bundled"] }
+duckdb = { version = "1.10501", features = ["bundled"] }
 
 # Web
 axum = { version = "0.8.8", features = ["ws", "form"] }
@@ -74,7 +74,7 @@ rubato = "1.0.1"
 hound = "3.5"
 
 # ML Inference (ONNX Runtime via ort — supports all ONNX opsets)
-ort = { version = "2.0.0-rc.12", features = ["download-binaries"] }
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "download-binaries", "tls-rustls", "copy-dylibs"] }
 ndarray = "0.16"
 
 # File watching
