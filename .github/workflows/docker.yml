@@ -17,8 +17,10 @@ name: Docker
 # Platforms:
 #   linux/amd64    — x86_64 servers / desktops
 #   linux/arm64    — Raspberry Pi 4 / 5 (64-bit OS)
-#   linux/arm/v7   — Raspberry Pi 3 / 32-bit OS  ⚠ ORT may not have armv7 binaries;
-#                    this platform is attempted but not required to succeed
+#
+# ⚠ linux/arm/v7 is NOT built — ONNX Runtime has no prebuilt armv7 binaries
+#   and the ort crate panics during cross-compilation.  Pi 3 users should use
+#   the native binary from GitHub Releases instead.
 
 on:
   push:
@@ -41,6 +43,7 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/birdnet-behavior
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -70,7 +73,7 @@ jobs:
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          platforms: linux/amd64,linux/arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -115,12 +118,12 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          dockerfile: Dockerfile
-          # Attempt all three platforms; arm/v7 failure does not block the push.
-          # Note: ORT download-binaries may not have prebuilt armv7 libs.
-          # If arm/v7 fails at runtime (not build time), users should use the
-          # native binary from GitHub Releases instead.
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          file: Dockerfile
+          # Build amd64 + arm64 only.  armv7 is excluded because ONNX Runtime
+          # does not ship prebuilt armv7 binaries and the `ort` crate's
+          # download-binaries feature panics during cross-compilation.
+          # Raspberry Pi 3 users should use the native binary from GitHub Releases.
+          platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'workflow_dispatch' || inputs.push == 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
