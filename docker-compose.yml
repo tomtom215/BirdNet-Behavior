@@ -126,7 +126,7 @@ services:
     # -------------------------------------------------------------------------
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent",
-             "http://localhost:8502/api/health"]
+             "http://localhost:8502/api/v2/health"]
       interval: 30s
       timeout: 10s
       retries: 3

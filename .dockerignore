@@ -31,6 +31,9 @@ benches/
 # CI/CD config — not needed inside the image
 .github/
 
+# Development scripts (visual QA, etc.) — not needed in production image
+scripts/
+
 # Large binary assets that should be mounted as volumes instead
 # (model files are downloaded at container startup, not baked in)
 *.onnx
