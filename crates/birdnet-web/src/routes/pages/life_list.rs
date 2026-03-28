@@ -219,10 +219,12 @@ async fn life_timeline_partial(State(state): State<AppState>) -> impl axum::resp
     let bar_w = 32_i32;
     let gap = 4_i32;
     let chart_h = 100_i32;
-    let svg_w = (bar_w + gap) * bar_count as i32 + 10;
+    // Ensure minimum width so the SVG doesn't become absurdly tall
+    let content_w = (bar_w + gap) * bar_count as i32 + 10;
+    let svg_w = content_w.max(400);
 
     let mut svg = format!(
-        r#"<svg viewBox="0 0 {svg_w} {sh}" style="width:100%;height:auto;display:block;" xmlns="http://www.w3.org/2000/svg">"#,
+        r#"<svg viewBox="0 0 {svg_w} {sh}" style="width:100%;max-height:180px;display:block;" xmlns="http://www.w3.org/2000/svg">"#,
         sh = chart_h + 22,
     );
 
