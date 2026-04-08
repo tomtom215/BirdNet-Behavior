@@ -10,6 +10,7 @@
 //! | `GET /admin/system/logs`       | SSE stream of recent log lines    |
 //! | `GET /admin/system/logs/page`  | Standalone log viewer HTML page    |
 
+use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -44,12 +45,15 @@ pub struct LogLine {
     pub timestamp_ms: u64,
 }
 
+/// Maximum number of recent log lines retained for new subscriber warm-up.
+const RECENT_LOG_CAPACITY: usize = 200;
+
 /// Shared log broadcaster — inject into tracing subscriber, clone for SSE handlers.
 #[derive(Debug, Clone)]
 pub struct LogBroadcaster {
     tx: broadcast::Sender<LogLine>,
-    /// Last N lines retained for new subscribers.
-    recent: Arc<Mutex<Vec<LogLine>>>,
+    /// Last N lines retained for new subscribers (ring buffer).
+    recent: Arc<Mutex<VecDeque<LogLine>>>,
 }
 
 impl LogBroadcaster {
@@ -58,18 +62,18 @@ impl LogBroadcaster {
         let (tx, _) = broadcast::channel(LOG_CHANNEL_CAPACITY);
         Self {
             tx,
-            recent: Arc::new(Mutex::new(Vec::with_capacity(200))),
+            recent: Arc::new(Mutex::new(VecDeque::with_capacity(RECENT_LOG_CAPACITY))),
         }
     }
 
     /// Publish a new log line.  Silently ignores send errors (no receivers).
     pub fn publish(&self, line: LogLine) {
-        // Retain in history ring buffer (max 200 lines)
+        // Retain in history ring buffer (O(1) eviction via VecDeque).
         if let Ok(mut buf) = self.recent.lock() {
-            if buf.len() >= 200 {
-                buf.remove(0);
+            if buf.len() >= RECENT_LOG_CAPACITY {
+                buf.pop_front();
             }
-            buf.push(line.clone());
+            buf.push_back(line.clone());
         }
         let _ = self.tx.send(line);
     }

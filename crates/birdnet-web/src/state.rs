@@ -56,10 +56,22 @@ struct AppStateInner {
     custom_image_dir: Option<PathBuf>,
 }
 
-/// Unwrap the `Arc<AppStateInner>`, panicking if shared (called during setup only).
+/// Unwrap the `Arc<AppStateInner>`, aborting if shared (called during setup only).
+///
+/// Builder methods (`with_*`) must be called before the `AppState` is cloned
+/// and shared with request handlers.  If this is violated (programming error),
+/// the process aborts with a clear error message rather than silently ignoring
+/// the mutation.  Since `panic = "abort"` is set in the release profile, this
+/// is equivalent to the previous `panic!()` but with a documented rationale.
 fn unwrap_inner(inner: Arc<AppStateInner>, method: &str) -> AppStateInner {
     Arc::try_unwrap(inner).unwrap_or_else(|_| {
-        panic!("{method} called after state was shared");
+        // This is a programming error (builder called after state was shared).
+        // Abort rather than silently dropping the configuration change.
+        tracing::error!(
+            method,
+            "AppState builder method called after state was shared — this is a bug"
+        );
+        std::process::abort();
     })
 }
 

@@ -86,6 +86,16 @@ impl CaptureManager {
             .is_some_and(CaptureProcess::is_running);
 
         if is_running {
+            // Process is healthy — reset the restart counter so transient
+            // failures (e.g. USB microphone momentary disconnect) don't
+            // permanently exhaust the restart budget over a long deployment.
+            if self.restart_count > 0 {
+                tracing::debug!(
+                    previous_restarts = self.restart_count,
+                    "capture process stable, resetting restart counter"
+                );
+                self.restart_count = 0;
+            }
             return true;
         }
 

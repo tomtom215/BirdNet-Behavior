@@ -11,6 +11,12 @@ use std::sync::Mutex;
 
 use super::types::{ImageError, SpeciesImage};
 
+/// Maximum number of cached species images (disk files + index entries).
+///
+/// Prevents unbounded disk growth during long field deployments. With ~50 KB
+/// per thumbnail, 2000 entries ≈ 100 MB — well within SD card budgets.
+const DEFAULT_MAX_ENTRIES: usize = 2000;
+
 /// On-disk image cache with an in-memory lookup index.
 #[derive(Debug)]
 pub struct DiskCache {
@@ -20,6 +26,8 @@ pub struct DiskCache {
     index: Mutex<HashMap<String, SpeciesImage>>,
     /// Thumbnail width recorded for newly created entries.
     thumb_width: u32,
+    /// Maximum number of cached entries.
+    max_entries: usize,
 }
 
 impl DiskCache {
@@ -37,6 +45,7 @@ impl DiskCache {
             cache_dir: cache_dir.to_path_buf(),
             index: Mutex::new(HashMap::new()),
             thumb_width,
+            max_entries: DEFAULT_MAX_ENTRIES,
         };
         cache.scan()?;
         Ok(cache)
@@ -91,12 +100,35 @@ impl DiskCache {
 
     /// Write raw image bytes to disk and update the index.
     ///
+    /// If the cache is at capacity (`max_entries`), the write succeeds but the
+    /// entry is not added to the in-memory index and a warning is logged.
+    ///
     /// # Errors
     ///
     /// Returns `ImageError::Io` on write failure.
     #[allow(clippy::significant_drop_tightening)]
     pub fn store(&self, cache_key: &str, bytes: &[u8]) -> Result<PathBuf, ImageError> {
         let path = self.path_for(cache_key);
+
+        // Check capacity before writing (don't grow the index beyond max_entries).
+        {
+            let index = self
+                .index
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if index.len() >= self.max_entries && !index.contains_key(cache_key) {
+                tracing::debug!(
+                    max = self.max_entries,
+                    key = cache_key,
+                    "image cache at capacity, skipping store"
+                );
+                // Still write the file (so it's on disk for future startups) but
+                // don't grow the in-memory index further.
+                std::fs::write(&path, bytes)?;
+                return Ok(path);
+            }
+        }
+
         std::fs::write(&path, bytes)?;
         {
             let mut index = self

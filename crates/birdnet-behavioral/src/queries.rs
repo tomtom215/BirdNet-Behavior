@@ -18,8 +18,17 @@ SELECT *,
 FROM detections;
 ";
 
-/// SQL to load the behavioral extension.
-pub const LOAD_BEHAVIORAL: &str = "
+/// SQL to load the behavioral extension (offline-safe).
+///
+/// Tries `LOAD` first — this succeeds if the extension was previously installed
+/// and cached locally, avoiding a network round-trip on every startup.
+/// Only falls back to `INSTALL FROM community` when the extension is not yet cached.
+pub const LOAD_BEHAVIORAL_CACHED: &str = "LOAD behavioral;";
+
+/// SQL to install and load the behavioral extension from the community registry.
+///
+/// Requires network on first run; subsequent runs use the locally cached extension.
+pub const INSTALL_BEHAVIORAL: &str = "
 INSTALL behavioral FROM community;
 LOAD behavioral;
 ";

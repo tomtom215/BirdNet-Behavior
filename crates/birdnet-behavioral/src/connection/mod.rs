@@ -109,14 +109,28 @@ impl AnalyticsDb {
 
     /// Load the `duckdb-behavioral` extension.
     ///
-    /// Non-fatal — the database can serve basic queries without the extension.
+    /// Tries loading from the local cache first (works offline), then falls
+    /// back to installing from the DuckDB community registry (requires network
+    /// on first run only). Non-fatal — the database can serve basic queries
+    /// without the extension.
     ///
     /// # Errors
     ///
     /// Returns an error if the extension cannot be installed or loaded.
     pub fn load_extension(&mut self) -> Result<(), AnalyticsError> {
+        // Try loading from local cache first (offline-safe).
+        if self
+            .conn
+            .execute_batch(queries::LOAD_BEHAVIORAL_CACHED)
+            .is_ok()
+        {
+            self.extension_loaded = true;
+            return Ok(());
+        }
+
+        // Not cached — install from community registry (requires network).
         self.conn
-            .execute_batch(queries::LOAD_BEHAVIORAL)
+            .execute_batch(queries::INSTALL_BEHAVIORAL)
             .map_err(|e| AnalyticsError::ExtensionLoad(e.to_string()))?;
         self.extension_loaded = true;
         Ok(())

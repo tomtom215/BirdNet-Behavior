@@ -214,6 +214,14 @@ impl Client {
             return false;
         }
 
+        // Prune stale cooldown entries (older than 2x cooldown) to prevent
+        // unbounded memory growth over long field deployments.
+        if self.last_notified.len() > 100 {
+            let prune_after = cooldown * 2;
+            self.last_notified
+                .retain(|_, instant| now.duration_since(*instant) < prune_after);
+        }
+
         // Update last-notified timestamp
         self.last_notified.insert(species.to_string(), now);
         true
