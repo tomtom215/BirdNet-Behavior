@@ -31,8 +31,8 @@ const DEFAULT_LOG_FILTER: &str = "info,birdnet_behavior=debug";
 #[allow(clippy::too_many_lines)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Use a reloadable filter so SIGHUP can change the log level at runtime.
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_FILTER));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_FILTER));
     let (filter_layer, reload_handle) = reload::Layer::new(env_filter);
     tracing_subscriber::registry()
         .with(filter_layer)
@@ -45,10 +45,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let handle = reload_handle;
         tokio::spawn(async move {
-            let mut sighup = tokio::signal::unix::signal(
-                tokio::signal::unix::SignalKind::hangup(),
-            )
-            .expect("failed to install SIGHUP handler");
+            let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+                .expect("failed to install SIGHUP handler");
             loop {
                 sighup.recv().await;
                 let new_filter = EnvFilter::try_from_default_env()
