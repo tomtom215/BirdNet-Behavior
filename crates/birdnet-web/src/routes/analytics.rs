@@ -236,10 +236,10 @@ async fn funnel(
 
 async fn patterns(State(_state): State<AppState>) -> (StatusCode, Json<Value>) {
     (
-        StatusCode::OK,
+        StatusCode::NOT_IMPLEMENTED,
         Json(json!({
             "status": "planned",
-            "message": "Pattern matching (sequence_match) endpoint is under development.",
+            "message": "Pattern matching (sequence_match) endpoint is not yet implemented.",
             "function": "sequence_match",
         })),
     )

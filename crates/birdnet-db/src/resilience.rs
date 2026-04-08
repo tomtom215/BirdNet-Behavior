@@ -201,8 +201,16 @@ pub fn restore_from_backup(backup_path: &Path, db_path: &Path) -> Result<(), Res
         // Also remove WAL/SHM journal files if present
         let wal_path = db_path.with_extension("db-wal");
         let shm_path = db_path.with_extension("db-shm");
-        let _ = std::fs::remove_file(wal_path);
-        let _ = std::fs::remove_file(shm_path);
+        if let Err(e) = std::fs::remove_file(&wal_path) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(path = %wal_path.display(), error = %e, "failed to remove WAL file during restore");
+            }
+        }
+        if let Err(e) = std::fs::remove_file(&shm_path) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(path = %shm_path.display(), error = %e, "failed to remove SHM file during restore");
+            }
+        }
     }
 
     let source =
