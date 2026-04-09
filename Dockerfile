@@ -134,19 +134,36 @@ RUN set -eu; \
     fi
 
 # Locate and stage the ONNX Runtime shared library that the `ort` crate
-# downloaded into the Cargo build tree (download-binaries feature).  We use
-# `find ... -not -type l` to get the real file, not a symlink, and fail loudly
-# if it is missing — that almost always means the ort-sys build script could
-# not download binaries and silently fell back to a stub build.
+# made available to the final binary.
+#
+# `ort-sys` (with the `copy-dylibs` feature, which we enable) places the
+# downloaded prebuilt ONNX Runtime under its platform cache dir
+# (`~/.cache/ort.pyke.io/dfbin/<target-triple>/<sha>/`) and then drops a
+# symlink at `target/release/libonnxruntime.so` pointing at that file.
+# We therefore:
+#
+#   1. `find` without `! -type l` so the symlink is matched.
+#   2. Use `install`, which *follows* symlinks and copies the target's
+#      bytes into /staging — the runtime image does not share the cache
+#      dir with the builder, so a symlink alone would dangle.
+#
+# The fallback search against the ort cache directory is a safety net in
+# case a future `ort-sys` release stops creating the target/release
+# symlink; we prefer failing loudly to silently shipping a broken binary.
 # hadolint ignore=DL4006
 RUN set -eu; \
-    lib=$(find target/release -name 'libonnxruntime.so*' ! -type l -print -quit); \
+    lib=$(find target/release -maxdepth 2 -name 'libonnxruntime.so*' -print -quit); \
     if [ -z "${lib}" ]; then \
-        echo "FATAL: libonnxruntime.so not found in target/release" >&2; \
+        lib=$(find /root/.cache/ort.pyke.io -name 'libonnxruntime.so*' -type f -print -quit 2>/dev/null || true); \
+    fi; \
+    if [ -z "${lib}" ]; then \
+        echo "FATAL: libonnxruntime.so not found in target/release or ~/.cache/ort.pyke.io" >&2; \
         echo "       The ort-sys crate likely failed to download binaries." >&2; \
+        find target/release -maxdepth 3 -name 'libonnxruntime*' -print >&2 || true; \
+        find /root/.cache/ort.pyke.io -maxdepth 4 -print >&2 2>/dev/null || true; \
         exit 1; \
     fi; \
-    echo "Staging ORT library: ${lib}"; \
+    echo "Staging ORT library from: ${lib}"; \
     install -D -m 0644 "${lib}" /staging/usr/local/lib/libonnxruntime.so; \
     install -D -m 0755 target/release/birdnet-behavior /staging/usr/local/bin/birdnet-behavior
 
