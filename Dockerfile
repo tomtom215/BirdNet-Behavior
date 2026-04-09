@@ -23,7 +23,14 @@
 # =============================================================================
 
 ARG RUST_VERSION=1.88
-ARG DEBIAN_CODENAME=bookworm
+# Debian 13 "trixie" is required here, not "bookworm": the pre-built
+# ONNX Runtime binaries that the `ort` crate downloads link against
+# glibc ≥ 2.38 (they use the C23 `__isoc23_strtol` / `strtoll` / `strtoull`
+# family) and a libstdc++ from GCC ≥ 13 (they reference `__cxa_call_terminate`).
+# Debian bookworm ships glibc 2.36 and GCC 12, so those symbols are missing
+# and the final `cargo build` link step aborts with "undefined reference".
+# Trixie ships glibc 2.41 and GCC 14, which matches what pyke builds against.
+ARG DEBIAN_CODENAME=trixie
 
 # -----------------------------------------------------------------------------
 # Stage 1 — cargo-chef base
