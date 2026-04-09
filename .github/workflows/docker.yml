@@ -249,9 +249,12 @@ jobs:
       - name: Inspect pushed manifest
         run: |
           set -euo pipefail
+          # The metadata-action's suffix flavor is already applied to the
+          # image.version label, so ${version} already ends with the variant
+          # suffix (e.g. "edge-analytics").  Do NOT append tag_suffix again.
           version=$(jq -r '.labels["org.opencontainers.image.version"]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
           docker buildx imagetools inspect \
-            "${REGISTRY}/${IMAGE_NAME}:${version}${{ matrix.variant.tag_suffix }}"
+            "${REGISTRY}/${IMAGE_NAME}:${version}"
 
       - name: Job summary
         run: |
