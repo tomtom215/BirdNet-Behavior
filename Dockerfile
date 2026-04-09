@@ -64,6 +64,33 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM chef AS builder
 ARG BUILD_FEATURES=""
 
+# Release profile overrides for the Docker build.  The default workspace
+# profile uses `lto = true` + `codegen-units = 1` which produces the
+# fastest possible runtime binary, at the cost of ~5 GB of linker RAM
+# per invocation.  GitHub-hosted runners — especially `ubuntu-24.04-arm`
+# with 8 GB — OOM the rust-lld linker under those settings, so we
+# scale them down here:
+#
+#   * CARGO_PROFILE_RELEASE_LTO=off
+#       Disables cross-crate LTO.  Runtime overhead is typically
+#       <5% for this workload and link memory drops dramatically.
+#   * CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+#       Lets rustc split code-gen into 16 parallel units, further
+#       reducing peak memory and taking better advantage of runners
+#       with multiple cores.
+#   * CARGO_INCREMENTAL=0
+#       Incremental caches bloat the target dir without helping a
+#       release-only Docker build.
+#
+# These overrides are Docker-only — the statically-linked native
+# binaries produced by .github/workflows/release.yml still use the
+# full fat-LTO profile for maximum runtime performance.
+ENV CARGO_PROFILE_RELEASE_LTO=off \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
+    CARGO_TERM_COLOR=never \
+    CARGO_INCREMENTAL=0 \
+    RUST_BACKTRACE=1
+
 # hadolint ignore=DL3008
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
@@ -89,12 +116,14 @@ RUN set -eu; \
 
 # Compile the application itself.  Dependencies are already warm from the
 # previous layer, so this step only compiles workspace crates + the binary.
+# `--verbose` is deliberate: it keeps rustc command lines in the CI log
+# so link-level failures can be diagnosed without a second build.
 COPY . .
 RUN set -eu; \
     if [ -n "${BUILD_FEATURES}" ]; then \
-        cargo build --release --bin birdnet-behavior --features "${BUILD_FEATURES}"; \
+        cargo build --release --verbose --bin birdnet-behavior --features "${BUILD_FEATURES}"; \
     else \
-        cargo build --release --bin birdnet-behavior; \
+        cargo build --release --verbose --bin birdnet-behavior; \
     fi
 
 # Locate and stage the ONNX Runtime shared library that the `ort` crate
