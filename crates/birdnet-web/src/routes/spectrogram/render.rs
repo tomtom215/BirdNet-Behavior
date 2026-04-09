@@ -107,7 +107,7 @@ fn encode_spectrogram_png_labeled(
         .iter()
         .flat_map(|row| row.iter().copied())
         .fold((f32::INFINITY, f32::NEG_INFINITY), |(mn, mx), v| {
-            (mn.min(v), mx.min(mx).max(v))
+            (mn.min(v), mx.max(v))
         });
     let range = (max_val - min_val).max(1e-6);
 

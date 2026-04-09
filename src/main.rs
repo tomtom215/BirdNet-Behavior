@@ -15,7 +15,8 @@ mod integrations;
 mod weekly_report;
 
 use clap::Parser;
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::{EnvFilter, reload};
 
 use cli::Cli;
 use helpers::{
@@ -23,15 +24,40 @@ use helpers::{
     maybe_install_avahi_service, run_backup, run_integrity_check, start_disk_manager,
 };
 
+/// Default log filter when `RUST_LOG` is not set.
+const DEFAULT_LOG_FILTER: &str = "info,birdnet_behavior=debug";
+
 #[tokio::main]
 #[allow(clippy::too_many_lines)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info,birdnet_behavior=debug")),
-        )
+    // Use a reloadable filter so SIGHUP can change the log level at runtime.
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_FILTER));
+    let (filter_layer, reload_handle) = reload::Layer::new(env_filter);
+    tracing_subscriber::registry()
+        .with(filter_layer)
+        .with(tracing_subscriber::fmt::layer())
         .init();
+
+    // Spawn SIGHUP handler for runtime log level changes.
+    // Usage: set RUST_LOG env var then `kill -HUP <pid>`.
+    #[cfg(unix)]
+    {
+        let handle = reload_handle;
+        tokio::spawn(async move {
+            let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+                .expect("failed to install SIGHUP handler");
+            loop {
+                sighup.recv().await;
+                let new_filter = EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_FILTER));
+                match handle.reload(new_filter) {
+                    Ok(()) => tracing::info!("log filter reloaded via SIGHUP"),
+                    Err(e) => tracing::error!(error = %e, "failed to reload log filter"),
+                }
+            }
+        });
+    }
 
     let cli = Cli::parse();
 
@@ -175,6 +201,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(ref mqtt) = integrations::get_mqtt_client_ref(&cli, config.as_ref()) {
         integrations::publish_ha_discovery(mqtt, &cli, config.as_ref());
     }
+
+    // Spawn daily auto-update check (logs result, does not auto-apply).
+    tokio::spawn(async {
+        // Wait 60 seconds after startup before first check.
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        let current_version = env!("CARGO_PKG_VERSION");
+        loop {
+            match tokio::task::spawn_blocking(move || {
+                birdnet_integrations::auto_update::check_for_update(current_version)
+            })
+            .await
+            {
+                Ok(Ok(info)) => {
+                    if info.update_available {
+                        tracing::info!(
+                            current = %info.current_version,
+                            latest = %info.latest_version,
+                            "new version available — use the admin panel to update"
+                        );
+                    } else {
+                        tracing::debug!("auto-update check: already up to date");
+                    }
+                }
+                Ok(Err(e)) => {
+                    tracing::debug!(error = %e, "auto-update check failed (non-fatal)");
+                }
+                Err(e) => {
+                    tracing::debug!(error = %e, "auto-update check task panicked");
+                }
+            }
+            // Check once every 24 hours.
+            tokio::time::sleep(std::time::Duration::from_secs(86_400)).await;
+        }
+    });
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     // Use `into_make_service_with_connect_info` so the per-IP rate limiter

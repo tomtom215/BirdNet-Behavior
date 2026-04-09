@@ -100,24 +100,37 @@ impl EmailNotifier {
         if cooldown.is_zero() {
             return false;
         }
-        let map = self.last_sent.lock().expect("cooldown mutex poisoned");
+        let map = self
+            .last_sent
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         map.get(species)
             .is_some_and(|last| last.elapsed() < cooldown)
     }
 
     /// Record that an email was sent for `species` right now.
+    ///
+    /// Also prunes stale cooldown entries (older than 2x the cooldown period)
+    /// to prevent unbounded memory growth over long deployments.
     fn record_sent(&self, species: &str) {
-        let mut map = self.last_sent.lock().expect("cooldown mutex poisoned");
+        let mut map = self
+            .last_sent
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Prune entries whose cooldown has long expired (2x cooldown = guaranteed stale).
+        let prune_threshold = Duration::from_secs(self.config.cooldown_secs * 2);
+        if map.len() > 100 {
+            map.retain(|_, instant| instant.elapsed() < prune_threshold);
+        }
         map.insert(species.to_owned(), Instant::now());
     }
 
     /// Reset the cooldown for a specific species (useful for testing).
-    ///
-    /// # Panics
-    ///
-    /// Panics if the cooldown mutex is poisoned.
     pub fn reset_cooldown(&self, species: &str) {
-        let mut map = self.last_sent.lock().expect("cooldown mutex poisoned");
+        let mut map = self
+            .last_sent
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         map.remove(species);
     }
 

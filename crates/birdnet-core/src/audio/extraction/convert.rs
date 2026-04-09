@@ -27,7 +27,9 @@ pub(super) fn convert_audio_format(
     match result {
         Ok(()) => {
             // Remove the intermediate WAV file.
-            let _ = std::fs::remove_file(wav_path);
+            if let Err(e) = std::fs::remove_file(wav_path) {
+                tracing::debug!(path = %wav_path.display(), error = %e, "failed to remove intermediate WAV");
+            }
             Ok(())
         }
         Err(e) => {

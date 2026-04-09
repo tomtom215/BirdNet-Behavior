@@ -28,6 +28,7 @@ CONFIG_DIR="/etc/birdnet"
 CONFIG_FILE="${CONFIG_DIR}/birdnet.conf"
 DATA_DIR="${HOME}/BirdNet-Behavior"
 RECS_DIR="${DATA_DIR}/recordings"
+STREAM_DIR="/tmp/birdnet-stream"
 IMAGE_CACHE_DIR="${DATA_DIR}/image_cache"
 MODEL_DIR="${DATA_DIR}/models"
 DB_PATH="${DATA_DIR}/birds.db"
@@ -214,6 +215,37 @@ create_directories() {
     success "Directories created under ${DATA_DIR}"
 }
 
+setup_tmpfs_streaming() {
+    info "Setting up tmpfs for audio streaming (SD card wear protection)…"
+    # Use /tmp/birdnet-stream for raw audio capture. On most Pi distros /tmp is
+    # already a tmpfs; this ensures the streaming directory exists after reboot.
+    install -d -m 0755 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${STREAM_DIR}"
+
+    # If /tmp is NOT already tmpfs, create a dedicated mount.
+    if ! findmnt -t tmpfs /tmp &>/dev/null; then
+        local MOUNT_UNIT="/etc/systemd/system/tmp-birdnet\\x2dstream.mount"
+        cat > "${MOUNT_UNIT}" <<MEOF
+[Unit]
+Description=tmpfs for BirdNet-Behavior audio streaming
+Before=birdnet-behavior.service
+
+[Mount]
+What=tmpfs
+Where=${STREAM_DIR}
+Type=tmpfs
+Options=size=64M,mode=0755,uid=$(id -u "${SERVICE_USER}"),gid=$(id -g "${SERVICE_USER}")
+
+[Install]
+WantedBy=multi-user.target
+MEOF
+        systemctl daemon-reload
+        systemctl enable --now "tmp-birdnet\\x2dstream.mount" 2>/dev/null || true
+        success "tmpfs mount unit installed for ${STREAM_DIR}"
+    else
+        success "/tmp is already tmpfs — ${STREAM_DIR} is RAM-backed"
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # Write default config
 # ---------------------------------------------------------------------------
@@ -287,13 +319,20 @@ Description=BirdNet-Behavior bird detection and analytics
 Documentation=https://github.com/${REPO}
 After=network.target sound.target
 Wants=network.target
+StartLimitBurst=5
+StartLimitIntervalSec=300
 
 [Service]
 Type=simple
 User=${SERVICE_USER}
-ExecStart=${INSTALL_DIR}/${BINARY_NAME} --config ${CONFIG_FILE} --listen ${LISTEN_ADDR} --watch-dir ${RECS_DIR} --image-cache-dir ${IMAGE_CACHE_DIR}
-Restart=on-failure
+ExecStart=${INSTALL_DIR}/${BINARY_NAME} --config ${CONFIG_FILE} --listen ${LISTEN_ADDR} --watch-dir ${STREAM_DIR} --image-cache-dir ${IMAGE_CACHE_DIR}
+# Always restart — covers panics (SIGABRT with panic=abort), OOM kills, and errors.
+Restart=always
 RestartSec=10
+# systemd watchdog: process must notify within this interval or gets killed + restarted.
+WatchdogSec=120
+# Hard memory ceiling — prevents OOM-killing other processes on low-RAM Pis.
+MemoryMax=512M
 # Allow access to audio devices and files.
 SupplementaryGroups=audio
 # Limit resource usage.
@@ -503,6 +542,7 @@ main() {
 
     install_binary "${version}" "${arch}"
     create_directories
+    setup_tmpfs_streaming
     download_model
     write_config
     configure_audio
