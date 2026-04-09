@@ -133,52 +133,37 @@ RUN set -eu; \
         cargo build --release --verbose --bin birdnet-behavior; \
     fi
 
-# Locate and stage the ONNX Runtime shared library that the `ort` crate
-# made available to the final binary.
+# Stage the release binary for the runtime image.
 #
-# `ort-sys` (with the `copy-dylibs` feature, which we enable) places the
-# downloaded prebuilt ONNX Runtime under its platform cache dir
-# (`~/.cache/ort.pyke.io/dfbin/<target-triple>/<sha>/`) and then drops a
-# symlink at `target/release/libonnxruntime.so` pointing at that file.
-# We therefore:
-#
-#   1. `find` without `! -type l` so the symlink is matched.
-#   2. Use `install`, which *follows* symlinks and copies the target's
-#      bytes into /staging — the runtime image does not share the cache
-#      dir with the builder, so a symlink alone would dangle.
-#
-# The fallback search against the ort cache directory is a safety net in
-# case a future `ort-sys` release stops creating the target/release
-# symlink; we prefer failing loudly to silently shipping a broken binary.
-# hadolint ignore=DL4006
-RUN set -eu; \
-    lib=$(find target/release -maxdepth 2 -name 'libonnxruntime.so*' -print -quit); \
-    if [ -z "${lib}" ]; then \
-        lib=$(find /root/.cache/ort.pyke.io -name 'libonnxruntime.so*' -type f -print -quit 2>/dev/null || true); \
-    fi; \
-    if [ -z "${lib}" ]; then \
-        echo "FATAL: libonnxruntime.so not found in target/release or ~/.cache/ort.pyke.io" >&2; \
-        echo "       The ort-sys crate likely failed to download binaries." >&2; \
-        find target/release -maxdepth 3 -name 'libonnxruntime*' -print >&2 || true; \
-        find /root/.cache/ort.pyke.io -maxdepth 4 -print >&2 2>/dev/null || true; \
-        exit 1; \
-    fi; \
-    echo "Staging ORT library from: ${lib}"; \
-    install -D -m 0644 "${lib}" /staging/usr/local/lib/libonnxruntime.so; \
-    install -D -m 0755 target/release/birdnet-behavior /staging/usr/local/bin/birdnet-behavior
+# Despite the `copy-dylibs` feature being enabled on the `ort` crate,
+# `ort-sys` 2.0.0-rc.12 ships only `libonnxruntime.a` (a static archive)
+# inside its pyke-hosted dfbin tarball — there is no `libonnxruntime.so`.
+# rustc therefore static-links ONNX Runtime directly into the
+# birdnet-behavior binary, and the only dynamic runtime dependencies left
+# are libstdc++ and libgcc_s (from the system C++ runtime), which are
+# installed in the runtime stage below.  Nothing extra to carry over.
+RUN install -D -m 0755 target/release/birdnet-behavior \
+        /staging/usr/local/bin/birdnet-behavior
 
 # -----------------------------------------------------------------------------
 # Stage 4 — runtime
 #
-# Minimal Debian image that contains only the binary, its shared library
-# dependencies, and a tiny entrypoint script.  Runs as a dedicated non-root
-# user with `audio` group membership for ALSA device access.
+# Minimal Debian image that contains only the birdnet-behavior binary, its
+# shared library dependencies, and a tiny entrypoint script.  Runs as a
+# dedicated non-root user with `audio` group membership for ALSA device
+# access.
 #
 # Runtime dependencies:
-#   libasound2       — ALSA userspace library (audio capture)
+#   libasound2t64    — ALSA userspace library (audio capture).  On Debian
+#                      trixie the package was renamed from `libasound2`
+#                      to `libasound2t64` as part of the 64-bit time_t ABI
+#                      transition.
+#   libstdc++6       — C++ runtime.  The statically-linked ONNX Runtime
+#                      still depends on libstdc++.so.6 at load time.
+#   libgcc-s1        — libgcc_s.so.1 for unwind/EH support.
 #   ca-certificates  — TLS trust store for BirdWeather, Wikipedia, etc.
-#   curl             — used by the entrypoint to fetch the BirdNET+ model
-#   tini             — PID 1 init, reaps zombies and forwards signals
+#   curl             — used by the entrypoint to fetch the BirdNET+ model.
+#   tini             — PID 1 init, reaps zombies and forwards signals.
 # -----------------------------------------------------------------------------
 FROM debian:${DEBIAN_CODENAME}-slim AS runtime
 
@@ -203,7 +188,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
-        libasound2 \
+        libasound2t64 \
+        libgcc-s1 \
+        libstdc++6 \
         tini \
     && groupadd --system --gid 10001 birdnet \
     && useradd  --system --uid 10001 --gid birdnet \
@@ -211,9 +198,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
                 --home-dir /data --no-create-home \
                 --shell /usr/sbin/nologin birdnet
 
-# Copy the built artefacts from the builder stage.
+# Copy the built binary from the builder stage.  ONNX Runtime is
+# statically linked into it, so there is no separate libonnxruntime.so
+# to carry over.
 COPY --from=builder /staging/ /
-RUN ldconfig
 
 # Entrypoint (model download + exec).
 COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
