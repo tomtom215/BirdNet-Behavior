@@ -1,22 +1,21 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1.9
 # =============================================================================
 # BirdNet-Behavior — Multi-stage Docker build
 #
-# Supported platforms (via docker buildx):
-#   linux/amd64   — x86_64 servers and desktops
-#   linux/arm64   — Raspberry Pi 4 / 5 (64-bit OS)
-#   linux/arm/v7  — Raspberry Pi 3 / 32-bit OS  ⚠ see note below
-#
-# ⚠  linux/arm/v7: ONNX Runtime does not ship prebuilt armv7 binaries.
-#    Building for armv7 requires ORT_STRATEGY=compile (adds ~30 min).
-#    For Raspberry Pi 3, prefer the native binary from GitHub Releases.
+# This Dockerfile builds a single architecture at a time.  Multi-architecture
+# manifests are assembled by the CI workflow (.github/workflows/docker.yml)
+# which runs this build natively on both amd64 and arm64 runners.  Building
+# natively avoids QEMU emulation, which is slow (30-45 min) and unreliable
+# for release builds using LTO + codegen-units=1 (emulated linker OOMs on
+# standard GitHub-hosted runners).
 #
 # Build arguments:
-#   RUST_VERSION      Rust toolchain version (default: 1.88)
-#   DEBIAN_CODENAME   Base image codename (default: bookworm)
+#   RUST_VERSION      Rust toolchain version (default: 1.88 — MSRV)
+#   DEBIAN_CODENAME   Debian base image codename (default: bookworm)
 #   BUILD_FEATURES    Comma-separated Cargo features (default: "")
-#                     Pass "analytics" to enable DuckDB behavioral analytics
-#                     ⚠ analytics adds ~7 min C++ compile for bundled libduckdb
+#                     Pass "analytics" to enable DuckDB behavioral analytics.
+#                     ⚠  analytics adds ~7 min of C++ compilation on first
+#                        build because libduckdb is statically bundled.
 #
 # Quick start:
 #   docker build -t birdnet-behavior .
@@ -28,16 +27,24 @@ ARG DEBIAN_CODENAME=bookworm
 
 # -----------------------------------------------------------------------------
 # Stage 1 — cargo-chef base
-# Installs the cargo-chef tool used for deterministic dependency caching.
+#
+# cargo-chef produces a deterministic "recipe" of workspace dependencies that
+# can be compiled in a separate, cache-friendly layer.  Only the recipe.json
+# file is copied into the cook stage, so the dependency layer is invalidated
+# solely when Cargo.lock or manifest files change — not on every source edit.
 # -----------------------------------------------------------------------------
 FROM rust:${RUST_VERSION}-slim-${DEBIAN_CODENAME} AS chef
-RUN cargo install cargo-chef --locked
 WORKDIR /build
+# cargo-chef is pinned to the 0.1 minor series for reproducibility.  The
+# --locked flag forces cargo to honour the bundled Cargo.lock from the
+# cargo-chef crate, which prevents transitive-dependency drift between builds.
+RUN cargo install cargo-chef --locked --version "^0.1"
 
 # -----------------------------------------------------------------------------
-# Stage 2 — dependency planner
-# Reads the workspace Cargo.toml/Cargo.lock and produces a recipe.json that
-# fingerprints the exact dependency set.  Only re-runs when Cargo files change.
+# Stage 2 — planner
+#
+# Reads the full workspace and emits recipe.json.  This stage is cheap: it
+# does not compile anything, it only walks the manifest tree.
 # -----------------------------------------------------------------------------
 FROM chef AS planner
 COPY . .
@@ -45,98 +52,153 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 # -----------------------------------------------------------------------------
 # Stage 3 — builder
-# Compiles dependencies first (cached layer), then the application binary.
+#
+# Installs native build dependencies, cooks the cargo-chef recipe (dependency
+# compile, cached layer), then compiles the application binary.
 #
 # System build-time dependencies:
-#   cmake + g++      — bundled libduckdb C++ compilation (analytics feature)
-#   libasound2-dev   — ALSA headers for audio capture
-#   pkg-config       — helps locate system libraries during build
+#   cmake + g++     — required by the bundled libduckdb build (analytics)
+#   libasound2-dev  — ALSA headers for the audio capture pipeline
+#   pkg-config      — locates system libraries during build-script execution
 # -----------------------------------------------------------------------------
 FROM chef AS builder
 ARG BUILD_FEATURES=""
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# hadolint ignore=DL3008
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update \
+    && apt-get install -y --no-install-recommends \
         cmake \
         g++ \
         libasound2-dev \
-        pkg-config \
-    && rm -rf /var/lib/apt/lists/*
+        pkg-config
 
-# Cook dependencies only — this layer is invalidated only when Cargo.lock changes
+# Cook dependencies — this layer is only invalidated when Cargo.lock or a
+# workspace manifest changes.  Cook the entire workspace so every
+# dependency is pre-compiled; the final `cargo build --bin` below will
+# reuse the warm artefacts without rebuilding anything.
 COPY --from=planner /build/recipe.json recipe.json
-RUN if [ -n "${BUILD_FEATURES}" ]; then \
-        cargo chef cook --release --recipe-path recipe.json --features "${BUILD_FEATURES}"; \
+RUN set -eu; \
+    if [ -n "${BUILD_FEATURES}" ]; then \
+        cargo chef cook --release --recipe-path recipe.json \
+            --features "${BUILD_FEATURES}"; \
     else \
         cargo chef cook --release --recipe-path recipe.json; \
     fi
 
-# Build the application
+# Compile the application itself.  Dependencies are already warm from the
+# previous layer, so this step only compiles workspace crates + the binary.
 COPY . .
-RUN if [ -n "${BUILD_FEATURES}" ]; then \
+RUN set -eu; \
+    if [ -n "${BUILD_FEATURES}" ]; then \
         cargo build --release --bin birdnet-behavior --features "${BUILD_FEATURES}"; \
     else \
         cargo build --release --bin birdnet-behavior; \
     fi
 
-# Locate and stage the ONNX Runtime shared library.
-# The `ort` crate (download-binaries feature) downloads a prebuilt libonnxruntime.so
-# into the Cargo build tree; we copy it to a predictable path for the next stage.
-RUN set -e; \
-    lib=$(find /build/target -name "libonnxruntime.so" ! -type l 2>/dev/null | head -1); \
-    if [ -z "$lib" ]; then \
-        echo "ERROR: libonnxruntime.so not found — ort download may have failed" >&2; \
+# Locate and stage the ONNX Runtime shared library that the `ort` crate
+# downloaded into the Cargo build tree (download-binaries feature).  We use
+# `find ... -not -type l` to get the real file, not a symlink, and fail loudly
+# if it is missing — that almost always means the ort-sys build script could
+# not download binaries and silently fell back to a stub build.
+# hadolint ignore=DL4006
+RUN set -eu; \
+    lib=$(find target/release -name 'libonnxruntime.so*' ! -type l -print -quit); \
+    if [ -z "${lib}" ]; then \
+        echo "FATAL: libonnxruntime.so not found in target/release" >&2; \
+        echo "       The ort-sys crate likely failed to download binaries." >&2; \
         exit 1; \
     fi; \
-    echo "Found ORT library: $lib"; \
-    cp "$lib" /libonnxruntime.so
+    echo "Staging ORT library: ${lib}"; \
+    install -D -m 0644 "${lib}" /staging/usr/local/lib/libonnxruntime.so; \
+    install -D -m 0755 target/release/birdnet-behavior /staging/usr/local/bin/birdnet-behavior
 
 # -----------------------------------------------------------------------------
-# Stage 4 — runtime image
-# Minimal Debian image containing only what is needed to run the binary.
+# Stage 4 — runtime
+#
+# Minimal Debian image that contains only the binary, its shared library
+# dependencies, and a tiny entrypoint script.  Runs as a dedicated non-root
+# user with `audio` group membership for ALSA device access.
 #
 # Runtime dependencies:
-#   libasound2      — ALSA userspace library for audio capture
-#   ca-certificates — TLS roots for BirdWeather / Wikipedia / HTTPS integrations
-#   curl            — used by entrypoint to download the BirdNET+ model
+#   libasound2       — ALSA userspace library (audio capture)
+#   ca-certificates  — TLS trust store for BirdWeather, Wikipedia, etc.
+#   curl             — used by the entrypoint to fetch the BirdNET+ model
+#   tini             — PID 1 init, reaps zombies and forwards signals
 # -----------------------------------------------------------------------------
 FROM debian:${DEBIAN_CODENAME}-slim AS runtime
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        libasound2 \
+# Re-declare global ARGs so they are in scope for the ENV / LABEL
+# instructions below.  ARGs declared before the first FROM are only
+# visible inside a stage if re-declared with another ARG instruction.
+ARG DEBIAN_CODENAME
+ARG BUILD_FEATURES=""
+
+# Environment knobs
+ENV BIRDNET_LISTEN=0.0.0.0:8502 \
+    BIRDNET_MODEL_DIR=/data/model \
+    RUST_BACKTRACE=1
+
+# Install runtime packages and create a non-root user in a single layer so
+# the image stays small and layer metadata is tidy.
+# hadolint ignore=DL3008
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
-    && rm -rf /var/lib/apt/lists/*
+        libasound2 \
+        tini \
+    && groupadd --system --gid 10001 birdnet \
+    && useradd  --system --uid 10001 --gid birdnet \
+                --groups audio \
+                --home-dir /data --no-create-home \
+                --shell /usr/sbin/nologin birdnet
 
-# Dedicated non-root user; member of `audio` for ALSA device access
-RUN groupadd --system birdnet \
-    && useradd --system --gid birdnet --groups audio \
-       --home-dir /data --no-create-home birdnet
-
-# Application binary
-COPY --from=builder /build/target/release/birdnet-behavior /usr/local/bin/birdnet-behavior
-
-# ONNX Runtime shared library
-COPY --from=builder /libonnxruntime.so /usr/local/lib/libonnxruntime.so
+# Copy the built artefacts from the builder stage.
+COPY --from=builder /staging/ /
 RUN ldconfig
 
-# Entrypoint script (model download + exec)
-COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+# Entrypoint (model download + exec).
+COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 
 # Persistent data layout under /data:
-#   /data/model       — BirdNET+ ONNX model + labels (auto-downloaded on first run)
-#   /data/recordings  — audio segments from the capture pipeline
-#   /data/cache       — Wikipedia species image cache
-#   /data/birdnet.db  — SQLite detections database
-#   /data/analytics.db — DuckDB behavioral analytics (optional)
+#   /data/model        — BirdNET+ ONNX model + labels (downloaded on first run)
+#   /data/recordings   — audio segments captured by the detection pipeline
+#   /data/cache        — Wikipedia species image cache
+#   /data/birdnet.db   — SQLite detections database
+#   /data/analytics.db — DuckDB behavioral analytics database (optional)
 RUN mkdir -p /data/model /data/recordings /data/cache \
     && chown -R birdnet:birdnet /data
 
 VOLUME ["/data"]
 WORKDIR /data
 
-# Web UI default port (override with BIRDNET_LISTEN env var)
-EXPOSE 8502
+# Web UI default port (override via BIRDNET_LISTEN).
+EXPOSE 8502/tcp
 
-USER birdnet
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+# Container health check — hit the web server's health endpoint.  The binary
+# exposes /api/v2/health which returns 200 OK when ready to serve requests.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD curl --fail --silent --show-error --max-time 4 \
+             "http://127.0.0.1:${BIRDNET_LISTEN##*:}/api/v2/health" \
+        || exit 1
+
+USER birdnet:birdnet
+
+# tini handles PID 1 duties (signal forwarding, zombie reaping) so the Rust
+# process gets SIGTERM cleanly for graceful shutdown.
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
+
+# OCI image metadata.  CI injects build-time labels via
+# docker/metadata-action, but the static ones live here so they are present
+# on every build, not only CI-driven ones.
+LABEL org.opencontainers.image.title="BirdNet-Behavior" \
+      org.opencontainers.image.description="Real-time acoustic bird classification with DuckDB behavioral analytics" \
+      org.opencontainers.image.source="https://github.com/tomtom215/BirdNet-Behavior" \
+      org.opencontainers.image.licenses="CC-BY-NC-SA-4.0" \
+      org.opencontainers.image.base.name="docker.io/library/debian:${DEBIAN_CODENAME}-slim" \
+      io.birdnet-behavior.build-features="${BUILD_FEATURES}"

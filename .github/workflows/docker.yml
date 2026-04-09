@@ -2,25 +2,35 @@ name: Docker
 
 # Build and publish multi-architecture container images to GHCR.
 #
+# Architecture: each (variant × platform) combination is built on a native
+# runner, then the resulting per-platform images are merged into a single
+# multi-arch manifest list by the `merge` job.  Building natively avoids
+# QEMU emulation, which is unreliable for release builds that enable LTO
+# and codegen-units=1 (the emulated linker OOMs on 7 GB GitHub-hosted
+# runners, producing exit code 101 after 30+ minutes of wasted CI time).
+#
 # Triggers:
 #   • Version tags  (v1.2.3)  → publishes versioned + latest tags
-#   • Main/master push        → publishes "edge" tag for nightly testing
-#   • Manual dispatch         → build on demand (branch selectable)
+#   • main/master push        → publishes the "edge" tag for nightly testing
+#   • Manual dispatch         → build on demand (push optional)
 #
 # Published images:
-#   ghcr.io/tomtom215/birdnet-behavior:latest       (stable release)
-#   ghcr.io/tomtom215/birdnet-behavior:1.2.3        (exact version)
-#   ghcr.io/tomtom215/birdnet-behavior:1.2          (minor series)
-#   ghcr.io/tomtom215/birdnet-behavior:edge         (main branch tip)
-#   ghcr.io/tomtom215/birdnet-behavior:1.2.3-analytics  (with DuckDB analytics)
+#   ghcr.io/tomtom215/birdnet-behavior:latest           (stable, tag-driven)
+#   ghcr.io/tomtom215/birdnet-behavior:1.2.3            (exact version)
+#   ghcr.io/tomtom215/birdnet-behavior:1.2              (minor series)
+#   ghcr.io/tomtom215/birdnet-behavior:1                (major series)
+#   ghcr.io/tomtom215/birdnet-behavior:edge             (main branch tip)
+#   ghcr.io/tomtom215/birdnet-behavior:sha-<7chars>     (exact revision)
+#   ghcr.io/tomtom215/birdnet-behavior:*-analytics      (DuckDB analytics)
 #
-# Platforms:
-#   linux/amd64    — x86_64 servers / desktops
-#   linux/arm64    — Raspberry Pi 4 / 5 (64-bit OS)
+# Supported platforms:
+#   linux/amd64  — x86_64 servers and desktops        (native on ubuntu-24.04)
+#   linux/arm64  — Raspberry Pi 4 / 5 (64-bit OS)     (native on ubuntu-24.04-arm)
 #
-# ⚠ linux/arm/v7 is NOT built — ONNX Runtime has no prebuilt armv7 binaries
-#   and the ort crate panics during cross-compilation.  Pi 3 users should use
-#   the native binary from GitHub Releases instead.
+# linux/arm/v7 is intentionally NOT built: the `ort` crate does not ship
+# prebuilt ONNX Runtime binaries for armv7, and building from source adds
+# ~30 minutes of CI time.  Raspberry Pi 3 / 32-bit Pi OS users should use
+# the native binary from the GitHub Releases page instead.
 
 on:
   push:
@@ -29,119 +39,229 @@ on:
     branches:
       - main
       - master
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/release.yml"
+  pull_request:
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "docker/**"
+      - ".github/workflows/docker.yml"
   workflow_dispatch:
     inputs:
       push:
-        description: "Push image to GHCR (false = build only)"
+        description: "Push images to GHCR (uncheck to build only)"
         required: false
-        default: "true"
+        default: true
+        type: boolean
+
+# Cancel superseded runs on the same ref to save minutes.
+concurrency:
+  group: docker-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
   packages: write
+  id-token: write   # for future keyless signing with cosign
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/birdnet-behavior
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Standard build (no DuckDB analytics) — fast, suitable for most users
+  # Per-platform image build.  Each matrix entry runs on a runner whose
+  # native CPU matches the target platform, so cargo compiles and links
+  # without QEMU.  Images are pushed to GHCR by digest only (no tags) —
+  # the `merge` job below assembles the final manifest list.
   # ---------------------------------------------------------------------------
   build:
-    name: Build (${{ matrix.variant }})
-    runs-on: ubuntu-24.04
+    name: Build ${{ matrix.variant.name }}/${{ matrix.platform.arch }}
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 90
+
+    # Only push on "real" events; PRs and dry-run dispatches build without
+    # pushing.  This gate is referenced by multiple steps below.
+    env:
+      PUSH: ${{ (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.push)) && 'true' || 'false' }}
 
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - variant: standard
+        variant:
+          - name: standard
             features: ""
             tag_suffix: ""
-          - variant: analytics
+          - name: analytics
             features: "analytics"
             tag_suffix: "-analytics"
+        platform:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      # QEMU enables cross-platform builds for arm64 and arm/v7 on x86_64 runners.
-      # Without QEMU, buildx can only build linux/amd64 natively.
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
         with:
-          platforms: linux/amd64,linux/arm64
+          persist-credentials: false
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          # Use the container driver for BuildKit cache features and
+          # consistent behaviour across runners.
+          driver-opts: |
+            network=host
 
       - name: Log in to GHCR
-        if: github.event_name != 'workflow_dispatch' || inputs.push == 'true'
+        if: env.PUSH == 'true'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Generate image tags and labels from Git metadata.
-      # Examples for tag v1.2.3, standard variant:
-      #   ghcr.io/tomtom215/birdnet-behavior:1.2.3
-      #   ghcr.io/tomtom215/birdnet-behavior:1.2
-      #   ghcr.io/tomtom215/birdnet-behavior:1
-      #   ghcr.io/tomtom215/birdnet-behavior:latest
-      # Examples for analytics variant:
-      #   ghcr.io/tomtom215/birdnet-behavior:1.2.3-analytics
-      #   ghcr.io/tomtom215/birdnet-behavior:latest-analytics
-      - name: Docker metadata
+      # Labels are applied to the per-platform image; the multi-arch
+      # manifest inherits them via the digest.  We do NOT compute tags here
+      # because per-platform images must be pushed by digest only.
+      - name: Compute image labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          labels: |
+            org.opencontainers.image.title=BirdNet-Behavior
+            org.opencontainers.image.description=Real-time acoustic bird classification with DuckDB behavioral analytics
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/${{ matrix.platform.arch }}
+          build-args: |
+            BUILD_FEATURES=${{ matrix.variant.features }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Per-(variant × arch) cache scope keeps caches from colliding
+          # between different feature sets and platforms.
+          cache-from: type=gha,scope=${{ matrix.variant.name }}-${{ matrix.platform.arch }}
+          cache-to:   type=gha,mode=max,scope=${{ matrix.variant.name }}-${{ matrix.platform.arch }}
+          provenance: ${{ env.PUSH == 'true' }}
+          sbom:       ${{ env.PUSH == 'true' }}
+          # Push as a digest-only image (no tags).  The merge job consumes
+          # these digests and assembles the multi-arch manifest.
+          outputs: |
+            type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=${{ env.PUSH }}
+
+      - name: Export digest
+        if: env.PUSH == 'true'
+        run: |
+          mkdir -p /tmp/digests
+          digest='${{ steps.build.outputs.digest }}'
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        if: env.PUSH == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.variant.name }}-${{ matrix.platform.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------
+  # Merge the per-arch digests into a multi-arch manifest list, and tag it
+  # from the output of docker/metadata-action.  One manifest is produced per
+  # variant (standard / analytics).
+  # ---------------------------------------------------------------------------
+  merge:
+    name: Merge (${{ matrix.variant.name }})
+    runs-on: ubuntu-24.04
+    needs: build
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.push)
+    timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        variant:
+          - name: standard
+            tag_suffix: ""
+          - name: analytics
+            tag_suffix: "-analytics"
+
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-${{ matrix.variant.name }}-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Compute tags for this variant (standard adds no suffix, analytics
+      # appends "-analytics").  The latest tag is only applied on version
+      # tags on the default branch; "edge" tracks main.
+      - name: Compute image tags
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           flavor: |
-            suffix=${{ matrix.tag_suffix }},onlatest=true
+            suffix=${{ matrix.variant.tag_suffix }},onlatest=true
           tags: |
-            # Versioned release tags (only on version tags)
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            # latest / latest-analytics on default branch version tags
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
-            # edge tag tracks the main branch tip
             type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' }}
-            # SHA-based tag for exact reproducibility
             type=sha,prefix=sha-
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile
-          # Build amd64 + arm64 only.  armv7 is excluded because ONNX Runtime
-          # does not ship prebuilt armv7 binaries and the `ort` crate's
-          # download-binaries feature panics during cross-compilation.
-          # Raspberry Pi 3 users should use the native binary from GitHub Releases.
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'workflow_dispatch' || inputs.push == 'true' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            BUILD_FEATURES=${{ matrix.features }}
-          # GitHub Actions cache — dramatically speeds up repeat builds by
-          # reusing the cargo-chef dependency layer.
-          cache-from: type=gha,scope=${{ matrix.variant }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}
-          provenance: true
-          sbom: true
-
-      - name: Image digest
-        if: github.event_name != 'workflow_dispatch' || inputs.push == 'true'
+      - name: Create multi-arch manifest and push
+        working-directory: /tmp/digests
         run: |
-          echo "### Docker Image (${{ matrix.variant }})" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Tags:" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          tags=$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          digests=$(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
+          echo "Assembling manifest with digests:"
+          printf '  %s\n' $digests
+          echo "Applying tags:"
+          printf '  %s\n' $(jq -r '.tags[]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          # shellcheck disable=SC2086
+          docker buildx imagetools create $tags $digests
+
+      - name: Inspect pushed manifest
+        run: |
+          set -euo pipefail
+          version=$(jq -r '.labels["org.opencontainers.image.version"]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          docker buildx imagetools inspect \
+            "${REGISTRY}/${IMAGE_NAME}:${version}${{ matrix.variant.tag_suffix }}"
+
+      - name: Job summary
+        run: |
+          {
+            echo "### Docker manifest — ${{ matrix.variant.name }}"
+            echo ""
+            echo "Platforms: \`linux/amd64\`, \`linux/arm64\`"
+            echo ""
+            echo "Tags:"
+            echo '```'
+            jq -r '.tags[]' <<< "$DOCKER_METADATA_OUTPUT_JSON"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
