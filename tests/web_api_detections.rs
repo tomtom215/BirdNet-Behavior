@@ -134,12 +134,7 @@ impl Fixture {
 /// Send a `GET` request to `router` and decode the response body as `JSON`.
 async fn get_json(router: axum::Router, uri: &str) -> (StatusCode, Value) {
     let response = router
-        .oneshot(
-            Request::builder()
-                .uri(uri)
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
         .await
         .unwrap();
 
@@ -249,8 +244,7 @@ async fn daily_detections_endpoint_returns_buckets_within_window() {
 #[tokio::test]
 async fn detections_pagination_first_page() {
     let fixture = Fixture::new();
-    let (status, json) =
-        get_json(fixture.router(), "/api/v2/detections?limit=2&offset=0").await;
+    let (status, json) = get_json(fixture.router(), "/api/v2/detections?limit=2&offset=0").await;
     assert_eq!(status, StatusCode::OK);
 
     assert_eq!(json["count"], 2);
@@ -262,8 +256,7 @@ async fn detections_pagination_first_page() {
 #[tokio::test]
 async fn detections_pagination_second_page() {
     let fixture = Fixture::new();
-    let (status, json) =
-        get_json(fixture.router(), "/api/v2/detections?limit=2&offset=2").await;
+    let (status, json) = get_json(fixture.router(), "/api/v2/detections?limit=2&offset=2").await;
     assert_eq!(status, StatusCode::OK);
 
     assert_eq!(json["count"], 2);
@@ -273,8 +266,7 @@ async fn detections_pagination_second_page() {
 #[tokio::test]
 async fn detections_pagination_beyond_data_is_empty() {
     let fixture = Fixture::new();
-    let (status, json) =
-        get_json(fixture.router(), "/api/v2/detections?limit=10&offset=100").await;
+    let (status, json) = get_json(fixture.router(), "/api/v2/detections?limit=10&offset=100").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["count"], 0);
 }
@@ -282,8 +274,7 @@ async fn detections_pagination_beyond_data_is_empty() {
 #[tokio::test]
 async fn detections_invalid_date_returns_400() {
     let fixture = Fixture::new();
-    let (status, json) =
-        get_json(fixture.router(), "/api/v2/detections?date=not-a-date").await;
+    let (status, json) = get_json(fixture.router(), "/api/v2/detections?date=not-a-date").await;
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(json["error"].as_str().unwrap().contains("invalid date"));
@@ -292,8 +283,7 @@ async fn detections_invalid_date_returns_400() {
 #[tokio::test]
 async fn detections_pagination_includes_total_count() {
     let fixture = Fixture::new();
-    let (status, json) =
-        get_json(fixture.router(), "/api/v2/detections?limit=2&offset=0").await;
+    let (status, json) = get_json(fixture.router(), "/api/v2/detections?limit=2&offset=0").await;
     assert_eq!(status, StatusCode::OK);
 
     // `total_count` is the count of all matching rows, not just the page.
@@ -306,8 +296,7 @@ async fn detections_pagination_includes_total_count() {
 #[tokio::test]
 async fn detections_limit_is_capped_at_max() {
     let fixture = Fixture::new();
-    let (status, json) =
-        get_json(fixture.router(), "/api/v2/detections?limit=999999").await;
+    let (status, json) = get_json(fixture.router(), "/api/v2/detections?limit=999999").await;
     assert_eq!(status, StatusCode::OK);
 
     // The handler must clamp the requested limit at `ROUTE_MAX_LIMIT`.
