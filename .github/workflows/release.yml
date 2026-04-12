@@ -167,6 +167,19 @@ jobs:
         run: ${{ matrix.command }}
 
 # ── Job 3: Cross-compile release binaries for every supported target ─────────
+  #
+  # Toolchain note: we build with Ubuntu 24.04's native GCC 13 cross toolchain
+  # (aarch64) / native compiler (x86_64) rather than cargo-zigbuild.  Zig's
+  # `-lstdc++` does not provide the full GNU libstdc++ cxx11-ABI symbol set
+  # that the pyke.io prebuilt ONNX Runtime archives reference (std::__cxx11::
+  # basic_istringstream, std::__cxx11::basic_ofstream, std::codecvt_utf8, etc.),
+  # and the pyke binaries also require glibc >= 2.38 for `__isoc23_strtol`.
+  # Ubuntu 24.04 ships glibc 2.39 + GCC 13, which is exactly what pyke builds
+  # against, so the symbols resolve cleanly.  See commit 1b80c41 for the same
+  # diagnosis in the Docker pipeline.
+  #
+  # Consequence: release binaries require glibc >= 2.39 at runtime.  Raspberry
+  # Pi OS Bookworm (glibc 2.36) is not supported; users must run Pi OS Trixie.
   build:
     name: Build ${{ matrix.target }}
     needs: [validate, ci]
@@ -175,15 +188,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Raspberry Pi 4 / 5 (64-bit Raspberry Pi OS Bullseye / Bookworm)
+          # Raspberry Pi 4 / 5 (64-bit Raspberry Pi OS Trixie)
           - target: aarch64-unknown-linux-gnu
-            glibc: "2.28"
+            cross: true
           # Standard 64-bit Linux (x86_64)
           - target: x86_64-unknown-linux-gnu
-            glibc: "2.28"
-          # Raspberry Pi 3 / 32-bit Pi OS (armv7)
-          - target: armv7-unknown-linux-gnueabihf
-            glibc: "2.28"
+            cross: false
+          # Note: armv7-unknown-linux-gnueabihf is intentionally omitted.
+          # `ort-sys` does not ship prebuilt ONNX Runtime binaries for armv7
+          # (see `docker.yml` header comment), and building ORT from source
+          # would add ~30 min of CI time per release.  Pi 3 / Pi Zero 2W
+          # users should build from source or run the 64-bit Pi OS.
+    env:
+      # Use the GNU cross toolchain from apt for aarch64 rather than Rust's
+      # default `cc` fallback.  These env vars are only consumed by the
+      # aarch64 build; on the x86_64 job they are harmless no-ops.
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+      CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+      CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
+      AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -194,28 +217,25 @@ jobs:
           toolchain: stable
           targets: ${{ matrix.target }}
 
-      # Zig serves as the cross-linker for cargo-zigbuild. Using Zig avoids
-      # installing a full cross GCC toolchain per target and keeps the glibc
-      # symbol baseline explicit (see `--target ...:.${{ matrix.glibc }}`).
-      - name: Install Zig
-        uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: 0.14.0
-
-      - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild --locked --quiet
+      - name: Install aarch64 cross toolchain
+        if: matrix.cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           shared-key: release-build-${{ matrix.target }}
-          key: ${{ matrix.glibc }}
 
       - name: Build release binary
         run: |
-          cargo zigbuild \
+          cargo build \
             --release \
-            --target ${{ matrix.target }}.${{ matrix.glibc }} \
+            --target ${{ matrix.target }} \
             --bin birdnet-behavior
 
       - name: Strip debug symbols
@@ -223,13 +243,7 @@ jobs:
         run: |
           BIN="target/${{ matrix.target }}/release/birdnet-behavior"
           if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends binutils-aarch64-linux-gnu
             aarch64-linux-gnu-strip "$BIN"
-          elif [[ "${{ matrix.target }}" == "armv7-unknown-linux-gnueabihf" ]]; then
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends binutils-arm-linux-gnueabihf
-            arm-linux-gnueabihf-strip "$BIN"
           else
             strip "$BIN"
           fi
@@ -411,11 +425,11 @@ jobs:
             echo '|-------------------------------------|---------------------------------------|'
             echo "| \`aarch64-unknown-linux-gnu\`       | Raspberry Pi 4 / 5, ARM64 Linux       |"
             echo "| \`x86_64-unknown-linux-gnu\`        | Standard 64-bit Linux                 |"
-            echo "| \`armv7-unknown-linux-gnueabihf\`   | Raspberry Pi 3 / 32-bit Pi OS         |"
             echo ""
             echo "Archives are gzipped tarballs containing the stripped binary,"
             echo '`README.md`, `CHANGELOG.md`, `LICENSE`, `LICENSE-UPSTREAM`, and'
-            echo '`install.sh`.'
+            echo '`install.sh`.  Binaries require **glibc 2.39 or newer**'
+            echo '(Raspberry Pi OS Trixie / Debian 13 / Ubuntu 24.04).'
             echo ""
             echo "### Docker"
             echo ""

@@ -89,9 +89,42 @@ detect_arch() {
     case "${machine}" in
         aarch64 | arm64) echo "aarch64-unknown-linux-gnu" ;;
         x86_64)          echo "x86_64-unknown-linux-gnu" ;;
-        armv7l)          echo "armv7-unknown-linux-gnueabihf" ;;
+        armv6l | armv7l)
+            # The `ort` crate does not ship prebuilt ONNX Runtime binaries
+            # for armv7 / armv6, so BirdNet-Behavior does not publish a
+            # 32-bit ARM release binary.  Every modern Raspberry Pi (Pi 3,
+            # Pi 4, Pi 5, Pi 400, Pi Zero 2 W) is 64-bit-capable — if you
+            # are seeing this message you are almost certainly running the
+            # 32-bit Pi OS on 64-bit-capable hardware.  The fix is to
+            # reflash with the 64-bit image, which is the Pi Foundation's
+            # current recommendation anyway.
+            cat >&2 <<'EOT'
+
+  Unsupported architecture: 32-bit ARM (armv6l / armv7l).
+
+  BirdNet-Behavior does not publish 32-bit ARM release binaries because
+  the ONNX Runtime crate (`ort`) ships no prebuilt libraries for that
+  target.
+
+  If you are on a Raspberry Pi 3, 4, 5, 400, or Zero 2 W, your hardware
+  is 64-bit-capable and you are just running the 32-bit Pi OS.  Reflash
+  with the 64-bit image (this is the current Raspberry Pi Foundation
+  recommendation) and re-run this installer:
+
+      https://downloads.raspberrypi.com/raspios_arm64/images/
+
+  After reflashing, `uname -m` should print `aarch64`, and this script
+  will download the aarch64 release binary automatically.
+
+  Only the original 2015 Pi 2 v1.1 (Cortex-A7) and the Pi 1 / Pi Zero /
+  Pi Zero W (ARM11) lack a 64-bit mode entirely.  Those boards would
+  need a from-source build, which is not currently supported upstream.
+
+EOT
+            fatal "Unsupported architecture: ${machine}."
+            ;;
         *)
-            fatal "Unsupported architecture: ${machine}. Supported: aarch64, x86_64, armv7l."
+            fatal "Unsupported architecture: ${machine}. Supported: aarch64, x86_64."
             ;;
     esac
 }

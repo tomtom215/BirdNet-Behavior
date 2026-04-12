@@ -102,8 +102,15 @@ x86_64 Linux.
 - `tracing`-based structured logging with SSE log streaming.
 - Multi-architecture Docker images published to GHCR (`linux/amd64`,
   `linux/arm64`), with and without the `analytics` feature.
-- Cross-compiled release binaries for `aarch64-unknown-linux-gnu`,
-  `x86_64-unknown-linux-gnu`, and `armv7-unknown-linux-gnueabihf`.
+- Cross-compiled release binaries for `aarch64-unknown-linux-gnu` and
+  `x86_64-unknown-linux-gnu`.  The `ort` crate does not ship prebuilt
+  ONNX Runtime binaries for `armv7-unknown-linux-gnueabihf`, so 32-bit
+  ARM is not supported — Pi 3 / Pi Zero 2W users should install the
+  64-bit Raspberry Pi OS, or build from source.
+- Release binaries are built on Ubuntu 24.04 (GCC 13, glibc 2.39) to
+  match the libstdc++ and glibc baselines that pyke's prebuilt ONNX
+  Runtime archives require.  **Runtime requirement: glibc >= 2.39**
+  (Raspberry Pi OS Trixie, Debian 13, Ubuntu 24.04, or newer).
 - systemd installer script with ALSA microphone auto-detection and
   automatic BirdNET+ model download from Zenodo.
 

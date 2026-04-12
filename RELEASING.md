@@ -69,7 +69,7 @@ The tag push triggers `release.yml`, which runs these jobs:
 |-----|---------|
 | `validate` | Validate semver tag, verify `Cargo.toml` version matches the tag, verify a `CHANGELOG.md` entry exists for the version |
 | `ci` | Full quality gate — `fmt`, `clippy`, `test`, `doc`, and MSRV check |
-| `build` | Cross-compile release binaries for `aarch64-unknown-linux-gnu`, `x86_64-unknown-linux-gnu`, and `armv7-unknown-linux-gnueabihf` via `cargo-zigbuild`, strip debug symbols, and archive as `.tar.gz` with per-archive SHA-256 |
+| `build` | Cross-compile release binaries for `aarch64-unknown-linux-gnu` and `x86_64-unknown-linux-gnu` using Ubuntu 24.04's native GCC 13 cross toolchain (glibc 2.39 baseline, which is what pyke's prebuilt ONNX Runtime requires), strip debug symbols, and archive as `.tar.gz` with per-archive SHA-256. `armv7-unknown-linux-gnueabihf` is intentionally not built — the `ort` crate ships no prebuilt ONNX Runtime binaries for that target |
 | `package` | Aggregate all build artifacts, generate a combined `SHA256SUMS` file, and produce a SLSA build provenance attestation signed via GitHub OIDC |
 | `github-release` | Create or update the GitHub Release idempotently, attach the archives, `SHA256SUMS`, and `install.sh`, and extract release notes from `CHANGELOG.md` |
 
