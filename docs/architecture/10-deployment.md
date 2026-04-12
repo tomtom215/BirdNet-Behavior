@@ -58,81 +58,65 @@ cargo build --release --target aarch64-unknown-linux-gnu
 
 ## CI/CD Pipeline (GitHub Actions)
 
-```yaml
-name: Release
-on:
-  push:
-    tags: ['v*']
-
-jobs:
-  build:
-    strategy:
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-          - target: armv7-unknown-linux-gnueabihf
-            os: ubuntu-latest
-
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@<commit-sha>
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-      - uses: cross-rs/cross-action@<commit-sha>
-        with:
-          command: build
-          args: --release --target ${{ matrix.target }}
-      - uses: actions/upload-artifact@<commit-sha>
-        with:
-          name: birdnet-behavior-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/birdnet-behavior
-```
-
-Action versions pinned by **commit SHA** (not tags) for reproducibility.
+Release artifacts are produced by `.github/workflows/release.yml`. The
+workflow uses `cargo-zigbuild` with Zig's universal linker to cross-compile
+the `aarch64`, `x86_64`, and `armv7` GNU Linux targets against an old
+enough glibc to run on Raspberry Pi OS Bullseye. See the workflow for the
+full target matrix.
 
 ## Quality Pipeline
 
-Following duckdb-behavioral's proven 6-workflow pattern:
+The CI workflow (`.github/workflows/ci.yml`) runs six jobs on every push
+and pull request:
 
-1. **Quality**: `fmt` → `clippy` → `check` → `doc` (fail fast)
-2. **Testing**: `cargo nextest run` on Ubuntu + macOS, MSRV verification
-3. **Security**: `cargo-deny` supply chain audit, CodeQL static analysis
-4. **Compatibility**: SemVer check via `cargo-semver-checks`
-5. **Coverage**: `cargo-tarpaulin` → Codecov
-6. **Release**: Multi-platform builds with provenance attestation
+1. **fmt** — `cargo fmt --check --all`
+2. **clippy** — `cargo clippy --workspace --all-targets -- -D warnings`
+3. **test** — unit, integration, and doc tests
+4. **doc** — `cargo doc --workspace --no-deps` with broken-link denial
+5. **build** — debug build with and without the `analytics` feature
+6. **msrv** — `cargo check` against the declared MSRV
 
-Concurrency cancellation for redundant PR runs.
+A separate workflow (`.github/workflows/docker.yml`) assembles a
+multi-architecture container image on native `ubuntu-24.04` (amd64) and
+`ubuntu-24.04-arm` (arm64) runners, then merges per-platform digests into
+a single manifest list.
 
 ## Deployment
 
+The recommended path on a Raspberry Pi or bare-metal Linux host is the
+installer script bundled with each release:
+
 ```bash
-# On the Pi:
-curl -L https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/birdnet-behavior-aarch64 \
+curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash
+```
+
+The installer detects the host architecture, downloads the matching
+pre-built binary from GitHub Releases, downloads the BirdNET+ V3.0 model
+from Zenodo, writes the systemd unit, and starts the service.
+
+For manual installation:
+
+```bash
+# Download the release binary for the target architecture
+curl -L https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/birdnet-behavior-aarch64-unknown-linux-gnu \
   -o /usr/local/bin/birdnet-behavior
 chmod +x /usr/local/bin/birdnet-behavior
-systemctl restart birdnet-behavior
 
-# That's it. No pip. No venv. No apt dependencies.
+# Enable and start the systemd service
+sudo systemctl enable --now birdnet-behavior
 ```
 
-### Migrate from BirdNET-Pi (Zero-Downtime)
+### Migrate from BirdNET-Pi
 
-```bash
-# 1. Stop BirdNET-Pi (optional — migration is non-destructive read-only)
-systemctl stop birdnet_analysis birdnet_web
+Migration is non-destructive: the source BirdNET-Pi database is opened
+read-only and never modified.
 
-# 2. Start BirdNet-Behavior
-systemctl start birdnet-behavior
-
-# 3. Open the web UI at http://pi.local:7070
-# 4. Navigate to Admin → Migration → Upload BirdNET-Pi database
-# 5. Validate the import report, then confirm import
-# 6. Your existing installation is untouched
-```
+1. Start BirdNet-Behavior (it can run alongside BirdNET-Pi)
+2. Open the web UI at `http://<host>:8502/admin/migrate`
+3. Upload `BirdDB.txt` or point to the BirdNET-Pi SQLite database
+4. Review the preview report (top species, date range, data quality)
+5. Click Import — transactional, fails cleanly on any error
+6. Verify the per-species count comparison
 
 ## systemd Service
 
@@ -148,10 +132,9 @@ Type=simple
 ExecStart=/usr/local/bin/birdnet-behavior \
     --config /etc/birdnet/birdnet.conf \
     --db /var/lib/birdnet/birds.db \
-    --port 7070
+    --listen 0.0.0.0:8502
 Restart=on-failure
 RestartSec=5
-WatchdogSec=60
 MemoryMax=256M
 StandardOutput=journal
 StandardError=journal
@@ -195,19 +178,22 @@ Configuration priority order (highest to lowest):
 4. `birdnet.conf` INI file (for BirdNET-Pi compatibility)
 5. Built-in defaults
 
-### Key CLI Flags
+### Selected CLI Flags
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--config` | `/etc/birdnet/birdnet.conf` | birdnet.conf path |
-| `--db` | `./birds.db` | SQLite database path |
-| `--port` | `7070` | HTTP server port |
-| `--backup-dir` | `./backups/` | Backup file directory |
-| `--recordings-dir` | `./StreamData/` | WAV recordings directory |
-| `--log-level` | `info` | Log verbosity (trace/debug/info/warn/error) |
+| Flag | Description |
+|------|-------------|
+| `--config` | Path to `birdnet.conf` (INI) |
+| `--db` | SQLite database path |
+| `--listen` | HTTP listen address (default `0.0.0.0:8502`) |
+| `--model` / `--labels` | BirdNET model and labels file paths |
+| `--watch-dir` | Directory the detection daemon watches for new recordings |
+| `--alsa-device` / `--rtsp-url` / `--rtsp-urls` | Audio source selection |
+| `--analytics-db` | DuckDB database path (enables behavioral analytics endpoints) |
+| `--apprise-url`, `--birdweather-token`, `--mqtt-host` | Integrations |
+
+See `birdnet-behavior --help` for the full list of flags and their
+environment variable equivalents.
 
 ---
-
-*Last updated: 2026-03-14*
 
 [← Web Server](09-web-server.md) | [Back to Index](../RUST_ARCHITECTURE_PLAN.md) | [Next: Migration →](11-migration.md)

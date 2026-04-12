@@ -1,38 +1,34 @@
 # ML Inference
 
-> Running BirdNET model inference in Rust.
+> BirdNET model inference via ONNX Runtime.
 
 ## Table of Contents
 
 - [Inference Pipeline](#inference-pipeline)
 - [Model Variants](#model-variants)
-- [Model Conversion](#model-conversion-tflite--onnx)
-- [Preferred Runtime: tract](#preferred-runtime-tract-pure-rust)
-- [Fallback Runtime: ort](#fallback-runtime-ort-onnx-runtime)
+- [Runtime: ort (ONNX Runtime)](#runtime-ort-onnx-runtime)
 - [Inference Code Pattern](#inference-code-pattern)
-- [Validation Plan](#validation-plan)
-- [Performance Targets](#performance-targets)
+- [Validation](#validation)
+- [Performance](#performance)
 - [Hot Reload](#hot-reload)
 
 ---
 
-**Status: ❌ Not yet implemented** — the inference integration is the final
-major technical milestone before full feature parity with BirdNET-Pi Python.
-The surrounding pipeline (decode, resample, detect, store, notify) is complete.
+Inference is implemented in `crates/birdnet-core/src/inference/` and wired
+into the detection daemon via `src/daemon.rs`.
 
 ## Inference Pipeline
 
 ```
-Mel spectrogram (f32 matrix)
+Audio chunk (f32, model sample rate)
         │
         ▼
     ┌───────────────┐
-    │ ONNX Runtime  │  ← Primary (ort crate, C++ backend)
-    │ or Tract      │  ← Long-term goal (pure Rust)
+    │ ONNX Runtime  │   ort crate, C++ core statically linked
     └───────────────┘
         │
         ▼
-    Raw logits (f32 vector, 6K+ entries)
+    Raw logits (f32 vector, thousands of entries)
         │
     sigmoid(sensitivity * logits)
         │
@@ -40,138 +36,102 @@ Mel spectrogram (f32 matrix)
         │
     Filter by confidence threshold
         │
+    Filter by species-occurrence metadata model (optional)
+        │
     Detection results → daemon event processor
 ```
 
 ## Model Variants
 
-BirdNET-Pi supports 4 model variants. All must be supported:
-
 | Model | Species | Input | Metadata | Notes |
 |-------|---------|-------|----------|-------|
-| BirdNET V2.4 FP16 | 6,362 | 3s audio @ 48kHz | Separate metadata model | Primary model |
-| BirdNET V1 | 6,000+ | 3s audio @ 48kHz | Lat/lon/week tensor | Legacy |
-| BirdNET-Go v20250916 | 6,362+ | 3s audio @ 48kHz | Extends V2.4 | Community model |
-| Perch V2 | Varies | 5s audio @ 32kHz | None | Google research model |
+| BirdNET+ V3.0 | ~11 000 | 3 s audio @ 48 kHz | Optional | Default (shipped by the installer from Zenodo) |
+| BirdNET V2.4 FP16 | 6 362 | 3 s audio @ 48 kHz | Separate metadata model | Legacy compatibility |
+| BirdNET V1 | 6 000+ | 3 s audio @ 48 kHz | Lat/lon/week tensor | Legacy |
 
-## Model Conversion (TFLite → ONNX)
+BirdNET models are supplied as ONNX. Users can drop in either the
+upstream TFLite conversion or any ONNX export with the correct input
+shape by setting `--model` / `BIRDNET_MODEL` at startup.
 
-```bash
-pip install tf2onnx onnxruntime
-python -m tf2onnx.convert --tflite BirdNET_model.tflite --output BirdNET_model.onnx --opset 18
-```
+## Runtime: `ort` (ONNX Runtime)
 
-Validate conversion:
-```python
-# Compare outputs between TFLite and ONNX on same input
-import numpy as np
-assert np.allclose(tflite_output, onnx_output, atol=1e-4)
-```
+The `ort` crate (v2.0.0-rc) wraps Microsoft's ONNX Runtime. Configured
+features in the workspace manifest:
 
-## Preferred Runtime: tract (Pure Rust)
+- `std` — standard library support
+- `ndarray` — tensor inputs and outputs via the `ndarray` crate
+- `download-binaries` — auto-fetch platform-specific ONNX Runtime binaries
+- `tls-rustls` — rustls-based TLS for the binary download (no OpenSSL)
+- `copy-dylibs` — copy platform dylibs when they exist (release images
+  still statically link the runtime)
 
-`tract-onnx` v0.22 by Sonos is a pure Rust ONNX inference engine:
-
-- **Zero C/C++ dependencies** — trivial cross-compilation to any target
-- CPU-only (no GPU), but BirdNET models are small enough for CPU inference
-- Passes ~85% of ONNX backend tests; common operators (conv, dense, sigmoid) well supported
-- Smaller binary than ort (no ONNX Runtime shared library)
-- Works on aarch64, x86_64, and even WebAssembly
-
-**Bridge option:** The `ort-tract` crate provides the `ort` API surface with
-tract as the backend, allowing future backend swaps without API changes.
-
-## Fallback Runtime: ort (ONNX Runtime)
-
-The `ort` crate v2.0.0-rc wraps Microsoft's ONNX Runtime:
-
-- ARM64 with NEON acceleration (XNNPACK backend)
-- FP16 tensor support via `half` feature flag
-- Quantized model support (INT8) for further Pi optimization
-- Thread pool configuration for constrained environments
-- For aarch64 Linux: supply ONNX Runtime binaries via `ORT_LIB_PATH` (requires glibc >= 2.35)
-- Model loading from file or embedded bytes
+ONNX Runtime on ARM64 provides NEON acceleration and thread-pool tuning
+suitable for constrained Raspberry Pi hardware.
 
 ## Inference Code Pattern
 
 ```rust
-use ort::{Session, Value};
+use ort::session::Session;
+use ort::value::Tensor;
 
 pub struct BirdNetModel {
     session: Session,
-    labels: Vec<String>,
+    labels: LabelSet,
     sensitivity: f32,
+    confidence_threshold: f32,
+    top_n: usize,
 }
 
 impl BirdNetModel {
-    pub fn load(model_path: &Path, sensitivity: f32) -> Result<Self, InferenceError> {
+    pub fn load(config: ModelConfig, model_path: &Path, labels: LabelSet) -> Result<Self, InferenceError> {
         let session = Session::builder()?
             .with_optimization_level(GraphOptimizationLevel::Level3)?
-            .with_intra_threads(2)?  // Limit threads on Pi
+            .with_intra_threads(config.num_threads)?
             .commit_from_file(model_path)?;
-        // Load labels...
-        Ok(Self { session, labels, sensitivity })
+        Ok(Self { session, labels, /* … */ })
     }
 
     pub fn predict(&self, audio: &[f32]) -> Result<Vec<Detection>, InferenceError> {
-        let input = Value::from_array(([1, audio.len()], audio))?;
-        let outputs = self.session.run(ort::inputs![input]?)?;
-        let logits = outputs[0].try_extract_tensor::<f32>()?;
-        // Apply sigmoid with sensitivity, filter, return top-N
-        todo!()
+        let input = Tensor::from_array(([1, audio.len()], audio.to_vec()))?;
+        let outputs = self.session.run(ort::inputs![input])?;
+        let (_, logits) = outputs[0].try_extract_tensor::<f32>()?;
+        Ok(self.post_process(logits))
     }
 }
 ```
 
-The `BirdNetModel` is designed to be wrapped in `Arc<RwLock<BirdNetModel>>`
-for safe concurrent access across the async detection daemon.
+The model is held inside an `Arc<Model>` in the detection daemon so it
+can be shared across concurrent detection chunks without cloning the
+underlying session.
 
-## Validation Plan
+## Validation
 
-Before committing to a runtime, validate both tract and ort:
+- Unit tests in `crates/birdnet-core/src/inference/` cover label parsing,
+  species filter metadata lookup, sigmoid post-processing, and shape
+  extraction.
+- End-to-end tests in `tests/inference_e2e.rs` run a real WAV fixture
+  (`tests/testdata/Pica_pica_30s.wav`) through the full pipeline and
+  assert a Eurasian Magpie detection at expected confidence.
 
-1. Convert BirdNET TFLite model to ONNX (opset 18)
-2. Load model in both tract and ort
-3. Run same test WAV files through the Rust audio pipeline
-4. Compare inference outputs against Python TFLite (must match within 1e-4)
-5. Benchmark latency on Pi 4/5 (target: <1s per 3-second chunk)
-6. If tract matches accuracy, prefer it (pure Rust, simpler deployment)
-7. If tract has accuracy issues, fall back to ort
+## Performance
 
-## Inference Chain (Matching Python)
-
-```
-1. Load audio file → f32 samples (symphonia)              ✅
-2. Resample to model sample rate (rubato)                  ✅
-3. Split into chunks (3s for BirdNET, 5s for Perch)       ✅
-4. Pad short chunks with zeros                             ✅
-5. Generate mel spectrogram for each chunk                 ⚠️ stubbed
-6. Run inference → raw logits                              ❌ TODO
-7. sigmoid(sensitivity * logits) → confidence scores      ❌ TODO
-8. Top-10 species per chunk                                ❌ TODO
-9. Filter by confidence threshold                          ❌ TODO
-10. Optional: metadata model filters by location           ❌ TODO
-```
-
-## Performance Targets
-
-| Metric | Python (TFLite) | Rust (target) |
-|--------|----------------|---------------|
-| Model load time | 2–5 seconds | <1 second |
-| Inference (3s clip, Pi 5) | 1–2 seconds | 0.3–0.8 seconds |
-| Inference (3s clip, Pi 4) | 2–4 seconds | 0.8–1.5 seconds |
+| Metric | Python (TFLite) | Rust (ort) |
+|--------|----------------|------------|
+| Model load time | 2–5 s | < 1 s |
+| Inference (3 s clip, Pi 5) | 1–2 s | 0.3–0.8 s |
+| Inference (3 s clip, Pi 4) | 2–4 s | 0.8–1.5 s |
 | Memory (model loaded) | ~200 MB | ~50 MB |
 
 ## Hot Reload
 
-Support model updates without restarting the service:
-- Watch model file for changes
-- Load new model in background
-- Swap atomically (Arc + RwLock pattern)
-- Validate new model produces reasonable output before committing
+Model updates without a service restart:
+
+- Watch the model file for changes via `notify`
+- Load the new session on a background task
+- Swap atomically via `Arc` replacement
+- Validate that the new session produces reasonable output before
+  committing the swap
 
 ---
-
-*Last updated: 2026-03-14*
 
 [← Audio Pipeline](05-audio-pipeline.md) | [Back to Index](../RUST_ARCHITECTURE_PLAN.md) | [Next: Database →](07-database.md)

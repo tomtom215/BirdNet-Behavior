@@ -39,16 +39,13 @@
 
 ## Why Not Go
 
-Go is a reasonable alternative (and tomtom215 has production Go code: `lyrebirdaudio-go`
-with Erlang-style supervision trees, Prometheus metrics, and 87% code coverage). However,
-Rust wins for BirdNET-Pi:
+Go is a reasonable alternative, but Rust wins for this workload:
 
 - **GC pauses** still exist (lower than Python but non-zero; matters for real-time audio)
-- **Binary size** is larger (Go embeds runtime; Rust strips to near-C sizes with `strip = true`)
-- **Memory usage** is higher (goroutine stacks, GC overhead vs Rust's zero-cost abstractions)
-- **Ecosystem for audio/ML** is weaker (no equivalent to symphonia, rubato, ort)
-- **DuckDB ecosystem** is entirely Rust-based in tomtom215's repos (duckdb-behavioral, quack-rs, mallardmetrics)
-- **Language selection pattern**: tomtom215 uses Go for infrastructure/systems tools (audio streaming, device management) and Rust for performance-critical work (analytics engines, FFI, web backends with embedded databases) — BirdNET-Pi is firmly in the latter category
+- **Binary size** is larger — Go embeds its runtime, while Rust strips to near-C sizes with `strip = true`
+- **Memory usage** is higher — goroutine stacks and GC overhead versus Rust's zero-cost abstractions
+- **Audio / ML ecosystem** is weaker — there is no Go equivalent to `symphonia`, `rubato`, or `ort`
+- **Embedded databases** — both DuckDB and SQLite have first-class Rust bindings that integrate cleanly into a single binary
 
 ## Design Philosophy
 
@@ -62,26 +59,25 @@ This project follows a **minimal dependency, pure Rust** philosophy:
 6. **No files over 500 lines** — single-responsibility, trait-based, modular sub-modules
 7. **Trait abstractions over concrete types** — every major boundary is a trait for testability
 
-### Feature Parity Commitment
+### Feature Parity
 
-BirdNET-Pi users migrating from the Python version expect:
+BirdNET-Pi users migrating from the Python version should find every
+feature they rely on:
 
 | Category | BirdNET-Pi (Python) | BirdNet-Behavior (Rust) |
 |----------|--------------------|-----------------------|
-| Detection pipeline | ✅ | ✅ Implemented |
-| Web dashboard | ✅ | ✅ HTMX + SSE live updates |
-| Species pages with images | ✅ | ✅ Flickr/Wikipedia cache |
-| Admin settings UI | ✅ | ✅ Full settings editor |
-| BirdWeather upload | ✅ | ✅ With retry queue |
-| Email alerts | ✅ | ✅ SMTP via lettre |
-| Apprise notifications | ✅ | ✅ Implemented |
-| Backup management | ✅ | ✅ List/download/delete UI |
-| Activity heatmap | ✅ | ✅ SVG hour×weekday |
-| BirdNET-Pi import | N/A | ✅ Zero-downtime migration |
-| Behavioral analytics | ❌ | ✅ DuckDB OLAP layer |
+| Detection pipeline | Yes | Yes |
+| Web dashboard | Yes | HTMX + WebSocket + SSE live updates |
+| Species pages with images | Yes | Wikipedia cache |
+| Admin settings UI | Yes | Full settings editor |
+| BirdWeather upload | Yes | With retry queue |
+| Email alerts | Yes | SMTP via `lettre` |
+| Apprise notifications | Yes | Yes |
+| Backup management | Yes | List / download / delete UI |
+| Activity heatmap | Yes | SVG hour × weekday |
+| BirdNET-Pi import | — | Non-destructive migration wizard |
+| Behavioral analytics | — | DuckDB OLAP layer |
 
 ---
-
-*Last updated: 2026-03-14*
 
 [Back to Index](../RUST_ARCHITECTURE_PLAN.md) | [Next: Architecture →](02-architecture.md)

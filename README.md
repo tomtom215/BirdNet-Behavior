@@ -130,8 +130,8 @@ The installer:
 7. Starts the service immediately
 
 ```bash
-# Install a specific version
-VERSION=0.2.0 bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh)
+# Install a specific version (defaults to latest)
+VERSION=0.1.0 bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh)
 
 # Uninstall (recordings and database are preserved)
 curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash -s uninstall
@@ -514,7 +514,9 @@ See [LICENSE](LICENSE) and [LICENSE-UPSTREAM](LICENSE-UPSTREAM) for full terms.
 
 | Document | Contents |
 |---|---|
-| [`docs/RUST_ARCHITECTURE_PLAN.md`](docs/RUST_ARCHITECTURE_PLAN.md) | Full architecture overview |
-| [`docs/architecture/02-architecture.md`](docs/architecture/02-architecture.md) | Single-binary design, workspace layout |
+| [`docs/RUST_ARCHITECTURE_PLAN.md`](docs/RUST_ARCHITECTURE_PLAN.md) | Architecture overview and index |
+| [`docs/architecture/01-motivation.md`](docs/architecture/01-motivation.md) | Design rationale: why Rust, not Python or Go |
+| [`docs/architecture/02-architecture.md`](docs/architecture/02-architecture.md) | Single-binary design and workspace layout |
+| [`docs/architecture/03-coding-standards.md`](docs/architecture/03-coding-standards.md) | Linting, error handling, modularity, testing |
 | [`docs/architecture/10-deployment.md`](docs/architecture/10-deployment.md) | Cross-compilation, CI/CD, systemd |
 | [`docs/architecture/13-implementation-status.md`](docs/architecture/13-implementation-status.md) | Implementation status and test coverage |

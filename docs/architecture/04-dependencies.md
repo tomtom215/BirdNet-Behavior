@@ -6,7 +6,7 @@
 
 - [Guiding Principles](#guiding-principles)
 - [Core Dependencies](#core-dependencies)
-- [ML Inference Strategy](#ml-inference-strategy)
+- [ML Inference Runtime](#ml-inference-runtime)
 - [Dependencies NOT Used](#dependencies-not-used-and-why)
 - [Actual Dependency Count by Crate](#actual-dependency-count-by-crate)
 - [Supply Chain Security](#supply-chain-security)
@@ -47,49 +47,41 @@
 | Purpose | Crate | Why C binding is needed |
 |---------|-------|----------------------|
 | SQLite | `rusqlite` (bundled) | Bundles SQLite C source; no system dependency required |
-| DuckDB | `duckdb` (bundled, optional) | Bundles DuckDB v1.5.1 C++ source; `analytics` feature flag; ~7 min compile |
-| ML inference | `ort` (tls-rustls) | ONNX Runtime for BirdNET model inference; uses rustls for binary download |
+| DuckDB | `duckdb` (bundled, optional) | Bundles DuckDB C++ source behind the `analytics` feature; roughly seven minutes of C++ compilation on first build |
+| ML inference | `ort` (rustls) | ONNX Runtime for BirdNET model inference; uses rustls for the binary download step |
 
-### Key Version Notes
+### Notes on specific versions
 
-- **sysinfo 0.32**: `RefreshKind::new()` (not `nothing()`); `Components` gated behind `component` feature;
-  `components.refresh()` takes 0 arguments (not `refresh(true)`)
-- **axum 0.8**: Uses `IntoResponse`, `Router::merge`, `extract::Path`, `extract::State`
-- **lettre**: Configured with `SmtpsTransport` or `StarttlsRelay`; no system OpenSSL needed
+- **sysinfo 0.32** — `Components` is gated behind the `component` feature;
+  the workspace manifest enables `features = ["system", "component"]`.
+- **axum 0.8** — the routing API uses `IntoResponse`, `Router::merge`,
+  `extract::Path`, and `extract::State`.
+- **lettre** — configured with `SmtpsTransport` or `StarttlsRelay` using
+  the `tokio1-rustls-tls` feature; no system OpenSSL is needed.
 
-## ML Inference Strategy
+## ML Inference Runtime
 
-| Option | Crate | Cross-compile | Pure Rust | Recommendation |
-|--------|-------|---------------|-----------|---------------|
-| ONNX Runtime | `ort` v2.0.0-rc | Medium (pre-built aarch64) | No (C++ core) | **Primary** — production-proven, ARM NEON |
-| Tract (pure Rust) | `tract-onnx` 0.22 | Trivial | **Yes** | **Preferred** if accuracy validates |
-| ort-tract bridge | `ort-tract` | Trivial | **Yes** | Use ort API with tract backend |
-| TFLite FFI | `tflite` | Hard (Bazel + TF) | No | **Avoid** — cross-compile nightmare |
-| TFLite C | `tflitec` | Medium | No | **Avoid** — pinned to outdated TF 2.9.1 |
+Inference is performed by the [`ort`](https://crates.io/crates/ort) crate —
+a Rust binding for Microsoft's ONNX Runtime — configured with the
+`download-binaries`, `tls-rustls`, and `copy-dylibs` features. This keeps
+the runtime self-contained: there is no system `libonnxruntime` dependency
+and no OpenSSL.
 
-**Preferred approach: `tract-onnx`** (pure Rust, Sonos). `tract` passes ~85% of
-ONNX backend tests but handles common operators well. For BirdNET's relatively
-simple model (conv + dense layers), this should be sufficient. Pure Rust means
-zero cross-compilation issues and smaller binaries.
+| Crate | Version | Notes |
+|-------|---------|-------|
+| `ort`      | `2.0.0-rc` | ONNX Runtime wrapper; handles session management, optimization levels, threading |
+| `ndarray`  | `0.16` | Tensor inputs and outputs for the session |
 
-**Bridge option: `ort-tract`** provides the `ort` API surface with `tract` as
-the backend. This allows starting with the ort API and swapping backends later.
+**Cross-compilation.** `ort` fetches pre-built ONNX Runtime binaries for
+`aarch64-unknown-linux-gnu` and `x86_64-unknown-linux-gnu` automatically,
+which makes `cargo build --target` work out of the box on GitHub Actions
+runners. Release images produced by `.github/workflows/docker.yml` build
+natively on `ubuntu-24.04` and `ubuntu-24.04-arm` runners to avoid QEMU
+emulation, and statically link ONNX Runtime into the final binary.
 
-**Fallback: `ort`** v2.0.0-rc (ONNX Runtime). Used by SurrealDB, Google Magika.
-For aarch64, you must supply ONNX Runtime binaries manually via `ORT_LIB_PATH`
-(Microsoft provides official aarch64 Linux builds, requires glibc >= 2.35).
-
-**Validation required:** Run the converted BirdNET ONNX model through both
-`tract` and `ort`, compare outputs against Python TFLite on identical inputs.
-If tract matches within 1e-4, prefer it for the pure Rust deployment.
-
-### Model Conversion
-
-Convert BirdNET TFLite models to ONNX:
-```bash
-pip install tf2onnx onnxruntime
-python -m tf2onnx.convert --tflite BirdNET_model.tflite --output BirdNET_model.onnx --opset 18
-```
+**Model format.** BirdNET models are distributed as ONNX (converted from
+TFLite upstream via `tf2onnx`). The model file path is passed via
+`BIRDNET_MODEL` / `--model` at startup. No runtime conversion is needed.
 
 ## Dependencies NOT Used (And Why)
 
@@ -108,26 +100,24 @@ python -m tf2onnx.convert --tflite BirdNET_model.tflite --output BirdNET_model.o
 
 Direct dependencies (excluding universal `serde` and `tracing`):
 
-| Crate | Direct deps | Key deps |
-|-------|------------|---------|
-| `birdnet-core` | 5 | symphonia, rubato, notify, configparser, ort |
-| `birdnet-db` | 1 | rusqlite |
-| `birdnet-web` | 7 | axum, tower, tower-http, tokio, tokio-util, sysinfo, serde_json |
-| `birdnet-integrations` | 3 | reqwest, tokio, lettre |
-| `birdnet-behavioral` | 2 | duckdb + rusqlite (optional, `analytics` feature) |
-| `birdnet-timeseries` | 1 | duckdb (optional, `analytics` feature) |
-| `birdnet-migrate` | 2 | rusqlite, birdnet-db |
+| Crate | Key direct dependencies |
+|-------|-------------------------|
+| `birdnet-core` | symphonia, rubato, realfft, notify, configparser, ort, ndarray, hound |
+| `birdnet-db` | rusqlite |
+| `birdnet-web` | axum, tower, tower-http, tokio, tokio-util, tokio-stream, sysinfo, reqwest |
+| `birdnet-integrations` | reqwest, tokio, lettre |
+| `birdnet-behavioral` | duckdb + rusqlite (optional, `analytics` feature) |
+| `birdnet-timeseries` | duckdb (optional, `analytics` feature) |
+| `birdnet-migrate` | rusqlite, birdnet-db |
+| `birdnet-scheduler` | (serde + tracing only) |
 
 ## Supply Chain Security
 
-All dependencies audited via `cargo-deny`:
-- **Licenses**: Only permissive licenses (MIT, Apache-2.0, BSD)
-- **Advisories**: RustSec advisory database checked in CI
-- **Sources**: Only crates.io (no git dependencies in production)
-- **Bans**: No duplicate versions of critical crates
+- **Licenses** — workspace standardises on permissive dependencies (MIT, Apache-2.0, BSD, MPL)
+- **TLS** — every HTTPS client (`reqwest`, `lettre`, `ort`) is configured to use `rustls`; there is no system OpenSSL dependency
+- **Sources** — all dependencies come from crates.io; no git dependencies in production
+- **`Cargo.lock`** — committed to the repository for reproducible builds across CI and release
 
 ---
-
-*Last updated: 2026-03-28*
 
 [← Coding Standards](03-coding-standards.md) | [Back to Index](../RUST_ARCHITECTURE_PLAN.md) | [Next: Audio Pipeline →](05-audio-pipeline.md)

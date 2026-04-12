@@ -11,7 +11,6 @@
 - [Validation & Safety](#validation--safety)
 - [Schema Compatibility](#schema-compatibility)
 - [Migration Report](#migration-report)
-- [Phase Execution Plan](#phase-execution-plan)
 - [Rollback Plan](#rollback-plan)
 
 ---
@@ -27,18 +26,24 @@
 
 ## birdnet-migrate Crate
 
-**Status: ✅ Implemented** in `crates/birdnet-migrate/`
+Implemented in `crates/birdnet-migrate/`.
 
 ### Module Structure
 
 ```
 birdnet-migrate/src/
 ├── lib.rs                   # Public API
-├── traits.rs                # Migrator trait
-├── report.rs                # MigrationReport, SpeciesReport types
+├── traits.rs                # Migrator / Validator / SchemaDetector traits
+├── error.rs                 # MigrateError type
+├── schema.rs                # Schema detection (SQLite and CSV)
+├── progress.rs              # Thread-safe progress handle
 └── birdnet_pi/
-    ├── mod.rs               # BirdNET-Pi implementation
-    └── species_report.rs    # Per-species summary builder
+    ├── mod.rs               # Public entry points
+    ├── validator.rs         # Required + advisory integrity checks
+    ├── importer.rs          # Batch transactional insert
+    ├── csv_importer.rs      # BirdDB.txt CSV importer
+    ├── detector.rs          # Schema detector
+    └── species_report.rs    # Pre- and post-migration species report
 ```
 
 ### Migrator Trait
@@ -219,19 +224,6 @@ Top imported species:
 Date range: 2022-04-01 → 2026-03-13
 ```
 
-## Phase Execution Plan
-
-| Phase | Status | Description |
-|-------|--------|-------------|
-| Trait definition | ✅ Complete | `Migrator` trait in `traits.rs` |
-| Schema validation | ✅ Complete | `validate_source()` checks schema + integrity |
-| Species report | ✅ Complete | `SpeciesReport` with per-species stats |
-| Core import logic | ✅ Complete | Batch upsert with transaction |
-| MigrationReport | ✅ Complete | Counts, duration, errors |
-| Web UI (upload + preview + confirm) | ⚠️ Planned | Admin migrate page |
-| SSE progress stream | ⚠️ Planned | Live import progress |
-| birdnet.conf import | ⚠️ Planned | Copy config values to settings table |
-
 ## Rollback Plan
 
 At any phase, the original BirdNET-Pi installation is unchanged:
@@ -244,7 +236,5 @@ At any phase, the original BirdNET-Pi installation is unchanged:
 No data loss is possible from a failed or interrupted migration.
 
 ---
-
-*Last updated: 2026-03-14*
 
 [← Deployment](10-deployment.md) | [Back to Index](../RUST_ARCHITECTURE_PLAN.md) | [Next: Risks →](12-risks.md)

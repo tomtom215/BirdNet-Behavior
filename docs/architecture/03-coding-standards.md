@@ -1,7 +1,6 @@
 # Coding Standards & Conventions
 
-> Derived from tomtom215's established Rust patterns across duckdb-behavioral,
-> quack-rs, and mallardmetrics.
+> Conventions applied uniformly across every workspace crate.
 
 ## Table of Contents
 
@@ -171,11 +170,10 @@ pub use sqlite::queries::detections::insert_detection;
 - Unit tests within modules (`#[cfg(test)]` pattern)
 - **Property-based testing** with `proptest` for data pipeline validation
 - **Criterion.rs benchmarks** with HTML reports for performance-critical paths
-- E2E tests against real systems (DuckDB CLI, actual WAV files)
-- **Mutation testing** via `cargo-mutants` (target: >85% kill rate)
-- Coverage tracked via `cargo-tarpaulin` + Codecov
-- MSRV explicitly specified (1.85) and CI-enforced
-- **Current test count**: ~420 passing across all crates
+- End-to-end tests against real WAV fixtures and real SQLite databases
+- Coverage tracked via `cargo-tarpaulin`
+- MSRV explicitly specified (1.88) and CI-enforced
+- **Current test count**: ~516 passing across all crates and integration tests
 
 ### Raw String Literals in HTML/SVG
 
@@ -192,17 +190,22 @@ write!(f, r##"<rect fill="#0f172a" rx="8"/>"##)?;
 
 ## CI/CD (GitHub Actions)
 
-Following duckdb-behavioral's proven workflow pattern:
+The `.github/workflows/ci.yml` pipeline enforces quality gates on every
+push and pull request:
 
-1. **Quality**: `fmt` → `clippy` → `check` → `doc` (fail fast)
-2. **Testing**: `nextest` on Ubuntu + macOS, MSRV verification
-3. **Security**: `cargo-deny` supply chain audit, CodeQL static analysis
-4. **Compatibility**: SemVer check against main branch
-5. **Coverage**: `cargo-tarpaulin` → Codecov
-6. **Release**: Multi-platform builds with provenance attestation
+1. **fmt** — `cargo fmt --check --all` (zero diff required)
+2. **clippy** — `cargo clippy --workspace --all-targets -- -D warnings`
+   (pedantic + nursery, zero warnings permitted)
+3. **test** — `cargo test --workspace` (unit, integration, doc tests)
+4. **doc** — `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`
+5. **build** — debug build of the full workspace with and without the
+   `analytics` feature
+6. **msrv** — `cargo check --workspace` against the declared MSRV
 
-Action versions pinned by **commit SHA** (not tags) for reproducibility.
-Concurrency cancellation for redundant PR runs.
+Release builds for `aarch64`, `x86_64`, and `armv7` are produced by
+`.github/workflows/release.yml` using `cargo-zigbuild`, and multi-arch
+Docker images are assembled by `.github/workflows/docker.yml` on native
+runners to avoid QEMU emulation.
 
 ## Code Style
 
@@ -216,7 +219,5 @@ Concurrency cancellation for redundant PR runs.
 - Structured logging: `tracing::info!(species = %name, confidence = conf, "detection");`
 
 ---
-
-*Last updated: 2026-03-14*
 
 [← Architecture](02-architecture.md) | [Back to Index](../RUST_ARCHITECTURE_PLAN.md) | [Next: Dependencies →](04-dependencies.md)
