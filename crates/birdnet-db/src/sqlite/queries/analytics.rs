@@ -462,32 +462,51 @@ mod tests {
     use crate::sqlite::connection::open_or_create;
     use rusqlite::params;
 
+    /// Return the ISO-8601 date `n` days before `now`, computed by `SQLite`
+    /// so callers and the fixture agree regardless of the host clock.
+    fn days_ago(conn: &Connection, n: i64) -> String {
+        conn.query_row(&format!("SELECT DATE('now', '-{n} days')"), [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+    }
+
     fn temp_db_with_data() -> (tempfile::NamedTempFile, Connection) {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let conn = open_or_create(tmp.path()).unwrap();
+        // Dates are computed relative to "now" so the fixture stays inside
+        // the 30-day windows used by the analytics queries under test.
+        let recent = days_ago(&conn, 6);
+        let earlier = days_ago(&conn, 7);
         for (date, time, sci, com, conf) in [
             (
-                "2026-03-11",
+                recent.as_str(),
                 "06:30:00",
                 "Turdus merula",
                 "Eurasian Blackbird",
                 0.87,
             ),
             (
-                "2026-03-11",
+                recent.as_str(),
                 "06:45:00",
                 "Erithacus rubecula",
                 "European Robin",
                 0.92,
             ),
             (
-                "2026-03-11",
+                recent.as_str(),
                 "07:00:00",
                 "Turdus merula",
                 "Eurasian Blackbird",
                 0.75,
             ),
-            ("2026-03-10", "18:00:00", "Parus major", "Great Tit", 0.80),
+            (
+                earlier.as_str(),
+                "18:00:00",
+                "Parus major",
+                "Great Tit",
+                0.80,
+            ),
         ] {
             conn.execute(
                 "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence) VALUES (?1,?2,?3,?4,?5)",
@@ -500,7 +519,8 @@ mod tests {
     #[test]
     fn hourly_groups_by_hour() {
         let (_tmp, conn) = temp_db_with_data();
-        let hours = hourly_activity(&conn, "2026-03-11").unwrap();
+        let recent = days_ago(&conn, 6);
+        let hours = hourly_activity(&conn, &recent).unwrap();
         assert_eq!(hours.len(), 2);
         assert_eq!(hours[0].hour, "06");
         assert_eq!(hours[0].count, 2);
@@ -519,8 +539,9 @@ mod tests {
     #[test]
     fn latest_detection_returns_most_recent() {
         let (_tmp, conn) = temp_db_with_data();
+        let recent = days_ago(&conn, 6);
         let (date, time, name) = latest_detection(&conn).unwrap().unwrap();
-        assert_eq!(date, "2026-03-11");
+        assert_eq!(date, recent);
         assert_eq!(time, "07:00:00");
         assert_eq!(name, "Eurasian Blackbird");
     }
@@ -563,7 +584,7 @@ mod tests {
     fn confidence_trend_covers_last_30_days() {
         let (_tmp, conn) = temp_db_with_data();
         let trend = confidence_trend(&conn, 30).unwrap();
-        // Should have at least one data point (we have 2026-03-11 data)
+        // Fixture inserts rows 6–7 days ago, well inside the 30-day window.
         assert!(!trend.is_empty());
         for (_, avg_conf) in &trend {
             assert!(*avg_conf >= 0.0 && *avg_conf <= 1.0);
@@ -590,7 +611,8 @@ mod tests {
     #[test]
     fn today_species_hour_heatmap_returns_cells_for_date() {
         let (_tmp, conn) = temp_db_with_data();
-        let cells = today_species_hour_heatmap(&conn, "2026-03-11", 10).unwrap();
+        let recent = days_ago(&conn, 6);
+        let cells = today_species_hour_heatmap(&conn, &recent, 10).unwrap();
         // Seed: Blackbird at 06 & 07, Robin at 06 → 3 (species, hour) pairs
         assert!(!cells.is_empty());
         for (_, hour, cnt) in &cells {
@@ -602,7 +624,8 @@ mod tests {
     #[test]
     fn today_species_hour_heatmap_respects_limit() {
         let (_tmp, conn) = temp_db_with_data();
-        let cells_limit1 = today_species_hour_heatmap(&conn, "2026-03-11", 1).unwrap();
+        let recent = days_ago(&conn, 6);
+        let cells_limit1 = today_species_hour_heatmap(&conn, &recent, 1).unwrap();
         // Only 1 species (most-detected) × at most 24 hours
         let species: std::collections::HashSet<_> = cells_limit1
             .iter()
@@ -618,8 +641,9 @@ mod tests {
     #[test]
     fn latest_detection_full_returns_most_recent() {
         let (_tmp, conn) = temp_db_with_data();
+        let recent = days_ago(&conn, 6);
         let det = latest_detection_full(&conn).unwrap().unwrap();
-        assert_eq!(det.date, "2026-03-11");
+        assert_eq!(det.date, recent);
         assert_eq!(det.time, "07:00:00");
         assert_eq!(det.com_name, "Eurasian Blackbird");
         assert!(det.confidence > 0.0 && det.confidence <= 1.0);
