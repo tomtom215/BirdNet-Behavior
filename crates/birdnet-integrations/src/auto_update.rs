@@ -7,7 +7,8 @@
 use std::fmt;
 use std::fs;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 /// GitHub API endpoint for the latest release.
 const RELEASES_URL: &str =
@@ -173,18 +174,25 @@ pub fn check_for_update(current_version: &str) -> Result<UpdateInfo, UpdateError
     })
 }
 
-/// Download the latest release binary and atomically replace the current binary.
+/// Download the latest release and atomically replace the current binary.
+///
+/// Release archives are gzipped tarballs of the form
+/// `birdnet-behavior-<version>-<target>.tar.gz` containing a single top-level
+/// directory with the binary inside. Older releases that exposed a raw
+/// ELF binary are still supported transparently.
 ///
 /// Steps:
-/// 1. Download asset to a temp file in the same directory as `current_binary`.
-/// 2. Set executable permissions on the temp file.
-/// 3. Rename the current binary to `{name}.bak`.
-/// 4. Rename the temp file to the original binary path.
+/// 1. Download the asset to a temp file next to `current_binary`.
+/// 2. If the asset is a tar.gz, extract it and locate the binary inside.
+/// 3. Set executable permissions on the new binary.
+/// 4. Rename the current binary to `{name}.bak`.
+/// 5. Rename the new binary into place.
 ///
 /// # Errors
 ///
 /// Returns `UpdateError::Network` on download failures, `UpdateError::Io` on
-/// filesystem errors.
+/// filesystem errors, and `UpdateError::Parse` if the archive layout is
+/// unexpected or the embedded binary cannot be located.
 pub fn apply_update(asset_url: &str, current_binary: &Path) -> Result<(), UpdateError> {
     let parent = current_binary.parent().unwrap_or_else(|| Path::new("."));
 
@@ -193,10 +201,11 @@ pub fn apply_update(asset_url: &str, current_binary: &Path) -> Result<(), Update
         .and_then(|n| n.to_str())
         .unwrap_or("birdnet-behavior");
 
-    let tmp_path = parent.join(format!(".{file_name}.update.tmp"));
+    let download_path = parent.join(format!(".{file_name}.update.download"));
+    let staged_path = parent.join(format!(".{file_name}.update.staged"));
     let bak_path = parent.join(format!("{file_name}.bak"));
 
-    // 1. Download
+    // 1. Download the asset bytes.
     tracing::info!("downloading update from {asset_url}");
     let client = reqwest::blocking::Client::builder()
         .user_agent(USER_AGENT)
@@ -221,28 +230,67 @@ pub fn apply_update(asset_url: &str, current_binary: &Path) -> Result<(), Update
         .map_err(|e| UpdateError::Network(format!("failed to read response body: {e}")))?;
 
     {
-        let mut tmp_file = fs::File::create(&tmp_path)?;
-        tmp_file.write_all(&bytes)?;
-        tmp_file.sync_all()?;
+        let mut f = fs::File::create(&download_path)?;
+        f.write_all(&bytes)?;
+        f.sync_all()?;
     }
 
-    // 2. Set executable permissions
+    // 2. If the asset is a tar.gz, extract it and pull the binary out.
+    if is_tarball_url(asset_url) {
+        tracing::info!("extracting release archive");
+        let extract_dir = parent.join(format!(".{file_name}.update.extract"));
+        let _ = fs::remove_dir_all(&extract_dir);
+        fs::create_dir_all(&extract_dir)?;
+
+        let status = Command::new("tar")
+            .arg("-xzf")
+            .arg(&download_path)
+            .arg("-C")
+            .arg(&extract_dir)
+            .status()
+            .map_err(|e| {
+                UpdateError::Network(format!("failed to invoke `tar` for extraction: {e}"))
+            })?;
+
+        if !status.success() {
+            let _ = fs::remove_dir_all(&extract_dir);
+            let _ = fs::remove_file(&download_path);
+            return Err(UpdateError::Network(format!(
+                "`tar -xzf` failed with exit status {status}"
+            )));
+        }
+
+        let extracted = find_extracted_binary(&extract_dir, file_name).inspect_err(|_| {
+            let _ = fs::remove_dir_all(&extract_dir);
+            let _ = fs::remove_file(&download_path);
+        })?;
+
+        // Move the extracted binary to the staged path, then clean up.
+        fs::rename(&extracted, &staged_path)?;
+        let _ = fs::remove_dir_all(&extract_dir);
+        let _ = fs::remove_file(&download_path);
+    } else {
+        // Legacy raw-binary asset — promote the download directly.
+        fs::rename(&download_path, &staged_path)?;
+    }
+
+    // 3. Set executable permissions on the staged binary.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let perms = fs::Permissions::from_mode(0o755);
-        fs::set_permissions(&tmp_path, perms)?;
+        fs::set_permissions(&staged_path, perms)?;
     }
 
-    // 3. Backup current binary
+    // 4. Backup current binary (best-effort).
     if current_binary.exists() {
         tracing::info!("backing up current binary to {}", bak_path.display());
         fs::rename(current_binary, &bak_path)?;
     }
 
-    // 4. Move new binary into place
+    // 5. Move new binary into place.
     tracing::info!("installing new binary to {}", current_binary.display());
-    fs::rename(&tmp_path, current_binary)?;
+    fs::rename(&staged_path, current_binary)?;
 
     tracing::info!("update applied successfully");
     Ok(())
@@ -253,6 +301,12 @@ pub fn apply_update(asset_url: &str, current_binary: &Path) -> Result<(), Update
 // ---------------------------------------------------------------------------
 
 /// Try to find a platform-appropriate binary asset URL from the release.
+///
+/// Prefers release archives (`.tar.gz`) matching the current architecture and
+/// Linux target, then falls back to any asset matching the architecture.
+// The lint fires on `ends_with(".ext")` but every string tested here is
+// pre-lowercased, so the suffix match is effectively case-insensitive.
+#[allow(clippy::case_sensitive_file_extension_comparisons)]
 fn find_asset_url(release: &serde_json::Value) -> Option<String> {
     let assets = release["assets"].as_array()?;
 
@@ -260,23 +314,92 @@ fn find_asset_url(release: &serde_json::Value) -> Option<String> {
         "aarch64"
     } else if cfg!(target_arch = "x86_64") {
         "x86_64"
+    } else if cfg!(target_arch = "arm") {
+        "armv7"
     } else {
         ""
     };
 
-    // Prefer an asset whose name contains our architecture and "linux".
+    // Skip metadata assets such as SHA256SUMS and install.sh that happen to
+    // live alongside the binary archives in each release.
+    let is_metadata = |lower: &str| -> bool {
+        lower.contains("sha256sums")
+            || lower.ends_with("install.sh")
+            || lower.ends_with(".sig")
+            || lower.ends_with(".asc")
+    };
+
+    // First pass: prefer a `.tar.gz` archive that targets both Linux and our arch.
     for asset in assets {
         let name = asset["name"].as_str().unwrap_or("");
         let lower = name.to_lowercase();
+        if is_metadata(&lower) {
+            continue;
+        }
+        if lower.ends_with(".tar.gz")
+            && lower.contains("linux")
+            && (arch.is_empty() || lower.contains(arch))
+        {
+            return asset["browser_download_url"].as_str().map(String::from);
+        }
+    }
+
+    // Second pass: accept any asset matching Linux and the arch (raw binary from
+    // older releases that did not ship tarballs).
+    for asset in assets {
+        let name = asset["name"].as_str().unwrap_or("");
+        let lower = name.to_lowercase();
+        if is_metadata(&lower) {
+            continue;
+        }
         if lower.contains("linux") && (arch.is_empty() || lower.contains(arch)) {
             return asset["browser_download_url"].as_str().map(String::from);
         }
     }
 
-    // Fall back to the first asset.
-    assets
-        .first()
-        .and_then(|a| a["browser_download_url"].as_str().map(String::from))
+    None
+}
+
+/// Returns `true` if the asset URL refers to a gzipped tar archive.
+// The input is lowercased before the suffix check, so the comparison is
+// effectively case-insensitive — `.tar.gz` is a double extension that
+// `std::path::Path::extension` cannot describe in a single call.
+#[allow(clippy::case_sensitive_file_extension_comparisons)]
+fn is_tarball_url(url: &str) -> bool {
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    let lower = path.to_lowercase();
+    lower.ends_with(".tar.gz") || lower.ends_with(".tgz")
+}
+
+/// Locate the binary inside an extracted release archive.
+///
+/// The release archive layout is
+/// `birdnet-behavior-<version>-<target>/birdnet-behavior`, so the binary sits
+/// exactly one level below the extraction root. This walks the immediate
+/// children, then falls back to a limited two-level search for robustness.
+fn find_extracted_binary(dir: &Path, binary_name: &str) -> Result<PathBuf, UpdateError> {
+    // First: check the top level directly (in case the archive is flat).
+    let direct = dir.join(binary_name);
+    if direct.is_file() {
+        return Ok(direct);
+    }
+
+    // Second: one level down (the normal release layout).
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            let candidate = path.join(binary_name);
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+    }
+
+    Err(UpdateError::Parse(format!(
+        "binary '{binary_name}' not found in extracted archive at {}",
+        dir.display()
+    )))
 }
 
 // ---------------------------------------------------------------------------
@@ -314,5 +437,93 @@ mod tests {
     fn is_newer_false() {
         assert!(!is_newer("0.2.0", "0.1.0").unwrap());
         assert!(!is_newer("1.0.0", "1.0.0").unwrap());
+    }
+
+    #[test]
+    fn is_tarball_url_recognises_tar_gz() {
+        assert!(is_tarball_url(
+            "https://example.com/birdnet-behavior-0.1.0-aarch64-unknown-linux-gnu.tar.gz"
+        ));
+        assert!(is_tarball_url("file.TAR.GZ"));
+        assert!(is_tarball_url("file.tgz"));
+    }
+
+    #[test]
+    fn is_tarball_url_ignores_raw_binaries() {
+        assert!(!is_tarball_url(
+            "https://example.com/birdnet-behavior-aarch64-unknown-linux-gnu"
+        ));
+        assert!(!is_tarball_url("SHA256SUMS"));
+    }
+
+    #[test]
+    fn is_tarball_url_ignores_query_string() {
+        assert!(is_tarball_url(
+            "https://example.com/archive.tar.gz?token=abc"
+        ));
+    }
+
+    #[test]
+    fn find_asset_url_prefers_tarball_matching_arch() {
+        let release = serde_json::json!({
+            "assets": [
+                {
+                    "name": "SHA256SUMS",
+                    "browser_download_url": "https://example.com/SHA256SUMS"
+                },
+                {
+                    "name": "install.sh",
+                    "browser_download_url": "https://example.com/install.sh"
+                },
+                {
+                    "name": "birdnet-behavior-0.1.0-x86_64-unknown-linux-gnu.tar.gz",
+                    "browser_download_url": "https://example.com/x86_64.tar.gz"
+                },
+                {
+                    "name": "birdnet-behavior-0.1.0-aarch64-unknown-linux-gnu.tar.gz",
+                    "browser_download_url": "https://example.com/aarch64.tar.gz"
+                }
+            ]
+        });
+
+        let url = find_asset_url(&release).expect("should find an asset");
+
+        // The exact match depends on the test runner architecture, but the
+        // returned URL must always be one of the real tarballs — never
+        // SHA256SUMS or install.sh.
+        assert!(url.ends_with(".tar.gz"));
+        assert!(!url.contains("SHA256SUMS"));
+        assert!(!url.contains("install.sh"));
+    }
+
+    #[test]
+    fn find_extracted_binary_walks_one_level() {
+        let tmp = tempfile::tempdir().unwrap();
+        let inner = tmp
+            .path()
+            .join("birdnet-behavior-0.1.0-x86_64-unknown-linux-gnu");
+        std::fs::create_dir_all(&inner).unwrap();
+        let bin = inner.join("birdnet-behavior");
+        std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
+
+        let found = find_extracted_binary(tmp.path(), "birdnet-behavior").unwrap();
+        assert_eq!(found, bin);
+    }
+
+    #[test]
+    fn find_extracted_binary_finds_flat_layout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("birdnet-behavior");
+        std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
+
+        let found = find_extracted_binary(tmp.path(), "birdnet-behavior").unwrap();
+        assert_eq!(found, bin);
+    }
+
+    #[test]
+    fn find_extracted_binary_errors_when_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = find_extracted_binary(tmp.path(), "birdnet-behavior").unwrap_err();
+        assert!(matches!(err, UpdateError::Parse(_)));
     }
 }

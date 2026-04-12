@@ -1,7 +1,8 @@
 //! ML inference for bird species classification.
 //!
-//! Supports ONNX models via `tract` (pure Rust, zero C dependencies).
-//! Designed for the `BirdNET` model family and compatible architectures.
+//! Loads ONNX models through the `ort` crate (ONNX Runtime) and runs
+//! inference on audio chunks. Designed for the `BirdNET` model family and
+//! compatible architectures.
 
 pub mod labels;
 pub mod model;

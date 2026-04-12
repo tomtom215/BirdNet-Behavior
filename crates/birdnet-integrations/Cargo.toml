@@ -9,7 +9,7 @@ authors.workspace = true
 readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "External service integrations: BirdWeather, Apprise, Flickr, Wikipedia"
+description = "External service integrations: BirdWeather, Apprise, Wikipedia, email, MQTT, auto-update"
 
 [dependencies]
 serde.workspace = true
@@ -18,6 +18,9 @@ tracing.workspace = true
 reqwest = { workspace = true, features = ["blocking"] }
 tokio.workspace = true
 lettre.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

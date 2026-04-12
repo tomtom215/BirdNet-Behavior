@@ -72,13 +72,12 @@ CREATE INDEX idx_detections_datetime    ON detections(Date, Time);
 
 ### Migration Framework
 
-Sequential migration system with `schema_version` tracking table:
-- **Version 1**: Create detections table
-- **Version 2**: Add performance indexes
-- **Version 3**: Add composite datetime index
-- **Version 4**: Create settings key-value table
-
-Migrations are idempotent and run automatically on startup.
+Sequential migration system tracked in a `schema_version` table. Ten
+versioned migrations are shipped in `crates/birdnet-db/src/migration.rs`
+and cover the core `detections` table, composite indexes, the settings
+key-value store, notification log, alert rules, species thresholds, and
+the rare-bird quarantine table. Migrations are idempotent and run
+automatically on startup.
 
 ### Settings Module
 
@@ -128,15 +127,9 @@ Settings used across the application:
 | `confidence_histogram()` | Confidence score distribution |
 | `co_occurrence_matrix()` | Species co-occurrence with `COUNT(DISTINCT a.Date)` fix |
 
-### Co-occurrence SQL Fix
-
-The self-join pattern for co-occurrence naturally double-counts:
+### Species co-occurrence
 
 ```sql
--- Self-join generates 2 rows per pair per date (A→B and B→A)
--- After canonicalization to (min, max) species, both land in same GROUP BY bucket
--- COUNT(*) = 2×days; COUNT(DISTINCT a.Date) = correct days
-
 WITH daily AS (
     SELECT DISTINCT Date, Com_Name FROM detections
 ),
@@ -144,7 +137,7 @@ pairs AS (
     SELECT
         MIN(a.Com_Name, b.Com_Name) AS species_a,
         MAX(a.Com_Name, b.Com_Name) AS species_b,
-        COUNT(DISTINCT a.Date) AS shared_days   -- ← not COUNT(*)
+        COUNT(DISTINCT a.Date) AS shared_days
     FROM daily a
     JOIN daily b ON a.Date = b.Date AND a.Com_Name != b.Com_Name
     GROUP BY species_a, species_b
@@ -152,9 +145,17 @@ pairs AS (
 SELECT * FROM pairs ORDER BY shared_days DESC;
 ```
 
+The canonical `(MIN, MAX)` pair is used to deduplicate the symmetric
+self-join, and `COUNT(DISTINCT a.Date)` gives the number of shared days
+rather than raw join row count.
+
 ## DuckDB (Analytics Database)
 
-**Status: ✅ Queries implemented** in `crates/birdnet-db/src/duckdb/`
+DuckDB powers the optional behavioral and time-series analytics layer
+(`--features analytics`). Types and query builders live in
+`crates/birdnet-behavioral/` and `crates/birdnet-timeseries/`; the
+DuckDB connection and sync helpers live in
+`crates/birdnet-behavioral/src/connection/`.
 
 ### Why DuckDB for Analytics
 
@@ -187,36 +188,29 @@ DETACH sqlite_db;
 
 Sync runs periodically (configurable interval, default: every 5 minutes).
 
-### Analytics Queries Implemented
+### Analytics queries implemented
+
+Analytics queries are split across two crates:
 
 | Query | Module | Description |
 |-------|--------|-------------|
-| Activity heatmap | `duckdb/queries/heatmap.rs` | Hour × day-of-week SVG heat map |
-| Daily trends | `duckdb/queries/trends.rs` | Detections per day with 7-day moving average |
-| Species correlation | `sqlite/queries/correlation.rs` | Co-occurrence shared-day count |
-| Top species by period | `duckdb/queries/species.rs` | Ranked species for week/month/year |
-| Confidence distribution | `duckdb/queries/confidence.rs` | Histogram by species |
-| Seasonal patterns | `duckdb/queries/seasonal.rs` | Month-by-month species activity |
-
-### Analytics API Endpoints
-
-```
-GET /api/v2/analytics/trends         → daily count + 7-day MA
-GET /api/v2/analytics/heatmap        → hour×weekday SVG (or JSON data)
-GET /api/v2/analytics/top-species    → species ranked by period
-GET /api/v2/analytics/confidence     → confidence histogram
-GET /api/v2/analytics/correlation    → species co-occurrence matrix
-GET /api/v2/analytics/seasonal       → month×species activity grid
-```
+| Activity heatmap | `birdnet-db::sqlite::queries::heatmap` | Hour × day-of-week SVG heat map (served from SQLite) |
+| Daily trends | `birdnet-timeseries::queries::activity` | Detections per day with rolling window |
+| Species correlation | `birdnet-db::sqlite::queries::correlation` | Co-occurrence shared-day count |
+| Confidence distribution | `birdnet-db::sqlite::queries::analytics` | Histogram by species |
+| Sessionization | `birdnet-behavioral::queries` | Activity sessions with configurable gap |
+| Retention / funnel | `birdnet-behavioral::queries` | Resident vs. migrant classification, dawn chorus sequences |
+| Phenology timing | `birdnet-behavioral::phenology::timing` | Migration windows, first / last detection, year-over-year trend |
+| Weekly abundance | `birdnet-behavioral::phenology::abundance` | Normalised abundance index and peak weeks |
 
 ## Cross-Compilation Notes
 
-- **rusqlite** with `bundled` feature: bundles SQLite C source, compiles anywhere
-- **DuckDB**: Needs C++ cross-toolchain; custom `cross` Docker image needed
-- Alternative: DuckDB queries run server-side only, so native compilation on Pi is viable
+- **rusqlite** with the `bundled` feature: bundles SQLite C source, compiles anywhere.
+- **DuckDB**: bundles DuckDB's C++ source, so a C++ toolchain is required on
+  the build host. CI builds Docker images natively on `ubuntu-24.04` and
+  `ubuntu-24.04-arm` runners to avoid QEMU emulation; release binaries are
+  produced via `cargo-zigbuild` using Zig's universal linker.
 
 ---
-
-*Last updated: 2026-03-14*
 
 [← ML Inference](06-ml-inference.md) | [Back to Index](../RUST_ARCHITECTURE_PLAN.md) | [Next: Behavioral Analytics →](08-behavioral-analytics.md)

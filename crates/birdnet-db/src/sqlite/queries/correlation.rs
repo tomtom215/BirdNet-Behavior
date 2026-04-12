@@ -207,6 +207,9 @@ mod tests {
 
     fn setup() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
+        // Dates are computed at insert time via SQLite's DATE('now', '-N days')
+        // so the fixture stays within the 30-day window used by the queries
+        // under test, regardless of when the suite runs.
         conn.execute_batch(
             "CREATE TABLE detections (
                 Date TEXT, Time TEXT, Sci_Name TEXT, Com_Name TEXT,
@@ -214,12 +217,12 @@ mod tests {
                 Week INTEGER, Sens REAL, Overlap REAL, File_Name TEXT
             );
             INSERT INTO detections VALUES
-              ('2026-03-10','07:00:00','A sp','Robin',  0.9,0,0,0,0,0,0,''),
-              ('2026-03-10','07:05:00','B sp','Wren',   0.8,0,0,0,0,0,0,''),
-              ('2026-03-10','08:00:00','C sp','Finch',  0.7,0,0,0,0,0,0,''),
-              ('2026-03-11','07:00:00','A sp','Robin',  0.9,0,0,0,0,0,0,''),
-              ('2026-03-11','07:10:00','B sp','Wren',   0.8,0,0,0,0,0,0,''),
-              ('2026-03-12','07:00:00','A sp','Robin',  0.9,0,0,0,0,0,0,'');",
+              (DATE('now', '-7 days'),'07:00:00','A sp','Robin',  0.9,0,0,0,0,0,0,''),
+              (DATE('now', '-7 days'),'07:05:00','B sp','Wren',   0.8,0,0,0,0,0,0,''),
+              (DATE('now', '-7 days'),'08:00:00','C sp','Finch',  0.7,0,0,0,0,0,0,''),
+              (DATE('now', '-6 days'),'07:00:00','A sp','Robin',  0.9,0,0,0,0,0,0,''),
+              (DATE('now', '-6 days'),'07:10:00','B sp','Wren',   0.8,0,0,0,0,0,0,''),
+              (DATE('now', '-5 days'),'07:00:00','A sp','Robin',  0.9,0,0,0,0,0,0,'');",
         )
         .unwrap();
         conn

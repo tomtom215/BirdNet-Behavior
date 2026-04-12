@@ -16,13 +16,15 @@
 
 ## Concept
 
-[duckdb-behavioral](https://github.com/tomtom215/duckdb-behavioral) (v0.4.0,
-compatible with DuckDB v1.5.1) provides ClickHouse-inspired behavioral analytics
-functions. Applied to bird detections, these reveal ecological patterns invisible
-to simple aggregation queries.
+[duckdb-behavioral](https://github.com/tomtom215/duckdb-behavioral)
+provides ClickHouse-inspired behavioral analytics functions. Applied to
+bird detections, these reveal ecological patterns that simple aggregation
+queries cannot capture.
 
-The `birdnet-behavioral` crate provides **types and SQL builders** for the
-behavioral analytics layer. The queries run against DuckDB via `birdnet-db`.
+The `birdnet-behavioral` crate provides the types, SQL builders, and
+DuckDB connection helpers for the behavioral analytics layer. Queries
+execute against a DuckDB file that is periodically synced from the
+operational SQLite database.
 
 ## Currently Implemented Analytics
 
@@ -78,19 +80,17 @@ Month-by-month species activity grid showing peak months per species.
 
 ## duckdb-behavioral Functions
 
-These behavioral analytics functions use the `duckdb-behavioral` community
-extension (v0.4.0). Types, SQL builders, and API endpoints are implemented
-in `birdnet-behavioral`; the extension is loaded at startup when the
+Types, SQL builders, and API endpoints are implemented in
+`birdnet-behavioral`; the extension is loaded at startup when the
 `analytics` feature is enabled.
 
-| Function | Bird Behavior Use | Status |
-|----------|------------------|--------|
-| `sessionize` | Group continuous bird activity into sessions | ✅ Complete |
-| `retention` | Track species return patterns (resident vs. migrant) | ✅ Complete |
-| `window_funnel` | Analyze dawn chorus ordering and sequences | ✅ Complete |
-| `sequence_match` | Find days matching specific bird activity patterns | ⚠️ SQL ready, not wired |
-| `sequence_count` | Count pattern occurrences over time | ⚠️ SQL ready, not wired |
-| `sequence_next_node` | Predict which species follows a detected bird | ✅ Complete |
+| Function | Bird Behavior Use |
+|----------|------------------|
+| `sessionize` | Group continuous bird activity into sessions |
+| `retention` | Track species return patterns (resident vs. migrant) |
+| `window_funnel` | Analyse dawn chorus ordering and sequences |
+| `sequence_next_node` | Predict which species follows a detected bird |
+| `sequence_match` / `sequence_count` | Match and count specific activity patterns |
 
 ### 1. Activity Sessionization
 
@@ -176,52 +176,30 @@ LIMIT 10;
 
 **Use case:** "What to expect next" prediction feature for the web UI.
 
-## Implementation Status
-
-| Component | Status |
-|-----------|--------|
-| Result types (`ActivitySession`, `SpeciesRetention`, etc.) | ✅ Complete |
-| Parameter types with defaults | ✅ Complete |
-| Residency classification logic | ✅ Complete |
-| SQL builder functions | ✅ Complete |
-| Activity heatmap (hour × weekday SVG) | ✅ Complete |
-| Species co-occurrence matrix | ✅ Complete |
-| Daily trends + moving average | ✅ Complete |
-| Seasonal patterns (month × species) | ✅ Complete |
-| DuckDB connection and execution | ✅ Complete |
-| API endpoint handlers | ✅ Complete |
-| duckdb-behavioral extension loading | ✅ Complete |
-| Sessionization endpoint | ✅ Complete |
-| Retention analysis endpoint | ✅ Complete |
-| Dawn chorus funnel endpoint | ✅ Complete |
-| Next species prediction endpoint | ✅ Complete |
-
 ## API Endpoints
 
 ```
-GET /api/v2/analytics/trends           → daily count + 7-day MA           ✅
-GET /api/v2/analytics/heatmap          → hour×weekday data                 ✅
-GET /api/v2/analytics/top-species      → species ranked by period          ✅
-GET /api/v2/analytics/correlation      → co-occurrence matrix              ✅
-GET /api/v2/analytics/seasonal         → month×species activity            ✅
-GET /api/v2/analytics/sessions         → activity sessionization           ✅
-GET /api/v2/analytics/retention        → species retention rates           ✅
-GET /api/v2/analytics/funnel           → dawn chorus funnel                ✅
-GET /api/v2/analytics/next-species     → "what's coming next" prediction   ✅
+GET /api/v2/analytics/trends           → daily count with rolling window
+GET /api/v2/analytics/heatmap          → hour × weekday data
+GET /api/v2/analytics/top-species      → species ranked by period
+GET /api/v2/analytics/correlation      → co-occurrence matrix
+GET /api/v2/analytics/seasonal         → month × species activity
+GET /api/v2/analytics/sessions         → activity sessionization
+GET /api/v2/analytics/retention        → species retention rates
+GET /api/v2/analytics/funnel           → dawn chorus funnel
+GET /api/v2/analytics/next-species     → "what's coming next" prediction
 ```
 
-## Web UI Visualizations
+## Web UI
 
-| Visualization | Status |
-|--------------|--------|
-| Activity heatmap (hour × weekday) | ✅ SVG, served at `/pages/heatmap` |
-| Daily trends chart | ✅ HTMX analytics page |
-| Species co-occurrence table | ✅ HTMX analytics page |
-| Seasonal patterns grid | ✅ HTMX analytics page |
-| Activity session timeline | ❌ Planned |
-| Species retention heatmap | ❌ Planned |
-| Dawn chorus funnel chart | ❌ Planned |
-| "What's coming next?" widget | ❌ Planned |
+Analytics are surfaced through several HTMX pages:
+
+- `/heatmap` — hour × weekday SVG activity grid
+- `/correlation` — species co-occurrence pairs and companion lookup
+- `/analytics` — sessions, retention, funnel, and next-species widgets
+  (feature-gated)
+- `/timeseries` — activity, diversity, trend, peak, gap, and session
+  time-series dashboards
 
 ## Data Preparation
 
@@ -233,7 +211,5 @@ FROM detections;
 ```
 
 ---
-
-*Last updated: 2026-03-28*
 
 [← Database](07-database.md) | [Back to Index](../RUST_ARCHITECTURE_PLAN.md) | [Next: Web Server →](09-web-server.md)

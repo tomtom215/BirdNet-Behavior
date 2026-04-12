@@ -1,6 +1,6 @@
 # Target Architecture
 
-> Single binary design with 7 workspace crates.
+> Single binary design with eight workspace crates.
 
 ## Table of Contents
 
@@ -13,176 +13,188 @@
 
 ## Single Binary Design
 
-Inspired by tomtom215's `mallardmetrics` pattern: a single Rust binary that embeds
-all functionality, deployed as one file.
+BirdNet-Behavior ships as one Rust binary that embeds every subsystem —
+audio capture, inference, storage, HTTP server, integrations, scheduler.
+There are no helper processes, no interpreter, no sidecar services.
 
 ```
 birdnet-behavior (single binary)
 ├── Core Engine
-│   ├── Audio Capture (replaces birdnet_recording.sh)
-│   ├── ML Inference (ONNX via ort / pure Rust via tract)
-│   ├── Detection Pipeline (notify → analyze → report)
-│   └── Audio Processing (decode, resample, mel spectrogram)
+│   ├── Audio Capture          ALSA / PulseAudio / PipeWire / RTSP
+│   ├── ML Inference           ONNX Runtime via the `ort` crate
+│   ├── Detection Pipeline     notify → decode → resample → infer → report
+│   └── Audio Processing       symphonia, rubato, mel spectrogram
 │
 ├── Data Layer
-│   ├── SQLite (operational: detections, settings, real-time queries)
-│   ├── DuckDB (analytics: trends, aggregations, behavioral)
-│   └── Resilience (WAL, backup, integrity, recovery)
+│   ├── SQLite (OLTP)          Detections, settings, live queries
+│   ├── DuckDB (OLAP)          Behavioral + time-series analytics (optional)
+│   └── Resilience             WAL, backup, integrity check, recovery
 │
 ├── Web Server (axum)
-│   ├── REST API (/api/v2/*)
-│   ├── Server-Sent Events (/api/v2/detections/stream, /api/v2/logs/stream)
-│   ├── HTMX pages (dashboard, species, heatmap, analytics, admin)
-│   └── Admin panel (settings, system, backup, logs)
+│   ├── REST API               /api/v2/*
+│   ├── WebSocket              Live detection stream, live spectrogram
+│   ├── Server-Sent Events     Live logs, detection feed
+│   ├── HTMX pages             Dashboard, species, heatmap, analytics
+│   └── Admin panel            Settings, system controls, backups, logs
 │
 ├── Integrations
-│   ├── BirdWeather (reqwest + retry queue)
-│   ├── Email alerts (lettre, SMTP, per-species cooldown)
-│   ├── Apprise notifications
-│   ├── Image caching (Flickr/Wikipedia)
-│   └── RTSP/Icecast
+│   ├── BirdWeather            Detection + soundscape upload
+│   ├── Apprise                80+ notification channels
+│   ├── Email (lettre)         SMTP / STARTTLS, per-species cooldown
+│   ├── MQTT                   Pure-Rust 3.1.1 publisher + HA discovery
+│   └── Species images         Wikipedia cache
 │
-├── Time Series
-│   └── Trend analysis, moving averages, seasonal patterns
+├── Analytics
+│   ├── Behavioral             Sessionize, retention, funnel, phenology
+│   └── Time series            Activity, diversity, trend, peak, gap
 │
 └── Migration
-    └── BirdNET-Pi SQLite import (zero-downtime, non-destructive)
+    └── BirdNET-Pi import      Schema detection, validation, transactional import
 ```
 
 ## Workspace Layout
 
 ```
 BirdNet-Behavior/
-├── Cargo.toml                    # Workspace root
+├── Cargo.toml                      # Workspace root
+├── src/                            # Binary entry point and application glue
+│   ├── main.rs                     # Startup, CLI parse, service wiring
+│   ├── cli.rs                      # clap argument definitions
+│   ├── daemon.rs                   # Detection event processor
+│   ├── capture.rs                  # Audio capture subprocess lifecycle
+│   ├── integrations.rs             # Integration factories
+│   ├── helpers.rs                  # Disk manager, mDNS, init helpers
+│   └── weekly_report.rs            # Weekly report scheduler
+│
 ├── crates/
-│   ├── birdnet-core/             # Detection pipeline, audio, ML
+│   ├── birdnet-core/               # Audio, detection pipeline, inference
 │   │   └── src/
 │   │       ├── lib.rs
-│   │       ├── config.rs         # birdnet.conf parser (INI-style)
+│   │       ├── config.rs           # birdnet.conf parser (INI)
+│   │       ├── i18n.rs             # Species name translation
 │   │       ├── audio/
-│   │       │   ├── mod.rs
-│   │       │   ├── capture.rs    # Mic/RTSP recording subprocess
-│   │       │   ├── decode.rs     # WAV/FLAC/MP3 via symphonia ✅
-│   │       │   ├── resample.rs   # Via rubato ✅
-│   │       │   └── spectrogram.rs # Mel spectrogram (pure Rust) ⚠️
-│   │       └── detection/
-│   │           ├── mod.rs
-│   │           ├── pipeline.rs   # Watch → Analyze → Report ✅
-│   │           └── types.rs      # Detection, RecordingFile types ✅
+│   │       │   ├── capture/        # arecord / ffmpeg / tmpfs / disk manager
+│   │       │   ├── decode.rs       # symphonia WAV/FLAC/MP3
+│   │       │   ├── resample.rs     # rubato polynomial resampler
+│   │       │   ├── extraction/     # Per-detection WAV extraction + metadata
+│   │       │   ├── quality/        # SNR, flatness, rain/wind detection
+│   │       │   └── spectrogram/    # Mel spectrogram + live broadcast
+│   │       ├── detection/
+│   │       │   ├── pipeline.rs     # Chunking + inference orchestration
+│   │       │   ├── daemon.rs       # File-watcher event loop
+│   │       │   ├── privacy.rs      # Human-voice suppression
+│   │       │   └── types.rs
+│   │       └── inference/
+│   │           ├── model.rs        # ort session wrapper
+│   │           ├── labels.rs       # BirdNET label parser
+│   │           └── species_filter.rs
 │   │
-│   ├── birdnet-db/               # Database layer
+│   ├── birdnet-db/                 # Database layer
 │   │   └── src/
 │   │       ├── lib.rs
-│   │       ├── duckdb/           # OLAP analytics queries
-│   │       │   ├── mod.rs
-│   │       │   ├── connection.rs
-│   │       │   └── queries/      # heatmap, trends, correlation, seasonal
-│   │       ├── sqlite/           # OLTP operational DB
-│   │       │   ├── mod.rs
-│   │       │   ├── connection.rs
-│   │       │   ├── migrations.rs
-│   │       │   ├── settings.rs   # Key-value settings table
-│   │       │   └── queries/      # detections, species, correlation, analytics
-│   │       └── resilience.rs     # WAL, backup, integrity, recovery
+│   │       ├── sqlite/             # Connection, queries, types
+│   │       ├── migration.rs        # Schema migrations (idempotent)
+│   │       ├── resilience.rs       # Backup, restore, integrity check
+│   │       ├── settings.rs         # Key-value settings store
+│   │       ├── alert_rules.rs      # Detection-triggered actions
+│   │       └── notifications.rs    # Notification log and stats
 │   │
-│   ├── birdnet-web/              # Web server
+│   ├── birdnet-web/                # Web server
 │   │   └── src/
 │   │       ├── lib.rs
-│   │       ├── server.rs         # axum setup, graceful shutdown
-│   │       ├── state.rs          # Shared app state (Arc<Mutex>)
-│   │       ├── system_info.rs    # CPU/memory/disk via sysinfo
-│   │       └── routes/
-│   │           ├── mod.rs
-│   │           ├── api/          # REST API v2
-│   │           │   ├── detections.rs
-│   │           │   ├── species.rs
-│   │           │   ├── recordings.rs
-│   │           │   ├── analytics.rs
-│   │           │   └── logs.rs
-│   │           ├── pages/        # HTMX server-rendered pages
-│   │           │   ├── dashboard.rs
-│   │           │   ├── species.rs
-│   │           │   ├── heatmap.rs
-│   │           │   ├── analytics.rs
-│   │           │   └── logs.rs
-│   │           └── admin/        # Admin panel
-│   │               ├── mod.rs
-│   │               ├── settings.rs
-│   │               ├── system.rs
-│   │               ├── backup.rs
-│   │               └── logs.rs
+│   │       ├── server.rs           # axum setup, graceful shutdown
+│   │       ├── state.rs            # Shared application state
+│   │       ├── auth.rs             # HTTP Basic Auth
+│   │       ├── rate_limit.rs       # Per-IP token-bucket rate limiter
+│   │       ├── system_info.rs      # CPU / memory / temperature
+│   │       └── routes/             # REST API, HTMX pages, admin panel
 │   │
-│   ├── birdnet-integrations/     # External services
+│   ├── birdnet-integrations/       # External services
+│   │   └── src/
+│   │       ├── birdweather.rs
+│   │       ├── apprise.rs
+│   │       ├── email/              # SMTP via lettre + rustls
+│   │       ├── species_images/     # Wikipedia image cache
+│   │       ├── mqtt/               # Pure-Rust MQTT 3.1.1 + HA discovery
+│   │       ├── auto_update.rs      # GitHub Releases update
+│   │       ├── heartbeat.rs
+│   │       ├── notification.rs     # Template rendering
+│   │       └── weekly_report.rs
+│   │
+│   ├── birdnet-behavioral/         # DuckDB behavioral analytics
 │   │   └── src/
 │   │       ├── lib.rs
-│   │       ├── birdweather.rs    # BirdWeather API client ✅
-│   │       ├── apprise.rs        # Apprise notification client ✅
-│   │       ├── email.rs          # SMTP email alerts (lettre) ✅
-│   │       ├── flickr.rs         # Flickr image caching ✅
-│   │       └── rtsp.rs           # RTSP stream management ⚠️
+│   │       ├── types.rs
+│   │       ├── queries.rs          # SQL builders
+│   │       ├── connection/         # DuckDB connection and sync
+│   │       └── phenology/          # Timing, abundance, migration windows
 │   │
-│   ├── birdnet-behavioral/       # DuckDB behavioral analytics
+│   ├── birdnet-timeseries/         # Time-series analytics
 │   │   └── src/
 │   │       ├── lib.rs
-│   │       ├── types.rs          # Result/parameter types ✅
-│   │       └── queries.rs        # SQL builders ✅
+│   │       ├── queries/            # activity, diversity, trend, peak, gap
+│   │       ├── executor/           # Query execution
+│   │       ├── window/             # tumbling, sliding, hopping, session
+│   │       └── types/
 │   │
-│   ├── birdnet-timeseries/       # Time series analysis
+│   ├── birdnet-migrate/            # BirdNET-Pi migration
 │   │   └── src/
 │   │       ├── lib.rs
-│   │       ├── trends.rs         # Trend detection ✅
-│   │       ├── moving_average.rs # Rolling window statistics ✅
-│   │       └── seasonal.rs       # Seasonal pattern analysis ✅
+│   │       ├── traits.rs           # Migrator, Validator, SchemaDetector
+│   │       ├── schema.rs           # SQLite + CSV schema detection
+│   │       ├── progress.rs         # Thread-safe progress handle
+│   │       └── birdnet_pi/         # Importer, validator, species report
 │   │
-│   └── birdnet-migrate/          # BirdNET-Pi migration
+│   └── birdnet-scheduler/          # Recording schedule
 │       └── src/
 │           ├── lib.rs
-│           ├── traits.rs         # Migrator trait ✅
-│           ├── report.rs         # MigrationReport types ✅
-│           └── birdnet_pi/       # BirdNET-Pi importer
-│               ├── mod.rs        # Schema validation + migration ✅
-│               └── species_report.rs # Per-species summary ✅
+│           ├── solar.rs            # NOAA/Meeus sunrise/sunset
+│           ├── schedule.rs
+│           ├── window.rs
+│           └── inhibit.rs          # Night-inhibit logic
 │
-├── src/
-│   ├── main.rs                   # Binary entry point ✅
-│   ├── daemon.rs                 # Detection daemon + event processor ✅
-│   └── integrations.rs           # Integration factories ✅
-├── tests/                        # Integration tests
-└── .github/workflows/            # CI
+├── docs/                           # Architecture documentation
+├── tests/                          # Integration tests
+└── .github/workflows/              # CI/CD pipelines
 ```
 
 ## Crate Responsibilities
 
-| Crate | Sync/Async | Purpose | Status |
-|-------|-----------|---------|--------|
-| `birdnet-core` | Sync | Audio processing, config, detection types | ✅ Decode/resample; ⚠️ spectrogram |
-| `birdnet-db` | Sync | SQLite + DuckDB operations, settings, resilience | ✅ Complete |
-| `birdnet-web` | Async | HTMX pages, REST API, SSE, admin panel | ✅ Complete |
-| `birdnet-integrations` | Async | BirdWeather, email, Apprise, Flickr | ✅ Complete |
-| `birdnet-behavioral` | Sync | DuckDB behavioral analytics types/SQL | ✅ Types + SQL builders |
-| `birdnet-timeseries` | Sync | Trend analysis, moving averages, seasonal | ✅ Complete |
-| `birdnet-migrate` | Sync | BirdNET-Pi SQLite migration, validation | ✅ Complete |
+| Crate | Sync/Async | Purpose |
+|-------|-----------|---------|
+| `birdnet-core` | Sync | Audio processing, detection pipeline, ML inference |
+| `birdnet-db` | Sync | SQLite operations, settings, resilience, alert rules |
+| `birdnet-web` | Async | REST API, WebSocket, HTMX pages, admin panel |
+| `birdnet-integrations` | Async | BirdWeather, Apprise, email, Wikipedia, MQTT |
+| `birdnet-behavioral` | Sync | DuckDB behavioral analytics types and SQL builders |
+| `birdnet-timeseries` | Sync | Time-series query builders and executors |
+| `birdnet-migrate` | Sync | BirdNET-Pi schema detection and transactional import |
+| `birdnet-scheduler` | Sync | Solar calculations and recording window scheduling |
+
+Library crates are synchronous by design. Async is confined to `birdnet-web`
+and the binary itself, so library code can be exercised in tests without an
+async runtime.
 
 ## Inter-Crate Dependencies
 
 ```
 main.rs / daemon.rs / integrations.rs
-  ├── birdnet-core     (no cross-deps)
-  ├── birdnet-db       (no cross-deps)
-  ├── birdnet-web ──────→ birdnet-core, birdnet-db
+  ├── birdnet-core         (no cross-deps)
+  ├── birdnet-db           (no cross-deps)
+  ├── birdnet-scheduler    (no cross-deps)
   ├── birdnet-integrations (no cross-deps)
   ├── birdnet-behavioral   (no cross-deps)
   ├── birdnet-timeseries   (no cross-deps)
-  └── birdnet-migrate  ──→ birdnet-db
+  ├── birdnet-migrate ───→ birdnet-db
+  └── birdnet-web ───────→ birdnet-core, birdnet-db, birdnet-integrations,
+                            birdnet-migrate, birdnet-behavioral, birdnet-timeseries
 ```
 
-The dependency graph is intentionally shallow. Library crates have no
-circular dependencies. Only `birdnet-web` depends on `birdnet-core` and
-`birdnet-db` for shared types and database access. `birdnet-migrate` depends
-on `birdnet-db` for the target database connection.
+The graph is intentionally shallow. Library crates have no circular
+dependencies. Only `birdnet-web` pulls in multiple sibling crates — it is
+the composition point for HTTP-accessible functionality. `birdnet-migrate`
+depends on `birdnet-db` solely for the target database connection type.
 
 ---
-
-*Last updated: 2026-03-14*
 
 [← Motivation](01-motivation.md) | [Back to Index](../RUST_ARCHITECTURE_PLAN.md) | [Next: Coding Standards →](03-coding-standards.md)

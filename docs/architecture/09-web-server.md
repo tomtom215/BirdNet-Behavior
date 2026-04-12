@@ -23,10 +23,11 @@ The web server replaces the Python FastAPI application with an axum server
 embedded in the single binary. It serves:
 
 - **REST API** (`/api/v2/*`) for programmatic access and HTMX partial updates
-- **Server-Sent Events** (`/api/v2/detections/stream`, `/api/v2/logs/stream`) for live updates
-- **HTMX pages** — full server-side rendered dashboard, species, heatmap, analytics, logs
-- **Admin panel** — settings editor, system info, backup management, live logs
-- **Static files** — species images cached from Flickr/Wikipedia
+- **WebSocket** (`/api/v2/ws`, `/api/v2/ws/spectrogram`) for live detection and spectrogram streams
+- **Server-Sent Events** (`/api/v2/detections/stream`, `/api/v2/logs/stream`) for live dashboards and logs
+- **HTMX pages** — fully server-rendered dashboard, species, heatmap, analytics, admin
+- **Admin panel** — settings editor, system info, backup management, log viewer, update check
+- **Static assets** — species images cached from Wikipedia, embedded HTMX JS
 
 ## Server Architecture
 
@@ -247,7 +248,5 @@ to implement, and sufficient for live detection/log updates. WebSocket adds
 complexity without benefit for this use case.
 
 ---
-
-*Last updated: 2026-03-14*
 
 [← Behavioral Analytics](08-behavioral-analytics.md) | [Back to Index](../RUST_ARCHITECTURE_PLAN.md) | [Next: Deployment →](10-deployment.md)
