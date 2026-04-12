@@ -1,46 +1,200 @@
+# Release pipeline for BirdNet-Behavior.
+#
+# Triggered by pushing a semver tag, e.g.:
+#   git tag -a v0.1.0 -m "Release v0.1.0"
+#   git push origin v0.1.0
+#
+# See RELEASING.md for the full release runbook.
+#
+# Job dependency graph:
+#
+#   validate ──► ci ──► build (matrix) ──► package ──► github-release
+#
+# Companion workflow: .github/workflows/docker.yml publishes multi-arch
+# container images to GHCR in parallel on the same tag push.
+
 name: Release
 
 on:
   push:
     tags:
-      - "v[0-9]+.[0-9]+.[0-9]*"
+      - "v[0-9]+.[0-9]+.[0-9]+"         # stable      (v1.2.3)
+      - "v[0-9]+.[0-9]+.[0-9]+-*"       # pre-release (v1.2.3-rc.1)
 
+# Prevent concurrent releases for the same ref.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# Minimal default — individual jobs escalate only what they need.
 permissions:
-  contents: write   # needed to create GitHub Releases and upload assets
+  contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+# ── Job 1: Validate tag, workspace version, and changelog ────────────────────
 jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Extract version metadata
+        id: meta
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+
+          echo "::group::Tag metadata"
+          printf 'Tag:        %s\n' "$TAG"
+          printf 'Version:    %s\n' "$VERSION"
+
+          # Validate semver (X.Y.Z with optional pre-release and build metadata).
+          SEMVER_RE='^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?(\+[A-Za-z0-9.]+)?$'
+          if [[ ! "$VERSION" =~ $SEMVER_RE ]]; then
+            echo "::error::Tag '$TAG' is not a valid semantic version."
+            echo "Expected: vX.Y.Z  or  vX.Y.Z-pre.1"
+            exit 1
+          fi
+
+          if [[ "$VERSION" =~ - ]]; then
+            IS_PRE=true
+          else
+            IS_PRE=false
+          fi
+
+          printf 'Pre-release: %s\n' "$IS_PRE"
+          echo "::endgroup::"
+
+          echo "version=$VERSION"      >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$IS_PRE" >> "$GITHUB_OUTPUT"
+
+      - name: Verify workspace version matches tag
+        shell: bash
+        run: |
+          TAG_VER="${{ steps.meta.outputs.version }}"
+          CARGO_VER=$(
+            awk '/^\[workspace\.package\]/{flag=1; next}
+                 /^\[/{flag=0}
+                 flag && /^version = /{gsub(/[" ]/, "", $3); print $3; exit}' \
+              Cargo.toml
+          )
+
+          echo "::group::Version consistency"
+          printf 'Cargo.toml workspace.package.version: %s\n' "$CARGO_VER"
+          printf 'Tag version:                           %s\n' "$TAG_VER"
+          echo "::endgroup::"
+
+          if [[ "$CARGO_VER" != "$TAG_VER" ]]; then
+            echo "::error file=Cargo.toml::workspace.package.version ($CARGO_VER) does not match tag ($TAG_VER)"
+            echo "Bump workspace.package.version in Cargo.toml before tagging."
+            exit 1
+          fi
+          echo "::notice::Workspace version matches tag: $TAG_VER"
+
+      - name: Verify CHANGELOG.md entry exists
+        shell: bash
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+
+          if [[ ! -f CHANGELOG.md ]]; then
+            echo "::error::CHANGELOG.md not found"
+            exit 1
+          fi
+
+          if ! grep -qE "^## \[$VERSION\]" CHANGELOG.md; then
+            echo "::error file=CHANGELOG.md::No '## [$VERSION]' entry in CHANGELOG.md"
+            echo "Add release notes under a '## [$VERSION]' heading before tagging."
+            exit 1
+          fi
+          echo "::notice::CHANGELOG.md entry found for v$VERSION"
+
+# ── Job 2: Full quality gate before building release artifacts ───────────────
+  ci:
+    name: CI gate — ${{ matrix.name }}
+    needs: validate
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: fmt
+            toolchain: stable
+            components: rustfmt
+            command: cargo fmt --check --all
+          - name: clippy
+            toolchain: stable
+            components: clippy
+            command: cargo clippy --workspace --all-targets -- -D warnings
+          - name: test
+            toolchain: stable
+            command: cargo test --workspace --lib --bins
+          - name: doc
+            toolchain: stable
+            command: cargo doc --workspace --no-deps --document-private-items
+          - name: msrv
+            toolchain: "1.88"
+            command: cargo check --workspace
+    env:
+      RUSTDOCFLAGS: "-D warnings"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: ${{ matrix.components || '' }}
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: release-ci-${{ matrix.name }}
+
+      - name: ${{ matrix.name }}
+        run: ${{ matrix.command }}
+
+# ── Job 3: Cross-compile release binaries for every supported target ─────────
   build:
     name: Build ${{ matrix.target }}
+    needs: [validate, ci]
     runs-on: ubuntu-24.04
-
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Raspberry Pi 4 / 5  (64-bit Raspberry Pi OS Bullseye / Bookworm)
+          # Raspberry Pi 4 / 5 (64-bit Raspberry Pi OS Bullseye / Bookworm)
           - target: aarch64-unknown-linux-gnu
             glibc: "2.28"
-            asset_name: birdnet-behavior-aarch64-unknown-linux-gnu
-
           # Standard 64-bit Linux (x86_64)
           - target: x86_64-unknown-linux-gnu
             glibc: "2.28"
-            asset_name: birdnet-behavior-x86_64-unknown-linux-gnu
-
           # Raspberry Pi 3 / 32-bit Pi OS (armv7)
           - target: armv7-unknown-linux-gnueabihf
             glibc: "2.28"
-            asset_name: birdnet-behavior-armv7-unknown-linux-gnueabihf
-
     steps:
-      - uses: actions/checkout@v5
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
-      # Zig is the cross-linker — available as a pip package, no Docker needed.
+      # Zig serves as the cross-linker for cargo-zigbuild. Using Zig avoids
+      # installing a full cross GCC toolchain per target and keeps the glibc
+      # symbol baseline explicit (see `--target ...:.${{ matrix.glibc }}`).
       - name: Install Zig
         uses: goto-bus-stop/setup-zig@v2
         with:
@@ -49,66 +203,306 @@ jobs:
       - name: Install cargo-zigbuild
         run: cargo install cargo-zigbuild --locked --quiet
 
-      # Cache the Cargo registry and compiled deps between runs.
       - name: Cache Cargo
-        uses: actions/cache@v4
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-${{ matrix.target }}-
+          shared-key: release-build-${{ matrix.target }}
+          key: ${{ matrix.glibc }}
 
-      - name: Build (release)
+      - name: Build release binary
         run: |
           cargo zigbuild \
             --release \
             --target ${{ matrix.target }}.${{ matrix.glibc }} \
             --bin birdnet-behavior
 
-      - name: Rename binary
+      - name: Strip debug symbols
+        shell: bash
         run: |
-          cp target/${{ matrix.target }}/release/birdnet-behavior \
-             ${{ matrix.asset_name }}
+          BIN="target/${{ matrix.target }}/release/birdnet-behavior"
+          if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends binutils-aarch64-linux-gnu
+            aarch64-linux-gnu-strip "$BIN"
+          elif [[ "${{ matrix.target }}" == "armv7-unknown-linux-gnueabihf" ]]; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends binutils-arm-linux-gnueabihf
+            arm-linux-gnueabihf-strip "$BIN"
+          else
+            strip "$BIN"
+          fi
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v6
+      - name: Stage archive contents
+        shell: bash
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+          NAME="birdnet-behavior-${VERSION}-${{ matrix.target }}"
+          STAGE="staging/${NAME}"
+
+          mkdir -p "$STAGE"
+          cp "target/${{ matrix.target }}/release/birdnet-behavior" "$STAGE/"
+          cp README.md LICENSE LICENSE-UPSTREAM CHANGELOG.md install.sh "$STAGE/"
+
+          echo "NAME=${NAME}" >> "$GITHUB_ENV"
+          echo "STAGE=${STAGE}" >> "$GITHUB_ENV"
+
+      - name: Create tar.gz archive
+        shell: bash
+        run: |
+          mkdir -p dist
+          tar -C staging -czf "dist/${NAME}.tar.gz" "${NAME}"
+
+          echo "::group::Archive contents"
+          tar -tzf "dist/${NAME}.tar.gz"
+          echo "::endgroup::"
+
+          echo "::group::Archive size"
+          ls -lh "dist/${NAME}.tar.gz"
+          echo "::endgroup::"
+
+      - name: Generate SHA-256 checksum
+        shell: bash
+        working-directory: dist
+        run: |
+          sha256sum "${NAME}.tar.gz" | tee "${NAME}.tar.gz.sha256"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ${{ matrix.asset_name }}
-          path: ${{ matrix.asset_name }}
+          name: build-${{ matrix.target }}
+          path: |
+            dist/${{ env.NAME }}.tar.gz
+            dist/${{ env.NAME }}.tar.gz.sha256
           retention-days: 7
+          if-no-files-found: error
 
-  release:
-    name: Publish GitHub Release
-    needs: build
+# ── Job 4: Aggregate artifacts, checksum, and SLSA attestation ───────────────
+  package:
+    name: Package and attest
+    needs: [validate, build]
     runs-on: ubuntu-24.04
-
+    permissions:
+      contents: read
+      id-token: write      # OIDC token for SLSA attestation
+      attestations: write  # attach attestation to the repository
     steps:
-      - uses: actions/checkout@v5
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: Download all build artifacts
-        uses: actions/download-artifact@v7
+      - name: Download build artifacts
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
-          path: artifacts/
+          pattern: build-*
+          path: raw/
+          merge-multiple: false
 
-      # Flatten the per-matrix subdirectories that download-artifact creates.
-      - name: Flatten artifacts
+      - name: Flatten artifacts into a single directory
+        shell: bash
         run: |
-          find artifacts/ -type f -exec mv {} artifacts/ \;
-          find artifacts/ -mindepth 1 -type d -delete
+          mkdir -p release
+          find raw -type f \( -name '*.tar.gz' -o -name '*.tar.gz.sha256' \) \
+            -exec cp -v {} release/ \;
+          cp install.sh release/
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+          echo "::group::Release artifacts"
+          ls -lh release/
+          echo "::endgroup::"
+
+      - name: Generate combined SHA256SUMS
+        shell: bash
+        working-directory: release
+        run: |
+          # Combine per-archive checksums into a single SHA256SUMS file in
+          # the standard sha256sum -c format.
+          : > SHA256SUMS
+          for f in *.tar.gz; do
+            sha256sum "$f" >> SHA256SUMS
+          done
+          sha256sum install.sh >> SHA256SUMS
+
+          echo "::group::SHA256SUMS"
+          cat SHA256SUMS
+          echo "::endgroup::"
+
+          # Remove the per-archive .sha256 sidecars now that SHA256SUMS is
+          # the canonical checksum file.
+          rm -f ./*.tar.gz.sha256
+
+      # SLSA Level 2 build provenance — signs every release archive with a
+      # workflow-scoped OIDC token. End users verify with:
+      #   gh attestation verify --repo tomtom215/BirdNet-Behavior <archive>
+      - name: Attest build provenance (SLSA)
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
-          name: "BirdNet-Behavior ${{ github.ref_name }}"
-          draft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          generate_release_notes: true
-          files: |
-            artifacts/birdnet-behavior-aarch64-unknown-linux-gnu
-            artifacts/birdnet-behavior-x86_64-unknown-linux-gnu
-            artifacts/birdnet-behavior-armv7-unknown-linux-gnueabihf
-            install.sh
+          subject-path: release/*.tar.gz
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-artifacts
+          path: release/
+          retention-days: 90
+          if-no-files-found: error
+
+# ── Job 5: Create or update the GitHub Release ───────────────────────────────
+  github-release:
+    name: Publish GitHub Release
+    needs: [validate, package]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write    # create release, upload assets
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: release-artifacts
+          path: release/
+
+      - name: Extract CHANGELOG section for this version
+        id: notes
+        shell: bash
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+
+          echo "::group::Extracting release notes for v$VERSION"
+
+          # Pull everything between ## [VERSION] and the next ## [ heading.
+          awk "
+            /^## \[$VERSION\]/ { found=1; next }
+            found && /^## \[/  { exit }
+            found              { print }
+          " CHANGELOG.md > release_notes.md
+
+          if [[ ! -s release_notes.md ]]; then
+            echo "::error::Empty release notes for $VERSION"
+            echo "Ensure CHANGELOG.md has a non-empty ## [$VERSION] section."
+            exit 1
+          fi
+
+          cat release_notes.md
+          echo "::endgroup::"
+
+      - name: Assemble final release notes
+        shell: bash
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+
+          {
+            cat release_notes.md
+            echo ""
+            echo "---"
+            echo ""
+            echo "## Installation"
+            echo ""
+            echo '### One-line installer (Raspberry Pi / bare-metal Linux)'
+            echo ""
+            echo '```bash'
+            echo "VERSION=${VERSION} bash <(curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh)"
+            echo '```'
+            echo ""
+            echo '### Download a binary directly'
+            echo ""
+            echo '| Target                              | Platform                              |'
+            echo '|-------------------------------------|---------------------------------------|'
+            echo "| \`aarch64-unknown-linux-gnu\`       | Raspberry Pi 4 / 5, ARM64 Linux       |"
+            echo "| \`x86_64-unknown-linux-gnu\`        | Standard 64-bit Linux                 |"
+            echo "| \`armv7-unknown-linux-gnueabihf\`   | Raspberry Pi 3 / 32-bit Pi OS         |"
+            echo ""
+            echo "Archives are gzipped tarballs containing the stripped binary,"
+            echo '`README.md`, `CHANGELOG.md`, `LICENSE`, `LICENSE-UPSTREAM`, and'
+            echo '`install.sh`.'
+            echo ""
+            echo "### Docker"
+            echo ""
+            echo '```bash'
+            echo "docker pull ghcr.io/${{ github.repository_owner }}/birdnet-behavior:${VERSION}"
+            echo "docker pull ghcr.io/${{ github.repository_owner }}/birdnet-behavior:${VERSION}-analytics"
+            echo '```'
+            echo ""
+            echo "Multi-arch manifests cover \`linux/amd64\` and \`linux/arm64\`."
+            echo ""
+            echo "## Verification"
+            echo ""
+            echo '### Checksums'
+            echo ""
+            echo '```bash'
+            echo "sha256sum -c SHA256SUMS --ignore-missing"
+            echo '```'
+            echo ""
+            echo '### SLSA build provenance'
+            echo ""
+            echo "Every release archive carries a signed [SLSA build provenance](https://slsa.dev/spec/v1.0/provenance)"
+            echo "attestation produced by this workflow run. Verify it with the GitHub CLI:"
+            echo ""
+            echo '```bash'
+            echo "gh attestation verify \\"
+            echo "  --repo ${{ github.repository }} \\"
+            echo "  birdnet-behavior-${VERSION}-aarch64-unknown-linux-gnu.tar.gz"
+            echo '```'
+          } > final_notes.md
+
+          echo "::group::Final release notes"
+          cat final_notes.md
+          echo "::endgroup::"
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+          IS_PRE="${{ needs.validate.outputs.is_prerelease }}"
+          TAG="v${VERSION}"
+          TITLE="BirdNet-Behavior ${TAG}"
+          RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/${TAG}"
+
+          PRE_FLAG=()
+          if [[ "$IS_PRE" == "true" ]]; then
+            PRE_FLAG=(--prerelease)
+          fi
+
+          # Idempotent: if a release already exists for this tag (created by
+          # an earlier workflow run or by a human via the web UI), update it
+          # in place rather than failing.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::warning::Release ${TAG} already exists — updating in place."
+            gh release edit "$TAG" \
+              "${PRE_FLAG[@]}" \
+              --title "$TITLE" \
+              --notes-file final_notes.md
+
+            gh release upload "$TAG" \
+              --clobber \
+              release/*.tar.gz \
+              release/SHA256SUMS \
+              release/install.sh
+            echo "::notice::Updated $RELEASE_URL"
+          else
+            gh release create "$TAG" \
+              "${PRE_FLAG[@]}" \
+              --title "$TITLE" \
+              --notes-file final_notes.md \
+              release/*.tar.gz \
+              release/SHA256SUMS \
+              release/install.sh
+            echo "::notice::Published $RELEASE_URL"
+          fi
+
+          {
+            echo "## Release v${VERSION}"
+            echo ""
+            echo "| Field       | Value |"
+            echo "|-------------|-------|"
+            echo "| Version     | \`${VERSION}\` |"
+            echo "| Pre-release | \`${IS_PRE}\` |"
+            echo "| Release     | [v${VERSION}](${RELEASE_URL}) |"
+            echo ""
+            echo "### Artifacts"
+            echo ""
+            echo '```'
+            ls -lh release/
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
