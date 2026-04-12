@@ -137,7 +137,9 @@ jobs:
             command: cargo clippy --workspace --all-targets -- -D warnings
           - name: test
             toolchain: stable
-            command: cargo test --workspace --lib --bins
+            # Run the full test suite (including integration tests under
+            # tests/*.rs) so a regression there blocks the release.
+            command: cargo test --workspace
           - name: doc
             toolchain: stable
             command: cargo doc --workspace --no-deps --document-private-items
