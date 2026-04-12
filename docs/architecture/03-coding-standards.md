@@ -202,10 +202,11 @@ push and pull request:
    `analytics` feature
 6. **msrv** — `cargo check --workspace` against the declared MSRV
 
-Release builds for `aarch64`, `x86_64`, and `armv7` are produced by
-`.github/workflows/release.yml` using `cargo-zigbuild`, and multi-arch
-Docker images are assembled by `.github/workflows/docker.yml` on native
-runners to avoid QEMU emulation.
+Release builds for `aarch64` and `x86_64` are produced by
+`.github/workflows/release.yml` using Ubuntu 24.04's native GCC 13
+cross toolchain, and multi-arch Docker images are assembled by
+`.github/workflows/docker.yml` on native runners to avoid QEMU
+emulation.
 
 ## Code Style
 

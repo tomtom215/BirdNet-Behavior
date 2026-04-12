@@ -121,7 +121,7 @@ curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/ins
 ```
 
 The installer:
-1. Detects your architecture (aarch64 / armv7 / x86_64)
+1. Detects your architecture (aarch64 / x86_64)
 2. Downloads the pre-built binary from GitHub Releases
 3. Downloads the BirdNET+ V3.0 model (~541 MB) from Zenodo
 4. Creates config, recording, and model directories

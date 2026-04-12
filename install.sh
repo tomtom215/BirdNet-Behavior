@@ -89,9 +89,16 @@ detect_arch() {
     case "${machine}" in
         aarch64 | arm64) echo "aarch64-unknown-linux-gnu" ;;
         x86_64)          echo "x86_64-unknown-linux-gnu" ;;
-        armv7l)          echo "armv7-unknown-linux-gnueabihf" ;;
+        armv6l | armv7l)
+            # The `ort` crate does not ship prebuilt ONNX Runtime binaries
+            # for armv7, so BirdNet-Behavior does not publish a 32-bit ARM
+            # release binary.  Pi 3 / Pi Zero 2W users should install the
+            # 64-bit Raspberry Pi OS and use the aarch64 binary, or build
+            # from source.  See RELEASING.md.
+            fatal "Unsupported architecture: ${machine}. 32-bit ARM is not supported; install the 64-bit Raspberry Pi OS and re-run this script, or build from source."
+            ;;
         *)
-            fatal "Unsupported architecture: ${machine}. Supported: aarch64, x86_64, armv7l."
+            fatal "Unsupported architecture: ${machine}. Supported: aarch64, x86_64."
             ;;
     esac
 }

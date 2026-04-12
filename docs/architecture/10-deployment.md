@@ -21,7 +21,13 @@
 |--------|----------|----------|
 | `aarch64-unknown-linux-gnu` | Raspberry Pi 5, Pi 4B, Pi 400 | Primary |
 | `x86_64-unknown-linux-gnu` | Desktop Linux, servers | Secondary |
-| `armv7-unknown-linux-gnueabihf` | Pi Zero 2W (32-bit compat) | Tertiary |
+
+`armv7-unknown-linux-gnueabihf` (Pi 3 / Pi Zero 2W in 32-bit mode) is
+not shipped as a release binary: the `ort` crate does not provide
+prebuilt ONNX Runtime archives for armv7, and building ORT from source
+adds ~30 minutes of CI time per release.  32-bit ARM users should
+install the 64-bit Raspberry Pi OS and run the aarch64 binary, or
+build from source.
 
 ## Cross-Compile Difficulty by Dependency
 
@@ -59,10 +65,13 @@ cargo build --release --target aarch64-unknown-linux-gnu
 ## CI/CD Pipeline (GitHub Actions)
 
 Release artifacts are produced by `.github/workflows/release.yml`. The
-workflow uses `cargo-zigbuild` with Zig's universal linker to cross-compile
-the `aarch64`, `x86_64`, and `armv7` GNU Linux targets against an old
-enough glibc to run on Raspberry Pi OS Bullseye. See the workflow for the
-full target matrix.
+workflow cross-compiles the `aarch64` and `x86_64` GNU Linux targets on
+Ubuntu 24.04 using the native GCC 13 cross toolchain (glibc 2.39
+baseline) — this matches the libstdc++ and glibc baselines that pyke's
+prebuilt ONNX Runtime archives were built against, so release binaries
+require **glibc 2.39 or newer** (Raspberry Pi OS Trixie, Debian 13,
+Ubuntu 24.04, or newer). See the workflow header comments for the full
+diagnosis.
 
 ## Quality Pipeline
 
