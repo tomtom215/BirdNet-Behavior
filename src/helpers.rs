@@ -159,8 +159,8 @@ pub fn init_audio_source(
         .rtsp_url
         .clone()
         .or_else(|| cli.alsa_device.clone())
-        .or_else(|| config?.get("RTSP_STREAM").map(String::from))
-        .or_else(|| config?.get("REC_CARD").map(String::from));
+        .or_else(|| config?.get("RTSP_URL").map(String::from))
+        .or_else(|| config?.get("ALSA_CARD").map(String::from));
 
     match source {
         Some(src) => {

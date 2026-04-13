@@ -145,31 +145,35 @@ See the [Docker section](#docker) below.
 
 ## Docker
 
-### Quick start (3 commands)
+### Quick start
 
 ```bash
 git clone https://github.com/tomtom215/BirdNet-Behavior.git
 cd BirdNet-Behavior
 cp .env.example .env
-# Edit .env — set at minimum BIRDNET_LATITUDE and BIRDNET_LONGITUDE
 ```
 
-Then choose your audio source:
+Open `.env` and set, at minimum:
+
+- `BIRDNET_LATITUDE` / `BIRDNET_LONGITUDE` — your station coordinates
+- **one** of `BIRDNET_ALSA_DEVICE`, `BIRDNET_PIPEWIRE_DEVICE`, `BIRDNET_RTSP_URL`, or `BIRDNET_RTSP_URLS` — your audio source
+
+Then start the stack with the compose overlay matching your audio source:
 
 ```bash
-# RTSP camera or file-watch mode (no mic needed)
+# RTSP camera / multi-stream / file-watch mode (no microphone needed)
 docker compose up -d
 
-# USB microphone (Raspberry Pi, most Linux)
+# USB microphone via ALSA (most Raspberry Pi setups)
 docker compose -f docker-compose.yml -f docker-compose.alsa.yml up -d
 
 # PulseAudio / PipeWire (desktop Linux)
 docker compose -f docker-compose.yml -f docker-compose.pulse.yml up -d
 ```
 
-Open **http://localhost:8502** in your browser.
+Open **http://localhost:8502** in your browser. The BirdNET+ V3.0 model (~541 MB) downloads automatically on first run — give it a couple of minutes. Subsequent starts are instant.
 
-The BirdNET+ model (~541 MB) downloads automatically on first run. Subsequent starts are instant.
+Settings that are **not** exposed as environment variables — detection confidence threshold, per-species thresholds, sensitivity, email, rare-bird quarantine rules — live in the web UI at **`/admin/settings`** and are persisted in the SQLite settings table.
 
 ### Pre-built images
 
@@ -303,26 +307,48 @@ http://<your-ip>:8502
 Settings are read in this priority order (highest wins):
 
 ```
-CLI flags  >  environment variables  >  settings DB  >  /etc/birdnet/birdnet.conf  >  defaults
+CLI flags  >  environment variables  >  /etc/birdnet/birdnet.conf  >  built-in defaults
 ```
 
-The easiest way to configure is through the **web UI at `/admin/settings`**.
+Plus a **SQLite settings table** managed through the web UI at **`/admin/settings`** — this is the canonical place for things that have no CLI flag or env var (detection confidence threshold, per-species thresholds, sensitivity, email SMTP, quarantine rules, …).
 
-### Key Settings
+### Env vars / CLI flags
 
-| Setting | Description | Default |
+The full list is in `.env.example` and `birdnet-behavior --help`. Each row below shows: the environment variable, the matching CLI flag, and the `birdnet.conf` INI key (for BirdNET-Pi compatibility).
+
+| Env var | CLI flag | `birdnet.conf` key | Default |
+|---|---|---|---|
+| `BIRDNET_LATITUDE` / `BIRDNET_LONGITUDE` | `--latitude` / `--longitude` | `LATITUDE` / `LONGITUDE` | — |
+| `BIRDNET_ALSA_DEVICE` | `--alsa-device` | `ALSA_CARD` | — |
+| `BIRDNET_PIPEWIRE_DEVICE` | `--pipewire-device` | — | — |
+| `BIRDNET_RTSP_URL` / `BIRDNET_RTSP_URLS` | `--rtsp-url` / `--rtsp-urls` | `RTSP_URL` | — |
+| `BIRDNET_LISTEN` | `--listen` | — | `127.0.0.1:8502` |
+| `BIRDNET_RECORDING_SCHEDULE` | `--recording-schedule` | — | `all-day` |
+| `BIRDNET_SEGMENT_DURATION` | `--segment-duration` | `RECORDING_LENGTH` | `15` |
+| `BIRDNET_OVERLAP` | `--overlap` | `OVERLAP` | `0.0` |
+| `BIRDNET_SF_THRESH` | `--sf-thresh` | `SF_THRESH` | `0.03` |
+| `BIRDNET_PRIVACY_THRESHOLD` | `--privacy-threshold` | `PRIVACY_THRESHOLD` | `0.0` |
+| `BIRDNET_QUALITY_FILTER` | `--quality-filter` | — | disabled |
+| `BIRDNET_APPRISE_URL` | `--apprise-url` | `APPRISE_URL` | — |
+| `BIRDNET_NOTIFY_CONFIDENCE` | `--notify-confidence` | — | `0.8` |
+| `BIRDNET_BIRDWEATHER_TOKEN` | `--birdweather-token` | `BIRDWEATHER_TOKEN` | — |
+| `BIRDNET_MQTT_HOST` | `--mqtt-host` | `MQTT_HOST` | — |
+| `BIRDNET_MQTT_HA_DISCOVERY` | `--mqtt-ha-discovery` | — | disabled |
+| `BIRDNET_MAX_FILES_PER_SPECIES` | `--max-files-per-species` | `MAX_FILES_SPECIES` | `0` |
+
+### Web-UI-only settings (no env var / flag)
+
+These are stored in the SQLite settings table and have **no** environment variable or `birdnet.conf` equivalent:
+
+| Setting | Where | Note |
 |---|---|---|
-| `confidence_threshold` | Minimum confidence to record a detection | `0.70` |
-| `sensitivity` | Detection sensitivity (0.5-1.5) | `1.0` |
-| `alsa_device` | ALSA device for microphone input (`plughw:1,0`) | - |
-| `rtsp_url` | RTSP stream URL | - |
-| `latitude` / `longitude` | Station coordinates | - |
-| `recording_days` | Days to retain audio files | `30` |
-| `apprise_url` | Apprise server URL | - |
-| `birdweather_token` | BirdWeather station token | - |
-| `mqtt_host` | MQTT broker hostname | - |
-| `mqtt_ha_discovery` | Home Assistant auto-discovery | `false` |
-| `quality_filter` | Enable audio quality pre-filtering | `false` |
+| Detection confidence threshold | `/admin/settings` — Detection | Per-species overrides also live here |
+| Detection sensitivity (0.5–1.5) | `/admin/settings` — Detection | Also `SENSITIVITY` in `birdnet.conf` for BirdNET-Pi compat |
+| Email / SMTP notifications | `/admin/settings` — Notifications | |
+| Rare-bird quarantine rules | `/admin/settings` — Species | |
+| BirdWeather station details | `/admin/settings` — BirdWeather | Token can also be set via env var |
+
+> **Data retention is not time-based.** There is no `recording_days` setting — the disk manager purges the oldest recordings once the disk hits the `DISK_PURGE_THRESHOLD` (default 95%) in `birdnet.conf`, and keeps at most `BIRDNET_MAX_FILES_PER_SPECIES` per species.
 
 ---
 
@@ -433,12 +459,20 @@ ss -tlnp | grep 8502
 sudo ufw allow 8502/tcp   # if using Ubuntu firewall
 ```
 
-**No detections appearing:**
+**No detections appearing (bare metal):**
 ```bash
 arecord -l                                          # list capture devices
 arecord -D plughw:1,0 -d 3 /tmp/test.wav && aplay /tmp/test.wav  # test mic
-sudo nano /etc/birdnet/birdnet.conf                 # set REC_CARD=plughw:X,Y
+sudo nano /etc/birdnet/birdnet.conf                 # set ALSA_CARD=plughw:X,Y
 sudo systemctl restart birdnet-behavior
+```
+
+**No detections appearing (Docker):**
+```bash
+docker compose logs birdnet | grep -i 'audio source'   # check which source was picked up
+# Verify one of BIRDNET_ALSA_DEVICE / BIRDNET_PIPEWIRE_DEVICE / BIRDNET_RTSP_URL is set:
+grep -E '^BIRDNET_(ALSA|PIPEWIRE|RTSP)' .env
+docker compose restart birdnet
 ```
 
 **Docker: no audio:**
