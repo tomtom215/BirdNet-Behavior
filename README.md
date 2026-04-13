@@ -114,7 +114,33 @@ It ships as a **single static binary** — no Python, no pip, no virtualenv. Dro
 
 ## Installation
 
-### Option 1: One-liner (Raspberry Pi / bare metal)
+**The fastest path is Docker.** Two commands and you're watching detections.
+
+### Option 1: Docker quick start (recommended)
+
+One command. Asks you 2-3 plain-English questions, auto-detects your USB mic, writes a minimal `.env`, and starts the container. No git clone, no editor, no hand-picking compose overlays.
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/quickstart.sh)
+```
+
+What it does:
+
+1. Verifies Docker Engine + Compose are installed and usable (clear remediation if not)
+2. Checks disk space and port 8502 availability
+3. Creates `~/birdnet-behavior/` for your `.env` and compose files
+4. Auto-detects your audio source — USB/ALSA card, PulseAudio/PipeWire, or falls back to asking for an RTSP URL
+5. Asks for your station latitude/longitude (with opt-in IP auto-detect via ipapi.co)
+6. Asks whether to enable DuckDB behavioral analytics (default: no)
+7. Writes a 6-line `.env` with only your chosen values
+8. Starts the container with the matching compose overlay
+9. Streams logs so you can watch the one-time 541 MB model download
+10. Stops tailing as soon as the web server reports healthy
+11. Prints the dashboard URL and your LAN IP
+
+The BirdNET+ V3.0 model (~541 MB) and species labels are downloaded automatically from Zenodo on first run — you never pick, locate, or install a model yourself.
+
+### Option 2: Bare-metal installer (Raspberry Pi / bare metal, no Docker)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash
@@ -137,15 +163,15 @@ VERSION=0.1.0 bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/Bird
 curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash -s uninstall
 ```
 
-### Option 2: Docker
-
-See the [Docker section](#docker) below.
-
 ---
 
 ## Docker
 
-### Quick start
+### Quick start (automatic)
+
+The easiest path is the [quickstart.sh](#option-1-docker-quick-start-recommended) script at the top of this README — one command, auto-detects your audio source, writes a minimal `.env`, and starts the stack. If you prefer to do it by hand, read on.
+
+### Quick start (manual)
 
 You only need to decide **three** things before running the container:
 
@@ -259,6 +285,29 @@ Resolution:
 
 > Settings that are **not** exposed as environment variables — detection confidence threshold, per-species thresholds, sensitivity, email SMTP, rare-bird quarantine rules — live in the web UI at **`/admin/settings`** and are persisted in the SQLite settings table. You do not need to touch them to get started.
 
+### Single `docker run` command (no compose)
+
+If you want the absolute minimum — no clone, no compose files on disk, no editor — you can start the container with a single `docker run`. Edit the four marked values and paste:
+
+```bash
+docker run -d \
+  --name birdnet-behavior \
+  --restart unless-stopped \
+  -p 8502:8502 \
+  -v birdnet-data:/data \
+  --device /dev/snd \
+  --group-add audio \
+  -e BIRDNET_LATITUDE=42.3601 \
+  -e BIRDNET_LONGITUDE=-71.0589 \
+  -e BIRDNET_ALSA_DEVICE=plughw:1,0 \
+  -e BIRDNET_LISTEN=0.0.0.0:8502 \
+  ghcr.io/tomtom215/birdnet-behavior:latest
+# then:
+docker logs -f birdnet-behavior         # watch the model download
+```
+
+Swap `:latest` for `:latest-analytics` to enable DuckDB behavioral analytics. For an RTSP stream instead of a mic, drop `--device /dev/snd --group-add audio` and replace `BIRDNET_ALSA_DEVICE=…` with `BIRDNET_RTSP_URL=rtsp://…`. For PulseAudio, use `-v /run/user/1000/pulse/native:/run/pulse/native -e PULSE_SERVER=unix:/run/pulse/native -e BIRDNET_PIPEWIRE_DEVICE=default`.
+
 ### Pre-built images
 
 Two tags are published on GHCR for `linux/amd64` and `linux/arm64`:
@@ -314,11 +363,12 @@ All persistent data lives in a single Docker volume at `/data`:
 
 | File | Purpose |
 |---|---|
-| `docker-compose.yml` | Base config — works for RTSP and file-watch mode |
+| `quickstart.sh` | One-command Docker bootstrap — auto-detects audio, writes minimal `.env`, starts the stack |
+| `docker-compose.yml` | Base compose — works for RTSP and file-watch mode |
 | `docker-compose.alsa.yml` | Overlay for USB/ALSA microphone (passes `/dev/snd`) |
 | `docker-compose.pulse.yml` | Overlay for PulseAudio/PipeWire (mounts PA socket) |
-| `.env.example` | Documented template for all environment variables |
-| `docker/entrypoint.sh` | Model download + container startup |
+| `.env.example` | Documented template for every supported environment variable |
+| `docker/entrypoint.sh` | Model download (with progress + resume) and container startup |
 
 ---
 
