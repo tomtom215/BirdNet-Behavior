@@ -24,7 +24,9 @@
 
 services:
   birdnet:
-    image: ghcr.io/tomtom215/birdnet-behavior:latest
+    # Image tag is driven by BIRDNET_IMAGE_TAG in .env (default: latest).
+    # Set BIRDNET_IMAGE_TAG=latest-analytics to pull the DuckDB-powered variant.
+    image: ghcr.io/tomtom215/birdnet-behavior:${BIRDNET_IMAGE_TAG:-latest}
     # To build locally instead of pulling from GHCR:
     #   docker compose build
     #   docker compose up -d

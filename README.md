@@ -147,21 +147,33 @@ See the [Docker section](#docker) below.
 
 ### Quick start
 
+You only need to decide **three** things before running the container:
+
+1. **Which image** — standard or with DuckDB behavioral analytics
+2. **Audio source** — USB mic, PulseAudio/PipeWire, or an RTSP stream URL
+3. **Station location** — latitude and longitude
+
+Everything else has sensible defaults. The BirdNET+ V3.0 model (~541 MB) is downloaded automatically from Zenodo on first run — you never have to pick or fetch a model yourself.
+
 ```bash
 git clone https://github.com/tomtom215/BirdNet-Behavior.git
 cd BirdNet-Behavior
 cp .env.example .env
 ```
 
-Open `.env` and set, at minimum:
+Edit the top **REQUIRED** section of `.env` — four lines, give or take:
 
-- `BIRDNET_LATITUDE` / `BIRDNET_LONGITUDE` — your station coordinates
-- **one** of `BIRDNET_ALSA_DEVICE`, `BIRDNET_PIPEWIRE_DEVICE`, `BIRDNET_RTSP_URL`, or `BIRDNET_RTSP_URLS` — your audio source
+```dotenv
+BIRDNET_LATITUDE=42.3601
+BIRDNET_LONGITUDE=-71.0589
+BIRDNET_ALSA_DEVICE=plughw:1,0          # pick ONE: ALSA, RTSP, or PipeWire
+BIRDNET_IMAGE_TAG=latest                # or latest-analytics
+```
 
-Then start the stack with the compose overlay matching your audio source:
+Then run **one** command depending on which audio source you chose:
 
 ```bash
-# RTSP camera / multi-stream / file-watch mode (no microphone needed)
+# RTSP camera / file-watch mode (no microphone needed)
 docker compose up -d
 
 # USB microphone via ALSA (most Raspberry Pi setups)
@@ -171,21 +183,20 @@ docker compose -f docker-compose.yml -f docker-compose.alsa.yml up -d
 docker compose -f docker-compose.yml -f docker-compose.pulse.yml up -d
 ```
 
-Open **http://localhost:8502** in your browser. The BirdNET+ V3.0 model (~541 MB) downloads automatically on first run — give it a couple of minutes. Subsequent starts are instant.
+Open **http://localhost:8502** — the model download takes a couple of minutes on first start, then the dashboard comes up and detections start flowing. Subsequent starts are instant.
 
-Settings that are **not** exposed as environment variables — detection confidence threshold, per-species thresholds, sensitivity, email, rare-bird quarantine rules — live in the web UI at **`/admin/settings`** and are persisted in the SQLite settings table.
+> Settings that are **not** exposed as environment variables — detection confidence threshold, per-species thresholds, sensitivity, email SMTP, rare-bird quarantine rules — live in the web UI at **`/admin/settings`** and are persisted in the SQLite settings table. You do not need to touch them to get started.
 
 ### Pre-built images
 
-```bash
-# Standard (no DuckDB analytics)
-docker pull ghcr.io/tomtom215/birdnet-behavior:latest
+Two tags are published on GHCR for `linux/amd64` and `linux/arm64`:
 
-# With behavioral analytics (DuckDB-powered)
-docker pull ghcr.io/tomtom215/birdnet-behavior:latest-analytics
-```
+| Tag | Contents |
+|---|---|
+| `ghcr.io/tomtom215/birdnet-behavior:latest` | Standard build (SQLite only) |
+| `ghcr.io/tomtom215/birdnet-behavior:latest-analytics` | Adds DuckDB behavioral analytics |
 
-Available for `linux/amd64` and `linux/arm64`.
+The compose file pulls whichever tag `BIRDNET_IMAGE_TAG` in `.env` points at — you never need to run `docker pull` by hand.
 
 ### USB microphone setup
 
@@ -249,9 +260,11 @@ http://<your-ip>:8502
 
 > Not sure of your Pi's IP? Run `hostname -I` on the Pi, or check your router's device list.
 
-1. Go to **`/admin/settings`** — set your latitude/longitude, confirm your audio source
-2. Return to **`/`** — the dashboard shows live detections as they come in
-3. Visit **`/species`** to browse all species detected so far
+If you set `BIRDNET_LATITUDE`/`LONGITUDE` and an audio source in `.env`, detections should start appearing within a minute or two of the first bird call — no further configuration is required.
+
+1. Dashboard `/` — live detections, activity heatmap, top species
+2. `/species` — every species detected so far, with sparklines
+3. `/admin/settings` — optional: confidence threshold, per-species overrides, email, quarantine rules
 
 ---
 
