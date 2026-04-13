@@ -114,7 +114,33 @@ It ships as a **single static binary** — no Python, no pip, no virtualenv. Dro
 
 ## Installation
 
-### Option 1: One-liner (Raspberry Pi / bare metal)
+**The fastest path is Docker.** Two commands and you're watching detections.
+
+### Option 1: Docker quick start (recommended)
+
+One command. Asks you 2-3 plain-English questions, auto-detects your USB mic, writes a minimal `.env`, and starts the container. No git clone, no editor, no hand-picking compose overlays.
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/quickstart.sh)
+```
+
+What it does:
+
+1. Verifies Docker Engine + Compose are installed and usable (clear remediation if not)
+2. Checks disk space and port 8502 availability
+3. Creates `~/birdnet-behavior/` for your `.env` and compose files
+4. Auto-detects your audio source — USB/ALSA card, PulseAudio/PipeWire, or falls back to asking for an RTSP URL
+5. Asks for your station latitude/longitude (with opt-in IP auto-detect via ipapi.co)
+6. Asks whether to enable DuckDB behavioral analytics (default: no)
+7. Writes a 6-line `.env` with only your chosen values
+8. Starts the container with the matching compose overlay
+9. Streams logs so you can watch the one-time 541 MB model download
+10. Stops tailing as soon as the web server reports healthy
+11. Prints the dashboard URL and your LAN IP
+
+The BirdNET+ V3.0 model (~541 MB) and species labels are downloaded automatically from Zenodo on first run — you never pick, locate, or install a model yourself.
+
+### Option 2: Bare-metal installer (Raspberry Pi / bare metal, no Docker)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash
@@ -137,51 +163,161 @@ VERSION=0.1.0 bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/Bird
 curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash -s uninstall
 ```
 
-### Option 2: Docker
-
-See the [Docker section](#docker) below.
-
 ---
 
 ## Docker
 
-### Quick start (3 commands)
+### Quick start (automatic)
+
+The easiest path is the [quickstart.sh](#option-1-docker-quick-start-recommended) script at the top of this README — one command, auto-detects your audio source, writes a minimal `.env`, and starts the stack. If you prefer to do it by hand, read on.
+
+### Quick start (manual)
+
+You only need to decide **three** things before running the container:
+
+1. **Station location** — latitude and longitude
+2. **Audio source** — one of: USB/ALSA mic, PulseAudio/PipeWire, or an RTSP stream URL
+3. **Which image** — standard or with DuckDB behavioral analytics
+
+Everything else has sensible defaults. The BirdNET+ V3.0 model (~541 MB) and species labels CSV are downloaded automatically from Zenodo on first run — you never pick, fetch, or install a model yourself.
+
+#### 1. Clone and create your `.env`
 
 ```bash
 git clone https://github.com/tomtom215/BirdNet-Behavior.git
 cd BirdNet-Behavior
 cp .env.example .env
-# Edit .env — set at minimum BIRDNET_LATITUDE and BIRDNET_LONGITUDE
 ```
 
-Then choose your audio source:
+#### 2. Edit the REQUIRED section at the top of `.env`
+
+Four lines, give or take. Pick **one** audio variable to fill in and leave the other two blank.
+
+```dotenv
+# Station location
+BIRDNET_LATITUDE=42.3601
+BIRDNET_LONGITUDE=-71.0589
+
+# Audio source — set exactly ONE
+BIRDNET_ALSA_DEVICE=plughw:1,0          # USB/ALSA mic  (use arecord -l to find it)
+# BIRDNET_RTSP_URL=rtsp://cam.lan:554/stream
+# BIRDNET_PIPEWIRE_DEVICE=default
+
+# Image variant: latest (standard) or latest-analytics (adds DuckDB analytics)
+BIRDNET_IMAGE_TAG=latest
+```
+
+#### 3. Start the stack
+
+Pick the line matching your audio source. The **same command** is used whether you want analytics or not — the `BIRDNET_IMAGE_TAG` you set in `.env` decides which image is pulled.
 
 ```bash
-# RTSP camera or file-watch mode (no mic needed)
+# A) RTSP camera / multi-stream / file-watch mode — no microphone hardware
 docker compose up -d
 
-# USB microphone (Raspberry Pi, most Linux)
+# B) USB / ALSA microphone (most Raspberry Pi setups)
 docker compose -f docker-compose.yml -f docker-compose.alsa.yml up -d
 
-# PulseAudio / PipeWire (desktop Linux)
+# C) PulseAudio / PipeWire (desktop Linux)
 docker compose -f docker-compose.yml -f docker-compose.pulse.yml up -d
 ```
 
-Open **http://localhost:8502** in your browser.
+Want to switch between the standard build and the analytics build? Change `BIRDNET_IMAGE_TAG` in `.env` and re-run the same command — compose will pull the other image and recreate the container. Your recordings, database, and cached model stay in the `birdnet-data` named volume.
 
-The BirdNET+ model (~541 MB) downloads automatically on first run. Subsequent starts are instant.
+#### 4. Watch the first-run model download
+
+On a fresh install the container downloads the BirdNET+ model from Zenodo before starting the web server. This happens exactly once per named volume; subsequent starts skip it entirely.
+
+```bash
+# Stream the container's logs so you can see the download progress bar,
+# the web server boot, and the first detections as they happen.
+docker compose logs -f birdnet
+```
+
+Typical output looks like this:
+
+```
+[birdnet] BirdNET+ V3.0 model directory: /data/model
+[birdnet] ----------------------------------------------------------------
+[birdnet] Downloading BirdNET+ V3.0 model (ONNX) (541.4MB)
+[birdnet]   from:  https://zenodo.org/api/records/18247420/files/BirdNET+_V3.0-preview3_Global_11K_FP32.onnx/content
+[birdnet]   to:    /data/model/BirdNET+_V3.0-preview3_Global_11K_FP32.onnx
+[birdnet]   This runs only on first start. The model is cached in the
+[birdnet]   Docker volume so subsequent container starts are instant.
+[birdnet]   Typical download: 1–3 min on fibre, 5–15 min on home broadband.
+[birdnet] ----------------------------------------------------------------
+[birdnet]   …BirdNET+ V3.0 model (ONNX): 18%  (97.4MB / 541.4MB, 6.5MB/s, 15s elapsed)
+[birdnet]   …BirdNET+ V3.0 model (ONNX): 36%  (194.9MB / 541.4MB, 6.5MB/s, 30s elapsed)
+[birdnet]   …BirdNET+ V3.0 model (ONNX): 54%  (292.4MB / 541.4MB, 6.5MB/s, 45s elapsed)
+[birdnet]   …
+[birdnet]   done: BirdNET+ V3.0 model (ONNX) saved (541.4MB in 83s)
+[birdnet] Downloading species labels CSV (809.2KB)
+[birdnet]   done: species labels CSV saved (809.2KB in 1s)
+[birdnet] Model ready.
+[birdnet] Starting birdnet-behavior  (listen: 0.0.0.0:8502)
+```
+
+Interrupted downloads **resume** on the next container start (`curl --continue-at -`), so a dropped connection on a slow network is not fatal — just `docker compose up -d` again and the download picks up where it left off. The container's health check has a 15-minute start period specifically to accommodate slow first-run downloads without being marked unhealthy.
+
+Once you see `Starting birdnet-behavior`, open **http://localhost:8502**.
+
+#### What if the model download fails?
+
+The entrypoint fails loud, not silent. If curl exits non-zero you'll see:
+
+```
+[birdnet] WARNING: BirdNET+ V3.0 model (ONNX): curl exited 28 after 30s
+[birdnet] WARNING: Partial file (97.4MB) kept at /data/model/….onnx.tmp.
+[birdnet] WARNING: The next container start will resume from where it left off.
+[birdnet] WARNING: Common causes:
+[birdnet] WARNING:   • no internet in the container (check the host's DNS/firewall)
+[birdnet] WARNING:   • Zenodo is temporarily unreachable (retry in a few minutes)
+[birdnet] WARNING:   • the volume is out of disk (df -h on the host's docker root)
+[birdnet] ERROR: Failed to download BirdNET+ V3.0 model (ONNX) from https://…
+```
+
+Resolution:
+
+- **Connectivity / DNS** — test from the host: `curl -fsSL -o /dev/null https://zenodo.org` and check your Docker network's DNS (`docker compose exec birdnet curl -fsSL https://zenodo.org` once the container is up again).
+- **Zenodo outage** — wait a few minutes and run `docker compose up -d` again. The download resumes from the partial file.
+- **Disk space** — the volume needs ~600 MB free. `docker system df -v` shows what each volume is using.
+- **Bring your own model** — if you already have an ONNX BirdNET model locally, mount it over `/data/model` and set `BIRDNET_SKIP_MODEL_DOWNLOAD=1` in `.env`.
+
+> Settings that are **not** exposed as environment variables — detection confidence threshold, per-species thresholds, sensitivity, email SMTP, rare-bird quarantine rules — live in the web UI at **`/admin/settings`** and are persisted in the SQLite settings table. You do not need to touch them to get started.
+
+### Single `docker run` command (no compose)
+
+If you want the absolute minimum — no clone, no compose files on disk, no editor — you can start the container with a single `docker run`. Edit the four marked values and paste:
+
+```bash
+docker run -d \
+  --name birdnet-behavior \
+  --restart unless-stopped \
+  -p 8502:8502 \
+  -v birdnet-data:/data \
+  --device /dev/snd \
+  --group-add audio \
+  -e BIRDNET_LATITUDE=42.3601 \
+  -e BIRDNET_LONGITUDE=-71.0589 \
+  -e BIRDNET_ALSA_DEVICE=plughw:1,0 \
+  -e BIRDNET_LISTEN=0.0.0.0:8502 \
+  ghcr.io/tomtom215/birdnet-behavior:latest
+# then:
+docker logs -f birdnet-behavior         # watch the model download
+```
+
+Swap `:latest` for `:latest-analytics` to enable DuckDB behavioral analytics. For an RTSP stream instead of a mic, drop `--device /dev/snd --group-add audio` and replace `BIRDNET_ALSA_DEVICE=…` with `BIRDNET_RTSP_URL=rtsp://…`. For PulseAudio, use `-v /run/user/1000/pulse/native:/run/pulse/native -e PULSE_SERVER=unix:/run/pulse/native -e BIRDNET_PIPEWIRE_DEVICE=default`.
 
 ### Pre-built images
 
-```bash
-# Standard (no DuckDB analytics)
-docker pull ghcr.io/tomtom215/birdnet-behavior:latest
+Two tags are published on GHCR for `linux/amd64` and `linux/arm64`:
 
-# With behavioral analytics (DuckDB-powered)
-docker pull ghcr.io/tomtom215/birdnet-behavior:latest-analytics
-```
+| Tag | Contents |
+|---|---|
+| `ghcr.io/tomtom215/birdnet-behavior:latest` | Standard build (SQLite only) |
+| `ghcr.io/tomtom215/birdnet-behavior:latest-analytics` | Adds DuckDB behavioral analytics |
 
-Available for `linux/amd64` and `linux/arm64`.
+The compose file pulls whichever tag `BIRDNET_IMAGE_TAG` in `.env` points at — you never need to run `docker pull` by hand.
 
 ### USB microphone setup
 
@@ -227,11 +363,12 @@ All persistent data lives in a single Docker volume at `/data`:
 
 | File | Purpose |
 |---|---|
-| `docker-compose.yml` | Base config — works for RTSP and file-watch mode |
+| `quickstart.sh` | One-command Docker bootstrap — auto-detects audio, writes minimal `.env`, starts the stack |
+| `docker-compose.yml` | Base compose — works for RTSP and file-watch mode |
 | `docker-compose.alsa.yml` | Overlay for USB/ALSA microphone (passes `/dev/snd`) |
 | `docker-compose.pulse.yml` | Overlay for PulseAudio/PipeWire (mounts PA socket) |
-| `.env.example` | Documented template for all environment variables |
-| `docker/entrypoint.sh` | Model download + container startup |
+| `.env.example` | Documented template for every supported environment variable |
+| `docker/entrypoint.sh` | Model download (with progress + resume) and container startup |
 
 ---
 
@@ -245,9 +382,11 @@ http://<your-ip>:8502
 
 > Not sure of your Pi's IP? Run `hostname -I` on the Pi, or check your router's device list.
 
-1. Go to **`/admin/settings`** — set your latitude/longitude, confirm your audio source
-2. Return to **`/`** — the dashboard shows live detections as they come in
-3. Visit **`/species`** to browse all species detected so far
+If you set `BIRDNET_LATITUDE`/`LONGITUDE` and an audio source in `.env`, detections should start appearing within a minute or two of the first bird call — no further configuration is required.
+
+1. Dashboard `/` — live detections, activity heatmap, top species
+2. `/species` — every species detected so far, with sparklines
+3. `/admin/settings` — optional: confidence threshold, per-species overrides, email, quarantine rules
 
 ---
 
@@ -303,26 +442,48 @@ http://<your-ip>:8502
 Settings are read in this priority order (highest wins):
 
 ```
-CLI flags  >  environment variables  >  settings DB  >  /etc/birdnet/birdnet.conf  >  defaults
+CLI flags  >  environment variables  >  /etc/birdnet/birdnet.conf  >  built-in defaults
 ```
 
-The easiest way to configure is through the **web UI at `/admin/settings`**.
+Plus a **SQLite settings table** managed through the web UI at **`/admin/settings`** — this is the canonical place for things that have no CLI flag or env var (detection confidence threshold, per-species thresholds, sensitivity, email SMTP, quarantine rules, …).
 
-### Key Settings
+### Env vars / CLI flags
 
-| Setting | Description | Default |
+The full list is in `.env.example` and `birdnet-behavior --help`. Each row below shows: the environment variable, the matching CLI flag, and the `birdnet.conf` INI key (for BirdNET-Pi compatibility).
+
+| Env var | CLI flag | `birdnet.conf` key | Default |
+|---|---|---|---|
+| `BIRDNET_LATITUDE` / `BIRDNET_LONGITUDE` | `--latitude` / `--longitude` | `LATITUDE` / `LONGITUDE` | — |
+| `BIRDNET_ALSA_DEVICE` | `--alsa-device` | `ALSA_CARD` | — |
+| `BIRDNET_PIPEWIRE_DEVICE` | `--pipewire-device` | — | — |
+| `BIRDNET_RTSP_URL` / `BIRDNET_RTSP_URLS` | `--rtsp-url` / `--rtsp-urls` | `RTSP_URL` | — |
+| `BIRDNET_LISTEN` | `--listen` | — | `127.0.0.1:8502` |
+| `BIRDNET_RECORDING_SCHEDULE` | `--recording-schedule` | — | `all-day` |
+| `BIRDNET_SEGMENT_DURATION` | `--segment-duration` | `RECORDING_LENGTH` | `15` |
+| `BIRDNET_OVERLAP` | `--overlap` | `OVERLAP` | `0.0` |
+| `BIRDNET_SF_THRESH` | `--sf-thresh` | `SF_THRESH` | `0.03` |
+| `BIRDNET_PRIVACY_THRESHOLD` | `--privacy-threshold` | `PRIVACY_THRESHOLD` | `0.0` |
+| `BIRDNET_QUALITY_FILTER` | `--quality-filter` | — | disabled |
+| `BIRDNET_APPRISE_URL` | `--apprise-url` | `APPRISE_URL` | — |
+| `BIRDNET_NOTIFY_CONFIDENCE` | `--notify-confidence` | — | `0.8` |
+| `BIRDNET_BIRDWEATHER_TOKEN` | `--birdweather-token` | `BIRDWEATHER_TOKEN` | — |
+| `BIRDNET_MQTT_HOST` | `--mqtt-host` | `MQTT_HOST` | — |
+| `BIRDNET_MQTT_HA_DISCOVERY` | `--mqtt-ha-discovery` | — | disabled |
+| `BIRDNET_MAX_FILES_PER_SPECIES` | `--max-files-per-species` | `MAX_FILES_SPECIES` | `0` |
+
+### Web-UI-only settings (no env var / flag)
+
+These are stored in the SQLite settings table and have **no** environment variable or `birdnet.conf` equivalent:
+
+| Setting | Where | Note |
 |---|---|---|
-| `confidence_threshold` | Minimum confidence to record a detection | `0.70` |
-| `sensitivity` | Detection sensitivity (0.5-1.5) | `1.0` |
-| `alsa_device` | ALSA device for microphone input (`plughw:1,0`) | - |
-| `rtsp_url` | RTSP stream URL | - |
-| `latitude` / `longitude` | Station coordinates | - |
-| `recording_days` | Days to retain audio files | `30` |
-| `apprise_url` | Apprise server URL | - |
-| `birdweather_token` | BirdWeather station token | - |
-| `mqtt_host` | MQTT broker hostname | - |
-| `mqtt_ha_discovery` | Home Assistant auto-discovery | `false` |
-| `quality_filter` | Enable audio quality pre-filtering | `false` |
+| Detection confidence threshold | `/admin/settings` — Detection | Per-species overrides also live here |
+| Detection sensitivity (0.5–1.5) | `/admin/settings` — Detection | Also `SENSITIVITY` in `birdnet.conf` for BirdNET-Pi compat |
+| Email / SMTP notifications | `/admin/settings` — Notifications | |
+| Rare-bird quarantine rules | `/admin/settings` — Species | |
+| BirdWeather station details | `/admin/settings` — BirdWeather | Token can also be set via env var |
+
+> **Data retention is not time-based.** There is no `recording_days` setting — the disk manager purges the oldest recordings once the disk hits the `DISK_PURGE_THRESHOLD` (default 95%) in `birdnet.conf`, and keeps at most `BIRDNET_MAX_FILES_PER_SPECIES` per species.
 
 ---
 
@@ -433,12 +594,20 @@ ss -tlnp | grep 8502
 sudo ufw allow 8502/tcp   # if using Ubuntu firewall
 ```
 
-**No detections appearing:**
+**No detections appearing (bare metal):**
 ```bash
 arecord -l                                          # list capture devices
 arecord -D plughw:1,0 -d 3 /tmp/test.wav && aplay /tmp/test.wav  # test mic
-sudo nano /etc/birdnet/birdnet.conf                 # set REC_CARD=plughw:X,Y
+sudo nano /etc/birdnet/birdnet.conf                 # set ALSA_CARD=plughw:X,Y
 sudo systemctl restart birdnet-behavior
+```
+
+**No detections appearing (Docker):**
+```bash
+docker compose logs birdnet | grep -i 'audio source'   # check which source was picked up
+# Verify one of BIRDNET_ALSA_DEVICE / BIRDNET_PIPEWIRE_DEVICE / BIRDNET_RTSP_URL is set:
+grep -E '^BIRDNET_(ALSA|PIPEWIRE|RTSP)' .env
+docker compose restart birdnet
 ```
 
 **Docker: no audio:**

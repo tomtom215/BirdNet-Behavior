@@ -342,17 +342,18 @@ LABELS_PATH=${MODEL_DIR}/${LABELS_FILE}
 
 # --- Audio source ---
 # Use one of: ALSA microphone, RTSP stream, or an existing recordings directory.
-# REC_CARD=plughw:1,0
-# RTSP_STREAM=rtsp://camera.local:554/stream
+# ALSA_CARD=plughw:1,0
+# RTSP_URL=rtsp://camera.local:554/stream
 
 # --- Location (used for species frequency filtering and BirdWeather) ---
 # LATITUDE=51.5074
 # LONGITUDE=-0.1278
 
 # --- Detection ---
-# CONFIDENCE=0.7
-# SENSITIVITY=1.0
-# OVERLAP=0.0
+# CONFIDENCE=0.25          # 0.0–1.0, default 0.25
+# SENSITIVITY=1.0          # 0.5–1.5, default 1.0
+# OVERLAP=0.0              # seconds of 3 s analysis window overlap
+# SF_THRESH=0.03           # species-frequency metadata-filter threshold
 # DATABASE_LANG=en
 
 # --- Disk management ---
@@ -361,8 +362,6 @@ LABELS_PATH=${MODEL_DIR}/${LABELS_FILE}
 
 # --- Notifications (Apprise) ---
 # APPRISE_URL=http://localhost:8000
-# NOTIFY_TRIGGER=each
-# WEEKLY_REPORT_SCHEDULE=monday
 
 # --- BirdWeather ---
 # BIRDWEATHER_TOKEN=your-token-here
@@ -438,12 +437,12 @@ configure_audio() {
 
     if [ -n "${device}" ]; then
         info "Auto-detected ALSA device: ${device}"
-        # Uncomment and set REC_CARD in the config file.
-        sed -i "s|# REC_CARD=plughw:1,0|REC_CARD=${device}|" "${CONFIG_FILE}"
+        # Uncomment and set ALSA_CARD in the config file.
+        sed -i "s|# ALSA_CARD=plughw:1,0|ALSA_CARD=${device}|" "${CONFIG_FILE}"
         success "Audio source set to ${device} in ${CONFIG_FILE}"
     else
         warn "No ALSA recording devices found."
-        warn "Edit ${CONFIG_FILE} to set REC_CARD or RTSP_STREAM before starting."
+        warn "Edit ${CONFIG_FILE} to set ALSA_CARD or RTSP_URL before starting."
     fi
 }
 
@@ -453,7 +452,7 @@ configure_audio() {
 
 maybe_start_service() {
     # Check whether an audio source was written into the config.
-    if grep -qE '^(REC_CARD|RTSP_STREAM)=' "${CONFIG_FILE}" 2>/dev/null; then
+    if grep -qE '^(ALSA_CARD|RTSP_URL)=' "${CONFIG_FILE}" 2>/dev/null; then
         info "Audio source detected in config — starting service now…"
         systemctl start birdnet-behavior.service
         success "Service started."
@@ -484,8 +483,8 @@ print_summary() {
     else
         echo -e "${BOLD}Next steps:${RESET}"
         echo "  1. Set your audio source in ${CONFIG_FILE}:"
-        echo "       REC_CARD=plughw:1,0       (ALSA microphone)"
-        echo "       RTSP_STREAM=rtsp://…      (RTSP camera)"
+        echo "       ALSA_CARD=plughw:1,0      (ALSA microphone)"
+        echo "       RTSP_URL=rtsp://…         (RTSP camera)"
         echo
         echo "  2. (Optional) Set LATITUDE and LONGITUDE for species filtering."
         echo

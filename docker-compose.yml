@@ -24,7 +24,9 @@
 
 services:
   birdnet:
-    image: ghcr.io/tomtom215/birdnet-behavior:latest
+    # Image tag is driven by BIRDNET_IMAGE_TAG in .env (default: latest).
+    # Set BIRDNET_IMAGE_TAG=latest-analytics to pull the DuckDB-powered variant.
+    image: ghcr.io/tomtom215/birdnet-behavior:${BIRDNET_IMAGE_TAG:-latest}
     # To build locally instead of pulling from GHCR:
     #   docker compose build
     #   docker compose up -d
@@ -122,7 +124,16 @@ services:
           memory: 128M
 
     # -------------------------------------------------------------------------
-    # Health check — verifies the web UI is responding
+    # Health check — verifies the web UI is responding.
+    #
+    # start_period is intentionally long: the BirdNET+ V3.0 model is ~541 MB
+    # and is downloaded from Zenodo the first time the container starts.
+    # On fibre that finishes in ~1 min; on slower connections it can take
+    # 10–15 min. During start_period, failing health checks are not counted
+    # against the retry budget, so a slow first-run download won't cause the
+    # container to be marked unhealthy or restarted mid-download. Subsequent
+    # starts reuse the cached model in the named volume and come up almost
+    # instantly, so the long start_period has no steady-state cost.
     # -------------------------------------------------------------------------
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent",
@@ -130,7 +141,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s    # allow time for model download on first run
+      start_period: 15m
 
     # -------------------------------------------------------------------------
     # Logging — structured JSON, rotated to avoid filling the disk
