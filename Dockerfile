@@ -223,7 +223,14 @@ EXPOSE 8502/tcp
 
 # Container health check — hit the web server's health endpoint.  The binary
 # exposes /api/v2/health which returns 200 OK when ready to serve requests.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+#
+# start-period is 15 min because the BirdNET+ V3.0 model (~541 MB) is
+# downloaded from Zenodo on first run; failing health checks inside the
+# start-period window are not counted against the retry budget, so a slow
+# first-run download cannot cause the container to be marked unhealthy or
+# restarted mid-download.  Subsequent starts reuse the cached model and come
+# up in seconds, so this window has no steady-state cost.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15m --retries=3 \
     CMD curl --fail --silent --show-error --max-time 4 \
              "http://127.0.0.1:${BIRDNET_LISTEN##*:}/api/v2/health" \
         || exit 1

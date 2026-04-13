@@ -149,11 +149,13 @@ See the [Docker section](#docker) below.
 
 You only need to decide **three** things before running the container:
 
-1. **Which image** — standard or with DuckDB behavioral analytics
-2. **Audio source** — USB mic, PulseAudio/PipeWire, or an RTSP stream URL
-3. **Station location** — latitude and longitude
+1. **Station location** — latitude and longitude
+2. **Audio source** — one of: USB/ALSA mic, PulseAudio/PipeWire, or an RTSP stream URL
+3. **Which image** — standard or with DuckDB behavioral analytics
 
-Everything else has sensible defaults. The BirdNET+ V3.0 model (~541 MB) is downloaded automatically from Zenodo on first run — you never have to pick or fetch a model yourself.
+Everything else has sensible defaults. The BirdNET+ V3.0 model (~541 MB) and species labels CSV are downloaded automatically from Zenodo on first run — you never pick, fetch, or install a model yourself.
+
+#### 1. Clone and create your `.env`
 
 ```bash
 git clone https://github.com/tomtom215/BirdNet-Behavior.git
@@ -161,29 +163,99 @@ cd BirdNet-Behavior
 cp .env.example .env
 ```
 
-Edit the top **REQUIRED** section of `.env` — four lines, give or take:
+#### 2. Edit the REQUIRED section at the top of `.env`
+
+Four lines, give or take. Pick **one** audio variable to fill in and leave the other two blank.
 
 ```dotenv
+# Station location
 BIRDNET_LATITUDE=42.3601
 BIRDNET_LONGITUDE=-71.0589
-BIRDNET_ALSA_DEVICE=plughw:1,0          # pick ONE: ALSA, RTSP, or PipeWire
-BIRDNET_IMAGE_TAG=latest                # or latest-analytics
+
+# Audio source — set exactly ONE
+BIRDNET_ALSA_DEVICE=plughw:1,0          # USB/ALSA mic  (use arecord -l to find it)
+# BIRDNET_RTSP_URL=rtsp://cam.lan:554/stream
+# BIRDNET_PIPEWIRE_DEVICE=default
+
+# Image variant: latest (standard) or latest-analytics (adds DuckDB analytics)
+BIRDNET_IMAGE_TAG=latest
 ```
 
-Then run **one** command depending on which audio source you chose:
+#### 3. Start the stack
+
+Pick the line matching your audio source. The **same command** is used whether you want analytics or not — the `BIRDNET_IMAGE_TAG` you set in `.env` decides which image is pulled.
 
 ```bash
-# RTSP camera / file-watch mode (no microphone needed)
+# A) RTSP camera / multi-stream / file-watch mode — no microphone hardware
 docker compose up -d
 
-# USB microphone via ALSA (most Raspberry Pi setups)
+# B) USB / ALSA microphone (most Raspberry Pi setups)
 docker compose -f docker-compose.yml -f docker-compose.alsa.yml up -d
 
-# PulseAudio / PipeWire (desktop Linux)
+# C) PulseAudio / PipeWire (desktop Linux)
 docker compose -f docker-compose.yml -f docker-compose.pulse.yml up -d
 ```
 
-Open **http://localhost:8502** — the model download takes a couple of minutes on first start, then the dashboard comes up and detections start flowing. Subsequent starts are instant.
+Want to switch between the standard build and the analytics build? Change `BIRDNET_IMAGE_TAG` in `.env` and re-run the same command — compose will pull the other image and recreate the container. Your recordings, database, and cached model stay in the `birdnet-data` named volume.
+
+#### 4. Watch the first-run model download
+
+On a fresh install the container downloads the BirdNET+ model from Zenodo before starting the web server. This happens exactly once per named volume; subsequent starts skip it entirely.
+
+```bash
+# Stream the container's logs so you can see the download progress bar,
+# the web server boot, and the first detections as they happen.
+docker compose logs -f birdnet
+```
+
+Typical output looks like this:
+
+```
+[birdnet] BirdNET+ V3.0 model directory: /data/model
+[birdnet] ----------------------------------------------------------------
+[birdnet] Downloading BirdNET+ V3.0 model (ONNX) (541.4MB)
+[birdnet]   from:  https://zenodo.org/api/records/18247420/files/BirdNET+_V3.0-preview3_Global_11K_FP32.onnx/content
+[birdnet]   to:    /data/model/BirdNET+_V3.0-preview3_Global_11K_FP32.onnx
+[birdnet]   This runs only on first start. The model is cached in the
+[birdnet]   Docker volume so subsequent container starts are instant.
+[birdnet]   Typical download: 1–3 min on fibre, 5–15 min on home broadband.
+[birdnet] ----------------------------------------------------------------
+[birdnet]   …BirdNET+ V3.0 model (ONNX): 18%  (97.4MB / 541.4MB, 6.5MB/s, 15s elapsed)
+[birdnet]   …BirdNET+ V3.0 model (ONNX): 36%  (194.9MB / 541.4MB, 6.5MB/s, 30s elapsed)
+[birdnet]   …BirdNET+ V3.0 model (ONNX): 54%  (292.4MB / 541.4MB, 6.5MB/s, 45s elapsed)
+[birdnet]   …
+[birdnet]   done: BirdNET+ V3.0 model (ONNX) saved (541.4MB in 83s)
+[birdnet] Downloading species labels CSV (809.2KB)
+[birdnet]   done: species labels CSV saved (809.2KB in 1s)
+[birdnet] Model ready.
+[birdnet] Starting birdnet-behavior  (listen: 0.0.0.0:8502)
+```
+
+Interrupted downloads **resume** on the next container start (`curl --continue-at -`), so a dropped connection on a slow network is not fatal — just `docker compose up -d` again and the download picks up where it left off. The container's health check has a 15-minute start period specifically to accommodate slow first-run downloads without being marked unhealthy.
+
+Once you see `Starting birdnet-behavior`, open **http://localhost:8502**.
+
+#### What if the model download fails?
+
+The entrypoint fails loud, not silent. If curl exits non-zero you'll see:
+
+```
+[birdnet] WARNING: BirdNET+ V3.0 model (ONNX): curl exited 28 after 30s
+[birdnet] WARNING: Partial file (97.4MB) kept at /data/model/….onnx.tmp.
+[birdnet] WARNING: The next container start will resume from where it left off.
+[birdnet] WARNING: Common causes:
+[birdnet] WARNING:   • no internet in the container (check the host's DNS/firewall)
+[birdnet] WARNING:   • Zenodo is temporarily unreachable (retry in a few minutes)
+[birdnet] WARNING:   • the volume is out of disk (df -h on the host's docker root)
+[birdnet] ERROR: Failed to download BirdNET+ V3.0 model (ONNX) from https://…
+```
+
+Resolution:
+
+- **Connectivity / DNS** — test from the host: `curl -fsSL -o /dev/null https://zenodo.org` and check your Docker network's DNS (`docker compose exec birdnet curl -fsSL https://zenodo.org` once the container is up again).
+- **Zenodo outage** — wait a few minutes and run `docker compose up -d` again. The download resumes from the partial file.
+- **Disk space** — the volume needs ~600 MB free. `docker system df -v` shows what each volume is using.
+- **Bring your own model** — if you already have an ONNX BirdNET model locally, mount it over `/data/model` and set `BIRDNET_SKIP_MODEL_DOWNLOAD=1` in `.env`.
 
 > Settings that are **not** exposed as environment variables — detection confidence threshold, per-species thresholds, sensitivity, email SMTP, rare-bird quarantine rules — live in the web UI at **`/admin/settings`** and are persisted in the SQLite settings table. You do not need to touch them to get started.
 
