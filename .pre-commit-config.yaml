@@ -1,0 +1,100 @@
+# Pre-commit hooks for BirdNet-Behavior.
+#
+# Mirrors the gates CI enforces so contributors catch failures locally
+# instead of waiting for the CI round-trip.
+#
+# Install once:
+#   pipx install pre-commit         # or: pip install --user pre-commit
+#   pre-commit install              # wires the hooks into .git/hooks
+#
+# Run on the staged changes:
+#   pre-commit run
+#
+# Run against the entire tree (what CI does):
+#   pre-commit run --all-files
+#
+# Skip a single hook for one commit (use sparingly):
+#   SKIP=cargo-clippy git commit -m "..."
+
+# CI mirror: every hook listed here runs in `.github/workflows/ci.yml` or
+# `.github/workflows/supply-chain.yml`. Keep the two in sync.
+
+default_install_hook_types: [pre-commit, commit-msg]
+default_stages: [pre-commit]
+fail_fast: false
+
+repos:
+  # ── Generic hygiene ───────────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: "^(src/testdata/|tests/testdata/|docs/screenshots/|Cargo.lock|.*\\.svg|.*\\.png|.*\\.jpg|.*\\.onnx|.*\\.tflite|.*\\.wav|.*\\.flac|.*\\.mp3)"
+      - id: end-of-file-fixer
+        exclude: "^(src/testdata/|tests/testdata/|docs/screenshots/|Cargo.lock|.*\\.svg|.*\\.png|.*\\.jpg|.*\\.onnx|.*\\.tflite|.*\\.wav|.*\\.flac|.*\\.mp3)"
+      - id: check-merge-conflict
+      - id: check-yaml
+        args: ["--unsafe"] # allow GitHub Actions `!secret` etc.
+        exclude: "^(docker-compose.*\\.yml)$"
+      - id: check-toml
+      - id: check-added-large-files
+        args: ["--maxkb=512"]
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+      - id: check-symlinks
+      - id: destroyed-symlinks
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
+
+  # ── Rust formatting ────────────────────────────────────────────────────────
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt --check
+        description: Verify Rust formatting matches rustfmt.toml.
+        entry: cargo fmt --all -- --check
+        language: system
+        pass_filenames: false
+        types: [rust]
+
+      # ── Clippy: heavyweight, opt-in to keep the pre-commit fast ────────────
+      #
+      # Enable with `pre-commit run --hook-stage manual cargo-clippy`. Not run
+      # automatically because a cold clippy build can take minutes; CI is
+      # authoritative.
+      - id: cargo-clippy
+        name: cargo clippy -- -D warnings
+        description: Run clippy (manual stage — CI is authoritative).
+        entry: cargo clippy --workspace --all-targets -- -D warnings
+        language: system
+        pass_filenames: false
+        types: [rust]
+        stages: [manual]
+
+      # ── Shell-script lint (mirrors supply-chain.yml) ──────────────────────
+      - id: shellcheck
+        name: shellcheck (advisory)
+        description: Lint quickstart.sh / install.sh / entrypoint.sh.
+        entry: bash -c 'command -v shellcheck >/dev/null || { echo "shellcheck not installed; skipping"; exit 0; }; shellcheck -S warning -x "$@"' --
+        language: system
+        pass_filenames: true
+        types: [shell]
+
+  # ── Typo scan (mirrors supply-chain.yml) ──────────────────────────────────
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.32.0
+    hooks:
+      - id: typos
+        args: ["--config", ".typos.toml"]
+
+  # ── Conventional Commits (advisory) ───────────────────────────────────────
+  #
+  # Project history follows the `type(scope): subject` form used by
+  # Conventional Commits. This hook nudges contributors toward it without
+  # enforcing it strictly — it warns rather than blocks.
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v3.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args: [--strict, --force-scope, feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert, deps]

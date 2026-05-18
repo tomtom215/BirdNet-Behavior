@@ -57,6 +57,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Coverage workflow** (`.github/workflows/coverage.yml`) running
   `cargo-llvm-cov` on every PR. Sticky summary comment, HTML + lcov
   artifacts, optional Codecov upload via `CODECOV_TOKEN`.
+- **Subprocess smoke tests** for the binary (`tests/doctor_smoke.rs`).
+  Builds the actual binary and runs `--version`, `--help`, `--doctor`,
+  `--preflight` (alias), `--doctor-json`, and `--check-db` to catch
+  "compiles but doesn't run" regressions — exactly the class of bug
+  that previously slipped past the unit tests when tracing was writing
+  to stdout and silently corrupting the JSON output.
+- **`.pre-commit-config.yaml`** mirrors the CI quality gates locally so
+  contributors fail fast (rustfmt check, typos, shellcheck, optional
+  manual clippy, generic file hygiene, Conventional-Commits message
+  format).
+- **Top-level `TROUBLESHOOTING.md`** organised by symptom — service
+  won't start, web UI not reachable, no detections, database errors,
+  memory pressure on small hardware, notifications never arrive,
+  cross-cutting "huh, that's weird" checklist. Each section links back
+  to the doctor as the first step.
 
 ### Changed
 

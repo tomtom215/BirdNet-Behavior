@@ -581,6 +581,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## Troubleshooting
 
+> Looking for a deeper guide? See [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md)
+> for symptom-organised, step-by-step recipes.
+
 **First step for any problem — run the built-in diagnostic:**
 ```bash
 # Bare metal
