@@ -42,6 +42,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   template with quality-gate checkboxes.
 - Architecture Decision Record `docs/architecture/14-diagnostics.md`
   captures the design and trade-offs of the diagnostic system.
+- **Snapshot tests** for the `--doctor` text output. The render is split
+  into a pure `render_text(&[Check]) -> String` function; four golden
+  files under `src/testdata/doctor_snapshots/` pin the exact bytes of
+  the report so accidental wording or formatting drift has to come
+  through a PR. Set `UPDATE_DOCTOR_SNAPSHOTS=1 cargo test` to refresh
+  after an intentional UX change.
+- **Mutation testing** workflow (`.github/workflows/mutation.yml`)
+  that runs `cargo-mutants` on the configuration validator. Catches
+  "tests pass even after the validator's behaviour changes" — the
+  one mutant that survived in the first run revealed a missing minute
+  boundary case, which is now covered by a new property test.
+  Current score: 0 missed / 61 caught / 4 unviable.
+- **Coverage workflow** (`.github/workflows/coverage.yml`) running
+  `cargo-llvm-cov` on every PR. Sticky summary comment, HTML + lcov
+  artifacts, optional Codecov upload via `CODECOV_TOKEN`.
 
 ### Changed
 

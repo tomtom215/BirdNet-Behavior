@@ -1,0 +1,21 @@
+
+BirdNet-Behavior preflight report
+=================================
+
+[ PASS ] CPU cores — 4 cores available for audio + inference
+[ PASS ] Temp directory — /tmp is writable
+[ WARN ] Configuration file — /etc/birdnet/birdnet.conf not found — using built-in defaults
+         → copy .env.example to /etc/birdnet/birdnet.conf and edit before going to production
+[ PASS ] Web listen address — 127.0.0.1:8502 parses as a valid socket address
+[ WARN ] Database directory — /var/lib/birdnet does not exist yet — will be created on first run
+         → no action needed unless you want to pre-create it with `mkdir -p`
+[ SKIP ] Database integrity — no database file yet — will be created on first run
+[ SKIP ] Recordings directory — no --watch-dir or RECS_DIR configured (file-watcher mode disabled)
+[ WARN ] Audio source — no audio source configured (no live detections will be produced)
+         → set one of: --alsa-device, --pipewire-device, --rtsp-url, --rtsp-urls, or the equivalent ALSA_CARD / RTSP_URL / PIPEWIRE_DEVICE config keys
+[ SKIP ] ONNX model file — no --model / MODEL configured (will use the bundled default at startup)
+[ PASS ] Disk space — 120 GiB free on the volume containing /
+
+Summary: 4 passed, 3 warning(s), 0 error(s), 3 skipped.
+Status:  READY WITH WARNINGS — the daemon will start but some features are degraded.
+

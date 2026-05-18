@@ -580,6 +580,25 @@ mod tests {
             );
         }
 
+        /// Any HH:MM with an out-of-range minute (>= 60) is rejected.
+        /// Pins the strict-less-than boundary check in `parse_hhmm` — caught
+        /// by `cargo-mutants` when this case wasn't covered.
+        #[test]
+        fn out_of_range_minute_rejected(
+            sh in 0_u8..24,
+            sm in 60_u8..=99,
+            eh in 0_u8..24,
+            em in 0_u8..60,
+        ) {
+            let raw = format!("fixed:{sh:02}:{sm:02}-{eh:02}:{em:02}");
+            let c = cfg(&[("RECORDING_SCHEDULE", &raw)]);
+            let findings = validate(&c);
+            prop_assert!(
+                findings.iter().any(|f| f.key == "RECORDING_SCHEDULE"),
+                "{raw} unexpectedly accepted"
+            );
+        }
+
         /// Validation should never panic, regardless of input contents.
         /// Generates arbitrary string pairs (within reasonable size) to make
         /// sure the validator survives whatever malformed user input arrives.

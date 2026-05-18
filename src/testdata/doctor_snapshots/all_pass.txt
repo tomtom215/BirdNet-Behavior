@@ -1,0 +1,20 @@
+
+BirdNet-Behavior preflight report
+=================================
+
+[ PASS ] CPU cores — 4 cores available for audio + inference
+[ PASS ] Temp directory — /tmp is writable
+[ PASS ] Configuration file — loaded from /etc/birdnet/birdnet.conf
+[ PASS ] Configuration values — all settings are within valid ranges
+[ PASS ] Web listen address — 127.0.0.1:8502 parses as a valid socket address
+[ PASS ] Database directory — /var/lib/birdnet is writable
+[ PASS ] Database integrity — /var/lib/birdnet/birds.db passes integrity check
+[ PASS ] Recordings directory — /var/lib/birdnet/recordings is writable
+[ PASS ] Audio source — ALSA source configured
+[ PASS ] ALSA device probe — plughw:1,0 matches an entry in `arecord -l`
+[ PASS ] ONNX model file — /usr/share/birdnet/model.onnx (541000000 bytes)
+[ PASS ] Disk space — 120 GiB free on the volume containing /var/lib/birdnet/recordings
+
+Summary: 12 passed, 0 warning(s), 0 error(s), 0 skipped.
+Status:  READY — start the daemon with `birdnet-behavior`.
+

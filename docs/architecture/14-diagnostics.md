@@ -132,3 +132,23 @@ Checks included today:
   directly. Same exit-code semantics as `--doctor`. String escaping is
   hand-rolled per RFC 8259 §7 to keep the binary's diagnostic surface
   free of macro magic.
+- **Snapshot tests** for the text-mode report. The render is split into
+  a pure `render_text(&[Check]) -> String` function; four golden files
+  under `src/testdata/doctor_snapshots/` pin the exact bytes of the
+  output for representative configurations (all-pass, mixed
+  warnings/skips, with errors, empty). Updating the snapshots requires
+  `UPDATE_DOCTOR_SNAPSHOTS=1 cargo test`, which forces the change to go
+  through a PR review.
+- **Mutation testing** for the configuration validator via
+  `cargo-mutants` in `.github/workflows/mutation.yml`. Restricted to
+  `crates/birdnet-core/src/config/validate.rs` so the run stays under
+  ten minutes. Threshold: more than five surviving mutants fails the
+  job; current score is 0 missed / 61 caught / 4 unviable. A surviving
+  mutant always means an assertion is too weak — fixing it tightens
+  the test suite.
+- **Coverage measurement** via `cargo-llvm-cov` in
+  `.github/workflows/coverage.yml`. Posts a sticky summary comment on
+  PRs, uploads HTML + lcov artifacts, and optionally pushes to Codecov
+  when `CODECOV_TOKEN` is set. Excludes the migration crate (legacy
+  surface) and integration tests from the per-file table to keep the
+  PR comment focused.

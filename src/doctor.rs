@@ -142,7 +142,7 @@ pub fn run_with_format(cli: &Cli, config: Option<&Config>, format: Format) -> i3
 
     let exit_code = summarise(&checks);
     match format {
-        Format::Text => print_report(&checks),
+        Format::Text => print!("{}", render_text(&checks)),
         Format::Json => println!("{}", render_json(&checks, exit_code)),
     }
     exit_code
@@ -231,28 +231,49 @@ pub fn summarise(checks: &[Check]) -> i32 {
     }
 }
 
-fn print_report(checks: &[Check]) {
-    println!();
-    println!("BirdNet-Behavior preflight report");
-    println!("=================================");
-    println!();
+/// Render the full diagnostic report as a single string of text.
+///
+/// Pure function with no I/O — every byte of the human-readable
+/// `--doctor` output goes through here. Split out from the I/O wrapper
+/// so it can be snapshot-tested against a golden file: a drift in the
+/// user-facing format requires updating the snapshot, which has to be
+/// reviewed in a PR.
+#[must_use]
+pub fn render_text(checks: &[Check]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(checks.len() * 128 + 256);
+    let _ = writeln!(out);
+    let _ = writeln!(out, "BirdNet-Behavior preflight report");
+    let _ = writeln!(out, "=================================");
+    let _ = writeln!(out);
     for c in checks {
-        print!("{c}");
+        let _ = write!(out, "{c}");
     }
 
     let (passes, warns, fails, skips) = tally(checks);
-    println!();
-    println!("Summary: {passes} passed, {warns} warning(s), {fails} error(s), {skips} skipped.");
+    let _ = writeln!(out);
+    let _ = writeln!(
+        out,
+        "Summary: {passes} passed, {warns} warning(s), {fails} error(s), {skips} skipped."
+    );
     if fails > 0 {
-        println!("Status:  NOT READY — fix the errors above before starting the detection daemon.");
+        let _ = writeln!(
+            out,
+            "Status:  NOT READY — fix the errors above before starting the detection daemon."
+        );
     } else if warns > 0 {
-        println!(
+        let _ = writeln!(
+            out,
             "Status:  READY WITH WARNINGS — the daemon will start but some features are degraded."
         );
     } else {
-        println!("Status:  READY — start the daemon with `birdnet-behavior`.");
+        let _ = writeln!(
+            out,
+            "Status:  READY — start the daemon with `birdnet-behavior`."
+        );
     }
-    println!();
+    let _ = writeln!(out);
+    out
 }
 
 fn tally(checks: &[Check]) -> (usize, usize, usize, usize) {
@@ -1061,6 +1082,181 @@ mod tests {
         let c = Check::pass("a", "x\u{0001}y");
         let json = render_json(&[c], 0);
         assert!(json.contains("x\\u0001y"), "{json}");
+    }
+
+    // ── Snapshot tests for the human-readable report ─────────────────────
+    //
+    // Pin the exact bytes of the `--doctor` output against a golden file so
+    // accidental wording or formatting drifts have to come through a PR. The
+    // input is a hand-curated fixture (no live filesystem / network access)
+    // so the snapshot is deterministic across hosts.
+    //
+    // To update after an intentional UX change:
+    //   UPDATE_DOCTOR_SNAPSHOTS=1 cargo test -p birdnet-behavior --bin birdnet-behavior \
+    //       -- tests::snapshot
+    // and review the resulting diff against
+    // `src/testdata/doctor_snapshots/*.txt`.
+
+    const SNAPSHOT_DIR: &str = "src/testdata/doctor_snapshots";
+
+    fn sample_all_pass() -> Vec<Check> {
+        vec![
+            Check::pass("CPU cores", "4 cores available for audio + inference"),
+            Check::pass("Temp directory", "/tmp is writable"),
+            Check::pass(
+                "Configuration file",
+                "loaded from /etc/birdnet/birdnet.conf",
+            ),
+            Check::pass(
+                "Configuration values",
+                "all settings are within valid ranges",
+            ),
+            Check::pass(
+                "Web listen address",
+                "127.0.0.1:8502 parses as a valid socket address",
+            ),
+            Check::pass("Database directory", "/var/lib/birdnet is writable"),
+            Check::pass(
+                "Database integrity",
+                "/var/lib/birdnet/birds.db passes integrity check",
+            ),
+            Check::pass(
+                "Recordings directory",
+                "/var/lib/birdnet/recordings is writable",
+            ),
+            Check::pass("Audio source", "ALSA source configured"),
+            Check::pass(
+                "ALSA device probe",
+                "plughw:1,0 matches an entry in `arecord -l`",
+            ),
+            Check::pass(
+                "ONNX model file",
+                "/usr/share/birdnet/model.onnx (541000000 bytes)",
+            ),
+            Check::pass(
+                "Disk space",
+                "120 GiB free on the volume containing /var/lib/birdnet/recordings",
+            ),
+        ]
+    }
+
+    fn sample_mixed() -> Vec<Check> {
+        vec![
+            Check::pass("CPU cores", "4 cores available for audio + inference"),
+            Check::pass("Temp directory", "/tmp is writable"),
+            Check::warn(
+                "Configuration file",
+                "/etc/birdnet/birdnet.conf not found — using built-in defaults",
+                "copy .env.example to /etc/birdnet/birdnet.conf and edit before going to production",
+            ),
+            Check::pass(
+                "Web listen address",
+                "127.0.0.1:8502 parses as a valid socket address",
+            ),
+            Check::warn(
+                "Database directory",
+                "/var/lib/birdnet does not exist yet — will be created on first run",
+                "no action needed unless you want to pre-create it with `mkdir -p`",
+            ),
+            Check::skip(
+                "Database integrity",
+                "no database file yet — will be created on first run",
+            ),
+            Check::skip(
+                "Recordings directory",
+                "no --watch-dir or RECS_DIR configured (file-watcher mode disabled)",
+            ),
+            Check::warn(
+                "Audio source",
+                "no audio source configured (no live detections will be produced)",
+                "set one of: --alsa-device, --pipewire-device, --rtsp-url, --rtsp-urls, \
+                 or the equivalent ALSA_CARD / RTSP_URL / PIPEWIRE_DEVICE config keys",
+            ),
+            Check::skip(
+                "ONNX model file",
+                "no --model / MODEL configured (will use the bundled default at startup)",
+            ),
+            Check::pass("Disk space", "120 GiB free on the volume containing /"),
+        ]
+    }
+
+    fn sample_with_errors() -> Vec<Check> {
+        vec![
+            Check::pass("CPU cores", "4 cores available for audio + inference"),
+            Check::pass("Temp directory", "/tmp is writable"),
+            Check::pass(
+                "Configuration file",
+                "loaded from /etc/birdnet/birdnet.conf",
+            ),
+            Check::fail(
+                "Config: LATITUDE",
+                "latitude 200 is outside the valid range -90.0 to 90.0",
+                "use decimal degrees, e.g. LATITUDE=42.3601 for Boston, MA",
+            ),
+            Check::fail(
+                "Config: AUDIO_FORMAT",
+                "AUDIO_FORMAT=\"aiff\" is not supported",
+                "use \"wav\", \"mp3\", \"flac\", or \"ogg\" (non-WAV formats need ffmpeg or sox)",
+            ),
+            Check::fail(
+                "Web listen address",
+                "\"not-an-address\" is not a valid socket address: invalid socket address syntax",
+                "use the form HOST:PORT, e.g. 127.0.0.1:8502 or 0.0.0.0:8502",
+            ),
+            Check::pass("Database directory", "/var/lib/birdnet is writable"),
+            Check::skip(
+                "Database integrity",
+                "no database file yet — will be created on first run",
+            ),
+            Check::warn(
+                "Audio source",
+                "no audio source configured (no live detections will be produced)",
+                "set one of: --alsa-device, --pipewire-device, --rtsp-url, --rtsp-urls, \
+                 or the equivalent ALSA_CARD / RTSP_URL / PIPEWIRE_DEVICE config keys",
+            ),
+            Check::pass("Disk space", "120 GiB free on the volume containing /"),
+        ]
+    }
+
+    fn check_snapshot(name: &str, actual: &str) {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(SNAPSHOT_DIR)
+            .join(format!("{name}.txt"));
+        let update = std::env::var("UPDATE_DOCTOR_SNAPSHOTS").is_ok();
+        if update || !path.exists() {
+            std::fs::create_dir_all(path.parent().expect("snapshot dir"))
+                .expect("create snapshot dir");
+            std::fs::write(&path, actual).expect("write snapshot");
+            return;
+        }
+        let expected = std::fs::read_to_string(&path).expect("read snapshot");
+        assert_eq!(
+            actual,
+            expected,
+            "Snapshot {name} drifted.\nRun with UPDATE_DOCTOR_SNAPSHOTS=1 to refresh.\n\
+             Expected (from {}):\n{expected}\n\nActual:\n{actual}",
+            path.display()
+        );
+    }
+
+    #[test]
+    fn snapshot_all_pass() {
+        check_snapshot("all_pass", &render_text(&sample_all_pass()));
+    }
+
+    #[test]
+    fn snapshot_mixed_warnings_and_skips() {
+        check_snapshot("mixed", &render_text(&sample_mixed()));
+    }
+
+    #[test]
+    fn snapshot_with_errors() {
+        check_snapshot("with_errors", &render_text(&sample_with_errors()));
+    }
+
+    #[test]
+    fn snapshot_empty_report() {
+        check_snapshot("empty", &render_text(&[]));
     }
 }
 
