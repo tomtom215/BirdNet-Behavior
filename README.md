@@ -595,6 +595,16 @@ audio source reachability, model file, database integrity, disk space, tool
 dependencies, and network. Every problem comes with a concrete suggested fix.
 Exit code: `0` = all good, `1` = warnings only, `2` = at least one error.
 
+For monitoring scripts (Nagios / Zabbix / Home Assistant command sensor /
+Prometheus textfile collector) the same checks are available as a single
+line of JSON:
+
+```bash
+birdnet-behavior --doctor-json | jq .
+# {"summary":{"passed":N,"warnings":N,"errors":N,"skipped":N,"exit_code":N},
+#  "checks":[{"status":"pass|warn|fail|skip","name":"...","message":"...","remediation":"..."|null}, ...]}
+```
+
 **Service won't start:**
 ```bash
 sudo journalctl -u birdnet-behavior -f

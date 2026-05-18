@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prints a one-screen report with a remediation hint per finding. Exit
   code summarises the worst severity (0 = ready, 1 = warnings, 2 = errors)
   so it works in monitoring scripts as well as interactively.
+- **`birdnet-behavior --doctor-json`** — same checks, single-line JSON
+  output for monitoring integrations (Nagios, Zabbix, Home Assistant
+  command sensor, Prometheus textfile collector). String escaping is
+  hand-rolled per RFC 8259 §7; control characters become `\uXXXX`.
 - Configuration validation at load time
   (`birdnet_core::config::validate`) — surfaces 13 distinct
   misconfigurations (lat/lon pairing and range, CONFIDENCE / SF_THRESH /

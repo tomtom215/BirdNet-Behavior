@@ -118,9 +118,17 @@ Checks included today:
 
 ## Future extensions
 
-- Optional `--doctor --json` mode for monitoring integrations.
 - Hardware-temperature check on Raspberry Pi (read
   `/sys/class/thermal/thermal_zone*/temp`).
 - ONNX model SHA-256 verification once a canonical hash is published.
 - Recent-detection sanity check: warn if the database has no detection
   rows newer than the audio-source's expected duty cycle.
+
+### Shipped extensions
+
+- **`--doctor-json`** — emits the same check results as a single-line JSON
+  object so monitoring integrations (Nagios, Zabbix, Home Assistant
+  command sensors, Prometheus textfile collector) can consume them
+  directly. Same exit-code semantics as `--doctor`. String escaping is
+  hand-rolled per RFC 8259 §7 to keep the binary's diagnostic surface
+  free of macro magic.

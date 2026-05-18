@@ -45,6 +45,15 @@ pub struct Cli {
     #[arg(long, visible_alias = "preflight")]
     pub doctor: bool,
 
+    /// Run the preflight diagnostic and emit a single-line JSON document.
+    ///
+    /// Same checks and exit codes as `--doctor`, but the output is a
+    /// machine-readable JSON object with `summary` and `checks` fields.
+    /// Use for monitoring scripts (Nagios / Zabbix / Prometheus textfile
+    /// collector / Home Assistant command sensor).
+    #[arg(long)]
+    pub doctor_json: bool,
+
     /// Path to the ONNX model file (overrides config).
     #[arg(long, env = "BIRDNET_MODEL")]
     pub model: Option<PathBuf>,

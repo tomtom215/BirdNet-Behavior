@@ -109,10 +109,29 @@ impl fmt::Display for Check {
     }
 }
 
+/// Output format for the diagnostic report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Format {
+    /// Human-readable text with one check per line and a trailing summary.
+    Text,
+    /// Machine-readable single-line JSON object suitable for monitoring
+    /// scripts. Schema:
+    /// `{"summary":{"passed":N,"warnings":N,"errors":N,"skipped":N,"exit_code":N},`
+    /// ` "checks":[{"status":"pass|warn|fail|skip","name":"...","message":"...","remediation":"..."|null}, ...]}`
+    Json,
+}
+
 /// Run every preflight check and print a report to stdout.
 ///
 /// Returns the process exit code that should be used (`0`/`1`/`2`).
 pub fn run(cli: &Cli, config: Option<&Config>) -> i32 {
+    run_with_format(cli, config, Format::Text)
+}
+
+/// Run every preflight check and print a report in the given format.
+///
+/// Returns the process exit code that should be used (`0`/`1`/`2`).
+pub fn run_with_format(cli: &Cli, config: Option<&Config>, format: Format) -> i32 {
     let mut checks: Vec<Check> = Vec::new();
 
     checks.extend(check_runtime_environment());
@@ -128,9 +147,79 @@ pub fn run(cli: &Cli, config: Option<&Config>) -> i32 {
     checks.extend(check_optional_tools(cli, config));
     checks.extend(check_disk_space(cli, config));
 
-    print_report(&checks);
+    let exit_code = summarise(&checks);
+    match format {
+        Format::Text => print_report(&checks),
+        Format::Json => println!("{}", render_json(&checks, exit_code)),
+    }
+    exit_code
+}
 
-    summarise(&checks)
+/// Render checks + summary as a single-line JSON object.
+///
+/// Hand-rolled rather than `serde_json::to_string` derive because the
+/// shape is small, fixed, and we want to keep the diagnostic surface
+/// free of macro magic that would obscure the contract. Strings are
+/// escaped per RFC 8259 §7 (handles `\`, `"`, control chars, surrogate
+/// pairs are not produced).
+#[must_use]
+pub fn render_json(checks: &[Check], exit_code: i32) -> String {
+    let (passed, warnings, errors, skipped) = tally(checks);
+    let mut out = String::with_capacity(512 + checks.len() * 96);
+    out.push_str("{\"summary\":{");
+    let _ = std::fmt::Write::write_fmt(
+        &mut out,
+        format_args!(
+            "\"passed\":{passed},\"warnings\":{warnings},\"errors\":{errors},\"skipped\":{skipped},\"exit_code\":{exit_code}"
+        ),
+    );
+    out.push_str("},\"checks\":[");
+    for (i, c) in checks.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let status = match c.status {
+            Status::Pass => "pass",
+            Status::Warn => "warn",
+            Status::Fail => "fail",
+            Status::Skip => "skip",
+        };
+        out.push_str("{\"status\":\"");
+        out.push_str(status);
+        out.push_str("\",\"name\":");
+        push_json_str(&mut out, &c.name);
+        out.push_str(",\"message\":");
+        push_json_str(&mut out, &c.message);
+        out.push_str(",\"remediation\":");
+        if let Some(r) = &c.remediation {
+            push_json_str(&mut out, r);
+        } else {
+            out.push_str("null");
+        }
+        out.push('}');
+    }
+    out.push_str("]}");
+    out
+}
+
+fn push_json_str(out: &mut String, s: &str) {
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0c}' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => {
+                let _ = std::fmt::Write::write_fmt(out, format_args!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
 }
 
 /// Summarise check results into a single exit code.
@@ -922,5 +1011,62 @@ mod tests {
         assert!(s.contains('X'));
         assert!(s.contains('m'));
         assert!(s.contains("fix me"));
+    }
+
+    // ── JSON rendering ─────────────────────────────────────────────────────
+
+    #[test]
+    fn json_summary_reflects_tally() {
+        let checks = vec![
+            Check::pass("a", "ok"),
+            Check::warn("b", "m", "fix"),
+            Check::fail("c", "broken", "fix"),
+            Check::skip("d", "n/a"),
+        ];
+        let json = render_json(&checks, 2);
+        assert!(json.contains("\"passed\":1"));
+        assert!(json.contains("\"warnings\":1"));
+        assert!(json.contains("\"errors\":1"));
+        assert!(json.contains("\"skipped\":1"));
+        assert!(json.contains("\"exit_code\":2"));
+        assert!(json.contains("\"status\":\"pass\""));
+        assert!(json.contains("\"status\":\"warn\""));
+        assert!(json.contains("\"status\":\"fail\""));
+        assert!(json.contains("\"status\":\"skip\""));
+    }
+
+    #[test]
+    fn json_escapes_control_characters_and_quotes() {
+        let c = Check::warn("name\"X", "line1\nline2\twith\\backslash", "fix\rme");
+        let json = render_json(&[c], 1);
+        // Must not contain unescaped specials in the string payload.
+        assert!(json.contains("name\\\"X"), "{json}");
+        assert!(json.contains("line1\\nline2\\twith\\\\backslash"), "{json}");
+        assert!(json.contains("fix\\rme"), "{json}");
+        // Must be parseable as a JSON object (last character is `}`).
+        assert!(json.ends_with('}'));
+    }
+
+    #[test]
+    fn json_omits_remediation_as_null() {
+        let c = Check::pass("a", "ok");
+        let json = render_json(&[c], 0);
+        assert!(json.contains("\"remediation\":null"), "{json}");
+    }
+
+    #[test]
+    fn json_empty_check_list_still_valid() {
+        let json = render_json(&[], 0);
+        // Empty arrays and zeroed summary.
+        assert!(json.contains("\"checks\":[]"));
+        assert!(json.contains("\"passed\":0"));
+    }
+
+    #[test]
+    fn json_handles_low_codepoint_via_unicode_escape() {
+        // U+0001 is below the 0x20 cut-off and must be -encoded.
+        let c = Check::pass("a", "x\u{0001}y");
+        let json = render_json(&[c], 0);
+        assert!(json.contains("x\\u0001y"), "{json}");
     }
 }

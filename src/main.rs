@@ -89,8 +89,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Preflight diagnostic (run and exit with status-derived exit code).
-    if cli.doctor {
-        let code = doctor::run(&cli, config.as_ref());
+    if cli.doctor || cli.doctor_json {
+        let format = if cli.doctor_json {
+            doctor::Format::Json
+        } else {
+            doctor::Format::Text
+        };
+        let code = doctor::run_with_format(&cli, config.as_ref(), format);
         std::process::exit(code);
     }
 
