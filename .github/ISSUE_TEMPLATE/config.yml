@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security disclosure
+    url: https://github.com/tomtom215/BirdNet-Behavior/security/advisories/new
+    about: Found a vulnerability? Open a private security advisory instead of a public issue.
+  - name: Discussion / question
+    url: https://github.com/tomtom215/BirdNet-Behavior/discussions
+    about: For setup questions and general discussion, please use Discussions.

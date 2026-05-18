@@ -484,4 +484,118 @@ mod tests {
         assert!(is_usable(&warnings_only));
         assert!(!is_usable(&with_error));
     }
+
+    // ── Property-based tests ──────────────────────────────────────────────
+    //
+    // proptest generates randomised inputs across the entire reachable space
+    // so we don't have to enumerate every edge case by hand. Each property
+    // is a quantified statement that should hold for ALL inputs in the
+    // range, not just the examples we thought of.
+
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Any in-range latitude/longitude pair must not produce a coordinate
+        /// finding. Generated values cover the full valid surface.
+        #[test]
+        fn valid_coords_never_produce_coord_findings(
+            lat in -90.0_f64..=90.0_f64,
+            lon in -180.0_f64..=180.0_f64,
+        ) {
+            let c = cfg(&[
+                ("LATITUDE", &lat.to_string()),
+                ("LONGITUDE", &lon.to_string()),
+            ]);
+            let findings = validate(&c);
+            prop_assert!(!findings.iter().any(|f| f.key == "LATITUDE" || f.key == "LONGITUDE"));
+        }
+
+        /// Any out-of-range latitude must yield a `LATITUDE` Error finding.
+        /// Filter excludes the valid band so we test the failure mode only.
+        #[test]
+        fn out_of_range_latitude_always_errors(
+            lat in prop_oneof![-1e6_f64..=-90.001_f64, 90.001_f64..=1e6_f64],
+        ) {
+            let c = cfg(&[("LATITUDE", &lat.to_string()), ("LONGITUDE", "0.0")]);
+            let findings = validate(&c);
+            prop_assert!(
+                findings.iter().any(|f| f.key == "LATITUDE" && f.severity == Severity::Error),
+                "lat={lat} did not produce a LATITUDE error; findings: {findings:?}"
+            );
+        }
+
+        /// CONFIDENCE in [0, 1] is always accepted.
+        #[test]
+        fn valid_confidence_never_errors(c in 0.0_f64..=1.0_f64) {
+            let cfg_ = cfg(&[("CONFIDENCE", &c.to_string())]);
+            let findings = validate(&cfg_);
+            prop_assert!(!findings.iter().any(|f| f.key == "CONFIDENCE"));
+        }
+
+        /// CONFIDENCE outside [0, 1] always errors. Restrict to a finite,
+        /// non-NaN range so the assertion is well-defined.
+        #[test]
+        fn invalid_confidence_always_errors(
+            c in prop_oneof![-1e6_f64..-0.0001_f64, 1.0001_f64..=1e6_f64],
+        ) {
+            let cfg_ = cfg(&[("CONFIDENCE", &c.to_string())]);
+            let findings = validate(&cfg_);
+            prop_assert!(
+                findings.iter().any(|f| f.key == "CONFIDENCE" && f.severity == Severity::Error),
+                "c={c} did not produce CONFIDENCE error"
+            );
+        }
+
+        /// Any well-formed "fixed:HH:MM-HH:MM" schedule is accepted.
+        #[test]
+        fn well_formed_fixed_schedule_is_accepted(
+            sh in 0_u8..24,
+            sm in 0_u8..60,
+            eh in 0_u8..24,
+            em in 0_u8..60,
+        ) {
+            let raw = format!("fixed:{sh:02}:{sm:02}-{eh:02}:{em:02}");
+            let c = cfg(&[("RECORDING_SCHEDULE", &raw)]);
+            let findings = validate(&c);
+            prop_assert!(
+                !findings.iter().any(|f| f.key == "RECORDING_SCHEDULE"),
+                "{raw} unexpectedly rejected: {findings:?}"
+            );
+        }
+
+        /// Any HH:MM with an out-of-range hour is rejected.
+        #[test]
+        fn out_of_range_hour_rejected(
+            sh in 24_u8..=99,
+            sm in 0_u8..60,
+            eh in 0_u8..24,
+            em in 0_u8..60,
+        ) {
+            let raw = format!("fixed:{sh:02}:{sm:02}-{eh:02}:{em:02}");
+            let c = cfg(&[("RECORDING_SCHEDULE", &raw)]);
+            let findings = validate(&c);
+            prop_assert!(
+                findings.iter().any(|f| f.key == "RECORDING_SCHEDULE"),
+                "{raw} unexpectedly accepted"
+            );
+        }
+
+        /// Validation should never panic, regardless of input contents.
+        /// Generates arbitrary string pairs (within reasonable size) to make
+        /// sure the validator survives whatever malformed user input arrives.
+        #[test]
+        fn validation_never_panics(
+            keys in proptest::collection::vec("[A-Z_]{1,20}", 0..10),
+            values in proptest::collection::vec(".{0,40}", 0..10),
+        ) {
+            let n = keys.len().min(values.len());
+            let pairs: Vec<(&str, &str)> = (0..n)
+                .map(|i| (keys[i].as_str(), values[i].as_str()))
+                .collect();
+            // Build a config from random pairs and assert validation returns
+            // without panicking. Output content is unconstrained.
+            let c = cfg(&pairs);
+            let _ = validate(&c);
+        }
+    }
 }

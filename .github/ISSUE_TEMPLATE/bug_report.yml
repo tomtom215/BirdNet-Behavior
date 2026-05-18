@@ -1,0 +1,108 @@
+name: Bug report
+description: Something is broken or behaving unexpectedly.
+title: "[bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a bug. Before filing, please run the built-in
+        diagnostic and paste its output below — it captures the environment
+        details that we always end up asking for:
+
+        ```
+        birdnet-behavior --doctor
+        # or, inside Docker:
+        docker compose exec birdnet birdnet-behavior --doctor
+        ```
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `birdnet-behavior --doctor`
+      description: The full preflight report. Redact tokens or location data if needed.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened?
+      description: A clear and concise description of the bug.
+      placeholder: When I do X, I expect Y but get Z.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Minimal, ordered steps that someone else can follow.
+      placeholder: |
+        1. Install via …
+        2. Configure …
+        3. Run …
+        4. Observe …
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment mode
+      options:
+        - Docker (docker compose)
+        - Docker (bare `docker run`)
+        - Bare metal (install.sh)
+        - Pre-built Pi image
+        - Built from source
+    validations:
+      required: true
+
+  - type: dropdown
+    id: arch
+    attributes:
+      label: Architecture
+      options:
+        - x86_64
+        - aarch64 (Raspberry Pi 5 / 4 64-bit / Pi 400)
+        - other (please specify in "What happened?")
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: BirdNet-Behavior version
+      description: Output of `birdnet-behavior --version` (or the image tag for Docker).
+      placeholder: e.g. v0.1.0 / ghcr.io/tomtom215/birdnet-behavior:latest@sha256:…
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Host OS
+      placeholder: e.g. Raspberry Pi OS 12 (bookworm) 64-bit / Ubuntu 24.04
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Last ~50 lines of `journalctl -u birdnet-behavior` or `docker compose logs birdnet`.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-flight checks
+      options:
+        - label: I ran `birdnet-behavior --doctor` and pasted its output above
+          required: true
+        - label: I searched existing issues and discussions for duplicates
+          required: true
+        - label: I am running a supported version (latest release or `edge` tag)
+          required: true
