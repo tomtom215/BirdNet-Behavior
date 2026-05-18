@@ -162,6 +162,7 @@ tower.workspace = true
 birdnet-web.workspace = true
 birdnet-db.workspace = true
 serde_json.workspace = true
+proptest.workspace = true
 
 [lints]
 workspace = true

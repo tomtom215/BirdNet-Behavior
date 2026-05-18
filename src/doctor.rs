@@ -1064,9 +1064,102 @@ mod tests {
 
     #[test]
     fn json_handles_low_codepoint_via_unicode_escape() {
-        // U+0001 is below the 0x20 cut-off and must be -encoded.
+        // U+0001 is below the 0x20 cut-off and must be \u0001-encoded.
         let c = Check::pass("a", "x\u{0001}y");
         let json = render_json(&[c], 0);
         assert!(json.contains("x\\u0001y"), "{json}");
+    }
+}
+
+#[cfg(test)]
+mod proptests_json {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn arb_status() -> impl Strategy<Value = Status> {
+        prop_oneof![
+            Just(Status::Pass),
+            Just(Status::Warn),
+            Just(Status::Fail),
+            Just(Status::Skip),
+        ]
+    }
+
+    fn arb_check() -> impl Strategy<Value = Check> {
+        (
+            arb_status(),
+            ".{0,40}",
+            ".{0,80}",
+            proptest::option::of(".{0,60}"),
+        )
+            .prop_map(|(status, name, message, remediation)| Check {
+                name,
+                status,
+                message,
+                remediation,
+            })
+    }
+
+    proptest! {
+        /// JSON output is always parseable, and the parsed object has the
+        /// documented schema (top-level object with `summary` and `checks`,
+        /// every check entry has all four required fields).
+        #[test]
+        fn json_is_always_parseable(
+            checks in proptest::collection::vec(arb_check(), 0..16),
+            exit in -10_i32..=10,
+        ) {
+            let s = render_json(&checks, exit);
+            let v: serde_json::Value = serde_json::from_str(&s)
+                .expect("render_json must produce valid JSON");
+            prop_assert!(v.is_object());
+            let obj = v.as_object().unwrap();
+            prop_assert!(obj.contains_key("summary"));
+            prop_assert!(obj.contains_key("checks"));
+            let arr = obj["checks"].as_array().expect("checks must be an array");
+            prop_assert_eq!(arr.len(), checks.len());
+            for entry in arr {
+                let m = entry.as_object().unwrap();
+                prop_assert!(m.contains_key("status"));
+                prop_assert!(m.contains_key("name"));
+                prop_assert!(m.contains_key("message"));
+                prop_assert!(m.contains_key("remediation"));
+            }
+        }
+
+        /// Summary counts always sum to the total number of checks — catches
+        /// off-by-one bugs in `tally` regardless of input ordering.
+        #[test]
+        fn json_summary_sums_to_check_count(
+            checks in proptest::collection::vec(arb_check(), 0..32),
+        ) {
+            let s = render_json(&checks, 0);
+            let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+            let sum = v["summary"]["passed"].as_u64().unwrap()
+                + v["summary"]["warnings"].as_u64().unwrap()
+                + v["summary"]["errors"].as_u64().unwrap()
+                + v["summary"]["skipped"].as_u64().unwrap();
+            prop_assert_eq!(sum, checks.len() as u64);
+        }
+
+        /// `summarise` and the JSON output's embedded summary always agree.
+        #[test]
+        fn summarise_matches_embedded_exit_code(
+            checks in proptest::collection::vec(arb_check(), 0..32),
+        ) {
+            let code = summarise(&checks);
+            let s = render_json(&checks, code);
+            let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+            prop_assert_eq!(v["summary"]["exit_code"].as_i64().unwrap(), i64::from(code));
+        }
+
+        /// `summarise` only returns one of the three documented exit codes.
+        #[test]
+        fn summarise_only_returns_documented_codes(
+            checks in proptest::collection::vec(arb_check(), 0..32),
+        ) {
+            let code = summarise(&checks);
+            prop_assert!(matches!(code, 0..=2), "unexpected exit code {code}");
+        }
     }
 }
