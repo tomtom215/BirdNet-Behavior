@@ -4,6 +4,11 @@
 //! where values may be wrapped in PHP-style double quotes.
 //!
 //! Equivalent to Python's `PHPConfigParser` in `scripts/utils/helpers.py`.
+//!
+//! The [`validate`] submodule provides range and shape checks for the parsed
+//! values so misconfiguration surfaces at startup instead of at first use.
+
+pub mod validate;
 
 use std::collections::HashMap;
 use std::fmt;

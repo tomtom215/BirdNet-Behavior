@@ -1,0 +1,72 @@
+# Automated dependency updates via GitHub Dependabot.
+#
+# https://docs.github.com/en/code-security/dependabot/dependabot-version-updates
+#
+# Strategy:
+#   - Cargo deps grouped weekly so we get one PR per ecosystem instead of dozens
+#   - Patch + minor releases are auto-grouped; majors get individual PRs so the
+#     review can scrutinise behavioural changes
+#   - GitHub Actions and Docker base images get their own weekly cadence to
+#     avoid mixing supply-chain bumps with code dep bumps
+version: 2
+updates:
+  # ── Rust crates ─────────────────────────────────────────────────────────────
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "07:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    labels: ["dependencies", "rust"]
+    groups:
+      cargo-patch-and-minor:
+        update-types: ["patch", "minor"]
+        exclude-patterns:
+          - "ort"
+          - "duckdb"
+          - "tokio"
+          - "axum"
+      cargo-async-runtime:
+        patterns:
+          - "tokio*"
+      cargo-web-framework:
+        patterns:
+          - "axum*"
+          - "tower*"
+          - "tower-http"
+
+  # ── GitHub Actions workflows ────────────────────────────────────────────────
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "07:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    labels: ["dependencies", "ci"]
+    groups:
+      actions:
+        update-types: ["patch", "minor"]
+
+  # ── Docker base image ───────────────────────────────────────────────────────
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "07:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "docker"
+      include: "scope"
+    labels: ["dependencies", "docker"]

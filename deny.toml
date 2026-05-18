@@ -1,0 +1,73 @@
+# cargo-deny configuration for BirdNet-Behavior.
+#
+# Enforced in CI via `cargo deny check`. Failures here gate merging.
+# https://embarkstudios.github.io/cargo-deny/
+
+# ── Advisories ────────────────────────────────────────────────────────────────
+# Block crates with published security advisories. yanked = warn so we get
+# visibility without breaking builds for transient registry hiccups.
+[advisories]
+version = 2
+yanked = "warn"
+ignore = []
+
+# ── Licenses ──────────────────────────────────────────────────────────────────
+# Curated allow-list of OSI-approved permissive licenses that are compatible
+# with this project's CC-BY-NC-SA-4.0 source license when consumed as
+# dependencies. Copyleft licenses (GPL family, AGPL) are NOT allowed because
+# they would impose terms on downstream binaries that are stricter than ours.
+[licenses]
+version = 2
+confidence-threshold = 0.93
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MIT-0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "ISC",
+    "Zlib",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "0BSD",
+    "OpenSSL",
+    "Unlicense",
+    "WTFPL",
+    "CDLA-Permissive-2.0",
+]
+# Crates whose advertised license metadata is wrong or absent get pinned
+# overrides here, with the actual upstream license repository link.
+[[licenses.clarify]]
+name = "ring"
+expression = "MIT AND ISC AND OpenSSL"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+
+# ── Bans ──────────────────────────────────────────────────────────────────────
+# Forbid known-bad crates and detect duplicated versions of a single crate
+# in the dependency graph (a common source of unnecessary binary bloat).
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+deny = [
+    # ed25519-dalek <2.0 is RUSTSEC-2022-0093.
+    { crate = "ed25519-dalek", reason = "use >=2.0", version = "<2.0" },
+]
+skip = []
+skip-tree = []
+
+# ── Sources ───────────────────────────────────────────────────────────────────
+# Only allow crates from the official registry. Git dependencies must be
+# explicitly listed here to be accepted, preventing accidental supply-chain
+# detours through forks or unauthenticated mirrors.
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

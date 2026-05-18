@@ -10,6 +10,7 @@
 mod capture;
 mod cli;
 mod daemon;
+mod doctor;
 mod helpers;
 mod integrations;
 mod weekly_report;
@@ -85,6 +86,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if cli.backup_db {
         return run_backup(config.as_ref());
+    }
+
+    // Preflight diagnostic (run and exit with status-derived exit code).
+    if cli.doctor {
+        let code = doctor::run(&cli, config.as_ref());
+        std::process::exit(code);
     }
 
     // Startup database resilience check.

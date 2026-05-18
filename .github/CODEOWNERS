@@ -1,0 +1,26 @@
+# BirdNet-Behavior code ownership.
+#
+# Lines later in this file override earlier matches. Reviewers listed here
+# are automatically requested on pull requests touching the matched paths.
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Catch-all — repository maintainer reviews everything by default.
+*                                @tomtom215
+
+# ── Critical surface that needs careful review ──────────────────────────────
+# Security policy, licence terms, lock file, and CI gates affect every user.
+/SECURITY.md                     @tomtom215
+/LICENSE                         @tomtom215
+/LICENSE-UPSTREAM                @tomtom215
+/Cargo.lock                      @tomtom215
+/Cargo.toml                      @tomtom215
+/rust-toolchain.toml             @tomtom215
+/deny.toml                       @tomtom215
+/.github/                        @tomtom215
+
+# ── Installer and bootstrap surface — touches end-user systems ─────────────
+/install.sh                      @tomtom215
+/quickstart.sh                   @tomtom215
+/docker/                         @tomtom215
+/Dockerfile                      @tomtom215
+/docker-compose*.yml             @tomtom215

@@ -581,6 +581,20 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## Troubleshooting
 
+**First step for any problem — run the built-in diagnostic:**
+```bash
+# Bare metal
+sudo -u birdnet birdnet-behavior --doctor
+
+# Docker
+docker compose exec birdnet birdnet-behavior --doctor
+```
+
+The diagnostic prints a one-screen report covering CPU, configuration values,
+audio source reachability, model file, database integrity, disk space, tool
+dependencies, and network. Every problem comes with a concrete suggested fix.
+Exit code: `0` = all good, `1` = warnings only, `2` = at least one error.
+
 **Service won't start:**
 ```bash
 sudo journalctl -u birdnet-behavior -f

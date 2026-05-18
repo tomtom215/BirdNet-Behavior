@@ -33,6 +33,18 @@ pub struct Cli {
     #[arg(long)]
     pub backup_db: bool,
 
+    /// Run the preflight diagnostic and exit.
+    ///
+    /// Validates the configuration, audio source, model file, database
+    /// integrity, disk space, and tool dependencies. Returns:
+    ///   - 0 — all checks passed
+    ///   - 1 — at least one warning (system will run, features degraded)
+    ///   - 2 — at least one error (system will not work until fixed)
+    ///
+    /// Run after install and any time the system behaves unexpectedly.
+    #[arg(long, visible_alias = "preflight")]
+    pub doctor: bool,
+
     /// Path to the ONNX model file (overrides config).
     #[arg(long, env = "BIRDNET_MODEL")]
     pub model: Option<PathBuf>,
