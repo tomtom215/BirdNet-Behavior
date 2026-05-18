@@ -141,6 +141,9 @@ async fn handle_ws_connection(mut socket: WebSocket, broadcast: DetectionBroadca
             msg = socket.recv() => {
                 match msg {
                     Some(Ok(Message::Ping(data))) => {
+                        // Pong reply must move `data`, so a match guard would force
+                        // a needless clone; collapse-into-match-guard lint allowed.
+                        #[allow(clippy::collapsible_match, clippy::collapsible_if)]
                         if socket.send(Message::Pong(data)).await.is_err() {
                             break;
                         }

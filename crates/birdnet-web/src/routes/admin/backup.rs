@@ -88,7 +88,7 @@ async fn list_backups(State(state): State<AppState>) -> Html<String> {
                 })
             })
             .collect();
-        entries.sort_by(|a, b| b.modified_secs.cmp(&a.modified_secs));
+        entries.sort_by_key(|e| std::cmp::Reverse(e.modified_secs));
         entries
     })
     .await
@@ -182,7 +182,7 @@ async fn download_backup(State(state): State<AppState>, Path(name): Path<String>
     let Ok(file) = tokio::fs::File::open(&file_canon).await else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let size = file.metadata().await.map(|m| m.len()).unwrap_or(0);
+    let size = file.metadata().await.map_or(0, |m| m.len());
     let stream = ReaderStream::new(file);
     let content_disposition = format!("attachment; filename=\"{name}\"");
 

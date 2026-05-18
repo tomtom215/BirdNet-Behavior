@@ -35,9 +35,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_FILTER));
     let (filter_layer, reload_handle) = reload::Layer::new(env_filter);
+    // Send logs to stderr (Unix convention) so stdout stays clean for
+    // structured output like `--doctor-json`.
     tracing_subscriber::registry()
         .with(filter_layer)
-        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
         .init();
 
     // Spawn SIGHUP handler for runtime log level changes.

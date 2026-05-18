@@ -35,8 +35,11 @@ doc-valid-idents = [
     "..",
 ]
 
-# Tests can be longer / more complex without raising eyebrows.
-disallowed-names = ["foo", "bar", "baz", "qux", "TODO", "tmp"]
+# Generic placeholder names that should never make it into the codebase.
+# `tmp` is intentionally NOT on this list: it is widely used as a legitimate
+# variable name for short-lived intermediates and banning it would cause a
+# huge cleanup churn for no real readability gain.
+disallowed-names = ["foo", "bar", "baz", "qux", "TODO"]
 allow-expect-in-tests = true
 allow-unwrap-in-tests = true
 allow-panic-in-tests = true

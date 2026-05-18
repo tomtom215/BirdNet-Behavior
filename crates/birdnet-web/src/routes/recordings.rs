@@ -207,7 +207,7 @@ fn collect_recordings(
         .collect();
 
     // Sort by most-recently-modified first
-    metas.sort_by(|a, b| b.modified_secs.cmp(&a.modified_secs));
+    metas.sort_by_key(|m| std::cmp::Reverse(m.modified_secs));
 
     metas.into_iter().skip(offset).take(limit).collect()
 }

@@ -474,6 +474,7 @@ dependencies = [
  "birdnet-web",
  "clap",
  "hound",
+ "proptest",
  "reqwest 0.13.2",
  "rusqlite",
  "serde_json",

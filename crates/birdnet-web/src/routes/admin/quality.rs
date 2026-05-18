@@ -377,9 +377,8 @@ fn render_hourly_quality(by_hour: &[(u8, i64, f64)]) -> String {
 
     let mut html = String::from(r#"<div class="hour-bars">"#);
     for (hour, maybe) in hours_map.iter().enumerate() {
-        let (count, avg_conf, color) = maybe
-            .map(|(c, a)| (c, a, conf_to_color(a)))
-            .unwrap_or((0, 0.0, "#1e293b"));
+        let (count, avg_conf, color) =
+            maybe.map_or((0, 0.0, "#1e293b"), |(c, a)| (c, a, conf_to_color(a)));
         let height_pct = (count * 100) / max_count;
         write!(
             html,

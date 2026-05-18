@@ -121,13 +121,6 @@ pub enum Format {
     Json,
 }
 
-/// Run every preflight check and print a report to stdout.
-///
-/// Returns the process exit code that should be used (`0`/`1`/`2`).
-pub fn run(cli: &Cli, config: Option<&Config>) -> i32 {
-    run_with_format(cli, config, Format::Text)
-}
-
 /// Run every preflight check and print a report in the given format.
 ///
 /// Returns the process exit code that should be used (`0`/`1`/`2`).
