@@ -17,15 +17,32 @@ Open an issue with the `enhancement` label. Describe the use case — what probl
 ## Submitting a pull request
 
 1. **Fork and branch** — work on a branch named `feature/…` or `fix/…`
-2. **Build and test** before opening the PR:
+2. **Build and test** before opening the PR — the local quality gates
+   mirror what CI enforces:
    ```bash
    cargo build --workspace
    cargo test --workspace
-   cargo clippy --workspace --all-targets  # no warnings allowed
+   cargo clippy --workspace --all-targets -- -D warnings
    cargo fmt --check --all
    ```
-3. **Keep PRs focused** — one fix or feature per PR makes review faster
-4. **Update the README** if you're adding or changing user-visible behaviour
+3. **Supply-chain & licence checks** (when you've touched `Cargo.toml`):
+   ```bash
+   cargo install --locked cargo-deny    # one-time
+   cargo deny check                     # licences, advisories, bans, sources
+   cargo install --locked cargo-audit   # one-time
+   cargo audit --deny warnings          # advisory database
+   ```
+4. **Diagnostic smoke test** — if you've touched anything that affects
+   startup, config parsing, or the audio/model surface, run the doctor
+   against a known-good config and a deliberately broken one:
+   ```bash
+   birdnet-behavior --doctor --config /etc/birdnet/birdnet.conf
+   ```
+5. **Keep PRs focused** — one fix or feature per PR makes review faster
+6. **Update the README, `.env.example`, and `CHANGELOG.md`** if you're
+   adding or changing user-visible behaviour
+7. **Add or update an ADR** under `docs/architecture/` for non-trivial
+   design decisions (use the format of the existing `14-diagnostics.md`)
 
 ## Code conventions
 
@@ -35,6 +52,8 @@ Documented in [`CLAUDE.md`](CLAUDE.md). The short version:
 - No async in library crates (`birdnet-core`, `birdnet-db`) — blocking only
 - `unsafe` is denied workspace-wide
 - Clippy pedantic + nursery, warnings denied in CI
+- `rust-toolchain.toml` pins the toolchain; do not bump it without also
+  bumping the MSRV in `Cargo.toml` and the MSRV CI job
 
 ## License
 

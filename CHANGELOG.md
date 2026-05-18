@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`birdnet-behavior --doctor`** (alias `--preflight`) — a one-shot
+  preflight diagnostic that runs ~12 environment checks (CPU, temp dir,
+  config parse, every config value range, listen address, database
+  directory and integrity, recordings dir, audio source reachability with
+  ALSA / PulseAudio / RTSP probes, model file sanity, audio encoder
+  presence when needed, Apprise CLI when configured, disk free space) and
+  prints a one-screen report with a remediation hint per finding. Exit
+  code summarises the worst severity (0 = ready, 1 = warnings, 2 = errors)
+  so it works in monitoring scripts as well as interactively.
+- Configuration validation at load time
+  (`birdnet_core::config::validate`) — surfaces 13 distinct
+  misconfigurations (lat/lon pairing and range, CONFIDENCE / SF_THRESH /
+  PRIVACY_THRESHOLD / SENSITIVITY / OVERLAP / RECORDING_LENGTH /
+  SEGMENT_DURATION bounds, schedule string shape, mutually-exclusive audio
+  sources, unsupported AUDIO_FORMAT, unknown INFO_SITE, malformed language
+  code) with clear remediation messages.
+- Property-based tests (proptest) for the configuration validator cover
+  the full reachable numeric range plus a panic-freedom invariant over
+  arbitrary string input.
+- Supply-chain CI workflow (`.github/workflows/supply-chain.yml`) running
+  `cargo-deny`, `cargo-audit`, `cargo-machete`, `typos`, and `shellcheck`
+  on every PR and weekly cron.
+- Reproducibility files: `rust-toolchain.toml`, `rustfmt.toml`,
+  `clippy.toml`, `deny.toml`.
+- Repository hygiene: `SECURITY.md`, `.github/CODEOWNERS`,
+  `.github/dependabot.yml`, structured GitHub issue forms, and a PR
+  template with quality-gate checkboxes.
+- Architecture Decision Record `docs/architecture/14-diagnostics.md`
+  captures the design and trade-offs of the diagnostic system.
+
+### Changed
+
+- `install.sh` model download now resumes on interrupt (`curl -C -` /
+  `wget -c`), shows a progress bar, and keeps the partial file in place
+  on failure so a flaky connection no longer forces a 541 MB restart from
+  zero. Failure messages list the three common root causes (no internet,
+  Zenodo down, disk full) inline.
+- `.env.example` gains worked latitude/longitude examples for three
+  continents, an OpenStreetMap walk-through for finding coordinates, and
+  units + ranges for SF_THRESH, PRIVACY_THRESHOLD, SEGMENT_DURATION, and
+  the schedule modes.
+- `README.md` troubleshooting section now leads with
+  `birdnet-behavior --doctor`.
+- `quickstart.sh` post-bootstrap output advertises the diagnostic.
+
 ## [0.1.0] - 2026-04-12
 
 First public release. BirdNet-Behavior is a ground-up Rust rewrite of
