@@ -49,7 +49,7 @@ rusqlite = { version = "0.38", features = ["bundled", "backup"] }
 duckdb = { version = "1.10501", features = ["bundled"] }
 
 # Web
-axum = { version = "0.8.8", features = ["ws", "form"] }
+axum = { version = "0.8.9", features = ["ws", "form"] }
 tower = "0.5.3"
 tower-http = { version = "0.6.8", features = ["cors", "trace", "fs"] }
 
