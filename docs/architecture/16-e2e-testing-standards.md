@@ -24,6 +24,14 @@ that the existing 819-test suite all happily passed against:
 6. **Audio-clip extraction computed `start > stop`** ("invalid sample
    range: 1224000..720000") whenever a detection sat past the
    operator-configured `recording_length`, silently dropping the clip.
+7. **`sigmoid` applied on top of already-calibrated probabilities**.
+   The V3.0 preview model emits probabilities in `[0, 1]`; our pipeline
+   was running `sigmoid(sensitivity * raw)` on them, which compressed
+   the range into `[0.5, 0.73]` and silently lost half the confidence
+   signal. A Magpie that the model rated `0.9247` was being recorded
+   at `0.7160`. Surfaced by comparing the Rust output against the
+   `birdnet-team/birdnet-V3.0-dev/analyze.py` reference, which is the
+   "Layer 2 — Reference-implementation parity" rung of this document.
 
 Each bug looked locally correct in code review. Each bug had unit-test
 coverage that exercised the *function* but not its *integration* with the

@@ -204,9 +204,16 @@ fn e2e_model_detects_pica_pica() {
         best.confidence * 100.0
     );
 
+    // V2.4 gives 0.93–0.97; V3.0 preview3 with the now-correct probability
+    // output gives ~0.90+ on the best chunk. The previous 0.5 lower bound
+    // masked the sigmoid-on-probabilities bug — any value > 0.5 passed
+    // even when the real confidence was being squashed from 0.92 to 0.72.
     assert!(
-        best.confidence > 0.5,
-        "Pica pica best confidence {:.1}% is too low (expected >50%)",
+        best.confidence > 0.80,
+        "Pica pica best confidence {:.1}% is too low (expected >80%; \
+         V2.4 reference is 93-97%, V3.0 preview3 is 90+ on the best chunk). \
+         A drop below 80% on this fixture is a strong signal that the \
+         output post-processing has regressed — see ADR 16.",
         best.confidence * 100.0
     );
 }

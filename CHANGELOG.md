@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Detection confidence on BirdNET+ V3.0 preview models was being
+  silently halved** by applying `sigmoid` to the model's `predictions`
+  output. The official `birdnet-team/birdnet-V3.0-dev/analyze.py`
+  reference uses the model output as already-calibrated probabilities
+  in `[0, 1]` (its default threshold is `--min-conf 0.15`, which only
+  makes sense against a probability distribution). Our pipeline was
+  applying `sigmoid(sensitivity * raw)` to those values, which
+  compressed the entire `[0, 1]` range into `[0.5, 0.73]` and turned a
+  Magpie that the model rated `0.9247` into a `0.7160` detection. Same
+  effect on every species — every detection clustered near 50 % because
+  `sigmoid(~0) = 0.5`, which is why every WAV ended up with a long
+  list of spurious "owl detections" near the noise floor.
+  - Fix: new `is_probability_output` flag set at model-load time from
+    the input shape (V3.0 fixed or dynamic ⇒ true). The `predict` path
+    branches on it — V3.0 models pass through clamped to `[0, 1]`,
+    V2.4 still goes through `sigmoid(sensitivity * logit)`.
+  - Live verification on the bundled Pica WAV: confidence climbs from
+    71 % to **92.1 %, 91.6 %, 81.9 %, 93.9 %** — matching the V2.4 /
+    BirdNET-Pi reference range of 93.9–97.0 % on the same WAV. The
+    spurious owl detections at the previous ~50 % noise floor have
+    completely disappeared (the real noise floor is below 5 %).
+  - `tests/inference_e2e.rs` bumps its assertion from `> 0.50` to
+    `> 0.80` so a future regression of this class fails the test
+    immediately instead of silently lurking under a tolerant bound.
 - **Audio-clip extraction range inversion** (`crates/birdnet-core/src/audio/extraction/extractor.rs`):
   `safe_stop` was clamped to the operator-configured `recording_length`
   rather than the actual decoded audio length. Any detection past that

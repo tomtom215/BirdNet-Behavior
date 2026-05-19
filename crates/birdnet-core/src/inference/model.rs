@@ -74,6 +74,12 @@ pub struct BirdNetModel {
     labels: LabelSet,
     config: ModelConfig,
     input_shape: Vec<usize>,
+    /// True when the model's `predictions` output is already a probability
+    /// distribution in `[0, 1]`. BirdNET+ V3.0 preview models report this;
+    /// V2.4 fixed-shape models emit raw logits that still need
+    /// sigmoid+sensitivity to reach probabilities. Set once at load time
+    /// from the input shape.
+    is_probability_output: bool,
 }
 
 impl fmt::Debug for BirdNetModel {
@@ -152,8 +158,10 @@ impl BirdNetModel {
 
         let input_shape = extract_input_shape(&session)?;
 
+        let is_probability_output = output_is_probability(&input_shape);
         tracing::info!(
             input_shape = ?input_shape,
+            is_probability_output,
             "model loaded successfully"
         );
 
@@ -162,6 +170,7 @@ impl BirdNetModel {
             labels,
             config,
             input_shape,
+            is_probability_output,
         })
     }
 
@@ -181,12 +190,14 @@ impl BirdNetModel {
             .map_err(|e| InferenceError::Model(e.to_string()))?;
 
         let input_shape = extract_input_shape(&session)?;
+        let is_probability_output = output_is_probability(&input_shape);
 
         Ok(Self {
             session,
             labels,
             config,
             input_shape,
+            is_probability_output,
         })
     }
 
@@ -230,11 +241,36 @@ impl BirdNetModel {
             .try_extract_tensor::<f32>()
             .map_err(|e| InferenceError::Runtime(format!("cannot extract logits: {e}")))?;
 
-        // Apply sigmoid with sensitivity and collect results
+        // Output-to-confidence mapping depends on the model family:
+        //
+        //   * V2.4 (input shape [1, 144_000]) emits raw logits in roughly
+        //     [-5, 5]; the canonical BirdNET-Analyzer pipeline applies a
+        //     sensitivity-scaled sigmoid to map them into [0, 1]. On the
+        //     bundled Pica WAV this gives 0.93–0.97 confidence for the
+        //     target species, matching BirdNET-Pi numbers.
+        //
+        //   * V3.0 preview models (dynamic input shape) emit values that
+        //     are *already* probabilities in [0, 1] — the official
+        //     `birdnet-V3.0-dev/analyze.py` reference uses them as-is,
+        //     with a default `--min-conf 0.15` threshold that only makes
+        //     sense against a probability distribution. Applying sigmoid
+        //     on top compresses the [0, 1] range into [0.5, 0.73], so a
+        //     0.92 Magpie detection silently becomes 0.72 — the bug the
+        //     user originally flagged.
+        //
+        // The two regimes are distinguished by `is_probability_output`,
+        // which is set at load time from the input shape (V3.0 ⇒ true).
+        // `sensitivity` only multiplies into the logit path because it is
+        // semantically a pre-sigmoid scale factor; mathematically it is
+        // not meaningful on values that are already probabilities.
         let mut detections = Vec::new();
 
-        for (i, &logit) in flat_logits.iter().enumerate() {
-            let confidence = sigmoid(self.config.sensitivity * logit);
+        for (i, &raw) in flat_logits.iter().enumerate() {
+            let confidence = if self.is_probability_output {
+                raw.clamp(0.0, 1.0)
+            } else {
+                sigmoid(self.config.sensitivity * raw)
+            };
 
             if confidence >= self.config.confidence_threshold
                 && let Some(label) = self.labels.get(i)
@@ -377,6 +413,14 @@ impl BirdNetModel {
         &self.config
     }
 
+    /// Whether the model emits already-calibrated probabilities (`true`) or
+    /// raw logits requiring sigmoid + sensitivity scaling (`false`).
+    ///
+    /// V3.0 preview models report `true`; V2.4 models report `false`.
+    pub const fn is_probability_output(&self) -> bool {
+        self.is_probability_output
+    }
+
     /// Update the sensitivity value.
     pub const fn set_sensitivity(&mut self, sensitivity: f32) {
         self.config.sensitivity = sensitivity;
@@ -389,6 +433,26 @@ impl BirdNetModel {
 }
 
 /// Apply sigmoid function: `1 / (1 + exp(-x))`.
+/// Determine whether the model's `predictions` output is already a
+/// probability distribution in `[0, 1]`, based on the input shape.
+///
+/// BirdNET+ V3.0 preview models declare a fully-dynamic input shape
+/// (`[1]` or `[1, 1]`) and emit calibrated probabilities. BirdNET V2.4
+/// fixed-shape models (`[1, 144_000]`) emit raw logits that still need
+/// sigmoid + sensitivity scaling.
+///
+/// V3.0 fixed-shape (`[1, 96_000]`) follows the V3.0 calibration too.
+fn output_is_probability(input_shape: &[usize]) -> bool {
+    match input_shape {
+        // V3.0 fixed (32 kHz × 3 s = 96 000 samples) and V3.0 dynamic
+        // preview both emit already-calibrated probabilities.
+        [_, 96_000] | [_, _, 96_000] | [1] | [1, 1] | [1, 1, 1] => true,
+        // V2.4 and any unknown future model → assume raw logits so we
+        // never lose the confidence signal for a model we can't classify.
+        _ => false,
+    }
+}
+
 fn sigmoid(x: f32) -> f32 {
     1.0 / (1.0 + (-x).exp())
 }
@@ -460,6 +524,36 @@ mod tests {
             _ => 48_000_u32,
         };
         assert_eq!(rate, 32_000);
+    }
+
+    #[test]
+    fn v24_emits_raw_logits() {
+        // V2.4 fixed-shape model needs sigmoid.
+        assert!(!output_is_probability(&[1, 144_000]));
+        assert!(!output_is_probability(&[1, 1, 144_000]));
+    }
+
+    #[test]
+    fn v30_fixed_emits_probabilities() {
+        // V3.0 fixed shape is already calibrated.
+        assert!(output_is_probability(&[1, 96_000]));
+        assert!(output_is_probability(&[1, 1, 96_000]));
+    }
+
+    #[test]
+    fn v30_dynamic_emits_probabilities() {
+        // V3.0 preview (dynamic) is also already calibrated.
+        assert!(output_is_probability(&[1]));
+        assert!(output_is_probability(&[1, 1]));
+        assert!(output_is_probability(&[1, 1, 1]));
+    }
+
+    #[test]
+    fn unknown_shape_defaults_to_logits() {
+        // Belt-and-braces: an unknown future model is assumed to need
+        // sigmoid rather than have us silently lose the confidence signal.
+        assert!(!output_is_probability(&[1, 999_999]));
+        assert!(!output_is_probability(&[]));
     }
 
     #[test]
