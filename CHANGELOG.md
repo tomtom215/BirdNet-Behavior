@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Audio-clip extraction range inversion** (`crates/birdnet-core/src/audio/extraction/extractor.rs`):
+  `safe_stop` was clamped to the operator-configured `recording_length`
+  rather than the actual decoded audio length. Any detection past that
+  window produced `start_sample > stop_sample` and silently dropped the
+  clip with the error *"invalid sample range: 1224000..720000"*. The
+  fix decodes first, clamps both endpoints to the file's real length,
+  rejects empty audio with a clear message, and ships three regression
+  tests covering the clamp / EOF / empty-audio paths.
+- **Detection rows lost across chunks of one recording**
+  (`migration 11`): the previous `UNIQUE(Date, Time, Sci_Name)`
+  constraint collapsed every chunk of one recording into a single row
+  because every chunk inherits the same `Time` from the file name. A
+  Eurasian Magpie that called in chunks 0, 4.5, 9, 13.5, and 18 seconds
+  produced **one** database row; the other four were rejected and lost.
+  New schema: `chunk_offset_secs REAL NOT NULL DEFAULT 0.0` column plus
+  `UNIQUE(Date, Time, Sci_Name, File_Name, chunk_offset_secs)`. Live
+  re-run with the bundled Magpie WAV: **5 distinct chunks recorded, top
+  confidence 71.9 %**.
+- **Test-fixture schema drift**
+  (`crates/birdnet-db/src/sqlite/connection.rs::open_or_create`): this
+  helper hand-coded its own `CREATE TABLE detections` with only the
+  migration-1 columns, so every test using it ran against a stale
+  schema. Fixed to apply the full migration chain — surfaced six
+  pre-existing test failures masquerading as passes that the new
+  migration 11 caught immediately.
+- **Three `INSERT INTO detections VALUES (...)` time bombs** with no
+  column list in `birdnet-db/sqlite/queries/heatmap.rs`,
+  `correlation.rs`, and `birdnet-migrate/birdnet_pi/importer.rs`. Each
+  would break the same way as the main daemon insert did when a future
+  migration adds a column. Now all use explicit column lists.
+
 - **Detection confidence on BirdNET+ V3.0 preview models** improves
   substantially because the daemon now adopts the model's recommended
   chunk length instead of always using the V2.4-era 3.0-second default.

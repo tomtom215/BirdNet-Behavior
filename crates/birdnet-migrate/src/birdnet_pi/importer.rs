@@ -245,7 +245,10 @@ mod tests {
         .unwrap();
         for i in 0..n {
             conn.execute(
-                "INSERT INTO detections VALUES
+                "INSERT INTO detections
+                   (Date, Time, Sci_Name, Com_Name, Confidence,
+                    Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name)
+                 VALUES
                     (?1,'06:00:00','Turdus merula','Blackbird',
                      0.9,51.5,-0.1,0.7,1,1.0,0.0,'rec.wav')",
                 params![format!("2026-01-{:02}", (i % 28) + 1)],

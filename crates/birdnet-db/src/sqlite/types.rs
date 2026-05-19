@@ -33,6 +33,12 @@ pub struct DetectionRecord<'a> {
     pub overlap: Option<f64>,
     /// Extracted audio filename, relative to the recordings dir.
     pub file_name: &'a str,
+    /// Start offset of the chunk within the source file, in seconds. `None`
+    /// when the row pre-dates migration 11 (e.g. imported BirdNET-Pi data).
+    ///
+    /// Together with `(Date, Time, Sci_Name, File_Name)` this gives a unique
+    /// key that survives chunked recordings — see migration 11.
+    pub chunk_offset_secs: Option<f64>,
 }
 
 /// A detection row read from the database.

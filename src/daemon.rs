@@ -287,6 +287,10 @@ fn event_processor(
             sensitivity: None,
             overlap: None,
             file_name: &file_str,
+            // Without this, every chunk of one recording shares the same
+            // UNIQUE key (Date, Time, Sci_Name, File_Name) and only the
+            // first chunk's detection is kept. See migration 11.
+            chunk_offset_secs: Some(f64::from(detection.start)),
         };
 
         if let Err(e) = state.with_db(|conn| birdnet_db::sqlite::insert_detection(conn, &record)) {

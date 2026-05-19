@@ -43,6 +43,15 @@ impl From<rusqlite::Error> for DbError {
     }
 }
 
+impl From<crate::migration::MigrationError> for DbError {
+    fn from(e: crate::migration::MigrationError) -> Self {
+        match e {
+            crate::migration::MigrationError::Sqlite(s) => Self::Sqlite(s),
+            crate::migration::MigrationError::Logic(msg) => Self::Schema(msg),
+        }
+    }
+}
+
 /// Recommended PRAGMAs applied to every connection.
 const PRAGMAS: &str = "PRAGMA journal_mode=WAL;
  PRAGMA synchronous=NORMAL;
@@ -78,23 +87,14 @@ pub fn open_connection(path: &Path) -> Result<Connection, DbError> {
 pub fn open_or_create(path: &Path) -> Result<Connection, DbError> {
     let conn = Connection::open(path)?;
     conn.execute_batch(PRAGMAS)?;
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS detections (
-            Date TEXT NOT NULL,
-            Time TEXT NOT NULL,
-            Sci_Name TEXT NOT NULL,
-            Com_Name TEXT NOT NULL,
-            Confidence REAL NOT NULL,
-            Lat REAL,
-            Lon REAL,
-            Cutoff REAL,
-            Week INTEGER,
-            Sens REAL,
-            Overlap REAL,
-            File_Name TEXT,
-            UNIQUE(Date, Time, Sci_Name)
-        );",
-    )?;
+    // Apply the full migration chain so the resulting database matches the
+    // production schema exactly. Previously this function hand-coded a
+    // bare-bones `CREATE TABLE detections` with only the migration-1 columns
+    // and the old UNIQUE constraint — every test fixture using this helper
+    // then missed every later column (`is_locked`, `chunk_offset_secs`) and
+    // the relaxed UNIQUE key from migration 11, so tests silently passed
+    // against a schema that didn't exist in production.
+    crate::migration::migrate(&conn)?;
     Ok(conn)
 }
 

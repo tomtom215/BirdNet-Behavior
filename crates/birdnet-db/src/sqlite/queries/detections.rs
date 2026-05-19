@@ -18,8 +18,8 @@ pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Resu
     // this write path working unchanged.
     conn.execute(
         "INSERT INTO detections \
-         (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+         (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, chunk_offset_secs) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             record.date,
             record.time,
@@ -33,6 +33,7 @@ pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Resu
             record.sensitivity,
             record.overlap,
             record.file_name,
+            record.chunk_offset_secs,
         ],
     )?;
     Ok(())
@@ -526,6 +527,7 @@ mod tests {
             sensitivity: Some(1.25),
             overlap: Some(0.0),
             file_name: "test.wav",
+            chunk_offset_secs: Some(0.0),
         };
         insert_detection(&conn, &record).unwrap();
         assert_eq!(detection_count(&conn).unwrap(), 1);
