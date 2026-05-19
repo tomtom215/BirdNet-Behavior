@@ -14,23 +14,21 @@
 [advisories]
 version = 2
 yanked = "warn"
+# Eight transitive advisories were lifted by targeted `cargo update
+# --precise` in this pass: rustls-webpki 0.103.9 → 0.103.13 (0049, 0098,
+# 0099, 0104), aws-lc-rs 1.16.1 → 1.17.0 carrying aws-lc-sys 0.38.0 →
+# 0.41.0 (0044, 0048), and tar 0.4.44 → 0.4.46 (0067, 0068). Only the
+# rand-0.8.x advisory remains — see comment below.
 ignore = [
-    # rand 0.8 / 0.9 unsoundness with custom global thread-local logger.
-    # We never install one; pulled in transitively via rustls / aws-lc-rs.
-    { id = "RUSTSEC-2026-0097", reason = "no custom rand logger installed" },
-    # rustls-webpki transitive via reqwest + hyper-rustls. Fix lands when
-    # those crates upgrade; track at the next dependency-bump pass.
-    { id = "RUSTSEC-2026-0049", reason = "transitive via reqwest; awaiting upstream upgrade" },
-    { id = "RUSTSEC-2026-0098", reason = "transitive via reqwest; awaiting upstream upgrade" },
-    { id = "RUSTSEC-2026-0099", reason = "transitive via reqwest; awaiting upstream upgrade" },
-    { id = "RUSTSEC-2026-0104", reason = "transitive via reqwest; awaiting upstream upgrade" },
-    # aws-lc-sys via rustls-platform-verifier. Same story.
-    { id = "RUSTSEC-2026-0044", reason = "transitive via rustls-platform-verifier" },
-    { id = "RUSTSEC-2026-0048", reason = "transitive via rustls-platform-verifier" },
-    # tar via reqwest dependency chain (PAX header / unpack_in).
-    # We don't expose tar extraction to untrusted input.
-    { id = "RUSTSEC-2026-0067", reason = "no untrusted tar input in this project" },
-    { id = "RUSTSEC-2026-0068", reason = "no untrusted tar input in this project" },
+    # rand 0.8.5 unsoundness with custom global thread-local logger.
+    # Patched in rand >= 0.9.3 and >= 0.10.1; the 0.8.x line has no
+    # corresponding release on crates.io as of this writing. We're on
+    # rand 0.9.4 for the 0.9.x copy, but several transitive deps
+    # (`rustc-hash`, `rust_decimal`, `num-bigint`, `num-complex`) still
+    # pin `rand "^0.8"` in their non-dev deps, so 0.8.5 stays in the
+    # lockfile until they upgrade. We never install a custom rand
+    # logger ourselves; the practical attack surface is zero.
+    { id = "RUSTSEC-2026-0097", reason = "no custom rand logger; rand 0.8.x has no patched upstream release" },
 ]
 
 # ── Licenses ──────────────────────────────────────────────────────────────────

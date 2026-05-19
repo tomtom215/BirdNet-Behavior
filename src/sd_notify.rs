@@ -78,18 +78,26 @@ pub fn stopping() {
 /// Ping the systemd watchdog so the unit's `WatchdogSec=` timer does not
 /// elapse and trigger a restart.
 ///
+/// Returns `true` if systemd accepted the ping (or appeared to — we send
+/// a datagram, so this is a best-effort signal that the socket exists
+/// and the kernel didn't reject the send), `false` otherwise.
+///
 /// Call from a background task whose interval is roughly **half** the
 /// configured `WatchdogSec`, per the systemd documentation: a single missed
 /// ping inside the window should not trigger a kill.
-pub fn watchdog_ping() {
-    let _ = notify("WATCHDOG=1");
+pub fn watchdog_ping() -> bool {
+    notify("WATCHDOG=1")
 }
 
 /// Spawn a background task that pings the systemd watchdog on a fixed
 /// interval. Returns immediately if `NOTIFY_SOCKET` or `WATCHDOG_USEC` is
 /// unset (i.e. running outside systemd, or the unit did not configure a
 /// watchdog). The interval is taken from `WATCHDOG_USEC` and halved.
-pub fn spawn_watchdog_pinger() {
+///
+/// When `metrics` is `Some`, every successful ping bumps the
+/// `birdnet_watchdog_pings_total` counter, giving operators a Prometheus-
+/// readable signal that the supervisor link is alive.
+pub fn spawn_watchdog_pinger(metrics: Option<birdnet_web::metrics::SharedMetrics>) {
     if std::env::var_os("NOTIFY_SOCKET").is_none() {
         return;
     }
@@ -110,7 +118,11 @@ pub fn spawn_watchdog_pinger() {
         ticker.tick().await;
         loop {
             ticker.tick().await;
-            watchdog_ping();
+            if watchdog_ping()
+                && let Some(m) = metrics.as_ref()
+            {
+                m.inc_watchdog_pings();
+            }
         }
     });
 }

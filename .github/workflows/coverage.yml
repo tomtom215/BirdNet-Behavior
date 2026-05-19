@@ -72,6 +72,33 @@ jobs:
         # The contract gates that actually exercise the integration tests
         # are `cargo test --workspace --tests` in the main CI workflow and
         # the doctor smoke test — coverage is a measurement, not a gate.
+        #
+        # The `--ignore-filename-regex` excludes two crates from the
+        # measured surface, deliberately:
+        #
+        # * `crates/birdnet-behavioral/` — gated entirely behind the
+        #   `analytics` cargo feature, which pulls in `duckdb` (bundled
+        #   libduckdb requires ~7 minutes of C++ compilation on the
+        #   coverage runner). The crate's tests run end-to-end against
+        #   DuckDB, so meaningful coverage requires building with the
+        #   feature, which adds ~10 minutes per PR. Coverage is a
+        #   measurement, not a contract gate; the analytics tests
+        #   already run in the main `ci.yml` job with the feature
+        #   enabled.
+        #
+        # * `crates/birdnet-migrate/` — a one-shot tool operators run
+        #   once to import a BirdNET-Pi database. Its surface is I/O-
+        #   bound and exercised via fixtures rather than unit tests;
+        #   per-line numbers would be misleading. The migration flow is
+        #   covered by the dedicated end-to-end test in `tests/` that
+        #   imports a sample BirdNET-Pi DB. The coverage workflow
+        #   `--lib --bins` mode skips integration tests anyway, so a
+        #   migration "line %" here would be artificially low.
+        #
+        # Both decisions are revisited on each major refactor of those
+        # crates; the right time to bring them under coverage is when
+        # we either drop the `analytics` feature gate or grow per-
+        # function unit tests inside the migration importer.
         run: |
           cargo llvm-cov --workspace --lib --bins --no-fail-fast \
             --lcov --output-path lcov.info \

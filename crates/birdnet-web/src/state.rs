@@ -11,6 +11,7 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 
+use crate::metrics::{self, SharedMetrics};
 use crate::routes::admin::logs::LogBroadcaster;
 use crate::routes::spectrogram_ws::SpectrogramBroadcast;
 use crate::routes::websocket::DetectionBroadcast;
@@ -54,6 +55,10 @@ struct AppStateInner {
     info_site: String,
     /// Custom species image directory (checked before Wikipedia cache).
     custom_image_dir: Option<PathBuf>,
+    /// Runtime metrics registry. Shared with the detection daemon (via the
+    /// detection-event pipeline) and the metrics endpoint. Process-local;
+    /// values are reset when the process restarts.
+    metrics: SharedMetrics,
 }
 
 /// Unwrap the `Arc<AppStateInner>`, aborting if shared (called during setup only).
@@ -119,6 +124,7 @@ impl AppState {
                 site_name: None,
                 info_site: "ebird".to_string(),
                 custom_image_dir: None,
+                metrics: metrics::new_shared(),
             }),
         })
     }
@@ -189,6 +195,7 @@ impl AppState {
                 site_name: None,
                 info_site: "ebird".to_string(),
                 custom_image_dir: None,
+                metrics: metrics::new_shared(),
             }),
         })
     }
@@ -215,6 +222,7 @@ impl AppState {
                 site_name: None,
                 info_site: "ebird".to_string(),
                 custom_image_dir: None,
+                metrics: metrics::new_shared(),
             }),
         }
     }
@@ -370,6 +378,16 @@ impl AppState {
     /// Get the detection broadcast channel for WebSocket streaming.
     pub fn detection_broadcast(&self) -> DetectionBroadcast {
         self.inner.detection_broadcast.clone()
+    }
+
+    /// Get the shared runtime metrics registry.
+    ///
+    /// Daemon-side code calls `inc_detection`, `observe_*`, etc. on this
+    /// handle; the `/api/v2/metrics` route reads from it. Both sides share
+    /// the same `Arc` so updates from any thread are visible immediately.
+    #[must_use]
+    pub fn metrics(&self) -> SharedMetrics {
+        Arc::clone(&self.inner.metrics)
     }
 
     /// Get the log broadcaster for SSE admin log streaming.

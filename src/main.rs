@@ -211,6 +211,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start the web server.
     let auth_config = integrations::create_auth_config(config.as_ref());
     tracing::info!(addr = %addr, "starting web server");
+    let metrics_for_watchdog = state.metrics();
     let app = birdnet_web::server::build_router_with_auth(state, auth_config);
 
     // Publish Home Assistant MQTT auto-discovery if configured.
@@ -262,7 +263,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // begin pinging the watchdog. If we are not running under systemd these
     // are no-ops.
     sd_notify::ready();
-    sd_notify::spawn_watchdog_pinger();
+    sd_notify::spawn_watchdog_pinger(Some(metrics_for_watchdog));
 
     // Use `into_make_service_with_connect_info` so the per-IP rate limiter
     // can read the client socket address from request extensions.

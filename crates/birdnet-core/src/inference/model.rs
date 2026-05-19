@@ -266,11 +266,8 @@ impl BirdNetModel {
         let mut detections = Vec::new();
 
         for (i, &raw) in flat_logits.iter().enumerate() {
-            let confidence = if self.is_probability_output {
-                raw.clamp(0.0, 1.0)
-            } else {
-                sigmoid(self.config.sensitivity * raw)
-            };
+            let confidence =
+                compute_confidence(raw, self.config.sensitivity, self.is_probability_output);
 
             if confidence >= self.config.confidence_threshold
                 && let Some(label) = self.labels.get(i)
@@ -305,20 +302,14 @@ impl BirdNetModel {
     /// Build the input tensor from audio samples.
     ///
     /// Pads or truncates audio to match expected input length.
-    /// For fully-dynamic shapes (V3.0 preview), defaults to 96 000 samples (32 kHz × 3 s).
+    /// For fully-dynamic shapes (V3.0 preview), defaults to 144 000 samples (32 kHz × 4.5 s).
     fn build_input_tensor(&self, audio: &[f32]) -> Result<Tensor<f32>, InferenceError> {
-        let expected_len = match self.input_shape.as_slice() {
-            [_, n] | [_, _, n] if *n > 1 => *n,
-            // All-dynamic or rank-1 shape → V3.0 preview: 4.5 s of 32 kHz
-            // audio = 144_000 samples. See `recommended_chunk_samples`
-            // docstring for the empirical justification.
-            [1] | [1, 1] | [1, 1, 1] => 144_000,
-            other => {
-                return Err(InferenceError::Shape(format!(
-                    "unsupported input shape: {other:?}, expected [1, N] or [1, 1, N]"
-                )));
-            }
-        };
+        let expected_len = expected_input_length(&self.input_shape).ok_or_else(|| {
+            InferenceError::Shape(format!(
+                "unsupported input shape: {:?}, expected [1, N] or [1, 1, N]",
+                self.input_shape
+            ))
+        })?;
 
         let mut padded = vec![0.0_f32; expected_len];
         let copy_len = audio.len().min(expected_len);
@@ -346,15 +337,7 @@ impl BirdNetModel {
     /// Returns 32 000 for fully-dynamic shapes (V3.0), 48 000 otherwise.
     #[must_use]
     pub fn infer_sample_rate(&self) -> u32 {
-        let n_samples = match self.input_shape.as_slice() {
-            [_, n] | [_, _, n] if *n > 1 => *n,
-            // All-dynamic shape → assume BirdNET+ V3.0 (32 kHz)
-            _ => return 32_000,
-        };
-        match n_samples {
-            96_000 => 32_000, // BirdNET+ V3.0 (32 kHz × 3 s)
-            _ => 48_000,      // BirdNET   V2.4 (48 kHz × 3 s) or unknown
-        }
+        infer_sample_rate_from_shape(&self.input_shape)
     }
 
     /// Recommended chunk length, in raw audio samples, for the pipeline to
@@ -374,12 +357,7 @@ impl BirdNetModel {
     ///   `docs/architecture/15-model-chunking.md`.
     #[must_use]
     pub fn recommended_chunk_samples(&self) -> usize {
-        match self.input_shape.as_slice() {
-            // Fixed shapes — use the dimension the model declares.
-            [_, n] | [_, _, n] if *n > 1 => *n,
-            // Dynamic shape — empirically-optimal default for V3.0 preview.
-            _ => 144_000,
-        }
+        recommended_chunk_samples_from_shape(&self.input_shape)
     }
 
     /// Recommended chunk length, in seconds, derived from the model's
@@ -432,7 +410,6 @@ impl BirdNetModel {
     }
 }
 
-/// Apply sigmoid function: `1 / (1 + exp(-x))`.
 /// Determine whether the model's `predictions` output is already a
 /// probability distribution in `[0, 1]`, based on the input shape.
 ///
@@ -453,6 +430,76 @@ fn output_is_probability(input_shape: &[usize]) -> bool {
     }
 }
 
+/// Pure helper: derive sample rate from any ONNX input shape.
+///
+/// V2.4 fixed `[1, 144_000]` → 48 kHz × 3 s. V3.0 fixed `[1, 96_000]` → 32 kHz × 3 s.
+/// Anything fully-dynamic or rank-1 → 32 kHz (assume V3.0 preview).
+/// Unknown sample counts default to 48 kHz so we don't silently mis-resample.
+#[must_use]
+pub fn infer_sample_rate_from_shape(input_shape: &[usize]) -> u32 {
+    let n_samples = match input_shape {
+        [_, n] | [_, _, n] if *n > 1 => *n,
+        // All-dynamic or rank-1 → V3.0
+        _ => return 32_000,
+    };
+    match n_samples {
+        96_000 => 32_000, // BirdNET+ V3.0 (32 kHz × 3 s)
+        _ => 48_000,      // BirdNET   V2.4 (48 kHz × 3 s) or unknown
+    }
+}
+
+/// Pure helper: derive the recommended chunk length in samples from any ONNX input shape.
+///
+/// Fixed-shape models report their own training length directly. Dynamic shapes
+/// (V3.0 preview) default to 144 000 samples (= 4.5 s × 32 kHz), the empirical
+/// optimum from the chunk-length sweep documented in
+/// `docs/architecture/15-model-chunking.md`.
+#[must_use]
+pub fn recommended_chunk_samples_from_shape(input_shape: &[usize]) -> usize {
+    match input_shape {
+        [_, n] | [_, _, n] if *n > 1 => *n,
+        _ => 144_000,
+    }
+}
+
+/// Resolve the expected input length the tensor builder pads/truncates to.
+///
+/// Returns the trained length for fixed-shape models and 144 000 for dynamic
+/// V3.0-style shapes. Returns `None` for shapes the pipeline cannot handle
+/// (e.g. rank > 3, or rank-2 with leading dim > 1). Kept separate from
+/// `recommended_chunk_samples_from_shape` because the latter is part of the
+/// public per-model recommendation API and tolerates a wider input domain.
+fn expected_input_length(input_shape: &[usize]) -> Option<usize> {
+    match input_shape {
+        [_, n] | [_, _, n] if *n > 1 => Some(*n),
+        [1] | [1, 1] | [1, 1, 1] => Some(144_000),
+        _ => None,
+    }
+}
+
+/// Pure helper: derive a confidence value in `[0, 1]` from a single model
+/// output, branching on whether the model already emits calibrated
+/// probabilities.
+///
+/// * `is_probability == true` (V3.0): clamp to `[0, 1]` so adversarial or
+///   numerically-noisy values can't escape the valid range, but otherwise
+///   pass through. The sensitivity parameter is **deliberately ignored**
+///   here because it is semantically a *pre-sigmoid* scale factor — applying
+///   it to an already-calibrated probability is meaningless and was the
+///   cause of the 52 % → 93 % Magpie fix in this session.
+///
+/// * `is_probability == false` (V2.4): apply `sigmoid(sensitivity * raw)`,
+///   matching the canonical BirdNET-Analyzer pipeline.
+#[must_use]
+pub fn compute_confidence(raw: f32, sensitivity: f32, is_probability: bool) -> f32 {
+    if is_probability {
+        raw.clamp(0.0, 1.0)
+    } else {
+        sigmoid(sensitivity * raw)
+    }
+}
+
+/// Apply sigmoid function: `1 / (1 + exp(-x))`.
 fn sigmoid(x: f32) -> f32 {
     1.0 / (1.0 + (-x).exp())
 }
@@ -565,5 +612,197 @@ mod tests {
             ModelConfig::default(),
         );
         assert!(matches!(result, Err(InferenceError::NotFound(_))));
+    }
+
+    // ─── Chunking math ────────────────────────────────────────────────────
+    //
+    // The V3.0 preview daemon-chunking bug (52 % → 72 %) and the
+    // is_probability_output regression (sigmoid-on-probabilities → 52 % vs
+    // 93 %) lived in this module and shipped despite the prior test suite.
+    // The tests below pin every cell in the model-family decision table so
+    // the same class of mis-mapping fails an assertion the next time.
+
+    #[test]
+    fn infer_sample_rate_from_shape_v24_fixed() {
+        assert_eq!(infer_sample_rate_from_shape(&[1, 144_000]), 48_000);
+        assert_eq!(infer_sample_rate_from_shape(&[1, 1, 144_000]), 48_000);
+    }
+
+    #[test]
+    fn infer_sample_rate_from_shape_v30_fixed() {
+        assert_eq!(infer_sample_rate_from_shape(&[1, 96_000]), 32_000);
+        assert_eq!(infer_sample_rate_from_shape(&[1, 1, 96_000]), 32_000);
+    }
+
+    #[test]
+    fn infer_sample_rate_from_shape_dynamic_is_v30() {
+        // Dynamic (V3.0 preview) input shape: all dims become 1.
+        assert_eq!(infer_sample_rate_from_shape(&[1]), 32_000);
+        assert_eq!(infer_sample_rate_from_shape(&[1, 1]), 32_000);
+        assert_eq!(infer_sample_rate_from_shape(&[1, 1, 1]), 32_000);
+    }
+
+    #[test]
+    fn infer_sample_rate_from_shape_unknown_falls_back_to_v24() {
+        // Anything we don't recognise gets the V2.4 sample rate so we never
+        // silently resample down from 48 kHz to 32 kHz.
+        assert_eq!(infer_sample_rate_from_shape(&[1, 192_000]), 48_000);
+        assert_eq!(infer_sample_rate_from_shape(&[1, 1_000_000]), 48_000);
+    }
+
+    #[test]
+    fn recommended_chunk_samples_v24_fixed() {
+        assert_eq!(recommended_chunk_samples_from_shape(&[1, 144_000]), 144_000);
+        assert_eq!(
+            recommended_chunk_samples_from_shape(&[1, 1, 144_000]),
+            144_000
+        );
+    }
+
+    #[test]
+    fn recommended_chunk_samples_v30_fixed() {
+        // V3.0 fixed shape reports its own trained length (96 000 @ 32 kHz = 3 s).
+        assert_eq!(recommended_chunk_samples_from_shape(&[1, 96_000]), 96_000);
+        assert_eq!(
+            recommended_chunk_samples_from_shape(&[1, 1, 96_000]),
+            96_000
+        );
+    }
+
+    #[test]
+    fn recommended_chunk_samples_dynamic_picks_optimal() {
+        // The empirical optimum from the bundled-WAV sweep: 144 000 samples
+        // = 4.5 s × 32 kHz, where Pica pica confidence climbs from 0.52
+        // (at 3.0 s × 32 kHz = 96 000) to 0.72.
+        // See docs/architecture/15-model-chunking.md.
+        assert_eq!(recommended_chunk_samples_from_shape(&[1]), 144_000);
+        assert_eq!(recommended_chunk_samples_from_shape(&[1, 1]), 144_000);
+        assert_eq!(recommended_chunk_samples_from_shape(&[1, 1, 1]), 144_000);
+    }
+
+    #[test]
+    fn recommended_chunk_secs_matches_3s_for_v24() {
+        // V2.4: 144 000 / 48 000 = 3.0 s exactly.
+        let samples = recommended_chunk_samples_from_shape(&[1, 144_000]);
+        let rate = infer_sample_rate_from_shape(&[1, 144_000]);
+        let secs = samples as f32 / rate as f32;
+        assert!((secs - 3.0).abs() < 1e-6, "got {secs}, expected 3.0");
+    }
+
+    #[test]
+    fn recommended_chunk_secs_matches_45s_for_v30_dynamic() {
+        // V3.0 dynamic: 144 000 / 32 000 = 4.5 s exactly.
+        let samples = recommended_chunk_samples_from_shape(&[1, 1]);
+        let rate = infer_sample_rate_from_shape(&[1, 1]);
+        let secs = samples as f32 / rate as f32;
+        assert!((secs - 4.5).abs() < 1e-6, "got {secs}, expected 4.5");
+    }
+
+    #[test]
+    fn recommended_chunk_secs_matches_3s_for_v30_fixed() {
+        // V3.0 fixed: 96 000 / 32 000 = 3.0 s.
+        let samples = recommended_chunk_samples_from_shape(&[1, 96_000]);
+        let rate = infer_sample_rate_from_shape(&[1, 96_000]);
+        let secs = samples as f32 / rate as f32;
+        assert!((secs - 3.0).abs() < 1e-6, "got {secs}, expected 3.0");
+    }
+
+    #[test]
+    fn expected_input_length_handles_known_shapes() {
+        assert_eq!(expected_input_length(&[1, 144_000]), Some(144_000));
+        assert_eq!(expected_input_length(&[1, 1, 144_000]), Some(144_000));
+        assert_eq!(expected_input_length(&[1, 96_000]), Some(96_000));
+        assert_eq!(expected_input_length(&[1]), Some(144_000));
+        assert_eq!(expected_input_length(&[1, 1]), Some(144_000));
+        assert_eq!(expected_input_length(&[1, 1, 1]), Some(144_000));
+    }
+
+    #[test]
+    fn expected_input_length_rejects_unsupported_shapes() {
+        // Anything outside rank 1/2/3 — or rank-2/3 with the sample axis
+        // collapsed to 1 outside the recognised dynamic shapes — falls
+        // through to None so the model loader can fail loudly instead of
+        // silently producing a zero-length tensor.
+        assert_eq!(expected_input_length(&[]), None);
+        assert_eq!(expected_input_length(&[1, 1, 1, 1]), None);
+    }
+
+    #[test]
+    fn expected_input_length_accepts_batch_dim_variations() {
+        // The leading "batch" dim is ignored — the spec only cares about
+        // the last dim being > 1. This is intentional so a model reporting
+        // [B, samples] shape still works.
+        assert_eq!(expected_input_length(&[2, 144_000]), Some(144_000));
+        assert_eq!(expected_input_length(&[8, 1, 96_000]), Some(96_000));
+    }
+
+    // ─── compute_confidence: the is_probability_output branch ───────────
+    //
+    // This is the function that lost half the Pica pica confidence signal
+    // before the fix. Each test pins one cell in the decision matrix.
+
+    #[test]
+    fn compute_confidence_v30_probabilities_pass_through() {
+        // sensitivity is deliberately ignored on the probability path.
+        let raw = 0.9247_f32;
+        let with_sensitivity_1 = compute_confidence(raw, 1.0, true);
+        let with_sensitivity_2 = compute_confidence(raw, 2.0, true);
+        assert!((with_sensitivity_1 - raw).abs() < 1e-6);
+        assert!((with_sensitivity_2 - raw).abs() < 1e-6);
+    }
+
+    #[test]
+    fn compute_confidence_v30_clamps_out_of_range() {
+        // Numerically noisy probabilities can spike outside [0, 1]; we clamp
+        // rather than panic. (NaN is *not* clamped by clamp — separate test.)
+        assert!((compute_confidence(-0.05, 1.0, true) - 0.0).abs() < 1e-6);
+        assert!((compute_confidence(1.05, 1.0, true) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn compute_confidence_v24_logits_get_sigmoid() {
+        // V2.4 raw logit 0 should map to 0.5.
+        let conf = compute_confidence(0.0, 1.0, false);
+        assert!((conf - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn compute_confidence_v24_logits_sensitivity_matters() {
+        // sensitivity > 1 makes the same logit more confident.
+        let conf_default = compute_confidence(1.0, 1.0, false);
+        let conf_sensitive = compute_confidence(1.0, 2.0, false);
+        assert!(conf_sensitive > conf_default);
+        // sensitivity < 1 makes it less confident.
+        let conf_dampened = compute_confidence(1.0, 0.5, false);
+        assert!(conf_dampened < conf_default);
+    }
+
+    /// Regression for the V3.0 sigmoid-on-probabilities bug.
+    ///
+    /// On the bundled WAV, the model rated the Magpie at 0.9247. The old
+    /// pipeline ran sigmoid(1.0 * 0.9247) = 0.7158 and silently lost the
+    /// confidence signal. After the fix the probability passes through
+    /// untouched.
+    #[test]
+    fn regression_v30_probability_not_sigmoided() {
+        let model_output = 0.9247_f32;
+        let new_path = compute_confidence(model_output, 1.0, true);
+        // Within rounding of the model output itself.
+        assert!(
+            (new_path - 0.9247).abs() < 1e-4,
+            "V3.0 probability path lost the signal: got {new_path}"
+        );
+        // What the old (buggy) path would have produced — kept here so a
+        // re-introduction of the bug shows up as an explicit mismatch in
+        // the assertion message.
+        let old_buggy_path = sigmoid(1.0 * model_output);
+        assert!(
+            (old_buggy_path - 0.7158).abs() < 5e-4,
+            "sigmoid(0.9247) was {old_buggy_path}, expected ~0.7158"
+        );
+        assert!(
+            new_path > old_buggy_path + 0.2,
+            "the fix must lift confidence by > 0.2 on this anchor"
+        );
     }
 }

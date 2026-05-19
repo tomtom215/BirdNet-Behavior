@@ -7,6 +7,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### Operability and test coverage on the carryover path from PR #35
+
+- **`birdnet-core::detection::daemon::new_event_correlation_id`** —
+  generates a short, sortable ID stamped on every event the daemon emits
+  for one audio file. `DetectionEvent` gains a `correlation_id` field
+  that propagates through `decode → infer → notify → DB write`, so an
+  operator can trace one file end-to-end with a single grep over the log
+  stream. Closes the visibility gap noted in the carryover plan ("every
+  event currently carries species + confidence but not a recording-id
+  or chunk-id").
+- **`birdnet-web::metrics`** — process-local Prometheus counters and
+  latency histograms surfaced at `/api/v2/metrics`. Replaces the previous
+  scrape-time snapshot (DB row count, RSS) with a real time-series
+  exposition: `birdnet_detections_total{species,chunk_offset}`,
+  `birdnet_inference_duration_seconds`, `birdnet_db_write_duration_seconds`,
+  `birdnet_audio_source_up{source}`, `birdnet_watchdog_pings_total`.
+  Hand-rolled exposition (no `prometheus` crate dependency); fixed
+  histogram buckets bracket the real per-chunk latency on a Pi 5
+  (1 ms ... 10 s). 9 new lib tests pin the renderer's escaping,
+  bucket-cumulativity, and sort-determinism contracts.
+- **`docs/grafana-dashboard.json`** — committed dashboard for the new
+  metrics. Five rows: Liveness (audio source up, watchdog ping rate,
+  uptime), Detection signal (per-species rate timeseries + lifetime
+  table), Pipeline latency (inference + DB-write p50/p95/p99), Resources
+  (RSS against the 384 MiB MemoryHigh ceiling, distinct species).
+- **`birdnet-behavior --doctor` watchdog check** verifies the daemon's
+  systemd-watchdog plumbing is honoured by the supervisor. Walks the
+  three-question decision matrix: `NOTIFY_SOCKET` set? `WATCHDOG_USEC`
+  set? does a synthetic `WATCHDOG=1` ping reach the socket? Outcomes:
+  `Skip` (not under systemd), `Warn` (notify-but-no-watchdog),
+  `Pass` (ping delivered, interval echoed), `Fail` (ping rejected —
+  supervisor has gone away). Six new unit tests cover the describe and
+  probe paths.
+
+### Changed
+
+- **Refactored `src/daemon.rs::event_processor`** to extract its
+  threshold gates into a pure-logic helper, `decide_disposition`,
+  returning a `DispositionDecision` enum. The 600-line god-function
+  shrinks slightly and gains nine unit tests pinning every cell of the
+  per-species × global threshold decision matrix — the kind of
+  per-file coverage gap the PR #35 carryover identified as the source
+  of the production bugs we just shipped fixes for.
+- **`crates/birdnet-core/src/inference/model.rs`** refactored to expose
+  three new public helpers, `infer_sample_rate_from_shape`,
+  `recommended_chunk_samples_from_shape`, and `compute_confidence`,
+  each of which used to be inline branching inside a method. The
+  helpers are mock-free, branch-pinnable, and now carry 17 additional
+  unit tests covering every model-family decision cell — including the
+  V3.0 sigmoid-on-probabilities regression that took out the previous
+  shipping confidence. The `regression_v30_probability_not_sigmoided`
+  test pins the anchor case directly.
+- **Mutation testing scope widened** to a 3-file matrix:
+  `crates/birdnet-core/src/config/validate.rs` (existing,
+  `missed > 0` threshold), plus `crates/birdnet-core/src/inference/model.rs`
+  and `crates/birdnet-core/src/audio/extraction/extractor.rs` (new,
+  `missed > 5` while the suites mature). Each file is its own job so a
+  surviving mutant in one doesn't tank the report on the others.
+- **Eight transitive RUSTSEC advisories lifted** by targeted
+  `cargo update --precise`: `rustls-webpki` 0.103.9 → 0.103.13 covers
+  RUSTSEC-2026-0049/0098/0099/0104, `aws-lc-rs` 1.16.1 → 1.17.0 brings
+  `aws-lc-sys` 0.38.0 → 0.41.0 covering RUSTSEC-2026-0044/0048,
+  `tar` 0.4.44 → 0.4.46 covers RUSTSEC-2026-0067/0068. The only
+  remaining ignore is RUSTSEC-2026-0097 against `rand` 0.8.5 (no 0.8.x
+  patch released upstream as of this writing; rand 0.9.x line is
+  current at 0.9.4). `.cargo/audit.toml` and `deny.toml` both reflect
+  the new lone-entry state with an explicit justification.
+- **`coverage.yml` exclusion comment expanded** to document why
+  `crates/birdnet-migrate/` and `crates/birdnet-behavioral/` stay out
+  of the per-PR coverage measurement (the analytics crate's DuckDB
+  build adds ~10 minutes; the migration crate is fixture-driven and
+  per-line numbers would be misleading). Both decisions are revisited
+  on each major refactor of those crates.
+
 ### Fixed
 
 - **Detection confidence on BirdNET+ V3.0 preview models was being
