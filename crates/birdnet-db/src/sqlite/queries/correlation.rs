@@ -206,17 +206,18 @@ mod tests {
     use rusqlite::Connection;
 
     fn setup() -> Connection {
+        // Apply the full migration chain rather than a hand-coded CREATE TABLE:
+        // ADR-16 flags the latter as the source of three of the PR #35 bugs
+        // because the hand-coded schema silently drifts the moment a new
+        // migration adds a column. The migration list is the single source
+        // of truth.
         let conn = Connection::open_in_memory().unwrap();
+        crate::migration::migrate(&conn).unwrap();
         // Dates are computed at insert time via SQLite's DATE('now', '-N days')
         // so the fixture stays within the 30-day window used by the queries
         // under test, regardless of when the suite runs.
         conn.execute_batch(
-            "CREATE TABLE detections (
-                Date TEXT, Time TEXT, Sci_Name TEXT, Com_Name TEXT,
-                Confidence REAL, Lat REAL, Lon REAL, Cutoff REAL,
-                Week INTEGER, Sens REAL, Overlap REAL, File_Name TEXT
-            );
-            INSERT INTO detections
+            "INSERT INTO detections
               (Date, Time, Sci_Name, Com_Name, Confidence,
                Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name)
             VALUES

@@ -136,6 +136,7 @@ fn render_detail_page(det: &birdnet_db::sqlite::DetectionRow) -> String {
 
     let audio_section = build_audio_section(det);
     let meta = build_meta_rows(det);
+    let correlation_section = build_correlation_section(det);
 
     format!(
         r#"<!DOCTYPE html>
@@ -182,6 +183,8 @@ fn render_detail_page(det: &birdnet_db::sqlite::DetectionRow) -> String {
   </div>
 
   {audio_section}
+
+  {correlation_section}
 
   <div class="card">
     <div class="section-title">Related</div>
@@ -233,6 +236,65 @@ fn build_audio_section(det: &birdnet_db::sqlite::DetectionRow) -> String {
     )
 }
 
+/// Render the per-row correlation-id card with a "Copy" affordance.
+///
+/// The `correlation_id` is the per-file ID the detection daemon stamps on
+/// every log line, DB write, and notification for one audio file
+/// (migration 12). Surfacing it on the row's detail page closes the
+/// log → row traceability loop: an operator who clicks a suspicious
+/// detection can copy the id and run `journalctl -u birdnet | grep <id>`
+/// to pull the exact decode/infer/notify slice the daemon emitted for
+/// that file.
+///
+/// Returns an empty string when the row pre-dates migration 12
+/// (BirdNET-Pi-imported rows, quarantine-approve rows) so the card
+/// doesn't render an empty "Correlation ID: " line.
+fn build_correlation_section(det: &birdnet_db::sqlite::DetectionRow) -> String {
+    let Some(ref id) = det.correlation_id else {
+        return String::new();
+    };
+    if id.is_empty() {
+        return String::new();
+    }
+    let safe = escape_html(id);
+    // Vanilla JS clipboard copy with a clear fallback affordance. We
+    // ship inline because the admin pages don't have a shared script
+    // bundle yet and a single 4-line script is cheaper than wiring one.
+    // The button intentionally shows the ID inline so an operator on a
+    // browser without clipboard access can read it directly.
+    format!(
+        r#"<div class="card">
+  <div class="section-title">Operator: Daemon Log Trace</div>
+  <p style="margin-bottom:0.75rem;color:#94a3b8;font-size:0.85rem;">
+    Every event the detection daemon emitted for this audio file is
+    tagged with the correlation ID below.
+    Run <code>journalctl -u birdnet | grep {safe}</code> to see the
+    exact decode/infer/notify slice that produced this row.
+  </p>
+  <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+    <code id="correlation-id"
+          style="background:#0f172a;padding:0.5rem 0.75rem;border-radius:0.375rem;
+                 font-family:ui-monospace,Menlo,monospace;color:#a7f3d0;">{safe}</code>
+    <button type="button" id="copy-correlation-id"
+            style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;
+                   border-radius:0.375rem;padding:0.5rem 0.75rem;cursor:pointer;"
+            onclick="(function(){{
+              const el=document.getElementById('correlation-id');
+              const txt=el.textContent;
+              if(navigator.clipboard){{navigator.clipboard.writeText(txt);}}
+              else{{const r=document.createRange();r.selectNode(el);
+                    window.getSelection().removeAllRanges();
+                    window.getSelection().addRange(r);
+                    document.execCommand('copy');}}
+              const b=document.getElementById('copy-correlation-id');
+              b.textContent='Copied!';
+              setTimeout(()=>{{b.textContent='Copy';}}, 1500);
+            }})()">Copy</button>
+  </div>
+</div>"#
+    )
+}
+
 fn build_meta_rows(det: &birdnet_db::sqlite::DetectionRow) -> String {
     let mut out = String::new();
     if let (Some(lat), Some(lon)) = (det.lat, det.lon) {
@@ -271,4 +333,77 @@ fn not_found_page(date: &str, time: &str) -> String {
         date = escape_html(date),
         time = escape_html(time),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_correlation_section;
+    use birdnet_db::sqlite::DetectionRow;
+
+    fn row_with_id(id: Option<&str>) -> DetectionRow {
+        DetectionRow {
+            date: "2026-05-19".into(),
+            time: "09:00:00".into(),
+            sci_name: "Pica pica".into(),
+            com_name: "Eurasian Magpie".into(),
+            confidence: 0.95,
+            lat: None,
+            lon: None,
+            cutoff: None,
+            week: None,
+            sens: None,
+            overlap: None,
+            file_name: None,
+            correlation_id: id.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn correlation_section_empty_when_id_is_none() {
+        // Rows that pre-date migration 12 (BirdNET-Pi imports,
+        // quarantine-approve writes) have no correlation_id. The
+        // section must not render then — otherwise the operator sees
+        // an empty grey card with no actionable content.
+        assert_eq!(build_correlation_section(&row_with_id(None)), "");
+    }
+
+    #[test]
+    fn correlation_section_empty_when_id_is_empty_string() {
+        // Defensive: an empty string id is treated the same as None.
+        assert_eq!(build_correlation_section(&row_with_id(Some(""))), "");
+    }
+
+    #[test]
+    fn correlation_section_renders_the_id() {
+        // The id appears in the code element so an operator can read
+        // it on a browser without clipboard access.
+        let html = build_correlation_section(&row_with_id(Some("a1b2c3d4")));
+        assert!(html.contains("a1b2c3d4"), "id not present in rendered html");
+        assert!(
+            html.contains("journalctl"),
+            "operator command hint not rendered"
+        );
+        assert!(
+            html.contains("id=\"correlation-id\""),
+            "id node not present"
+        );
+        assert!(html.contains("Copy"), "copy affordance not rendered");
+    }
+
+    #[test]
+    fn correlation_section_escapes_html_in_id() {
+        // The id is rendered into a `code` element and into the
+        // `journalctl ... grep <id>` command snippet. Pin escaping
+        // so a maliciously crafted DB row (or BirdNET-Pi import) can't
+        // break out into the page's script context.
+        let html = build_correlation_section(&row_with_id(Some("<script>alert(1)</script>")));
+        assert!(
+            !html.contains("<script>alert(1)</script>"),
+            "raw script tag should be escaped"
+        );
+        assert!(
+            html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"),
+            "expected HTML-encoded id"
+        );
+    }
 }

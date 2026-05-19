@@ -44,3 +44,4 @@ Thumbs.db
 *.profraw
 lcov.info
 tarpaulin-report.html
+mutants.out/
