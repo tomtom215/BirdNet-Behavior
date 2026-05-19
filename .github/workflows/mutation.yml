@@ -109,7 +109,13 @@ jobs:
             echo "summary=No outcomes.json produced." >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          mutants=$(jq '[.outcomes[] | select(.scenario.Mutant != null)] | length' mutants.out/outcomes.json)
+          # cargo-mutants outcomes contain ONE baseline entry whose
+          # `scenario` is the bare string "Baseline" and N mutant entries
+          # whose `scenario` is an object `{"Mutant": {...}}`. Filtering
+          # the mutants requires gating on the scenario being an object
+          # (otherwise `.scenario.Mutant` errors with "Cannot index
+          # string with string \"Mutant\"" and the whole step exits 5).
+          mutants=$(jq '[.outcomes[] | select((.scenario | type) == "object")] | length' mutants.out/outcomes.json)
           caught=$(jq '[.outcomes[] | select(.summary == "CaughtMutant")] | length' mutants.out/outcomes.json)
           missed=$(jq '[.outcomes[] | select(.summary == "MissedMutant")] | length' mutants.out/outcomes.json)
           unviable=$(jq '[.outcomes[] | select(.summary == "Unviable")] | length' mutants.out/outcomes.json)
@@ -119,8 +125,9 @@ jobs:
           echo "missed=$missed" >> "$GITHUB_OUTPUT"
           echo "unviable=$unviable" >> "$GITHUB_OUTPUT"
           echo "timeout=$timeout" >> "$GITHUB_OUTPUT"
-          # List missed mutants — actionable ones. Scenario is an enum
-          # serialised as `{"Mutant": {…}}` so the path is `.scenario.Mutant`.
+          # List missed mutants — actionable ones. The summary filter
+          # implicitly restricts to mutant scenarios so the `.Mutant` index
+          # is safe here.
           jq -r '[.outcomes[] | select(.summary == "MissedMutant") | "\(.scenario.Mutant.file):\(.scenario.Mutant.span.start.line)  \(.scenario.Mutant.name)"] | join("\n")' \
             mutants.out/outcomes.json > missed.txt
           {

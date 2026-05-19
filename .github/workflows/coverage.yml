@@ -61,11 +61,19 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      - name: Run coverage (workspace, lib + bins + tests)
-        # `--no-fail-fast` so one failing test does not hide other coverage
-        # data; `--workspace --all-targets` instruments every crate.
+      - name: Run coverage (workspace lib + bins; skip integration tests)
+        # `--lib --bins` only — integration tests under `tests/` link a fresh
+        # test binary and need libonnxruntime.so to be alongside it. Under
+        # llvm-cov, cargo writes binaries into `target/llvm-cov-target/`
+        # instead of `target/debug/`, so the `copy-dylibs` step the `ort`
+        # build script runs ends up in the wrong directory and the test
+        # binaries fail to load. Unit tests inside library crates aren't
+        # affected because they're statically linked.
+        # The contract gates that actually exercise the integration tests
+        # are `cargo test --workspace --tests` in the main CI workflow and
+        # the doctor smoke test — coverage is a measurement, not a gate.
         run: |
-          cargo llvm-cov --workspace --all-targets --no-fail-fast \
+          cargo llvm-cov --workspace --lib --bins --no-fail-fast \
             --lcov --output-path lcov.info \
             --ignore-filename-regex '(crates/birdnet-migrate|crates/birdnet-behavioral|tests/)'
 
