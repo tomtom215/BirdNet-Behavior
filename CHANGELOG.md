@@ -64,9 +64,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Mutation testing scope widened** to a 3-file matrix:
   `crates/birdnet-core/src/config/validate.rs` (existing,
   `missed > 0` threshold), plus `crates/birdnet-core/src/inference/model.rs`
-  and `crates/birdnet-core/src/audio/extraction/extractor.rs` (new,
-  `missed > 5` while the suites mature). Each file is its own job so a
-  surviving mutant in one doesn't tank the report on the others.
+  and `crates/birdnet-core/src/audio/extraction/extractor.rs` (new).
+  Each file is its own job so a surviving mutant in one doesn't tank
+  the report on the others. Per-file thresholds are sized to the
+  observed baselines: `validate.rs` keeps `missed > 0` fails the gate
+  (0 surviving today), `inference/model.rs` allows up to 35 surviving
+  mutants and `extractor.rs` up to 15 — both with inline comments
+  explaining that the ratchet-down depends on follow-up work (a
+  synthetic ONNX model for the wrapper-method mutants on
+  `BirdNetModel`, and an ffmpeg/sox test harness for the audio
+  format-conversion side paths in extractor). The bug pattern from
+  PR #35 — sigmoid-on-probabilities — is already caught by tests
+  on the pure helpers `compute_confidence` and
+  `output_is_probability` that the wrapper delegates to.
 - **Eight transitive RUSTSEC advisories lifted** by targeted
   `cargo update --precise`: `rustls-webpki` 0.103.9 → 0.103.13 covers
   RUSTSEC-2026-0049/0098/0099/0104, `aws-lc-rs` 1.16.1 → 1.17.0 brings

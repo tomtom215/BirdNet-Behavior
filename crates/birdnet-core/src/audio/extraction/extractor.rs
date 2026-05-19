@@ -348,4 +348,185 @@ mod tests {
             "error message changed shape; got: {msg}"
         );
     }
+
+    /// Decode the WAV the extractor produced and compare its length to the
+    /// configured extraction window. Pins the spacer-around-detection
+    /// arithmetic: `(extraction_length - 3.0) / 2.0` applied symmetrically
+    /// around the detection's [start, stop].
+    ///
+    /// Why this matters: mutation testing previously surfaced `replace / with *`
+    /// and `replace - with +` mutants in this exact arithmetic that the
+    /// existing tests passed unchanged. The bug pattern that emitted
+    /// `start_sample > stop_sample` in PR #35 was an arithmetic-on-clamps
+    /// problem of the same shape.
+    #[test]
+    fn extraction_clip_length_matches_extraction_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("2026-05-19-birdnet-09:00:00.wav");
+        write_silent_wav(&src, 30.0, 48_000);
+
+        // extraction_length = 6.0 → spacer = (6 - 3) / 2 = 1.5 s either side.
+        // Detection at 10-13 → expected clip span 8.5-14.5 s → 6 s total.
+        let cfg = ExtractionConfig {
+            output_dir: tmp.path().join("out"),
+            audio_format: "wav".into(),
+            recording_length: 30.0,
+            extraction_length: 6.0,
+            target_format: AudioFormat::Wav,
+            freq_shift_hz: 0,
+        };
+        let extractor = Extractor::new(cfg);
+        let out = extractor
+            .extract_detection(&src, &det(10.0, 13.0))
+            .expect("extraction succeeds");
+
+        let reader = hound::WavReader::open(&out).expect("WAV reader");
+        let samples = reader.duration();
+        // Spec is 48 kHz × 6 s = 288 000 samples. ±1 sample is fine.
+        assert!(
+            samples.abs_diff(288_000) <= 1,
+            "expected ~288_000 samples (6 s @ 48 kHz), got {samples}"
+        );
+    }
+
+    /// `extraction_length = 3.0` should give a clip exactly 3 s long
+    /// (spacer = 0). Anchors the boundary case of the spacer formula.
+    #[test]
+    fn extraction_clip_length_with_zero_spacer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("2026-05-19-birdnet-09:00:00.wav");
+        write_silent_wav(&src, 30.0, 48_000);
+
+        let cfg = ExtractionConfig {
+            output_dir: tmp.path().join("out"),
+            audio_format: "wav".into(),
+            recording_length: 30.0,
+            extraction_length: 3.0, // spacer = 0
+            target_format: AudioFormat::Wav,
+            freq_shift_hz: 0,
+        };
+        let extractor = Extractor::new(cfg);
+        let out = extractor
+            .extract_detection(&src, &det(10.0, 13.0))
+            .expect("extraction succeeds");
+        let reader = hound::WavReader::open(&out).expect("WAV reader");
+        let samples = reader.duration();
+        // 48 kHz × 3 s = 144 000.
+        assert!(
+            samples.abs_diff(144_000) <= 1,
+            "expected ~144_000 samples (3 s @ 48 kHz), got {samples}"
+        );
+    }
+
+    /// Extracted clip starts at `detection.start - spacer`. Pin the offset
+    /// arithmetic by inserting a sentinel pulse at a known sample index
+    /// and confirming it ends up where the spacer arithmetic predicts.
+    #[test]
+    fn extraction_offset_matches_safe_start() {
+        use hound::WavWriter;
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("2026-05-19-birdnet-09:00:00.wav");
+
+        // 30 s of zeros except for a single +1 sample at exactly t = 11.5 s.
+        let spec = WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: 16,
+            sample_format: SampleFormat::Int,
+        };
+        let mut w = WavWriter::create(&src, spec).unwrap();
+        let pulse_idx = 48_000 * 23 / 2; // 11.5 s × 48 000 Hz = 552_000
+        let total = 48_000 * 30;
+        for i in 0..total {
+            let s: i16 = if i == pulse_idx { 16_384 } else { 0 };
+            w.write_sample(s).unwrap();
+        }
+        w.finalize().unwrap();
+
+        // extraction_length = 6.0, spacer = 1.5. Detection at [10, 13]:
+        // safe_start = 10 - 1.5 = 8.5 s → pulse at 11.5 - 8.5 = 3.0 s into clip.
+        let cfg = ExtractionConfig {
+            output_dir: tmp.path().join("out"),
+            audio_format: "wav".into(),
+            recording_length: 30.0,
+            extraction_length: 6.0,
+            target_format: AudioFormat::Wav,
+            freq_shift_hz: 0,
+        };
+        let extractor = Extractor::new(cfg);
+        let out = extractor
+            .extract_detection(&src, &det(10.0, 13.0))
+            .expect("extraction succeeds");
+
+        let mut reader = hound::WavReader::open(&out).expect("WAV reader");
+        let samples: Vec<i16> = reader
+            .samples::<i16>()
+            .collect::<Result<_, _>>()
+            .expect("read samples");
+
+        // Locate the pulse — should be at index 3 s × 48 000 = 144 000,
+        // within ±1 sample of rounding noise.
+        let (idx, _) = samples
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, s)| s.unsigned_abs())
+            .expect("samples non-empty");
+        let expected_clip_offset = 144_000_i64;
+        let drift = (idx as i64 - expected_clip_offset).abs();
+        assert!(
+            drift <= 1,
+            "pulse drifted: expected offset ~{expected_clip_offset} in clip, found at {idx} (drift {drift})"
+        );
+    }
+
+    // ─── build_extraction_filename: pure function, no audio I/O ────────
+
+    fn det_named(scientific_name: &str, common_name: &str, confidence: f32) -> Detection {
+        Detection {
+            date: "2026-05-19".into(),
+            time: "09:00:00".into(),
+            scientific_name: scientific_name.into(),
+            common_name: common_name.into(),
+            confidence,
+            start: 0.0,
+            stop: 3.0,
+            week: 20,
+            file_name_extr: None,
+        }
+    }
+
+    #[test]
+    fn extraction_filename_canonical_no_rtsp() {
+        let d = det_named("Pica pica", "Eurasian Magpie", 0.93);
+        let name = build_extraction_filename(&d, "wav");
+        assert_eq!(name, "Eurasian_Magpie-93-2026-05-19-birdnet-09:00:00.wav");
+    }
+
+    #[test]
+    fn extraction_filename_includes_rtsp_id_when_present() {
+        let mut d = det_named("Pica pica", "Eurasian Magpie", 0.93);
+        d.file_name_extr = Some("/var/lib/birdnet/2026-05-19-birdnet-RTSP_2-09:00:00.wav".into());
+        let name = build_extraction_filename(&d, "flac");
+        assert_eq!(
+            name,
+            "Eurasian_Magpie-93-2026-05-19-birdnet-RTSP_2-09:00:00.flac"
+        );
+    }
+
+    #[test]
+    fn extraction_filename_omits_rtsp_when_source_has_no_rtsp_segment() {
+        let mut d = det_named("Pica pica", "Eurasian Magpie", 0.93);
+        d.file_name_extr = Some("/var/lib/birdnet/2026-05-19-birdnet-09:00:00.wav".into());
+        let name = build_extraction_filename(&d, "wav");
+        assert_eq!(name, "Eurasian_Magpie-93-2026-05-19-birdnet-09:00:00.wav");
+    }
+
+    #[test]
+    fn extraction_filename_format_extension_overrides() {
+        // Trip the format argument so a mutant swapping it for an empty
+        // string fails an assertion.
+        let d = det_named("Pica pica", "Eurasian Magpie", 0.93);
+        assert!(build_extraction_filename(&d, "mp3").ends_with(".mp3"));
+        assert!(build_extraction_filename(&d, "flac").ends_with(".flac"));
+    }
 }

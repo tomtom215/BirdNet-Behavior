@@ -614,6 +614,33 @@ mod tests {
         assert!(matches!(result, Err(InferenceError::NotFound(_))));
     }
 
+    #[test]
+    fn inference_error_display_includes_payload() {
+        let e = InferenceError::NotFound("/tmp/x.onnx".into());
+        let s = format!("{e}");
+        assert!(s.contains("/tmp/x.onnx"), "got: {s}");
+
+        let e = InferenceError::Model("bad opset".into());
+        assert!(format!("{e}").contains("bad opset"));
+
+        let e = InferenceError::Runtime("op failed".into());
+        assert!(format!("{e}").contains("op failed"));
+
+        let e = InferenceError::Shape("rank mismatch".into());
+        assert!(format!("{e}").contains("rank mismatch"));
+    }
+
+    #[test]
+    fn inference_error_is_std_error() {
+        // Pin that the type implements std::error::Error so it composes
+        // with `?` / `Box<dyn Error>` upstream. Returning the wrong
+        // variant from a function would be caught by Display tests
+        // above; this one just pins the trait bound.
+        fn assert_error<E: std::error::Error>(_: &E) {}
+        let e = InferenceError::NotFound("x".into());
+        assert_error(&e);
+    }
+
     // ─── Chunking math ────────────────────────────────────────────────────
     //
     // The V3.0 preview daemon-chunking bug (52 % → 72 %) and the
