@@ -15,11 +15,16 @@
 #      sigmoid-on-probabilities bug shipped despite unit-test coverage.
 #   3. crates/birdnet-core/src/audio/extraction/extractor.rs — added
 #      after the range-inversion clip-extraction bug shipped likewise.
+#   4. crates/birdnet-db/src/sqlite/queries/detections.rs — added so the
+#      "explicit column list" + UNIQUE-on-chunk-offset contracts that
+#      PR #35 fixed can't quietly regress. The full CRUD surface is
+#      now under tests, so the gate stays at 0 missed.
 #
 # Each file is its own matrix job so a survivor in one doesn't tank the
-# whole pipeline. Per-file threshold: > 0 missed fails the validator
-# job (it's been at 0 forever); > 5 missed fails the others (where the
-# tests are newer and we're ratcheting downward).
+# whole pipeline. Per-file threshold: 0 missed on every file — we follow
+# the PR #49 pattern (refactor the source until the boundary is
+# observable, never lift the threshold) rather than letting mutants
+# accumulate.
 #
 # Runs on:
 #   - PRs that touch any of the in-scope files (path filter below)
@@ -36,6 +41,7 @@ on:
       - "crates/birdnet-core/src/inference/**"
       - "crates/birdnet-core/src/audio/extraction/**"
       - "crates/birdnet-core/tests/**"
+      - "crates/birdnet-db/src/sqlite/queries/detections.rs"
       - ".github/workflows/mutation.yml"
   pull_request:
     branches: ["main", "master"]
@@ -44,6 +50,7 @@ on:
       - "crates/birdnet-core/src/inference/**"
       - "crates/birdnet-core/src/audio/extraction/**"
       - "crates/birdnet-core/tests/**"
+      - "crates/birdnet-db/src/sqlite/queries/detections.rs"
       - ".github/workflows/mutation.yml"
   schedule:
     # Mondays at 09:00 UTC.
@@ -102,6 +109,26 @@ jobs:
             # ffmpeg nor sox is on PATH so a stripped-down CI runner
             # doesn't false-fail; the main CI image has ffmpeg.
             max_missed: 0
+          - label: sqlite/queries/detections.rs
+            slug: sqlite-queries-detections.rs
+            file: crates/birdnet-db/src/sqlite/queries/detections.rs
+            package: birdnet-db
+            # The detections-CRUD layer. PR #35 caught a positional-VALUES
+            # / column-list-drift bug here; the explicit column list +
+            # 30+ tests we have today should make every mutant
+            # observable, but the gate stays at 0 missed so a future
+            # regression of the same shape lights up immediately.
+            max_missed: 0
+            # NOTE: `src/daemon.rs` is intentionally NOT in this matrix
+            # yet — the pure helpers extracted in PR #49 (decide_disposition,
+            # derive_source_label) are mutation-clean, but the surrounding
+            # `start_detection_daemon` / `event_processor` orchestrators
+            # have ~10 "delete field from struct" mutants that need either
+            # (a) extracting more pure config-builder helpers, or (b) an
+            # integration harness that exercises the daemon end-to-end.
+            # Tracked as a follow-up; will land in its own PR with the
+            # extracted helpers + tests instead of being chained onto
+            # this dep-bump + traceability batch.
     steps:
       - uses: actions/checkout@v5
 
@@ -145,11 +172,15 @@ jobs:
         # below is the gate that decides pass/fail. A build failure
         # (exit 4 from cargo-mutants) still propagates, so we only
         # swallow the specific "some mutants survived" exit code.
+        #
+        # `--package` defaults to `birdnet-core`; per-row matrix entries
+        # can override via `matrix.package` for files in other workspace
+        # crates or the binary itself.
         run: |
           set +e
           cargo mutants \
             --workspace \
-            --package birdnet-core \
+            --package "${{ matrix.package || 'birdnet-core' }}" \
             --file "${{ matrix.file }}" \
             --in-place \
             --timeout 120 \

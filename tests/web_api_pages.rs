@@ -11,24 +11,11 @@ use birdnet_web::state::AppState;
 /// Create a test `AppState` with an in-memory database and sample data.
 fn test_state() -> AppState {
     let conn = Connection::open_in_memory().unwrap();
-    conn.execute_batch(
-        "PRAGMA journal_mode=WAL;
-         CREATE TABLE IF NOT EXISTS detections (
-            Date TEXT NOT NULL,
-            Time TEXT NOT NULL,
-            Sci_Name TEXT NOT NULL,
-            Com_Name TEXT NOT NULL,
-            Confidence REAL NOT NULL,
-            Lat REAL,
-            Lon REAL,
-            Cutoff REAL,
-            Week INTEGER,
-            Sens REAL,
-            Overlap REAL,
-            File_Name TEXT
-        );",
-    )
-    .unwrap();
+    // Apply the full migration chain — hand-coded CREATE TABLE in
+    // test fixtures drifts the moment a migration adds a column.
+    // See ADR-16 "Anti-patterns this standard exists to prevent /
+    // Hand-coded schema in test fixtures duplicating the migration".
+    birdnet_db::migration::migrate(&conn).unwrap();
 
     let records = [
         (

@@ -9,6 +9,115 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Persistence — log-to-row traceability for detections (item C9)
+
+- **Migration 12: `correlation_id TEXT` column on detections.** Closes
+  the log→DB→UI traceability loop opened by PR #49. The daemon already
+  stamps a short, sortable correlation id on every event for one audio
+  file (`new_event_correlation_id` in `birdnet-core::detection::daemon`)
+  and threads it through `decode → infer → notify → DB-write` logs;
+  this migration carries that id to durable storage so an admin who
+  clicks a suspicious row in the web UI can run
+  `journalctl -u birdnet | grep <id>` to pull the exact decode/infer/
+  notify slice that produced it. The column is NULLABLE so quarantine-
+  approve and BirdNET-Pi-importer rows (which have no id to backfill)
+  keep working unchanged, and the new `idx_detections_correlation_id`
+  index makes "show every row from one file" cheap. `DetectionRecord`
+  / `DetectionRow` gain a matching `correlation_id` field; the column
+  is serialised on `/api/v2/detections` responses via
+  `#[serde(skip_serializing_if = "Option::is_none")]` so historical
+  rows don't accumulate a useless `"correlation_id": null` key.
+
+#### Supply-chain — Software Bill of Materials at release (item D14)
+
+- **CycloneDX SBOM attached to every GitHub release.** The release
+  pipeline now installs `cargo-cyclonedx@0.5.7` (pinned for repro-
+  ducibility), generates both CycloneDX 1.5 JSON and XML BOMs of the
+  full workspace, and uploads `birdnet-behavior-<ver>-sbom.cdx.json`
+  + `.cdx.xml` alongside the binaries. Both SBOM files are signed by
+  the same SLSA build provenance attestation as the binaries and
+  hashed in `SHA256SUMS`. Consumers can ingest them into
+  Dependency-Track, GitHub Dependency Graph, or any CycloneDX-aware
+  vulnerability scanner. The release notes template links to the
+  files so operators don't have to dig through the artifact list.
+
+#### Test coverage carryovers from PR #49 (item A1)
+
+- **`src/helpers.rs` lifted from 0 % to ~95 % unit coverage.** Each
+  config-and-state helper now has a dedicated test pinning the CLI →
+  config → built-in-default precedence — `db_path_from_config`,
+  `init_audio_source`, `init_site_name`, `init_i18n`, `init_image_cache`,
+  `maybe_install_avahi_service`, `start_disk_manager`. The pattern
+  uses `Cli::parse_from(["birdnet-behavior"])` for the "no flags"
+  baseline and `Config::parse(...)` for hand-written config snippets,
+  so the tests run without filesystem or network I/O. 21 new tests
+  total. Closes carryover item A1.
+- **`src/integrations.rs` lifted from 0 % to ~90 % unit coverage.**
+  Every `create_*_client` and `create_notification_*` helper now has
+  precedence tests covering "CLI wins", "config falls through", and
+  "neither configured → None". Notable: the MQTT helper's
+  `retain` / `port` / `topic_prefix` overrides are pinned per-field
+  so a future config-key rename surfaces immediately, and the email
+  notifier round-trips through a real settings table seeded via
+  `birdnet_db::settings::set`. 32 new tests total.
+- **`crates/birdnet-db/src/sqlite/queries/detections.rs` lifted from
+  the 11-test smoke surface to a 34-test full-CRUD surface.** The
+  remaining helpers — `delete_detection`, `relabel_detection`,
+  `lock_detection`/`unlock_detection`/`is_detection_locked`,
+  `locked_file_names`, `species_for_date`, `detection_dates`,
+  `todays_detections{,_count}` (including the `NOT ` exclusion path
+  and whitespace-search behaviour) — are now pinned by dedicated
+  tests. The migration-11 chunked-recording contract (5 chunks per
+  file each get a row) and the migration-12 correlation-id round
+  trip are both regression-tested.
+- **Six integration test fixtures fixed (`tests/web_api*.rs`).** Six
+  test files had hand-coded `CREATE TABLE detections` declarations
+  duplicating migration 1 — the exact anti-pattern ADR-16 flags as
+  the source of three of the PR #35 production bugs. Each was rewriting
+  the schema to the migration-1 shape on every test run, so the
+  fixtures couldn't see any column added by migrations 2–12. Replaced
+  with `birdnet_db::migration::migrate(&conn)` so the canonical schema
+  is always applied. All 31 web-API integration tests pass on the new
+  fixture.
+
+#### Mutation testing matrix expanded (item A2, partial)
+
+- **`crates/birdnet-db/src/sqlite/queries/detections.rs` added to the
+  cargo-mutants matrix.** Runs as its own job with the same
+  `missed = 0` gate that already pins `validate.rs`,
+  `inference/model.rs`, and `extractor.rs`. The 30+ tests added in
+  this PR (cover the full CRUD surface plus the migration-12
+  correlation-id round trip) make every mutant observable. Path
+  filter and PR/cron triggers updated to match. The workflow now
+  supports a per-row `package` override so future non-`birdnet-core`
+  files plug in cleanly.
+- **`src/daemon.rs` deferred to a follow-up PR.** A dry run
+  surfaced the right answer to the carryover plan's question: the
+  extracted pure helpers (`decide_disposition`,
+  `derive_source_label`) are mutation-clean *after* the boundary
+  test fix (`<` → `<=` on a float-exact `0.5` rather than a
+  non-representable `0.8`) that this PR adds. But the surrounding
+  `start_detection_daemon` and `event_processor` orchestrators
+  contribute ~10 "delete field from struct" mutants on the
+  `SpeciesFilterConfig` / `PipelineConfig` / `ModelConfig` /
+  `ExtractionConfig` literals that no unit test can catch without
+  either (a) extracting per-config pure builders (the dim_to_usize
+  template pattern), or (b) standing up an integration harness that
+  actually runs the daemon. Either is a substantial refactor and
+  doesn't fit the "dep bump + traceability" theme of this PR.
+  Tracking as the highest-priority follow-up; the matrix template
+  is already wired so it lands as a one-line addition once the
+  helpers exist.
+
+#### Supply chain — last advisory ignore lifted (item A3)
+
+- **RUSTSEC-2026-0097 dropped from `.cargo/audit.toml` and `deny.toml`.**
+  The lockfile now pins `rand 0.8.6` (the patched version the
+  advisory listed under `>= 0.8.6` ↦ fix). Both ignore lists are now
+  empty — the project clears `cargo audit --deny warnings` and
+  `cargo deny check advisories` with no exceptions. The comment in
+  both files documents the chain that unblocked it for next time.
+
 #### Operability and test coverage on the carryover path from PR #35
 
 - **`birdnet-core::detection::daemon::new_event_correlation_id`** —

@@ -221,6 +221,34 @@ pub const MIGRATIONS: &[Migration] = &[
                  CREATE INDEX IF NOT EXISTS idx_detections_chunk_offset
                      ON detections(chunk_offset_secs);",
     },
+    Migration {
+        version: 12,
+        description: "Add correlation_id to detections for log-to-row traceability",
+        // PR #49 propagated a `correlation_id` through the
+        // decode→infer→notify→DB log path so an operator could grep
+        // for "the one file that did X" across the stream. That id
+        // never reached the database row though, which broke the
+        // round trip — an admin looking at a suspicious detection in
+        // the web UI couldn't pivot back to the log slice that
+        // produced it. This migration carries the id to durable
+        // storage.
+        //
+        // Nullable on purpose:
+        //  - rows that pre-date this column have no id to backfill
+        //    (history is fine without it);
+        //  - the quarantine-approve path and the BirdNET-Pi importer
+        //    don't have a daemon-generated id either, so they keep
+        //    writing NULL until we wire them up;
+        //  - omitting the column on insert is harmless going forward.
+        //
+        // No UNIQUE / no NOT NULL — we don't index on it because the
+        // operator-facing lookup pattern is "find the rows for one
+        // file" not "find one row by id", and a UNIQUE constraint
+        // would force the importer to invent fake ids.
+        up_sql: "ALTER TABLE detections ADD COLUMN correlation_id TEXT;
+                 CREATE INDEX IF NOT EXISTS idx_detections_correlation_id
+                     ON detections(correlation_id);",
+    },
 ];
 
 /// Ensure the `schema_version` tracking table exists.
