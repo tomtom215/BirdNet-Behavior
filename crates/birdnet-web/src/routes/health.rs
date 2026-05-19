@@ -12,6 +12,7 @@ use axum::{Router, routing::get};
 use std::fmt::Write as _;
 use std::time::SystemTime;
 
+use crate::metrics::render_runtime_metrics;
 use crate::state::AppState;
 
 /// Mount metrics routes.
@@ -81,6 +82,12 @@ async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoResponse 
     out.push_str("# HELP birdnet_analytics_enabled Whether DuckDB analytics is enabled.\n");
     out.push_str("# TYPE birdnet_analytics_enabled gauge\n");
     writeln!(out, "birdnet_analytics_enabled {has_analytics}").unwrap_or_default();
+
+    // Append the runtime counters/histograms maintained by the detection
+    // daemon. Snapshot is computed under the registry's read locks so the
+    // hot insert path is never blocked.
+    let runtime = render_runtime_metrics(&state.metrics().snapshot());
+    out.push_str(&runtime);
 
     (
         StatusCode::OK,

@@ -35,6 +35,11 @@ Thumbs.db
 *.tflite
 *.onnx
 
+# But keep tiny test fixtures embedded via include_bytes!()
+# Used by inference/model.rs to drive BirdNetModel methods without
+# the real 541 MB BirdNET+ model on disk.
+!crates/birdnet-core/src/testdata/*.onnx
+
 # Coverage/profiling
 *.profraw
 lcov.info

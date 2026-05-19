@@ -1,19 +1,29 @@
-# Mutation testing on the configuration validator.
+# Mutation testing across the most regression-prone modules.
 #
 # `cargo-mutants` rewrites the source under test in small, well-defined
 # ways (replace a `>` with `<`, return `Default::default()`, drop a branch,
 # etc.) and re-runs the test suite. A mutant that survives means the
-# tests pass even though the validator's behaviour was changed — almost
+# tests pass even though the module's behaviour was changed — almost
 # always a sign that the assertion is too weak.
 #
-# Scoped to `crates/birdnet-core/src/config/validate.rs` so the run takes
-# ~5–10 min instead of hours. Expanding the scope to the whole workspace
-# is a future option once the per-module mutant score is high.
+# Scope per the carryover-from-PR-#35 plan in CLAUDE.md, ratcheted
+# outward one module at a time:
+#
+#   1. crates/birdnet-core/src/config/validate.rs  — first expansion;
+#      0 missed at last run. This is the canonical gate.
+#   2. crates/birdnet-core/src/inference/model.rs  — added after the
+#      sigmoid-on-probabilities bug shipped despite unit-test coverage.
+#   3. crates/birdnet-core/src/audio/extraction/extractor.rs — added
+#      after the range-inversion clip-extraction bug shipped likewise.
+#
+# Each file is its own matrix job so a survivor in one doesn't tank the
+# whole pipeline. Per-file threshold: > 0 missed fails the validator
+# job (it's been at 0 forever); > 5 missed fails the others (where the
+# tests are newer and we're ratcheting downward).
 #
 # Runs on:
-#   - PRs that touch the validator or its tests (path filter)
-#   - Weekly cron so the mutant catalogue stays fresh against new
-#     properties added to validate.rs
+#   - PRs that touch any of the in-scope files (path filter below)
+#   - Weekly cron so the mutant catalogue stays fresh
 #   - Manual dispatch
 
 name: Mutation testing
@@ -23,13 +33,17 @@ on:
     branches: ["main", "master"]
     paths:
       - "crates/birdnet-core/src/config/**"
-      - "crates/birdnet-core/tests/config_validator.rs"
+      - "crates/birdnet-core/src/inference/**"
+      - "crates/birdnet-core/src/audio/extraction/**"
+      - "crates/birdnet-core/tests/**"
       - ".github/workflows/mutation.yml"
   pull_request:
     branches: ["main", "master"]
     paths:
       - "crates/birdnet-core/src/config/**"
-      - "crates/birdnet-core/tests/config_validator.rs"
+      - "crates/birdnet-core/src/inference/**"
+      - "crates/birdnet-core/src/audio/extraction/**"
+      - "crates/birdnet-core/tests/**"
       - ".github/workflows/mutation.yml"
   schedule:
     # Mondays at 09:00 UTC.
@@ -46,9 +60,48 @@ permissions:
 
 jobs:
   mutants:
-    name: cargo-mutants on validate.rs
+    name: cargo-mutants on ${{ matrix.label }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
+    strategy:
+      # One file's surviving mutants must not abort the rest of the matrix —
+      # we want the PR comment to show the full landscape across all scoped
+      # files, not just whichever finished first.
+      fail-fast: false
+      matrix:
+        include:
+          - label: validate.rs
+            # `slug` is the same as `label` with forward slashes replaced
+            # by hyphens so it can appear in artifact names (GitHub
+            # rejects `/` in artifact names — see
+            # https://docs.github.com/en/actions/using-workflows/storing-workflow-data-as-artifacts).
+            slug: validate.rs
+            file: crates/birdnet-core/src/config/validate.rs
+            # The validator has been mutation-clean since it was added; any
+            # regression at all is a real test-coverage gap.
+            max_missed: 0
+          - label: inference/model.rs
+            slug: inference-model.rs
+            file: crates/birdnet-core/src/inference/model.rs
+            # Wrapper-method mutants on `BirdNetModel` (`infer_sample_rate`,
+            # `recommended_chunk_samples`, `is_probability_output`,
+            # setters, `predict`) used to be uncatchable without a real
+            # 541 MB BirdNET+ model. Two tiny (~220-byte) embedded ONNX
+            # models — `tiny_v24_test.onnx` and `tiny_v30_test.onnx` —
+            # now let those methods run inside unit tests. Threshold set
+            # to 0 because every mutant has a covering test today.
+            max_missed: 0
+          - label: audio/extraction/extractor.rs
+            slug: audio-extraction-extractor.rs
+            file: crates/birdnet-core/src/audio/extraction/extractor.rs
+            # Threshold 0 — every remaining mutant on the spacer
+            # arithmetic, the `||` predicate that gates conversion, the
+            # freq-shift fallback, and the WAV-metadata-embed branch is
+            # now covered by a dedicated test. The freq-shift and
+            # format-conversion tests skip themselves when neither
+            # ffmpeg nor sox is on PATH so a stripped-down CI runner
+            # doesn't false-fail; the main CI image has ffmpeg.
+            max_missed: 0
     steps:
       - uses: actions/checkout@v5
 
@@ -56,44 +109,64 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-mutants-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-mutants-
+          key: ${{ runner.os }}-mutants-${{ matrix.label }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mutants-${{ matrix.label }}-
+            ${{ runner.os }}-mutants-
 
       - name: Install cargo-mutants
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-mutants
 
-      - name: Run mutation testing on the configuration validator
-        # `--file` restricts mutation to the validator only.
-        # `--in-place` lets the test runner reuse the existing target dir.
-        # `--timeout` per-mutant: the validator tests run in <1s; allow 60s.
-        # No `--output` flag — cargo-mutants writes to the default
-        # `mutants.out/` next to Cargo.toml, which avoids the
-        # double-nesting trap (`mutants.out/mutants.out/outcomes.json`)
-        # the old script tripped over.
+      - name: Install ffmpeg
+        # The extractor.rs tests for the format-conversion / freq-shift
+        # branches skip themselves when neither ffmpeg nor sox is on
+        # PATH. We need the tests to actually run during mutation testing
+        # (so the surviving-mutant count for those branches stays at 0),
+        # so install ffmpeg unconditionally.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Run mutation testing on ${{ matrix.file }}
+        # `--file` restricts mutation to one source file at a time so each
+        # matrix job's report stays focused. The default timeout (180 s)
+        # is plenty for these focused suites; we set 120 s to surface a
+        # genuinely-stuck mutant rather than waiting the full default.
+        #
+        # cargo-mutants exits 2 when any mutant survives — we don't want
+        # that to fail the step, because the per-file threshold check
+        # below is the gate that decides pass/fail. A build failure
+        # (exit 4 from cargo-mutants) still propagates, so we only
+        # swallow the specific "some mutants survived" exit code.
         run: |
+          set +e
           cargo mutants \
             --workspace \
             --package birdnet-core \
-            --file crates/birdnet-core/src/config/validate.rs \
+            --file "${{ matrix.file }}" \
             --in-place \
-            --timeout 60 \
+            --timeout 120 \
             --no-shuffle \
             --json
+          status=$?
+          if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
+            echo "::error::cargo-mutants exited with status $status (not the survived-mutants exit code 2)"
+            exit "$status"
+          fi
+          exit 0
 
       - name: Upload mutants report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: mutants-report
+          name: mutants-report-${{ matrix.slug }}
           path: mutants.out
           retention-days: 14
 
@@ -101,20 +174,10 @@ jobs:
         if: always()
         id: summary
         run: |
-          # cargo-mutants `summary` strings are `CaughtMutant`, `MissedMutant`,
-          # `Timeout`, `Unviable`, `Success` (baseline). The previous workflow
-          # used `Caught`/`Missed`, so every count came back as 0 and the
-          # sticky PR comment landed empty. Match the real enum here.
           if [ ! -f mutants.out/outcomes.json ]; then
             echo "summary=No outcomes.json produced." >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # cargo-mutants outcomes contain ONE baseline entry whose
-          # `scenario` is the bare string "Baseline" and N mutant entries
-          # whose `scenario` is an object `{"Mutant": {...}}`. Filtering
-          # the mutants requires gating on the scenario being an object
-          # (otherwise `.scenario.Mutant` errors with "Cannot index
-          # string with string \"Mutant\"" and the whole step exits 5).
           mutants=$(jq '[.outcomes[] | select((.scenario | type) == "object")] | length' mutants.out/outcomes.json)
           caught=$(jq '[.outcomes[] | select(.summary == "CaughtMutant")] | length' mutants.out/outcomes.json)
           missed=$(jq '[.outcomes[] | select(.summary == "MissedMutant")] | length' mutants.out/outcomes.json)
@@ -125,9 +188,6 @@ jobs:
           echo "missed=$missed" >> "$GITHUB_OUTPUT"
           echo "unviable=$unviable" >> "$GITHUB_OUTPUT"
           echo "timeout=$timeout" >> "$GITHUB_OUTPUT"
-          # List missed mutants — actionable ones. The summary filter
-          # implicitly restricts to mutant scenarios so the `.Mutant` index
-          # is safe here.
           jq -r '[.outcomes[] | select(.summary == "MissedMutant") | "\(.scenario.Mutant.file):\(.scenario.Mutant.span.start.line)  \(.scenario.Mutant.name)"] | join("\n")' \
             mutants.out/outcomes.json > missed.txt
           {
@@ -138,11 +198,11 @@ jobs:
 
       - name: Comment summary on PR
         if: github.event_name == 'pull_request' && always()
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v3
         with:
-          header: mutants
+          header: mutants-${{ matrix.slug }}
           message: |
-            ### 🧬 Mutation testing on `config/validate.rs`
+            ### 🧬 Mutation testing on `${{ matrix.file }}`
 
             | Outcome | Count |
             | --- | --- |
@@ -152,6 +212,8 @@ jobs:
             | Unviable (would not compile) | ${{ steps.summary.outputs.unviable }} |
             | Timeout | ${{ steps.summary.outputs.timeout }} |
 
+            Threshold for this file: **`missed > ${{ matrix.max_missed }}` fails the gate**.
+
             <details>
             <summary>Missed mutants (top 50)</summary>
 
@@ -160,14 +222,18 @@ jobs:
             ```
             </details>
 
-            Full report: see the `mutants-report` artifact on this run.
+            Full report: see the `mutants-report-${{ matrix.slug }}` artifact on this run.
 
       - name: Fail if too many mutants survived
-        # Pragmatic threshold: > 5 missed mutants suggests the test suite has
-        # a real blind spot. Tune down as the mutant score improves.
+        # Per-file threshold from the matrix above.
         run: |
           missed="${{ steps.summary.outputs.missed }}"
-          if [ -n "$missed" ] && [ "$missed" -gt 5 ]; then
-            echo "::error::$missed mutants survived; tighten the validator tests"
+          limit="${{ matrix.max_missed }}"
+          if [ -z "$missed" ]; then
+            echo "::warning::no missed-mutants count produced; treating as 0"
+            exit 0
+          fi
+          if [ "$missed" -gt "$limit" ]; then
+            echo "::error::$missed mutants survived in ${{ matrix.file }} (limit $limit); tighten the assertions"
             exit 1
           fi

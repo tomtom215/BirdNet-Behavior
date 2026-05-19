@@ -8,28 +8,22 @@
 #
 # Revisit every dependency-bump pass: when the upstream patch lands and the
 # resolver picks it up, the corresponding entry should be removed from
-# BOTH this file and deny.toml.
+# BOTH this file and deny.toml. Eight transitive advisories were lifted
+# in this pass — `rustls-webpki` (0.103.9 → 0.103.13 covers 0049/0098/0099/0104),
+# `aws-lc-sys` (0.38.0 → 0.41.0 via `aws-lc-rs` 1.16.1 → 1.17.0 covers
+# 0044/0048), and `tar` (0.4.44 → 0.4.46 covers 0067/0068). Only the
+# rand-0.8.x advisory remains; see comment below.
 
 [advisories]
 ignore = [
-    # rand 0.8 / 0.9 unsoundness with a custom global thread-local logger.
-    # We never install one; pulled in transitively via rustls / aws-lc-rs.
+    # rand 0.8.5 unsoundness with a custom global thread-local logger.
+    # Patched in rand >= 0.9.3 and >= 0.10.1, but the 0.8.x line has no
+    # corresponding release on crates.io as of this writing — the
+    # advisory's `>= 0.8.6` patch range is aspirational. We're on rand
+    # 0.9.4 for the 0.9.x copy, but a number of transitive deps
+    # (`rustc-hash`, `rust_decimal`, `num-bigint`, `num-complex`) still
+    # pin `rand "^0.8"`, which is what carries 0.8.5 in the lockfile.
+    # We never install a custom rand logger ourselves, so the practical
+    # attack surface is zero. Revisit when one of those crates upgrades.
     "RUSTSEC-2026-0097",
-
-    # rustls-webpki transitive via reqwest + hyper-rustls. Patch lands when
-    # those crates upgrade; tracked at the next dep-bump pass.
-    "RUSTSEC-2026-0049",
-    "RUSTSEC-2026-0098",
-    "RUSTSEC-2026-0099",
-    "RUSTSEC-2026-0104",
-
-    # aws-lc-sys via rustls-platform-verifier. Same story — awaiting
-    # upstream upgrade.
-    "RUSTSEC-2026-0044",
-    "RUSTSEC-2026-0048",
-
-    # tar via reqwest dependency chain (PAX header / unpack_in).
-    # We don't expose tar extraction to untrusted input.
-    "RUSTSEC-2026-0067",
-    "RUSTSEC-2026-0068",
 ]

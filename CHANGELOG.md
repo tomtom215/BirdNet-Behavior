@@ -7,6 +7,159 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### Operability and test coverage on the carryover path from PR #35
+
+- **`birdnet-core::detection::daemon::new_event_correlation_id`** —
+  generates a short, sortable ID stamped on every event the daemon emits
+  for one audio file. `DetectionEvent` gains a `correlation_id` field
+  that propagates through `decode → infer → notify → DB write`, so an
+  operator can trace one file end-to-end with a single grep over the log
+  stream. Closes the visibility gap noted in the carryover plan ("every
+  event currently carries species + confidence but not a recording-id
+  or chunk-id").
+- **`birdnet-web::metrics`** — process-local Prometheus counters and
+  latency histograms surfaced at `/api/v2/metrics`. Replaces the previous
+  scrape-time snapshot (DB row count, RSS) with a real time-series
+  exposition: `birdnet_detections_total{species,chunk_offset}`,
+  `birdnet_inference_duration_seconds`, `birdnet_db_write_duration_seconds`,
+  `birdnet_audio_source_up{source}`, `birdnet_watchdog_pings_total`.
+  Hand-rolled exposition (no `prometheus` crate dependency); fixed
+  histogram buckets bracket the real per-chunk latency on a Pi 5
+  (1 ms ... 10 s). 9 new lib tests pin the renderer's escaping,
+  bucket-cumulativity, and sort-determinism contracts.
+- **`docs/grafana-dashboard.json`** — committed dashboard for the new
+  metrics. Five rows: Liveness (audio source up, watchdog ping rate,
+  uptime), Detection signal (per-species rate timeseries + lifetime
+  table), Pipeline latency (inference + DB-write p50/p95/p99), Resources
+  (RSS against the 384 MiB MemoryHigh ceiling, distinct species).
+- **`birdnet-behavior --doctor` watchdog check** verifies the daemon's
+  systemd-watchdog plumbing is honoured by the supervisor. Walks the
+  three-question decision matrix: `NOTIFY_SOCKET` set? `WATCHDOG_USEC`
+  set? does a synthetic `WATCHDOG=1` ping reach the socket? Outcomes:
+  `Skip` (not under systemd), `Warn` (notify-but-no-watchdog),
+  `Pass` (ping delivered, interval echoed), `Fail` (ping rejected —
+  supervisor has gone away). Six new unit tests cover the describe and
+  probe paths.
+
+### Changed
+
+- **Refactored `src/daemon.rs::event_processor`** to extract its
+  threshold gates into a pure-logic helper, `decide_disposition`,
+  returning a `DispositionDecision` enum. The 600-line god-function
+  shrinks slightly and gains nine unit tests pinning every cell of the
+  per-species × global threshold decision matrix — the kind of
+  per-file coverage gap the PR #35 carryover identified as the source
+  of the production bugs we just shipped fixes for.
+- **`crates/birdnet-core/src/inference/model.rs`** refactored to expose
+  three new public helpers, `infer_sample_rate_from_shape`,
+  `recommended_chunk_samples_from_shape`, and `compute_confidence`,
+  each of which used to be inline branching inside a method. The
+  helpers are mock-free, branch-pinnable, and now carry 17 additional
+  unit tests covering every model-family decision cell — including the
+  V3.0 sigmoid-on-probabilities regression that took out the previous
+  shipping confidence. The `regression_v30_probability_not_sigmoided`
+  test pins the anchor case directly.
+- **Mutation testing scope widened** to a 3-file matrix with
+  `missed > 0` as the gate on every file:
+  `crates/birdnet-core/src/config/validate.rs`,
+  `crates/birdnet-core/src/inference/model.rs`,
+  `crates/birdnet-core/src/audio/extraction/extractor.rs`. Each file
+  is its own job so a surviving mutant in one doesn't tank the
+  report on the others. Two embedded ~220-byte ONNX models
+  (`crates/birdnet-core/src/testdata/tiny_v24_test.onnx` and
+  `tiny_v30_test.onnx`) let the new BirdNetModel tests drive
+  `infer_sample_rate`, `recommended_chunk_samples`,
+  `is_probability_output`, the setters, and `predict` without the
+  real 541 MB BirdNET+ model on disk. The mutation workflow installs
+  `ffmpeg` so the freq-shift and format-conversion branch tests in
+  extractor.rs actually run instead of skipping. Final mutant counts
+  on the touched files: **0 missed / 65 caught on validate.rs**,
+  **0 missed / 73 caught on inference/model.rs**, **0 missed / 24
+  caught on extractor.rs** (numbers will be re-verified by the
+  matrix run after this lands).
+- **Eight transitive RUSTSEC advisories lifted** by targeted
+  `cargo update --precise`: `rustls-webpki` 0.103.9 → 0.103.13 covers
+  RUSTSEC-2026-0049/0098/0099/0104, `aws-lc-rs` 1.16.1 → 1.17.0 brings
+  `aws-lc-sys` 0.38.0 → 0.41.0 covering RUSTSEC-2026-0044/0048,
+  `tar` 0.4.44 → 0.4.46 covers RUSTSEC-2026-0067/0068. The only
+  remaining ignore is RUSTSEC-2026-0097 against `rand` 0.8.5 (no 0.8.x
+  patch released upstream as of this writing; rand 0.9.x line is
+  current at 0.9.4). `.cargo/audit.toml` and `deny.toml` both reflect
+  the new lone-entry state with an explicit justification.
+- **`coverage.yml` exclusion comment expanded** to document why
+  `crates/birdnet-migrate/` and `crates/birdnet-behavioral/` stay out
+  of the per-PR coverage measurement (the analytics crate's DuckDB
+  build adds ~10 minutes; the migration crate is fixture-driven and
+  per-line numbers would be misleading). Both decisions are revisited
+  on each major refactor of those crates.
+
+#### Dependency refresh — folded in PRs #37–#48 from Dependabot
+
+- **GitHub Actions** bumped across every workflow:
+  `actions/cache@v4 → v5`, `actions/upload-artifact@v4/v6 → v7`,
+  `actions/download-artifact@v7 → v8`,
+  `marocchino/sticky-pull-request-comment@v2 → v3`. Pinned SHAs in
+  `release.yml` updated to match (`v4.6.2 → v7.0.1` for upload,
+  `v4.1.8 → v8.0.1` for download).
+- **Cargo patch + minor group**: `clap` 4.6.0 → 4.6.1, `filetime`
+  0.2.27 → 0.2.29, `proptest` 1.10 → 1.11, `reqwest` 0.13.2 → 0.13.3,
+  `tower-http` 0.6.8 → 0.6.11, `tracing-subscriber` 0.3.22 → 0.3.23.
+- **Cargo async runtime group**: `tokio` 1.51 → 1.52 (patch).
+- **Cargo web framework group**: `axum` 0.8.8 → 0.8.9,
+  `tokio-tungstenite` 0.28 → 0.29 (transitive).
+- **`audioadapter-buffers` 2 → 3** — semver-major bump in the audio
+  buffer adapter; no API changes needed in this codebase (`rubato`
+  consumed it transitively, and our direct uses target only the
+  `InterleavedSlice` constructor which is stable across the bump).
+- **`criterion` 0.5 → 0.8** — major bench-framework bump; only used
+  in `crates/birdnet-core/benches/audio_pipeline.rs`, which compiles
+  unchanged against 0.8. Dropped transitive deps `is-terminal` and
+  `hermit-abi`.
+- **`sysinfo` 0.32 → 0.38** — Dependabot proposed 0.39, but that line
+  raised MSRV to Rust 1.95 which would have forced us to lift the
+  workspace MSRV from 1.88 in lockstep (and broken the Dockerfile's
+  `rust:1.88-slim` builder). 0.38.4 carries the same API changes the
+  source-side updates already adopted — `RefreshKind::new()` →
+  `RefreshKind::nothing()` (rename, same behaviour),
+  `Components::refresh()` takes a `bool` arg, and
+  `Component::temperature()` returns `Option<f32>` so we use
+  `.and_then` instead of `.map`. Pinned to `^0.38` with a comment
+  explaining the MSRV rationale.
+- **`rubato` 1.0.1 → 2.0.0** — major-version bump with no source
+  changes needed in our consumer (the resampler API we use is stable
+  across the bump). Brought in transitive `audioadapter` 3 to match.
+- **`symphonia` 0.5.5 → 0.6.0** — major-version bump that **did**
+  break our `decode_file` implementation. Rewrote
+  `crates/birdnet-core/src/audio/decode.rs` for the new API:
+    * `symphonia::core::probe::Hint` → `symphonia::core::formats::probe::Hint`.
+    * `get_probe().format(...)` (taking options by ref, returning a
+      `ProbeResult`) → `get_probe().probe(...)` (taking options by
+      value, returning a `Box<dyn FormatReader>` directly).
+    * `format.default_track()` → `format.default_track(TrackType::Audio)`.
+    * `track.codec_params` is now `Option<CodecParameters>` rather
+      than a flat struct; access requires `.as_ref().and_then(|p| p.audio())`.
+    * `get_codecs().make(...)` → `get_codecs().make_audio_decoder(...)`
+      taking the audio-specific `AudioCodecParameters`.
+    * `format.next_packet()` now returns `Result<Option<Packet>>`
+      (`None` for EOF rather than `UnexpectedEof`).
+    * `packet.track_id` is a struct field, not a method.
+    * Buffer-copy API switched from
+      `SampleBuffer::new(...).copy_interleaved_ref(audio_buf)` to
+      `audio_buf.copy_to_slice_interleaved(&mut vec)`, sized via
+      `audio_buf.samples_interleaved()`. `num_planes()` now reports
+      channel count.
+  All 243 birdnet-core lib tests still pass; the live ADR-16 Layer-4
+  check (Pica WAV → DB) must run in CI after merge.
+- **Skipped: PR #36** (`dtolnay/rust-toolchain` 1.88 → 1.100).
+  Rust 1.100 doesn't exist yet (current stable is 1.95, dependabot
+  misinterpreted the version tag). MSRV stays at 1.88.
+- **Lockfile**: 8 transitive RUSTSEC advisories now unblocked
+  (rustls-webpki 4, aws-lc-sys 2, tar 2 — see A3 above) plus the
+  routine churn from the Dependabot bumps. Only RUSTSEC-2026-0097
+  (rand 0.8.5) remains, with the same documented justification.
+
 ### Fixed
 
 - **Detection confidence on BirdNET+ V3.0 preview models was being

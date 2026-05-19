@@ -4,6 +4,7 @@
 //! channel to WebSocket broadcasts and external integrations. Now also supports
 //! heartbeat pings, notification templates, species filters, and trigger modes.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
 
@@ -14,6 +15,82 @@ use birdnet_integrations::notification::{
 
 use crate::cli::Cli;
 use crate::integrations::{AppriseHandle, EmailHandle, HeartbeatHandle, MqttHandle};
+
+/// What to do with a detection after the threshold gates run.
+///
+/// Extracted from the inline gate logic in [`event_processor`] so the
+/// dispatch decision is unit-testable without spinning up a database,
+/// broadcast channel, or notification stack. The actual side effects
+/// (DB insert, quarantine row, audio extraction, broadcasts) still live
+/// in the processor — this enum just pins the decision boundary.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum DispositionDecision {
+    /// Detection passes all gates — persist, extract clip, broadcast.
+    Accept,
+    /// Below an operator-set per-species threshold — quarantine for review.
+    Quarantine {
+        /// The threshold that gated this detection, for the quarantine row.
+        threshold: f64,
+    },
+    /// Below the global threshold and no per-species override — drop silently.
+    DropBelowGlobal,
+}
+
+/// Pure helper: decide what to do with a detection based on its confidence
+/// and the configured thresholds.
+///
+/// * A per-species threshold (if present) wins over the global threshold
+///   and triggers quarantine (not silent drop) when missed — this preserves
+///   the detection for manual review.
+/// * Without a per-species override, the global confidence threshold is
+///   the gate. Detections below it are dropped silently because the model
+///   already applied the same gate; this is a belt-and-braces check.
+///
+/// Comparisons are done in `f64` because per-species thresholds come from
+/// SQLite REAL columns (f64) and we don't want a single-precision rounding
+/// step to flip a `==`-on-boundary case.
+fn decide_disposition(
+    confidence: f32,
+    sci_name: &str,
+    per_species_thresholds: &HashMap<String, f64>,
+    global_confidence: f32,
+) -> DispositionDecision {
+    if let Some(&threshold) = per_species_thresholds.get(sci_name) {
+        if f64::from(confidence) < threshold {
+            return DispositionDecision::Quarantine { threshold };
+        }
+        return DispositionDecision::Accept;
+    }
+    if confidence < global_confidence {
+        return DispositionDecision::DropBelowGlobal;
+    }
+    DispositionDecision::Accept
+}
+
+/// Derive a stable audio-source label from a recording's filename.
+///
+/// Recording filenames follow `YYYY-MM-DD-birdnet[-RTSP_ID]-HH:MM:SS.wav`.
+/// The optional `RTSP_ID` segment (`RTSP_1`, `RTSP_2`, …) names the
+/// per-stream supervisor that produced the file; its absence means the
+/// file came from the local microphone (ALSA / PulseAudio / PipeWire).
+/// We collapse all microphone sources to a single `local` label because
+/// the supervisor doesn't currently expose finer-grained per-mic IDs.
+///
+/// Used to populate the `birdnet_audio_source_up{source}` gauge as a
+/// best-effort liveness signal. A proper supervisor → metrics path is
+/// the right long-term fix, but a per-event freshness gauge is already
+/// useful: stations with one source going dark while another stays up
+/// show that immediately in Prometheus.
+#[must_use]
+fn derive_source_label(source_file: &std::path::Path) -> String {
+    let name = source_file
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    birdnet_core::detection::types::RecordingFile::parse(name)
+        .and_then(|rf| rf.rtsp_id)
+        .unwrap_or_else(|| "local".to_owned())
+}
 
 /// Start the detection daemon in a background thread.
 ///
@@ -222,14 +299,21 @@ fn event_processor(
         };
 
         let detection = &event.detection;
+        let correlation_id = event.correlation_id.as_str();
 
         // Apply per-species confidence threshold.
         // Detections that pass the global threshold but fail a stricter
         // per-species threshold are quarantined for manual review rather
         // than silently dropped.
-        if let Some(&threshold) = species_thresholds.get(&detection.scientific_name) {
-            if f64::from(detection.confidence) < threshold {
+        match decide_disposition(
+            detection.confidence,
+            &detection.scientific_name,
+            &species_thresholds,
+            global_confidence,
+        ) {
+            DispositionDecision::Quarantine { threshold } => {
                 tracing::debug!(
+                    correlation_id,
                     species = %detection.scientific_name,
                     confidence = detection.confidence,
                     threshold,
@@ -257,14 +341,17 @@ fn event_processor(
                 if let Err(e) =
                     state.with_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
                 {
-                    tracing::warn!(error = %e, species = %detection.scientific_name,
-                        "failed to quarantine detection");
+                    tracing::warn!(
+                        correlation_id,
+                        error = %e,
+                        species = %detection.scientific_name,
+                        "failed to quarantine detection"
+                    );
                 }
                 continue;
             }
-        } else if detection.confidence < global_confidence {
-            // Global threshold is already applied by the model, but double-check.
-            continue;
+            DispositionDecision::DropBelowGlobal => continue,
+            DispositionDecision::Accept => {}
         }
 
         // Insert into SQLite. Numeric columns receive Option<f64> /
@@ -293,9 +380,33 @@ fn event_processor(
             chunk_offset_secs: Some(f64::from(detection.start)),
         };
 
-        if let Err(e) = state.with_db(|conn| birdnet_db::sqlite::insert_detection(conn, &record)) {
-            tracing::warn!(error = %e, "failed to insert detection into database");
+        let metrics = state.metrics();
+        // Liveness signal: a detection here proves the source produced a
+        // file the watcher picked up. Stamp the audio-source label
+        // accordingly. We parse the source label from the filename
+        // because the source supervisor doesn't currently feed liveness
+        // updates upstream; the filename's RTSP prefix is the only
+        // per-event tag the daemon sees.
+        let source_label = derive_source_label(&event.source_file);
+        metrics.set_source_up(&source_label, true);
+
+        let db_start = std::time::Instant::now();
+        let insert_result =
+            state.with_db(|conn| birdnet_db::sqlite::insert_detection(conn, &record));
+        metrics.observe_db_write_seconds(db_start.elapsed().as_secs_f64());
+        if let Err(e) = insert_result {
+            tracing::warn!(
+                correlation_id,
+                error = %e,
+                "failed to insert detection into database"
+            );
+        } else {
+            metrics.inc_detection(&detection.scientific_name, detection.start);
         }
+        // event.latency_ms covers decode + inference; surface as a histogram
+        // so the dashboard can flag rising p95s before they catch the eye.
+        #[allow(clippy::cast_precision_loss)]
+        metrics.observe_inference_seconds((event.latency_ms as f64) / 1000.0);
 
         // Extract audio clip to disk.
         match extractor.extract_detection(&event.source_file, detection) {
@@ -550,6 +661,7 @@ fn event_processor(
         }
 
         tracing::debug!(
+            correlation_id,
             species = %detection.common_name,
             confidence = format!("{:.0}%", detection.confidence * 100.0),
             latency_ms = event.latency_ms,
@@ -604,5 +716,126 @@ async fn dispatch_webhook(url: &str, method: &str, body: Option<&str>, rule_name
                 "webhook dispatch failed"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Unit tests for the pure-logic helpers extracted from `event_processor`.
+    //!
+    //! These exist because the carryover from PR #35 noted that the daemon's
+    //! event-processing path was at ~0 % unit coverage — the bugs we found
+    //! lived there. Unit tests for the dispatch decision protect the
+    //! threshold-gate contract going forward without needing a live model
+    //! or database.
+
+    use super::*;
+
+    fn thresholds(pairs: &[(&str, f64)]) -> HashMap<String, f64> {
+        pairs.iter().map(|(k, v)| ((*k).to_owned(), *v)).collect()
+    }
+
+    #[test]
+    fn no_per_species_threshold_accepts_above_global() {
+        // global=0.5, detection=0.7 → accept (no per-species).
+        let d = decide_disposition(0.7, "Pica pica", &thresholds(&[]), 0.5);
+        assert_eq!(d, DispositionDecision::Accept);
+    }
+
+    #[test]
+    fn no_per_species_threshold_drops_below_global() {
+        // global=0.5, detection=0.4 → drop (no per-species; model already
+        // gated, but the double-check fires here too).
+        let d = decide_disposition(0.4, "Pica pica", &thresholds(&[]), 0.5);
+        assert_eq!(d, DispositionDecision::DropBelowGlobal);
+    }
+
+    #[test]
+    fn per_species_threshold_accepts_when_met() {
+        // per-species=0.8, detection=0.85 → accept.
+        let t = thresholds(&[("Pica pica", 0.8)]);
+        let d = decide_disposition(0.85, "Pica pica", &t, 0.5);
+        assert_eq!(d, DispositionDecision::Accept);
+    }
+
+    #[test]
+    fn per_species_threshold_quarantines_when_missed() {
+        // per-species=0.8, detection=0.6 → quarantine, not drop.
+        // The whole point of the quarantine workflow is to keep these
+        // detections around for review rather than silently dropping them.
+        let t = thresholds(&[("Pica pica", 0.8)]);
+        let d = decide_disposition(0.6, "Pica pica", &t, 0.5);
+        assert_eq!(d, DispositionDecision::Quarantine { threshold: 0.8 });
+    }
+
+    #[test]
+    fn per_species_threshold_overrides_global_when_below_both() {
+        // global=0.5, per-species=0.8, detection=0.4 → quarantine (NOT
+        // drop). The per-species override wins even when the detection
+        // would also have failed the global gate — the operator-configured
+        // threshold is the gate that decides quarantine vs. drop.
+        let t = thresholds(&[("Pica pica", 0.8)]);
+        let d = decide_disposition(0.4, "Pica pica", &t, 0.5);
+        assert_eq!(d, DispositionDecision::Quarantine { threshold: 0.8 });
+    }
+
+    #[test]
+    fn per_species_threshold_only_applies_to_named_species() {
+        // Threshold for Pica pica; detection for Corvus corax → no override.
+        let t = thresholds(&[("Pica pica", 0.95)]);
+        let d = decide_disposition(0.6, "Corvus corax", &t, 0.5);
+        // 0.6 > 0.5 global, no override → accept.
+        assert_eq!(d, DispositionDecision::Accept);
+    }
+
+    #[test]
+    fn boundary_at_threshold_is_accept_for_global() {
+        // The check uses `<` so equality passes. Pin the contract.
+        let d = decide_disposition(0.5, "Pica pica", &thresholds(&[]), 0.5);
+        assert_eq!(d, DispositionDecision::Accept);
+    }
+
+    #[test]
+    fn boundary_at_threshold_is_accept_for_per_species() {
+        // f64::from(f32) is exact for representable values; pin the contract.
+        let t = thresholds(&[("Pica pica", 0.8)]);
+        let d = decide_disposition(0.8, "Pica pica", &t, 0.5);
+        assert_eq!(d, DispositionDecision::Accept);
+    }
+
+    #[test]
+    fn empty_string_species_is_treated_like_unknown() {
+        // Defensive: a malformed detection with no species name should
+        // hit the no-override path; whether it accepts or drops depends
+        // on confidence.
+        let d = decide_disposition(0.9, "", &thresholds(&[]), 0.5);
+        assert_eq!(d, DispositionDecision::Accept);
+        let d2 = decide_disposition(0.1, "", &thresholds(&[]), 0.5);
+        assert_eq!(d2, DispositionDecision::DropBelowGlobal);
+    }
+
+    // ── derive_source_label ────────────────────────────────────────────
+
+    #[test]
+    fn source_label_is_local_for_no_rtsp_prefix() {
+        let p = std::path::Path::new("/tmp/2026-05-19-birdnet-09:00:00.wav");
+        assert_eq!(derive_source_label(p), "local");
+    }
+
+    #[test]
+    fn source_label_picks_up_rtsp_id() {
+        let p = std::path::Path::new("/tmp/2026-05-19-birdnet-RTSP_1-09:00:00.wav");
+        assert_eq!(derive_source_label(p), "RTSP_1");
+        let p2 = std::path::Path::new("/tmp/2026-05-19-birdnet-RTSP_42-12:34:56.flac");
+        assert_eq!(derive_source_label(p2), "RTSP_42");
+    }
+
+    #[test]
+    fn source_label_falls_back_to_local_on_unparseable_filename() {
+        // Filename that doesn't match the canonical schema.
+        let p = std::path::Path::new("/tmp/random-file.wav");
+        assert_eq!(derive_source_label(p), "local");
+        let p2 = std::path::Path::new("/tmp/");
+        assert_eq!(derive_source_label(p2), "local");
     }
 }

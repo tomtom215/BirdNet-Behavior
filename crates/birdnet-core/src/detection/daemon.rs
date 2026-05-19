@@ -103,6 +103,12 @@ pub struct DetectionEvent {
     pub source_file: PathBuf,
     /// Processing latency in milliseconds.
     pub latency_ms: u64,
+    /// Correlation ID stamped at file-arrival time and propagated through
+    /// every event the daemon emits for that file. Every log line, DB
+    /// write, and notification dispatched downstream tags this ID so the
+    /// operator can trace one audio file end-to-end with a single grep.
+    /// Empty when the upstream call site did not set one (older API).
+    pub correlation_id: String,
 }
 
 /// Handle for controlling a running daemon.
@@ -121,6 +127,27 @@ impl DaemonHandle {
     pub fn stop(&self) {
         let _ = self.stop_tx.send(());
     }
+}
+
+/// Generate a short correlation ID for a single audio file.
+///
+/// Format: `e-{ms-since-epoch}-{counter:04x}`. Sortable by arrival time,
+/// monotonically increasing per-process, short enough for one log line.
+/// Used only as a debug aid for tracing one file through the pipeline —
+/// uniqueness across processes is not required (every process scrapes
+/// its own log).
+#[must_use]
+pub fn new_event_correlation_id() -> String {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    let ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("e-{ms}-{n:04x}")
 }
 
 /// Process a single audio file through the full pipeline (no model -- pipeline-only mode).
@@ -144,6 +171,9 @@ pub fn process_file_pipeline_only(
 /// Returns all detections found in the file, or an empty vec if
 /// nothing meets the confidence threshold.
 ///
+/// `correlation_id`, if non-empty, is stamped on every event emitted for
+/// this file and surfaced in every log line — see [`DetectionEvent::correlation_id`].
+///
 /// # Errors
 ///
 /// Returns `DaemonError` if any stage fails.
@@ -152,6 +182,7 @@ pub fn process_and_infer(
     path: &Path,
     pipeline_config: &PipelineConfig,
     model: &mut BirdNetModel,
+    correlation_id: &str,
 ) -> Result<Vec<DetectionEvent>, DaemonError> {
     let start = Instant::now();
 
@@ -159,6 +190,7 @@ pub fn process_and_infer(
     let pipeline_elapsed = start.elapsed();
 
     tracing::debug!(
+        correlation_id,
         file = %path.display(),
         chunks = chunks.len(),
         pipeline_ms = pipeline_elapsed.as_millis(),
@@ -184,6 +216,7 @@ pub fn process_and_infer(
 
         for detection in detections {
             tracing::info!(
+                correlation_id,
                 species = %detection.common_name,
                 confidence = format!("{:.1}%", detection.confidence * 100.0),
                 chunk = format!("{:.1}s-{:.1}s", chunk.start_secs, chunk.end_secs),
@@ -195,12 +228,14 @@ pub fn process_and_infer(
                 detection,
                 source_file: path.to_path_buf(),
                 latency_ms: total_ms,
+                correlation_id: correlation_id.to_owned(),
             });
         }
     }
 
     let total = start.elapsed();
     tracing::info!(
+        correlation_id,
         file = %path.display(),
         detections = events.len(),
         total_ms = total.as_millis(),
@@ -233,6 +268,7 @@ pub fn process_and_infer_filtered(
     lat: Option<f64>,
     lon: Option<f64>,
     week: u32,
+    correlation_id: &str,
 ) -> Result<Vec<DetectionEvent>, DaemonError> {
     let start = Instant::now();
 
@@ -240,6 +276,7 @@ pub fn process_and_infer_filtered(
     let pipeline_elapsed = start.elapsed();
 
     tracing::debug!(
+        correlation_id,
         file = %path.display(),
         chunks = chunks.len(),
         pipeline_ms = pipeline_elapsed.as_millis(),
@@ -288,6 +325,7 @@ pub fn process_and_infer_filtered(
             // The daemon produces raw events; threshold filtering is done downstream.
 
             tracing::info!(
+                correlation_id,
                 species = %detection.common_name,
                 confidence = format!("{:.1}%", detection.confidence * 100.0),
                 chunk = format!("{:.1}s-{:.1}s", chunk.start_secs, chunk.end_secs),
@@ -298,12 +336,14 @@ pub fn process_and_infer_filtered(
                 detection: detection.clone(),
                 source_file: path.to_path_buf(),
                 latency_ms: total_ms,
+                correlation_id: correlation_id.to_owned(),
             });
         }
     }
 
     let total = start.elapsed();
     tracing::info!(
+        correlation_id,
         file = %path.display(),
         detections = events.len(),
         total_ms = total.as_millis(),
@@ -468,6 +508,16 @@ pub fn run_daemon(
                     // Small delay to let the file finish writing
                     std::thread::sleep(Duration::from_millis(200));
 
+                    // Stamp a correlation ID on every event we publish for
+                    // this file so the operator can trace one file through
+                    // the entire pipeline by grepping a single string.
+                    let correlation_id = new_event_correlation_id();
+                    tracing::info!(
+                        correlation_id = %correlation_id,
+                        file = %path.display(),
+                        "begin processing file"
+                    );
+
                     match process_and_infer_filtered(
                         &path,
                         &pipeline_config,
@@ -477,17 +527,22 @@ pub fn run_daemon(
                         lat,
                         lon,
                         0, // week will be computed by caller
+                        &correlation_id,
                     ) {
                         Ok(events) => {
                             for event in events {
                                 if event_tx.send(event).is_err() {
-                                    tracing::warn!("event receiver dropped, stopping daemon");
+                                    tracing::warn!(
+                                        correlation_id = %correlation_id,
+                                        "event receiver dropped, stopping daemon"
+                                    );
                                     return;
                                 }
                             }
                         }
                         Err(e) => {
                             tracing::warn!(
+                                correlation_id = %correlation_id,
                                 file = %path.display(),
                                 error = %e,
                                 "failed to process file"
@@ -544,6 +599,7 @@ fn process_existing_files(
             continue;
         }
 
+        let correlation_id = new_event_correlation_id();
         match process_and_infer_filtered(
             &path,
             pipeline_config,
@@ -553,6 +609,7 @@ fn process_existing_files(
             lat,
             lon,
             0,
+            &correlation_id,
         ) {
             Ok(events) => {
                 for event in events {
@@ -562,6 +619,7 @@ fn process_existing_files(
             }
             Err(e) => {
                 tracing::debug!(
+                    correlation_id = %correlation_id,
                     file = %path.display(),
                     error = %e,
                     "skipping existing file"
@@ -617,5 +675,64 @@ mod tests {
         let (stop_tx, _stop_rx) = mpsc::channel();
         let handle = DaemonHandle { stop_tx };
         handle.stop(); // Should not panic even if receiver is alive
+    }
+
+    // ─── Correlation-ID generator ─────────────────────────────────────────
+    //
+    // Operators rely on the correlation_id to trace one audio file through
+    // decode → infer → notify → DB write with a single `grep` over the log.
+    // The contract is "unique enough that two files arriving in the same
+    // millisecond still get distinct IDs."
+
+    #[test]
+    fn correlation_id_has_recognisable_shape() {
+        let id = new_event_correlation_id();
+        // `e-{ms}-{counter:04x}`
+        assert!(id.starts_with("e-"), "expected prefix 'e-', got: {id}");
+        let parts: Vec<&str> = id.split('-').collect();
+        assert_eq!(parts.len(), 3, "expected 3 hyphen-segments in: {id}");
+        assert!(parts[1].chars().all(|c| c.is_ascii_digit()));
+        assert!(parts[2].chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn correlation_id_is_unique_across_rapid_calls() {
+        // Generate a bunch quickly — the per-process counter must keep
+        // them distinct even when SystemTime returns the same millisecond.
+        let mut ids = std::collections::HashSet::new();
+        for _ in 0..1000 {
+            ids.insert(new_event_correlation_id());
+        }
+        assert_eq!(ids.len(), 1000, "correlation IDs are not unique");
+    }
+
+    #[test]
+    fn detection_event_carries_correlation_id() {
+        // Pin the contract: DetectionEvent has the field and round-trips
+        // through clone without losing it.
+        use crate::detection::types::Detection;
+        let event = DetectionEvent {
+            detection: Detection {
+                date: "2026-05-19".to_owned(),
+                time: "09:00:00".to_owned(),
+                scientific_name: "Pica pica".to_owned(),
+                common_name: "Eurasian Magpie".to_owned(),
+                confidence: 0.93,
+                start: 0.0,
+                stop: 4.5,
+                week: 20,
+                file_name_extr: None,
+            },
+            source_file: PathBuf::from("/tmp/x.wav"),
+            latency_ms: 42,
+            correlation_id: "e-12345-0001".to_owned(),
+        };
+        // Use the clone path even though we drop the original immediately —
+        // the clippy::redundant_clone flag will fire, but pinning Clone is
+        // exactly the point of this test. Bind both so the second move
+        // through Clone is observable.
+        let cloned = event.clone();
+        drop(event);
+        assert_eq!(cloned.correlation_id, "e-12345-0001");
     }
 }
