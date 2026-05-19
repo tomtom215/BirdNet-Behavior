@@ -434,7 +434,7 @@ fn output_is_probability(input_shape: &[usize]) -> bool {
 ///
 /// V2.4 fixed `[1, 144_000]` → 48 kHz × 3 s. V3.0 fixed `[1, 96_000]` → 32 kHz × 3 s.
 /// Anything fully-dynamic or rank-1 → 32 kHz (assume V3.0 preview).
-/// Unknown sample counts default to 48 kHz so we don't silently mis-resample.
+/// Unknown sample counts default to 48 kHz so we don't silently downsample.
 #[must_use]
 pub fn infer_sample_rate_from_shape(input_shape: &[usize]) -> u32 {
     let n_samples = match input_shape {
@@ -620,7 +620,7 @@ mod tests {
     // is_probability_output regression (sigmoid-on-probabilities → 52 % vs
     // 93 %) lived in this module and shipped despite the prior test suite.
     // The tests below pin every cell in the model-family decision table so
-    // the same class of mis-mapping fails an assertion the next time.
+    // the same class of incorrect mapping fails an assertion the next time.
 
     #[test]
     fn infer_sample_rate_from_shape_v24_fixed() {
