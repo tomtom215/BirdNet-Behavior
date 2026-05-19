@@ -14,22 +14,14 @@
 [advisories]
 version = 2
 yanked = "warn"
-# Eight transitive advisories were lifted by targeted `cargo update
-# --precise` in this pass: rustls-webpki 0.103.9 → 0.103.13 (0049, 0098,
-# 0099, 0104), aws-lc-rs 1.16.1 → 1.17.0 carrying aws-lc-sys 0.38.0 →
-# 0.41.0 (0044, 0048), and tar 0.4.44 → 0.4.46 (0067, 0068). Only the
-# rand-0.8.x advisory remains — see comment below.
-ignore = [
-    # rand 0.8.5 unsoundness with custom global thread-local logger.
-    # Patched in rand >= 0.9.3 and >= 0.10.1; the 0.8.x line has no
-    # corresponding release on crates.io as of this writing. We're on
-    # rand 0.9.4 for the 0.9.x copy, but several transitive deps
-    # (`rustc-hash`, `rust_decimal`, `num-bigint`, `num-complex`) still
-    # pin `rand "^0.8"` in their non-dev deps, so 0.8.5 stays in the
-    # lockfile until they upgrade. We never install a custom rand
-    # logger ourselves; the practical attack surface is zero.
-    { id = "RUSTSEC-2026-0097", reason = "no custom rand logger; rand 0.8.x has no patched upstream release" },
-]
+# Nine transitive advisories have been lifted by targeted dep refreshes
+# across the last two passes: rustls-webpki 0.103.9 → 0.103.13 (0049,
+# 0098, 0099, 0104), aws-lc-rs 1.16.1 → 1.17.0 carrying aws-lc-sys
+# 0.38.0 → 0.41.0 (0044, 0048), tar 0.4.44 → 0.4.46 (0067, 0068), and
+# now rand 0.8.5 → 0.8.6 (0097 — the last remaining ignore from PR #49).
+# The list is intentionally empty; any new ignore must come with a
+# justification and a follow-up plan.
+ignore = []
 
 # ── Licenses ──────────────────────────────────────────────────────────────────
 # Curated allow-list of OSI-approved permissive licenses that are compatible

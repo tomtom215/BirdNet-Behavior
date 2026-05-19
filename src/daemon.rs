@@ -378,6 +378,18 @@ fn event_processor(
             // UNIQUE key (Date, Time, Sci_Name, File_Name) and only the
             // first chunk's detection is kept. See migration 11.
             chunk_offset_secs: Some(f64::from(detection.start)),
+            // The correlation_id is the per-file id stamped on every
+            // event; persisting it closes the log→row round trip so an
+            // admin clicking a suspicious detection in the web UI can
+            // grep the journal for the exact decode/infer/notify
+            // slice that produced it. Empty string means "no id"
+            // (forward-compat with non-daemon write paths) — store as
+            // NULL so the DB doesn't try to index empty strings.
+            correlation_id: if correlation_id.is_empty() {
+                None
+            } else {
+                Some(correlation_id)
+            },
         };
 
         let metrics = state.metrics();
@@ -797,9 +809,17 @@ mod tests {
 
     #[test]
     fn boundary_at_threshold_is_accept_for_per_species() {
-        // f64::from(f32) is exact for representable values; pin the contract.
-        let t = thresholds(&[("Pica pica", 0.8)]);
-        let d = decide_disposition(0.8, "Pica pica", &t, 0.5);
+        // Use exactly-representable f32 boundary value 0.5 so the
+        // `<` → `<=` mutation is observable. The naive choice of 0.8
+        // would leave both `<` and `<=` returning false — `0.8_f32`
+        // rounds up to ~0.80000001 in f64, while `0.8_f64` is
+        // ~0.79999999... so `f64::from(0.8_f32) <= 0.8_f64` is
+        // already false. 0.5 is a power of two and round-trips
+        // exactly between f32 and f64, so `0.5 < 0.5` is false and
+        // `0.5 <= 0.5` is true — the assertion below catches the
+        // boundary mutation.
+        let t = thresholds(&[("Pica pica", 0.5)]);
+        let d = decide_disposition(0.5, "Pica pica", &t, 0.25);
         assert_eq!(d, DispositionDecision::Accept);
     }
 

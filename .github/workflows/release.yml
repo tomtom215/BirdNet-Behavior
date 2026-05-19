@@ -292,7 +292,7 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-# ── Job 4: Aggregate artifacts, checksum, and SLSA attestation ───────────────
+# ── Job 4: Aggregate artifacts, checksum, SBOM, and SLSA attestation ─────────
   package:
     name: Package and attest
     needs: [validate, build]
@@ -304,6 +304,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
 
       - name: Download build artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -324,15 +329,59 @@ jobs:
           ls -lh release/
           echo "::endgroup::"
 
+      # CycloneDX SBOM — one machine-readable bill of materials for the
+      # full workspace, attached to the GitHub release. Consumers can
+      # use this to audit transitive dependencies, surface CVEs against
+      # specific package versions, or feed it into Dependency-Track /
+      # GitHub Dependency Graph. We pin cargo-cyclonedx to a known-good
+      # version so a transitive bug in the generator can't silently
+      # poison the release artifact set.
+      - name: Install cargo-cyclonedx
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-cyclonedx@0.5.7
+
+      - name: Generate SBOM (CycloneDX 1.5 JSON)
+        shell: bash
+        run: |
+          VERSION="${{ needs.validate.outputs.version }}"
+          # `--format json` → CycloneDX 1.5 JSON; the BOM lives at
+          # `bom.json` next to each crate's Cargo.toml. We collect
+          # the workspace-root one as the canonical artifact and
+          # also produce an aggregated XML SBOM (more common with
+          # consumers that haven't moved to JSON yet).
+          cargo cyclonedx --format json --output-cdx
+          cargo cyclonedx --format xml  --output-cdx
+
+          # The root SBOM is what release consumers want; per-crate
+          # SBOMs live alongside their respective Cargo.toml and
+          # are useful to anyone vendoring a single crate.
+          NAME="birdnet-behavior-${VERSION}-sbom"
+          cp birdnet-behavior.cdx.json "release/${NAME}.cdx.json"
+          cp birdnet-behavior.cdx.xml  "release/${NAME}.cdx.xml"
+
+          echo "::group::SBOM summary"
+          jq '{
+            spec: .specVersion,
+            components: (.components | length),
+            tool: (.metadata.tools.components[0].name // "unknown")
+          }' "release/${NAME}.cdx.json"
+          echo "::endgroup::"
+
       - name: Generate combined SHA256SUMS
         shell: bash
         working-directory: release
         run: |
           # Combine per-archive checksums into a single SHA256SUMS file in
-          # the standard sha256sum -c format.
+          # the standard sha256sum -c format. SBOM files are included so
+          # downstream consumers can verify the BOM hasn't been tampered
+          # with between download and ingestion.
           : > SHA256SUMS
           for f in *.tar.gz; do
             sha256sum "$f" >> SHA256SUMS
+          done
+          for f in *.cdx.json *.cdx.xml; do
+            [[ -e "$f" ]] && sha256sum "$f" >> SHA256SUMS
           done
           sha256sum install.sh >> SHA256SUMS
 
@@ -347,10 +396,15 @@ jobs:
       # SLSA Level 2 build provenance — signs every release archive with a
       # workflow-scoped OIDC token. End users verify with:
       #   gh attestation verify --repo tomtom215/BirdNet-Behavior <archive>
+      # The SBOM is also attested so consumers know the BOM came from the
+      # same workflow run as the binaries.
       - name: Attest build provenance (SLSA)
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
-          subject-path: release/*.tar.gz
+          subject-path: |
+            release/*.tar.gz
+            release/*.cdx.json
+            release/*.cdx.xml
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -458,6 +512,19 @@ jobs:
             echo "  --repo ${{ github.repository }} \\"
             echo "  birdnet-behavior-${VERSION}-aarch64-unknown-linux-gnu.tar.gz"
             echo '```'
+            echo ""
+            echo '### Software Bill of Materials (CycloneDX)'
+            echo ""
+            echo "A CycloneDX 1.5 SBOM for the full workspace is attached as a"
+            echo "release asset in both JSON and XML formats:"
+            echo ""
+            echo "- \`birdnet-behavior-${VERSION}-sbom.cdx.json\`"
+            echo "- \`birdnet-behavior-${VERSION}-sbom.cdx.xml\`"
+            echo ""
+            echo "Consumers can ingest these into Dependency-Track, GitHub"
+            echo "Dependency Graph, or any CycloneDX-aware vulnerability"
+            echo "scanner. Both files are signed by the same SLSA build"
+            echo "provenance attestation as the binaries."
           } > final_notes.md
 
           echo "::group::Final release notes"
@@ -483,6 +550,17 @@ jobs:
           # Idempotent: if a release already exists for this tag (created by
           # an earlier workflow run or by a human via the web UI), update it
           # in place rather than failing.
+          # Glob SBOM uploads through `compgen` so the workflow keeps
+          # working when the SBOM step hasn't produced anything (e.g.
+          # during a manual rerun with only the github-release job
+          # re-run). The two CycloneDX flavours (JSON + XML) are both
+          # uploaded so consumers can pick whichever their tooling
+          # natively understands.
+          SBOM_ASSETS=()
+          for f in release/*.cdx.json release/*.cdx.xml; do
+            [[ -e "$f" ]] && SBOM_ASSETS+=("$f")
+          done
+
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "::warning::Release ${TAG} already exists — updating in place."
             gh release edit "$TAG" \
@@ -494,7 +572,8 @@ jobs:
               --clobber \
               release/*.tar.gz \
               release/SHA256SUMS \
-              release/install.sh
+              release/install.sh \
+              "${SBOM_ASSETS[@]}"
             echo "::notice::Updated $RELEASE_URL"
           else
             gh release create "$TAG" \
@@ -503,7 +582,8 @@ jobs:
               --notes-file final_notes.md \
               release/*.tar.gz \
               release/SHA256SUMS \
-              release/install.sh
+              release/install.sh \
+              "${SBOM_ASSETS[@]}"
             echo "::notice::Published $RELEASE_URL"
           fi
 

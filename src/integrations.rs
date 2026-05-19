@@ -499,3 +499,465 @@ pub fn publish_ha_discovery(
         ),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! Unit tests for the integration-client construction helpers.
+    //!
+    //! These exist because the carryover from PR #49 noted that
+    //! `src/integrations.rs` was at 0 % unit coverage. Every helper here
+    //! is a pure config-to-handle mapping: extract a value from CLI or
+    //! config, decide whether to construct, and return the handle (or
+    //! None). The tests fix the precedence between CLI flag, config
+    //! value, and "neither configured" so a future refactor can't
+    //! silently break the "CLI wins" rule that the production
+    //! deployment story depends on.
+    use super::*;
+    use crate::cli::Cli;
+    use clap::Parser;
+
+    fn default_cli() -> Cli {
+        Cli::parse_from(["birdnet-behavior"])
+    }
+
+    fn config_with(entries: &[(&str, &str)]) -> birdnet_core::config::Config {
+        let content = entries
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        birdnet_core::config::Config::parse(&content).unwrap()
+    }
+
+    fn test_state() -> birdnet_web::state::AppState {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        birdnet_web::state::AppState::from_connection(conn, std::path::PathBuf::from(":memory:"))
+    }
+
+    // ── create_apprise_client ──────────────────────────────────────────
+
+    #[test]
+    fn apprise_is_none_when_neither_url_nor_config_file_set() {
+        let cli = default_cli();
+        assert!(create_apprise_client(&cli, None).is_none());
+    }
+
+    #[test]
+    fn apprise_built_from_cli_url() {
+        let mut cli = default_cli();
+        cli.apprise_url = Some("http://localhost:8000".to_owned());
+        assert!(create_apprise_client(&cli, None).is_some());
+    }
+
+    #[test]
+    fn apprise_built_from_config_url() {
+        let cli = default_cli();
+        let cfg = config_with(&[("APPRISE_URL", "http://broker:8000")]);
+        assert!(create_apprise_client(&cli, Some(&cfg)).is_some());
+    }
+
+    #[test]
+    fn apprise_built_in_cli_only_mode_when_config_file_set() {
+        // CLI-only mode: no HTTP URL, only an Apprise config file. The
+        // helper still returns a handle; notifications fan out via the
+        // `apprise` CLI rather than the HTTP API.
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut cli = default_cli();
+        cli.apprise_config = Some(tmp.path().to_path_buf());
+        assert!(create_apprise_client(&cli, None).is_some());
+    }
+
+    // ── create_birdweather_client ──────────────────────────────────────
+
+    #[test]
+    fn birdweather_is_none_without_token() {
+        let cli = default_cli();
+        assert!(create_birdweather_client(&cli, None).is_none());
+    }
+
+    #[test]
+    fn birdweather_built_from_cli_token() {
+        let mut cli = default_cli();
+        cli.birdweather_token = Some("station-abc".to_owned());
+        cli.latitude = Some(42.36);
+        cli.longitude = Some(-71.06);
+        let client = create_birdweather_client(&cli, None).expect("client built");
+        assert_eq!(client.coordinates(), (42.36, -71.06));
+    }
+
+    #[test]
+    fn birdweather_built_from_config_token() {
+        let cli = default_cli();
+        let cfg = config_with(&[
+            ("BIRDWEATHER_TOKEN", "config-station"),
+            ("LATITUDE", "40.0"),
+            ("LONGITUDE", "-74.0"),
+        ]);
+        let client = create_birdweather_client(&cli, Some(&cfg)).expect("client built");
+        assert_eq!(client.coordinates(), (40.0, -74.0));
+    }
+
+    #[test]
+    fn birdweather_defaults_coordinates_to_zero_when_unset() {
+        // Token present, coordinates absent → station coordinates
+        // default to (0, 0). BirdWeather treats that as an
+        // intentionally-anonymous station rather than rejecting the
+        // submission.
+        let mut cli = default_cli();
+        cli.birdweather_token = Some("anonymous".to_owned());
+        let client = create_birdweather_client(&cli, None).expect("client built");
+        assert_eq!(client.coordinates(), (0.0, 0.0));
+    }
+
+    // ── create_heartbeat_client ────────────────────────────────────────
+
+    #[test]
+    fn heartbeat_is_none_without_url() {
+        let cli = default_cli();
+        assert!(create_heartbeat_client(&cli, None).is_none());
+    }
+
+    #[test]
+    fn heartbeat_built_from_cli_url() {
+        let mut cli = default_cli();
+        cli.heartbeat_url = Some("https://heartbeat.example/ping".to_owned());
+        assert!(create_heartbeat_client(&cli, None).is_some());
+    }
+
+    #[test]
+    fn heartbeat_built_from_config_url() {
+        let cli = default_cli();
+        let cfg = config_with(&[("HEARTBEAT_URL", "https://hb.example/ping")]);
+        assert!(create_heartbeat_client(&cli, Some(&cfg)).is_some());
+    }
+
+    // ── create_notification_filter ─────────────────────────────────────
+
+    #[test]
+    fn filter_uses_each_detection_trigger_by_default() {
+        use birdnet_integrations::notification::TriggerMode;
+        let cli = default_cli();
+        let f = create_notification_filter(&cli);
+        assert_eq!(f.trigger, TriggerMode::EachDetection);
+        // No species filter → allow everything.
+        assert!(f.species_filter.is_allowed("Pica pica"));
+        assert!(f.species_filter.is_allowed("Corvus corax"));
+    }
+
+    #[test]
+    fn filter_parses_new_species_trigger() {
+        use birdnet_integrations::notification::TriggerMode;
+        let mut cli = default_cli();
+        cli.notify_trigger = "new-species".to_owned();
+        let f = create_notification_filter(&cli);
+        assert_eq!(f.trigger, TriggerMode::NewSpecies);
+    }
+
+    #[test]
+    fn filter_parses_new_species_daily_trigger() {
+        use birdnet_integrations::notification::TriggerMode;
+        let mut cli = default_cli();
+        cli.notify_trigger = "new-species-daily".to_owned();
+        let f = create_notification_filter(&cli);
+        assert_eq!(f.trigger, TriggerMode::NewSpeciesDaily);
+    }
+
+    #[test]
+    fn filter_honours_species_exclude_list() {
+        let mut cli = default_cli();
+        cli.notify_species_exclude = Some("Pica pica, Corvus corax".to_owned());
+        let f = create_notification_filter(&cli);
+        assert!(!f.species_filter.is_allowed("Pica pica"));
+        assert!(!f.species_filter.is_allowed("Corvus corax"));
+        assert!(f.species_filter.is_allowed("Turdus merula"));
+    }
+
+    #[test]
+    fn filter_honours_species_only_list() {
+        let mut cli = default_cli();
+        cli.notify_species_only = Some("Turdus merula,Erithacus rubecula".to_owned());
+        let f = create_notification_filter(&cli);
+        assert!(f.species_filter.is_allowed("Turdus merula"));
+        assert!(f.species_filter.is_allowed("Erithacus rubecula"));
+        assert!(!f.species_filter.is_allowed("Pica pica"));
+    }
+
+    // ── create_notification_template ───────────────────────────────────
+
+    #[test]
+    fn template_default_when_neither_title_nor_body_supplied() {
+        let cli = default_cli();
+        let t = create_notification_template(&cli, None);
+        // Default template produced by NotificationTemplate::default().
+        let ctx = birdnet_integrations::notification::NotificationContext {
+            sci_name: "Pica pica".to_owned(),
+            com_name: "Eurasian Magpie".to_owned(),
+            confidence: 0.9,
+            confidence_pct: 90,
+            date: "2026-05-19".to_owned(),
+            time: "09:00:00".to_owned(),
+            week: 20,
+            latitude: 0.0,
+            longitude: 0.0,
+            reason: String::new(),
+            listen_url: None,
+            image_url: None,
+            station_url: None,
+        };
+        let (title, body) = t.render(&ctx);
+        assert!(!title.is_empty(), "default title must not be empty");
+        assert!(!body.is_empty(), "default body must not be empty");
+    }
+
+    #[test]
+    fn template_uses_cli_title_and_body() {
+        let mut cli = default_cli();
+        cli.notify_title_template = Some("Title $comname".to_owned());
+        cli.notify_body_template = Some("Body $sciname".to_owned());
+        let t = create_notification_template(&cli, None);
+        let ctx = birdnet_integrations::notification::NotificationContext {
+            sci_name: "Pica pica".to_owned(),
+            com_name: "Eurasian Magpie".to_owned(),
+            confidence: 0.9,
+            confidence_pct: 90,
+            date: String::new(),
+            time: String::new(),
+            week: 0,
+            latitude: 0.0,
+            longitude: 0.0,
+            reason: String::new(),
+            listen_url: None,
+            image_url: None,
+            station_url: None,
+        };
+        let (title, body) = t.render(&ctx);
+        assert!(title.contains("Eurasian Magpie"));
+        assert!(body.contains("Pica pica"));
+    }
+
+    #[test]
+    fn template_falls_back_to_config_when_cli_unset() {
+        let cli = default_cli();
+        let cfg = config_with(&[
+            ("APPRISE_TITLE_TEMPLATE", "Config-$comname"),
+            ("APPRISE_BODY_TEMPLATE", "Body-$confidencepct"),
+        ]);
+        let t = create_notification_template(&cli, Some(&cfg));
+        let ctx = birdnet_integrations::notification::NotificationContext {
+            sci_name: "X".to_owned(),
+            com_name: "Y".to_owned(),
+            confidence: 0.5,
+            confidence_pct: 50,
+            date: String::new(),
+            time: String::new(),
+            week: 0,
+            latitude: 0.0,
+            longitude: 0.0,
+            reason: String::new(),
+            listen_url: None,
+            image_url: None,
+            station_url: None,
+        };
+        let (title, body) = t.render(&ctx);
+        assert!(title.contains("Config-Y"));
+        assert!(body.contains("50"));
+    }
+
+    #[test]
+    fn template_only_title_uses_default_body_with_full_substitutions() {
+        let mut cli = default_cli();
+        cli.notify_title_template = Some("only-title".to_owned());
+        let t = create_notification_template(&cli, None);
+        let ctx = birdnet_integrations::notification::NotificationContext {
+            sci_name: "Pica pica".to_owned(),
+            com_name: "Eurasian Magpie".to_owned(),
+            confidence: 0.9,
+            confidence_pct: 90,
+            date: "2026-05-19".to_owned(),
+            time: "09:00:00".to_owned(),
+            week: 20,
+            latitude: 0.0,
+            longitude: 0.0,
+            reason: String::new(),
+            listen_url: None,
+            image_url: None,
+            station_url: None,
+        };
+        let (title, body) = t.render(&ctx);
+        assert_eq!(title, "only-title");
+        // The hand-rolled default body uses $comname / $sciname /
+        // $confidencepct / $time / $date placeholders.
+        assert!(body.contains("Eurasian Magpie"));
+        assert!(body.contains("Pica pica"));
+        assert!(body.contains("90"));
+    }
+
+    #[test]
+    fn template_only_body_uses_default_title() {
+        let mut cli = default_cli();
+        cli.notify_body_template = Some("only-body".to_owned());
+        let t = create_notification_template(&cli, None);
+        let ctx = birdnet_integrations::notification::NotificationContext {
+            sci_name: "P. pica".to_owned(),
+            com_name: "Eurasian Magpie".to_owned(),
+            confidence: 0.9,
+            confidence_pct: 90,
+            date: String::new(),
+            time: String::new(),
+            week: 0,
+            latitude: 0.0,
+            longitude: 0.0,
+            reason: String::new(),
+            listen_url: None,
+            image_url: None,
+            station_url: None,
+        };
+        let (title, body) = t.render(&ctx);
+        assert_eq!(body, "only-body");
+        // The hand-rolled default title is "Bird Detection: $comname".
+        assert!(title.contains("Eurasian Magpie"));
+    }
+
+    // ── create_email_notifier ──────────────────────────────────────────
+
+    #[test]
+    fn email_notifier_is_none_when_no_smtp_host_configured() {
+        // Empty settings DB → no smtp host → no notifier.
+        let state = test_state();
+        assert!(create_email_notifier(&state).is_none());
+    }
+
+    #[test]
+    fn email_notifier_built_from_settings_table() {
+        // Seed the settings rows the helper reads, then prove it
+        // constructs a notifier. We don't actually send mail; we only
+        // pin that the configuration path builds the handle.
+        use birdnet_db::settings::{SettingsCategory, ensure_settings_table, set};
+        let state = test_state();
+        state.with_db(|conn| {
+            ensure_settings_table(conn).unwrap();
+            set(
+                conn,
+                "email_smtp_host",
+                "smtp.example.com",
+                SettingsCategory::Notifications,
+            )
+            .unwrap();
+            set(
+                conn,
+                "email_smtp_port",
+                "587",
+                SettingsCategory::Notifications,
+            )
+            .unwrap();
+            set(
+                conn,
+                "email_from",
+                "birds@example.com",
+                SettingsCategory::Notifications,
+            )
+            .unwrap();
+            set(
+                conn,
+                "email_to",
+                "operator@example.com",
+                SettingsCategory::Notifications,
+            )
+            .unwrap();
+        });
+        let notifier = create_email_notifier(&state);
+        assert!(
+            notifier.is_some(),
+            "email notifier should construct when smtp host is set"
+        );
+    }
+
+    // ── create_mqtt_client / get_mqtt_client_ref ───────────────────────
+
+    #[test]
+    fn mqtt_none_when_no_host_configured() {
+        let cli = default_cli();
+        assert!(create_mqtt_client(&cli, None).is_none());
+        assert!(get_mqtt_client_ref(&cli, None).is_none());
+    }
+
+    #[test]
+    fn mqtt_built_from_cli_host() {
+        let mut cli = default_cli();
+        cli.mqtt_host = Some("mqtt.local".to_owned());
+        assert!(create_mqtt_client(&cli, None).is_some());
+        assert!(get_mqtt_client_ref(&cli, None).is_some());
+    }
+
+    #[test]
+    fn mqtt_built_from_config_host() {
+        let cli = default_cli();
+        let cfg = config_with(&[("MQTT_HOST", "mqtt.config")]);
+        assert!(create_mqtt_client(&cli, Some(&cfg)).is_some());
+    }
+
+    #[test]
+    fn mqtt_picks_config_port_over_cli_when_present() {
+        // CLI default is 1883; config overrides.
+        let mut cli = default_cli();
+        cli.mqtt_host = Some("mqtt.local".to_owned());
+        let cfg = config_with(&[("MQTT_PORT", "8883")]);
+        let handle = create_mqtt_client(&cli, Some(&cfg)).expect("client built");
+        assert_eq!(handle.config().port, 8883);
+    }
+
+    #[test]
+    fn mqtt_uses_config_topic_prefix_when_set() {
+        let mut cli = default_cli();
+        cli.mqtt_host = Some("mqtt.local".to_owned());
+        let cfg = config_with(&[("MQTT_TOPIC_PREFIX", "stations/garden")]);
+        let handle = create_mqtt_client(&cli, Some(&cfg)).expect("client built");
+        assert_eq!(handle.config().topic_prefix, "stations/garden");
+    }
+
+    #[test]
+    fn mqtt_retain_set_when_cli_flag_or_config_truthy() {
+        // CLI flag wins.
+        let mut cli = default_cli();
+        cli.mqtt_host = Some("mqtt.local".to_owned());
+        cli.mqtt_retain = true;
+        let handle = create_mqtt_client(&cli, None).expect("client built");
+        assert!(handle.config().retain);
+
+        // Config-only path: CLI flag false but config sets it true.
+        let mut cli = default_cli();
+        cli.mqtt_host = Some("mqtt.local".to_owned());
+        let cfg = config_with(&[("MQTT_RETAIN", "true")]);
+        let handle = create_mqtt_client(&cli, Some(&cfg)).expect("client built");
+        assert!(handle.config().retain);
+    }
+
+    // ── create_auth_config ─────────────────────────────────────────────
+
+    #[test]
+    fn auth_none_when_no_password_configured() {
+        let cli = default_cli();
+        // Config absent.
+        assert!(create_auth_config(None).is_none());
+        // Config present but no CADDY_PWD.
+        let cfg = config_with(&[("SOMETHING", "irrelevant")]);
+        assert!(create_auth_config(Some(&cfg)).is_none());
+        // Defeats the borrow checker complaining about unused `cli`.
+        let _ = cli;
+    }
+
+    #[test]
+    fn auth_built_with_default_username_when_only_password_set() {
+        let cfg = config_with(&[("CADDY_PWD", "hunter2")]);
+        let auth = create_auth_config(Some(&cfg));
+        assert!(auth.is_some(), "auth should be built when password set");
+    }
+
+    #[test]
+    fn auth_built_with_custom_username() {
+        let cfg = config_with(&[("CADDY_PWD", "hunter2"), ("CADDY_USER", "operator")]);
+        let auth = create_auth_config(Some(&cfg));
+        assert!(auth.is_some());
+    }
+}

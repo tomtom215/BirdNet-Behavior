@@ -11,24 +11,14 @@ use birdnet_web::state::AppState;
 /// Create a test `AppState` with an in-memory database and sample data.
 fn test_state() -> AppState {
     let conn = Connection::open_in_memory().unwrap();
-    conn.execute_batch(
-        "PRAGMA journal_mode=WAL;
-         CREATE TABLE IF NOT EXISTS detections (
-            Date TEXT NOT NULL,
-            Time TEXT NOT NULL,
-            Sci_Name TEXT NOT NULL,
-            Com_Name TEXT NOT NULL,
-            Confidence REAL NOT NULL,
-            Lat REAL,
-            Lon REAL,
-            Cutoff REAL,
-            Week INTEGER,
-            Sens REAL,
-            Overlap REAL,
-            File_Name TEXT
-        );",
-    )
-    .unwrap();
+    // Apply the full migration chain — hand-coded CREATE TABLE
+    // declarations here drift the moment a migration adds a column.
+    // The same anti-pattern (caught in PR #35 against
+    // `open_or_create`, flagged again in ADR-16) means tests give
+    // false greens until something downstream tries to read the
+    // missing column. Defer to migrate() and the schema is always
+    // current.
+    birdnet_db::migration::migrate(&conn).unwrap();
 
     let records = [
         (

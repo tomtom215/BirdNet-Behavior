@@ -18,8 +18,8 @@ pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Resu
     // this write path working unchanged.
     conn.execute(
         "INSERT INTO detections \
-         (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, chunk_offset_secs) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+         (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, chunk_offset_secs, correlation_id) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             record.date,
             record.time,
@@ -34,6 +34,7 @@ pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Resu
             record.overlap,
             record.file_name,
             record.chunk_offset_secs,
+            record.correlation_id,
         ],
     )?;
     Ok(())
@@ -528,6 +529,7 @@ mod tests {
             overlap: Some(0.0),
             file_name: "test.wav",
             chunk_offset_secs: Some(0.0),
+            correlation_id: None,
         };
         insert_detection(&conn, &record).unwrap();
         assert_eq!(detection_count(&conn).unwrap(), 1);
@@ -595,5 +597,438 @@ mod tests {
         let rows = detections_by_species(&conn, "Eurasian Blackbird", 10).unwrap();
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().all(|d| d.com_name == "Eurasian Blackbird"));
+    }
+
+    // ── coverage carryover from PR #49 ─────────────────────────────────
+    //
+    // These tests cover the remaining helpers in this module so the
+    // file can be brought under cargo-mutants at `missed = 0`. Each
+    // adds one assertion per branch the surface is supposed to honour.
+
+    #[test]
+    fn detection_count_for_date_filters_by_date() {
+        let (_tmp, conn) = temp_db_with_data();
+        assert_eq!(detection_count_for_date(&conn, "2026-03-11").unwrap(), 3);
+        assert_eq!(detection_count_for_date(&conn, "2026-03-10").unwrap(), 1);
+        assert_eq!(detection_count_for_date(&conn, "2026-03-09").unwrap(), 0);
+    }
+
+    #[test]
+    fn detection_count_for_species_date_counts_per_species() {
+        let (_tmp, conn) = temp_db_with_data();
+        assert_eq!(
+            detection_count_for_species_date(&conn, "2026-03-11", "Turdus merula").unwrap(),
+            2
+        );
+        assert_eq!(
+            detection_count_for_species_date(&conn, "2026-03-11", "Erithacus rubecula").unwrap(),
+            1
+        );
+        assert_eq!(
+            detection_count_for_species_date(&conn, "2026-03-11", "Pica pica").unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn delete_detection_removes_matching_row_and_returns_true() {
+        let (_tmp, conn) = temp_db_with_data();
+        assert!(delete_detection(&conn, "2026-03-10", "18:00:00", "Parus major").unwrap());
+        assert_eq!(detection_count(&conn).unwrap(), 3);
+    }
+
+    #[test]
+    fn delete_detection_returns_false_when_no_match() {
+        let (_tmp, conn) = temp_db_with_data();
+        assert!(!delete_detection(&conn, "2026-03-10", "00:00:00", "Parus major").unwrap());
+        assert_eq!(detection_count(&conn).unwrap(), 4);
+    }
+
+    #[test]
+    fn relabel_detection_updates_both_names_and_returns_true() {
+        let (_tmp, conn) = temp_db_with_data();
+        let updated = relabel_detection(
+            &conn,
+            "2026-03-10",
+            "18:00:00",
+            "Parus major",
+            "Cyanistes caeruleus",
+            "Eurasian Blue Tit",
+        )
+        .unwrap();
+        assert!(updated);
+        let rows = detections_by_species(&conn, "Eurasian Blue Tit", 10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].sci_name, "Cyanistes caeruleus");
+    }
+
+    #[test]
+    fn relabel_detection_returns_false_when_no_match() {
+        let (_tmp, conn) = temp_db_with_data();
+        let updated = relabel_detection(
+            &conn,
+            "1900-01-01",
+            "00:00:00",
+            "Parus major",
+            "Cyanistes caeruleus",
+            "Eurasian Blue Tit",
+        )
+        .unwrap();
+        assert!(!updated);
+    }
+
+    #[test]
+    fn lock_unlock_detection_flips_is_locked() {
+        let (_tmp, conn) = temp_db_with_data();
+        assert!(!is_detection_locked(&conn, "2026-03-10", "18:00:00", "Parus major").unwrap());
+        assert!(lock_detection(&conn, "2026-03-10", "18:00:00", "Parus major").unwrap());
+        assert!(is_detection_locked(&conn, "2026-03-10", "18:00:00", "Parus major").unwrap());
+        assert!(unlock_detection(&conn, "2026-03-10", "18:00:00", "Parus major").unwrap());
+        assert!(!is_detection_locked(&conn, "2026-03-10", "18:00:00", "Parus major").unwrap());
+    }
+
+    #[test]
+    fn lock_detection_returns_false_when_no_match() {
+        let (_tmp, conn) = temp_db_with_data();
+        assert!(!lock_detection(&conn, "1900-01-01", "00:00:00", "Parus major").unwrap());
+    }
+
+    #[test]
+    fn unlock_detection_returns_false_when_no_match() {
+        let (_tmp, conn) = temp_db_with_data();
+        assert!(!unlock_detection(&conn, "1900-01-01", "00:00:00", "Parus major").unwrap());
+    }
+
+    #[test]
+    fn locked_file_names_lists_distinct_locked_files() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_or_create(tmp.path()).unwrap();
+        for (date, time, sci, com, conf, file) in [
+            (
+                "2026-03-11",
+                "06:30:00",
+                "Turdus merula",
+                "Eurasian Blackbird",
+                0.87,
+                "a.wav",
+            ),
+            (
+                "2026-03-11",
+                "06:45:00",
+                "Erithacus rubecula",
+                "European Robin",
+                0.92,
+                "a.wav",
+            ),
+            (
+                "2026-03-10",
+                "18:00:00",
+                "Parus major",
+                "Great Tit",
+                0.80,
+                "b.wav",
+            ),
+        ] {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name) VALUES (?1,?2,?3,?4,?5,?6)",
+                params![date, time, sci, com, conf, file],
+            ).unwrap();
+        }
+        // Lock two rows on `a.wav` and one on `b.wav` — locked_file_names
+        // must return both distinct file names, not duplicate `a.wav`.
+        lock_detection(&conn, "2026-03-11", "06:30:00", "Turdus merula").unwrap();
+        lock_detection(&conn, "2026-03-11", "06:45:00", "Erithacus rubecula").unwrap();
+        lock_detection(&conn, "2026-03-10", "18:00:00", "Parus major").unwrap();
+        let mut names = locked_file_names(&conn).unwrap();
+        names.sort();
+        assert_eq!(names, vec!["a.wav".to_string(), "b.wav".to_string()]);
+    }
+
+    #[test]
+    fn locked_file_names_omits_unlocked_rows() {
+        let (_tmp, conn) = temp_db_with_data();
+        // None are locked by default.
+        assert!(locked_file_names(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn species_for_date_groups_by_species_descending_by_count() {
+        let (_tmp, conn) = temp_db_with_data();
+        let rows = species_for_date(&conn, "2026-03-11").unwrap();
+        // Two Turdus merula entries, one Erithacus rubecula → Turdus
+        // merula is first.
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, "Eurasian Blackbird");
+        assert_eq!(rows[0].1, "Turdus merula");
+        assert_eq!(rows[0].2, 2);
+        assert_eq!(rows[1].2, 1);
+    }
+
+    #[test]
+    fn detection_dates_returns_distinct_descending() {
+        let (_tmp, conn) = temp_db_with_data();
+        let dates = detection_dates(&conn, 10).unwrap();
+        assert_eq!(dates, vec!["2026-03-11", "2026-03-10"]);
+    }
+
+    #[test]
+    fn detection_dates_respects_limit() {
+        let (_tmp, conn) = temp_db_with_data();
+        let dates = detection_dates(&conn, 1).unwrap();
+        assert_eq!(dates, vec!["2026-03-11"]);
+    }
+
+    #[test]
+    fn todays_detections_filters_by_date_and_search() {
+        let (_tmp, conn) = temp_db_with_data();
+        // No search → all rows for that date.
+        let rows = todays_detections(&conn, "2026-03-11", None, 10, 0).unwrap();
+        assert_eq!(rows.len(), 3);
+
+        // Include pattern (Com_Name LIKE).
+        let rows = todays_detections(&conn, "2026-03-11", Some("Robin"), 10, 0).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].com_name, "European Robin");
+
+        // Exclusion pattern (NOT LIKE).
+        let rows = todays_detections(&conn, "2026-03-11", Some("NOT Robin"), 10, 0).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| r.com_name != "European Robin"));
+    }
+
+    #[test]
+    fn todays_detections_pagination() {
+        let (_tmp, conn) = temp_db_with_data();
+        let page1 = todays_detections(&conn, "2026-03-11", None, 2, 0).unwrap();
+        let page2 = todays_detections(&conn, "2026-03-11", None, 2, 2).unwrap();
+        assert_eq!(page1.len(), 2);
+        assert_eq!(page2.len(), 1);
+        assert_ne!(page1[0].time, page2[0].time);
+    }
+
+    #[test]
+    fn todays_detections_whitespace_search_treated_as_none() {
+        let (_tmp, conn) = temp_db_with_data();
+        // A blank search term should not collapse the result set.
+        let rows = todays_detections(&conn, "2026-03-11", Some("   "), 10, 0).unwrap();
+        assert_eq!(rows.len(), 3);
+    }
+
+    #[test]
+    fn todays_detections_search_matches_sci_name_too() {
+        // The inclusion path matches either Com_Name or Sci_Name LIKE.
+        let (_tmp, conn) = temp_db_with_data();
+        let rows = todays_detections(&conn, "2026-03-11", Some("Erithacus"), 10, 0).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].sci_name, "Erithacus rubecula");
+    }
+
+    #[test]
+    fn todays_detection_count_filters_match_query_path() {
+        let (_tmp, conn) = temp_db_with_data();
+        assert_eq!(
+            todays_detection_count(&conn, "2026-03-11", None).unwrap(),
+            3
+        );
+        assert_eq!(
+            todays_detection_count(&conn, "2026-03-11", Some("Robin")).unwrap(),
+            1
+        );
+        assert_eq!(
+            todays_detection_count(&conn, "2026-03-11", Some("NOT Robin")).unwrap(),
+            2
+        );
+        assert_eq!(
+            todays_detection_count(&conn, "2026-03-11", Some("   ")).unwrap(),
+            3
+        );
+    }
+
+    #[test]
+    #[allow(clippy::items_after_statements)] // the type aliases tighten the asserter ergonomics
+    fn insert_detection_with_null_optional_fields_stores_nulls() {
+        // The DetectionRecord struct carries Option<f64>/Option<i64> so
+        // missing values become SQLite NULLs — this contract is the
+        // entire reason migration 11 + DetectionRecord exists. Pin it
+        // against the columns that are nullable (lat, lon, cutoff,
+        // week, sens, overlap). `chunk_offset_secs` is `NOT NULL
+        // DEFAULT 0.0` since migration 11, so we pass Some(0.0).
+        type OptF = Option<f64>;
+        type OptI = Option<i64>;
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_or_create(tmp.path()).unwrap();
+        let record = DetectionRecord {
+            date: "2026-03-11",
+            time: "08:30:00",
+            sci_name: "Turdus merula",
+            com_name: "Eurasian Blackbird",
+            confidence: 0.87,
+            lat: None,
+            lon: None,
+            cutoff: None,
+            week: None,
+            sensitivity: None,
+            overlap: None,
+            file_name: "test.wav",
+            chunk_offset_secs: Some(0.0),
+            correlation_id: None,
+        };
+
+        insert_detection(&conn, &record).unwrap();
+
+        // Read back: the optional fields should be SQL NULL, not the
+        // empty string that the pre-migration-11 daemon used to
+        // produce and that poisoned every typed read.
+        let cols: (OptF, OptF, OptF, OptI, OptF, OptF) = conn
+            .query_row(
+                "SELECT Lat, Lon, Cutoff, Week, Sens, Overlap FROM detections WHERE Sci_Name = ?1",
+                params!["Turdus merula"],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(cols, (None, None, None, None, None, None));
+    }
+
+    #[test]
+    fn insert_detection_chunk_offset_is_stored_in_unique_key() {
+        // Migration 11 added `chunk_offset_secs` to the UNIQUE
+        // constraint so a Magpie that calls in five chunks of one file
+        // doesn't collapse to a single row. Two rows with identical
+        // (Date, Time, Sci_Name, File_Name) but different chunk offsets
+        // must both succeed.
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_or_create(tmp.path()).unwrap();
+        let base = DetectionRecord {
+            date: "2026-05-19",
+            time: "09:00:00",
+            sci_name: "Pica pica",
+            com_name: "Eurasian Magpie",
+            confidence: 0.93,
+            lat: None,
+            lon: None,
+            cutoff: None,
+            week: Some(20),
+            sensitivity: None,
+            overlap: None,
+            file_name: "magpie.wav",
+            chunk_offset_secs: Some(0.0),
+            correlation_id: None,
+        };
+        insert_detection(&conn, &base).unwrap();
+        let chunk2 = DetectionRecord {
+            chunk_offset_secs: Some(4.5),
+            ..base.clone()
+        };
+        insert_detection(&conn, &chunk2).unwrap();
+        let chunk3 = DetectionRecord {
+            chunk_offset_secs: Some(9.0),
+            ..base.clone()
+        };
+        insert_detection(&conn, &chunk3).unwrap();
+
+        assert_eq!(detection_count(&conn).unwrap(), 3);
+    }
+
+    #[test]
+    fn recent_detections_page_pagination_terminates() {
+        // Pin that the page beyond the data is empty (boundary case
+        // that mutation testing on `LIMIT ?1 OFFSET ?2` would otherwise
+        // flip).
+        let (_tmp, conn) = temp_db_with_data();
+        let beyond = recent_detections_page(&conn, 10, 100).unwrap();
+        assert!(beyond.is_empty());
+    }
+
+    // ── correlation_id round trip (migration 12) ───────────────────────
+
+    #[test]
+    fn correlation_id_round_trips_through_insert_and_read() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_or_create(tmp.path()).unwrap();
+        let record = DetectionRecord {
+            date: "2026-05-19",
+            time: "09:00:00",
+            sci_name: "Pica pica",
+            com_name: "Eurasian Magpie",
+            confidence: 0.92,
+            lat: None,
+            lon: None,
+            cutoff: None,
+            week: Some(20),
+            sensitivity: None,
+            overlap: None,
+            file_name: "magpie.wav",
+            chunk_offset_secs: Some(0.0),
+            correlation_id: Some("e-20260519-abc123"),
+        };
+        insert_detection(&conn, &record).unwrap();
+        let rows = recent_detections(&conn, 10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].correlation_id.as_deref(), Some("e-20260519-abc123"));
+    }
+
+    #[test]
+    fn correlation_id_null_when_record_omits_it() {
+        // Quarantine-approve / BirdNET-Pi-import paths write None;
+        // migration 12 keeps the column NULL so the daemon's id-shape
+        // contract isn't forced on every code path.
+        let (_tmp, conn) = temp_db_with_data();
+        let rows = recent_detections(&conn, 10).unwrap();
+        assert!(rows.iter().all(|r| r.correlation_id.is_none()));
+    }
+
+    #[test]
+    fn correlation_id_can_be_used_to_pull_one_files_rows() {
+        // The operator-facing usage pattern: "given the id from one
+        // detection's log slice, give me every row from the same
+        // file". This must round-trip exactly.
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_or_create(tmp.path()).unwrap();
+        let cid_a = "e-A";
+        let cid_b = "e-B";
+        for (cid, offset) in [
+            (Some(cid_a), 0.0_f64),
+            (Some(cid_a), 4.5),
+            (Some(cid_a), 9.0),
+            (Some(cid_b), 0.0),
+        ] {
+            let r = DetectionRecord {
+                date: "2026-05-19",
+                time: "09:00:00",
+                sci_name: "Pica pica",
+                com_name: "Eurasian Magpie",
+                confidence: 0.9,
+                lat: None,
+                lon: None,
+                cutoff: None,
+                week: Some(20),
+                sensitivity: None,
+                overlap: None,
+                file_name: if cid == Some("e-A") { "a.wav" } else { "b.wav" },
+                chunk_offset_secs: Some(offset),
+                correlation_id: cid,
+            };
+            insert_detection(&conn, &r).unwrap();
+        }
+
+        // The dedicated index from migration 12 lets a future endpoint
+        // pull by correlation_id efficiently.
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM detections WHERE correlation_id = ?1",
+                params![cid_a],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 3);
     }
 }

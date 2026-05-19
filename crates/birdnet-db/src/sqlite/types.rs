@@ -39,6 +39,14 @@ pub struct DetectionRecord<'a> {
     /// Together with `(Date, Time, Sci_Name, File_Name)` this gives a unique
     /// key that survives chunked recordings — see migration 11.
     pub chunk_offset_secs: Option<f64>,
+    /// Correlation id stamped on every event for one audio file.
+    ///
+    /// `None` for rows that pre-date migration 12 (historical, imported
+    /// from BirdNET-Pi, or written by the quarantine-approve path that
+    /// doesn't have a daemon-generated id). When present, an operator
+    /// can grep the daemon log for this exact string to see every
+    /// decode/infer/notify line that produced this row.
+    pub correlation_id: Option<&'a str>,
 }
 
 /// A detection row read from the database.
@@ -68,6 +76,15 @@ pub struct DetectionRow {
     pub overlap: Option<f64>,
     /// Extracted audio filename.
     pub file_name: Option<String>,
+    /// Correlation id of the daemon event that produced this row.
+    ///
+    /// `None` for rows that pre-date migration 12. When present, it
+    /// uniquely identifies the per-file log slice in the daemon's
+    /// `tracing` stream so an operator can click the row in the web
+    /// UI and run `journalctl -u birdnet | grep <id>` to see the
+    /// decode/infer/notify lines that produced this detection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub correlation_id: Option<String>,
 }
 
 /// Species with detection count and average confidence.
@@ -133,9 +150,15 @@ pub(super) fn map_detection_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Det
         sens: row.get(9)?,
         overlap: row.get(10)?,
         file_name: row.get(11)?,
+        correlation_id: row.get(12)?,
     })
 }
 
 /// Columns selected in all full-row detection queries.
-pub(super) const DETECTION_COLS: &str =
-    "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name";
+///
+/// Ordering matches [`map_detection_row`] — never reorder one without the
+/// other, never drop a column from this list while the row mapper still
+/// reads at that index. PR #35 shipped a column-list / row-mapper drift
+/// bug; the explicit `correlation_id` at the end of both is the same
+/// pattern.
+pub(super) const DETECTION_COLS: &str = "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id";
