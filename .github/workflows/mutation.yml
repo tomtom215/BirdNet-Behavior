@@ -71,11 +71,17 @@ jobs:
       matrix:
         include:
           - label: validate.rs
+            # `slug` is the same as `label` with forward slashes replaced
+            # by hyphens so it can appear in artifact names (GitHub
+            # rejects `/` in artifact names — see
+            # https://docs.github.com/en/actions/using-workflows/storing-workflow-data-as-artifacts).
+            slug: validate.rs
             file: crates/birdnet-core/src/config/validate.rs
             # The validator has been mutation-clean since it was added; any
             # regression at all is a real test-coverage gap.
             max_missed: 0
           - label: inference/model.rs
+            slug: inference-model.rs
             file: crates/birdnet-core/src/inference/model.rs
             # Baseline starting point. Of the ~32 currently-surviving
             # mutants, the bulk are on `BirdNetModel` instance methods
@@ -92,6 +98,7 @@ jobs:
             # gate while existing wrapper-only mutants stay tracked.
             max_missed: 35
           - label: audio/extraction/extractor.rs
+            slug: audio-extraction-extractor.rs
             file: crates/birdnet-core/src/audio/extraction/extractor.rs
             # First-pass tests add WAV-length / pulse-offset checks for
             # the spacer arithmetic plus four `build_extraction_filename`
@@ -130,7 +137,14 @@ jobs:
         # matrix job's report stays focused. The default timeout (180 s)
         # is plenty for these focused suites; we set 120 s to surface a
         # genuinely-stuck mutant rather than waiting the full default.
+        #
+        # cargo-mutants exits 2 when any mutant survives — we don't want
+        # that to fail the step, because the per-file threshold check
+        # below is the gate that decides pass/fail. A build failure
+        # (exit 4 from cargo-mutants) still propagates, so we only
+        # swallow the specific "some mutants survived" exit code.
         run: |
+          set +e
           cargo mutants \
             --workspace \
             --package birdnet-core \
@@ -139,12 +153,18 @@ jobs:
             --timeout 120 \
             --no-shuffle \
             --json
+          status=$?
+          if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
+            echo "::error::cargo-mutants exited with status $status (not the survived-mutants exit code 2)"
+            exit "$status"
+          fi
+          exit 0
 
       - name: Upload mutants report
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: mutants-report-${{ matrix.label }}
+          name: mutants-report-${{ matrix.slug }}
           path: mutants.out
           retention-days: 14
 
@@ -178,7 +198,7 @@ jobs:
         if: github.event_name == 'pull_request' && always()
         uses: marocchino/sticky-pull-request-comment@v3
         with:
-          header: mutants-${{ matrix.label }}
+          header: mutants-${{ matrix.slug }}
           message: |
             ### 🧬 Mutation testing on `${{ matrix.file }}`
 
@@ -200,7 +220,7 @@ jobs:
             ```
             </details>
 
-            Full report: see the `mutants-report-${{ matrix.label }}` artifact on this run.
+            Full report: see the `mutants-report-${{ matrix.slug }}` artifact on this run.
 
       - name: Fail if too many mutants survived
         # Per-file threshold from the matrix above.

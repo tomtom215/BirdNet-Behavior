@@ -471,8 +471,11 @@ mod tests {
             .enumerate()
             .max_by_key(|(_, s)| s.unsigned_abs())
             .expect("samples non-empty");
-        let expected_clip_offset = 144_000_i64;
-        let drift = (idx as i64 - expected_clip_offset).abs();
+        // Use usize-symmetric difference rather than casting to i64.
+        // A signed cast on a usize > i64::MAX would wrap silently, and
+        // the value here is well-bounded by the test's clip length.
+        let expected_clip_offset: usize = 144_000;
+        let drift = idx.abs_diff(expected_clip_offset);
         assert!(
             drift <= 1,
             "pulse drifted: expected offset ~{expected_clip_offset} in clip, found at {idx} (drift {drift})"
@@ -524,9 +527,19 @@ mod tests {
     #[test]
     fn extraction_filename_format_extension_overrides() {
         // Trip the format argument so a mutant swapping it for an empty
-        // string fails an assertion.
+        // string fails an assertion. We assert against the full filename
+        // rather than a `.ends_with` to keep clippy's case-sensitive-ext
+        // lint quiet — the format argument is always lowercase here so
+        // case sensitivity isn't a concern, but the assertion is clearer
+        // anyway.
         let d = det_named("Pica pica", "Eurasian Magpie", 0.93);
-        assert!(build_extraction_filename(&d, "mp3").ends_with(".mp3"));
-        assert!(build_extraction_filename(&d, "flac").ends_with(".flac"));
+        assert_eq!(
+            build_extraction_filename(&d, "mp3"),
+            "Eurasian_Magpie-93-2026-05-19-birdnet-09:00:00.mp3"
+        );
+        assert_eq!(
+            build_extraction_filename(&d, "flac"),
+            "Eurasian_Magpie-93-2026-05-19-birdnet-09:00:00.flac"
+        );
     }
 }
