@@ -1,0 +1,35 @@
+# cargo-audit configuration.
+#
+# Kept in sync with the `[advisories]` table in `deny.toml`. cargo-deny and
+# cargo-audit are intentionally run as redundant gates against the same
+# RustSec database (so a silent misconfiguration of one is caught by the
+# other), and both need to know which transitive advisories we've already
+# triaged.
+#
+# Revisit every dependency-bump pass: when the upstream patch lands and the
+# resolver picks it up, the corresponding entry should be removed from
+# BOTH this file and deny.toml.
+
+[advisories]
+ignore = [
+    # rand 0.8 / 0.9 unsoundness with a custom global thread-local logger.
+    # We never install one; pulled in transitively via rustls / aws-lc-rs.
+    "RUSTSEC-2026-0097",
+
+    # rustls-webpki transitive via reqwest + hyper-rustls. Patch lands when
+    # those crates upgrade; tracked at the next dep-bump pass.
+    "RUSTSEC-2026-0049",
+    "RUSTSEC-2026-0098",
+    "RUSTSEC-2026-0099",
+    "RUSTSEC-2026-0104",
+
+    # aws-lc-sys via rustls-platform-verifier. Same story — awaiting
+    # upstream upgrade.
+    "RUSTSEC-2026-0044",
+    "RUSTSEC-2026-0048",
+
+    # tar via reqwest dependency chain (PAX header / unpack_in).
+    # We don't expose tar extraction to untrusted input.
+    "RUSTSEC-2026-0067",
+    "RUSTSEC-2026-0068",
+]
