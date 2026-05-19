@@ -83,7 +83,7 @@ pub(super) async fn full_backup(State(state): State<AppState>) -> axum::response
                 }
             };
 
-            let size = file.metadata().await.map(|m| m.len()).unwrap_or(0);
+            let size = file.metadata().await.map_or(0, |m| m.len());
             let stream = tokio_util::io::ReaderStream::new(file);
 
             let tmp_clone = tmp_path.clone();

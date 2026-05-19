@@ -191,6 +191,36 @@ pub const MIGRATIONS: &[Migration] = &[
         CREATE INDEX IF NOT EXISTS idx_quarantine_date ON quarantine(date);
         CREATE INDEX IF NOT EXISTS idx_quarantine_sci_name ON quarantine(sci_name);",
     },
+    Migration {
+        version: 11,
+        description: "Add chunk_offset_secs and relax detections UNIQUE so chunks per file keep all hits",
+        // Migration 5 introduced UNIQUE(Date, Time, Sci_Name). It was meant
+        // to deduplicate identical detections but had the unintended effect
+        // of collapsing every chunk of one recording into a single row: a
+        // Eurasian Magpie that calls in chunks 0–4.5 s, 4.5–9 s, 9–13.5 s,
+        // … was logged exactly once because all chunks share the same
+        // `Time` parsed from the filename. The station then only saw the
+        // FIRST chunk's confidence (usually the lowest) and lost every
+        // later — often stronger — detection of the same species in the
+        // same file.
+        //
+        // Fix: add a `chunk_offset_secs REAL NOT NULL DEFAULT 0.0` column
+        // that records the start time of the chunk within its source file,
+        // and include it in the unique key alongside the existing fields.
+        // The NOT NULL + DEFAULT means SQLite's NULL-is-distinct UNIQUE
+        // semantics don't accidentally let through duplicates from code
+        // paths that haven't been updated to populate the column (e.g.
+        // the quarantine → approve path, which keeps writing with offset
+        // 0). Historical rows imported from BirdNET-Pi also collapse to
+        // offset 0, which matches their semantics (one detection per
+        // (date, time, species) before chunking existed).
+        up_sql: "ALTER TABLE detections ADD COLUMN chunk_offset_secs REAL NOT NULL DEFAULT 0.0;
+                 DROP INDEX IF EXISTS idx_detections_unique;
+                 CREATE UNIQUE INDEX IF NOT EXISTS idx_detections_unique
+                     ON detections(Date, Time, Sci_Name, File_Name, chunk_offset_secs);
+                 CREATE INDEX IF NOT EXISTS idx_detections_chunk_offset
+                     ON detections(chunk_offset_secs);",
+    },
 ];
 
 /// Ensure the `schema_version` tracking table exists.

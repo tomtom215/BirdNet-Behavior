@@ -10,8 +10,11 @@
 mod capture;
 mod cli;
 mod daemon;
+mod doctor;
 mod helpers;
 mod integrations;
+mod maintenance;
+mod sd_notify;
 mod weekly_report;
 
 use clap::Parser;
@@ -34,9 +37,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG_FILTER));
     let (filter_layer, reload_handle) = reload::Layer::new(env_filter);
+    // Send logs to stderr (Unix convention) so stdout stays clean for
+    // structured output like `--doctor-json`.
     tracing_subscriber::registry()
         .with(filter_layer)
-        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
         .init();
 
     // Spawn SIGHUP handler for runtime log level changes.
@@ -85,6 +90,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if cli.backup_db {
         return run_backup(config.as_ref());
+    }
+
+    // Preflight diagnostic (run and exit with status-derived exit code).
+    if cli.doctor || cli.doctor_json {
+        let format = if cli.doctor_json {
+            doctor::Format::Json
+        } else {
+            doctor::Format::Text
+        };
+        let code = doctor::run_with_format(&cli, config.as_ref(), format);
+        std::process::exit(code);
     }
 
     // Startup database resilience check.
@@ -236,7 +252,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    // Periodic database maintenance (VACUUM, integrity check, backup rotation).
+    // No-op when the DB does not exist yet.
+    maintenance::spawn_database_maintenance(db_path.clone(), backup_dir.clone());
+
     let listener = tokio::net::TcpListener::bind(addr).await?;
+
+    // The web server is bound — notify systemd that startup is complete and
+    // begin pinging the watchdog. If we are not running under systemd these
+    // are no-ops.
+    sd_notify::ready();
+    sd_notify::spawn_watchdog_pinger();
+
     // Use `into_make_service_with_connect_info` so the per-IP rate limiter
     // can read the client socket address from request extensions.
     axum::serve(
@@ -246,6 +273,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .with_graceful_shutdown(shutdown_signal())
     .await?;
 
+    sd_notify::stopping();
     tracing::info!("BirdNet-Behavior stopped");
     Ok(())
 }

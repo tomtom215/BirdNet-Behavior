@@ -146,6 +146,38 @@ download() {
 }
 
 # ---------------------------------------------------------------------------
+# Large-file download helper — resumes on interrupt, shows a progress bar
+# so the operator sees something is happening during the ~541 MB model pull.
+#
+#   download_large URL DEST [HUMAN_NAME]
+#
+# Behaviour:
+#   - If DEST already exists, resume from its current byte offset (-C -).
+#   - Print a progress bar to the terminal (-#).
+#   - Up to 5 automatic retries with exponential backoff for transient errors.
+#   - Treat HTTP errors as failures (-f).
+#   - Leave the partial file in place on failure so the next run can resume.
+# ---------------------------------------------------------------------------
+download_large() {
+    local url="$1"
+    local dest="$2"
+    local name="${3:-${dest##*/}}"
+    info "  Fetching ${name}…"
+    if command -v curl &>/dev/null; then
+        # -C - : resume; -# : progress bar; --retry-all-errors handles flaky CDNs.
+        curl -fL -C - -# \
+            --retry 5 --retry-delay 2 --retry-all-errors --retry-max-time 600 \
+            --connect-timeout 30 \
+            -o "${dest}" "${url}"
+    elif command -v wget &>/dev/null; then
+        # -c : resume; --show-progress to stderr; tolerate transient failures.
+        wget -c --tries=5 --waitretry=2 --timeout=30 --show-progress -O "${dest}" "${url}"
+    else
+        fatal "Neither curl nor wget is available. Please install one and retry."
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Resolve version to install
 # ---------------------------------------------------------------------------
 
@@ -249,18 +281,26 @@ download_model() {
 
     install -d -m 0755 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${MODEL_DIR}"
 
-    # Model (Zenodo API /content endpoint handles + in filenames correctly)
+    # Model (Zenodo API /content endpoint handles + in filenames correctly).
+    # Uses download_large so a dropped connection picks up where it left off
+    # on the next run instead of restarting from 0 MB.
     if [ ! -f "${model_dest}" ]; then
-        download "${ZENODO_API}/${MODEL_FILE}/content" "${model_dest}" \
-            || fatal "Model download failed. Check your internet connection and retry."
+        if ! download_large "${ZENODO_API}/${MODEL_FILE}/content" "${model_dest}" "BirdNET+ V3.0 model (~541 MB)"; then
+            warn "Model download was interrupted; the partial file is kept at:"
+            warn "  ${model_dest}"
+            warn "Re-run this installer to resume from where it stopped."
+            warn "Common causes: no internet connection, Zenodo temporarily down, or disk full."
+            fatal "Model download failed. Check the cause above and retry."
+        fi
         chown "${SERVICE_USER}:${SERVICE_USER}" "${model_dest}"
         success "Model downloaded to ${model_dest}"
     fi
 
-    # Labels
+    # Labels (small file — no resume needed, but keep the consistent helper).
     if [ ! -f "${labels_dest}" ]; then
-        download "${ZENODO_API}/${LABELS_FILE}/content" "${labels_dest}" \
-            || fatal "Labels download failed."
+        if ! download "${ZENODO_API}/${LABELS_FILE}/content" "${labels_dest}"; then
+            fatal "Labels download failed. Check your internet connection and retry."
+        fi
         chown "${SERVICE_USER}:${SERVICE_USER}" "${labels_dest}"
         success "Labels downloaded to ${labels_dest}"
     fi
@@ -384,26 +424,103 @@ install_service() {
 [Unit]
 Description=BirdNet-Behavior bird detection and analytics
 Documentation=https://github.com/${REPO}
-After=network.target sound.target
-Wants=network.target
+# Wait for the network stack AND sound subsystem before launching. The
+# detection daemon needs both; running before them just causes an
+# avoidable restart loop on slow-booting hardware (USB enumeration on Pi).
+After=network-online.target sound.target time-sync.target
+Wants=network-online.target
+# Don't enter a tight restart loop. If 5 restarts happen inside 5 min the
+# unit is marked failed and stays down for operator review (visible in
+# the web UI's health page once the service comes back).
 StartLimitBurst=5
 StartLimitIntervalSec=300
 
 [Service]
-Type=simple
+# Type=notify pairs with sd_notify in src/sd_notify.rs:
+#   - READY=1 when the web server has bound its socket
+#   - WATCHDOG=1 periodic pings keep the watchdog happy
+#   - STOPPING=1 on graceful shutdown
+Type=notify
+NotifyAccess=main
 User=${SERVICE_USER}
+
+# Preflight: run the doctor before starting the main service so a broken
+# install fails fast with an actionable report in the journal, rather than
+# entering a restart loop that fills the disk with logs.
+# Exit 0 (pass) or 1 (warnings only) are both accepted — only exit 2
+# (errors that will prevent operation) keeps the service from starting.
+ExecStartPre=/bin/sh -c '${INSTALL_DIR}/${BINARY_NAME} --doctor --config ${CONFIG_FILE} || [ \$? -le 1 ]'
 ExecStart=${INSTALL_DIR}/${BINARY_NAME} --config ${CONFIG_FILE} --listen ${LISTEN_ADDR} --watch-dir ${STREAM_DIR} --image-cache-dir ${IMAGE_CACHE_DIR}
-# Always restart — covers panics (SIGABRT with panic=abort), OOM kills, and errors.
+
+# Restart policy. panic=abort means panics show up as SIGABRT exits;
+# Restart=always covers panics, OOM kills, and any non-zero exit.
 Restart=always
 RestartSec=10
-# systemd watchdog: process must notify within this interval or gets killed + restarted.
+# Generous startup budget so a first-run model download / DB migration
+# doesn't trip the watchdog while it is still legitimately working.
+TimeoutStartSec=900
+# Allow graceful shutdown to drain WAL and finish outstanding HTTP
+# requests; SIGTERM is the friendly signal, SIGKILL is the fallback.
+TimeoutStopSec=30
+KillSignal=SIGTERM
+KillMode=mixed
+SendSIGKILL=yes
+
+# Watchdog: src/sd_notify.rs pings every WatchdogSec/2.
+# 120 s window is plenty: a healthy daemon pings every ~60 s.
 WatchdogSec=120
-# Hard memory ceiling — prevents OOM-killing other processes on low-RAM Pis.
+
+# Resource ceilings. Tuned conservatively so a runaway process can't
+# take down the whole Pi.
 MemoryMax=512M
-# Allow access to audio devices and files.
-SupplementaryGroups=audio
-# Limit resource usage.
+MemoryHigh=384M
+TasksMax=512
 LimitNOFILE=65536
+LimitNPROC=256
+# Recover gracefully under memory pressure.
+OOMScoreAdjust=200
+OOMPolicy=stop
+
+# ── Filesystem isolation ─────────────────────────────────────────────────
+# Read-only access to the rest of the filesystem; explicit write paths.
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=${DATA_DIR} ${CONFIG_DIR} ${STREAM_DIR} /run /var/log
+PrivateTmp=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+# Block-listed kernel surfaces; we don't need them.
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+NoNewPrivileges=yes
+SystemCallArchitectures=native
+# Permit only POSIX, file I/O, networking, and signals — explicitly
+# excludes things like raw_io / module_load / ptrace / mount / reboot.
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @mount @debug @cpu-emulation @obsolete @reboot @swap @raw-io @clock @module
+
+# Audio access — must keep these capability sets / device mounts.
+SupplementaryGroups=audio
+DeviceAllow=/dev/snd rw
+DevicePolicy=closed
+
+# ── Logging ──────────────────────────────────────────────────────────────
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=birdnet-behavior
+# Cap journal volume so a chatty failure mode can't exhaust the disk on
+# a Pi with a small SD card.
+LogRateLimitIntervalSec=30
+LogRateLimitBurst=1000
 
 [Install]
 WantedBy=multi-user.target
@@ -411,7 +528,7 @@ EOF
 
     systemctl daemon-reload
     systemctl enable birdnet-behavior.service
-    success "Service installed and enabled."
+    success "Service installed and enabled (Type=notify, hardened, watchdog active)."
 }
 
 # ---------------------------------------------------------------------------

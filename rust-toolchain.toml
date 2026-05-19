@@ -1,0 +1,12 @@
+# Reproducible Rust toolchain for BirdNet-Behavior.
+#
+# Locking the channel and required components guarantees that local builds,
+# CI builds, and release builds all use the same compiler surface. Cargo
+# auto-installs the toolchain via rustup on first use.
+#
+# Bump in lockstep with `rust-version` in Cargo.toml and the MSRV job in
+# .github/workflows/ci.yml whenever the MSRV is raised.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy", "rust-src"]
+profile = "minimal"

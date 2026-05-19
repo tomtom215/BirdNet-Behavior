@@ -1,0 +1,47 @@
+# Clippy configuration for BirdNet-Behavior.
+#
+# Tightens the default thresholds enforced by the pedantic and nursery lint
+# groups. These values are deliberately conservative: code that exceeds them
+# is almost always easier to read after extraction. Raising any threshold
+# should be justified in the PR description.
+
+# Hold all crates to the published MSRV — guards against accidentally using
+# APIs that would break the MSRV CI job.
+msrv = "1.88"
+
+# Complexity budgets. Functions/types past these limits should be refactored.
+cognitive-complexity-threshold = 25
+type-complexity-threshold = 250
+too-many-arguments-threshold = 8
+too-many-lines-threshold = 200
+single-char-binding-names-threshold = 4
+trivial-copy-size-limit = 32
+
+# Documentation: extra identifiers that must not trigger doc_markdown.
+# Add project-specific proper nouns / abbreviations here as they appear so
+# rustdoc lint stays green without weakening the rule.
+doc-valid-idents = [
+    "BirdNET", "BirdNET-Pi", "BirdNet-Behavior", "BirdWeather",
+    "DuckDB", "SQLite", "PostgreSQL",
+    "ONNX", "WAV", "FLAC", "MP3", "OGG", "PCM", "RTSP", "ALSA",
+    "PulseAudio", "PipeWire", "ffmpeg", "arecord", "Zenodo",
+    "HTMX", "HTTP", "HTTPS", "REST", "WebSocket", "JSON", "TLS", "mTLS",
+    "MQTT", "IoT", "HomeAssistant", "Mosquitto", "NodeRED",
+    "Linux", "macOS", "Raspberry", "Pi", "ARM", "aarch64", "x86_64",
+    "Avahi", "mDNS", "ZRAM",
+    "Apprise", "SMTP", "OAuth", "TOTP",
+    "eBird", "AllAboutBirds", "iNaturalist", "Cornell",
+    "Mel", "FFT", "STFT", "SNR", "ML", "FP16", "FP32",
+    "..",
+]
+
+# Generic placeholder names that should never make it into the codebase.
+# `tmp` is intentionally NOT on this list: it is widely used as a legitimate
+# variable name for short-lived intermediates and banning it would cause a
+# huge cleanup churn for no real readability gain.
+disallowed-names = ["foo", "bar", "baz", "qux", "TODO"]
+allow-expect-in-tests = true
+allow-unwrap-in-tests = true
+allow-panic-in-tests = true
+allow-print-in-tests = true
+allow-dbg-in-tests = false

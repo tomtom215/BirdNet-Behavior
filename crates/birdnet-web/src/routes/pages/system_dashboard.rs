@@ -144,7 +144,7 @@ async fn sys_disk_partial(State(state): State<AppState>) -> impl axum::response:
         let dir_str = dir.to_string_lossy().to_string();
 
         // Use statvfs via std::fs metadata as a proxy — count directory size
-        let db_size = std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0);
+        let db_size = std::fs::metadata(&db_path).map_or(0, |m| m.len());
         (dir_str, db_size)
     })
     .await;
@@ -241,17 +241,15 @@ async fn sys_uptime_partial(State(_state): State<AppState>) -> impl axum::respon
 async fn sys_audio_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {
     let rec_dir = state.recording_dir();
     let result = tokio::task::spawn_blocking(move || {
-        let count = std::fs::read_dir(&rec_dir)
-            .map(|rd| {
-                rd.filter_map(Result::ok)
-                    .filter(|e| {
-                        e.path()
-                            .extension()
-                            .is_some_and(|ext| ext == "wav" || ext == "flac" || ext == "mp3")
-                    })
-                    .count()
-            })
-            .unwrap_or(0);
+        let count = std::fs::read_dir(&rec_dir).map_or(0, |rd| {
+            rd.filter_map(Result::ok)
+                .filter(|e| {
+                    e.path()
+                        .extension()
+                        .is_some_and(|ext| ext == "wav" || ext == "flac" || ext == "mp3")
+                })
+                .count()
+        });
         let dir_str = rec_dir.to_string_lossy().to_string();
         (dir_str, count)
     })

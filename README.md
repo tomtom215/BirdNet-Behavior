@@ -581,6 +581,33 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## Troubleshooting
 
+> Looking for a deeper guide? See [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md)
+> for symptom-organised, step-by-step recipes.
+
+**First step for any problem — run the built-in diagnostic:**
+```bash
+# Bare metal
+sudo -u birdnet birdnet-behavior --doctor
+
+# Docker
+docker compose exec birdnet birdnet-behavior --doctor
+```
+
+The diagnostic prints a one-screen report covering CPU, configuration values,
+audio source reachability, model file, database integrity, disk space, tool
+dependencies, and network. Every problem comes with a concrete suggested fix.
+Exit code: `0` = all good, `1` = warnings only, `2` = at least one error.
+
+For monitoring scripts (Nagios / Zabbix / Home Assistant command sensor /
+Prometheus textfile collector) the same checks are available as a single
+line of JSON:
+
+```bash
+birdnet-behavior --doctor-json | jq .
+# {"summary":{"passed":N,"warnings":N,"errors":N,"skipped":N,"exit_code":N},
+#  "checks":[{"status":"pass|warn|fail|skip","name":"...","message":"...","remediation":"..."|null}, ...]}
+```
+
 **Service won't start:**
 ```bash
 sudo journalctl -u birdnet-behavior -f

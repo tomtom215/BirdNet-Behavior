@@ -1,0 +1,22 @@
+
+BirdNet-Behavior preflight report
+=================================
+
+[ PASS ] CPU cores — 4 cores available for audio + inference
+[ PASS ] Temp directory — /tmp is writable
+[ PASS ] Configuration file — loaded from /etc/birdnet/birdnet.conf
+[ FAIL ] Config: LATITUDE — latitude 200 is outside the valid range -90.0 to 90.0
+         → use decimal degrees, e.g. LATITUDE=42.3601 for Boston, MA
+[ FAIL ] Config: AUDIO_FORMAT — AUDIO_FORMAT="aiff" is not supported
+         → use "wav", "mp3", "flac", or "ogg" (non-WAV formats need ffmpeg or sox)
+[ FAIL ] Web listen address — "not-an-address" is not a valid socket address: invalid socket address syntax
+         → use the form HOST:PORT, e.g. 127.0.0.1:8502 or 0.0.0.0:8502
+[ PASS ] Database directory — /var/lib/birdnet is writable
+[ SKIP ] Database integrity — no database file yet — will be created on first run
+[ WARN ] Audio source — no audio source configured (no live detections will be produced)
+         → set one of: --alsa-device, --pipewire-device, --rtsp-url, --rtsp-urls, or the equivalent ALSA_CARD / RTSP_URL / PIPEWIRE_DEVICE config keys
+[ PASS ] Disk space — 120 GiB free on the volume containing /
+
+Summary: 5 passed, 1 warning(s), 3 error(s), 1 skipped.
+Status:  NOT READY — fix the errors above before starting the detection daemon.
+

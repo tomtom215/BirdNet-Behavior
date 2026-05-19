@@ -45,30 +45,53 @@ impl Extractor {
         source_file: &Path,
         detection: &Detection,
     ) -> Result<PathBuf, ExtractionError> {
-        // 1. Calculate safe extraction boundaries (matches BirdNET-Pi logic).
+        // 1. Decode first so we know the actual audio length. Without this,
+        //    safe_stop was clamped to the configured `recording_length`
+        //    (default 15 s), and any detection beyond that window produced
+        //    start_sample > stop_sample → "invalid sample range" with the
+        //    range inverted.
+        let audio = decode_file(source_file)?;
+        if audio.samples.is_empty() {
+            return Err(ExtractionError::Decode(format!(
+                "decoded audio is empty: {}",
+                source_file.display()
+            )));
+        }
+        let actual_duration_secs = audio.samples.len() as f32 / audio.sample_rate as f32;
+
+        // 2. Calculate safe extraction boundaries against the file's real
+        //    duration, not the operator-configured recording length.
         let spacer = (self.config.extraction_length - 3.0) / 2.0;
-        let safe_start = (detection.start - spacer).max(0.0);
-        let safe_stop = (detection.stop + spacer).min(self.config.recording_length);
+        let safe_start = (detection.start - spacer)
+            .max(0.0)
+            .min(actual_duration_secs);
+        let safe_stop = (detection.stop + spacer)
+            .max(safe_start)
+            .min(actual_duration_secs);
 
         tracing::debug!(
             species = %detection.common_name,
             safe_start,
             safe_stop,
+            actual_duration_secs,
+            configured_recording_length = self.config.recording_length,
             "extracting detection clip"
         );
 
-        // 2. Decode the source audio file.
-        let audio = decode_file(source_file)?;
-
-        // 3. Extract the relevant samples.
+        // 3. Extract the relevant samples. The clamping above guarantees
+        //    0 ≤ start ≤ stop ≤ samples.len(), but we re-check here so the
+        //    invariant is enforced at the slicing boundary too.
         let start_sample = (safe_start * audio.sample_rate as f32) as usize;
         let stop_sample =
             ((safe_stop * audio.sample_rate as f32) as usize).min(audio.samples.len());
 
-        if start_sample >= stop_sample || start_sample >= audio.samples.len() {
+        if start_sample >= stop_sample {
             return Err(ExtractionError::Decode(format!(
-                "invalid sample range: {start_sample}..{stop_sample} (total {})",
-                audio.samples.len()
+                "no usable audio range for detection at {start_sample}..{stop_sample} samples \
+                 (file has {} samples, detection at {:.2}s-{:.2}s)",
+                audio.samples.len(),
+                detection.start,
+                detection.stop
             )));
         }
 
@@ -199,4 +222,130 @@ pub(super) fn build_extraction_filename(detection: &Detection, format: &str) -> 
         .unwrap_or_default();
 
     format!("{name_safe}-{conf_pct}-{date}-birdnet-{rtsp_part}{time}.{format}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::extraction::{AudioFormat, ExtractionConfig};
+    use hound::{SampleFormat, WavSpec, WavWriter};
+
+    fn write_silent_wav(path: &Path, secs: f32, sample_rate: u32) {
+        let spec = WavSpec {
+            channels: 1,
+            sample_rate,
+            bits_per_sample: 16,
+            sample_format: SampleFormat::Int,
+        };
+        let mut writer = WavWriter::create(path, spec).expect("create wav");
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss
+        )]
+        let n = (secs * sample_rate as f32) as u32;
+        for _ in 0..n {
+            writer.write_sample(0_i16).expect("write");
+        }
+        writer.finalize().expect("finalize");
+    }
+
+    fn det(start: f32, stop: f32) -> Detection {
+        Detection {
+            date: "2026-05-19".into(),
+            time: "09:00:00".into(),
+            scientific_name: "Pica pica".into(),
+            common_name: "Eurasian Magpie".into(),
+            confidence: 0.85,
+            start,
+            stop,
+            week: 20,
+            file_name_extr: None,
+        }
+    }
+
+    /// Regression: a detection past the configured `recording_length` used to
+    /// compute `start_sample > stop_sample` and fail with "invalid sample
+    /// range". After the fix the clamp uses the *actual* decoded length.
+    #[test]
+    fn extraction_clamps_to_actual_audio_length_not_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("2026-05-19-birdnet-09:00:00.wav");
+        write_silent_wav(&src, 30.0, 48_000);
+
+        let cfg = ExtractionConfig {
+            output_dir: tmp.path().join("out"),
+            audio_format: "wav".into(),
+            recording_length: 15.0, // operator-configured, deliberately < file
+            extraction_length: 6.0,
+            target_format: AudioFormat::Wav,
+            freq_shift_hz: 0,
+        };
+        let extractor = Extractor::new(cfg);
+
+        // Detection at 25s — past the 15s configured length but well inside
+        // the 30s real audio. Old code: error. New code: success.
+        let out = extractor
+            .extract_detection(&src, &det(25.0, 28.0))
+            .expect("extraction should succeed within the real file length");
+        assert!(out.exists());
+    }
+
+    /// Empty-audio guard: a zero-sample WAV must produce a clear error,
+    /// not a panic on `..` slicing.
+    #[test]
+    fn extraction_rejects_empty_audio_with_clear_message() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("2026-05-19-birdnet-09:00:00.wav");
+        write_silent_wav(&src, 0.0, 48_000);
+
+        let cfg = ExtractionConfig {
+            output_dir: tmp.path().join("out"),
+            audio_format: "wav".into(),
+            recording_length: 15.0,
+            extraction_length: 6.0,
+            target_format: AudioFormat::Wav,
+            freq_shift_hz: 0,
+        };
+        let extractor = Extractor::new(cfg);
+
+        let err = extractor
+            .extract_detection(&src, &det(0.0, 3.0))
+            .expect_err("empty audio should fail");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("empty") || msg.contains("no usable audio range"),
+            "error should mention empty audio, got: {msg}"
+        );
+    }
+
+    /// A detection that lies entirely past the end of the file should fail
+    /// with a clear message — never with "start > stop" range inversion.
+    #[test]
+    fn extraction_past_end_of_file_fails_cleanly() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("2026-05-19-birdnet-09:00:00.wav");
+        write_silent_wav(&src, 5.0, 48_000);
+
+        let cfg = ExtractionConfig {
+            output_dir: tmp.path().join("out"),
+            audio_format: "wav".into(),
+            recording_length: 15.0,
+            extraction_length: 6.0,
+            target_format: AudioFormat::Wav,
+            freq_shift_hz: 0,
+        };
+        let extractor = Extractor::new(cfg);
+
+        // Detection start past EOF: should clamp to file end, leaving an
+        // empty window → clean error rather than start>stop.
+        let err = extractor
+            .extract_detection(&src, &det(20.0, 23.0))
+            .expect_err("detection past EOF should fail");
+        let msg = format!("{err}");
+        assert!(
+            !msg.contains("invalid sample range") || msg.contains("no usable audio range"),
+            "error message changed shape; got: {msg}"
+        );
+    }
 }

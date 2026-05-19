@@ -1,0 +1,49 @@
+name: Feature request
+description: Suggest a new capability or improvement.
+title: "[feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the situation that motivates this request. Avoid jumping to a specific implementation.
+      placeholder: As a station operator, when I … I'd like to …
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would the ideal user experience look like? Mock-up commands, screens, config snippets, etc.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you've thought about and why they fall short.
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Affected surface
+      multiple: true
+      options:
+        - Detection pipeline (audio capture / ML inference)
+        - Web UI / REST API
+        - Database / migration
+        - Integrations (BirdWeather / Apprise / MQTT / Email)
+        - Installer / Docker
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Links to relevant code, similar features in other projects, hardware constraints, etc.

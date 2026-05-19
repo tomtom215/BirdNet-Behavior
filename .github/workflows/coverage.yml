@@ -1,0 +1,133 @@
+# Code coverage with `cargo-llvm-cov`.
+#
+# Runs on PRs and on pushes to the default branch. The HTML report is
+# uploaded as a workflow artifact (always available); a summary comment is
+# posted on PRs so the reviewer can see line/branch coverage at a glance.
+#
+# Codecov upload is opt-in via the `CODECOV_TOKEN` repo secret. If the
+# secret is missing the upload step is skipped silently — coverage still
+# runs and the artifact still uploads.
+#
+# Trade-off: the coverage build pulls every dependency and instruments
+# every workspace crate, so it adds ~5 min to PR CI. Worth it for the
+# regression-risk visibility.
+
+name: Coverage
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  llvm-cov:
+    name: cargo-llvm-cov
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-coverage-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-coverage-
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Run coverage (workspace lib + bins; skip integration tests)
+        # `--lib --bins` only — integration tests under `tests/` link a fresh
+        # test binary and need libonnxruntime.so to be alongside it. Under
+        # llvm-cov, cargo writes binaries into `target/llvm-cov-target/`
+        # instead of `target/debug/`, so the `copy-dylibs` step the `ort`
+        # build script runs ends up in the wrong directory and the test
+        # binaries fail to load. Unit tests inside library crates aren't
+        # affected because they're statically linked.
+        # The contract gates that actually exercise the integration tests
+        # are `cargo test --workspace --tests` in the main CI workflow and
+        # the doctor smoke test — coverage is a measurement, not a gate.
+        run: |
+          cargo llvm-cov --workspace --lib --bins --no-fail-fast \
+            --lcov --output-path lcov.info \
+            --ignore-filename-regex '(crates/birdnet-migrate|crates/birdnet-behavioral|tests/)'
+
+      - name: Generate HTML report
+        run: |
+          cargo llvm-cov report --html \
+            --ignore-filename-regex '(crates/birdnet-migrate|crates/birdnet-behavioral|tests/)'
+
+      - name: Compute summary
+        id: summary
+        run: |
+          # `report --summary-only` prints a table; capture it for the PR comment.
+          summary="$(cargo llvm-cov report --summary-only \
+            --ignore-filename-regex '(crates/birdnet-migrate|crates/birdnet-behavioral|tests/)')"
+          {
+            echo 'summary<<COVERAGE_EOF'
+            echo "$summary"
+            echo 'COVERAGE_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload HTML report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: target/llvm-cov/html
+          retention-days: 14
+
+      - name: Upload lcov artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: lcov.info
+          retention-days: 14
+
+      - name: Comment summary on PR
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: coverage
+          message: |
+            ### 📊 Coverage report
+
+            ```
+            ${{ steps.summary.outputs.summary }}
+            ```
+
+            Full HTML report: see the `coverage-html` artifact on this run.
+
+      - name: Upload to Codecov (opt-in)
+        if: env.CODECOV_TOKEN != ''
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}

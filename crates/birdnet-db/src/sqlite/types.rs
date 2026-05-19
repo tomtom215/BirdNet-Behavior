@@ -1,6 +1,12 @@
 //! Row types shared across `SQLite` query modules.
 
 /// A detection record for database insertion.
+///
+/// Numeric fields are `Option<f64>` / `Option<i64>` so missing values
+/// land in SQLite as `NULL` rather than the empty-string TEXT that
+/// would silently corrupt the column type (the schema declares these
+/// columns as `REAL` / `INTEGER`). Storing them as TEXT used to make
+/// every subsequent read fail with `Invalid column type Text at index N`.
 #[derive(Debug, Clone)]
 pub struct DetectionRecord<'a> {
     /// Detection date (YYYY-MM-DD).
@@ -13,20 +19,26 @@ pub struct DetectionRecord<'a> {
     pub com_name: &'a str,
     /// Confidence score.
     pub confidence: f64,
-    /// Latitude.
-    pub lat: &'a str,
-    /// Longitude.
-    pub lon: &'a str,
-    /// Confidence cutoff threshold.
-    pub cutoff: &'a str,
-    /// ISO week number.
-    pub week: &'a str,
-    /// Sensitivity setting.
-    pub sensitivity: &'a str,
-    /// Overlap setting.
-    pub overlap: &'a str,
-    /// Extracted audio filename.
+    /// Latitude (decimal degrees) — `None` when no station coords configured.
+    pub lat: Option<f64>,
+    /// Longitude (decimal degrees) — `None` when no station coords configured.
+    pub lon: Option<f64>,
+    /// Confidence cutoff threshold applied at inference time.
+    pub cutoff: Option<f64>,
+    /// ISO week number (1–53).
+    pub week: Option<i64>,
+    /// Sensitivity setting (typically 0.5–1.5).
+    pub sensitivity: Option<f64>,
+    /// Overlap setting (typically 0.0–2.9 seconds).
+    pub overlap: Option<f64>,
+    /// Extracted audio filename, relative to the recordings dir.
     pub file_name: &'a str,
+    /// Start offset of the chunk within the source file, in seconds. `None`
+    /// when the row pre-dates migration 11 (e.g. imported BirdNET-Pi data).
+    ///
+    /// Together with `(Date, Time, Sci_Name, File_Name)` this gives a unique
+    /// key that survives chunked recordings — see migration 11.
+    pub chunk_offset_secs: Option<f64>,
 }
 
 /// A detection row read from the database.

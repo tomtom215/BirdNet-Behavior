@@ -135,11 +135,14 @@ mod tests {
                 Confidence REAL, Lat REAL, Lon REAL, Cutoff REAL,
                 Week INTEGER, Sens REAL, Overlap REAL, File_Name TEXT
             );
-            INSERT INTO detections VALUES
-              (DATE('now', '-7 days'),'07:00:00','A','Robin',0.9,0,0,0,0,0,0,''),
-              (DATE('now', '-7 days'),'07:30:00','A','Robin',0.8,0,0,0,0,0,0,''),
-              (DATE('now', '-7 days'),'08:00:00','B','Wren', 0.7,0,0,0,0,0,0,''),
-              (DATE('now', '-6 days'),'07:00:00','A','Robin',0.9,0,0,0,0,0,0,'');",
+            INSERT INTO detections
+              (Date, Time, Sci_Name, Com_Name, Confidence,
+               Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name)
+            VALUES
+              (DATE('now', '-7 days'),'07:00:00','A','Robin',0.9, NULL,NULL,NULL,NULL,NULL,NULL,''),
+              (DATE('now', '-7 days'),'07:30:00','A','Robin',0.8, NULL,NULL,NULL,NULL,NULL,NULL,''),
+              (DATE('now', '-7 days'),'08:00:00','B','Wren', 0.7, NULL,NULL,NULL,NULL,NULL,NULL,''),
+              (DATE('now', '-6 days'),'07:00:00','A','Robin',0.9, NULL,NULL,NULL,NULL,NULL,NULL,'');",
         )
         .unwrap();
         conn

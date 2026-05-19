@@ -1,0 +1,8 @@
+
+BirdNet-Behavior preflight report
+=================================
+
+
+Summary: 0 passed, 0 warning(s), 0 error(s), 0 skipped.
+Status:  READY — start the daemon with `birdnet-behavior`.
+

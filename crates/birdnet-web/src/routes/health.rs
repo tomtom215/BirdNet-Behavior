@@ -117,8 +117,7 @@ fn get_process_uptime() -> u64 {
     // Fallback: compute from build-time epoch (less accurate).
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// Get process RSS and CPU count.

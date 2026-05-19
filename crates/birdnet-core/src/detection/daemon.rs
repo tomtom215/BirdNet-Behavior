@@ -375,6 +375,24 @@ pub fn run_daemon(
         pipeline_config.raw_audio_input = raw_mode;
     }
 
+    // Adopt the model's recommended chunk length when it differs from the
+    // pipeline default. This matters most for V3.0 preview3 (dynamic input
+    // shape): with 3.0 s × 32 kHz = 96 000 samples the Magpie reference
+    // confidence on the bundled WAV is ~0.52, but at 4.5 s × 32 kHz =
+    // 144 000 samples it rises to ~0.72. The model accepts variable length
+    // so this is purely a per-chunk accuracy tuning. Fixed-shape V2.4 keeps
+    // its trained 3.0 s window.
+    let model_chunk_secs = model.recommended_chunk_secs();
+    let configured_chunk_secs = pipeline_config.chunk_duration_secs;
+    if (model_chunk_secs - configured_chunk_secs).abs() > 0.01 {
+        tracing::info!(
+            configured_chunk_secs = configured_chunk_secs,
+            model_chunk_secs,
+            "adjusting pipeline chunk duration to match model recommendation"
+        );
+        pipeline_config.chunk_duration_secs = model_chunk_secs;
+    }
+
     // Load species filter (metadata model)
     let mut species_filter = config.metadata_model_path.as_ref().map_or_else(
         || SpeciesFilter::new_passthrough(config.species_filter.clone()),
@@ -406,8 +424,11 @@ pub fn run_daemon(
     // Create stop channel
     let (stop_tx, stop_rx) = mpsc::channel();
 
-    // Start file watcher
-    let (_watcher, file_rx) =
+    // Start file watcher. The `RecommendedWatcher` MUST live for the
+    // lifetime of the spawned thread — dropping it stops delivery and
+    // closes the channel. Bound to a name that the closure captures so
+    // `move ||` takes ownership and keeps it alive.
+    let (file_watcher, file_rx) =
         pipeline::watch_directory(&config.watch_dir).map_err(DaemonError::Pipeline)?;
 
     // Process existing files if requested
@@ -426,6 +447,12 @@ pub fn run_daemon(
 
     // Main daemon loop -- runs on current thread
     std::thread::spawn(move || {
+        // Keep the watcher alive for the lifetime of this thread.
+        // Without this the `RecommendedWatcher` gets dropped when
+        // `start_detection_daemon` returns, the underlying `notify`
+        // backend stops, and `file_rx` immediately reports
+        // `Disconnected` — silently breaking the watch path.
+        let _watcher = file_watcher;
         tracing::info!("detection daemon started");
 
         loop {

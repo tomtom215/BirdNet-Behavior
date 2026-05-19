@@ -119,7 +119,7 @@ pub fn compare_source_dest(
             matched: *src_count == dst_count,
         });
     }
-    species_diff.sort_by(|a, b| b.source_count.cmp(&a.source_count));
+    species_diff.sort_by_key(|d| std::cmp::Reverse(d.source_count));
 
     let all_matched = species_diff.iter().all(|d| d.matched);
 

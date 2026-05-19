@@ -1,0 +1,173 @@
+# Mutation testing on the configuration validator.
+#
+# `cargo-mutants` rewrites the source under test in small, well-defined
+# ways (replace a `>` with `<`, return `Default::default()`, drop a branch,
+# etc.) and re-runs the test suite. A mutant that survives means the
+# tests pass even though the validator's behaviour was changed — almost
+# always a sign that the assertion is too weak.
+#
+# Scoped to `crates/birdnet-core/src/config/validate.rs` so the run takes
+# ~5–10 min instead of hours. Expanding the scope to the whole workspace
+# is a future option once the per-module mutant score is high.
+#
+# Runs on:
+#   - PRs that touch the validator or its tests (path filter)
+#   - Weekly cron so the mutant catalogue stays fresh against new
+#     properties added to validate.rs
+#   - Manual dispatch
+
+name: Mutation testing
+
+on:
+  push:
+    branches: ["main", "master"]
+    paths:
+      - "crates/birdnet-core/src/config/**"
+      - "crates/birdnet-core/tests/config_validator.rs"
+      - ".github/workflows/mutation.yml"
+  pull_request:
+    branches: ["main", "master"]
+    paths:
+      - "crates/birdnet-core/src/config/**"
+      - "crates/birdnet-core/tests/config_validator.rs"
+      - ".github/workflows/mutation.yml"
+  schedule:
+    # Mondays at 09:00 UTC.
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  mutants:
+    name: cargo-mutants on validate.rs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-mutants-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-mutants-
+
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+
+      - name: Run mutation testing on the configuration validator
+        # `--file` restricts mutation to the validator only.
+        # `--in-place` lets the test runner reuse the existing target dir.
+        # `--timeout` per-mutant: the validator tests run in <1s; allow 60s.
+        # No `--output` flag — cargo-mutants writes to the default
+        # `mutants.out/` next to Cargo.toml, which avoids the
+        # double-nesting trap (`mutants.out/mutants.out/outcomes.json`)
+        # the old script tripped over.
+        run: |
+          cargo mutants \
+            --workspace \
+            --package birdnet-core \
+            --file crates/birdnet-core/src/config/validate.rs \
+            --in-place \
+            --timeout 60 \
+            --no-shuffle \
+            --json
+
+      - name: Upload mutants report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-report
+          path: mutants.out
+          retention-days: 14
+
+      - name: Summarise mutants
+        if: always()
+        id: summary
+        run: |
+          # cargo-mutants `summary` strings are `CaughtMutant`, `MissedMutant`,
+          # `Timeout`, `Unviable`, `Success` (baseline). The previous workflow
+          # used `Caught`/`Missed`, so every count came back as 0 and the
+          # sticky PR comment landed empty. Match the real enum here.
+          if [ ! -f mutants.out/outcomes.json ]; then
+            echo "summary=No outcomes.json produced." >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # cargo-mutants outcomes contain ONE baseline entry whose
+          # `scenario` is the bare string "Baseline" and N mutant entries
+          # whose `scenario` is an object `{"Mutant": {...}}`. Filtering
+          # the mutants requires gating on the scenario being an object
+          # (otherwise `.scenario.Mutant` errors with "Cannot index
+          # string with string \"Mutant\"" and the whole step exits 5).
+          mutants=$(jq '[.outcomes[] | select((.scenario | type) == "object")] | length' mutants.out/outcomes.json)
+          caught=$(jq '[.outcomes[] | select(.summary == "CaughtMutant")] | length' mutants.out/outcomes.json)
+          missed=$(jq '[.outcomes[] | select(.summary == "MissedMutant")] | length' mutants.out/outcomes.json)
+          unviable=$(jq '[.outcomes[] | select(.summary == "Unviable")] | length' mutants.out/outcomes.json)
+          timeout=$(jq '[.outcomes[] | select(.summary == "Timeout")] | length' mutants.out/outcomes.json)
+          echo "total=$mutants" >> "$GITHUB_OUTPUT"
+          echo "caught=$caught" >> "$GITHUB_OUTPUT"
+          echo "missed=$missed" >> "$GITHUB_OUTPUT"
+          echo "unviable=$unviable" >> "$GITHUB_OUTPUT"
+          echo "timeout=$timeout" >> "$GITHUB_OUTPUT"
+          # List missed mutants — actionable ones. The summary filter
+          # implicitly restricts to mutant scenarios so the `.Mutant` index
+          # is safe here.
+          jq -r '[.outcomes[] | select(.summary == "MissedMutant") | "\(.scenario.Mutant.file):\(.scenario.Mutant.span.start.line)  \(.scenario.Mutant.name)"] | join("\n")' \
+            mutants.out/outcomes.json > missed.txt
+          {
+            echo 'missed_table<<MUT_EOF'
+            head -50 missed.txt
+            echo 'MUT_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Comment summary on PR
+        if: github.event_name == 'pull_request' && always()
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: mutants
+          message: |
+            ### 🧬 Mutation testing on `config/validate.rs`
+
+            | Outcome | Count |
+            | --- | --- |
+            | Total mutants | ${{ steps.summary.outputs.total }} |
+            | Caught (tests failed → good) | ${{ steps.summary.outputs.caught }} |
+            | **Missed (tests passed → tighten an assertion)** | **${{ steps.summary.outputs.missed }}** |
+            | Unviable (would not compile) | ${{ steps.summary.outputs.unviable }} |
+            | Timeout | ${{ steps.summary.outputs.timeout }} |
+
+            <details>
+            <summary>Missed mutants (top 50)</summary>
+
+            ```
+            ${{ steps.summary.outputs.missed_table }}
+            ```
+            </details>
+
+            Full report: see the `mutants-report` artifact on this run.
+
+      - name: Fail if too many mutants survived
+        # Pragmatic threshold: > 5 missed mutants suggests the test suite has
+        # a real blind spot. Tune down as the mutant score improves.
+        run: |
+          missed="${{ steps.summary.outputs.missed }}"
+          if [ -n "$missed" ] && [ "$missed" -gt 5 ]; then
+            echo "::error::$missed mutants survived; tighten the validator tests"
+            exit 1
+          fi

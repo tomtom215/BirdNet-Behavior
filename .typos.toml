@@ -1,0 +1,48 @@
+# Configuration for the `typos` spell checker.
+#
+# We use it as an advisory tool, not a grammar checker: only obvious typos
+# in identifiers, log messages, and documentation should fail the build.
+# Bird names, scientific terms, and abbreviations the dictionary doesn't
+# know about live in the [default.extend-words] table below.
+
+[files]
+# Generated and vendored content should not be flagged.
+extend-exclude = [
+    "Cargo.lock",
+    "*.svg",
+    "*.png",
+    "*.jpg",
+    "tests/testdata/**",
+    "target/**",
+    "docs/screenshots/**",
+    "LICENSE",
+    "LICENSE-UPSTREAM",
+    # Vendored / minified JS (htmx, etc.) — too dense for spell-check and
+    # not our code to fix.
+    "**/static/htmx.min.js",
+    "**/static/*.min.js",
+    "**/*.min.js",
+]
+
+[default]
+# Bird taxonomy, scientific names, abbreviations, library terms.
+extend-ignore-identifiers-re = [
+    # ISO codes that look like typos.
+    "ISO[0-9]+",
+    # German/French/etc. species name fragments.
+    "ue|oe|ae",
+]
+
+[default.extend-words]
+# Words that the dictionary thinks are typos but are correct in context.
+# Each entry must be lowercase = lowercase to avoid case-sensitive misses.
+ot = "ot"             # ONNX op type
+nd = "nd"             # ndarray crate
+nin = "nin"           # NIN (neural network in network)
+arange = "arange"     # numpy-style function name
+ot_ = "ot_"
+crate_ = "crate_"
+mosquitto = "mosquitto" # MQTT broker, correct spelling (not "mosquito")
+yoy = "yoy"           # year-over-year, domain abbreviation
+inh = "inh"           # short for "inhibit" — used as local var name
+unparseable = "unparseable" # alternative spelling of "unparsable", widely used

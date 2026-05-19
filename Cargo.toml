@@ -142,9 +142,13 @@ birdnet-core.workspace = true
 birdnet-db.workspace = true
 birdnet-web.workspace = true
 birdnet-integrations.workspace = true
+# Listed here so the `analytics` feature can refer to them via
+# `birdnet-behavioral/analytics` / `birdnet-timeseries/analytics`. The
+# binary doesn't reference them directly — birdnet-web does — but Cargo
+# requires the dep to appear in this manifest for the feature passthrough
+# to resolve. See `[package.metadata.cargo-machete]` below.
 birdnet-behavioral.workspace = true
 birdnet-timeseries.workspace = true
-birdnet-migrate.workspace = true
 birdnet-scheduler.workspace = true
 tokio.workspace = true
 axum.workspace = true
@@ -162,6 +166,12 @@ tower.workspace = true
 birdnet-web.workspace = true
 birdnet-db.workspace = true
 serde_json.workspace = true
+proptest.workspace = true
+
+[package.metadata.cargo-machete]
+# Feature-passthrough deps that machete can't see are used through
+# `feature = ["crate/feature"]` chains in [features] above.
+ignored = ["birdnet-behavioral", "birdnet-timeseries"]
 
 [lints]
 workspace = true

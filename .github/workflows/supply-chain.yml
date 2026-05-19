@@ -1,0 +1,104 @@
+# Supply-chain and source hygiene checks.
+#
+# Runs on every PR and on a weekly cadence so that new advisories against
+# pinned dependencies surface quickly even when no code changes are landing.
+# Lives in a separate workflow file from CI to keep concerns isolated and to
+# let teams toggle the schedule independently of code-quality gates.
+
+name: Supply chain
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+    branches: ["main", "master"]
+  schedule:
+    # Mondays at 08:00 UTC — picks up the prior week of new RustSec advisories.
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+
+# Cancel superseded runs on the same branch so a fast follow-up commit does
+# not have to wait behind the previous one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ── cargo-deny ───────────────────────────────────────────────────────────
+  # Enforces deny.toml: license allow-list, advisory database, banned crates,
+  # and source restriction. Fails the build on any violation.
+  cargo-deny:
+    name: cargo-deny
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Run cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --all-features
+
+  # ── cargo-audit ──────────────────────────────────────────────────────────
+  # Independent advisory scan against the RustSec database. Redundant with
+  # cargo-deny's `advisories` table on purpose: if cargo-deny is silently
+  # misconfigured the audit job is still authoritative.
+  cargo-audit:
+    name: cargo-audit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install --locked cargo-audit
+      - name: Run cargo-audit
+        run: cargo audit --deny warnings
+
+  # ── cargo-machete ────────────────────────────────────────────────────────
+  # Finds Cargo.toml entries that are no longer used anywhere in the
+  # workspace. Unused dependencies bloat the build, the dependency graph,
+  # and the supply-chain surface — they should be removed.
+  cargo-machete:
+    name: cargo-machete (unused dependencies)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install cargo-machete
+        uses: bnjbvr/cargo-machete@main
+
+  # ── typo scan ────────────────────────────────────────────────────────────
+  # Catches misspelled identifiers, log messages, and documentation without
+  # blocking on a heavyweight grammar checker. Configured to be conservative
+  # (no auto-fix in CI; report only).
+  typos:
+    name: Spelling (typos)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Run typos
+        uses: crate-ci/typos@master
+        with:
+          config: ./.typos.toml
+
+  # ── shellcheck ───────────────────────────────────────────────────────────
+  # The bootstrap surface is shell — quickstart.sh, install.sh, the docker
+  # entrypoint. These run unsupervised on operator machines so they get
+  # the strictest static check we have.
+  shellcheck:
+    name: shellcheck (bootstrap scripts)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Run shellcheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          severity: warning
+          scandir: "."
+          check_together: "no"
+        env:
+          SHELLCHECK_OPTS: "-x"

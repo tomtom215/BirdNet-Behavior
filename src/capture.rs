@@ -441,6 +441,8 @@ mod tests {
             web_only: false,
             check_db: false,
             backup_db: false,
+            doctor: false,
+            doctor_json: false,
             model: None,
             labels: None,
             watch_dir: None,

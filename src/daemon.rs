@@ -267,8 +267,12 @@ fn event_processor(
             continue;
         }
 
-        // Insert into SQLite.
-        let week_str = detection.week.to_string();
+        // Insert into SQLite. Numeric columns receive Option<f64> /
+        // Option<i64> so missing values become SQLite NULLs (the schema
+        // declares Lat/Lon/Cutoff/Sens/Overlap as REAL and Week as
+        // INTEGER). Previously the daemon passed empty strings here,
+        // which SQLite silently stored as TEXT and every subsequent
+        // typed read returned "Invalid column type Text at index N".
         let file_str = event.source_file.to_string_lossy();
         let record = birdnet_db::sqlite::DetectionRecord {
             date: &detection.date,
@@ -276,13 +280,17 @@ fn event_processor(
             sci_name: &detection.scientific_name,
             com_name: &detection.common_name,
             confidence: f64::from(detection.confidence),
-            lat: "",
-            lon: "",
-            cutoff: "",
-            week: &week_str,
-            sensitivity: "",
-            overlap: "",
+            lat: None,
+            lon: None,
+            cutoff: None,
+            week: Some(i64::from(detection.week)),
+            sensitivity: None,
+            overlap: None,
             file_name: &file_str,
+            // Without this, every chunk of one recording shares the same
+            // UNIQUE key (Date, Time, Sci_Name, File_Name) and only the
+            // first chunk's detection is kept. See migration 11.
+            chunk_offset_secs: Some(f64::from(detection.start)),
         };
 
         if let Err(e) = state.with_db(|conn| birdnet_db::sqlite::insert_detection(conn, &record)) {
