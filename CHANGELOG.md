@@ -83,6 +83,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-line numbers would be misleading). Both decisions are revisited
   on each major refactor of those crates.
 
+#### Dependency refresh — folded in PRs #37–#48 from Dependabot
+
+- **GitHub Actions** bumped across every workflow:
+  `actions/cache@v4 → v5`, `actions/upload-artifact@v4/v6 → v7`,
+  `actions/download-artifact@v7 → v8`,
+  `marocchino/sticky-pull-request-comment@v2 → v3`. Pinned SHAs in
+  `release.yml` updated to match (`v4.6.2 → v7.0.1` for upload,
+  `v4.1.8 → v8.0.1` for download).
+- **Cargo patch + minor group**: `clap` 4.6.0 → 4.6.1, `filetime`
+  0.2.27 → 0.2.29, `proptest` 1.10 → 1.11, `reqwest` 0.13.2 → 0.13.3,
+  `tower-http` 0.6.8 → 0.6.11, `tracing-subscriber` 0.3.22 → 0.3.23.
+- **Cargo async runtime group**: `tokio` 1.51 → 1.52 (patch).
+- **Cargo web framework group**: `axum` 0.8.8 → 0.8.9,
+  `tokio-tungstenite` 0.28 → 0.29 (transitive).
+- **`audioadapter-buffers` 2 → 3** — semver-major bump in the audio
+  buffer adapter; no API changes needed in this codebase (`rubato`
+  consumed it transitively, and our direct uses target only the
+  `InterleavedSlice` constructor which is stable across the bump).
+- **`criterion` 0.5 → 0.8** — major bench-framework bump; only used
+  in `crates/birdnet-core/benches/audio_pipeline.rs`, which compiles
+  unchanged against 0.8. Dropped transitive deps `is-terminal` and
+  `hermit-abi`.
+- **`sysinfo` 0.32 → 0.39** — required two source changes:
+  `RefreshKind::new()` is now `RefreshKind::nothing()` (the old name
+  was misleading), and `Component::temperature()` now returns
+  `Option<f32>` so we use `.and_then` instead of `.map` to propagate
+  the inner `None`. `Components::refresh()` now takes a `bool` arg;
+  we pass `true` so hot-removed sensors don't leave stale readings.
+- **`rubato` 1.0.1 → 2.0.0** — major-version bump with no source
+  changes needed in our consumer (the resampler API we use is stable
+  across the bump). Brought in transitive `audioadapter` 3 to match.
+- **`symphonia` 0.5.5 → 0.6.0** — major-version bump that **did**
+  break our `decode_file` implementation. Rewrote
+  `crates/birdnet-core/src/audio/decode.rs` for the new API:
+    * `symphonia::core::probe::Hint` → `symphonia::core::formats::probe::Hint`.
+    * `get_probe().format(...)` (taking options by ref, returning a
+      `ProbeResult`) → `get_probe().probe(...)` (taking options by
+      value, returning a `Box<dyn FormatReader>` directly).
+    * `format.default_track()` → `format.default_track(TrackType::Audio)`.
+    * `track.codec_params` is now `Option<CodecParameters>` rather
+      than a flat struct; access requires `.as_ref().and_then(|p| p.audio())`.
+    * `get_codecs().make(...)` → `get_codecs().make_audio_decoder(...)`
+      taking the audio-specific `AudioCodecParameters`.
+    * `format.next_packet()` now returns `Result<Option<Packet>>`
+      (`None` for EOF rather than `UnexpectedEof`).
+    * `packet.track_id` is a struct field, not a method.
+    * Buffer-copy API switched from
+      `SampleBuffer::new(...).copy_interleaved_ref(audio_buf)` to
+      `audio_buf.copy_to_slice_interleaved(&mut vec)`, sized via
+      `audio_buf.samples_interleaved()`. `num_planes()` now reports
+      channel count.
+  All 243 birdnet-core lib tests still pass; the live ADR-16 Layer-4
+  check (Pica WAV → DB) must run in CI after merge.
+- **Skipped: PR #36** (`dtolnay/rust-toolchain` 1.88 → 1.100).
+  Rust 1.100 doesn't exist yet (current stable is 1.95, dependabot
+  misinterpreted the version tag). MSRV stays at 1.88.
+- **Lockfile**: 8 transitive RUSTSEC advisories now unblocked
+  (rustls-webpki 4, aws-lc-sys 2, tar 2 — see A3 above) plus the
+  routine churn from the Dependabot bumps. Only RUSTSEC-2026-0097
+  (rand 0.8.5) remains, with the same documented justification.
+
 ### Fixed
 
 - **Detection confidence on BirdNET+ V3.0 preview models was being

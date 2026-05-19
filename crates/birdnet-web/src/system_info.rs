@@ -62,8 +62,11 @@ impl SystemSnapshot {
 ///
 /// Does not panic.  Returns a zeroed snapshot on any internal error.
 pub fn sample() -> SystemSnapshot {
+    // sysinfo 0.39 renamed `RefreshKind::new()` to `RefreshKind::nothing()`
+    // because the previous name was misleading (the value was actually empty,
+    // not "default everything"). The builder pattern is otherwise unchanged.
     let mut sys = System::new_with_specifics(
-        RefreshKind::new()
+        RefreshKind::nothing()
             .with_cpu(CpuRefreshKind::everything())
             .with_memory(MemoryRefreshKind::everything()),
     );
@@ -117,10 +120,19 @@ pub fn sample() -> SystemSnapshot {
 ///
 /// Returns `None` if not available (many cloud VMs and containers don't expose this).
 fn sample_cpu_temperature() -> Option<f32> {
-    // sysinfo Components API requires a separate refresh
+    // sysinfo Components API requires a separate refresh.
+    //
+    // sysinfo 0.39 changes two contracts here vs. the 0.32 we used to be on:
+    //   1. `refresh()` now takes a `bool` (`true` to remove components that
+    //      vanished between refreshes). We pass `true` so a hotplugged
+    //      sensor that disappears doesn't leave a stale reading.
+    //   2. `Component::temperature()` returns `Option<f32>` instead of
+    //      `f32` — many cloud VMs and containers expose a component with
+    //      no thermal reading, and the old API conflated "no sensor" with
+    //      "0 °C". We propagate the inner None with `.flatten()`.
     use sysinfo::{Component, Components};
     let mut components = Components::new_with_refreshed_list();
-    components.refresh();
+    components.refresh(true);
 
     components
         .iter()
@@ -128,7 +140,7 @@ fn sample_cpu_temperature() -> Option<f32> {
             let label = c.label().to_ascii_lowercase();
             label.contains("cpu") || label.contains("core") || label.contains("package")
         })
-        .map(|c: &Component| c.temperature())
+        .and_then(|c: &Component| c.temperature())
 }
 
 /// Format bytes as human-readable string.

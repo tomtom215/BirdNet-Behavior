@@ -58,12 +58,13 @@ impl From<std::io::Error> for DecodeError {
 /// Returns `DecodeError` if the file cannot be read, decoded, or contains no audio.
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 pub fn decode_file(path: &Path) -> Result<AudioData, DecodeError> {
-    use symphonia::core::audio::SampleBuffer;
-    use symphonia::core::codecs::DecoderOptions;
-    use symphonia::core::formats::FormatOptions;
+    use symphonia::core::audio::GenericAudioBufferRef;
+    use symphonia::core::codecs::audio::AudioDecoderOptions;
+    use symphonia::core::errors::Error as SymphoniaError;
+    use symphonia::core::formats::probe::Hint;
+    use symphonia::core::formats::{FormatOptions, TrackType};
     use symphonia::core::io::{MediaSourceStream, MediaSourceStreamOptions};
     use symphonia::core::meta::MetadataOptions;
-    use symphonia::core::probe::Hint;
 
     let file = std::fs::File::open(path)?;
     let mss = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
@@ -73,58 +74,69 @@ pub fn decode_file(path: &Path) -> Result<AudioData, DecodeError> {
         hint.with_extension(ext);
     }
 
-    let probed = symphonia::default::get_probe()
-        .format(
+    // Symphonia 0.6: `probe` takes options by value and returns the
+    // `FormatReader` directly (no more `ProbeResult` wrapper).
+    let mut format = symphonia::default::get_probe()
+        .probe(
             &hint,
             mss,
-            &FormatOptions::default(),
-            &MetadataOptions::default(),
+            FormatOptions::default(),
+            MetadataOptions::default(),
         )
         .map_err(|e| DecodeError::Format(e.to_string()))?;
 
-    let mut format = probed.format;
-    let track = format.default_track().ok_or(DecodeError::NoTracks)?;
-    let sample_rate = track
+    // 0.6 splits tracks by `TrackType`; we only want audio.
+    let track = format
+        .default_track(TrackType::Audio)
+        .ok_or(DecodeError::NoTracks)?;
+    let track_id = track.id;
+    let audio_params = track
         .codec_params
+        .as_ref()
+        .and_then(|p| p.audio())
+        .ok_or_else(|| DecodeError::Format("track has no audio codec params".into()))?;
+    let sample_rate = audio_params
         .sample_rate
         .ok_or_else(|| DecodeError::Format("unknown sample rate".into()))?;
 
+    // `make_audio_decoder` now takes the audio-specific codec params
+    // (previously `make` accepted the whole CodecParameters struct).
     let mut decoder = symphonia::default::get_codecs()
-        .make(&track.codec_params, &DecoderOptions::default())
+        .make_audio_decoder(audio_params, &AudioDecoderOptions::default())
         .map_err(|e| DecodeError::Format(e.to_string()))?;
 
-    let track_id = track.id;
     let mut samples = Vec::new();
+    let mut interleaved: Vec<f32> = Vec::new();
 
-    loop {
-        let packet = match format.next_packet() {
-            Ok(p) => p,
-            Err(symphonia::core::errors::Error::IoError(ref e))
-                if e.kind() == std::io::ErrorKind::UnexpectedEof =>
-            {
-                break;
-            }
-            Err(e) => return Err(DecodeError::Format(e.to_string())),
-        };
-
-        if packet.track_id() != track_id {
+    // 0.6: `next_packet` returns `Result<Option<Packet>>` (EOF is now `None`
+    // rather than a sentinel `UnexpectedEof` error).
+    while let Some(packet) = format
+        .next_packet()
+        .map_err(|e| DecodeError::Format(e.to_string()))?
+    {
+        // `track_id` is a struct field now, not a method call.
+        if packet.track_id != track_id {
             continue;
         }
 
-        let audio_buf = decoder
-            .decode(&packet)
-            .map_err(|e| DecodeError::Format(e.to_string()))?;
+        let audio_buf: GenericAudioBufferRef<'_> = match decoder.decode(&packet) {
+            Ok(b) => b,
+            // Recoverable decode errors (typical at format edges) — skip
+            // this packet and continue.
+            Err(SymphoniaError::DecodeError(_)) => continue,
+            Err(e) => return Err(DecodeError::Format(e.to_string())),
+        };
 
-        let spec = *audio_buf.spec();
-        let num_channels = spec.channels.count();
+        let num_channels = audio_buf.num_planes();
         let num_frames = audio_buf.frames();
+        if num_channels == 0 || num_frames == 0 {
+            continue;
+        }
 
-        let mut sample_buf = SampleBuffer::<f32>::new(num_frames as u64, spec);
-        sample_buf.copy_interleaved_ref(audio_buf);
+        interleaved.resize(audio_buf.samples_interleaved(), 0.0_f32);
+        audio_buf.copy_to_slice_interleaved(&mut interleaved[..]);
 
-        let interleaved = sample_buf.samples();
-
-        // Mix to mono by averaging channels
+        // Mix to mono by averaging channels.
         for frame in 0..num_frames {
             let mut sum = 0.0_f32;
             for ch in 0..num_channels {
