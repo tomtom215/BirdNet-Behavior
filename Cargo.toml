@@ -70,7 +70,7 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 
 # Audio
 symphonia = { version = "0.5.5", features = ["wav", "flac", "mp3"] }
-rubato = "1.0.1"
+rubato = "2.0.0"
 hound = "3.5"
 
 # ML Inference (ONNX Runtime via ort — supports all ONNX opsets)
