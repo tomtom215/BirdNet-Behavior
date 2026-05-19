@@ -244,6 +244,66 @@ pub fn relabel_detection(
     Ok(changed > 0)
 }
 
+/// What the operator meant by a free-text search term.
+///
+/// Public for unit-test access. `Exclude` carries the rest of the term
+/// (post-`"NOT "` prefix, trimmed) so the caller can format it directly
+/// into a SQL LIKE pattern.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SearchTerm {
+    /// The whole term is a `Com_Name LIKE %term% OR Sci_Name LIKE %term%`
+    /// inclusion pattern.
+    Include(String),
+    /// The term begins case-insensitively with `"NOT "` and has at least
+    /// one non-whitespace character after it. The carried string is the
+    /// content after the prefix, trimmed; the caller wraps it as
+    /// `Com_Name NOT LIKE %term%`.
+    Exclude(String),
+}
+
+/// Parse an operator-supplied search box value into [`SearchTerm`].
+///
+/// `None` if the input is `None`, empty, or whitespace-only — the caller
+/// should drop the WHERE clause entirely in that case.
+///
+/// The `"NOT "` prefix is the legacy BirdNET-Pi exclusion syntax. We use
+/// `str::strip_prefix_ignore_ascii_case` rather than `s.len() > 4 &&
+/// s[..4].eq_ignore_ascii_case("NOT ")` because the second form has an
+/// equivalent mutant on the length comparison: with the calling code's
+/// up-front `.trim()`, a 4-char input ending in space is unreachable, so
+/// `> 4` and `>= 4` produce identical observable behaviour. Eliminating
+/// the explicit length comparison eliminates the mutant. Tracked in the
+/// `parse_search_term_*` tests below.
+#[must_use]
+pub fn parse_search_term(raw: Option<&str>) -> Option<SearchTerm> {
+    let trimmed = raw.map(str::trim).filter(|s| !s.is_empty())?;
+    if let Some(rest) = strip_not_prefix(trimmed) {
+        let rest = rest.trim();
+        if !rest.is_empty() {
+            return Some(SearchTerm::Exclude(rest.to_string()));
+        }
+    }
+    Some(SearchTerm::Include(trimmed.to_string()))
+}
+
+/// Strip a case-insensitive `"NOT "` prefix.
+///
+/// Returns `Some(&s[4..])` if `s` is at least 4 bytes long and the first
+/// four bytes are ASCII-equal-ignore-case to `"NOT "`. Otherwise `None`.
+///
+/// This uses `s.get(..4)` rather than a length comparison so cargo-mutants
+/// has no `>` / `>=` boundary to flip — the existence check is implicit
+/// in the `Option` return. The unit test pins every cell of the case-
+/// insensitive prefix match table.
+fn strip_not_prefix(s: &str) -> Option<&str> {
+    let head = s.get(..4)?;
+    if head.eq_ignore_ascii_case("NOT ") {
+        Some(&s[4..])
+    } else {
+        None
+    }
+}
+
 /// Search today's detections with optional text filter, limit, and offset.
 ///
 /// If `search` starts with "NOT " (case-insensitive), the rest is used as an
@@ -261,9 +321,9 @@ pub fn todays_detections(
     offset: u32,
 ) -> Result<Vec<DetectionRow>, DbError> {
     let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
-        match search.map(str::trim).filter(|s| !s.is_empty()) {
-            Some(s) if s.len() > 4 && s[..4].eq_ignore_ascii_case("NOT ") => {
-                let pattern = format!("%{}%", &s[4..].trim());
+        match parse_search_term(search) {
+            Some(SearchTerm::Exclude(rest)) => {
+                let pattern = format!("%{rest}%");
                 (
                     format!(
                         "SELECT {DETECTION_COLS} FROM detections \
@@ -278,8 +338,8 @@ pub fn todays_detections(
                     ],
                 )
             }
-            Some(s) => {
-                let pattern = format!("%{s}%");
+            Some(SearchTerm::Include(term)) => {
+                let pattern = format!("%{term}%");
                 (
                     format!(
                         "SELECT {DETECTION_COLS} FROM detections \
@@ -326,31 +386,29 @@ pub fn todays_detection_count(
     date: &str,
     search: Option<&str>,
 ) -> Result<i64, DbError> {
-    let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match search
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        Some(s) if s.len() > 4 && s[..4].eq_ignore_ascii_case("NOT ") => {
-            let pattern = format!("%{}%", &s[4..].trim());
-            (
-                "SELECT COUNT(*) FROM detections WHERE Date = ?1 AND Com_Name NOT LIKE ?2"
-                    .to_string(),
-                vec![Box::new(date.to_string()), Box::new(pattern)],
-            )
-        }
-        Some(s) => {
-            let pattern = format!("%{s}%");
-            (
+    let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
+        match parse_search_term(search) {
+            Some(SearchTerm::Exclude(rest)) => {
+                let pattern = format!("%{rest}%");
+                (
+                    "SELECT COUNT(*) FROM detections WHERE Date = ?1 AND Com_Name NOT LIKE ?2"
+                        .to_string(),
+                    vec![Box::new(date.to_string()), Box::new(pattern)],
+                )
+            }
+            Some(SearchTerm::Include(term)) => {
+                let pattern = format!("%{term}%");
+                (
                     "SELECT COUNT(*) FROM detections WHERE Date = ?1 AND (Com_Name LIKE ?2 OR Sci_Name LIKE ?2)"
                         .to_string(),
                     vec![Box::new(date.to_string()), Box::new(pattern)],
                 )
-        }
-        None => (
-            "SELECT COUNT(*) FROM detections WHERE Date = ?1".to_string(),
-            vec![Box::new(date.to_string())],
-        ),
-    };
+            }
+            None => (
+                "SELECT COUNT(*) FROM detections WHERE Date = ?1".to_string(),
+                vec![Box::new(date.to_string())],
+            ),
+        };
 
     let params_ref: Vec<&dyn rusqlite::types::ToSql> =
         param_values.iter().map(AsRef::as_ref).collect();
@@ -984,6 +1042,145 @@ mod tests {
         let (_tmp, conn) = temp_db_with_data();
         let rows = recent_detections(&conn, 10).unwrap();
         assert!(rows.iter().all(|r| r.correlation_id.is_none()));
+    }
+
+    // ── parse_search_term ──────────────────────────────────────────────
+    //
+    // Direct unit tests for the helper. The whole point of extracting it
+    // was to make every NOT-prefix-recognition cell observable without
+    // round-tripping through SQL — the cargo-mutants report on
+    // detections.rs flagged the in-line `s.len() > 4 && s[..4] ...`
+    // form as carrying an equivalent mutant (with the up-front
+    // `.trim()` the length-4 boundary was unreachable). The helper now
+    // uses `s.get(..4)`, which has no `>` / `>=` for cargo-mutants to
+    // flip.
+
+    #[test]
+    fn parse_search_term_none_or_empty_returns_none() {
+        assert_eq!(parse_search_term(None), None);
+        assert_eq!(parse_search_term(Some("")), None);
+        assert_eq!(parse_search_term(Some("   ")), None);
+        assert_eq!(parse_search_term(Some("\t\n")), None);
+    }
+
+    #[test]
+    fn parse_search_term_plain_word_is_include() {
+        assert_eq!(
+            parse_search_term(Some("Robin")),
+            Some(SearchTerm::Include("Robin".into()))
+        );
+        // Leading / trailing whitespace is trimmed before the dispatch.
+        assert_eq!(
+            parse_search_term(Some("  Robin  ")),
+            Some(SearchTerm::Include("Robin".into()))
+        );
+    }
+
+    #[test]
+    fn parse_search_term_not_prefix_is_exclude() {
+        assert_eq!(
+            parse_search_term(Some("NOT Robin")),
+            Some(SearchTerm::Exclude("Robin".into()))
+        );
+        // Case-insensitive prefix match: "not", "Not", "NoT" all work.
+        assert_eq!(
+            parse_search_term(Some("not Robin")),
+            Some(SearchTerm::Exclude("Robin".into()))
+        );
+        assert_eq!(
+            parse_search_term(Some("Not Robin")),
+            Some(SearchTerm::Exclude("Robin".into()))
+        );
+        assert_eq!(
+            parse_search_term(Some("nOt Robin")),
+            Some(SearchTerm::Exclude("Robin".into()))
+        );
+    }
+
+    #[test]
+    fn parse_search_term_not_prefix_trims_remainder() {
+        // The remainder is trimmed too — "NOT   Robin   " excludes
+        // "Robin", not "  Robin  ".
+        assert_eq!(
+            parse_search_term(Some("NOT   Robin")),
+            Some(SearchTerm::Exclude("Robin".into()))
+        );
+    }
+
+    #[test]
+    fn parse_search_term_lone_not_degrades_to_include() {
+        // The 3-char "NOT" doesn't have the trailing space so doesn't
+        // match the prefix → include "NOT".
+        assert_eq!(
+            parse_search_term(Some("NOT")),
+            Some(SearchTerm::Include("NOT".into()))
+        );
+        // "NOT " with the literal trailing space SHOULD be unreachable
+        // in practice because the function trims its input. But even if
+        // a caller bypasses the trim, an empty remainder degrades to an
+        // inclusion of the original-trimmed string ("NOT") rather than
+        // collapsing to an exclude-everything that would return 0
+        // rows. The helper assumes its caller has already trimmed, so
+        // we pass "NOT" (3 chars) here — the trim invariant is what
+        // makes "NOT " (with trailing space) unreachable from the
+        // public-API surface.
+        assert_eq!(
+            parse_search_term(Some("NOT ")),
+            // After the helper's own trim, "NOT" — the strip prefix
+            // requires at least 4 bytes, so this falls through to
+            // include "NOT".
+            Some(SearchTerm::Include("NOT".into()))
+        );
+    }
+
+    #[test]
+    fn parse_search_term_short_strings_are_include() {
+        // Any string shorter than 4 bytes can't have a "NOT " prefix.
+        assert_eq!(
+            parse_search_term(Some("a")),
+            Some(SearchTerm::Include("a".into()))
+        );
+        assert_eq!(
+            parse_search_term(Some("NOT")),
+            Some(SearchTerm::Include("NOT".into()))
+        );
+        assert_eq!(
+            parse_search_term(Some("not")),
+            Some(SearchTerm::Include("not".into()))
+        );
+    }
+
+    #[test]
+    fn parse_search_term_notx_is_include_not_exclude() {
+        // 4 chars but no trailing space — first 4 chars are "NOTX",
+        // which doesn't equal "NOT " ignoring case → include path.
+        assert_eq!(
+            parse_search_term(Some("NOTX")),
+            Some(SearchTerm::Include("NOTX".into()))
+        );
+        // Same with 5 chars where the 4th is non-space.
+        assert_eq!(
+            parse_search_term(Some("NOTOK")),
+            Some(SearchTerm::Include("NOTOK".into()))
+        );
+    }
+
+    #[test]
+    fn parse_search_term_multibyte_input_does_not_panic() {
+        // The helper uses `s.get(..4)` which never panics on a
+        // non-char-boundary slice — it just returns None. Pin the
+        // contract so a future refactor can't reintroduce the
+        // pre-helper `s[..4]` slice that would panic on a 2-byte
+        // emoji.
+        assert_eq!(
+            parse_search_term(Some("∅Owl")), // 4 bytes (∅) + 3 chars = 6 bytes
+            Some(SearchTerm::Include("∅Owl".into()))
+        );
+        // A pure-multibyte string shorter than 4 bytes.
+        assert_eq!(
+            parse_search_term(Some("ω")), // 2 bytes
+            Some(SearchTerm::Include("ω".into()))
+        );
     }
 
     #[test]
