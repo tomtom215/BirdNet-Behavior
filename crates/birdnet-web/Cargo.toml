@@ -28,7 +28,8 @@ tracing.workspace = true
 tokio.workspace = true
 axum = { workspace = true, features = ["form", "multipart"] }
 tempfile.workspace = true
-tower.workspace = true
+# tower-http brings in the bits of tower we actually use (TraceLayer,
+# CorsLayer); a direct tower dep would be redundant.
 tower-http.workspace = true
 rusqlite.workspace = true
 sysinfo.workspace = true

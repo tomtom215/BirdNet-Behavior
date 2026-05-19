@@ -75,6 +75,10 @@ jobs:
         # `--file` restricts mutation to the validator only.
         # `--in-place` lets the test runner reuse the existing target dir.
         # `--timeout` per-mutant: the validator tests run in <1s; allow 60s.
+        # No `--output` flag — cargo-mutants writes to the default
+        # `mutants.out/` next to Cargo.toml, which avoids the
+        # double-nesting trap (`mutants.out/mutants.out/outcomes.json`)
+        # the old script tripped over.
         run: |
           cargo mutants \
             --workspace \
@@ -83,7 +87,6 @@ jobs:
             --in-place \
             --timeout 60 \
             --no-shuffle \
-            --output mutants.out \
             --json
 
       - name: Upload mutants report
@@ -98,22 +101,27 @@ jobs:
         if: always()
         id: summary
         run: |
+          # cargo-mutants `summary` strings are `CaughtMutant`, `MissedMutant`,
+          # `Timeout`, `Unviable`, `Success` (baseline). The previous workflow
+          # used `Caught`/`Missed`, so every count came back as 0 and the
+          # sticky PR comment landed empty. Match the real enum here.
           if [ ! -f mutants.out/outcomes.json ]; then
             echo "summary=No outcomes.json produced." >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          total=$(jq '.outcomes | length' mutants.out/outcomes.json)
-          caught=$(jq '[.outcomes[] | select(.summary == "Caught" or .summary == "Timeout" or .summary == "Unviable")] | length' mutants.out/outcomes.json)
-          missed=$(jq '[.outcomes[] | select(.summary == "Missed")] | length' mutants.out/outcomes.json)
+          mutants=$(jq '[.outcomes[] | select(.scenario.Mutant != null)] | length' mutants.out/outcomes.json)
+          caught=$(jq '[.outcomes[] | select(.summary == "CaughtMutant")] | length' mutants.out/outcomes.json)
+          missed=$(jq '[.outcomes[] | select(.summary == "MissedMutant")] | length' mutants.out/outcomes.json)
           unviable=$(jq '[.outcomes[] | select(.summary == "Unviable")] | length' mutants.out/outcomes.json)
           timeout=$(jq '[.outcomes[] | select(.summary == "Timeout")] | length' mutants.out/outcomes.json)
-          echo "total=$total" >> "$GITHUB_OUTPUT"
+          echo "total=$mutants" >> "$GITHUB_OUTPUT"
           echo "caught=$caught" >> "$GITHUB_OUTPUT"
           echo "missed=$missed" >> "$GITHUB_OUTPUT"
           echo "unviable=$unviable" >> "$GITHUB_OUTPUT"
           echo "timeout=$timeout" >> "$GITHUB_OUTPUT"
-          # List missed mutants (the actionable ones).
-          jq -r '[.outcomes[] | select(.summary == "Missed") | "\(.scenario.mutant.source_file.path):\(.scenario.mutant.span.start.line)  \(.scenario.mutant.replacement)"] | join("\n")' \
+          # List missed mutants — actionable ones. Scenario is an enum
+          # serialised as `{"Mutant": {…}}` so the path is `.scenario.Mutant`.
+          jq -r '[.outcomes[] | select(.summary == "MissedMutant") | "\(.scenario.Mutant.file):\(.scenario.Mutant.span.start.line)  \(.scenario.Mutant.name)"] | join("\n")' \
             mutants.out/outcomes.json > missed.txt
           {
             echo 'missed_table<<MUT_EOF'

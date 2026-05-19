@@ -13,7 +13,6 @@ description = "Core detection pipeline: audio processing, ML inference, and dete
 
 [dependencies]
 serde.workspace = true
-configparser.workspace = true
 tracing.workspace = true
 
 # Audio pipeline (pure Rust, zero C deps)
@@ -25,9 +24,9 @@ realfft = "3"
 # Audio writing (WAV extraction)
 hound.workspace = true
 
-# ML Inference (ONNX Runtime)
+# ML Inference (ONNX Runtime). `ort` enables its own `ndarray` feature so
+# the type is available transitively without us declaring it directly.
 ort.workspace = true
-ndarray.workspace = true
 
 # File watching
 notify.workspace = true

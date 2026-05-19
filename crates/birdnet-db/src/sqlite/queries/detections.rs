@@ -14,7 +14,7 @@ pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Resu
     // Explicit column list — `VALUES (?1, …, ?12)` without one was a
     // schema-vs-insert drift waiting to happen and broke in production
     // when migration 7 added `is_locked` as a 13th column. Naming the
-    // columns means new columns with DEFAULTs (like `is_locked`) keep
+    // columns means new columns with a DEFAULT (like `is_locked`) keep
     // this write path working unchanged.
     conn.execute(
         "INSERT INTO detections \

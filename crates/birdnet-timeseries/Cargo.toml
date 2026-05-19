@@ -20,7 +20,6 @@ analytics = ["dep:duckdb"]
 [dependencies]
 duckdb = { workspace = true, optional = true }
 serde.workspace = true
-tracing.workspace = true
 
 [dev-dependencies]
 duckdb.workspace = true

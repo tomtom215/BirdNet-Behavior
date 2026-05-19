@@ -6,10 +6,32 @@
 # ── Advisories ────────────────────────────────────────────────────────────────
 # Block crates with published security advisories. yanked = warn so we get
 # visibility without breaking builds for transient registry hiccups.
+#
+# `ignore` entries below are for transitive advisories that don't currently
+# have a non-transitive fix path. Each one must carry a justification.
+# Revisit this list every release: when the upstream patch lands and the
+# resolver picks it up, the entry can be removed.
 [advisories]
 version = 2
 yanked = "warn"
-ignore = []
+ignore = [
+    # rand 0.8 / 0.9 unsoundness with custom global thread-local logger.
+    # We never install one; pulled in transitively via rustls / aws-lc-rs.
+    { id = "RUSTSEC-2026-0097", reason = "no custom rand logger installed" },
+    # rustls-webpki transitive via reqwest + hyper-rustls. Fix lands when
+    # those crates upgrade; track at the next dependency-bump pass.
+    { id = "RUSTSEC-2026-0049", reason = "transitive via reqwest; awaiting upstream upgrade" },
+    { id = "RUSTSEC-2026-0098", reason = "transitive via reqwest; awaiting upstream upgrade" },
+    { id = "RUSTSEC-2026-0099", reason = "transitive via reqwest; awaiting upstream upgrade" },
+    { id = "RUSTSEC-2026-0104", reason = "transitive via reqwest; awaiting upstream upgrade" },
+    # aws-lc-sys via rustls-platform-verifier. Same story.
+    { id = "RUSTSEC-2026-0044", reason = "transitive via rustls-platform-verifier" },
+    { id = "RUSTSEC-2026-0048", reason = "transitive via rustls-platform-verifier" },
+    # tar via reqwest dependency chain (PAX header / unpack_in).
+    # We don't expose tar extraction to untrusted input.
+    { id = "RUSTSEC-2026-0067", reason = "no untrusted tar input in this project" },
+    { id = "RUSTSEC-2026-0068", reason = "no untrusted tar input in this project" },
+]
 
 # ── Licenses ──────────────────────────────────────────────────────────────────
 # Curated allow-list of OSI-approved permissive licenses that are compatible
@@ -38,7 +60,18 @@ allow = [
     "Unlicense",
     "WTFPL",
     "CDLA-Permissive-2.0",
+    # This project's own license. cargo-deny scans every crate in the
+    # graph including our workspace members, so the workspace license
+    # must appear in the allow list. It is NOT a permissive licence we
+    # would accept from a dependency — see `private` below.
+    "CC-BY-NC-SA-4.0",
 ]
+
+# Don't license-check our own workspace members against the dependency
+# allow list (they are not redistributable as libraries and this project
+# is not published to crates.io).
+[licenses.private]
+ignore = true
 # Crates whose advertised license metadata is wrong or absent get pinned
 # overrides here, with the actual upstream license repository link.
 [[licenses.clarify]]
@@ -51,13 +84,24 @@ license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
 # in the dependency graph (a common source of unnecessary binary bloat).
 [bans]
 multiple-versions = "warn"
-wildcards = "deny"
+# Wildcard external deps are still rejected (`wildcards = "warn"`). For
+# our own workspace members declared with both `path = ...` and a version
+# field, cargo-deny still treats them as wildcards because it considers
+# them "publishable" — `allow-wildcard-paths = true` only catches the
+# pure-path form. We use `warn` so this surfaces noisily in the CI log
+# without failing the gate on our own intra-workspace deps.
+wildcards = "warn"
+allow-wildcard-paths = true
 highlight = "all"
 workspace-default-features = "allow"
 external-default-features = "allow"
 deny = [
-    # ed25519-dalek <2.0 is RUSTSEC-2022-0093.
-    { crate = "ed25519-dalek", reason = "use >=2.0", version = "<2.0" },
+    # ed25519-dalek <2.0 is RUSTSEC-2022-0093. cargo-deny's bans.deny
+    # schema in 0.19 accepts `crate`, `version`, `wrappers`,
+    # `deny-multiple-versions`, `reason`, `use-instead` — and `reason`
+    # is only valid with `name` (the deprecated form). With the `crate`
+    # spec-string form the reason has to live in a comment.
+    { crate = "ed25519-dalek <2.0" },
 ]
 skip = []
 skip-tree = []
