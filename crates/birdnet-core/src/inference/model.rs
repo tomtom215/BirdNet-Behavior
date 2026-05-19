@@ -631,6 +631,7 @@ mod tests {
 
     const TINY_V24_MODEL: &[u8] = include_bytes!("../testdata/tiny_v24_test.onnx");
     const TINY_V30_MODEL: &[u8] = include_bytes!("../testdata/tiny_v30_test.onnx");
+    const TINY_DYNAMIC_MODEL: &[u8] = include_bytes!("../testdata/tiny_dynamic_test.onnx");
 
     fn tiny_labels() -> LabelSet {
         LabelSet::from_entries(
@@ -775,36 +776,68 @@ mod tests {
 
     #[test]
     fn predict_returns_top_n_detections() {
-        // The Slice model emits [1, 11] for the 11 labels we registered,
-        // so the predict() loop's loop body executes 11 times. With the
-        // default 0.25 threshold and our trivial slice op (which copies
-        // raw input through), some chunks of the input will be above /
-        // below threshold depending on the data.
-        //
-        // To exercise the path deterministically, set a confidence
-        // threshold so low that every label passes, and feed in a
-        // constant 0.5 buffer. The probability-output branch (V3.0)
-        // would clamp them to [0, 1] giving exactly 0.5; the logit
-        // branch (V2.4) would sigmoid(1.0 * 0.5) ≈ 0.622. Either way,
-        // top-N truncation gives us a bounded number of detections.
+        // The V3.0 tiny model has TWO outputs: `embeddings` (all
+        // zeros, idx 0) and `predictions` (slice of the input, idx 1).
+        // BirdNetModel::predict selects outputs[1] when len > 1, so a
+        // mutation that flips that comparison would silently start
+        // reading embeddings instead — i.e. all zeros, which clamp
+        // to confidence 0.0 on the probability path. We assert the
+        // observed confidence is roughly 0.5 (the constant we feed
+        // in) so that wrong-output mutation fails.
         let mut m = load_tiny_v30(); // probability-output path
         m.set_confidence_threshold(0.0); // accept everything
         let audio = vec![0.5_f32; 96_000];
         let detections = m
             .predict(&audio, "2026-05-19", "09:00:00", 0.0, 3.0, 20)
             .expect("predict should not error on a constant input");
-        // top_n defaults to 10. Returning 0 here would be a sign that
-        // the predict() loop body was replaced with an empty Ok(vec![])
-        // (which is one of the surviving mutants we want to kill).
         assert!(
             !detections.is_empty(),
             "predict returned no detections — likely a body-replacement mutation"
         );
         assert!(detections.len() <= 10);
-        // The first detection's date/time should round-trip from our args.
+        // Date/time/week round-trip from our args.
         assert_eq!(detections[0].date, "2026-05-19");
         assert_eq!(detections[0].time, "09:00:00");
         assert_eq!(detections[0].week, 20);
+        // Confidence must be 0.5 (the input value, clamped through the
+        // probability-output branch). If predict() picked outputs[0]
+        // (embeddings = zeros) instead of outputs[1] (predictions =
+        // slice of input), the confidence would be 0.0 → assertion
+        // catches the `outputs.len() > 1` mutation flip.
+        for d in &detections {
+            assert!(
+                (d.confidence - 0.5).abs() < 1e-4,
+                "expected confidence ~0.5 from the predictions output; got {} \
+                 (suggests the V3.0 model's second output was not selected)",
+                d.confidence
+            );
+        }
+    }
+
+    #[test]
+    fn dynamic_shape_model_substitutes_one_for_symbolic_dims() {
+        // Loads a model whose input has a symbolic batch dim
+        // (`dim_param = "batch"`). ort reports that as 0 in the
+        // extracted shape; `extract_input_shape` must substitute 1
+        // for any non-positive dim. A mutation `d > 0 → d >= 0`
+        // would let the 0 through and produce a shape containing 0
+        // — observable by inspecting the loaded model's `input_shape`.
+        let m = BirdNetModel::load_from_bytes(
+            TINY_DYNAMIC_MODEL,
+            tiny_labels(),
+            ModelConfig::default(),
+        )
+        .expect("dynamic-shape model loads");
+        let shape = m.input_shape();
+        // Every dimension must be ≥ 1 because the substitution maps
+        // dynamic / non-positive dims to 1. A surviving `d >= 0`
+        // mutant would leave a 0 in `shape`.
+        for (i, &d) in shape.iter().enumerate() {
+            assert!(
+                d >= 1,
+                "input_shape dim {i} is {d}; extract_input_shape failed to substitute 1 for a non-positive dim"
+            );
+        }
     }
 
     #[test]
