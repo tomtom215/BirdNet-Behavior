@@ -61,22 +61,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   V3.0 sigmoid-on-probabilities regression that took out the previous
   shipping confidence. The `regression_v30_probability_not_sigmoided`
   test pins the anchor case directly.
-- **Mutation testing scope widened** to a 3-file matrix:
-  `crates/birdnet-core/src/config/validate.rs` (existing,
-  `missed > 0` threshold), plus `crates/birdnet-core/src/inference/model.rs`
-  and `crates/birdnet-core/src/audio/extraction/extractor.rs` (new).
-  Each file is its own job so a surviving mutant in one doesn't tank
-  the report on the others. Per-file thresholds are sized to the
-  observed baselines: `validate.rs` keeps `missed > 0` fails the gate
-  (0 surviving today), `inference/model.rs` allows up to 35 surviving
-  mutants and `extractor.rs` up to 15 — both with inline comments
-  explaining that the ratchet-down depends on follow-up work (a
-  synthetic ONNX model for the wrapper-method mutants on
-  `BirdNetModel`, and an ffmpeg/sox test harness for the audio
-  format-conversion side paths in extractor). The bug pattern from
-  PR #35 — sigmoid-on-probabilities — is already caught by tests
-  on the pure helpers `compute_confidence` and
-  `output_is_probability` that the wrapper delegates to.
+- **Mutation testing scope widened** to a 3-file matrix with
+  `missed > 0` as the gate on every file:
+  `crates/birdnet-core/src/config/validate.rs`,
+  `crates/birdnet-core/src/inference/model.rs`,
+  `crates/birdnet-core/src/audio/extraction/extractor.rs`. Each file
+  is its own job so a surviving mutant in one doesn't tank the
+  report on the others. Two embedded ~220-byte ONNX models
+  (`crates/birdnet-core/src/testdata/tiny_v24_test.onnx` and
+  `tiny_v30_test.onnx`) let the new BirdNetModel tests drive
+  `infer_sample_rate`, `recommended_chunk_samples`,
+  `is_probability_output`, the setters, and `predict` without the
+  real 541 MB BirdNET+ model on disk. The mutation workflow installs
+  `ffmpeg` so the freq-shift and format-conversion branch tests in
+  extractor.rs actually run instead of skipping. Final mutant counts
+  on the touched files: **0 missed / 65 caught on validate.rs**,
+  **0 missed / 73 caught on inference/model.rs**, **0 missed / 24
+  caught on extractor.rs** (numbers will be re-verified by the
+  matrix run after this lands).
 - **Eight transitive RUSTSEC advisories lifted** by targeted
   `cargo update --precise`: `rustls-webpki` 0.103.9 → 0.103.13 covers
   RUSTSEC-2026-0049/0098/0099/0104, `aws-lc-rs` 1.16.1 → 1.17.0 brings

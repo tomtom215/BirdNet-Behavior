@@ -614,6 +614,199 @@ mod tests {
         assert!(matches!(result, Err(InferenceError::NotFound(_))));
     }
 
+    // ─── BirdNetModel instance methods — driven by tiny embedded ONNX models ──
+    //
+    // Mutation testing surfaced ~30 surviving mutants on `BirdNetModel`
+    // instance methods (`input_shape`, `infer_sample_rate`, getters,
+    // setters, `predict`) because no test built an instance — every call
+    // went through `BirdNetModel::load(path)` which the suite never
+    // exercised. Embedding two ~220-byte ONNX models (a fixed `[1, 144_000]`
+    // V2.4-style and a fixed `[1, 96_000]` V3.0-style) lets us drive these
+    // methods directly without needing the real 541 MB BirdNET+ model on
+    // disk. The models compute a trivial Slice — their *behaviour* is not
+    // what we test; only that `BirdNetModel` can load them, expose the
+    // right input-shape contract, and round-trip the config setters.
+    //
+    // Generated once via Python's `onnx` library and checked in.
+
+    const TINY_V24_MODEL: &[u8] = include_bytes!("../testdata/tiny_v24_test.onnx");
+    const TINY_V30_MODEL: &[u8] = include_bytes!("../testdata/tiny_v30_test.onnx");
+
+    fn tiny_labels() -> LabelSet {
+        LabelSet::from_entries(
+            (0..11)
+                .map(|i| (format!("Species_{i}"), format!("Bird {i}")))
+                .collect(),
+        )
+    }
+
+    fn load_tiny_v24() -> BirdNetModel {
+        BirdNetModel::load_from_bytes(TINY_V24_MODEL, tiny_labels(), ModelConfig::default())
+            .expect("tiny V2.4 model loads")
+    }
+
+    fn load_tiny_v30() -> BirdNetModel {
+        BirdNetModel::load_from_bytes(TINY_V30_MODEL, tiny_labels(), ModelConfig::default())
+            .expect("tiny V3.0 model loads")
+    }
+
+    #[test]
+    fn loaded_v24_model_reports_144k_input_shape() {
+        let m = load_tiny_v24();
+        // [1, 144_000] is the V2.4 contract.
+        let shape = m.input_shape();
+        assert_eq!(shape, &[1usize, 144_000][..]);
+    }
+
+    #[test]
+    fn loaded_v30_model_reports_96k_input_shape() {
+        let m = load_tiny_v30();
+        assert_eq!(m.input_shape(), &[1usize, 96_000][..]);
+    }
+
+    #[test]
+    fn loaded_v24_model_infers_48khz_sample_rate() {
+        let m = load_tiny_v24();
+        assert_eq!(m.infer_sample_rate(), 48_000);
+    }
+
+    #[test]
+    fn loaded_v30_model_infers_32khz_sample_rate() {
+        let m = load_tiny_v30();
+        assert_eq!(m.infer_sample_rate(), 32_000);
+    }
+
+    #[test]
+    fn loaded_v24_model_recommends_144k_chunk_samples() {
+        let m = load_tiny_v24();
+        assert_eq!(m.recommended_chunk_samples(), 144_000);
+    }
+
+    #[test]
+    fn loaded_v30_model_recommends_96k_chunk_samples() {
+        let m = load_tiny_v30();
+        assert_eq!(m.recommended_chunk_samples(), 96_000);
+    }
+
+    #[test]
+    fn loaded_v24_model_recommends_3s_chunk_secs() {
+        let m = load_tiny_v24();
+        // 144_000 / 48_000 = 3.0 s exactly.
+        let secs = m.recommended_chunk_secs();
+        assert!((secs - 3.0).abs() < 1e-6, "got {secs}");
+    }
+
+    #[test]
+    fn loaded_v30_model_recommends_3s_chunk_secs() {
+        let m = load_tiny_v30();
+        // 96_000 / 32_000 = 3.0 s exactly.
+        let secs = m.recommended_chunk_secs();
+        assert!((secs - 3.0).abs() < 1e-6, "got {secs}");
+    }
+
+    #[test]
+    fn loaded_v24_model_does_not_expect_raw_audio() {
+        // expects_raw_audio is `infer_sample_rate() == 32_000`. V2.4 is 48 kHz,
+        // so this must be false.
+        let m = load_tiny_v24();
+        assert!(!m.expects_raw_audio());
+    }
+
+    #[test]
+    fn loaded_v30_model_expects_raw_audio() {
+        // V3.0 is 32 kHz → raw audio path.
+        let m = load_tiny_v30();
+        assert!(m.expects_raw_audio());
+    }
+
+    #[test]
+    fn loaded_v24_model_emits_logits_not_probabilities() {
+        // [1, 144_000] is V2.4 territory → raw logits, needs sigmoid.
+        let m = load_tiny_v24();
+        assert!(!m.is_probability_output());
+    }
+
+    #[test]
+    fn loaded_v30_model_emits_probabilities() {
+        // [1, 96_000] is V3.0 fixed → already-calibrated probabilities.
+        let m = load_tiny_v30();
+        assert!(m.is_probability_output());
+    }
+
+    #[test]
+    fn set_sensitivity_persists() {
+        let mut m = load_tiny_v24();
+        let before = m.config().sensitivity;
+        m.set_sensitivity(before + 0.5);
+        let after = m.config().sensitivity;
+        assert!(
+            (after - (before + 0.5)).abs() < 1e-6,
+            "set_sensitivity did not persist: before={before}, after={after}"
+        );
+    }
+
+    #[test]
+    fn set_confidence_threshold_persists() {
+        let mut m = load_tiny_v24();
+        let before = m.config().confidence_threshold;
+        m.set_confidence_threshold(before + 0.1);
+        let after = m.config().confidence_threshold;
+        assert!(
+            (after - (before + 0.1)).abs() < 1e-6,
+            "set_confidence_threshold did not persist: before={before}, after={after}"
+        );
+    }
+
+    #[test]
+    fn loaded_v24_model_labels_count_matches() {
+        let m = load_tiny_v24();
+        assert_eq!(m.labels().len(), 11);
+    }
+
+    #[test]
+    fn debug_format_is_non_empty() {
+        // Pins the Debug impl so a mutation that replaces it with
+        // `Ok(Default::default())` (an empty string) fails the assertion.
+        let m = load_tiny_v24();
+        let s = format!("{m:?}");
+        assert!(s.contains("BirdNetModel"));
+        assert!(s.contains("labels_count"));
+    }
+
+    #[test]
+    fn predict_returns_top_n_detections() {
+        // The Slice model emits [1, 11] for the 11 labels we registered,
+        // so the predict() loop's loop body executes 11 times. With the
+        // default 0.25 threshold and our trivial slice op (which copies
+        // raw input through), some chunks of the input will be above /
+        // below threshold depending on the data.
+        //
+        // To exercise the path deterministically, set a confidence
+        // threshold so low that every label passes, and feed in a
+        // constant 0.5 buffer. The probability-output branch (V3.0)
+        // would clamp them to [0, 1] giving exactly 0.5; the logit
+        // branch (V2.4) would sigmoid(1.0 * 0.5) ≈ 0.622. Either way,
+        // top-N truncation gives us a bounded number of detections.
+        let mut m = load_tiny_v30(); // probability-output path
+        m.set_confidence_threshold(0.0); // accept everything
+        let audio = vec![0.5_f32; 96_000];
+        let detections = m
+            .predict(&audio, "2026-05-19", "09:00:00", 0.0, 3.0, 20)
+            .expect("predict should not error on a constant input");
+        // top_n defaults to 10. Returning 0 here would be a sign that
+        // the predict() loop body was replaced with an empty Ok(vec![])
+        // (which is one of the surviving mutants we want to kill).
+        assert!(
+            !detections.is_empty(),
+            "predict returned no detections — likely a body-replacement mutation"
+        );
+        assert!(detections.len() <= 10);
+        // The first detection's date/time should round-trip from our args.
+        assert_eq!(detections[0].date, "2026-05-19");
+        assert_eq!(detections[0].time, "09:00:00");
+        assert_eq!(detections[0].week, 20);
+    }
+
     #[test]
     fn inference_error_display_includes_payload() {
         let e = InferenceError::NotFound("/tmp/x.onnx".into());

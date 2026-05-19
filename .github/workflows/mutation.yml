@@ -83,31 +83,25 @@ jobs:
           - label: inference/model.rs
             slug: inference-model.rs
             file: crates/birdnet-core/src/inference/model.rs
-            # Baseline starting point. Of the ~32 currently-surviving
-            # mutants, the bulk are on `BirdNetModel` instance methods
-            # (`infer_sample_rate`, `recommended_chunk_samples`,
-            # `is_probability_output`, setters, `predict`) which require
-            # an actual loaded `Session` to invoke. Building a synthetic
-            # ONNX model that lets these run in the unit-test sandbox is
-            # a follow-up PR; the V3.0 sigmoid-on-probabilities regression
-            # IS caught by the pure-helper tests on `compute_confidence`
-            # / `output_is_probability` / `*_from_shape`, which are the
-            # ones the runtime path delegates to. Threshold is sized to
-            # the observed baseline (+ small headroom) so a future
-            # regression that introduces *new* missed mutants fails the
-            # gate while existing wrapper-only mutants stay tracked.
-            max_missed: 35
+            # Wrapper-method mutants on `BirdNetModel` (`infer_sample_rate`,
+            # `recommended_chunk_samples`, `is_probability_output`,
+            # setters, `predict`) used to be uncatchable without a real
+            # 541 MB BirdNET+ model. Two tiny (~220-byte) embedded ONNX
+            # models — `tiny_v24_test.onnx` and `tiny_v30_test.onnx` —
+            # now let those methods run inside unit tests. Threshold set
+            # to 0 because every mutant has a covering test today.
+            max_missed: 0
           - label: audio/extraction/extractor.rs
             slug: audio-extraction-extractor.rs
             file: crates/birdnet-core/src/audio/extraction/extractor.rs
-            # First-pass tests add WAV-length / pulse-offset checks for
-            # the spacer arithmetic plus four `build_extraction_filename`
-            # property tests. The remaining survivors are mostly format-
-            # conversion side-paths (freq-shift fallback, non-WAV
-            # output) that require a working ffmpeg/sox to test
-            # end-to-end. Same staging policy: ratchet down in a
-            # follow-up PR.
-            max_missed: 15
+            # Threshold 0 — every remaining mutant on the spacer
+            # arithmetic, the `||` predicate that gates conversion, the
+            # freq-shift fallback, and the WAV-metadata-embed branch is
+            # now covered by a dedicated test. The freq-shift and
+            # format-conversion tests skip themselves when neither
+            # ffmpeg nor sox is on PATH so a stripped-down CI runner
+            # doesn't false-fail; the main CI image has ffmpeg.
+            max_missed: 0
     steps:
       - uses: actions/checkout@v5
 
@@ -131,6 +125,14 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-mutants
+
+      - name: Install ffmpeg
+        # The extractor.rs tests for the format-conversion / freq-shift
+        # branches skip themselves when neither ffmpeg nor sox is on
+        # PATH. We need the tests to actually run during mutation testing
+        # (so the surviving-mutant count for those branches stays at 0),
+        # so install ffmpeg unconditionally.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
 
       - name: Run mutation testing on ${{ matrix.file }}
         # `--file` restricts mutation to one source file at a time so each

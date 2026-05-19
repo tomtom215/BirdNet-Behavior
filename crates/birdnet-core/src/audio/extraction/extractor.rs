@@ -321,11 +321,17 @@ mod tests {
 
     /// A detection that lies entirely past the end of the file should fail
     /// with a clear message — never with "start > stop" range inversion.
+    ///
+    /// The exact range in the error message is asserted here so a mutation
+    /// that swaps the `/` in `audio.samples.len() / audio.sample_rate` for
+    /// `*` (which would inflate `actual_duration_secs` to a huge value and
+    /// disable the `safe_start` clamp) is observable: under the mutation the
+    /// reported start would be `888_000` instead of `240_000`.
     #[test]
     fn extraction_past_end_of_file_fails_cleanly() {
         let tmp = tempfile::tempdir().unwrap();
         let src = tmp.path().join("2026-05-19-birdnet-09:00:00.wav");
-        write_silent_wav(&src, 5.0, 48_000);
+        write_silent_wav(&src, 5.0, 48_000); // file = 240_000 samples
 
         let cfg = ExtractionConfig {
             output_dir: tmp.path().join("out"),
@@ -337,15 +343,23 @@ mod tests {
         };
         let extractor = Extractor::new(cfg);
 
-        // Detection start past EOF: should clamp to file end, leaving an
-        // empty window → clean error rather than start>stop.
+        // Detection start past EOF: clamp should reduce both endpoints
+        // to actual_duration_secs (= 5.0 s), so start_sample == stop_sample
+        // == samples.len() == 240_000 and we get the "no usable audio
+        // range" error with both indices at 240_000.
         let err = extractor
             .extract_detection(&src, &det(20.0, 23.0))
             .expect_err("detection past EOF should fail");
         let msg = format!("{err}");
         assert!(
-            !msg.contains("invalid sample range") || msg.contains("no usable audio range"),
-            "error message changed shape; got: {msg}"
+            msg.contains("no usable audio range"),
+            "error should mention 'no usable audio range'; got: {msg}"
+        );
+        // Pin the exact reported range — this is what tightens the
+        // duration-divide mutation to fail.
+        assert!(
+            msg.contains("240000..240000 samples"),
+            "expected the past-EOF clamp to report 240000..240000, got: {msg}"
         );
     }
 
@@ -540,6 +554,191 @@ mod tests {
         assert_eq!(
             build_extraction_filename(&d, "flac"),
             "Eurasian_Magpie-93-2026-05-19-birdnet-09:00:00.flac"
+        );
+    }
+
+    // ─── Format-conversion + frequency-shift side paths ─────────────────
+    //
+    // These paths require ffmpeg or sox at runtime. The tests below detect
+    // that availability and skip themselves when neither tool is present,
+    // so they pass on minimal CI runners but actually exercise the
+    // branches on developer machines and on the main CI image. The
+    // mutants they kill are the `||`/`&&` swap on the
+    // `freq_shift_hz != 0 || needs_conversion()` predicate, the
+    // `shift_ok != ` flip in the fallback path, and the
+    // `target_format == AudioFormat::Wav` flip on the metadata-embed
+    // guard.
+
+    fn has_ffmpeg_or_sox() -> bool {
+        let Ok(path) = std::env::var("PATH") else {
+            return false;
+        };
+        std::env::split_paths(&path).any(|d| d.join("ffmpeg").is_file() || d.join("sox").is_file())
+    }
+
+    #[test]
+    fn extraction_with_mp3_target_produces_mp3_file() {
+        if !has_ffmpeg_or_sox() {
+            eprintln!("SKIP: neither ffmpeg nor sox available");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("2026-05-19-birdnet-09:00:00.wav");
+        write_silent_wav(&src, 30.0, 48_000);
+
+        let cfg = ExtractionConfig {
+            output_dir: tmp.path().join("out"),
+            audio_format: "mp3".into(),
+            recording_length: 30.0,
+            extraction_length: 6.0,
+            target_format: AudioFormat::Mp3, // needs_conversion = true
+            freq_shift_hz: 0,                // no freq shift
+        };
+        let extractor = Extractor::new(cfg);
+        let out = extractor
+            .extract_detection(&src, &det(10.0, 13.0))
+            .expect("MP3 extraction succeeds");
+
+        // Pins the `||` branch on line 116: with freq_shift_hz=0 and
+        // needs_conversion=true, the OR branch must fire. A mutant that
+        // swaps `||` for `&&` would skip the conversion (because LHS is
+        // false), leaving us with a WAV at the .mp3 path → the magic
+        // bytes assert below catches that.
+        assert!(out.exists(), "expected output at {}", out.display());
+        let head = std::fs::read(&out).expect("read output");
+        // MP3 frame sync = 0xFFE or 0xFFF (11 high bits set). ID3 prefix
+        // = "ID3". Either signature is acceptable as a "this is an MP3".
+        let is_mp3 = head.starts_with(b"ID3")
+            || (head.len() >= 2 && head[0] == 0xFF && (head[1] & 0xE0) == 0xE0);
+        assert!(
+            is_mp3,
+            "output is not an MP3 (no ID3 header or sync frame); first bytes = {:?}",
+            &head[..head.len().min(16)]
+        );
+    }
+
+    #[test]
+    fn extraction_with_freq_shift_writes_distinct_audio() {
+        if !has_ffmpeg_or_sox() {
+            eprintln!("SKIP: neither ffmpeg nor sox available");
+            return;
+        }
+        // Source is a 1 kHz sine wave; with freq_shift_hz != 0 the
+        // resulting clip's dominant frequency content shifts. We
+        // compare raw byte content rather than running a spectrum
+        // analyser: if the freq-shift branch on line 121 was inverted
+        // (`!=` ↔ `==`), the shift would be skipped and the output WAV
+        // would be byte-identical to the no-shift baseline.
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("2026-05-19-birdnet-09:00:00.wav");
+        let sample_rate = 48_000_u32;
+        let secs = 30.0_f32;
+        let spec = WavSpec {
+            channels: 1,
+            sample_rate,
+            bits_per_sample: 16,
+            sample_format: SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&src, spec).unwrap();
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss
+        )]
+        let total_samples = (secs * sample_rate as f32) as u32;
+        for i in 0..total_samples {
+            #[allow(clippy::cast_precision_loss)]
+            let t_secs = i as f32 / sample_rate as f32;
+            let amplitude = (t_secs * 2.0 * std::f32::consts::PI * 1_000.0).sin();
+            #[allow(clippy::cast_possible_truncation)]
+            let sample = (amplitude * 16_384.0) as i16;
+            writer.write_sample(sample).unwrap();
+        }
+        writer.finalize().unwrap();
+
+        // Baseline: no freq shift, mp3 conversion.
+        let cfg_base = ExtractionConfig {
+            output_dir: tmp.path().join("out_base"),
+            audio_format: "mp3".into(),
+            recording_length: 30.0,
+            extraction_length: 6.0,
+            target_format: AudioFormat::Mp3,
+            freq_shift_hz: 0,
+        };
+        let extractor_base = Extractor::new(cfg_base);
+        let base = extractor_base
+            .extract_detection(&src, &det(10.0, 13.0))
+            .expect("baseline extraction");
+        let base_bytes = std::fs::read(&base).expect("read baseline");
+
+        // Shifted: freq_shift_hz = +500, same mp3 conversion.
+        let cfg_shift = ExtractionConfig {
+            output_dir: tmp.path().join("out_shift"),
+            audio_format: "mp3".into(),
+            recording_length: 30.0,
+            extraction_length: 6.0,
+            target_format: AudioFormat::Mp3,
+            freq_shift_hz: 500,
+        };
+        let extractor_shift = Extractor::new(cfg_shift);
+        let shifted = extractor_shift
+            .extract_detection(&src, &det(10.0, 13.0))
+            .expect("shifted extraction");
+        let shift_bytes = std::fs::read(&shifted).expect("read shifted");
+
+        // If freq_shift is wired the two byte streams differ. If the
+        // `!=` on line 121 was flipped, shift_ok evaluates the wrong
+        // arm and the shift never runs → bytes match the baseline.
+        assert_ne!(
+            base_bytes, shift_bytes,
+            "freq shift produced byte-identical output — shift branch likely skipped"
+        );
+    }
+
+    #[test]
+    fn wav_target_embeds_metadata_in_output() {
+        // WAV target hits the `target_format == AudioFormat::Wav`
+        // branch on line 165, which embeds RIFF INFO metadata. A
+        // mutation that flips `==` to `!=` would skip the embed and
+        // the resulting WAV would lack the species-name bytes.
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("2026-05-19-birdnet-09:00:00.wav");
+        write_silent_wav(&src, 30.0, 48_000);
+
+        let cfg = ExtractionConfig {
+            output_dir: tmp.path().join("out"),
+            audio_format: "wav".into(),
+            recording_length: 30.0,
+            extraction_length: 6.0,
+            target_format: AudioFormat::Wav,
+            freq_shift_hz: 0,
+        };
+        let extractor = Extractor::new(cfg);
+        let out = extractor
+            .extract_detection(
+                &src,
+                &Detection {
+                    date: "2026-05-19".into(),
+                    time: "09:00:00".into(),
+                    scientific_name: "Pica pica".into(),
+                    common_name: "Eurasian_Magpie".into(),
+                    confidence: 0.85,
+                    start: 10.0,
+                    stop: 13.0,
+                    week: 20,
+                    file_name_extr: None,
+                },
+            )
+            .expect("WAV extraction succeeds");
+
+        // The metadata embed writes the species name into the RIFF
+        // INFO chunk; the resulting file should contain those bytes.
+        let bytes = std::fs::read(&out).expect("read output");
+        let needle = b"Pica pica";
+        assert!(
+            bytes.windows(needle.len()).any(|w| w == needle),
+            "expected the species name in embedded metadata; file does not contain {:?}",
+            String::from_utf8_lossy(needle)
         );
     }
 }
