@@ -1180,7 +1180,7 @@ mod tests {
     fn resolve_f32_handles_zero_default() {
         // privacy_threshold defaults to 0.0. Pin both branches against the
         // zero default so the `== 0.0` boundary surfaces if the helper
-        // gets mis-refactored to use `< EPSILON` again.
+        // gets refactored back to a `< EPSILON` form by mistake.
         assert!((resolve_f32_with_default(0.0, 0.0, Some(0.02)) - 0.02).abs() < f32::EPSILON);
         assert!((resolve_f32_with_default(0.0, 0.0, None) - 0.0).abs() < f32::EPSILON);
         assert!((resolve_f32_with_default(0.01, 0.0, Some(0.02)) - 0.01).abs() < f32::EPSILON);
