@@ -75,6 +75,38 @@ pub fn enforce_wal_mode(db_path: &Path) -> Result<(), ResilienceError> {
     Ok(())
 }
 
+/// Reclaim space and defragment the on-disk layout via `VACUUM`.
+///
+/// Intended to be called from a low-frequency background task (the binary
+/// schedules this weekly). Returns when the operation finishes — VACUUM
+/// holds an exclusive lock, so callers should make sure no other writer
+/// is active. The operation is idempotent and safe to run on a healthy
+/// database; on a corrupted one it returns an error rather than masking it.
+///
+/// # Errors
+///
+/// Returns `ResilienceError` if the database cannot be opened or `VACUUM`
+/// fails.
+pub fn vacuum_database(db_path: &Path) -> Result<(), ResilienceError> {
+    let conn = Connection::open(db_path)?;
+    conn.execute_batch("VACUUM;")?;
+    Ok(())
+}
+
+/// Force a WAL checkpoint to flush pending writes back into the main
+/// database file. Useful before backups, before unmounting, or on
+/// scheduled maintenance windows.
+///
+/// # Errors
+///
+/// Returns `ResilienceError` if the database cannot be opened or the
+/// checkpoint fails.
+pub fn checkpoint_wal(db_path: &Path) -> Result<(), ResilienceError> {
+    let conn = Connection::open(db_path)?;
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+    Ok(())
+}
+
 /// Run integrity check on a database.
 ///
 /// Uses `PRAGMA quick_check` for speed. For full check, use `full_integrity_check`.

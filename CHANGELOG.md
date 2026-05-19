@@ -9,6 +9,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Field-deployment hardening (24/7/365 unattended operation)
+
+- **systemd watchdog integration** (`src/sd_notify.rs`). The daemon now
+  speaks the `sd_notify` protocol natively (no extra dependency): sends
+  `READY=1` after the HTTP server binds, `WATCHDOG=1` every
+  `WATCHDOG_USEC / 2` from a background tokio task, and `STOPPING=1` on
+  graceful shutdown. Verified end-to-end against a real Unix datagram
+  socket: `READY=1 → WATCHDOG=1 …  → STOPPING=1`. Fixes the previously
+  broken combination of `WatchdogSec=120` (set in the systemd unit) with
+  no `sd_notify` call in the binary — under the old config systemd
+  would kill the daemon every 2 minutes in production.
+- **Periodic database maintenance** (`src/maintenance.rs`) — background
+  task that runs a daily `PRAGMA integrity_check`, a weekly WAL
+  checkpoint + `VACUUM`, and prunes the backup directory to the most
+  recent 14 snapshots. All best-effort with full logging; never crashes
+  the loop on transient failure.
+- **`vacuum_database` and `checkpoint_wal`** added to
+  `birdnet_db::resilience` so the binary can do scheduled maintenance
+  without taking a new direct `rusqlite` dependency.
+- **Hardened systemd unit** in `install.sh`:
+  - `Type=notify` + `NotifyAccess=main` + `WatchdogSec=120` —
+    process-supervision contract is now real.
+  - `ExecStartPre` runs `birdnet-behavior --doctor`; exit code 2
+    (errors) blocks startup so the journal shows *what is broken*
+    instead of a restart-loop.
+  - `ProtectSystem=strict`, `ProtectHome=read-only`, explicit
+    `ReadWritePaths`, `PrivateTmp=yes`, `NoNewPrivileges=yes`,
+    `LockPersonality=yes`, `MemoryDenyWriteExecute=yes`,
+    `RestrictRealtime=yes`, `RestrictNamespaces=yes`,
+    `SystemCallFilter=@system-service` minus the privileged / kernel /
+    debug / reboot / mount / cpu-emulation / clock / module groups.
+  - Resource ceilings: `MemoryMax=512M`, `MemoryHigh=384M`,
+    `TasksMax=512`, `LimitNPROC=256`, `OOMPolicy=stop`.
+  - `After=network-online.target sound.target time-sync.target` —
+    no startup race with mic enumeration or clock sync on slow-booting
+    hardware.
+  - `LogRateLimitIntervalSec=30` + `LogRateLimitBurst=1000` — a chatty
+    failure mode cannot exhaust the SD card.
+- **`docs/FIELD_DEPLOYMENT.md`** — 12-section runbook for unattended
+  deployments: hardware checklist, power & thermals, storage planning,
+  network resilience, system hardening, time synchronisation, watchdog
+  smoke test, backup policy, remote diagnostics, update strategy,
+  pre-flight checklist, and a symptom-keyed recovery runbook.
+
 - **`birdnet-behavior --doctor`** (alias `--preflight`) — a one-shot
   preflight diagnostic that runs ~12 environment checks (CPU, temp dir,
   config parse, every config value range, listen address, database
