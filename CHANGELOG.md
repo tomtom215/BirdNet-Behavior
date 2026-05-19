@@ -9,6 +9,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### Mutation testing extended to `src/daemon.rs` (item A1, PR #50 carryover)
+
+- **`src/daemon.rs` brought to `missed = 0` cargo-mutants.** PR #50
+  explicitly deferred this — the inline struct literals on
+  `SpeciesFilterConfig` / `PipelineConfig` / `ModelConfig` /
+  `ExtractionConfig` produced ~10 "delete field" mutants, and the
+  three orchestrator functions (`start_detection_daemon`,
+  `event_processor`, `dispatch_webhook`) had body-replacement
+  mutants that no unit test could observe. This release:
+  1. **Extracted four per-config builder helpers** —
+     `build_pipeline_config`, `build_model_config`,
+     `build_species_filter_config`, `build_extraction_config` —
+     each pinned by a dedicated unit test covering every field
+     individually so a "delete field" mutant on the struct literal
+     surfaces as a failing assertion.
+  2. **Extracted seven smaller pure helpers** to dissolve the
+     remaining inline boundary / arithmetic / boolean mutations:
+     `resolve_f32_with_default` (kills the
+     `(cli - DEFAULT).abs() < f32::EPSILON` family by using
+     bit-exact equality on the documented CLI default — same
+     trick PR #50 used for `parse_search_term` /
+     `strip_not_prefix`), `confidence_pct_trunc`,
+     `confidence_pct_round`, `latency_ms_to_seconds`,
+     `is_first_detection_today`, `passes_filter`,
+     `should_dispatch_notification`, `species_thresholds_log_count`,
+     `resolve_required_paths`, `extraction_output_dir`.
+  3. **Refactored `dispatch_webhook`** to return
+     `Result<u16, WebhookError>` and introduced `build_webhook_spec`
+     + `WebhookSpec` + `WebhookMethod` to encapsulate the inline
+     request-builder logic. The typed-error return makes the
+     `replace dispatch_webhook with ()` mutant unviable, and the
+     `build_webhook_spec` cells (`(GET, body)`, `(POST, body)`,
+     `(POST, none)`, unknown-method fallback) are unit-tested.
+  4. **Added two in-process integration tests** that catch the
+     remaining `replace start_detection_daemon -> Option<...> with None`
+     and `replace event_processor with ()` mutants:
+     `start_detection_daemon_returns_some_with_valid_inputs` stands
+     the daemon up against the tiny `tiny_v24_test.onnx` bundled at
+     `crates/birdnet-core/src/testdata/`, in-memory `AppState`, and
+     a tempdir watch dir; `event_processor_inserts_row_for_accepted_event`
+     drops a fixture `DetectionEvent` through the channel and
+     asserts the row lands in the DB (also pinning the migration-12
+     correlation-id round trip end-to-end).
+  5. **Mutation workflow updated** to include `src/daemon.rs` at
+     `max_missed = 0` in the matrix. Path filter updated. The
+     workflow's previous "deferred follow-up" note is replaced by
+     a record of how the mutants were dissolved.
+
+#### Web UI — `correlation_id` surfaced on detection-detail page (item A5)
+
+- **`/detections/detail?date=...&time=...` now renders the per-row
+  correlation id with a "Copy" affordance.** Migration 12 carries
+  the daemon's per-file id to durable storage; the operator-facing
+  detail page now closes the log → row traceability loop by
+  rendering the id alongside a one-click "Copy" button and the
+  exact `journalctl -u birdnet | grep <id>` command an admin would
+  run to pull the decode/infer/notify slice that produced the row.
+  Rows pre-dating migration 12 (BirdNET-Pi imports, quarantine-
+  approve writes) render no card at all — no empty-state noise.
+  Four new unit tests pin the empty/empty-string/non-empty/
+  malicious-content escaping cases.
+
+#### Test-fixture audit — last hand-coded `CREATE TABLE detections` removed (item F15)
+
+- **`crates/birdnet-db/src/sqlite/queries/heatmap.rs` and
+  `correlation.rs` test fixtures** were hand-coding a migration-1-
+  shape `CREATE TABLE detections` block inside their `setup()`
+  helpers. Both follow the exact anti-pattern PR #50 flagged on
+  the `tests/web_api*.rs` files — the schema silently drifts the
+  moment a new migration adds a column. Replaced both with
+  `crate::migration::migrate(&conn)` so the canonical schema is
+  always applied. Existing tests still pass; the
+  birdnet-migrate crate's own CREATE TABLE blocks (which model
+  BirdNET-Pi schemas, *not* our schema) are left alone.
+
+#### Drift gate — `DETECTION_COLS` / `map_detection_row` / `DETECTION_COL_NAMES` (item F16)
+
+- **`DETECTION_COL_NAMES` const list added** as a source-of-truth
+  pair to the joined `DETECTION_COLS` string. Four new
+  drift-gate tests pin the invariant: `DETECTION_COLS` must
+  equal `DETECTION_COL_NAMES.join(", ")`, the projection's
+  prepared-statement column count must match the names list, every
+  name must resolve against the migrated `detections` schema, and
+  `map_detection_row` must round-trip a real
+  `DetectionRecord` insert. Migration 12 needed three coordinated
+  edits across these three surfaces; the drift-gate tests turn
+  the next missed edit into a unit-test failure with a directly-
+  actionable message instead of the `"Invalid column type Text at
+  index N"` runtime errors that ate half a day in the PR #35
+  investigation.
+
 #### Persistence — log-to-row traceability for detections (item C9)
 
 - **Migration 12: `correlation_id TEXT` column on detections.** Closes

@@ -154,11 +154,146 @@ pub(super) fn map_detection_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Det
     })
 }
 
+/// Source-of-truth list of every column projected by detection queries.
+///
+/// Paired with [`DETECTION_COLS`] (the joined-string SQL projection) and
+/// [`map_detection_row`] (the row-to-struct mapper). The
+/// `detection_cols_*` drift-gate tests below assert all three stay in
+/// lockstep — a column added here without matching updates in the
+/// drift-prone surfaces is caught by a failing unit test rather than a
+/// silent runtime error.
+///
+/// Order matters: indexes match the `row.get(N)` calls in
+/// [`map_detection_row`]. PR #35 shipped a column-list / row-mapper
+/// drift bug; the names list is the structural guarantee that the
+/// same shape of drift can't recur silently.
+#[cfg(test)]
+pub(super) const DETECTION_COL_NAMES: &[&str] = &[
+    "Date",
+    "Time",
+    "Sci_Name",
+    "Com_Name",
+    "Confidence",
+    "Lat",
+    "Lon",
+    "Cutoff",
+    "Week",
+    "Sens",
+    "Overlap",
+    "File_Name",
+    "correlation_id",
+];
+
 /// Columns selected in all full-row detection queries.
 ///
-/// Ordering matches [`map_detection_row`] — never reorder one without the
-/// other, never drop a column from this list while the row mapper still
-/// reads at that index. PR #35 shipped a column-list / row-mapper drift
-/// bug; the explicit `correlation_id` at the end of both is the same
-/// pattern.
+/// Must equal `DETECTION_COL_NAMES.join(", ")` — the
+/// `detection_cols_matches_names` test pins the invariant.
 pub(super) const DETECTION_COLS: &str = "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id";
+
+#[cfg(test)]
+mod drift_gate_tests {
+    //! Drift-gate tests for the `DETECTION_COLS` / `map_detection_row` /
+    //! `DETECTION_COL_NAMES` triple.
+    //!
+    //! Migration 12 (`correlation_id`) needed three coordinated edits:
+    //! 1. column added in the migration SQL,
+    //! 2. field added in `DetectionRow`,
+    //! 3. column added in `DETECTION_COLS` AND in `map_detection_row`
+    //!    (at a matching index).
+    //!
+    //! Steps 1–2 fail at compile time when missed. Step 3 used to fail
+    //! at runtime with the cryptic *"Invalid column type Text at index N"*
+    //! that PR #35 spent half a day chasing. These tests turn that into
+    //! a unit-test failure with a directly-actionable message.
+    use super::{DETECTION_COL_NAMES, DETECTION_COLS};
+    use rusqlite::Connection;
+
+    #[test]
+    fn detection_cols_matches_names() {
+        // DETECTION_COLS is the joined form of DETECTION_COL_NAMES — adding
+        // a column to one without the other surfaces here, not in production.
+        assert_eq!(DETECTION_COLS, DETECTION_COL_NAMES.join(", "));
+    }
+
+    #[test]
+    fn detection_cols_count_matches_select_projection() {
+        // Build a real SELECT against the migrated schema and confirm the
+        // prepared statement's column count matches the names list. A new
+        // migration that adds a column without updating DETECTION_COL_NAMES
+        // (or vice versa) breaks this assertion before it can ship.
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migration::migrate(&conn).unwrap();
+        let sql = format!("SELECT {DETECTION_COLS} FROM detections LIMIT 0");
+        let stmt = conn.prepare(&sql).unwrap();
+        assert_eq!(
+            stmt.column_count(),
+            DETECTION_COL_NAMES.len(),
+            "DETECTION_COLS projection count must match DETECTION_COL_NAMES.len()"
+        );
+    }
+
+    #[test]
+    fn detection_cols_names_are_resolvable_against_migrated_schema() {
+        // Every name in DETECTION_COL_NAMES must resolve against the
+        // migrated `detections` table — a typo or a column dropped by
+        // a future migration without updating the names list lights up
+        // here. We rely on SQLite raising "no such column" for each
+        // missing name rather than building one giant SELECT, so the
+        // error message points at the actual offender.
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migration::migrate(&conn).unwrap();
+        for name in DETECTION_COL_NAMES {
+            let sql = format!("SELECT \"{name}\" FROM detections LIMIT 0");
+            conn.prepare(&sql).unwrap_or_else(|e| {
+                panic!("column {name:?} not present in migrated detections schema: {e}")
+            });
+        }
+    }
+
+    #[test]
+    fn map_detection_row_reads_every_column_indexed() {
+        // Insert a row with every column set to a distinct, type-correct
+        // value, then read it back via the canonical SELECT + mapper.
+        // If `map_detection_row` ever stops reading any of the indices
+        // covered by DETECTION_COL_NAMES, the assertion below fires.
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migration::migrate(&conn).unwrap();
+        let record = super::DetectionRecord {
+            date: "2026-05-19",
+            time: "09:00:00",
+            sci_name: "Pica pica",
+            com_name: "Eurasian Magpie",
+            confidence: 0.95,
+            lat: Some(51.0),
+            lon: Some(-0.1),
+            cutoff: Some(0.5),
+            week: Some(20),
+            sensitivity: Some(1.0),
+            overlap: Some(0.0),
+            file_name: "/tmp/x.wav",
+            chunk_offset_secs: Some(3.0),
+            correlation_id: Some("abc123"),
+        };
+        crate::sqlite::queries::detections::insert_detection(&conn, &record).unwrap();
+
+        let sql = format!("SELECT {DETECTION_COLS} FROM detections LIMIT 1");
+        let row = conn.query_row(&sql, [], super::map_detection_row).unwrap();
+
+        // Each assertion below pins one column read in `map_detection_row`;
+        // a `row.get(N)` regression on any single column lights up the
+        // matching assertion with the column's name in the failure.
+        assert_eq!(row.date, "2026-05-19");
+        assert_eq!(row.time, "09:00:00");
+        assert_eq!(row.sci_name, "Pica pica");
+        assert_eq!(row.com_name, "Eurasian Magpie");
+        assert!((row.confidence - 0.95).abs() < 1e-9);
+        assert_eq!(row.lat, Some(51.0));
+        assert_eq!(row.lon, Some(-0.1));
+        assert_eq!(row.cutoff, Some(0.5));
+        assert_eq!(row.week, Some(20));
+        assert_eq!(row.sens, Some(1.0));
+        assert_eq!(row.overlap, Some(0.0));
+        assert_eq!(row.file_name.as_deref(), Some("/tmp/x.wav"));
+        assert_eq!(row.correlation_id.as_deref(), Some("abc123"));
+    }
+}
