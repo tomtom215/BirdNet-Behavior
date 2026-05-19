@@ -406,8 +406,11 @@ pub fn run_daemon(
     // Create stop channel
     let (stop_tx, stop_rx) = mpsc::channel();
 
-    // Start file watcher
-    let (_watcher, file_rx) =
+    // Start file watcher. The `RecommendedWatcher` MUST live for the
+    // lifetime of the spawned thread — dropping it stops delivery and
+    // closes the channel. Bound to a name that the closure captures so
+    // `move ||` takes ownership and keeps it alive.
+    let (file_watcher, file_rx) =
         pipeline::watch_directory(&config.watch_dir).map_err(DaemonError::Pipeline)?;
 
     // Process existing files if requested
@@ -426,6 +429,12 @@ pub fn run_daemon(
 
     // Main daemon loop -- runs on current thread
     std::thread::spawn(move || {
+        // Keep the watcher alive for the lifetime of this thread.
+        // Without this the `RecommendedWatcher` gets dropped when
+        // `start_detection_daemon` returns, the underlying `notify`
+        // backend stops, and `file_rx` immediately reports
+        // `Disconnected` — silently breaking the watch path.
+        let _watcher = file_watcher;
         tracing::info!("detection daemon started");
 
         loop {

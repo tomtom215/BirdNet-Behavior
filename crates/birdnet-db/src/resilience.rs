@@ -360,7 +360,9 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let conn = open_or_create(tmp.path()).unwrap();
         conn.execute(
-            "INSERT INTO detections VALUES ('2026-03-11', '08:30:00', 'Turdus merula', 'Eurasian Blackbird', 0.87, 42.36, -71.06, 0.7, 10, 1.25, 0.0, 'test.wav')",
+            "INSERT INTO detections \
+             (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name) \
+             VALUES ('2026-03-11', '08:30:00', 'Turdus merula', 'Eurasian Blackbird', 0.87, 42.36, -71.06, 0.7, 10, 1.25, 0.0, 'test.wav')",
             [],
         )
         .unwrap();

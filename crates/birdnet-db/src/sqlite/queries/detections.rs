@@ -11,8 +11,15 @@ use crate::sqlite::types::{DETECTION_COLS, DetectionRecord, DetectionRow, map_de
 ///
 /// Returns `DbError` on insert failure.
 pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Result<(), DbError> {
+    // Explicit column list — `VALUES (?1, …, ?12)` without one was a
+    // schema-vs-insert drift waiting to happen and broke in production
+    // when migration 7 added `is_locked` as a 13th column. Naming the
+    // columns means new columns with DEFAULTs (like `is_locked`) keep
+    // this write path working unchanged.
     conn.execute(
-        "INSERT INTO detections VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        "INSERT INTO detections \
+         (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             record.date,
             record.time,
@@ -512,12 +519,12 @@ mod tests {
             sci_name: "Turdus merula",
             com_name: "Eurasian Blackbird",
             confidence: 0.87,
-            lat: "42.36",
-            lon: "-71.06",
-            cutoff: "0.7",
-            week: "10",
-            sensitivity: "1.25",
-            overlap: "0.0",
+            lat: Some(42.36),
+            lon: Some(-71.06),
+            cutoff: Some(0.7),
+            week: Some(10),
+            sensitivity: Some(1.25),
+            overlap: Some(0.0),
             file_name: "test.wav",
         };
         insert_detection(&conn, &record).unwrap();
