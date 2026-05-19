@@ -103,28 +103,43 @@ fn extract_input_shape(session: &Session) -> Result<Vec<usize>, InferenceError> 
         .ok_or_else(|| InferenceError::Shape("model has no inputs".into()))?;
 
     match input.dtype() {
-        #[allow(
-            clippy::cast_precision_loss,
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            clippy::cast_possible_wrap,
-            clippy::cast_lossless
-        )]
-        ValueType::Tensor { shape, .. } => Ok(shape
-            .iter()
-            .map(|&d| {
-                if d > 0 {
-                    // Fixed dimension — use it directly
-                    d as usize
-                } else {
-                    // Dynamic dimension (-1 in ONNX) — treat as batch size 1
-                    1
-                }
-            })
-            .collect()),
+        ValueType::Tensor { shape, .. } => Ok(shape.iter().copied().map(dim_to_usize).collect()),
         other => Err(InferenceError::Shape(format!(
             "expected Tensor input, got {other:?}"
         ))),
+    }
+}
+
+/// Pure helper: map a single ONNX dimension value to a usize for the
+/// pipeline's input-shape vector.
+///
+/// ONNX dimensions are signed `i64`s. The conventions we care about:
+/// * `d >= 1` — a concrete fixed dimension (e.g. 144 000 samples). Pass
+///   through unchanged as `usize`.
+/// * `d == 0` — an "empty" dimension. We substitute 1 (treat it as a
+///   single-element batch) so the downstream tensor builder still has a
+///   well-defined shape rather than producing a zero-length tensor.
+/// * `d < 0` — a dynamic / symbolic dimension (`-1` in ONNX, with the
+///   accompanying `dim_param` carrying a human name). Substitute 1; the
+///   real value is provided at inference time as the tensor we feed in.
+///
+/// Extracted from `extract_input_shape` so the boundary case `d == 0`
+/// (which `ort` does not produce in practice — it reports symbolic dims
+/// as `-1`) is observable to unit tests. Without this split, a mutation
+/// that swaps `>` for `>=` in the boundary check would be an equivalent
+/// mutant because no real model ever has `dim_value == 0`.
+#[must_use]
+pub const fn dim_to_usize(d: i64) -> usize {
+    if d > 0 {
+        // Positive ONNX dim. On 32-bit targets a single dim > usize::MAX
+        // would saturate to 1; we don't run on those targets in practice.
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let n = d as usize;
+        n
+    } else {
+        // Either dynamic (-1, the only value ort emits) or an unexpected
+        // zero from a hand-crafted model. Substitute 1.
+        1
     }
 }
 
@@ -817,11 +832,9 @@ mod tests {
     #[test]
     fn dynamic_shape_model_substitutes_one_for_symbolic_dims() {
         // Loads a model whose input has a symbolic batch dim
-        // (`dim_param = "batch"`). ort reports that as 0 in the
-        // extracted shape; `extract_input_shape` must substitute 1
-        // for any non-positive dim. A mutation `d > 0 → d >= 0`
-        // would let the 0 through and produce a shape containing 0
-        // — observable by inspecting the loaded model's `input_shape`.
+        // (`dim_param = "batch"`). ort reports symbolic dims as `-1`
+        // in the extracted shape; `extract_input_shape` must
+        // substitute 1 for any non-positive dim.
         let m = BirdNetModel::load_from_bytes(
             TINY_DYNAMIC_MODEL,
             tiny_labels(),
@@ -829,13 +842,73 @@ mod tests {
         )
         .expect("dynamic-shape model loads");
         let shape = m.input_shape();
-        // Every dimension must be ≥ 1 because the substitution maps
-        // dynamic / non-positive dims to 1. A surviving `d >= 0`
-        // mutant would leave a 0 in `shape`.
         for (i, &d) in shape.iter().enumerate() {
             assert!(
                 d >= 1,
                 "input_shape dim {i} is {d}; extract_input_shape failed to substitute 1 for a non-positive dim"
+            );
+        }
+    }
+
+    // ─── dim_to_usize: pure helper extracted to make d=0 testable ──────
+    //
+    // ort emits `-1` for symbolic dims, never `0`. That means the
+    // inline `d > 0` check used to be an "equivalent mutant" target
+    // for the `> → >=` mutation: the only input that differentiates
+    // them (`d == 0`) never actually occurs in shapes ort returns.
+    // Factoring out the pure helper lets us test the boundary
+    // directly so the mutation fails an assertion.
+
+    #[test]
+    fn dim_to_usize_positive_passes_through() {
+        assert_eq!(dim_to_usize(144_000), 144_000);
+        assert_eq!(dim_to_usize(96_000), 96_000);
+        assert_eq!(dim_to_usize(1), 1);
+    }
+
+    #[test]
+    fn dim_to_usize_zero_substitutes_one() {
+        // Pins the boundary that the `>` vs `>=` mutation would flip.
+        // Original `d > 0` says 0 is not positive → substitute 1.
+        // Mutated `d >= 0` would let 0 through → return 0.
+        assert_eq!(dim_to_usize(0), 1);
+    }
+
+    #[test]
+    fn dim_to_usize_negative_substitutes_one() {
+        // ONNX symbolic dim convention.
+        assert_eq!(dim_to_usize(-1), 1);
+        assert_eq!(dim_to_usize(-99), 1);
+        assert_eq!(dim_to_usize(i64::MIN), 1);
+    }
+
+    /// V2.4-style model has exactly one output. The `outputs.len() > 1`
+    /// check on the V3.0 / V2.4 selector must pick `outputs[0]` here;
+    /// a mutation `> → >=` would pick `outputs[1]` instead and the
+    /// runtime would either panic (out of bounds) or fail
+    /// `try_extract_tensor` → `predict` returns an error. Either way
+    /// the assertion below fails.
+    #[test]
+    fn predict_on_v24_model_with_single_output_selects_index_zero() {
+        let mut m = load_tiny_v24();
+        m.set_confidence_threshold(0.0); // accept everything
+        let audio = vec![0.5_f32; 144_000];
+        let detections = m
+            .predict(&audio, "2026-05-19", "09:00:00", 0.0, 3.0, 20)
+            .expect("predict on V2.4 (single output) must not panic");
+        // 11 labels × sigmoid(0.5) ≈ 0.622 (V2.4 is the logit path).
+        // top_n defaults to 10; expect a non-empty result.
+        assert!(
+            !detections.is_empty(),
+            "predict returned no detections from V2.4 model — likely an out-of-bounds output selection"
+        );
+        // sigmoid(sensitivity=1.0 * raw=0.5) = 1/(1+e^-0.5) ≈ 0.6225
+        for d in &detections {
+            assert!(
+                (d.confidence - 0.6224).abs() < 1e-3,
+                "expected V2.4 confidence ~0.6225 from sigmoid(0.5); got {} \
+                 (suggests outputs[1] was read instead of outputs[0])",
+                d.confidence
             );
         }
     }
