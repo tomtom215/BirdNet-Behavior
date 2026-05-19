@@ -59,8 +59,15 @@ reqwest = { version = "0.13.3", features = ["blocking", "json"] }
 # Email (SMTP) — pure Rust TLS via rustls, no OpenSSL
 lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "smtp-transport", "builder"] }
 
-# System monitoring — CPU, memory, temperature
-sysinfo = { version = "0.39", default-features = false, features = ["system", "component"] }
+# System monitoring — CPU, memory, temperature.
+#
+# Pinned to the 0.38 line: sysinfo 0.39.x raised its MSRV to Rust 1.95,
+# which would force us to either bump the workspace MSRV in lockstep or
+# fail the Dockerfile's 1.88-toolchain build. We track the 0.38 line until
+# we're ready to make that MSRV move; the API changes we adopted (`nothing()`,
+# `refresh(bool)`, `Component::temperature() -> Option<f32>`) already landed
+# in 0.38.x so the source-side changes don't need to revert.
+sysinfo = { version = "0.38", default-features = false, features = ["system", "component"] }
 
 # Async IO utilities (file streaming for recording serving)
 tokio-util = { version = "0.7", features = ["io"] }

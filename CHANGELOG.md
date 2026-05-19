@@ -105,12 +105,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in `crates/birdnet-core/benches/audio_pipeline.rs`, which compiles
   unchanged against 0.8. Dropped transitive deps `is-terminal` and
   `hermit-abi`.
-- **`sysinfo` 0.32 → 0.39** — required two source changes:
-  `RefreshKind::new()` is now `RefreshKind::nothing()` (the old name
-  was misleading), and `Component::temperature()` now returns
-  `Option<f32>` so we use `.and_then` instead of `.map` to propagate
-  the inner `None`. `Components::refresh()` now takes a `bool` arg;
-  we pass `true` so hot-removed sensors don't leave stale readings.
+- **`sysinfo` 0.32 → 0.38** — Dependabot proposed 0.39, but that line
+  raised MSRV to Rust 1.95 which would have forced us to lift the
+  workspace MSRV from 1.88 in lockstep (and broken the Dockerfile's
+  `rust:1.88-slim` builder). 0.38.4 carries the same API changes the
+  source-side updates already adopted — `RefreshKind::new()` →
+  `RefreshKind::nothing()` (rename, same behaviour),
+  `Components::refresh()` takes a `bool` arg, and
+  `Component::temperature()` returns `Option<f32>` so we use
+  `.and_then` instead of `.map`. Pinned to `^0.38` with a comment
+  explaining the MSRV rationale.
 - **`rubato` 1.0.1 → 2.0.0** — major-version bump with no source
   changes needed in our consumer (the resampler API we use is stable
   across the bump). Brought in transitive `audioadapter` 3 to match.
