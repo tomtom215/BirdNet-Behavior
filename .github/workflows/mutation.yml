@@ -138,7 +138,7 @@ jobs:
 
       - name: Comment summary on PR
         if: github.event_name == 'pull_request' && always()
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v3
         with:
           header: mutants
           message: |
