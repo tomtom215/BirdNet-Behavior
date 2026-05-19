@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Detection confidence on BirdNET+ V3.0 preview models** improves
+  substantially because the daemon now adopts the model's recommended
+  chunk length instead of always using the V2.4-era 3.0-second default.
+  Same `Pica_pica_30s.wav` fixture, same model, only chunk length
+  changed: Eurasian Magpie confidence went from **52.2 %** (3.0 s × 32 kHz =
+  96 000 samples) to **71.5 %** (4.5 s × 32 kHz = 144 000 samples).
+  Python ONNX Runtime reference at 4.5 s gives the same 71.8 %, so the
+  Rust pipeline now sits at parity with the reference implementation
+  rather than 19 percentage points below it. Investigation, evidence
+  and the comparison against BirdNET V2.4 (which BirdNET-Pi used and
+  which still hits 93–97 % on the same WAV) live in the new ADR
+  [`docs/architecture/15-model-chunking.md`](docs/architecture/15-model-chunking.md).
+- `BirdNetModel::recommended_chunk_samples()` and
+  `recommended_chunk_secs()` expose the per-model chunk size so the
+  daemon can pick the right value without hard-coding model knowledge
+  in the pipeline.
+
 ### Added
 
 #### Field-deployment hardening (24/7/365 unattended operation)

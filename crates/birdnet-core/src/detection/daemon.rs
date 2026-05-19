@@ -375,6 +375,24 @@ pub fn run_daemon(
         pipeline_config.raw_audio_input = raw_mode;
     }
 
+    // Adopt the model's recommended chunk length when it differs from the
+    // pipeline default. This matters most for V3.0 preview3 (dynamic input
+    // shape): with 3.0 s × 32 kHz = 96 000 samples the Magpie reference
+    // confidence on the bundled WAV is ~0.52, but at 4.5 s × 32 kHz =
+    // 144 000 samples it rises to ~0.72. The model accepts variable length
+    // so this is purely a per-chunk accuracy tuning. Fixed-shape V2.4 keeps
+    // its trained 3.0 s window.
+    let model_chunk_secs = model.recommended_chunk_secs();
+    let configured_chunk_secs = pipeline_config.chunk_duration_secs;
+    if (model_chunk_secs - configured_chunk_secs).abs() > 0.01 {
+        tracing::info!(
+            configured_chunk_secs = configured_chunk_secs,
+            model_chunk_secs,
+            "adjusting pipeline chunk duration to match model recommendation"
+        );
+        pipeline_config.chunk_duration_secs = model_chunk_secs;
+    }
+
     // Load species filter (metadata model)
     let mut species_filter = config.metadata_model_path.as_ref().map_or_else(
         || SpeciesFilter::new_passthrough(config.species_filter.clone()),

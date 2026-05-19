@@ -273,8 +273,10 @@ impl BirdNetModel {
     fn build_input_tensor(&self, audio: &[f32]) -> Result<Tensor<f32>, InferenceError> {
         let expected_len = match self.input_shape.as_slice() {
             [_, n] | [_, _, n] if *n > 1 => *n,
-            // All-dynamic or rank-1 shape → use V3.0 default chunk size
-            [1] | [1, 1] | [1, 1, 1] => 96_000,
+            // All-dynamic or rank-1 shape → V3.0 preview: 4.5 s of 32 kHz
+            // audio = 144_000 samples. See `recommended_chunk_samples`
+            // docstring for the empirical justification.
+            [1] | [1, 1] | [1, 1, 1] => 144_000,
             other => {
                 return Err(InferenceError::Shape(format!(
                     "unsupported input shape: {other:?}, expected [1, N] or [1, 1, N]"
@@ -317,6 +319,42 @@ impl BirdNetModel {
             96_000 => 32_000, // BirdNET+ V3.0 (32 kHz × 3 s)
             _ => 48_000,      // BirdNET   V2.4 (48 kHz × 3 s) or unknown
         }
+    }
+
+    /// Recommended chunk length, in raw audio samples, for the pipeline to
+    /// feed this model.
+    ///
+    /// * Fixed-shape models report their own training length directly.
+    /// * **Dynamic-shape models** (BirdNET+ V3.0 preview, `[1, 1]`) accept any
+    ///   length, but they were trained on longer windows than the V2.4
+    ///   default of 3.0 s. Empirically, the preview3 model peaks at
+    ///   ~4.5 s of audio: on the bundled `Pica_pica_30s.wav` fixture the
+    ///   best-chunk Eurasian Magpie confidence climbs from 0.52 at
+    ///   3.0 s × 32 kHz (96 000 samples) to 0.72 at 4.5 s × 32 kHz
+    ///   (144 000 samples). We therefore default the dynamic case to
+    ///   144 000 samples — the same numeric chunk size V2.4 used, just
+    ///   at the lower sample rate.
+    /// * The chunk-length sweep that justifies the default lives in
+    ///   `docs/architecture/15-model-chunking.md`.
+    #[must_use]
+    pub fn recommended_chunk_samples(&self) -> usize {
+        match self.input_shape.as_slice() {
+            // Fixed shapes — use the dimension the model declares.
+            [_, n] | [_, _, n] if *n > 1 => *n,
+            // Dynamic shape — empirically-optimal default for V3.0 preview.
+            _ => 144_000,
+        }
+    }
+
+    /// Recommended chunk length, in seconds, derived from the model's
+    /// recommended sample count and its inferred sample rate.
+    #[must_use]
+    pub fn recommended_chunk_secs(&self) -> f32 {
+        let samples = self.recommended_chunk_samples();
+        let sr = self.infer_sample_rate();
+        #[allow(clippy::cast_precision_loss)]
+        let result = samples as f32 / sr as f32;
+        result
     }
 
     /// Returns `true` if this model expects raw audio samples as input.
