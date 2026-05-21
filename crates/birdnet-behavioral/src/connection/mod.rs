@@ -56,6 +56,39 @@ impl From<DuckDbError> for AnalyticsError {
     }
 }
 
+/// Default cap on `DuckDB`'s buffer-pool memory.
+///
+/// Without an explicit limit `DuckDB` sizes its buffer pool at ~80% of system
+/// RAM, which OOM-kills the whole process during a heavy analytics query on a
+/// 1–4 GB Raspberry Pi. This conservative default leaves room for inference,
+/// the web server, and the OS within the unit's memory budget; larger hosts
+/// can raise it via the `BIRDNET_DUCKDB_MEMORY_LIMIT` environment variable.
+const DEFAULT_DUCKDB_MEMORY_LIMIT: &str = "256MB";
+
+/// Resolve the `DuckDB` memory limit from an optional configured value,
+/// falling back to [`DEFAULT_DUCKDB_MEMORY_LIMIT`] when unset or malformed.
+///
+/// The value is interpolated into a `SET memory_limit='…'` statement, so only
+/// well-formed literals (a leading digit then digits / unit letters / `.` /
+/// `%`) are accepted — anything else falls back to the default. That both
+/// keeps untrusted text out of the statement and avoids a startup failure from
+/// an operator typo.
+fn resolve_memory_limit(configured: Option<&str>) -> String {
+    match configured.map(str::trim) {
+        Some(v) if is_valid_memory_limit(v) => v.to_owned(),
+        _ => DEFAULT_DUCKDB_MEMORY_LIMIT.to_owned(),
+    }
+}
+
+/// Whether `v` is a safe `DuckDB` memory-limit literal: a leading ASCII digit
+/// followed only by alphanumerics, `.`, or `%` (e.g. `512MB`, `2GB`, `80%`,
+/// `1073741824`).
+fn is_valid_memory_limit(v: &str) -> bool {
+    v.bytes().next().is_some_and(|b| b.is_ascii_digit())
+        && v.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'%')
+}
+
 /// A file-backed `DuckDB` connection for behavioral analytics.
 #[derive(Debug)]
 pub struct AnalyticsDb {
@@ -73,6 +106,14 @@ impl AnalyticsDb {
     /// cannot be created.
     pub fn open(path: &Path) -> Result<Self, AnalyticsError> {
         let conn = Connection::open(path)?;
+
+        // Bound DuckDB's buffer memory before any query runs, so a heavy
+        // analytics query cannot OOM the process on a small Pi (DuckDB
+        // otherwise targets ~80% of system RAM).
+        let memory_limit =
+            resolve_memory_limit(std::env::var("BIRDNET_DUCKDB_MEMORY_LIMIT").ok().as_deref());
+        conn.execute_batch(&format!("SET memory_limit='{memory_limit}';"))?;
+
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS detections (
                 Date TEXT NOT NULL,
@@ -158,5 +199,44 @@ mod tests {
         let (db, _tmp) = make_db();
         assert!(db.path().exists());
         assert!(!db.extension_loaded());
+    }
+
+    #[test]
+    fn memory_limit_defaults_when_unset_or_malformed() {
+        assert_eq!(resolve_memory_limit(None), DEFAULT_DUCKDB_MEMORY_LIMIT);
+        assert_eq!(resolve_memory_limit(Some("")), DEFAULT_DUCKDB_MEMORY_LIMIT);
+        assert_eq!(
+            resolve_memory_limit(Some("MB")),
+            DEFAULT_DUCKDB_MEMORY_LIMIT
+        ); // no leading digit
+        // Anything that could break out of the SET statement falls back.
+        assert_eq!(
+            resolve_memory_limit(Some("256MB';DROP TABLE detections;--")),
+            DEFAULT_DUCKDB_MEMORY_LIMIT
+        );
+    }
+
+    #[test]
+    fn memory_limit_accepts_well_formed_values() {
+        assert_eq!(resolve_memory_limit(Some("512MB")), "512MB");
+        assert_eq!(resolve_memory_limit(Some("2GB")), "2GB");
+        assert_eq!(resolve_memory_limit(Some(" 80% ")), "80%");
+        assert_eq!(resolve_memory_limit(Some("1073741824")), "1073741824");
+    }
+
+    #[test]
+    fn open_applies_a_bounded_memory_limit() {
+        let (db, _tmp) = make_db();
+        let limit: String = db
+            .conn()
+            .query_row("SELECT current_setting('memory_limit')", [], |r| r.get(0))
+            .unwrap();
+        // Our 256MB cap reads back sub-GiB (e.g. "244.1 MiB"); crucially it is
+        // NOT the multi-GiB ~80%-of-RAM default, so a big analytics query can't
+        // OOM a small Pi.
+        assert!(
+            !limit.is_empty() && !limit.contains("GiB"),
+            "expected a bounded sub-GiB memory_limit, got {limit:?}"
+        );
     }
 }
