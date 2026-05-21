@@ -11,7 +11,8 @@
 
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use crate::audio::capture::is_audio_file;
@@ -114,6 +115,7 @@ pub struct DetectionEvent {
 /// Handle for controlling a running daemon.
 pub struct DaemonHandle {
     stop_tx: mpsc::Sender<()>,
+    heartbeat: Arc<AtomicU64>,
 }
 
 impl fmt::Debug for DaemonHandle {
@@ -126,6 +128,16 @@ impl DaemonHandle {
     /// Signal the daemon to stop.
     pub fn stop(&self) {
         let _ = self.stop_tx.send(());
+    }
+
+    /// A shared counter the detection loop increments on every iteration.
+    ///
+    /// Sample it periodically (e.g. from the systemd watchdog pinger): if it
+    /// stops advancing, the detection pipeline has hung and the process should
+    /// be restarted rather than left silently frozen.
+    #[must_use]
+    pub fn heartbeat(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.heartbeat)
     }
 }
 
@@ -464,6 +476,11 @@ pub fn run_daemon(
     // Create stop channel
     let (stop_tx, stop_rx) = mpsc::channel();
 
+    // Liveness heartbeat: the loop bumps this once per iteration so an external
+    // watchdog can distinguish a hung pipeline (no progress) from an idle one.
+    let heartbeat = Arc::new(AtomicU64::new(0));
+    let heartbeat_loop = Arc::clone(&heartbeat);
+
     // Start file watcher. The `RecommendedWatcher` MUST live for the
     // lifetime of the spawned thread — dropping it stops delivery and
     // closes the channel. Bound to a name that the closure captures so
@@ -496,6 +513,12 @@ pub fn run_daemon(
         tracing::info!("detection daemon started");
 
         loop {
+            // Heartbeat: record that the loop is still cycling so a watchdog
+            // can tell a hung pipeline from an idle one. Bumped per iteration;
+            // one in-flight file is processed well within the watchdog window,
+            // so per-chunk heartbeating isn't needed to avoid false restarts.
+            heartbeat_loop.fetch_add(1, Ordering::Relaxed);
+
             // Check for stop signal (non-blocking)
             if stop_rx.try_recv().is_ok() {
                 tracing::info!("detection daemon stopping");
@@ -561,7 +584,7 @@ pub fn run_daemon(
         tracing::info!("detection daemon stopped");
     });
 
-    Ok(DaemonHandle { stop_tx })
+    Ok(DaemonHandle { stop_tx, heartbeat })
 }
 
 /// Process any audio files already present in the watch directory.
@@ -673,8 +696,77 @@ mod tests {
     #[test]
     fn daemon_handle_stop_does_not_panic() {
         let (stop_tx, _stop_rx) = mpsc::channel();
-        let handle = DaemonHandle { stop_tx };
+        let handle = DaemonHandle {
+            stop_tx,
+            heartbeat: Arc::new(AtomicU64::new(0)),
+        };
         handle.stop(); // Should not panic even if receiver is alive
+    }
+
+    #[test]
+    fn daemon_handle_exposes_shared_heartbeat() {
+        let (stop_tx, _stop_rx) = mpsc::channel();
+        let heartbeat = Arc::new(AtomicU64::new(7));
+        let handle = DaemonHandle {
+            stop_tx,
+            heartbeat: Arc::clone(&heartbeat),
+        };
+        // The accessor returns a handle onto the *same* counter, so a watchdog
+        // observes the loop's increments.
+        assert_eq!(handle.heartbeat().load(Ordering::Relaxed), 7);
+        heartbeat.fetch_add(1, Ordering::Relaxed);
+        assert_eq!(handle.heartbeat().load(Ordering::Relaxed), 8);
+    }
+
+    #[test]
+    fn run_daemon_loop_advances_heartbeat() {
+        // A healthy detection loop must keep advancing its heartbeat, so the
+        // watchdog never mistakes a *running* daemon for a hung one and
+        // needlessly restarts a healthy field station. Stand the real loop up
+        // against the tiny bundled model and assert the counter climbs.
+        const TINY_V24: &[u8] = include_bytes!("../testdata/tiny_v24_test.onnx");
+
+        let tmp = tempfile::tempdir().unwrap();
+        let watch_dir = tmp.path().join("recs");
+        std::fs::create_dir_all(&watch_dir).unwrap();
+        let model_path = tmp.path().join("model.onnx");
+        std::fs::write(&model_path, TINY_V24).unwrap();
+        let labels_path = tmp.path().join("labels.txt");
+        let labels = (0..11)
+            .map(|i| format!("Species{i}_Bird {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&labels_path, labels).unwrap();
+
+        let config = DaemonConfig {
+            watch_dir,
+            model_path,
+            labels_path,
+            pipeline: PipelineConfig::default(),
+            model: ModelConfig::default(),
+            process_existing: false,
+            metadata_model_path: None,
+            species_filter: crate::inference::species_filter::SpeciesFilterConfig::default(),
+            privacy_threshold: 0.0,
+            latitude: None,
+            longitude: None,
+            species_thresholds: std::collections::HashMap::new(),
+        };
+
+        let (event_tx, _event_rx) = mpsc::channel();
+        let handle = run_daemon(&config, event_tx).expect("daemon starts with the tiny model");
+
+        let hb = handle.heartbeat();
+        let start = hb.load(Ordering::Relaxed);
+        // The loop polls on a 500 ms timeout, so ~1.2 s is at least two cycles.
+        std::thread::sleep(Duration::from_millis(1_200));
+        let after = hb.load(Ordering::Relaxed);
+        handle.stop();
+
+        assert!(
+            after > start,
+            "detection loop heartbeat must advance while running (start={start}, after={after})"
+        );
     }
 
     // ─── Correlation-ID generator ─────────────────────────────────────────
