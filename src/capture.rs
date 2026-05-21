@@ -17,7 +17,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use birdnet_core::audio::capture::{AudioFormat, CaptureManager, CaptureSource, RecordingConfig};
+use birdnet_core::audio::capture::{
+    AudioFormat, CaptureError, CaptureManager, CaptureSource, RecordingConfig,
+};
 use birdnet_scheduler::{DailySchedule, ScheduleConfig};
 use birdnet_web::metrics::SharedMetrics;
 
@@ -26,7 +28,27 @@ use crate::cli::Cli;
 mod schedule;
 mod supervisor;
 
-use supervisor::{Supervisor, source_gauge_label};
+use supervisor::{Source, Supervisor, source_gauge_label};
+
+/// Bridge the real [`CaptureManager`] into the supervisor's `Source`
+/// abstraction. This trivial delegation is the supervisor's only contact with
+/// a live subprocess, so it lives here in the orchestration module rather than
+/// in `supervisor.rs`, whose restart/backoff/schedule logic is exhaustively
+/// fake-source-tested under the mutation gate (a real subprocess can't be
+/// driven from a unit test).
+impl Source for CaptureManager {
+    fn is_running(&mut self) -> bool {
+        Self::is_running(self)
+    }
+
+    fn start(&mut self) -> Result<(), CaptureError> {
+        Self::start(self)
+    }
+
+    fn stop(&mut self) {
+        Self::stop(self);
+    }
+}
 
 /// How often the supervisor reconciles each source toward its desired state.
 /// Short enough to notice a dead subprocess and resume after a scheduled

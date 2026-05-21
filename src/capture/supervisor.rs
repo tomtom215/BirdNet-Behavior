@@ -3,7 +3,7 @@
 //!
 //! # Why this exists
 //!
-//! [`CaptureManager`] knows how to *start* and *stop* a recording
+//! `CaptureManager` knows how to *start* and *stop* a recording
 //! subprocess (`arecord` / `ffmpeg`), but on its own it never notices when
 //! that subprocess dies. A bumped USB microphone, an `ffmpeg` crash, or an
 //! RTSP camera reboot leaves a dead process that is never respawned — so on
@@ -40,7 +40,7 @@
 
 use std::time::{Duration, Instant};
 
-use birdnet_core::audio::capture::{CaptureError, CaptureManager, CaptureSource};
+use birdnet_core::audio::capture::{CaptureError, CaptureSource};
 use birdnet_web::metrics::SharedMetrics;
 
 /// First retry delay after a source is found dead.
@@ -57,7 +57,7 @@ const DOWN_WARN_AFTER: Duration = Duration::from_secs(120);
 /// Cadence for repeating the "still down" warning after the first one.
 const DOWN_WARN_EVERY: Duration = Duration::from_secs(300);
 
-/// The slice of [`CaptureManager`] behaviour the supervisor depends on.
+/// The slice of `CaptureManager` behaviour the supervisor depends on.
 ///
 /// Abstracted into a trait so unit tests can inject a fake process that
 /// "dies" on command and exercise the restart path without a real
@@ -70,26 +70,12 @@ pub(super) trait Source {
     ///
     /// # Errors
     ///
-    /// Propagates whatever [`CaptureManager::start`] would return (tool
+    /// Propagates whatever `CaptureManager::start` would return (tool
     /// missing, spawn failure, …).
     fn start(&mut self) -> Result<(), CaptureError>;
 
     /// Stop the subprocess.
     fn stop(&mut self);
-}
-
-impl Source for CaptureManager {
-    fn is_running(&mut self) -> bool {
-        Self::is_running(self)
-    }
-
-    fn start(&mut self) -> Result<(), CaptureError> {
-        Self::start(self)
-    }
-
-    fn stop(&mut self) {
-        Self::stop(self);
-    }
 }
 
 /// Gauge label for a capture source.
