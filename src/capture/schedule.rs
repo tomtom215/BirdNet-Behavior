@@ -1,13 +1,13 @@
-//! Recording-schedule parsing and the time-gate monitor loop.
+//! Recording-schedule parsing and the hand-rolled UTC clock.
 //!
 //! Turns the `--recording-schedule` CLI flag (`all-day` / `solar` /
-//! `fixed:HH:MM-HH:MM`) into a [`ScheduleConfig`], and runs the background
-//! loop that logs when the recording gate opens and closes.
+//! `fixed:HH:MM-HH:MM`) into a [`ScheduleConfig`], converts Unix time to a
+//! civil date ([`civil_from_unix_secs`]) for evaluating the schedule gate, and
+//! reports whether the clock looks NTP-synced ([`secs_look_synced`]). Acting on
+//! the gate (starting/stopping capture) is the supervisor's job; this module is
+//! pure parsing + clock.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-
-use birdnet_scheduler::{DailySchedule, Location, RecordingWindow, ScheduleConfig};
+use birdnet_scheduler::{Location, RecordingWindow, ScheduleConfig};
 
 use crate::cli::Cli;
 
@@ -94,29 +94,44 @@ fn resolve_location(cli: &Cli, config: Option<&birdnet_core::config::Config>) ->
     Location::new(lat, lon).ok()
 }
 
-/// Get the current UTC time as `(year, month, day, minutes_since_midnight)`.
-pub(super) fn utc_now() -> (u32, u32, u32, u32) {
-    use std::time::{SystemTime, UNIX_EPOCH};
+/// Unix-time floor below which the system clock is treated as unsynced.
+///
+/// A Raspberry Pi has no battery-backed RTC, so before NTP syncs it commonly
+/// reports the epoch or a stale build-time value. `2024-01-01T00:00:00Z` is
+/// safely before this project's deployment era yet far above any unset-clock
+/// reading, so a value below it means "time isn't trustworthy yet".
+const CLOCK_SYNCED_FLOOR_SECS: u64 = 1_704_067_200;
 
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+/// Whether the system clock (as a Unix timestamp in seconds) looks NTP-synced.
+///
+/// Pure so the boundary is unit-testable. A `false` result tells callers to
+/// fail *open* — keep recording rather than trust a bogus date for solar
+/// scheduling — until the clock becomes plausible.
+pub(super) const fn secs_look_synced(secs: u64) -> bool {
+    secs >= CLOCK_SYNCED_FLOOR_SECS
+}
 
-    // Simple UTC date calculation.
+/// Convert a Unix timestamp (seconds since 1970-01-01 UTC) into
+/// `(year, month, day, minutes_since_midnight)`.
+///
+/// Pure (no clock access) so the date arithmetic can be property-tested
+/// directly. Implements Howard Hinnant's `civil_from_days`:
+/// <http://howardhinnant.github.io/date_algorithms.html>.
+pub(super) fn civil_from_unix_secs(secs: u64) -> (u32, u32, u32, u32) {
     let days = secs / 86400;
     let time_of_day = secs % 86400;
+    #[allow(clippy::cast_possible_truncation)]
     let minutes = (time_of_day / 60) as u32;
 
-    // Convert days since epoch to (year, month, day).
-    // Algorithm from http://howardhinnant.github.io/date_algorithms.html
     #[allow(
         clippy::cast_possible_wrap,
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss
     )]
     let z = days as i64 + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    // `z` is always >= 0 here — a u64 timestamp cannot predate the epoch — so
+    // Hinnant's proleptic negative-era branch is unreachable; divide directly.
+    let era = z / 146_097;
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let doe = (z - era * 146_097) as u32;
     let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
@@ -131,53 +146,16 @@ pub(super) fn utc_now() -> (u32, u32, u32, u32) {
     (y as u32, m, d, minutes)
 }
 
-/// Background loop that logs schedule transitions.
-///
-/// Checks every 60 seconds whether the recording gate is open or closed
-/// and logs transitions. The `CaptureManager` itself handles the actual
-/// start/stop; this loop provides observability.
-#[allow(clippy::needless_pass_by_value)]
-pub(super) fn schedule_monitor_loop(stop: Arc<AtomicBool>, config: ScheduleConfig) {
-    let mut was_allowed = true;
-
-    loop {
-        if stop.load(Ordering::Relaxed) {
-            break;
-        }
-
-        std::thread::sleep(std::time::Duration::from_secs(60));
-
-        if stop.load(Ordering::Relaxed) {
-            break;
-        }
-
-        let (year, month, day, minutes_now) = utc_now();
-        let daily = DailySchedule::for_date(&config, year, month, day);
-        let allowed = daily.is_allowed(minutes_now);
-
-        if allowed != was_allowed {
-            if allowed {
-                tracing::info!(
-                    minutes = minutes_now,
-                    "recording schedule: gate OPEN — recording should resume"
-                );
-            } else {
-                tracing::info!(
-                    minutes = minutes_now,
-                    "recording schedule: gate CLOSED — recording should pause"
-                );
-            }
-            was_allowed = allowed;
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{parse_fixed_window, parse_hhmm, parse_schedule_config, utc_now};
+    use super::{
+        CLOCK_SYNCED_FLOOR_SECS, civil_from_unix_secs, parse_fixed_window, parse_hhmm,
+        parse_schedule_config, resolve_location, secs_look_synced,
+    };
     use crate::cli::Cli;
     use birdnet_scheduler::traits::RecordingGate;
     use clap::Parser;
+    use proptest::prelude::*;
 
     /// A default `Cli` with the recording schedule overridden — the only
     /// field these schedule-parsing tests vary.
@@ -186,6 +164,8 @@ mod tests {
         cli.recording_schedule = schedule.to_string();
         cli
     }
+
+    // ---- parse_hhmm --------------------------------------------------------
 
     #[test]
     fn parse_hhmm_valid() {
@@ -204,6 +184,23 @@ mod tests {
     }
 
     #[test]
+    fn parse_hhmm_rejects_wrong_part_count() {
+        assert_eq!(parse_hhmm("1:2:3"), None);
+        assert_eq!(parse_hhmm("12"), None);
+    }
+
+    #[test]
+    fn parse_hhmm_boundary_values() {
+        // Pins the `>= 24` / `>= 60` guards at their exact boundaries.
+        assert_eq!(parse_hhmm("23:00"), Some(1380));
+        assert_eq!(parse_hhmm("00:59"), Some(59));
+        assert_eq!(parse_hhmm("24:00"), None);
+        assert_eq!(parse_hhmm("00:60"), None);
+    }
+
+    // ---- parse_fixed_window ------------------------------------------------
+
+    #[test]
     fn parse_fixed_window_valid() {
         let w = parse_fixed_window("06:00-20:00").unwrap();
         assert!(w.is_allowed(720)); // noon
@@ -216,6 +213,8 @@ mod tests {
         assert!(parse_fixed_window("20:00-06:00").is_none());
         assert!(parse_fixed_window("").is_none());
     }
+
+    // ---- parse_schedule_config ---------------------------------------------
 
     #[test]
     fn parse_schedule_all_day() {
@@ -232,6 +231,7 @@ mod tests {
         assert!(config.night_inhibit);
         assert_eq!(config.pre_sunrise_offset_min, 30);
         assert_eq!(config.post_sunset_offset_min, 30);
+        assert!(config.fixed_window.is_none());
     }
 
     #[test]
@@ -239,14 +239,170 @@ mod tests {
         let cli = cli_with_schedule("fixed:08:00-18:00");
         let config = parse_schedule_config(&cli, None);
         assert!(config.fixed_window.is_some());
+        // The fixed branch must not also assert a solar night-inhibit.
+        assert!(!config.night_inhibit);
     }
 
     #[test]
-    fn utc_now_returns_valid_values() {
-        let (year, month, day, minutes) = utc_now();
-        assert!(year >= 2024);
-        assert!((1..=12).contains(&month));
-        assert!((1..=31).contains(&day));
-        assert!(minutes < 1440);
+    fn parse_schedule_invalid_fixed_falls_back_to_all_day() {
+        let cli = cli_with_schedule("fixed:99:99");
+        let config = parse_schedule_config(&cli, None);
+        assert!(config.fixed_window.is_none());
+        assert!(!config.night_inhibit);
+    }
+
+    #[test]
+    fn parse_schedule_respects_night_inhibit_flag() {
+        let mut cli = cli_with_schedule("all-day");
+        cli.night_inhibit = true;
+        let config = parse_schedule_config(&cli, None);
+        assert!(config.night_inhibit);
+        assert!(config.fixed_window.is_none());
+    }
+
+    #[test]
+    fn parse_schedule_carries_location() {
+        let mut cli = cli_with_schedule("solar");
+        cli.latitude = Some(40.0);
+        cli.longitude = Some(-105.0);
+        let config = parse_schedule_config(&cli, None);
+        assert!(config.location.is_some());
+    }
+
+    // ---- resolve_location --------------------------------------------------
+
+    #[test]
+    fn resolve_location_from_cli() {
+        let mut cli = Cli::parse_from(["birdnet-behavior"]);
+        cli.latitude = Some(40.0);
+        cli.longitude = Some(-105.0);
+        assert!(resolve_location(&cli, None).is_some());
+    }
+
+    #[test]
+    fn resolve_location_requires_both_coords() {
+        let mut cli = Cli::parse_from(["birdnet-behavior"]);
+        cli.latitude = Some(40.0); // longitude missing
+        assert!(resolve_location(&cli, None).is_none());
+    }
+
+    #[test]
+    fn resolve_location_none_without_coords() {
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        assert!(resolve_location(&cli, None).is_none());
+    }
+
+    // ---- secs_look_synced / civil_from_unix_secs ---------------------------
+
+    #[test]
+    fn clock_below_floor_is_unsynced() {
+        assert!(!secs_look_synced(0)); // epoch — the classic unset-RTC reading
+        assert!(!secs_look_synced(CLOCK_SYNCED_FLOOR_SECS - 1));
+    }
+
+    #[test]
+    fn clock_at_or_above_floor_is_synced() {
+        assert!(secs_look_synced(CLOCK_SYNCED_FLOOR_SECS));
+        assert!(secs_look_synced(1_900_000_000)); // year 2030
+    }
+
+    #[test]
+    fn civil_epoch_is_1970() {
+        assert_eq!(civil_from_unix_secs(0), (1970, 1, 1, 0));
+    }
+
+    #[test]
+    fn civil_end_of_first_day() {
+        // 1970-01-01 23:59 UTC.
+        assert_eq!(
+            civil_from_unix_secs(23 * 3600 + 59 * 60),
+            (1970, 1, 1, 23 * 60 + 59)
+        );
+    }
+
+    #[test]
+    fn civil_known_timestamp() {
+        // 1_700_000_000 == 2023-11-14T22:13:20Z (independently verifiable).
+        assert_eq!(
+            civil_from_unix_secs(1_700_000_000),
+            (2023, 11, 14, 22 * 60 + 13)
+        );
+    }
+
+    // ---- oracle: Hinnant's inverse, used to cross-check ---------------------
+
+    fn is_leap(y: i64) -> bool {
+        (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+    }
+
+    fn days_in_month(y: i64, m: u32) -> u32 {
+        match m {
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+            4 | 6 | 9 | 11 => 30,
+            2 if is_leap(y) => 29,
+            2 => 28,
+            other => panic!("invalid month {other}"),
+        }
+    }
+
+    /// Days since 1970-01-01 for civil `(y, m, d)` — Hinnant's
+    /// `days_from_civil`, the exact inverse of `civil_from_unix_secs`.
+    fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+        let y = if m <= 2 { y - 1 } else { y };
+        let era = (if y >= 0 { y } else { y - 399 }) / 400;
+        let yoe = y - era * 400; // [0, 399]
+        let mp = if m > 2 { m - 3 } else { m + 9 };
+        let doy = (153 * mp + 2) / 5 + d - 1; // [0, 365]
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+        era * 146_097 + doe - 719_468
+    }
+
+    #[test]
+    fn civil_matches_oracle_every_day_for_centuries() {
+        // Walk every calendar day from 1970 through 2200 and assert the
+        // forward conversion matches an independently-advanced civil date.
+        // This exercises every month length, every leap day (Feb 29), and
+        // the century rule — 2100 is divisible by 4 but is NOT a leap year.
+        let mut y = 1970i64;
+        let mut m = 1u32;
+        let mut d = 1u32;
+        let end = days_from_civil(2201, 1, 1);
+        let mut day = 0i64;
+        while day < end {
+            let secs = u64::try_from(day).expect("non-negative day") * 86_400 + 12 * 3600;
+            let expected = (u32::try_from(y).expect("year fits u32"), m, d, 720u32);
+            assert_eq!(civil_from_unix_secs(secs), expected, "at day offset {day}");
+
+            day += 1;
+            d += 1;
+            if d > days_in_month(y, m) {
+                d = 1;
+                m += 1;
+                if m > 12 {
+                    m = 1;
+                    y += 1;
+                }
+            }
+        }
+    }
+
+    proptest! {
+        /// Round-trip: build a timestamp from a civil date via the oracle,
+        /// then assert the forward conversion recovers it.
+        #[test]
+        fn civil_round_trips(
+            y in 1970i64..=4000,
+            m in 1u32..=12,
+            d in 1u32..=28,
+            secs_of_day in 0u64..86_400,
+        ) {
+            let base = u64::try_from(days_from_civil(y, i64::from(m), i64::from(d)))
+                .expect("non-negative") * 86_400;
+            let (ry, rm, rd, rmin) = civil_from_unix_secs(base + secs_of_day);
+            prop_assert_eq!(ry, u32::try_from(y).expect("year fits u32"));
+            prop_assert_eq!(rm, m);
+            prop_assert_eq!(rd, d);
+            prop_assert_eq!(rmin, u32::try_from(secs_of_day / 60).expect("minutes fit u32"));
+        }
     }
 }

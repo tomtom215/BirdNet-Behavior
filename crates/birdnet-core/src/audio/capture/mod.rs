@@ -9,7 +9,7 @@
 //! |--------|---------------|
 //! | `types` | `CaptureSource`, `RecordingConfig`, `AudioFormat`, `CaptureError` |
 //! | `process` | `CaptureProcess`, spawn helpers, tool availability checks |
-//! | `manager` | `CaptureManager` lifecycle (start/stop/restart) |
+//! | `manager` | `CaptureManager` lifecycle (start/stop/liveness) |
 //! | `disk` | `DiskUsage`, `disk_usage`, `recording_stats`, `cleanup_old_recordings` |
 //! | `tmpfs` | `TmpfsConfig`, `TmpfsError`, tmpfs mount/unmount helpers |
 

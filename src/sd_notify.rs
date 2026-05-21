@@ -23,6 +23,8 @@
 use std::os::unix::net::UnixDatagram;
 #[cfg(unix)]
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 /// Send a single notification message to the systemd notify socket.
@@ -94,10 +96,21 @@ pub fn watchdog_ping() -> bool {
 /// unset (i.e. running outside systemd, or the unit did not configure a
 /// watchdog). The interval is taken from `WATCHDOG_USEC` and halved.
 ///
-/// When `metrics` is `Some`, every successful ping bumps the
+/// When `heartbeat` is `Some`, the ping is **gated on detection-loop
+/// progress**: each interval we ping only if the counter advanced since the
+/// last ping. A stalled counter means the pipeline hung, so we deliberately
+/// withhold the ping and let systemd's `WatchdogSec` fire — a frozen daemon
+/// gets restarted instead of looking healthy forever. With `None` (e.g.
+/// `--web-only`, no detection loop) we ping unconditionally: this task running
+/// is itself proof the runtime is live.
+///
+/// When `metrics` is `Some`, every delivered ping bumps the
 /// `birdnet_watchdog_pings_total` counter, giving operators a Prometheus-
 /// readable signal that the supervisor link is alive.
-pub fn spawn_watchdog_pinger(metrics: Option<birdnet_web::metrics::SharedMetrics>) {
+pub fn spawn_watchdog_pinger(
+    metrics: Option<birdnet_web::metrics::SharedMetrics>,
+    heartbeat: Option<Arc<AtomicU64>>,
+) {
     if std::env::var_os("NOTIFY_SOCKET").is_none() {
         return;
     }
@@ -109,6 +122,7 @@ pub fn spawn_watchdog_pinger(metrics: Option<birdnet_web::metrics::SharedMetrics
     tracing::info!(
         watchdog_interval_secs = interval.as_secs(),
         ping_every_secs = ping_every.as_secs(),
+        gated_on_detection_loop = heartbeat.is_some(),
         "starting systemd watchdog pinger"
     );
     tokio::spawn(async move {
@@ -116,15 +130,39 @@ pub fn spawn_watchdog_pinger(metrics: Option<birdnet_web::metrics::SharedMetrics
         // Skip the immediate first tick — systemd considers the unit healthy
         // until WatchdogSec elapses, so an early ping is unnecessary.
         ticker.tick().await;
+        // The heartbeat value at the previous ping; used to detect progress.
+        let mut last_seen = heartbeat.as_ref().map_or(0, |h| h.load(Ordering::Relaxed));
         loop {
             ticker.tick().await;
-            if watchdog_ping()
-                && let Some(m) = metrics.as_ref()
-            {
-                m.inc_watchdog_pings();
+            let (do_ping, seen) = watchdog_should_ping(heartbeat.as_deref(), last_seen);
+            last_seen = seen;
+            if do_ping {
+                if watchdog_ping()
+                    && let Some(m) = metrics.as_ref()
+                {
+                    m.inc_watchdog_pings();
+                }
+            } else {
+                tracing::error!(
+                    "detection loop heartbeat stalled; withholding watchdog ping so systemd restarts the hung daemon"
+                );
             }
         }
     });
+}
+
+/// Decide whether to send a watchdog ping this interval, given the optional
+/// detection-loop heartbeat and the value seen at the previous ping.
+///
+/// Returns `(should_ping, heartbeat_to_remember)`. With no heartbeat we always
+/// ping; with one we ping only if it advanced (a stalled counter means the
+/// pipeline hung and the watchdog should be allowed to fire).
+#[must_use]
+fn watchdog_should_ping(heartbeat: Option<&AtomicU64>, last_seen: u64) -> (bool, u64) {
+    heartbeat.map_or((true, last_seen), |hb| {
+        let current = hb.load(Ordering::Relaxed);
+        (current != last_seen, current)
+    })
 }
 
 /// Parse the systemd-supplied `WATCHDOG_USEC` env var (microseconds) into
@@ -196,5 +234,28 @@ mod tests {
             return;
         }
         assert!(!notify("READY=1"));
+    }
+
+    #[test]
+    fn watchdog_pings_unconditionally_without_heartbeat() {
+        // No detection loop to gate on (e.g. --web-only): always ping, and
+        // carry the previous `last_seen` through unchanged.
+        assert_eq!(watchdog_should_ping(None, 0), (true, 0));
+        assert_eq!(watchdog_should_ping(None, 99), (true, 99));
+    }
+
+    #[test]
+    fn watchdog_pings_when_heartbeat_advances() {
+        // Loop made progress since the last ping → ping, remember the new value.
+        let hb = AtomicU64::new(10);
+        assert_eq!(watchdog_should_ping(Some(&hb), 5), (true, 10));
+    }
+
+    #[test]
+    fn watchdog_withholds_ping_when_heartbeat_stalled() {
+        // Counter unchanged since the last ping → pipeline hung → withhold the
+        // ping so systemd's WatchdogSec fires.
+        let hb = AtomicU64::new(42);
+        assert_eq!(watchdog_should_ping(Some(&hb), 42), (false, 42));
     }
 }

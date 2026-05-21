@@ -39,7 +39,32 @@ pub async fn run(
                     tracing::info!(details = %result.details, "database healthy");
                 }
             }
-            Err(e) => tracing::error!(error = %e, "database recovery failed"),
+            Err(e) => {
+                // Corrupt and unrecoverable (no good backup). Never write to a
+                // corrupt database: quarantine it for offline recovery and
+                // start fresh, so an unattended station keeps recording rather
+                // than refusing to boot. Only refuse to start if we cannot even
+                // move the corrupt file aside.
+                tracing::error!(
+                    error = %e,
+                    path = %db_path.display(),
+                    "database is corrupt and no good backup exists; quarantining before starting fresh"
+                );
+                let quarantined = birdnet_db::resilience::quarantine_corrupt_database(&db_path)
+                    .map_err(|qe| {
+                        format!(
+                            "database is corrupt and could not be quarantined ({qe}); refusing to \
+                             start to avoid writing to a corrupt database — restore a backup or move \
+                             {} aside manually",
+                            db_path.display()
+                        )
+                    })?;
+                tracing::error!(
+                    quarantined_to = %quarantined.display(),
+                    "corrupt database quarantined; starting with a fresh database. Restore a backup \
+                     or recover the quarantined file to keep historical detections"
+                );
+            }
         }
     }
 
@@ -103,9 +128,9 @@ pub async fn run(
 
     // Start background subsystems.
     let _disk_manager_thread = helpers::start_disk_manager(&cli, config.as_ref(), &state);
-    let _capture_managers = capture::start_capture_manager(&cli, config.as_ref());
+    let _capture_handle = capture::start_capture_manager(&cli, config.as_ref(), state.metrics());
 
-    let _daemon_handle = if cli.web_only {
+    let daemon_handle = if cli.web_only {
         tracing::info!("running in web-only mode (no detection daemon)");
         None
     } else {
@@ -183,7 +208,14 @@ pub async fn run(
     // begin pinging the watchdog. If we are not running under systemd these
     // are no-ops.
     sd_notify::ready();
-    sd_notify::spawn_watchdog_pinger(Some(metrics_for_watchdog));
+    // Gate the watchdog on detection-loop progress: if the pipeline hangs, the
+    // heartbeat stops advancing, the pinger withholds WATCHDOG=1, and systemd
+    // restarts us instead of leaving a frozen daemon running. In web-only mode
+    // there is no detection loop, so the pinger falls back to unconditional pings.
+    let detection_heartbeat = daemon_handle
+        .as_ref()
+        .map(birdnet_core::detection::daemon::DaemonHandle::heartbeat);
+    sd_notify::spawn_watchdog_pinger(Some(metrics_for_watchdog), detection_heartbeat);
 
     // Use `into_make_service_with_connect_info` so the per-IP rate limiter
     // can read the client socket address from request extensions.

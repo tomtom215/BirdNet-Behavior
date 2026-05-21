@@ -46,3 +46,8 @@ lcov.info
 tarpaulin-report.html
 mutants.out/
 mutants.out.old/
+
+# proptest failure-case seeds. Regenerated locally whenever a proptest fails —
+# including every time cargo-mutants makes one fail to catch a mutant — so the
+# directory is noise rather than a curated regression corpus here.
+proptest-regressions/
