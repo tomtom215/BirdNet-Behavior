@@ -123,7 +123,9 @@ fn civil_from_unix_secs(secs: u64) -> (u32, u32, u32, u32) {
         clippy::cast_sign_loss
     )]
     let z = days as i64 + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    // `z` is always >= 0 here — a u64 timestamp cannot predate the epoch — so
+    // Hinnant's proleptic negative-era branch is unreachable; divide directly.
+    let era = z / 146_097;
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let doe = (z - era * 146_097) as u32;
     let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;

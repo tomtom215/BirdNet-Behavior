@@ -100,19 +100,18 @@ pub(super) fn source_gauge_label(source: &CaptureSource) -> String {
 /// `0` attempts → no delay (the first attempt fires immediately); then
 /// `2s, 4s, 8s, …` doubling up to [`BACKOFF_CAP`].
 #[must_use]
-const fn backoff_delay(attempts_since_healthy: u32) -> Duration {
+fn backoff_delay(attempts_since_healthy: u32) -> Duration {
     if attempts_since_healthy == 0 {
         return Duration::ZERO;
     }
-    // Clamp the shift so the doubling can never overflow the `u64`.
-    let shift = if attempts_since_healthy > 21 {
-        20
-    } else {
-        attempts_since_healthy - 1
-    };
-    let secs = BACKOFF_BASE.as_secs() << shift;
-    let cap = BACKOFF_CAP.as_secs();
-    Duration::from_secs(if secs > cap { cap } else { secs })
+    // Cap the shift (so the doubling can't overflow) and then cap the delay.
+    // `.min` is used rather than `if a > b { .. }` so each bound is observable
+    // on its own: with the comparison form the shift-clamp boundary (21) and
+    // the cap boundary coincide with their neighbours, making `>`→`>=` an
+    // equivalent (unkillable) mutation.
+    let shift = (attempts_since_healthy - 1).min(20);
+    let secs = (BACKOFF_BASE.as_secs() << shift).min(BACKOFF_CAP.as_secs());
+    Duration::from_secs(secs)
 }
 
 /// Whether a "still down" warning is due right now.
@@ -636,5 +635,30 @@ mod tests {
         assert_eq!(sup.sources[1].source.start_calls, 1);
         assert_eq!(gauge(&m, "local"), Some(1));
         assert_eq!(gauge(&m, "RTSP_1"), Some(0));
+    }
+
+    // ---- "source down for N min" warning ----------------------------------
+
+    #[test]
+    fn long_down_source_records_warning() {
+        // Exercises `maybe_warn_down`: a source that stays down past the warn
+        // threshold must record `last_down_warn` (the observable effect of the
+        // otherwise log-only warning).
+        let m = metrics();
+        let mut sup = one(FakeSource::always_failing());
+        let t0 = Instant::now();
+
+        sup.tick(t0, true, &m);
+        assert!(
+            sup.sources[0].last_down_warn.is_none(),
+            "no warning before the threshold elapses"
+        );
+
+        // Still down well past the warn threshold.
+        sup.tick(t0 + DOWN_WARN_AFTER + Duration::from_secs(1), true, &m);
+        assert!(
+            sup.sources[0].last_down_warn.is_some(),
+            "a source down past the threshold must record a warning"
+        );
     }
 }
