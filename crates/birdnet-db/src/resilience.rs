@@ -526,7 +526,10 @@ mod tests {
         // The corrupt data is preserved for offline recovery, not deleted.
         assert!(quarantined.exists());
         assert_eq!(std::fs::read(&quarantined).unwrap(), b"corrupt");
-        assert_eq!(std::fs::read(with_suffix(&quarantined, "-wal")).unwrap(), b"wal");
+        assert_eq!(
+            std::fs::read(with_suffix(&quarantined, "-wal")).unwrap(),
+            b"wal"
+        );
         assert!(
             quarantined
                 .file_name()
