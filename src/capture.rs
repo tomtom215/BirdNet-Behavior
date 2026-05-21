@@ -1,17 +1,20 @@
 //! Audio capture manager startup with recording schedule integration.
 //!
 //! Resolves capture source from CLI flags or config, then starts the
-//! `CaptureManager` subprocess lifecycle. Integrates `birdnet-scheduler`
-//! to gate recording based on time-of-day / solar position.
+//! `CaptureManager` subprocess lifecycle. The recording-schedule parsing and
+//! the time-gate monitor loop live in the [`schedule`] submodule; this module
+//! owns the capture-source resolution and process orchestration.
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 use birdnet_core::audio::capture::{AudioFormat, CaptureManager, CaptureSource, RecordingConfig};
-use birdnet_scheduler::{DailySchedule, Location, RecordingWindow, ScheduleConfig};
+use birdnet_scheduler::DailySchedule;
 
 use crate::cli::Cli;
+
+mod schedule;
 
 /// Handle returned from [`start_capture_manager`] that keeps recording alive
 /// and manages schedule-based pausing.
@@ -21,126 +24,6 @@ pub struct CaptureHandle {
     _manager: CaptureManager,
     /// Shared flag to stop the schedule loop.
     stop_signal: Arc<AtomicBool>,
-}
-
-/// Parse a schedule string from CLI into a `ScheduleConfig`.
-///
-/// Supported formats:
-/// - `"all-day"` — no restriction
-/// - `"solar"` — sunrise-to-sunset (requires lat/lon and night-inhibit)
-/// - `"fixed:HH:MM-HH:MM"` — fixed daily window
-fn parse_schedule_config(
-    cli: &Cli,
-    config: Option<&birdnet_core::config::Config>,
-) -> ScheduleConfig {
-    let location = resolve_location(cli, config);
-
-    let schedule_str = cli.recording_schedule.trim().to_lowercase();
-
-    if schedule_str == "solar" {
-        return ScheduleConfig {
-            location,
-            pre_sunrise_offset_min: cli.twilight_offset,
-            post_sunset_offset_min: cli.twilight_offset,
-            night_inhibit: true,
-            fixed_window: None,
-        };
-    }
-
-    if let Some(fixed_spec) = schedule_str.strip_prefix("fixed:") {
-        if let Some(window) = parse_fixed_window(fixed_spec) {
-            return ScheduleConfig {
-                location: None,
-                pre_sunrise_offset_min: 0,
-                post_sunset_offset_min: 0,
-                night_inhibit: false,
-                fixed_window: Some(window),
-            };
-        }
-        tracing::warn!(spec = %fixed_spec, "invalid fixed schedule, falling back to all-day");
-    }
-
-    // "all-day" or unrecognized — but respect --night-inhibit flag.
-    ScheduleConfig {
-        location,
-        pre_sunrise_offset_min: cli.twilight_offset,
-        post_sunset_offset_min: cli.twilight_offset,
-        night_inhibit: cli.night_inhibit,
-        fixed_window: None,
-    }
-}
-
-/// Parse `"HH:MM-HH:MM"` into a `RecordingWindow`.
-fn parse_fixed_window(spec: &str) -> Option<RecordingWindow> {
-    let parts: Vec<&str> = spec.split('-').collect();
-    if parts.len() != 2 {
-        return None;
-    }
-    let start = parse_hhmm(parts[0])?;
-    let end = parse_hhmm(parts[1])?;
-    RecordingWindow::fixed(start, end).ok()
-}
-
-/// Parse `"HH:MM"` into minutes since midnight.
-fn parse_hhmm(s: &str) -> Option<u32> {
-    let parts: Vec<&str> = s.trim().split(':').collect();
-    if parts.len() != 2 {
-        return None;
-    }
-    let h: u32 = parts[0].parse().ok()?;
-    let m: u32 = parts[1].parse().ok()?;
-    if h >= 24 || m >= 60 {
-        return None;
-    }
-    Some(h * 60 + m)
-}
-
-/// Resolve latitude/longitude from CLI flags or config.
-fn resolve_location(cli: &Cli, config: Option<&birdnet_core::config::Config>) -> Option<Location> {
-    let lat = cli
-        .latitude
-        .or_else(|| config?.get_parsed::<f64>("LATITUDE").ok())?;
-    let lon = cli
-        .longitude
-        .or_else(|| config?.get_parsed::<f64>("LONGITUDE").ok())?;
-    Location::new(lat, lon).ok()
-}
-
-/// Get the current UTC time as `(year, month, day, minutes_since_midnight)`.
-fn utc_now() -> (u32, u32, u32, u32) {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-
-    // Simple UTC date calculation.
-    let days = secs / 86400;
-    let time_of_day = secs % 86400;
-    let minutes = (time_of_day / 60) as u32;
-
-    // Convert days since epoch to (year, month, day).
-    // Algorithm from http://howardhinnant.github.io/date_algorithms.html
-    #[allow(
-        clippy::cast_possible_wrap,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss
-    )]
-    let z = days as i64 + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let doe = (z - era * 146_097) as u32;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let y = i64::from(yoe) + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    (y as u32, m, d, minutes)
 }
 
 /// Resolve all RTSP URLs from CLI flags and config.
@@ -235,7 +118,7 @@ pub fn start_capture_manager(
     };
 
     // Parse schedule configuration.
-    let schedule_config = parse_schedule_config(cli, config);
+    let schedule_config = schedule::parse_schedule_config(cli, config);
     let is_all_day = schedule_config.fixed_window.is_none() && !schedule_config.night_inhibit;
 
     if is_all_day {
@@ -250,7 +133,7 @@ pub fn start_capture_manager(
     }
 
     // Check if we should start recording now based on schedule.
-    let (year, month, day, minutes_now) = utc_now();
+    let (year, month, day, minutes_now) = schedule::utc_now();
     let daily = DailySchedule::for_date(&schedule_config, year, month, day);
     let should_start = daily.is_allowed(minutes_now);
 
@@ -309,7 +192,7 @@ pub fn start_capture_manager(
         let stop = Arc::clone(&handles[0].stop_signal);
         let sched = schedule_config;
         std::thread::spawn(move || {
-            schedule_monitor_loop(stop, sched);
+            schedule::schedule_monitor_loop(stop, sched);
         });
     }
 
@@ -318,181 +201,4 @@ pub fn start_capture_manager(
     }
 
     handles
-}
-
-/// Background loop that logs schedule transitions.
-///
-/// Checks every 60 seconds whether the recording gate is open or closed
-/// and logs transitions. The `CaptureManager` itself handles the actual
-/// start/stop; this loop provides observability.
-#[allow(clippy::needless_pass_by_value)]
-fn schedule_monitor_loop(stop: Arc<AtomicBool>, config: ScheduleConfig) {
-    let mut was_allowed = true;
-
-    loop {
-        if stop.load(Ordering::Relaxed) {
-            break;
-        }
-
-        std::thread::sleep(std::time::Duration::from_secs(60));
-
-        if stop.load(Ordering::Relaxed) {
-            break;
-        }
-
-        let (year, month, day, minutes_now) = utc_now();
-        let daily = DailySchedule::for_date(&config, year, month, day);
-        let allowed = daily.is_allowed(minutes_now);
-
-        if allowed != was_allowed {
-            if allowed {
-                tracing::info!(
-                    minutes = minutes_now,
-                    "recording schedule: gate OPEN — recording should resume"
-                );
-            } else {
-                tracing::info!(
-                    minutes = minutes_now,
-                    "recording schedule: gate CLOSED — recording should pause"
-                );
-            }
-            was_allowed = allowed;
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use birdnet_scheduler::traits::RecordingGate;
-
-    #[test]
-    fn parse_hhmm_valid() {
-        assert_eq!(parse_hhmm("06:00"), Some(360));
-        assert_eq!(parse_hhmm("20:30"), Some(1230));
-        assert_eq!(parse_hhmm("00:00"), Some(0));
-        assert_eq!(parse_hhmm("23:59"), Some(1439));
-    }
-
-    #[test]
-    fn parse_hhmm_invalid() {
-        assert_eq!(parse_hhmm("24:00"), None);
-        assert_eq!(parse_hhmm("12:60"), None);
-        assert_eq!(parse_hhmm("abc"), None);
-        assert_eq!(parse_hhmm(""), None);
-    }
-
-    #[test]
-    fn parse_fixed_window_valid() {
-        let w = parse_fixed_window("06:00-20:00").unwrap();
-        assert!(w.is_allowed(720)); // noon
-        assert!(!w.is_allowed(300)); // 05:00
-    }
-
-    #[test]
-    fn parse_fixed_window_invalid() {
-        assert!(parse_fixed_window("06:00").is_none());
-        assert!(parse_fixed_window("20:00-06:00").is_none());
-        assert!(parse_fixed_window("").is_none());
-    }
-
-    #[test]
-    fn parse_schedule_all_day() {
-        let cli = test_cli("all-day");
-        let config = parse_schedule_config(&cli, None);
-        assert!(config.fixed_window.is_none());
-        assert!(!config.night_inhibit);
-    }
-
-    #[test]
-    fn parse_schedule_solar() {
-        let cli = test_cli("solar");
-        let config = parse_schedule_config(&cli, None);
-        assert!(config.night_inhibit);
-        assert_eq!(config.pre_sunrise_offset_min, 30);
-        assert_eq!(config.post_sunset_offset_min, 30);
-    }
-
-    #[test]
-    fn parse_schedule_fixed() {
-        let cli = test_cli("fixed:08:00-18:00");
-        let config = parse_schedule_config(&cli, None);
-        assert!(config.fixed_window.is_some());
-    }
-
-    #[test]
-    fn utc_now_returns_valid_values() {
-        let (year, month, day, minutes) = utc_now();
-        assert!(year >= 2024);
-        assert!((1..=12).contains(&month));
-        assert!((1..=31).contains(&day));
-        assert!(minutes < 1440);
-    }
-
-    /// Helper to create a minimal `Cli` for schedule parsing tests.
-    fn test_cli(schedule: &str) -> Cli {
-        Cli {
-            config: PathBuf::from("/dev/null"),
-            listen: "127.0.0.1:8502".to_string(),
-            web_only: false,
-            check_db: false,
-            backup_db: false,
-            doctor: false,
-            doctor_json: false,
-            model: None,
-            labels: None,
-            watch_dir: None,
-            process_existing: false,
-            analytics_db: None,
-            apprise_url: None,
-            notify_confidence: 0.8,
-            birdweather_token: None,
-            latitude: None,
-            longitude: None,
-            image_cache_dir: None,
-            alsa_device: None,
-            pipewire_device: None,
-            rtsp_url: None,
-            rtsp_urls: Vec::new(),
-            segment_duration: 15,
-            recording_schedule: schedule.to_string(),
-            night_inhibit: false,
-            twilight_offset: 30,
-            heartbeat_url: None,
-            notify_trigger: "each".to_string(),
-            notify_species_exclude: None,
-            notify_species_only: None,
-            notify_title_template: None,
-            notify_body_template: None,
-            metadata_model: None,
-            sf_thresh: 0.03,
-            privacy_threshold: 0.0,
-            overlap: 0.0,
-            site_name: None,
-            lang: "en".to_string(),
-            labels_dir: None,
-            info_site: "ebird".to_string(),
-            audio_format: "wav".to_string(),
-            max_files_per_species: 0,
-            disk_exclude: Vec::new(),
-            custom_image_dir: None,
-            apprise_config: None,
-            weekly_report_schedule: "monday".to_string(),
-            freq_shift_hz: 0,
-            mqtt_host: None,
-            mqtt_port: 1883,
-            mqtt_client_id: "birdnet-behavior".to_string(),
-            mqtt_username: None,
-            mqtt_password: None,
-            mqtt_topic_prefix: "birdnet".to_string(),
-            mqtt_retain: false,
-            mqtt_ha_discovery: false,
-            quality_filter: false,
-            quality_min_snr_db: 3.0,
-        }
-    }
 }
