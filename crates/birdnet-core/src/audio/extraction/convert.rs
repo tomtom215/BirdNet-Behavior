@@ -158,10 +158,24 @@ fn convert_with_sox(wav_path: &Path, output_path: &Path) -> Result<(), Extractio
     }
 }
 
+/// Hard cap (in seconds) on freq-shift output length.
+///
+/// An `asetrate`/`aresample` pitch shift is duration-preserving, so a shift of
+/// an extracted clip (bounded by the ~6 s `extraction_length`) is never longer
+/// than its input. Passing ffmpeg `-t` with this cap is **field-hardening**: a
+/// degenerate resample rate — whether from a misconfiguration in the field or,
+/// in CI, a cargo-mutants body mutant that forces `asetrate=1` — would
+/// otherwise make ffmpeg reinterpret the clip at ~1 Hz and expand it ~48000x
+/// into a runaway, disk-filling file. 30 s is generous headroom over any real
+/// clip while keeping even the pathological case a sub-second ffmpeg run.
+const MAX_FREQ_SHIFT_OUTPUT_SECS: u32 = 30;
+
 /// Apply frequency shifting to a WAV file using ffmpeg (preferred) or sox.
 ///
 /// Uses the `asetrate` + `aresample` ffmpeg filter to shift pitch by the given
-/// number of Hz, or the sox `pitch` effect as a fallback.
+/// number of Hz, or the sox `pitch` effect as a fallback. The ffmpeg output is
+/// capped at [`MAX_FREQ_SHIFT_OUTPUT_SECS`] so a bad rate can never produce a
+/// runaway file.
 ///
 /// Returns `true` on success, `false` if both tools fail or are unavailable.
 /// BirdNET-Pi equivalent: `FREQ_SHIFT` config applied via sox/rubberband.
@@ -178,6 +192,7 @@ pub(super) fn apply_freq_shift(
     // shift_hz > 0 shifts up (makes calls accessible to those with high-freq hearing loss).
     let new_rate = freq_shift_resample_rate(sample_rate, shift_hz);
     let filter = format!("asetrate={new_rate},aresample={sample_rate}");
+    let max_secs = MAX_FREQ_SHIFT_OUTPUT_SECS.to_string();
 
     let ffmpeg_ok = Command::new("ffmpeg")
         .args([
@@ -186,6 +201,8 @@ pub(super) fn apply_freq_shift(
             &input_path.to_string_lossy(),
             "-af",
             &filter,
+            "-t",
+            &max_secs,
             "-loglevel",
             "error",
             &output_path.to_string_lossy(),
@@ -247,6 +264,13 @@ mod tests {
             writer.write_sample(0_i16).expect("write");
         }
         writer.finalize().expect("finalize");
+    }
+
+    /// Read the duration (seconds) of a WAV file by its frame count.
+    fn wav_duration_secs(path: &Path) -> f64 {
+        let reader = hound::WavReader::open(path).expect("open wav");
+        let rate = reader.spec().sample_rate;
+        f64::from(reader.duration()) / f64::from(rate)
     }
 
     // ── ffmpeg_codec_args ────────────────────────────────────────────────
@@ -378,7 +402,7 @@ mod tests {
     // ── apply_freq_shift ─────────────────────────────────────────────────
 
     #[test]
-    fn apply_freq_shift_succeeds_with_real_tool() {
+    fn apply_freq_shift_succeeds_and_preserves_duration() {
         if !ffmpeg_available() {
             eprintln!("SKIP: ffmpeg not available");
             return;
@@ -386,20 +410,25 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let input = tmp.path().join("in.wav");
         let output = tmp.path().join("out.wav");
-        // Deliberately tiny (5 ms). ffmpeg's `asetrate=N` reinterprets the
-        // sample rate, so the output length scales with `orig_rate / N`. Under
-        // cargo-mutants a `freq_shift_resample_rate -> 1` body mutant sets
-        // `asetrate=1`, expanding the clip by 48000x — on a 1 s input that is
-        // ~48000 s (~4.6 GB) of output and blows past the 120 s mutation
-        // timeout (a timeout fails the gate just like a missed mutant). A 5 ms
-        // input caps that worst case at ~0.4 s so the mutant is caught fast.
-        write_silent_wav(&input, 0.005, 48_000);
+        // 2 s input: a pitch shift is duration-preserving, so the output must
+        // come back ~2 s. Asserting that pins MAX_FREQ_SHIFT_OUTPUT_SECS — a
+        // mutant shrinking the cap to 1 s truncates the output and fails the
+        // duration check. The cap also keeps this test (and the extractor's
+        // freq-shift test, which calls the same function) bounded under a
+        // `freq_shift_resample_rate -> 1` mutant: ffmpeg stops at the 30 s
+        // cap (~1 s of work) instead of expanding the clip into gigabytes.
+        write_silent_wav(&input, 2.0, 48_000);
 
         assert!(
             apply_freq_shift(&input, &output, 48_000, 500),
             "freq shift must succeed via ffmpeg's early-return path"
         );
         assert!(output.exists(), "the shifted output should be written");
+        let dur = wav_duration_secs(&output);
+        assert!(
+            (dur - 2.0).abs() < 0.5,
+            "a duration-preserving shift should yield ~2 s of audio, got {dur} s"
+        );
     }
 
     #[test]
