@@ -7,6 +7,7 @@
 //! - External integrations (`BirdWeather`, notifications)
 //! - BirdNET-Pi migration tooling
 
+mod app;
 mod capture;
 mod cli;
 mod daemon;
@@ -22,16 +23,59 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::{EnvFilter, reload};
 
 use cli::Cli;
-use helpers::{
-    db_path_from_config, init_audio_source, init_i18n, init_image_cache, init_site_name,
-    maybe_install_avahi_service, run_backup, run_integrity_check, start_disk_manager,
-};
+use helpers::{run_backup, run_integrity_check};
 
 /// Default log filter when `RUST_LOG` is not set.
 const DEFAULT_LOG_FILTER: &str = "info,birdnet_behavior=debug";
 
+/// The mutually-exclusive top-level action the binary takes, decided from
+/// the parsed CLI before any subsystem is built.
+///
+/// Extracted from `main` so the precedence rules — maintenance commands and
+/// the doctor preflight each short-circuit the server — are unit-testable
+/// without standing up tokio, a TCP listener, or a database. `main` was at
+/// 0 % coverage because every decision lived inside the async orchestrator;
+/// pulling the decision out into a pure function lets the contract be pinned
+/// by tests (carryover item A2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Action {
+    /// `--check-db`: run a `SQLite` integrity check and exit.
+    CheckDb,
+    /// `--backup-db`: take a hot backup and exit.
+    BackupDb,
+    /// `--doctor` / `--doctor-json`: print diagnostics and exit with a
+    /// status-derived code. Carries the chosen render format.
+    Doctor(doctor::Format),
+    /// No short-circuit flag set: start the detection daemon + web server.
+    RunServer,
+}
+
+/// Decide which top-level [`Action`] the parsed CLI selects.
+///
+/// Precedence matches the original inline `if` chain in `main`:
+/// `--check-db` > `--backup-db` > doctor preflight > run the server. The
+/// first matching flag wins, so e.g. `--check-db --doctor` runs the
+/// integrity check and never reaches the doctor.
+const fn dispatch_subcommand(cli: &Cli) -> Action {
+    if cli.check_db {
+        Action::CheckDb
+    } else if cli.backup_db {
+        Action::BackupDb
+    } else if cli.doctor || cli.doctor_json {
+        // `--doctor-json` wins the format choice when both are passed so a
+        // monitoring script that sets both still gets machine-readable output.
+        let format = if cli.doctor_json {
+            doctor::Format::Json
+        } else {
+            doctor::Format::Text
+        };
+        Action::Doctor(format)
+    } else {
+        Action::RunServer
+    }
+}
+
 #[tokio::main]
-#[allow(clippy::too_many_lines)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Use a reloadable filter so SIGHUP can change the log level at runtime.
     let env_filter =
@@ -84,222 +128,129 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    // Database maintenance commands (run and exit).
-    if cli.check_db {
-        return run_integrity_check(config.as_ref());
-    }
-    if cli.backup_db {
-        return run_backup(config.as_ref());
-    }
-
-    // Preflight diagnostic (run and exit with status-derived exit code).
-    if cli.doctor || cli.doctor_json {
-        let format = if cli.doctor_json {
-            doctor::Format::Json
-        } else {
-            doctor::Format::Text
-        };
-        let code = doctor::run_with_format(&cli, config.as_ref(), format);
-        std::process::exit(code);
-    }
-
-    // Startup database resilience check.
-    let db_path = db_path_from_config(config.as_ref());
-    let backup_dir = db_path
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
-        .join("backups");
-
-    if db_path.exists() {
-        match birdnet_db::resilience::check_and_recover(&db_path, &backup_dir) {
-            Ok(result) => {
-                if result.action == birdnet_db::resilience::RecoveryAction::Recovered {
-                    tracing::warn!(details = %result.details, "database recovered");
-                } else {
-                    tracing::info!(details = %result.details, "database healthy");
-                }
-            }
-            Err(e) => tracing::error!(error = %e, "database recovery failed"),
+    // Maintenance commands and the doctor preflight each run and exit before
+    // any subsystem is constructed. The decision is a pure function so its
+    // precedence is unit-tested; `main` only carries out the chosen action,
+    // delegating the server orchestration to `app::run`.
+    match dispatch_subcommand(&cli) {
+        Action::CheckDb => return run_integrity_check(config.as_ref()),
+        Action::BackupDb => return run_backup(config.as_ref()),
+        Action::Doctor(format) => {
+            let code = doctor::run_with_format(&cli, config.as_ref(), format);
+            std::process::exit(code);
         }
+        Action::RunServer => app::run(cli, config).await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Unit tests for the pure top-level dispatch.
+    //!
+    //! `main` itself binds a TCP listener and runs the axum server, so it
+    //! can't be exercised in a unit test. Pulling the subcommand precedence
+    //! into [`dispatch_subcommand`] lets the contract — which flag wins, and
+    //! how `--doctor` / `--doctor-json` choose a render format — be pinned
+    //! here instead of being implicitly trusted inside the orchestrator.
+
+    use super::{Action, dispatch_subcommand};
+    use crate::cli::Cli;
+    use crate::doctor;
+    use clap::Parser;
+
+    fn cli(args: &[&str]) -> Cli {
+        let mut full = vec!["birdnet-behavior"];
+        full.extend_from_slice(args);
+        Cli::parse_from(full)
     }
 
-    // Build app state.
-    let addr: std::net::SocketAddr = cli.listen.parse()?;
-    let server_config = birdnet_web::server::ServerConfig {
-        addr,
-        db_path: db_path.clone(),
-    };
+    #[test]
+    fn no_flags_runs_the_server() {
+        assert_eq!(dispatch_subcommand(&cli(&[])), Action::RunServer);
+    }
 
-    #[cfg(feature = "analytics")]
-    let state = helpers::build_state_with_analytics(&cli, config.as_ref(), &server_config)?;
+    #[test]
+    fn check_db_flag_selects_check_db() {
+        assert_eq!(dispatch_subcommand(&cli(&["--check-db"])), Action::CheckDb);
+    }
 
-    #[cfg(not(feature = "analytics"))]
-    let state = {
-        if cli.analytics_db.is_some() {
-            tracing::warn!(
-                "DuckDB analytics requested but not compiled in. Rebuild with --features analytics"
-            );
-        }
-        birdnet_web::state::AppState::new(server_config.db_path.clone())
-            .map_err(|e| format!("database error: {e}"))?
-    };
-
-    // Initialize all optional subsystems.
-    let state = init_image_cache(state, &cli, config.as_ref());
-    let state = if let Some(ref dir) = cli.custom_image_dir {
-        tracing::info!(path = %dir.display(), "custom species image directory configured");
-        state.with_custom_image_dir(dir.clone())
-    } else {
-        state
-    };
-    let state = init_audio_source(state, &cli, config.as_ref());
-    let state = init_site_name(state, &cli, config.as_ref());
-    let state = if cli.info_site == "ebird" {
-        state
-    } else {
-        state.with_info_site(cli.info_site.clone())
-    };
-    let state = init_i18n(state, &cli, config.as_ref());
-
-    let broadcast = state.detection_broadcast();
-
-    // Create integration clients.
-    let apprise_client = integrations::create_apprise_client(&cli, config.as_ref());
-    let birdweather_client = integrations::create_birdweather_client(&cli, config.as_ref());
-    let email_notifier = integrations::create_email_notifier(&state);
-    let heartbeat_client = integrations::create_heartbeat_client(&cli, config.as_ref());
-    let mqtt_client = integrations::create_mqtt_client(&cli, config.as_ref());
-    let notification_filter = integrations::create_notification_filter(&cli);
-    let notification_template = integrations::create_notification_template(&cli, config.as_ref());
-
-    // Start weekly report scheduler (if Apprise is configured).
-    if let Some(ref apprise) = apprise_client {
-        weekly_report::start_weekly_report_scheduler(
-            &cli.weekly_report_schedule,
-            std::sync::Arc::clone(apprise),
-            state.clone(),
+    #[test]
+    fn backup_db_flag_selects_backup_db() {
+        assert_eq!(
+            dispatch_subcommand(&cli(&["--backup-db"])),
+            Action::BackupDb
         );
     }
 
-    // Start background subsystems.
-    let _disk_manager_thread = start_disk_manager(&cli, config.as_ref(), &state);
-    let _capture_managers = capture::start_capture_manager(&cli, config.as_ref());
-
-    let _daemon_handle = if cli.web_only {
-        tracing::info!("running in web-only mode (no detection daemon)");
-        None
-    } else {
-        daemon::start_detection_daemon(
-            &cli,
-            config.as_ref(),
-            state.clone(),
-            broadcast,
-            apprise_client,
-            birdweather_client,
-            email_notifier,
-            heartbeat_client,
-            mqtt_client,
-            notification_filter,
-            notification_template,
-        )
-    };
-
-    // Register Avahi mDNS service for zero-config local discovery.
-    let site_name = cli.site_name.as_deref().unwrap_or("BirdNet-Behavior");
-    maybe_install_avahi_service(addr.port(), site_name);
-
-    // Start the web server.
-    let auth_config = integrations::create_auth_config(config.as_ref());
-    tracing::info!(addr = %addr, "starting web server");
-    let metrics_for_watchdog = state.metrics();
-    let app = birdnet_web::server::build_router_with_auth(state, auth_config);
-
-    // Publish Home Assistant MQTT auto-discovery if configured.
-    if let Some(ref mqtt) = integrations::get_mqtt_client_ref(&cli, config.as_ref()) {
-        integrations::publish_ha_discovery(mqtt, &cli, config.as_ref());
+    #[test]
+    fn doctor_flag_selects_text_format() {
+        assert_eq!(
+            dispatch_subcommand(&cli(&["--doctor"])),
+            Action::Doctor(doctor::Format::Text)
+        );
     }
 
-    // Spawn daily auto-update check (logs result, does not auto-apply).
-    tokio::spawn(async {
-        // Wait 60 seconds after startup before first check.
-        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-        let current_version = env!("CARGO_PKG_VERSION");
-        loop {
-            match tokio::task::spawn_blocking(move || {
-                birdnet_integrations::auto_update::check_for_update(current_version)
-            })
-            .await
-            {
-                Ok(Ok(info)) => {
-                    if info.update_available {
-                        tracing::info!(
-                            current = %info.current_version,
-                            latest = %info.latest_version,
-                            "new version available — use the admin panel to update"
-                        );
-                    } else {
-                        tracing::debug!("auto-update check: already up to date");
-                    }
-                }
-                Ok(Err(e)) => {
-                    tracing::debug!(error = %e, "auto-update check failed (non-fatal)");
-                }
-                Err(e) => {
-                    tracing::debug!(error = %e, "auto-update check task panicked");
-                }
-            }
-            // Check once every 24 hours.
-            tokio::time::sleep(std::time::Duration::from_secs(86_400)).await;
-        }
-    });
+    #[test]
+    fn preflight_alias_selects_doctor_text() {
+        // `--preflight` is a visible alias for `--doctor`; it must take the
+        // same path.
+        assert_eq!(
+            dispatch_subcommand(&cli(&["--preflight"])),
+            Action::Doctor(doctor::Format::Text)
+        );
+    }
 
-    // Periodic database maintenance (VACUUM, integrity check, backup rotation).
-    // No-op when the DB does not exist yet.
-    maintenance::spawn_database_maintenance(db_path.clone(), backup_dir.clone());
+    #[test]
+    fn doctor_json_flag_selects_json_format() {
+        assert_eq!(
+            dispatch_subcommand(&cli(&["--doctor-json"])),
+            Action::Doctor(doctor::Format::Json)
+        );
+    }
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    #[test]
+    fn doctor_json_wins_format_when_both_doctor_flags_set() {
+        // Both `--doctor` and `--doctor-json`: JSON wins so a script that
+        // passes both still gets machine-readable output.
+        assert_eq!(
+            dispatch_subcommand(&cli(&["--doctor", "--doctor-json"])),
+            Action::Doctor(doctor::Format::Json)
+        );
+    }
 
-    // The web server is bound — notify systemd that startup is complete and
-    // begin pinging the watchdog. If we are not running under systemd these
-    // are no-ops.
-    sd_notify::ready();
-    sd_notify::spawn_watchdog_pinger(Some(metrics_for_watchdog));
+    #[test]
+    fn check_db_takes_precedence_over_backup_db() {
+        assert_eq!(
+            dispatch_subcommand(&cli(&["--check-db", "--backup-db"])),
+            Action::CheckDb
+        );
+    }
 
-    // Use `into_make_service_with_connect_info` so the per-IP rate limiter
-    // can read the client socket address from request extensions.
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown_signal())
-    .await?;
+    #[test]
+    fn check_db_takes_precedence_over_doctor() {
+        // `--check-db` short-circuits before the doctor preflight is even
+        // considered: the integrity check runs and the process exits.
+        assert_eq!(
+            dispatch_subcommand(&cli(&["--check-db", "--doctor"])),
+            Action::CheckDb
+        );
+    }
 
-    sd_notify::stopping();
-    tracing::info!("BirdNet-Behavior stopped");
-    Ok(())
-}
+    #[test]
+    fn backup_db_takes_precedence_over_doctor() {
+        assert_eq!(
+            dispatch_subcommand(&cli(&["--backup-db", "--doctor-json"])),
+            Action::BackupDb
+        );
+    }
 
-/// Wait for a shutdown signal (SIGTERM or SIGINT).
-async fn shutdown_signal() {
-    let ctrl_c = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
-    };
-
-    #[cfg(unix)]
-    let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to install SIGTERM handler")
-            .recv()
-            .await;
-    };
-
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    tokio::select! {
-        () = ctrl_c => tracing::info!("received Ctrl+C"),
-        () = terminate => tracing::info!("received SIGTERM"),
+    #[test]
+    fn web_only_alone_still_runs_the_server() {
+        // `--web-only` is handled later inside the server path, not by the
+        // subcommand dispatch — it must not divert away from RunServer.
+        assert_eq!(
+            dispatch_subcommand(&cli(&["--web-only"])),
+            Action::RunServer
+        );
     }
 }

@@ -45,3 +45,4 @@ Thumbs.db
 lcov.info
 tarpaulin-report.html
 mutants.out/
+mutants.out.old/

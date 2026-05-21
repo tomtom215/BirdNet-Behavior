@@ -15,22 +15,28 @@
 #      sigmoid-on-probabilities bug shipped despite unit-test coverage.
 #   3. crates/birdnet-core/src/audio/extraction/extractor.rs — added
 #      after the range-inversion clip-extraction bug shipped likewise.
+#      Its sibling crates/birdnet-core/src/audio/extraction/convert.rs
+#      (ffmpeg/sox format conversion + frequency shift) joined the matrix
+#      once its arithmetic and codec-arg mapping were extracted into pure
+#      helpers and its command-execution branches covered by ffmpeg-gated
+#      tests — 0 missed (26 mutants: 23 caught, 3 unviable).
 #   4. crates/birdnet-db/src/sqlite/queries/detections.rs — added so the
 #      "explicit column list" + UNIQUE-on-chunk-offset contracts that
 #      PR #35 fixed can't quietly regress. The full CRUD surface is
 #      now under tests, so the gate stays at 0 missed.
-#   5. src/daemon.rs — the daemon orchestrator. The 10 inline
-#      struct-literal "delete field" mutants the PR #50 carryover
-#      flagged were dissolved by extracting per-config builder helpers
-#      (`build_pipeline_config`, `build_model_config`,
-#      `build_species_filter_config`, `build_extraction_config`),
-#      plus six smaller pure helpers for the inline arithmetic /
-#      boolean / boundary checks that no test could observe before.
-#      The orchestrator's body-replacement mutants (return None,
-#      return ()) are now caught by in-process integration tests
-#      that exercise `start_detection_daemon` and `event_processor`
-#      against the tiny V2.4 ONNX model bundled at
-#      `crates/birdnet-core/src/testdata/tiny_v24_test.onnx`.
+#   5. src/daemon/ — the daemon orchestrator. The inline struct-literal
+#      "delete field" mutants the PR #50 carryover flagged were dissolved
+#      by extracting per-config builder helpers (`build_pipeline_config`,
+#      `build_model_config`, `build_species_filter_config`,
+#      `build_extraction_config`) plus smaller pure helpers for the inline
+#      arithmetic / boolean / boundary checks that no test could observe
+#      before. The orchestrator's body-replacement mutants (return None,
+#      return ()) are caught by in-process integration tests that exercise
+#      `start_detection_daemon` and `event_processor` against the tiny
+#      V2.4 ONNX model bundled at
+#      `crates/birdnet-core/src/testdata/tiny_v24_test.onnx`. Originally a
+#      single src/daemon.rs; split into src/daemon/{mod,config,disposition,
+#      webhook,processor}.rs for readability, so the gate globs the dir.
 #
 # Each file is its own matrix job so a survivor in one doesn't tank the
 # whole pipeline. Per-file threshold: 0 missed on every file — we follow
@@ -54,7 +60,7 @@ on:
       - "crates/birdnet-core/src/audio/extraction/**"
       - "crates/birdnet-core/tests/**"
       - "crates/birdnet-db/src/sqlite/queries/detections.rs"
-      - "src/daemon.rs"
+      - "src/daemon/**"
       - ".github/workflows/mutation.yml"
   pull_request:
     branches: ["main", "master"]
@@ -64,7 +70,7 @@ on:
       - "crates/birdnet-core/src/audio/extraction/**"
       - "crates/birdnet-core/tests/**"
       - "crates/birdnet-db/src/sqlite/queries/detections.rs"
-      - "src/daemon.rs"
+      - "src/daemon/**"
       - ".github/workflows/mutation.yml"
   schedule:
     # Mondays at 09:00 UTC.
@@ -123,6 +129,20 @@ jobs:
             # ffmpeg nor sox is on PATH so a stripped-down CI runner
             # doesn't false-fail; the main CI image has ffmpeg.
             max_missed: 0
+          - label: audio/extraction/convert.rs
+            slug: audio-extraction-convert.rs
+            file: crates/birdnet-core/src/audio/extraction/convert.rs
+            # The format-conversion + frequency-shift module. The arithmetic
+            # (resample-rate, cents) and the ffmpeg codec-argument mapping
+            # were extracted into pure helpers (freq_shift_resample_rate,
+            # freq_shift_cents, ffmpeg_codec_args) so their mutants die to
+            # unit tests that need no external tool. The command-execution
+            # branches — ffmpeg success vs. non-zero exit, the sox fallback,
+            # and the rename-on-failure path — are covered by tests that run
+            # the real ffmpeg (gated on its presence; the CI image installs
+            # it). 0 missed at introduction: 26 mutants, 23 caught, 3
+            # unviable.
+            max_missed: 0
           - label: sqlite/queries/detections.rs
             slug: sqlite-queries-detections.rs
             file: crates/birdnet-db/src/sqlite/queries/detections.rs
@@ -133,34 +153,32 @@ jobs:
             # observable, but the gate stays at 0 missed so a future
             # regression of the same shape lights up immediately.
             max_missed: 0
-          - label: src/daemon.rs
-            slug: src-daemon.rs
-            file: src/daemon.rs
+          - label: src/daemon/
+            slug: src-daemon
+            # The whole daemon module tree. The orchestrator was split from a
+            # single src/daemon.rs into src/daemon/{mod,config,disposition,
+            # webhook,processor}.rs for readability, so the gate globs the
+            # directory to keep mutating every moved function. The glob
+            # `src/daemon/*.rs` matches all submodules (test_support.rs is
+            # cfg(test) and generates no mutants).
+            file: src/daemon/*.rs
             package: birdnet-behavior
-            # The detection daemon orchestrator. PR #50 carryover
-            # deferred this because the inline struct literals on
-            # SpeciesFilterConfig / PipelineConfig / ModelConfig /
-            # ExtractionConfig produced ~10 "delete field" mutants and
-            # the start_detection_daemon / event_processor / dispatch_webhook
-            # functions had body-replacement mutants that no unit test
-            # could observe. The refactor in this PR:
-            #   1. Extracted per-config builder helpers each with a
-            #      dedicated unit test pinning every field individually.
-            #   2. Extracted ten more pure helpers (resolve_f32_with_default,
-            #      build_webhook_spec, confidence_pct_round/_trunc,
-            #      latency_ms_to_seconds, is_first_detection_today,
-            #      passes_filter, should_dispatch_notification,
-            #      species_thresholds_log_count, resolve_required_paths,
-            #      extraction_output_dir) so every inline boundary or
-            #      arithmetic is testable.
-            #   3. Changed `dispatch_webhook` to return Result<u16,
-            #      WebhookError> so the `replace body with ()` mutant
-            #      becomes unviable by return type.
-            #   4. Added in-process integration tests that run
-            #      `start_detection_daemon` against the tiny V2.4 ONNX
-            #      model and `event_processor` against a fixture
-            #      DetectionEvent — both with in-memory AppState +
-            #      tempdir.
+            # 0 missed is held by the same coverage as before the split:
+            #   * config.rs     — per-config builders + resolve_f32_with_default
+            #     / resolve_required_paths / species_thresholds_log_count, each
+            #     with a unit test pinning every field/branch individually.
+            #   * disposition.rs — decide_disposition, the confidence-% and
+            #     latency arithmetic, and the boolean notification gates
+            #     (passes_filter / should_dispatch_notification), all pure and
+            #     unit-tested.
+            #   * webhook.rs    — build_webhook_spec (unit-tested decision
+            #     matrix); dispatch_webhook returns Result<u16, WebhookError>
+            #     so its body-replacement mutant is unviable by return type.
+            #   * processor.rs  — event_processor, covered by in-process
+            #     integration tests (in-memory AppState + tempdir) for the
+            #     accept / quarantine / drop / alert-rule paths.
+            #   * mod.rs        — start_detection_daemon, covered by the
+            #     in-process test against the tiny V2.4 ONNX model.
             max_missed: 0
     steps:
       - uses: actions/checkout@v5
