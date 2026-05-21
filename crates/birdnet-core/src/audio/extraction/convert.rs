@@ -386,7 +386,14 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let input = tmp.path().join("in.wav");
         let output = tmp.path().join("out.wav");
-        write_silent_wav(&input, 1.0, 48_000);
+        // Deliberately tiny (5 ms). ffmpeg's `asetrate=N` reinterprets the
+        // sample rate, so the output length scales with `orig_rate / N`. Under
+        // cargo-mutants a `freq_shift_resample_rate -> 1` body mutant sets
+        // `asetrate=1`, expanding the clip by 48000x — on a 1 s input that is
+        // ~48000 s (~4.6 GB) of output and blows past the 120 s mutation
+        // timeout (a timeout fails the gate just like a missed mutant). A 5 ms
+        // input caps that worst case at ~0.4 s so the mutant is caught fast.
+        write_silent_wav(&input, 0.005, 48_000);
 
         assert!(
             apply_freq_shift(&input, &output, 48_000, 500),
