@@ -271,6 +271,55 @@ pub fn restore_from_backup(backup_path: &Path, db_path: &Path) -> Result<(), Res
     Ok(())
 }
 
+/// Append a raw suffix to a whole path (not just the file stem), so
+/// `birds.db` + `-wal` → `birds.db-wal` and `birds.db` + `.corrupt.5` →
+/// `birds.db.corrupt.5`.
+fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut s = path.as_os_str().to_owned();
+    s.push(suffix);
+    PathBuf::from(s)
+}
+
+/// Move a corrupt database aside so the daemon can start fresh without ever
+/// writing to corruption.
+///
+/// The main file and its `-wal` / `-shm` sidecars are renamed to
+/// `<name>.corrupt.<unix_secs>` (with matching `-wal` / `-shm`) and preserved
+/// for offline recovery. Returns the path the main database was moved to.
+///
+/// This is the policy when [`check_and_recover`] reports the database is
+/// corrupt and there is no good backup to restore: refusing to boot would
+/// leave a remote, unattended station recording nothing, and writing to a
+/// corrupt file risks worsening it and losing more data. Quarantining lets the
+/// station resume on a fresh database immediately while the corrupt copy is
+/// kept for the operator to recover offline.
+///
+/// # Errors
+///
+/// Returns `ResilienceError::Io` if the main database file cannot be renamed.
+/// The caller should then refuse to start rather than write to the corrupt
+/// file. Sidecar moves are best-effort (their loss is harmless).
+pub fn quarantine_corrupt_database(db_path: &Path) -> Result<PathBuf, ResilienceError> {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let quarantine = with_suffix(db_path, &format!(".corrupt.{timestamp}"));
+
+    std::fs::rename(db_path, &quarantine)?;
+
+    // Best-effort: move the WAL/SHM sidecars too so they don't attach to the
+    // fresh database created at the original path.
+    for sidecar in ["-wal", "-shm"] {
+        let from = with_suffix(db_path, sidecar);
+        if from.exists() {
+            let _ = std::fs::rename(&from, with_suffix(&quarantine, sidecar));
+        }
+    }
+
+    Ok(quarantine)
+}
+
 /// Check database health and attempt recovery if corrupt.
 ///
 /// # Errors
@@ -444,5 +493,59 @@ mod tests {
             .collect();
 
         assert_eq!(remaining.len(), 3);
+    }
+
+    #[test]
+    fn with_suffix_appends_to_whole_path() {
+        assert_eq!(
+            with_suffix(Path::new("/data/birds.db"), "-wal"),
+            PathBuf::from("/data/birds.db-wal")
+        );
+        assert_eq!(
+            with_suffix(Path::new("/data/birds.db"), ".corrupt.5"),
+            PathBuf::from("/data/birds.db.corrupt.5")
+        );
+    }
+
+    #[test]
+    fn quarantine_moves_corrupt_db_and_sidecars_aside() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("birds.db");
+        std::fs::write(&db, b"corrupt").unwrap();
+        std::fs::write(with_suffix(&db, "-wal"), b"wal").unwrap();
+        std::fs::write(with_suffix(&db, "-shm"), b"shm").unwrap();
+
+        let quarantined = quarantine_corrupt_database(&db).unwrap();
+
+        // Original paths are cleared so a fresh database can be created there,
+        // and no stale sidecar attaches to it.
+        assert!(!db.exists());
+        assert!(!with_suffix(&db, "-wal").exists());
+        assert!(!with_suffix(&db, "-shm").exists());
+
+        // The corrupt data is preserved for offline recovery, not deleted.
+        assert!(quarantined.exists());
+        assert_eq!(std::fs::read(&quarantined).unwrap(), b"corrupt");
+        assert_eq!(std::fs::read(with_suffix(&quarantined, "-wal")).unwrap(), b"wal");
+        assert!(
+            quarantined
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .contains(".corrupt.")
+        );
+    }
+
+    #[test]
+    fn check_and_recover_errors_when_corrupt_without_backup() {
+        // Pins the contract the daemon relies on: a corrupt DB with no backup
+        // returns an error (the daemon then quarantines and starts fresh
+        // rather than writing to the corrupt file).
+        let (tmp, backup_dir) = temp_db_with_data();
+        std::fs::write(tmp.path(), b"not a database").unwrap();
+        assert!(matches!(
+            check_and_recover(tmp.path(), &backup_dir),
+            Err(ResilienceError::NoBackup)
+        ));
     }
 }

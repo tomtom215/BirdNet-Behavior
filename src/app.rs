@@ -39,7 +39,32 @@ pub async fn run(
                     tracing::info!(details = %result.details, "database healthy");
                 }
             }
-            Err(e) => tracing::error!(error = %e, "database recovery failed"),
+            Err(e) => {
+                // Corrupt and unrecoverable (no good backup). Never write to a
+                // corrupt database: quarantine it for offline recovery and
+                // start fresh, so an unattended station keeps recording rather
+                // than refusing to boot. Only refuse to start if we cannot even
+                // move the corrupt file aside.
+                tracing::error!(
+                    error = %e,
+                    path = %db_path.display(),
+                    "database is corrupt and no good backup exists; quarantining before starting fresh"
+                );
+                let quarantined = birdnet_db::resilience::quarantine_corrupt_database(&db_path)
+                    .map_err(|qe| {
+                        format!(
+                            "database is corrupt and could not be quarantined ({qe}); refusing to \
+                             start to avoid writing to a corrupt database — restore a backup or move \
+                             {} aside manually",
+                            db_path.display()
+                        )
+                    })?;
+                tracing::error!(
+                    quarantined_to = %quarantined.display(),
+                    "corrupt database quarantined; starting with a fresh database. Restore a backup \
+                     or recover the quarantined file to keep historical detections"
+                );
+            }
         }
     }
 
