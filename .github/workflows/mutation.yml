@@ -61,6 +61,7 @@ on:
       - "crates/birdnet-core/tests/**"
       - "crates/birdnet-db/src/sqlite/queries/detections.rs"
       - "src/daemon/**"
+      - "src/capture/**"
       - ".github/workflows/mutation.yml"
   pull_request:
     branches: ["main", "master"]
@@ -71,6 +72,7 @@ on:
       - "crates/birdnet-core/tests/**"
       - "crates/birdnet-db/src/sqlite/queries/detections.rs"
       - "src/daemon/**"
+      - "src/capture/**"
       - ".github/workflows/mutation.yml"
   schedule:
     # Mondays at 09:00 UTC.
@@ -179,6 +181,33 @@ jobs:
             #     accept / quarantine / drop / alert-rule paths.
             #   * mod.rs        — start_detection_daemon, covered by the
             #     in-process test against the tiny V2.4 ONNX model.
+            max_missed: 0
+          - label: src/capture/supervisor.rs
+            slug: src-capture-supervisor.rs
+            file: src/capture/supervisor.rs
+            package: birdnet-behavior
+            # The capture supervisor — the field-survival core: a dead
+            # arecord/ffmpeg subprocess is restarted with capped exponential
+            # backoff, the recording schedule pauses/resumes capture, and the
+            # birdnet_audio_source_up gauge is driven from real process health.
+            # Every restart/backoff/schedule decision lives in `reconcile` +
+            # the pure helpers (`backoff_delay`, `should_warn_down`,
+            # `source_gauge_label`) behind the `Source` trait, so a fake source
+            # drives each branch — death -> backoff -> recovery, the schedule
+            # gate, the boundary of the backoff window — without a real
+            # capture tool on the runner. 0 missed at introduction.
+            max_missed: 0
+          - label: src/capture/schedule.rs
+            slug: src-capture-schedule.rs
+            file: src/capture/schedule.rs
+            package: birdnet-behavior
+            # Schedule parsing + the hand-rolled UTC clock. `utc_now`'s date
+            # arithmetic was extracted into the pure `civil_from_unix_secs`,
+            # which is cross-checked against an independent inverse oracle for
+            # every calendar day across two centuries (every month length,
+            # every leap day, and the 2100 century rule) plus a proptest
+            # round-trip, so its arithmetic mutants die. The parse helpers and
+            # `resolve_location` have per-branch/boundary tests. 0 missed.
             max_missed: 0
     steps:
       - uses: actions/checkout@v5

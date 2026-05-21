@@ -103,7 +103,7 @@ pub async fn run(
 
     // Start background subsystems.
     let _disk_manager_thread = helpers::start_disk_manager(&cli, config.as_ref(), &state);
-    let _capture_managers = capture::start_capture_manager(&cli, config.as_ref());
+    let _capture_handle = capture::start_capture_manager(&cli, config.as_ref(), state.metrics());
 
     let _daemon_handle = if cli.web_only {
         tracing::info!("running in web-only mode (no detection daemon)");

@@ -1,25 +1,25 @@
-//! `CaptureManager`: lifecycle management for audio capture processes.
+//! `CaptureManager`: lifecycle control for a single audio-capture process.
 //!
-//! Starts the appropriate subprocess (arecord / ffmpeg), monitors it for
-//! unexpected exits, and restarts it up to `max_restarts` times.
+//! Starts and stops the appropriate subprocess (`arecord` / `ffmpeg`) and
+//! reports whether it is still alive. Deciding *when* to (re)start it —
+//! restart-on-death with backoff, schedule-driven pause/resume — is the job
+//! of the capture supervisor in the binary crate, which polls
+//! [`CaptureManager::is_running`] and drives [`CaptureManager::start`] /
+//! [`CaptureManager::stop`] accordingly.
 
 use super::process::{CaptureProcess, is_tool_available, required_tool, spawn_capture};
 use super::types::{CaptureError, RecordingConfig};
 
-/// Maximum number of automatic restarts before giving up.
-const DEFAULT_MAX_RESTARTS: u32 = 10;
-
 /// Manages the lifecycle of an audio capture process.
 ///
-/// Call [`CaptureManager::start`] to begin recording, and rely on
-/// [`CaptureManager::check_and_restart`] (called periodically from a
-/// monitoring task) to keep the subprocess alive after unexpected exits.
+/// A thin, restart-policy-free wrapper: call [`start`](Self::start) to begin
+/// recording, [`stop`](Self::stop) to end it, and [`is_running`](Self::is_running)
+/// to check liveness. The supervisor that keeps the process alive over a long
+/// deployment lives in `crate::capture::supervisor` (binary crate).
 #[derive(Debug)]
 pub struct CaptureManager {
     config: RecordingConfig,
     process: Option<CaptureProcess>,
-    restart_count: u32,
-    max_restarts: u32,
 }
 
 impl CaptureManager {
@@ -30,16 +30,7 @@ impl CaptureManager {
         Self {
             config,
             process: None,
-            restart_count: 0,
-            max_restarts: DEFAULT_MAX_RESTARTS,
         }
-    }
-
-    /// Override the maximum number of automatic restarts (default: 10).
-    #[must_use]
-    pub const fn with_max_restarts(mut self, n: u32) -> Self {
-        self.max_restarts = n;
-        self
     }
 
     /// Start the capture process.
@@ -60,7 +51,6 @@ impl CaptureManager {
 
         let process = spawn_capture(&self.config)?;
         self.process = Some(process);
-        self.restart_count = 0;
         tracing::info!("capture started");
         Ok(())
     }
@@ -75,69 +65,11 @@ impl CaptureManager {
         self.process = None;
     }
 
-    /// Check if the capture process is still running and restart if needed.
-    ///
-    /// Returns `true` if the process is running (or was successfully restarted).
-    /// Returns `false` if the max restart count has been exceeded.
-    pub fn check_and_restart(&mut self) -> bool {
-        let is_running = self
-            .process
-            .as_mut()
-            .is_some_and(CaptureProcess::is_running);
-
-        if is_running {
-            // Process is healthy — reset the restart counter so transient
-            // failures (e.g. USB microphone momentary disconnect) don't
-            // permanently exhaust the restart budget over a long deployment.
-            if self.restart_count > 0 {
-                tracing::debug!(
-                    previous_restarts = self.restart_count,
-                    "capture process stable, resetting restart counter"
-                );
-                self.restart_count = 0;
-            }
-            return true;
-        }
-
-        if self.process.is_none() {
-            return false;
-        }
-
-        if self.restart_count >= self.max_restarts {
-            tracing::error!(
-                restarts = self.restart_count,
-                max = self.max_restarts,
-                "capture process exceeded max restarts"
-            );
-            return false;
-        }
-
-        self.restart_count += 1;
-        tracing::warn!(
-            restart = self.restart_count,
-            "capture process died, restarting"
-        );
-        self.process = None;
-
-        match self.start() {
-            Ok(()) => true,
-            Err(e) => {
-                tracing::error!(error = %e, "failed to restart capture");
-                false
-            }
-        }
-    }
-
     /// Whether the capture process is currently running.
     pub fn is_running(&mut self) -> bool {
         self.process
             .as_mut()
             .is_some_and(CaptureProcess::is_running)
-    }
-
-    /// Get the restart count.
-    pub const fn restart_count(&self) -> u32 {
-        self.restart_count
     }
 
     /// Get the recording configuration.
@@ -175,7 +107,6 @@ mod tests {
     fn new_manager_not_running() {
         let mut mgr = CaptureManager::new(microphone_config());
         assert!(!mgr.is_running());
-        assert_eq!(mgr.restart_count(), 0);
     }
 
     #[test]
@@ -186,13 +117,6 @@ mod tests {
         let mut mgr = CaptureManager::new(microphone_config());
         let result = mgr.start();
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn check_and_restart_returns_false_when_not_started() {
-        let mut mgr = CaptureManager::new(microphone_config());
-        // No process → returns false without crashing.
-        assert!(!mgr.check_and_restart());
     }
 
     #[test]
