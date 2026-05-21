@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use birdnet_core::audio::capture::{
     AudioFormat, CaptureError, CaptureManager, CaptureSource, RecordingConfig,
@@ -211,6 +211,14 @@ pub fn start_capture_manager(
 
 /// The supervisor's background loop: reconcile every source on a fixed
 /// cadence until asked to stop.
+///
+/// Each tick re-checks whether the system clock looks NTP-synced. A Raspberry
+/// Pi has no battery-backed RTC, so at boot the clock can read the epoch (or a
+/// stale value) until `systemd-timesyncd`/NTP catches up. While the clock is
+/// untrustworthy we **fail open** — record continuously regardless of the
+/// solar/fixed window — because trusting a bogus date could drop us into a
+/// "night" window and silently lose a whole session. Normal scheduling
+/// resumes automatically once the clock becomes plausible.
 fn run_supervisor(
     mut supervisor: Supervisor<CaptureManager>,
     schedule_config: &ScheduleConfig,
@@ -218,18 +226,55 @@ fn run_supervisor(
     stop: &AtomicBool,
 ) {
     tracing::info!("capture supervisor started");
+    // Start from "synced" so an unsynced clock at boot trips the warning on
+    // the very first tick.
+    let mut clock_synced = true;
     while !stop.load(Ordering::Relaxed) {
-        let recording_allowed = recording_allowed_now(schedule_config);
-        supervisor.tick(Instant::now(), recording_allowed, metrics);
+        let secs = now_unix_secs();
+        let synced = schedule::secs_look_synced(secs);
+        if synced != clock_synced {
+            log_clock_sync_change(synced);
+            clock_synced = synced;
+        }
+        supervisor.tick(
+            Instant::now(),
+            recording_allowed(schedule_config, secs),
+            metrics,
+        );
         sleep_with_stop(SUPERVISE_TICK, stop);
     }
     tracing::info!("capture supervisor stopped");
 }
 
-/// Evaluate the recording schedule against the current wall-clock time.
-fn recording_allowed_now(config: &ScheduleConfig) -> bool {
-    let (year, month, day, minutes_now) = schedule::utc_now();
+/// Current Unix time in seconds (0 if the clock is somehow before the epoch).
+fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// Whether recording is allowed for `secs`, failing **open** while the clock
+/// looks unsynced so a bogus boot-time date can't silence the station.
+fn recording_allowed(config: &ScheduleConfig, secs: u64) -> bool {
+    !schedule::secs_look_synced(secs) || schedule_allows_at(config, secs)
+}
+
+/// Evaluate the recording schedule for a given (trusted) Unix timestamp.
+fn schedule_allows_at(config: &ScheduleConfig, secs: u64) -> bool {
+    let (year, month, day, minutes_now) = schedule::civil_from_unix_secs(secs);
     DailySchedule::for_date(config, year, month, day).is_allowed(minutes_now)
+}
+
+/// Log a one-line notice when the clock's apparent sync state changes.
+fn log_clock_sync_change(synced: bool) {
+    if synced {
+        tracing::info!("system clock looks NTP-synced; honouring the recording schedule");
+    } else {
+        tracing::warn!(
+            "system clock looks UNSYNCED (no RTC, NTP not ready) — recording continuously so no \
+             session is missed; detection timestamps may be wrong until time syncs"
+        );
+    }
 }
 
 /// Sleep up to `total`, waking early when `stop` is set so shutdown stays
@@ -313,5 +358,34 @@ mod tests {
         c.alsa_device = Some("plughw:1,0".to_string());
         let sources = resolve_sources(&c, None);
         assert!(matches!(sources[0], CaptureSource::PipeWire { .. }));
+    }
+
+    fn fixed_window_config(spec: &str) -> ScheduleConfig {
+        let mut c = cli();
+        c.recording_schedule = spec.to_string();
+        schedule::parse_schedule_config(&c, None)
+    }
+
+    #[test]
+    fn recording_allowed_fails_open_when_clock_unsynced() {
+        // A window that excludes 00:00. At the epoch (an unset-RTC reading) the
+        // clock is untrustworthy, so we record anyway rather than believe the
+        // bogus 1970 date and stay silent. Without the fail-open guard the
+        // 06:00–07:00 window would reject 00:00 and this would be false.
+        let config = fixed_window_config("fixed:06:00-07:00");
+        assert!(recording_allowed(&config, 0));
+    }
+
+    #[test]
+    fn recording_allowed_honours_schedule_once_clock_synced() {
+        let config = fixed_window_config("fixed:06:00-07:00");
+        let midnight_2024 = 1_704_067_200; // 2024-01-01 00:00:00 UTC — clock looks synced
+        // 06:30 UTC is inside the window.
+        assert!(recording_allowed(
+            &config,
+            midnight_2024 + 6 * 3600 + 30 * 60
+        ));
+        // 12:00 UTC is outside — and the clock is trusted, so we honour it.
+        assert!(!recording_allowed(&config, midnight_2024 + 12 * 3600));
     }
 }

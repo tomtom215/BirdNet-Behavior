@@ -1,9 +1,10 @@
 //! Recording-schedule parsing and the hand-rolled UTC clock.
 //!
 //! Turns the `--recording-schedule` CLI flag (`all-day` / `solar` /
-//! `fixed:HH:MM-HH:MM`) into a [`ScheduleConfig`], and exposes [`utc_now`]
-//! — the current UTC date used to evaluate the schedule gate. Acting on the
-//! gate (starting/stopping capture) is the supervisor's job; this module is
+//! `fixed:HH:MM-HH:MM`) into a [`ScheduleConfig`], converts Unix time to a
+//! civil date ([`civil_from_unix_secs`]) for evaluating the schedule gate, and
+//! reports whether the clock looks NTP-synced ([`secs_look_synced`]). Acting on
+//! the gate (starting/stopping capture) is the supervisor's job; this module is
 //! pure parsing + clock.
 
 use birdnet_scheduler::{Location, RecordingWindow, ScheduleConfig};
@@ -93,16 +94,21 @@ fn resolve_location(cli: &Cli, config: Option<&birdnet_core::config::Config>) ->
     Location::new(lat, lon).ok()
 }
 
-/// Get the current UTC time as `(year, month, day, minutes_since_midnight)`.
-pub(super) fn utc_now() -> (u32, u32, u32, u32) {
-    use std::time::{SystemTime, UNIX_EPOCH};
+/// Unix-time floor below which the system clock is treated as unsynced.
+///
+/// A Raspberry Pi has no battery-backed RTC, so before NTP syncs it commonly
+/// reports the epoch or a stale build-time value. `2024-01-01T00:00:00Z` is
+/// safely before this project's deployment era yet far above any unset-clock
+/// reading, so a value below it means "time isn't trustworthy yet".
+const CLOCK_SYNCED_FLOOR_SECS: u64 = 1_704_067_200;
 
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-
-    civil_from_unix_secs(secs)
+/// Whether the system clock (as a Unix timestamp in seconds) looks NTP-synced.
+///
+/// Pure so the boundary is unit-testable. A `false` result tells callers to
+/// fail *open* — keep recording rather than trust a bogus date for solar
+/// scheduling — until the clock becomes plausible.
+pub(super) const fn secs_look_synced(secs: u64) -> bool {
+    secs >= CLOCK_SYNCED_FLOOR_SECS
 }
 
 /// Convert a Unix timestamp (seconds since 1970-01-01 UTC) into
@@ -111,7 +117,7 @@ pub(super) fn utc_now() -> (u32, u32, u32, u32) {
 /// Pure (no clock access) so the date arithmetic can be property-tested
 /// directly. Implements Howard Hinnant's `civil_from_days`:
 /// <http://howardhinnant.github.io/date_algorithms.html>.
-fn civil_from_unix_secs(secs: u64) -> (u32, u32, u32, u32) {
+pub(super) fn civil_from_unix_secs(secs: u64) -> (u32, u32, u32, u32) {
     let days = secs / 86400;
     let time_of_day = secs % 86400;
     #[allow(clippy::cast_possible_truncation)]
@@ -143,8 +149,8 @@ fn civil_from_unix_secs(secs: u64) -> (u32, u32, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::{
-        civil_from_unix_secs, parse_fixed_window, parse_hhmm, parse_schedule_config,
-        resolve_location, utc_now,
+        CLOCK_SYNCED_FLOOR_SECS, civil_from_unix_secs, parse_fixed_window, parse_hhmm,
+        parse_schedule_config, resolve_location, secs_look_synced,
     };
     use crate::cli::Cli;
     use birdnet_scheduler::traits::RecordingGate;
@@ -286,15 +292,18 @@ mod tests {
         assert!(resolve_location(&cli, None).is_none());
     }
 
-    // ---- utc_now / civil_from_unix_secs ------------------------------------
+    // ---- secs_look_synced / civil_from_unix_secs ---------------------------
 
     #[test]
-    fn utc_now_returns_valid_values() {
-        let (year, month, day, minutes) = utc_now();
-        assert!(year >= 2024);
-        assert!((1..=12).contains(&month));
-        assert!((1..=31).contains(&day));
-        assert!(minutes < 1440);
+    fn clock_below_floor_is_unsynced() {
+        assert!(!secs_look_synced(0)); // epoch — the classic unset-RTC reading
+        assert!(!secs_look_synced(CLOCK_SYNCED_FLOOR_SECS - 1));
+    }
+
+    #[test]
+    fn clock_at_or_above_floor_is_synced() {
+        assert!(secs_look_synced(CLOCK_SYNCED_FLOOR_SECS));
+        assert!(secs_look_synced(1_900_000_000)); // year 2030
     }
 
     #[test]
