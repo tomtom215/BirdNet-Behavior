@@ -1766,4 +1766,236 @@ mod tests {
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].correlation_id.as_deref(), Some("test-corr-abc"));
     }
+
+    // ── event_processor: disposition + alert-rule branches ──────────────
+    //
+    // The accepted-event test above walks the happy path. These extend the
+    // same in-process harness to the branches that the carryover (item A3)
+    // flagged as un-exercised: the quarantine path, the silent-drop path,
+    // and the three alert-rule actions (Log / Suppress / Webhook). All
+    // external integrations stay disabled (None) — these tests target the
+    // DB / disposition / alert-rule logic, not the network sinks.
+
+    /// Build a `DetectionEvent` with the given species and confidence.
+    fn make_event(
+        sci: &str,
+        com: &str,
+        confidence: f32,
+        source_file: PathBuf,
+        correlation_id: &str,
+    ) -> birdnet_core::detection::daemon::DetectionEvent {
+        use birdnet_core::detection::daemon::DetectionEvent;
+        use birdnet_core::detection::types::Detection;
+        DetectionEvent {
+            detection: Detection {
+                date: "2026-05-19".into(),
+                time: "09:00:00".into(),
+                scientific_name: sci.into(),
+                common_name: com.into(),
+                confidence,
+                start: 0.0,
+                stop: 3.0,
+                week: 20,
+                file_name_extr: None,
+            },
+            source_file,
+            latency_ms: 100,
+            correlation_id: correlation_id.into(),
+        }
+    }
+
+    /// Drive `event_processor` to completion over `events` against the
+    /// caller-supplied `state` (so a test can pre-seed alert rules), with
+    /// every external integration disabled. Returns once the channel is
+    /// drained and the processor's loop exits, so DB assertions are
+    /// observed after all synchronous work has run.
+    async fn run_processor(
+        state: &birdnet_web::state::AppState,
+        events: Vec<birdnet_core::detection::daemon::DetectionEvent>,
+        species_thresholds: HashMap<String, f64>,
+        global_confidence: f32,
+    ) {
+        let broadcast = state.detection_broadcast();
+        let (event_tx, event_rx) = mpsc::channel();
+        for ev in events {
+            event_tx.send(ev).unwrap();
+        }
+        drop(event_tx);
+
+        let filter = birdnet_integrations::notification::NotificationFilter {
+            trigger: birdnet_integrations::notification::TriggerMode::EachDetection,
+            species_filter: birdnet_integrations::notification::SpeciesFilter::new(None, None),
+        };
+        let template = birdnet_integrations::notification::NotificationTemplate::default();
+        let extractor = Extractor::new(ExtractionConfig::default());
+        let rt_handle = tokio::runtime::Handle::current();
+        let state_for_processor = state.clone();
+
+        tokio::task::spawn_blocking(move || {
+            super::event_processor(
+                event_rx,
+                state_for_processor,
+                broadcast,
+                None,
+                None,
+                None,
+                None,
+                None,
+                filter,
+                template,
+                rt_handle,
+                species_thresholds,
+                global_confidence,
+                extractor,
+            );
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn event_processor_quarantines_below_per_species_threshold() {
+        // global=0.25, per-species "Pica pica"=0.80, detection=0.60: passes
+        // the global gate but fails the stricter per-species threshold, so
+        // the event is quarantined for review rather than stored or dropped.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let ev = make_event(
+            "Pica pica",
+            "Eurasian Magpie",
+            0.60,
+            tmp.path().join("rec.wav"),
+            "corr-quarantine",
+        );
+
+        run_processor(&state, vec![ev], thresholds(&[("Pica pica", 0.80)]), 0.25).await;
+
+        let detections = state.with_db(|c| birdnet_db::sqlite::detection_count(c).unwrap_or(-1));
+        assert_eq!(
+            detections, 0,
+            "a detection below its per-species threshold must not be stored as a detection"
+        );
+        let pending =
+            state.with_db(|c| birdnet_db::sqlite::quarantine_pending_count(c).unwrap_or(-1));
+        assert_eq!(
+            pending, 1,
+            "a detection below its per-species threshold must be quarantined for review"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn event_processor_drops_below_global_threshold() {
+        // global=0.25, no per-species override, detection=0.10: fails the
+        // global gate and is dropped silently — neither stored nor
+        // quarantined (quarantine is reserved for the per-species case).
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let ev = make_event(
+            "Pica pica",
+            "Eurasian Magpie",
+            0.10,
+            tmp.path().join("rec.wav"),
+            "corr-drop",
+        );
+
+        run_processor(&state, vec![ev], HashMap::new(), 0.25).await;
+
+        let detections = state.with_db(|c| birdnet_db::sqlite::detection_count(c).unwrap_or(-1));
+        assert_eq!(detections, 0, "below-global detections must not be stored");
+        let pending =
+            state.with_db(|c| birdnet_db::sqlite::quarantine_pending_count(c).unwrap_or(-1));
+        assert_eq!(
+            pending, 0,
+            "below-global with no per-species override must not quarantine"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn event_processor_runs_every_alert_rule_action() {
+        // Seed one rule per action type — Log, Suppress, Webhook — each
+        // matching any detection, then send one accepted event. This walks
+        // all three arms of the alert-rule match loop. The accepted event is
+        // still stored: a Suppress rule gates *notifications*, not storage.
+        use birdnet_db::alert_rules::{AlertAction, NewAlertRule, insert_rule};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+
+        let match_all = |name: &str, action: AlertAction| NewAlertRule {
+            name: name.to_owned(),
+            enabled: true,
+            species_pattern: None,
+            confidence_min: 0.0,
+            confidence_max: 1.0,
+            hour_start: None,
+            hour_end: None,
+            days_of_week: None,
+            action,
+        };
+
+        state.with_db(|c| {
+            insert_rule(c, &match_all("log-all", AlertAction::Log)).unwrap();
+            insert_rule(c, &match_all("suppress-all", AlertAction::Suppress)).unwrap();
+            insert_rule(
+                c,
+                &match_all(
+                    "hook-all",
+                    AlertAction::Webhook {
+                        // RFC 5737 TEST-NET-2: the spawned dispatch can never
+                        // connect, but the test does not await it — the
+                        // runtime is dropped at end-of-test, aborting the task.
+                        url: "http://198.51.100.1:1/".to_owned(),
+                        method: "POST".to_owned(),
+                        body_template: Some("{\"species\":\"{{species}}\"}".to_owned()),
+                    },
+                ),
+            )
+            .unwrap();
+        });
+
+        let ev = make_event(
+            "Pica pica",
+            "Eurasian Magpie",
+            0.95,
+            tmp.path().join("rec.wav"),
+            "corr-rules",
+        );
+        run_processor(&state, vec![ev], HashMap::new(), 0.25).await;
+
+        let detections = state.with_db(|c| birdnet_db::sqlite::detection_count(c).unwrap_or(-1));
+        assert_eq!(
+            detections, 1,
+            "an accepted detection is stored even when a Suppress alert rule fires"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn event_processor_processes_multiple_events_in_one_run() {
+        // Two accepted events in one channel drain: confirms the loop
+        // re-enters and both rows land. Catches a mutant that would `break`
+        // after the first event instead of looping.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let events = vec![
+            make_event(
+                "Pica pica",
+                "Eurasian Magpie",
+                0.95,
+                tmp.path().join("a.wav"),
+                "corr-a",
+            ),
+            make_event(
+                "Corvus corax",
+                "Northern Raven",
+                0.90,
+                tmp.path().join("b.wav"),
+                "corr-b",
+            ),
+        ];
+
+        run_processor(&state, events, HashMap::new(), 0.25).await;
+
+        let detections = state.with_db(|c| birdnet_db::sqlite::detection_count(c).unwrap_or(-1));
+        assert_eq!(detections, 2, "both accepted events must be stored");
+    }
 }
