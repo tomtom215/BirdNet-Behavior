@@ -15,6 +15,11 @@
 #      sigmoid-on-probabilities bug shipped despite unit-test coverage.
 #   3. crates/birdnet-core/src/audio/extraction/extractor.rs — added
 #      after the range-inversion clip-extraction bug shipped likewise.
+#      Its sibling crates/birdnet-core/src/audio/extraction/convert.rs
+#      (ffmpeg/sox format conversion + frequency shift) joined the matrix
+#      once its arithmetic and codec-arg mapping were extracted into pure
+#      helpers and its command-execution branches covered by ffmpeg-gated
+#      tests — 0 missed (26 mutants: 23 caught, 3 unviable).
 #   4. crates/birdnet-db/src/sqlite/queries/detections.rs — added so the
 #      "explicit column list" + UNIQUE-on-chunk-offset contracts that
 #      PR #35 fixed can't quietly regress. The full CRUD surface is
@@ -122,6 +127,20 @@ jobs:
             # format-conversion tests skip themselves when neither
             # ffmpeg nor sox is on PATH so a stripped-down CI runner
             # doesn't false-fail; the main CI image has ffmpeg.
+            max_missed: 0
+          - label: audio/extraction/convert.rs
+            slug: audio-extraction-convert.rs
+            file: crates/birdnet-core/src/audio/extraction/convert.rs
+            # The format-conversion + frequency-shift module. The arithmetic
+            # (resample-rate, cents) and the ffmpeg codec-argument mapping
+            # were extracted into pure helpers (freq_shift_resample_rate,
+            # freq_shift_cents, ffmpeg_codec_args) so their mutants die to
+            # unit tests that need no external tool. The command-execution
+            # branches — ffmpeg success vs. non-zero exit, the sox fallback,
+            # and the rename-on-failure path — are covered by tests that run
+            # the real ffmpeg (gated on its presence; the CI image installs
+            # it). 0 missed at introduction: 26 mutants, 23 caught, 3
+            # unviable.
             max_missed: 0
           - label: sqlite/queries/detections.rs
             slug: sqlite-queries-detections.rs
