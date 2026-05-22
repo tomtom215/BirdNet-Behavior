@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>BirdNet-Behavior — design exploration</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link
+  href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&family=Newsreader:opsz,wght@6..72,400;6..72,500&family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+  rel="stylesheet"
+/>
+<link rel="stylesheet" href="lib/tokens.css" />
+
+<style>
+  html, body { margin: 0; padding: 0; background: var(--bg); font-family: "Inter Tight", system-ui, sans-serif; color: var(--fg); transition: background .25s; }
+  body { font-size: 14px; line-height: 1.5; }
+  #root { width: 100%; min-height: 100vh; }
+  image-slot { background: var(--surface-2); }
+
+  /* Page layout */
+  .page-root { display: flex; flex-direction: column; min-height: 100vh; }
+  .page-shell { display: grid; grid-template-columns: 240px 1fr; max-width: 1640px; margin: 0 auto; width: 100%; }
+  .page-main { min-width: 0; }
+
+  /* Table of contents */
+  .page-toc {
+    position: sticky; top: 56px; align-self: start;
+    height: calc(100vh - 56px);
+    padding: 28px 0 28px 28px;
+    overflow-y: auto;
+    border-right: 0.5px solid var(--hairline);
+  }
+  .page-toc::-webkit-scrollbar { width: 4px; }
+  .page-toc::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .page-toc-inner { padding-right: 16px; }
+  .page-toc-section { margin-bottom: 22px; }
+  .page-toc-section-title {
+    display: flex; align-items: center;
+    font-size: 13px; font-weight: 500; color: var(--fg);
+    text-decoration: none; padding: 4px 0;
+    letter-spacing: -0.005em;
+  }
+  .page-toc-frames { list-style: none; padding: 0; margin: 4px 0 0; }
+  .page-toc-frames li { padding: 0; }
+  .page-toc-frame {
+    display: block;
+    font-size: 12px; color: var(--fg-3);
+    text-decoration: none;
+    padding: 4px 0 4px 8px;
+    border-left: 1.5px solid var(--hairline);
+    margin-left: 3px;
+    transition: color .12s, border-color .12s, background .12s;
+  }
+  .page-toc-frame:hover { color: var(--fg-2); border-left-color: var(--border-2); }
+  .page-toc-frame.active { color: var(--fg); border-left-color: var(--moss); font-weight: 500; }
+
+  .page-nav {
+    position: sticky; top: 0; z-index: 50;
+    background: color-mix(in oklch, var(--bg) 92%, transparent);
+    backdrop-filter: saturate(1.4) blur(14px);
+    -webkit-backdrop-filter: saturate(1.4) blur(14px);
+    border-bottom: 0.5px solid var(--border);
+  }
+  .page-nav-inner {
+    max-width: 1640px; margin: 0 auto;
+    padding: 14px 32px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .page-nav-link {
+    padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 500;
+    color: var(--fg-2); text-decoration: none;
+    transition: background .15s, color .15s;
+  }
+  .page-nav-link:hover { background: var(--surface-2); color: var(--fg); }
+
+  .page-section {
+    padding: 64px 40px 32px;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .page-section + .page-section { border-top: 0.5px solid var(--border); }
+  .page-section-header { margin-bottom: 28px; max-width: 1400px; }
+  .page-section-body { display: flex; flex-direction: column; gap: 36px; max-width: 1400px; }
+
+  /* Frames */
+  .frame {
+    margin: 0;
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: var(--shadow-md);
+  }
+  .frame-caption {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 14px 20px;
+    border-bottom: 0.5px solid var(--hairline);
+    background: var(--surface-2);
+  }
+  .frame-label { font-size: 12.5px; font-weight: 500; color: var(--fg); letter-spacing: -0.005em; }
+  .frame-dims { font-size: 10.5px; color: var(--fg-3); }
+  .frame-wrap {
+    width: 100%; overflow: hidden; position: relative;
+    background: var(--bg);
+  }
+  .frame-content { transform-origin: top left; }
+
+  .phones-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 24px;
+  }
+  .phones-row .frame.compact .frame-wrap { background: var(--bg); }
+
+  .page-footer {
+    border-top: 0.5px solid var(--border);
+    padding: 28px 32px;
+    color: var(--fg-3);
+    text-align: center;
+    margin-top: 48px;
+  }
+
+  /* Smooth-scroll the anchors */
+  html { scroll-behavior: smooth; scroll-padding-top: 80px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- React + Babel (pinned) -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<!-- Starters -->
+<script src="image-slot.js"></script>
+<script type="text/babel" src="ios-frame.jsx"></script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+
+<!-- Data + shared components -->
+<script type="text/babel" src="lib/data.jsx"></script>
+<script type="text/babel" src="lib/components.jsx"></script>
+
+<!-- Screens -->
+<script type="text/babel" src="screens/onboarding.jsx"></script>
+<script type="text/babel" src="screens/dashboard.jsx"></script>
+<script type="text/babel" src="screens/heatmap.jsx"></script>
+<script type="text/babel" src="screens/dawn-chorus.jsx"></script>
+<script type="text/babel" src="screens/co-occurrence.jsx"></script>
+<script type="text/babel" src="screens/migration.jsx"></script>
+<script type="text/babel" src="screens/spectrogram.jsx"></script>
+<script type="text/babel" src="screens/species-list.jsx"></script>
+<script type="text/babel" src="screens/species-detail.jsx"></script>
+<script type="text/babel" src="screens/gallery.jsx"></script>
+<script type="text/babel" src="screens/recordings.jsx"></script>
+<script type="text/babel" src="screens/today.jsx"></script>
+<script type="text/babel" src="screens/life-list.jsx"></script>
+<script type="text/babel" src="screens/history.jsx"></script>
+<script type="text/babel" src="screens/trends.jsx"></script>
+<script type="text/babel" src="screens/year-in-review.jsx"></script>
+<script type="text/babel" src="screens/weekly-report.jsx"></script>
+<script type="text/babel" src="screens/system.jsx"></script>
+<script type="text/babel" src="screens/audio-settings.jsx"></script>
+<script type="text/babel" src="screens/quarantine.jsx"></script>
+<script type="text/babel" src="screens/notifications.jsx"></script>
+<script type="text/babel" src="screens/migrate.jsx"></script>
+<script type="text/babel" src="screens/backup-recovery.jsx"></script>
+<script type="text/babel" src="screens/kiosk.jsx"></script>
+<script type="text/babel" src="screens/mobile.jsx"></script>
+
+<!-- App -->
+<script type="text/babel" src="lib/app.jsx"></script>
+</body>
+</html>
