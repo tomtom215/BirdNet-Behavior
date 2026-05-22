@@ -346,6 +346,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1.15.0 → 1.16.0. The unused `ndarray` workspace entry was aligned
   0.16 → 0.17 to match the version `ort` already resolves transitively
   (0.17.2).
+- **`rusqlite` 0.38 → 0.39** and **`rubato` 2.0 → 3.0** — the two
+  out-of-range majors surfaced by the currency review, both verified
+  drop-in with no source changes. `rusqlite` 0.39 pulls `libsqlite3-sys`
+  0.36 → 0.37 and passes the full `birdnet-db` / `birdnet-migrate` /
+  `birdnet-web` suites (and the analytics-gated `birdnet-behavioral`
+  connection path); `rubato` 3.0 leaves its `audioadapter` pin unchanged
+  and passes the `birdnet-core` lib + `audio_pipeline` integration
+  tests. With these, every direct dependency is at its latest release as
+  of 2026-05-22.
 - **`rubato` 1.0.1 → 2.0.0** — major-version bump with no source
   changes needed in our consumer (the resampler API we use is stable
   across the bump). Brought in transitive `audioadapter` 3 to match.
