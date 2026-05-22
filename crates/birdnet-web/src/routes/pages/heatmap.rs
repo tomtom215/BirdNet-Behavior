@@ -237,10 +237,18 @@ async fn dawn_chorus_partial(State(state): State<AppState>) -> impl axum::respon
             "<p>Error loading dawn chorus</p>".to_string(),
         );
     };
+    // Current hour-of-day (UTC) for the "now" hand on the polar.
+    #[allow(clippy::cast_precision_loss)]
+    let now_h = {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        (secs % 86_400) as f64 / 3600.0
+    };
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/html")],
-        super::viz::circadian_polar(&series),
+        super::viz::circadian_polar(&series, now_h),
     )
 }
 
@@ -415,36 +423,28 @@ fn render_heatmap_svg(cells: &[HeatmapCell]) -> String {
     svg
 }
 
-/// Map a 0.0–1.0 intensity to a sky-blue → green → amber heat color.
+/// Map a 0.0–1.0 intensity to an on-brand, theme-aware heat colour.
+///
+/// Mirrors the documented `.bnb-heat-*` ramp: the warm **dawn** hue deepens
+/// over the neutral surface as activity climbs, then tips toward the **rare**
+/// hue for the busiest cells. Uses `color-mix(in oklch, …)` so the ramp tracks
+/// the active light/dark theme instead of baking in fixed sRGB values (the old
+/// blue→red rainbow ignored the palette and looked identical in both themes).
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn heat_color(t: f64) -> String {
     let t = t.clamp(0.0, 1.0);
     if t < 0.001 {
-        return "var(--surface-2)".to_string(); // empty cell — dark slate
+        return "var(--surface-2)".to_string(); // empty cell
     }
-    // Interpolate: dark-blue → cyan → green → yellow → orange
-    let (r, g, b) = if t < 0.25 {
-        let s = t / 0.25;
-        lerp_rgb((14, 165, 233), (6, 182, 212), s) // sky → cyan
-    } else if t < 0.5 {
-        let s = (t - 0.25) / 0.25;
-        lerp_rgb((6, 182, 212), (74, 222, 128), s) // cyan → green
-    } else if t < 0.75 {
-        let s = (t - 0.5) / 0.25;
-        lerp_rgb((74, 222, 128), (251, 191, 36), s) // green → yellow
+    if t < 0.6 {
+        // surface-2 → dawn (12% … 100% mix)
+        let pct = (t / 0.6).mul_add(88.0, 12.0).round() as i32;
+        format!("color-mix(in oklch, var(--dawn) {pct}%, var(--surface-2))")
     } else {
-        let s = (t - 0.75) / 0.25;
-        lerp_rgb((251, 191, 36), (239, 68, 68), s) // yellow → red
-    };
-    format!("#{r:02x}{g:02x}{b:02x}")
-}
-
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn lerp_rgb(a: (u8, u8, u8), b: (u8, u8, u8), t: f64) -> (u8, u8, u8) {
-    let lerp = |a: u8, b: u8| -> u8 {
-        let v = (f64::from(b) - f64::from(a)).mul_add(t, f64::from(a));
-        v.round() as u8
-    };
-    (lerp(a.0, b.0), lerp(a.1, b.1), lerp(a.2, b.2))
+        // dawn → rare for the hottest cells
+        let s = ((t - 0.6) / 0.4 * 100.0).round() as i32;
+        format!("color-mix(in oklch, var(--rare) {s}%, var(--dawn))")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -529,23 +529,18 @@ mod tests {
 
     #[test]
     fn heat_color_full() {
+        // Hottest cells tip toward the rare hue, theme-aware via color-mix.
         let c = heat_color(1.0);
-        assert!(c.starts_with('#'));
-        assert_eq!(c.len(), 7);
+        assert!(c.contains("color-mix"));
+        assert!(c.contains("var(--rare)"));
     }
 
     #[test]
     fn heat_color_mid() {
+        // Mid intensity is a dawn-over-surface mix (not the old sRGB rainbow).
         let c = heat_color(0.5);
-        assert!(c.starts_with('#'));
-    }
-
-    #[test]
-    fn lerp_rgb_endpoints() {
-        let (r, g, b) = lerp_rgb((0, 0, 0), (255, 255, 255), 0.0);
-        assert_eq!((r, g, b), (0, 0, 0));
-        let (r, g, b) = lerp_rgb((0, 0, 0), (255, 255, 255), 1.0);
-        assert_eq!((r, g, b), (255, 255, 255));
+        assert!(c.contains("color-mix"));
+        assert!(c.contains("var(--dawn)"));
     }
 
     #[test]

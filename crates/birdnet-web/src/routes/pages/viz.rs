@@ -267,70 +267,126 @@ pub(crate) fn accumulation_curve(points: &[(String, i64)]) -> String {
 
 // ─────────────────────────── dawn-chorus polar ─────────────────────────────
 
-/// 24-hour polar plot. Each series is `(common_name, [hourly_value; 24])`;
-/// values are normalised against the global maximum so heights compare.
+/// 24-hour polar plot. Each series is `(common_name, [hourly_value; 24])`.
+///
+/// Each species occupies its own concentric **ribbon** centred on a baseline
+/// circle; the ribbon swells in and out around that baseline where the species
+/// is active, normalised to its own daily peak so every rhythm reads clearly.
+/// A night wedge, 3-hour ticks, sunrise/sunset markers and a dashed "now" hand
+/// orient the reader. `now_h` is the current hour-of-day (0–24); pass a value
+/// outside that range to hide the hand.
 #[must_use]
 #[allow(clippy::cast_precision_loss)]
-pub(crate) fn circadian_polar(series: &[(String, [f64; 24])]) -> String {
+pub(crate) fn circadian_polar(series: &[(String, [f64; 24])], now_h: f64) -> String {
     if series.is_empty() {
         return EMPTY.to_string();
     }
-    let global_max = series
-        .iter()
-        .flat_map(|(_, v)| v.iter())
-        .copied()
-        .fold(0.0_f64, f64::max)
-        .max(1.0);
-
-    let size = 320.0_f64;
+    let n = series.len();
+    let size = 440.0_f64;
     let cx = size / 2.0;
     let cy = size / 2.0;
-    let ir = 30.0_f64;
-    let or = size / 2.0 - 30.0;
+    let ir = 46.0_f64;
+    let or = size / 2.0 - 38.0;
+    let band = (or - ir) / n as f64;
+    let amp = band * 0.42;
 
     let mut svg = format!(
-        r#"<svg width="{size:.0}" height="{size:.0}" viewBox="0 0 {size:.0} {size:.0}" role="img" aria-label="Dawn chorus circadian plot" style="max-width:100%;display:block;margin:0 auto;">"#
+        r#"<svg width="{size:.0}" height="{size:.0}" viewBox="0 0 {size:.0} {size:.0}" role="img" aria-label="Dawn chorus circadian plot" style="max-width:100%;height:auto;display:block;margin:0 auto;">"#
     );
 
-    // Dawn wedge (05:00–08:00) + dusk wedge (17:00–20:00).
-    for (start, end, tok) in [(5.0, 8.0, "var(--dawn)"), (17.0, 20.0, "var(--night)")] {
-        let (x0, y0) = polar(cx, cy, or, hour_angle(start));
-        let (x1, y1) = polar(cx, cy, or, hour_angle(end));
+    // Night wedge (≈20:00 → 05:00, wrapping through midnight at the top).
+    {
+        let mut wedge = format!("M{cx:.1},{cy:.1} ");
+        // 20:00 → 29:00 (i.e. 05:00 next day) in half-hour steps, as integers.
+        for k in 40..=58 {
+            let h = f64::from(k) * 0.5;
+            let (x, y) = polar(cx, cy, or, hour_angle(h));
+            let _ = write!(wedge, "L{x:.1},{y:.1} ");
+        }
+        wedge.push('Z');
         let _ = write!(
             svg,
-            r#"<path d="M{cx:.1},{cy:.1} L{x0:.1},{y0:.1} A{or:.1},{or:.1} 0 0 1 {x1:.1},{y1:.1} Z" fill="{tok}" fill-opacity="0.12"/>"#,
+            r#"<path d="{wedge}" fill="var(--night)" fill-opacity="0.14"/>"#
         );
     }
 
-    // Hour rings + spokes.
-    for r in [ir, f64::midpoint(ir, or), or] {
+    // Reference rings.
+    for r in [ir, or] {
         let _ = write!(
             svg,
-            r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{r:.1}" fill="none" stroke="var(--hairline)" stroke-width="0.5"/>"#,
-        );
-    }
-    for (h, lbl) in [(0.0, "12a"), (6.0, "6a"), (12.0, "12p"), (18.0, "6p")] {
-        let (lx, ly) = polar(cx, cy, or + 12.0, hour_angle(h));
-        let _ = write!(
-            svg,
-            r#"<text class="mono" x="{lx:.1}" y="{ly:.1}" text-anchor="middle" dominant-baseline="middle" font-size="9" fill="var(--fg-4)">{lbl}</text>"#,
+            r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{r:.1}" fill="none" stroke="var(--hairline)" stroke-width="0.75"/>"#,
         );
     }
 
-    // Per-species closed polar areas.
-    for (name, hours) in series {
+    // 3-hour spokes + labels.
+    let labels = ["12a", "3a", "6a", "9a", "12p", "3p", "6p", "9p"];
+    for (i, lbl) in labels.iter().enumerate() {
+        let h = i as f64 * 3.0;
+        let (sx, sy) = polar(cx, cy, ir, hour_angle(h));
+        let (ex, ey) = polar(cx, cy, or, hour_angle(h));
+        let _ = write!(
+            svg,
+            r#"<line x1="{sx:.1}" y1="{sy:.1}" x2="{ex:.1}" y2="{ey:.1}" stroke="var(--hairline)" stroke-width="0.5"/>"#,
+        );
+        let (lx, ly) = polar(cx, cy, or + 14.0, hour_angle(h));
+        let _ = write!(
+            svg,
+            r#"<text class="mono" x="{lx:.1}" y="{ly:.1}" text-anchor="middle" dominant-baseline="middle" font-size="10" fill="var(--fg-4)">{lbl}</text>"#,
+        );
+    }
+
+    // Sunrise (☀ ~06:00) and sunset (☾ ~19:00) markers on the outer ring.
+    for (h, glyph, col) in [
+        (6.0, "\u{2600}", "var(--dawn-ink)"),
+        (19.0, "\u{263e}", "var(--fg-3)"),
+    ] {
+        let (mx, my) = polar(cx, cy, or, hour_angle(h));
+        let _ = write!(
+            svg,
+            r#"<text x="{mx:.1}" y="{my:.1}" text-anchor="middle" dominant-baseline="central" font-size="13" fill="{col}">{glyph}</text>"#,
+        );
+    }
+
+    // Per-species concentric ribbons (outer rows first so inner draw on top).
+    for (i, (name, hours)) in series.iter().enumerate() {
         let color = species_color(name);
+        let baseline = ir + (i as f64 + 0.5) * band;
+        let row_max = hours.iter().copied().fold(0.0_f64, f64::max).max(1.0);
+
+        // Outer edge (baseline + activity), 0..24 inclusive to close the loop.
         let mut path = String::new();
-        for (h, &v) in hours.iter().enumerate() {
-            let r = ir + (v / global_max) * (or - ir);
-            let (x, y) = polar(cx, cy, r, hour_angle(h as f64));
-            let _ = write!(path, "{}{x:.1},{y:.1} ", if h == 0 { "M" } else { "L" });
+        for k in 0..=24 {
+            let h = k as f64;
+            let v = hours[k % 24];
+            let (x, y) = polar(cx, cy, baseline + (v / row_max) * amp, hour_angle(h));
+            let _ = write!(path, "{}{x:.1},{y:.1} ", if k == 0 { "M" } else { "L" });
+        }
+        // Inner edge (baseline - activity), traced back.
+        for k in (0..=24).rev() {
+            let h = k as f64;
+            let v = hours[k % 24];
+            let (x, y) = polar(cx, cy, baseline - (v / row_max) * amp, hour_angle(h));
+            let _ = write!(path, "L{x:.1},{y:.1} ");
         }
         path.push('Z');
         let _ = write!(
             svg,
-            r#"<path d="{path}" fill="{color}" fill-opacity="0.16" stroke="{color}" stroke-width="1.4" stroke-opacity="0.85"><title>{n}</title></path>"#,
+            r#"<path data-species-fill="1" d="{path}" fill="{color}" fill-opacity="0.55" stroke="{color}" stroke-width="1" stroke-opacity="0.9"><title>{n}</title></path>"#,
             n = escape_html(name),
+        );
+        // Faint baseline circle for the species' "silent" radius.
+        let _ = write!(
+            svg,
+            r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{baseline:.1}" fill="none" stroke="{color}" stroke-width="0.5" stroke-opacity="0.25"/>"#,
+        );
+    }
+
+    // Current-time hand (dashed) when a valid hour is supplied.
+    if (0.0..24.0).contains(&now_h) {
+        let (hx, hy) = polar(cx, cy, or, hour_angle(now_h));
+        let _ = write!(
+            svg,
+            r#"<line x1="{cx:.1}" y1="{cy:.1}" x2="{hx:.1}" y2="{hy:.1}" stroke="var(--fg-2)" stroke-width="1.25" stroke-dasharray="2 3"/><circle cx="{cx:.1}" cy="{cy:.1}" r="2.5" fill="var(--fg-2)"/>"#,
         );
     }
 
@@ -373,10 +429,41 @@ pub(crate) fn ridgeline(series: &[(String, Vec<i64>)]) -> String {
     let bottom = 22.0_f64;
     let h = top + n as f64 * row_step + bottom;
     let step_x = plot_w / (weeks - 1) as f64;
+    let wk_x = |wk: f64| left + wk * step_x;
+
+    // Per-species vertical gradients: saturated at the crest, fading to baseline.
+    let mut defs = String::from("<defs>");
+    for (i, (name, _)) in series.iter().enumerate() {
+        let color = species_color(name);
+        let baseline = top + (i + 1) as f64 * row_step;
+        let _ = write!(
+            defs,
+            r#"<linearGradient id="ridge-{i}" gradientUnits="userSpaceOnUse" x1="0" y1="{y0:.1}" x2="0" y2="{y1:.1}"><stop offset="0%" stop-color="{color}" stop-opacity="0.78"/><stop offset="100%" stop-color="{color}" stop-opacity="0.07"/></linearGradient>"#,
+            y0 = baseline - amp,
+            y1 = baseline,
+        );
+    }
+    defs.push_str("</defs>");
 
     let mut svg = format!(
-        r#"<div style="overflow-x:auto;"><svg width="{w:.0}" height="{h:.0}" viewBox="0 0 {w:.0} {h:.0}" role="img" aria-label="Migration phenology ridgeline">"#
+        r#"<div style="overflow-x:auto;"><svg width="{w:.0}" height="{h:.0}" viewBox="0 0 {w:.0} {h:.0}" role="img" aria-label="Migration phenology ridgeline">{defs}"#
     );
+
+    // Spring (~weeks 12–21) and fall (~weeks 30–43) migration bands, behind.
+    let yb = h - bottom;
+    for (w0, w1, tok, lbl) in [
+        (12.0, 21.0, "var(--moss)", "spring"),
+        (30.0, 43.0, "var(--dawn)", "fall"),
+    ] {
+        let x = wk_x(w0);
+        let bw = wk_x(w1) - x;
+        let _ = write!(
+            svg,
+            r#"<rect x="{x:.1}" y="{top:.1}" width="{bw:.1}" height="{bh:.1}" fill="{tok}" fill-opacity="0.06"/><text class="bnb-eyebrow" x="{tx:.1}" y="{top:.1}" font-size="8" fill="var(--fg-4)">{lbl}</text>"#,
+            bh = yb - top,
+            tx = x + 3.0,
+        );
+    }
 
     // Month ticks + faint guides.
     for (m, label) in MONTHS.iter().enumerate() {
@@ -384,7 +471,6 @@ pub(crate) fn ridgeline(series: &[(String, Vec<i64>)]) -> String {
         let _ = write!(
             svg,
             r#"<line x1="{x:.1}" y1="{top:.1}" x2="{x:.1}" y2="{yb:.1}" stroke="var(--hairline)" stroke-width="0.5"/><text class="mono" x="{x:.1}" y="{ty:.1}" text-anchor="middle" font-size="8" fill="var(--fg-4)">{label}</text>"#,
-            yb = h - bottom,
             ty = h - 6.0,
         );
     }
@@ -396,18 +482,18 @@ pub(crate) fn ridgeline(series: &[(String, Vec<i64>)]) -> String {
         let color = species_color(name);
         let mut path = String::new();
         for (wk, &v) in vals.iter().enumerate() {
-            let x = left + wk as f64 * step_x;
+            let x = wk_x(wk as f64);
             let y = baseline - (v as f64 / row_max) * amp;
             let _ = write!(path, "{}{x:.1},{y:.1} ", if wk == 0 { "M" } else { "L" });
         }
         let area = format!(
             "{path}L{xe:.1},{baseline:.1} L{x0:.1},{baseline:.1} Z",
-            xe = left + (vals.len() - 1) as f64 * step_x,
+            xe = wk_x((vals.len() - 1) as f64),
             x0 = left,
         );
         let _ = write!(
             svg,
-            r#"<path d="{area}" fill="{color}" fill-opacity="0.70" stroke="{color}" stroke-width="1.2"/><text class="mono" x="{lx:.1}" y="{ly:.1}" text-anchor="end" dominant-baseline="middle" font-size="9" fill="var(--fg-3)"><title>{full}</title>{code}</text>"#,
+            r#"<path data-species-fill="1" d="{area}" fill="url(#ridge-{i})" stroke="{color}" stroke-width="1.4" stroke-opacity="0.95"/><text class="mono" x="{lx:.1}" y="{ly:.1}" text-anchor="end" dominant-baseline="middle" font-size="9" fill="var(--fg-3)"><title>{full}</title>{code}</text>"#,
             lx = left - 8.0,
             ly = baseline - 4.0,
             full = escape_html(name),
@@ -477,11 +563,13 @@ mod tests {
 
     #[test]
     fn polar_empty_and_basic() {
-        assert!(circadian_polar(&[]).contains("Not enough data"));
+        assert!(circadian_polar(&[], 6.0).contains("Not enough data"));
         let mut h = [0.0_f64; 24];
         h[6] = 5.0;
         h[7] = 8.0;
-        let svg = circadian_polar(&[("Northern Cardinal".to_string(), h)]);
+        let svg = circadian_polar(&[("Northern Cardinal".to_string(), h)], 6.5);
         assert!(svg.contains("<svg") && svg.contains("12a") && svg.contains("6a"));
+        // The dashed current-time hand renders for an in-range hour.
+        assert!(svg.contains("stroke-dasharray"));
     }
 }
