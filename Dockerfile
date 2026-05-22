@@ -10,7 +10,7 @@
 # standard GitHub-hosted runners).
 #
 # Build arguments:
-#   RUST_VERSION      Rust toolchain version (default: 1.88 — MSRV)
+#   RUST_VERSION      Rust toolchain version (default: 1.95 — MSRV)
 #   DEBIAN_CODENAME   Debian base image codename (default: bookworm)
 #   BUILD_FEATURES    Comma-separated Cargo features (default: "")
 #                     Pass "analytics" to enable DuckDB behavioral analytics.
@@ -22,7 +22,7 @@
 #   docker build -t birdnet-behavior --build-arg BUILD_FEATURES=analytics .
 # =============================================================================
 
-ARG RUST_VERSION=1.88
+ARG RUST_VERSION=1.95
 # Debian 13 "trixie" is required here, not "bookworm": the pre-built
 # ONNX Runtime binaries that the `ort` crate downloads link against
 # glibc ≥ 2.38 (they use the C23 `__isoc23_strtol` / `strtoll` / `strtoull`

@@ -70,3 +70,61 @@ pub(super) fn check_database(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
 
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::doctor::Status;
+    use clap::Parser;
+
+    fn cli() -> Cli {
+        Cli::parse_from(["birdnet-behavior"])
+    }
+
+    #[test]
+    fn dir_pass_and_integrity_skip_when_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Config::parse(&format!("DB_PATH={}/birds.db", dir.path().display())).unwrap();
+        let checks = check_database(&cli(), Some(&cfg));
+        assert!(
+            checks
+                .iter()
+                .any(|c| c.name.contains("Database directory") && c.status == Status::Pass)
+        );
+        assert!(
+            checks
+                .iter()
+                .any(|c| c.name.contains("Database integrity") && c.status == Status::Skip)
+        );
+    }
+
+    #[test]
+    fn dir_warn_when_parent_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = format!("{}/no-such-subdir/birds.db", dir.path().display());
+        let cfg = Config::parse(&format!("DB_PATH={missing}")).unwrap();
+        let checks = check_database(&cli(), Some(&cfg));
+        assert!(
+            checks
+                .iter()
+                .any(|c| c.name.contains("Database directory") && c.status == Status::Warn)
+        );
+    }
+
+    #[test]
+    fn integrity_pass_for_valid_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("birds.db");
+        // A real, migrated SQLite database passes the integrity check.
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        drop(conn);
+        let cfg = Config::parse(&format!("DB_PATH={}", db_path.display())).unwrap();
+        let checks = check_database(&cli(), Some(&cfg));
+        assert!(
+            checks
+                .iter()
+                .any(|c| c.name.contains("Database integrity") && c.status == Status::Pass)
+        );
+    }
+}

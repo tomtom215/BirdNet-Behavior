@@ -96,3 +96,56 @@ pub(super) fn check_optional_tools(cli: &Cli, config: Option<&Config>) -> Vec<Ch
 
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::doctor::Status;
+    use clap::Parser;
+
+    fn cli() -> Cli {
+        Cli::parse_from(["birdnet-behavior"])
+    }
+
+    #[test]
+    fn runtime_environment_reports_cpu_and_temp() {
+        let checks = check_runtime_environment();
+        assert_eq!(checks.len(), 2);
+        assert!(checks[0].name.contains("CPU cores"));
+        // Pass on a multi-core host, Warn on a single core — both are valid.
+        assert!(matches!(checks[0].status, Status::Pass | Status::Warn));
+        assert!(checks[1].name.contains("Temp directory"));
+    }
+
+    #[test]
+    fn optional_tools_empty_for_wav_defaults() {
+        // Default CLI: WAV output, no freq-shift, no Apprise config.
+        let checks = check_optional_tools(&cli(), None);
+        assert!(checks.is_empty());
+    }
+
+    #[test]
+    fn optional_tools_checks_encoder_for_nonwav_format() {
+        let mut cli = cli();
+        cli.audio_format = "mp3".to_string();
+        let checks = check_optional_tools(&cli, None);
+        // Presence is deterministic; status depends on whether ffmpeg/sox exists.
+        assert!(checks.iter().any(|c| c.name.contains("Audio encoder")));
+    }
+
+    #[test]
+    fn optional_tools_checks_freq_shift_backend() {
+        let mut cli = cli();
+        cli.freq_shift_hz = 2000;
+        let checks = check_optional_tools(&cli, None);
+        assert!(checks.iter().any(|c| c.name.contains("Frequency-shift")));
+    }
+
+    #[test]
+    fn optional_tools_checks_apprise_when_configured() {
+        let mut cli = cli();
+        cli.apprise_config = Some(std::path::PathBuf::from("/tmp/apprise.conf"));
+        let checks = check_optional_tools(&cli, None);
+        assert!(checks.iter().any(|c| c.name.contains("Apprise")));
+    }
+}

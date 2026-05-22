@@ -64,3 +64,66 @@ pub(super) fn check_paths(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
 
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::doctor::Status;
+    use clap::Parser;
+
+    fn cli() -> Cli {
+        Cli::parse_from(["birdnet-behavior"])
+    }
+
+    #[test]
+    fn skip_when_no_watch_dir_configured() {
+        let checks = check_paths(&cli(), None);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].status, Status::Skip);
+        assert!(checks[0].name.contains("Recordings"));
+    }
+
+    #[test]
+    fn pass_for_writable_watch_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cli = cli();
+        cli.watch_dir = Some(dir.path().to_path_buf());
+        let checks = check_paths(&cli, None);
+        assert_eq!(checks[0].status, Status::Pass);
+        assert!(checks[0].message.contains("writable"));
+    }
+
+    #[test]
+    fn warn_for_missing_watch_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cli = cli();
+        cli.watch_dir = Some(dir.path().join("does-not-exist"));
+        let checks = check_paths(&cli, None);
+        assert_eq!(checks[0].status, Status::Warn);
+        assert!(checks[0].message.contains("does not exist"));
+    }
+
+    #[test]
+    fn includes_image_cache_when_set() {
+        let watch = tempfile::tempdir().unwrap();
+        let image = tempfile::tempdir().unwrap();
+        let mut cli = cli();
+        cli.watch_dir = Some(watch.path().to_path_buf());
+        cli.image_cache_dir = Some(image.path().to_path_buf());
+        let checks = check_paths(&cli, None);
+        assert_eq!(checks.len(), 2);
+        assert!(
+            checks
+                .iter()
+                .any(|c| c.name.contains("Image cache") && c.status == Status::Pass)
+        );
+    }
+
+    #[test]
+    fn reads_recs_dir_from_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Config::parse(&format!("RECS_DIR={}", dir.path().display())).unwrap();
+        let checks = check_paths(&cli(), Some(&cfg));
+        assert_eq!(checks[0].status, Status::Pass);
+    }
+}

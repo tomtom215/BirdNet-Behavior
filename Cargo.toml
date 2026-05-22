@@ -14,7 +14,7 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95"
 license = "CC-BY-NC-SA-4.0"
 repository = "https://github.com/tomtom215/BirdNet-Behavior"
 authors = ["tomtom215"]
@@ -45,7 +45,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 tokio = { version = "1.52", features = ["full"] }
 
 # Database
-rusqlite = { version = "0.38", features = ["bundled", "backup"] }
+rusqlite = { version = "0.39", features = ["bundled", "backup"] }
 duckdb = { version = "1.10501", features = ["bundled"] }
 
 # Web
@@ -61,13 +61,11 @@ lettre = { version = "0.11", default-features = false, features = ["tokio1-rustl
 
 # System monitoring — CPU, memory, temperature.
 #
-# Pinned to the 0.38 line: sysinfo 0.39.x raised its MSRV to Rust 1.95,
-# which would force us to either bump the workspace MSRV in lockstep or
-# fail the Dockerfile's 1.88-toolchain build. We track the 0.38 line until
-# we're ready to make that MSRV move; the API changes we adopted (`nothing()`,
-# `refresh(bool)`, `Component::temperature() -> Option<f32>`) already landed
-# in 0.38.x so the source-side changes don't need to revert.
-sysinfo = { version = "0.38", default-features = false, features = ["system", "component"] }
+# sysinfo 0.39.x requires Rust 1.95, which is what sets the workspace MSRV
+# floor (see `rust-version` above). The API we use — `RefreshKind::nothing()`,
+# `Components::refresh(bool)`, `Component::temperature() -> Option<f32>` — is
+# stable across the 0.38/0.39 boundary, so only the version bump is needed.
+sysinfo = { version = "0.39", default-features = false, features = ["system", "component"] }
 
 # Async IO utilities (file streaming for recording serving)
 tokio-util = { version = "0.7", features = ["io"] }
@@ -77,12 +75,14 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 
 # Audio
 symphonia = { version = "0.6.0", features = ["wav", "flac", "mp3"] }
-rubato = "2.0.0"
+rubato = "3.0.0"
 hound = "3.5"
 
 # ML Inference (ONNX Runtime via ort — supports all ONNX opsets)
 ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "download-binaries", "tls-rustls", "copy-dylibs"] }
-ndarray = "0.16"
+# Pulled in transitively through ort's `ndarray` feature; tracked here so the
+# declared version matches what the lockfile resolves.
+ndarray = "0.17"
 
 # File watching
 notify = "8"
@@ -109,6 +109,10 @@ cargo = { level = "warn", priority = -1 }
 module_name_repetitions = "allow"
 must_use_candidate = "allow"
 multiple_crate_versions = "allow"
+# Nursery lint that, under the 1.95 toolchain, flags `Duration::from_secs(300)`
+# in favour of `from_mins(5)` etc. across ~20 pre-existing call sites. The
+# explicit-seconds form is intentional here, so we opt out of the suggestion.
+duration_suboptimal_units = "allow"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
