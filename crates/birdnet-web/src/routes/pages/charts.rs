@@ -45,7 +45,11 @@ pub(crate) fn render_hourly_chart(hours: &[birdnet_db::sqlite::HourlyCount]) -> 
         let x = left_pad + i as i32 * (bar_w + gap);
         let bar_h = (count as f64 / max_count as f64 * chart_h as f64) as i32;
         let y = chart_h - bar_h;
-        let color = if count > 0 { "#38bdf8" } else { "#1e293b" };
+        let color = if count > 0 {
+            "var(--moss)"
+        } else {
+            "var(--surface-2)"
+        };
 
         let _ = write!(
             svg,
@@ -55,7 +59,7 @@ pub(crate) fn render_hourly_chart(hours: &[birdnet_db::sqlite::HourlyCount]) -> 
         if count > 0 {
             let _ = write!(
                 svg,
-                r##"<text x="{tx}" y="{ty}" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="sans-serif">{count}</text>"##,
+                r#"<text x="{tx}" y="{ty}" text-anchor="middle" fill="var(--fg-3)" font-size="9" font-family="sans-serif">{count}</text>"#,
                 tx = x + bar_w / 2,
                 ty = y - 3,
             );
@@ -64,7 +68,7 @@ pub(crate) fn render_hourly_chart(hours: &[birdnet_db::sqlite::HourlyCount]) -> 
         if i % 3 == 0 {
             let _ = write!(
                 svg,
-                r##"<text x="{tx}" y="{ty}" text-anchor="middle" fill="#64748b" font-size="9" font-family="sans-serif">{i:02}</text>"##,
+                r#"<text x="{tx}" y="{ty}" text-anchor="middle" fill="var(--fg-4)" font-size="9" font-family="sans-serif">{i:02}</text>"#,
                 tx = x + bar_w / 2,
                 ty = chart_h + 14,
             );
@@ -107,13 +111,13 @@ pub(crate) fn render_daily_chart(days: &[birdnet_db::sqlite::DailyCount]) -> Str
 
         let _ = write!(
             svg,
-            r##"<rect x="{x}" y="{y}" width="{bar_w}" height="{bar_h}" rx="2" fill="#38bdf8"/>"##,
+            r#"<rect x="{x}" y="{y}" width="{bar_w}" height="{bar_h}" rx="2" fill="var(--moss)"/>"#,
         );
 
         if day.count > 0 {
             let _ = write!(
                 svg,
-                r##"<text x="{tx}" y="{ty}" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="sans-serif">{count}</text>"##,
+                r#"<text x="{tx}" y="{ty}" text-anchor="middle" fill="var(--fg-3)" font-size="9" font-family="sans-serif">{count}</text>"#,
                 tx = x + bar_w / 2,
                 ty = y - 3,
                 count = day.count,
@@ -123,7 +127,7 @@ pub(crate) fn render_daily_chart(days: &[birdnet_db::sqlite::DailyCount]) -> Str
         let date_label = day.date.get(5..).unwrap_or(&day.date);
         let _ = write!(
             svg,
-            r##"<text x="{tx}" y="{ty}" text-anchor="middle" fill="#64748b" font-size="8" font-family="sans-serif">{label}</text>"##,
+            r#"<text x="{tx}" y="{ty}" text-anchor="middle" fill="var(--fg-4)" font-size="8" font-family="sans-serif">{label}</text>"#,
             tx = x + bar_w / 2,
             ty = chart_h + 14,
             label = super::escape_html(date_label),
@@ -152,7 +156,12 @@ pub(crate) fn render_confidence_chart(buckets: &[i64; 6]) -> String {
     let max_count = buckets.iter().copied().max().unwrap_or(1).max(1);
     let labels = ["<50%", "50-60%", "60-70%", "70-80%", "80-90%", "90-100%"];
     let colors = [
-        "#64748b", "#f59e0b", "#eab308", "#84cc16", "#22c55e", "#10b981",
+        "var(--fg-4)",
+        "var(--rare)",
+        "var(--dawn-ink)",
+        "var(--dawn)",
+        "var(--moss-ink)",
+        "var(--moss)",
     ];
 
     let bar_h = 18;
@@ -180,7 +189,7 @@ pub(crate) fn render_confidence_chart(buckets: &[i64; 6]) -> String {
 
         let _ = write!(
             svg,
-            r##"<text x="{lx}" y="{ly}" text-anchor="end" fill="#94a3b8" font-size="10" font-family="sans-serif" dominant-baseline="middle">{label}</text>"##,
+            r#"<text x="{lx}" y="{ly}" text-anchor="end" fill="var(--fg-3)" font-size="10" font-family="sans-serif" dominant-baseline="middle">{label}</text>"#,
             lx = label_w - 4,
             ly = y + bar_h / 2,
         );
@@ -191,7 +200,7 @@ pub(crate) fn render_confidence_chart(buckets: &[i64; 6]) -> String {
         if count > 0 {
             let _ = write!(
                 svg,
-                r##"<text x="{tx}" y="{ty}" fill="#94a3b8" font-size="9" font-family="sans-serif" dominant-baseline="middle">{count}</text>"##,
+                r#"<text x="{tx}" y="{ty}" fill="var(--fg-3)" font-size="9" font-family="sans-serif" dominant-baseline="middle">{count}</text>"#,
                 tx = label_w + bar_w + 4,
                 ty = y + bar_h / 2,
             );

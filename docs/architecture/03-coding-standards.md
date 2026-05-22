@@ -172,7 +172,7 @@ pub use sqlite::queries::detections::insert_detection;
 - **Criterion.rs benchmarks** with HTML reports for performance-critical paths
 - End-to-end tests against real WAV fixtures and real SQLite databases
 - Coverage tracked via `cargo-tarpaulin`
-- MSRV explicitly specified (1.88) and CI-enforced
+- MSRV explicitly specified (1.95) and CI-enforced
 - **Current test count**: ~516 passing across all crates and integration tests
 
 ### Raw String Literals in HTML/SVG

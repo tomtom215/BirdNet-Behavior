@@ -85,8 +85,9 @@ async fn dashboard_page_returns_html() {
     assert!(html.contains("<!DOCTYPE html>"));
     assert!(html.contains("BirdNet-Behavior"));
     assert!(html.contains("htmx.min.js"));
-    assert!(html.contains("Recent Detections"));
-    assert!(html.contains("Top Species"));
+    assert!(html.contains("/static/css/app.css"));
+    assert!(html.contains("Detections as they happen"));
+    assert!(html.contains("Top species"));
 }
 
 #[tokio::test]
@@ -110,7 +111,7 @@ async fn species_page_returns_html() {
         .unwrap();
     let html = String::from_utf8_lossy(&body);
 
-    assert!(html.contains("All Species"));
+    assert!(html.contains("Every voice"));
     assert!(html.contains("hx-get"));
 }
 
@@ -135,8 +136,9 @@ async fn htmx_stats_partial_returns_html() {
         .unwrap();
     let html = String::from_utf8_lossy(&body);
 
-    assert!(html.contains("Total Detections"));
-    assert!(html.contains("Unique Species"));
+    assert!(html.contains("Detections"));
+    assert!(html.contains("Species"));
+    assert!(html.contains("stat-tile"));
     assert!(html.contains('5')); // total detections from test data
     assert!(html.contains('4')); // unique species from test data
 }
@@ -162,7 +164,7 @@ async fn htmx_detections_partial_returns_table() {
         .unwrap();
     let html = String::from_utf8_lossy(&body);
 
-    assert!(html.contains("<table>"));
+    assert!(html.contains("feed-row"));
     assert!(html.contains("Eurasian Blackbird"));
     assert!(html.contains("European Robin"));
 }
@@ -189,7 +191,8 @@ async fn htmx_top_species_partial_returns_list() {
     let html = String::from_utf8_lossy(&body);
 
     assert!(html.contains("Eurasian Blackbird"));
-    assert!(html.contains("species-item"));
+    assert!(html.contains("list-row"));
+    assert!(html.contains("bnb-avatar"));
 }
 
 #[tokio::test]
@@ -343,6 +346,108 @@ async fn htmx_analytics_config_partial() {
 }
 
 #[tokio::test]
+async fn htmx_cooccurrence_matrix_partial() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/cooccurrence-matrix?days=3650")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+    // Either a rendered matrix or the graceful "not enough data" message.
+    assert!(html.contains("<svg") || html.contains("Not enough data"));
+}
+
+#[tokio::test]
+async fn htmx_activity_streamgraph_partial() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/activity-streamgraph?days=3650")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+    assert!(html.contains("<svg") || html.contains("Not enough data"));
+}
+
+#[tokio::test]
+async fn htmx_dawn_chorus_partial() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/dawn-chorus")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+    // All-time top species exist in the fixture, so the polar renders.
+    assert!(html.contains("<svg") || html.contains("Not enough data"));
+}
+
+#[tokio::test]
+async fn htmx_life_accumulation_partial() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/life-accumulation")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+    assert!(html.contains("<svg") || html.contains("Not enough data"));
+}
+
+#[tokio::test]
+async fn htmx_migration_ridgeline_partial() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/migration-ridgeline")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+    assert!(html.contains("<svg") || html.contains("Not enough data"));
+}
+
+#[tokio::test]
 async fn htmx_confidence_chart_partial() {
     let app = app();
 
@@ -365,4 +470,49 @@ async fn htmx_confidence_chart_partial() {
 
     // Should contain SVG chart (test data has detections with various confidence levels)
     assert!(html.contains("<svg"));
+}
+
+#[tokio::test]
+async fn all_redesigned_pages_render_ok() {
+    // Every primary page + every new visualization partial must render
+    // without a server error against a seeded database.
+    let routes = [
+        "/",
+        "/today",
+        "/species",
+        "/heatmap",
+        "/analytics",
+        "/correlation",
+        "/life-list",
+        "/recordings",
+        "/gallery",
+        "/timeseries",
+        "/weekly",
+        "/history",
+        "/notifications",
+        "/quarantine",
+        "/system",
+        "/kiosk",
+        "/live",
+        "/pages/cooccurrence-matrix",
+        "/pages/activity-streamgraph",
+        "/pages/dawn-chorus",
+        "/pages/migration-ridgeline",
+        "/pages/life-accumulation",
+        "/admin/overview",
+        "/admin/quality",
+        "/admin/rules",
+    ];
+    for route in routes {
+        let app = app();
+        let response = app
+            .oneshot(Request::builder().uri(route).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "route {route} did not return 200"
+        );
+    }
 }

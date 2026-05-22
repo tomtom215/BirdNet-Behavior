@@ -19,62 +19,62 @@ pub fn migration_page(dest_db_path: &str) -> String {
     format!(
         r##"<!DOCTYPE html>
 <html lang="en">
-<head>
+<head><script src="/static/theme-guard.js"></script><link rel="stylesheet" href="/static/css/app.css">
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>BirdNET-Pi Migration - BirdNet-Behavior</title>
   <script src="/static/htmx.min.js"></script>
   <style>
-    body {{ background:#0f172a; color:#e2e8f0; font-family:system-ui,sans-serif; }}
+    body {{ background:var(--bg); color:var(--fg); font-family:var(--font-ui); }}
     .container {{ max-width:860px; margin:0 auto; padding:2rem 1rem; }}
-    nav a {{ color:#94a3b8; text-decoration:none; margin-right:1.5rem; }}
-    nav a:hover {{ color:#38bdf8; }}
-    .card {{ background:#1e293b; border:1px solid #334155; border-radius:0.75rem;
+    nav a {{ color:var(--fg-3); text-decoration:none; margin-right:1.5rem; }}
+    nav a:hover {{ color:var(--moss-ink); }}
+    .card {{ background:var(--surface); border:1px solid var(--border); border-radius:0.75rem;
              padding:1.5rem; margin-bottom:1.5rem; }}
-    label {{ display:block; font-size:0.85rem; color:#94a3b8; margin-bottom:0.25rem; }}
-    input[type=text],input[type=file] {{ width:100%; background:#0f172a; border:1px solid #334155;
-             border-radius:0.375rem; padding:0.5rem 0.75rem; color:#e2e8f0;
+    label {{ display:block; font-size:0.85rem; color:var(--fg-3); margin-bottom:0.25rem; }}
+    input[type=text],input[type=file] {{ width:100%; background:var(--bg); border:1px solid var(--border);
+             border-radius:0.375rem; padding:0.5rem 0.75rem; color:var(--fg);
              font-size:0.875rem; box-sizing:border-box; }}
     input[type=file] {{ padding:0.35rem 0.5rem; cursor:pointer; }}
     .btn {{ padding:0.5rem 1.5rem; border-radius:0.375rem; border:none;
             cursor:pointer; font-weight:600; font-size:0.875rem; }}
-    .btn-primary {{ background:#0ea5e9; color:#fff; }}
-    .btn-primary:hover {{ background:#38bdf8; }}
-    .btn-secondary {{ background:#334155; color:#e2e8f0; }}
-    .btn-secondary:hover {{ background:#475569; }}
-    .hint {{ font-size:0.75rem; color:#64748b; margin-top:0.25rem; }}
-    code {{ background:#0f172a; border:1px solid #334155; padding:0.1em 0.4em;
+    .btn-primary {{ background:var(--moss); color:#fff; }}
+    .btn-primary:hover {{ background:var(--moss-ink); }}
+    .btn-secondary {{ background:var(--border); color:var(--fg); }}
+    .btn-secondary:hover {{ background:var(--border-2); }}
+    .hint {{ font-size:0.75rem; color:var(--fg-4); margin-top:0.25rem; }}
+    code {{ background:var(--bg); border:1px solid var(--border); padding:0.1em 0.4em;
             border-radius:0.2rem; font-family:monospace; font-size:0.875rem; }}
     .tabs {{ display:flex; gap:0.5rem; margin-bottom:1rem; }}
-    .tab {{ padding:0.4rem 1rem; border-radius:0.375rem; border:1px solid #334155;
-            cursor:pointer; font-size:0.85rem; background:#0f172a; color:#94a3b8; }}
-    .tab.active {{ background:#0ea5e9; color:#fff; border-color:#0ea5e9; }}
+    .tab {{ padding:0.4rem 1rem; border-radius:0.375rem; border:1px solid var(--border);
+            cursor:pointer; font-size:0.85rem; background:var(--bg); color:var(--fg-3); }}
+    .tab.active {{ background:var(--moss); color:#fff; border-color:var(--moss); }}
     .tab-panel {{ display:none; }}
     .tab-panel.active {{ display:block; }}
   </style>
 </head>
 <body>
 <div class="container">
-  <nav style="margin-bottom:2rem;padding:1rem 0;border-bottom:1px solid #334155;">
+  <nav style="margin-bottom:2rem;padding:1rem 0;border-bottom:1px solid var(--border);">
     <a href="/">Dashboard</a>
     <a href="/admin/settings">Settings</a>
-    <a href="/admin/migrate" style="color:#38bdf8;">Migration</a>
+    <a href="/admin/migrate" style="color:var(--moss-ink);">Migration</a>
     <a href="/admin/system">System</a>
     <a href="/admin/notifications">Notifications</a>
   </nav>
 
-  <h1 style="font-size:1.5rem;font-weight:700;margin-bottom:0.5rem;color:#f1f5f9;">
+  <h1 style="font-size:1.5rem;font-weight:700;margin-bottom:0.5rem;color:var(--fg);">
     BirdNET-Pi Migration
   </h1>
-  <p style="color:#94a3b8;margin-bottom:1.5rem;">
+  <p style="color:var(--fg-3);margin-bottom:1.5rem;">
     Safely import your existing BirdNET-Pi detection history.
-    Your source file is <strong style="color:#f1f5f9;">never modified</strong>
+    Your source file is <strong style="color:var(--fg);">never modified</strong>
     and your original installation is left completely untouched.
   </p>
 
-  <div class="card" style="border-color:#334155">
-    <div style="font-weight:600;color:#38bdf8;margin-bottom:0.75rem;">How it works</div>
-    <ol style="padding-left:1.25rem;line-height:1.8;color:#cbd5e1;">
+  <div class="card" style="border-color:var(--border)">
+    <div style="font-weight:600;color:var(--moss-ink);margin-bottom:0.75rem;">How it works</div>
+    <ol style="padding-left:1.25rem;line-height:1.8;color:var(--fg-2);">
       <li>Optionally stop BirdNET-Pi:
           <code>sudo systemctl stop birdnet_analysis birdnet_recording</code></li>
       <li>Find your BirdNET-Pi database (usually
@@ -83,7 +83,7 @@ pub fn migration_page(dest_db_path: &str) -> String {
       <li>Click <strong>Validate</strong>, review the report, then <strong>Start Import</strong>.</li>
       <li>Your original BirdNET-Pi installation is untouched and safe to restart.</li>
     </ol>
-    <p style="color:#64748b;font-size:0.85rem;margin-top:0.5rem;">
+    <p style="color:var(--fg-4);font-size:0.85rem;margin-top:0.5rem;">
       Destination: <code>{dest_db_path}</code>
     </p>
   </div>
@@ -110,7 +110,7 @@ pub fn migration_page(dest_db_path: &str) -> String {
         <div style="margin-top:1rem;display:flex;gap:0.75rem;align-items:center;">
           <button type="submit" class="btn btn-primary">Upload &amp; Import</button>
           <span id="upload-spinner" class="htmx-indicator"
-                style="color:#94a3b8;font-size:0.85rem;">Uploading…</span>
+                style="color:var(--fg-3);font-size:0.85rem;">Uploading…</span>
         </div>
       </form>
     </div>
@@ -170,11 +170,11 @@ pub fn validation_result(
                 let mut buf = String::new();
                 for c in &report.checks {
                     let icon = if c.passed {
-                        r#"<span style="color:#4ade80">✔</span>"#
+                        r#"<span style="color:var(--moss)">✔</span>"#
                     } else if c.required {
-                        r#"<span style="color:#f87171">✘</span>"#
+                        r#"<span style="color:var(--rare)">✘</span>"#
                     } else {
-                        r#"<span style="color:#fbbf24">⚠</span>"#
+                        r#"<span style="color:var(--dawn)">⚠</span>"#
                     };
                     let _ = write!(
                         buf,
@@ -187,9 +187,9 @@ pub fn validation_result(
             };
 
             let (color, label) = if ok {
-                ("#4ade80", "Validation passed")
+                ("var(--moss)", "Validation passed")
             } else {
-                ("#fbbf24", "Validation passed with warnings")
+                ("var(--dawn)", "Validation passed with warnings")
             };
 
             // Species breakdown table
@@ -201,12 +201,12 @@ pub fn validation_result(
 
             let quality_html = if migration_report.null_date_rows > 0 {
                 format!(
-                    r#"<p style="color:#fbbf24;">⚠ {} rows have missing dates</p>"#,
+                    r#"<p style="color:var(--dawn);">⚠ {} rows have missing dates</p>"#,
                     migration_report.null_date_rows
                 )
             } else if migration_report.duplicate_rows > 0 {
                 format!(
-                    r#"<p style="color:#94a3b8;">ℹ {} duplicate rows will be skipped</p>"#,
+                    r#"<p style="color:var(--fg-3);">ℹ {} duplicate rows will be skipped</p>"#,
                     migration_report.duplicate_rows
                 )
             } else {
@@ -221,9 +221,9 @@ pub fn validation_result(
                         buf,
                         r#"<tr>
   <td style="padding:.35rem .5rem;">{}</td>
-  <td style="padding:.35rem .5rem;color:#64748b;font-style:italic;font-size:.8rem;">{}</td>
+  <td style="padding:.35rem .5rem;color:var(--fg-4);font-style:italic;font-size:.8rem;">{}</td>
   <td style="padding:.35rem .5rem;text-align:right;">{}</td>
-  <td style="padding:.35rem .5rem;text-align:right;color:#64748b;">{:.0}%</td>
+  <td style="padding:.35rem .5rem;text-align:right;color:var(--fg-4);">{:.0}%</td>
 </tr>"#,
                         escape_html(&s.common_name),
                         escape_html(&s.scientific_name),
@@ -236,7 +236,7 @@ pub fn validation_result(
 
             let more_species = if migration_report.unique_species > 10 {
                 format!(
-                    r#"<p style="color:#64748b;font-size:.8rem;margin-top:.5rem;">
+                    r#"<p style="color:var(--fg-4);font-size:.8rem;margin-top:.5rem;">
                       … and {} more species
                     </p>"#,
                     migration_report.unique_species - 10
@@ -256,16 +256,16 @@ pub fn validation_result(
   <ul style="list-style:none;padding:0;margin:0.75rem 0;">{checks_html}</ul>
 
   <details style="margin:1rem 0;">
-    <summary style="cursor:pointer;color:#94a3b8;font-size:.875rem;">
+    <summary style="cursor:pointer;color:var(--fg-3);font-size:.875rem;">
       Top species preview (click to expand)
     </summary>
     <table style="width:100%;border-collapse:collapse;font-size:.8rem;margin-top:.75rem;">
       <thead>
-        <tr style="border-bottom:1px solid #334155;">
-          <th style="text-align:left;padding:.35rem .5rem;color:#64748b;">Species</th>
-          <th style="text-align:left;padding:.35rem .5rem;color:#64748b;">Scientific</th>
-          <th style="text-align:right;padding:.35rem .5rem;color:#64748b;">Count</th>
-          <th style="text-align:right;padding:.35rem .5rem;color:#64748b;">Avg Conf</th>
+        <tr style="border-bottom:1px solid var(--border);">
+          <th style="text-align:left;padding:.35rem .5rem;color:var(--fg-4);">Species</th>
+          <th style="text-align:left;padding:.35rem .5rem;color:var(--fg-4);">Scientific</th>
+          <th style="text-align:right;padding:.35rem .5rem;color:var(--fg-4);">Count</th>
+          <th style="text-align:right;padding:.35rem .5rem;color:var(--fg-4);">Avg Conf</th>
         </tr>
       </thead>
       <tbody>{top_species_html}</tbody>
@@ -285,8 +285,8 @@ pub fn validation_result(
             )
         }
         Err(e) => format!(
-            r#"<div class="card" style="border-color:#f87171">
-  <div style="font-weight:600;color:#f87171;margin-bottom:0.5rem;">Validation failed</div>
+            r#"<div class="card" style="border-color:var(--rare)">
+  <div style="font-weight:600;color:var(--rare);margin-bottom:0.5rem;">Validation failed</div>
   <p>{}</p>
 </div>"#,
             escape_html(&e.to_string())
@@ -297,8 +297,8 @@ pub fn validation_result(
 /// Render an upload error partial.
 pub fn upload_error(msg: &str) -> String {
     format!(
-        r#"<div class="card" style="border-color:#f87171">
-  <div style="font-weight:600;color:#f87171;margin-bottom:0.5rem;">Upload failed</div>
+        r#"<div class="card" style="border-color:var(--rare)">
+  <div style="font-weight:600;color:var(--rare);margin-bottom:0.5rem;">Upload failed</div>
   <p>{}</p>
 </div>"#,
         escape_html(msg)
@@ -308,13 +308,13 @@ pub fn upload_error(msg: &str) -> String {
 /// Render the "import started" partial (triggers progress polling).
 pub fn import_started() -> String {
     r#"<div id="migrate-status">
-  <p style="color:#94a3b8">Import started. Polling for progress…</p>
+  <p style="color:var(--fg-3)">Import started. Polling for progress…</p>
   <div id="migrate-progress"
        hx-get="/admin/migrate/progress"
        hx-trigger="every 2s"
        hx-swap="outerHTML">
-    <div style="background:#1e293b;border-radius:9999px;height:8px;overflow:hidden;">
-      <div style="background:#38bdf8;height:100%;width:0%;transition:width 0.3s;"></div>
+    <div style="background:var(--surface);border-radius:9999px;height:8px;overflow:hidden;">
+      <div style="background:var(--moss-ink);height:100%;width:0%;transition:width 0.3s;"></div>
     </div>
   </div>
 </div>"#
@@ -331,18 +331,18 @@ pub fn progress_bar(p: &MigrationProgress) -> String {
         r#" hx-get="/admin/migrate/progress" hx-trigger="every 2s" hx-swap="outerHTML""#.to_string()
     };
     let color = match p.stage {
-        MigrationStage::Complete => "#4ade80",
-        MigrationStage::Failed => "#f87171",
-        MigrationStage::Cancelled => "#fbbf24",
-        _ => "#38bdf8",
+        MigrationStage::Complete => "var(--moss)",
+        MigrationStage::Failed => "var(--rare)",
+        MigrationStage::Cancelled => "var(--dawn)",
+        _ => "var(--moss-ink)",
     };
     format!(
         r#"<div id="migrate-progress"{trigger}>
   <p style="color:{color};margin-bottom:0.5rem;">{msg}</p>
-  <div style="background:#1e293b;border-radius:9999px;height:8px;overflow:hidden;">
+  <div style="background:var(--surface);border-radius:9999px;height:8px;overflow:hidden;">
     <div style="background:{color};height:100%;width:{pct}%;transition:width 0.3s;"></div>
   </div>
-  <p style="color:#64748b;font-size:0.8rem;margin-top:0.25rem;">
+  <p style="color:var(--fg-4);font-size:0.8rem;margin-top:0.25rem;">
     {imported} / {total} rows
   </p>
 </div>"#,
@@ -385,6 +385,6 @@ mod tests {
             error: None,
         };
         let html = progress_bar(&p);
-        assert!(html.contains("#4ade80"));
+        assert!(html.contains("var(--moss)"));
     }
 }

@@ -117,44 +117,44 @@ fn render_quality_page(data: &QualityData) -> String {
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
-<head>
+<head><script src="/static/theme-guard.js"></script><link rel="stylesheet" href="/static/css/app.css">
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>Data Quality — BirdNet-Behavior Admin</title>
   <script src="/static/htmx.min.js"></script>
   <style>
-    body {{ background:#0f172a; color:#e2e8f0; font-family:system-ui,sans-serif; margin:0; }}
+    body {{ background:var(--bg); color:var(--fg); font-family:var(--font-ui); margin:0; }}
     .container {{ max-width:960px; margin:0 auto; padding:2rem 1rem; }}
     nav {{ margin-bottom:2rem; }}
-    nav a {{ color:#94a3b8; text-decoration:none; margin-right:1.5rem; font-size:.9rem; }}
-    nav a:hover {{ color:#38bdf8; }}
-    h1 {{ font-size:1.5rem; font-weight:700; color:#f8fafc; margin-bottom:.25rem; }}
-    .subtitle {{ color:#64748b; font-size:.875rem; margin-bottom:2rem; }}
-    .card {{ background:#1e293b; border:1px solid #334155; border-radius:.75rem; padding:1.5rem; margin-bottom:1.5rem; }}
-    .card h2 {{ font-size:1.05rem; color:#38bdf8; margin:0 0 1rem; font-weight:600; }}
+    nav a {{ color:var(--fg-3); text-decoration:none; margin-right:1.5rem; font-size:.9rem; }}
+    nav a:hover {{ color:var(--moss-ink); }}
+    h1 {{ font-size:1.5rem; font-weight:700; color:var(--fg); margin-bottom:.25rem; }}
+    .subtitle {{ color:var(--fg-4); font-size:.875rem; margin-bottom:2rem; }}
+    .card {{ background:var(--surface); border:1px solid var(--border); border-radius:.75rem; padding:1.5rem; margin-bottom:1.5rem; }}
+    .card h2 {{ font-size:1.05rem; color:var(--moss-ink); margin:0 0 1rem; font-weight:600; }}
     .stat-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:1rem; }}
-    .stat-card {{ background:#0f172a; border:1px solid #1e293b; border-radius:.5rem; padding:1rem; text-align:center; }}
+    .stat-card {{ background:var(--bg); border:1px solid var(--surface); border-radius:.5rem; padding:1rem; text-align:center; }}
     .stat-value {{ font-size:1.5rem; font-weight:700; margin-bottom:.25rem; }}
-    .stat-label {{ font-size:.75rem; color:#64748b; text-transform:uppercase; letter-spacing:.05em; }}
+    .stat-label {{ font-size:.75rem; color:var(--fg-4); text-transform:uppercase; letter-spacing:.05em; }}
     .bar-chart {{ display:flex; align-items:flex-end; gap:.375rem; height:120px; padding:.5rem 0; }}
     .bar-wrap {{ display:flex; flex-direction:column; align-items:center; flex:1; gap:.25rem; }}
     .bar {{ border-radius:.25rem .25rem 0 0; min-height:2px; width:100%; transition:height .3s; }}
-    .bar-label {{ font-size:.7rem; color:#64748b; white-space:nowrap; }}
-    .bar-val {{ font-size:.75rem; color:#94a3b8; font-weight:600; }}
+    .bar-label {{ font-size:.7rem; color:var(--fg-4); white-space:nowrap; }}
+    .bar-val {{ font-size:.75rem; color:var(--fg-3); font-weight:600; }}
     .trend-bars {{ display:flex; align-items:flex-end; gap:2px; height:80px; overflow-x:auto; padding:.25rem 0; }}
     .trend-bar {{ min-width:8px; border-radius:.125rem .125rem 0 0; flex-shrink:0; }}
     table {{ width:100%; border-collapse:collapse; font-size:.875rem; }}
-    th {{ text-align:left; color:#64748b; font-size:.75rem; text-transform:uppercase; font-weight:600;
-           padding:.5rem .75rem; border-bottom:1px solid #334155; }}
-    td {{ padding:.6rem .75rem; border-bottom:1px solid #1e293b; }}
+    th {{ text-align:left; color:var(--fg-4); font-size:.75rem; text-transform:uppercase; font-weight:600;
+           padding:.5rem .75rem; border-bottom:1px solid var(--border); }}
+    td {{ padding:.6rem .75rem; border-bottom:1px solid var(--surface); }}
     tr:last-child td {{ border-bottom:none; }}
     .hour-bars {{ display:grid; grid-template-columns:repeat(24, 1fr); gap:2px; align-items:end; height:80px; }}
     .hour-bar {{ border-radius:.125rem .125rem 0 0; }}
-    .conf-meter {{ height:6px; border-radius:3px; background:#334155; overflow:hidden; }}
+    .conf-meter {{ height:6px; border-radius:3px; background:var(--border); overflow:hidden; }}
     .conf-fill {{ height:100%; border-radius:3px; }}
     .badge {{ display:inline-block; padding:.15rem .5rem; border-radius:.25rem; font-size:.75rem; font-weight:600; }}
-    .badge-warn {{ background:#422006; color:#fbbf24; }}
-    .badge-ok   {{ background:#14532d; color:#4ade80; }}
+    .badge-warn {{ background:var(--dawn-soft); color:var(--dawn); }}
+    .badge-ok   {{ background:var(--moss-soft); color:var(--moss); }}
   </style>
 </head>
 <body>
@@ -163,7 +163,7 @@ fn render_quality_page(data: &QualityData) -> String {
     <a href="/admin/overview">Overview</a>
     <a href="/admin/settings">Settings</a>
     <a href="/admin/rules">Rules</a>
-    <a href="/admin/quality" style="color:#38bdf8;">Quality</a>
+    <a href="/admin/quality" style="color:var(--moss-ink);">Quality</a>
     <a href="/admin/notifications">Notifications</a>
     <a href="/admin/system">System</a>
   </nav>
@@ -186,7 +186,7 @@ fn render_quality_page(data: &QualityData) -> String {
 
   <div class="card">
     <h2>Confidence Distribution</h2>
-    <p style="font-size:.8rem;color:#64748b;margin-bottom:.75rem;">
+    <p style="font-size:.8rem;color:var(--fg-4);margin-bottom:.75rem;">
       Detection counts across six confidence buckets. A healthy dataset should
       skew toward higher buckets (≥70%).
     </p>
@@ -195,7 +195,7 @@ fn render_quality_page(data: &QualityData) -> String {
 
   <div class="card">
     <h2>30-Day Confidence Trend</h2>
-    <p style="font-size:.8rem;color:#64748b;margin-bottom:.75rem;">
+    <p style="font-size:.8rem;color:var(--fg-4);margin-bottom:.75rem;">
       Daily average confidence. Sudden drops may indicate equipment issues or
       adverse acoustic conditions.
     </p>
@@ -209,7 +209,7 @@ fn render_quality_page(data: &QualityData) -> String {
 
   <div class="card">
     <h2>Hourly Quality Profile</h2>
-    <p style="font-size:.8rem;color:#64748b;margin-bottom:.75rem;">
+    <p style="font-size:.8rem;color:var(--fg-4);margin-bottom:.75rem;">
       Detection counts (bars) and average confidence (colour intensity) by
       hour of day. Dawn (04–08) and dusk (18–22) windows typically have
       the most activity.
@@ -219,10 +219,10 @@ fn render_quality_page(data: &QualityData) -> String {
 
   <div class="card">
     <h2>Low-Confidence Species (&lt;60% avg, ≥3 detections)</h2>
-    <p style="font-size:.8rem;color:#64748b;margin-bottom:.75rem;">
+    <p style="font-size:.8rem;color:var(--fg-4);margin-bottom:.75rem;">
       Species with consistently low confidence scores are prime false-positive
       candidates. Consider raising their per-species threshold in
-      <a href="/admin/species" style="color:#38bdf8;">Species settings</a>.
+      <a href="/admin/species" style="color:var(--moss-ink);">Species settings</a>.
     </p>
     {low_conf_html}
   </div>
@@ -234,7 +234,7 @@ fn render_quality_page(data: &QualityData) -> String {
 
 fn render_summary_cards(summary: Option<&QualitySummary>) -> String {
     let Some(s) = summary else {
-        return r#"<p style="color:#64748b;">No detections in database.</p>"#.to_string();
+        return r#"<p style="color:var(--fg-4);">No detections in database.</p>"#.to_string();
     };
 
     let low_pct = if s.total_detections > 0 {
@@ -252,19 +252,19 @@ fn render_summary_cards(summary: Option<&QualitySummary>) -> String {
     format!(
         r#"<div class="stat-grid">
   <div class="stat-card">
-    <div class="stat-value" style="color:#38bdf8;">{total}</div>
+    <div class="stat-value" style="color:var(--moss-ink);">{total}</div>
     <div class="stat-label">Total Detections</div>
   </div>
   <div class="stat-card">
-    <div class="stat-value" style="color:#34d399;">{species}</div>
+    <div class="stat-value" style="color:var(--moss);">{species}</div>
     <div class="stat-label">Species</div>
   </div>
   <div class="stat-card">
-    <div class="stat-value" style="color:#a78bfa;">{avg:.1}%</div>
+    <div class="stat-value" style="color:var(--moss-ink);">{avg:.1}%</div>
     <div class="stat-label">Avg Confidence</div>
   </div>
   <div class="stat-card">
-    <div class="stat-value" style="color:#fb923c;">{min:.0}%–{max:.0}%</div>
+    <div class="stat-value" style="color:var(--dawn);">{min:.0}%–{max:.0}%</div>
     <div class="stat-label">Conf Range</div>
   </div>
   <div class="stat-card">
@@ -272,7 +272,7 @@ fn render_summary_cards(summary: Option<&QualitySummary>) -> String {
     <div class="stat-label">Quality Flag</div>
   </div>
   <div class="stat-card">
-    <div class="stat-value" style="font-size:1rem;color:#64748b;">{earliest}</div>
+    <div class="stat-value" style="font-size:1rem;color:var(--fg-4);">{earliest}</div>
     <div class="stat-label">Earliest Detection</div>
   </div>
 </div>"#,
@@ -289,7 +289,12 @@ fn render_summary_cards(summary: Option<&QualitySummary>) -> String {
 fn render_confidence_distribution(buckets: &[i64; 6]) -> String {
     let labels = ["<50%", "50–60%", "60–70%", "70–80%", "80–90%", "≥90%"];
     let colors = [
-        "#ef4444", "#f97316", "#eab308", "#22c55e", "#3b82f6", "#8b5cf6",
+        "var(--rare)",
+        "var(--dawn)",
+        "var(--dawn)",
+        "var(--moss)",
+        "var(--moss-ink)",
+        "var(--moss-ink)",
     ];
     let max = *buckets.iter().max().unwrap_or(&1).max(&1);
 
@@ -317,7 +322,7 @@ fn render_confidence_distribution(buckets: &[i64; 6]) -> String {
 
 fn render_confidence_trend(trend: &[(String, f64)]) -> String {
     if trend.is_empty() {
-        return r#"<p style="color:#64748b;">No data for the last 30 days.</p>"#.to_string();
+        return r#"<p style="color:var(--fg-4);">No data for the last 30 days.</p>"#.to_string();
     }
 
     let max_conf = trend
@@ -349,7 +354,7 @@ fn render_confidence_trend(trend: &[(String, f64)]) -> String {
     if let (Some((first, _)), Some((last, _))) = (trend.first(), trend.last()) {
         write!(
             html,
-            r#"<div style="display:flex;justify-content:space-between;font-size:.75rem;color:#64748b;margin-top:.25rem;">
+            r#"<div style="display:flex;justify-content:space-between;font-size:.75rem;color:var(--fg-4);margin-top:.25rem;">
   <span>{}</span><span>{}</span>
 </div>"#,
             escape_html(first),
@@ -362,7 +367,7 @@ fn render_confidence_trend(trend: &[(String, f64)]) -> String {
 
 fn render_hourly_quality(by_hour: &[(u8, i64, f64)]) -> String {
     if by_hour.is_empty() {
-        return r#"<p style="color:#64748b;">No data yet.</p>"#.to_string();
+        return r#"<p style="color:var(--fg-4);">No data yet.</p>"#.to_string();
     }
 
     let max_count = by_hour.iter().map(|(_, c, _)| *c).max().unwrap_or(1).max(1);
@@ -377,8 +382,9 @@ fn render_hourly_quality(by_hour: &[(u8, i64, f64)]) -> String {
 
     let mut html = String::from(r#"<div class="hour-bars">"#);
     for (hour, maybe) in hours_map.iter().enumerate() {
-        let (count, avg_conf, color) =
-            maybe.map_or((0, 0.0, "#1e293b"), |(c, a)| (c, a, conf_to_color(a)));
+        let (count, avg_conf, color) = maybe.map_or((0, 0.0, "var(--surface)"), |(c, a)| {
+            (c, a, conf_to_color(a))
+        });
         let height_pct = (count * 100) / max_count;
         write!(
             html,
@@ -396,7 +402,7 @@ fn render_hourly_quality(by_hour: &[(u8, i64, f64)]) -> String {
 
     // Hour axis labels
     html.push_str(
-        r#"<div style="display:grid;grid-template-columns:repeat(24,1fr);gap:2px;font-size:.65rem;color:#64748b;margin-top:.25rem;">"#,
+        r#"<div style="display:grid;grid-template-columns:repeat(24,1fr);gap:2px;font-size:.65rem;color:var(--fg-4);margin-top:.25rem;">"#,
     );
     for h in 0u8..24 {
         if h % 6 == 0 {
@@ -413,7 +419,7 @@ fn render_hourly_quality(by_hour: &[(u8, i64, f64)]) -> String {
 
 fn render_low_confidence_species(low: &[(String, String, i64, f64)]) -> String {
     if low.is_empty() {
-        return r#"<p style="color:#4ade80;">
+        return r#"<p style="color:var(--moss);">
             No species with avg confidence &lt;60% (≥3 detections). Database quality looks good!
            </p>"#
             .to_string();
@@ -446,13 +452,13 @@ fn render_low_confidence_species(low: &[(String, String, i64, f64)]) -> String {
             html,
             r#"<tr>
   <td><strong>{com}</strong></td>
-  <td style="color:#94a3b8;font-style:italic">{sci}</td>
+  <td style="color:var(--fg-3);font-style:italic">{sci}</td>
   <td style="text-align:right">{count}</td>
   <td>
     <div class="conf-meter">
       <div class="conf-fill" style="width:{bar_pct}%;background:{color};"></div>
     </div>
-    <span style="font-size:.8rem;color:#94a3b8;">{pct:.1}%</span>
+    <span style="font-size:.8rem;color:var(--fg-3);">{pct:.1}%</span>
   </td>
   <td>{rec}</td>
 </tr>"#,
@@ -471,19 +477,15 @@ fn render_low_confidence_species(low: &[(String, String, i64, f64)]) -> String {
     html
 }
 
-/// Map a confidence value (0.0–1.0) to a CSS colour string.
+/// Map a confidence value (0.0–1.0) to a design-token colour string.
 fn conf_to_color(conf: f64) -> &'static str {
-    if conf >= 0.90 {
-        "#8b5cf6"
-    } else if conf >= 0.80 {
-        "#3b82f6"
+    if conf >= 0.85 {
+        "var(--moss-ink)"
     } else if conf >= 0.70 {
-        "#22c55e"
-    } else if conf >= 0.60 {
-        "#eab308"
-    } else if conf >= 0.50 {
-        "#f97316"
+        "var(--moss)"
+    } else if conf >= 0.55 {
+        "var(--dawn)"
     } else {
-        "#ef4444"
+        "var(--rare)"
     }
 }

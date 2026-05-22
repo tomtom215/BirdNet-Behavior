@@ -13,27 +13,27 @@ pub fn render_species_page(exclude: &[String], include: &[String]) -> String {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Species Lists — BirdNet-Behavior</title>
     <script src="/static/htmx.min.js"></script>
-    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/theme-guard.js"></script><link rel="stylesheet" href="/static/css/app.css">
     <style>
-      body {{ background:#0f172a; color:#e2e8f0; font-family:system-ui,sans-serif; }}
+      body {{ background:var(--bg); color:var(--fg); font-family:var(--font-ui); }}
       .container {{ max-width:900px; margin:0 auto; padding:2rem 1rem; }}
-      nav a {{ color:#94a3b8; text-decoration:none; margin-right:1.5rem; }}
-      nav a.active, nav a:hover {{ color:#38bdf8; }}
-      .card {{ background:#1e293b; border:1px solid #334155; border-radius:0.75rem; padding:1.5rem; margin-bottom:1.5rem; }}
-      .section-title {{ font-size:1.1rem; font-weight:600; color:#38bdf8; margin-bottom:1rem; border-bottom:1px solid #334155; padding-bottom:0.5rem; }}
-      label {{ display:block; font-size:0.85rem; color:#94a3b8; margin-bottom:0.25rem; }}
-      input {{ width:100%; background:#0f172a; border:1px solid #334155; border-radius:0.375rem; padding:0.5rem 0.75rem; color:#e2e8f0; font-size:0.875rem; box-sizing:border-box; }}
-      input:focus {{ outline:none; border-color:#38bdf8; }}
+      nav a {{ color:var(--fg-3); text-decoration:none; margin-right:1.5rem; }}
+      nav a.active, nav a:hover {{ color:var(--moss-ink); }}
+      .card {{ background:var(--surface); border:1px solid var(--border); border-radius:0.75rem; padding:1.5rem; margin-bottom:1.5rem; }}
+      .section-title {{ font-size:1.1rem; font-weight:600; color:var(--moss-ink); margin-bottom:1rem; border-bottom:1px solid var(--border); padding-bottom:0.5rem; }}
+      label {{ display:block; font-size:0.85rem; color:var(--fg-3); margin-bottom:0.25rem; }}
+      input {{ width:100%; background:var(--bg); border:1px solid var(--border); border-radius:0.375rem; padding:0.5rem 0.75rem; color:var(--fg); font-size:0.875rem; box-sizing:border-box; }}
+      input:focus {{ outline:none; border-color:var(--moss-ink); }}
       .btn {{ padding:0.4rem 1rem; border-radius:0.375rem; border:none; cursor:pointer; font-weight:600; font-size:0.85rem; }}
-      .btn-primary {{ background:#0ea5e9; color:#fff; }}
-      .btn-danger {{ background:#ef4444; color:#fff; }}
-      .pill {{ display:inline-flex; align-items:center; gap:0.4rem; background:#0f172a; border:1px solid #334155; border-radius:999px; padding:0.2rem 0.7rem; font-size:0.8rem; margin:0.2rem; }}
-      .hint {{ font-size:0.75rem; color:#64748b; margin-top:0.25rem; margin-bottom:1rem; }}
+      .btn-primary {{ background:var(--moss); color:#fff; }}
+      .btn-danger {{ background:var(--rare); color:#fff; }}
+      .pill {{ display:inline-flex; align-items:center; gap:0.4rem; background:var(--bg); border:1px solid var(--border); border-radius:999px; padding:0.2rem 0.7rem; font-size:0.8rem; margin:0.2rem; }}
+      .hint {{ font-size:0.75rem; color:var(--fg-4); margin-top:0.25rem; margin-bottom:1rem; }}
     </style>
 </head>
 <body>
 <div class="container">
-  <nav style="margin-bottom:2rem; padding:1rem 0; border-bottom:1px solid #334155;">
+  <nav style="margin-bottom:2rem; padding:1rem 0; border-bottom:1px solid var(--border);">
     <a href="/">Dashboard</a>
     <a href="/species">Species</a>
     <a href="/admin">Admin</a>
@@ -41,7 +41,7 @@ pub fn render_species_page(exclude: &[String], include: &[String]) -> String {
     <a href="/admin/species/test">Filter Test</a>
     <a href="/admin/settings">Settings</a>
   </nav>
-  <h1 style="font-size:1.5rem;font-weight:700;margin-bottom:1.5rem;color:#f1f5f9;">Species List Management</h1>
+  <h1 style="font-size:1.5rem;font-weight:700;margin-bottom:1.5rem;color:var(--fg);">Species List Management</h1>
   <div id="species-lists">
     {inner}
   </div>
@@ -101,7 +101,7 @@ fn render_list_card(
     {esc}
     <form hx-post="/admin/species/{kind}/remove" hx-target="#species-lists" hx-swap="innerHTML" style="display:inline;margin:0;">
       <input type="hidden" name="name" value="{esc}">
-      <button type="submit" style="background:none;border:none;color:#ef4444;cursor:pointer;padding:0;font-size:0.9rem;line-height:1;" title="Remove">&#x2715;</button>
+      <button type="submit" style="background:none;border:none;color:var(--rare);cursor:pointer;padding:0;font-size:0.9rem;line-height:1;" title="Remove">&#x2715;</button>
     </form>
   </span>"##
         );
@@ -110,7 +110,7 @@ fn render_list_card(
     if list.is_empty() {
         let _ = write!(
             out,
-            r#"<span style="color:#475569;font-size:0.85rem;">No species in this list</span>"#
+            r#"<span style="color:var(--border-2);font-size:0.85rem;">No species in this list</span>"#
         );
     }
 
@@ -135,7 +135,7 @@ pub fn render_thresholds_partial(thresholds: &[birdnet_db::sqlite::SpeciesThresh
 
     if thresholds.is_empty() {
         out.push_str(
-            r#"<p style="color:#475569;font-size:0.85rem;margin-bottom:1rem;">No per-species thresholds configured. The global threshold applies to all species.</p>"#,
+            r#"<p style="color:var(--border-2);font-size:0.85rem;margin-bottom:1rem;">No per-species thresholds configured. The global threshold applies to all species.</p>"#,
         );
     } else {
         out.push_str(
@@ -209,14 +209,14 @@ pub fn render_filter_test_page(
             || {
                 pass_count += 1;
                 (
-                    r#"<span style="background:#22c55e;color:#fff;padding:0.15rem 0.5rem;border-radius:999px;font-size:0.75rem;font-weight:700;">Pass</span>"#,
+                    r#"<span style="background:var(--moss);color:#fff;padding:0.15rem 0.5rem;border-radius:999px;font-size:0.75rem;font-weight:700;">Pass</span>"#,
                     "—",
                 )
             },
             |reason| {
                 block_count += 1;
                 (
-                    r#"<span style="background:#ef4444;color:#fff;padding:0.15rem 0.5rem;border-radius:999px;font-size:0.75rem;font-weight:700;">Blocked</span>"#,
+                    r#"<span style="background:var(--rare);color:#fff;padding:0.15rem 0.5rem;border-radius:999px;font-size:0.75rem;font-weight:700;">Blocked</span>"#,
                     reason,
                 )
             },
@@ -227,7 +227,7 @@ pub fn render_filter_test_page(
         let _ = std::fmt::write(
             &mut rows,
             format_args!(
-                "<tr><td>{esc_com}</td><td style=\"color:#94a3b8;font-style:italic;\">{esc_sci}</td><td style=\"text-align:center;\">{count}</td><td style=\"text-align:center;\">{badge}</td><td style=\"color:#94a3b8;font-size:0.8rem;\">{reason_txt}</td></tr>"
+                "<tr><td>{esc_com}</td><td style=\"color:var(--fg-3);font-style:italic;\">{esc_sci}</td><td style=\"text-align:center;\">{count}</td><td style=\"text-align:center;\">{badge}</td><td style=\"color:var(--fg-3);font-size:0.8rem;\">{reason_txt}</td></tr>"
             ),
         );
     }
@@ -240,25 +240,25 @@ pub fn render_filter_test_page(
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Species Filter Test — BirdNet-Behavior</title>
     <script src="/static/htmx.min.js"></script>
-    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/theme-guard.js"></script><link rel="stylesheet" href="/static/css/app.css">
     <style>
-      body {{ background:#0f172a; color:#e2e8f0; font-family:system-ui,sans-serif; }}
+      body {{ background:var(--bg); color:var(--fg); font-family:var(--font-ui); }}
       .container {{ max-width:960px; margin:0 auto; padding:2rem 1rem; }}
-      nav a {{ color:#94a3b8; text-decoration:none; margin-right:1.5rem; }}
-      nav a.active, nav a:hover {{ color:#38bdf8; }}
-      .card {{ background:#1e293b; border:1px solid #334155; border-radius:0.75rem; padding:1.5rem; margin-bottom:1.5rem; }}
-      .section-title {{ font-size:1.1rem; font-weight:600; color:#38bdf8; margin-bottom:1rem; border-bottom:1px solid #334155; padding-bottom:0.5rem; }}
+      nav a {{ color:var(--fg-3); text-decoration:none; margin-right:1.5rem; }}
+      nav a.active, nav a:hover {{ color:var(--moss-ink); }}
+      .card {{ background:var(--surface); border:1px solid var(--border); border-radius:0.75rem; padding:1.5rem; margin-bottom:1.5rem; }}
+      .section-title {{ font-size:1.1rem; font-weight:600; color:var(--moss-ink); margin-bottom:1rem; border-bottom:1px solid var(--border); padding-bottom:0.5rem; }}
       table {{ width:100%; border-collapse:collapse; }}
-      th, td {{ padding:0.5rem 0.75rem; border-bottom:1px solid #1e293b; text-align:left; }}
-      th {{ color:#94a3b8; font-size:0.8rem; font-weight:600; text-transform:uppercase; background:#0f172a; }}
-      tr:hover td {{ background:#1e293b44; }}
+      th, td {{ padding:0.5rem 0.75rem; border-bottom:1px solid var(--surface); text-align:left; }}
+      th {{ color:var(--fg-3); font-size:0.8rem; font-weight:600; text-transform:uppercase; background:var(--bg); }}
+      tr:hover td {{ background:var(--surface)44; }}
       .stat {{ display:inline-block; padding:0.4rem 1rem; border-radius:0.5rem; font-weight:700; font-size:0.9rem; margin-right:0.5rem; }}
-      .hint {{ font-size:0.75rem; color:#64748b; margin-bottom:1rem; }}
+      .hint {{ font-size:0.75rem; color:var(--fg-4); margin-bottom:1rem; }}
     </style>
 </head>
 <body>
 <div class="container">
-  <nav style="margin-bottom:2rem; padding:1rem 0; border-bottom:1px solid #334155;">
+  <nav style="margin-bottom:2rem; padding:1rem 0; border-bottom:1px solid var(--border);">
     <a href="/">Dashboard</a>
     <a href="/species">Species</a>
     <a href="/admin">Admin</a>
@@ -266,28 +266,28 @@ pub fn render_filter_test_page(
     <a href="/admin/species/test" class="active">Filter Test</a>
     <a href="/admin/settings">Settings</a>
   </nav>
-  <h1 style="font-size:1.5rem;font-weight:700;margin-bottom:0.5rem;color:#f1f5f9;">Species Filter Preview</h1>
+  <h1 style="font-size:1.5rem;font-weight:700;margin-bottom:0.5rem;color:var(--fg);">Species Filter Preview</h1>
   <p class="hint">Shows which species from your detection history pass or are blocked by the current exclude/allow-list filters.</p>
 
   <div class="card">
     <div class="section-title">Current Filters</div>
     <div style="margin-bottom:1rem;">
-      <strong style="color:#94a3b8;">Exclusion list:</strong>
+      <strong style="color:var(--fg-3);">Exclusion list:</strong>
       {excl_pills}
     </div>
     <div style="margin-bottom:1rem;">
-      <strong style="color:#94a3b8;">Allow-list:</strong>
+      <strong style="color:var(--fg-3);">Allow-list:</strong>
       {incl_pills}
     </div>
-    <a href="/admin/species" style="color:#38bdf8;font-size:0.85rem;">Edit filters →</a>
+    <a href="/admin/species" style="color:var(--moss-ink);font-size:0.85rem;">Edit filters →</a>
   </div>
 
   <div class="card">
     <div class="section-title">Detection History Filter Results</div>
     <div style="margin-bottom:1rem;">
-      <span class="stat" style="background:#1e4620;color:#22c55e;">{pass_count} Pass</span>
-      <span class="stat" style="background:#4c1818;color:#ef4444;">{block_count} Blocked</span>
-      <span style="color:#64748b;font-size:0.85rem;">{total} species in history</span>
+      <span class="stat" style="background:var(--moss-soft);color:var(--moss);">{pass_count} Pass</span>
+      <span class="stat" style="background:var(--rare-soft);color:var(--rare);">{block_count} Blocked</span>
+      <span style="color:var(--fg-4);font-size:0.85rem;">{total} species in history</span>
     </div>
     {table_or_empty}
   </div>
@@ -300,7 +300,7 @@ pub fn render_filter_test_page(
         block_count = block_count,
         total = species.len(),
         table_or_empty = if species.is_empty() {
-            "<p style=\"color:#64748b;\">No detections in the database yet.</p>".to_string()
+            "<p style=\"color:var(--fg-4);\">No detections in the database yet.</p>".to_string()
         } else {
             format!(
                 r#"<table>
@@ -320,13 +320,13 @@ pub fn render_filter_test_page(
 
 fn pills_or_none(list: &[String]) -> String {
     if list.is_empty() {
-        return "<span style=\"color:#64748b;font-size:0.85rem;\">None</span>".to_string();
+        return "<span style=\"color:var(--fg-4);font-size:0.85rem;\">None</span>".to_string();
     }
     let mut out = String::new();
     for s in list {
         write!(
             out,
-            "<span style=\"display:inline-block;background:#0f172a;border:1px solid #334155;border-radius:999px;padding:0.15rem 0.6rem;font-size:0.8rem;margin:0.15rem;\">{}</span>",
+            "<span style=\"display:inline-block;background:var(--bg);border:1px solid var(--border);border-radius:999px;padding:0.15rem 0.6rem;font-size:0.8rem;margin:0.15rem;\">{}</span>",
             escape_html(s)
         )
         .unwrap_or_default();
