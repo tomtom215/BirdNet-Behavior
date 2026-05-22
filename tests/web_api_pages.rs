@@ -471,3 +471,48 @@ async fn htmx_confidence_chart_partial() {
     // Should contain SVG chart (test data has detections with various confidence levels)
     assert!(html.contains("<svg"));
 }
+
+#[tokio::test]
+async fn all_redesigned_pages_render_ok() {
+    // Every primary page + every new visualization partial must render
+    // without a server error against a seeded database.
+    let routes = [
+        "/",
+        "/today",
+        "/species",
+        "/heatmap",
+        "/analytics",
+        "/correlation",
+        "/life-list",
+        "/recordings",
+        "/gallery",
+        "/timeseries",
+        "/weekly",
+        "/history",
+        "/notifications",
+        "/quarantine",
+        "/system",
+        "/kiosk",
+        "/live",
+        "/pages/cooccurrence-matrix",
+        "/pages/activity-streamgraph",
+        "/pages/dawn-chorus",
+        "/pages/migration-ridgeline",
+        "/pages/life-accumulation",
+        "/admin/overview",
+        "/admin/quality",
+        "/admin/rules",
+    ];
+    for route in routes {
+        let app = app();
+        let response = app
+            .oneshot(Request::builder().uri(route).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "route {route} did not return 200"
+        );
+    }
+}
