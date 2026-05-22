@@ -18,7 +18,10 @@ use axum::response::Html;
 use axum::routing::get;
 use serde::Deserialize;
 
-use birdnet_db::sqlite::{HeatmapCell, hourly_totals, weekly_heatmap};
+use birdnet_db::sqlite::{
+    HeatmapCell, hourly_totals, species_hourly_activity, species_sparklines, top_species,
+    weekly_heatmap,
+};
 
 use crate::state::AppState;
 
@@ -28,6 +31,8 @@ pub fn router() -> Router<AppState> {
         .route("/heatmap", get(heatmap_page))
         .route("/pages/heatmap-grid", get(heatmap_grid_partial))
         .route("/pages/hourly-totals", get(hourly_totals_partial))
+        .route("/pages/activity-streamgraph", get(streamgraph_partial))
+        .route("/pages/dawn-chorus", get(dawn_chorus_partial))
 }
 
 #[derive(Deserialize)]
@@ -58,16 +63,31 @@ const HEATMAP_CONTENT: &str = r#"<div class="page-head">
 </div>
 
 <div class="bnb-card pad">
-  <div class="section-header"><div><div class="bnb-eyebrow">Hour × day-of-week</div><h3>Activity grid</h3></div></div>
-  <div id="heatmap-grid" hx-get="/pages/heatmap-grid?days=7" hx-trigger="load" hx-swap="innerHTML">
-    <p class="bnb-meta">Loading heatmap…</p>
+  <div class="section-header"><div><div class="bnb-eyebrow">Who's singing, over time</div><h3>Activity streamgraph</h3></div></div>
+  <div id="activity-streamgraph" hx-get="/pages/activity-streamgraph?days=7" hx-trigger="load" hx-swap="innerHTML">
+    <p class="bnb-meta">Loading streamgraph...</p>
   </div>
 </div>
 
 <div class="bnb-card pad">
-  <div class="section-header"><div><div class="bnb-eyebrow">All days</div><h3>Detections by hour</h3></div></div>
-  <div id="hourly-totals" hx-get="/pages/hourly-totals?days=7" hx-trigger="load" hx-swap="innerHTML">
-    <p class="bnb-meta">Loading chart…</p>
+  <div class="section-header"><div><div class="bnb-eyebrow">Hour × day-of-week</div><h3>Activity grid</h3></div></div>
+  <div id="heatmap-grid" hx-get="/pages/heatmap-grid?days=7" hx-trigger="load" hx-swap="innerHTML">
+    <p class="bnb-meta">Loading heatmap...</p>
+  </div>
+</div>
+
+<div class="grid-2">
+  <div class="bnb-card pad">
+    <div class="section-header"><div><div class="bnb-eyebrow">The dawn chorus</div><h3>Circadian rhythm</h3></div></div>
+    <div id="dawn-chorus" hx-get="/pages/dawn-chorus" hx-trigger="load" hx-swap="innerHTML">
+      <p class="bnb-meta">Loading dawn chorus...</p>
+    </div>
+  </div>
+  <div class="bnb-card pad">
+    <div class="section-header"><div><div class="bnb-eyebrow">All days</div><h3>Detections by hour</h3></div></div>
+    <div id="hourly-totals" hx-get="/pages/hourly-totals?days=7" hx-trigger="load" hx-swap="innerHTML">
+      <p class="bnb-meta">Loading chart...</p>
+    </div>
   </div>
 </div>
 
@@ -75,6 +95,7 @@ const HEATMAP_CONTENT: &str = r#"<div class="page-head">
 function loadDays(days, btn) {
   document.querySelectorAll('#range-controls .btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
+  htmx.ajax('GET', '/pages/activity-streamgraph?days=' + days, '#activity-streamgraph');
   htmx.ajax('GET', '/pages/heatmap-grid?days=' + days, '#heatmap-grid');
   htmx.ajax('GET', '/pages/hourly-totals?days=' + days, '#hourly-totals');
 }
@@ -130,6 +151,86 @@ async fn hourly_totals_partial(
             "<p>Error loading hourly totals</p>".to_string(),
         ),
     }
+}
+
+// ---------------------------------------------------------------------------
+// GET /pages/activity-streamgraph — per-species stacked activity
+// ---------------------------------------------------------------------------
+
+async fn streamgraph_partial(
+    State(state): State<AppState>,
+    Query(query): Query<HeatmapQuery>,
+) -> impl axum::response::IntoResponse {
+    let days = query.days.unwrap_or(7).clamp(2, 365);
+    let result =
+        tokio::task::spawn_blocking(move || state.with_db(|conn| species_sparklines(conn, days)))
+            .await;
+
+    match result {
+        Ok(Ok(map)) => {
+            let mut series: Vec<(String, Vec<i64>)> = map.into_iter().collect();
+            // Most active species first → stable, readable stacking order.
+            series.sort_by(|a, b| {
+                b.1.iter()
+                    .sum::<i64>()
+                    .cmp(&a.1.iter().sum::<i64>())
+                    .then_with(|| a.0.cmp(&b.0))
+            });
+            series.truncate(8);
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/html")],
+                super::viz::streamgraph(&series),
+            )
+        }
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading streamgraph</p>".to_string(),
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GET /pages/dawn-chorus — circadian polar of the top species
+// ---------------------------------------------------------------------------
+
+#[allow(clippy::cast_precision_loss)]
+async fn dawn_chorus_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {
+    let series = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| {
+            let top = top_species(conn, 5).unwrap_or_default();
+            top.iter()
+                .map(|s| {
+                    let mut arr = [0.0_f64; 24];
+                    if let Ok(hours) = species_hourly_activity(conn, &s.com_name) {
+                        for hc in hours {
+                            if let Ok(h) = hc.hour.parse::<usize>()
+                                && h < 24
+                            {
+                                arr[h] = hc.count as f64;
+                            }
+                        }
+                    }
+                    (s.com_name.clone(), arr)
+                })
+                .collect::<Vec<_>>()
+        })
+    })
+    .await;
+
+    let Ok(series) = series else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading dawn chorus</p>".to_string(),
+        );
+    };
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/html")],
+        super::viz::circadian_polar(&series),
+    )
 }
 
 // ---------------------------------------------------------------------------

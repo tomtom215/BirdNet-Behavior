@@ -346,6 +346,68 @@ async fn htmx_analytics_config_partial() {
 }
 
 #[tokio::test]
+async fn htmx_cooccurrence_matrix_partial() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/cooccurrence-matrix?days=3650")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+    // Either a rendered matrix or the graceful "not enough data" message.
+    assert!(html.contains("<svg") || html.contains("Not enough data"));
+}
+
+#[tokio::test]
+async fn htmx_activity_streamgraph_partial() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/activity-streamgraph?days=3650")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+    assert!(html.contains("<svg") || html.contains("Not enough data"));
+}
+
+#[tokio::test]
+async fn htmx_dawn_chorus_partial() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/dawn-chorus")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+    // All-time top species exist in the fixture, so the polar renders.
+    assert!(html.contains("<svg") || html.contains("Not enough data"));
+}
+
+#[tokio::test]
 async fn htmx_confidence_chart_partial() {
     let app = app();
 

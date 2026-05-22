@@ -29,6 +29,10 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/correlation", get(correlation_page))
         .route("/pages/correlation-pairs", get(correlation_pairs_partial))
+        .route(
+            "/pages/cooccurrence-matrix",
+            get(cooccurrence_matrix_partial),
+        )
         .route("/pages/companion-species", get(companion_partial))
 }
 
@@ -57,6 +61,13 @@ const CORRELATION_CONTENT: &str = r##"<div class="page-head">
     <button class="btn" onclick="loadDays(90, this)">90 days</button>
     <button class="btn" onclick="loadDays(180, this)">6 months</button>
     <button class="btn" onclick="loadDays(365, this)">1 year</button>
+  </div>
+</div>
+
+<div class="bnb-card pad">
+  <div class="section-header"><div><div class="bnb-eyebrow">The yard's social graph</div><h3>Co-occurrence matrix</h3></div></div>
+  <div id="cooccurrence-matrix" hx-get="/pages/cooccurrence-matrix?days=30" hx-trigger="load" hx-swap="innerHTML">
+    <p class="bnb-meta">Loading…</p>
   </div>
 </div>
 
@@ -90,6 +101,7 @@ function loadDays(days, btn) {
   document.querySelectorAll('#range-controls .btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   document.getElementById('days-hidden').value = days;
+  htmx.ajax('GET', '/pages/cooccurrence-matrix?days=' + days, '#cooccurrence-matrix');
   htmx.ajax('GET', '/pages/correlation-pairs?days=' + days, '#correlation-pairs');
   const species = document.getElementById('species-input').value.trim();
   if (species) {
@@ -124,6 +136,83 @@ async fn correlation_pairs_partial(
             "<p style='color:var(--rare)'>Error loading co-occurrence data</p>".to_string(),
         ),
     }
+}
+
+// ---------------------------------------------------------------------------
+// GET /pages/cooccurrence-matrix — N×N intensity grid
+// ---------------------------------------------------------------------------
+
+async fn cooccurrence_matrix_partial(
+    State(state): State<AppState>,
+    Query(query): Query<CorrelationQuery>,
+) -> impl axum::response::IntoResponse {
+    let days = query.days.unwrap_or(30).min(365);
+    let result = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| top_cooccurrence_pairs(conn, days, 120, 1))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(pairs)) => {
+            let (labels, matrix) = build_matrix(&pairs, 10);
+            let html = super::viz::cooccurrence_matrix(&labels, &matrix);
+            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+        }
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading matrix</p>".to_string(),
+        ),
+    }
+}
+
+/// Reduce co-occurrence pairs to a square matrix over the `max_species` most
+/// connected species. Cell strength is shared-days normalised to the global
+/// maximum so the grid reads as a relative heat-map.
+#[allow(clippy::cast_precision_loss)]
+fn build_matrix(
+    pairs: &[birdnet_db::sqlite::SpeciesPair],
+    max_species: usize,
+) -> (Vec<String>, Vec<Vec<f64>>) {
+    use std::collections::HashMap;
+
+    // Total shared-days each species participates in → connectedness ranking.
+    let mut weight: HashMap<&str, i64> = HashMap::new();
+    for p in pairs {
+        *weight.entry(p.species_a.as_str()).or_insert(0) += p.co_occurrence_days;
+        *weight.entry(p.species_b.as_str()).or_insert(0) += p.co_occurrence_days;
+    }
+    let mut ranked: Vec<(&str, i64)> = weight.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    let labels: Vec<String> = ranked
+        .iter()
+        .take(max_species)
+        .map(|(n, _)| (*n).to_string())
+        .collect();
+
+    let idx: std::collections::HashMap<&str, usize> = labels
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.as_str(), i))
+        .collect();
+    let n = labels.len();
+    let mut matrix = vec![vec![0.0_f64; n]; n];
+    let mut max_co = 1.0_f64;
+    for p in pairs {
+        if let (Some(&i), Some(&j)) = (idx.get(p.species_a.as_str()), idx.get(p.species_b.as_str()))
+        {
+            let v = p.co_occurrence_days as f64;
+            matrix[i][j] = v;
+            matrix[j][i] = v;
+            max_co = max_co.max(v);
+        }
+    }
+    for row in &mut matrix {
+        for cell in row.iter_mut() {
+            *cell /= max_co;
+        }
+    }
+    (labels, matrix)
 }
 
 fn render_pairs_table(pairs: &[birdnet_db::sqlite::SpeciesPair], days: u32) -> String {

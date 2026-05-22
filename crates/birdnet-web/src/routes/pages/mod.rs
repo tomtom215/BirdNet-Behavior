@@ -37,6 +37,7 @@ pub mod species_pages;
 pub mod system_dashboard;
 pub mod timeseries_dash;
 pub mod today;
+pub mod viz;
 pub mod weekly_report;
 
 use axum::Router;
