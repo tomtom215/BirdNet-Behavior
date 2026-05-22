@@ -33,6 +33,10 @@ pub fn router() -> Router<AppState> {
         .route("/pages/hourly-totals", get(hourly_totals_partial))
         .route("/pages/activity-streamgraph", get(streamgraph_partial))
         .route("/pages/dawn-chorus", get(dawn_chorus_partial))
+        .route(
+            "/pages/migration-ridgeline",
+            get(migration_ridgeline_partial),
+        )
 }
 
 #[derive(Deserialize)]
@@ -88,6 +92,13 @@ const HEATMAP_CONTENT: &str = r#"<div class="page-head">
     <div id="hourly-totals" hx-get="/pages/hourly-totals?days=7" hx-trigger="load" hx-swap="innerHTML">
       <p class="bnb-meta">Loading chart...</p>
     </div>
+  </div>
+</div>
+
+<div class="bnb-card pad">
+  <div class="section-header"><div><div class="bnb-eyebrow">Arrivals & departures</div><h3>Seasonal phenology</h3></div></div>
+  <div id="migration-ridgeline" hx-get="/pages/migration-ridgeline" hx-trigger="load" hx-swap="innerHTML">
+    <p class="bnb-meta">Loading phenology...</p>
   </div>
 </div>
 
@@ -231,6 +242,49 @@ async fn dawn_chorus_partial(State(state): State<AppState>) -> impl axum::respon
         [(header::CONTENT_TYPE, "text/html")],
         super::viz::circadian_polar(&series),
     )
+}
+
+// ---------------------------------------------------------------------------
+// GET /pages/migration-ridgeline — per-species seasonal joyplot
+// ---------------------------------------------------------------------------
+
+async fn migration_ridgeline_partial(
+    State(state): State<AppState>,
+) -> impl axum::response::IntoResponse {
+    // One dense query for the year, then bucket each species into ~52 weeks.
+    let result =
+        tokio::task::spawn_blocking(move || state.with_db(|conn| species_sparklines(conn, 364)))
+            .await;
+
+    match result {
+        Ok(Ok(map)) => {
+            let mut ranked: Vec<(String, Vec<i64>)> = map.into_iter().collect();
+            ranked.sort_by(|a, b| {
+                b.1.iter()
+                    .sum::<i64>()
+                    .cmp(&a.1.iter().sum::<i64>())
+                    .then_with(|| a.0.cmp(&b.0))
+            });
+            ranked.truncate(7);
+            let series: Vec<(String, Vec<i64>)> = ranked
+                .into_iter()
+                .map(|(name, daily)| {
+                    let weekly: Vec<i64> = daily.chunks(7).map(|c| c.iter().sum()).collect();
+                    (name, weekly)
+                })
+                .collect();
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/html")],
+                super::viz::ridgeline(&series),
+            )
+        }
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading ridgeline</p>".to_string(),
+        ),
+    }
 }
 
 // ---------------------------------------------------------------------------

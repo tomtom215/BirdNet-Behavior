@@ -349,6 +349,76 @@ pub(crate) fn circadian_polar(series: &[(String, [f64; 24])]) -> String {
     svg
 }
 
+// ───────────────────────── migration ridgeline ─────────────────────────────
+
+/// Joyplot of per-species seasonal abundance. Each series is
+/// `(common_name, weekly_counts)`; rows are stacked with overlap and each
+/// ridge is normalised to its own peak so arrival/departure *timing* reads
+/// clearly. Month ticks run along the bottom.
+#[must_use]
+pub(crate) fn ridgeline(series: &[(String, Vec<i64>)]) -> String {
+    const MONTHS: [&str; 12] = ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"];
+    let weeks = series.iter().map(|(_, v)| v.len()).max().unwrap_or(0);
+    if series.is_empty() || weeks < 2 {
+        return EMPTY.to_string();
+    }
+    let n = series.len();
+    let w = 760.0_f64;
+    let left = 96.0_f64;
+    let right = 10.0_f64;
+    let plot_w = w - left - right;
+    let row_step = 30.0_f64;
+    let amp = 54.0_f64;
+    let top = amp;
+    let bottom = 22.0_f64;
+    let h = top + n as f64 * row_step + bottom;
+    let step_x = plot_w / (weeks - 1) as f64;
+
+    let mut svg = format!(
+        r#"<div style="overflow-x:auto;"><svg width="{w:.0}" height="{h:.0}" viewBox="0 0 {w:.0} {h:.0}" role="img" aria-label="Migration phenology ridgeline">"#
+    );
+
+    // Month ticks + faint guides.
+    for (m, label) in MONTHS.iter().enumerate() {
+        let x = left + (m as f64 / 12.0) * plot_w;
+        let _ = write!(
+            svg,
+            r#"<line x1="{x:.1}" y1="{top:.1}" x2="{x:.1}" y2="{yb:.1}" stroke="var(--hairline)" stroke-width="0.5"/><text class="mono" x="{x:.1}" y="{ty:.1}" text-anchor="middle" font-size="8" fill="var(--fg-4)">{label}</text>"#,
+            yb = h - bottom,
+            ty = h - 6.0,
+        );
+    }
+
+    // Ridges, top row first so lower rows overlap in front.
+    for (i, (name, vals)) in series.iter().enumerate() {
+        let row_max = vals.iter().copied().max().unwrap_or(1).max(1) as f64;
+        let baseline = top + (i + 1) as f64 * row_step;
+        let color = species_color(name);
+        let mut path = String::new();
+        for (wk, &v) in vals.iter().enumerate() {
+            let x = left + wk as f64 * step_x;
+            let y = baseline - (v as f64 / row_max) * amp;
+            let _ = write!(path, "{}{x:.1},{y:.1} ", if wk == 0 { "M" } else { "L" });
+        }
+        let area = format!(
+            "{path}L{xe:.1},{baseline:.1} L{x0:.1},{baseline:.1} Z",
+            xe = left + (vals.len() - 1) as f64 * step_x,
+            x0 = left,
+        );
+        let _ = write!(
+            svg,
+            r#"<path d="{area}" fill="{color}" fill-opacity="0.70" stroke="{color}" stroke-width="1.2"/><text class="mono" x="{lx:.1}" y="{ly:.1}" text-anchor="end" dominant-baseline="middle" font-size="9" fill="var(--fg-3)"><title>{full}</title>{code}</text>"#,
+            lx = left - 8.0,
+            ly = baseline - 4.0,
+            full = escape_html(name),
+            code = species_code(name),
+        );
+    }
+
+    svg.push_str("</svg></div>");
+    svg
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -392,6 +462,17 @@ mod tests {
         ];
         let svg = accumulation_curve(&pts);
         assert!(svg.contains("<svg") && svg.contains("12 species"));
+    }
+
+    #[test]
+    fn ridgeline_empty_and_basic() {
+        assert!(ridgeline(&[]).contains("Not enough data"));
+        let s = vec![
+            ("Blue Jay".to_string(), vec![0, 1, 3, 5, 2, 0]),
+            ("Magnolia Warbler".to_string(), vec![0, 0, 0, 2, 6, 1]),
+        ];
+        let svg = ridgeline(&s);
+        assert!(svg.contains("<svg") && svg.contains("BLJA"));
     }
 
     #[test]
