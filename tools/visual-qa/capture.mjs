@@ -41,6 +41,8 @@ const ROUTES = [
   ['live', '/live'],
   ['admin-overview', '/admin/overview'],
   ['admin-settings', '/admin/settings'],
+  ['admin-audio', '/admin/audio'],
+  ['admin-backups', '/admin/backups'],
   ['admin-species', '/admin/species'],
   ['admin-quality', '/admin/quality'],
   ['admin-rules', '/admin/rules'],

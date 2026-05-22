@@ -506,6 +506,8 @@ async fn all_redesigned_pages_render_ok() {
         "/admin/overview",
         "/admin/quality",
         "/admin/rules",
+        "/admin/audio",
+        "/admin/backups",
     ];
     for route in routes {
         let app = app();

@@ -30,7 +30,9 @@
 //! | `POST /admin/rules/{id}/toggle`       | Enable / disable an alert rule |
 //! | `GET  /admin/quality`                 | Data quality metrics dashboard |
 
+pub mod audio;
 pub mod backup;
+pub mod backup_recovery;
 pub mod images;
 pub mod logs;
 pub mod migration;
@@ -46,9 +48,62 @@ pub mod system;
 pub mod system_controls;
 pub mod update;
 
+use std::fmt::Write as _;
+
 use axum::{Router, routing::get};
 
 use crate::state::AppState;
+
+/// Wrap an admin page `body` in the standard standalone admin shell — FOUC
+/// theme guard, the design-system stylesheet, HTMX and a slim nav row. `active`
+/// highlights the matching nav link.
+pub(crate) fn admin_shell(title: &str, active: &str, body: &str) -> String {
+    let nav = [
+        ("overview", "/admin/overview", "Overview"),
+        ("settings", "/admin/settings", "Settings"),
+        ("audio", "/admin/audio", "Audio"),
+        ("rules", "/admin/rules", "Rules"),
+        ("quality", "/admin/quality", "Quality"),
+        ("notifications", "/admin/notifications", "Notifications"),
+        ("backups", "/admin/backups", "Backups"),
+        ("system", "/admin/system", "System"),
+    ];
+    let mut nav_html = String::new();
+    for (key, href, label) in nav {
+        let style = if key == active {
+            " style=\"color:var(--moss-ink);font-weight:500;\""
+        } else {
+            ""
+        };
+        let _ = write!(nav_html, "<a href=\"{href}\"{style}>{label}</a>");
+    }
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>{title} — BirdNet-Behavior Admin</title>
+<script src="/static/theme-guard.js"></script>
+<link rel="stylesheet" href="/static/css/app.css">
+<script src="/static/htmx.min.js"></script>
+<style>
+  body {{ background:var(--bg); color:var(--fg); font-family:var(--font-ui); margin:0; }}
+  .admin-wrap {{ max-width:1180px; margin:0 auto; padding:1.5rem 1.25rem 3rem; }}
+  .admin-nav {{ display:flex; flex-wrap:wrap; gap:1.25rem; margin-bottom:1.75rem; padding-bottom:1rem; border-bottom:0.5px solid var(--hairline); }}
+  .admin-nav a {{ color:var(--fg-3); text-decoration:none; font-size:.875rem; }}
+  .admin-nav a:hover {{ color:var(--moss-ink); }}
+</style>
+</head>
+<body>
+<div class="admin-wrap">
+  <nav class="admin-nav">{nav_html}</nav>
+  {body}
+</div>
+</body>
+</html>"#
+    )
+}
 
 /// Build the admin router and mount all sub-routes.
 pub fn router() -> Router<AppState> {
@@ -59,6 +114,10 @@ pub fn router() -> Router<AppState> {
         .merge(overview::router())
         // Settings
         .merge(settings::router())
+        // Audio / microphone setup
+        .merge(audio::router())
+        // Backups, restore & system admin
+        .merge(backup_recovery::router())
         // Species list management
         .merge(species::router())
         // Migration
