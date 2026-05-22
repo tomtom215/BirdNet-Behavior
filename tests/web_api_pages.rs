@@ -495,6 +495,7 @@ async fn all_redesigned_pages_render_ok() {
         "/kiosk",
         "/live",
         "/pages/cooccurrence-matrix",
+        "/pages/acoustic-network",
         "/pages/activity-streamgraph",
         "/pages/dawn-chorus",
         "/pages/migration-ridgeline",
