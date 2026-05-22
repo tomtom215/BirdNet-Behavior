@@ -276,7 +276,13 @@ async fn sys_audio_partial(State(state): State<AppState>) -> impl axum::response
     }
 }
 
-const SYSTEM_DASHBOARD_HTML: &str = r#"<h1 style="margin-bottom:1.5rem;">System Health</h1>
+const SYSTEM_DASHBOARD_HTML: &str = r#"<div class="page-head" style="margin-bottom:var(--pad-3);">
+    <div>
+        <div class="bnb-eyebrow">Operations</div>
+        <h1 class="display" style="font-size:34px;">System health</h1>
+        <p class="bnb-meta" style="margin-top:4px;">Live vitals for this station — CPU, memory, temperature, storage, and the audio pipeline.</p>
+    </div>
+</div>
 
 <div class="stats-grid" hx-get="/pages/sys-vitals" hx-trigger="load, every 10s" hx-swap="innerHTML">
     <div class="stat-card"><div class="value">--</div><div class="label">CPU Usage</div></div>
