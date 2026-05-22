@@ -17,6 +17,7 @@
 //! | `system_dashboard`    | System health monitoring dashboard              |
 //! | `notification_center` | Notification history and channel status          |
 
+pub mod atoms;
 pub mod audio_player;
 pub mod behavioral;
 pub mod charts;
@@ -36,6 +37,7 @@ pub mod species_pages;
 pub mod system_dashboard;
 pub mod timeseries_dash;
 pub mod today;
+pub mod viz;
 pub mod weekly_report;
 
 use axum::Router;
@@ -96,6 +98,7 @@ pub(crate) fn render_page(title: &str, content: &str, active_nav: &str) -> Html<
         .replace("{{nav_weekly}}", nav("weekly"))
         .replace("{{nav_quarantine}}", nav("quarantine"))
         .replace("{{nav_life_list}}", nav("life-list"))
+        .replace("{{nav_heatmap}}", nav("heatmap"))
         .replace("{{nav_system}}", nav("system"))
         .replace("{{nav_notifications}}", nav("notifications"));
     Html(html)
@@ -214,6 +217,11 @@ mod tests {
     #[test]
     fn render_page_nav_active() {
         let html = render_page("Test", "<p>hi</p>", "dashboard");
-        assert!(html.0.contains("class=\"active\""));
+        // The active section link carries the `active` modifier alongside the
+        // base `topnav-link` class, and the content is substituted in.
+        assert!(html.0.contains("topnav-link active"));
+        assert!(html.0.contains("<p>hi</p>"));
+        // Inactive sections must not be marked active.
+        assert!(!html.0.contains("{{nav_dashboard}}"));
     }
 }

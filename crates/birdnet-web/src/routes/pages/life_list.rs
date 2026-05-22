@@ -25,6 +25,48 @@ pub fn router() -> Router<AppState> {
         .route("/pages/life-table", get(life_table_partial))
         .route("/pages/life-stats", get(life_stats_partial))
         .route("/pages/life-timeline", get(life_timeline_partial))
+        .route("/pages/life-accumulation", get(life_accumulation_partial))
+}
+
+/// HTMX partial: cumulative species-accumulation curve (life-list growth).
+async fn life_accumulation_partial(
+    State(state): State<AppState>,
+) -> impl axum::response::IntoResponse {
+    let result = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| {
+            let first_seen = birdnet_db::sqlite::species_first_seen(conn).unwrap_or_default();
+            let mut monthly: std::collections::BTreeMap<String, u32> =
+                std::collections::BTreeMap::new();
+            for date in first_seen.values() {
+                if date.len() >= 7 {
+                    *monthly.entry(date[..7].to_string()).or_default() += 1;
+                }
+            }
+            monthly
+        })
+    })
+    .await;
+
+    let Ok(monthly) = result else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading accumulation</p>".to_string(),
+        );
+    };
+    let mut cum: i64 = 0;
+    let points: Vec<(String, i64)> = monthly
+        .iter()
+        .map(|(month, &c)| {
+            cum += i64::from(c);
+            (month.get(2..).unwrap_or(month).to_string(), cum)
+        })
+        .collect();
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/html")],
+        super::viz::accumulation_curve(&points),
+    )
 }
 
 async fn life_list_page() -> Html<String> {
@@ -235,13 +277,13 @@ async fn life_timeline_partial(State(state): State<AppState>) -> impl axum::resp
 
         let _ = write!(
             svg,
-            r##"<rect x="{x}" y="{y}" width="{bar_w}" height="{bar_h}" rx="2" fill="#38bdf8"/>"##,
+            r#"<rect x="{x}" y="{y}" width="{bar_w}" height="{bar_h}" rx="2" fill="var(--moss)"/>"#,
         );
 
         if count > 0 {
             let _ = write!(
                 svg,
-                r##"<text x="{tx}" y="{ty}" text-anchor="middle" fill="#94a3b8" font-size="8" font-family="sans-serif">{count}</text>"##,
+                r#"<text x="{tx}" y="{ty}" text-anchor="middle" fill="var(--fg-3)" font-size="8" font-family="sans-serif">{count}</text>"#,
                 tx = x + bar_w / 2,
                 ty = y - 3,
             );
@@ -253,7 +295,7 @@ async fn life_timeline_partial(State(state): State<AppState>) -> impl axum::resp
             let label = month.get(2..).unwrap_or(month);
             let _ = write!(
                 svg,
-                r##"<text x="{tx}" y="{ty}" text-anchor="middle" fill="#64748b" font-size="7" font-family="sans-serif">{label}</text>"##,
+                r#"<text x="{tx}" y="{ty}" text-anchor="middle" fill="var(--fg-4)" font-size="7" font-family="sans-serif">{label}</text>"#,
                 tx = x + bar_w / 2,
                 ty = chart_h + 14,
             );
@@ -264,11 +306,21 @@ async fn life_timeline_partial(State(state): State<AppState>) -> impl axum::resp
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], svg)
 }
 
-const LIFE_LIST_HTML: &str = r##"<h1 style="margin-bottom:0.5rem;">Life List</h1>
+const LIFE_LIST_HTML: &str = r##"<div class="bnb-eyebrow">Journal</div><h1 class="display" style="font-size:34px;margin-bottom:0.25rem;">Life list</h1>
 <p style="color:var(--text-muted);margin-bottom:1.5rem;">Every species ever detected at this station.</p>
 
 <div class="stats-grid" hx-get="/pages/life-stats" hx-trigger="load" hx-swap="innerHTML">
     <div class="stat-card"><div class="value">--</div><div class="label">Loading...</div></div>
+</div>
+
+<div class="card" style="margin-bottom:1rem;">
+    <h2>The list, growing</h2>
+    <p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:0.75rem;">
+        Cumulative species recorded at this station over time.
+    </p>
+    <div hx-get="/pages/life-accumulation" hx-trigger="load" hx-swap="innerHTML">
+        <p style="color:var(--text-muted);">Loading curve...</p>
+    </div>
 </div>
 
 <div class="card" style="margin-bottom:1rem;">

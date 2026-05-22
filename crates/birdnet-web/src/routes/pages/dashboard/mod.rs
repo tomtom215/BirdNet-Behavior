@@ -25,6 +25,7 @@ pub fn router() -> Router<AppState> {
         .route("/", get(dashboard_page))
         .route("/kiosk", get(kiosk::kiosk_page))
         .route("/pages/stats", get(stats::stats_partial))
+        .route("/pages/hero-status", get(stats::hero_status_partial))
         .route("/pages/detections", get(partials::detections_partial))
         .route("/pages/top-species", get(partials::top_species_partial))
         .route("/pages/species-list", get(partials::species_list_partial))

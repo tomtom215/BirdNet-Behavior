@@ -71,3 +71,79 @@ pub(super) fn check_model(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
 
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::doctor::Status;
+    use clap::Parser;
+
+    fn cli() -> Cli {
+        Cli::parse_from(["birdnet-behavior"])
+    }
+
+    #[test]
+    fn skip_when_unconfigured() {
+        let checks = check_model(&cli(), None);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].status, Status::Skip);
+    }
+
+    #[test]
+    fn pass_for_large_model_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = dir.path().join("model.onnx");
+        std::fs::write(&model, vec![0u8; 1_000_001]).unwrap();
+        let mut cli = cli();
+        cli.model = Some(model);
+        let checks = check_model(&cli, None);
+        assert_eq!(checks[0].status, Status::Pass);
+        assert!(checks[0].name.contains("ONNX model"));
+    }
+
+    #[test]
+    fn warn_for_tiny_model_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = dir.path().join("model.onnx");
+        std::fs::write(&model, b"tiny").unwrap();
+        let mut cli = cli();
+        cli.model = Some(model);
+        let checks = check_model(&cli, None);
+        assert_eq!(checks[0].status, Status::Warn);
+        assert!(checks[0].message.contains("truncated"));
+    }
+
+    #[test]
+    fn fail_for_missing_model_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cli = cli();
+        cli.model = Some(dir.path().join("absent.onnx"));
+        let checks = check_model(&cli, None);
+        assert_eq!(checks[0].status, Status::Fail);
+        assert!(checks[0].message.contains("does not exist"));
+    }
+
+    #[test]
+    fn labels_pass_when_present_and_fail_when_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let labels = dir.path().join("labels.txt");
+        std::fs::write(&labels, "Turdus merula_Common Blackbird").unwrap();
+        let mut cli_present = cli();
+        cli_present.labels = Some(labels);
+        let checks = check_model(&cli_present, None);
+        assert!(
+            checks
+                .iter()
+                .any(|c| c.name.contains("Labels") && c.status == Status::Pass)
+        );
+
+        let mut cli_absent = cli();
+        cli_absent.labels = Some(dir.path().join("absent-labels.txt"));
+        let checks = check_model(&cli_absent, None);
+        assert!(
+            checks
+                .iter()
+                .any(|c| c.name.contains("Labels") && c.status == Status::Fail)
+        );
+    }
+}

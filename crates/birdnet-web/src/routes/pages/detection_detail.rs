@@ -14,6 +14,7 @@ use axum::response::Html;
 use axum::{Router, routing::get};
 use serde::Deserialize;
 
+use super::atoms::conf_bar;
 use super::{escape_html, simple_url_encode};
 use crate::state::AppState;
 
@@ -54,10 +55,10 @@ async fn detection_detail_page(
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let Some(det) = detection else {
-        return Ok(Html(not_found_page(&date, &time)));
+        return Ok(not_found_page(&date, &time));
     };
 
-    Ok(Html(render_detail_page(&det)))
+    Ok(render_detail_page(&det))
 }
 
 // ---------------------------------------------------------------------------
@@ -122,90 +123,51 @@ fn find_detection(
 // Rendering
 // ---------------------------------------------------------------------------
 
-fn render_detail_page(det: &birdnet_db::sqlite::DetectionRow) -> String {
-    let conf_pct = det.confidence * 100.0;
-    let conf_color = if conf_pct >= 80.0 {
-        "#34d399"
-    } else if conf_pct >= 50.0 {
-        "#fbbf24"
-    } else {
-        "#f87171"
-    };
+fn render_detail_page(det: &birdnet_db::sqlite::DetectionRow) -> Html<String> {
     let enc_name = simple_url_encode(&det.com_name);
     let enc_sci = simple_url_encode(&det.sci_name);
+    let com = escape_html(&det.com_name);
+    let sci = escape_html(&det.sci_name);
+    let date = escape_html(&det.date);
+    let time = escape_html(&det.time);
 
     let audio_section = build_audio_section(det);
     let meta = build_meta_rows(det);
     let correlation_section = build_correlation_section(det);
+    let conf = conf_bar(det.confidence);
 
-    format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{com_name} — {date} {time} — BirdNet-Behavior</title>
-  <link rel="stylesheet" href="/static/style.css">
-  <style>
-    body {{ background:#0f172a; color:#e2e8f0; font-family:system-ui,sans-serif; }}
-    .container {{ max-width:900px; margin:0 auto; padding:2rem 1rem; }}
-    nav a {{ color:#94a3b8; text-decoration:none; margin-right:1.5rem; }}
-    nav a:hover {{ color:#38bdf8; }}
-    .card {{ background:#1e293b; border:1px solid #334155; border-radius:0.75rem; padding:1.5rem; margin-bottom:1.5rem; }}
-    .section-title {{ font-size:1.1rem; font-weight:600; color:#38bdf8; margin-bottom:1rem; border-bottom:1px solid #334155; padding-bottom:0.5rem; }}
-    table {{ width:100%; border-collapse:collapse; }}
-    td {{ padding:0.4rem 0.75rem; border-bottom:1px solid #1e293b; font-size:0.9rem; }}
-    tr:last-child td {{ border-bottom:none; }}
-    td:first-child {{ color:#94a3b8; width:35%; }}
-  </style>
-</head>
-<body>
-<div class="container">
-  <nav style="margin-bottom:2rem; padding:1rem 0; border-bottom:1px solid #334155;">
-    <a href="/">Dashboard</a>
-    <a href="/species">Species</a>
-    <a href="/species/detail?name={enc_name}">↩ {com_name_esc}</a>
-  </nav>
-
-  <h1 style="font-size:1.5rem;font-weight:700;margin-bottom:0.5rem;color:#f1f5f9;">
-    {com_name_esc}
-  </h1>
-  <p style="color:#64748b;margin-bottom:1.5rem;font-style:italic;">{sci_name_esc}</p>
-
-  <div class="card">
-    <div class="section-title">Detection Details</div>
-    <table>
-      <tr><td>Date</td><td>{date_esc}</td></tr>
-      <tr><td>Time</td><td>{time_esc}</td></tr>
-      <tr><td>Confidence</td><td><strong style="color:{conf_color};">{conf_pct:.1}%</strong></td></tr>
-      {meta}
-    </table>
+    let content = format!(
+        r#"<div class="page-head">
+  <div>
+    <div class="bnb-eyebrow">Detection · {date} {time}</div>
+    <h1 class="display" style="font-size:40px;line-height:1.05;">{com}</h1>
+    <p class="mono" style="color:var(--fg-3);font-style:italic;margin-top:4px;">{sci}</p>
   </div>
-
-  {audio_section}
-
-  {correlation_section}
-
-  <div class="card">
-    <div class="section-title">Related</div>
-    <p><a href="/species/detail?name={enc_name}" style="color:#38bdf8;">
-      All detections of {com_name_esc} →
-    </a></p>
-    <p><a href="/api/v2/images/{enc_sci}" style="color:#38bdf8;">
-      Species photo (Wikipedia) →
-    </a></p>
-  </div>
+  <a class="bnb-btn" href="/species/detail?name={enc_name}">All detections →</a>
 </div>
-</body>
-</html>"#,
-        com_name = escape_html(&det.com_name),
-        com_name_esc = escape_html(&det.com_name),
-        sci_name_esc = escape_html(&det.sci_name),
-        date = escape_html(&det.date),
-        date_esc = escape_html(&det.date),
-        time = escape_html(&det.time),
-        time_esc = escape_html(&det.time),
-    )
+
+<div class="grid-2">
+  <div>
+    {audio_section}
+    <div class="bnb-card pad">
+      <div class="section-header"><div><div class="bnb-eyebrow">Details</div><h3>This detection</h3></div>{conf}</div>
+      <table>
+        <tr><td class="bnb-meta">Date</td><td>{date}</td></tr>
+        <tr><td class="bnb-meta">Time</td><td>{time}</td></tr>
+        {meta}
+      </table>
+    </div>
+    {correlation_section}
+  </div>
+  <div class="bnb-card pad">
+    <div class="section-header"><div><div class="bnb-eyebrow">Related</div><h3>Explore</h3></div></div>
+    <p style="margin-bottom:8px;"><a href="/species/detail?name={enc_name}">All detections of {com} →</a></p>
+    <p><a href="/api/v2/images/{enc_sci}">Species photo (Wikipedia) →</a></p>
+  </div>
+</div>"#
+    );
+
+    super::render_page(&format!("{com} · {date} {time}"), &content, "today")
 }
 
 fn build_audio_section(det: &birdnet_db::sqlite::DetectionRow) -> String {
@@ -222,16 +184,16 @@ fn build_audio_section(det: &birdnet_db::sqlite::DetectionRow) -> String {
         .unwrap_or_default();
     let safe = escape_html(&basename);
     format!(
-        r#"<div class="card">
-  <div class="section-title">Recording</div>
-  <audio controls style="width:100%;margin-bottom:1rem;">
+        r#"<div class="bnb-card pad">
+  <div class="section-header"><div><div class="bnb-eyebrow">Recording</div><h3>The 3-second clip</h3></div></div>
+  <img src="/api/v2/spectrogram/{safe}"
+       alt="Spectrogram"
+       style="width:100%;border-radius:var(--r-md);border:0.5px solid var(--border);display:block;margin-bottom:12px;"
+       onerror="this.style.display='none'">
+  <audio controls style="width:100%;">
     <source src="/api/v2/recordings/{safe}" type="audio/wav">
     Your browser does not support audio playback.
   </audio>
-  <img src="/api/v2/spectrogram/{safe}"
-       alt="Spectrogram"
-       style="width:100%;border-radius:0.5rem;border:1px solid #334155;"
-       onerror="this.style.display='none'">
 </div>"#
     )
 }
@@ -263,9 +225,9 @@ fn build_correlation_section(det: &birdnet_db::sqlite::DetectionRow) -> String {
     // The button intentionally shows the ID inline so an operator on a
     // browser without clipboard access can read it directly.
     format!(
-        r#"<div class="card">
-  <div class="section-title">Operator: Daemon Log Trace</div>
-  <p style="margin-bottom:0.75rem;color:#94a3b8;font-size:0.85rem;">
+        r#"<div class="bnb-card pad">
+  <div class="section-header"><div><div class="bnb-eyebrow">Operator</div><h3>Daemon log trace</h3></div></div>
+  <p class="bnb-meta" style="margin-bottom:0.75rem;">
     Every event the detection daemon emitted for this audio file is
     tagged with the correlation ID below.
     Run <code>journalctl -u birdnet | grep {safe}</code> to see the
@@ -273,11 +235,9 @@ fn build_correlation_section(det: &birdnet_db::sqlite::DetectionRow) -> String {
   </p>
   <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
     <code id="correlation-id"
-          style="background:#0f172a;padding:0.5rem 0.75rem;border-radius:0.375rem;
-                 font-family:ui-monospace,Menlo,monospace;color:#a7f3d0;">{safe}</code>
-    <button type="button" id="copy-correlation-id"
-            style="background:#1e293b;color:#e2e8f0;border:1px solid #334155;
-                   border-radius:0.375rem;padding:0.5rem 0.75rem;cursor:pointer;"
+          style="background:var(--surface-2);padding:0.5rem 0.75rem;border-radius:var(--r-sm);
+                 font-family:var(--font-mono);color:var(--moss-ink);">{safe}</code>
+    <button type="button" id="copy-correlation-id" class="bnb-btn"
             onclick="(function(){{
               const el=document.getElementById('correlation-id');
               const txt=el.textContent;
@@ -319,20 +279,17 @@ fn build_meta_rows(det: &birdnet_db::sqlite::DetectionRow) -> String {
     out
 }
 
-fn not_found_page(date: &str, time: &str) -> String {
-    format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="UTF-8"><title>Not Found</title></head>
-<body style="background:#0f172a;color:#e2e8f0;font-family:system-ui;padding:2rem;">
-  <h1>Detection not found</h1>
-  <p>No detection found for date=<code>{date}</code> time=<code>{time}</code>.</p>
-  <a href="/" style="color:#38bdf8;">← Back to dashboard</a>
-</body>
-</html>"#,
+fn not_found_page(date: &str, time: &str) -> Html<String> {
+    let content = format!(
+        r#"<div class="empty-state">
+  <h1 class="display" style="font-size:32px;">Detection not found</h1>
+  <p class="bnb-meta" style="margin-top:8px;">No detection found for date <code>{date}</code> time <code>{time}</code>.</p>
+  <p style="margin-top:16px;"><a class="bnb-btn" href="/">← Back to dashboard</a></p>
+</div>"#,
         date = escape_html(date),
         time = escape_html(time),
-    )
+    );
+    super::render_page("Detection not found", &content, "today")
 }
 
 #[cfg(test)]

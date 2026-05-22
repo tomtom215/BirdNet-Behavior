@@ -144,7 +144,7 @@ async fn create_rule(
 
     // Return a success message; HTMX will trigger a reload of the list via hx-on
     Ok(Html(format!(
-        "<div style=\"color:#4ade80;padding:.5rem;border-radius:.375rem;background:#14532d33;\">Rule created successfully.</div>\
+        "<div style=\"color:var(--moss);padding:.5rem;border-radius:.375rem;background:var(--moss-soft)33;\">Rule created successfully.</div>\
          <div hx-get=\"/admin/rules/list\" hx-trigger=\"load\" hx-target=\"{}\" hx-swap=\"innerHTML\"></div>",
         "#rules-table-container"
     )))
@@ -174,7 +174,11 @@ async fn toggle_rule_handler(
 
     let enabled = new_state.unwrap_or(false);
     let label = if enabled { "Enabled" } else { "Disabled" };
-    let color = if enabled { "#4ade80" } else { "#94a3b8" };
+    let color = if enabled {
+        "var(--moss)"
+    } else {
+        "var(--fg-3)"
+    };
     Ok(Html(format!(
         r#"<span style="color:{color};font-weight:600;">{label}</span>"#
     )))
@@ -188,47 +192,47 @@ async fn toggle_rule_handler(
 fn render_page(_rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
     r##"<!DOCTYPE html>
 <html lang="en">
-<head>
+<head><script src="/static/theme-guard.js"></script><link rel="stylesheet" href="/static/css/app.css">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width,initial-scale=1.0">
     <title>Alert Rules — BirdNet-Behavior Admin</title>
     <script src="/static/htmx.min.js"></script>
     <style>
-      body { background:#0f172a; color:#e2e8f0; font-family:system-ui,sans-serif; margin:0; }
+      body { background:var(--bg); color:var(--fg); font-family:var(--font-ui); margin:0; }
       .container { max-width:960px; margin:0 auto; padding:2rem 1rem; }
       nav { margin-bottom:2rem; }
-      nav a { color:#94a3b8; text-decoration:none; margin-right:1.5rem; font-size:.9rem; }
-      nav a:hover { color:#38bdf8; }
-      h1 { font-size:1.5rem; font-weight:700; color:#f8fafc; margin-bottom:.25rem; }
-      .subtitle { color:#64748b; font-size:.875rem; margin-bottom:2rem; }
-      .card { background:#1e293b; border:1px solid #334155; border-radius:.75rem; padding:1.5rem; margin-bottom:1.5rem; }
-      .card h2 { font-size:1.1rem; color:#38bdf8; margin:0 0 1rem; }
-      label { display:block; font-size:.8rem; color:#94a3b8; margin-bottom:.25rem; margin-top:.75rem; }
+      nav a { color:var(--fg-3); text-decoration:none; margin-right:1.5rem; font-size:.9rem; }
+      nav a:hover { color:var(--moss-ink); }
+      h1 { font-size:1.5rem; font-weight:700; color:var(--fg); margin-bottom:.25rem; }
+      .subtitle { color:var(--fg-4); font-size:.875rem; margin-bottom:2rem; }
+      .card { background:var(--surface); border:1px solid var(--border); border-radius:.75rem; padding:1.5rem; margin-bottom:1.5rem; }
+      .card h2 { font-size:1.1rem; color:var(--moss-ink); margin:0 0 1rem; }
+      label { display:block; font-size:.8rem; color:var(--fg-3); margin-bottom:.25rem; margin-top:.75rem; }
       label:first-of-type { margin-top:0; }
-      input,select,textarea { width:100%; background:#0f172a; border:1px solid #334155; border-radius:.375rem;
-                               color:#e2e8f0; padding:.5rem .75rem; font-size:.875rem; box-sizing:border-box; }
-      input:focus,select:focus,textarea:focus { outline:none; border-color:#38bdf8; }
+      input,select,textarea { width:100%; background:var(--bg); border:1px solid var(--border); border-radius:.375rem;
+                               color:var(--fg); padding:.5rem .75rem; font-size:.875rem; box-sizing:border-box; }
+      input:focus,select:focus,textarea:focus { outline:none; border-color:var(--moss-ink); }
       .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
       .form-grid-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:1rem; }
       .btn { padding:.5rem 1.25rem; border-radius:.375rem; border:none; cursor:pointer; font-weight:600; font-size:.875rem; }
-      .btn-primary { background:#0ea5e9; color:#fff; }
-      .btn-primary:hover { background:#0284c7; }
-      .btn-danger { background:#dc2626; color:#fff; }
-      .btn-danger:hover { background:#b91c1c; }
+      .btn-primary { background:var(--moss); color:#fff; }
+      .btn-primary:hover { background:var(--moss-ink); }
+      .btn-danger { background:var(--rare); color:#fff; }
+      .btn-danger:hover { background:var(--rare); }
       .btn-sm { padding:.25rem .75rem; font-size:.8rem; }
       table { width:100%; border-collapse:collapse; font-size:.875rem; }
-      th { text-align:left; color:#64748b; font-weight:600; font-size:.75rem; text-transform:uppercase;
-             padding:.5rem .75rem; border-bottom:1px solid #334155; }
-      td { padding:.6rem .75rem; border-bottom:1px solid #1e293b; vertical-align:middle; }
-      tr:hover td { background:#1e293b55; }
+      th { text-align:left; color:var(--fg-4); font-weight:600; font-size:.75rem; text-transform:uppercase;
+             padding:.5rem .75rem; border-bottom:1px solid var(--border); }
+      td { padding:.6rem .75rem; border-bottom:1px solid var(--surface); vertical-align:middle; }
+      tr:hover td { background:var(--surface)55; }
       .badge { display:inline-block; padding:.15rem .5rem; border-radius:.25rem; font-size:.75rem; font-weight:600; }
-      .badge-green { background:#14532d; color:#4ade80; }
-      .badge-gray  { background:#1e293b; color:#64748b; border:1px solid #334155; }
-      .badge-blue  { background:#1e3a5f; color:#60a5fa; }
-      .badge-red   { background:#450a0a; color:#f87171; }
-      .badge-yellow{ background:#422006; color:#fbbf24; }
+      .badge-green { background:var(--moss-soft); color:var(--moss); }
+      .badge-gray  { background:var(--surface); color:var(--fg-4); border:1px solid var(--border); }
+      .badge-blue  { background:var(--surface); color:var(--moss-ink); }
+      .badge-red   { background:var(--rare-soft); color:var(--rare); }
+      .badge-yellow{ background:var(--dawn-soft); color:var(--dawn); }
       #webhook-fields { display:none; }
-      .hint { color:#64748b; font-size:.75rem; margin-top:.25rem; }
+      .hint { color:var(--fg-4); font-size:.75rem; margin-top:.25rem; }
     </style>
 </head>
 <body>
@@ -236,7 +240,7 @@ fn render_page(_rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
   <nav>
     <a href="/admin/overview">Overview</a>
     <a href="/admin/settings">Settings</a>
-    <a href="/admin/rules" style="color:#38bdf8;">Rules</a>
+    <a href="/admin/rules" style="color:var(--moss-ink);">Rules</a>
     <a href="/admin/notifications">Notifications</a>
     <a href="/admin/system">System</a>
   </nav>
@@ -341,7 +345,7 @@ fn render_page(_rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
          hx-get="/admin/rules/list"
          hx-trigger="load"
          hx-swap="innerHTML">
-      <p style="color:#64748b;">Loading…</p>
+      <p style="color:var(--fg-4);">Loading…</p>
     </div>
   </div>
 </div>
@@ -352,7 +356,7 @@ fn render_page(_rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
 
 fn render_rules_table(rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
     if rules.is_empty() {
-        return r#"<p style="color:#64748b;text-align:center;padding:2rem 0;">
+        return r#"<p style="color:var(--fg-4);text-align:center;padding:2rem 0;">
             No alert rules defined. Create one above.
         </p>"#
             .to_string();
@@ -383,7 +387,7 @@ fn render_rules_table(rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
         };
 
         let species_display = rule.species_pattern.as_deref().map_or_else(
-            || "<em style='color:#64748b'>any</em>".to_string(),
+            || "<em style='color:var(--fg-4)'>any</em>".to_string(),
             escape_html,
         );
 
@@ -395,7 +399,7 @@ fn render_rules_table(rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
 
         let window_display = match (rule.hour_start, rule.hour_end) {
             (Some(s), Some(e)) => format!("{s:02}:00–{e:02}:59"),
-            _ => "<em style='color:#64748b'>any time</em>".to_string(),
+            _ => "<em style='color:var(--fg-4)'>any time</em>".to_string(),
         };
 
         let action_badge = match &rule.action {
@@ -406,7 +410,7 @@ fn render_rules_table(rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
                     url.clone()
                 };
                 format!(
-                    r#"<span class="badge badge-blue">{method}</span> <span style="font-size:.75rem;color:#94a3b8;">{}</span>"#,
+                    r#"<span class="badge badge-blue">{method}</span> <span style="font-size:.75rem;color:var(--fg-3);">{}</span>"#,
                     escape_html(&url_short)
                 )
             }

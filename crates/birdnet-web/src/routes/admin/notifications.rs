@@ -73,7 +73,7 @@ async fn prune_handler(State(state): State<AppState>) -> Result<Html<String>, St
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Html(format!(
-        r#"<div style="color:#4ade80;padding:0.5rem 0;">
+        r#"<div style="color:var(--moss);padding:0.5rem 0;">
           Pruned {deleted} notification(s) older than 90 days.
         </div>"#
     )))
@@ -92,50 +92,50 @@ fn render_page(entries: &[NotifEntry], stats: (i64, i64, i64)) -> String {
     format!(
         r##"<!DOCTYPE html>
 <html lang="en">
-<head>
+<head><script src="/static/theme-guard.js"></script><link rel="stylesheet" href="/static/css/app.css">
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>Notification History - BirdNet-Behavior</title>
   <script src="/static/htmx.min.js"></script>
   <style>
-    body {{ background:#0f172a; color:#e2e8f0; font-family:system-ui,sans-serif; }}
+    body {{ background:var(--bg); color:var(--fg); font-family:var(--font-ui); }}
     .container {{ max-width:1100px; margin:0 auto; padding:2rem 1rem; }}
-    nav a {{ color:#94a3b8; text-decoration:none; margin-right:1.5rem; }}
-    nav a:hover {{ color:#38bdf8; }}
-    .card {{ background:#1e293b; border:1px solid #334155; border-radius:0.75rem;
+    nav a {{ color:var(--fg-3); text-decoration:none; margin-right:1.5rem; }}
+    nav a:hover {{ color:var(--moss-ink); }}
+    .card {{ background:var(--surface); border:1px solid var(--border); border-radius:0.75rem;
              padding:1.5rem; margin-bottom:1.5rem; }}
     .stat {{ text-align:center; }}
     .stat .value {{ font-size:2rem; font-weight:700; }}
-    .stat .label {{ font-size:0.8rem; color:#94a3b8; margin-top:0.25rem; }}
+    .stat .label {{ font-size:0.8rem; color:var(--fg-3); margin-top:0.25rem; }}
     table {{ width:100%; border-collapse:collapse; font-size:0.85rem; }}
-    th {{ text-align:left; color:#64748b; font-weight:600; padding:0.5rem 0.75rem;
-          border-bottom:1px solid #334155; }}
-    td {{ padding:0.5rem 0.75rem; border-bottom:1px solid #1e293b; }}
-    tr:hover td {{ background:#1e293b; }}
+    th {{ text-align:left; color:var(--fg-4); font-weight:600; padding:0.5rem 0.75rem;
+          border-bottom:1px solid var(--border); }}
+    td {{ padding:0.5rem 0.75rem; border-bottom:1px solid var(--surface); }}
+    tr:hover td {{ background:var(--surface); }}
     .badge {{ display:inline-block; padding:0.15rem 0.5rem; border-radius:9999px;
               font-size:0.75rem; font-weight:600; }}
-    .badge-sent {{ background:#14532d; color:#4ade80; }}
-    .badge-failed {{ background:#450a0a; color:#f87171; }}
-    .badge-skipped {{ background:#422006; color:#fbbf24; }}
+    .badge-sent {{ background:var(--moss-soft); color:var(--moss); }}
+    .badge-failed {{ background:var(--rare-soft); color:var(--rare); }}
+    .badge-skipped {{ background:var(--dawn-soft); color:var(--dawn); }}
     .btn {{ padding:0.4rem 1rem; border-radius:0.375rem; border:none;
             cursor:pointer; font-weight:600; font-size:0.8rem; }}
-    .btn-danger {{ background:#7f1d1d; color:#fca5a5; }}
-    .btn-danger:hover {{ background:#991b1b; }}
-    .empty {{ color:#64748b; text-align:center; padding:2rem; }}
+    .btn-danger {{ background:var(--rare-soft); color:var(--rare); }}
+    .btn-danger:hover {{ background:var(--rare-soft); }}
+    .empty {{ color:var(--fg-4); text-align:center; padding:2rem; }}
   </style>
 </head>
 <body>
 <div class="container">
-  <nav style="margin-bottom:2rem;padding:1rem 0;border-bottom:1px solid #334155;">
+  <nav style="margin-bottom:2rem;padding:1rem 0;border-bottom:1px solid var(--border);">
     <a href="/">Dashboard</a>
     <a href="/admin/settings">Settings</a>
     <a href="/admin/migrate">Migration</a>
     <a href="/admin/system">System</a>
-    <a href="/admin/notifications" style="color:#38bdf8;">Notifications</a>
+    <a href="/admin/notifications" style="color:var(--moss-ink);">Notifications</a>
   </nav>
 
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem;">
-    <h1 style="font-size:1.5rem;font-weight:700;color:#f1f5f9;">Notification History</h1>
+    <h1 style="font-size:1.5rem;font-weight:700;color:var(--fg);">Notification History</h1>
     <button class="btn btn-danger"
             hx-delete="/admin/notifications/prune"
             hx-target="#prune-result"
@@ -149,24 +149,24 @@ fn render_page(entries: &[NotifEntry], stats: (i64, i64, i64)) -> String {
   <!-- Stats cards -->
   <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;margin-bottom:1.5rem;">
     <div class="card stat">
-      <div class="value" style="color:#4ade80;">{sent}</div>
+      <div class="value" style="color:var(--moss);">{sent}</div>
       <div class="label">Sent (30 days)</div>
     </div>
     <div class="card stat">
-      <div class="value" style="color:#f87171;">{failed}</div>
+      <div class="value" style="color:var(--rare);">{failed}</div>
       <div class="label">Failed (30 days)</div>
     </div>
     <div class="card stat">
-      <div class="value" style="color:#fbbf24;">{skipped}</div>
+      <div class="value" style="color:var(--dawn);">{skipped}</div>
       <div class="label">Skipped (30 days)</div>
     </div>
   </div>
 
   <div class="card" style="padding:0;overflow:hidden;">
-    <div style="padding:1rem 1.5rem;border-bottom:1px solid #334155;
+    <div style="padding:1rem 1.5rem;border-bottom:1px solid var(--border);
                 display:flex;justify-content:space-between;align-items:center;">
-      <span style="font-weight:600;color:#f1f5f9;">Recent Notifications</span>
-      <span style="color:#64748b;font-size:0.85rem;">{count} entries</span>
+      <span style="font-weight:600;color:var(--fg);">Recent Notifications</span>
+      <span style="color:var(--fg-4);font-size:0.85rem;">{count} entries</span>
     </div>
     <div id="notif-table"
          hx-get="/admin/notifications/partial"
@@ -223,19 +223,19 @@ fn render_table_rows(entries: &[NotifEntry]) -> String {
             .replace('>', "&gt;");
         let error_html = e.error.as_ref().map_or_else(String::new, |err| {
             format!(
-                r#"<br><span style="color:#f87171;font-size:0.75rem;">{}</span>"#,
+                r#"<br><span style="color:var(--rare);font-size:0.75rem;">{}</span>"#,
                 err.replace('<', "&lt;").replace('>', "&gt;")
             )
         });
         write!(
             out,
             r#"<tr>
-                  <td style="white-space:nowrap;color:#94a3b8;">{sent_at}</td>
+                  <td style="white-space:nowrap;color:var(--fg-3);">{sent_at}</td>
                   <td><code style="font-size:0.8rem;">{channel}</code></td>
                   <td>{species}</td>
-                  <td style="color:#94a3b8;">{confidence}</td>
+                  <td style="color:var(--fg-3);">{confidence}</td>
                   <td><span class="badge {badge_class}">{status}</span></td>
-                  <td style="color:#94a3b8;">{msg}{error_html}</td>
+                  <td style="color:var(--fg-3);">{msg}{error_html}</td>
                 </tr>"#,
             sent_at = &e.sent_at[..16], // trim seconds
             channel = e.channel,

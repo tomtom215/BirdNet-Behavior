@@ -138,7 +138,7 @@ async fn gallery_grid_partial(
     }
 }
 
-const GALLERY_HTML: &str = r##"<h1 style="margin-bottom:0.5rem;">Species Gallery</h1>
+const GALLERY_HTML: &str = r##"<div class="bnb-eyebrow">Browse</div><h1 class="display" style="font-size:34px;margin-bottom:0.25rem;">Gallery</h1>
 <p style="color:var(--text-muted);margin-bottom:1.5rem;">Photo gallery of all detected species.</p>
 
 <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1.5rem;flex-wrap:wrap;">

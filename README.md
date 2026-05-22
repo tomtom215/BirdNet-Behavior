@@ -3,7 +3,7 @@
 
 <p align="center">
   <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/"><img src="https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg" alt="License"></a>
-  <img src="https://img.shields.io/badge/Rust-1.88%2B-orange" alt="MSRV">
+  <img src="https://img.shields.io/badge/Rust-1.95%2B-orange" alt="MSRV">
   <img src="https://img.shields.io/badge/platform-aarch64%20%7C%20x86__64-blue" alt="Platforms">
   <img src="https://img.shields.io/badge/clippy-pedantic%20%2B%20nursery-green" alt="Clippy">
   <img src="https://img.shields.io/badge/Docker-ghcr.io-2496ED" alt="Docker">
@@ -552,7 +552,7 @@ Duplicate rows are silently skipped, so re-running is safe.
 
 ## Building from Source
 
-**Prerequisites:** [Rust 1.88+](https://rustup.rs), `git`
+**Prerequisites:** [Rust 1.95+](https://rustup.rs), `git`
 
 ```bash
 git clone https://github.com/tomtom215/BirdNet-Behavior.git

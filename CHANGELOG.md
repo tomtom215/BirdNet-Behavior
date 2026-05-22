@@ -317,16 +317,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in `crates/birdnet-core/benches/audio_pipeline.rs`, which compiles
   unchanged against 0.8. Dropped transitive deps `is-terminal` and
   `hermit-abi`.
-- **`sysinfo` 0.32 → 0.38** — Dependabot proposed 0.39, but that line
-  raised MSRV to Rust 1.95 which would have forced us to lift the
-  workspace MSRV from 1.88 in lockstep (and broken the Dockerfile's
-  `rust:1.88-slim` builder). 0.38.4 carries the same API changes the
-  source-side updates already adopted — `RefreshKind::new()` →
-  `RefreshKind::nothing()` (rename, same behaviour),
-  `Components::refresh()` takes a `bool` arg, and
+- **`sysinfo` 0.32 → 0.39** (PR #47) — the 0.39 line requires Rust
+  1.95, so it is paired with the **workspace MSRV bump 1.88 → 1.95**
+  (see below). The API changes were already adopted on the way through
+  0.38 — `RefreshKind::new()` → `RefreshKind::nothing()` (rename, same
+  behaviour), `Components::refresh()` takes a `bool` arg, and
   `Component::temperature()` returns `Option<f32>` so we use
-  `.and_then` instead of `.map`. Pinned to `^0.38` with a comment
-  explaining the MSRV rationale.
+  `.and_then` instead of `.map` — so the 0.38 → 0.39 step needed no
+  source changes, only the version constraint and the MSRV move.
+- **Workspace MSRV raised 1.88 → 1.95**, the current Rust stable as of
+  2026-05-22. Driven by `sysinfo` 0.39 (above); 1.95 is both the floor
+  that crate demands and the latest released toolchain, so the MSRV
+  tracks stable rather than trailing it. Updated in lockstep:
+  `Cargo.toml` `rust-version`, `clippy.toml` `msrv`, the Dockerfile
+  `RUST_VERSION` arg (`rust:1.95-slim-trixie` builder), the
+  `dtolnay/rust-toolchain` pins in `ci.yml` and `release.yml`, and the
+  README badge / docs.
+- **New clippy nursery lint allowed for the 1.95 toolchain.** Rust
+  1.95's clippy enables `duration_suboptimal_units`, which flags ~25
+  pre-existing `Duration::from_secs(…)` call sites in favour of
+  `from_mins` / `from_hours`. The explicit-seconds form is intentional,
+  so the lint is added to the workspace `[lints.clippy]` allowances
+  rather than churning those sites (and `from_days` is still unstable
+  at this MSRV regardless).
+- **Currency sweep (2026-05-22).** In-range `cargo update`: `serde_json`
+  1.0.149 → 1.0.150, `duckdb` 1.10502 → 1.10503 (`libduckdb-sys`
+  likewise), plus transitive `autocfg` 1.5.0 → 1.5.1 and `either`
+  1.15.0 → 1.16.0. The unused `ndarray` workspace entry was aligned
+  0.16 → 0.17 to match the version `ort` already resolves transitively
+  (0.17.2).
+- **`rusqlite` 0.38 → 0.39** and **`rubato` 2.0 → 3.0** — the two
+  out-of-range majors surfaced by the currency review, both verified
+  drop-in with no source changes. `rusqlite` 0.39 pulls `libsqlite3-sys`
+  0.36 → 0.37 and passes the full `birdnet-db` / `birdnet-migrate` /
+  `birdnet-web` suites (and the analytics-gated `birdnet-behavioral`
+  connection path); `rubato` 3.0 leaves its `audioadapter` pin unchanged
+  and passes the `birdnet-core` lib + `audio_pipeline` integration
+  tests. With these, every direct dependency is at its latest release as
+  of 2026-05-22.
 - **`rubato` 1.0.1 → 2.0.0** — major-version bump with no source
   changes needed in our consumer (the resampler API we use is stable
   across the bump). Brought in transitive `audioadapter` 3 to match.
@@ -353,8 +381,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   All 243 birdnet-core lib tests still pass; the live ADR-16 Layer-4
   check (Pica WAV → DB) must run in CI after merge.
 - **Skipped: PR #36** (`dtolnay/rust-toolchain` 1.88 → 1.100).
-  Rust 1.100 doesn't exist yet (current stable is 1.95, dependabot
-  misinterpreted the version tag). MSRV stays at 1.88.
+  Rust 1.100 does not exist — current stable is 1.95 and Dependabot
+  misordered the `1.x` action tags (it sorts `1.100 > 1.95`
+  lexically). The toolchain pins move to **1.95**, the real current
+  stable, via the MSRV bump above — not to the bogus 1.100. PR #36
+  should be closed.
 - **Lockfile**: 8 transitive RUSTSEC advisories now unblocked
   (rustls-webpki 4, aws-lc-sys 2, tar 2 — see A3 above) plus the
   routine churn from the Dependabot bumps. Only RUSTSEC-2026-0097

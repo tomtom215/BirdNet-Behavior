@@ -251,7 +251,7 @@ async fn progress_handler(migration_state: MigrationState) -> Html<String> {
     };
     let Some(p) = snap else {
         return Html(
-            r#"<div id="migrate-progress" style="color:#64748b">No migration in progress.</div>"#
+            r#"<div id="migrate-progress" style="color:var(--fg-4)">No migration in progress.</div>"#
                 .to_string(),
         );
     };

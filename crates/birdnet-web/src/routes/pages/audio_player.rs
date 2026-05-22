@@ -115,13 +115,13 @@ async fn player_page(
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{species_safe} — {site_name}</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/css/app.css">
   <style>{PLAYER_CSS}</style>
 </head>
 <body>
 <div class="container" style="max-width:720px;margin:2rem auto;padding:0 1rem;">
   <nav style="margin-bottom:1.5rem;">
-    <a href="/" style="color:var(--accent,#89b4fa);text-decoration:none;">&larr; Dashboard</a>
+    <a href="/" style="color:var(--accent,var(--moss-ink));text-decoration:none;">&larr; Dashboard</a>
   </nav>
   {content}
 </div>
@@ -134,27 +134,27 @@ async fn player_page(
 }
 
 const PLAYER_CSS: &str = r#"
-body { background:#0f172a; color:#e2e8f0; font-family:system-ui,sans-serif; }
-.player-container { background:#1e293b; border:1px solid #334155; border-radius:12px; overflow:hidden; }
+body { background:var(--bg); color:var(--fg); font-family:system-ui,sans-serif; }
+.player-container { background:var(--surface); border:1px solid var(--border); border-radius:12px; overflow:hidden; }
 .player-header { padding:1.25rem 1.5rem 0.75rem; }
-.player-header h2 { margin:0 0 0.5rem; font-size:1.3rem; color:#f1f5f9; }
-.player-meta { display:flex; align-items:center; gap:0.75rem; font-size:0.85rem; color:#94a3b8; }
-.confidence-badge { background:#0ea5e9; color:#fff; padding:2px 8px; border-radius:4px; font-weight:600; font-size:0.8rem; }
+.player-header h2 { margin:0 0 0.5rem; font-size:1.3rem; color:var(--fg); }
+.player-meta { display:flex; align-items:center; gap:0.75rem; font-size:0.85rem; color:var(--fg-3); }
+.confidence-badge { background:var(--moss); color:#fff; padding:2px 8px; border-radius:4px; font-weight:600; font-size:0.8rem; }
 .spectrogram-display { position:relative; background:#000; }
 .spectrogram-display img { width:100%; display:block; image-rendering:pixelated; min-height:128px; }
 #playhead-canvas { position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; }
 .audio-controls { padding:1rem 1.5rem 1.25rem; }
 .transport { display:flex; align-items:center; gap:0.75rem; }
-#play-btn { background:none; border:none; color:#e2e8f0; cursor:pointer; padding:4px; }
-#play-btn:hover { color:#38bdf8; }
-.progress-bar { flex:1; height:6px; background:#334155; border-radius:3px; cursor:pointer; position:relative; }
-.progress-fill { height:100%; background:#0ea5e9; border-radius:3px; width:0; transition:width 0.1s linear; }
-.time-display { font-size:0.8rem; color:#94a3b8; min-width:80px; text-align:right; font-variant-numeric:tabular-nums; }
-.volume-row { display:flex; align-items:center; gap:0.5rem; margin-top:0.75rem; font-size:0.8rem; color:#94a3b8; }
-.volume-row input[type="range"] { width:80px; accent-color:#0ea5e9; }
-.volume-row select { background:#0f172a; border:1px solid #334155; color:#e2e8f0; border-radius:4px; padding:2px 4px; font-size:0.8rem; }
-.btn-small { background:#334155; border:none; color:#e2e8f0; padding:4px 12px; border-radius:4px; cursor:pointer; font-size:0.8rem; }
-.btn-small:hover { background:#475569; }
+#play-btn { background:none; border:none; color:var(--fg); cursor:pointer; padding:4px; }
+#play-btn:hover { color:var(--moss-ink); }
+.progress-bar { flex:1; height:6px; background:var(--border); border-radius:3px; cursor:pointer; position:relative; }
+.progress-fill { height:100%; background:var(--moss); border-radius:3px; width:0; transition:width 0.1s linear; }
+.time-display { font-size:0.8rem; color:var(--fg-3); min-width:80px; text-align:right; font-variant-numeric:tabular-nums; }
+.volume-row { display:flex; align-items:center; gap:0.5rem; margin-top:0.75rem; font-size:0.8rem; color:var(--fg-3); }
+.volume-row input[type="range"] { width:80px; accent-color:var(--moss); }
+.volume-row select { background:var(--bg); border:1px solid var(--border); color:var(--fg); border-radius:4px; padding:2px 4px; font-size:0.8rem; }
+.btn-small { background:var(--border); border:none; color:var(--fg); padding:4px 12px; border-radius:4px; cursor:pointer; font-size:0.8rem; }
+.btn-small:hover { background:var(--border-2); }
 "#;
 
 const PLAYER_JS: &str = r"

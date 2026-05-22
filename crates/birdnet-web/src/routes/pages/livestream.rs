@@ -47,16 +47,16 @@ const LIVESTREAM_HTML: &str = r#"<div class="livestream-container">
     max-width: 600px;
     margin: 2rem auto;
     padding: 1.5rem;
-    background: var(--card-bg, #1e1e2e);
+    background: var(--card-bg, var(--surface));
     border-radius: 12px;
     border: 1px solid var(--border-color, #333);
 }
 .livestream-container h2 {
     margin-top: 0;
-    color: var(--text-primary, #cdd6f4);
+    color: var(--text-primary, var(--fg));
 }
 .description {
-    color: var(--text-secondary, #a6adc8);
+    color: var(--text-secondary, var(--fg-3));
     margin-bottom: 1.5rem;
 }
 .audio-player {
@@ -75,16 +75,16 @@ const LIVESTREAM_HTML: &str = r#"<div class="livestream-container">
     margin-bottom: 1rem;
 }
 .volume-control label {
-    color: var(--text-secondary, #a6adc8);
+    color: var(--text-secondary, var(--fg-3));
     font-size: 0.9rem;
     min-width: 55px;
 }
 .volume-control input[type="range"] {
     flex: 1;
-    accent-color: var(--accent, #89b4fa);
+    accent-color: var(--accent, var(--moss-ink));
 }
 #volume-display {
-    color: var(--text-secondary, #a6adc8);
+    color: var(--text-secondary, var(--fg-3));
     font-size: 0.85rem;
     min-width: 35px;
     text-align: right;
@@ -98,8 +98,8 @@ const LIVESTREAM_HTML: &str = r#"<div class="livestream-container">
     padding: 0.5rem 1.5rem;
     border: none;
     border-radius: 6px;
-    background: var(--accent, #89b4fa);
-    color: var(--card-bg, #1e1e2e);
+    background: var(--accent, var(--moss-ink));
+    color: var(--card-bg, var(--surface));
     font-weight: 600;
     cursor: pointer;
     transition: opacity 0.15s;
@@ -109,10 +109,10 @@ const LIVESTREAM_HTML: &str = r#"<div class="livestream-container">
 }
 .status-indicator {
     font-size: 0.85rem;
-    color: var(--text-secondary, #a6adc8);
+    color: var(--text-secondary, var(--fg-3));
 }
 .status-indicator.playing {
-    color: var(--success, #a6e3a1);
+    color: var(--success, var(--moss));
 }
 </style>
 

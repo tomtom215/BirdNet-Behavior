@@ -1,7 +1,10 @@
-<h1 style="margin-bottom: 1.5rem;">Behavioral Analytics</h1>
-
-<div class="stats-grid">
-    <div class="stat-card" hx-get="/pages/analytics-status" hx-trigger="load" hx-swap="innerHTML">
+<div class="page-head" style="margin-bottom:var(--pad-3);">
+    <div>
+        <div class="bnb-eyebrow">The deep dive</div>
+        <h1 class="display" style="font-size:34px;">Behavioral Analytics</h1>
+        <p class="bnb-meta" style="margin-top:4px;">When birds sing, who they sing with, and which species follow which.</p>
+    </div>
+    <div class="bnb-card pad" style="margin:0;min-width:220px;" hx-get="/pages/analytics-status" hx-trigger="load" hx-swap="innerHTML">
         <div class="value">--</div>
         <div class="label">Analytics Status</div>
     </div>

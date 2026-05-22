@@ -40,36 +40,36 @@ pub(super) fn render_settings_page(settings: &HashMap<String, String>) -> String
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Admin Settings — BirdNet-Behavior</title>
     <script src="/static/htmx.min.js"></script>
-    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/theme-guard.js"></script><link rel="stylesheet" href="/static/css/app.css">
     <style>
-      body {{ background: #0f172a; color: #e2e8f0; font-family: system-ui,sans-serif; }}
+      body {{ background: var(--bg); color: var(--fg); font-family: var(--font-ui); }}
       .container {{ max-width: 900px; margin: 0 auto; padding: 2rem 1rem; }}
-      nav a {{ color: #94a3b8; text-decoration: none; margin-right: 1.5rem; }}
-      nav a.active, nav a:hover {{ color: #38bdf8; }}
-      .card {{ background: #1e293b; border: 1px solid #334155; border-radius: 0.75rem;
+      nav a {{ color: var(--fg-3); text-decoration: none; margin-right: 1.5rem; }}
+      nav a.active, nav a:hover {{ color: var(--moss-ink); }}
+      .card {{ background: var(--surface); border: 1px solid var(--border); border-radius: 0.75rem;
                padding: 1.5rem; margin-bottom: 1.5rem; }}
-      .section-title {{ font-size: 1.1rem; font-weight: 600; color: #38bdf8;
-                        margin-bottom: 1rem; border-bottom: 1px solid #334155; padding-bottom: 0.5rem; }}
-      label {{ display: block; font-size: 0.85rem; color: #94a3b8; margin-bottom: 0.25rem; }}
-      input, textarea, select {{ width: 100%; background: #0f172a; border: 1px solid #334155;
-                                  border-radius: 0.375rem; padding: 0.5rem 0.75rem; color: #e2e8f0;
+      .section-title {{ font-size: 1.1rem; font-weight: 600; color: var(--moss-ink);
+                        margin-bottom: 1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }}
+      label {{ display: block; font-size: 0.85rem; color: var(--fg-3); margin-bottom: 0.25rem; }}
+      input, textarea, select {{ width: 100%; background: var(--bg); border: 1px solid var(--border);
+                                  border-radius: 0.375rem; padding: 0.5rem 0.75rem; color: var(--fg);
                                   font-size: 0.875rem; box-sizing: border-box; margin-bottom: 1rem; }}
-      input:focus, textarea:focus {{ outline: none; border-color: #38bdf8; }}
+      input:focus, textarea:focus {{ outline: none; border-color: var(--moss-ink); }}
       .grid-2 {{ display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }}
       .btn {{ padding: 0.5rem 1.5rem; border-radius: 0.375rem; border: none; cursor: pointer;
                font-weight: 600; font-size: 0.875rem; }}
-      .btn-primary {{ background: #0ea5e9; color: #fff; }}
-      .btn-primary:hover {{ background: #38bdf8; }}
-      .alert-success {{ background: #064e3b; border: 1px solid #065f46; color: #6ee7b7;
+      .btn-primary {{ background: var(--moss); color: #fff; }}
+      .btn-primary:hover {{ background: var(--moss-ink); }}
+      .alert-success {{ background: var(--moss-soft); border: 1px solid var(--moss-soft); color: var(--moss-ink);
                          border-radius: 0.375rem; padding: 0.75rem 1rem; margin-bottom: 1rem; }}
-      .alert-error {{ background: #450a0a; border: 1px solid #7f1d1d; color: #fca5a5;
+      .alert-error {{ background: var(--rare-soft); border: 1px solid var(--rare-soft); color: var(--rare);
                        border-radius: 0.375rem; padding: 0.75rem 1rem; margin-bottom: 1rem; }}
-      .hint {{ font-size: 0.75rem; color: #64748b; margin-top: -0.75rem; margin-bottom: 1rem; }}
+      .hint {{ font-size: 0.75rem; color: var(--fg-4); margin-top: -0.75rem; margin-bottom: 1rem; }}
     </style>
 </head>
 <body>
 <div class="container">
-  <nav style="margin-bottom:2rem; padding:1rem 0; border-bottom:1px solid #334155;">
+  <nav style="margin-bottom:2rem; padding:1rem 0; border-bottom:1px solid var(--border);">
     <a href="/">Dashboard</a>
     <a href="/species">Species</a>
     <a href="/admin" class="active">Admin</a>
@@ -78,7 +78,7 @@ pub(super) fn render_settings_page(settings: &HashMap<String, String>) -> String
     <a href="/admin/system">System</a>
   </nav>
 
-  <h1 style="font-size:1.5rem;font-weight:700;margin-bottom:1.5rem;color:#f1f5f9;">
+  <h1 style="font-size:1.5rem;font-weight:700;margin-bottom:1.5rem;color:var(--fg);">
     Admin Settings
   </h1>
 
@@ -108,10 +108,10 @@ pub(super) fn render_settings_form(settings: &HashMap<String, String>) -> String
         r#"
   <div style="display:flex; align-items:center; gap:1rem;">
     <button type="submit" class="btn btn-primary">Save Settings</button>
-    <span id="save-spinner" class="htmx-indicator" style="color:#94a3b8; font-size:0.875rem;">
+    <span id="save-spinner" class="htmx-indicator" style="color:var(--fg-3); font-size:0.875rem;">
       Saving…
     </span>
-    <span style="color:#64748b; font-size:0.8rem;">
+    <span style="color:var(--fg-4); font-size:0.8rem;">
       Most settings require a restart to take effect.
     </span>
   </div>

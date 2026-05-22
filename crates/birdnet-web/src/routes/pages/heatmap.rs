@@ -18,7 +18,10 @@ use axum::response::Html;
 use axum::routing::get;
 use serde::Deserialize;
 
-use birdnet_db::sqlite::{HeatmapCell, hourly_totals, weekly_heatmap};
+use birdnet_db::sqlite::{
+    HeatmapCell, hourly_totals, species_hourly_activity, species_sparklines, top_species,
+    weekly_heatmap,
+};
 
 use crate::state::AppState;
 
@@ -28,6 +31,12 @@ pub fn router() -> Router<AppState> {
         .route("/heatmap", get(heatmap_page))
         .route("/pages/heatmap-grid", get(heatmap_grid_partial))
         .route("/pages/hourly-totals", get(hourly_totals_partial))
+        .route("/pages/activity-streamgraph", get(streamgraph_partial))
+        .route("/pages/dawn-chorus", get(dawn_chorus_partial))
+        .route(
+            "/pages/migration-ridgeline",
+            get(migration_ridgeline_partial),
+        )
 }
 
 #[derive(Deserialize)]
@@ -40,85 +49,68 @@ struct HeatmapQuery {
 // ---------------------------------------------------------------------------
 
 async fn heatmap_page() -> Html<String> {
-    Html(HEATMAP_PAGE.to_string())
+    super::render_page("Activity Heatmap", HEATMAP_CONTENT, "heatmap")
 }
 
-const HEATMAP_PAGE: &str = r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1.0">
-  <title>Activity Heatmap — BirdNet-Behavior</title>
-  <script src="/static/htmx.min.js"></script>
-  <style>
-    body { background:#0f172a; color:#e2e8f0; font-family:system-ui,sans-serif; margin:0; }
-    .container { max-width:1100px; margin:0 auto; padding:2rem 1rem; }
-    nav a { color:#94a3b8; text-decoration:none; margin-right:1.5rem; font-size:.9rem; }
-    nav a:hover, nav a.active { color:#38bdf8; }
-    h1 { font-size:1.5rem; font-weight:700; color:#f1f5f9; margin-bottom:.5rem; }
-    .subtitle { color:#64748b; font-size:.875rem; margin-bottom:2rem; }
-    .card { background:#1e293b; border:1px solid #334155; border-radius:.75rem;
-            padding:1.5rem; margin-bottom:1.5rem; }
-    .section-title { font-size:1rem; font-weight:600; color:#38bdf8;
-                     margin-bottom:1rem; }
-    .controls { display:flex; gap:.75rem; margin-bottom:1.5rem; flex-wrap:wrap; }
-    .btn { padding:.4rem 1rem; border-radius:.375rem; border:1px solid #334155;
-           background:#1e293b; color:#e2e8f0; cursor:pointer; font-size:.875rem; }
-    .btn.active, .btn:hover { background:#0ea5e9; border-color:#0ea5e9; color:#fff; }
-  </style>
-</head>
-<body>
-<div class="container">
-  <nav style="margin-bottom:2rem;padding:1rem 0;border-bottom:1px solid #334155;">
-    <a href="/">Dashboard</a>
-    <a href="/species">Species</a>
-    <a href="/heatmap" class="active">Heatmap</a>
-    <a href="/analytics">Analytics</a>
-    <a href="/correlation">Correlation</a>
-    <a href="/admin">Admin</a>
-  </nav>
-
-  <h1>Activity Heatmap</h1>
-  <p class="subtitle">Detection frequency by hour of day and day of week</p>
-
-  <div class="controls">
+const HEATMAP_CONTENT: &str = r#"<div class="page-head">
+  <div>
+    <div class="bnb-eyebrow">Behavioral analytics</div>
+    <h1 class="display" style="font-size:34px;">When the yard is alive</h1>
+    <p class="bnb-meta" style="margin-top:4px;">Detection frequency by hour of day and day of week.</p>
+  </div>
+  <div class="seg" id="range-controls">
     <button class="btn active" onclick="loadDays(7, this)">7 days</button>
     <button class="btn" onclick="loadDays(14, this)">14 days</button>
     <button class="btn" onclick="loadDays(30, this)">30 days</button>
     <button class="btn" onclick="loadDays(90, this)">90 days</button>
   </div>
+</div>
 
-  <div class="card">
-    <div class="section-title">Hour × Day-of-Week Grid</div>
-    <div id="heatmap-grid"
-         hx-get="/pages/heatmap-grid?days=7"
-         hx-trigger="load"
-         hx-swap="innerHTML">
-      <p style="color:#64748b;">Loading heatmap…</p>
+<div class="bnb-card pad">
+  <div class="section-header"><div><div class="bnb-eyebrow">Who's singing, over time</div><h3>Activity streamgraph</h3></div></div>
+  <div id="activity-streamgraph" hx-get="/pages/activity-streamgraph?days=7" hx-trigger="load" hx-swap="innerHTML">
+    <p class="bnb-meta">Loading streamgraph...</p>
+  </div>
+</div>
+
+<div class="bnb-card pad">
+  <div class="section-header"><div><div class="bnb-eyebrow">Hour × day-of-week</div><h3>Activity grid</h3></div></div>
+  <div id="heatmap-grid" hx-get="/pages/heatmap-grid?days=7" hx-trigger="load" hx-swap="innerHTML">
+    <p class="bnb-meta">Loading heatmap...</p>
+  </div>
+</div>
+
+<div class="grid-2">
+  <div class="bnb-card pad">
+    <div class="section-header"><div><div class="bnb-eyebrow">The dawn chorus</div><h3>Circadian rhythm</h3></div></div>
+    <div id="dawn-chorus" hx-get="/pages/dawn-chorus" hx-trigger="load" hx-swap="innerHTML">
+      <p class="bnb-meta">Loading dawn chorus...</p>
     </div>
   </div>
-
-  <div class="card">
-    <div class="section-title">Detections by Hour (all days)</div>
-    <div id="hourly-totals"
-         hx-get="/pages/hourly-totals?days=7"
-         hx-trigger="load"
-         hx-swap="innerHTML">
-      <p style="color:#64748b;">Loading chart…</p>
+  <div class="bnb-card pad">
+    <div class="section-header"><div><div class="bnb-eyebrow">All days</div><h3>Detections by hour</h3></div></div>
+    <div id="hourly-totals" hx-get="/pages/hourly-totals?days=7" hx-trigger="load" hx-swap="innerHTML">
+      <p class="bnb-meta">Loading chart...</p>
     </div>
+  </div>
+</div>
+
+<div class="bnb-card pad">
+  <div class="section-header"><div><div class="bnb-eyebrow">Arrivals & departures</div><h3>Seasonal phenology</h3></div></div>
+  <div id="migration-ridgeline" hx-get="/pages/migration-ridgeline" hx-trigger="load" hx-swap="innerHTML">
+    <p class="bnb-meta">Loading phenology...</p>
   </div>
 </div>
 
 <script>
 function loadDays(days, btn) {
-  document.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('#range-controls .btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
+  htmx.ajax('GET', '/pages/activity-streamgraph?days=' + days, '#activity-streamgraph');
   htmx.ajax('GET', '/pages/heatmap-grid?days=' + days, '#heatmap-grid');
   htmx.ajax('GET', '/pages/hourly-totals?days=' + days, '#hourly-totals');
 }
-</script>
-</body>
-</html>"#;
+</script>"#;
 
 // ---------------------------------------------------------------------------
 // GET /pages/heatmap-grid — SVG heatmap partial
@@ -173,6 +165,129 @@ async fn hourly_totals_partial(
 }
 
 // ---------------------------------------------------------------------------
+// GET /pages/activity-streamgraph — per-species stacked activity
+// ---------------------------------------------------------------------------
+
+async fn streamgraph_partial(
+    State(state): State<AppState>,
+    Query(query): Query<HeatmapQuery>,
+) -> impl axum::response::IntoResponse {
+    let days = query.days.unwrap_or(7).clamp(2, 365);
+    let result =
+        tokio::task::spawn_blocking(move || state.with_db(|conn| species_sparklines(conn, days)))
+            .await;
+
+    match result {
+        Ok(Ok(map)) => {
+            let mut series: Vec<(String, Vec<i64>)> = map.into_iter().collect();
+            // Most active species first → stable, readable stacking order.
+            series.sort_by(|a, b| {
+                b.1.iter()
+                    .sum::<i64>()
+                    .cmp(&a.1.iter().sum::<i64>())
+                    .then_with(|| a.0.cmp(&b.0))
+            });
+            series.truncate(8);
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/html")],
+                super::viz::streamgraph(&series),
+            )
+        }
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading streamgraph</p>".to_string(),
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GET /pages/dawn-chorus — circadian polar of the top species
+// ---------------------------------------------------------------------------
+
+#[allow(clippy::cast_precision_loss)]
+async fn dawn_chorus_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {
+    let series = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| {
+            let top = top_species(conn, 5).unwrap_or_default();
+            top.iter()
+                .map(|s| {
+                    let mut arr = [0.0_f64; 24];
+                    if let Ok(hours) = species_hourly_activity(conn, &s.com_name) {
+                        for hc in hours {
+                            if let Ok(h) = hc.hour.parse::<usize>()
+                                && h < 24
+                            {
+                                arr[h] = hc.count as f64;
+                            }
+                        }
+                    }
+                    (s.com_name.clone(), arr)
+                })
+                .collect::<Vec<_>>()
+        })
+    })
+    .await;
+
+    let Ok(series) = series else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading dawn chorus</p>".to_string(),
+        );
+    };
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/html")],
+        super::viz::circadian_polar(&series),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// GET /pages/migration-ridgeline — per-species seasonal joyplot
+// ---------------------------------------------------------------------------
+
+async fn migration_ridgeline_partial(
+    State(state): State<AppState>,
+) -> impl axum::response::IntoResponse {
+    // One dense query for the year, then bucket each species into ~52 weeks.
+    let result =
+        tokio::task::spawn_blocking(move || state.with_db(|conn| species_sparklines(conn, 364)))
+            .await;
+
+    match result {
+        Ok(Ok(map)) => {
+            let mut ranked: Vec<(String, Vec<i64>)> = map.into_iter().collect();
+            ranked.sort_by(|a, b| {
+                b.1.iter()
+                    .sum::<i64>()
+                    .cmp(&a.1.iter().sum::<i64>())
+                    .then_with(|| a.0.cmp(&b.0))
+            });
+            ranked.truncate(7);
+            let series: Vec<(String, Vec<i64>)> = ranked
+                .into_iter()
+                .map(|(name, daily)| {
+                    let weekly: Vec<i64> = daily.chunks(7).map(|c| c.iter().sum()).collect();
+                    (name, weekly)
+                })
+                .collect();
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/html")],
+                super::viz::ridgeline(&series),
+            )
+        }
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading ridgeline</p>".to_string(),
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // SVG heatmap renderer
 // ---------------------------------------------------------------------------
 
@@ -181,7 +296,7 @@ const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 #[allow(clippy::too_many_lines)]
 fn render_heatmap_svg(cells: &[HeatmapCell]) -> String {
     if cells.is_empty() {
-        return r#"<p style="color:#64748b;text-align:center;padding:2rem;">
+        return r#"<p style="color:var(--fg-4);text-align:center;padding:2rem;">
             No data available for the selected period.
         </p>"#
             .to_string();
@@ -207,12 +322,12 @@ fn render_heatmap_svg(cells: &[HeatmapCell]) -> String {
     let svg_h = label_h + 7 * cell_h + 40;
 
     let mut svg = format!(
-        r##"<div style="overflow-x:auto;">
+        r#"<div style="overflow-x:auto;">
 <svg xmlns="http://www.w3.org/2000/svg" width="{svg_w}" height="{svg_h}"
      style="font-family:system-ui,sans-serif;">
   <!-- Background -->
-  <rect width="{svg_w}" height="{svg_h}" fill="#0f172a" rx="8"/>
-"##
+  <rect width="{svg_w}" height="{svg_h}" fill="var(--surface)" rx="8"/>
+"#
     );
 
     // Hour labels (0..23)
@@ -220,9 +335,9 @@ fn render_heatmap_svg(cells: &[HeatmapCell]) -> String {
         let x = label_w + h * cell_w + cell_w / 2;
         let _ = write!(
             svg,
-            r##"  <text x="{x}" y="{y}" text-anchor="middle" font-size="9"
-                fill="#64748b">{h:02}</text>
-"##,
+            r#"  <text x="{x}" y="{y}" text-anchor="middle" font-size="9"
+                fill="var(--fg-4)">{h:02}</text>
+"#,
             y = label_h - 4,
         );
     }
@@ -232,9 +347,9 @@ fn render_heatmap_svg(cells: &[HeatmapCell]) -> String {
         let y_label = label_h + dow * cell_h + cell_h / 2 + 4;
         let _ = write!(
             svg,
-            r##"  <text x="{x}" y="{y_label}" text-anchor="end" font-size="10"
-                fill="#94a3b8">{day}</text>
-"##,
+            r#"  <text x="{x}" y="{y_label}" text-anchor="end" font-size="10"
+                fill="var(--fg-3)">{day}</text>
+"#,
             x = label_w - 4,
             day = DAYS[dow],
         );
@@ -272,7 +387,7 @@ fn render_heatmap_svg(cells: &[HeatmapCell]) -> String {
     let legend_y = label_h + 7 * cell_h + 10;
     let _ = writeln!(
         svg,
-        r##"  <text x="{label_w}" y="{legend_y}" font-size="9" fill="#64748b">Low</text>"##,
+        r#"  <text x="{label_w}" y="{legend_y}" font-size="9" fill="var(--fg-4)">Low</text>"#,
     );
     for i in 0..20_usize {
         #[allow(
@@ -292,7 +407,7 @@ fn render_heatmap_svg(cells: &[HeatmapCell]) -> String {
     }
     let _ = writeln!(
         svg,
-        r##"  <text x="{lx}" y="{legend_y}" font-size="9" fill="#64748b">High</text>"##,
+        r#"  <text x="{lx}" y="{legend_y}" font-size="9" fill="var(--fg-4)">High</text>"#,
         lx = label_w + 30 + 20 * 12 + 4,
     );
 
@@ -304,7 +419,7 @@ fn render_heatmap_svg(cells: &[HeatmapCell]) -> String {
 fn heat_color(t: f64) -> String {
     let t = t.clamp(0.0, 1.0);
     if t < 0.001 {
-        return "#1e293b".to_string(); // empty cell — dark slate
+        return "var(--surface-2)".to_string(); // empty cell — dark slate
     }
     // Interpolate: dark-blue → cyan → green → yellow → orange
     let (r, g, b) = if t < 0.25 {
@@ -338,7 +453,7 @@ fn lerp_rgb(a: (u8, u8, u8), b: (u8, u8, u8), t: f64) -> (u8, u8, u8) {
 
 fn render_hourly_bars(totals: &[birdnet_db::sqlite::HourTotal]) -> String {
     if totals.is_empty() {
-        return r#"<p style="color:#64748b;text-align:center;padding:2rem;">
+        return r#"<p style="color:var(--fg-4);text-align:center;padding:2rem;">
             No data available for the selected period.
         </p>"#
             .to_string();
@@ -352,10 +467,10 @@ fn render_hourly_bars(totals: &[birdnet_db::sqlite::HourTotal]) -> String {
     let svg_h = chart_h + label_h + 10;
 
     let mut svg = format!(
-        r##"<svg xmlns="http://www.w3.org/2000/svg" width="{svg_w}" height="{svg_h}"
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{svg_w}" height="{svg_h}"
              style="font-family:system-ui,sans-serif;display:block;">
-  <rect width="{svg_w}" height="{svg_h}" fill="#0f172a" rx="8"/>
-"##
+  <rect width="{svg_w}" height="{svg_h}" fill="var(--surface)" rx="8"/>
+"#
     );
 
     // Build a lookup by hour
@@ -381,18 +496,18 @@ fn render_hourly_bars(totals: &[birdnet_db::sqlite::HourTotal]) -> String {
         let y = chart_h - bar_h as usize;
         // Dawn/dusk hours: 5-8 and 18-21 get a lighter color
         let color = if (5..=8).contains(&hour) || (18..=21).contains(&hour) {
-            "#fbbf24"
+            "var(--dawn)"
         } else {
-            "#0ea5e9"
+            "var(--moss)"
         };
         let _ = write!(
             svg,
-            r##"  <rect x="{x}" y="{y}" width="{bw}" height="{bar_h}"
+            r#"  <rect x="{x}" y="{y}" width="{bw}" height="{bar_h}"
                   fill="{color}" rx="2">
                 <title>{hour:02}:00 — {count} detections</title></rect>
-  <text x="{lx}" y="{ly}" text-anchor="middle" font-size="8" fill="#64748b">
+  <text x="{lx}" y="{ly}" text-anchor="middle" font-size="8" fill="var(--fg-4)">
     {hour:02}</text>
-"##,
+"#,
             bw = bar_w - 2,
             lx = x + bar_w / 2,
             ly = chart_h + label_h,
@@ -409,7 +524,7 @@ mod tests {
 
     #[test]
     fn heat_color_empty() {
-        assert_eq!(heat_color(0.0), "#1e293b");
+        assert_eq!(heat_color(0.0), "var(--surface-2)");
     }
 
     #[test]

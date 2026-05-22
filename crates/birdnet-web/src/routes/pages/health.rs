@@ -19,13 +19,16 @@ async fn health_badge_partial(State(state): State<AppState>) -> impl axum::respo
     })
     .await;
 
-    let (dot_class, label) = match result {
-        Ok(true) => ("ok", "Healthy"),
-        Ok(false) => ("err", "Degraded"),
-        Err(_) => ("err", "Error"),
+    // `pill` drives the visual tone; `state` is a stable machine-readable token.
+    let (pill, dot, label, state_token) = match result {
+        Ok(true) => ("moss", "live", "Healthy", "ok"),
+        Ok(false) => ("dawn", "dawn", "Degraded", "warn"),
+        Err(_) => ("rare", "rare", "Error", "err"),
     };
 
-    let html = format!(r#"<span class="dot {dot_class}"></span> {label}"#);
+    let html = format!(
+        r#"<span class="bnb-pill {pill}" data-health="{state_token}"><span class="bnb-dot {dot}"></span> {label}</span>"#
+    );
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
@@ -42,21 +45,32 @@ async fn disk_status_partial(State(state): State<AppState>) -> impl axum::respon
     match result {
         Ok(Ok(usage)) => {
             let pct = usage.used_percent();
-            let css_class = if usage.is_critical() {
-                "err"
+            let dot = if usage.is_critical() {
+                "rare"
             } else if usage.is_low() {
-                "warn"
+                "dawn"
             } else {
-                "ok"
+                "live"
+            };
+            let bar_color = if usage.is_critical() {
+                "var(--rare)"
+            } else if usage.is_low() {
+                "var(--dawn)"
+            } else {
+                "var(--moss)"
             };
 
             #[allow(clippy::cast_precision_loss)]
             let avail_gb = usage.available_bytes as f64 / 1_073_741_824.0;
 
             let html = format!(
-                r#"<div class="stat-card">
-    <div class="value"><span class="dot {css_class}"></span> {pct:.0}%</div>
-    <div class="label">Disk Used ({avail_gb:.1} GB free)</div>
+                r#"<div class="bnb-card pad">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;">
+      <div class="bnb-eyebrow"><span class="bnb-dot {dot}"></span> Disk</div>
+      <span class="bnb-meta mono">{avail_gb:.1} GB free</span>
+    </div>
+    <div class="display tabular" style="font-size:26px;margin:4px 0 8px;">{pct:.0}%</div>
+    <div class="progress"><div class="progress-bar" style="width:{pct:.0}%;background:{bar_color};"></div></div>
 </div>"#,
             );
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
@@ -64,7 +78,7 @@ async fn disk_status_partial(State(state): State<AppState>) -> impl axum::respon
         _ => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
-            r#"<div class="stat-card"><div class="value">--</div><div class="label">Disk Status</div></div>"#.to_string(),
+            r#"<div class="bnb-card pad"><div class="bnb-eyebrow">Disk</div><div class="display" style="font-size:22px;">—</div></div>"#.to_string(),
         ),
     }
 }
