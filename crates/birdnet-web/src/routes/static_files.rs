@@ -22,8 +22,12 @@ const APP_CSS: &[u8] = include_bytes!("../../static/css/app.css");
 /// Pre-paint theme/density guard for standalone pages (admin, kiosk, player).
 const THEME_GUARD_JS: &[u8] = include_bytes!("../../static/theme-guard.js");
 
-/// Self-hosted webfonts (latin + latin-ext subsets). Non-Latin scripts fall
-/// back to Noto Sans, which the page `<head>` loads as a progressive enhancement.
+/// Self-hosted webfonts (latin + latin-ext subsets), embedded at compile time
+/// so the UI renders fully offline with no CDN dependency. `Inter Tight` (UI),
+/// `Instrument Serif` (display) and `JetBrains Mono` (numeric) cover Latin
+/// scripts; Noto Sans is the self-hosted fallback for Latin-script `BirdNET`
+/// packs. Non-Latin scripts (CJK, Devanagari, …) fall back to the client's
+/// installed system fonts named in the `--font-ui` stack.
 const FONTS: &[(&str, &[u8])] = &[
     (
         "inter-tight-latin-400-normal.woff2",
@@ -80,6 +84,30 @@ const FONTS: &[(&str, &[u8])] = &[
     (
         "jetbrains-mono-latin-ext-500-normal.woff2",
         include_bytes!("../../static/fonts/jetbrains-mono-latin-ext-500-normal.woff2"),
+    ),
+    (
+        "noto-sans-latin-400-normal.woff2",
+        include_bytes!("../../static/fonts/noto-sans-latin-400-normal.woff2"),
+    ),
+    (
+        "noto-sans-latin-ext-400-normal.woff2",
+        include_bytes!("../../static/fonts/noto-sans-latin-ext-400-normal.woff2"),
+    ),
+    (
+        "noto-sans-latin-500-normal.woff2",
+        include_bytes!("../../static/fonts/noto-sans-latin-500-normal.woff2"),
+    ),
+    (
+        "noto-sans-latin-ext-500-normal.woff2",
+        include_bytes!("../../static/fonts/noto-sans-latin-ext-500-normal.woff2"),
+    ),
+    (
+        "noto-sans-latin-600-normal.woff2",
+        include_bytes!("../../static/fonts/noto-sans-latin-600-normal.woff2"),
+    ),
+    (
+        "noto-sans-latin-ext-600-normal.woff2",
+        include_bytes!("../../static/fonts/noto-sans-latin-ext-600-normal.woff2"),
     ),
 ];
 
@@ -161,7 +189,7 @@ mod tests {
     #[test]
     fn all_fonts_embedded_and_valid_woff2() {
         // Every advertised face must be present and carry the woff2 magic ("wOF2").
-        assert_eq!(FONTS.len(), 14);
+        assert_eq!(FONTS.len(), 20);
         for (name, bytes) in FONTS {
             assert!(bytes.len() > 1000, "{name} suspiciously small");
             assert_eq!(&bytes[0..4], b"wOF2", "{name} is not a woff2 file");
