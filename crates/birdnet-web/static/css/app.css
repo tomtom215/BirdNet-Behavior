@@ -447,6 +447,10 @@ tbody tr:hover { background: var(--surface-2); }
 .btn:hover { background: var(--surface-2); text-decoration: none; }
 .btn-primary { background: var(--moss); color: oklch(100% 0 0); border-color: transparent; }
 .btn-primary:hover { background: var(--moss-ink); }
+.btn.active { background: var(--fg); color: var(--bg); border-color: transparent; }
+
+/* Segmented control (period / range pickers) */
+.seg { display: inline-flex; gap: 4px; flex-wrap: wrap; }
 
 input[type="text"], input[type="search"], input[type="date"], input[type="number"], input[type="password"], select, textarea {
   padding: 6px 10px; border: 0.5px solid var(--border-2); border-radius: var(--r-sm);
@@ -464,6 +468,11 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--m
 
 .empty-state { text-align: center; padding: 48px 24px; color: var(--fg-3); }
 .empty-state svg { width: 48px; height: 48px; margin-bottom: 12px; opacity: .5; }
+
+/* Inline data-bar + linkable species name + tag (co-occurrence, companions) */
+.bar { height: 8px; background: var(--moss); border-radius: 4px; min-width: 4px; }
+.species-link { color: var(--moss-ink); font-weight: 500; }
+.tag { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 500; background: var(--moss-soft); color: var(--moss-ink); }
 
 /* Legacy status dot */
 .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--fg-3); margin-right: 5px; vertical-align: middle; }
