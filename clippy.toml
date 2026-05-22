@@ -7,7 +7,7 @@
 
 # Hold all crates to the published MSRV — guards against accidentally using
 # APIs that would break the MSRV CI job.
-msrv = "1.88"
+msrv = "1.95"
 
 # Complexity budgets. Functions/types past these limits should be refactored.
 cognitive-complexity-threshold = 25
