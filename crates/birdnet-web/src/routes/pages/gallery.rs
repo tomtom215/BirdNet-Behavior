@@ -13,6 +13,7 @@ use axum::response::Html;
 use axum::{Router, routing::get};
 use serde::Deserialize;
 
+use super::atoms::{species_code, species_color};
 use super::{escape_html, render_page, simple_url_encode};
 use crate::state::AppState;
 
@@ -103,11 +104,14 @@ async fn gallery_grid_partial(
                      <div class=\"card\" style=\"padding:0;overflow:hidden;transition:transform 0.15s,box-shadow 0.15s;cursor:pointer;\" \
                           onmouseover=\"this.style.transform='translateY(-2px)';this.style.boxShadow='0 4px 12px rgba(0,0,0,0.15)'\" \
                           onmouseout=\"this.style.transform='';this.style.boxShadow=''\">\
-                       <div style=\"height:120px;background:var(--bg-hover);display:flex;align-items:center;justify-content:center;overflow:hidden;\">\
+                       <div style=\"height:120px;overflow:hidden;position:relative;\">\
+                         <div style=\"position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:color-mix(in oklch, {color} 15%, var(--surface));\">\
+                           <span class=\"display\" style=\"font-size:1.7rem;letter-spacing:0.04em;color:{color};\">{code}</span>\
+                         </div>\
                          <img src=\"/api/v2/images/species/{enc}\" alt=\"{name}\" \
                               loading=\"lazy\" \
-                              style=\"width:100%;height:100%;object-fit:cover;\" \
-                              onerror=\"this.style.display='none';this.parentElement.innerHTML='<div style=\\'font-size:2rem;color:var(--text-muted);\\'>&#x1F426;</div>'\">\
+                              style=\"position:relative;width:100%;height:100%;object-fit:cover;\" \
+                              onerror=\"this.style.display='none'\">\
                        </div>\
                        <div style=\"padding:0.75rem;\">\
                          <div style=\"font-weight:600;font-size:0.9rem;margin-bottom:0.25rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;\">{name}</div>\
@@ -117,6 +121,8 @@ async fn gallery_grid_partial(
                          </div>",
                     name = escape_html(&s.com_name),
                     count = s.count,
+                    color = species_color(&s.com_name),
+                    code = species_code(&s.com_name),
                 );
                 if !first.is_empty() {
                     let _ = write!(
