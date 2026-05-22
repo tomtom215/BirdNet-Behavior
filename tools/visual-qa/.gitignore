@@ -1,0 +1,5 @@
+node_modules/
+shots/
+*.png
+.montage.html
+package-lock.json

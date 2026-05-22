@@ -1,0 +1,15 @@
+{
+  "name": "birdnet-behavior-visual-qa",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Headless-browser screenshot pipeline for visual QA of the birdnet-web UI. Pair with `cargo run -p birdnet-web --example screenshot_server`.",
+  "type": "module",
+  "scripts": {
+    "setup": "npm i -D playwright && npx playwright install --with-deps chromium",
+    "capture": "node capture.mjs",
+    "probe": "node probe.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.49.0"
+  }
+}
