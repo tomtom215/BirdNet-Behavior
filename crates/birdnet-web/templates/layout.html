@@ -1,525 +1,104 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
-    <!-- FOUC guard: read localStorage before first paint so theme is correct immediately. -->
-    <script>(function(){var t=localStorage.getItem('theme');if(!t)t=window.matchMedia('(prefers-color-scheme:light)').matches?'light':'dark';document.documentElement.setAttribute('data-theme',t);})();</script>
+    <!-- FOUC guard: resolve theme before first paint. -->
+    <script>(function(){var t=localStorage.getItem('theme');if(t!=='light'&&t!=='dark')t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';document.documentElement.setAttribute('data-theme',t);var d=localStorage.getItem('bnb-density');if(d==='compact'||d==='comfy'||d==='regular')document.documentElement.style.setProperty('--density',d==='compact'?'0.78':d==='comfy'?'1.15':'1');})();</script>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{{title}} - BirdNet-Behavior</title>
+    <title>{{title}} · BirdNet-Behavior</title>
+    <meta name="color-scheme" content="light dark">
+    <link rel="stylesheet" href="/static/css/app.css">
     <!--
-      Noto Sans: covers Latin, CJK, Arabic, Devanagari, Hebrew, Cyrillic, Greek,
-      Thai, and 100+ other scripts — ensures correct rendering of all 36 BirdNET
-      language label packs. Loaded with display=swap so text is visible immediately.
+      Noto Sans (+ CJK/Devanagari) is a progressive-enhancement fallback for the
+      36 BirdNET language label packs. Latin UI text uses the self-hosted Inter
+      Tight; non-Latin species names fall through to Noto Sans, then system UI.
+      Loaded async (media=print → all) so it never blocks first paint, and the
+      app renders fully offline without it.
     -->
     <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="stylesheet"
-          href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;700&family=Noto+Sans+JP:wght@400;700&family=Noto+Sans+KR:wght@400;700&family=Noto+Sans+Devanagari:wght@400;700&display=swap"
-          media="print" onload="this.media='all'">
-    <noscript>
-        <link rel="stylesheet"
-              href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&display=swap">
-    </noscript>
+    <link rel="stylesheet" media="print" onload="this.media='all'"
+          href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600&family=Noto+Sans+SC:wght@400;600&family=Noto+Sans+JP:wght@400;600&family=Noto+Sans+KR:wght@400;600&family=Noto+Sans+Devanagari:wght@400;600&display=swap">
     <script src="/static/htmx.min.js"></script>
-    <style>
-        /* ------------------------------------------------------------------ */
-        /* Theme: Dark (default)                                              */
-        /* ------------------------------------------------------------------ */
-        :root,
-        [data-theme="dark"] {
-            --bg: #0f172a;
-            --bg-card: #1e293b;
-            --bg-hover: #334155;
-            --text: #e2e8f0;
-            --text-muted: #94a3b8;
-            --accent: #38bdf8;
-            --accent-dim: #0ea5e9;
-            --accent-rgb: 56, 189, 248;
-            --success: #22c55e;
-            --warning: #f59e0b;
-            --danger: #ef4444;
-            --border: #334155;
-            --radius: 8px;
-            --conf-high-bg: rgba(34,197,94,0.15);
-            --conf-mid-bg: rgba(245,158,11,0.15);
-            --conf-low-bg: rgba(239,68,68,0.15);
-            --input-bg: #0f172a;
-        }
-
-        /* ------------------------------------------------------------------ */
-        /* Theme: Light                                                        */
-        /* ------------------------------------------------------------------ */
-        [data-theme="light"] {
-            --bg: #f8fafc;
-            --bg-card: #ffffff;
-            --bg-hover: #f1f5f9;
-            --text: #1e293b;
-            --text-muted: #64748b;
-            --accent: #0284c7;
-            --accent-dim: #0369a1;
-            --accent-rgb: 2, 132, 199;
-            --success: #16a34a;
-            --warning: #d97706;
-            --danger: #dc2626;
-            --border: #e2e8f0;
-            --conf-high-bg: rgba(22,163,74,0.12);
-            --conf-mid-bg: rgba(217,119,6,0.12);
-            --conf-low-bg: rgba(220,38,38,0.12);
-            --input-bg: #ffffff;
-        }
-
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Noto Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-            background: var(--bg);
-            color: var(--text);
-            line-height: 1.6;
-            min-height: 100vh;
-        }
-        a { color: var(--accent); text-decoration: none; }
-        a:hover { text-decoration: underline; }
-
-        /* Navigation */
-        nav {
-            background: var(--bg-card);
-            border-bottom: 1px solid var(--border);
-            padding: 0.75rem 1.5rem;
-            display: flex;
-            align-items: center;
-            gap: 1.5rem;
-            flex-wrap: wrap;
-        }
-        nav .brand {
-            font-size: 1.25rem;
-            font-weight: 700;
-            color: var(--accent);
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-        nav .links {
-            display: flex;
-            gap: 0.5rem;
-            flex-wrap: wrap;
-        }
-        nav .links a {
-            color: var(--text-muted);
-            padding: 0.25rem 0.75rem;
-            border-radius: var(--radius);
-            transition: background 0.2s, color 0.2s;
-            font-size: 0.9rem;
-        }
-        nav .links a:hover,
-        nav .links a.active {
-            background: var(--bg-hover);
-            color: var(--text);
-            text-decoration: none;
-        }
-        nav .nav-right {
-            margin-left: auto;
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-        }
-        nav .status {
-            font-size: 0.85rem;
-            color: var(--text-muted);
-        }
-        nav .status .dot {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            margin-right: 4px;
-        }
-        nav .status .dot.ok { background: var(--success); }
-        nav .status .dot.err { background: var(--danger); }
-
-        /* Theme toggle */
-        .theme-toggle {
-            background: none;
-            border: 1px solid var(--border);
-            color: var(--text-muted);
-            padding: 0.3rem 0.5rem;
-            border-radius: var(--radius);
-            cursor: pointer;
-            font-size: 1rem;
-            line-height: 1;
-            transition: background 0.2s, color 0.2s;
-        }
-        .theme-toggle:hover {
-            background: var(--bg-hover);
-            color: var(--text);
-        }
-
-        /* Layout */
-        main {
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 1.5rem;
-        }
-
-        /* Cards */
-        .card {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 1.25rem;
-            margin-bottom: 1rem;
-        }
-        .card h2 {
-            font-size: 1rem;
-            font-weight: 600;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin-bottom: 1rem;
-        }
-
-        /* Stats grid */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 1rem;
-            margin-bottom: 1.5rem;
-        }
-        .stat-card {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 1.25rem;
-            text-align: center;
-        }
-        .stat-card .value {
-            font-size: 2rem;
-            font-weight: 700;
-            color: var(--accent);
-        }
-        .stat-card .label {
-            font-size: 0.85rem;
-            color: var(--text-muted);
-            margin-top: 0.25rem;
-        }
-
-        /* Two-column layout */
-        .grid-2 {
-            display: grid;
-            grid-template-columns: 2fr 1fr;
-            gap: 1rem;
-        }
-
-        /* ------------------------------------------------------------------ */
-        /* Responsive / Mobile                                                 */
-        /* ------------------------------------------------------------------ */
-
-        /* Tablet: collapse 2-column grids, tighten nav */
-        @media (max-width: 900px) {
-            main { padding: 1rem; }
-        }
-
-        @media (max-width: 768px) {
-            .grid-2 { grid-template-columns: 1fr; }
-            nav .links { gap: 0.25rem; }
-            nav .links a { padding: 0.25rem 0.5rem; font-size: 0.8rem; }
-            .stats-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
-            .stat-card .value { font-size: 1.5rem; }
-        }
-
-        /* Phone: single-column everything, collapsible nav overflow */
-        @media (max-width: 520px) {
-            nav { padding: 0.5rem 0.75rem; gap: 0.5rem; }
-            nav .brand { font-size: 1rem; }
-            nav .links a { padding: 0.2rem 0.4rem; font-size: 0.75rem; }
-            nav .nav-right { gap: 0.4rem; }
-            nav .status { display: none; } /* hide status badge on tiny screens */
-            main { padding: 0.75rem; }
-            .card { padding: 0.9rem; }
-            h1 { font-size: 1.25rem !important; }
-            table { font-size: 0.8rem; }
-            th, td { padding: 0.35rem 0.5rem; }
-            .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 0.5rem; }
-            .stat-card { padding: 0.75rem; }
-            .stat-card .value { font-size: 1.25rem; }
-        }
-
-        /* Prevent horizontal scroll on narrow screens */
-        @media (max-width: 600px) {
-            table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-        }
-
-        /* Tables */
-        table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        th, td {
-            padding: 0.5rem 0.75rem;
-            text-align: left;
-            border-bottom: 1px solid var(--border);
-        }
-        th {
-            font-size: 0.8rem;
-            font-weight: 600;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-        }
-        tr:hover { background: var(--bg-hover); }
-        td { font-size: 0.9rem; }
-
-        /* Confidence badge */
-        .conf {
-            display: inline-block;
-            padding: 0.15rem 0.5rem;
-            border-radius: 9999px;
-            font-size: 0.8rem;
-            font-weight: 600;
-        }
-        .conf.high { background: var(--conf-high-bg); color: var(--success); }
-        .conf.mid { background: var(--conf-mid-bg); color: var(--warning); }
-        .conf.low { background: var(--conf-low-bg); color: var(--danger); }
-
-        /* Live indicator */
-        .live-dot {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            background: var(--success);
-            border-radius: 50%;
-            animation: pulse 2s ease-in-out infinite;
-            margin-right: 4px;
-        }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.3; }
-        }
-
-        /* Species list */
-        .species-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 0.5rem 0;
-            border-bottom: 1px solid var(--border);
-        }
-        .species-item:last-child { border-bottom: none; }
-        .species-name { font-weight: 500; }
-        .species-count {
-            background: var(--bg-hover);
-            padding: 0.15rem 0.6rem;
-            border-radius: 9999px;
-            font-size: 0.85rem;
-            color: var(--text-muted);
-        }
-
-        /* Loading indicator */
-        .htmx-indicator {
-            display: none;
-            opacity: 0;
-            transition: opacity 0.3s;
-        }
-        .htmx-request .htmx-indicator,
-        .htmx-request.htmx-indicator {
-            display: inline-block;
-            opacity: 1;
-        }
-
-        /* Footer */
-        footer {
-            text-align: center;
-            padding: 2rem 1.5rem;
-            color: var(--text-muted);
-            font-size: 0.8rem;
-            border-top: 1px solid var(--border);
-            margin-top: 2rem;
-        }
-        footer a { color: var(--text-muted); }
-        footer a:hover { color: var(--accent); }
-
-        /* Buttons */
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.35rem;
-            padding: 0.4rem 0.9rem;
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            background: var(--bg-card);
-            color: var(--text);
-            font-size: 0.85rem;
-            cursor: pointer;
-            transition: background 0.15s, color 0.15s;
-        }
-        .btn:hover {
-            background: var(--bg-hover);
-            text-decoration: none;
-        }
-        .btn-primary {
-            background: var(--accent);
-            color: #fff;
-            border-color: var(--accent-dim);
-        }
-        .btn-primary:hover {
-            background: var(--accent-dim);
-        }
-
-        /* Inputs */
-        input[type="text"],
-        input[type="search"],
-        input[type="date"],
-        select {
-            padding: 0.4rem 0.75rem;
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            background: var(--input-bg);
-            color: var(--text);
-            font-size: 0.9rem;
-            transition: border-color 0.2s;
-        }
-        input[type="text"]:focus,
-        input[type="search"]:focus,
-        select:focus {
-            outline: none;
-            border-color: var(--accent);
-            box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.15);
-        }
-
-        /* Tooltips */
-        [title] { cursor: help; }
-
-        /* Transitions for HTMX swaps */
-        .htmx-swapping { opacity: 0.5; transition: opacity 0.15s; }
-        .htmx-settling { opacity: 1; transition: opacity 0.25s; }
-
-        /* Progress bars */
-        .progress { height: 6px; background: var(--bg-hover); border-radius: 3px; overflow: hidden; }
-        .progress-bar { height: 100%; border-radius: 3px; transition: width 0.3s; }
-
-        /* Badges */
-        .badge {
-            display: inline-block;
-            padding: 0.1rem 0.5rem;
-            border-radius: 9999px;
-            font-size: 0.75rem;
-            font-weight: 600;
-        }
-        .badge-success { background: var(--conf-high-bg); color: var(--success); }
-        .badge-warning { background: var(--conf-mid-bg); color: var(--warning); }
-        .badge-danger { background: var(--conf-low-bg); color: var(--danger); }
-
-        /* Empty state */
-        .empty-state {
-            text-align: center;
-            padding: 3rem 1.5rem;
-            color: var(--text-muted);
-        }
-        .empty-state svg {
-            width: 48px;
-            height: 48px;
-            margin-bottom: 0.75rem;
-            opacity: 0.5;
-        }
-
-        /* Scrollbar styling */
-        ::-webkit-scrollbar { width: 6px; height: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-        ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
-
-        /* Focus visible for keyboard nav */
-        :focus-visible {
-            outline: 2px solid var(--accent);
-            outline-offset: 2px;
-        }
-
-        /* Skip-to-content for accessibility */
-        .skip-link {
-            position: absolute;
-            top: -40px;
-            left: 0;
-            background: var(--accent);
-            color: #fff;
-            padding: 0.5rem 1rem;
-            z-index: 100;
-            transition: top 0.2s;
-        }
-        .skip-link:focus { top: 0; }
-    </style>
 </head>
 <body>
     <a href="#main-content" class="skip-link">Skip to content</a>
-    <nav role="navigation" aria-label="Main navigation">
-        <div class="brand">BirdNet-Behavior</div>
-        <div class="links">
-            <a href="/" class="{{nav_dashboard}}">Dashboard</a>
-            <a href="/today" class="{{nav_today}}">Today</a>
-            <a href="/history" class="{{nav_history}}">History</a>
-            <a href="/weekly" class="{{nav_weekly}}">Weekly</a>
-            <a href="/species" class="{{nav_species}}">Species</a>
-            <a href="/life-list" class="{{nav_life_list}}">Life List</a>
-            <a href="/recordings" class="{{nav_recordings}}">Recordings</a>
-            <a href="/analytics" class="{{nav_analytics}}">Analytics</a>
-            <a href="/timeseries" class="{{nav_timeseries}}">Time Series</a>
-            <a href="/quarantine" class="{{nav_quarantine}}" style="display:inline-flex;align-items:center;">
-                Quarantine<span hx-get="/pages/quarantine-pending-count"
-                                hx-trigger="load, every 60s"
-                                hx-swap="innerHTML"></span>
+    <header class="topnav" role="navigation" aria-label="Main navigation">
+        <a href="/" class="topnav-brand" aria-label="BirdNet-Behavior home">
+            <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="11" fill="none" stroke="currentColor" stroke-width="0.8" style="color:var(--fg)"></circle>
+                <g stroke="currentColor" stroke-width="1.4" stroke-linecap="round" style="color:var(--fg)">
+                    <line x1="6" y1="12" x2="6" y2="12"></line>
+                    <line x1="9" y1="9.5" x2="9" y2="14.5"></line>
+                    <line x1="12" y1="6" x2="12" y2="18"></line>
+                    <line x1="15" y1="8" x2="15" y2="16"></line>
+                    <line x1="18" y1="10.5" x2="18" y2="13.5"></line>
+                </g>
+            </svg>
+            <span class="name">BirdNet</span><span class="sub">Behavior</span>
+        </a>
+        <span class="bnb-vrule" style="height:16px;align-self:center"></span>
+        <nav class="topnav-links" aria-label="Sections">
+            <a href="/" class="topnav-link {{nav_dashboard}}">Dashboard</a>
+            <a href="/today" class="topnav-link {{nav_today}}">Today</a>
+            <a href="/species" class="topnav-link {{nav_species}}">Species</a>
+            <a href="/heatmap" class="topnav-link {{nav_heatmap}}">Heatmap</a>
+            <a href="/analytics" class="topnav-link {{nav_analytics}}">Analytics</a>
+            <a href="/life-list" class="topnav-link {{nav_life_list}}">Life&nbsp;list</a>
+            <a href="/quarantine" class="topnav-link {{nav_quarantine}}" style="display:inline-flex;align-items:center;gap:4px;">
+                Quarantine<span hx-get="/pages/quarantine-pending-count" hx-trigger="load, every 60s" hx-swap="innerHTML"></span>
             </a>
-            <a href="/notifications" class="{{nav_notifications}}">Notifications</a>
-            <a href="/system" class="{{nav_system}}">System</a>
-        </div>
-        <div class="nav-right">
+            <a href="/system" class="topnav-link {{nav_system}}">System</a>
+        </nav>
+        <div class="topnav-right">
             <form action="/species" method="get" class="nav-search" role="search">
-                <input type="text" name="q" placeholder="Search species..."
-                       aria-label="Search species"
-                       style="padding:0.3rem 0.6rem;border:1px solid var(--border);border-radius:var(--radius);background:var(--input-bg);color:var(--text);font-size:0.8rem;width:140px;transition:width 0.2s;"
-                       onfocus="this.style.width='200px'" onblur="this.style.width='140px'">
+                <input type="search" name="q" placeholder="Search species…" aria-label="Search species">
             </form>
-            <button class="theme-toggle" id="theme-toggle" title="Toggle light/dark theme" aria-label="Toggle theme">
-                <span id="theme-icon"></span>
-            </button>
-            <div class="status" hx-get="/pages/health-badge" hx-trigger="load, every 30s" hx-swap="innerHTML">
-                <span class="dot"></span> Loading...
+            <div class="status" hx-get="/pages/health-badge" hx-trigger="load, every 30s" hx-swap="innerHTML"
+                 style="display:inline-flex;align-items:center;">
+                <span class="bnb-pill"><span class="bnb-dot"></span> …</span>
             </div>
+            <button class="icon-btn" id="theme-toggle" title="Toggle light/dark theme" aria-label="Toggle theme">
+                <span id="theme-icon" aria-hidden="true"></span>
+            </button>
         </div>
-    </nav>
+    </header>
     <main id="main-content" role="main">
         {{content}}
     </main>
     <footer role="contentinfo">
-        <div style="margin-bottom:0.5rem;">
-            BirdNet-Behavior v{{version}} &middot; Acoustic bird classification with behavioral analytics
+        <div style="display:flex;flex-wrap:wrap;gap:10px 18px;justify-content:center;margin-bottom:10px;">
+            <a href="/today">Today</a>
+            <a href="/history">History</a>
+            <a href="/weekly">Weekly report</a>
+            <a href="/recordings">Recordings</a>
+            <a href="/gallery">Gallery</a>
+            <a href="/timeseries">Time series</a>
+            <a href="/correlation">Co-occurrence</a>
+            <a href="/notifications">Notifications</a>
+            <a href="/system">System</a>
+            <a href="/admin">Admin</a>
+            <a href="/kiosk">Kiosk</a>
         </div>
-        <div>
-            <a href="/system">System Health</a> &middot;
-            <a href="/admin">Admin</a> &middot;
-            <a href="/kiosk">Kiosk Mode</a>
+        <div class="mono" style="opacity:.75;">
+            BirdNet-Behavior v{{version}} · acoustic bird classification with behavioral analytics
         </div>
     </footer>
     <script>
     (function() {
-        var DARK_ICON = '\u263D';
-        var LIGHT_ICON = '\u2600';
+        var DARK_ICON = '☽';   // ☽
+        var LIGHT_ICON = '☀';  // ☀
         var html = document.documentElement;
         var btn = document.getElementById('theme-toggle');
         var icon = document.getElementById('theme-icon');
-
-        function getPreferred() {
-            var stored = localStorage.getItem('theme');
-            if (stored === 'light' || stored === 'dark') return stored;
-            return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-        }
-
+        function current() { return html.getAttribute('data-theme') === 'dark' ? 'dark' : 'light'; }
         function apply(theme) {
             html.setAttribute('data-theme', theme);
-            icon.textContent = theme === 'dark' ? LIGHT_ICON : DARK_ICON;
+            if (icon) icon.textContent = theme === 'dark' ? LIGHT_ICON : DARK_ICON;
         }
-
-        apply(getPreferred());
-
-        btn.addEventListener('click', function() {
-            var current = html.getAttribute('data-theme') || 'dark';
-            var next = current === 'dark' ? 'light' : 'dark';
+        apply(current());
+        if (btn) btn.addEventListener('click', function() {
+            var next = current() === 'dark' ? 'light' : 'dark';
             localStorage.setItem('theme', next);
             apply(next);
         });

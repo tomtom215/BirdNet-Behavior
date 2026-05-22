@@ -85,8 +85,9 @@ async fn dashboard_page_returns_html() {
     assert!(html.contains("<!DOCTYPE html>"));
     assert!(html.contains("BirdNet-Behavior"));
     assert!(html.contains("htmx.min.js"));
-    assert!(html.contains("Recent Detections"));
-    assert!(html.contains("Top Species"));
+    assert!(html.contains("/static/css/app.css"));
+    assert!(html.contains("Detections as they happen"));
+    assert!(html.contains("Top species"));
 }
 
 #[tokio::test]
@@ -135,8 +136,9 @@ async fn htmx_stats_partial_returns_html() {
         .unwrap();
     let html = String::from_utf8_lossy(&body);
 
-    assert!(html.contains("Total Detections"));
-    assert!(html.contains("Unique Species"));
+    assert!(html.contains("Detections"));
+    assert!(html.contains("Species"));
+    assert!(html.contains("stat-tile"));
     assert!(html.contains('5')); // total detections from test data
     assert!(html.contains('4')); // unique species from test data
 }
@@ -162,7 +164,7 @@ async fn htmx_detections_partial_returns_table() {
         .unwrap();
     let html = String::from_utf8_lossy(&body);
 
-    assert!(html.contains("<table>"));
+    assert!(html.contains("feed-row"));
     assert!(html.contains("Eurasian Blackbird"));
     assert!(html.contains("European Robin"));
 }
@@ -189,7 +191,8 @@ async fn htmx_top_species_partial_returns_list() {
     let html = String::from_utf8_lossy(&body);
 
     assert!(html.contains("Eurasian Blackbird"));
-    assert!(html.contains("species-item"));
+    assert!(html.contains("list-row"));
+    assert!(html.contains("bnb-avatar"));
 }
 
 #[tokio::test]

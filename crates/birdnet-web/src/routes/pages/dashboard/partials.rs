@@ -7,11 +7,22 @@ use axum::http::{StatusCode, header};
 use serde::Deserialize;
 
 use super::conf_class;
+use crate::routes::pages::atoms::{avatar, conf_bar, sparkline, waveform};
 use crate::routes::pages::charts::{
     render_confidence_chart, render_daily_chart, render_hourly_chart,
 };
 use crate::routes::pages::{escape_html, simple_url_encode, today_date_string};
 use crate::state::AppState;
+
+/// Cheap deterministic seed for a detection's mini-waveform.
+fn row_seed(name: &str, time: &str) -> u64 {
+    let mut h: u64 = 1_469_598_103_934_665_603;
+    for b in name.bytes().chain(time.bytes()) {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(1_099_511_628_211);
+    }
+    h
+}
 
 // ---------------------------------------------------------------------------
 // Detections table partial
@@ -32,17 +43,17 @@ pub(super) async fn detections_partial(
 
     match result {
         Ok(Ok((detections, first_seen))) => {
-            let mut html = String::from(
-                r"<table>
-<thead><tr><th>Species</th><th>Confidence</th><th>Time</th><th>Date</th><th>Audio</th></tr></thead>
-<tbody>",
-            );
-            for d in &detections {
-                render_detection_row(&mut html, d, &first_seen, &today);
-            }
-            html.push_str("</tbody></table>");
             if detections.is_empty() {
-                html = r#"<p style="color:var(--text-muted)">No detections yet.</p>"#.to_string();
+                return (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, "text/html")],
+                    r#"<p class="bnb-meta">No detections yet — your station is listening.</p>"#
+                        .to_string(),
+                );
+            }
+            let mut html = String::new();
+            for (i, d) in detections.iter().enumerate() {
+                render_feed_row(&mut html, d, &first_seen, &today, i == 0);
             }
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
@@ -54,32 +65,34 @@ pub(super) async fn detections_partial(
     }
 }
 
-fn render_detection_row(
+/// Render one live-feed row in the redesigned dashboard style.
+fn render_feed_row(
     html: &mut String,
     d: &birdnet_db::sqlite::DetectionRow,
     first_seen: &std::collections::HashMap<String, String>,
     today: &str,
+    fresh: bool,
 ) {
-    let conf_pct = d.confidence * 100.0;
-    let cls = conf_class(conf_pct);
     let enc = simple_url_encode(&d.com_name);
+    let time_short = d.time.get(0..5).unwrap_or(&d.time);
 
     let badge = first_seen.get(&d.sci_name).map_or(String::new(), |fs| {
         if fs == today {
-            r#" <span style="background:#166534;color:#86efac;font-size:.65rem;padding:1px 6px;border-radius:9999px;font-weight:700;vertical-align:middle;">NEW</span>"#.to_string()
-        } else if fs == &d.date && fs != today {
-            r#" <span style="background:#164e63;color:#67e8f9;font-size:.65rem;padding:1px 6px;border-radius:9999px;font-weight:700;vertical-align:middle;">RARE</span>"#.to_string()
+            r#" <span class="bnb-pill moss" style="font-size:9.5px;">first today</span>"#
+                .to_string()
+        } else if fs == &d.date {
+            r#" <span class="bnb-pill rare" style="font-size:9.5px;">rare</span>"#.to_string()
         } else {
             String::new()
         }
     });
 
-    let audio_cell = d
+    let play = d
         .file_name
         .as_deref()
         .filter(|f| !f.is_empty())
         .map_or_else(
-            || "\u{2014}".to_string(),
+            || r#"<span class="bnb-meta">—</span>"#.to_string(),
             |f| {
                 let basename = std::path::Path::new(f)
                     .file_name()
@@ -87,18 +100,20 @@ fn render_detection_row(
                     .unwrap_or_default();
                 let safe = escape_html(&basename);
                 format!(
-                    r#"<audio controls preload="none" style="height:24px;max-width:160px;vertical-align:middle;">
-                      <source src="/api/v2/recordings/{safe}" type="audio/wav">
-                    </audio>"#
+                    r#"<audio controls preload="none" style="height:30px;width:120px;"><source src="/api/v2/recordings/{safe}" type="audio/wav"></audio>"#
                 )
             },
         );
+
+    let fresh_cls = if fresh { " fresh bnb-rise" } else { "" };
     let _ = write!(
         html,
-        r#"<tr><td><a href="/species/detail?name={enc}" style="color:inherit;text-decoration:none;">{n}</a>{badge}</td><td><span class="conf {cls}">{conf_pct:.0}%</span></td><td>{t}</td><td>{d2}</td><td>{audio_cell}</td></tr>"#,
-        n = escape_html(&d.com_name),
-        t = escape_html(&d.time),
-        d2 = escape_html(&d.date),
+        r#"<div class="feed-row{fresh_cls}"><span class="ago mono">{time_short}</span>{avatar}<div class="who"><div class="name"><a href="/species/detail?name={enc}" style="color:inherit;">{name}</a>{badge}</div><div class="sci mono">{sci}</div></div>{wave}{conf}{play}</div>"#,
+        avatar = avatar(&d.com_name, ""),
+        name = escape_html(&d.com_name),
+        sci = escape_html(&d.sci_name),
+        wave = waveform(row_seed(&d.com_name, &d.time), 24),
+        conf = conf_bar(d.confidence),
     );
 }
 
@@ -110,25 +125,39 @@ pub(super) async fn top_species_partial(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::sqlite::top_species(conn, 10))
+        state.with_db(|conn| {
+            let species = birdnet_db::sqlite::top_species(conn, 6)?;
+            let sparklines = birdnet_db::sqlite::species_sparklines(conn, 14).unwrap_or_default();
+            Ok::<_, birdnet_db::sqlite::DbError>((species, sparklines))
+        })
     })
     .await;
 
     match result {
-        Ok(Ok(species)) => {
+        Ok(Ok((species, sparklines))) => {
+            if species.is_empty() {
+                return (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, "text/html")],
+                    r#"<p class="bnb-meta">No species detected yet.</p>"#.to_string(),
+                );
+            }
             let mut html = String::new();
             for s in &species {
                 let enc = simple_url_encode(&s.com_name);
+                let color = crate::routes::pages::atoms::species_color(&s.com_name);
+                let spark = sparklines
+                    .get(&s.com_name)
+                    .map(|data| sparkline(data, 56.0, 16.0, Some(&color)))
+                    .unwrap_or_default();
                 let _ = write!(
                     html,
-                    r#"<a href="/species/detail?name={enc}" style="text-decoration:none;color:inherit;"><div class="species-item"><span class="species-name">{n}</span><span class="species-count">{c}</span></div></a>"#,
+                    r#"<div class="list-row" style="grid-template-columns:auto 1fr auto 56px;">{avatar}<div style="min-width:0"><div style="font-weight:500;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"><a href="/species/detail?name={enc}" style="color:inherit;">{n}</a></div><div class="sci mono bnb-meta" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{sci}</div></div><span class="mono tabular" style="font-size:13px;color:var(--fg-2)">{c}</span>{spark}</div>"#,
+                    avatar = avatar(&s.com_name, ""),
                     n = escape_html(&s.com_name),
+                    sci = escape_html(&s.sci_name),
                     c = s.count,
                 );
-            }
-            if species.is_empty() {
-                html = r#"<p style="color:var(--text-muted)">No species detected yet.</p>"#
-                    .to_string();
             }
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
