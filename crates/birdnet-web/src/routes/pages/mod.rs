@@ -31,6 +31,7 @@ pub mod history;
 pub mod life_list;
 pub mod livestream;
 pub mod notification_center;
+pub mod onboarding;
 pub mod quarantine;
 pub mod recordings;
 pub mod species_pages;
@@ -78,6 +79,7 @@ pub fn router() -> Router<AppState> {
         .merge(system_dashboard::router())
         .merge(notification_center::router())
         .merge(year_in_review::router())
+        .merge(onboarding::router())
 }
 
 /// Render a full page by substituting content into the layout template.

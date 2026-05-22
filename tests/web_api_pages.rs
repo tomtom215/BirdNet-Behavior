@@ -478,6 +478,7 @@ async fn all_redesigned_pages_render_ok() {
     // without a server error against a seeded database.
     let routes = [
         "/",
+        "/onboarding",
         "/today",
         "/species",
         "/heatmap",

@@ -19,6 +19,7 @@ const CARD = encodeURIComponent('Northern Cardinal');
 
 const ROUTES = [
   ['dashboard', '/'],
+  ['onboarding', '/onboarding'],
   ['today', '/today'],
   ['species', '/species'],
   ['species-detail', `/species/detail?name=${CARD}`],
