@@ -111,7 +111,7 @@ async fn species_page_returns_html() {
         .unwrap();
     let html = String::from_utf8_lossy(&body);
 
-    assert!(html.contains("All Species"));
+    assert!(html.contains("Every voice"));
     assert!(html.contains("hx-get"));
 }
 

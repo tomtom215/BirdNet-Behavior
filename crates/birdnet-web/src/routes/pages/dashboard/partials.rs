@@ -7,7 +7,7 @@ use axum::http::{StatusCode, header};
 use serde::Deserialize;
 
 use super::conf_class;
-use crate::routes::pages::atoms::{avatar, conf_bar, sparkline, waveform};
+use crate::routes::pages::atoms::{avatar, conf_bar, sparkline, species_color, waveform};
 use crate::routes::pages::charts::{
     render_confidence_chart, render_daily_chart, render_hourly_chart,
 };
@@ -210,25 +210,28 @@ pub(super) async fn species_list_partial(
                 return (
                     StatusCode::OK,
                     [(header::CONTENT_TYPE, "text/html")],
-                    format!(r#"<p style="color:var(--text-muted)">{msg}</p>"#),
+                    format!(r#"<p class="bnb-meta">{msg}</p>"#),
                 );
             }
             let mut html = String::from(
-                r"<table><thead><tr><th>Species</th><th>7-Day</th><th>Detections</th><th>Avg Confidence</th></tr></thead><tbody>",
+                r#"<table><thead><tr><th style="width:32px;">#</th><th>Species</th><th>14-day</th><th>Detections</th><th>Confidence</th></tr></thead><tbody>"#,
             );
-            for s in &species {
-                let conf_pct = s.avg_confidence * 100.0;
-                let cls = conf_class(conf_pct);
+            for (i, s) in species.iter().enumerate() {
                 let enc = simple_url_encode(&s.com_name);
+                let color = species_color(&s.com_name);
                 let spark = sparklines
                     .get(&s.com_name)
-                    .map(|data| render_sparkline_svg(data))
+                    .map(|data| sparkline(data, 84.0, 22.0, Some(&color)))
                     .unwrap_or_default();
                 let _ = write!(
                     html,
-                    r#"<tr><td><a href="/species/detail?name={enc}" style="color:inherit;text-decoration:none;">{n}</a></td><td>{spark}</td><td>{c}</td><td><span class="conf {cls}">{conf_pct:.0}%</span></td></tr>"#,
+                    r#"<tr><td class="mono" style="color:var(--fg-4);font-size:11px;">{rank}</td><td><div style="display:flex;align-items:center;gap:10px;">{avatar}<div style="min-width:0;"><div style="font-weight:500;"><a href="/species/detail?name={enc}" style="color:inherit;">{n}</a></div><div class="sci mono bnb-meta">{sci}</div></div></div></td><td>{spark}</td><td class="mono tabular">{c}</td><td>{conf}</td></tr>"#,
+                    rank = i + 1,
+                    avatar = avatar(&s.com_name, ""),
                     n = escape_html(&s.com_name),
+                    sci = escape_html(&s.sci_name),
                     c = s.count,
+                    conf = conf_bar(s.avg_confidence),
                 );
             }
             html.push_str("</tbody></table>");
@@ -240,58 +243,6 @@ pub(super) async fn species_list_partial(
             "<p>Error loading species list</p>".to_string(),
         ),
     }
-}
-
-/// Render an inline SVG sparkline from daily count data.
-#[allow(clippy::many_single_char_names)]
-fn render_sparkline_svg(data: &[i64]) -> String {
-    if data.is_empty() {
-        return String::new();
-    }
-
-    let w = 60.0_f64;
-    let h = 20.0_f64;
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        clippy::cast_precision_loss,
-        clippy::cast_possible_wrap,
-        clippy::cast_lossless
-    )]
-    let max_val = data.iter().copied().max().unwrap_or(1).max(1) as f64;
-    let n = data.len();
-
-    let mut points = String::new();
-    for (i, &val) in data.iter().enumerate() {
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            clippy::cast_precision_loss,
-            clippy::cast_possible_wrap,
-            clippy::cast_lossless
-        )]
-        let x = if n > 1 {
-            (i as f64) / ((n - 1) as f64) * w
-        } else {
-            w / 2.0
-        };
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            clippy::cast_precision_loss,
-            clippy::cast_possible_wrap,
-            clippy::cast_lossless
-        )]
-        let y = (val as f64 / max_val).mul_add(-(h - 2.0), h) - 1.0;
-        if !points.is_empty() {
-            points.push(' ');
-        }
-        let _ = write!(points, "{x:.1},{y:.1}");
-    }
-
-    format!(
-        r#"<svg width="{w:.0}" height="{h:.0}" viewBox="0 0 {w:.0} {h:.0}" style="vertical-align:middle;"><polyline points="{points}" fill="none" stroke="var(--accent,#89b4fa)" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>"#,
-    )
 }
 
 // ---------------------------------------------------------------------------
