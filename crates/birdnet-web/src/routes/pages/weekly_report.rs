@@ -281,7 +281,11 @@ fn render_weekly_chart(week_start: &str, daily: &[birdnet_db::sqlite::DailyCount
         let x = left_pad + i as i32 * (bar_w + gap);
         let bar_h = (count as f64 / max_count as f64 * chart_h as f64) as i32;
         let y = chart_h - bar_h;
-        let color = if count > 0 { "#38bdf8" } else { "#1e293b" };
+        let color = if count > 0 {
+            "var(--moss)"
+        } else {
+            "var(--surface-2)"
+        };
 
         let _ = std::fmt::write(
             &mut svg,
@@ -299,7 +303,7 @@ fn render_weekly_chart(week_start: &str, daily: &[birdnet_db::sqlite::DailyCount
             let _ = std::fmt::write(
                 &mut svg,
                 format_args!(
-                    r##"<text x="{tx}" y="{ty}" text-anchor="middle" fill="#94a3b8" font-size="11" font-family="sans-serif">{count}</text>"##,
+                    r#"<text x="{tx}" y="{ty}" text-anchor="middle" fill="var(--fg-3)" font-size="11" font-family="sans-serif">{count}</text>"#,
                     tx = x + bar_w / 2,
                     ty = y - 4,
                     count = count,
@@ -310,7 +314,7 @@ fn render_weekly_chart(week_start: &str, daily: &[birdnet_db::sqlite::DailyCount
         let _ = std::fmt::write(
             &mut svg,
             format_args!(
-                r##"<text x="{tx}" y="{ty}" text-anchor="middle" fill="#64748b" font-size="11" font-family="sans-serif">{label}</text>"##,
+                r#"<text x="{tx}" y="{ty}" text-anchor="middle" fill="var(--fg-4)" font-size="11" font-family="sans-serif">{label}</text>"#,
                 tx = x + bar_w / 2,
                 ty = chart_h + 17,
                 label = day_labels[i],
@@ -403,7 +407,7 @@ fn today_string() -> String {
 // ---------------------------------------------------------------------------
 
 const WEEKLY_SHELL_HTML: &str = r#"<div class="page-content" style="max-width:900px;margin:0 auto;padding:1.5rem;">
-  <h2 style="margin-bottom:1.5rem;">Weekly Report</h2>
+  <div class="bnb-eyebrow">The backyard bulletin</div><h2 class="display" style="font-size:32px;margin-bottom:1rem;">Weekly report</h2>
   <div id="weekly-content"
        hx-get="/pages/weekly-content"
        hx-trigger="load"

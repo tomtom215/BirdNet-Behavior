@@ -235,13 +235,13 @@ async fn life_timeline_partial(State(state): State<AppState>) -> impl axum::resp
 
         let _ = write!(
             svg,
-            r##"<rect x="{x}" y="{y}" width="{bar_w}" height="{bar_h}" rx="2" fill="#38bdf8"/>"##,
+            r#"<rect x="{x}" y="{y}" width="{bar_w}" height="{bar_h}" rx="2" fill="var(--moss)"/>"#,
         );
 
         if count > 0 {
             let _ = write!(
                 svg,
-                r##"<text x="{tx}" y="{ty}" text-anchor="middle" fill="#94a3b8" font-size="8" font-family="sans-serif">{count}</text>"##,
+                r#"<text x="{tx}" y="{ty}" text-anchor="middle" fill="var(--fg-3)" font-size="8" font-family="sans-serif">{count}</text>"#,
                 tx = x + bar_w / 2,
                 ty = y - 3,
             );
@@ -253,7 +253,7 @@ async fn life_timeline_partial(State(state): State<AppState>) -> impl axum::resp
             let label = month.get(2..).unwrap_or(month);
             let _ = write!(
                 svg,
-                r##"<text x="{tx}" y="{ty}" text-anchor="middle" fill="#64748b" font-size="7" font-family="sans-serif">{label}</text>"##,
+                r#"<text x="{tx}" y="{ty}" text-anchor="middle" fill="var(--fg-4)" font-size="7" font-family="sans-serif">{label}</text>"#,
                 tx = x + bar_w / 2,
                 ty = chart_h + 14,
             );
@@ -264,7 +264,7 @@ async fn life_timeline_partial(State(state): State<AppState>) -> impl axum::resp
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], svg)
 }
 
-const LIFE_LIST_HTML: &str = r##"<h1 style="margin-bottom:0.5rem;">Life List</h1>
+const LIFE_LIST_HTML: &str = r##"<div class="bnb-eyebrow">Journal</div><h1 class="display" style="font-size:34px;margin-bottom:0.25rem;">Life list</h1>
 <p style="color:var(--text-muted);margin-bottom:1.5rem;">Every species ever detected at this station.</p>
 
 <div class="stats-grid" hx-get="/pages/life-stats" hx-trigger="load" hx-swap="innerHTML">
