@@ -25,6 +25,48 @@ pub fn router() -> Router<AppState> {
         .route("/pages/life-table", get(life_table_partial))
         .route("/pages/life-stats", get(life_stats_partial))
         .route("/pages/life-timeline", get(life_timeline_partial))
+        .route("/pages/life-accumulation", get(life_accumulation_partial))
+}
+
+/// HTMX partial: cumulative species-accumulation curve (life-list growth).
+async fn life_accumulation_partial(
+    State(state): State<AppState>,
+) -> impl axum::response::IntoResponse {
+    let result = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| {
+            let first_seen = birdnet_db::sqlite::species_first_seen(conn).unwrap_or_default();
+            let mut monthly: std::collections::BTreeMap<String, u32> =
+                std::collections::BTreeMap::new();
+            for date in first_seen.values() {
+                if date.len() >= 7 {
+                    *monthly.entry(date[..7].to_string()).or_default() += 1;
+                }
+            }
+            monthly
+        })
+    })
+    .await;
+
+    let Ok(monthly) = result else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading accumulation</p>".to_string(),
+        );
+    };
+    let mut cum: i64 = 0;
+    let points: Vec<(String, i64)> = monthly
+        .iter()
+        .map(|(month, &c)| {
+            cum += i64::from(c);
+            (month.get(2..).unwrap_or(month).to_string(), cum)
+        })
+        .collect();
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/html")],
+        super::viz::accumulation_curve(&points),
+    )
 }
 
 async fn life_list_page() -> Html<String> {
@@ -269,6 +311,16 @@ const LIFE_LIST_HTML: &str = r##"<div class="bnb-eyebrow">Journal</div><h1 class
 
 <div class="stats-grid" hx-get="/pages/life-stats" hx-trigger="load" hx-swap="innerHTML">
     <div class="stat-card"><div class="value">--</div><div class="label">Loading...</div></div>
+</div>
+
+<div class="card" style="margin-bottom:1rem;">
+    <h2>The list, growing</h2>
+    <p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:0.75rem;">
+        Cumulative species recorded at this station over time.
+    </p>
+    <div hx-get="/pages/life-accumulation" hx-trigger="load" hx-swap="innerHTML">
+        <p style="color:var(--text-muted);">Loading curve...</p>
+    </div>
 </div>
 
 <div class="card" style="margin-bottom:1rem;">

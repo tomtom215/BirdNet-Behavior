@@ -192,6 +192,79 @@ pub(crate) fn streamgraph(series: &[(String, Vec<i64>)]) -> String {
     svg
 }
 
+// ───────────────────────── species accumulation curve ──────────────────────
+
+/// Monotonic life-list accumulation: `points` is `(label, cumulative_total)`
+/// in chronological order. Renders a filled step-up area with end-value label.
+#[must_use]
+pub(crate) fn accumulation_curve(points: &[(String, i64)]) -> String {
+    if points.len() < 2 {
+        return EMPTY.to_string();
+    }
+    let w = 720.0_f64;
+    let h = 200.0_f64;
+    let pad_l = 6.0;
+    let pad_b = 22.0;
+    let pad_t = 12.0;
+    let plot_h = h - pad_b - pad_t;
+    let n = points.len();
+    let max = points.last().map_or(1, |(_, v)| *v).max(1) as f64;
+    let step = (w - pad_l) / (n - 1) as f64;
+    let x_at = |i: usize| pad_l + i as f64 * step;
+    let y_at = |v: i64| pad_t + plot_h - (v as f64 / max) * plot_h;
+
+    let mut line = String::new();
+    for (i, (_, v)) in points.iter().enumerate() {
+        let _ = write!(
+            line,
+            "{}{x:.1},{y:.1} ",
+            if i == 0 { "M" } else { "L" },
+            x = x_at(i),
+            y = y_at(*v)
+        );
+    }
+    let area = format!(
+        "{line}L{x:.1},{base:.1} L{x0:.1},{base:.1} Z",
+        x = x_at(n - 1),
+        x0 = x_at(0),
+        base = pad_t + plot_h,
+    );
+
+    let mut svg = format!(
+        r#"<svg width="100%" viewBox="0 0 {w:.0} {h:.0}" preserveAspectRatio="none" role="img" aria-label="Species accumulation over time" style="display:block;">"#
+    );
+    let _ = write!(
+        svg,
+        r#"<line x1="{pad_l:.1}" y1="{base:.1}" x2="{w:.1}" y2="{base:.1}" stroke="var(--hairline)" stroke-width="0.5"/>"#,
+        base = pad_t + plot_h,
+    );
+    let _ = write!(
+        svg,
+        r#"<path d="{area}" fill="var(--moss)" fill-opacity="0.12"/><path d="{line}" fill="none" stroke="var(--moss)" stroke-width="1.6"/>"#,
+    );
+    let (lx, ly) = (x_at(n - 1), y_at(points[n - 1].1));
+    let _ = write!(
+        svg,
+        r#"<circle cx="{lx:.1}" cy="{ly:.1}" r="2.6" fill="var(--moss)"/><text class="mono" x="{tx:.1}" y="{ty:.1}" text-anchor="end" font-size="11" fill="var(--moss-ink)">{total} species</text>"#,
+        tx = lx - 4.0,
+        ty = (ly - 6.0).max(pad_t + 8.0),
+        total = points[n - 1].1,
+    );
+    let stride = (n / 6).max(1);
+    for (i, (label, _)) in points.iter().enumerate() {
+        if i % stride == 0 || i == n - 1 {
+            let _ = write!(
+                svg,
+                r#"<text class="mono" x="{x:.1}" y="{ty:.1}" text-anchor="middle" font-size="8" fill="var(--fg-4)">{label}</text>"#,
+                x = x_at(i),
+                ty = h - 6.0,
+            );
+        }
+    }
+    svg.push_str("</svg>");
+    svg
+}
+
 // ─────────────────────────── dawn-chorus polar ─────────────────────────────
 
 /// 24-hour polar plot. Each series is `(common_name, [hourly_value; 24])`;
@@ -307,6 +380,18 @@ mod tests {
         let svg = streamgraph(&series);
         assert!(svg.contains("<svg") && svg.contains("<path"));
         assert!(svg.contains("Blue Jay"));
+    }
+
+    #[test]
+    fn accumulation_empty_and_monotonic() {
+        assert!(accumulation_curve(&[]).contains("Not enough data"));
+        let pts = vec![
+            ("24-03".to_string(), 3),
+            ("24-04".to_string(), 7),
+            ("24-05".to_string(), 12),
+        ];
+        let svg = accumulation_curve(&pts);
+        assert!(svg.contains("<svg") && svg.contains("12 species"));
     }
 
     #[test]

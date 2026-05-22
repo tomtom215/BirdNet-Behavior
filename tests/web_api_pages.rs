@@ -408,6 +408,26 @@ async fn htmx_dawn_chorus_partial() {
 }
 
 #[tokio::test]
+async fn htmx_life_accumulation_partial() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/life-accumulation")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+    assert!(html.contains("<svg") || html.contains("Not enough data"));
+}
+
+#[tokio::test]
 async fn htmx_confidence_chart_partial() {
     let app = app();
 
