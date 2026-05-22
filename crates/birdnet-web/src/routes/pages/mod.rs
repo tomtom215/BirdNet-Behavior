@@ -39,6 +39,7 @@ pub mod timeseries_dash;
 pub mod today;
 pub mod viz;
 pub mod weekly_report;
+pub mod year_in_review;
 
 use axum::Router;
 use axum::response::Html;
@@ -76,6 +77,7 @@ pub fn router() -> Router<AppState> {
         .merge(gallery::router())
         .merge(system_dashboard::router())
         .merge(notification_center::router())
+        .merge(year_in_review::router())
 }
 
 /// Render a full page by substituting content into the layout template.

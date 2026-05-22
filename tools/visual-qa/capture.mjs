@@ -31,6 +31,7 @@ const ROUTES = [
   ['recordings', '/recordings'],
   ['gallery', '/gallery'],
   ['weekly', '/weekly'],
+  ['year-in-review', '/year-in-review'],
   ['history', '/history'],
   ['notifications', '/notifications'],
   ['quarantine', '/quarantine'],

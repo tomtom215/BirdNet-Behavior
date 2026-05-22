@@ -488,6 +488,7 @@ async fn all_redesigned_pages_render_ok() {
         "/gallery",
         "/timeseries",
         "/weekly",
+        "/year-in-review",
         "/history",
         "/notifications",
         "/quarantine",
