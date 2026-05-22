@@ -54,12 +54,12 @@ fn blocking_stats(state: &AppState) -> String {
     let mut out = String::with_capacity(2048);
 
     // DB stats row
-    let stat_card_total = stat_card("Total Detections", &total.to_string(), "#38bdf8");
-    let stat_card_species = stat_card("Unique Species", &species.to_string(), "#34d399");
+    let stat_card_total = stat_card("Total Detections", &total.to_string(), "var(--moss-ink)");
+    let stat_card_species = stat_card("Unique Species", &species.to_string(), "var(--moss)");
     let stat_card_today = stat_card(
         &format!("Today ({})", today_date_string()),
         &today.to_string(),
-        "#a78bfa",
+        "var(--moss-ink)",
     );
     write!(
         out,
@@ -78,9 +78,9 @@ fn blocking_stats(state: &AppState) -> String {
         .cpu_temp_celsius
         .map_or_else(|| "N/A".to_string(), |t| format!("{t:.1}\u{b0}C"));
 
-    let cpu_card = stat_card("CPU", &cpu, "#fb923c");
-    let mem_card = stat_card("Memory", &mem, "#60a5fa");
-    let temp_card = stat_card("Temperature", &temp, "#f472b6");
+    let cpu_card = stat_card("CPU", &cpu, "var(--dawn)");
+    let mem_card = stat_card("Memory", &mem, "var(--moss-ink)");
+    let temp_card = stat_card("Temperature", &temp, "var(--rare)");
     write!(
         out,
         r#"<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1rem;">{cpu_card}{mem_card}{temp_card}</div>"#,
@@ -92,9 +92,9 @@ fn blocking_stats(state: &AppState) -> String {
 
 fn stat_card(label: &str, value: &str, color: &str) -> String {
     format!(
-        r#"<div style="background:#1e293b;border:1px solid #334155;border-radius:0.75rem;padding:1rem;text-align:center;">
+        r#"<div style="background:var(--surface);border:1px solid var(--border);border-radius:0.75rem;padding:1rem;text-align:center;">
   <div style="font-size:1.5rem;font-weight:700;color:{color};">{value}</div>
-  <div style="font-size:0.8rem;color:#94a3b8;margin-top:0.25rem;">{label}</div>
+  <div style="font-size:0.8rem;color:var(--fg-3);margin-top:0.25rem;">{label}</div>
 </div>"#,
         value = escape_html(value),
         label = escape_html(label),
@@ -111,31 +111,31 @@ fn render_overview_page(stats_html: &str) -> String {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Admin Overview — BirdNet-Behavior</title>
     <script src="/static/htmx.min.js"></script>
-    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/theme-guard.js"></script><link rel="stylesheet" href="/static/css/app.css">
     <style>
-      body {{ background:#0f172a; color:#e2e8f0; font-family:system-ui,sans-serif; }}
+      body {{ background:var(--bg); color:var(--fg); font-family:var(--font-ui); }}
       .container {{ max-width:1000px; margin:0 auto; padding:2rem 1rem; }}
-      nav a {{ color:#94a3b8; text-decoration:none; margin-right:1.5rem; }}
-      nav a.active, nav a:hover {{ color:#38bdf8; }}
-      .card {{ background:#1e293b; border:1px solid #334155; border-radius:0.75rem; padding:1.5rem; margin-bottom:1.5rem; }}
-      .section-title {{ font-size:1.1rem; font-weight:600; color:#38bdf8; margin-bottom:1rem; border-bottom:1px solid #334155; padding-bottom:0.5rem; }}
+      nav a {{ color:var(--fg-3); text-decoration:none; margin-right:1.5rem; }}
+      nav a.active, nav a:hover {{ color:var(--moss-ink); }}
+      .card {{ background:var(--surface); border:1px solid var(--border); border-radius:0.75rem; padding:1.5rem; margin-bottom:1.5rem; }}
+      .section-title {{ font-size:1.1rem; font-weight:600; color:var(--moss-ink); margin-bottom:1rem; border-bottom:1px solid var(--border); padding-bottom:0.5rem; }}
       .quick-links {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:1rem; }}
-      .quick-link {{ background:#0f172a; border:1px solid #334155; border-radius:0.5rem; padding:1rem; text-decoration:none; color:#e2e8f0; transition:border-color 0.2s; }}
-      .quick-link:hover {{ border-color:#38bdf8; color:#38bdf8; }}
+      .quick-link {{ background:var(--bg); border:1px solid var(--border); border-radius:0.5rem; padding:1rem; text-decoration:none; color:var(--fg); transition:border-color 0.2s; }}
+      .quick-link:hover {{ border-color:var(--moss-ink); color:var(--moss-ink); }}
       .quick-link-title {{ font-weight:600; font-size:0.95rem; }}
-      .quick-link-desc {{ font-size:0.75rem; color:#64748b; margin-top:0.25rem; }}
+      .quick-link-desc {{ font-size:0.75rem; color:var(--fg-4); margin-top:0.25rem; }}
     </style>
 </head>
 <body>
 <div class="container">
-  <nav style="margin-bottom:2rem; padding:1rem 0; border-bottom:1px solid #334155;">
+  <nav style="margin-bottom:2rem; padding:1rem 0; border-bottom:1px solid var(--border);">
     <a href="/">Dashboard</a>
     <a href="/species">Species</a>
     <a href="/admin/overview" class="active">Admin</a>
     <a href="/admin/settings">Settings</a>
   </nav>
 
-  <h1 style="font-size:1.5rem;font-weight:700;margin-bottom:1.5rem;color:#f1f5f9;">Admin Overview</h1>
+  <h1 style="font-size:1.5rem;font-weight:700;margin-bottom:1.5rem;color:var(--fg);">Admin Overview</h1>
 
   <!-- Live stats (auto-refresh every 30s) -->
   <div class="card">

@@ -82,29 +82,29 @@ fn render_test_page(apprise_ok: bool, bw_ok: bool) -> String {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Test Notifications — BirdNet-Behavior</title>
     <script src="/static/htmx.min.js"></script>
-    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/theme-guard.js"></script><link rel="stylesheet" href="/static/css/app.css">
     <style>
-      body { background:#0f172a; color:#e2e8f0; font-family:system-ui,sans-serif; }
+      body { background:var(--bg); color:var(--fg); font-family:var(--font-ui); }
       .container { max-width:800px; margin:0 auto; padding:2rem 1rem; }
-      nav a { color:#94a3b8; text-decoration:none; margin-right:1.5rem; }
-      nav a.active, nav a:hover { color:#38bdf8; }
-      .card { background:#1e293b; border:1px solid #334155; border-radius:0.75rem; padding:1.5rem; margin-bottom:1.5rem; }
-      .section-title { font-size:1.1rem; font-weight:600; color:#38bdf8; margin-bottom:1rem; border-bottom:1px solid #334155; padding-bottom:0.5rem; }
+      nav a { color:var(--fg-3); text-decoration:none; margin-right:1.5rem; }
+      nav a.active, nav a:hover { color:var(--moss-ink); }
+      .card { background:var(--surface); border:1px solid var(--border); border-radius:0.75rem; padding:1.5rem; margin-bottom:1.5rem; }
+      .section-title { font-size:1.1rem; font-weight:600; color:var(--moss-ink); margin-bottom:1rem; border-bottom:1px solid var(--border); padding-bottom:0.5rem; }
       .btn { padding:0.5rem 1.5rem; border-radius:0.375rem; border:none; cursor:pointer; font-weight:600; font-size:0.875rem; }
-      .btn-primary { background:#0ea5e9; color:#fff; }
-      .btn-disabled { background:#334155; color:#64748b; cursor:not-allowed; }
-      .hint { font-size:0.75rem; color:#64748b; }
+      .btn-primary { background:var(--moss); color:#fff; }
+      .btn-disabled { background:var(--border); color:var(--fg-4); cursor:not-allowed; }
+      .hint { font-size:0.75rem; color:var(--fg-4); }
     </style>
 </head>
 <body>
 <div class="container">
-  <nav style="margin-bottom:2rem; padding:1rem 0; border-bottom:1px solid #334155;">
+  <nav style="margin-bottom:2rem; padding:1rem 0; border-bottom:1px solid var(--border);">
     <a href="/">Dashboard</a>
     <a href="/admin">Admin</a>
     <a href="/admin/settings">Settings</a>
     <a href="/admin/notifications/test" class="active">Test Notifications</a>
   </nav>
-  <h1 style="font-size:1.5rem;font-weight:700;margin-bottom:1.5rem;color:#f1f5f9;">Test Notification Channels</h1>
+  <h1 style="font-size:1.5rem;font-weight:700;margin-bottom:1.5rem;color:var(--fg);">Test Notification Channels</h1>
 "#);
 
     // Apprise card
@@ -113,7 +113,7 @@ fn render_test_page(apprise_ok: bool, bw_ok: bool) -> String {
         r##"  <div class="card">
     <div class="section-title">Apprise Push Notifications</div>
     <p class="hint" style="margin-bottom:1rem;">{apprise_icon} Status: {apprise_status}<br>
-      Configure the Apprise URL in <a href="/admin/settings" style="color:#38bdf8;">Settings</a>.
+      Configure the Apprise URL in <a href="/admin/settings" style="color:var(--moss-ink);">Settings</a>.
     </p>
     <form hx-post="/admin/notifications/test/apprise" hx-target="#apprise-result" hx-swap="innerHTML">
       <button type="submit" class="btn {apprise_btn}" {apprise_disabled}>Send Test Apprise Notification</button>
@@ -130,7 +130,7 @@ fn render_test_page(apprise_ok: bool, bw_ok: bool) -> String {
         r##"  <div class="card">
     <div class="section-title">BirdWeather Station Ping</div>
     <p class="hint" style="margin-bottom:1rem;">{bw_icon} Status: {bw_status}<br>
-      Configure the BirdWeather token in <a href="/admin/settings" style="color:#38bdf8;">Settings</a>.
+      Configure the BirdWeather token in <a href="/admin/settings" style="color:var(--moss-ink);">Settings</a>.
     </p>
     <form hx-post="/admin/notifications/test/birdweather" hx-target="#birdweather-result" hx-swap="innerHTML">
       <button type="submit" class="btn {bw_btn}" {bw_disabled}>Ping BirdWeather API</button>
@@ -302,9 +302,17 @@ async fn ping_birdweather(token: &str) -> Result<String, String> {
 }
 
 fn result_html(ok: bool, msg: &str) -> String {
-    let bg = if ok { "#064e3b" } else { "#450a0a" };
-    let border = if ok { "#065f46" } else { "#7f1d1d" };
-    let color = if ok { "#6ee7b7" } else { "#fca5a5" };
+    let bg = if ok {
+        "var(--moss-soft)"
+    } else {
+        "var(--rare-soft)"
+    };
+    let border = if ok {
+        "var(--moss-soft)"
+    } else {
+        "var(--rare-soft)"
+    };
+    let color = if ok { "var(--moss-ink)" } else { "var(--rare)" };
     let icon = if ok { "&#x2713;" } else { "&#x2717;" };
     format!(
         r#"<div style="background:{bg};border:1px solid {border};border-radius:0.375rem;padding:0.75rem;margin-top:0.75rem;color:{color};">{icon} {msg}</div>"#,

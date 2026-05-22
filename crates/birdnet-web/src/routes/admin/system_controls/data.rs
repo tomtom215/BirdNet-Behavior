@@ -21,12 +21,12 @@ pub(super) async fn clear_detections(State(state): State<AppState>) -> Html<Stri
     .await;
 
     match result {
-        Ok(Ok(msg)) => Html(format!(r#"<p style="color:#4ade80;">{msg}</p>"#)),
+        Ok(Ok(msg)) => Html(format!(r#"<p style="color:var(--moss);">{msg}</p>"#)),
         Ok(Err(e)) => Html(format!(
-            r#"<p style="color:#f87171;">Failed to clear data: {e}</p>"#
+            r#"<p style="color:var(--rare);">Failed to clear data: {e}</p>"#
         )),
         Err(e) => Html(format!(
-            r#"<p style="color:#f87171;">Internal error: {e}</p>"#
+            r#"<p style="color:var(--rare);">Internal error: {e}</p>"#
         )),
     }
 }
@@ -67,10 +67,10 @@ pub(super) async fn clear_extracted(State(state): State<AppState>) -> Html<Strin
     .await;
 
     match result {
-        Ok(Ok(msg)) => Html(format!(r#"<p style="color:#4ade80;">{msg}</p>"#)),
-        Ok(Err(e)) => Html(format!(r#"<p style="color:#f87171;">Failed: {e}</p>"#)),
+        Ok(Ok(msg)) => Html(format!(r#"<p style="color:var(--moss);">{msg}</p>"#)),
+        Ok(Err(e)) => Html(format!(r#"<p style="color:var(--rare);">Failed: {e}</p>"#)),
         Err(e) => Html(format!(
-            r#"<p style="color:#f87171;">Internal error: {e}</p>"#
+            r#"<p style="color:var(--rare);">Internal error: {e}</p>"#
         )),
     }
 }

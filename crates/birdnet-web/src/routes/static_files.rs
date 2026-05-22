@@ -19,6 +19,9 @@ const HTMX_SSE_JS: &[u8] = include_bytes!("../../static/htmx-sse.js");
 /// Design-system stylesheet (tokens, atoms, shell, screen layouts).
 const APP_CSS: &[u8] = include_bytes!("../../static/css/app.css");
 
+/// Pre-paint theme/density guard for standalone pages (admin, kiosk, player).
+const THEME_GUARD_JS: &[u8] = include_bytes!("../../static/theme-guard.js");
+
 /// Self-hosted webfonts (latin + latin-ext subsets). Non-Latin scripts fall
 /// back to Noto Sans, which the page `<head>` loads as a progressive enhancement.
 const FONTS: &[(&str, &[u8])] = &[
@@ -87,8 +90,20 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/static/htmx.min.js", get(htmx_js))
         .route("/static/htmx-sse.js", get(htmx_sse_js))
+        .route("/static/theme-guard.js", get(theme_guard_js))
         .route("/static/css/app.css", get(app_css))
         .route("/static/fonts/{file}", get(font_file))
+}
+
+async fn theme_guard_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, IMMUTABLE),
+        ],
+        THEME_GUARD_JS,
+    )
 }
 
 async fn htmx_js() -> impl IntoResponse {
