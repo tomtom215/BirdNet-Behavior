@@ -494,6 +494,7 @@ async fn all_redesigned_pages_render_ok() {
         "/system",
         "/kiosk",
         "/live",
+        "/pages/today-daystrip",
         "/pages/cooccurrence-matrix",
         "/pages/acoustic-network",
         "/pages/activity-streamgraph",

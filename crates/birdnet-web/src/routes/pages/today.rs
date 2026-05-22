@@ -19,6 +19,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/today", get(today_page))
         .route("/pages/today-list", get(today_partial))
+        .route("/pages/today-daystrip", get(today_daystrip_partial))
         .route("/pages/today-count", get(today_count_partial))
         .route("/pages/today-delete", axum::routing::post(delete_detection))
         .route(
@@ -182,6 +183,87 @@ async fn today_partial(
             "<p>Error loading detections</p>".to_string(),
         ),
     }
+}
+
+/// HTMX partial: a 24-hour `DayStrip` timeline of today's detections — an
+/// hourly histogram with one colour-coded dot per detection (placed by time
+/// and confidence), night bands, sunrise/sunset markers and a "now" line.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoResponse {
+    let today = today_date_string();
+    let result = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| birdnet_db::sqlite::todays_detections(conn, &today, None, 1000, 0))
+    })
+    .await;
+
+    let Ok(Ok(rows)) = result else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading timeline</p>".to_string(),
+        );
+    };
+
+    if rows.is_empty() {
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            r#"<p class="bnb-meta" style="text-align:center;padding:1rem;">No detections yet today.</p>"#
+                .to_string(),
+        );
+    }
+
+    let mut hourly = [0i64; 24];
+    let mut dots: Vec<(f64, String, f64)> = Vec::with_capacity(rows.len());
+    for d in &rows {
+        let hf = parse_hour_fraction(&d.time);
+        let hi = hf as usize;
+        if hi < 24 {
+            hourly[hi] += 1;
+        }
+        dots.push((hf, super::atoms::species_color(&d.com_name), d.confidence));
+    }
+
+    // Current hour-of-day (UTC) for the "now" marker.
+    let now_h = {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |x| x.as_secs());
+        (secs % 86_400) as f64 / 3600.0
+    };
+
+    let total: i64 = hourly.iter().sum();
+    let mut peak_hour = 0usize;
+    let mut peak = -1i64;
+    for (h, &c) in hourly.iter().enumerate() {
+        if c > peak {
+            peak = c;
+            peak_hour = h;
+        }
+    }
+    let dawn: i64 = hourly[4..9].iter().sum();
+
+    let caption = format!(
+        r#"<div class="bnb-meta" style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:10px;"><span class="mono">{peak_hour:02}:00 peak hour</span><span>{dawn} in the dawn chorus</span><span>{total} total today</span></div>"#
+    );
+    let strip = super::viz::day_strip(&hourly, &dots, 6.0, 19.5, now_h);
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/html")],
+        format!("{caption}{strip}"),
+    )
+}
+
+/// Parse "HH:MM:SS" into a fractional hour in [0, 24). Best-effort.
+fn parse_hour_fraction(t: &str) -> f64 {
+    let mut it = t.split(':');
+    let h: f64 = it.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+    let m: f64 = it.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+    h + m / 60.0
 }
 
 /// Render a single detection row into the HTML buffer.

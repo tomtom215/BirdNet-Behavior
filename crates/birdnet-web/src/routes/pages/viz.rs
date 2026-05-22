@@ -670,6 +670,115 @@ pub(crate) fn chord_diagram(labels: &[String], m: &[Vec<f64>]) -> String {
     svg
 }
 
+// ─────────────────────────────── day strip ─────────────────────────────────
+
+/// Full-width 24-hour timeline for "today": night bands behind, an hourly
+/// histogram (moss-soft), one colour-coded dot per detection placed by time
+/// (x) and confidence (y), sunrise/sunset markers and a dashed "now" line.
+///
+/// `hourly` is the per-hour detection count; `dots` is `(hour 0–24, colour,
+/// confidence 0–1)`; `sunrise`/`sunset`/`now_h` are hours-of-day (0–24).
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub(crate) fn day_strip(
+    hourly: &[i64; 24],
+    dots: &[(f64, String, f64)],
+    sunrise: f64,
+    sunset: f64,
+    now_h: f64,
+) -> String {
+    let max = hourly.iter().copied().max().unwrap_or(0);
+    if max == 0 && dots.is_empty() {
+        return EMPTY.to_string();
+    }
+    let w = 960.0_f64;
+    let h = 132.0_f64;
+    let base = 108.0_f64; // histogram baseline / dot floor
+    let bar_ceiling = 40.0_f64; // tallest a bar may reach
+    let hw = w / 24.0;
+    let max_f = max.max(1) as f64;
+    let x_of = |hour: f64| hour / 24.0 * w;
+
+    let mut svg = format!(
+        r#"<svg viewBox="0 0 {w:.0} {h:.0}" width="100%" height="auto" role="img" aria-label="Detections across the day" style="display:block;">"#
+    );
+
+    // Night bands (midnight→sunrise, sunset→midnight).
+    let sunrise_x = x_of(sunrise);
+    let sunset_x = x_of(sunset);
+    let _ = write!(
+        svg,
+        r#"<rect x="0" y="0" width="{sunrise_x:.1}" height="{base:.1}" fill="var(--night)" fill-opacity="0.07"/><rect x="{sunset_x:.1}" y="0" width="{rw:.1}" height="{base:.1}" fill="var(--night)" fill-opacity="0.07"/>"#,
+        rw = w - sunset_x,
+    );
+
+    // Hourly histogram bars.
+    for (hour, &c) in hourly.iter().enumerate() {
+        if c > 0 {
+            let bh = (c as f64 / max_f) * (base - bar_ceiling);
+            let x = hour as f64 * hw + 1.5;
+            let y = base - bh;
+            let _ = write!(
+                svg,
+                r#"<rect x="{x:.1}" y="{y:.1}" width="{bw:.1}" height="{bh:.1}" rx="1.5" fill="var(--moss-soft)"/>"#,
+                bw = hw - 3.0,
+            );
+        }
+    }
+
+    // Baseline.
+    let _ = write!(
+        svg,
+        r#"<line x1="0" y1="{base:.1}" x2="{w:.0}" y2="{base:.1}" stroke="var(--hairline)" stroke-width="1"/>"#
+    );
+
+    // Detection dots — x by time, y by confidence (higher = nearer the top).
+    for (hr, color, conf) in dots.iter().take(800) {
+        let x = x_of(*hr);
+        let y = (base - 6.0) - conf.clamp(0.0, 1.0) * (base - 18.0);
+        let _ = write!(
+            svg,
+            r#"<circle data-species-fill="1" cx="{x:.1}" cy="{y:.1}" r="2.4" fill="{color}" fill-opacity="0.85"/>"#
+        );
+    }
+
+    // Sunrise / sunset markers.
+    for (hh, glyph, col) in [
+        (sunrise, "\u{2600}", "var(--dawn-ink)"),
+        (sunset, "\u{263e}", "var(--fg-3)"),
+    ] {
+        let mx = x_of(hh);
+        let _ = write!(
+            svg,
+            r#"<line x1="{mx:.1}" y1="0" x2="{mx:.1}" y2="{base:.1}" stroke="var(--border)" stroke-width="0.75" stroke-dasharray="1 3"/><text x="{mx:.1}" y="13" text-anchor="middle" font-size="13" fill="{col}">{glyph}</text>"#,
+        );
+    }
+
+    // "Now" line + pill.
+    if (0.0..24.0).contains(&now_h) {
+        let nx = x_of(now_h);
+        let _ = write!(
+            svg,
+            r#"<line x1="{nx:.1}" y1="0" x2="{nx:.1}" y2="{base:.1}" stroke="var(--fg)" stroke-width="1.25"/><rect x="{px:.1}" y="0" width="34" height="15" rx="7.5" fill="var(--fg)"/><text x="{tx:.1}" y="11" text-anchor="middle" font-size="9" fill="var(--bg)" class="mono">now</text>"#,
+            px = (nx - 17.0).clamp(0.0, w - 34.0),
+            tx = (nx).clamp(17.0, w - 17.0),
+        );
+    }
+
+    // Hour ticks.
+    for hour in [0, 3, 6, 9, 12, 15, 18, 21] {
+        let x = f64::from(hour) * hw;
+        let _ = write!(
+            svg,
+            r#"<text class="mono" x="{x:.1}" y="{ty:.1}" text-anchor="middle" font-size="9" fill="var(--fg-4)">{hour:02}</text>"#,
+            ty = h - 4.0,
+        );
+    }
+
+    svg.push_str("</svg>");
+    svg
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -736,6 +845,23 @@ mod tests {
         assert!(svg.contains("<svg") && svg.contains("12a") && svg.contains("6a"));
         // The dashed current-time hand renders for an in-range hour.
         assert!(svg.contains("stroke-dasharray"));
+    }
+
+    #[test]
+    fn day_strip_empty_and_basic() {
+        let zero = [0i64; 24];
+        assert!(day_strip(&zero, &[], 6.0, 19.0, 12.0).contains("Not enough"));
+        let mut hourly = [0i64; 24];
+        hourly[6] = 4;
+        hourly[7] = 7;
+        let dots = vec![
+            (6.5, "var(--moss)".to_string(), 0.9),
+            (7.25, "var(--dawn)".to_string(), 0.7),
+        ];
+        let svg = day_strip(&hourly, &dots, 6.0, 19.5, 13.0);
+        assert!(svg.contains("<svg"));
+        assert!(svg.contains("<circle")); // detection dots
+        assert!(svg.contains("now")); // current-time pill
     }
 
     #[test]
