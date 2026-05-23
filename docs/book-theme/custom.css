@@ -1,0 +1,53 @@
+/* BirdNet-Behavior docs — align mdBook's accents with the app's moss palette. */
+
+:root {
+  --bnb-moss: #3f7d52;
+  --bnb-moss-ink: #2c5a3a;
+  --bnb-dawn: #b07d3a;
+}
+
+/* Light theme accents */
+.light, .rust {
+  --links: var(--bnb-moss-ink);
+  --sidebar-active: var(--bnb-moss);
+  --searchbar-border-color: #d8dcd2;
+}
+
+/* Dark themes keep links readable against the dark surface */
+.navy, .coal, .ayu {
+  --links: #7bbf86;
+  --sidebar-active: #8ed09a;
+}
+
+/* Tighten the headings with the app's editorial feel */
+.content h1, .content h2, .content h3 {
+  letter-spacing: -0.01em;
+}
+.content h1 { font-weight: 650; }
+
+/* Screenshots: rounded, hairline border, soft shadow — framed like the UI cards */
+.content img {
+  border-radius: 10px;
+  border: 0.5px solid rgba(0, 0, 0, 0.10);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.08);
+  max-width: 100%;
+  height: auto;
+}
+.navy .content img, .coal .content img, .ayu .content img {
+  border-color: rgba(255, 255, 255, 0.10);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
+}
+
+/* A little more breathing room around figures */
+.content p > img { margin: 0.6rem 0; }
+
+/* Callout-friendly blockquotes */
+.content blockquote {
+  border-inline-start: 3px solid var(--bnb-moss);
+  background: rgba(63, 125, 82, 0.06);
+}
+
+/* Tables: align with the clean, hairline aesthetic */
+.content table thead th {
+  border-bottom: 2px solid var(--bnb-moss);
+}
