@@ -33,6 +33,7 @@
 pub mod audio;
 pub mod backup;
 pub mod backup_recovery;
+pub mod doctor;
 pub mod images;
 pub mod logs;
 pub mod migration;
@@ -67,6 +68,7 @@ pub(crate) fn admin_shell(title: &str, active: &str, body: &str) -> String {
         ("notifications", "/admin/notifications", "Notifications"),
         ("backups", "/admin/backups", "Backups"),
         ("system", "/admin/system", "System"),
+        ("doctor", "/admin/doctor", "Diagnostics"),
     ];
     let mut nav_html = String::new();
     for (key, href, label) in nav {
@@ -118,6 +120,7 @@ pub fn router() -> Router<AppState> {
         .merge(audio::router())
         // Backups, restore & system admin
         .merge(backup_recovery::router())
+        .merge(doctor::router())
         // Species list management
         .merge(species::router())
         // Migration

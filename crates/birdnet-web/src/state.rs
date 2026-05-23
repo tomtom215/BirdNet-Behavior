@@ -55,6 +55,9 @@ struct AppStateInner {
     info_site: String,
     /// Custom species image directory (checked before Wikipedia cache).
     custom_image_dir: Option<PathBuf>,
+    /// Path to the active configuration file, threaded from the CLI so the
+    /// in-UI diagnostics page can re-read and validate it. `None` in tests.
+    config_path: Option<PathBuf>,
     /// Runtime metrics registry. Shared with the detection daemon (via the
     /// detection-event pipeline) and the metrics endpoint. Process-local;
     /// values are reset when the process restarts.
@@ -124,6 +127,7 @@ impl AppState {
                 site_name: None,
                 info_site: "ebird".to_string(),
                 custom_image_dir: None,
+                config_path: None,
                 metrics: metrics::new_shared(),
             }),
         })
@@ -195,6 +199,7 @@ impl AppState {
                 site_name: None,
                 info_site: "ebird".to_string(),
                 custom_image_dir: None,
+                config_path: None,
                 metrics: metrics::new_shared(),
             }),
         })
@@ -222,6 +227,7 @@ impl AppState {
                 site_name: None,
                 info_site: "ebird".to_string(),
                 custom_image_dir: None,
+                config_path: None,
                 metrics: metrics::new_shared(),
             }),
         }
@@ -294,6 +300,15 @@ impl AppState {
         }
     }
 
+    /// Set the path to the active configuration file (for the diagnostics page).
+    #[must_use]
+    pub fn with_config_path(self, path: PathBuf) -> Self {
+        let inner = unwrap_inner(self.inner, "with_config_path");
+        Self {
+            inner: rebuild_inner(inner, |s| s.config_path = Some(path)),
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Accessors
     // -----------------------------------------------------------------------
@@ -363,6 +378,12 @@ impl AppState {
     /// Get the database file path.
     pub fn db_path(&self) -> &Path {
         &self.inner.db_path
+    }
+
+    /// Path to the active configuration file, if threaded from the CLI.
+    #[must_use]
+    pub fn config_path(&self) -> Option<&Path> {
+        self.inner.config_path.as_deref()
     }
 
     /// Get the directory where extracted audio recordings are stored.
