@@ -1,4 +1,4 @@
-// Build a contact-sheet montage from PNGs so many screens can be eyeballed at once.
+// Build a contact-sheet montage from PNG files so many screens can be eyeballed at once.
 // Usage: node montage.mjs <shots_dir> <out.png> <filter_substring> [thumbW] [cols]
 import { chromium } from 'playwright';
 import fs from 'node:fs';

@@ -22,6 +22,9 @@ extend-exclude = [
     "**/static/htmx.min.js",
     "**/static/*.min.js",
     "**/*.min.js",
+    # Design handoff bundle — prototype React/Markdown reference with mock data
+    # (banding codes, scientific names), not shipping code.
+    "design_handoff_birdnet_behavior/**",
 ]
 
 [default]
@@ -31,6 +34,12 @@ extend-ignore-identifiers-re = [
     "ISO[0-9]+",
     # German/French/etc. species name fragments.
     "ue|oe|ae",
+]
+
+# Literal text spans to ignore (matched anywhere, not just identifiers).
+extend-ignore-re = [
+    # CSS @font-face unicode-range hex, e.g. "U+0100-02BA" — codepoints, not prose.
+    'U\+[0-9A-Fa-f]{4,6}(-[0-9A-Fa-f]{4,6})?',
 ]
 
 [default.extend-words]
@@ -46,3 +55,4 @@ mosquitto = "mosquitto" # MQTT broker, correct spelling (not "mosquito")
 yoy = "yoy"           # year-over-year, domain abbreviation
 inh = "inh"           # short for "inhibit" — used as local var name
 unparseable = "unparseable" # alternative spelling of "unparsable", widely used
+cardinalis = "cardinalis" # Latin species epithet — Cardinalis cardinalis (Northern Cardinal)

@@ -1,11 +1,11 @@
 //! Bespoke analytics visualizations rendered as inline SVG.
 //!
 //! Pure functions, styled by the design tokens in `static/css/app.css`:
-//! - [`cooccurrence_matrix`] — who-sings-with-whom intensity grid
-//! - [`streamgraph`] — centred stacked species activity over a window
-//! - [`circadian_polar`] — the dawn-chorus 24-hour polar plot
+//! - `cooccurrence_matrix` — who-sings-with-whom intensity grid
+//! - `streamgraph` — centred stacked species activity over a window
+//! - `circadian_polar` — the dawn-chorus 24-hour polar plot
 //!
-//! Colours come from [`super::atoms::species_color`] so a species keeps the
+//! Colours come from `super::atoms::species_color` so a species keeps the
 //! same hue across every screen.
 //!
 //! These are geometry-heavy SVG generators; the lint allows below cover the
