@@ -416,28 +416,16 @@ async fn species_hero_partial(
         .unwrap_or(file_name);
     let safe_file = escape_html(&basename);
     let time_short = time.get(0..5).unwrap_or(&time);
-    let caption = escape_html(&format!("best detection — {date} {time_short} · {conf:.2}"));
+    let conf_pct = conf * 100.0;
 
-    let photo_inner = state
-        .image_cache()
-        .and_then(|cache| cache.get_cached(&name))
-        .filter(|img| img.cached_path.is_some())
-        .map(|_| {
-            let enc = simple_url_encode(&name);
-            format!(
-                r#"<img src="/api/v2/species/image/{enc}/file" alt="{alt}" loading="lazy" style="width:100%;height:100%;object-fit:cover;" />"#,
-                alt = escape_html(&name),
-            )
-        })
-        .unwrap_or_default();
-
+    // The hero is the *recording* — the spectrogram and audio of the loudest
+    // call. The species reference photo lives in the "About this species" card
+    // below, so it isn't shown (cropped, and a second time) on the same page.
     let html = format!(
         r#"<div class="bnb-eyebrow" style="margin-bottom:8px;">Best detection</div>
-<div class="bnb-photo" data-caption="{caption}" style="aspect-ratio:4/3;border-radius:var(--r-md);overflow:hidden;position:relative;">{photo_inner}</div>
-<img src="/api/v2/spectrogram/{safe_file}" alt="Spectrogram" onerror="this.style.display='none'" style="width:100%;border-radius:var(--r-md);border:0.5px solid var(--border);display:block;margin-top:10px;" />
+<img src="/api/v2/spectrogram/{safe_file}" alt="Spectrogram of the loudest detected call" onerror="this.style.display='none'" style="width:100%;border-radius:var(--r-md);border:0.5px solid var(--border);display:block;" />
 <audio controls preload="metadata" style="width:100%;margin-top:10px;"><source src="/api/v2/recordings/{safe_file}" type="audio/wav"></audio>
-<div class="bnb-meta mono" style="margin-top:8px;">{conf_pct:.0}% confidence · clip 3.0 s</div>"#,
-        conf_pct = conf * 100.0,
+<div class="bnb-meta mono" style="margin-top:8px;">{conf_pct:.0}% confidence · {date} {time_short}</div>"#,
     );
 
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
