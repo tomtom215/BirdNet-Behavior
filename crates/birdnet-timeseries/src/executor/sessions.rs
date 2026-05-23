@@ -151,8 +151,10 @@ with_session_id AS (
     FROM ordered
 )
 SELECT
-    session_id, detection_date,
-    MIN(detection_timestamp), MAX(detection_timestamp),
+    session_id,
+    strftime(detection_date, '%Y-%m-%d'),
+    strftime(MIN(detection_timestamp), '%Y-%m-%d %H:%M:%S'),
+    strftime(MAX(detection_timestamp), '%Y-%m-%d %H:%M:%S'),
     COUNT(*), COUNT(DISTINCT Com_Name),
     date_diff('minute', MIN(detection_timestamp), MAX(detection_timestamp)),
     MAX(gap_minutes)

@@ -38,8 +38,8 @@ impl QueryPlan for HourlyActivity {
             .unwrap_or_default();
         format!(
             "SELECT
-    time_bucket(INTERVAL 1 HOUR, detection_timestamp) AS window_start,
-    window_start + INTERVAL 1 HOUR                    AS window_end,
+    strftime(time_bucket(INTERVAL 1 HOUR, detection_timestamp), '%Y-%m-%d %H:%M:%S') AS window_start,
+    strftime(time_bucket(INTERVAL 1 HOUR, detection_timestamp) + INTERVAL 1 HOUR, '%Y-%m-%d %H:%M:%S') AS window_end,
     COUNT(*)                                           AS detection_count,
     COUNT(DISTINCT Com_Name)                           AS species_count,
     AVG(Confidence)                                    AS avg_confidence
@@ -83,8 +83,8 @@ impl QueryPlan for DailyActivity {
             .unwrap_or_default();
         format!(
             "SELECT
-    detection_date                AS window_start,
-    detection_date + INTERVAL 1 DAY AS window_end,
+    strftime(detection_date, '%Y-%m-%d') AS window_start,
+    strftime(detection_date + INTERVAL 1 DAY, '%Y-%m-%d') AS window_end,
     COUNT(*)                      AS detection_count,
     COUNT(DISTINCT Com_Name)      AS species_count,
     AVG(Confidence)               AS avg_confidence,
@@ -116,8 +116,8 @@ impl QueryPlan for WeeklyActivity {
         let weeks = self.lookback_weeks;
         format!(
             "SELECT
-    date_trunc('week', detection_date)::DATE             AS window_start,
-    (date_trunc('week', detection_date) + INTERVAL 7 DAYS)::DATE AS window_end,
+    strftime(date_trunc('week', detection_date), '%Y-%m-%d') AS window_start,
+    strftime(date_trunc('week', detection_date) + INTERVAL 7 DAYS, '%Y-%m-%d') AS window_end,
     COUNT(*)                                              AS detection_count,
     COUNT(DISTINCT Com_Name)                              AS species_count,
     AVG(Confidence)                                       AS avg_confidence

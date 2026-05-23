@@ -126,9 +126,9 @@ with_session_id AS (
 )
 SELECT
     session_id,
-    detection_date,
-    MIN(detection_timestamp) AS session_start,
-    MAX(detection_timestamp) AS session_end,
+    strftime(detection_date, '%Y-%m-%d') AS detection_date,
+    strftime(MIN(detection_timestamp), '%Y-%m-%d %H:%M:%S') AS session_start,
+    strftime(MAX(detection_timestamp), '%Y-%m-%d %H:%M:%S') AS session_end,
     COUNT(*)                 AS detection_count,
     COUNT(DISTINCT Com_Name) AS species_count,
     date_diff('minute',

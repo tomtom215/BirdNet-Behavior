@@ -118,7 +118,7 @@ impl WindowSpec for SlidingSpec {
     GROUP BY detection_date
 )
 SELECT
-    detection_date,
+    strftime(detection_date, '%Y-%m-%d') AS det_date,
     daily_detections,
     species_richness,
     avg_confidence,

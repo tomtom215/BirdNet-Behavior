@@ -39,10 +39,10 @@ impl QueryPlan for IntraDay {
         let thresh = self.threshold_minutes;
         format!(
             "SELECT
-    detection_timestamp             AS gap_end,
-    LAG(detection_timestamp) OVER (
+    strftime(detection_timestamp, '%Y-%m-%d %H:%M:%S') AS gap_end,
+    strftime(LAG(detection_timestamp) OVER (
         ORDER BY detection_timestamp
-    )                               AS gap_start,
+    ), '%Y-%m-%d %H:%M:%S')          AS gap_start,
     date_diff('minute',
         LAG(detection_timestamp) OVER (ORDER BY detection_timestamp),
         detection_timestamp
@@ -82,7 +82,7 @@ impl QueryPlan for QuietDays {
         let days = self.lookback_days;
         format!(
             "SELECT
-    detection_date          AS date,
+    strftime(detection_date, '%Y-%m-%d') AS date,
     COUNT(*)                AS detection_count,
     COUNT(DISTINCT Com_Name) AS species_count
 FROM detections_ts
@@ -134,7 +134,7 @@ impl QueryPlan for DailyMaxGap {
     WHERE detection_date >= CURRENT_DATE - INTERVAL {days} DAYS
 )
 SELECT
-    detection_date             AS date,
+    strftime(detection_date, '%Y-%m-%d') AS date,
     MAX(gap_minutes)           AS max_gap_minutes,
     COUNT(*)                   AS detection_count,
     COUNT(CASE WHEN gap_minutes >= {min_gap} THEN 1 END) AS gap_count
@@ -191,7 +191,7 @@ presence AS (
     LEFT JOIN seen_days sd ON ds.d = sd.detection_date
 )
 SELECT
-    date,
+    strftime(date, '%Y-%m-%d') AS dt,
     seen,
     SUM(CASE WHEN seen THEN 1 ELSE 0 END) OVER (
         ORDER BY date ROWS UNBOUNDED PRECEDING

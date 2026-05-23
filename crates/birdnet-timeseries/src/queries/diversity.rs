@@ -26,7 +26,7 @@ impl QueryPlan for DailyRichness {
         let days = self.lookback_days;
         format!(
             "SELECT
-    detection_date              AS date,
+    strftime(detection_date, '%Y-%m-%d') AS date,
     COUNT(DISTINCT Com_Name)    AS species_richness,
     COUNT(*)                    AS total_detections
 FROM detections_ts
@@ -76,7 +76,7 @@ totals AS (
     GROUP BY detection_date
 )
 SELECT
-    sd.detection_date                     AS date,
+    strftime(sd.detection_date, '%Y-%m-%d') AS date,
     COUNT(DISTINCT sd.Com_Name)           AS species_richness,
     t.total                               AS total_detections,
     -SUM((sd.n * 1.0 / t.total) * ln(sd.n * 1.0 / t.total)) AS shannon_h,
@@ -128,7 +128,7 @@ impl QueryPlan for AccumulationCurve {
     GROUP BY Com_Name
 )
 SELECT
-    first_date            AS date,
+    strftime(first_date, '%Y-%m-%d') AS date,
     COUNT(*)              AS new_species_today,
     SUM(COUNT(*)) OVER (
         ORDER BY first_date
@@ -168,8 +168,8 @@ impl QueryPlan for TopSpeciesByCount {
     Com_Name                 AS species,
     COUNT(*)                 AS detection_count,
     AVG(Confidence)          AS avg_confidence,
-    MIN(detection_date)      AS first_seen,
-    MAX(detection_date)      AS last_seen,
+    strftime(MIN(detection_date), '%Y-%m-%d') AS first_seen,
+    strftime(MAX(detection_date), '%Y-%m-%d') AS last_seen,
     COUNT(DISTINCT detection_date) AS active_days
 FROM detections_ts
 WHERE detection_date >= CURRENT_DATE - INTERVAL {days} DAYS
