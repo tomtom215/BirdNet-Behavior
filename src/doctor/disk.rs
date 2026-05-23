@@ -73,7 +73,27 @@ fn parse_df_available_kib(df_output: &str) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_df_available_kib;
+    use super::{check_disk_space, parse_df_available_kib};
+
+    #[test]
+    fn check_disk_space_returns_one_named_check() {
+        use crate::cli::Cli;
+        use clap::Parser as _;
+        // Shells out to `df` on the default volume; the exact verdict depends on
+        // the host's free space, so we assert structure rather than the branch.
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        let checks = check_disk_space(&cli, None);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].name, "Disk space");
+    }
+
+    #[test]
+    fn parse_df_available_kib_handles_wrapped_and_empty() {
+        // No data row → None (covers the early-return path).
+        assert_eq!(parse_df_available_kib(""), None);
+        // Fewer than four columns → None.
+        assert_eq!(parse_df_available_kib("Header\n/dev/sda1 100"), None);
+    }
 
     #[test]
     fn parse_df_available_kib_reads_fourth_column() {

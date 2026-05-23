@@ -388,4 +388,43 @@ mod tests {
         // 12:00 UTC is outside — and the clock is trusted, so we honour it.
         assert!(!recording_allowed(&config, midnight_2024 + 12 * 3600));
     }
+
+    #[test]
+    fn resolve_rtsp_urls_falls_back_to_config() {
+        use birdnet_core::config::Config;
+        // No CLI flags → the single RTSP_URL config key is used.
+        let cfg = Config::parse("RTSP_URL=rtsp://cam.local/s").unwrap();
+        assert_eq!(
+            resolve_rtsp_urls(&cli(), Some(&cfg)),
+            vec!["rtsp://cam.local/s".to_string()]
+        );
+        // No flags and no config → empty.
+        assert!(resolve_rtsp_urls(&cli(), None).is_empty());
+    }
+
+    #[test]
+    fn resolve_sources_reads_alsa_card_from_config() {
+        use birdnet_core::config::Config;
+        let cfg = Config::parse("ALSA_CARD=plughw:2,0").unwrap();
+        let sources = resolve_sources(&cli(), Some(&cfg));
+        assert_eq!(sources.len(), 1);
+        assert!(matches!(sources[0], CaptureSource::Microphone { .. }));
+    }
+
+    #[test]
+    fn sleep_with_stop_returns_promptly_when_already_stopped() {
+        let stop = AtomicBool::new(true);
+        let start = Instant::now();
+        sleep_with_stop(Duration::from_secs(10), &stop);
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "must wake immediately when the stop flag is already set"
+        );
+    }
+
+    #[test]
+    fn now_unix_secs_is_after_2020() {
+        // 2020-01-01 UTC; a sanity floor that catches a broken clock helper.
+        assert!(now_unix_secs() > 1_577_836_800);
+    }
 }

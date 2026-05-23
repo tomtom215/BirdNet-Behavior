@@ -232,7 +232,56 @@ fn parse_host_port(hp: &str, default: u16) -> (String, u16) {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_card_number, parse_host_port};
+    use super::{check_audio_source, extract_card_number, parse_host_port, probe_rtsp_url};
+    use crate::cli::Cli;
+    use crate::doctor::Status;
+    use clap::Parser as _;
+
+    #[test]
+    fn check_audio_source_none_configured_warns() {
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        let checks = check_audio_source(&cli, None);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].name, "Audio source");
+        assert_eq!(checks[0].status, Status::Warn);
+    }
+
+    #[test]
+    fn check_audio_source_single_source_passes_summary() {
+        let mut cli = Cli::parse_from(["birdnet-behavior"]);
+        cli.rtsp_url = Some("rtsp://nonexistent.invalid:554/stream".into());
+        let checks = check_audio_source(&cli, None);
+        // First check is the source summary (exactly one source → pass); the
+        // RTSP probe follows. We don't assert the probe verdict (it depends on
+        // the host's resolvability), only that the summary is a pass.
+        assert_eq!(checks[0].name, "Audio source");
+        assert_eq!(checks[0].status, Status::Pass);
+        assert!(checks.iter().any(|c| c.name == "RTSP URL probe"));
+    }
+
+    #[test]
+    fn check_audio_source_multiple_sources_warn() {
+        let mut cli = Cli::parse_from(["birdnet-behavior"]);
+        cli.alsa_device = Some("plughw:1,0".into());
+        cli.rtsp_url = Some("rtsp://nonexistent.invalid:554/s".into());
+        let checks = check_audio_source(&cli, None);
+        assert_eq!(checks[0].name, "Audio source");
+        assert_eq!(checks[0].status, Status::Warn);
+        assert!(checks[0].message.contains('2'));
+    }
+
+    #[test]
+    fn probe_rtsp_url_rejects_non_rtsp_scheme() {
+        assert_eq!(probe_rtsp_url("http://example.com/s").status, Status::Fail);
+    }
+
+    #[test]
+    fn probe_rtsp_url_warns_on_unresolvable_host() {
+        // `.invalid` is reserved and never resolves (RFC 6761), so the probe
+        // takes the resolution-failure branch deterministically.
+        let c = probe_rtsp_url("rtsp://nonexistent.invalid:554/stream");
+        assert_eq!(c.status, Status::Warn);
+    }
 
     #[test]
     fn parse_host_port_basic() {

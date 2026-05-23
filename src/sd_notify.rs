@@ -258,4 +258,20 @@ mod tests {
         let hb = AtomicU64::new(42);
         assert_eq!(watchdog_should_ping(Some(&hb), 42), (false, 42));
     }
+
+    #[test]
+    fn notify_wrappers_are_safe_no_ops_without_systemd() {
+        // Documented behaviour: every entry point is a graceful no-op when not
+        // running under systemd. (Skip if a real NOTIFY_SOCKET is inherited,
+        // since we must not mutate the env under the no-unsafe rule.)
+        if std::env::var_os("NOTIFY_SOCKET").is_some() {
+            return;
+        }
+        ready();
+        stopping();
+        assert!(!watchdog_ping());
+        // No NOTIFY_SOCKET → returns immediately without spawning anything, so
+        // this is safe to call outside a tokio runtime.
+        spawn_watchdog_pinger(None, None);
+    }
 }
