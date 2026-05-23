@@ -60,6 +60,8 @@ pub fn api_routes() -> Router<AppState> {
         .merge(pages::router())
         .merge(static_files::router())
         .merge(admin::router())
+        // Friendly branded 404 for any unmatched path (e.g. a mistyped page URL).
+        .fallback(pages::not_found)
 }
 
 #[cfg(test)]

@@ -9,7 +9,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.0] - 2026-05-23
 
+### Security
+
+- **Response-hardening headers on every response.** A new
+  `birdnet-web::security` middleware layer sets `Content-Security-Policy`
+  (own-origin scripts/styles/`connect-src`; no off-origin script, object, or
+  framing), `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`,
+  and `Referrer-Policy: strict-origin-when-cross-origin`. No HSTS — the binary
+  serves plain HTTP and expects a reverse proxy to own TLS.
+- **Stateless CSRF protection.** State-changing requests (`POST`/`PUT`/`PATCH`/
+  `DELETE`) whose `Origin`/`Referer` authority does not match the request
+  `Host` are rejected with `403`. The web UI uses HTTP Basic Auth with no
+  sessions, so a same-origin check (rather than a per-form synchroniser token)
+  is the appropriate CSRF defence; non-browser clients (the CLI, scripts,
+  `curl`) that send neither header are unaffected.
+
 ### Added
+
+#### Pre-release hardening for 0.2.0 (release pipeline, docs, web)
+
+- **Release binaries ship analytics built in.** `release.yml` builds each
+  target with `--features analytics`, so one binary statically links the
+  DuckDB behavioral-analytics engine (dormant until `--analytics-db` is
+  passed) — there is no separate archive to choose.
+- **Keyless cosign signatures on the Docker images.** The `docker.yml` merge
+  job signs each multi-arch manifest with the workflow's GitHub OIDC identity
+  (Fulcio + Rekor), matching the SLSA build-provenance attestation already on
+  the binaries. Verification recipe in `RELEASING.md` and the job summary.
+- **Rehearsable releases.** A `workflow_dispatch` dry run on `release.yml`
+  runs validate → ci → build → package → attest without publishing, so a
+  release — including the DuckDB analytics cross-build — can be proven green
+  before a tag is pushed.
+- **mdBook link checking in CI.** `docs.yml` now runs `mdbook-linkcheck`; a
+  broken internal documentation link fails the build.
+- **Reconnecting live-detection stream client.** A self-contained
+  `/static/live-detections.js` consumes the existing `/api/v2/ws/detections`
+  WebSocket, surfaces a live/offline indicator, dispatches `birdnet:detection`
+  events, and reconnects with exponential backoff + jitter (capped at 30 s),
+  dropping the socket while the tab is hidden. All DOM writes use `textContent`
+  (never `innerHTML`).
+- **Friendly `404` page.** Unmatched URLs now render the branded app layout
+  with a route back to the dashboard, replacing the previous empty response.
+- **Supported hardware/OS matrix** added prominently to the README and the
+  book, making the glibc 2.39 floor, the Bookworm→Docker path, and the
+  no-armv7 caveat unmissable.
+- **Upgrade-safe installer.** Re-running `install.sh` stops the service before
+  swapping the binary (avoiding `ETXTBSY`) and restarts it on the new version;
+  data and config are preserved and schema migrations run on startup. The
+  installer also refuses to run on glibc < 2.39 with an actionable message.
+- **`RELEASING.md` rewritten** to match the real pipeline (two build targets,
+  native GCC cross — not `cargo-zigbuild`, SBOM, cosign, dry run) with a
+  copy-paste pre-release checklist and a "what is not automated" section.
 
 #### Mutation testing extended to `src/daemon.rs` (item A1, PR #50 carryover)
 

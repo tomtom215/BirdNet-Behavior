@@ -108,6 +108,23 @@ pub(crate) fn render_page(title: &str, content: &str, active_nav: &str) -> Html<
     Html(html)
 }
 
+/// Friendly `404` page rendered in the full app layout. Wired as the router
+/// fallback so a mistyped URL gets the branded shell and a way back, rather
+/// than an empty body.
+pub(crate) async fn not_found() -> impl axum::response::IntoResponse {
+    let body = render_page(
+        "Page not found",
+        r#"<section class="bnb-card" style="max-width:560px;margin:48px auto;text-align:center;padding:40px 28px;">
+  <div class="display" style="font-size:48px;line-height:1;margin-bottom:8px;">404</div>
+  <h1 style="margin:0 0 10px;font-size:20px;">That page flew off</h1>
+  <p style="opacity:.8;margin:0 0 20px;">The link may be stale, or the page may have moved. Check the address, or head back to the dashboard.</p>
+  <a class="bnb-btn" href="/">Back to the dashboard</a>
+</section>"#,
+        "",
+    );
+    (axum::http::StatusCode::NOT_FOUND, body)
+}
+
 // ---------------------------------------------------------------------------
 // Shared utilities (used across multiple sub-modules)
 // ---------------------------------------------------------------------------
