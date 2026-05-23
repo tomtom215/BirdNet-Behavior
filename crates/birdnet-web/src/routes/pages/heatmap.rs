@@ -34,7 +34,7 @@ pub fn router() -> Router<AppState> {
         .route("/pages/activity-streamgraph", get(streamgraph_partial))
         .route("/pages/dawn-chorus", get(dawn_chorus_partial))
         .route(
-            "/pages/migration-ridgeline",
+            "/pages/seasonal-phenology",
             get(migration_ridgeline_partial),
         )
 }
@@ -97,7 +97,7 @@ const HEATMAP_CONTENT: &str = r#"<div class="page-head">
 
 <div class="bnb-card pad">
   <div class="section-header"><div><div class="bnb-eyebrow">Arrivals & departures</div><h3>Seasonal phenology</h3></div></div>
-  <div id="migration-ridgeline" hx-get="/pages/migration-ridgeline" hx-trigger="load" hx-swap="innerHTML">
+  <div id="seasonal-phenology" hx-get="/pages/seasonal-phenology" hx-trigger="load" hx-swap="innerHTML">
     <p class="bnb-meta">Loading phenology...</p>
   </div>
 </div>
@@ -253,7 +253,8 @@ async fn dawn_chorus_partial(State(state): State<AppState>) -> impl axum::respon
 }
 
 // ---------------------------------------------------------------------------
-// GET /pages/migration-ridgeline — per-species seasonal joyplot
+// GET /pages/seasonal-phenology — per-species seasonal joyplot
+// (the dedicated /migration page owns the canonical /pages/migration-ridgeline)
 // ---------------------------------------------------------------------------
 
 async fn migration_ridgeline_partial(
