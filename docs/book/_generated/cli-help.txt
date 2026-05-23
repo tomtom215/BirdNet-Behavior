@@ -1,0 +1,363 @@
+BirdNet-Behavior: Real-time acoustic bird classification with DuckDB behavioral analytics
+
+Usage: birdnet-behavior [OPTIONS]
+
+Options:
+  -c, --config <CONFIG>
+          Path to configuration file
+
+          [env: BIRDNET_CONFIG=]
+          [default: /etc/birdnet/birdnet.conf]
+
+      --listen <LISTEN>
+          Web server listen address
+
+          [env: BIRDNET_LISTEN=]
+          [default: 127.0.0.1:8502]
+
+      --web-only
+          Run only the web server (skip analysis daemon)
+
+      --check-db
+          Run database integrity check and exit
+
+      --backup-db
+          Create database backup and exit
+
+      --doctor
+          Run the preflight diagnostic and exit.
+
+          Validates the configuration, audio source, model file, database integrity, disk space, and tool dependencies. Returns: - 0 — all checks passed - 1 — at least one warning (system will run, features degraded) - 2 — at least one error (system will not work until fixed)
+
+          Run after install and any time the system behaves unexpectedly.
+
+          [aliases: --preflight]
+
+      --doctor-json
+          Run the preflight diagnostic and emit a single-line JSON document.
+
+          Same checks and exit codes as `--doctor`, but the output is a machine-readable JSON object with `summary` and `checks` fields. Use for monitoring scripts (Nagios / Zabbix / Prometheus textfile collector / Home Assistant command sensor).
+
+      --model <MODEL>
+          Path to the ONNX model file (overrides config)
+
+          [env: BIRDNET_MODEL=]
+
+      --labels <LABELS>
+          Path to the species labels file (overrides config)
+
+          [env: BIRDNET_LABELS=]
+
+      --watch-dir <WATCH_DIR>
+          Directory to watch for new audio files (overrides config)
+
+          [env: BIRDNET_WATCH_DIR=]
+
+      --process-existing
+          Process audio files already present in watch directory on startup
+
+      --analytics-db <ANALYTICS_DB>
+          Path to the `DuckDB` analytics database file (enables behavioral analytics).
+
+          When set, a file-backed `DuckDB` database is opened at this path for behavioral analytics queries.  The file is created if it doesn't exist.
+
+          [env: BIRDNET_ANALYTICS_DB=]
+
+      --apprise-url <APPRISE_URL>
+          Apprise notification server URL (e.g., `http://localhost:8000`)
+
+          [env: BIRDNET_APPRISE_URL=]
+
+      --notify-confidence <NOTIFY_CONFIDENCE>
+          Minimum confidence threshold for Apprise notifications (0.0–1.0)
+
+          [env: BIRDNET_NOTIFY_CONFIDENCE=]
+          [default: 0.8]
+
+      --birdweather-token <BIRDWEATHER_TOKEN>
+          `BirdWeather` station token for uploading detections
+
+          [env: BIRDNET_BIRDWEATHER_TOKEN=]
+
+      --latitude <LATITUDE>
+          Station latitude for `BirdWeather` uploads
+
+          [env: BIRDNET_LATITUDE=]
+
+      --longitude <LONGITUDE>
+          Station longitude for `BirdWeather` uploads
+
+          [env: BIRDNET_LONGITUDE=]
+
+      --image-cache-dir <IMAGE_CACHE_DIR>
+          Directory for caching species images from Wikipedia
+
+          [env: BIRDNET_IMAGE_CACHE_DIR=]
+
+      --alsa-device <ALSA_DEVICE>
+          ALSA device for microphone capture (e.g., `plughw:1,0`)
+
+          [env: BIRDNET_ALSA_DEVICE=]
+
+      --pipewire-device <PIPEWIRE_DEVICE>
+          PipeWire/PulseAudio source for microphone capture.
+
+          Uses `ffmpeg -f pulse` which works with both native `PulseAudio` and `PipeWire` (via `pipewire-pulse`). Leave empty or use `default` for the system default source. Takes precedence over `--alsa-device` when set. BirdNET-Pi equivalent: ALSA device pointing to a `PulseAudio` sink.
+
+          [env: BIRDNET_PIPEWIRE_DEVICE=]
+
+      --rtsp-url <RTSP_URL>
+          RTSP URL for audio capture (e.g., `rtsp://camera.local:554/stream`).
+
+          For a single stream. Use `--rtsp-urls` for multiple streams.
+
+          [env: BIRDNET_RTSP_URL=]
+
+      --rtsp-urls <RTSP_URLS>
+          Comma-separated RTSP URLs for multi-stream capture.
+
+          Each URL gets its own independent capture pipeline with filenames prefixed `RTSP_1-`, `RTSP_2-`, etc. Overrides `--rtsp-url` if set.
+
+          [env: BIRDNET_RTSP_URLS=]
+
+      --segment-duration <SEGMENT_DURATION>
+          Duration of each recording segment in seconds (default: 15)
+
+          [env: BIRDNET_SEGMENT_DURATION=]
+          [default: 15]
+
+      --recording-schedule <RECORDING_SCHEDULE>
+          Recording schedule mode: "all-day" (24/7), "solar" (sunrise-to-sunset), or "fixed:HH:MM-HH:MM" (e.g., "fixed:06:00-20:00")
+
+          [env: BIRDNET_RECORDING_SCHEDULE=]
+          [default: all-day]
+
+      --night-inhibit
+          Inhibit recording during night hours (requires --latitude and --longitude)
+
+          [env: BIRDNET_NIGHT_INHIBIT=]
+
+      --twilight-offset <TWILIGHT_OFFSET>
+          Minutes offset from sunrise/sunset for twilight recording (default: 30)
+
+          [env: BIRDNET_TWILIGHT_OFFSET=]
+          [default: 30]
+
+      --heartbeat-url <HEARTBEAT_URL>
+          Heartbeat URL to ping after each analysis cycle (e.g., uptime monitoring)
+
+          [env: BIRDNET_HEARTBEAT_URL=]
+
+      --notify-trigger <NOTIFY_TRIGGER>
+          Notification trigger mode: "each", "new-species", "new-species-daily"
+
+          [env: BIRDNET_NOTIFY_TRIGGER=]
+          [default: each]
+
+      --notify-species-exclude <NOTIFY_SPECIES_EXCLUDE>
+          Species to exclude from notifications (comma-separated scientific names)
+
+          [env: BIRDNET_NOTIFY_SPECIES_EXCLUDE=]
+
+      --notify-species-only <NOTIFY_SPECIES_ONLY>
+          Only notify for these species (comma-separated scientific names)
+
+          [env: BIRDNET_NOTIFY_SPECIES_ONLY=]
+
+      --notify-title-template <NOTIFY_TITLE_TEMPLATE>
+          Custom notification title template (supports $comname, $sciname, $confidence, etc.)
+
+          [env: BIRDNET_NOTIFY_TITLE_TEMPLATE=]
+
+      --notify-body-template <NOTIFY_BODY_TEMPLATE>
+          Custom notification body template (supports $comname, $sciname, $confidence, etc.)
+
+          [env: BIRDNET_NOTIFY_BODY_TEMPLATE=]
+
+      --metadata-model <METADATA_MODEL>
+          Path to the metadata ONNX model for species occurrence filtering.
+
+          When set, the metadata model predicts which species are likely present at the station's location and time of year, filtering out unlikely species.
+
+          [env: BIRDNET_METADATA_MODEL=]
+
+      --sf-thresh <SF_THRESH>
+          Species frequency threshold for the metadata model filter (0.0-1.0).
+
+          Species with occurrence probability below this threshold are filtered out. Lower values allow more species through; higher values are more restrictive.
+
+          [env: BIRDNET_SF_THRESH=]
+          [default: 0.03]
+
+      --privacy-threshold <PRIVACY_THRESHOLD>
+          Privacy filter threshold for human voice detection (0.0 = disabled).
+
+          When enabled, audio chunks containing human voice are suppressed along with adjacent chunks. Typical values: 0.01-0.03.
+
+          [env: BIRDNET_PRIVACY_THRESHOLD=]
+          [default: 0.0]
+
+      --overlap <OVERLAP>
+          Analysis window overlap in seconds (0.0-2.9, default 0.0).
+
+          Controls how much consecutive 3-second analysis windows overlap. Higher overlap increases sensitivity at the cost of more CPU time. BirdNET-Pi equivalent: OVERLAP config option.
+
+          [env: BIRDNET_OVERLAP=]
+          [default: 0.0]
+
+      --site-name <SITE_NAME>
+          Custom site name displayed in page titles and header.
+
+          Replaces the default "BirdNet-Behavior" branding in the web UI.
+
+          [env: BIRDNET_SITENAME=]
+
+      --lang <LANG>
+          Language code for species name translation (e.g., "de", "fr", "ja").
+
+          When set, species common names are translated to the specified language using `BirdNET` label files. Default: "en" (English).
+
+          [env: BIRDNET_LANG=]
+          [default: en]
+
+      --labels-dir <LABELS_DIR>
+          Directory containing `BirdNET` language label files for i18n.
+
+          Label files should be named like `labels_de.txt`, `labels_fr.txt`, etc.
+
+          [env: BIRDNET_LABELS_DIR=]
+
+      --info-site <INFO_SITE>
+          eBird/AllAboutBirds species info links: "ebird", "allaboutbirds", or "none"
+
+          [env: BIRDNET_INFO_SITE=]
+          [default: ebird]
+
+      --audio-format <AUDIO_FORMAT>
+          Audio format for extracted detection clips: "wav", "mp3", "flac", or "ogg".
+
+          Non-WAV formats require ffmpeg or sox to be installed. BirdNET-Pi equivalent: AUDIOFMT config option.
+
+          [env: BIRDNET_AUDIO_FORMAT=]
+          [default: wav]
+
+      --max-files-per-species <MAX_FILES_PER_SPECIES>
+          Maximum number of extracted recordings kept per species (0 = unlimited).
+
+          When set, the oldest files beyond this limit are deleted automatically. `BirdNET-Pi` equivalent: `MAX_FILES_SPECIES` config option.
+
+          [env: BIRDNET_MAX_FILES_PER_SPECIES=]
+          [default: 0]
+
+      --disk-exclude <DISK_EXCLUDE>
+          Comma-separated paths to exclude from disk usage monitoring.
+
+          Files under these paths are never auto-purged.
+
+          [env: BIRDNET_DISK_EXCLUDE=]
+
+      --custom-image-dir <CUSTOM_IMAGE_DIR>
+          Directory containing custom species images (checked before Wikipedia cache).
+
+          Files should be named `{lowercase_sci_name_with_underscores}.jpg`, e.g. `turdus_merula.jpg`. `BirdNET-Pi` equivalent: `CUSTOM_IMAGE` directory.
+
+          [env: BIRDNET_CUSTOM_IMAGE_DIR=]
+
+      --apprise-config <APPRISE_CONFIG>
+          Path to Apprise config file (alternative/addition to --apprise-url).
+
+          When set, uses the `apprise` CLI tool with `-c <file>` for notifications. `BirdNET-Pi` equivalent: `APPRISE_CONFIG_FILE` config option.
+
+          [env: BIRDNET_APPRISE_CONFIG=]
+
+      --weekly-report-schedule <WEEKLY_REPORT_SCHEDULE>
+          Weekly report notification schedule.
+
+          Send a weekly summary via Apprise on a fixed weekday. Values: "monday", "tuesday", ..., "sunday", or "disabled". `BirdNET-Pi` equivalent: `weekly_report` cron job.
+
+          [env: BIRDNET_WEEKLY_REPORT_SCHEDULE=]
+          [default: monday]
+
+      --freq-shift-hz <FREQ_SHIFT_HZ>
+          Frequency shift applied to extracted audio clips in Hz (0 = disabled).
+
+          Shifts the pitch of saved detection clips upward by the given number of Hz, making high-frequency bird calls accessible to people with high-frequency hearing loss. Requires ffmpeg or sox. Typical values: 1000–4000 Hz. `BirdNET-Pi` equivalent: `FREQ_SHIFT` + `FREQ_SHIFT_AMOUNT` config options.
+
+          [env: BIRDNET_FREQ_SHIFT_HZ=]
+          [default: 0]
+
+      --mqtt-host <MQTT_HOST>
+          MQTT broker hostname or IP address for `IoT` detection events.
+
+          When set, each bird detection is published as a JSON payload to the configured broker.  Compatible with Home Assistant, Node-RED, Mosquitto, and any MQTT 3.1.1-compatible broker. Example: `--mqtt-host mqtt.local`
+
+          [env: BIRDNET_MQTT_HOST=]
+
+      --mqtt-port <MQTT_PORT>
+          MQTT broker port (default: 1883; TLS: 8883)
+
+          [env: BIRDNET_MQTT_PORT=]
+          [default: 1883]
+
+      --mqtt-client-id <MQTT_CLIENT_ID>
+          MQTT client identifier published in CONNECT packets.
+
+          Must be unique per active connection on the broker.
+
+          [env: BIRDNET_MQTT_CLIENT_ID=]
+          [default: birdnet-behavior]
+
+      --mqtt-username <MQTT_USERNAME>
+          MQTT broker username for authentication
+
+          [env: BIRDNET_MQTT_USERNAME=]
+
+      --mqtt-password <MQTT_PASSWORD>
+          MQTT broker password for authentication
+
+          [env: BIRDNET_MQTT_PASSWORD=]
+
+      --mqtt-topic-prefix <MQTT_TOPIC_PREFIX>
+          MQTT topic prefix for published messages (default: "birdnet").
+
+          Detections are published to `{prefix}/detection/{species}`. Status heartbeat is published to `{prefix}/status`.
+
+          [env: BIRDNET_MQTT_TOPIC_PREFIX=]
+          [default: birdnet]
+
+      --mqtt-retain
+          Set the RETAIN flag on MQTT detection messages.
+
+          When set, the broker stores the last detection per topic and delivers it immediately to new subscribers.  Useful for Home Assistant sensors.
+
+          [env: BIRDNET_MQTT_RETAIN=]
+
+      --mqtt-ha-discovery
+          Publish Home Assistant MQTT auto-discovery messages at startup.
+
+          When enabled, BirdNet-Behavior publishes MQTT discovery payloads to `homeassistant/<component>/<uid>/config` so Home Assistant automatically creates sensors without manual `configuration.yaml` entries.
+
+          Requires `--mqtt-host` to be set.  Harmless if HA is not running.
+
+          [env: BIRDNET_MQTT_HA_DISCOVERY=]
+
+      --quality-filter
+          Enable audio quality pre-filtering before ML inference.
+
+          When enabled, audio chunks are assessed for SNR, spectral flatness, and rain/wind interference before being passed to the ML model. Chunks below the quality threshold are discarded, reducing false positives in noisy environments at the cost of some sensitivity.
+
+          [env: BIRDNET_QUALITY_FILTER=]
+
+      --quality-min-snr-db <QUALITY_MIN_SNR_DB>
+          Minimum SNR (dB) for audio quality pre-filtering (default: 3.0).
+
+          Only used when --quality-filter is set.
+
+          [env: BIRDNET_QUALITY_MIN_SNR=]
+          [default: 3.0]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version

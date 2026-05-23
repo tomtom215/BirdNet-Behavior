@@ -41,6 +41,7 @@
 
 # Reference
 
+- [Full Configuration Reference](./reference/configuration-reference.md)
 - [Web UI & URLs](./reference/web-api.md)
 - [HTTP & WebSocket API](./reference/api.md)
 - [Integrations Reference](./reference/integrations.md)

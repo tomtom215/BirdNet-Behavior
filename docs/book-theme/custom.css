@@ -51,3 +51,24 @@
 .content table thead th {
   border-bottom: 2px solid var(--bnb-moss);
 }
+
+/* Dark themes: brighten the moss accents so callouts and table headers read
+   clearly against the dark surface, and lift the blockquote tint to visible. */
+.navy .content blockquote,
+.coal .content blockquote,
+.ayu .content blockquote {
+  border-inline-start-color: #7bbf86;
+  background: rgba(123, 191, 134, 0.08);
+}
+.navy .content table thead th,
+.coal .content table thead th,
+.ayu .content table thead th {
+  border-bottom-color: #7bbf86;
+}
+
+/* Keep inline code and the search highlight legible on every theme. */
+.navy .content code,
+.coal .content code,
+.ayu .content code {
+  background-color: rgba(255, 255, 255, 0.07);
+}
