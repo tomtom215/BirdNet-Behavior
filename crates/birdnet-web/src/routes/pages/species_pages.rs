@@ -250,11 +250,23 @@ async fn species_info_partial(
 
     let mut html = String::new();
 
+    // The /file image route is cache-only, so warm this species' photo in the
+    // background (non-blocking) on first view — a later view then shows it.
     if let Some(cache) = state.image_cache()
-        && let Some(image) = cache.get_cached(&sci_name)
+        && !name.is_empty()
+        && cache.get_cached(&name).is_none()
+    {
+        let name_bg = name.clone();
+        tokio::spawn(async move {
+            let _ = cache.get_image(&name_bg).await;
+        });
+    }
+
+    if let Some(cache) = state.image_cache()
+        && let Some(image) = cache.get_cached(&name)
     {
         if image.cached_path.is_some() {
-            let enc = simple_url_encode(&sci_name);
+            let enc = simple_url_encode(&name);
             let _ = write!(
                 html,
                 r#"<img src="/api/v2/species/image/{enc}/file" alt="{alt}" style="width:100%;border-radius:var(--radius);margin-bottom:1rem;" />"#,
@@ -366,7 +378,7 @@ async fn species_hero_partial(
     let best = tokio::task::spawn_blocking(move || {
         state_clone.with_db(|conn| {
             conn.query_row(
-                "SELECT Date, Time, Confidence, File_Name, Sci_Name \
+                "SELECT Date, Time, Confidence, File_Name \
                  FROM detections \
                  WHERE Com_Name = ?1 AND File_Name IS NOT NULL AND File_Name <> '' \
                  ORDER BY Confidence DESC LIMIT 1",
@@ -377,7 +389,6 @@ async fn species_hero_partial(
                         r.get::<_, String>(1)?,
                         r.get::<_, f64>(2)?,
                         r.get::<_, String>(3)?,
-                        r.get::<_, String>(4)?,
                     ))
                 },
             )
@@ -388,7 +399,7 @@ async fn species_hero_partial(
     .ok()
     .flatten();
 
-    let Some((date, time, conf, file_name, sci_name)) = best else {
+    let Some((date, time, conf, file_name)) = best else {
         let html = r#"<div class="bnb-eyebrow" style="margin-bottom:8px;">Best detection</div>
 <div class="bnb-photo" data-caption="no clip yet" style="aspect-ratio:4/3;border-radius:var(--r-md);"></div>
 <p class="bnb-meta" style="margin-top:8px;">No recording captured for this species yet.</p>"#;
@@ -409,12 +420,12 @@ async fn species_hero_partial(
 
     let photo_inner = state
         .image_cache()
-        .and_then(|cache| cache.get_cached(&sci_name))
+        .and_then(|cache| cache.get_cached(&name))
         .filter(|img| img.cached_path.is_some())
         .map(|_| {
-            let enc_sci = simple_url_encode(&sci_name);
+            let enc = simple_url_encode(&name);
             format!(
-                r#"<img src="/api/v2/species/image/{enc_sci}/file" alt="{alt}" loading="lazy" style="width:100%;height:100%;object-fit:cover;" />"#,
+                r#"<img src="/api/v2/species/image/{enc}/file" alt="{alt}" loading="lazy" style="width:100%;height:100%;object-fit:cover;" />"#,
                 alt = escape_html(&name),
             )
         })
