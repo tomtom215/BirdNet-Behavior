@@ -181,6 +181,29 @@ sudo systemctl restart birdnet-behavior
 Backups are taken automatically at startup whenever WAL replay detects
 recovery; manual backups are equivalent.
 
+### 4.1 Behavioral analytics show "extension required"
+
+Symptom: the **Analytics** page cards (Activity Sessions, Species Retention,
+Next Species) report *"The `duckdb-behavioral` extension is required…"*, and the
+startup log warns `duckdb-behavioral extension not loaded`.
+
+Cause: the `duckdb-behavioral` community extension is compiled against a
+**specific DuckDB version** and DuckDB refuses to load an extension built for a
+different version (e.g. an extension built for DuckDB `v1.5.1` cannot load into a
+binary that bundles `v1.5.3`). The mismatch can appear after the bundled DuckDB
+is bumped.
+
+This is **non-fatal** — the rest of the app is unaffected, and the
+station-local analytics that read SQLite directly (Migration, the Dawn Chorus,
+the Heatmap, Co-occurrence, and the Time-series page) keep working. Only the
+extension-backed sessionize / retention / next-species queries are unavailable.
+
+Fix: rebuild and republish the extension for the bundled DuckDB version in the
+[duckdb-behavioral](https://github.com/tomtom215/duckdb-behavioral) repository,
+or pin the `duckdb` crate to the version the published extension targets, then
+rebuild with `--features analytics`. Check the bundled version with
+`birdnet-behavior --doctor` (or the log line above) and match it.
+
 ---
 
 ## 5. Memory / CPU pressure on small hardware
