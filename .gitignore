@@ -51,3 +51,10 @@ mutants.out.old/
 # including every time cargo-mutants makes one fail to catch a mutant — so the
 # directory is noise rather than a curated regression corpus here.
 proptest-regressions/
+
+# Local scratch dir for the visual-QA screenshot pipeline (Playwright +
+# node_modules + captured PNGs). The committed tooling lives in tools/visual-qa/.
+.screenshot-tooling/
+
+# mdBook build output (the docs site is built + deployed by .github/workflows/docs.yml)
+docs/.book-build/

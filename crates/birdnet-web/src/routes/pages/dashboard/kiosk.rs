@@ -11,37 +11,44 @@ use crate::routes::pages::{escape_html, today_date_string};
 use crate::state::AppState;
 
 const KIOSK_HTML: &str = r#"<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BirdNet Kiosk</title>
+<title>BirdNet-Behavior · Kiosk</title>
+<link rel="stylesheet" href="/static/css/app.css">
 <style>
-  * { margin:0; padding:0; box-sizing:border-box; }
-  body { background:#0f172a; color:#e2e8f0; font-family:system-ui,-apple-system,sans-serif; padding:1rem; }
-  h1 { font-size:1.5rem; margin-bottom:1rem; text-align:center; color:#89b4fa; }
-  .stats { display:flex; gap:1rem; justify-content:center; margin-bottom:1rem; flex-wrap:wrap; }
-  .stat { background:#1e293b; border-radius:8px; padding:0.75rem 1.5rem; text-align:center; min-width:120px; }
-  .stat .value { font-size:2rem; font-weight:700; color:#89b4fa; }
-  .stat .label { font-size:0.75rem; color:#94a3b8; text-transform:uppercase; }
-  .recent { max-height:calc(100vh - 12rem); overflow-y:auto; }
-  .detection { display:flex; align-items:center; gap:1rem; padding:0.5rem 0; border-bottom:1px solid #1e293b; }
-  .detection .name { font-weight:600; font-size:1.1rem; }
-  .detection .sci { font-style:italic; color:#94a3b8; font-size:0.85rem; }
-  .detection .conf { padding:0.15rem 0.5rem; border-radius:4px; font-size:0.8rem; font-weight:600; }
-  .conf.high { background:#166534; color:#4ade80; }
-  .conf.mid { background:#854d0e; color:#facc15; }
-  .conf.low { background:#991b1b; color:#fca5a5; }
-  .detection .time { color:#94a3b8; font-size:0.85rem; margin-left:auto; white-space:nowrap; }
+  body { padding:4vh 5vw; overflow:hidden; }
+  .kiosk-head { display:flex; align-items:center; justify-content:center; gap:12px; margin-bottom:4vh; }
+  .kiosk-head .title { font-family:var(--font-display); font-size:clamp(28px,4vw,52px); letter-spacing:-0.02em; }
+  .stats { display:flex; gap:24px; justify-content:center; margin-bottom:4vh; flex-wrap:wrap; }
+  .stat { background:var(--surface); border:0.5px solid var(--border); border-radius:var(--r-lg); padding:20px 36px; text-align:center; min-width:170px; box-shadow:var(--shadow-md); }
+  .stat .value { font-family:var(--font-display); font-variant-numeric:tabular-nums; font-size:clamp(34px,5vw,64px); line-height:1; color:var(--moss); }
+  .stat .label { font-size:11px; letter-spacing:0.1em; text-transform:uppercase; color:var(--fg-3); margin-top:10px; }
+  .recent { max-width:1100px; margin:0 auto; max-height:calc(100vh - 34vh); overflow-y:auto; }
+  .detection { display:flex; align-items:center; gap:18px; padding:14px 2px; border-bottom:0.5px solid var(--hairline); }
+  .detection .name { font-weight:500; font-size:clamp(16px,1.6vw,22px); }
+  .detection .sci { font-style:italic; color:var(--fg-3); font-size:13px; font-family:var(--font-mono); }
+  .detection .time { color:var(--fg-3); font-size:13px; margin-left:auto; white-space:nowrap; font-family:var(--font-mono); }
 </style>
 </head>
 <body>
-<h1>BirdNet-Behavior</h1>
+<div class="kiosk-head">
+  <svg width="32" height="32" viewBox="0 0 24 24" aria-hidden="true">
+    <circle cx="12" cy="12" r="11" fill="none" stroke="currentColor" stroke-width="0.8" style="color:var(--fg)"></circle>
+    <g stroke="currentColor" stroke-width="1.4" stroke-linecap="round" style="color:var(--fg)">
+      <line x1="6" y1="12" x2="6" y2="12"></line><line x1="9" y1="9.5" x2="9" y2="14.5"></line>
+      <line x1="12" y1="6" x2="12" y2="18"></line><line x1="15" y1="8" x2="15" y2="16"></line>
+      <line x1="18" y1="10.5" x2="18" y2="13.5"></line>
+    </g>
+  </svg>
+  <span class="title">BirdNet<span style="color:var(--fg-3)">Behavior</span></span>
+</div>
 <div id="kiosk-content"
      hx-get="/pages/kiosk-content"
      hx-trigger="load, every 30s"
      hx-swap="innerHTML">
-  <p style="text-align:center;color:#94a3b8;">Loading...</p>
+  <p style="text-align:center;color:var(--fg-3);">Loading…</p>
 </div>
 <script src="/static/htmx.min.js"></script>
 </body>

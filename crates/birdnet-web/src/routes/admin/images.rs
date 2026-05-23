@@ -84,7 +84,7 @@ async fn images_page(State(state): State<AppState>) -> Html<String> {
         "<!DOCTYPE html><html><head>\
          <title>Image Blacklist — Admin</title>\
          <script src=\"/static/htmx.min.js\"></script>\
-         <link rel=\"stylesheet\" href=\"/static/style.css\">\
+         <script src=\"/static/theme-guard.js\"></script><link rel=\"stylesheet\" href=\"/static/css/app.css\">\
          </head><body>\
          <div style=\"max-width:960px;margin:2rem auto;padding:0 1rem;\">\
          <h1 style=\"font-size:1.5rem;margin-bottom:1rem;\">Species Image Blacklist</h1>\

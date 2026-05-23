@@ -213,7 +213,7 @@ fn add_days(date: &str, delta: i64) -> String {
 }
 
 const HISTORY_SHELL_HTML: &str = r#"<div class="page-content" style="padding:1.5rem;">
-  <h2 style="margin-bottom:1rem;">Detection History</h2>
+  <div class="bnb-eyebrow">Browse the past</div><h2 class="display" style="font-size:32px;margin-bottom:1rem;">History</h2>
   <div style="display:grid;grid-template-columns:200px 1fr;gap:1.5rem;align-items:start;">
     <!-- Date list sidebar -->
     <div style="background:var(--bg-card);border-radius:var(--radius);border:1px solid var(--border);">

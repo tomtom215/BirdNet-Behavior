@@ -147,7 +147,7 @@ async fn notif_stats_partial(State(state): State<AppState>) -> impl axum::respon
     }
 }
 
-const NOTIFICATION_HTML: &str = r#"<h1 style="margin-bottom:1.5rem;">Notification Center</h1>
+const NOTIFICATION_HTML: &str = r#"<div class="bnb-eyebrow">Operations</div><h1 class="display" style="font-size:34px;margin-bottom:1rem;">Notifications</h1>
 
 <div class="stats-grid" hx-get="/pages/notif-stats" hx-trigger="load, every 60s" hx-swap="innerHTML">
     <div class="stat-card"><div class="value">--</div><div class="label">Loading...</div></div>

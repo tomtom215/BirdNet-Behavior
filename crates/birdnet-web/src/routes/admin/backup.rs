@@ -105,7 +105,7 @@ struct BackupEntry {
 
 fn render_backup_list(entries: &[BackupEntry]) -> String {
     let rows = if entries.is_empty() {
-        "<tr><td colspan=\"3\" style=\"color:#64748b;text-align:center;\">No backups found</td></tr>".to_string()
+        "<tr><td colspan=\"3\" style=\"color:var(--fg-4);text-align:center;\">No backups found</td></tr>".to_string()
     } else {
         {
             use std::fmt::Write as _;
@@ -118,17 +118,17 @@ fn render_backup_list(entries: &[BackupEntry]) -> String {
                     buf,
                     r#"<tr>
                   <td style="font-family:monospace;font-size:.8rem;">{name_esc}</td>
-                  <td style="color:#94a3b8;">{size_str}</td>
-                  <td style="color:#64748b;">{date_str}</td>
+                  <td style="color:var(--fg-3);">{size_str}</td>
+                  <td style="color:var(--fg-4);">{date_str}</td>
                   <td style="display:flex;gap:.5rem;">
                     <a href="/admin/system/backups/{name_esc}"
                        download="{name_esc}"
-                       style="color:#38bdf8;font-size:.8rem;text-decoration:none;">Download</a>
+                       style="color:var(--moss-ink);font-size:.8rem;text-decoration:none;">Download</a>
                     <button hx-delete="/admin/system/backups/{name_esc}"
                             hx-target="closest tr"
                             hx-swap="outerHTML"
                             hx-confirm="Delete {name_esc}?"
-                            style="background:none;border:none;color:#f87171;cursor:pointer;font-size:.8rem;">
+                            style="background:none;border:none;color:var(--rare);cursor:pointer;font-size:.8rem;">
                       Delete
                     </button>
                   </td>
@@ -144,7 +144,7 @@ fn render_backup_list(entries: &[BackupEntry]) -> String {
           <div class="section-title">Database Backups</div>
           <table style="width:100%;border-collapse:collapse;font-size:.875rem;">
             <thead>
-              <tr style="border-bottom:1px solid #334155;color:#64748b;text-align:left;">
+              <tr style="border-bottom:1px solid var(--border);color:var(--fg-4);text-align:left;">
                 <th style="padding:.5rem;">Filename</th>
                 <th style="padding:.5rem;">Size</th>
                 <th style="padding:.5rem;">Created</th>

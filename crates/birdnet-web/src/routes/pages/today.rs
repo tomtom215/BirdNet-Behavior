@@ -11,6 +11,7 @@ use axum::response::{Html, IntoResponse};
 use axum::{Router, routing::get};
 use serde::Deserialize;
 
+use super::atoms::{avatar, conf_bar};
 use super::{TODAY_PAGE_HTML, escape_html, simple_url_encode, today_date_string};
 use crate::state::AppState;
 
@@ -18,6 +19,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/today", get(today_page))
         .route("/pages/today-list", get(today_partial))
+        .route("/pages/today-daystrip", get(today_daystrip_partial))
         .route("/pages/today-count", get(today_count_partial))
         .route("/pages/today-delete", axum::routing::post(delete_detection))
         .route(
@@ -183,10 +185,89 @@ async fn today_partial(
     }
 }
 
-/// Render a single detection card into the HTML buffer.
+/// HTMX partial: a 24-hour `DayStrip` timeline of today's detections — an
+/// hourly histogram with one colour-coded dot per detection (placed by time
+/// and confidence), night bands, sunrise/sunset markers and a "now" line.
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoResponse {
+    let today = today_date_string();
+    let result = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| birdnet_db::sqlite::todays_detections(conn, &today, None, 1000, 0))
+    })
+    .await;
+
+    let Ok(Ok(rows)) = result else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading timeline</p>".to_string(),
+        );
+    };
+
+    if rows.is_empty() {
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            r#"<p class="bnb-meta" style="text-align:center;padding:1rem;">No detections yet today.</p>"#
+                .to_string(),
+        );
+    }
+
+    let mut hourly = [0i64; 24];
+    let mut dots: Vec<(f64, String, f64)> = Vec::with_capacity(rows.len());
+    for d in &rows {
+        let hf = parse_hour_fraction(&d.time);
+        let hi = hf as usize;
+        if hi < 24 {
+            hourly[hi] += 1;
+        }
+        dots.push((hf, super::atoms::species_color(&d.com_name), d.confidence));
+    }
+
+    // Current hour-of-day (UTC) for the "now" marker.
+    let now_h = {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |x| x.as_secs());
+        (secs % 86_400) as f64 / 3600.0
+    };
+
+    let total: i64 = hourly.iter().sum();
+    let mut peak_hour = 0usize;
+    let mut peak = -1i64;
+    for (h, &c) in hourly.iter().enumerate() {
+        if c > peak {
+            peak = c;
+            peak_hour = h;
+        }
+    }
+    let dawn: i64 = hourly[4..9].iter().sum();
+
+    let caption = format!(
+        r#"<div class="bnb-meta" style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:10px;"><span class="mono">{peak_hour:02}:00 peak hour</span><span>{dawn} in the dawn chorus</span><span>{total} total today</span></div>"#
+    );
+    let strip = super::viz::day_strip(&hourly, &dots, 6.0, 19.5, now_h);
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/html")],
+        format!("{caption}{strip}"),
+    )
+}
+
+/// Parse "HH:MM:SS" into a fractional hour in [0, 24). Best-effort.
+fn parse_hour_fraction(t: &str) -> f64 {
+    let mut it = t.split(':');
+    let h: f64 = it.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+    let m: f64 = it.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+    h + m / 60.0
+}
+
+/// Render a single detection row into the HTML buffer.
 fn render_detection_card(html: &mut String, d: &birdnet_db::sqlite::DetectionRow) {
-    let conf_pct = d.confidence * 100.0;
-    let cls = conf_class(conf_pct);
     let enc_name = simple_url_encode(&d.com_name);
 
     // Audio player
@@ -201,13 +282,15 @@ fn render_detection_card(html: &mut String, d: &birdnet_db::sqlite::DetectionRow
                 .unwrap_or_default();
             let safe = escape_html(&basename);
             format!(
-                "<audio controls preload=\"none\" style=\"width:100%;height:32px;margin-top:0.5rem;\">\
+                "<audio controls preload=\"none\" style=\"height:30px;width:200px;max-width:100%;margin-top:6px;\">\
                  <source src=\"/api/v2/recordings/{safe}\" type=\"audio/wav\">\
                  </audio>"
             )
         })
         .unwrap_or_default();
 
+    let av = avatar(&d.com_name, "");
+    let conf = conf_bar(d.confidence);
     let com_name = escape_html(&d.com_name);
     let sci_name = escape_html(&d.sci_name);
     let time = escape_html(&d.time);
@@ -219,34 +302,27 @@ fn render_detection_card(html: &mut String, d: &birdnet_db::sqlite::DetectionRow
 
     let _ = write!(
         html,
-        "<div class=\"card\" style=\"display:flex;gap:1rem;align-items:flex-start;padding:0.75rem 1rem;\">\
+        "<div class=\"bnb-card\" style=\"display:flex;gap:14px;align-items:center;padding:10px 14px;margin-bottom:8px;\">\
+         {av}\
          <div style=\"flex:1;min-width:0;\">\
-         <div style=\"display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;\">\
-         <a href=\"/species/detail?name={enc_name}\" style=\"font-weight:600;color:var(--text);text-decoration:none;font-size:1rem;\">{com_name}</a>\
-         <span class=\"conf {cls}\">{conf_pct:.0}%</span>\
+         <div style=\"display:flex;align-items:center;gap:10px;flex-wrap:wrap;\">\
+         <a href=\"/species/detail?name={enc_name}\" style=\"font-weight:500;color:inherit;font-size:14px;\">{com_name}</a>\
+         {conf}\
          </div>\
-         <div style=\"color:var(--text-muted);font-size:0.8rem;font-style:italic;\">{sci_name}</div>\
-         <div style=\"color:var(--text-muted);font-size:0.8rem;margin-top:0.25rem;\">\
-         <a href=\"/detections/detail?date={date_enc}&time={time_enc}&name={enc_name}\" \
-         style=\"color:var(--text-muted);text-decoration:none;\">{time}</a>\
-         </div>\
+         <div class=\"bnb-meta mono\" style=\"margin-top:2px;\">{sci_name} · \
+         <a href=\"/detections/detail?date={date_enc}&time={time_enc}&name={enc_name}\" style=\"color:inherit;\">{time}</a></div>\
          {audio}\
          </div>\
-         <div style=\"display:flex;flex-direction:column;gap:0.25rem;flex-shrink:0;\">\
-         <button hx-post=\"/pages/today-lock\" \
+         <div style=\"display:flex;gap:6px;flex-shrink:0;\">\
+         <button class=\"bnb-btn ghost\" hx-post=\"/pages/today-lock\" \
          hx-vals='{{\"date\":\"{date_raw}\",\"time\":\"{time_raw}\",\"sci_name\":\"{sci_name_raw}\"}}' \
          hx-target=\"#today-results\" hx-swap=\"innerHTML\" hx-include=\"#today-search\" \
-         style=\"background:none;border:1px solid var(--text-muted);color:var(--text-muted);padding:0.2rem 0.5rem;\
-         border-radius:var(--radius);cursor:pointer;font-size:0.75rem;\" \
-         title=\"Lock this detection (protect from auto-purge)\">🔒 Lock</button>\
-         <button hx-post=\"/pages/today-delete\" \
+         title=\"Lock this detection (protect from auto-purge)\">🔒</button>\
+         <button class=\"bnb-btn danger\" hx-post=\"/pages/today-delete\" \
          hx-vals='{{\"date\":\"{date_raw}\",\"time\":\"{time_raw}\",\"sci_name\":\"{sci_name_raw}\"}}' \
          hx-target=\"#today-results\" hx-swap=\"innerHTML\" hx-include=\"#today-search\" \
          hx-confirm=\"Delete detection of {com_name} at {time}?\" \
-         style=\"background:none;border:1px solid var(--danger);color:var(--danger);padding:0.2rem 0.5rem;\
-         border-radius:var(--radius);cursor:pointer;font-size:0.75rem;\" \
-         title=\"Delete this detection\">\
-         Delete</button>\
+         title=\"Delete this detection\">Delete</button>\
          </div></div>",
     );
 }
@@ -335,14 +411,4 @@ async fn unlock_detection(
         [(header::CONTENT_TYPE, "text/html")],
         "<div hx-get=\"/pages/today-list\" hx-trigger=\"load\" hx-target=\"#today-results\" hx-swap=\"innerHTML\" hx-include=\"#today-search\"></div>".to_string(),
     )
-}
-
-fn conf_class(pct: f64) -> &'static str {
-    if pct >= 80.0 {
-        "high"
-    } else if pct >= 50.0 {
-        "mid"
-    } else {
-        "low"
-    }
 }

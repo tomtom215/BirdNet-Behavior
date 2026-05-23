@@ -181,43 +181,43 @@ async fn log_page(_: State<AppState>) -> Html<String> {
 
 const LOG_PAGE_HTML: &str = r#"<!DOCTYPE html>
 <html lang="en">
-<head>
+<head><script src="/static/theme-guard.js"></script><link rel="stylesheet" href="/static/css/app.css">
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>Live Logs — BirdNet-Behavior Admin</title>
   <script src="/static/htmx.min.js"></script>
   <script src="/static/htmx-sse.js"></script>
   <style>
-    body { background:#0f172a; color:#e2e8f0; font-family:system-ui,sans-serif; margin:0; }
+    body { background:var(--bg); color:var(--fg); font-family:var(--font-ui); margin:0; }
     .container { max-width:1100px; margin:0 auto; padding:2rem 1rem; }
-    nav a { color:#94a3b8; text-decoration:none; margin-right:1.5rem; font-size:.9rem; }
-    nav a:hover, nav a.active { color:#38bdf8; }
-    h1 { font-size:1.5rem; font-weight:700; color:#f1f5f9; margin-bottom:1.5rem; }
+    nav a { color:var(--fg-3); text-decoration:none; margin-right:1.5rem; font-size:.9rem; }
+    nav a:hover, nav a.active { color:var(--moss-ink); }
+    h1 { font-size:1.5rem; font-weight:700; color:var(--fg); margin-bottom:1.5rem; }
     #log-panel {
-      background:#0d1117; border:1px solid #21262d; border-radius:.5rem;
+      background:var(--bg); border:1px solid var(--surface); border-radius:.5rem;
       padding:1rem; height:600px; overflow-y:auto; font-family:monospace;
       font-size:.8rem; display:flex; flex-direction:column; gap:2px;
     }
     .log-line { display:flex; gap:.75rem; line-height:1.4; }
     .log-level { min-width:50px; font-weight:700; }
-    .log-target { color:#64748b; min-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .log-msg { color:#cbd5e1; flex:1; word-break:break-all; }
-    .level-error .log-level { color:#f87171; }
-    .level-warn  .log-level { color:#fbbf24; }
-    .level-info  .log-level { color:#4ade80; }
-    .level-debug .log-level { color:#60a5fa; }
-    .level-trace .log-level { color:#a78bfa; }
+    .log-target { color:var(--fg-4); min-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .log-msg { color:var(--fg-2); flex:1; word-break:break-all; }
+    .level-error .log-level { color:var(--rare); }
+    .level-warn  .log-level { color:var(--dawn); }
+    .level-info  .log-level { color:var(--moss); }
+    .level-debug .log-level { color:var(--moss-ink); }
+    .level-trace .log-level { color:var(--moss-ink); }
     .controls { display:flex; gap:1rem; margin-bottom:1rem; align-items:center; }
-    .btn { padding:.4rem 1rem; border-radius:.375rem; border:1px solid #334155;
-           background:#1e293b; color:#e2e8f0; cursor:pointer; font-size:.875rem; }
-    .btn:hover { border-color:#38bdf8; color:#38bdf8; }
-    .status { font-size:.8rem; color:#64748b; }
-    .status.connected { color:#4ade80; }
+    .btn { padding:.4rem 1rem; border-radius:.375rem; border:1px solid var(--border);
+           background:var(--surface); color:var(--fg); cursor:pointer; font-size:.875rem; }
+    .btn:hover { border-color:var(--moss-ink); color:var(--moss-ink); }
+    .status { font-size:.8rem; color:var(--fg-4); }
+    .status.connected { color:var(--moss); }
   </style>
 </head>
 <body>
 <div class="container">
-  <nav style="margin-bottom:2rem;padding:1rem 0;border-bottom:1px solid #334155;">
+  <nav style="margin-bottom:2rem;padding:1rem 0;border-bottom:1px solid var(--border);">
     <a href="/">Dashboard</a>
     <a href="/admin/settings">Settings</a>
     <a href="/admin/system">System</a>
@@ -229,13 +229,13 @@ const LOG_PAGE_HTML: &str = r#"<!DOCTYPE html>
   <div class="controls">
     <button class="btn" onclick="clearLog()">Clear</button>
     <button class="btn" id="pause-btn" onclick="togglePause()">Pause</button>
-    <label style="display:flex;align-items:center;gap:.5rem;font-size:.875rem;color:#94a3b8;">
+    <label style="display:flex;align-items:center;gap:.5rem;font-size:.875rem;color:var(--fg-3);">
       <input type="checkbox" id="scroll-lock" checked> Auto-scroll
     </label>
-    <label style="display:flex;align-items:center;gap:.5rem;font-size:.875rem;color:#94a3b8;">
+    <label style="display:flex;align-items:center;gap:.5rem;font-size:.875rem;color:var(--fg-3);">
       Filter:
       <select id="level-filter" onchange="applyFilter()"
-              style="background:#1e293b;border:1px solid #334155;color:#e2e8f0;
+              style="background:var(--surface);border:1px solid var(--border);color:var(--fg);
                      border-radius:.25rem;padding:.25rem .5rem;font-size:.8rem;">
         <option value="">All levels</option>
         <option value="level-error">ERROR</option>

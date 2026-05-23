@@ -1,90 +1,107 @@
-<div class="stats-grid" hx-get="/pages/stats" hx-trigger="load, every 60s" hx-swap="innerHTML">
-    <div class="stat-card">
-        <div class="value">--</div>
-        <div class="label">Total Detections</div>
+<section class="hero">
+    <div>
+        <div class="bnb-eyebrow" style="margin-bottom:8px;">Right now</div>
+        <h1>The yard is <em>listening</em>.</h1>
+        <p class="hero-lead">
+            Your station is recording and classifying calls in real time. New detections
+            stream into the feed below as they happen; today's totals and the busiest hours
+            are summarised in the panels.
+        </p>
+        <div class="pill-row">
+            <span class="bnb-pill moss"><span class="bnb-dot live"></span> recording</span>
+            <span class="bnb-pill" id="hero-species"
+                  hx-get="/pages/hero-status" hx-trigger="load, every 60s" hx-swap="innerHTML">hearing…</span>
+            <a class="bnb-pill" href="/heatmap">when it's busiest →</a>
+        </div>
     </div>
-    <div class="stat-card">
-        <div class="value">--</div>
-        <div class="label">Unique Species</div>
-    </div>
-    <div class="stat-card">
-        <div class="value">--</div>
-        <div class="label">Today</div>
-    </div>
-    <div class="stat-card">
-        <div class="value">--</div>
-        <div class="label">Last Hour</div>
-    </div>
-    <div class="stat-card">
-        <div class="value">--</div>
-        <div class="label">Last Detection</div>
-    </div>
+    <aside aria-label="Live signal">
+        <div class="bnb-card pad" style="display:flex;flex-direction:column;gap:6px;">
+            <div style="display:flex;justify-content:space-between;align-items:baseline;">
+                <span class="bnb-eyebrow">Live signal · last 30 s</span>
+                <span class="bnb-pill moss" style="font-size:10px;"><span class="bnb-dot live"></span> live</span>
+            </div>
+            <canvas id="hero-pulse" height="80" style="width:100%;height:80px;display:block;"></canvas>
+            <div style="display:flex;justify-content:space-between;">
+                <span class="mono bnb-meta">input · mic</span>
+                <span class="mono bnb-meta">48 kHz</span>
+                <span class="mono bnb-meta">BirdNET V3.0</span>
+            </div>
+        </div>
+    </aside>
+</section>
+
+<div class="stat-row" hx-get="/pages/stats" hx-trigger="load, every 60s" hx-swap="innerHTML">
+    <div class="stat-tile"><span class="label">Detections</span><span class="value">—</span></div>
+    <div class="stat-tile"><span class="label">Species</span><span class="value">—</span></div>
+    <div class="stat-tile"><span class="label">Today</span><span class="value">—</span></div>
+    <div class="stat-tile"><span class="label">Last hour</span><span class="value">—</span></div>
 </div>
 
-<div class="card" style="margin-bottom: 1rem;">
-    <h2><span class="live-dot"></span> Most Recent Detection</h2>
-    <div hx-get="/pages/most-recent" hx-trigger="load, every 15s" hx-swap="innerHTML">
-        <p style="color: var(--text-muted)">Loading...</p>
-    </div>
-</div>
-
-<div class="card" style="margin-bottom: 1rem;">
-    <h2>Today's Activity</h2>
-    <div hx-get="/pages/hourly-chart" hx-trigger="load, every 60s" hx-swap="innerHTML">
-        <p style="color: var(--text-muted)">Loading chart...</p>
-    </div>
-</div>
-
-<div class="card" style="margin-bottom: 1rem;">
-    <h2>Species &times; Hour Heatmap (Today)</h2>
-    <div hx-get="/pages/activity-heatmap" hx-trigger="load, every 60s" hx-swap="innerHTML">
-        <p style="color: var(--text-muted)">Loading heatmap...</p>
-    </div>
-</div>
+<hr class="bnb-divider">
 
 <div class="grid-2">
-    <div>
-        <div class="card">
-            <h2><span class="live-dot"></span> Recent Detections</h2>
-            <div id="detections-table" hx-get="/pages/detections" hx-trigger="load, every 15s" hx-swap="innerHTML">
-                <p style="color: var(--text-muted)">Loading detections...</p>
+    <div class="bnb-card pad">
+        <div class="section-header">
+            <div>
+                <div class="bnb-eyebrow">Live feed</div>
+                <h3>Detections as they happen</h3>
             </div>
+            <span class="bnb-pill moss"><span class="bnb-dot live"></span> Listening</span>
+        </div>
+        <div id="detections-table" class="feed" hx-get="/pages/detections" hx-trigger="load, every 15s" hx-swap="innerHTML">
+            <p class="bnb-meta">Loading detections…</p>
         </div>
     </div>
 
-    <div>
-        <div class="card">
-            <h2>Top Species</h2>
+    <div style="display:flex;flex-direction:column;gap:var(--pad-3);">
+        <div class="bnb-card pad">
+            <div class="section-header">
+                <div><div class="bnb-eyebrow">Today</div><h3>Top species</h3></div>
+                <a class="action" href="/species">See all →</a>
+            </div>
             <div id="top-species" hx-get="/pages/top-species" hx-trigger="load, every 60s" hx-swap="innerHTML">
-                <p style="color: var(--text-muted)">Loading species...</p>
+                <p class="bnb-meta">Loading species…</p>
             </div>
         </div>
 
-        <div class="card">
-            <h2>7-Day Trend</h2>
-            <div hx-get="/pages/daily-chart" hx-trigger="load, every 300s" hx-swap="innerHTML">
-                <p style="color: var(--text-muted)">Loading trend...</p>
+        <div class="bnb-card pad">
+            <div class="section-header">
+                <div><div class="bnb-eyebrow">Activity · today</div><h3>Species × hour</h3></div>
+                <a class="action" href="/heatmap">Open heatmap →</a>
+            </div>
+            <div hx-get="/pages/activity-heatmap" hx-trigger="load, every 60s" hx-swap="innerHTML">
+                <p class="bnb-meta">Loading heatmap…</p>
             </div>
         </div>
 
-        <div class="card">
-            <h2>Confidence Distribution</h2>
-            <div hx-get="/pages/confidence-chart" hx-trigger="load, every 300s" hx-swap="innerHTML">
-                <p style="color: var(--text-muted)">Loading chart...</p>
-            </div>
-        </div>
-
-        <div class="card">
-            <h2>Quick Links</h2>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;">
-                <a href="/life-list" class="btn" style="justify-content:center;">Life List</a>
-                <a href="/correlation" class="btn" style="justify-content:center;">Co-occurrence</a>
-                <a href="/notifications" class="btn" style="justify-content:center;">Notifications</a>
-                <a href="/system" class="btn" style="justify-content:center;">System</a>
-            </div>
-        </div>
-
-        <div hx-get="/pages/disk-status" hx-trigger="load, every 120s" hx-swap="innerHTML">
-        </div>
+        <div hx-get="/pages/disk-status" hx-trigger="load, every 120s" hx-swap="innerHTML"></div>
     </div>
 </div>
+
+<script>
+(function () {
+    var cnv = document.getElementById('hero-pulse');
+    if (!cnv || !cnv.getContext) return;
+    var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var ctx = cnv.getContext('2d');
+    function color(op) {
+        var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        return dark ? 'oklch(80% 0.14 150 / ' + op + ')' : 'oklch(48% 0.10 150 / ' + op + ')';
+    }
+    var phase = 0, raf = 0;
+    function frame() {
+        var w = cnv.width = cnv.clientWidth, h = cnv.height = 80, bars = 90, bw = (w - bars * 2) / bars;
+        ctx.clearRect(0, 0, w, h);
+        for (var i = 0; i < bars; i++) {
+            var xt = i / bars, env = Math.sin(xt * Math.PI);
+            var v = env * (0.5 + 0.45 * Math.sin(i * 0.4 + phase) + 0.18 * Math.sin(i * 1.7 + phase * 1.5));
+            var bh = Math.max(4, Math.abs(v) * h * 0.85);
+            ctx.fillStyle = color((0.35 + Math.abs(v) * 0.55).toFixed(2));
+            ctx.fillRect(i * (bw + 2), (h - bh) / 2, bw, bh);
+        }
+        phase += 0.06;
+        raf = requestAnimationFrame(frame);
+    }
+    if (reduce) { phase = 1.2; frame(); cancelAnimationFrame(raf); } else { frame(); }
+})();
+</script>

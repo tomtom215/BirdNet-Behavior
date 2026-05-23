@@ -71,46 +71,46 @@ async fn sys_vitals_partial(State(_state): State<AppState>) -> impl axum::respon
             let mem_summary = snap.memory_summary();
             let uptime = crate::system_info::format_uptime(snap.uptime_secs);
 
-            let mut html = String::with_capacity(2048);
-            // CPU gauge
             #[allow(clippy::cast_lossless)]
             let cpu_f64 = snap.cpu_usage_pct as f64;
+            // Temperature is shown on a 0–90 °C scale; absent sensor → empty gauge.
+            #[allow(clippy::cast_lossless)]
+            let temp_pct = snap
+                .cpu_temp_celsius
+                .map_or(0.0, |t| (f64::from(t) / 90.0 * 100.0).clamp(0.0, 100.0));
+
+            let mut html = String::with_capacity(2048);
+            html.push_str(&arc_gauge(
+                cpu_f64,
+                &format!("{cpu_f64:.0}%"),
+                "CPU",
+                &format!("{} cores", snap.cpu_count),
+                cpu_color,
+            ));
+            html.push_str(&arc_gauge(
+                mem_pct,
+                &format!("{mem_pct:.0}%"),
+                "Memory",
+                &escape_html(&mem_summary),
+                mem_color,
+            ));
+            html.push_str(&arc_gauge(
+                temp_pct,
+                &temp_str,
+                "Temperature",
+                if snap.cpu_temp_celsius.is_some() {
+                    "core"
+                } else {
+                    "no sensor"
+                },
+                temp_color,
+            ));
+            // Uptime is a duration, not a ratio — keep it as a clean value tile.
             let _ = write!(
                 html,
-                "<div class=\"stat-card\">\
-                  <div class=\"value\" style=\"color:{cpu_color};\">{cpu:.0}%</div>\
-                  <div class=\"label\">CPU ({cores} cores)</div>\
-                  {bar}\
-                </div>",
-                cpu = snap.cpu_usage_pct,
-                cores = snap.cpu_count,
-                bar = progress_bar(cpu_f64, cpu_color),
-            );
-            // Memory gauge
-            let _ = write!(
-                html,
-                "<div class=\"stat-card\">\
-                  <div class=\"value\" style=\"color:{mem_color};\">{mem_pct:.0}%</div>\
-                  <div class=\"label\">Memory ({mem_summary})</div>\
-                  {bar}\
-                </div>",
-                bar = progress_bar(mem_pct, mem_color),
-                mem_summary = escape_html(&mem_summary),
-            );
-            // Temperature
-            let _ = write!(
-                html,
-                "<div class=\"stat-card\">\
-                  <div class=\"value\" style=\"color:{temp_color};\">{temp_str}</div>\
-                  <div class=\"label\">Temperature</div>\
-                </div>",
-            );
-            // Uptime
-            let _ = write!(
-                html,
-                "<div class=\"stat-card\">\
-                  <div class=\"value\" style=\"font-size:1.2rem;\">{uptime}</div>\
-                  <div class=\"label\">System Uptime</div>\
+                "<div class=\"stat-card\" style=\"display:flex;flex-direction:column;align-items:center;justify-content:center;\">\
+                  <div class=\"display\" style=\"font-size:24px;\">{uptime}</div>\
+                  <div class=\"label\" style=\"margin-top:6px;\">System uptime</div>\
                 </div>",
                 uptime = escape_html(&uptime),
             );
@@ -125,13 +125,35 @@ async fn sys_vitals_partial(State(_state): State<AppState>) -> impl axum::respon
     }
 }
 
-/// Render an inline CSS progress bar.
-fn progress_bar(pct: f64, color: &str) -> String {
-    let clamped = pct.clamp(0.0, 100.0);
+/// Render a 3/4-arc gauge (270° sweep, gap at the bottom) with a big display
+/// value in the centre — the design's system-vitals gauge. `center` is the
+/// value text (e.g. "42%"), `label` the metric and `sub` a small detail line;
+/// both `center` and `sub` must already be escaped.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn arc_gauge(pct: f64, center: &str, label: &str, sub: &str, color: &str) -> String {
+    let pct = pct.clamp(0.0, 100.0);
+    let (cx, cy, r) = (60.0_f64, 58.0_f64, 44.0_f64);
+    let start = 135.0_f64;
+    let total = 270.0_f64;
+    let xy = |deg: f64| {
+        let a: f64 = deg.to_radians();
+        (r.mul_add(a.cos(), cx), r.mul_add(a.sin(), cy))
+    };
+    let (sx, sy) = xy(start);
+    let (ex, ey) = xy(start + total);
+    let v_sweep = total * pct / 100.0;
+    let (vx, vy) = xy(start + v_sweep);
+    let large_v = i32::from(v_sweep > 180.0);
     format!(
-        "<div style=\"margin-top:0.5rem;height:6px;background:var(--bg-hover);border-radius:3px;overflow:hidden;\">\
-         <div style=\"width:{clamped:.0}%;height:100%;background:{color};border-radius:3px;transition:width 0.3s;\"></div>\
-         </div>",
+        "<div class=\"stat-card\" style=\"display:flex;flex-direction:column;align-items:center;\">\
+          <svg viewBox=\"0 0 120 100\" width=\"128\" style=\"max-width:100%;\" aria-hidden=\"true\">\
+            <path d=\"M{sx:.1},{sy:.1} A{r},{r} 0 1 1 {ex:.1},{ey:.1}\" fill=\"none\" stroke=\"var(--surface-2)\" stroke-width=\"9\" stroke-linecap=\"round\"/>\
+            <path d=\"M{sx:.1},{sy:.1} A{r},{r} 0 {large_v} 1 {vx:.1},{vy:.1}\" fill=\"none\" stroke=\"{color}\" stroke-width=\"9\" stroke-linecap=\"round\"/>\
+            <text x=\"60\" y=\"62\" text-anchor=\"middle\" class=\"display\" style=\"font-size:24px;fill:var(--fg);\">{center}</text>\
+          </svg>\
+          <div class=\"label\" style=\"font-weight:500;\">{label}</div>\
+          <div class=\"bnb-meta\" style=\"font-size:10.5px;\">{sub}</div>\
+        </div>",
     )
 }
 
@@ -276,13 +298,19 @@ async fn sys_audio_partial(State(state): State<AppState>) -> impl axum::response
     }
 }
 
-const SYSTEM_DASHBOARD_HTML: &str = r#"<h1 style="margin-bottom:1.5rem;">System Health</h1>
+const SYSTEM_DASHBOARD_HTML: &str = r#"<div class="page-head" style="margin-bottom:var(--pad-3);">
+    <div>
+        <div class="bnb-eyebrow">Operations</div>
+        <h1 class="display" style="font-size:34px;">System health</h1>
+        <p class="bnb-meta" style="margin-top:4px;">Live vitals for this station — CPU, memory, temperature, storage, and the audio pipeline.</p>
+    </div>
+</div>
 
 <div class="stats-grid" hx-get="/pages/sys-vitals" hx-trigger="load, every 10s" hx-swap="innerHTML">
     <div class="stat-card"><div class="value">--</div><div class="label">CPU Usage</div></div>
     <div class="stat-card"><div class="value">--</div><div class="label">Memory</div></div>
     <div class="stat-card"><div class="value">--</div><div class="label">Temperature</div></div>
-    <div class="stat-card"><div class="value">--</div><div class="label">Load Average</div></div>
+    <div class="stat-card"><div class="value">--</div><div class="label">System uptime</div></div>
 </div>
 
 <div class="grid-2">

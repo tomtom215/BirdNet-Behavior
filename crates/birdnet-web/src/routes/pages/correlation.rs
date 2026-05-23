@@ -29,6 +29,11 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/correlation", get(correlation_page))
         .route("/pages/correlation-pairs", get(correlation_pairs_partial))
+        .route(
+            "/pages/cooccurrence-matrix",
+            get(cooccurrence_matrix_partial),
+        )
+        .route("/pages/acoustic-network", get(acoustic_network_partial))
         .route("/pages/companion-species", get(companion_partial))
 }
 
@@ -43,118 +48,77 @@ struct CorrelationQuery {
 // ---------------------------------------------------------------------------
 
 async fn correlation_page() -> Html<String> {
-    Html(CORRELATION_PAGE.to_string())
+    super::render_page("Species Co-occurrence", CORRELATION_CONTENT, "analytics")
 }
 
-const CORRELATION_PAGE: &str = r##"<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1.0">
-  <title>Species Correlation — BirdNet-Behavior</title>
-  <script src="/static/htmx.min.js"></script>
-  <style>
-    body { background:#0f172a; color:#e2e8f0; font-family:system-ui,sans-serif; margin:0; }
-    .container { max-width:1000px; margin:0 auto; padding:2rem 1rem; }
-    nav a { color:#94a3b8; text-decoration:none; margin-right:1.5rem; font-size:.9rem; }
-    nav a:hover, nav a.active { color:#38bdf8; }
-    h1 { font-size:1.5rem; font-weight:700; color:#f1f5f9; margin-bottom:.5rem; }
-    .subtitle { color:#64748b; font-size:.875rem; margin-bottom:2rem; }
-    .card { background:#1e293b; border:1px solid #334155; border-radius:.75rem;
-            padding:1.5rem; margin-bottom:1.5rem; }
-    .section-title { font-size:1rem; font-weight:600; color:#38bdf8;
-                     margin-bottom:1rem; }
-    table { width:100%; border-collapse:collapse; font-size:.875rem; }
-    th { text-align:left; padding:.5rem .75rem; color:#64748b; font-weight:500;
-         border-bottom:1px solid #334155; font-size:.75rem; text-transform:uppercase; }
-    td { padding:.5rem .75rem; border-bottom:1px solid #1e293b; }
-    tr:hover td { background:#334155; }
-    .bar { height:8px; background:#0ea5e9; border-radius:4px; }
-    .controls { display:flex; gap:.75rem; margin-bottom:1.5rem; flex-wrap:wrap;
-                align-items:center; }
-    .btn { padding:.4rem 1rem; border-radius:.375rem; border:1px solid #334155;
-           background:#1e293b; color:#e2e8f0; cursor:pointer; font-size:.875rem; }
-    .btn.active, .btn:hover { background:#0ea5e9; border-color:#0ea5e9; color:#fff; }
-    input[type="text"] { background:#0f172a; border:1px solid #334155; border-radius:.375rem;
-                          padding:.4rem .75rem; color:#e2e8f0; font-size:.875rem;
-                          outline:none; width:280px; }
-    input[type="text"]:focus { border-color:#38bdf8; }
-    a.species-link { color:#38bdf8; text-decoration:none; }
-    a.species-link:hover { text-decoration:underline; }
-    .tag { display:inline-block; padding:2px 8px; border-radius:9999px; font-size:.7rem;
-           font-weight:600; background:#0c4a6e; color:#7dd3fc; }
-  </style>
-</head>
-<body>
-<div class="container">
-  <nav style="margin-bottom:2rem;padding:1rem 0;border-bottom:1px solid #334155;">
-    <a href="/">Dashboard</a>
-    <a href="/species">Species</a>
-    <a href="/heatmap">Heatmap</a>
-    <a href="/analytics">Analytics</a>
-    <a href="/correlation" class="active">Correlation</a>
-    <a href="/admin">Admin</a>
-  </nav>
-
-  <h1>Species Co-occurrence</h1>
-  <p class="subtitle">Which species are detected together most often?</p>
-
-  <div class="controls">
+const CORRELATION_CONTENT: &str = r##"<div class="page-head">
+  <div>
+    <div class="bnb-eyebrow">Behavioral analytics</div>
+    <h1 class="display" style="font-size:34px;">Who sings with whom</h1>
+    <p class="bnb-meta" style="margin-top:4px;">Which species are detected together most often.</p>
+  </div>
+  <div class="seg" id="range-controls">
     <button class="btn active" onclick="loadDays(30, this)">30 days</button>
     <button class="btn" onclick="loadDays(90, this)">90 days</button>
     <button class="btn" onclick="loadDays(180, this)">6 months</button>
     <button class="btn" onclick="loadDays(365, this)">1 year</button>
   </div>
+</div>
 
-  <!-- Top pairs -->
-  <div class="card">
-    <div class="section-title">Top Co-occurring Species Pairs</div>
-    <div id="correlation-pairs"
-         hx-get="/pages/correlation-pairs?days=30"
-         hx-trigger="load"
-         hx-swap="innerHTML">
-      <p style="color:#64748b;">Loading…</p>
-    </div>
+<div class="bnb-card pad">
+  <div class="section-header"><div><div class="bnb-eyebrow">The yard's social graph</div><h3>Co-occurrence matrix</h3></div></div>
+  <div id="cooccurrence-matrix" hx-get="/pages/cooccurrence-matrix?days=30" hx-trigger="load" hx-swap="innerHTML">
+    <p class="bnb-meta">Loading…</p>
   </div>
+</div>
 
-  <!-- Companion lookup -->
-  <div class="card">
-    <div class="section-title">Companion Species Lookup</div>
-    <p style="font-size:.875rem;color:#94a3b8;margin-bottom:1rem;">
-      Enter a species to see which others are commonly detected on the same day.
-    </p>
-    <div style="display:flex;gap:.75rem;margin-bottom:1rem;">
-      <input type="text" id="species-input"
-             placeholder="e.g. European Robin"
-             hx-get="/pages/companion-species"
-             hx-trigger="keyup changed delay:400ms"
-             hx-target="#companion-results"
-             hx-include="[name='days-val']"
-             name="species">
-      <input type="hidden" name="days-val" id="days-hidden" value="30">
-    </div>
-    <div id="companion-results">
-      <p style="color:#64748b;font-size:.875rem;">Type a species name above…</p>
-    </div>
+<div class="bnb-card pad">
+  <div class="section-header"><div><div class="bnb-eyebrow">The acoustic network</div><h3>Who connects to whom</h3></div><span class="bnb-pill">ρ ≥ 0.20</span></div>
+  <p class="bnb-meta" style="margin:4px 0 12px;">The same data as the matrix, drawn as ribbons — thicker links co-occur more often, and each species' arc length is its total connectedness in the soundscape.</p>
+  <div id="acoustic-network" hx-get="/pages/acoustic-network?days=30" hx-trigger="load" hx-swap="innerHTML">
+    <p class="bnb-meta">Loading…</p>
+  </div>
+</div>
+
+<div class="bnb-card pad">
+  <div class="section-header"><div><div class="bnb-eyebrow">Strongest pairs</div><h3>Top co-occurring species</h3></div></div>
+  <div id="correlation-pairs" hx-get="/pages/correlation-pairs?days=30" hx-trigger="load" hx-swap="innerHTML">
+    <p class="bnb-meta">Loading…</p>
+  </div>
+</div>
+
+<div class="bnb-card pad">
+  <div class="section-header"><div><div class="bnb-eyebrow">Lookup</div><h3>Companion species</h3></div></div>
+  <p class="bnb-meta" style="margin:4px 0 12px;">Enter a species to see which others are commonly detected on the same day.</p>
+  <div style="display:flex;gap:.75rem;margin-bottom:1rem;">
+    <input type="text" id="species-input" style="width:280px;"
+           placeholder="e.g. European Robin"
+           hx-get="/pages/companion-species"
+           hx-trigger="keyup changed delay:400ms"
+           hx-target="#companion-results"
+           hx-include="[name='days-val']"
+           name="species">
+    <input type="hidden" name="days-val" id="days-hidden" value="30">
+  </div>
+  <div id="companion-results">
+    <p class="bnb-meta">Type a species name above…</p>
   </div>
 </div>
 
 <script>
-let currentDays = 30;
 function loadDays(days, btn) {
-  currentDays = days;
-  document.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('#range-controls .btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   document.getElementById('days-hidden').value = days;
+  htmx.ajax('GET', '/pages/cooccurrence-matrix?days=' + days, '#cooccurrence-matrix');
+  htmx.ajax('GET', '/pages/acoustic-network?days=' + days, '#acoustic-network');
   htmx.ajax('GET', '/pages/correlation-pairs?days=' + days, '#correlation-pairs');
   const species = document.getElementById('species-input').value.trim();
   if (species) {
     htmx.ajax('GET', '/pages/companion-species?species=' + encodeURIComponent(species) + '&days=' + days, '#companion-results');
   }
 }
-</script>
-</body>
-</html>"##;
+</script>"##;
 
 // ---------------------------------------------------------------------------
 // GET /pages/correlation-pairs — top co-occurring pairs partial
@@ -179,15 +143,121 @@ async fn correlation_pairs_partial(
         _ => (
             StatusCode::INTERNAL_SERVER_ERROR,
             [(header::CONTENT_TYPE, "text/html")],
-            "<p style='color:#f87171'>Error loading co-occurrence data</p>".to_string(),
+            "<p style='color:var(--rare)'>Error loading co-occurrence data</p>".to_string(),
         ),
     }
+}
+
+// ---------------------------------------------------------------------------
+// GET /pages/cooccurrence-matrix — N×N intensity grid
+// ---------------------------------------------------------------------------
+
+async fn cooccurrence_matrix_partial(
+    State(state): State<AppState>,
+    Query(query): Query<CorrelationQuery>,
+) -> impl axum::response::IntoResponse {
+    let days = query.days.unwrap_or(30).min(365);
+    let result = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| top_cooccurrence_pairs(conn, days, 120, 1))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(pairs)) => {
+            let (labels, matrix) = build_matrix(&pairs, 10);
+            let html = super::viz::cooccurrence_matrix(&labels, &matrix);
+            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+        }
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading matrix</p>".to_string(),
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GET /pages/acoustic-network — chord diagram of the co-occurrence graph
+// ---------------------------------------------------------------------------
+
+async fn acoustic_network_partial(
+    State(state): State<AppState>,
+    Query(query): Query<CorrelationQuery>,
+) -> impl axum::response::IntoResponse {
+    let days = query.days.unwrap_or(30).min(365);
+    let result = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| top_cooccurrence_pairs(conn, days, 120, 1))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(pairs)) => {
+            // Fewer arcs read more clearly as a chord than the 10-wide matrix.
+            let (labels, matrix) = build_matrix(&pairs, 9);
+            let html = super::viz::chord_diagram(&labels, &matrix);
+            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+        }
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading network</p>".to_string(),
+        ),
+    }
+}
+
+/// Reduce co-occurrence pairs to a square matrix over the `max_species` most
+/// connected species. Cell strength is shared-days normalised to the global
+/// maximum so the grid reads as a relative heat-map.
+#[allow(clippy::cast_precision_loss)]
+fn build_matrix(
+    pairs: &[birdnet_db::sqlite::SpeciesPair],
+    max_species: usize,
+) -> (Vec<String>, Vec<Vec<f64>>) {
+    use std::collections::HashMap;
+
+    // Total shared-days each species participates in → connectedness ranking.
+    let mut weight: HashMap<&str, i64> = HashMap::new();
+    for p in pairs {
+        *weight.entry(p.species_a.as_str()).or_insert(0) += p.co_occurrence_days;
+        *weight.entry(p.species_b.as_str()).or_insert(0) += p.co_occurrence_days;
+    }
+    let mut ranked: Vec<(&str, i64)> = weight.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    let labels: Vec<String> = ranked
+        .iter()
+        .take(max_species)
+        .map(|(n, _)| (*n).to_string())
+        .collect();
+
+    let idx: std::collections::HashMap<&str, usize> = labels
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.as_str(), i))
+        .collect();
+    let n = labels.len();
+    let mut matrix = vec![vec![0.0_f64; n]; n];
+    let mut max_co = 1.0_f64;
+    for p in pairs {
+        if let (Some(&i), Some(&j)) = (idx.get(p.species_a.as_str()), idx.get(p.species_b.as_str()))
+        {
+            let v = p.co_occurrence_days as f64;
+            matrix[i][j] = v;
+            matrix[j][i] = v;
+            max_co = max_co.max(v);
+        }
+    }
+    for row in &mut matrix {
+        for cell in row.iter_mut() {
+            *cell /= max_co;
+        }
+    }
+    (labels, matrix)
 }
 
 fn render_pairs_table(pairs: &[birdnet_db::sqlite::SpeciesPair], days: u32) -> String {
     if pairs.is_empty() {
         return format!(
-            r#"<p style="color:#64748b;text-align:center;padding:1.5rem;">
+            r#"<p style="color:var(--fg-3);text-align:center;padding:1.5rem;">
                No co-occurring pairs found in the last {days} days.
                Try extending the time window.
              </p>"#
@@ -233,7 +303,7 @@ fn render_pairs_table(pairs: &[birdnet_db::sqlite::SpeciesPair], days: u32) -> S
   <td>
     <div style="display:flex;align-items:center;gap:.5rem;">
       <div class="bar" style="width:{bar_pct}%;min-width:4px;"></div>
-      <span style="font-size:.75rem;color:#64748b;">{days} days</span>
+      <span style="font-size:.75rem;color:var(--fg-3);">{days} days</span>
     </div>
   </td>
 </tr>"#,
@@ -261,7 +331,7 @@ async fn companion_partial(
             return (
                 StatusCode::OK,
                 [(header::CONTENT_TYPE, "text/html")],
-                r#"<p style="color:#64748b;font-size:.875rem;">Type a species name above…</p>"#
+                r#"<p style="color:var(--fg-3);font-size:.875rem;">Type a species name above…</p>"#
                     .to_string(),
             );
         }
@@ -282,14 +352,14 @@ async fn companion_partial(
         _ => (
             StatusCode::INTERNAL_SERVER_ERROR,
             [(header::CONTENT_TYPE, "text/html")],
-            "<p style='color:#f87171'>Error loading companion species</p>".to_string(),
+            "<p style='color:var(--rare)'>Error loading companion species</p>".to_string(),
         ),
     }
 }
 
 fn render_companion_table(companions: &[birdnet_db::sqlite::FollowOn]) -> String {
     if companions.is_empty() {
-        return r#"<p style="color:#64748b;font-size:.875rem;">
+        return r#"<p style="color:var(--fg-3);font-size:.875rem;">
           No companion species found. Try a different name or extend the time window.
         </p>"#
             .to_string();

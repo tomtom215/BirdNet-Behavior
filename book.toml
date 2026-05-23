@@ -1,0 +1,28 @@
+[book]
+title = "BirdNet-Behavior"
+authors = ["tomtom215"]
+description = "Real-time acoustic bird classification with behavioral analytics — written in Rust, runs on a Raspberry Pi."
+src = "docs/book"
+language = "en"
+
+[build]
+build-dir = "docs/.book-build"
+create-missing = false
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/tomtom215/BirdNet-Behavior"
+git-repository-icon = "fa-github"
+edit-url-template = "https://github.com/tomtom215/BirdNet-Behavior/edit/main/docs/book/{path}"
+additional-css = ["docs/book-theme/custom.css"]
+smart-punctuation = true
+
+[output.html.search]
+enable = true
+limit-results = 25
+use-boolean-and = true
+
+[output.html.fold]
+enable = true
+level = 1

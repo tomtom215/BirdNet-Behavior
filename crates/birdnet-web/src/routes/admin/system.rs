@@ -35,45 +35,45 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
     Html(format!(
         r##"<!DOCTYPE html>
 <html lang="en">
-<head>
+<head><script src="/static/theme-guard.js"></script><link rel="stylesheet" href="/static/css/app.css">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width,initial-scale=1.0">
     <title>System — BirdNet-Behavior Admin</title>
     <script src="/static/htmx.min.js"></script>
     <style>
-      body {{ background:#0f172a; color:#e2e8f0; font-family:system-ui,sans-serif; }}
+      body {{ background:var(--bg); color:var(--fg); font-family:var(--font-ui); }}
       .container {{ max-width:900px; margin:0 auto; padding:2rem 1rem; }}
-      nav a {{ color:#94a3b8; text-decoration:none; margin-right:1.5rem; }}
-      nav a:hover, nav a.active {{ color:#38bdf8; }}
-      .card {{ background:#1e293b; border:1px solid #334155; border-radius:.75rem;
+      nav a {{ color:var(--fg-3); text-decoration:none; margin-right:1.5rem; }}
+      nav a:hover, nav a.active {{ color:var(--moss-ink); }}
+      .card {{ background:var(--surface); border:1px solid var(--border); border-radius:.75rem;
                padding:1.5rem; margin-bottom:1.5rem; }}
-      .section-title {{ font-size:1.1rem; font-weight:600; color:#38bdf8;
+      .section-title {{ font-size:1.1rem; font-weight:600; color:var(--moss-ink);
                         margin-bottom:.75rem; }}
       .stat-grid {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr));
                     gap:1rem; }}
-      .stat-card {{ background:#0f172a; border:1px solid #1e293b; border-radius:.5rem;
+      .stat-card {{ background:var(--bg); border:1px solid var(--surface); border-radius:.5rem;
                     padding:1rem; }}
-      .stat-label {{ font-size:.75rem; color:#64748b; text-transform:uppercase; }}
+      .stat-label {{ font-size:.75rem; color:var(--fg-4); text-transform:uppercase; }}
       .stat-value {{ font-size:1.4rem; font-weight:700; margin-top:.25rem; }}
       .btn {{ padding:.5rem 1.5rem; border-radius:.375rem; border:none; cursor:pointer;
                font-weight:600; font-size:.875rem; }}
-      .btn-secondary {{ background:#1e293b; color:#e2e8f0; border:1px solid #334155; }}
-      .btn-secondary:hover {{ border-color:#38bdf8; color:#38bdf8; }}
-      .btn-danger {{ background:#7f1d1d; color:#fca5a5; border:1px solid #991b1b; }}
-      .badge-ok {{ color:#4ade80; }} .badge-warn {{ color:#fbbf24; }}
-      .badge-crit {{ color:#f87171; }}
+      .btn-secondary {{ background:var(--surface); color:var(--fg); border:1px solid var(--border); }}
+      .btn-secondary:hover {{ border-color:var(--moss-ink); color:var(--moss-ink); }}
+      .btn-danger {{ background:var(--rare-soft); color:var(--rare); border:1px solid var(--rare-soft); }}
+      .badge-ok {{ color:var(--moss); }} .badge-warn {{ color:var(--dawn); }}
+      .badge-crit {{ color:var(--rare); }}
     </style>
 </head>
 <body>
 <div class="container">
-  <nav style="margin-bottom:2rem;padding:1rem 0;border-bottom:1px solid #334155;">
+  <nav style="margin-bottom:2rem;padding:1rem 0;border-bottom:1px solid var(--border);">
     <a href="/">Dashboard</a>
     <a href="/admin/settings">Settings</a>
     <a href="/admin/migrate">Migration</a>
     <a href="/admin/system" class="active">System</a>
   </nav>
 
-  <h1 style="font-size:1.5rem;font-weight:700;margin-bottom:1.5rem;color:#f1f5f9;">
+  <h1 style="font-size:1.5rem;font-weight:700;margin-bottom:1.5rem;color:var(--fg);">
     System Status
   </h1>
 
@@ -87,7 +87,7 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
   <!-- Service Controls -->
   <div class="card">
     <div class="section-title">Service Controls</div>
-    <p style="color:#94a3b8;font-size:.85rem;margin-bottom:1rem;">
+    <p style="color:var(--fg-3);font-size:.85rem;margin-bottom:1rem;">
       Control the BirdNet-Behavior detection service. The service restarts automatically
       when managed by systemd (Restart=on-failure). Reconnect after ~5 seconds.
     </p>
@@ -110,7 +110,7 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
     <div id="service-status-box"
          hx-get="/admin/system/service/status"
          hx-trigger="load"
-         style="margin-top:1rem;font-size:.85rem;color:#94a3b8;">
+         style="margin-top:1rem;font-size:.85rem;color:var(--fg-3);">
       Loading service status…
     </div>
   </div>
@@ -118,9 +118,9 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
   <!-- Update Check -->
   <div class="card">
     <div class="section-title">Software Update</div>
-    <p style="color:#94a3b8;font-size:.85rem;margin-bottom:1rem;">
+    <p style="color:var(--fg-3);font-size:.85rem;margin-bottom:1rem;">
       Check GitHub Releases for a newer version. If an update is available,
-      download and replace the binary with: <code style="background:#0f172a;padding:.1rem .4rem;border-radius:.25rem;">
+      download and replace the binary with: <code style="background:var(--bg);padding:.1rem .4rem;border-radius:.25rem;">
       sudo install.sh</code> or pull the latest binary from Releases.
     </p>
     <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:center;">
@@ -145,14 +145,14 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
         Create Backup Now
       </button>
       <a href="/admin/system/backups"
-         style="padding:.5rem 1.5rem;border-radius:.375rem;border:1px solid #334155;
-                color:#94a3b8;font-size:.875rem;text-decoration:none;font-weight:600;">
+         style="padding:.5rem 1.5rem;border-radius:.375rem;border:1px solid var(--border);
+                color:var(--fg-3);font-size:.875rem;text-decoration:none;font-weight:600;">
         Manage Backups
       </a>
       <a href="/admin/system/backup/full"
          download="birdnet-backup.tar.gz"
-         style="padding:.5rem 1.5rem;border-radius:.375rem;border:1px solid #334155;
-                color:#94a3b8;font-size:.875rem;text-decoration:none;font-weight:600;">
+         style="padding:.5rem 1.5rem;border-radius:.375rem;border:1px solid var(--border);
+                color:var(--fg-3);font-size:.875rem;text-decoration:none;font-weight:600;">
         Full Backup (DB + Audio + Config)
       </a>
     </div>
@@ -160,9 +160,9 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
   </div>
 
   <!-- Danger Zone -->
-  <div class="card" style="border-color:#7f1d1d;">
-    <div class="section-title" style="color:#f87171;">Danger Zone</div>
-    <p style="color:#94a3b8;font-size:.85rem;margin-bottom:1rem;">
+  <div class="card" style="border-color:var(--rare-soft);">
+    <div class="section-title" style="color:var(--rare);">Danger Zone</div>
+    <p style="color:var(--fg-3);font-size:.85rem;margin-bottom:1rem;">
       These actions cannot be undone. Create a backup first.
     </p>
     <div style="display:flex;gap:1rem;flex-wrap:wrap;">
@@ -208,15 +208,15 @@ async fn render_status_partial(state: &AppState) -> String {
             .and_then(|p| disk_usage(p).ok());
 
         let disk_html = disk.map_or_else(
-            || r#"<p style="color:#64748b">Disk info unavailable</p>"#.to_string(),
+            || r#"<p style="color:var(--fg-4)">Disk info unavailable</p>"#.to_string(),
             |d| {
                 let pct = d.used_percent();
                 let (badge, bar_color) = if d.is_critical() {
-                    ("badge-crit", "#f87171")
+                    ("badge-crit", "var(--rare)")
                 } else if d.is_low() {
-                    ("badge-warn", "#fbbf24")
+                    ("badge-warn", "var(--dawn)")
                 } else {
-                    ("badge-ok", "#4ade80")
+                    ("badge-ok", "var(--moss)")
                 };
 
                 #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
@@ -228,10 +228,10 @@ async fn render_status_partial(state: &AppState) -> String {
                         <span style="font-size:.875rem;">Disk Usage</span>
                         <span class="{badge}" style="font-weight:600;">{pct_u}%</span>
                       </div>
-                      <div style="background:#0f172a;border-radius:9999px;height:8px;overflow:hidden;">
+                      <div style="background:var(--bg);border-radius:9999px;height:8px;overflow:hidden;">
                         <div style="background:{bar_color};height:100%;width:{pct_u}%;"></div>
                       </div>
-                      <p style="color:#64748b;font-size:.75rem;margin-top:.25rem;">
+                      <p style="color:var(--fg-4);font-size:.75rem;margin-top:.25rem;">
                         {avail} free of {total}
                       </p>
                     </div>"#,
@@ -246,7 +246,7 @@ async fn render_status_partial(state: &AppState) -> String {
             .parent()
             .and_then(|p| recording_stats(p).ok())
             .map_or_else(
-                || r#"<p style="color:#64748b">Recording stats unavailable</p>"#.to_string(),
+                || r#"<p style="color:var(--fg-4)">Recording stats unavailable</p>"#.to_string(),
                 |(count, size)| {
                     format!(
                         r#"<p style="font-size:.875rem;">
@@ -261,7 +261,7 @@ async fn render_status_partial(state: &AppState) -> String {
     })
     .await
     .unwrap_or_else(|_| {
-        let err = r#"<p style="color:#f87171">Error querying system info</p>"#.to_string();
+        let err = r#"<p style="color:var(--rare)">Error querying system info</p>"#.to_string();
         (err.clone(), err)
     });
 
@@ -269,10 +269,10 @@ async fn render_status_partial(state: &AppState) -> String {
     let sys_snap = tokio::task::spawn_blocking(system_info::sample).await.ok();
 
     let sys_html = sys_snap.map_or_else(
-        || r#"<p style="color:#64748b">System info unavailable</p>"#.to_string(),
+        || r#"<p style="color:var(--fg-4)">System info unavailable</p>"#.to_string(),
         |snap| {
-            let cpu_color = if snap.is_cpu_high() { "#f87171" } else { "#4ade80" };
-            let mem_color = if snap.is_memory_critical() { "#f87171" } else { "#4ade80" };
+            let cpu_color = if snap.is_cpu_high() { "var(--rare)" } else { "var(--moss)" };
+            let mem_color = if snap.is_memory_critical() { "var(--rare)" } else { "var(--moss)" };
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let cpu_pct = snap.cpu_usage_pct as u32;
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -283,30 +283,30 @@ async fn render_status_partial(state: &AppState) -> String {
                 .map(|t| {
                     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss, clippy::cast_possible_wrap, clippy::cast_lossless)]
                     let tc = t as u32;
-                    let c = if tc > 80 { "#f87171" } else if tc > 65 { "#fbbf24" } else { "#4ade80" };
+                    let c = if tc > 80 { "var(--rare)" } else if tc > 65 { "var(--dawn)" } else { "var(--moss)" };
                     format!(r#"<p style="font-size:.8rem;margin:.25rem 0;">CPU Temp: <span style="color:{c};font-weight:600;">{tc}°C</span></p>"#)
                 })
                 .unwrap_or_default();
 
             format!(
-                r#"<p style="font-size:.8rem;color:#64748b;margin-bottom:.5rem;">
+                r#"<p style="font-size:.8rem;color:var(--fg-4);margin-bottom:.5rem;">
                   {cores} cores · uptime {uptime}
                 </p>
                 <div style="display:flex;justify-content:space-between;margin-bottom:.25rem;">
                   <span style="font-size:.8rem;">CPU</span>
                   <span style="color:{cpu_color};font-weight:600;font-size:.8rem;">{cpu_pct}%</span>
                 </div>
-                <div style="background:#0f172a;border-radius:9999px;height:6px;margin-bottom:.75rem;overflow:hidden;">
+                <div style="background:var(--bg);border-radius:9999px;height:6px;margin-bottom:.75rem;overflow:hidden;">
                   <div style="background:{cpu_color};height:100%;width:{cpu_pct}%;"></div>
                 </div>
                 <div style="display:flex;justify-content:space-between;margin-bottom:.25rem;">
                   <span style="font-size:.8rem;">Memory</span>
                   <span style="color:{mem_color};font-weight:600;font-size:.8rem;">{mem_pct}%</span>
                 </div>
-                <div style="background:#0f172a;border-radius:9999px;height:6px;margin-bottom:.5rem;overflow:hidden;">
+                <div style="background:var(--bg);border-radius:9999px;height:6px;margin-bottom:.5rem;overflow:hidden;">
                   <div style="background:{mem_color};height:100%;width:{mem_pct}%;"></div>
                 </div>
-                <p style="font-size:.75rem;color:#64748b;margin:0;">{mem_summary}</p>
+                <p style="font-size:.75rem;color:var(--fg-4);margin:0;">{mem_summary}</p>
                 {temp_html}"#,
                 cores = snap.cpu_count,
                 mem_summary = snap.memory_summary(),
@@ -327,7 +327,7 @@ async fn render_status_partial(state: &AppState) -> String {
           </div>
         </div>
         <div style="text-align:right;margin-top:.5rem;">
-          <a href="/admin/system/logs/page" style="color:#64748b;font-size:.8rem;text-decoration:none;">
+          <a href="/admin/system/logs/page" style="color:var(--fg-4);font-size:.8rem;text-decoration:none;">
             📋 Live Logs →
           </a>
         </div>"#
@@ -351,13 +351,13 @@ async fn trigger_backup(State(state): State<AppState>) -> Result<Html<String>, S
 
     match result {
         Ok(path) => Ok(Html(format!(
-            r#"<p style="color:#4ade80;">
+            r#"<p style="color:var(--moss);">
               Backup created: <code style="font-size:.8rem;">{}</code>
             </p>"#,
             path.display()
         ))),
         Err(e) => Ok(Html(format!(
-            r#"<p style="color:#f87171;">Backup failed: {e}</p>"#
+            r#"<p style="color:var(--rare);">Backup failed: {e}</p>"#
         ))),
     }
 }

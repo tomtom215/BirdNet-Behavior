@@ -1,5 +1,11 @@
-<h1 style="margin-bottom: 0.5rem;">{{species_name}}</h1>
-<p style="color: var(--text-muted); font-style: italic; margin-bottom: 1.5rem;">{{scientific_name}}</p>
+<div class="page-head" style="align-items:flex-start;">
+    <div>
+        <div class="bnb-eyebrow">Species</div>
+        <h1 class="display" style="font-size:48px;line-height:1.02;letter-spacing:-0.02em;text-wrap:balance;">{{species_name}}</h1>
+        <p class="mono" style="color:var(--fg-3);font-style:italic;font-size:14px;margin-top:4px;">{{scientific_name}}</p>
+    </div>
+    <a class="bnb-btn" href="/today?search={{species_encoded}}">View in today's log →</a>
+</div>
 
 <div class="stats-grid" hx-get="/pages/species-summary?name={{species_encoded}}" hx-trigger="load" hx-swap="innerHTML">
     <div class="stat-card">
