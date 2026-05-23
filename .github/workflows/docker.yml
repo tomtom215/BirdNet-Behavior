@@ -66,7 +66,7 @@ concurrency:
 permissions:
   contents: read
   packages: write
-  id-token: write   # for future keyless signing with cosign
+  id-token: write   # keyless cosign signing via Fulcio/Rekor OIDC (merge job)
 
 env:
   REGISTRY: ghcr.io
@@ -215,6 +215,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
       # Compute tags for this variant (standard adds no suffix, analytics
       # appends "-analytics").  The latest tag is only applied on version
       # tags on the default branch; "edge" tracks main.
@@ -246,6 +249,22 @@ jobs:
           # shellcheck disable=SC2086
           docker buildx imagetools create $tags $digests
 
+      - name: Sign the manifest (keyless cosign)
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        run: |
+          set -euo pipefail
+          # Every tag for this variant points at one manifest-list digest, and
+          # cosign signs by digest — so signing the digest once covers all of
+          # this variant's tags (version, latest/edge, sha, ...). Keyless: the
+          # signature is bound to this workflow's OIDC identity (Fulcio cert,
+          # Rekor transparency log), matching the SLSA attestation on the
+          # binaries. Verify with the recipe in the job summary / README.
+          first_tag=$(jq -r '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
+          digest=$(docker buildx imagetools inspect "${first_tag}" --format '{{ .Manifest.Digest }}')
+          echo "Signing ${IMAGE}@${digest} (keyless, GitHub OIDC)"
+          cosign sign --yes "${IMAGE}@${digest}"
+
       - name: Inspect pushed manifest
         run: |
           set -euo pipefail
@@ -266,5 +285,13 @@ jobs:
             echo "Tags:"
             echo '```'
             jq -r '.tags[]' <<< "$DOCKER_METADATA_OUTPUT_JSON"
+            echo '```'
+            echo ""
+            echo "Signed with **cosign** (keyless, GitHub OIDC). Verify:"
+            echo '```bash'
+            echo "cosign verify \\"
+            echo "  --certificate-identity-regexp '^https://github.com/${{ github.repository }}/' \\"
+            echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com \\"
+            echo "  ${REGISTRY}/${IMAGE_NAME}:$(jq -r '.labels["org.opencontainers.image.version"]' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
