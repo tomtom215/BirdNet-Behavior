@@ -137,13 +137,15 @@ isn't half-done:
   (see the checklist). There is no auto-bump.
 - **Tag creation/push.** The pipeline is tag-triggered; creating and
   pushing the tag is the manual "go" action.
-- **Docs versioning.** The mdBook documentation site is **"latest tracks
-  `main`"** — it is not snapshotted per release. `docs.yml` rebuilds and
-  deploys it on pushes to `main` that touch `docs/**` *and* on release
-  tags, so a release refreshes the live docs, but old versions are not
-  archived. (Rationale: a single small appliance project; one accurate
-  "current" manual beats N drifting snapshots. Revisit if the schema or
-  config surface starts changing incompatibly between releases.)
+- **Docs versioning + tag-time rebuild.** The mdBook documentation site is
+  **"latest tracks `main`"** — it is not snapshotted per release. `docs.yml`
+  rebuilds and deploys it on pushes to `main` that touch `docs/**`. There is
+  no tag-triggered docs build, and it is not needed: a release is cut from
+  `main`, so the live docs already reflect the released commit (the docs
+  change deployed when its PR merged). Old versions are not archived.
+  (Rationale: a single small appliance project; one accurate "current"
+  manual beats N drifting snapshots. Revisit if the config/schema surface
+  starts changing incompatibly between releases.)
 - **Crates.io publishing.** Not published to crates.io (this is an
   application, not a library).
 
@@ -163,6 +165,6 @@ isn't half-done:
 - **The release already exists and needs regenerating.** Delete the
   GitHub Release (keep the tag), then re-run the workflow from the
   Actions tab. `github-release` is idempotent and re-creates it.
-- **Docs didn't update after a release.** Check the `docs.yml` run for
-  the tag; Pages must be enabled (Settings → Pages → Source: GitHub
-  Actions) once for the repo.
+- **Docs didn't update after merging a docs change.** Check the
+  `docs.yml` run on `main`; Pages must be enabled (Settings → Pages →
+  Source: GitHub Actions) once for the repo.
