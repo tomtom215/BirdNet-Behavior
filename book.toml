@@ -26,3 +26,12 @@ use-boolean-and = true
 [output.html.fold]
 enable = true
 level = 1
+
+# Fail the build on broken *internal* links (cross-references between book
+# pages and to in-repo files). External web links are intentionally NOT
+# followed in CI: they rot and rate-limit, which would make the docs build
+# flaky and block releases. To audit external links on demand, run locally
+# with `follow-web-links = true`.
+[output.linkcheck]
+follow-web-links = false
+warning-policy = "error"

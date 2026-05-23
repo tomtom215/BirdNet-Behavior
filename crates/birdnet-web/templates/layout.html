@@ -51,6 +51,11 @@
             <form action="/species" method="get" class="nav-search" role="search">
                 <input type="search" name="q" placeholder="Search species…" aria-label="Search species">
             </form>
+            <span id="live-status" class="bnb-pill" data-state="connecting" hidden
+                  title="Live detection stream" aria-live="polite"
+                  style="display:inline-flex;align-items:center;gap:4px;">
+                <span class="bnb-dot"></span><span data-live-label>Live</span>
+            </span>
             <div class="status" hx-get="/pages/health-badge" hx-trigger="load, every 30s" hx-swap="innerHTML"
                  style="display:inline-flex;align-items:center;">
                 <span class="bnb-pill"><span class="bnb-dot"></span> …</span>
@@ -102,5 +107,8 @@
         });
     })();
     </script>
+    <!-- Live detection stream: keeps a reconnecting WebSocket to surface a
+         live/offline indicator and dispatch birdnet:detection events. -->
+    <script src="/static/live-detections.js" defer></script>
 </body>
 </html>

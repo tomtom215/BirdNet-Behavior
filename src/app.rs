@@ -89,6 +89,10 @@ pub async fn run(
             .map_err(|e| format!("database error: {e}"))?
     };
 
+    // Thread the active config path so the in-UI diagnostics page can re-read
+    // and validate it.
+    let state = state.with_config_path(cli.config.clone());
+
     // Initialize all optional subsystems.
     let state = helpers::init_image_cache(state, &cli, config.as_ref());
     let state = if let Some(ref dir) = cli.custom_image_dir {

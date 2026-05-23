@@ -25,7 +25,8 @@
 services:
   birdnet:
     # Image tag is driven by BIRDNET_IMAGE_TAG in .env (default: latest).
-    # Set BIRDNET_IMAGE_TAG=latest-analytics to pull the DuckDB-powered variant.
+    # Every published image includes DuckDB behavioral analytics (enabled below
+    # via BIRDNET_ANALYTICS_DB) — there is no separate analytics tag.
     image: ghcr.io/tomtom215/birdnet-behavior:${BIRDNET_IMAGE_TAG:-latest}
     # To build locally instead of pulling from GHCR:
     #   docker compose build
@@ -34,9 +35,10 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        # Pass BUILD_FEATURES=analytics to enable DuckDB behavioral analytics
+        # Analytics (bundled DuckDB) is built in by default; set BUILD_FEATURES=""
+        # for a leaner local image.
         # ⚠ Adds ~7 min to the first build (bundled libduckdb C++ compilation)
-        BUILD_FEATURES: ${BUILD_FEATURES:-}
+        BUILD_FEATURES: ${BUILD_FEATURES:-analytics}
 
     container_name: birdnet-behavior
 

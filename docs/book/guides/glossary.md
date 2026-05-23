@@ -32,4 +32,4 @@ Plain-English definitions for the terms you'll meet around the dashboard.
 
 **Streamgraph** — a flowing, stacked area chart (used for activity over time) drawn from a centered baseline so each band's *thickness* shows that species' share.
 
-**Resident vs. migrant** — a resident species is present year-round; a migrant only passes through seasonally. The analytics build classifies which is which from your data.
+**Resident vs. migrant** — a resident species is present year-round; a migrant only passes through seasonally. Behavioral analytics classifies which is which from your data.

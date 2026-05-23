@@ -1,12 +1,11 @@
 # Running with Docker
 
-The [quick-start script](./installation.md#option-1--docker-quick-start-recommended) is the easiest path. If you prefer to do it by hand, you only need to decide **three** things:
+The [quick-start script](./installation.md#option-1--docker-quick-start-recommended) is the easiest path. If you prefer to do it by hand, you only need to decide **two** things:
 
 1. **Station location** — latitude and longitude.
 2. **Audio source** — one of: USB/ALSA mic, PulseAudio/PipeWire, or an RTSP stream URL.
-3. **Which image** — standard, or with DuckDB behavioral analytics.
 
-Everything else has sensible defaults.
+Everything else has sensible defaults — including DuckDB behavioral analytics, which is built into the image and enabled by default.
 
 ## 1. Clone and create your `.env`
 
@@ -30,13 +29,13 @@ BIRDNET_ALSA_DEVICE=plughw:1,0          # USB/ALSA mic  (use `arecord -l` to fin
 # BIRDNET_RTSP_URL=rtsp://cam.lan:554/stream
 # BIRDNET_PIPEWIRE_DEVICE=default
 
-# Image variant: latest (standard) or latest-analytics (adds DuckDB analytics)
+# Image tag — pin a release like 0.2.0, or leave as latest (analytics is built in)
 BIRDNET_IMAGE_TAG=latest
 ```
 
 ## 3. Start the stack
 
-The **same command** is used whether or not you want analytics — `BIRDNET_IMAGE_TAG` decides which image is pulled.
+`docker compose up -d` pulls the image and starts everything — analytics is built in, so there is no variant to choose.
 
 ```bash
 # A) RTSP camera / multi-stream / file-watch mode — no microphone hardware
@@ -49,7 +48,7 @@ docker compose -f docker-compose.yml -f docker-compose.alsa.yml up -d
 docker compose -f docker-compose.yml -f docker-compose.pulse.yml up -d
 ```
 
-Switching between standard and analytics builds is just a matter of changing `BIRDNET_IMAGE_TAG` and re-running the same command — your recordings, database, and cached model stay in the `birdnet-data` named volume.
+Your recordings, database, and cached model live in the `birdnet-data` named volume, so they survive restarts and image upgrades.
 
 ## 4. Watch the first-run model download
 
@@ -85,16 +84,16 @@ docker run -d \
 docker logs -f birdnet-behavior         # watch the model download
 ```
 
-Swap `:latest` for `:latest-analytics` to enable analytics. For RTSP, drop `--device /dev/snd --group-add audio` and set `BIRDNET_RTSP_URL=` instead of `BIRDNET_ALSA_DEVICE`.
+For RTSP, drop `--device /dev/snd --group-add audio` and set `BIRDNET_RTSP_URL=` instead of `BIRDNET_ALSA_DEVICE`.
 
 ## Pre-built images
 
 | Tag | Contents |
 |---|---|
-| `ghcr.io/tomtom215/birdnet-behavior:latest` | Standard build (SQLite only) |
-| `ghcr.io/tomtom215/birdnet-behavior:latest-analytics` | Adds DuckDB behavioral analytics |
+| `ghcr.io/tomtom215/birdnet-behavior:latest` | Latest release — includes DuckDB behavioral analytics |
+| `ghcr.io/tomtom215/birdnet-behavior:0.2.0` | A specific version (same contents) |
 
-Both are published for `linux/amd64` and `linux/arm64`.
+Published for `linux/amd64` and `linux/arm64`, and signed with [cosign](https://docs.sigstore.dev/) (keyless). There is no separate `-analytics` image — every image has analytics built in.
 
 ## Data layout & compose reference
 
@@ -106,7 +105,7 @@ All persistent data lives in one Docker volume at `/data`:
   recordings/   Audio segments from the capture pipeline
   cache/        Wikipedia species image cache
   birdnet.db    SQLite detections database
-  analytics.db  DuckDB behavioral analytics (optional)
+  analytics.db  DuckDB behavioral analytics (on by default)
 ```
 
 | File | Purpose |

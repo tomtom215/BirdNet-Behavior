@@ -22,5 +22,7 @@ The `.env.example` block below is embedded straight from the repository at build
 > **Keeping this page current:** the `.env.example` block updates itself on every docs build. Regenerate the CLI block after changing any flag with:
 >
 > ```bash
-> cargo run --bin birdnet-behavior -- --help > docs/book/_generated/cli-help.txt
+> ./scripts/gen-cli-help.sh
 > ```
+>
+> CI fails if the committed `cli-help.txt` is stale, so this can't silently drift.

@@ -24,9 +24,9 @@ Under `/data` in Docker (a named volume) or under the configured data directory 
 
 Retention is disk-based, not time-based — the oldest clips are purged once the disk fills past the threshold. **Lock** any detection (on the Today page) to pin its recording permanently. See [Backups & Recovery](../admin/backups.md).
 
-## What's the difference between the standard and analytics builds?
+## Do I need anything special for behavioral analytics?
 
-The **analytics** build bundles DuckDB and lights up the deeper behavioral views — activity sessions, species retention, next-species prediction, year-on-year trends. Everything else is identical. Use the `:latest-analytics` image or build with `--features analytics`.
+No. The DuckDB engine behind the deeper behavioral views — activity sessions, species retention, next-species prediction, year-on-year trends — is **built into every release and on by default**. The installer runs the service with `--analytics-db` and Docker compose sets `BIRDNET_ANALYTICS_DB`, so there is no separate build, flag, or image to pick. (From source, build with `--features analytics`. On a very low-RAM board you can turn it off — see [Troubleshooting](./troubleshooting.md).)
 
 ## Can I use it commercially?
 

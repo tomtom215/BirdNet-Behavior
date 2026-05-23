@@ -2,14 +2,24 @@
 
 There are two supported ways to install BirdNet-Behavior. **Docker is the fastest path** — two commands and you are watching detections. The bare-metal installer is ideal for a dedicated Raspberry Pi with no container runtime.
 
-## Requirements
+## Supported hardware & OS
 
-| Platform | Status |
-|---|---|
-| Raspberry Pi 5 | Recommended |
-| Raspberry Pi 4B / 400 | Fully supported |
-| Any x86_64 Linux | Fully supported |
-| Raspberry Pi 3B+ | Supported (native binary only, no Docker) |
+| Platform | Status | Notes |
+|---|---|---|
+| Raspberry Pi 5 | ✅ Recommended | 64-bit Raspberry Pi OS **Trixie** |
+| Raspberry Pi 4B / 400 | ✅ Fully supported | 64-bit Raspberry Pi OS **Trixie** |
+| Any x86_64 Linux | ✅ Fully supported | glibc ≥ 2.39 (Debian 13 / Ubuntu 24.04 or newer) |
+| Raspberry Pi OS **Bookworm** (glibc 2.36) | ⚠️ Docker only | The native binary needs glibc ≥ 2.39. Run the **Docker** image (it bundles its own runtime, so the host glibc does not matter) or upgrade to Trixie. |
+| Pi 3 / Pi Zero 2 W on a **32-bit** OS (armv7) | ❌ | No prebuilt ONNX Runtime exists for armv7. These boards are 64-bit-capable — reflash with the 64-bit Pi OS. |
+
+> **Runtime requirement: glibc ≥ 2.39.** The prebuilt binaries are built on
+> Ubuntu 24.04 to match the baseline that pyke's ONNX Runtime requires, so they
+> do **not** run on Raspberry Pi OS Bookworm / Debian 12 (glibc 2.36). `install.sh`
+> checks this and refuses with a clear message rather than installing a binary
+> that won't start. Bookworm users: use Docker. Each prebuilt binary also ships
+> the DuckDB behavioral-analytics engine **built in and on by default** — the
+> installer's systemd unit enables it automatically (for a manual run, pass
+> `--analytics-db`).
 
 - **Storage:** ~1.5 GB free (541 MB for the BirdNET+ model, the rest for recordings and database).
 - **Audio input** — one of:
@@ -54,11 +64,15 @@ The installer detects your architecture, downloads the pre-built binary and the 
 
 ```bash
 # Install a specific version (defaults to latest)
-VERSION=0.1.0 bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh)
+VERSION=0.2.0 bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh)
 
 # Uninstall (recordings and database are preserved)
 curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash -s uninstall
 ```
+
+Re-running the installer is an **upgrade**: it stops the service, swaps in the
+new binary, and restarts it. Your configuration and the SQLite/DuckDB databases
+are preserved, and schema migrations run automatically on the next start.
 
 ## Building from source
 

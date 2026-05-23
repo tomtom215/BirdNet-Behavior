@@ -12,14 +12,16 @@
 # Build arguments:
 #   RUST_VERSION      Rust toolchain version (default: 1.95 — MSRV)
 #   DEBIAN_CODENAME   Debian base image codename (default: bookworm)
-#   BUILD_FEATURES    Comma-separated Cargo features (default: "")
-#                     Pass "analytics" to enable DuckDB behavioral analytics.
+#   BUILD_FEATURES    Comma-separated Cargo features (default: "analytics")
+#                     DuckDB behavioral analytics is built in by default, to
+#                     match the release binaries. Pass BUILD_FEATURES="" for a
+#                     leaner image without it.
 #                     ⚠  analytics adds ~7 min of C++ compilation on first
 #                        build because libduckdb is statically bundled.
 #
 # Quick start:
-#   docker build -t birdnet-behavior .
-#   docker build -t birdnet-behavior --build-arg BUILD_FEATURES=analytics .
+#   docker build -t birdnet-behavior .                          # with analytics
+#   docker build -t birdnet-behavior --build-arg BUILD_FEATURES="" .   # lean
 # =============================================================================
 
 ARG RUST_VERSION=1.95
@@ -69,7 +71,9 @@ RUN cargo chef prepare --recipe-path recipe.json
 #   pkg-config      — locates system libraries during build-script execution
 # -----------------------------------------------------------------------------
 FROM chef AS builder
-ARG BUILD_FEATURES=""
+# Analytics (bundled DuckDB) is compiled in by default, matching the release
+# binaries. Override with --build-arg BUILD_FEATURES="" for a leaner image.
+ARG BUILD_FEATURES="analytics"
 
 # Release profile overrides for the Docker build.  The default workspace
 # profile uses `lto = true` + `codegen-units = 1` which produces the
@@ -171,7 +175,7 @@ FROM debian:${DEBIAN_CODENAME}-slim AS runtime
 # instructions below.  ARGs declared before the first FROM are only
 # visible inside a stage if re-declared with another ARG instruction.
 ARG DEBIAN_CODENAME
-ARG BUILD_FEATURES=""
+ARG BUILD_FEATURES="analytics"
 
 # Environment knobs
 ENV BIRDNET_LISTEN=0.0.0.0:8502 \
