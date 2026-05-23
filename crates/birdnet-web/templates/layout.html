@@ -2,12 +2,14 @@
 <html lang="en">
 <head>
     <!-- FOUC guard: resolve theme before first paint. -->
-    <script>(function(){var t=localStorage.getItem('theme');if(t!=='light'&&t!=='dark')t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';document.documentElement.setAttribute('data-theme',t);var d=localStorage.getItem('bnb-density');if(d==='compact'||d==='comfy'||d==='regular')document.documentElement.style.setProperty('--density',d==='compact'?'0.78':d==='comfy'?'1.15':'1');})();</script>
+    <script>(function(){var t=localStorage.getItem('theme');if(t!=='light'&&t!=='dark')t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';document.documentElement.setAttribute('data-theme',t);var d=localStorage.getItem('bnb-density');if(d==='compact'||d==='comfy'||d==='regular')document.documentElement.style.setProperty('--density',d==='compact'?'0.78':d==='comfy'?'1.15':'1');var m=localStorage.getItem('bnb-motion');if(m==='reduced')document.documentElement.setAttribute('data-motion','reduced');var c=localStorage.getItem('bnb-contrast');if(c==='high')document.documentElement.setAttribute('data-contrast','high');})();</script>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{title}} · BirdNet-Behavior</title>
     <meta name="color-scheme" content="light dark">
     <link rel="stylesheet" href="/static/css/app.css">
+    <link rel="stylesheet" href="/static/css/print.css" media="print">
+    <link rel="alternate" type="application/rss+xml" title="BirdNet · rare detections" href="/feeds/rare.rss">
     <!--
       All webfonts are self-hosted and embedded in the binary (see app.css
       @font-face) — no CDN dependency, so the dashboard renders fully offline on
@@ -40,6 +42,7 @@
             <a href="/today" class="topnav-link {{nav_today}}">Today</a>
             <a href="/species" class="topnav-link {{nav_species}}">Species</a>
             <a href="/heatmap" class="topnav-link {{nav_heatmap}}">Heatmap</a>
+            <a href="/migration" class="topnav-link {{nav_migration}}">Migration</a>
             <a href="/analytics" class="topnav-link {{nav_analytics}}">Analytics</a>
             <a href="/life-list" class="topnav-link {{nav_life_list}}">Life&nbsp;list</a>
             <a href="/quarantine" class="topnav-link {{nav_quarantine}}" style="display:inline-flex;align-items:center;gap:4px;">

@@ -256,10 +256,7 @@ async fn quarantine_list_partial(
             let mut html = String::with_capacity(4096);
 
             if rows.is_empty() && offset == 0 {
-                html.push_str(
-                    r#"<p style="color:var(--text-muted);text-align:center;padding:2rem;">
-                    No entries found.</p>"#,
-                );
+                html.push_str(&super::empty_states::no_rare_yet());
                 return (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html);
             }
 

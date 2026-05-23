@@ -36,6 +36,10 @@ sysinfo.workspace = true
 tokio-util.workspace = true
 tokio-stream.workspace = true
 reqwest.workspace = true
+# Share-link token signing (O-07 — public rare-bird permalinks).
+hmac.workspace = true
+sha2.workspace = true
+base64.workspace = true
 
 [lints]
 workspace = true

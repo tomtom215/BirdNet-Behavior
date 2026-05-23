@@ -136,6 +136,14 @@ fn render_detail_page(det: &birdnet_db::sqlite::DetectionRow) -> Html<String> {
     let correlation_section = build_correlation_section(det);
     let conf = conf_bar(det.confidence);
 
+    // Public, HMAC-signed share link for this detection (O-07). The button
+    // copies an absolute `/r/<token>` URL built from the page's own origin.
+    let token = crate::routes::share::issue_token_for(&det.date, &det.time, &det.com_name);
+    let share_path = format!("/r/{token}");
+    let share_button = format!(
+        r#"<button type="button" class="bnb-btn" title="Copy a public share link" onclick="(function(b){{var u=location.origin+'{share_path}';if(navigator.clipboard){{navigator.clipboard.writeText(u).then(function(){{b.textContent='Link copied';setTimeout(function(){{b.textContent='Share clip';}},1500);}});}}else{{window.prompt('Copy this link:',u);}}}})(this)">Share clip</button>"#
+    );
+
     let content = format!(
         r#"<div class="page-head">
   <div>
@@ -143,7 +151,10 @@ fn render_detail_page(det: &birdnet_db::sqlite::DetectionRow) -> Html<String> {
     <h1 class="display" style="font-size:40px;line-height:1.05;">{com}</h1>
     <p class="mono" style="color:var(--fg-3);font-style:italic;margin-top:4px;">{sci}</p>
   </div>
-  <a class="bnb-btn" href="/species/detail?name={enc_name}">All detections →</a>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+    <a class="bnb-btn" href="/species/detail?name={enc_name}">All detections →</a>
+    {share_button}
+  </div>
 </div>
 
 <div class="grid-2">

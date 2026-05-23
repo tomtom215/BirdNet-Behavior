@@ -254,14 +254,9 @@ fn build_matrix(
     (labels, matrix)
 }
 
-fn render_pairs_table(pairs: &[birdnet_db::sqlite::SpeciesPair], days: u32) -> String {
+fn render_pairs_table(pairs: &[birdnet_db::sqlite::SpeciesPair], _days: u32) -> String {
     if pairs.is_empty() {
-        return format!(
-            r#"<p style="color:var(--fg-3);text-align:center;padding:1.5rem;">
-               No co-occurring pairs found in the last {days} days.
-               Try extending the time window.
-             </p>"#
-        );
+        return super::empty_states::no_co_signal();
     }
 
     let max_days = pairs
@@ -426,7 +421,7 @@ mod tests {
     #[test]
     fn render_pairs_table_empty() {
         let html = render_pairs_table(&[], 30);
-        assert!(html.contains("No co-occurring"));
+        assert!(html.contains("Not enough overlap"));
     }
 
     #[test]

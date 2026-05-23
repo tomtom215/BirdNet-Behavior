@@ -30,7 +30,11 @@ pub fn router() -> Router<AppState> {
 }
 
 async fn system_page() -> Html<String> {
-    render_page("System Health", SYSTEM_DASHBOARD_HTML, "system")
+    render_page(
+        "System Health",
+        &format!("{SYSTEM_DASHBOARD_HTML}{DISPLAY_PREFS_HTML}"),
+        "system",
+    )
 }
 
 /// HTMX partial: CPU, memory, temperature.
@@ -297,6 +301,8 @@ async fn sys_audio_partial(State(state): State<AppState>) -> impl axum::response
         ),
     }
 }
+
+const DISPLAY_PREFS_HTML: &str = include_str!("../../../templates/_partial_display_prefs.html");
 
 const SYSTEM_DASHBOARD_HTML: &str = r#"<div class="page-head" style="margin-bottom:var(--pad-3);">
     <div>

@@ -157,11 +157,12 @@ async fn life_table_partial(
             }
 
             if species.is_empty() {
-                return (
-                    StatusCode::OK,
-                    [(header::CONTENT_TYPE, "text/html")],
-                    r#"<p style="color:var(--text-muted);text-align:center;padding:2rem;">No species found.</p>"#.to_string(),
-                );
+                let body = if search_lower.is_empty() {
+                    super::empty_states::no_life_list()
+                } else {
+                    r#"<p style="color:var(--text-muted);text-align:center;padding:2rem;">No species found.</p>"#.to_string()
+                };
+                return (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], body);
             }
 
             let mut html = String::with_capacity(species.len() * 200);

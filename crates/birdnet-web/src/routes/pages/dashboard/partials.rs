@@ -47,8 +47,7 @@ pub(super) async fn detections_partial(
                 return (
                     StatusCode::OK,
                     [(header::CONTENT_TYPE, "text/html")],
-                    r#"<p class="bnb-meta">No detections yet — your station is listening.</p>"#
-                        .to_string(),
+                    crate::routes::pages::empty_states::quiet_yard(),
                 );
             }
             let mut html = String::new();
@@ -74,6 +73,8 @@ fn render_feed_row(
     fresh: bool,
 ) {
     let enc = simple_url_encode(&d.com_name);
+    let date_enc = simple_url_encode(&d.date);
+    let time_enc = simple_url_encode(&d.time);
     let time_short = d.time.get(0..5).unwrap_or(&d.time);
 
     let badge = first_seen.get(&d.sci_name).map_or(String::new(), |fs| {
@@ -108,7 +109,7 @@ fn render_feed_row(
     let fresh_cls = if fresh { " fresh bnb-rise" } else { "" };
     let _ = write!(
         html,
-        r#"<div class="feed-row{fresh_cls}"><span class="ago mono">{time_short}</span>{avatar}<div class="who"><div class="name"><a href="/species/detail?name={enc}" style="color:inherit;">{name}</a>{badge}</div><div class="sci mono">{sci}</div></div>{wave}{conf}{play}</div>"#,
+        r#"<div class="feed-row{fresh_cls}"><a class="ago mono" href="/detections/detail?date={date_enc}&time={time_enc}&name={enc}" style="color:inherit;text-decoration:none;" title="Open detection detail">{time_short}</a>{avatar}<div class="who"><div class="name"><a href="/species/detail?name={enc}" style="color:inherit;">{name}</a>{badge}</div><div class="sci mono">{sci}</div></div>{wave}{conf}{play}</div>"#,
         avatar = avatar(&d.com_name, ""),
         name = escape_html(&d.com_name),
         sci = escape_html(&d.sci_name),
@@ -202,16 +203,12 @@ pub(super) async fn species_list_partial(
     match result {
         Ok(Ok((species, sparklines))) => {
             if species.is_empty() {
-                let msg = if has_search {
-                    "No matching species found."
+                let body = if has_search {
+                    r#"<p class="bnb-meta">No matching species found.</p>"#.to_string()
                 } else {
-                    "No species detected yet."
+                    crate::routes::pages::empty_states::no_species()
                 };
-                return (
-                    StatusCode::OK,
-                    [(header::CONTENT_TYPE, "text/html")],
-                    format!(r#"<p class="bnb-meta">{msg}</p>"#),
-                );
+                return (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], body);
             }
             let mut html = String::from(
                 r#"<table><thead><tr><th style="width:32px;">#</th><th>Species</th><th>14-day</th><th>Detections</th><th>Confidence</th></tr></thead><tbody>"#,
