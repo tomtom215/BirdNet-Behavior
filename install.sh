@@ -36,6 +36,15 @@ SERVICE_FILE="/etc/systemd/system/birdnet-behavior.service"
 SERVICE_USER="${SUDO_USER:-${USER}}"
 LISTEN_ADDR="0.0.0.0:8502"
 
+# Minimum glibc the prebuilt binaries link against (pyke's ONNX Runtime needs
+# glibc >= 2.38; Ubuntu 24.04, where we build, ships 2.39). Set
+# BIRDNET_SKIP_GLIBC_CHECK=1 to bypass (e.g. you built from source).
+REQUIRED_GLIBC="2.39"
+
+# Set to 1 by main() when an already-running service is stopped for an upgrade,
+# so we know to restart it afterwards rather than leave it down.
+SERVICE_WAS_RUNNING=0
+
 # BirdNET+ V3.0 model files (Zenodo — direct download, no login required).
 # FP32 ONNX (~541 MB): same model used by BirdNET-Pi, works on all platforms.
 ZENODO_RECORD="18247420"
@@ -130,6 +139,69 @@ EOT
 }
 
 # ---------------------------------------------------------------------------
+# glibc preflight
+#
+# The prebuilt release binaries are built on Ubuntu 24.04 (glibc 2.39) because
+# pyke's prebuilt ONNX Runtime requires glibc >= 2.38. On an older system
+# (notably Raspberry Pi OS Bookworm / Debian 12, glibc 2.36) the binary loads
+# but dies with "version `GLIBC_2.39' not found". Catch that here, before we
+# download 540 MB of model, and point the user at a path that actually works.
+# ---------------------------------------------------------------------------
+
+detect_glibc_version() {
+    # Prefer getconf (prints "glibc 2.36"); fall back to `ldd --version`.
+    local v
+    v="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')"
+    if [ -z "${v}" ]; then
+        v="$(ldd --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | tail -1)"
+    fi
+    echo "${v}"
+}
+
+check_glibc() {
+    if [ "${BIRDNET_SKIP_GLIBC_CHECK:-0}" = "1" ]; then
+        warn "Skipping glibc check (BIRDNET_SKIP_GLIBC_CHECK=1)."
+        return 0
+    fi
+
+    local current
+    current="$(detect_glibc_version)"
+    if [ -z "${current}" ]; then
+        warn "Could not determine the system glibc version."
+        warn "The prebuilt binary needs glibc >= ${REQUIRED_GLIBC}; continuing anyway."
+        return 0
+    fi
+
+    # current >= required  iff  the lower of the two (sort -V) is the requirement.
+    if [ "$(printf '%s\n%s\n' "${REQUIRED_GLIBC}" "${current}" | sort -V | head -1)" = "${REQUIRED_GLIBC}" ]; then
+        success "glibc ${current} (>= ${REQUIRED_GLIBC}) — OK"
+        return 0
+    fi
+
+    error "System glibc is ${current}, but the prebuilt binary requires >= ${REQUIRED_GLIBC}."
+    cat >&2 <<EOT
+
+  Your OS is too old for the prebuilt native binary. Raspberry Pi OS
+  Bookworm / Debian 12 ship glibc 2.36 and are NOT supported by the
+  binary. Two paths that DO work:
+
+    1. Run the Docker image — it bundles its own runtime, so the host
+       glibc does not matter (works fine on Bookworm):
+
+           bash <(curl -fsSL https://raw.githubusercontent.com/${REPO}/main/quickstart.sh)
+
+    2. Upgrade the OS to Raspberry Pi OS Trixie / Debian 13 /
+       Ubuntu 24.04 (or newer), then re-run this installer.
+
+  Building from source against your system's older toolchain also works;
+  see the documentation. To bypass this check anyway (you know what you
+  are doing), re-run with BIRDNET_SKIP_GLIBC_CHECK=1.
+
+EOT
+    fatal "Unsupported glibc ${current} (need >= ${REQUIRED_GLIBC})."
+}
+
+# ---------------------------------------------------------------------------
 # Download helper (curl or wget)
 # ---------------------------------------------------------------------------
 
@@ -216,6 +288,14 @@ resolve_version() {
 install_binary() {
     local version="$1"
     local arch="$2"
+
+    if [ -x "${INSTALL_DIR}/${BINARY_NAME}" ]; then
+        local old_ver
+        old_ver="$("${INSTALL_DIR}/${BINARY_NAME}" --version 2>/dev/null | awk '{print $NF}' || true)"
+        if [ -n "${old_ver}" ]; then
+            info "Existing install detected (v${old_ver}) — upgrading to v${version}."
+        fi
+    fi
 
     local archive="${BINARY_NAME}-${version}-${arch}.tar.gz"
     local base_url="https://github.com/${REPO}/releases/download/v${version}"
@@ -568,7 +648,17 @@ configure_audio() {
 # ---------------------------------------------------------------------------
 
 maybe_start_service() {
-    # Check whether an audio source was written into the config.
+    # Upgrade path: if we stopped a running service to swap the binary, bring
+    # it back on the new version. Schema migrations run automatically on
+    # startup, and the SQLite/DuckDB data + config were left untouched.
+    if [ "${SERVICE_WAS_RUNNING}" = "1" ]; then
+        info "Restarting service on the upgraded binary…"
+        systemctl start birdnet-behavior.service
+        success "Service restarted (schema migrations applied on startup)."
+        return
+    fi
+
+    # Fresh install: only start if an audio source was written into the config.
     if grep -qE '^(ALSA_CARD|RTSP_URL)=' "${CONFIG_FILE}" 2>/dev/null; then
         info "Audio source detected in config — starting service now…"
         systemctl start birdnet-behavior.service
@@ -720,9 +810,20 @@ main() {
 
     local arch version
     arch="$(detect_arch)"
+    check_glibc
     version="$(resolve_version)"
 
     info "Arch: ${arch}, Version: ${version}"
+
+    # Upgrade-safe: stop a running service before swapping the binary. You
+    # cannot overwrite a running executable in place (ETXTBSY), and a plain
+    # `systemctl start` on an already-running unit would not load the new
+    # binary. Record that it was running so maybe_start_service restarts it.
+    if systemctl is-active --quiet birdnet-behavior.service 2>/dev/null; then
+        SERVICE_WAS_RUNNING=1
+        info "Stopping the running service to upgrade the binary safely…"
+        systemctl stop birdnet-behavior.service || true
+    fi
 
     install_binary "${version}" "${arch}"
     create_directories
