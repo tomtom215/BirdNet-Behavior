@@ -50,6 +50,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (never `innerHTML`).
 - **Friendly `404` page.** Unmatched URLs now render the branded app layout
   with a route back to the dashboard, replacing the previous empty response.
+- **In-UI configuration diagnostics** at `/admin/doctor` (linked from the admin
+  nav as *Diagnostics*). Re-reads the active config and renders the same
+  range/consistency findings the CLI `--doctor` reports, reusing the canonical
+  `birdnet_core::config::validate` so the two can't drift; points to the CLI
+  doctor for audio/model/disk/network checks.
+- **CLI-help docs drift-gate.** `scripts/gen-cli-help.sh` regenerates
+  `docs/book/_generated/cli-help.txt` from the binary's `--help`, and CI fails
+  if the committed copy is stale — so the documented flags/env vars/defaults
+  stay in lockstep with `src/cli.rs`.
+- **Accessibility.** Added an `.sr-only` visually-hidden utility and live-status
+  indicator styling (the existing reduced-motion / focus-visible / chart-ARIA
+  coverage was already in place).
 - **Supported hardware/OS matrix** added prominently to the README and the
   book, making the glibc 2.39 floor, the Bookworm→Docker path, and the
   no-armv7 caveat unmissable.
