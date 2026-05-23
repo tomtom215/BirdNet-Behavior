@@ -114,6 +114,16 @@ jobs:
           restore-keys: ${{ runner.os }}-build-
       - name: Build workspace (debug)
         run: cargo build --workspace
+      - name: Check generated CLI help is current
+        # Regenerates docs/book/_generated/cli-help.txt from the binary's
+        # --help and fails if it differs from what's committed, so the docs
+        # can't drift from the actual flags/env vars/defaults.
+        run: |
+          ./scripts/gen-cli-help.sh
+          if ! git diff --exit-code docs/book/_generated/cli-help.txt; then
+            echo "::error file=docs/book/_generated/cli-help.txt::Stale CLI help — run scripts/gen-cli-help.sh and commit."
+            exit 1
+          fi
       - name: Build with analytics feature
         run: cargo build --workspace --features birdnet-web/analytics
 
