@@ -84,6 +84,11 @@ ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "n
 # declared version matches what the lockfile resolves.
 ndarray = "0.17"
 
+# Cryptography — HMAC-SHA256 signing for public share-link tokens (O-07)
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+
 # File watching
 notify = "8"
 

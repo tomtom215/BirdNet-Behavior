@@ -13,6 +13,7 @@ pub mod images;
 pub mod livestream;
 pub mod pages;
 pub mod recordings;
+pub mod share;
 pub mod species;
 pub mod spectrogram;
 pub mod spectrogram_ws;
@@ -60,6 +61,7 @@ pub fn api_routes() -> Router<AppState> {
         .merge(livestream::stream_router())
         .merge(pages::router())
         .merge(feeds::router())
+        .merge(share::router())
         .merge(static_files::router())
         .merge(admin::router())
         // Friendly branded 404 for any unmatched path (e.g. a mistyped page URL).

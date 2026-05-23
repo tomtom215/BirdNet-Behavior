@@ -203,16 +203,12 @@ pub(super) async fn species_list_partial(
     match result {
         Ok(Ok((species, sparklines))) => {
             if species.is_empty() {
-                let msg = if has_search {
-                    "No matching species found."
+                let body = if has_search {
+                    r#"<p class="bnb-meta">No matching species found.</p>"#.to_string()
                 } else {
-                    "No species detected yet."
+                    crate::routes::pages::empty_states::no_species()
                 };
-                return (
-                    StatusCode::OK,
-                    [(header::CONTENT_TYPE, "text/html")],
-                    format!(r#"<p class="bnb-meta">{msg}</p>"#),
-                );
+                return (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], body);
             }
             let mut html = String::from(
                 r#"<table><thead><tr><th style="width:32px;">#</th><th>Species</th><th>14-day</th><th>Detections</th><th>Confidence</th></tr></thead><tbody>"#,

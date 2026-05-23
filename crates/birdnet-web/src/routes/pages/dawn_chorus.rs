@@ -113,7 +113,7 @@ async fn polar_partial(State(state): State<AppState>) -> impl IntoResponse {
 
     let ribbons = match result {
         Ok(Ok(r)) if !r.is_empty() => r,
-        _ => return empty_state("No detections yet for the dawn chorus."),
+        _ => return ok_html(super::empty_states::no_chorus()),
     };
 
     let (sunrise, sunset) = station_sun_times(); // approx; fall back to defaults
@@ -313,7 +313,7 @@ async fn list_partial(State(state): State<AppState>) -> impl IntoResponse {
             .await;
     let ribbons = match result {
         Ok(Ok(r)) if !r.is_empty() => r,
-        _ => return empty_state("No species ribbons yet — keep listening."),
+        _ => return ok_html(super::empty_states::no_chorus()),
     };
 
     let mut s = String::new();
@@ -499,11 +499,6 @@ fn alpha_code(name: &str) -> String {
 
 fn ok_html(body: String) -> (StatusCode, [(header::HeaderName, &'static str); 1], String) {
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], body)
-}
-
-fn empty_state(msg: &str) -> (StatusCode, [(header::HeaderName, &'static str); 1], String) {
-    let body = format!(r#"<p class="bnb-meta">{}</p>"#, escape_html(msg));
-    ok_html(body)
 }
 
 #[cfg(test)]
