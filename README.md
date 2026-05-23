@@ -115,9 +115,11 @@ The BirdNET+ V3.0 model (~541 MB) downloads automatically from Zenodo on first r
 - **Behavioral analytics** (built into every release, on by default; `--features analytics` for source builds) — activity sessions, resident vs. migrant classification, dawn-chorus validation, species co-occurrence, migration phenology.
 - **IoT / Home Automation** — pure-Rust MQTT 3.1.1 publishing with Home Assistant auto-discovery.
 - **Editorial reports** — Weekly Report and a celebratory Year in Review.
+- **Share & follow** — a per-detection [detail page](https://tomtom215.github.io/BirdNet-Behavior/guide/sharing.html) with spectrogram + audio, signed public **share links** (`/r/<token>`, HMAC-SHA256, 30-day expiry), and **RSS/iCal feeds** for rare and daily detections. Print stylesheet for the reports.
+- **Per-device display preferences** — theme, density, motion and contrast, applied before first paint (no flash on reload).
 - **Operational polish** — rare-bird quarantine queue, audio quality pre-filtering, a built-in `--doctor` diagnostic, Prometheus metrics, kiosk mode, a live spectrogram, and a first-run onboarding wizard.
 
-➡️ Tour them all in the [Field Guide](https://tomtom215.github.io/BirdNet-Behavior/guide/dashboard.html).
+➡️ Tour them all in the [Field Guide](https://tomtom215.github.io/BirdNet-Behavior/guide/dashboard.html). New environment variables for these features — `BNB_SHARE_SECRET`, `BNB_BASE_URL`, `BNB_STATION_LAT`/`BNB_STATION_LON` — are documented in [`.env.example`](.env.example) and the [configuration reference](https://tomtom215.github.io/BirdNet-Behavior/reference/configuration-reference.html).
 
 ---
 

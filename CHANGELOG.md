@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Migration & phenology page (`/migration`).** A per-species ridgeline
+  ("joyplot") of weekly abundance for migratory species, with first-of-year
+  arrivals, peak diversity week, earliest-vs-last-year, and "still expected"
+  tiles — built entirely from the existing `detections` table.
+- **Dawn-chorus page (`/analytics/dawn-chorus`).** A 24-hour polar clock of
+  per-species activity with sunrise/sunset markers from the station
+  coordinates (`BNB_STATION_LAT`/`BNB_STATION_LON`, falling back to
+  `BIRDNET_LATITUDE`/`BIRDNET_LONGITUDE`).
+- **Detection detail + public share links.** Every detection links to a detail
+  page (spectrogram, audio, daemon correlation id) and can be shared via a
+  signed, public `/r/<token>` page — HMAC-SHA256 over `(date, time, com_name,
+  expiry)`, constant-time verify, 30-day expiry, filename-based audio/
+  spectrogram redirects. Set `BNB_SHARE_SECRET` so links survive restarts
+  (fail-secure random per-process secret otherwise).
+- **RSS & iCal feeds.** `/feeds/rare.rss`, `/feeds/rare.ics`, and
+  `/feeds/today.rss`, linking back to detection detail pages; the rare RSS feed
+  is advertised via `<link rel="alternate">` in the dashboard head. Absolute
+  links use `BNB_BASE_URL`.
+- **Per-device display preferences** on `/system` — theme, density, motion and
+  contrast, applied before first paint (no flash on reload).
+- **Comparative "today" phrase**, **species-detail hero/status partials**,
+  **illustrated empty states** across six surfaces, and a **print stylesheet**
+  for the reports.
+
+### Fixed
+
+- **Startup crash from a duplicate route.** The new `/migration` page and the
+  heatmap page both registered `GET /pages/migration-ridgeline`; axum's
+  `Router::merge` panicked at construction, so the server never started. The
+  heatmap embed moved to `/pages/seasonal-phenology`, and a lib-level test now
+  builds the full router so an overlapping route fails CI (the standard test
+  job runs `--lib --bins`, which skips the integration tests that would have
+  caught it).
+- **Print stylesheet 404.** `/static/css/print.css` was linked but never served
+  by the static router; `@media print` output was unstyled and every page
+  logged a console error.
+- **Broken "Species Accumulation" card** on `/timeseries` (pointed at a
+  non-existent `/pages/ts-accumulation`) — now uses `/pages/life-accumulation`.
+- **Migration page request flood.** A `hx-trigger="… every 1h"` poll was
+  parsed by htmx as 1 ms (it understands `s`/`m` but not `h`), hammering
+  `/pages/migration-stats`; changed to `every 60m`.
+- **Species photos never loaded** — the gallery card and the detection-detail
+  link used image URLs that matched no route; pointed both at
+  `/api/v2/species/image/{name}/file`.
+- **Placeholder copy + missing skip link** on the public share page.
+
 ## [0.2.0] - 2026-05-23
 
 ### Security
