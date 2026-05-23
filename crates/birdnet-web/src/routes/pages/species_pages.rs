@@ -27,6 +27,8 @@ pub fn router() -> Router<AppState> {
         .route("/pages/species-daily", get(species_daily_partial))
         .route("/pages/species-info", get(species_info_partial))
         .route("/pages/species-companions", get(species_companions_partial))
+        .route("/pages/species-hero", get(species_hero_partial))
+        .route("/pages/species-status", get(species_status_partial))
 }
 
 async fn species_page() -> Html<String> {
@@ -304,6 +306,128 @@ async fn species_info_partial(
             }
         }
     }
+
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+}
+
+/// HTMX partial: status pills (detection count, first/last heard, mean
+/// confidence) shown under the species headline on the detail page.
+async fn species_status_partial(
+    State(state): State<AppState>,
+    Query(query): Query<SpeciesQuery>,
+) -> impl axum::response::IntoResponse {
+    let Some(name) = query.name else {
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            String::new(),
+        );
+    };
+    let result = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| birdnet_db::sqlite::species_summary(conn, &name))
+    })
+    .await;
+
+    let html = match result {
+        Ok(Ok(Some(s))) => {
+            let conf_pct = s.avg_confidence * 100.0;
+            format!(
+                r#"<span class="bnb-pill moss"><span class="bnb-dot"></span> {count} detections</span>
+<span class="bnb-pill">First heard {first}</span>
+<span class="bnb-pill">Last heard {last}</span>
+<span class="bnb-pill">avg {conf_pct:.0}% confidence</span>"#,
+                count = s.count,
+                first = escape_html(&s.first_seen),
+                last = escape_html(&s.last_seen),
+            )
+        }
+        Ok(Ok(None)) => r#"<span class="bnb-pill">No detections yet</span>"#.to_string(),
+        _ => String::new(),
+    };
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+}
+
+/// HTMX partial: "best detection" hero card — the highest-confidence clip for
+/// the species, with the reference photo, spectrogram, and an audio scrubber.
+async fn species_hero_partial(
+    State(state): State<AppState>,
+    Query(query): Query<SpeciesQuery>,
+) -> impl axum::response::IntoResponse {
+    let Some(name) = query.name else {
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            String::new(),
+        );
+    };
+
+    let lookup_name = name.clone();
+    let state_clone = state.clone();
+    let best = tokio::task::spawn_blocking(move || {
+        state_clone.with_db(|conn| {
+            conn.query_row(
+                "SELECT Date, Time, Confidence, File_Name, Sci_Name \
+                 FROM detections \
+                 WHERE Com_Name = ?1 AND File_Name IS NOT NULL AND File_Name <> '' \
+                 ORDER BY Confidence DESC LIMIT 1",
+                [&lookup_name],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, f64>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, String>(4)?,
+                    ))
+                },
+            )
+            .ok()
+        })
+    })
+    .await
+    .ok()
+    .flatten();
+
+    let Some((date, time, conf, file_name, sci_name)) = best else {
+        let html = r#"<div class="bnb-eyebrow" style="margin-bottom:8px;">Best detection</div>
+<div class="bnb-photo" data-caption="no clip yet" style="aspect-ratio:4/3;border-radius:var(--r-md);"></div>
+<p class="bnb-meta" style="margin-top:8px;">No recording captured for this species yet.</p>"#;
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            html.to_string(),
+        );
+    };
+
+    let basename = std::path::Path::new(&file_name)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or(file_name);
+    let safe_file = escape_html(&basename);
+    let time_short = time.get(0..5).unwrap_or(&time);
+    let caption = escape_html(&format!("best detection — {date} {time_short} · {conf:.2}"));
+
+    let photo_inner = state
+        .image_cache()
+        .and_then(|cache| cache.get_cached(&sci_name))
+        .filter(|img| img.cached_path.is_some())
+        .map(|_| {
+            let enc_sci = simple_url_encode(&sci_name);
+            format!(
+                r#"<img src="/api/v2/species/image/{enc_sci}/file" alt="{alt}" loading="lazy" style="width:100%;height:100%;object-fit:cover;" />"#,
+                alt = escape_html(&name),
+            )
+        })
+        .unwrap_or_default();
+
+    let html = format!(
+        r#"<div class="bnb-eyebrow" style="margin-bottom:8px;">Best detection</div>
+<div class="bnb-photo" data-caption="{caption}" style="aspect-ratio:4/3;border-radius:var(--r-md);overflow:hidden;position:relative;">{photo_inner}</div>
+<img src="/api/v2/spectrogram/{safe_file}" alt="Spectrogram" onerror="this.style.display='none'" style="width:100%;border-radius:var(--r-md);border:0.5px solid var(--border);display:block;margin-top:10px;" />
+<audio controls preload="metadata" style="width:100%;margin-top:10px;"><source src="/api/v2/recordings/{safe_file}" type="audio/wav"></audio>
+<div class="bnb-meta mono" style="margin-top:8px;">{conf_pct:.0}% confidence · clip 3.0 s</div>"#,
+        conf_pct = conf * 100.0,
+    );
 
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }

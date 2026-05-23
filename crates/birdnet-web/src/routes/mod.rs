@@ -7,6 +7,7 @@ pub mod admin;
 pub mod analytics;
 pub mod detections;
 pub mod export;
+pub mod feeds;
 pub mod health;
 pub mod images;
 pub mod livestream;
@@ -58,6 +59,7 @@ pub fn api_routes() -> Router<AppState> {
         .nest("/api/v2", health::router())
         .merge(livestream::stream_router())
         .merge(pages::router())
+        .merge(feeds::router())
         .merge(static_files::router())
         .merge(admin::router())
         // Friendly branded 404 for any unmatched path (e.g. a mistyped page URL).

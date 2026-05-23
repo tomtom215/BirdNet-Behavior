@@ -23,13 +23,16 @@ pub mod behavioral;
 pub mod charts;
 pub mod correlation;
 pub mod dashboard;
+pub mod dawn_chorus;
 pub mod detection_detail;
+pub mod empty_states;
 pub mod gallery;
 pub mod health;
 pub mod heatmap;
 pub mod history;
 pub mod life_list;
 pub mod livestream;
+pub mod migration;
 pub mod notification_center;
 pub mod onboarding;
 pub mod quarantine;
@@ -38,12 +41,14 @@ pub mod species_pages;
 pub mod system_dashboard;
 pub mod timeseries_dash;
 pub mod today;
+pub(crate) mod today_phrase;
 pub mod viz;
 pub mod weekly_report;
 pub mod year_in_review;
 
 use axum::Router;
 use axum::response::Html;
+use axum::routing::get;
 
 use crate::state::AppState;
 
@@ -80,6 +85,12 @@ pub fn router() -> Router<AppState> {
         .merge(notification_center::router())
         .merge(year_in_review::router())
         .merge(onboarding::router())
+        .merge(migration::router())
+        .merge(dawn_chorus::router())
+        .route(
+            "/pages/today-phrase",
+            get(today_phrase::today_phrase_partial),
+        )
 }
 
 /// Render a full page by substituting content into the layout template.
@@ -103,6 +114,7 @@ pub(crate) fn render_page(title: &str, content: &str, active_nav: &str) -> Html<
         .replace("{{nav_quarantine}}", nav("quarantine"))
         .replace("{{nav_life_list}}", nav("life-list"))
         .replace("{{nav_heatmap}}", nav("heatmap"))
+        .replace("{{nav_migration}}", nav("migration"))
         .replace("{{nav_system}}", nav("system"))
         .replace("{{nav_notifications}}", nav("notifications"));
     Html(html)
