@@ -19,6 +19,9 @@ const HTMX_SSE_JS: &[u8] = include_bytes!("../../static/htmx-sse.js");
 /// Design-system stylesheet (tokens, atoms, shell, screen layouts).
 const APP_CSS: &[u8] = include_bytes!("../../static/css/app.css");
 
+/// Print-only stylesheet (loaded with `media="print"` by the layout).
+const PRINT_CSS: &[u8] = include_bytes!("../../static/css/print.css");
+
 /// Pre-paint theme/density guard for standalone pages (admin, kiosk, player).
 const THEME_GUARD_JS: &[u8] = include_bytes!("../../static/theme-guard.js");
 
@@ -124,6 +127,7 @@ pub fn router() -> Router<AppState> {
         .route("/static/theme-guard.js", get(theme_guard_js))
         .route("/static/live-detections.js", get(live_detections_js))
         .route("/static/css/app.css", get(app_css))
+        .route("/static/css/print.css", get(print_css))
         .route("/static/fonts/{file}", get(font_file))
 }
 
@@ -181,6 +185,17 @@ async fn app_css() -> impl IntoResponse {
             (header::CACHE_CONTROL, IMMUTABLE),
         ],
         APP_CSS,
+    )
+}
+
+async fn print_css() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/css; charset=utf-8"),
+            (header::CACHE_CONTROL, IMMUTABLE),
+        ],
+        PRINT_CSS,
     )
 }
 
