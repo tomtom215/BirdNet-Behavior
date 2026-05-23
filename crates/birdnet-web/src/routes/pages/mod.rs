@@ -207,6 +207,21 @@ pub(crate) fn today_count(conn: &rusqlite::Connection) -> i64 {
     .unwrap_or(0)
 }
 
+/// Format an integer with thousands separators (e.g. 9914 → "9,914").
+pub(crate) fn group_thousands(n: i64) -> String {
+    let neg = n < 0;
+    let digits = n.unsigned_abs().to_string();
+    let mut out = String::new();
+    let len = digits.len();
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (len - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    if neg { format!("-{out}") } else { out }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,6 +260,15 @@ mod tests {
     #[test]
     fn simple_url_encode_preserves_unreserved() {
         assert_eq!(simple_url_encode("a-b_c.d~e"), "a-b_c.d~e");
+    }
+
+    #[test]
+    fn group_thousands_formats() {
+        assert_eq!(group_thousands(0), "0");
+        assert_eq!(group_thousands(42), "42");
+        assert_eq!(group_thousands(9914), "9,914");
+        assert_eq!(group_thousands(1_234_567), "1,234,567");
+        assert_eq!(group_thousands(-12_345), "-12,345");
     }
 
     #[test]

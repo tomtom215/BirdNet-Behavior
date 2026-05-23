@@ -7,7 +7,7 @@ use axum::http::{StatusCode, header};
 use axum::response::Html;
 
 use super::conf_class;
-use crate::routes::pages::{escape_html, today_date_string};
+use crate::routes::pages::{escape_html, group_thousands, today_date_string};
 use crate::state::AppState;
 
 const KIOSK_HTML: &str = r#"<!DOCTYPE html>
@@ -85,6 +85,8 @@ pub(super) async fn kiosk_content_partial(
   <div class="stat"><div class="value">{species_n}</div><div class="label">Species</div></div>
 </div>
 <div class="recent">"#,
+                today_n = group_thousands(today_n),
+                total = group_thousands(total),
             );
 
             for d in &recent {
