@@ -22,10 +22,6 @@ extend-exclude = [
     "**/static/htmx.min.js",
     "**/static/*.min.js",
     "**/*.min.js",
-    # Design handoff bundle — prototype React/Markdown reference with mock data
-    # (banding codes, scientific names), not shipping code.
-    "design_handoff_birdnet_behavior/**",
-    "design_handoff_birdnet_behavior 2/**",
 ]
 
 [default]

@@ -1,8 +1,7 @@
 //! Server-side render helpers for the design-system atoms.
 //!
-//! These mirror the React reference components in
-//! `design_handoff_birdnet_behavior/source/lib/components.jsx`
-//! (`SpeciesAvatar`, `ConfBar`, `Sparkline`, `MiniWaveform`) but emit plain
+//! These mirror the React reference components from the original design
+//! prototype (`SpeciesAvatar`, `ConfBar`, `Sparkline`, `MiniWaveform`) but emit plain
 //! HTML/SVG strings styled by `static/css/app.css`. Colours are derived
 //! deterministically from the species name so a given bird is always the same
 //! hue without needing a persisted colour column.
