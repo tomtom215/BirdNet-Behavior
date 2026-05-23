@@ -1,0 +1,107 @@
+<!--
+  Migration (phenology) · NEW page at /migration
+  Ridgeline of weekly per-species abundance over the calendar year, with
+  arrival markers, peak diversity, and "still expected" forecast cards.
+
+  Drop-in: register at /migration (see DIFF.md). Renames the existing
+  /admin/migration → /admin/import to free the URL.
+-->
+<div class="page-head" style="align-items:flex-start;" data-screen-label="Migration" data-om-validate>
+  <div>
+    <div class="bnb-eyebrow">Behavioral analytics · phenology</div>
+    <h1 class="display"
+        style="font-size:48px;line-height:1.05;letter-spacing:-0.02em;text-wrap:balance;">
+      Arrivals and <em style="color:var(--moss-ink);">departures</em>.
+    </h1>
+    <p class="bnb-meta" style="margin-top:6px;max-width:620px;">
+      Weekly abundance index for migratory species this year. Each ridge is normalized
+      to its own peak so small-population species stay readable. Spring window highlighted
+      in green, fall in amber.
+    </p>
+  </div>
+  <div class="pill-row" style="margin:0;">
+    <span class="bnb-pill">Calendar year {{year}}</span>
+    <span class="bnb-pill">Migratory only</span>
+    <span class="bnb-pill">vs. last year</span>
+  </div>
+</div>
+
+<!-- KPI tiles -->
+<div class="stat-row"
+     hx-get="/pages/migration-stats"
+     hx-trigger="load, every 1h"
+     hx-swap="innerHTML"
+     aria-live="polite"
+     aria-label="Migration statistics">
+  <div class="stat-tile"><span class="label">First-of-year arrivals</span><span class="value">—</span></div>
+  <div class="stat-tile"><span class="label">Peak diversity week</span><span class="value">—</span></div>
+  <div class="stat-tile"><span class="label">Earliest vs last year</span><span class="value">—</span></div>
+  <div class="stat-tile"><span class="label">Still expected</span><span class="value">—</span></div>
+</div>
+
+<!-- Ridgeline + diversity strip — Rust renders the SVG inline -->
+<div class="bnb-card pad">
+  <div class="section-header">
+    <div>
+      <div class="bnb-eyebrow">Ridgeline · per-species weekly index</div>
+      <h3>Twelve months of migrants</h3>
+    </div>
+    <div style="display:flex;gap:14px;align-items:center;">
+      <span class="bnb-meta" style="display:inline-flex;align-items:center;gap:6px;">
+        <span style="width:10px;height:6px;border-radius:2px;background:color-mix(in oklch, var(--moss) 60%, transparent);"></span>
+        spring window
+      </span>
+      <span class="bnb-meta" style="display:inline-flex;align-items:center;gap:6px;">
+        <span style="width:10px;height:6px;border-radius:2px;background:color-mix(in oklch, var(--dawn) 60%, transparent);"></span>
+        fall window
+      </span>
+      <span class="bnb-meta mono">w 1 — 52</span>
+    </div>
+  </div>
+
+  <div id="migration-ridgeline"
+       hx-get="/pages/migration-ridgeline"
+       hx-trigger="load"
+       hx-swap="innerHTML"
+       style="min-height:360px;">
+    <p class="bnb-meta">Building ridgeline…</p>
+  </div>
+
+  <div style="margin-top:14px;padding-top:14px;border-top:0.5px solid var(--hairline);">
+    <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
+      <div class="bnb-eyebrow">Weekly diversity · all species combined</div>
+      <span id="migration-diversity-caption" class="bnb-meta mono">—</span>
+    </div>
+    <div id="migration-diversity"
+         hx-get="/pages/migration-diversity"
+         hx-trigger="load"
+         hx-swap="innerHTML"
+         style="min-height:70px;">
+    </div>
+  </div>
+</div>
+
+<!-- Editorial cards: just arrived / currently peaking / missing -->
+<div class="grid-2" style="grid-template-columns:1fr 1fr 1fr;">
+  <div class="bnb-card pad"
+       hx-get="/pages/migration-card?kind=arrived"
+       hx-trigger="load, every 30m"
+       hx-swap="innerHTML">
+    <div class="bnb-eyebrow" style="color:var(--moss-ink);">Just arrived</div>
+    <div class="display" style="font-size:20px;margin-top:8px;">Loading…</div>
+  </div>
+  <div class="bnb-card pad"
+       hx-get="/pages/migration-card?kind=peaking"
+       hx-trigger="load, every 30m"
+       hx-swap="innerHTML">
+    <div class="bnb-eyebrow" style="color:var(--dawn-ink);">Currently peaking</div>
+    <div class="display" style="font-size:20px;margin-top:8px;">Loading…</div>
+  </div>
+  <div class="bnb-card pad"
+       hx-get="/pages/migration-card?kind=missing"
+       hx-trigger="load, every 30m"
+       hx-swap="innerHTML">
+    <div class="bnb-eyebrow" style="color:var(--rare);">Missing</div>
+    <div class="display" style="font-size:20px;margin-top:8px;">Loading…</div>
+  </div>
+</div>
