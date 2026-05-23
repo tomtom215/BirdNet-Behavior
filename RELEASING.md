@@ -2,117 +2,167 @@
 
 This document is the release runbook. Follow it to cut a new version.
 
-## Overview
+`v0.1.0` shipped on 2026-04-12; everything below applies to `v0.2.0`
+and later.
 
-Releases are driven entirely by pushing a semver tag (`vX.Y.Z`). The
-`.github/workflows/release.yml` workflow validates the tag, runs the
-full quality gate, cross-compiles release binaries for three
-architectures, generates a SLSA build provenance attestation, and
-publishes a GitHub Release with the binaries, checksums, and release
-notes extracted from `CHANGELOG.md`.
-
-A separate workflow, `.github/workflows/docker.yml`, runs in parallel
-on the same tag push and publishes multi-architecture container images
-to GHCR.
-
-## Pre-flight checklist
-
-1. **Bump the workspace version.** Edit `Cargo.toml` and update
-   `workspace.package.version` to the new version. Run `cargo build`
-   or `cargo check --workspace` to refresh `Cargo.lock`.
-
-2. **Update `CHANGELOG.md`.** Convert the `[Unreleased]` section into a
-   dated version heading and start a fresh `[Unreleased]` block above
-   it. The release workflow will extract release notes from the
-   section matching the tag version.
-
-   ```markdown
-   ## [Unreleased]
-
-   ## [0.2.0] - 2026-05-01
-
-   ### Added
-   - ...
-   ```
-
-   Update the link references at the bottom of the file.
-
-3. **Run the full quality gate locally.**
-
-   ```bash
-   cargo fmt --check --all
-   cargo clippy --workspace --all-targets -- -D warnings
-   cargo test --workspace
-   RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
-   ```
-
-4. **Commit the version bump and changelog** on a release branch, open
-   a pull request, and merge it to `main` once CI is green.
-
-## Cutting the release
-
-From the merged commit on `main`:
+## TL;DR — what a maintainer does
 
 ```bash
-git checkout main
-git pull origin main
-
-# Use an annotated tag — `release.yml` triggers on tags matching
-# v[0-9]+.[0-9]+.[0-9]+ or v[0-9]+.[0-9]+.[0-9]+-*
-git tag -a v0.2.0 -m "Release v0.2.0"
-git push origin v0.2.0
+# 1. Bump the version + roll the changelog (on a branch, via PR).
+#    Cargo.toml workspace.package.version = X.Y.Z
+#    CHANGELOG.md: [Unreleased] -> ## [X.Y.Z] - YYYY-MM-DD  (+ fresh [Unreleased])
+# 2. Get CI green on main.
+# 3. (Optional but recommended) Rehearse via the dry run — see below.
+# 4. Tag and push:
+git checkout main && git pull origin main
+git tag -a vX.Y.Z -m "Release vX.Y.Z"
+git push origin vX.Y.Z
+# 5. Watch Actions, then verify the published artifacts (see "Verifying").
 ```
 
-The tag push triggers `release.yml`, which runs these jobs:
+That single tag push drives everything else.
 
-| Job | Purpose |
-|-----|---------|
-| `validate` | Validate semver tag, verify `Cargo.toml` version matches the tag, verify a `CHANGELOG.md` entry exists for the version |
-| `ci` | Full quality gate — `fmt`, `clippy`, `test`, `doc`, and MSRV check |
-| `build` | Cross-compile release binaries for `aarch64-unknown-linux-gnu` and `x86_64-unknown-linux-gnu` using Ubuntu 24.04's native GCC 13 cross toolchain (glibc 2.39 baseline, which is what pyke's prebuilt ONNX Runtime requires), strip debug symbols, and archive as `.tar.gz` with per-archive SHA-256. `armv7-unknown-linux-gnueabihf` is intentionally not built — the `ort` crate ships no prebuilt ONNX Runtime binaries for that target |
-| `package` | Aggregate all build artifacts, generate a combined `SHA256SUMS` file, and produce a SLSA build provenance attestation signed via GitHub OIDC |
-| `github-release` | Create or update the GitHub Release idempotently, attach the archives, `SHA256SUMS`, and `install.sh`, and extract release notes from `CHANGELOG.md` |
+## What each workflow emits
 
-If a release for the tag already exists (for example, created by a
-different tool while testing), the workflow updates it in place rather
-than failing.
+Pushing a `vX.Y.Z` tag triggers **two** workflows in parallel:
+
+### `release.yml` — binaries, SBOM, attestation, GitHub Release
+
+```
+validate ──► ci ──► build (matrix) ──► package ──► github-release
+                                                    (tag push only)
+```
+
+| Job | Emits |
+|-----|-------|
+| `validate` | Confirms the tag is valid semver, that `Cargo.toml` `workspace.package.version` equals the tag, and that a non-empty `## [X.Y.Z]` section exists in `CHANGELOG.md`. Detects `-pre` suffixes and marks the release as a pre-release. |
+| `ci` | Full quality gate: `fmt`, `clippy -D warnings`, `test`, Rustdoc (`-D warnings`, private intra-doc links), and an MSRV (Rust 1.95) check. |
+| `build` | A release binary per target, built with **`--features analytics`** (DuckDB statically linked in; dormant until `--analytics-db` is passed). Stripped, archived as `.tar.gz` with a per-archive SHA-256. |
+| `package` | Combined `SHA256SUMS`; a CycloneDX 1.5 SBOM (JSON + XML); and a **SLSA build-provenance attestation** over the archives and SBOMs, signed via GitHub OIDC. |
+| `github-release` | Creates/updates the GitHub Release idempotently, attaches the archives, `SHA256SUMS`, `install.sh`, and SBOMs, and uses the extracted `CHANGELOG` section (plus appended install/Docker/verify notes) as the body. |
+
+**Build targets** (two — there is no armv7 and no musl):
+
+| Target | Platform | Built |
+|--------|----------|-------|
+| `aarch64-unknown-linux-gnu` | Raspberry Pi 4 / 5 / 400, ARM64 Linux | cross, on the x86_64 runner via the native GCC 13 aarch64 toolchain |
+| `x86_64-unknown-linux-gnu` | Standard 64-bit Linux | native |
+
+We build on Ubuntu 24.04 (GCC 13, **glibc 2.39**) because pyke's prebuilt
+ONNX Runtime needs glibc ≥ 2.38 and a GCC ≥ 13 libstdc++. We do **not**
+use `cargo-zigbuild`: Zig's `-lstdc++` does not provide the full GNU
+cxx11-ABI symbol set the pyke archives reference. Consequence: the
+binaries require **glibc ≥ 2.39 at runtime** (Pi OS Trixie / Debian 13 /
+Ubuntu 24.04). Pi OS **Bookworm** (glibc 2.36) is unsupported by the
+native binary — those users should run the Docker image.
+
+`armv7-unknown-linux-gnueabihf` is intentionally omitted: `ort` ships no
+prebuilt ONNX Runtime for armv7. Pi 3 / Pi Zero 2 W users should run the
+64-bit Pi OS and use the aarch64 binary.
+
+### `docker.yml` — multi-arch container images
+
+Builds **standard** and **`-analytics`** variants for **linux/amd64**
+and **linux/arm64**, each natively on a matching runner (no QEMU), pushes
+by digest, then merges to multi-arch manifests tagged
+`X.Y.Z` / `X.Y` / `X` / `latest` (and `edge` on `main`, `sha-<rev>` always).
+Each manifest is **signed with keyless cosign** (GitHub OIDC → Fulcio +
+Rekor), with buildx `provenance` and `sbom` attestations attached.
+
+## Rehearsing a release (dry run)
+
+`release.yml` has a `workflow_dispatch` entry. Triggering it from the
+Actions tab runs `validate → ci → build → package` exactly as a real
+release — including the **DuckDB analytics cross-build**, the SBOM, and
+the SLSA attestation — but **skips `github-release`, so nothing is
+published**. Use it to prove a release will build cleanly before tagging
+(especially after dependency bumps or toolchain changes).
+
+- Leave the `version` input blank to rehearse the current
+  `Cargo.toml` version, or set it (e.g. `0.2.0`) to rehearse a specific
+  one. `validate` still checks `Cargo.toml` and `CHANGELOG.md`, so a
+  dry run catches a forgotten version bump or changelog entry too.
+
+## Pre-release checklist
+
+Copy-paste this into the release PR or issue and tick it off:
+
+```text
+[ ] workspace.package.version in Cargo.toml bumped to X.Y.Z
+[ ] Cargo.lock refreshed (cargo update --workspace)
+[ ] CHANGELOG.md: [Unreleased] rolled into ## [X.Y.Z] - YYYY-MM-DD
+[ ] CHANGELOG.md: fresh empty [Unreleased] section added
+[ ] CHANGELOG.md: link references at the foot updated
+[ ] Local gate: cargo fmt --check --all
+[ ] Local gate: cargo clippy --workspace --all-targets -- -D warnings
+[ ] Local gate: cargo test --workspace
+[ ] Local gate: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items
+[ ] Version-bump PR merged to main; CI green on the merge commit
+[ ] Dry run (workflow_dispatch on release.yml) is green
+[ ] git tag -a vX.Y.Z -m "Release vX.Y.Z" && git push origin vX.Y.Z
+[ ] Post-publish verification done (binaries, Docker, attestation, SBOM)
+```
+
+## Verifying a published release
+
+```bash
+# Checksums
+sha256sum -c SHA256SUMS --ignore-missing
+
+# SLSA build provenance on a binary archive
+gh attestation verify \
+  --repo tomtom215/BirdNet-Behavior \
+  birdnet-behavior-X.Y.Z-aarch64-unknown-linux-gnu.tar.gz
+
+# Docker image signature (keyless cosign)
+cosign verify \
+  --certificate-identity-regexp '^https://github.com/tomtom215/BirdNet-Behavior/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/tomtom215/birdnet-behavior:X.Y.Z
+```
 
 ## Pre-releases
 
-Pre-release tags follow the pattern `vX.Y.Z-<suffix>`, for example
-`v0.2.0-rc.1`. The workflow detects the suffix, marks the GitHub
-Release as a pre-release, and publishes it alongside stable releases.
+Tags of the form `vX.Y.Z-<suffix>` (e.g. `v0.2.0-rc.1`) are detected by
+`validate`, which marks the GitHub Release as a pre-release. Docker still
+publishes versioned tags for them but does **not** move `latest`.
 
-## Verifying a release
+## What is NOT automated
 
-Every release artifact is covered by a SLSA build provenance
-attestation. End users can verify the attestation against a binary
-archive with the GitHub CLI:
+These are deliberate manual / out-of-scope steps — know them so a release
+isn't half-done:
 
-```bash
-gh attestation verify \
-  --repo tomtom215/BirdNet-Behavior \
-  birdnet-behavior-aarch64-unknown-linux-gnu.tar.gz
-```
-
-Checksums can be verified against `SHA256SUMS`:
-
-```bash
-sha256sum -c SHA256SUMS --ignore-missing
-```
+- **Version bump + changelog roll.** `validate` *checks* that
+  `Cargo.toml` and `CHANGELOG.md` match the tag, but you make the edits
+  (see the checklist). There is no auto-bump.
+- **Tag creation/push.** The pipeline is tag-triggered; creating and
+  pushing the tag is the manual "go" action.
+- **Docs versioning.** The mdBook documentation site is **"latest tracks
+  `main`"** — it is not snapshotted per release. `docs.yml` rebuilds and
+  deploys it on pushes to `main` that touch `docs/**` *and* on release
+  tags, so a release refreshes the live docs, but old versions are not
+  archived. (Rationale: a single small appliance project; one accurate
+  "current" manual beats N drifting snapshots. Revisit if the schema or
+  config surface starts changing incompatibly between releases.)
+- **Crates.io publishing.** Not published to crates.io (this is an
+  application, not a library).
 
 ## Troubleshooting
 
-- **`validate` fails with "version does not match tag".** The
-  `workspace.package.version` field in `Cargo.toml` must equal the tag
-  minus the leading `v`. Fix the commit, tag again.
-- **`validate` fails with "no CHANGELOG entry".** Add a
-  `## [X.Y.Z]` heading to `CHANGELOG.md` and re-push the tag.
-- **`build` fails on a single architecture.** The Zig linker used by
-  `cargo-zigbuild` occasionally regresses on minor versions. Pin a
-  known-good Zig version in the `Install Zig` step of
-  `.github/workflows/release.yml`.
-- **The release already exists and needs to be regenerated.** Delete
-  the GitHub Release (keep the tag), then re-run the workflow from the
-  Actions tab. The `github-release` job is idempotent and will recreate
-  the release and re-upload assets.
+- **`validate` fails: "version does not match tag".**
+  `workspace.package.version` must equal the tag minus the leading `v`.
+  Fix the commit, re-tag.
+- **`validate` fails: "no CHANGELOG entry" / "empty release notes".**
+  Add a non-empty `## [X.Y.Z]` heading to `CHANGELOG.md` and re-push.
+- **`build` fails on the aarch64 analytics link.** The bundled libduckdb
+  is a large C++ static archive; the cross build links it on the 16 GB
+  x86_64 runner. If it regresses, rehearse with the dry run and, if
+  needed, fall back to building aarch64 natively on `ubuntu-24.04-arm`
+  (as `docker.yml` does) — at the cost of relaxing LTO to fit the 8 GB
+  arm runner.
+- **The release already exists and needs regenerating.** Delete the
+  GitHub Release (keep the tag), then re-run the workflow from the
+  Actions tab. `github-release` is idempotent and re-creates it.
+- **Docs didn't update after a release.** Check the `docs.yml` run for
+  the tag; Pages must be enabled (Settings → Pages → Source: GitHub
+  Actions) once for the repo.
