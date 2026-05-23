@@ -53,3 +53,4 @@ yoy = "yoy"           # year-over-year, domain abbreviation
 inh = "inh"           # short for "inhibit" — used as local var name
 unparseable = "unparseable" # alternative spelling of "unparsable", widely used
 cardinalis = "cardinalis" # Latin species epithet — Cardinalis cardinalis (Northern Cardinal)
+ater = "ater"         # Latin species epithet — Periparus ater (Coal Tit)
