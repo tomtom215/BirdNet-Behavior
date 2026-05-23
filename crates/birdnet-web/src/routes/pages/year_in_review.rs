@@ -11,7 +11,9 @@ use axum::response::Html;
 use axum::{Router, routing::get};
 
 use super::atoms::avatar;
-use super::{days_to_date, escape_html, render_page, simple_url_encode, today_date_string};
+use super::{
+    days_to_date, escape_html, group_thousands, render_page, simple_url_encode, today_date_string,
+};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -300,21 +302,6 @@ fn milestone(html: &mut String, label: &str, value: &str, sub: &str) {
     );
 }
 
-/// Format an integer with thousands separators (e.g. 9914 → "9,914").
-fn group_thousands(n: i64) -> String {
-    let neg = n < 0;
-    let digits = n.unsigned_abs().to_string();
-    let mut out = String::new();
-    let len = digits.len();
-    for (i, ch) in digits.chars().enumerate() {
-        if i > 0 && (len - i).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(ch);
-    }
-    if neg { format!("-{out}") } else { out }
-}
-
 /// Convert YYYY-MM-DD to days since the Unix epoch (rata die).
 fn date_to_epoch_days(date: &str) -> u64 {
     if date.len() < 10 {
@@ -334,14 +321,6 @@ fn date_to_epoch_days(date: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn group_thousands_formats() {
-        assert_eq!(group_thousands(0), "0");
-        assert_eq!(group_thousands(42), "42");
-        assert_eq!(group_thousands(9914), "9,914");
-        assert_eq!(group_thousands(1_234_567), "1,234,567");
-    }
 
     #[test]
     fn date_to_epoch_days_known() {

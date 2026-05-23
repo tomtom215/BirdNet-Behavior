@@ -616,3 +616,33 @@ footer a:hover { color: var(--moss-ink); }
 }
 
 /* ── /BNB:CSS-APPEND:O-03_display_prefs ── */
+
+/* ── Responsive overflow hardening ──────────────────────────────────────
+   All rules are scoped to <=1080px so the desktop layout is unchanged.
+   CSS grid/flex children default to min-width:auto and refuse to shrink
+   below their content's intrinsic width, which pushed wide cards, charts
+   and tables past the viewport at laptop/tablet/phone widths. Let the
+   columns shrink, stack the two-column layouts a little earlier, and let
+   wide tables and charts scroll inside their card instead of the page. */
+.grid-2 > *,
+.hero > *,
+.stat-tile { min-width: 0; }
+
+/* Wide chart SVGs (e.g. the activity heatmap, which grows with the date
+   range) scale down to their card instead of overflowing. SVGs that already
+   fit are unaffected, so the desktop layout is unchanged. */
+.bnb-card svg,
+.card svg { max-width: 100%; height: auto; }
+
+@media (max-width: 1080px) {
+  .grid-2 { grid-template-columns: 1fr; }
+}
+@media (max-width: 980px) {
+  /* Wide data tables scroll within their container rather than the page. */
+  table { display: block; overflow-x: auto; white-space: nowrap; }
+}
+@media (max-width: 720px) {
+  /* On phones, a card holding a wide fixed-size chart scrolls sideways
+     instead of forcing a horizontal scrollbar on the whole document. */
+  .bnb-card { overflow-x: auto; }
+}

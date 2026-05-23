@@ -6,7 +6,7 @@ use axum::extract::State;
 use axum::http::{StatusCode, header};
 
 use crate::routes::pages::atoms::sparkline;
-use crate::routes::pages::{escape_html, today_count, today_date_string};
+use crate::routes::pages::{escape_html, group_thousands, today_count, today_date_string};
 use crate::state::AppState;
 
 /// Distinct species seen today (helper inlined — no dedicated DB fn exists).
@@ -59,6 +59,7 @@ pub(super) async fn stats_partial(
         r#"<div class="stat-tile"><span class="label">Detections</span>
              <div><div class="value tabular">{total}</div><div class="sub">all time</div></div>
              <div style="margin-top:auto">{spark}</div></div>"#,
+        total = group_thousands(total),
     );
     // Tile 2 — Species (all-time unique).
     let _ = write!(
@@ -71,6 +72,7 @@ pub(super) async fn stats_partial(
         html,
         r#"<div class="stat-tile"><span class="label">Today</span>
              <div><div class="value tabular">{today_n}</div><div class="sub">{date}</div></div></div>"#,
+        today_n = group_thousands(today_n),
         date = escape_html(&today_date_string()),
     );
     // Tile 4 — Last hour (dawn accent for the live-ish number).

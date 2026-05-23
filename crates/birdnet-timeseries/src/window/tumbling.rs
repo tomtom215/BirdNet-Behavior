@@ -100,8 +100,8 @@ impl WindowSpec for TumblingSpec {
         let limit = self.limit;
         format!(
             "SELECT
-    {bucket_expr} AS window_start,
-    {bucket_expr} + {interval} AS window_end,
+    strftime({bucket_expr}, '%Y-%m-%d %H:%M:%S') AS window_start,
+    strftime({bucket_expr} + {interval}, '%Y-%m-%d %H:%M:%S') AS window_end,
     COUNT(*) AS detection_count,
     COUNT(DISTINCT Com_Name) AS species_count,
     AVG(Confidence) AS avg_confidence,

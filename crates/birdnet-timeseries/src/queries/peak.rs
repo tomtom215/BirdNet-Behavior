@@ -65,8 +65,8 @@ impl QueryPlan for PeakWindows {
     )
 )
 SELECT
-    w.window_start,
-    w.window_end,
+    strftime(w.window_start, '%Y-%m-%d %H:%M:%S') AS window_start,
+    strftime(w.window_end, '%Y-%m-%d %H:%M:%S') AS window_end,
     COUNT(d.Com_Name)          AS detection_count,
     COUNT(DISTINCT d.Com_Name) AS species_count,
     MAX(d.Confidence)          AS peak_confidence
@@ -124,8 +124,8 @@ impl QueryPlan for DawnChorusPeak {
     )
 )
 SELECT
-    w.window_start,
-    w.window_end,
+    strftime(w.window_start, '%Y-%m-%d %H:%M:%S') AS window_start,
+    strftime(w.window_end, '%Y-%m-%d %H:%M:%S') AS window_end,
     COUNT(d.Com_Name)          AS detection_count,
     COUNT(DISTINCT d.Com_Name) AS species_count,
     list(DISTINCT d.Com_Name ORDER BY d.Com_Name) AS species_list

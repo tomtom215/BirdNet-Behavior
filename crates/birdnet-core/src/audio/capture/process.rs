@@ -82,25 +82,59 @@ pub fn start_microphone_capture(config: &RecordingConfig) -> Result<CaptureProce
 
     let filename_pattern = recording_filename(None, config.format);
     let output_path = config.output_dir.join(&filename_pattern);
+    let segment = config.segment_duration_secs.to_string();
 
-    let mut cmd = Command::new("arecord");
-    cmd.arg("-D")
-        .arg(device)
-        .arg("-f")
-        .arg("S16_LE")
-        .arg("-r")
-        .arg(sample_rate.to_string())
-        .arg("-c")
-        .arg(channels.to_string())
-        .arg("--max-file-time")
-        .arg(config.segment_duration_secs.to_string())
-        .arg("--use-strftime")
-        .arg(output_path.to_string_lossy().as_ref())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped());
+    // macOS captures the system microphone through ffmpeg's avfoundation input
+    // (ALSA's `arecord` is Linux-only); every other target uses `arecord`. Both
+    // branches are compiled on every platform via `cfg!` (not `#[cfg]`), so the
+    // macOS path is type-checked and linted even when the build runs on Linux.
+    let mut cmd = if cfg!(target_os = "macos") {
+        // The avfoundation input spec is "[video]:[audio]"; ":<n>" selects audio
+        // device <n> with no video capture. ALSA-style device names (e.g.
+        // "plughw:1,0") don't apply, so fall back to the default input (0).
+        let audio_device = if device.is_empty() || device.contains(':') || device.starts_with("hw")
+        {
+            "0"
+        } else {
+            device.as_str()
+        };
+        let mut cmd = Command::new("ffmpeg");
+        cmd.arg("-f")
+            .arg("avfoundation")
+            .arg("-i")
+            .arg(format!(":{audio_device}"))
+            .arg("-ar")
+            .arg(sample_rate.to_string())
+            .arg("-ac")
+            .arg(channels.to_string())
+            .arg("-f")
+            .arg("segment")
+            .arg("-segment_time")
+            .arg(&segment)
+            .arg("-strftime")
+            .arg("1")
+            .arg(output_path.to_string_lossy().as_ref());
+        cmd
+    } else {
+        let mut cmd = Command::new("arecord");
+        cmd.arg("-D")
+            .arg(device)
+            .arg("-f")
+            .arg("S16_LE")
+            .arg("-r")
+            .arg(sample_rate.to_string())
+            .arg("-c")
+            .arg(channels.to_string())
+            .arg("--max-file-time")
+            .arg(&segment)
+            .arg("--use-strftime")
+            .arg(output_path.to_string_lossy().as_ref());
+        cmd
+    };
+    cmd.stdout(Stdio::null()).stderr(Stdio::piped());
 
     let child = cmd.spawn()?;
-    tracing::info!(device = device, "started microphone capture via arecord");
+    tracing::info!(device = %device, "started microphone capture");
     Ok(CaptureProcess {
         child,
         source: config.source.clone(),
@@ -240,7 +274,14 @@ pub fn spawn_capture(config: &RecordingConfig) -> Result<CaptureProcess, Capture
 /// Return the system tool name required for the given source.
 pub const fn required_tool(source: &CaptureSource) -> &'static str {
     match source {
-        CaptureSource::Microphone { .. } => "arecord",
+        // macOS records the microphone via ffmpeg/avfoundation; Linux via arecord.
+        CaptureSource::Microphone { .. } => {
+            if cfg!(target_os = "macos") {
+                "ffmpeg"
+            } else {
+                "arecord"
+            }
+        }
         CaptureSource::PipeWire { .. } | CaptureSource::Rtsp { .. } => "ffmpeg",
     }
 }
@@ -279,7 +320,12 @@ mod tests {
             sample_rate: 48_000,
             channels: 1,
         };
-        assert_eq!(required_tool(&src), "arecord");
+        let expected = if cfg!(target_os = "macos") {
+            "ffmpeg"
+        } else {
+            "arecord"
+        };
+        assert_eq!(required_tool(&src), expected);
     }
 
     #[test]

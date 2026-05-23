@@ -62,7 +62,7 @@ impl QueryPlan for MovingAverage {
     GROUP BY detection_date
 )
 SELECT
-    detection_date,
+    strftime(detection_date, '%Y-%m-%d') AS det_date,
     daily_detections,
     AVG(daily_detections) OVER (
         ORDER BY detection_date
@@ -113,7 +113,7 @@ impl QueryPlan for YearOverYear {
     GROUP BY week_start, yr
 )
 SELECT
-    w1.week_start,
+    strftime(w1.week_start, '%Y-%m-%d') AS week_start,
     w1.detection_count  AS current_year_count,
     w2.detection_count  AS prior_year_count,
     w1.detection_count - COALESCE(w2.detection_count, 0) AS yoy_delta,
@@ -178,7 +178,7 @@ with_stats AS (
     FROM daily
 )
 SELECT
-    detection_date,
+    strftime(detection_date, '%Y-%m-%d') AS detection_date,
     detections,
     rolling_mean,
     rolling_stddev,

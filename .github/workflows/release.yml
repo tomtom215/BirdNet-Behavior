@@ -219,16 +219,25 @@ jobs:
   build:
     name: Build ${{ matrix.target }}
     needs: [validate, ci]
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           # Raspberry Pi 4 / 5 (64-bit Raspberry Pi OS Trixie)
           - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04
             cross: true
           # Standard 64-bit Linux (x86_64)
           - target: x86_64-unknown-linux-gnu
+            os: ubuntu-24.04
+            cross: false
+          # macOS on Apple Silicon (M-series). The macos-14 runner is arm64, so
+          # ort-sys downloads the aarch64-apple-darwin ONNX Runtime prebuilt and
+          # audio capture works through ffmpeg's avfoundation input. This target
+          # must be verified on a real macos-14 run before it is relied upon.
+          - target: aarch64-apple-darwin
+            os: macos-14
             cross: false
           # Note: armv7-unknown-linux-gnueabihf is intentionally omitted.
           # `ort-sys` does not ship prebuilt ONNX Runtime binaries for armv7
@@ -253,7 +262,8 @@ jobs:
           toolchain: stable
           targets: ${{ matrix.target }}
 
-      - name: Install native build dependencies
+      - name: Install native build dependencies (Linux)
+        if: runner.os == 'Linux'
         # cmake + a host C++ compiler are required to compile the bundled
         # libduckdb (the `analytics` feature) from source. GitHub's ubuntu-24.04
         # image ships build-essential, but install cmake explicitly so the build
@@ -261,6 +271,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake g++
+
+      - name: Install native build dependencies (macOS)
+        if: runner.os == 'macOS'
+        # macos-14 ships clang (via Xcode) and usually cmake, but install cmake
+        # explicitly so the bundled libduckdb build doesn't depend on the runner
+        # image's default package set.
+        run: brew install cmake || brew upgrade cmake || true
 
       - name: Install aarch64 cross toolchain
         if: matrix.cross

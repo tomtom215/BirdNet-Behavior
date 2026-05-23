@@ -314,11 +314,9 @@ fn extension_error_html(
 <p style="color:var(--text-muted);font-size:0.8rem;">{error}</p>"#,
         error = escape_html(error),
     );
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        [(header::CONTENT_TYPE, "text/html")],
-        html,
-    )
+    // Return 200 (not 503) so HTMX swaps this informative fragment into the
+    // card; a non-2xx response leaves the "Loading…" placeholder stuck.
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
 #[cfg(feature = "analytics")]

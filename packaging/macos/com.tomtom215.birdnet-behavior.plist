@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd LaunchAgent for BirdNet-Behavior on macOS (Apple Silicon).
+
+  A LaunchAgent (per-user, starts at login) is used rather than a system
+  LaunchDaemon because capturing the microphone requires the user to grant
+  Microphone access via System Settings → Privacy & Security → Microphone,
+  and that TCC consent is tied to a logged-in user session. A headless
+  LaunchDaemon cannot obtain mic permission.
+
+  Install:
+    cp packaging/macos/com.tomtom215.birdnet-behavior.plist \
+       ~/Library/LaunchAgents/
+    # edit the paths/coords below to match your install, then:
+    launchctl load -w ~/Library/LaunchAgents/com.tomtom215.birdnet-behavior.plist
+    # the first run will prompt for Microphone access — grant it.
+
+  Logs:  tail -f /opt/homebrew/var/log/birdnet-behavior.log
+  Stop:  launchctl unload -w ~/Library/LaunchAgents/com.tomtom215.birdnet-behavior.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.tomtom215.birdnet-behavior</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/birdnet-behavior</string>
+    <string>-c</string>
+    <string>/opt/homebrew/etc/birdnet-behavior/birdnet.conf</string>
+    <string>--analytics-db</string>
+    <string>/opt/homebrew/var/birdnet-behavior/analytics.duckdb</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/opt/homebrew/var/log/birdnet-behavior.log</string>
+  <key>StandardErrorPath</key>
+  <string>/opt/homebrew/var/log/birdnet-behavior.err.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- Sun-time overlay for the dawn-chorus page; set to your station. -->
+    <key>BNB_STATION_LAT</key>
+    <string>0.0</string>
+    <key>BNB_STATION_LON</key>
+    <string>0.0</string>
+    <!-- Stable secret so share links survive restarts (generate your own). -->
+    <key>BNB_SHARE_SECRET</key>
+    <string>CHANGE-ME-to-32-plus-random-bytes</string>
+  </dict>
+</dict>
+</plist>
