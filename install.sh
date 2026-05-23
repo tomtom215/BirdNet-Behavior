@@ -530,7 +530,10 @@ User=${SERVICE_USER}
 # Exit 0 (pass) or 1 (warnings only) are both accepted — only exit 2
 # (errors that will prevent operation) keeps the service from starting.
 ExecStartPre=/bin/sh -c '${INSTALL_DIR}/${BINARY_NAME} --doctor --config ${CONFIG_FILE} || [ \$? -le 1 ]'
-ExecStart=${INSTALL_DIR}/${BINARY_NAME} --config ${CONFIG_FILE} --listen ${LISTEN_ADDR} --watch-dir ${STREAM_DIR} --image-cache-dir ${IMAGE_CACHE_DIR}
+# DuckDB behavioral analytics is compiled into every release binary and enabled
+# here by default (the database is created on first run). To run without it
+# (e.g. on a very low-RAM board), remove the --analytics-db flag below.
+ExecStart=${INSTALL_DIR}/${BINARY_NAME} --config ${CONFIG_FILE} --listen ${LISTEN_ADDR} --watch-dir ${STREAM_DIR} --image-cache-dir ${IMAGE_CACHE_DIR} --analytics-db ${DATA_DIR}/analytics.db
 
 # Restart policy. panic=abort means panics show up as SIGABRT exits;
 # Restart=always covers panics, OOM kills, and any non-zero exit.
