@@ -21,7 +21,10 @@ name: Docker
 #   ghcr.io/tomtom215/birdnet-behavior:1                (major series)
 #   ghcr.io/tomtom215/birdnet-behavior:edge             (main branch tip)
 #   ghcr.io/tomtom215/birdnet-behavior:sha-<7chars>     (exact revision)
-#   ghcr.io/tomtom215/birdnet-behavior:*-analytics      (DuckDB analytics)
+#
+# Every image has the DuckDB behavioral-analytics engine compiled in (there is
+# no separate `-analytics` tag); docker-compose.yml enables it by default via
+# BIRDNET_ANALYTICS_DB.
 #
 # Supported platforms:
 #   linux/amd64  — x86_64 servers and desktops        (native on ubuntu-24.04)
@@ -80,7 +83,7 @@ jobs:
   # the `merge` job below assembles the final manifest list.
   # ---------------------------------------------------------------------------
   build:
-    name: Build ${{ matrix.variant.name }}/${{ matrix.platform.arch }}
+    name: Build ${{ matrix.platform.arch }}
     runs-on: ${{ matrix.platform.runner }}
     timeout-minutes: 90
 
@@ -92,13 +95,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant:
-          - name: standard
-            features: ""
-            tag_suffix: ""
-          - name: analytics
-            features: "analytics"
-            tag_suffix: "-analytics"
+        # A single image variant: analytics is compiled in (statically-linked
+        # DuckDB) so `:latest` / `:VERSION` ship the full feature set with no
+        # separate `-analytics` tag, matching the release binaries.
         platform:
           - arch: amd64
             runner: ubuntu-24.04
@@ -147,12 +146,11 @@ jobs:
           file: Dockerfile
           platforms: linux/${{ matrix.platform.arch }}
           build-args: |
-            BUILD_FEATURES=${{ matrix.variant.features }}
+            BUILD_FEATURES=analytics
           labels: ${{ steps.meta.outputs.labels }}
-          # Per-(variant × arch) cache scope keeps caches from colliding
-          # between different feature sets and platforms.
-          cache-from: type=gha,scope=${{ matrix.variant.name }}-${{ matrix.platform.arch }}
-          cache-to:   type=gha,mode=max,scope=${{ matrix.variant.name }}-${{ matrix.platform.arch }}
+          # Per-arch cache scope keeps the two platforms' caches from colliding.
+          cache-from: type=gha,scope=${{ matrix.platform.arch }}
+          cache-to:   type=gha,mode=max,scope=${{ matrix.platform.arch }}
           provenance: ${{ env.PUSH == 'true' }}
           sbom:       ${{ env.PUSH == 'true' }}
           # Push as a digest-only image (no tags).  The merge job consumes
@@ -171,38 +169,28 @@ jobs:
         if: env.PUSH == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: digests-${{ matrix.variant.name }}-${{ matrix.platform.arch }}
+          name: digests-${{ matrix.platform.arch }}
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
 
   # ---------------------------------------------------------------------------
-  # Merge the per-arch digests into a multi-arch manifest list, and tag it
-  # from the output of docker/metadata-action.  One manifest is produced per
-  # variant (standard / analytics).
+  # Merge the per-arch digests into a single multi-arch manifest list and tag
+  # it from the output of docker/metadata-action.
   # ---------------------------------------------------------------------------
   merge:
-    name: Merge (${{ matrix.variant.name }})
+    name: Merge multi-arch manifest
     runs-on: ubuntu-24.04
     needs: build
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.push)
     timeout-minutes: 15
-
-    strategy:
-      fail-fast: false
-      matrix:
-        variant:
-          - name: standard
-            tag_suffix: ""
-          - name: analytics
-            tag_suffix: "-analytics"
 
     steps:
       - name: Download digests
         uses: actions/download-artifact@v8
         with:
           path: /tmp/digests
-          pattern: digests-${{ matrix.variant.name }}-*
+          pattern: digests-*
           merge-multiple: true
 
       - name: Set up Docker Buildx
@@ -218,16 +206,13 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
-      # Compute tags for this variant (standard adds no suffix, analytics
-      # appends "-analytics").  The latest tag is only applied on version
-      # tags on the default branch; "edge" tracks main.
+      # `latest` is only applied on version tags on the default branch;
+      # "edge" tracks main.
       - name: Compute image tags
         id: meta
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          flavor: |
-            suffix=${{ matrix.variant.tag_suffix }},onlatest=true
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -254,12 +239,12 @@ jobs:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         run: |
           set -euo pipefail
-          # Every tag for this variant points at one manifest-list digest, and
-          # cosign signs by digest — so signing the digest once covers all of
-          # this variant's tags (version, latest/edge, sha, ...). Keyless: the
-          # signature is bound to this workflow's OIDC identity (Fulcio cert,
-          # Rekor transparency log), matching the SLSA attestation on the
-          # binaries. Verify with the recipe in the job summary / README.
+          # Every tag points at one manifest-list digest, and cosign signs by
+          # digest — so signing the digest once covers all tags (version,
+          # latest/edge, sha, ...). Keyless: the signature is bound to this
+          # workflow's OIDC identity (Fulcio cert, Rekor transparency log),
+          # matching the SLSA attestation on the binaries. Verify with the
+          # recipe in the job summary / README.
           first_tag=$(jq -r '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
           digest=$(docker buildx imagetools inspect "${first_tag}" --format '{{ .Manifest.Digest }}')
           echo "Signing ${IMAGE}@${digest} (keyless, GitHub OIDC)"
@@ -268,9 +253,6 @@ jobs:
       - name: Inspect pushed manifest
         run: |
           set -euo pipefail
-          # The metadata-action's suffix flavor is already applied to the
-          # image.version label, so ${version} already ends with the variant
-          # suffix (e.g. "edge-analytics").  Do NOT append tag_suffix again.
           version=$(jq -r '.labels["org.opencontainers.image.version"]' <<< "$DOCKER_METADATA_OUTPUT_JSON")
           docker buildx imagetools inspect \
             "${REGISTRY}/${IMAGE_NAME}:${version}"
@@ -278,7 +260,7 @@ jobs:
       - name: Job summary
         run: |
           {
-            echo "### Docker manifest — ${{ matrix.variant.name }}"
+            echo "### Docker manifest"
             echo ""
             echo "Platforms: \`linux/amd64\`, \`linux/arm64\`"
             echo ""
