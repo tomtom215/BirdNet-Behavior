@@ -1,7 +1,8 @@
 //! Axum server setup and lifecycle.
 //!
 //! Configures the axum Router with Tower middleware (`CORS`, tracing,
-//! rate limiting), mounts API routes, and manages graceful shutdown.
+//! rate limiting, a stateless CSRF guard, and response-hardening security
+//! headers), mounts API routes, and manages graceful shutdown.
 
 use axum::Router;
 use std::fmt;
@@ -85,8 +86,15 @@ pub fn build_router_with_auth(
         router
     };
 
-    // Apply rate limiting before auth so the IP is still available.
+    // Layer order is outermost-last. The CSRF guard runs after rate limiting
+    // (so request floods are still throttled) and before auth, rejecting
+    // cross-site state-changing requests. The security-headers layer is added
+    // last so it decorates *every* response — 401/404/429, static files, and
+    // handler output alike.
     router
+        .layer(axum::middleware::from_fn(
+            crate::security::csrf_guard_middleware,
+        ))
         .layer(axum::middleware::from_fn(move |req, next| {
             let limiter = Arc::clone(&limiter);
             crate::rate_limit::rate_limit_middleware(limiter, req, next)
@@ -98,6 +106,9 @@ pub fn build_router_with_auth(
                 .allow_methods(Any)
                 .allow_headers(Any),
         )
+        .layer(axum::middleware::from_fn(
+            crate::security::security_headers_middleware,
+        ))
 }
 
 /// Start the web server.
