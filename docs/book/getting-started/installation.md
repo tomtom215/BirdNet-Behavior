@@ -17,8 +17,9 @@ There are two supported ways to install BirdNet-Behavior. **Docker is the fastes
 > do **not** run on Raspberry Pi OS Bookworm / Debian 12 (glibc 2.36). `install.sh`
 > checks this and refuses with a clear message rather than installing a binary
 > that won't start. Bookworm users: use Docker. Each prebuilt binary also ships
-> the DuckDB behavioral-analytics engine **built in** — it stays dormant until
-> you pass `--analytics-db`.
+> the DuckDB behavioral-analytics engine **built in and on by default** — the
+> installer's systemd unit enables it automatically (for a manual run, pass
+> `--analytics-db`).
 
 - **Storage:** ~1.5 GB free (541 MB for the BirdNET+ model, the rest for recordings and database).
 - **Audio input** — one of:

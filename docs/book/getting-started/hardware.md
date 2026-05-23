@@ -6,9 +6,9 @@ You don't need much — a Raspberry Pi (or any Linux box) and something to liste
 
 | Device | Notes |
 |---|---|
-| **Raspberry Pi 5** | Recommended. Comfortable headroom for the analytics build and the live spectrogram. |
+| **Raspberry Pi 5** | Recommended. Comfortable headroom for behavioral analytics and the live spectrogram. |
 | **Raspberry Pi 4B / 400** | Fully supported and very capable for everyday use. |
-| **Raspberry Pi 3B+** | Works with the native binary (not Docker). Stick to the standard build. |
+| **Raspberry Pi 3B+** | Works on the 64-bit Pi OS. Tight on RAM — consider disabling analytics (remove `--analytics-db`) to keep memory low. |
 | **Any x86_64 Linux** | Fully supported — an old laptop or mini-PC is a great always-on host. |
 
 BirdNet-Behavior is light (~20–50 MB of RAM at runtime), so the limiting factor is usually storage for recordings, not CPU. Budget **~1.5 GB free** to start (541 MB of that is the model).

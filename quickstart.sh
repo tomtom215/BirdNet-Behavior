@@ -21,7 +21,7 @@
 #        • Otherwise prompts you for an RTSP stream URL
 #   5. Asks for your station coordinates (or auto-detects via opt-in IP
 #      geolocation through ipapi.co — off by default, you have to say yes).
-#   6. Asks whether to enable DuckDB behavioral analytics.
+#   6. (DuckDB behavioral analytics is built into every image and on by default.)
 #   7. Writes a minimal 6-line .env with only your chosen values.
 #   8. Starts the container with the matching compose overlay.
 #   9. Tails the logs so you can watch the first-run model download, and
@@ -274,20 +274,13 @@ if [ -z "$LAT" ] || [ -z "$LON" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Image variant (analytics on/off)
+# Image tag
 # ---------------------------------------------------------------------------
-hdr "Behavioral analytics"
-say "The 'analytics' image adds DuckDB behavioral analytics (activity"
-say "sessions, resident-vs-migrant classification, dawn chorus validation,"
-say "species co-occurrence). It's about 80 MB larger than the standard image;"
-say "otherwise identical. You can switch later by editing BIRDNET_IMAGE_TAG."
-say ""
-
-if yesno "Enable behavioral analytics?" n; then
-    IMAGE_TAG="latest-analytics"
-else
-    IMAGE_TAG="latest"
-fi
+# Every image includes DuckDB behavioral analytics (activity sessions,
+# resident-vs-migrant classification, dawn-chorus validation, species
+# co-occurrence), enabled by default via BIRDNET_ANALYTICS_DB in the compose
+# file. Pin a specific release later by editing BIRDNET_IMAGE_TAG (e.g. 0.2.0).
+IMAGE_TAG="latest"
 
 # ---------------------------------------------------------------------------
 # Write the minimal .env
@@ -310,7 +303,7 @@ hdr "Writing your .env"
         none)  printf '# (none set — add BIRDNET_ALSA_DEVICE / BIRDNET_RTSP_URL / BIRDNET_PIPEWIRE_DEVICE here)\n' ;;
     esac
     printf '\n'
-    printf '# --- Image variant: latest | latest-analytics ---\n'
+    printf '# --- Image tag (e.g. latest, 0.2.0) — analytics is built in ---\n'
     printf 'BIRDNET_IMAGE_TAG=%s\n' "$IMAGE_TAG"
 } > .env
 

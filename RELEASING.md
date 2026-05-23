@@ -62,11 +62,12 @@ prebuilt ONNX Runtime for armv7. Pi 3 / Pi Zero 2 W users should run the
 
 ### `docker.yml` — multi-arch container images
 
-Builds **standard** and **`-analytics`** variants for **linux/amd64**
-and **linux/arm64**, each natively on a matching runner (no QEMU), pushes
-by digest, then merges to multi-arch manifests tagged
+Builds a **single image** (DuckDB analytics compiled in, matching the
+binaries — no separate `-analytics` tag) for **linux/amd64** and
+**linux/arm64**, each natively on a matching runner (no QEMU), pushes by
+digest, then merges to one multi-arch manifest tagged
 `X.Y.Z` / `X.Y` / `X` / `latest` (and `edge` on `main`, `sha-<rev>` always).
-Each manifest is **signed with keyless cosign** (GitHub OIDC → Fulcio +
+The manifest is **signed with keyless cosign** (GitHub OIDC → Fulcio +
 Rekor), with buildx `provenance` and `sbom` attestations attached.
 
 ## Rehearsing a release (dry run)

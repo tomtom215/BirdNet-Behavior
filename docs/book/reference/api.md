@@ -58,7 +58,7 @@ curl 'http://localhost:8502/api/v2/detections/recent?limit=2'
 
 ## Time-series & analytics
 
-These power the charts on the [Analytics](../guide/analytics.md) and time-series pages. The richer ones require the **analytics build** ([Configuration](../getting-started/configuration.md)) and return a "not available" status otherwise.
+These power the charts on the [Analytics](../guide/analytics.md) and time-series pages. The richer ones use the DuckDB analytics engine, which is **built in and on by default** ([Configuration](../getting-started/configuration.md)); they return a "not available" status only if you've disabled it.
 
 | Endpoint | Purpose |
 |---|---|

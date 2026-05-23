@@ -28,10 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Pre-release hardening for 0.2.0 (release pipeline, docs, web)
 
-- **Release binaries ship analytics built in.** `release.yml` builds each
-  target with `--features analytics`, so one binary statically links the
-  DuckDB behavioral-analytics engine (dormant until `--analytics-db` is
-  passed) — there is no separate archive to choose.
+- **Analytics built in everywhere, on by default.** Release binaries are built
+  with `--features analytics` (one binary, no separate archive), and the
+  **Docker image is now a single variant** with analytics compiled in — the
+  separate `-analytics` tag is gone. `install.sh` runs the service with
+  `--analytics-db` and `docker-compose.yml` sets `BIRDNET_ANALYTICS_DB`, so
+  behavioral analytics works out of the box with no extra build, flag, or tag.
+  Disable on very low-RAM boards by removing the flag / unsetting the env var.
 - **Keyless cosign signatures on the Docker images.** The `docker.yml` merge
   job signs each multi-arch manifest with the workflow's GitHub OIDC identity
   (Fulcio + Rekor), matching the SLSA build-provenance attestation already on

@@ -11,7 +11,7 @@
 #
 # The release binaries are built with `--features analytics`, so a single
 # binary per target ships the DuckDB behavioral-analytics code statically
-# linked in; it stays dormant at runtime until `--analytics-db` is passed.
+# linked in; install.sh enables it by default via `--analytics-db`.
 #
 # See RELEASING.md for the full release runbook.
 #
@@ -542,7 +542,8 @@ jobs:
             echo "Archives are gzipped tarballs containing the stripped binary,"
             echo '`README.md`, `CHANGELOG.md`, `LICENSE`, `LICENSE-UPSTREAM`, and'
             echo '`install.sh`. Each binary ships the DuckDB behavioral-analytics'
-            echo 'engine built in — it stays dormant until you pass `--analytics-db`.'
+            echo 'engine built in; `install.sh` enables it by default (for a manual'
+            echo 'run, pass `--analytics-db`).'
             echo ""
             echo '> **Runtime requirement: glibc 2.39 or newer** — Raspberry Pi OS'
             echo '> **Trixie**, Debian 13, or Ubuntu 24.04. Pi OS **Bookworm**'
@@ -554,9 +555,9 @@ jobs:
             echo ""
             echo '```bash'
             echo "docker pull ghcr.io/${{ github.repository_owner }}/birdnet-behavior:${VERSION}"
-            echo "docker pull ghcr.io/${{ github.repository_owner }}/birdnet-behavior:${VERSION}-analytics"
             echo '```'
             echo ""
+            echo "The image includes DuckDB analytics (no separate \`-analytics\` tag)."
             echo "Multi-arch manifests cover \`linux/amd64\` and \`linux/arm64\`."
             echo ""
             echo "## Verification"

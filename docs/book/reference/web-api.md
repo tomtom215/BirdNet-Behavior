@@ -18,7 +18,7 @@ A map of every page and admin URL the dashboard serves. For the JSON/WebSocket A
 | `/recordings` | Recording browser with inline audio player |
 | `/heatmap` | Activity heatmap, circadian polar, migration ridgeline |
 | `/correlation` | Co-occurrence matrix + acoustic-network chord diagram |
-| `/analytics` | Behavioral analytics (analytics build) |
+| `/analytics` | Behavioral analytics (on by default) |
 | `/timeseries` | Time-series analytics (activity, diversity, trends, peaks) |
 | `/quarantine` | Rare-bird quarantine — review, approve, reject |
 | `/notifications` | Notification center — history and channel stats |

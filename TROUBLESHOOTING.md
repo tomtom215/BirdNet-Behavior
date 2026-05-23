@@ -196,8 +196,10 @@ Mitigations in order of effectiveness:
    compared with `OVERLAP=1.5`.
 3. **Use a smaller model.** BirdNET V2.4 FP16 is ~50 MB vs BirdNET+
    V3.0's ~541 MB; both are accepted by the daemon.
-4. **Stop the analytics feature.** Pull `latest` instead of
-   `latest-analytics`; DuckDB doubles RAM usage during sync.
+4. **Disable analytics.** Analytics is on by default. On a tiny board,
+   turn it off: bare-metal, remove the `--analytics-db` flag from the
+   systemd unit; Docker, unset `BIRDNET_ANALYTICS_DB` in your `.env`.
+   DuckDB roughly doubles RAM usage during sync.
 5. **Throttle the disk manager.** Increase `DISK_PURGE_THRESHOLD` so
    purges happen less often on SD-card storage.
 
