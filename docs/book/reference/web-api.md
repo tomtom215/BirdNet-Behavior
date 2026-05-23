@@ -1,4 +1,6 @@
-# Web UI & API
+# Web UI & URLs
+
+A map of every page and admin URL the dashboard serves. For the JSON/WebSocket API, see [HTTP & WebSocket API](./api.md).
 
 ## Pages
 
@@ -41,12 +43,4 @@
 
 ## API
 
-| URL | Description |
-|---|---|
-| `/api/v2/health` | JSON health check |
-| `/api/v2/metrics` | Prometheus metrics |
-| `/api/v2/detections` | Detection CRUD |
-| `/api/v2/species` | Species queries |
-| `/api/v2/ws` | WebSocket live detection stream |
-
-> The API is versioned under `/api/v2`. The WebSocket stream powers the live dashboard feed, the spectrogram, and kiosk mode.
+The JSON API is versioned under `/api/v2`, with a WebSocket live stream at `/api/v2/ws/detections`. It has its own page: **[HTTP & WebSocket API](./api.md)** — endpoints, query parameters, response shapes and examples.
