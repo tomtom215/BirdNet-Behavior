@@ -156,7 +156,7 @@ async fn ridgeline_partial(State(state): State<AppState>) -> impl IntoResponse {
 fn render_ridgeline_svg(ridges: &[SpeciesRidge], today_week: u8) -> String {
     const W: f64 = 1240.0;
     const H: f64 = 360.0;
-    const PAD_L: f64 = 140.0;
+    const PAD_L: f64 = 172.0; // room for the longest common names (e.g. "Ruby-throated Hummingbird")
     const PAD_R: f64 = 16.0;
     const PAD_T: f64 = 24.0;
     const PAD_B: f64 = 32.0;
@@ -394,7 +394,7 @@ async fn diversity_partial(State(state): State<AppState>) -> impl IntoResponse {
 fn render_diversity_svg(weekly: &[i64; 52], today_week: u8) -> String {
     const W: f64 = 1240.0;
     const H: f64 = 70.0;
-    const PAD_L: f64 = 56.0;
+    const PAD_L: f64 = 92.0; // room for the "species / wk" axis label (mono)
     const PAD_R: f64 = 16.0;
     let inner_w = W - PAD_L - PAD_R;
     let bw = inner_w / 52.0;
