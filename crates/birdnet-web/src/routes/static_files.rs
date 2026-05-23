@@ -22,6 +22,9 @@ const APP_CSS: &[u8] = include_bytes!("../../static/css/app.css");
 /// Pre-paint theme/density guard for standalone pages (admin, kiosk, player).
 const THEME_GUARD_JS: &[u8] = include_bytes!("../../static/theme-guard.js");
 
+/// Reconnecting live-detection WebSocket client (embedded at compile time).
+const LIVE_DETECTIONS_JS: &[u8] = include_bytes!("../../static/live-detections.js");
+
 /// Self-hosted webfonts (latin + latin-ext subsets), embedded at compile time
 /// so the UI renders fully offline with no CDN dependency. `Inter Tight` (UI),
 /// `Instrument Serif` (display) and `JetBrains Mono` (numeric) cover Latin
@@ -119,8 +122,22 @@ pub fn router() -> Router<AppState> {
         .route("/static/htmx.min.js", get(htmx_js))
         .route("/static/htmx-sse.js", get(htmx_sse_js))
         .route("/static/theme-guard.js", get(theme_guard_js))
+        .route("/static/live-detections.js", get(live_detections_js))
         .route("/static/css/app.css", get(app_css))
         .route("/static/fonts/{file}", get(font_file))
+}
+
+async fn live_detections_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            // Short cache (not immutable): this script ships with the binary
+            // and can change between versions under the same URL.
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        LIVE_DETECTIONS_JS,
+    )
 }
 
 async fn theme_guard_js() -> impl IntoResponse {
@@ -202,5 +219,14 @@ mod tests {
         assert!(css.contains("--moss"));
         assert!(css.contains("@font-face"));
         assert!(css.contains("Inter Tight"));
+    }
+
+    #[test]
+    fn live_detections_client_embedded() {
+        let js = std::str::from_utf8(LIVE_DETECTIONS_JS).unwrap();
+        assert!(js.contains("/api/v2/ws/detections"));
+        assert!(js.contains("birdnet:detection"));
+        // Must never use innerHTML for untrusted species names.
+        assert!(!js.contains("innerHTML"));
     }
 }
