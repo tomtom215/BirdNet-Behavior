@@ -168,7 +168,7 @@ mod tests {
     fn hmap(pairs: &[(header::HeaderName, &str)]) -> HeaderMap {
         let mut h = HeaderMap::new();
         for (name, value) in pairs {
-            h.insert(name.clone(), HeaderValue::from_str(*value).unwrap());
+            h.insert(name.clone(), HeaderValue::from_str(value).unwrap());
         }
         h
     }

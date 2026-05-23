@@ -26,16 +26,13 @@ pub fn router() -> Router<AppState> {
 }
 
 async fn doctor_page(State(state): State<AppState>) -> Html<String> {
-    let body = match state.config_path() {
-        None => no_config_body(),
-        Some(path) => {
-            let shown = path.display().to_string();
-            match Config::load_from(path) {
-                Ok(config) => findings_body(&shown, &validate::validate(&config)),
-                Err(e) => load_error_body(&shown, &e.to_string()),
-            }
+    let body = state.config_path().map_or_else(no_config_body, |path| {
+        let shown = path.display().to_string();
+        match Config::load_from(path) {
+            Ok(config) => findings_body(&shown, &validate::validate(&config)),
+            Err(e) => load_error_body(&shown, &e.to_string()),
         }
-    };
+    });
     Html(admin_shell("Diagnostics", "doctor", &body))
 }
 
@@ -119,7 +116,7 @@ fn render_findings(findings: &[&Finding]) -> String {
 fn no_config_body() -> String {
     let mut out = card_open();
     out.push_str(
-        r#"<p>No configuration file path is known to the running server, so it cannot be validated here.</p>"#,
+        r"<p>No configuration file path is known to the running server, so it cannot be validated here.</p>",
     );
     out.push_str(CLI_NOTE);
     out.push_str("</section>");

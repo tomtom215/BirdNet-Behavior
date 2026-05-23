@@ -8,7 +8,10 @@
 # from the actual flags/env vars/defaults.
 #
 # Output is deterministic: redirecting stdout to a file is non-TTY, so clap
-# renders at its fixed 100-column fallback width.
+# renders at its fixed 100-column fallback width. Trailing whitespace is
+# stripped so the result matches the repo's pre-commit whitespace-hygiene hook
+# (clap emits trailing spaces on blank continuation lines; the hook would strip
+# them on commit, which would otherwise leave the CI drift-gate permanently red).
 
 set -euo pipefail
 
@@ -19,6 +22,7 @@ out="docs/book/_generated/cli-help.txt"
 # `--quiet` keeps cargo's build chatter on stderr only, so stdout is purely the
 # help text. `--help` is intercepted by clap before main runs, so no config,
 # model, or audio device is required.
-cargo run --quiet --bin birdnet-behavior -- --help > "${out}"
+cargo run --quiet --bin birdnet-behavior -- --help \
+    | sed 's/[[:space:]]*$//' > "${out}"
 
 echo "Wrote ${out}"

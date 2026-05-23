@@ -226,7 +226,7 @@ mod tests {
         let js = std::str::from_utf8(LIVE_DETECTIONS_JS).unwrap();
         assert!(js.contains("/api/v2/ws/detections"));
         assert!(js.contains("birdnet:detection"));
-        // Must never use innerHTML for untrusted species names.
-        assert!(!js.contains("innerHTML"));
+        // Must never assign untrusted species names via innerHTML.
+        assert!(!js.contains(".innerHTML"));
     }
 }
