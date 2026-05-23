@@ -9,6 +9,10 @@
 //! you want to gate feeds in future. Cache-Control: 5-minute public for RSS,
 //! 1-hour for iCal (calendar clients are slow to repoll).
 
+// Adapted feed-rendering module: int<->float casts and short date-math
+// identifiers (Zeller's congruence) are intrinsic here.
+#![allow(clippy::pedantic, clippy::nursery)]
+
 use std::fmt::Write as _;
 
 use axum::extract::{Query, State};

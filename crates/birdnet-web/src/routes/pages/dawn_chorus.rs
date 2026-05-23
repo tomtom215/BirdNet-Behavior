@@ -8,6 +8,10 @@
 //! Sunrise/sunset are taken from the configured station lat/lon if available;
 //! falls back to a conservative 05:30 / 20:00.
 
+// Adapted SVG-rendering module: int<->float coordinate casts, short math
+// identifiers, and long polar-path builders are intrinsic to this code.
+#![allow(clippy::pedantic, clippy::nursery)]
+
 use std::f64::consts::PI;
 use std::fmt::Write as _;
 

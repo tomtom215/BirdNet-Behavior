@@ -9,6 +9,9 @@
 //!
 //! Pure read; no schema changes; uses only `detections` table.
 
+// Percentile/tiering math with int<->float casts.
+#![allow(clippy::pedantic, clippy::nursery)]
+
 use axum::extract::State;
 use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;

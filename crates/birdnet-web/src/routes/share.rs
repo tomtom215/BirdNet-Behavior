@@ -2,8 +2,8 @@
 //!
 //! Routes:
 //!   GET /r/{token}                  full HTML share page
-//!   GET /r/{token}/audio.wav        302 -> /api/v2/recordings/<filename>
-//!   GET /r/{token}/spectrogram.png  302 -> /api/v2/spectrogram/<filename>
+//!   GET /r/{token}/audio.wav        302 -> `/api/v2/recordings/<filename>`
+//!   GET /r/{token}/spectrogram.png  302 -> `/api/v2/spectrogram/<filename>`
 //!
 //! A detection has no integer id in this schema — it is identified by the
 //! `(Date, Time, Com_Name)` triple (the `UNIQUE(Date, Time, Sci_Name)` index
@@ -18,6 +18,10 @@
 //! Set `BNB_SHARE_SECRET` (32+ random bytes) in the environment so links
 //! survive restarts; without it a random per-process secret is used
 //! (fail-secure: every outstanding link invalidates on restart).
+
+// Crypto + HTTP rendering: short identifiers and doc acronyms (HMAC-SHA256,
+// base64url) are intrinsic; allow the pedantic/nursery style noise.
+#![allow(clippy::pedantic, clippy::nursery)]
 
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};

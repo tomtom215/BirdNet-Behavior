@@ -10,6 +10,10 @@
 //! All renders are pure SVG strings — no client JS needed beyond htmx.
 //! Designed to use only the existing `detections` table; no schema migration.
 
+// Adapted SVG-rendering module: int<->float coordinate casts, short math
+// identifiers, and long path-builder functions are intrinsic to this code.
+#![allow(clippy::pedantic, clippy::nursery)]
+
 use std::fmt::Write as _;
 
 use axum::extract::{Query, State};
@@ -576,8 +580,9 @@ async fn card_partial(
 ) -> impl IntoResponse {
     let year = current_year();
     let kind = q.kind;
+    let kind_db = kind.clone();
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| match kind.as_str() {
+        state.with_db(|conn| match kind_db.as_str() {
             "arrived" => {
                 // most recent species whose first-ever detection is in this year
                 conn.query_row(
@@ -604,9 +609,9 @@ async fn card_partial(
     })
     .await;
 
-    let (eyebrow, headline, sub) = match q_kind(&result, &q.kind) {
+    let (eyebrow, headline, sub) = match q_kind(&result, &kind) {
         Some((eb, hd, sb)) => (eb, hd, sb),
-        None => match q.kind.as_str() {
+        None => match kind.as_str() {
             "arrived" => ("Just arrived", "No arrivals yet".into(), "Watching…".into()),
             "peaking" => (
                 "Currently peaking",
@@ -620,7 +625,7 @@ async fn card_partial(
         r#"<div class="bnb-eyebrow" style="color:{accent};">{eyebrow}</div>
 <div class="display" style="font-size:20px;margin-top:8px;">{headline}</div>
 <div class="bnb-meta" style="margin-top:4px;">{sub}</div>"#,
-        accent = card_color(&q.kind),
+        accent = card_color(&kind),
         eyebrow = escape_html(eyebrow),
         headline = escape_html(&headline),
         sub = escape_html(&sub),

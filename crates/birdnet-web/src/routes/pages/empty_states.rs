@@ -12,7 +12,7 @@
 //! ```
 
 const SHELL_OPEN: &str = r#"<div class="empty-state">"#;
-const SHELL_CLOSE: &str = r#"</div>"#;
+const SHELL_CLOSE: &str = "</div>";
 
 pub fn quiet_yard() -> String {
     format!(
