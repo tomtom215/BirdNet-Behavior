@@ -527,6 +527,18 @@ footer a:hover { color: var(--moss-ink); }
 }
 .skip-link:focus { top: 8px; }
 
+/* Visually-hidden but screen-reader-available (labels for icon-only controls,
+   chart descriptions, etc.). */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
+/* Live detection-stream indicator, driven by live-detections.js. Hidden until
+   the client opens the socket; dimmed while reconnecting. */
+#live-status[data-state="reconnecting"] { opacity: .6; }
+#live-status[data-state="live"] .bnb-dot { background: var(--moss); }
+
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 4px; }
