@@ -6,7 +6,7 @@ The dashboard (`/`) is the right-now view — the page you leave open. It answer
 
 ## What you're looking at
 
-- **The hero** leads with a plain-English headline ("The yard is *listening*.") and a live signal card showing the last 30 seconds of audio as an animated waveform, with the input device, sample rate and model version.
+- **The hero** leads with a plain-English headline ("The yard is *singing*.") and a live signal card showing the last 30 seconds of audio as an animated waveform, with the input device, sample rate and model version.
 - **The stat row** gives the four numbers that matter: detections all-time, species, today's count, and a rolling 60-minute "last hour" tally.
 - **Live feed** ("Detections as they happen") streams new detections as they arrive. Each row shows the time, a species avatar (its four-letter banding code in the species' own color), the common and scientific name, a mini call-waveform, the confidence, and a play button. A freshly arrived detection rises in with a brief moss-colored pulse.
 - **Top species** ranks today's most-heard birds with per-species sparklines.
