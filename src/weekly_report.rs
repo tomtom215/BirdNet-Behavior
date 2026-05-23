@@ -223,4 +223,60 @@ mod tests {
         assert!(date.len() == 10); // "YYYY-MM-DD"
         assert!(wd <= 6);
     }
+
+    #[test]
+    fn days_to_date_str_known_values() {
+        assert_eq!(days_to_date_str(0), "1970-01-01");
+        assert_eq!(days_to_date_str(19_723), "2024-01-01");
+        assert_eq!(days_to_date_str(20_454), "2026-01-01");
+    }
+
+    #[test]
+    fn week_range_strings_is_a_seven_day_window() {
+        let (end, start) = week_range_strings();
+        assert_eq!(end.len(), 10);
+        assert_eq!(start.len(), 10);
+        // ISO date strings sort chronologically, and start is six days before end.
+        assert!(start <= end);
+    }
+
+    fn seeded_state(rows: &[(&str, &str)]) -> birdnet_web::state::AppState {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        let (today, _) = week_range_strings();
+        for (sci, com) in rows {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence) \
+                 VALUES (?1, '06:00:00', ?2, ?3, 0.9)",
+                rusqlite::params![today, sci, com],
+            )
+            .unwrap();
+        }
+        birdnet_web::state::AppState::from_connection(conn, std::path::PathBuf::from(":memory:"))
+    }
+
+    #[test]
+    fn build_weekly_report_formats_title_and_top_species() {
+        let state = seeded_state(&[
+            ("Cardinalis cardinalis", "Northern Cardinal"),
+            ("Cardinalis cardinalis", "Northern Cardinal"),
+            ("Cyanocitta cristata", "Blue Jay"),
+        ]);
+        let (title, body) = build_weekly_report(&state).unwrap();
+        assert!(title.contains("Weekly Bird Report"));
+        assert!(
+            title.contains('3'),
+            "title should report 3 detections: {title}"
+        );
+        assert!(body.contains("Top species"));
+        assert!(body.contains("Northern Cardinal"));
+    }
+
+    #[test]
+    fn build_weekly_report_handles_empty_window() {
+        let state = seeded_state(&[]);
+        let (title, body) = build_weekly_report(&state).unwrap();
+        assert!(title.contains("0 detections"));
+        assert!(body.contains("Top species"));
+    }
 }

@@ -428,12 +428,15 @@ async fn htmx_life_accumulation_partial() {
 }
 
 #[tokio::test]
-async fn htmx_migration_ridgeline_partial() {
+async fn htmx_seasonal_phenology_partial() {
+    // The heatmap page's embedded ridgeline lives at /pages/seasonal-phenology;
+    // the dedicated /migration page owns /pages/migration-ridgeline (tested in
+    // all_redesigned_pages_render_ok).
     let app = app();
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/pages/migration-ridgeline")
+                .uri("/pages/seasonal-phenology")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -482,7 +485,9 @@ async fn all_redesigned_pages_render_ok() {
         "/today",
         "/species",
         "/heatmap",
+        "/migration",
         "/analytics",
+        "/analytics/dawn-chorus",
         "/correlation",
         "/life-list",
         "/recordings",
@@ -501,7 +506,12 @@ async fn all_redesigned_pages_render_ok() {
         "/pages/acoustic-network",
         "/pages/activity-streamgraph",
         "/pages/dawn-chorus",
+        "/pages/seasonal-phenology",
         "/pages/migration-ridgeline",
+        "/pages/migration-stats",
+        "/pages/migration-diversity",
+        "/pages/dawn-polar",
+        "/pages/dawn-list",
         "/pages/life-accumulation",
         "/admin/overview",
         "/admin/quality",

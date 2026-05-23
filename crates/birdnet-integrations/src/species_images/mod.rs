@@ -40,7 +40,27 @@ pub use wikipedia::WikipediaClient;
 
 use std::fmt;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+/// User-Agent for image-byte downloads. Wikimedia rejects requests without a
+/// descriptive User-Agent (returning a short policy notice instead of the
+/// image — see <https://phabricator.wikimedia.org/T400119>), so the download
+/// client must identify the application, matching the provider's API client.
+const IMAGE_DOWNLOAD_USER_AGENT: &str =
+    "BirdNet-Behavior/0.2 (+https://github.com/tomtom215/BirdNet-Behavior)";
+
+/// Shared, lazily-built HTTP client for downloading image bytes. Carries the
+/// User-Agent Wikimedia requires and a bounded timeout.
+fn image_download_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .user_agent(IMAGE_DOWNLOAD_USER_AGENT)
+            .timeout(std::time::Duration::from_secs(20))
+            .build()
+            .unwrap_or_default()
+    })
+}
 
 /// Coordinating cache: fetches from a remote `ImageProvider` and stores
 /// images locally via `DiskCache`.
@@ -115,17 +135,31 @@ impl ImageCache {
         // Slow path: fetch from provider.
         let mut img = self.provider.fetch(scientific_name).await?;
 
-        // Download and store the image bytes.
+        // Download and store the image bytes. Uses a User-Agent'd client
+        // (Wikimedia rejects anonymous requests) and only caches a genuine
+        // image so an error page can't poison the on-disk cache.
         if !img.url.is_empty() {
-            // Re-use the provider's HTTP client for the download if it's Wikipedia.
-            // For a generic provider we'd need a separate client; use a simple reqwest call.
-            let bytes = reqwest::get(&img.url)
+            let resp = image_download_client()
+                .get(&img.url)
+                .send()
                 .await
                 .map_err(|e| ImageError::Http(e.to_string()))?
+                .error_for_status()
+                .map_err(|e| ImageError::Http(e.to_string()))?;
+            let is_image = resp
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|ct| ct.starts_with("image/"));
+            if !is_image {
+                return Err(ImageError::Http(format!(
+                    "image download for '{scientific_name}' did not return an image"
+                )));
+            }
+            let bytes = resp
                 .bytes()
                 .await
                 .map_err(|e| ImageError::Http(e.to_string()))?;
-
             let path = self.disk.store(&key, &bytes)?;
             img.cached_path = Some(path);
         }

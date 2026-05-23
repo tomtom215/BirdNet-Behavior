@@ -173,7 +173,7 @@ fn render_detail_page(det: &birdnet_db::sqlite::DetectionRow) -> Html<String> {
   <div class="bnb-card pad">
     <div class="section-header"><div><div class="bnb-eyebrow">Related</div><h3>Explore</h3></div></div>
     <p style="margin-bottom:8px;"><a href="/species/detail?name={enc_name}">All detections of {com} →</a></p>
-    <p><a href="/api/v2/images/{enc_sci}">Species photo (Wikipedia) →</a></p>
+    <p><a href="/api/v2/species/image/{enc_sci}/file">Species photo (Wikipedia) →</a></p>
   </div>
 </div>"#
     );

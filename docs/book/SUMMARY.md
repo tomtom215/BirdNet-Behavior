@@ -14,10 +14,15 @@
 
 - [The Dashboard](./guide/dashboard.md)
 - [Today & the Detection Log](./guide/today.md)
+- [Detection Detail & Sharing](./guide/sharing.md)
 - [Species & the Life List](./guide/species.md)
 - [Behavioral Analytics](./guide/analytics.md)
+- [Migration & Phenology](./guide/phenology.md)
+- [The Dawn Chorus](./guide/dawn-chorus.md)
 - [Recordings & Gallery](./guide/recordings.md)
+- [RSS & Calendar Feeds](./guide/feeds.md)
 - [Reports](./guide/reports.md)
+- [Display Preferences](./guide/display-preferences.md)
 - [Kiosk Mode](./guide/kiosk.md)
 
 # Administration

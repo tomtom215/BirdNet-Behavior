@@ -222,4 +222,27 @@ mod tests {
         let tmp = std::env::temp_dir();
         assert!(writable(&tmp));
     }
+
+    #[test]
+    fn writable_false_for_nonexistent_dir() {
+        let missing = std::path::Path::new("/nonexistent-bnb-doctor-dir-x9k/sub");
+        assert!(!writable(missing));
+    }
+
+    #[test]
+    fn run_with_format_runs_every_check_and_returns_valid_exit_code() {
+        use crate::cli::Cli;
+        use clap::Parser as _;
+        // A bare CLI with no config: every check still runs without panicking
+        // and the command returns a summary exit code in {0,1,2}. Nothing is
+        // configured, so the verdict is at least a warning.
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        let json_code = super::run_with_format(&cli, None, super::Format::Json);
+        let text_code = super::run_with_format(&cli, None, super::Format::Text);
+        assert!((1..=2).contains(&json_code), "got {json_code}");
+        assert_eq!(
+            json_code, text_code,
+            "output format must not change the verdict"
+        );
+    }
 }

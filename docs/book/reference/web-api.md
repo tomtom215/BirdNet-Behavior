@@ -16,16 +16,19 @@ A map of every page and admin URL the dashboard serves. For the JSON/WebSocket A
 | `/gallery` | Species photo gallery — card grid with search and sort |
 | `/life-list` | Life list — every species ever detected, with a growth curve |
 | `/recordings` | Recording browser with inline audio player |
-| `/heatmap` | Activity heatmap, circadian polar, migration ridgeline |
+| `/heatmap` | Activity heatmap, circadian polar, seasonal phenology |
+| `/migration` | Migration & phenology — per-species ridgeline, arrivals, "still expected" |
 | `/correlation` | Co-occurrence matrix + acoustic-network chord diagram |
 | `/analytics` | Behavioral analytics (on by default) |
+| `/analytics/dawn-chorus` | Dawn-chorus polar clock with sunrise/sunset markers |
 | `/timeseries` | Time-series analytics (activity, diversity, trends, peaks) |
 | `/quarantine` | Rare-bird quarantine — review, approve, reject |
 | `/notifications` | Notification center — history and channel stats |
-| `/system` | System health — CPU / memory / temp gauges, database, disk |
+| `/system` | System health + per-device display preferences (theme/density/motion/contrast) |
 | `/kiosk` | Kiosk mode — auto-refreshing display for dedicated screens |
 | `/onboarding` | First-run setup wizard |
 | `/live` | Live audio stream |
+| `/detections/detail?date=&time=&name=` | Single-detection detail — spectrogram, audio, correlation id, share |
 
 ## Admin
 
@@ -40,6 +43,19 @@ A map of every page and admin URL the dashboard serves. For the JSON/WebSocket A
 | `/admin/system` | CPU / memory / temperature / disk |
 | `/admin/system/logs/page` | Live log viewer (SSE, level filtering) |
 | `/admin/update/check` | Check for and apply binary updates |
+
+## Public links & feeds
+
+These are unauthenticated, read-only endpoints. See [Detection Detail & Sharing](../guide/sharing.md) and [RSS & Calendar Feeds](../guide/feeds.md).
+
+| URL | Description |
+|---|---|
+| `/r/<token>` | Public share page for one detection (HMAC-signed, 30-day expiry) |
+| `/r/<token>/audio.wav` | Redirect to the shared clip's audio |
+| `/r/<token>/spectrogram.png` | Redirect to the shared clip's spectrogram |
+| `/feeds/rare.rss` | RSS 2.0 — first-of-station detections (confidence ≥ 0.85) |
+| `/feeds/rare.ics` | iCalendar — the same rare detections as calendar events |
+| `/feeds/today.rss` | RSS 2.0 — every detection today |
 
 ## API
 

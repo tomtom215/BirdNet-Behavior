@@ -108,7 +108,7 @@ async fn gallery_grid_partial(
                          <div style=\"position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:color-mix(in oklch, {color} 15%, var(--surface));\">\
                            <span class=\"display\" style=\"font-size:1.7rem;letter-spacing:0.04em;color:{color};\">{code}</span>\
                          </div>\
-                         <img src=\"/api/v2/images/species/{enc}\" alt=\"{name}\" \
+                         <img src=\"/api/v2/species/image/{enc}/file\" alt=\"{name}\" \
                               loading=\"lazy\" \
                               style=\"position:relative;width:100%;height:100%;object-fit:cover;\" \
                               onerror=\"this.style.display='none'\">\

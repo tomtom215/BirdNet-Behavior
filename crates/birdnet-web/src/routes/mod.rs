@@ -72,6 +72,20 @@ pub fn api_routes() -> Router<AppState> {
 mod tests {
     use super::is_valid_date;
 
+    /// Constructing the router must not panic on overlapping routes.
+    ///
+    /// `Router::merge`/`route` panic when two handlers register the same
+    /// method+path. The main CI test job runs `cargo test --workspace --lib
+    /// --bins`, which excludes the integration tests under `tests/` (they link
+    /// libonnxruntime), and CI never boots the server — so without this
+    /// lib-level guard a duplicate route only surfaces as a startup crash in
+    /// production. Building the full router here makes any collision fail
+    /// `cargo test --lib`.
+    #[test]
+    fn api_routes_build_without_collision() {
+        let _router = super::api_routes();
+    }
+
     #[test]
     fn valid_date_format() {
         assert!(is_valid_date("2026-03-12"));
