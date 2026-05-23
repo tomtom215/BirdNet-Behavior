@@ -478,6 +478,7 @@ async fn all_redesigned_pages_render_ok() {
     // without a server error against a seeded database.
     let routes = [
         "/",
+        "/onboarding",
         "/today",
         "/species",
         "/heatmap",
@@ -488,13 +489,16 @@ async fn all_redesigned_pages_render_ok() {
         "/gallery",
         "/timeseries",
         "/weekly",
+        "/year-in-review",
         "/history",
         "/notifications",
         "/quarantine",
         "/system",
         "/kiosk",
         "/live",
+        "/pages/today-daystrip",
         "/pages/cooccurrence-matrix",
+        "/pages/acoustic-network",
         "/pages/activity-streamgraph",
         "/pages/dawn-chorus",
         "/pages/migration-ridgeline",
@@ -502,6 +506,8 @@ async fn all_redesigned_pages_render_ok() {
         "/admin/overview",
         "/admin/quality",
         "/admin/rules",
+        "/admin/audio",
+        "/admin/backups",
     ];
     for route in routes {
         let app = app();

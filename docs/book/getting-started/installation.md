@@ -1,0 +1,76 @@
+# Installation
+
+There are two supported ways to install BirdNet-Behavior. **Docker is the fastest path** — two commands and you are watching detections. The bare-metal installer is ideal for a dedicated Raspberry Pi with no container runtime.
+
+## Requirements
+
+| Platform | Status |
+|---|---|
+| Raspberry Pi 5 | Recommended |
+| Raspberry Pi 4B / 400 | Fully supported |
+| Any x86_64 Linux | Fully supported |
+| Raspberry Pi 3B+ | Supported (native binary only, no Docker) |
+
+- **Storage:** ~1.5 GB free (541 MB for the BirdNET+ model, the rest for recordings and database).
+- **Audio input** — one of:
+  - a USB microphone or USB sound card (`arecord` from `alsa-utils`), or
+  - an IP camera or any RTSP stream (`ffmpeg`).
+
+The BirdNET+ V3.0 model (~541 MB) and species labels are downloaded automatically from Zenodo on first run — you never pick, locate, or install a model yourself.
+
+## Option 1 — Docker quick start (recommended)
+
+One command. It asks two or three plain-English questions, auto-detects your USB mic, writes a minimal `.env`, and starts the container. No git clone, no editor, no hand-picking compose overlays.
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/quickstart.sh)
+```
+
+<details>
+<summary>What the quick-start script does</summary>
+
+1. Verifies Docker Engine + Compose are installed and usable (with clear remediation if not).
+2. Checks disk space and that port 8502 is free.
+3. Creates `~/birdnet-behavior/` for your `.env` and compose files.
+4. Auto-detects your audio source — USB/ALSA card, PulseAudio/PipeWire, or falls back to asking for an RTSP URL.
+5. Asks for your station latitude/longitude (with opt-in IP auto-detect via ipapi.co).
+6. Asks whether to enable DuckDB behavioral analytics (default: no).
+7. Writes a short `.env` with only your chosen values.
+8. Starts the container with the matching compose overlay.
+9. Streams logs so you can watch the one-time 541 MB model download.
+10. Stops tailing as soon as the web server reports healthy, then prints the dashboard URL and your LAN IP.
+
+</details>
+
+See [Running with Docker](./docker.md) for the manual path, `docker run`, and audio-source overlays.
+
+## Option 2 — Bare-metal installer (no Docker)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash
+```
+
+The installer detects your architecture, downloads the pre-built binary and the BirdNET+ model, creates the config/recording/model directories, installs and enables a `systemd` service, auto-detects your ALSA microphone, and starts the service immediately.
+
+```bash
+# Install a specific version (defaults to latest)
+VERSION=0.1.0 bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh)
+
+# Uninstall (recordings and database are preserved)
+curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash -s uninstall
+```
+
+## Building from source
+
+**Prerequisites:** [Rust 1.95+](https://rustup.rs) and `git`.
+
+```bash
+git clone https://github.com/tomtom215/BirdNet-Behavior.git
+cd BirdNet-Behavior
+
+cargo build --release                              # optimized build (~3–5 min)
+cargo build --release --features analytics         # + DuckDB analytics (~7 min first build)
+cross build --release --target aarch64-unknown-linux-gnu   # cross-compile for a Pi
+```
+
+Once installed, head to [First Steps](./first-steps.md) to open the dashboard.

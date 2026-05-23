@@ -33,6 +33,7 @@ pub fn router() -> Router<AppState> {
             "/pages/cooccurrence-matrix",
             get(cooccurrence_matrix_partial),
         )
+        .route("/pages/acoustic-network", get(acoustic_network_partial))
         .route("/pages/companion-species", get(companion_partial))
 }
 
@@ -72,6 +73,14 @@ const CORRELATION_CONTENT: &str = r##"<div class="page-head">
 </div>
 
 <div class="bnb-card pad">
+  <div class="section-header"><div><div class="bnb-eyebrow">The acoustic network</div><h3>Who connects to whom</h3></div><span class="bnb-pill">ρ ≥ 0.20</span></div>
+  <p class="bnb-meta" style="margin:4px 0 12px;">The same data as the matrix, drawn as ribbons — thicker links co-occur more often, and each species' arc length is its total connectedness in the soundscape.</p>
+  <div id="acoustic-network" hx-get="/pages/acoustic-network?days=30" hx-trigger="load" hx-swap="innerHTML">
+    <p class="bnb-meta">Loading…</p>
+  </div>
+</div>
+
+<div class="bnb-card pad">
   <div class="section-header"><div><div class="bnb-eyebrow">Strongest pairs</div><h3>Top co-occurring species</h3></div></div>
   <div id="correlation-pairs" hx-get="/pages/correlation-pairs?days=30" hx-trigger="load" hx-swap="innerHTML">
     <p class="bnb-meta">Loading…</p>
@@ -102,6 +111,7 @@ function loadDays(days, btn) {
   btn.classList.add('active');
   document.getElementById('days-hidden').value = days;
   htmx.ajax('GET', '/pages/cooccurrence-matrix?days=' + days, '#cooccurrence-matrix');
+  htmx.ajax('GET', '/pages/acoustic-network?days=' + days, '#acoustic-network');
   htmx.ajax('GET', '/pages/correlation-pairs?days=' + days, '#correlation-pairs');
   const species = document.getElementById('species-input').value.trim();
   if (species) {
@@ -162,6 +172,35 @@ async fn cooccurrence_matrix_partial(
             StatusCode::INTERNAL_SERVER_ERROR,
             [(header::CONTENT_TYPE, "text/html")],
             "<p>Error loading matrix</p>".to_string(),
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GET /pages/acoustic-network — chord diagram of the co-occurrence graph
+// ---------------------------------------------------------------------------
+
+async fn acoustic_network_partial(
+    State(state): State<AppState>,
+    Query(query): Query<CorrelationQuery>,
+) -> impl axum::response::IntoResponse {
+    let days = query.days.unwrap_or(30).min(365);
+    let result = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| top_cooccurrence_pairs(conn, days, 120, 1))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(pairs)) => {
+            // Fewer arcs read more clearly as a chord than the 10-wide matrix.
+            let (labels, matrix) = build_matrix(&pairs, 9);
+            let html = super::viz::chord_diagram(&labels, &matrix);
+            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+        }
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading network</p>".to_string(),
         ),
     }
 }

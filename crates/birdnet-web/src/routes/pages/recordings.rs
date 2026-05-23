@@ -12,6 +12,7 @@ use axum::response::IntoResponse;
 use axum::{Router, response::Html, routing::get};
 use serde::Deserialize;
 
+use super::atoms::avatar;
 use super::{RECORDINGS_PAGE_HTML, escape_html, simple_url_encode};
 use crate::state::AppState;
 
@@ -66,10 +67,14 @@ async fn species_list_partial(State(state): State<AppState>) -> impl IntoRespons
                          hx-target="#recordings-detail-content"
                          hx-swap="innerHTML"
                          onclick="document.getElementById(&quot;recordings-detail&quot;).style.display=&quot;&quot;">
-  <span class="species-name">{name}</span>
-  <span style="color:var(--text-muted);font-size:0.8rem;font-style:italic;margin-left:0.5rem;">{sci}</span>
+  {av}
+  <div style="flex:1;min-width:0;">
+    <span class="species-name">{name}</span>
+    <span class="bnb-meta" style="font-style:italic;display:block;">{sci}</span>
+  </div>
   <span class="species-count">{count}</span>
 </div>"##,
+                    av = avatar(&s.com_name, ""),
                     name = escape_html(&s.com_name),
                     sci = escape_html(&s.sci_name),
                     count = s.count,
@@ -238,6 +243,7 @@ fn render_detection_list(
         let _ = write!(
             html,
             r#"<div style="display:flex;gap:1rem;align-items:flex-start;padding:0.6rem 0;border-bottom:1px solid var(--border);">
+  {av}
   <div style="flex:1;min-width:0;">
     <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
       <a href="/species/detail?name={enc_name}" style="font-weight:500;color:var(--text);text-decoration:none;">{com_name}</a>
@@ -258,6 +264,7 @@ fn render_detection_list(
     </button>
   </div>
 </div>"#,
+            av = avatar(&d.com_name, ""),
             com_name = escape_html(&d.com_name),
             sci_name = escape_html(&d.sci_name),
             time = escape_html(&d.time),

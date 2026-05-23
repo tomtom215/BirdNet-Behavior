@@ -1,5 +1,5 @@
 <h1 align="center">BirdNet-Behavior</h1>
-<p align="center">Real-time acoustic bird classification with behavioral analytics — written in Rust, runs on a Raspberry Pi</p>
+<p align="center">Real-time acoustic bird classification with behavioral analytics — written in Rust, runs on a Raspberry Pi.</p>
 
 <p align="center">
   <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/"><img src="https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg" alt="License"></a>
@@ -9,670 +9,155 @@
   <img src="https://img.shields.io/badge/Docker-ghcr.io-2496ED" alt="Docker">
 </p>
 
+<p align="center">
+  <strong>📖 <a href="https://tomtom215.github.io/BirdNet-Behavior/">Read the documentation</a></strong>
+  &nbsp;·&nbsp; <a href="https://tomtom215.github.io/BirdNet-Behavior/getting-started/installation.html">Install</a>
+  &nbsp;·&nbsp; <a href="https://tomtom215.github.io/BirdNet-Behavior/getting-started/docker.html">Docker</a>
+  &nbsp;·&nbsp; <a href="https://tomtom215.github.io/BirdNet-Behavior/guide/dashboard.html">Field Guide</a>
+  &nbsp;·&nbsp; <a href="https://tomtom215.github.io/BirdNet-Behavior/guides/troubleshooting.html">Troubleshooting</a>
+</p>
+
 > [!IMPORTANT]
 > BirdNet-Behavior is licensed **CC BY-NC-SA 4.0** — the same terms as the upstream BirdNET model and BirdNET-Pi.
 > **You may not use this project to build a commercial product.** See [LICENSE](LICENSE) for details.
 
----
-
-**[Quick Install](#installation)** · **[Docker](#docker)** · **[Screenshots](#screenshots)** · **[Features](#features)** · **[Configuration](#configuration)** · **[Troubleshooting](#troubleshooting)**
-
----
-
-## Screenshots
-
-<details open>
-<summary><strong>Dashboard</strong> — live detection feed, activity charts, species heatmap</summary>
-
-![Dashboard](docs/screenshots/dashboard.png)
-</details>
-
-<details>
-<summary><strong>Today's Detections</strong> — searchable, paginated, with inline audio playback</summary>
-
-![Today](docs/screenshots/today.png)
-</details>
-
-<details>
-<summary><strong>Species List</strong> — all detected species with sparklines and confidence</summary>
-
-![Species List](docs/screenshots/species-list.png)
-</details>
-
-<details>
-<summary><strong>Species Gallery</strong> — photo card grid with search and sort</summary>
-
-![Gallery](docs/screenshots/gallery.png)
-</details>
-
-<details>
-<summary><strong>Life List</strong> — birding journal with first-seen dates and discovery timeline</summary>
-
-![Life List](docs/screenshots/life-list.png)
-</details>
-
-<details>
-<summary><strong>Weekly Report</strong> — top species, new discoveries, daily activity chart</summary>
-
-![Weekly Report](docs/screenshots/weekly-report.png)
-</details>
-
-<details>
-<summary><strong>Detection History</strong> — date browser with hourly bar charts</summary>
-
-![History](docs/screenshots/history.png)
-</details>
-
-<details>
-<summary><strong>Activity Heatmap</strong> — hour x day-of-week SVG grid</summary>
-
-![Heatmap](docs/screenshots/heatmap.png)
-</details>
-
-<details>
-<summary><strong>System Health</strong> — CPU, memory, temperature gauges, database integrity</summary>
-
-![System Health](docs/screenshots/system-health.png)
-</details>
-
-> All pages support **dark and light themes** with automatic OS preference detection. The UI is fully responsive on mobile, tablet, and desktop.
+<p align="center">
+  <img src="docs/book/images/dashboard.png" alt="The BirdNet-Behavior dashboard" width="900">
+</p>
 
 ---
 
 ## What is BirdNet-Behavior?
 
-BirdNet-Behavior is a ground-up Rust rewrite of [BirdNET-Pi](https://github.com/mcguirepr89/BirdNET-Pi). It runs on a Raspberry Pi, listens to your microphone or RTSP camera, identifies birds in real time using the BirdNET+ neural network, and serves a web dashboard you open in any browser.
+A ground-up Rust rewrite of [BirdNET-Pi](https://github.com/mcguirepr89/BirdNET-Pi). It runs on a Raspberry Pi, listens to your microphone or RTSP camera, identifies birds in real time using the BirdNET+ neural network, and serves a fast, beautiful web dashboard you open in any browser.
 
 It ships as a **single static binary** — no Python, no pip, no virtualenv. Drop it on a Pi and run it.
 
 | | BirdNET-Pi (Python) | BirdNet-Behavior (Rust) |
 |---|---|---|
-| Memory | 400-600 MB | ~20-50 MB |
-| Cold start | 5-15 s | < 1 s |
-| Dependencies | pip + venv + system libs | None |
-| Upgrade | pip breakage, virtualenv rot | `scp` one file |
+| Memory | 400–600 MB | ~20–50 MB |
+| Cold start | 5–15 s | < 1 s |
+| Dependencies | pip + venv + system libs | None — one binary |
+| Upgrade | pip breakage, virtualenv rot | copy one file |
 | Concurrency | GIL-constrained | Lock-free parallel audio |
 
----
-
-## Requirements
-
-| Platform | Status |
-|---|---|
-| Raspberry Pi 5 | Recommended |
-| Raspberry Pi 4B / 400 | Fully supported |
-| Any x86_64 Linux | Fully supported |
-| Raspberry Pi 3B+ | Supported (native binary only, no Docker) |
-
-**Storage:** ~1.5 GB free (541 MB for the BirdNET+ model, the rest for recordings and database).
-
-**Audio input** (one of):
-- USB microphone or USB sound card (`arecord` from `alsa-utils`)
-- IP camera or any RTSP stream (`ffmpeg`)
+> **It is a clean rewrite, not a fork.** See [Credits & Attribution](#credits--attribution).
 
 ---
 
-## Installation
+## Screenshots
 
-**The fastest path is Docker.** Two commands and you're watching detections.
+Every screen leads with a plain-English headline, then layers the dense numbers beneath — designed to serve a casual hobbyist and a PhD ornithologist at once. Light + dark themes, fully responsive.
 
-### Option 1: Docker quick start (recommended)
+<table>
+  <tr>
+    <td width="50%"><a href="https://tomtom215.github.io/BirdNet-Behavior/guide/today.html"><img src="docs/book/images/today.png" alt="Today's detections with a 24-hour timeline"></a><br><sub><b>Today</b> — searchable log + 24-hour DayStrip</sub></td>
+    <td width="50%"><a href="https://tomtom215.github.io/BirdNet-Behavior/guide/analytics.html"><img src="docs/book/images/heatmap.png" alt="Activity heatmap and circadian polar"></a><br><sub><b>Analytics</b> — streamgraph, mosaic, circadian polar, ridgeline</sub></td>
+  </tr>
+  <tr>
+    <td><a href="https://tomtom215.github.io/BirdNet-Behavior/guide/analytics.html"><img src="docs/book/images/correlation.png" alt="Co-occurrence chord diagram"></a><br><sub><b>Co-occurrence</b> — matrix + acoustic-network chord diagram</sub></td>
+    <td><a href="https://tomtom215.github.io/BirdNet-Behavior/guide/species.html"><img src="docs/book/images/life-list.png" alt="Life list with accumulation curve"></a><br><sub><b>Life List</b> — birding journal with a growth curve</sub></td>
+  </tr>
+  <tr>
+    <td><a href="https://tomtom215.github.io/BirdNet-Behavior/guide/reports.html"><img src="docs/book/images/year-in-review.png" alt="Year in Review"></a><br><sub><b>Year in Review</b> — editorial annual recap</sub></td>
+    <td><a href="https://tomtom215.github.io/BirdNet-Behavior/guide/recordings.html"><img src="docs/book/images/gallery.png" alt="Species photo gallery"></a><br><sub><b>Gallery</b> — species photo grid</sub></td>
+  </tr>
+  <tr>
+    <td><a href="https://tomtom215.github.io/BirdNet-Behavior/admin/audio.html"><img src="docs/book/images/admin-audio.png" alt="Audio settings"></a><br><sub><b>Audio setup</b> — USB + RTSP mic management</sub></td>
+    <td><a href="https://tomtom215.github.io/BirdNet-Behavior/guide/dashboard.html"><img src="docs/book/images/dashboard-dark.png" alt="Dashboard in dark mode"></a><br><sub><b>Dark mode</b> — a cool observatory theme</sub></td>
+  </tr>
+</table>
 
-One command. Asks you 2-3 plain-English questions, auto-detects your USB mic, writes a minimal `.env`, and starts the container. No git clone, no editor, no hand-picking compose overlays.
+➡️ **See every screen in the [Field Guide](https://tomtom215.github.io/BirdNet-Behavior/guide/dashboard.html).**
+
+---
+
+## Quick start
+
+**The fastest path is Docker.** One command — it auto-detects your USB mic, asks for your location, writes a minimal `.env`, and starts the container:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/quickstart.sh)
 ```
 
-What it does:
-
-1. Verifies Docker Engine + Compose are installed and usable (clear remediation if not)
-2. Checks disk space and port 8502 availability
-3. Creates `~/birdnet-behavior/` for your `.env` and compose files
-4. Auto-detects your audio source — USB/ALSA card, PulseAudio/PipeWire, or falls back to asking for an RTSP URL
-5. Asks for your station latitude/longitude (with opt-in IP auto-detect via ipapi.co)
-6. Asks whether to enable DuckDB behavioral analytics (default: no)
-7. Writes a 6-line `.env` with only your chosen values
-8. Starts the container with the matching compose overlay
-9. Streams logs so you can watch the one-time 541 MB model download
-10. Stops tailing as soon as the web server reports healthy
-11. Prints the dashboard URL and your LAN IP
-
-The BirdNET+ V3.0 model (~541 MB) and species labels are downloaded automatically from Zenodo on first run — you never pick, locate, or install a model yourself.
-
-### Option 2: Bare-metal installer (Raspberry Pi / bare metal, no Docker)
+**Bare metal (Raspberry Pi, no Docker):**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash
 ```
 
-The installer:
-1. Detects your architecture (aarch64 / x86_64)
-2. Downloads the pre-built binary from GitHub Releases
-3. Downloads the BirdNET+ V3.0 model (~541 MB) from Zenodo
-4. Creates config, recording, and model directories
-5. Installs and enables a systemd service
-6. Auto-detects your ALSA microphone
-7. Starts the service immediately
+The BirdNET+ V3.0 model (~541 MB) downloads automatically from Zenodo on first run. When it's ready, open **<http://localhost:8502>**.
 
-```bash
-# Install a specific version (defaults to latest)
-VERSION=0.1.0 bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh)
-
-# Uninstall (recordings and database are preserved)
-curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash -s uninstall
-```
-
----
-
-## Docker
-
-### Quick start (automatic)
-
-The easiest path is the [quickstart.sh](#option-1-docker-quick-start-recommended) script at the top of this README — one command, auto-detects your audio source, writes a minimal `.env`, and starts the stack. If you prefer to do it by hand, read on.
-
-### Quick start (manual)
-
-You only need to decide **three** things before running the container:
-
-1. **Station location** — latitude and longitude
-2. **Audio source** — one of: USB/ALSA mic, PulseAudio/PipeWire, or an RTSP stream URL
-3. **Which image** — standard or with DuckDB behavioral analytics
-
-Everything else has sensible defaults. The BirdNET+ V3.0 model (~541 MB) and species labels CSV are downloaded automatically from Zenodo on first run — you never pick, fetch, or install a model yourself.
-
-#### 1. Clone and create your `.env`
-
-```bash
-git clone https://github.com/tomtom215/BirdNet-Behavior.git
-cd BirdNet-Behavior
-cp .env.example .env
-```
-
-#### 2. Edit the REQUIRED section at the top of `.env`
-
-Four lines, give or take. Pick **one** audio variable to fill in and leave the other two blank.
-
-```dotenv
-# Station location
-BIRDNET_LATITUDE=42.3601
-BIRDNET_LONGITUDE=-71.0589
-
-# Audio source — set exactly ONE
-BIRDNET_ALSA_DEVICE=plughw:1,0          # USB/ALSA mic  (use arecord -l to find it)
-# BIRDNET_RTSP_URL=rtsp://cam.lan:554/stream
-# BIRDNET_PIPEWIRE_DEVICE=default
-
-# Image variant: latest (standard) or latest-analytics (adds DuckDB analytics)
-BIRDNET_IMAGE_TAG=latest
-```
-
-#### 3. Start the stack
-
-Pick the line matching your audio source. The **same command** is used whether you want analytics or not — the `BIRDNET_IMAGE_TAG` you set in `.env` decides which image is pulled.
-
-```bash
-# A) RTSP camera / multi-stream / file-watch mode — no microphone hardware
-docker compose up -d
-
-# B) USB / ALSA microphone (most Raspberry Pi setups)
-docker compose -f docker-compose.yml -f docker-compose.alsa.yml up -d
-
-# C) PulseAudio / PipeWire (desktop Linux)
-docker compose -f docker-compose.yml -f docker-compose.pulse.yml up -d
-```
-
-Want to switch between the standard build and the analytics build? Change `BIRDNET_IMAGE_TAG` in `.env` and re-run the same command — compose will pull the other image and recreate the container. Your recordings, database, and cached model stay in the `birdnet-data` named volume.
-
-#### 4. Watch the first-run model download
-
-On a fresh install the container downloads the BirdNET+ model from Zenodo before starting the web server. This happens exactly once per named volume; subsequent starts skip it entirely.
-
-```bash
-# Stream the container's logs so you can see the download progress bar,
-# the web server boot, and the first detections as they happen.
-docker compose logs -f birdnet
-```
-
-Typical output looks like this:
-
-```
-[birdnet] BirdNET+ V3.0 model directory: /data/model
-[birdnet] ----------------------------------------------------------------
-[birdnet] Downloading BirdNET+ V3.0 model (ONNX) (541.4MB)
-[birdnet]   from:  https://zenodo.org/api/records/18247420/files/BirdNET+_V3.0-preview3_Global_11K_FP32.onnx/content
-[birdnet]   to:    /data/model/BirdNET+_V3.0-preview3_Global_11K_FP32.onnx
-[birdnet]   This runs only on first start. The model is cached in the
-[birdnet]   Docker volume so subsequent container starts are instant.
-[birdnet]   Typical download: 1–3 min on fibre, 5–15 min on home broadband.
-[birdnet] ----------------------------------------------------------------
-[birdnet]   …BirdNET+ V3.0 model (ONNX): 18%  (97.4MB / 541.4MB, 6.5MB/s, 15s elapsed)
-[birdnet]   …BirdNET+ V3.0 model (ONNX): 36%  (194.9MB / 541.4MB, 6.5MB/s, 30s elapsed)
-[birdnet]   …BirdNET+ V3.0 model (ONNX): 54%  (292.4MB / 541.4MB, 6.5MB/s, 45s elapsed)
-[birdnet]   …
-[birdnet]   done: BirdNET+ V3.0 model (ONNX) saved (541.4MB in 83s)
-[birdnet] Downloading species labels CSV (809.2KB)
-[birdnet]   done: species labels CSV saved (809.2KB in 1s)
-[birdnet] Model ready.
-[birdnet] Starting birdnet-behavior  (listen: 0.0.0.0:8502)
-```
-
-Interrupted downloads **resume** on the next container start (`curl --continue-at -`), so a dropped connection on a slow network is not fatal — just `docker compose up -d` again and the download picks up where it left off. The container's health check has a 15-minute start period specifically to accommodate slow first-run downloads without being marked unhealthy.
-
-Once you see `Starting birdnet-behavior`, open **http://localhost:8502**.
-
-#### What if the model download fails?
-
-The entrypoint fails loud, not silent. If curl exits non-zero you'll see:
-
-```
-[birdnet] WARNING: BirdNET+ V3.0 model (ONNX): curl exited 28 after 30s
-[birdnet] WARNING: Partial file (97.4MB) kept at /data/model/….onnx.tmp.
-[birdnet] WARNING: The next container start will resume from where it left off.
-[birdnet] WARNING: Common causes:
-[birdnet] WARNING:   • no internet in the container (check the host's DNS/firewall)
-[birdnet] WARNING:   • Zenodo is temporarily unreachable (retry in a few minutes)
-[birdnet] WARNING:   • the volume is out of disk (df -h on the host's docker root)
-[birdnet] ERROR: Failed to download BirdNET+ V3.0 model (ONNX) from https://…
-```
-
-Resolution:
-
-- **Connectivity / DNS** — test from the host: `curl -fsSL -o /dev/null https://zenodo.org` and check your Docker network's DNS (`docker compose exec birdnet curl -fsSL https://zenodo.org` once the container is up again).
-- **Zenodo outage** — wait a few minutes and run `docker compose up -d` again. The download resumes from the partial file.
-- **Disk space** — the volume needs ~600 MB free. `docker system df -v` shows what each volume is using.
-- **Bring your own model** — if you already have an ONNX BirdNET model locally, mount it over `/data/model` and set `BIRDNET_SKIP_MODEL_DOWNLOAD=1` in `.env`.
-
-> Settings that are **not** exposed as environment variables — detection confidence threshold, per-species thresholds, sensitivity, email SMTP, rare-bird quarantine rules — live in the web UI at **`/admin/settings`** and are persisted in the SQLite settings table. You do not need to touch them to get started.
-
-### Single `docker run` command (no compose)
-
-If you want the absolute minimum — no clone, no compose files on disk, no editor — you can start the container with a single `docker run`. Edit the four marked values and paste:
-
-```bash
-docker run -d \
-  --name birdnet-behavior \
-  --restart unless-stopped \
-  -p 8502:8502 \
-  -v birdnet-data:/data \
-  --device /dev/snd \
-  --group-add audio \
-  -e BIRDNET_LATITUDE=42.3601 \
-  -e BIRDNET_LONGITUDE=-71.0589 \
-  -e BIRDNET_ALSA_DEVICE=plughw:1,0 \
-  -e BIRDNET_LISTEN=0.0.0.0:8502 \
-  ghcr.io/tomtom215/birdnet-behavior:latest
-# then:
-docker logs -f birdnet-behavior         # watch the model download
-```
-
-Swap `:latest` for `:latest-analytics` to enable DuckDB behavioral analytics. For an RTSP stream instead of a mic, drop `--device /dev/snd --group-add audio` and replace `BIRDNET_ALSA_DEVICE=…` with `BIRDNET_RTSP_URL=rtsp://…`. For PulseAudio, use `-v /run/user/1000/pulse/native:/run/pulse/native -e PULSE_SERVER=unix:/run/pulse/native -e BIRDNET_PIPEWIRE_DEVICE=default`.
-
-### Pre-built images
-
-Two tags are published on GHCR for `linux/amd64` and `linux/arm64`:
-
-| Tag | Contents |
-|---|---|
-| `ghcr.io/tomtom215/birdnet-behavior:latest` | Standard build (SQLite only) |
-| `ghcr.io/tomtom215/birdnet-behavior:latest-analytics` | Adds DuckDB behavioral analytics |
-
-The compose file pulls whichever tag `BIRDNET_IMAGE_TAG` in `.env` points at — you never need to run `docker pull` by hand.
-
-### USB microphone setup
-
-```bash
-# 1. Find your device on the host
-arecord -l
-# card 1: Device [USB Audio], device 0: USB Audio [USB Audio]
-
-# 2. Test it works
-arecord -D plughw:1,0 -d 3 /tmp/test.wav && aplay /tmp/test.wav
-
-# 3. Set it in .env
-echo "BIRDNET_ALSA_DEVICE=plughw:1,0" >> .env
-
-# 4. Start with the ALSA overlay
-docker compose -f docker-compose.yml -f docker-compose.alsa.yml up -d
-```
-
-### Build locally (instead of pulling)
-
-```bash
-# Standard build
-docker compose build
-
-# With DuckDB analytics (adds ~7 min for C++ compilation)
-BUILD_FEATURES=analytics docker compose build
-```
-
-### Docker data layout
-
-All persistent data lives in a single Docker volume at `/data`:
-
-```
-/data/
-  model/        BirdNET+ ONNX model + labels (auto-downloaded)
-  recordings/   Audio segments from the capture pipeline
-  cache/        Wikipedia species image cache
-  birdnet.db    SQLite detections database
-  analytics.db  DuckDB behavioral analytics (optional)
-```
-
-### Compose files reference
-
-| File | Purpose |
-|---|---|
-| `quickstart.sh` | One-command Docker bootstrap — auto-detects audio, writes minimal `.env`, starts the stack |
-| `docker-compose.yml` | Base compose — works for RTSP and file-watch mode |
-| `docker-compose.alsa.yml` | Overlay for USB/ALSA microphone (passes `/dev/snd`) |
-| `docker-compose.pulse.yml` | Overlay for PulseAudio/PipeWire (mounts PA socket) |
-| `.env.example` | Documented template for every supported environment variable |
-| `docker/entrypoint.sh` | Model download (with progress + resume) and container startup |
-
----
-
-## First Steps
-
-After starting (via installer or Docker), open the web dashboard:
-
-```
-http://<your-ip>:8502
-```
-
-> Not sure of your Pi's IP? Run `hostname -I` on the Pi, or check your router's device list.
-
-If you set `BIRDNET_LATITUDE`/`LONGITUDE` and an audio source in `.env`, detections should start appearing within a minute or two of the first bird call — no further configuration is required.
-
-1. Dashboard `/` — live detections, activity heatmap, top species
-2. `/species` — every species detected so far, with sparklines
-3. `/admin/settings` — optional: confidence threshold, per-species overrides, email, quarantine rules
+📖 Full instructions: [Installation](https://tomtom215.github.io/BirdNet-Behavior/getting-started/installation.html) · [Docker guide](https://tomtom215.github.io/BirdNet-Behavior/getting-started/docker.html) · [Configuration](https://tomtom215.github.io/BirdNet-Behavior/getting-started/configuration.html)
 
 ---
 
 ## Features
 
-### Core (everything BirdNET-Pi does)
+**Everything BirdNET-Pi does** — real-time detection from a USB mic or RTSP stream, the BirdNET+ V3.0 model, a SQLite detection database, per-species pages, Apprise notifications (Telegram/Slack/Discord + 80 more), BirdWeather uploads, email alerts, CSV/JSON export, web-based admin, database backup/restore, and HTTP basic auth.
 
-| Feature | Notes |
-|---|---|
-| Real-time detection | USB microphone or RTSP stream |
-| BirdNET+ V3.0 model | Same accuracy as upstream |
-| SQLite detection database | Full history, fast queries |
-| Web dashboard | 18+ pages, dark/light theme, responsive |
-| Per-species pages | Hourly activity, 14-day trend, companion species, Wikipedia image |
-| Apprise notifications | Telegram, Slack, Discord, 80+ channels |
-| BirdWeather uploads | Station API compatible |
-| Email alerts | SMTP/STARTTLS, per-species cooldown |
-| CSV / JSON export | Full detection history |
-| Admin settings panel | All config via web UI |
-| Database backup/restore | Download from web UI |
-| HTTP Basic Auth | Caddy / `CADDY_PWD` compatible |
+**New in BirdNet-Behavior:**
 
-### New in BirdNet-Behavior
+- **A redesigned UI** — 20+ pages, OKLCH light/dark themes, self-hosted fonts, bespoke SVG visualizations (streamgraph, circadian polar, co-occurrence chord diagram, migration ridgeline, DayStrip), fully responsive down to a phone.
+- **Behavioral analytics** (optional `--features analytics`) — activity sessions, resident vs. migrant classification, dawn-chorus validation, species co-occurrence, migration phenology.
+- **IoT / Home Automation** — pure-Rust MQTT 3.1.1 publishing with Home Assistant auto-discovery.
+- **Editorial reports** — Weekly Report and a celebratory Year in Review.
+- **Operational polish** — rare-bird quarantine queue, audio quality pre-filtering, a built-in `--doctor` diagnostic, Prometheus metrics, kiosk mode, a live spectrogram, and a first-run onboarding wizard.
 
-**Behavioral Analytics** (optional, requires `--features analytics`):
-- Activity sessions, resident vs. migrant classification
-- Dawn chorus validation, species co-occurrence correlation
-- Migration phenology with weekly abundance index
-
-**IoT / Home Automation:**
-- Pure Rust MQTT 3.1.1 publishing (no external broker library)
-- Home Assistant auto-discovery (`--mqtt-ha-discovery`)
-- Compatible with Mosquitto, Node-RED, any MQTT 3.1.1 broker
-
-**Additional pages and features:**
-- Species photo gallery with search and sort
-- Life list / birding journal with first-seen dates and discovery timeline
-- System health dashboard (CPU, memory, temperature, database integrity)
-- Notification center with channel stats
-- Rare bird quarantine queue (approve / reject / delete)
-- Hour x day-of-week activity heatmap (SVG)
-- Species co-occurrence correlation matrix
-- Audio quality pre-filtering (SNR, spectral flatness, rain/wind detection)
-- Prometheus metrics at `/api/v2/metrics`
-- Kiosk mode for dedicated display screens
-- Live spectrogram WebSocket stream
-- Custom audio player with spectrogram overlay
+➡️ Tour them all in the [Field Guide](https://tomtom215.github.io/BirdNet-Behavior/guide/dashboard.html).
 
 ---
 
-## Configuration
+## Migrating from BirdNET-Pi
 
-Settings are read in this priority order (highest wins):
+Safe, non-destructive import — the source database is opened read-only and never modified. Stop BirdNET-Pi, open `/admin/migrate`, point it at your `BirdDB.txt`, review the preview, and import. Duplicate rows are skipped, so re-running is safe.
 
-```
-CLI flags  >  environment variables  >  /etc/birdnet/birdnet.conf  >  built-in defaults
-```
-
-Plus a **SQLite settings table** managed through the web UI at **`/admin/settings`** — this is the canonical place for things that have no CLI flag or env var (detection confidence threshold, per-species thresholds, sensitivity, email SMTP, quarantine rules, …).
-
-### Env vars / CLI flags
-
-The full list is in `.env.example` and `birdnet-behavior --help`. Each row below shows: the environment variable, the matching CLI flag, and the `birdnet.conf` INI key (for BirdNET-Pi compatibility).
-
-| Env var | CLI flag | `birdnet.conf` key | Default |
-|---|---|---|---|
-| `BIRDNET_LATITUDE` / `BIRDNET_LONGITUDE` | `--latitude` / `--longitude` | `LATITUDE` / `LONGITUDE` | — |
-| `BIRDNET_ALSA_DEVICE` | `--alsa-device` | `ALSA_CARD` | — |
-| `BIRDNET_PIPEWIRE_DEVICE` | `--pipewire-device` | — | — |
-| `BIRDNET_RTSP_URL` / `BIRDNET_RTSP_URLS` | `--rtsp-url` / `--rtsp-urls` | `RTSP_URL` | — |
-| `BIRDNET_LISTEN` | `--listen` | — | `127.0.0.1:8502` |
-| `BIRDNET_RECORDING_SCHEDULE` | `--recording-schedule` | — | `all-day` |
-| `BIRDNET_SEGMENT_DURATION` | `--segment-duration` | `RECORDING_LENGTH` | `15` |
-| `BIRDNET_OVERLAP` | `--overlap` | `OVERLAP` | `0.0` |
-| `BIRDNET_SF_THRESH` | `--sf-thresh` | `SF_THRESH` | `0.03` |
-| `BIRDNET_PRIVACY_THRESHOLD` | `--privacy-threshold` | `PRIVACY_THRESHOLD` | `0.0` |
-| `BIRDNET_QUALITY_FILTER` | `--quality-filter` | — | disabled |
-| `BIRDNET_APPRISE_URL` | `--apprise-url` | `APPRISE_URL` | — |
-| `BIRDNET_NOTIFY_CONFIDENCE` | `--notify-confidence` | — | `0.8` |
-| `BIRDNET_BIRDWEATHER_TOKEN` | `--birdweather-token` | `BIRDWEATHER_TOKEN` | — |
-| `BIRDNET_MQTT_HOST` | `--mqtt-host` | `MQTT_HOST` | — |
-| `BIRDNET_MQTT_HA_DISCOVERY` | `--mqtt-ha-discovery` | — | disabled |
-| `BIRDNET_MAX_FILES_PER_SPECIES` | `--max-files-per-species` | `MAX_FILES_SPECIES` | `0` |
-
-### Web-UI-only settings (no env var / flag)
-
-These are stored in the SQLite settings table and have **no** environment variable or `birdnet.conf` equivalent:
-
-| Setting | Where | Note |
-|---|---|---|
-| Detection confidence threshold | `/admin/settings` — Detection | Per-species overrides also live here |
-| Detection sensitivity (0.5–1.5) | `/admin/settings` — Detection | Also `SENSITIVITY` in `birdnet.conf` for BirdNET-Pi compat |
-| Email / SMTP notifications | `/admin/settings` — Notifications | |
-| Rare-bird quarantine rules | `/admin/settings` — Species | |
-| BirdWeather station details | `/admin/settings` — BirdWeather | Token can also be set via env var |
-
-> **Data retention is not time-based.** There is no `recording_days` setting — the disk manager purges the oldest recordings once the disk hits the `DISK_PURGE_THRESHOLD` (default 95%) in `birdnet.conf`, and keeps at most `BIRDNET_MAX_FILES_PER_SPECIES` per species.
+📖 [Migration guide](https://tomtom215.github.io/BirdNet-Behavior/guides/migration.html)
 
 ---
 
-## Web UI
+## Building from source
 
-### Pages
-
-| URL | Description |
-|---|---|
-| `/` | Dashboard — live detections, top species, activity heatmap, quick links |
-| `/today` | Today's detections — searchable, paginated, delete / lock / re-label |
-| `/history` | Detection history — date browser with hourly bar charts |
-| `/weekly` | Weekly report — top 10 species, new discoveries, 7-day chart |
-| `/species` | Species list — search, detection counts, 7-day sparklines |
-| `/species/detail?name=...` | Species detail — hourly chart, trend, companion species, Wikipedia image |
-| `/gallery` | Species photo gallery — card grid with search and sort |
-| `/life-list` | Life list — every species ever detected, discovery timeline |
-| `/recordings` | Recording browser with inline audio player |
-| `/heatmap` | Hour x day-of-week SVG heatmap |
-| `/correlation` | Species co-occurrence pairs and companion lookup |
-| `/analytics` | Behavioral analytics (requires `--analytics-db`) |
-| `/timeseries` | Time-series analytics (activity, diversity, trends, peaks) |
-| `/quarantine` | Rare bird quarantine — review, approve, reject |
-| `/notifications` | Notification center — history and channel stats |
-| `/system` | System health — CPU/memory/temp gauges, database, disk |
-| `/kiosk` | Kiosk mode — auto-refreshing display for dedicated screens |
-| `/live` | Live audio stream |
-
-### Admin
-
-| URL | Description |
-|---|---|
-| `/admin/settings` | Audio, location, detection, notifications, email, MQTT, species, system |
-| `/admin/migrate` | BirdNET-Pi database import |
-| `/admin/system` | CPU / memory / temperature / disk |
-| `/admin/system/backups` | Backup management |
-| `/admin/system/logs/page` | Live log viewer (SSE, level filtering) |
-| `/admin/update/check` | Check for and apply binary updates |
-
-### API
-
-| URL | Description |
-|---|---|
-| `/api/v2/health` | JSON health check |
-| `/api/v2/metrics` | Prometheus metrics |
-| `/api/v2/detections` | Detection CRUD |
-| `/api/v2/species` | Species queries |
-| `/api/v2/ws` | WebSocket live detection stream |
-
----
-
-## BirdNET-Pi Migration
-
-Safe, non-destructive import from an existing BirdNET-Pi installation. The source database is opened read-only and never modified.
-
-1. Stop BirdNET-Pi: `sudo systemctl stop birdnet_*`
-2. Open `http://<your-pi>:8502/admin/migrate`
-3. Upload or enter the path to `~/BirdNET-Pi/BirdDB.txt`
-4. Review the preview (top 20 species, date range, data quality report)
-5. Click Import — transaction-backed, fails cleanly on any error
-6. Verify the per-species count comparison
-
-Duplicate rows are silently skipped, so re-running is safe.
-
----
-
-## Building from Source
-
-**Prerequisites:** [Rust 1.95+](https://rustup.rs), `git`
+**Prerequisites:** [Rust 1.95+](https://rustup.rs) and `git`.
 
 ```bash
 git clone https://github.com/tomtom215/BirdNet-Behavior.git
 cd BirdNet-Behavior
 
-# Local testing (fast compile)
-cargo build
+cargo build --release                              # optimized build
+cargo build --release --features analytics         # + DuckDB analytics
+cross build --release --target aarch64-unknown-linux-gnu   # cross-compile for a Pi
 
-# Deploy to Pi or server (optimized, ~3-5 min)
-cargo build --release
-
-# With behavioral analytics (DuckDB C++ — ~7 min first build)
-cargo build --release --features analytics
-
-# Cross-compile for Raspberry Pi
-cross build --release --target aarch64-unknown-linux-gnu
-
-# Run tests
-cargo test --workspace
-
-# Lint (pedantic + nursery, warnings denied)
-cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace                             # run tests
+cargo clippy --workspace --all-targets -- -D warnings   # lint (pedantic + nursery)
 ```
 
 ---
 
 ## Troubleshooting
 
-> Looking for a deeper guide? See [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md)
-> for symptom-organised, step-by-step recipes.
-
-**First step for any problem — run the built-in diagnostic:**
-```bash
-# Bare metal
-sudo -u birdnet birdnet-behavior --doctor
-
-# Docker
-docker compose exec birdnet birdnet-behavior --doctor
-```
-
-The diagnostic prints a one-screen report covering CPU, configuration values,
-audio source reachability, model file, database integrity, disk space, tool
-dependencies, and network. Every problem comes with a concrete suggested fix.
-Exit code: `0` = all good, `1` = warnings only, `2` = at least one error.
-
-For monitoring scripts (Nagios / Zabbix / Home Assistant command sensor /
-Prometheus textfile collector) the same checks are available as a single
-line of JSON:
+First step for any problem — run the built-in diagnostic, which prints a one-screen report (CPU, config, audio reachability, model, database, disk, network) with a concrete fix for each issue:
 
 ```bash
-birdnet-behavior --doctor-json | jq .
-# {"summary":{"passed":N,"warnings":N,"errors":N,"skipped":N,"exit_code":N},
-#  "checks":[{"status":"pass|warn|fail|skip","name":"...","message":"...","remediation":"..."|null}, ...]}
+sudo -u birdnet birdnet-behavior --doctor            # bare metal
+docker compose exec birdnet birdnet-behavior --doctor   # Docker
 ```
 
-**Service won't start:**
-```bash
-sudo journalctl -u birdnet-behavior -f
-# Common cause: no audio source set in /etc/birdnet/birdnet.conf
-```
-
-**Web UI not reachable:**
-```bash
-sudo systemctl status birdnet-behavior
-ss -tlnp | grep 8502
-sudo ufw allow 8502/tcp   # if using Ubuntu firewall
-```
-
-**No detections appearing (bare metal):**
-```bash
-arecord -l                                          # list capture devices
-arecord -D plughw:1,0 -d 3 /tmp/test.wav && aplay /tmp/test.wav  # test mic
-sudo nano /etc/birdnet/birdnet.conf                 # set ALSA_CARD=plughw:X,Y
-sudo systemctl restart birdnet-behavior
-```
-
-**No detections appearing (Docker):**
-```bash
-docker compose logs birdnet | grep -i 'audio source'   # check which source was picked up
-# Verify one of BIRDNET_ALSA_DEVICE / BIRDNET_PIPEWIRE_DEVICE / BIRDNET_RTSP_URL is set:
-grep -E '^BIRDNET_(ALSA|PIPEWIRE|RTSP)' .env
-docker compose restart birdnet
-```
-
-**Docker: no audio:**
-```bash
-# Verify /dev/snd is accessible
-ls -la /dev/snd/
-# Ensure the ALSA overlay is used
-docker compose -f docker-compose.yml -f docker-compose.alsa.yml up -d
-# Check container logs
-docker compose logs -f birdnet
-```
-
-**Model not found:**
-```bash
-ls ~/BirdNet-Behavior/models/   # bare metal
-docker compose exec birdnet ls /data/model/   # Docker
-# If empty, re-run the installer or restart the container (auto-downloads)
-```
+📖 [Troubleshooting guide](https://tomtom215.github.io/BirdNet-Behavior/guides/troubleshooting.html) · deeper recipes in [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md).
 
 ---
 
 ## Architecture
 
-Single binary built from 8 Rust workspace crates:
+A single binary built from eight Rust workspace crates — `birdnet-core` (audio + ML), `birdnet-db` (SQLite + DuckDB), `birdnet-web` (axum + HTMX), `birdnet-integrations`, `birdnet-behavioral`, `birdnet-timeseries`, `birdnet-migrate`, and `birdnet-scheduler`.
 
-```
-birdnet-behavior (single binary)
-+-- birdnet-core          Audio capture, decode, resample, mel spectrogram, ML inference
-+-- birdnet-db            SQLite (OLTP) + DuckDB (OLAP), migrations, resilience, backup
-+-- birdnet-web           axum web server, REST API, WebSocket, HTMX templates
-+-- birdnet-integrations  BirdWeather, Apprise, email, Wikipedia images, MQTT, auto-update
-+-- birdnet-behavioral    DuckDB behavioral analytics (feature-gated)
-+-- birdnet-timeseries    Activity, diversity, trend, peak, gap, session analytics
-+-- birdnet-migrate       BirdNET-Pi schema detection, validation, import
-+-- birdnet-scheduler     Solar calculations, recording window scheduling
-```
+📖 [Architecture overview](https://tomtom215.github.io/BirdNet-Behavior/reference/architecture.html) · full design docs in [`docs/architecture/`](docs/architecture/).
 
-See [`docs/architecture/`](docs/architecture/) for full design documents.
+---
+
+## Documentation
+
+The complete, navigable documentation lives at **[tomtom215.github.io/BirdNet-Behavior](https://tomtom215.github.io/BirdNet-Behavior/)** — installation, a screen-by-screen field guide, configuration, administration, migration, an FAQ, and troubleshooting. It is built with [mdBook](https://rust-lang.github.io/mdBook/) from the Markdown in [`docs/book/`](docs/book/) and published automatically on every push to `main`.
 
 ---
 
@@ -683,15 +168,11 @@ See [`docs/architecture/`](docs/architecture/) for full design documents.
 - **[BirdNET-Pi fork](https://github.com/Nachtzuster/BirdNET-Pi)** — maintained fork by [Nachtzuster](https://github.com/Nachtzuster)
 - **[duckdb-behavioral](https://github.com/tomtom215/duckdb-behavioral)** — behavioral analytics by [tomtom215](https://github.com/tomtom215)
 
-BirdNet-Behavior is a **clean rewrite**, not a fork.
-
 ---
 
 ## License
 
-Licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/), matching the upstream BirdNET and BirdNET-Pi projects.
-
-See [LICENSE](LICENSE) and [LICENSE-UPSTREAM](LICENSE-UPSTREAM) for full terms.
+Licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/), matching the upstream BirdNET and BirdNET-Pi projects. See [LICENSE](LICENSE) and [LICENSE-UPSTREAM](LICENSE-UPSTREAM) for full terms.
 
 ---
 
@@ -703,16 +184,3 @@ See [LICENSE](LICENSE) and [LICENSE-UPSTREAM](LICENSE-UPSTREAM) for full terms.
 | [quack-rs](https://github.com/tomtom215/quack-rs) | SDK for building DuckDB extensions in Rust |
 | [mallardmetrics](https://github.com/tomtom215/mallardmetrics) | Single-binary web analytics (axum + DuckDB) |
 | [LyreBirdAudio](https://github.com/tomtom215/LyreBirdAudio) | RTSP audio streaming |
-
----
-
-## Documentation
-
-| Document | Contents |
-|---|---|
-| [`docs/RUST_ARCHITECTURE_PLAN.md`](docs/RUST_ARCHITECTURE_PLAN.md) | Architecture overview and index |
-| [`docs/architecture/01-motivation.md`](docs/architecture/01-motivation.md) | Design rationale: why Rust, not Python or Go |
-| [`docs/architecture/02-architecture.md`](docs/architecture/02-architecture.md) | Single-binary design and workspace layout |
-| [`docs/architecture/03-coding-standards.md`](docs/architecture/03-coding-standards.md) | Linting, error handling, modularity, testing |
-| [`docs/architecture/10-deployment.md`](docs/architecture/10-deployment.md) | Cross-compilation, CI/CD, systemd |
-| [`docs/architecture/13-implementation-status.md`](docs/architecture/13-implementation-status.md) | Implementation status and test coverage |

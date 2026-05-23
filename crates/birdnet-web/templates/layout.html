@@ -9,16 +9,13 @@
     <meta name="color-scheme" content="light dark">
     <link rel="stylesheet" href="/static/css/app.css">
     <!--
-      Noto Sans (+ CJK/Devanagari) is a progressive-enhancement fallback for the
-      36 BirdNET language label packs. Latin UI text uses the self-hosted Inter
-      Tight; non-Latin species names fall through to Noto Sans, then system UI.
-      Loaded async (media=print → all) so it never blocks first paint, and the
-      app renders fully offline without it.
+      All webfonts are self-hosted and embedded in the binary (see app.css
+      @font-face) — no CDN dependency, so the dashboard renders fully offline on
+      a Pi without leaking requests to a third party. Latin UI text uses
+      Inter Tight; the Latin-script BirdNET label packs fall back to the
+      self-hosted Noto Sans; non-Latin species names (CJK, Devanagari, …) use
+      the client's installed system fonts named in the --font-ui stack.
     -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="stylesheet" media="print" onload="this.media='all'"
-          href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600&family=Noto+Sans+SC:wght@400;600&family=Noto+Sans+JP:wght@400;600&family=Noto+Sans+KR:wght@400;600&family=Noto+Sans+Devanagari:wght@400;600&display=swap">
     <script src="/static/htmx.min.js"></script>
 </head>
 <body>
@@ -71,6 +68,7 @@
             <a href="/today">Today</a>
             <a href="/history">History</a>
             <a href="/weekly">Weekly report</a>
+            <a href="/year-in-review">Year in review</a>
             <a href="/recordings">Recordings</a>
             <a href="/gallery">Gallery</a>
             <a href="/timeseries">Time series</a>
