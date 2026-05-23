@@ -535,7 +535,7 @@ async fn stats_partial(State(state): State<AppState>) -> impl IntoResponse {
             r#"<span class="value">{delta} d</span><span class="bnb-meta">{species}</span>"#,
             species = escape_html(&species),
         ),
-        Some((species, delta)) if delta == 0 => format!(
+        Some((species, 0)) => format!(
             r#"<span class="value">on time</span><span class="bnb-meta">{species}</span>"#,
             species = escape_html(&species),
         ),
@@ -701,7 +701,8 @@ fn current_week() -> u8 {
 
 /// AOU-style 4-letter banding code. Re-exports the canonical helper from
 /// `atoms.rs` so every page renders the same code for the same species.
-#[inline]
+/// Only referenced by tests — production paths call `species_code` directly.
+#[cfg(test)]
 fn alpha_code(name: &str) -> String {
     species_code(name)
 }

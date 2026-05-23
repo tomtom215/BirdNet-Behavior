@@ -349,14 +349,14 @@ fn rfc822(date: &str, time: &str) -> String {
 fn ics_datetime(date: &str, time: &str) -> String {
     // 20260312T061432Z
     let d = date.replace('-', "");
-    let t = time.replace(':', "").replace('Z', "");
+    let t = time.replace([':', 'Z'], "");
     format!("{d}T{t}Z")
 }
 
 /// Zeller's congruence; 0 = Sunday … 6 = Saturday.
 fn day_of_week(y: i32, m: u32, d: u32) -> u32 {
     let (y, m) = if m < 3 { (y - 1, m + 12) } else { (y, m) };
-    let k = y.rem_euclid(100) as i32;
+    let k = y.rem_euclid(100);
     let j = y.div_euclid(100);
     let h = (d as i32 + (13 * (m as i32 + 1)) / 5 + k + k / 4 + j / 4 + 5 * j).rem_euclid(7);
     // Zeller: 0 = Saturday. Shift to 0 = Sunday.
