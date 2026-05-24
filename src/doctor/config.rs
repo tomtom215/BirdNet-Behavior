@@ -20,13 +20,22 @@ pub(super) fn check_config_file(cli: &Cli, config: Option<&Config>) -> Check {
             "check the file for syntax errors (key=value, one per line; '#' for comments)",
         )
     } else {
+        // The default config path (/etc/birdnet/birdnet.conf) needs sudo on
+        // macOS, where the recommended home is the user-writable Application
+        // Support directory the launchd LaunchAgent points at.
+        let remediation: &str = if cfg!(target_os = "macos") {
+            "copy .env.example to \"$HOME/Library/Application Support/birdnet-behavior/birdnet.conf\" \
+             and start with -c that path (the /etc default needs sudo on macOS)"
+        } else {
+            "copy .env.example to /etc/birdnet/birdnet.conf and edit before going to production"
+        };
         Check::warn(
             "Configuration file",
             format!(
                 "{} not found — using built-in defaults",
                 cli.config.display()
             ),
-            "copy .env.example to /etc/birdnet/birdnet.conf and edit before going to production",
+            remediation,
         )
     }
 }
