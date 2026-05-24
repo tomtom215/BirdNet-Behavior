@@ -115,32 +115,50 @@ confirm() { # $1=prompt
   case "$a" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
 }
 
+# `DRY_RUN` is "0" or "1" — both non-empty, so `${DRY_RUN:+…}` would always
+# expand. Use an explicit label instead.
+DRY_LABEL=""; [ "$DRY_RUN" = 1 ] && DRY_LABEL="  (dry-run — nothing will change)"
+
 # ── macOS branch (launchd) ──────────────────────────────────────────────────
 if [ "$(uname -s)" = "Darwin" ]; then
-  info "macOS detected — handling the launchd LaunchAgent."
+  info "macOS detected — handling the launchd LaunchAgent.${DRY_LABEL}"
   PLIST="$HOME/Library/LaunchAgents/${MAC_LABEL}.plist"
-  if [ -f "$PLIST" ]; then
-    [ "$DRY_RUN" = 1 ] && echo "  would unload + remove $PLIST" || {
-      launchctl unload -w "$PLIST" 2>/dev/null || true
-      rm -f "$PLIST" && ok "removed LaunchAgent"
-    }
-  else info "no LaunchAgent at $PLIST"; fi
   MAC_DATA="$HOME/Library/Application Support/birdnet-behavior"
-  echo
-  info "Software removed. Data is at: $MAC_DATA"
-  if [ "$REMOVE_DB" = 1 ] || [ "$REMOVE_RECS" = 1 ] || [ "$REMOVE_CONFIG" = 1 ] || [ "$PURGE" = 1 ]; then
-    if confirm "Remove $MAC_DATA and logs?"; then
-      rm_path "$MAC_DATA" "macOS data"
-      rm_path "$HOME/Library/Logs/birdnet-behavior.log" "log"
-      rm_path "$HOME/Library/Logs/birdnet-behavior.err.log" "error log"
+  if [ -f "$PLIST" ]; then
+    if [ "$DRY_RUN" = 1 ]; then echo "  would unload + remove the LaunchAgent ($PLIST)"
+    else
+      launchctl unload -w "$PLIST" 2>/dev/null || true
+      rm -f "$PLIST" && ok "removed LaunchAgent ($PLIST)"
     fi
   else
-    echo "  Kept. Remove later with: ./uninstall.sh --purge   (or rm -rf the dir above)"
+    info "no LaunchAgent loaded ($PLIST) — nothing to unload"
   fi
+
+  if [ "$REMOVE_DB" = 1 ] || [ "$REMOVE_RECS" = 1 ] || [ "$REMOVE_CONFIG" = 1 ] || [ "$PURGE" = 1 ]; then
+    if [ -e "$MAC_DATA" ] || [ -e "$HOME/Library/Logs/birdnet-behavior.log" ]; then
+      if confirm "Remove $MAC_DATA and logs?"; then
+        rm_path "$MAC_DATA" "macOS data dir"
+        rm_path "$HOME/Library/Logs/birdnet-behavior.log" "log"
+        rm_path "$HOME/Library/Logs/birdnet-behavior.err.log" "error log"
+      else info "kept data (declined)."; fi
+    else
+      info "no data directory at $MAC_DATA — nothing to remove"
+    fi
+  elif [ -e "$MAC_DATA" ]; then
+    echo "  Data kept at: $MAC_DATA"
+    echo "  Remove later with: ./uninstall.sh --purge"
+  fi
+
   if command -v brew >/dev/null 2>&1 && brew list birdnet-behavior >/dev/null 2>&1; then
     warn "Installed via Homebrew — also run: brew uninstall birdnet-behavior"
   fi
-  ok "macOS uninstall complete."
+  SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo .)"
+  if [ -x "${SCRIPT_DIR}/target/release/birdnet-behavior" ]; then
+    info "Note: your from-source binary (target/release/birdnet-behavior) is left in place — 'cargo clean' or delete the repo to remove it."
+  fi
+  echo
+  if [ "$DRY_RUN" = 1 ]; then info "Dry run only — nothing was changed."
+  else ok "macOS uninstall complete."; fi
   exit 0
 fi
 
@@ -193,7 +211,7 @@ if [ -f "$SERVICE_FILE" ] || [ -e "$BIN_PATH" ]; then HAD_NATIVE=1; fi
 
 # ── Plan ─────────────────────────────────────────────────────────────────────
 echo
-info "${B}BirdNet-Behavior uninstaller${Z}${DRY_RUN:+  (dry-run — nothing will change)}"
+info "${B}BirdNet-Behavior uninstaller${Z}${DRY_LABEL}"
 echo "  Software (always removed): systemd service, tmpfs mount unit, ${STREAM_DIR}$([ "$KEEP_BINARY" = 1 ] && echo "" || echo ", binary")"
 echo "  Detected data dir:         ${DATA_DIR}$([ "${DATA_DIR_GUESSED:-0}" = 1 ] && echo "  (guessed — config already gone)")"
 plan_line() { printf "    %-18s %s\n" "$1" "$2"; }
