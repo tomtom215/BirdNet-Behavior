@@ -129,11 +129,19 @@ fn get_process_uptime() -> u64 {
 
 /// Get process RSS and CPU count.
 fn process_metrics() -> (u64, u32) {
-    let mut rss_bytes: u64 = 0;
-    let mut cpu_count: u32 = 1;
-
+    // `/proc` is Linux-only; other platforms (macOS, etc.) report unknown (0)
+    // RSS and a single core, which the System page renders as "—". Keeping the
+    // mutable accumulators inside the Linux arm avoids an `unused_mut` warning
+    // on non-Linux targets.
+    #[cfg(not(target_os = "linux"))]
+    {
+        (0, 1)
+    }
     #[cfg(target_os = "linux")]
     {
+        let mut rss_bytes: u64 = 0;
+        let mut cpu_count: u32 = 1;
+
         // RSS from /proc/self/status
         if let Ok(content) = std::fs::read_to_string("/proc/self/status") {
             for line in content.lines() {
@@ -155,9 +163,9 @@ fn process_metrics() -> (u64, u32) {
                 cpu_count = u32::try_from(count).unwrap_or(1);
             }
         }
-    }
 
-    (rss_bytes, cpu_count)
+        (rss_bytes, cpu_count)
+    }
 }
 
 #[cfg(test)]
