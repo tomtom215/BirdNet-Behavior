@@ -53,6 +53,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   LaunchAgent. The doctor also now flags missing ffmpeg when a macOS mic
   (avfoundation) or RTSP source is configured, and its config-path hint is
   platform-aware.
+- **`install.sh` is now OS-aware.** On macOS it dispatches (before any root
+  check or filesystem change) to a per-user launchd path — offering to
+  `brew install` ffmpeg/cmake, downloading the `aarch64-apple-darwin` build when
+  a release publishes one (else printing clear source-build steps), and writing
+  a starter config + LaunchAgent — instead of failing partway through the
+  Linux/systemd flow. Runs without `sudo` on macOS. Also hardened `SERVICE_USER`
+  resolution so a missing `$USER` no longer aborts the script under `set -u`.
 - **macOS Apple Silicon runbook + Homebrew formula draft** —
   `packaging/macos/verify-macos.sh` (from-source build, doctor, boot, mic
   enumeration, manual TCC/launchd checklist) and a template
