@@ -42,9 +42,7 @@ fn free_port() -> u16 {
 /// line (e.g. `HTTP/1.1 200 OK`), or `None` if the server is not up yet.
 fn http_status_line(port: u16, path: &str) -> Option<String> {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).ok()?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .ok()?;
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
     stream
         .write_all(
             format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
