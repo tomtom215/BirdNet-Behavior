@@ -25,6 +25,7 @@ pub mod correlation;
 pub mod dashboard;
 pub mod dawn_chorus;
 pub mod detection_detail;
+pub mod detection_reviews;
 pub mod empty_states;
 pub mod gallery;
 pub mod health;
@@ -68,6 +69,7 @@ pub fn router() -> Router<AppState> {
         .merge(audio_player::router())
         .merge(health::router())
         .merge(detection_detail::router())
+        .merge(detection_reviews::router())
         .merge(species_pages::router())
         .merge(behavioral::router())
         .merge(timeseries_dash::router())

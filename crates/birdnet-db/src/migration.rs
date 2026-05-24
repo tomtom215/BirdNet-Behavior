@@ -249,6 +249,33 @@ pub const MIGRATIONS: &[Migration] = &[
                  CREATE INDEX IF NOT EXISTS idx_detections_correlation_id
                      ON detections(correlation_id);",
     },
+    Migration {
+        version: 13,
+        description: "Create detection_reviews table for manual confirm/reject triage of detections",
+        // A reviewer verdict on an individual detection, identified by the
+        // same (date, time, sci_name) triple the rest of the UI keys on. This
+        // is an *annotation*, not a data move: a 'rejected' verdict flags a
+        // likely-misidentified detection for the operator without deleting the
+        // row (unlike quarantine, which gates rows *out* of `detections`
+        // before they are ever admitted). UNIQUE(date, time, sci_name) makes
+        // the verdict idempotent — re-reviewing the same detection updates the
+        // existing verdict via INSERT … ON CONFLICT rather than piling up rows.
+        up_sql: "CREATE TABLE IF NOT EXISTS detection_reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            time TEXT NOT NULL,
+            sci_name TEXT NOT NULL,
+            com_name TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('confirmed','rejected')),
+            notes TEXT,
+            reviewed_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(date, time, sci_name)
+        );
+        CREATE INDEX IF NOT EXISTS idx_detection_reviews_status
+            ON detection_reviews(status);
+        CREATE INDEX IF NOT EXISTS idx_detection_reviews_reviewed_at
+            ON detection_reviews(reviewed_at DESC);",
+    },
 ];
 
 /// Ensure the `schema_version` tracking table exists.

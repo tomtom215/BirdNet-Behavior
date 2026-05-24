@@ -177,11 +177,8 @@ fn lookup(
     time: &str,
     com: &str,
 ) -> Option<ShareDetection> {
-    conn.query_row(
-        "SELECT Com_Name, Sci_Name, Date, Time, Confidence \
-         FROM detections WHERE Date = ?1 AND Time = ?2 AND Com_Name = ?3 LIMIT 1",
-        rusqlite::params![date, time, com],
-        |row| {
+    let query = |sql: &str| {
+        conn.query_row(sql, rusqlite::params![date, time, com], |row| {
             Ok(ShareDetection {
                 com_name: row.get(0)?,
                 sci_name: row.get(1)?,
@@ -189,9 +186,21 @@ fn lookup(
                 time: row.get(3)?,
                 confidence: row.get(4)?,
             })
-        },
+        })
+        .ok()
+    };
+    query(
+        "SELECT Com_Name, Sci_Name, Date, Time, Confidence \
+         FROM detections WHERE Date = ?1 AND Time = ?2 AND Com_Name = ?3 LIMIT 1",
     )
-    .ok()
+    // O-07: rare birds shared from the quarantine queue are not in `detections`
+    // until approved, so fall back to the quarantine table.
+    .or_else(|| {
+        query(
+            "SELECT com_name, sci_name, date, time, confidence \
+             FROM quarantine WHERE date = ?1 AND time = ?2 AND com_name = ?3 LIMIT 1",
+        )
+    })
 }
 
 async fn share_page(State(state): State<AppState>, Path(token): Path<String>) -> Response {
@@ -299,6 +308,17 @@ async fn lookup_basename(state: AppState, date: &str, time: &str, com: &str) -> 
             )
             .ok()
             .flatten()
+            // O-07: fall back to the quarantine row's recording.
+            .or_else(|| {
+                conn.query_row(
+                    "SELECT file_name FROM quarantine \
+                     WHERE date = ?1 AND time = ?2 AND com_name = ?3 LIMIT 1",
+                    rusqlite::params![d, t, c],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .ok()
+                .flatten()
+            })
         })
     })
     .await
