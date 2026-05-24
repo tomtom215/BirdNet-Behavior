@@ -41,6 +41,9 @@ async fn gallery_grid_partial(
     let search = params.q.unwrap_or_default();
     let sort = params.sort.unwrap_or_default();
 
+    // Clone the cache handle out before `state` moves into the blocking task,
+    // so we can kick off a background photo warm after the query returns.
+    let cache = state.image_cache();
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
             let search_trimmed = search.trim().to_string();
@@ -78,13 +81,38 @@ async fn gallery_grid_partial(
                 );
             }
 
+            // Progressive background warmer: fetch any not-yet-cached species
+            // photos (keyed by scientific name) so the grid self-populates over
+            // repeat visits. Paced to avoid bursting Wikimedia's rate limit;
+            // already-cached species short-circuit with no network call.
+            if let Some(cache) = cache {
+                let scis: Vec<String> = species
+                    .iter()
+                    .map(|s| s.sci_name.clone())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                tokio::spawn(async move {
+                    for sci in scis {
+                        if cache.get_cached(&sci).is_none() {
+                            let _ = cache.get_image(&sci).await;
+                            tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+                        }
+                    }
+                });
+            }
+
             let mut html = String::with_capacity(species.len() * 300);
             html.push_str(
                 "<div style=\"display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:1rem;\">",
             );
 
             for s in &species {
+                // Detail link is keyed by common name (the URL the rest of the
+                // UI uses); the species photo is keyed by *scientific* name so
+                // gallery, species-detail, and detection-detail all share one
+                // cache entry per bird.
                 let enc = simple_url_encode(&s.com_name);
+                let enc_img = simple_url_encode(&s.sci_name);
                 let conf_pct = s.avg_confidence * 100.0;
                 let cls = if conf_pct >= 80.0 {
                     "high"
@@ -108,7 +136,7 @@ async fn gallery_grid_partial(
                          <div style=\"position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:color-mix(in oklch, {color} 15%, var(--surface));\">\
                            <span class=\"display\" style=\"font-size:1.7rem;letter-spacing:0.04em;color:{color};\">{code}</span>\
                          </div>\
-                         <img src=\"/api/v2/species/image/{enc}/file\" alt=\"{name}\" \
+                         <img src=\"/api/v2/species/image/{enc_img}/file\" alt=\"{name}\" \
                               loading=\"lazy\" \
                               style=\"position:relative;width:100%;height:100%;object-fit:cover;\" \
                               onerror=\"this.style.display='none'\">\

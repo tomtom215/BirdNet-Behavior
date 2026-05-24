@@ -73,3 +73,11 @@ The dashboard ships all its Latin fonts self-hosted, but non-Latin scripts (CJK,
 ```bash
 sudo apt-get install -y fonts-noto-cjk
 ```
+
+## Behavioral analytics show "extension required"
+
+On the **Analytics** page, the Activity Sessions, Species Retention, and Next Species cards read *"the `duckdb-behavioral` extension is required…"* and the startup log warns `duckdb-behavioral extension not loaded`.
+
+The `duckdb-behavioral` community extension is compiled for a **specific DuckDB version**, and DuckDB refuses to load an extension built for a different one (an extension built for DuckDB `v1.5.1` won't load into a binary that bundles `v1.5.3`). This is **non-fatal**: everything that reads SQLite directly — Migration, the Dawn Chorus, the Heatmap, Co-occurrence, and the whole Time-series page — keeps working; only the extension-backed sessionize / retention / next-species queries are unavailable. The Analytics status badge reflects this — it reports the database is *connected* but does not claim behavioral analytics are active.
+
+To fix it, rebuild and republish the extension for the bundled DuckDB version in the [duckdb-behavioral](https://github.com/tomtom215/duckdb-behavioral) repository (or pin the `duckdb` crate to the version the published extension targets) and rebuild with `--features analytics`. Confirm the bundled version with `birdnet-behavior --doctor`. See the full [TROUBLESHOOTING.md](https://github.com/tomtom215/BirdNet-Behavior/blob/main/TROUBLESHOOTING.md) entry for details.

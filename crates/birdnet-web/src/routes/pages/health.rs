@@ -90,15 +90,21 @@ async fn analytics_status_partial(
     let configured = state.has_analytics();
 
     let (status, css_class) = if configured {
-        ("Active", "ok")
+        ("Connected", "ok")
     } else if compiled {
         ("Not Configured", "warn")
     } else {
         ("Not Compiled", "err")
     };
 
+    // The DuckDB analytics database being open does not guarantee the
+    // duckdb-behavioral extension loaded — that is a separate requirement the
+    // sessions / retention / next-species cards report on individually. Avoid
+    // overclaiming here so the badge stays honest when the extension version
+    // does not match the bundled DuckDB.
     let hint = if configured {
-        "DuckDB behavioral analytics are active."
+        "DuckDB analytics database connected. Behavioral insights (sessions, retention, \
+         next-species) additionally require the duckdb-behavioral extension — see the cards below."
     } else if compiled {
         "Start with <code>--analytics-db</code> to enable."
     } else {

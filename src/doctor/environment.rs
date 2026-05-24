@@ -64,6 +64,40 @@ pub(super) fn check_optional_tools(cli: &Cli, config: Option<&Config>) -> Vec<Ch
         }
     }
 
+    // Live capture needs ffmpeg for RTSP on every platform, and for the
+    // microphone on macOS (which captures through ffmpeg's avfoundation input
+    // rather than ALSA's arecord). A configured source with no ffmpeg means no
+    // detections, so this is a hard error rather than a warning.
+    let rtsp = cli.rtsp_url.is_some()
+        || !cli.rtsp_urls.is_empty()
+        || config.is_some_and(|c| c.get("RTSP_URL").is_some_and(|v| !v.is_empty()));
+    let mic = cli.alsa_device.is_some()
+        || cli.pipewire_device.is_some()
+        || config.is_some_and(|c| {
+            c.get("ALSA_CARD").is_some_and(|v| !v.is_empty())
+                || c.get("PIPEWIRE_DEVICE").is_some_and(|v| !v.is_empty())
+        });
+    let needs_ffmpeg_capture = rtsp || (cfg!(target_os = "macos") && mic);
+    if needs_ffmpeg_capture {
+        if tool_exists("ffmpeg") {
+            out.push(Check::pass(
+                "Capture backend (ffmpeg)",
+                "ffmpeg is available for live capture",
+            ));
+        } else {
+            let why = if rtsp {
+                "RTSP capture"
+            } else {
+                "macOS microphone capture (avfoundation)"
+            };
+            out.push(Check::fail(
+                "Capture backend (ffmpeg)",
+                format!("{why} requires ffmpeg but it is not installed"),
+                "install ffmpeg (macOS: `brew install ffmpeg`; Debian/Ubuntu: `apt install ffmpeg`)",
+            ));
+        }
+    }
+
     if cli.freq_shift_hz != 0 {
         if tool_exists("ffmpeg") || tool_exists("sox") {
             out.push(Check::pass(
@@ -147,5 +181,15 @@ mod tests {
         cli.apprise_config = Some(std::path::PathBuf::from("/tmp/apprise.conf"));
         let checks = check_optional_tools(&cli, None);
         assert!(checks.iter().any(|c| c.name.contains("Apprise")));
+    }
+
+    #[test]
+    fn optional_tools_requires_ffmpeg_for_rtsp() {
+        // RTSP capture shells out to ffmpeg on every platform, so the capture
+        // backend check must appear (verdict depends on whether ffmpeg exists).
+        let mut cli = cli();
+        cli.rtsp_url = Some("rtsp://camera.invalid:554/stream".into());
+        let checks = check_optional_tools(&cli, None);
+        assert!(checks.iter().any(|c| c.name.contains("Capture backend")));
     }
 }

@@ -66,8 +66,14 @@ jobs:
             target/
           key: ${{ runner.os }}-test-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-test-
-      - name: Run unit and integration tests
+      - name: Run unit tests (lib + bins)
         run: cargo test --workspace --lib --bins
+      - name: Run integration tests (incl. real-binary boot smoke test)
+        # The tests/ suite links libonnxruntime and, via boot_smoke.rs, spawns
+        # the compiled binary in --web-only mode and curls GET / — exercising
+        # the real startup path (clap, config load, migrations, axum::serve)
+        # that the in-process router tests never touch.
+        run: cargo test --workspace --tests
       - name: Run doc tests
         run: cargo test --workspace --doc
 

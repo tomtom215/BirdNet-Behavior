@@ -32,6 +32,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Comparative "today" phrase**, **species-detail hero/status partials**,
   **illustrated empty states** across six surfaces, and a **print stylesheet**
   for the reports.
+- **Detection-review triage (`/detection-reviews`).** A non-destructive
+  confirm/reject verdict per detection, stored in a new `detection_reviews`
+  table (migration 13). The triage page queues recent unreviewed detections
+  with Confirm/Reject actions and lists recent verdicts; each detection-detail
+  page gains a self-replacing review widget. Distinct from quarantine, which
+  gates uncertain rows *out* of the log before they are admitted.
+- **Share from the quarantine queue.** Every quarantine row gets a "Share"
+  button issuing the same signed `/r/<token>` link as detection detail; the
+  share page now falls back to the quarantine table so a pending rare bird (not
+  yet in `detections`) still resolves.
+- **`uninstall.sh`** — a safe, idempotent, deterministic uninstaller shipped
+  beside the binary (and as a standalone release asset). Removes only the
+  software by default (systemd service, tmpfs mount unit, binary) and keeps the
+  database, recordings, settings, and model unless you opt in via `--purge` or
+  granular `--remove-db` / `--remove-recordings` / `--remove-config` /
+  `--remove-models` / `--remove-image-cache` flags. Auto-detects the real data
+  directory from the installed config/service, refuses to touch protected
+  paths, supports `--dry-run` and `--yes`, and handles the macOS launchd
+  LaunchAgent. The doctor also now flags missing ffmpeg when a macOS mic
+  (avfoundation) or RTSP source is configured, and its config-path hint is
+  platform-aware.
+- **`install.sh` is now OS-aware.** On macOS it dispatches (before any root
+  check or filesystem change) to a per-user launchd path — offering to
+  `brew install` ffmpeg/cmake, downloading the `aarch64-apple-darwin` build when
+  a release publishes one (else offering to build in place when run from a
+  checkout, or printing the source-build steps), and writing
+  a starter config + LaunchAgent — instead of failing partway through the
+  Linux/systemd flow. Runs without `sudo` on macOS. Also hardened `SERVICE_USER`
+  resolution so a missing `$USER` no longer aborts the script under `set -u`.
+- **macOS Apple Silicon runbook + Homebrew formula draft** —
+  `packaging/macos/verify-macos.sh` (from-source build, doctor, boot, mic
+  enumeration, manual TCC/launchd checklist) and a template
+  `packaging/macos/birdnet-behavior.rb` pending a hardware-verified release.
 
 ### Fixed
 
@@ -54,6 +87,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   link used image URLs that matched no route; pointed both at
   `/api/v2/species/image/{name}/file`.
 - **Placeholder copy + missing skip link** on the public share page.
+- **Four phone-width (390px) horizontal overflows** — `/history`,
+  `/admin/audio`, `/admin/settings`, and `/onboarding` had inline multi-column
+  grids the global responsive rules couldn't reach; they now collapse to a
+  single column at ≤520px (and the onboarding stepper drops its text labels).
+- **Misleading analytics status.** `/analytics` reported "behavioral analytics
+  are active" whenever a DuckDB database was connected, even when the
+  `duckdb-behavioral` extension failed to load; the badge now states the
+  extension is a separate requirement (which the per-feature cards report on).
+- **Duplicate species-photo caching.** Gallery and species-detail keyed photos
+  by common name while detection-detail used the scientific name, so the same
+  bird was fetched and stored twice (and detection-detail's link often 404'd);
+  all three now key by scientific name, with a paced gallery background warmer.
+- **Unlogged time-series 500s.** Failed `/api/v2/timeseries/*` queries returned
+  500 with the error only in the body; the error is now logged server-side.
+
+### CI
+
+- The Tests job now runs the `tests/` integration suite (`cargo test
+  --workspace --tests`), including a new `boot_smoke.rs` that spawns the binary
+  in `--web-only` mode and curls `GET /` — closing the gap that let a startup
+  panic ship despite green CI.
 
 ## [0.2.0] - 2026-05-23
 

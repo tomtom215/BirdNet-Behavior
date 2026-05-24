@@ -48,17 +48,25 @@ async fn detection_detail_page(
     let time2 = time.clone();
     let com2 = com_name.clone();
 
-    let detection = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| find_detection(conn, &date2, &time2, &com2))
+    let found = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| {
+            let det = find_detection(conn, &date2, &time2, &com2)?;
+            let verdict =
+                birdnet_db::sqlite::get_detection_review(conn, &det.date, &det.time, &det.sci_name)
+                    .ok()
+                    .flatten()
+                    .map(|r| r.status);
+            Some((det, verdict))
+        })
     })
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let Some(det) = detection else {
+    let Some((det, verdict)) = found else {
         return Ok(not_found_page(&date, &time));
     };
 
-    Ok(render_detail_page(&det))
+    Ok(render_detail_page(&det, verdict.as_deref()))
 }
 
 // ---------------------------------------------------------------------------
@@ -123,7 +131,10 @@ fn find_detection(
 // Rendering
 // ---------------------------------------------------------------------------
 
-fn render_detail_page(det: &birdnet_db::sqlite::DetectionRow) -> Html<String> {
+fn render_detail_page(
+    det: &birdnet_db::sqlite::DetectionRow,
+    verdict: Option<&str>,
+) -> Html<String> {
     let enc_name = simple_url_encode(&det.com_name);
     let enc_sci = simple_url_encode(&det.sci_name);
     let com = escape_html(&det.com_name);
@@ -135,6 +146,13 @@ fn render_detail_page(det: &birdnet_db::sqlite::DetectionRow) -> Html<String> {
     let meta = build_meta_rows(det);
     let correlation_section = build_correlation_section(det);
     let conf = conf_bar(det.confidence);
+    let review_widget = super::detection_reviews::render_review_widget(
+        &det.date,
+        &det.time,
+        &det.sci_name,
+        &det.com_name,
+        verdict,
+    );
 
     // Public, HMAC-signed share link for this detection (O-07). The button
     // copies an absolute `/r/<token>` URL built from the page's own origin.
@@ -168,6 +186,7 @@ fn render_detail_page(det: &birdnet_db::sqlite::DetectionRow) -> Html<String> {
         {meta}
       </table>
     </div>
+    {review_widget}
     {correlation_section}
   </div>
   <div class="bnb-card pad">

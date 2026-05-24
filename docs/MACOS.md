@@ -8,6 +8,22 @@
 > not yet been confirmed on real hardware or a `macos-14` CI run. Treat this as
 > a setup guide to validate, not a support guarantee.
 
+## Quick install
+
+`install.sh` is OS-aware: on macOS it sets up a per-user launchd LaunchAgent
+(not systemd), so run it **without `sudo`**:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | bash
+```
+
+Once a release publishes the `aarch64-apple-darwin` build, this downloads and
+installs it, writes a starter config under `~/Library/Application Support/birdnet-behavior/`,
+and writes a ready-to-load LaunchAgent. Until then it offers to `brew install`
+the dependencies and prints the one-time source-build steps below. A Homebrew
+formula is planned so this becomes `brew install`. Uninstall any time with
+[`./uninstall.sh`](../uninstall.sh) (`--purge` to remove data too).
+
 ## What works the same as Linux
 
 File/`--watch-dir` analysis, RTSP capture (via `ffmpeg`), the web UI, SQLite,
@@ -32,6 +48,22 @@ cargo build --release --features analytics    # ONNX Runtime downloads on first 
 ```
 
 The binary lands at `target/release/birdnet-behavior`.
+
+### One-shot verification
+
+[`packaging/macos/verify-macos.sh`](../packaging/macos/verify-macos.sh) runs the
+whole from-source check in one go — toolchain/dependency probe, release build,
+`--doctor` preflight, a real `--web-only` boot with a `GET /` check, and
+`avfoundation` device enumeration — then prints the manual steps (microphone/TCC
+consent, the launchd LaunchAgent) that need a human at the machine:
+
+```bash
+bash packaging/macos/verify-macos.sh            # full build + boot + report
+SKIP_BUILD=1 bash packaging/macos/verify-macos.sh   # reuse an existing build
+```
+
+It installs nothing and changes no system settings. Paste its output back when
+reporting macOS results.
 
 ## Live microphone capture (avfoundation)
 

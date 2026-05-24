@@ -13,7 +13,8 @@ It shows:
 - the species (common + scientific name), confidence, and exact timestamp;
 - the **3-second clip**, rendered as both a spectrogram image and an inline audio player, when a recording is on disk for that detection;
 - the **correlation id** the detection daemon stamped on every log line, DB write and notification for the source file — copy it and `grep` your logs to pull the exact decode→infer→notify slice that produced the row;
-- a **Share clip** button.
+- a **Share clip** button;
+- a **Review this detection** widget — confirm or reject the identification in place (see [Reviewing Detections](./reviews.md)).
 
 ## Share links (`/r/<token>`)
 

@@ -131,7 +131,9 @@ fn build_page_html(active_filter: &str) -> String {
   <p style=\"color:var(--text-muted);font-size:0.9rem;\">\
     Detections that passed the global confidence threshold but failed a stricter \
     per-species threshold are held here for manual review. Approve to admit into \
-    the detection log; reject or delete to discard.\
+    the detection log; reject or delete to discard. To confirm or reject \
+    detections already in the log, use \
+    <a href=\"/detection-reviews\" style=\"color:var(--primary);\">Detection reviews</a>.\
   </p>\
 </div>\
 <div id=\"quarantine-stats\" \
@@ -355,11 +357,18 @@ fn render_quarantine_row(
         r#"<span style="color:var(--warning);">&#9679; Pending</span>"#
     };
     let id = row.id;
-    let actions = if row.reviewed {
+    // O-07: a public, HMAC-signed share link for this rare-bird row. The share
+    // page falls back to the quarantine table, so pending rows resolve too.
+    let token = crate::routes::share::issue_token_for(&row.date, &row.time, &row.com_name);
+    let base_actions = if row.reviewed {
         row_delete_button(id, filter_param)
     } else {
         row_action_buttons(id, filter_param, &com_name)
     };
+    let actions = format!(
+        "<div style=\"display:flex;gap:0.4rem;flex-wrap:wrap;align-items:center;\">{base_actions}{}</div>",
+        row_share_button(&token)
+    );
     let audio = row_audio_player(row.file_name.as_deref());
     let _ = write!(
         html,
@@ -436,6 +445,22 @@ fn row_delete_button(id: i64, filter_param: &str) -> String {
                   font-size:0.8rem;\">\
            Delete\
         </button>",
+    )
+}
+
+/// Render a "Share" button that copies a public `/r/<token>` link for the row
+/// (O-07). The token is base64url, so it is safe inside the single-quoted JS
+/// string literal.
+fn row_share_button(token: &str) -> String {
+    format!(
+        "<button type=\"button\" title=\"Copy a public share link\" \
+           style=\"background:none;border:1px solid var(--border);color:var(--text);\
+                  padding:0.25rem 0.6rem;border-radius:var(--radius);cursor:pointer;\
+                  font-size:0.8rem;white-space:nowrap;\" \
+           onclick=\"(function(b){{var u=location.origin+'/r/{token}';\
+             if(navigator.clipboard){{navigator.clipboard.writeText(u).then(function(){{\
+               b.textContent='Copied';setTimeout(function(){{b.textContent='Share';}},1500);}});}}\
+             else{{window.prompt('Copy this link:',u);}}}})(this)\">Share</button>"
     )
 }
 

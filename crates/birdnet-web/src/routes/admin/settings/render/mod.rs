@@ -65,6 +65,7 @@ pub(super) fn render_settings_page(settings: &HashMap<String, String>) -> String
       .alert-error {{ background: var(--rare-soft); border: 1px solid var(--rare-soft); color: var(--rare);
                        border-radius: 0.375rem; padding: 0.75rem 1rem; margin-bottom: 1rem; }}
       .hint {{ font-size: 0.75rem; color: var(--fg-4); margin-top: -0.75rem; margin-bottom: 1rem; }}
+      @media (max-width: 520px) {{ .grid-2 {{ grid-template-columns: 1fr; }} }}
     </style>
 </head>
 <body>

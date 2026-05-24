@@ -54,6 +54,7 @@ export const ROUTES = [
   ['species', '/species'],
   ['species-detail', `/species/detail?name=${enc('European Robin')}`],
   ['detection-detail', `/detections/detail?date=${TODAY}&time=05:14:08&name=${enc('Eurasian Magpie')}`],
+  ['detection-reviews', '/detection-reviews'],
   ['heatmap', '/heatmap'],
   ['migration', '/migration'],
   ['correlation', '/correlation'],

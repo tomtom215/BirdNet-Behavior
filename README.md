@@ -80,13 +80,29 @@ Every screen leads with a plain-English headline, then layers the dense numbers 
 bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/quickstart.sh)
 ```
 
-**Bare metal (Raspberry Pi, no Docker):**
+**Bare metal — Linux / Raspberry Pi (no Docker):**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash
 ```
 
+**macOS (Apple Silicon)** — the same script detects macOS and sets up a per-user launchd LaunchAgent instead of systemd (**no `sudo`**):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | bash
+```
+
+> On macOS it installs the `aarch64-apple-darwin` build once a release publishes one; until then it offers to `brew install` the dependencies and prints the one-time source-build steps. A Homebrew formula is planned. (See [docs/MACOS.md](docs/MACOS.md).)
+
 The BirdNET+ V3.0 model (~541 MB) downloads automatically from Zenodo on first run. When it's ready, open **<http://localhost:8502>**.
+
+**Uninstall** (ships beside the binary, and as a release asset). It removes only the software by default — your database, recordings, and settings are kept unless you opt in:
+
+```bash
+sudo ./uninstall.sh              # remove the service + binary, KEEP all data
+sudo ./uninstall.sh --dry-run    # preview exactly what would change
+sudo ./uninstall.sh --purge      # remove everything, including data + model
+```
 
 📖 Full instructions: [Installation](https://tomtom215.github.io/BirdNet-Behavior/getting-started/installation.html) · [Docker guide](https://tomtom215.github.io/BirdNet-Behavior/getting-started/docker.html) · [Configuration](https://tomtom215.github.io/BirdNet-Behavior/getting-started/configuration.html)
 

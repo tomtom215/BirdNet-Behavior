@@ -36,14 +36,23 @@ pub(super) fn handle_ts_result<T: serde::Serialize>(
             let total = v.as_array().map_or(0, Vec::len);
             (StatusCode::OK, Json(json!({ key: v, "total": total })))
         }
-        Ok(Some(Err(e))) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
-        ),
+        Ok(Some(Err(e))) => {
+            // Log server-side so intermittent query failures are diagnosable —
+            // previously the detail only went into the JSON body, leaving an
+            // unexplained 500 in the access log.
+            tracing::error!(endpoint = key, error = %e, "time-series query failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+        }
         Ok(None) => ts_unavailable(key),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("task error: {e}") })),
-        ),
+        Err(e) => {
+            tracing::error!(endpoint = key, error = %e, "time-series task join failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("task error: {e}") })),
+            )
+        }
     }
 }
