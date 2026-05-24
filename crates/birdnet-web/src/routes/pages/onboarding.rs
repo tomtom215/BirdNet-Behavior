@@ -72,6 +72,14 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
   @media (prefers-reduced-motion: reduce) {
     .ob-step, .vu i, .calib i, .sonar * { animation:none !important; }
   }
+  /* Phones: drop the step labels (numbered dots + connectors stay), tighten
+     padding, and stack the two-column step bodies so nothing overflows 390px. */
+  @media (max-width:520px) {
+    .ob-root { padding:0 14px; }
+    .ob-pip .nm { display:none; }
+    .ob-pip .bar { width:16px; }
+    .ob-two { grid-template-columns:1fr; gap:18px; }
+  }
 </style>
 </head>
 <body>

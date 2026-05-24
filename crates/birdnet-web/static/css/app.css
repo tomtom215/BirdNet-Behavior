@@ -646,3 +646,12 @@ footer a:hover { color: var(--moss-ink); }
      instead of forcing a horizontal scrollbar on the whole document. */
   .bnb-card { overflow-x: auto; }
 }
+@media (max-width: 520px) {
+  /* Phone fallback: any element whose inline style sets an explicit
+     multi-column grid (history's 200px+1fr layout, the audio device rows,
+     the onboarding step grids, etc.) collapses to a single column so it
+     can't push past a 390px viewport. Class-based grids (.grid-2) are
+     already handled above; this catches the inline ones the global rules
+     can't select. */
+  [style*="grid-template-columns"] { grid-template-columns: 1fr !important; }
+}

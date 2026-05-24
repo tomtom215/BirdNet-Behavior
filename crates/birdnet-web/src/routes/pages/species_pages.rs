@@ -250,23 +250,32 @@ async fn species_info_partial(
 
     let mut html = String::new();
 
+    // Species photos are cached by *scientific* name so the gallery,
+    // species-detail, and detection-detail pages share one entry per bird
+    // (falling back to the common name only if the scientific lookup failed).
+    let img_key = if sci_name.is_empty() {
+        name.clone()
+    } else {
+        sci_name.clone()
+    };
+
     // The /file image route is cache-only, so warm this species' photo in the
     // background (non-blocking) on first view — a later view then shows it.
     if let Some(cache) = state.image_cache()
-        && !name.is_empty()
-        && cache.get_cached(&name).is_none()
+        && !img_key.is_empty()
+        && cache.get_cached(&img_key).is_none()
     {
-        let name_bg = name.clone();
+        let key_bg = img_key.clone();
         tokio::spawn(async move {
-            let _ = cache.get_image(&name_bg).await;
+            let _ = cache.get_image(&key_bg).await;
         });
     }
 
     if let Some(cache) = state.image_cache()
-        && let Some(image) = cache.get_cached(&name)
+        && let Some(image) = cache.get_cached(&img_key)
     {
         if image.cached_path.is_some() {
-            let enc = simple_url_encode(&name);
+            let enc = simple_url_encode(&img_key);
             let _ = write!(
                 html,
                 r#"<img src="/api/v2/species/image/{enc}/file" alt="{alt}" style="width:100%;border-radius:var(--radius);margin-bottom:1rem;" />"#,
