@@ -42,6 +42,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   button issuing the same signed `/r/<token>` link as detection detail; the
   share page now falls back to the quarantine table so a pending rare bird (not
   yet in `detections`) still resolves.
+- **`uninstall.sh`** — a safe, idempotent, deterministic uninstaller shipped
+  beside the binary (and as a standalone release asset). Removes only the
+  software by default (systemd service, tmpfs mount unit, binary) and keeps the
+  database, recordings, settings, and model unless you opt in via `--purge` or
+  granular `--remove-db` / `--remove-recordings` / `--remove-config` /
+  `--remove-models` / `--remove-image-cache` flags. Auto-detects the real data
+  directory from the installed config/service, refuses to touch protected
+  paths, supports `--dry-run` and `--yes`, and handles the macOS launchd
+  LaunchAgent. The doctor also now flags missing ffmpeg when a macOS mic
+  (avfoundation) or RTSP source is configured, and its config-path hint is
+  platform-aware.
 - **macOS Apple Silicon runbook + Homebrew formula draft** —
   `packaging/macos/verify-macos.sh` (from-source build, doctor, boot, mic
   enumeration, manual TCC/launchd checklist) and a template

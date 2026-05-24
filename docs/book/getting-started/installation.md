@@ -65,14 +65,33 @@ The installer detects your architecture, downloads the pre-built binary and the 
 ```bash
 # Install a specific version (defaults to latest)
 VERSION=0.2.0 bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh)
-
-# Uninstall (recordings and database are preserved)
-curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash -s uninstall
 ```
 
 Re-running the installer is an **upgrade**: it stops the service, swaps in the
 new binary, and restarts it. Your configuration and the SQLite/DuckDB databases
 are preserved, and schema migrations run automatically on the next start.
+
+### Uninstalling
+
+`uninstall.sh` ships next to the binary in every release tarball (and as a
+standalone release asset). It is **safe by default** — it removes only the
+software (the systemd service, the tmpfs mount unit, and the binary) and
+**keeps your database, recordings, settings, and the downloaded model** unless
+you opt in. It is idempotent (re-running is harmless) and refuses to touch
+system directories.
+
+```bash
+sudo ./uninstall.sh                 # remove the software, keep all data
+sudo ./uninstall.sh --dry-run       # preview the exact plan, change nothing
+sudo ./uninstall.sh --purge         # remove EVERYTHING (data, settings, model)
+
+# Or pick precisely what to delete:
+sudo ./uninstall.sh --remove-db --remove-recordings
+```
+
+It auto-detects your real data directory from the installed config and service
+files, so it removes exactly what was installed. On macOS it instead unloads
+the launchd LaunchAgent; pass `--purge` to also remove the user data directory.
 
 ## Building from source
 

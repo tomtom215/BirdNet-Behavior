@@ -325,7 +325,7 @@ jobs:
 
           mkdir -p "$STAGE"
           cp "target/${{ matrix.target }}/release/birdnet-behavior" "$STAGE/"
-          cp README.md LICENSE LICENSE-UPSTREAM CHANGELOG.md install.sh "$STAGE/"
+          cp README.md LICENSE LICENSE-UPSTREAM CHANGELOG.md install.sh uninstall.sh "$STAGE/"
 
           echo "NAME=${NAME}" >> "$GITHUB_ENV"
           echo "STAGE=${STAGE}" >> "$GITHUB_ENV"
@@ -391,7 +391,7 @@ jobs:
           mkdir -p release
           find raw -type f \( -name '*.tar.gz' -o -name '*.tar.gz.sha256' \) \
             -exec cp -v {} release/ \;
-          cp install.sh release/
+          cp install.sh uninstall.sh release/
 
           echo "::group::Release artifacts"
           ls -lh release/
@@ -452,6 +452,7 @@ jobs:
             [[ -e "$f" ]] && sha256sum "$f" >> SHA256SUMS
           done
           sha256sum install.sh >> SHA256SUMS
+          sha256sum uninstall.sh >> SHA256SUMS
 
           echo "::group::SHA256SUMS"
           cat SHA256SUMS
@@ -656,6 +657,7 @@ jobs:
               release/*.tar.gz \
               release/SHA256SUMS \
               release/install.sh \
+              release/uninstall.sh \
               "${SBOM_ASSETS[@]}"
             echo "::notice::Updated $RELEASE_URL"
           else
@@ -666,6 +668,7 @@ jobs:
               release/*.tar.gz \
               release/SHA256SUMS \
               release/install.sh \
+              release/uninstall.sh \
               "${SBOM_ASSETS[@]}"
             echo "::notice::Published $RELEASE_URL"
           fi

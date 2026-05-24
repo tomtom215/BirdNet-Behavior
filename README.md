@@ -88,6 +88,14 @@ curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/ins
 
 The BirdNET+ V3.0 model (~541 MB) downloads automatically from Zenodo on first run. When it's ready, open **<http://localhost:8502>**.
 
+**Uninstall** (ships beside the binary, and as a release asset). It removes only the software by default — your database, recordings, and settings are kept unless you opt in:
+
+```bash
+sudo ./uninstall.sh              # remove the service + binary, KEEP all data
+sudo ./uninstall.sh --dry-run    # preview exactly what would change
+sudo ./uninstall.sh --purge      # remove everything, including data + model
+```
+
 📖 Full instructions: [Installation](https://tomtom215.github.io/BirdNet-Behavior/getting-started/installation.html) · [Docker guide](https://tomtom215.github.io/BirdNet-Behavior/getting-started/docker.html) · [Configuration](https://tomtom215.github.io/BirdNet-Behavior/getting-started/configuration.html)
 
 ---
