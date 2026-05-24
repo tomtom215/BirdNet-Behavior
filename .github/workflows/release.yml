@@ -420,17 +420,20 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ needs.validate.outputs.version }}"
-          # `--format json` → CycloneDX 1.5 JSON; the BOM lives at
-          # `bom.json` next to each crate's Cargo.toml. We collect
-          # the workspace-root one as the canonical artifact and
-          # also produce an aggregated XML SBOM (more common with
-          # consumers that haven't moved to JSON yet).
-          cargo cyclonedx --format json --output-cdx
-          cargo cyclonedx --format xml  --output-cdx
+          # cargo-cyclonedx 0.5.7 writes one SBOM per workspace package
+          # next to its Cargo.toml, named `<package>.cdx.{json,xml}` by
+          # default — the `.cdx` infix is the default naming, there is no
+          # `--output-cdx` flag. spec-version defaults to 1.3, so request
+          # 1.5 explicitly (matches the asset name and the summary jq
+          # below, which reads the 1.5 `metadata.tools.components[]` shape).
+          cargo cyclonedx --format json --spec-version 1.5
+          cargo cyclonedx --format xml  --spec-version 1.5
 
-          # The root SBOM is what release consumers want; per-crate
-          # SBOMs live alongside their respective Cargo.toml and
-          # are useful to anyone vendoring a single crate.
+          # The root `birdnet-behavior` package's SBOM is the canonical
+          # one for release consumers — it captures the binary's full
+          # transitive dependency tree. Per-crate SBOMs live alongside
+          # their respective Cargo.toml and help anyone vendoring a
+          # single crate.
           NAME="birdnet-behavior-${VERSION}-sbom"
           cp birdnet-behavior.cdx.json "release/${NAME}.cdx.json"
           cp birdnet-behavior.cdx.xml  "release/${NAME}.cdx.xml"
