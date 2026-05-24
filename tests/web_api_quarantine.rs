@@ -170,7 +170,11 @@ async fn quarantine_list_empty() {
 
     let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
     let html = String::from_utf8_lossy(&body);
-    assert!(html.contains("No entries found"));
+    // The empty state is the illustrated "Nothing waiting for review." panel
+    // (see empty_states::no_rare_yet); the old "No entries found" string was
+    // replaced when illustrated empty states landed but this assertion was
+    // never updated because CI didn't run the integration tests.
+    assert!(html.contains("Nothing waiting for review"));
 }
 
 #[tokio::test]
