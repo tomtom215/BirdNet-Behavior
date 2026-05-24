@@ -93,6 +93,14 @@ It auto-detects your real data directory from the installed config and service
 files, so it removes exactly what was installed. On macOS it instead unloads
 the launchd LaunchAgent; pass `--purge` to also remove the user data directory.
 
+**Docker deployments** are torn down with Compose instead — from the directory
+holding your `docker-compose.yml`:
+
+```bash
+docker compose down            # stop + remove the container, keep named volumes
+docker compose down -v         # also remove volumes (deletes the database!)
+```
+
 ## Building from source
 
 **Prerequisites:** [Rust 1.95+](https://rustup.rs) and `git`.

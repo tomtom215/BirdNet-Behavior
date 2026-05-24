@@ -150,14 +150,18 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 # ── Deterministic path detection (read the real install) ────────────────────
+# Both helpers print the value or nothing, and always succeed: a missing key
+# makes grep exit non-zero, which under `set -e -o pipefail` would otherwise
+# kill the script mid-detection. The trailing `|| true` keeps them quiet.
 read_conf() { # $1=key  -> value or empty
   [ -f "$CONFIG_FILE" ] || return 0
-  grep -E "^[[:space:]]*$1[[:space:]]*=" "$CONFIG_FILE" 2>/dev/null | tail -1 | cut -d= -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+  { grep -E "^[[:space:]]*$1[[:space:]]*=" "$CONFIG_FILE" 2>/dev/null \
+      | tail -1 | cut -d= -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'; } || true
 }
 svc_flag() { # $1=flag  -> value or empty (from ExecStart=)
   [ -f "$SERVICE_FILE" ] || return 0
-  grep -E '^ExecStart=' "$SERVICE_FILE" 2>/dev/null | tail -1 \
-    | grep -oE "$1[ =][^ ]+" | head -1 | sed -E "s/^$1[ =]//"
+  { grep -E '^ExecStart=' "$SERVICE_FILE" 2>/dev/null | tail -1 \
+      | grep -oE "$1[ =][^ ]+" | head -1 | sed -E "s/^$1[ =]//"; } || true
 }
 
 DB_PATH="$(read_conf DB_PATH)"
@@ -172,7 +176,7 @@ DATA_DIR="$DATA_DIR_OVERRIDE"
 if [ -z "$DATA_DIR" ] && [ -n "$DB_PATH" ];   then DATA_DIR="$(dirname "$DB_PATH")"; fi
 if [ -z "$DATA_DIR" ] && [ -n "$RECS_DIR" ];  then DATA_DIR="$(dirname "$RECS_DIR")"; fi
 if [ -z "$DATA_DIR" ]; then
-  _home="$(getent passwd "${SUDO_USER:-root}" | cut -d: -f6)"; _home="${_home:-$HOME}"
+  _home="$(getent passwd "${SUDO_USER:-root}" 2>/dev/null | cut -d: -f6 || true)"; _home="${_home:-$HOME}"
   DATA_DIR="${_home}/BirdNet-Behavior"
   DATA_DIR_GUESSED=1
 fi
@@ -182,6 +186,10 @@ fi
 MODEL_DIR="${DATA_DIR}/models"
 BACKUPS_DIR="${DATA_DIR}/backups"
 DB_PATH="${DB_PATH:-${DATA_DIR}/birds.db}"
+
+# Record whether a native (systemd) install is present, to advise Docker users.
+HAD_NATIVE=0
+if [ -f "$SERVICE_FILE" ] || [ -e "$BIN_PATH" ]; then HAD_NATIVE=1; fi
 
 # ── Plan ─────────────────────────────────────────────────────────────────────
 echo
@@ -250,6 +258,13 @@ if [ "$DRY_RUN" = 1 ]; then
   info "Dry run only — nothing was changed. Re-run without --dry-run to apply."
 else
   ok "Uninstall complete."
+fi
+if [ "$HAD_NATIVE" = 0 ]; then
+  warn "No systemd service or binary found at the standard paths."
+  echo "  If you run BirdNet-Behavior in Docker, tear it down with Compose instead"
+  echo "  (from the directory with your docker-compose.yml):"
+  echo "    docker compose down       # keep named volumes"
+  echo "    docker compose down -v    # also remove the database volume"
 fi
 # What was kept, with the one-liner to finish the job.
 KEPT=()
