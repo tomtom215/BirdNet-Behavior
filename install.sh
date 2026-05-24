@@ -911,8 +911,27 @@ macos_install() {
         macos_setup_config_and_agent "${bindst}/${BINARY_NAME}"
     else
         mac_brew_dep cmake "needed to compile the bundled libduckdb when building from source."
-        warn "No prebuilt macOS binary${version:+ for v${version}} is published yet — build from source (one time, ~6 min):"
-        cat <<EOF
+        local script_dir
+        script_dir="$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo "")"
+        if [ -n "${script_dir}" ] && [ -f "${script_dir}/Cargo.toml" ] && [ -d "${script_dir}/crates" ]; then
+            # Already inside a source checkout — offer to build it right here
+            # instead of telling the user to clone what they're running from.
+            warn "No prebuilt macOS binary${version:+ for v${version}} is published yet — but you're in a source checkout."
+            command -v cargo >/dev/null 2>&1 || fatal "cargo not found — install Rust from https://rustup.rs, then re-run."
+            local ans="n"
+            if [ -t 0 ]; then read -rp "  Build it now with 'cargo build --release --features analytics' (~6 min)? [Y/n] " ans </dev/tty 2>/dev/null || ans="y"; fi
+            case "$ans" in
+                n|N|no|NO)
+                    echo "  Build later:  cargo build --release --features analytics && bash packaging/macos/verify-macos.sh" ;;
+                *)
+                    info "Building (this takes a few minutes)…"
+                    ( cd "${script_dir}" && cargo build --release --features analytics ) || fatal "build failed — see the cargo output above."
+                    success "Build complete."
+                    macos_setup_config_and_agent "${script_dir}/target/release/${BINARY_NAME}" ;;
+            esac
+        else
+            warn "No prebuilt macOS binary${version:+ for v${version}} is published yet — build from source (one time, ~6 min):"
+            cat <<EOF
 
     git clone https://github.com/${REPO}.git
     cd BirdNet-Behavior
@@ -921,6 +940,7 @@ macos_install() {
 
   (A Homebrew formula is planned so this becomes a one-line 'brew install'.)
 EOF
+        fi
     fi
 }
 
