@@ -60,6 +60,13 @@ for (const [name, route, theme] of PAGES) {
     await sleep(1400);
     const h = await page.evaluate(() => document.documentElement.scrollHeight);
     const clipH = Math.min(h, MAXH);
+    // Playwright's `clip` can't exceed the viewport, so a clip taller than the
+    // initial 1000px height was silently truncated. Grow the viewport to the
+    // intended clip height (re-waiting for any reflowed images) so MAXH is the
+    // real cap on tall list pages rather than the viewport.
+    await page.setViewportSize({ width: W, height: clipH });
+    await page.waitForFunction(() => [...document.images].every((i) => i.complete), { timeout: 8000 }).catch(() => {});
+    await sleep(400);
     await page.screenshot({ path: path.join(OUT, name), clip: { x: 0, y: 0, width: W, height: clipH } });
     console.log(`. ${name} (${W}x${clipH}${h > MAXH ? ` clipped from ${h}` : ''})`);
   } catch (e) {
