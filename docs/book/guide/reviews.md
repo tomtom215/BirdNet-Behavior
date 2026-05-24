@@ -48,6 +48,6 @@ audio and all.
 
 Not sure about a call? Both the detection-detail page and every row in the
 [quarantine queue](../admin/settings.md) have a **Share** button that copies a
-public [`/r/<token>` link](./sharing.md#share-links-rtoken). The share page
+public [`/r/<token>` link](./sharing.md). The share page
 resolves quarantined rows too, so you can send a rare bird that hasn't been
 admitted to the log to another birder for a second opinion before you decide.

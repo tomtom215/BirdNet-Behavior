@@ -33,6 +33,22 @@ cargo build --release --features analytics    # ONNX Runtime downloads on first 
 
 The binary lands at `target/release/birdnet-behavior`.
 
+### One-shot verification
+
+[`packaging/macos/verify-macos.sh`](../packaging/macos/verify-macos.sh) runs the
+whole from-source check in one go — toolchain/dependency probe, release build,
+`--doctor` preflight, a real `--web-only` boot with a `GET /` check, and
+`avfoundation` device enumeration — then prints the manual steps (microphone/TCC
+consent, the launchd LaunchAgent) that need a human at the machine:
+
+```bash
+bash packaging/macos/verify-macos.sh            # full build + boot + report
+SKIP_BUILD=1 bash packaging/macos/verify-macos.sh   # reuse an existing build
+```
+
+It installs nothing and changes no system settings. Paste its output back when
+reporting macOS results.
+
 ## Live microphone capture (avfoundation)
 
 On macOS the microphone is captured through `ffmpeg`'s **avfoundation** input
