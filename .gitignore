@@ -56,5 +56,10 @@ proptest-regressions/
 # node_modules + captured PNGs). The committed tooling lives in tools/visual-qa/.
 .screenshot-tooling/
 
+# Durable cache for the prebuilt ONNX Runtime static lib (~90 MB) and the
+# throwaway extractor crate. Survives sandbox reclaim because it lives inside
+# the repo dir, but must never be committed. See tools/visual-qa/README.md.
+.ort-durable/
+
 # mdBook build output (the docs site is built + deployed by .github/workflows/docs.yml)
 docs/.book-build/
