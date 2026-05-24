@@ -23,6 +23,7 @@ const PAGES = [
   ['species-list.png', '/species', 'light'],
   ['species-detail.png', `/species/detail?name=${enc('European Robin')}`, 'light'],
   ['detection-detail.png', `/detections/detail?date=${TODAY}&time=05:14:08&name=${enc('Eurasian Magpie')}`, 'light'],
+  ['detection-reviews.png', '/detection-reviews', 'light'],
   ['heatmap.png', '/heatmap', 'light'],
   ['migration.png', '/migration', 'light'],
   ['dawn-chorus.png', '/analytics/dawn-chorus', 'light'],

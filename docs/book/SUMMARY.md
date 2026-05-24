@@ -15,6 +15,7 @@
 - [The Dashboard](./guide/dashboard.md)
 - [Today & the Detection Log](./guide/today.md)
 - [Detection Detail & Sharing](./guide/sharing.md)
+- [Reviewing Detections](./guide/reviews.md)
 - [Species & the Life List](./guide/species.md)
 - [Behavioral Analytics](./guide/analytics.md)
 - [Migration & Phenology](./guide/phenology.md)
