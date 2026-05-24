@@ -101,9 +101,10 @@ fn web_only_boots_and_serves_root() {
                 return; // booted and serving — success
             }
         }
-        if Instant::now() >= deadline {
-            panic!("server did not serve GET / with 200 within 45s (last: {last})");
-        }
+        assert!(
+            Instant::now() < deadline,
+            "server did not serve GET / with 200 within 45s (last: {last})"
+        );
         std::thread::sleep(Duration::from_millis(300));
     }
 }

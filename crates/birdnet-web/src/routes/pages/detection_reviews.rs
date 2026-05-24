@@ -71,8 +71,7 @@ pub struct ClearForm {
 }
 
 async fn detection_reviews_page() -> Html<String> {
-    let content = format!(
-        "<div style=\"margin-bottom:1.25rem;\">\
+    let content = "<div style=\"margin-bottom:1.25rem;\">\
   <div class=\"bnb-eyebrow\">Quality control</div>\
   <h1 class=\"display\" style=\"font-size:32px;margin:0.1rem 0 0.35rem;\">Detection reviews</h1>\
   <p style=\"color:var(--fg-2);max-width:60ch;margin:0;\">Confirm detections that look right or reject likely misidentifications. \
@@ -81,9 +80,8 @@ async fn detection_reviews_page() -> Html<String> {
 </div>\
 <div id=\"dr-queue\" hx-get=\"/pages/detection-reviews-queue\" hx-trigger=\"load\" hx-swap=\"innerHTML\">\
   <p style=\"color:var(--fg-3);padding:2rem;text-align:center;\">Loading review queue…</p>\
-</div>"
-    );
-    super::render_page("Detection reviews", &content, "")
+</div>";
+    super::render_page("Detection reviews", content, "")
 }
 
 async fn detection_reviews_queue_partial(State(state): State<AppState>) -> impl IntoResponse {
@@ -263,8 +261,7 @@ async fn detection_review_inline(
     State(state): State<AppState>,
     Form(form): Form<ReviewForm>,
 ) -> impl IntoResponse {
-    let mut current = None;
-    if let Some(status) = birdnet_db::sqlite::ReviewStatus::parse(&form.status) {
+    let current = if let Some(status) = birdnet_db::sqlite::ReviewStatus::parse(&form.status) {
         let (date, time, sci, com) = (
             form.date.clone(),
             form.time.clone(),
@@ -279,8 +276,10 @@ async fn detection_review_inline(
             })
         })
         .await;
-        current = Some(status.as_str());
-    }
+        Some(status.as_str())
+    } else {
+        None
+    };
     let widget = render_review_widget(
         &form.date,
         &form.time,
