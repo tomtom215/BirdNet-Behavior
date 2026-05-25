@@ -46,11 +46,15 @@ tokio = { version = "1.52", features = ["full"] }
 
 # Database
 rusqlite = { version = "0.39", features = ["bundled", "backup"] }
-# `~` pins the bundled DuckDB version: the `10503` component is DuckDB itself
-# (the trailing `.x` is only duckdb-rs's binding revision). It must match the
-# DuckDB the published `behavioral` community extension targets, so don't let
-# it drift to a newer bundled DuckDB until that extension is live on the CDN.
-duckdb = { version = "~1.10503", features = ["bundled"] }
+# `~` pins the bundled DuckDB version: the `10501` component is DuckDB 1.5.1
+# itself (the trailing `.x` is only duckdb-rs's binding revision). It MUST match
+# the DuckDB version the published `behavioral` community extension targets:
+# v0.4.0 on the community CDN is built for DuckDB 1.5.1, and DuckDB refuses to
+# LOAD an extension built for any other version (verified: even
+# `allow_extensions_metadata_mismatch` does not bypass the LOAD-time check).
+# Bump this and the lockfile to ~1.10503 only once a 1.5.3-built `behavioral`
+# extension is live on the community CDN.
+duckdb = { version = "~1.10501", features = ["bundled"] }
 
 # Web
 axum = { version = "0.8.9", features = ["ws", "form"] }
