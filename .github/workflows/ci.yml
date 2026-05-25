@@ -17,7 +17,7 @@ jobs:
     name: Format (rustfmt)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Install Rust toolchain (stable + rustfmt)
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -30,7 +30,7 @@ jobs:
     name: Clippy (pedantic + nursery)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Install Rust toolchain (stable + clippy)
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -53,7 +53,7 @@ jobs:
     name: Tests (x86_64)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Cache Cargo
@@ -82,7 +82,7 @@ jobs:
     name: Rustdoc (no broken links)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Cache Cargo
@@ -105,7 +105,7 @@ jobs:
     name: Build (debug, all features)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Cache Cargo
@@ -138,7 +138,7 @@ jobs:
     name: MSRV (Rust 1.95)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Install MSRV toolchain
         uses: dtolnay/rust-toolchain@1.95
       - name: Cache Cargo
