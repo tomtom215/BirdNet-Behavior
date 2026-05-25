@@ -77,6 +77,31 @@ pub struct Cli {
     #[arg(long, env = "BIRDNET_ANALYTICS_DB")]
     pub analytics_db: Option<PathBuf>,
 
+    /// Reinstall the behavioral `DuckDB` extension and exit.
+    ///
+    /// Force-downloads the latest `behavioral` build for the bundled `DuckDB`
+    /// version from the community registry, loads it to verify, then exits.
+    /// Requires `--analytics-db` (or `ANALYTICS_DB_PATH`) and network access.
+    #[arg(long)]
+    pub refresh_extension: bool,
+
+    /// Automatically keep the behavioral `DuckDB` extension up to date (on by
+    /// default).
+    ///
+    /// Shortly after startup and then on a fixed interval, the running server
+    /// checks the `DuckDB` community registry and installs a newer `behavioral`
+    /// build when one is available for the bundled `DuckDB` version. Disable
+    /// with `--analytics-auto-update false` or `BIRDNET_ANALYTICS_AUTO_UPDATE=false`.
+    /// The interval is set by `BIRDNET_ANALYTICS_UPDATE_INTERVAL_HOURS` (default 24).
+    #[arg(
+        long,
+        env = "BIRDNET_ANALYTICS_AUTO_UPDATE",
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        value_parser = clap::builder::BoolishValueParser::new()
+    )]
+    pub analytics_auto_update: bool,
+
     /// Apprise notification server URL (e.g., `http://localhost:8000`).
     #[arg(long, env = "BIRDNET_APPRISE_URL")]
     pub apprise_url: Option<String>,

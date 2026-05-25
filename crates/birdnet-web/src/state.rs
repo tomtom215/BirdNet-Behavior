@@ -174,6 +174,12 @@ impl AppState {
                         error = %e,
                         "duckdb-behavioral extension not loaded (analytics queries unavailable)"
                     );
+                } else {
+                    tracing::info!(
+                        duckdb = adb.duckdb_version().as_deref().unwrap_or("unknown"),
+                        extension = adb.extension_version().as_deref().unwrap_or("unknown"),
+                        "duckdb-behavioral extension loaded"
+                    );
                 }
 
                 Some(Mutex::new(adb))
@@ -339,6 +345,26 @@ impl AppState {
         self.inner.analytics_db.as_ref().map(|db| {
             let db = db.lock().expect("analytics mutex poisoned");
             f(&db)
+        })
+    }
+
+    /// Execute a closure with a mutable reference to the `DuckDB` analytics
+    /// database — for operations that mutate connection state, such as
+    /// installing or updating the behavioral extension.
+    ///
+    /// Returns `None` when analytics is not configured.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex is poisoned.
+    #[cfg(feature = "analytics")]
+    pub fn with_analytics_mut<F, T>(&self, f: F) -> Option<T>
+    where
+        F: FnOnce(&mut AnalyticsDb) -> T,
+    {
+        self.inner.analytics_db.as_ref().map(|db| {
+            let mut db = db.lock().expect("analytics mutex poisoned");
+            f(&mut db)
         })
     }
 

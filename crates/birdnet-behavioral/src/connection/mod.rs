@@ -56,6 +56,16 @@ impl From<DuckDbError> for AnalyticsError {
     }
 }
 
+/// Outcome of [`AnalyticsDb::update_extension`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtensionUpdate {
+    /// The extension was not loaded and has now been installed and loaded.
+    Installed,
+    /// The extension was already loaded; the community registry was checked for
+    /// a newer build, which is applied on the next restart if one exists.
+    Checked,
+}
+
 /// Default cap on `DuckDB`'s buffer-pool memory.
 ///
 /// Without an explicit limit `DuckDB` sizes its buffer pool at ~80% of system
@@ -177,6 +187,81 @@ impl AnalyticsDb {
         Ok(())
     }
 
+    /// The bundled `DuckDB` engine version (e.g. `v1.5.1`).
+    ///
+    /// The `behavioral` community extension is version-locked to this exact
+    /// `DuckDB` version — a build for any other version will not `LOAD` — so
+    /// this is the value the published extension must target. Returns `None`
+    /// only if the version string cannot be read.
+    pub fn duckdb_version(&self) -> Option<String> {
+        self.conn
+            .query_row("SELECT version()", [], |r| r.get::<_, String>(0))
+            .ok()
+    }
+
+    /// The installed `behavioral` extension version (e.g. `v0.4.0`).
+    ///
+    /// Returns `None` when the extension is not installed/loaded or its version
+    /// is unavailable. Best-effort — any query error maps to `None` — so it is
+    /// safe to call for status reporting regardless of extension state.
+    pub fn extension_version(&self) -> Option<String> {
+        self.conn
+            .query_row(queries::BEHAVIORAL_EXTENSION_VERSION, [], |r| {
+                r.get::<_, Option<String>>(0)
+            })
+            .ok()
+            .flatten()
+    }
+
+    /// Force-reinstall the `behavioral` extension from the community registry
+    /// and load it.
+    ///
+    /// Always re-downloads the latest build for the bundled `DuckDB` version,
+    /// even when a cached copy exists. Backs the `--refresh-extension`
+    /// maintenance command. Requires network access.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the extension cannot be reinstalled or loaded — for
+    /// example, offline, or the community registry has no build matching the
+    /// bundled `DuckDB` version yet.
+    pub fn refresh_extension(&mut self) -> Result<(), AnalyticsError> {
+        self.conn
+            .execute_batch(queries::FORCE_INSTALL_BEHAVIORAL)
+            .map_err(|e| AnalyticsError::ExtensionLoad(e.to_string()))?;
+        self.extension_loaded = true;
+        Ok(())
+    }
+
+    /// Check the community registry for a newer `behavioral` extension and
+    /// apply it, installing the extension first if it is not yet present.
+    ///
+    /// - When the extension is not loaded, installs and loads it (the same
+    ///   network path as [`Self::load_extension`]'s fallback) and reports
+    ///   [`ExtensionUpdate::Installed`].
+    /// - When it is already loaded, runs `UPDATE EXTENSIONS`, which re-downloads
+    ///   only if a newer build exists, and reports [`ExtensionUpdate::Checked`];
+    ///   a newer build takes effect on the next restart.
+    ///
+    /// Drives the periodic auto-update task. Requires network access.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the install or update fails — for example, offline,
+    /// or no build matching the bundled `DuckDB` version is published yet.
+    pub fn update_extension(&mut self) -> Result<ExtensionUpdate, AnalyticsError> {
+        if self.extension_loaded {
+            self.conn.execute_batch(queries::UPDATE_BEHAVIORAL)?;
+            Ok(ExtensionUpdate::Checked)
+        } else {
+            self.conn
+                .execute_batch(queries::INSTALL_BEHAVIORAL)
+                .map_err(|e| AnalyticsError::ExtensionLoad(e.to_string()))?;
+            self.extension_loaded = true;
+            Ok(ExtensionUpdate::Installed)
+        }
+    }
+
     /// Get a reference to the underlying `DuckDB` connection.
     pub const fn conn(&self) -> &Connection {
         &self.conn
@@ -199,6 +284,25 @@ mod tests {
         let (db, _tmp) = make_db();
         assert!(db.path().exists());
         assert!(!db.extension_loaded());
+    }
+
+    #[test]
+    fn duckdb_version_reports_bundled_engine() {
+        let (db, _tmp) = make_db();
+        let v = db.duckdb_version().expect("version() should be readable");
+        // The bundled DuckDB is pinned to 1.5.x so it matches the DuckDB the
+        // published `behavioral` community extension targets (see the duckdb
+        // pin in the workspace Cargo.toml). If this trips, the pin moved and
+        // the extension compatibility must be re-checked before shipping.
+        assert!(v.starts_with("v1.5"), "unexpected DuckDB version: {v:?}");
+    }
+
+    #[test]
+    fn extension_version_is_none_before_load() {
+        // No extension installed/loaded yet, so there is no version to report.
+        let (db, _tmp) = make_db();
+        assert!(!db.extension_loaded());
+        assert_eq!(db.extension_version(), None);
     }
 
     #[test]

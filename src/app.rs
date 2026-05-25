@@ -157,6 +157,14 @@ pub async fn run(
     let site_name = cli.site_name.as_deref().unwrap_or("BirdNet-Behavior");
     helpers::maybe_install_avahi_service(addr.port(), site_name);
 
+    // Keep the behavioral DuckDB extension current (on by default). The first
+    // load already ran during AppState construction; this background task only
+    // pulls newer community builds shortly after startup and then periodically.
+    #[cfg(feature = "analytics")]
+    if cli.analytics_auto_update && state.has_analytics() {
+        helpers::spawn_extension_auto_update(state.clone());
+    }
+
     // Start the web server.
     let auth_config = integrations::create_auth_config(config.as_ref());
     tracing::info!(addr = %addr, "starting web server");
