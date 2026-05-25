@@ -199,92 +199,6 @@ pub fn run_refresh_extension(
     )
 }
 
-/// Resolve the auto-update check interval from an optional configured value.
-///
-/// Defaults to 24 hours; a positive integer count of hours overrides it.
-/// Malformed, zero, or absent values fall back to the default. Split from the
-/// env lookup so the parsing is unit-testable without touching process env.
-#[cfg(feature = "analytics")]
-fn resolve_update_interval(configured: Option<&str>) -> std::time::Duration {
-    const DEFAULT_HOURS: u64 = 24;
-    let hours = configured
-        .and_then(|v| v.trim().parse::<u64>().ok())
-        .filter(|&h| h > 0)
-        .unwrap_or(DEFAULT_HOURS);
-    std::time::Duration::from_secs(hours.saturating_mul(3600))
-}
-
-/// Interval between behavioral-extension auto-update checks, from
-/// `BIRDNET_ANALYTICS_UPDATE_INTERVAL_HOURS` (default 24).
-#[cfg(feature = "analytics")]
-fn analytics_update_interval() -> std::time::Duration {
-    resolve_update_interval(
-        std::env::var("BIRDNET_ANALYTICS_UPDATE_INTERVAL_HOURS")
-            .ok()
-            .as_deref(),
-    )
-}
-
-/// Spawn the background task that keeps the behavioral extension up to date.
-///
-/// After a short startup delay it runs an update check, then repeats every
-/// [`analytics_update_interval`]. The initial extension load already happened
-/// during `AppState` construction; this only pulls newer community builds.
-/// Failures (offline, or no matching build published yet) are logged at debug
-/// and retried on the next tick, so a station picks up a freshly published
-/// build without a manual reinstall.
-#[cfg(feature = "analytics")]
-pub fn spawn_extension_auto_update(state: birdnet_web::state::AppState) {
-    use birdnet_behavioral::connection::{AnalyticsDb, ExtensionUpdate};
-
-    let interval = analytics_update_interval();
-    tokio::spawn(async move {
-        // Brief delay so the first check doesn't compete with startup I/O.
-        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-        loop {
-            let st = state.clone();
-            // The update touches DuckDB and the network, so run it on the
-            // blocking pool; map the error to a String inside the closure so
-            // the result is `Send` regardless of the DuckDB error type.
-            let result = tokio::task::spawn_blocking(move || {
-                st.with_analytics_mut(|db: &mut AnalyticsDb| {
-                    let outcome = db.update_extension().map_err(|e| e.to_string());
-                    (outcome, db.extension_version())
-                })
-            })
-            .await;
-            match result {
-                Ok(Some((Ok(outcome), version))) => {
-                    let v = version.as_deref().unwrap_or("unknown");
-                    match outcome {
-                        ExtensionUpdate::Installed => {
-                            tracing::info!(
-                                version = v,
-                                "behavioral extension installed by auto-update"
-                            );
-                        }
-                        ExtensionUpdate::Checked => {
-                            tracing::debug!(
-                                version = v,
-                                "checked behavioral extension for updates"
-                            );
-                        }
-                    }
-                }
-                Ok(Some((Err(e), _))) => {
-                    tracing::debug!(error = %e, "behavioral extension auto-update failed (non-fatal)");
-                }
-                // Analytics is not configured (or went away) — nothing to do.
-                Ok(None) => break,
-                Err(e) => {
-                    tracing::debug!(error = %e, "behavioral extension auto-update task panicked");
-                }
-            }
-            tokio::time::sleep(interval).await;
-        }
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use super::{init_audio_source, init_i18n, init_image_cache, init_site_name};
@@ -435,33 +349,5 @@ mod tests {
         )]);
         let state = init_image_cache(test_state(), &cli, Some(&cfg));
         assert!(state.image_cache().is_some());
-    }
-
-    // ── resolve_update_interval ────────────────────────────────────────
-
-    #[cfg(feature = "analytics")]
-    #[test]
-    fn update_interval_defaults_when_absent_or_invalid() {
-        use std::time::Duration;
-        let day = Duration::from_secs(24 * 3600);
-        assert_eq!(super::resolve_update_interval(None), day);
-        assert_eq!(super::resolve_update_interval(Some("")), day);
-        assert_eq!(super::resolve_update_interval(Some("abc")), day);
-        // Zero would mean "never check" — treat as invalid and use the default.
-        assert_eq!(super::resolve_update_interval(Some("0")), day);
-    }
-
-    #[cfg(feature = "analytics")]
-    #[test]
-    fn update_interval_honours_positive_hours() {
-        use std::time::Duration;
-        assert_eq!(
-            super::resolve_update_interval(Some("1")),
-            Duration::from_secs(3600)
-        );
-        assert_eq!(
-            super::resolve_update_interval(Some(" 12 ")),
-            Duration::from_secs(12 * 3600)
-        );
     }
 }

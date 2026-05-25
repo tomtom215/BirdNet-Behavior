@@ -56,16 +56,6 @@ impl From<DuckDbError> for AnalyticsError {
     }
 }
 
-/// Outcome of [`AnalyticsDb::update_extension`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExtensionUpdate {
-    /// The extension was not loaded and has now been installed and loaded.
-    Installed,
-    /// The extension was already loaded; the community registry was checked for
-    /// a newer build, which is applied on the next restart if one exists.
-    Checked,
-}
-
 /// Default cap on `DuckDB`'s buffer-pool memory.
 ///
 /// Without an explicit limit `DuckDB` sizes its buffer pool at ~80% of system
@@ -199,11 +189,11 @@ impl AnalyticsDb {
             .ok()
     }
 
-    /// The installed `behavioral` extension version (e.g. `v0.4.0`).
+    /// The loaded `behavioral` extension version (e.g. `v0.4.0`).
     ///
-    /// Returns `None` when the extension is not installed/loaded or its version
-    /// is unavailable. Best-effort — any query error maps to `None` — so it is
-    /// safe to call for status reporting regardless of extension state.
+    /// Returns `None` when the extension is not loaded in this connection or its
+    /// version is unavailable. Best-effort — any query error maps to `None` — so
+    /// it is safe to call for status reporting regardless of extension state.
     pub fn extension_version(&self) -> Option<String> {
         self.conn
             .query_row(queries::BEHAVIORAL_EXTENSION_VERSION, [], |r| {
@@ -231,35 +221,6 @@ impl AnalyticsDb {
             .map_err(|e| AnalyticsError::ExtensionLoad(e.to_string()))?;
         self.extension_loaded = true;
         Ok(())
-    }
-
-    /// Check the community registry for a newer `behavioral` extension and
-    /// apply it, installing the extension first if it is not yet present.
-    ///
-    /// - When the extension is not loaded, installs and loads it (the same
-    ///   network path as [`Self::load_extension`]'s fallback) and reports
-    ///   [`ExtensionUpdate::Installed`].
-    /// - When it is already loaded, runs `UPDATE EXTENSIONS`, which re-downloads
-    ///   only if a newer build exists, and reports [`ExtensionUpdate::Checked`];
-    ///   a newer build takes effect on the next restart.
-    ///
-    /// Drives the periodic auto-update task. Requires network access.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the install or update fails — for example, offline,
-    /// or no build matching the bundled `DuckDB` version is published yet.
-    pub fn update_extension(&mut self) -> Result<ExtensionUpdate, AnalyticsError> {
-        if self.extension_loaded {
-            self.conn.execute_batch(queries::UPDATE_BEHAVIORAL)?;
-            Ok(ExtensionUpdate::Checked)
-        } else {
-            self.conn
-                .execute_batch(queries::INSTALL_BEHAVIORAL)
-                .map_err(|e| AnalyticsError::ExtensionLoad(e.to_string()))?;
-            self.extension_loaded = true;
-            Ok(ExtensionUpdate::Installed)
-        }
     }
 
     /// Get a reference to the underlying `DuckDB` connection.
@@ -299,7 +260,8 @@ mod tests {
 
     #[test]
     fn extension_version_is_none_before_load() {
-        // No extension installed/loaded yet, so there is no version to report.
+        // Not loaded in this connection, so there is no active version to
+        // report — even if a build is cached in DuckDB's shared extension dir.
         let (db, _tmp) = make_db();
         assert!(!db.extension_loaded());
         assert_eq!(db.extension_version(), None);

@@ -27,4 +27,4 @@ pub use state::{
 pub use system::{maybe_install_avahi_service, start_disk_manager};
 
 #[cfg(feature = "analytics")]
-pub use state::{build_state_with_analytics, spawn_extension_auto_update};
+pub use state::build_state_with_analytics;

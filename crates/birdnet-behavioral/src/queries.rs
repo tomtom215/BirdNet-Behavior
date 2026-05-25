@@ -44,20 +44,13 @@ FORCE INSTALL behavioral FROM community;
 LOAD behavioral;
 ";
 
-/// SQL to update the installed behavioral extension to the newest build.
+/// SQL to read the loaded behavioral extension version (e.g. `v0.4.0`).
 ///
-/// `UPDATE EXTENSIONS` consults the community registry and re-downloads only
-/// when a newer build exists for the bundled `DuckDB` version. A freshly fetched
-/// build takes effect on the next restart — `DuckDB` keeps the already-loaded
-/// version for the life of the current connection.
-pub const UPDATE_BEHAVIORAL: &str = "UPDATE EXTENSIONS (behavioral);";
-
-/// SQL to read the installed behavioral extension version (e.g. `v0.4.0`).
-///
-/// Returns no rows when the extension is not installed; the `extension_version`
-/// column is NULL until a versioned build is loaded.
-pub const BEHAVIORAL_EXTENSION_VERSION: &str =
-    "SELECT extension_version FROM duckdb_extensions() WHERE extension_name = 'behavioral'";
+/// Filters on `loaded` so it reports the version active in the current
+/// connection, not one merely present in `DuckDB`'s shared extension cache.
+/// Returns no rows when the extension is not loaded.
+pub const BEHAVIORAL_EXTENSION_VERSION: &str = "SELECT extension_version FROM duckdb_extensions() \
+     WHERE extension_name = 'behavioral' AND loaded";
 
 /// Build SQL for activity sessionization.
 ///
