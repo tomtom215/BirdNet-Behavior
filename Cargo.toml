@@ -46,7 +46,11 @@ tokio = { version = "1.52", features = ["full"] }
 
 # Database
 rusqlite = { version = "0.39", features = ["bundled", "backup"] }
-duckdb = { version = "1.10503", features = ["bundled"] }
+# `~` pins the bundled DuckDB version: the `10503` component is DuckDB itself
+# (the trailing `.x` is only duckdb-rs's binding revision). It must match the
+# DuckDB the published `behavioral` community extension targets, so don't let
+# it drift to a newer bundled DuckDB until that extension is live on the CDN.
+duckdb = { version = "~1.10503", features = ["bundled"] }
 
 # Web
 axum = { version = "0.8.9", features = ["ws", "form"] }
