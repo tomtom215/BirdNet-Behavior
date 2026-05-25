@@ -29,7 +29,7 @@ jobs:
     env:
       MDBOOK_VERSION: "0.4.52"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install mdBook + mdbook-linkcheck
         uses: taiki-e/install-action@v2
         with:
@@ -39,8 +39,8 @@ jobs:
         # fails this step. With more than one backend, mdBook writes the HTML
         # into the html/ subdirectory of the build dir.
         run: mdbook build
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: docs/.book-build/html
 
@@ -53,4 +53,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

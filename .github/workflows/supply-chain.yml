@@ -34,7 +34,7 @@ jobs:
     name: cargo-deny
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Run cargo-deny
@@ -51,7 +51,7 @@ jobs:
     name: cargo-audit
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Install cargo-audit
@@ -67,7 +67,7 @@ jobs:
     name: cargo-machete (unused dependencies)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Install cargo-machete
         uses: bnjbvr/cargo-machete@main
 
@@ -79,7 +79,7 @@ jobs:
     name: Spelling (typos)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Run typos
         uses: crate-ci/typos@master
         with:
@@ -93,7 +93,7 @@ jobs:
     name: shellcheck (bootstrap scripts)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Run shellcheck
         uses: ludeeus/action-shellcheck@master
         with:

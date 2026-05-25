@@ -46,7 +46,7 @@ tokio = { version = "1.52", features = ["full"] }
 
 # Database
 rusqlite = { version = "0.39", features = ["bundled", "backup"] }
-duckdb = { version = "1.10501", features = ["bundled"] }
+duckdb = { version = "1.10503", features = ["bundled"] }
 
 # Web
 axum = { version = "0.8.9", features = ["ws", "form"] }
@@ -85,8 +85,8 @@ ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "n
 ndarray = "0.17"
 
 # Cryptography — HMAC-SHA256 signing for public share-link tokens (O-07)
-hmac = "0.12"
-sha2 = "0.10"
+hmac = "0.13"
+sha2 = "0.11"
 base64 = "0.22"
 
 # File watching
