@@ -143,6 +143,62 @@ pub fn init_site_name(
     }
 }
 
+/// Reinstall the behavioral `DuckDB` extension and exit (`--refresh-extension`).
+///
+/// Resolves the analytics database path the same way
+/// [`build_state_with_analytics`] does, opens it, force-reinstalls the latest
+/// community build, and loads it to verify. Any failure (no path configured,
+/// offline, or a version mismatch) is returned so the process exits non-zero
+/// with a clear message.
+///
+/// # Errors
+///
+/// Returns an error if no analytics path is configured, the database cannot be
+/// opened, or the extension cannot be reinstalled and loaded.
+#[cfg(feature = "analytics")]
+pub fn run_refresh_extension(
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use birdnet_behavioral::connection::AnalyticsDb;
+
+    let analytics_path = cli
+        .analytics_db
+        .clone()
+        .or_else(|| config?.get("ANALYTICS_DB_PATH").map(PathBuf::from))
+        .ok_or(
+            "no analytics database configured — set --analytics-db or ANALYTICS_DB_PATH \
+             before --refresh-extension",
+        )?;
+
+    tracing::info!(path = %analytics_path.display(), "refreshing behavioral DuckDB extension");
+    let mut adb = AnalyticsDb::open(&analytics_path).map_err(|e| format!("DuckDB error: {e}"))?;
+    adb.refresh_extension()
+        .map_err(|e| format!("failed to refresh behavioral extension: {e}"))?;
+    tracing::info!(
+        duckdb = adb.duckdb_version().as_deref().unwrap_or("unknown"),
+        extension = adb.extension_version().as_deref().unwrap_or("unknown"),
+        "behavioral extension reinstalled and loaded"
+    );
+    Ok(())
+}
+
+/// Without the `analytics` feature there is no `DuckDB` extension to refresh.
+///
+/// # Errors
+///
+/// Always returns an error explaining that the `analytics` feature is required.
+#[cfg(not(feature = "analytics"))]
+pub fn run_refresh_extension(
+    _cli: &Cli,
+    _config: Option<&birdnet_core::config::Config>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    Err(
+        "--refresh-extension requires the `analytics` feature; rebuild with `--features analytics`"
+            .into(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{init_audio_source, init_i18n, init_image_cache, init_site_name};

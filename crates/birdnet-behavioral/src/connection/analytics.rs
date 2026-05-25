@@ -217,7 +217,7 @@ mod tests {
         let (db, _tmp) = make_db();
         let params = types::FunnelParams {
             species_sequence: vec!["Robin".into(), "Blackbird".into()],
-            lookback_days: 30,
+            ..types::FunnelParams::default()
         };
         let err = db.funnel(&params).unwrap_err();
         assert!(err.to_string().contains("extension not loaded"));

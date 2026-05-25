@@ -33,6 +33,25 @@ INSTALL behavioral FROM community;
 LOAD behavioral;
 ";
 
+/// SQL to force-reinstall the behavioral extension from the community registry
+/// and load it.
+///
+/// Unlike [`INSTALL_BEHAVIORAL`], `FORCE INSTALL` always re-downloads the latest
+/// build for the bundled `DuckDB` version even when a cached copy exists. Backs
+/// the manual `--refresh-extension` maintenance command.
+pub const FORCE_INSTALL_BEHAVIORAL: &str = "
+FORCE INSTALL behavioral FROM community;
+LOAD behavioral;
+";
+
+/// SQL to read the loaded behavioral extension version (e.g. `v0.4.0`).
+///
+/// Filters on `loaded` so it reports the version active in the current
+/// connection, not one merely present in `DuckDB`'s shared extension cache.
+/// Returns no rows when the extension is not loaded.
+pub const BEHAVIORAL_EXTENSION_VERSION: &str = "SELECT extension_version FROM duckdb_extensions() \
+     WHERE extension_name = 'behavioral' AND loaded";
+
 /// Build SQL for activity sessionization.
 ///
 /// Uses `sessionize()` from duckdb-behavioral to group continuous

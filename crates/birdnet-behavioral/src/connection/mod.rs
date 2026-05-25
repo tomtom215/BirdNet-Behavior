@@ -177,6 +177,52 @@ impl AnalyticsDb {
         Ok(())
     }
 
+    /// The bundled `DuckDB` engine version (e.g. `v1.5.1`).
+    ///
+    /// The `behavioral` community extension is version-locked to this exact
+    /// `DuckDB` version — a build for any other version will not `LOAD` — so
+    /// this is the value the published extension must target. Returns `None`
+    /// only if the version string cannot be read.
+    pub fn duckdb_version(&self) -> Option<String> {
+        self.conn
+            .query_row("SELECT version()", [], |r| r.get::<_, String>(0))
+            .ok()
+    }
+
+    /// The loaded `behavioral` extension version (e.g. `v0.4.0`).
+    ///
+    /// Returns `None` when the extension is not loaded in this connection or its
+    /// version is unavailable. Best-effort — any query error maps to `None` — so
+    /// it is safe to call for status reporting regardless of extension state.
+    pub fn extension_version(&self) -> Option<String> {
+        self.conn
+            .query_row(queries::BEHAVIORAL_EXTENSION_VERSION, [], |r| {
+                r.get::<_, Option<String>>(0)
+            })
+            .ok()
+            .flatten()
+    }
+
+    /// Force-reinstall the `behavioral` extension from the community registry
+    /// and load it.
+    ///
+    /// Always re-downloads the latest build for the bundled `DuckDB` version,
+    /// even when a cached copy exists. Backs the `--refresh-extension`
+    /// maintenance command. Requires network access.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the extension cannot be reinstalled or loaded — for
+    /// example, offline, or the community registry has no build matching the
+    /// bundled `DuckDB` version yet.
+    pub fn refresh_extension(&mut self) -> Result<(), AnalyticsError> {
+        self.conn
+            .execute_batch(queries::FORCE_INSTALL_BEHAVIORAL)
+            .map_err(|e| AnalyticsError::ExtensionLoad(e.to_string()))?;
+        self.extension_loaded = true;
+        Ok(())
+    }
+
     /// Get a reference to the underlying `DuckDB` connection.
     pub const fn conn(&self) -> &Connection {
         &self.conn
@@ -199,6 +245,26 @@ mod tests {
         let (db, _tmp) = make_db();
         assert!(db.path().exists());
         assert!(!db.extension_loaded());
+    }
+
+    #[test]
+    fn duckdb_version_reports_bundled_engine() {
+        let (db, _tmp) = make_db();
+        let v = db.duckdb_version().expect("version() should be readable");
+        // The bundled DuckDB is pinned to 1.5.x so it matches the DuckDB the
+        // published `behavioral` community extension targets (see the duckdb
+        // pin in the workspace Cargo.toml). If this trips, the pin moved and
+        // the extension compatibility must be re-checked before shipping.
+        assert!(v.starts_with("v1.5"), "unexpected DuckDB version: {v:?}");
+    }
+
+    #[test]
+    fn extension_version_is_none_before_load() {
+        // Not loaded in this connection, so there is no active version to
+        // report — even if a build is cached in DuckDB's shared extension dir.
+        let (db, _tmp) = make_db();
+        assert!(!db.extension_loaded());
+        assert_eq!(db.extension_version(), None);
     }
 
     #[test]

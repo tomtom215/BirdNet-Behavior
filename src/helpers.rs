@@ -21,7 +21,9 @@ mod system;
 mod test_support;
 
 pub use db::{db_path_from_config, run_backup, run_integrity_check};
-pub use state::{init_audio_source, init_i18n, init_image_cache, init_site_name};
+pub use state::{
+    init_audio_source, init_i18n, init_image_cache, init_site_name, run_refresh_extension,
+};
 pub use system::{maybe_install_avahi_service, start_disk_manager};
 
 #[cfg(feature = "analytics")]

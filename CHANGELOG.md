@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-25
+
+### Added
+
+- **`--refresh-extension`** — a maintenance command that force-reinstalls the
+  latest `behavioral` DuckDB extension for the bundled DuckDB version, loads it
+  to verify, and exits. Useful for recovering a corrupted extension cache.
+  Requires `--analytics-db` (or `ANALYTICS_DB_PATH`) and network access.
+- The bundled DuckDB version and the loaded `behavioral` extension version are
+  logged at startup, so it is clear which analytics engine and extension build
+  a station is running.
+
+### Fixed
+
+- **Behavioral analytics (sessionize, retention, funnel, next-species) failed to
+  load.** DuckDB version-locks its extensions, but the bundled engine had
+  drifted to DuckDB 1.5.3 while the published `behavioral` community extension
+  targets 1.5.1, so `LOAD behavioral` was rejected and the extension-backed
+  analytics were unavailable. The bundled DuckDB is now pinned to 1.5.1 to match
+  the published extension.
+
+### Changed
+
+- Routine dependency and CI-action updates.
+
 ## [0.3.0] - 2026-05-24
 
 ### Added
@@ -868,7 +893,8 @@ x86_64 Linux.
 - systemd installer script with ALSA microphone auto-detection and
   automatic BirdNET+ model download from Zenodo.
 
-[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/tomtom215/BirdNet-Behavior/releases/tag/v0.3.0
 [0.2.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/tomtom215/BirdNet-Behavior/releases/tag/v0.1.0

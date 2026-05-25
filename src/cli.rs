@@ -77,6 +77,14 @@ pub struct Cli {
     #[arg(long, env = "BIRDNET_ANALYTICS_DB")]
     pub analytics_db: Option<PathBuf>,
 
+    /// Reinstall the behavioral `DuckDB` extension and exit.
+    ///
+    /// Force-downloads the latest `behavioral` build for the bundled `DuckDB`
+    /// version from the community registry, loads it to verify, then exits.
+    /// Requires `--analytics-db` (or `ANALYTICS_DB_PATH`) and network access.
+    #[arg(long)]
+    pub refresh_extension: bool,
+
     /// Apprise notification server URL (e.g., `http://localhost:8000`).
     #[arg(long, env = "BIRDNET_APPRISE_URL")]
     pub apprise_url: Option<String>,

@@ -210,7 +210,7 @@ jobs:
             # `resolve_location` have per-branch/boundary tests. 0 missed.
             max_missed: 0
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

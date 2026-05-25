@@ -12,7 +12,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.95"
 license = "CC-BY-NC-SA-4.0"
@@ -46,7 +46,15 @@ tokio = { version = "1.52", features = ["full"] }
 
 # Database
 rusqlite = { version = "0.39", features = ["bundled", "backup"] }
-duckdb = { version = "1.10501", features = ["bundled"] }
+# `~` pins the bundled DuckDB version: the `10501` component is DuckDB 1.5.1
+# itself (the trailing `.x` is only duckdb-rs's binding revision). It MUST match
+# the DuckDB version the published `behavioral` community extension targets:
+# v0.4.0 on the community CDN is built for DuckDB 1.5.1, and DuckDB refuses to
+# LOAD an extension built for any other version (verified: even
+# `allow_extensions_metadata_mismatch` does not bypass the LOAD-time check).
+# Bump this and the lockfile to ~1.10503 only once a 1.5.3-built `behavioral`
+# extension is live on the community CDN.
+duckdb = { version = "~1.10501", features = ["bundled"] }
 
 # Web
 axum = { version = "0.8.9", features = ["ws", "form"] }
@@ -85,8 +93,8 @@ ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "n
 ndarray = "0.17"
 
 # Cryptography — HMAC-SHA256 signing for public share-link tokens (O-07)
-hmac = "0.12"
-sha2 = "0.10"
+hmac = "0.13"
+sha2 = "0.11"
 base64 = "0.22"
 
 # File watching

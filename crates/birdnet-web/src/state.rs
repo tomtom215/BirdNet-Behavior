@@ -174,6 +174,12 @@ impl AppState {
                         error = %e,
                         "duckdb-behavioral extension not loaded (analytics queries unavailable)"
                     );
+                } else {
+                    tracing::info!(
+                        duckdb = adb.duckdb_version().as_deref().unwrap_or("unknown"),
+                        extension = adb.extension_version().as_deref().unwrap_or("unknown"),
+                        "duckdb-behavioral extension loaded"
+                    );
                 }
 
                 Some(Mutex::new(adb))

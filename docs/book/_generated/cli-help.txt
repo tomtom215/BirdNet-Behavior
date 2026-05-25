@@ -63,6 +63,11 @@ Options:
 
           [env: BIRDNET_ANALYTICS_DB=]
 
+      --refresh-extension
+          Reinstall the behavioral `DuckDB` extension and exit.
+
+          Force-downloads the latest `behavioral` build for the bundled `DuckDB` version from the community registry, loads it to verify, then exits. Requires `--analytics-db` (or `ANALYTICS_DB_PATH`) and network access.
+
       --apprise-url <APPRISE_URL>
           Apprise notification server URL (e.g., `http://localhost:8000`)
 
