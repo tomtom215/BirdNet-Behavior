@@ -54,7 +54,7 @@ rusqlite = { version = "0.39", features = ["bundled", "backup"] }
 # `allow_extensions_metadata_mismatch` does not bypass the LOAD-time check).
 # Bump this and the lockfile to ~1.10503 only once a 1.5.3-built `behavioral`
 # extension is live on the community CDN.
-duckdb = { version = "~1.10501", features = ["bundled"] }
+duckdb = { version = "~1.10503", features = ["bundled"] }
 
 # Web
 axum = { version = "0.8.9", features = ["ws", "form"] }
