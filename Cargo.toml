@@ -85,7 +85,7 @@ ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "n
 ndarray = "0.17"
 
 # Cryptography — HMAC-SHA256 signing for public share-link tokens (O-07)
-hmac = "0.12"
+hmac = "0.13"
 sha2 = "0.10"
 base64 = "0.22"
 
