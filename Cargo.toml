@@ -86,7 +86,7 @@ ndarray = "0.17"
 
 # Cryptography — HMAC-SHA256 signing for public share-link tokens (O-07)
 hmac = "0.12"
-sha2 = "0.10"
+sha2 = "0.11"
 base64 = "0.22"
 
 # File watching
