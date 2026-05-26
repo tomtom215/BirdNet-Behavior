@@ -12,6 +12,8 @@
 //! | `analytics`  | `sessionize`, `retention`, `funnel`, `next_species`         |
 
 mod analytics;
+#[cfg(test)]
+mod live;
 mod sync;
 
 use duckdb::{Connection, Error as DuckDbError};
@@ -177,7 +179,7 @@ impl AnalyticsDb {
         Ok(())
     }
 
-    /// The bundled `DuckDB` engine version (e.g. `v1.5.1`).
+    /// The bundled `DuckDB` engine version (e.g. `v1.5.3`).
     ///
     /// The `behavioral` community extension is version-locked to this exact
     /// `DuckDB` version — a build for any other version will not `LOAD` — so
@@ -189,7 +191,7 @@ impl AnalyticsDb {
             .ok()
     }
 
-    /// The loaded `behavioral` extension version (e.g. `v0.4.0`).
+    /// The loaded `behavioral` extension version (e.g. `v0.6.0`).
     ///
     /// Returns `None` when the extension is not loaded in this connection or its
     /// version is unavailable. Best-effort — any query error maps to `None` — so

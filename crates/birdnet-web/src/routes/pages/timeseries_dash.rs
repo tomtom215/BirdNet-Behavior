@@ -263,14 +263,14 @@ fn render_heatmap_table(rows: &[birdnet_timeseries::types::results::HourlyHeatma
         r"<table><thead><tr><th>Hour</th><th>Avg/Day</th><th>Total</th><th>Trend</th></tr></thead><tbody>",
     );
     for row in rows {
-        let bar_pct = (row.avg_detections_per_day / max_avg * 100.0) as u32;
+        let bar_pct = (row.avg_detections_per_day / max_avg * 100.0).clamp(0.0, 100.0);
         let _ = write!(
             html,
             r#"<tr>
 <td style="font-weight:600;">{h:02}:00</td>
 <td>{avg:.1}</td>
 <td>{total}</td>
-<td><div style="width:{pct}%;height:8px;background:var(--accent);border-radius:4px;min-width:2px;"></div></td>
+<td><div style="width:{pct:.0}%;height:8px;background:var(--accent);border-radius:4px;min-width:2px;"></div></td>
 </tr>"#,
             h = row.hour_of_day,
             avg = row.avg_detections_per_day,
@@ -293,10 +293,10 @@ fn render_trend_table(rows: &[birdnet_timeseries::types::results::TrendRow]) -> 
     for row in rows.iter().rev().take(14).rev() {
         let avg = row
             .moving_avg_detections
-            .map_or("—".to_string(), |v| format!("{v:.1}"));
+            .map_or_else(|| "—".to_string(), |v| format!("{v:.1}"));
         let _ = write!(
             html,
-            r#"<tr><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+            r"<tr><td>{}</td><td>{}</td><td>{}</td></tr>",
             escape_html(&row.date),
             row.daily_detections,
             avg
@@ -315,13 +315,15 @@ fn render_diversity_table(rows: &[birdnet_timeseries::types::results::DiversityR
         r"<table><thead><tr><th>Date</th><th>Richness</th><th>Shannon H′</th><th>Evenness</th></tr></thead><tbody>",
     );
     for row in rows.iter().rev().take(14).rev() {
-        let h = row.shannon_h.map_or("—".to_string(), |v| format!("{v:.3}"));
+        let h = row
+            .shannon_h
+            .map_or_else(|| "—".to_string(), |v| format!("{v:.3}"));
         let ev = row
             .pielou_evenness
-            .map_or("—".to_string(), |v| format!("{v:.2}"));
+            .map_or_else(|| "—".to_string(), |v| format!("{v:.2}"));
         let _ = write!(
             html,
-            r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+            r"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
             escape_html(&row.date),
             row.species_richness,
             h,
@@ -343,7 +345,7 @@ fn render_sessions_table(rows: &[birdnet_timeseries::types::results::SessionRow]
     for row in rows.iter().take(20) {
         let _ = write!(
             html,
-            r#"<tr><td>{}</td><td>{}m</td><td>{}</td><td>{}</td></tr>"#,
+            r"<tr><td>{}</td><td>{}m</td><td>{}</td><td>{}</td></tr>",
             escape_html(&row.session_start),
             row.duration_minutes,
             row.detection_count,
@@ -364,7 +366,9 @@ fn render_anomaly_table(rows: &[birdnet_timeseries::types::results::AnomalyRow])
         r"<table><thead><tr><th>Date</th><th>Detections</th><th>Z-Score</th><th>Type</th></tr></thead><tbody>",
     );
     for row in &anomalous {
-        let z = row.z_score.map_or("—".to_string(), |v| format!("{v:.2}"));
+        let z = row
+            .z_score
+            .map_or_else(|| "—".to_string(), |v| format!("{v:.2}"));
         let cls = if row.anomaly_flag == "high" {
             "high"
         } else {
@@ -393,7 +397,7 @@ fn render_peak_table(rows: &[birdnet_timeseries::types::results::PeakWindowRow])
     for row in rows {
         let _ = write!(
             html,
-            r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+            r"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
             escape_html(&row.window_start),
             escape_html(&row.window_end),
             row.detection_count,

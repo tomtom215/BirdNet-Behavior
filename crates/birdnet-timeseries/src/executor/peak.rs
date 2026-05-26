@@ -5,7 +5,7 @@ use crate::queries::QueryPlan;
 use crate::queries::peak::{PeakWindows, SpeciesPeak};
 use crate::types::{params::PeakParams, results::PeakWindowRow};
 
-impl<'conn> super::TimeSeriesDb<'conn> {
+impl super::TimeSeriesDb<'_> {
     /// Busiest N-minute detection windows over a lookback period.
     ///
     /// # Errors

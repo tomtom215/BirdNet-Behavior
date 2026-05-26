@@ -8,7 +8,7 @@ use crate::types::{
     results::{HourlyHeatmapRow, WindowRow},
 };
 
-impl<'conn> super::TimeSeriesDb<'conn> {
+impl super::TimeSeriesDb<'_> {
     /// Hourly detection counts over the last `params.lookback_days`.
     ///
     /// # Errors

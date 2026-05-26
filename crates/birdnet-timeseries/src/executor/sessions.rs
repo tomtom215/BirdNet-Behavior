@@ -9,7 +9,7 @@ use crate::types::{
 };
 use crate::window::{SessionSpec, WindowSpec};
 
-impl<'conn> super::TimeSeriesDb<'conn> {
+impl super::TimeSeriesDb<'_> {
     /// Group detections into activity sessions separated by inactivity gaps.
     ///
     /// # Errors
@@ -26,7 +26,7 @@ impl<'conn> super::TimeSeriesDb<'conn> {
             );
             spec.build_sql()
         } else {
-            self.build_daterange_session_sql(params)
+            Self::build_daterange_session_sql(params)
         };
 
         let mut stmt = self.conn.prepare(&sql)?;
@@ -127,7 +127,7 @@ impl<'conn> super::TimeSeriesDb<'conn> {
 
     /// Build a date-range session query without SQL injection risk
     /// (all interpolated values are validated u32 integers).
-    pub(super) fn build_daterange_session_sql(&self, params: &SessionParams) -> String {
+    pub(super) fn build_daterange_session_sql(params: &SessionParams) -> String {
         let threshold = params.gap_minutes;
         let days = params.lookback_days;
         let limit = params.limit;

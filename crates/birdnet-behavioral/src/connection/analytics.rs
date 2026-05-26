@@ -1,7 +1,7 @@
 //! Behavioral analytics query methods on `AnalyticsDb`.
 //!
 //! Wraps the `duckdb-behavioral` extension functions (sessionize, retention,
-//! window_funnel, sequence_next_node) with typed Rust APIs.
+//! `window_funnel`, `sequence_match`, `sequence_next_node`) with typed Rust APIs.
 //! All methods require `extension_loaded == true`.
 
 use duckdb::types::Value;
@@ -26,14 +26,17 @@ impl AnalyticsDb {
         self.require_extension()?;
         let sql = queries::sessionize_sql(params);
         let mut stmt = self.conn.prepare(&sql)?;
+        // DuckDB returns BIGINT for the session id, COUNT and DATEDIFF, and the
+        // timestamps are CAST to VARCHAR in the query; convert the signed
+        // counts (always non-negative here) to the struct's unsigned fields.
         let rows = stmt.query_map([], |row| {
             Ok(types::ActivitySession {
                 species: row.get(0)?,
-                session_id: row.get(1)?,
-                detection_count: row.get(2)?,
+                session_id: u64::try_from(row.get::<_, i64>(1)?).unwrap_or(0),
+                detection_count: u32::try_from(row.get::<_, i64>(2)?).unwrap_or(0),
                 start_time: row.get(3)?,
                 end_time: row.get(4)?,
-                duration_secs: row.get(5)?,
+                duration_secs: u64::try_from(row.get::<_, i64>(5)?).unwrap_or(0),
             })
         })?;
         rows.map(|r| r.map_err(AnalyticsError::from)).collect()
@@ -51,6 +54,14 @@ impl AnalyticsDb {
         &self,
         params: &types::RetentionParams,
     ) -> Result<Vec<types::SpeciesRetention>, AnalyticsError> {
+        // retention() accepts 2..=32 conditions; one anchors the cohort, so
+        // 1..=31 day intervals are valid.
+        let n = params.intervals.len();
+        if !(1..=31).contains(&n) {
+            return Err(AnalyticsError::InvalidData(format!(
+                "retention requires 1..=31 day intervals, got {n}"
+            )));
+        }
         self.require_extension()?;
         let sql = queries::retention_sql(params);
         let mut stmt = self.conn.prepare(&sql)?;
@@ -102,14 +113,24 @@ impl AnalyticsDb {
         &self,
         params: &types::FunnelParams,
     ) -> Result<Vec<types::ChorusFunnel>, AnalyticsError> {
+        let n = params.species_sequence.len();
+        if !(2..=32).contains(&n) {
+            return Err(AnalyticsError::InvalidData(format!(
+                "window_funnel requires 2..=32 species, got {n}"
+            )));
+        }
         self.require_extension()?;
         let sql = queries::funnel_sql(params);
-        let total_steps = u32::try_from(params.species_sequence.len()).unwrap_or(0);
+        let total_steps = u32::try_from(n).unwrap_or(0);
         let sequence = params.species_sequence.clone();
 
         let mut stmt = self.conn.prepare(&sql)?;
+        // window_funnel returns INTEGER (the furthest step reached).
         let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                u32::try_from(row.get::<_, i32>(1)?).unwrap_or(0),
+            ))
         })?;
 
         let mut results = Vec::new();
@@ -128,6 +149,41 @@ impl AnalyticsDb {
             });
         }
         Ok(results)
+    }
+
+    /// Execute an ordered sequence-pattern match query.
+    ///
+    /// For each day, reports whether the configured species were detected in
+    /// the given order (optionally within `params.max_gap_minutes` between
+    /// consecutive steps), using `sequence_match` from duckdb-behavioral.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AnalyticsError::InvalidData` if the species sequence is not
+    /// 2..=32 long, `AnalyticsError::ExtensionLoad` if the extension is not
+    /// loaded, or `AnalyticsError::Database` on query failure.
+    pub fn sequence_match(
+        &self,
+        params: &types::PatternParams,
+    ) -> Result<Vec<types::PatternMatch>, AnalyticsError> {
+        let n = params.species_sequence.len();
+        if !(2..=32).contains(&n) {
+            return Err(AnalyticsError::InvalidData(format!(
+                "sequence_match requires 2..=32 species, got {n}"
+            )));
+        }
+        self.require_extension()?;
+        let sql = queries::sequence_match_sql(params);
+        let sequence = params.species_sequence.clone();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map([], |row| {
+            Ok(types::PatternMatch {
+                date: row.get(0)?,
+                matched: row.get(1)?,
+                species_sequence: sequence.clone(),
+            })
+        })?;
+        rows.map(|r| r.map_err(AnalyticsError::from)).collect()
     }
 
     /// Execute a next-species prediction query.
@@ -221,5 +277,50 @@ mod tests {
         };
         let err = db.funnel(&params).unwrap_err();
         assert!(err.to_string().contains("extension not loaded"));
+    }
+
+    #[test]
+    fn sequence_match_requires_extension() {
+        let (db, _tmp) = make_db();
+        let err = db
+            .sequence_match(&types::PatternParams::default())
+            .unwrap_err();
+        assert!(err.to_string().contains("extension not loaded"));
+    }
+
+    // Input validation runs before the extension check, so these are testable
+    // without a loaded extension.
+
+    #[test]
+    fn sequence_match_rejects_short_sequence() {
+        let (db, _tmp) = make_db();
+        let params = types::PatternParams {
+            species_sequence: vec!["Robin".into()],
+            ..types::PatternParams::default()
+        };
+        let err = db.sequence_match(&params).unwrap_err();
+        assert!(err.to_string().contains("requires 2..=32"));
+    }
+
+    #[test]
+    fn funnel_rejects_short_sequence() {
+        let (db, _tmp) = make_db();
+        let params = types::FunnelParams {
+            species_sequence: vec!["Robin".into()],
+            ..types::FunnelParams::default()
+        };
+        let err = db.funnel(&params).unwrap_err();
+        assert!(err.to_string().contains("requires 2..=32"));
+    }
+
+    #[test]
+    fn retention_rejects_empty_intervals() {
+        let (db, _tmp) = make_db();
+        let params = types::RetentionParams {
+            intervals: vec![],
+            min_detections: 5,
+        };
+        let err = db.retention(&params).unwrap_err();
+        assert!(err.to_string().contains("requires 1..=31"));
     }
 }

@@ -61,6 +61,15 @@ struct NextSpeciesQuery {
     limit: Option<u32>,
 }
 
+#[derive(Deserialize)]
+#[allow(dead_code)]
+struct PatternsQuery {
+    species: Option<String>,
+    max_gap: Option<u32>,
+    hour_start: Option<u32>,
+    hour_end: Option<u32>,
+}
+
 // -- Handler implementations --
 
 #[cfg(feature = "analytics")]
@@ -234,15 +243,77 @@ async fn funnel(
     unavailable("window_funnel")
 }
 
-async fn patterns(State(_state): State<AppState>) -> (StatusCode, Json<Value>) {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(json!({
-            "status": "planned",
-            "message": "Pattern matching (sequence_match) endpoint is not yet implemented.",
-            "function": "sequence_match",
-        })),
-    )
+#[cfg(feature = "analytics")]
+async fn patterns(
+    State(state): State<AppState>,
+    Query(query): Query<PatternsQuery>,
+) -> (StatusCode, Json<Value>) {
+    if !state.has_analytics() {
+        return unavailable("sequence_match");
+    }
+
+    let default = birdnet_behavioral::types::PatternParams::default();
+    let species_sequence = query
+        .species
+        .map(|s| s.split(',').map(|part| part.trim().to_string()).collect())
+        .unwrap_or(default.species_sequence);
+
+    let params = birdnet_behavioral::types::PatternParams {
+        species_sequence,
+        max_gap_minutes: query.max_gap,
+        hour_start: query.hour_start.unwrap_or(default.hour_start),
+        hour_end: query.hour_end.unwrap_or(default.hour_end),
+    };
+
+    let result = tokio::task::spawn_blocking(move || {
+        state
+            .with_analytics(|adb| adb.sequence_match(&params))
+            .unwrap_or_else(|| {
+                Err(
+                    birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
+                        "analytics not available".into(),
+                    ),
+                )
+            })
+    })
+    .await;
+
+    match result {
+        Ok(Ok(matches)) => {
+            let total = matches.len();
+            let matched_days = matches.iter().filter(|m| m.matched).count();
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "patterns": matches,
+                    "total": total,
+                    "matched_days": matched_days,
+                })),
+            )
+        }
+        // A bad species count is a client error, not an extension fault.
+        Ok(Err(birdnet_behavioral::connection::AnalyticsError::InvalidData(msg))) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "status": "invalid_request",
+                "function": "sequence_match",
+                "error": msg,
+            })),
+        ),
+        Ok(Err(e)) => extension_error("sequence_match", &e.to_string()),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("internal error: {e}") })),
+        ),
+    }
+}
+
+#[cfg(not(feature = "analytics"))]
+async fn patterns(
+    State(_state): State<AppState>,
+    Query(_query): Query<PatternsQuery>,
+) -> (StatusCode, Json<Value>) {
+    unavailable("sequence_match")
 }
 
 #[cfg(feature = "analytics")]
@@ -322,7 +393,7 @@ async fn analytics_status(State(state): State<AppState>) -> (StatusCode, Json<Va
                 "retention": "/analytics/retention?min_detections=5",
                 "funnel": "/analytics/funnel?species=Robin,Blackbird&window=120&hour_start=4&hour_end=8",
                 "next_species": "/analytics/next-species?after=European+Robin&window=60&limit=10",
-                "patterns": "planned",
+                "patterns": "/analytics/patterns?species=Robin,Blackbird,Wren&max_gap=60&hour_start=4&hour_end=8",
             },
         })),
     )
