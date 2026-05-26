@@ -68,6 +68,15 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Free up runner disk space
+        # The all-features step compiles the workspace a 4th time (bundled
+        # DuckDB + analytics) atop the earlier lib/bins, integration-test, and
+        # doctest target/ artifacts, overrunning the stock runner's ~14 GB
+        # ("No space left on device"). Reclaim ~25-30 GB of unused SDKs.
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
+          df -h /
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Install native build dependencies
