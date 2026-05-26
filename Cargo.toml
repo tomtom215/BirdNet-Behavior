@@ -45,7 +45,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 tokio = { version = "1.52", features = ["full"] }
 
 # Database
-rusqlite = { version = "0.39", features = ["bundled", "backup"] }
+rusqlite = { version = "0.40", features = ["bundled", "backup"] }
 # `~` pins the bundled DuckDB version: the `10503` component is DuckDB 1.5.3
 # itself (the trailing `.x` is only duckdb-rs's binding revision). It MUST match
 # the DuckDB version the published `behavioral` community extension targets —
