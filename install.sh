@@ -73,9 +73,13 @@ else
     RED='' GREEN='' YELLOW='' BLUE='' BOLD='' RESET=''
 fi
 
-info()    { echo -e "${BLUE}[INFO]${RESET}  $*"; }
-success() { echo -e "${GREEN}[OK]${RESET}    $*"; }
-warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*"; }
+# All logging goes to stderr so that stdout is reserved for a function's return
+# value. resolve_version/detect_arch return via `echo`, and callers capture them
+# with $(...) — a log line on stdout would be swallowed into the value (e.g. a
+# version of "[INFO] Querying…\n0.5.1", which then corrupts the download URL).
+info()    { echo -e "${BLUE}[INFO]${RESET}  $*" >&2; }
+success() { echo -e "${GREEN}[OK]${RESET}    $*" >&2; }
+warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*" >&2; }
 error()   { echo -e "${RED}[ERROR]${RESET} $*" >&2; }
 fatal()   { error "$*"; exit 1; }
 
