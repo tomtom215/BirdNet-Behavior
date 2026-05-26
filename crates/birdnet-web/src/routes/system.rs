@@ -90,11 +90,11 @@ async fn disk_info(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
         }
         Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
+            Json(json!({ "error": crate::routes::log_internal("internal error", &e) })),
         ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("internal error: {e}") })),
+            Json(json!({ "error": crate::routes::log_internal("internal error", &e) })),
         ),
     }
 }
@@ -140,7 +140,7 @@ async fn stats(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("internal error: {e}") })),
+            Json(json!({ "error": crate::routes::log_internal("internal error", &e) })),
         ),
     }
 }

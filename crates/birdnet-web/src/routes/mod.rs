@@ -42,6 +42,19 @@ pub(crate) fn is_valid_date(s: &str) -> bool {
         && bytes[8..10].iter().all(u8::is_ascii_digit)
 }
 
+/// Log an internal (5xx) error server-side and return a generic, safe message
+/// for the client.
+///
+/// 5xx responses must never echo internal error strings: a `DbError`'s Display
+/// leaks SQL/schema detail (e.g. "sqlite error: no such column …") and a
+/// `JoinError` leaks panic text. Handlers keep their own response shape and use
+/// this for the `"error"` field, so the real detail is logged for the operator
+/// (with the module as the tracing target) but never disclosed over the network.
+pub(crate) fn log_internal<E: std::fmt::Display>(context: &str, err: &E) -> &'static str {
+    tracing::error!(error = %err, "{context}");
+    "internal server error"
+}
+
 /// Build all routes: API under `/api/v2/`, admin routes at `/admin`, and page routes at `/`.
 pub fn api_routes() -> Router<AppState> {
     Router::new()
