@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Version-pinned installs work over `sudo` again.** `install.sh` now accepts a
+  `--version X.Y.Z` flag (the `VERSION` environment variable still works), so a
+  release can be pinned through the pipe form
+  `curl … | sudo bash -s -- --version X.Y.Z`. The docs and the generated release
+  notes no longer suggest `sudo bash <(curl …)`, which fails with
+  `/dev/fd/63: No such file or directory` because `sudo` closes the
+  process-substitution file descriptor crossing to root. The root-required error
+  message now prints a working command instead of a literal `curl ... | sudo bash`.
+
 ## [0.5.1] - 2026-05-26
 
 ### Added

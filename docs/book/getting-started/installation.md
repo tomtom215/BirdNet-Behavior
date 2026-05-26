@@ -63,9 +63,21 @@ curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/ins
 The installer detects your architecture, downloads the pre-built binary and the BirdNET+ model, creates the config/recording/model directories, installs and enables a `systemd` service, auto-detects your ALSA microphone, and starts the service immediately.
 
 ```bash
-# Install a specific version (defaults to latest)
-VERSION=0.5.1 bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh)
+# Install a specific version (defaults to latest). The `-s --` passes the
+# argument through to the installer.
+curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash -s -- --version 0.5.1
 ```
+
+> **Don't run the installer with `sudo bash <(curl ...)`.** Process substitution
+> hands `bash` a file descriptor owned by your user; `sudo` closes it crossing
+> to root, so the script disappears with `/dev/fd/63: No such file or directory`.
+> The pipe forms above (`curl ... | sudo bash`) avoid that entirely. If you'd
+> rather inspect the script first, download it and run it directly:
+>
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh -o install.sh
+> sudo bash install.sh --version 0.5.1
+> ```
 
 Re-running the installer is an **upgrade**: it stops the service, swaps in the
 new binary, and restarts it. Your configuration and the SQLite/DuckDB databases

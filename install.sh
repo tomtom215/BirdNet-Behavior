@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
 # install.sh — BirdNet-Behavior installer for Raspberry Pi and x86_64 Linux
 #
-# Usage:
-#   curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | bash
-#   # or, for a specific version:
-#   VERSION=0.2.0 bash install.sh
+# Usage (Linux / Raspberry Pi — installs a systemd service, so it needs root):
+#   curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash
+#   # pin a specific version (the `-s --` passes the args through to the script):
+#   curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash -s -- --version 0.5.1
+#   # from a saved copy:
+#   sudo bash install.sh [--version 0.5.1]
+#
+# Do NOT use `sudo bash <(curl ...)`: process substitution hands bash a file
+# descriptor owned by your user, and sudo closes it crossing to root, so the
+# script disappears ("/dev/fd/63: No such file or directory"). Use the pipe.
+#
+# macOS (Apple Silicon) sets up a per-user launchd agent instead — run without sudo.
 #
 # What this script does:
 #   1. Detects the system architecture (aarch64 / x86_64)
@@ -77,13 +85,30 @@ fatal()   { error "$*"; exit 1; }
 
 require_root() {
     if [ "$(id -u)" -ne 0 ]; then
-        fatal "This installer must be run as root. Try: curl ... | sudo bash"
+        error "This installer needs root — it installs a systemd service."
+        cat >&2 <<EOF
+
+Re-run it by piping into sudo:
+
+    curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sudo bash
+
+To pin a version, pass it as an argument after a literal --:
+
+    curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sudo bash -s -- --version ${VERSION:-X.Y.Z}
+
+Already saved the script?   sudo bash install.sh [--version ${VERSION:-X.Y.Z}]
+
+Avoid  sudo bash <(curl ...)  — process substitution gives bash a file
+descriptor owned by your user, and sudo closes it on the way to root, so the
+script vanishes ("/dev/fd/63: No such file or directory"). The pipe above works.
+EOF
+        exit 1
     fi
     # Determine who to run the service as.  When invoked via `sudo`, $SUDO_USER
     # is the original (non-root) user.  Refuse to run as root directly so the
     # service doesn't end up owned by root.
     if [ -z "${SUDO_USER:-}" ] || [ "${SUDO_USER}" = "root" ]; then
-        fatal "Run the installer with sudo from a normal user account, not as root directly."
+        fatal "Run the installer via sudo from a normal user account, not as root directly, so the service isn't owned by root.  E.g.:  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sudo bash"
     fi
     SERVICE_USER="${SUDO_USER}"
 }
@@ -272,7 +297,7 @@ resolve_version() {
         fi
     fi
     rm -f "${tmp}"
-    fatal "Could not determine latest release version. Set VERSION=x.y.z to install a specific version."
+    fatal "Could not determine latest release version. Pass --version x.y.z (or set VERSION=x.y.z) to install a specific version."
 }
 
 # ---------------------------------------------------------------------------
@@ -954,10 +979,73 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+
+SUBCOMMAND=""
+
+usage() {
+    cat <<EOF
+BirdNet-Behavior installer
+
+Linux / Raspberry Pi (installs a systemd service, so it needs root):
+  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sudo bash
+  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sudo bash -s -- --version X.Y.Z
+
+From a saved copy of this script:
+  sudo bash install.sh [--version X.Y.Z]
+  sudo bash install.sh uninstall
+
+Options:
+  -v, --version X.Y.Z   Install a specific release (default: latest stable).
+                        The VERSION environment variable is still honoured too.
+  -h, --help            Show this help and exit.
+
+Avoid  sudo bash <(curl ...)  — sudo closes the process-substitution file
+descriptor on the way to root, so the script never loads. Use the pipe above.
+EOF
+}
+
+parse_args() {
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            -v | --version)
+                [ "$#" -ge 2 ] || fatal "--version needs a value, e.g. --version 0.5.1"
+                VERSION="$2"
+                shift 2
+                ;;
+            --version=*)
+                VERSION="${1#*=}"
+                shift
+                ;;
+            -h | --help)
+                usage
+                exit 0
+                ;;
+            uninstall)
+                SUBCOMMAND="uninstall"
+                shift
+                ;;
+            --)
+                shift
+                ;;
+            -*)
+                fatal "Unknown option: $1  (run with --help for usage)."
+                ;;
+            *)
+                fatal "Unexpected argument: $1  (run with --help for usage)."
+                ;;
+        esac
+    done
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 main() {
+    parse_args "$@"
+
     echo -e "${BOLD}BirdNet-Behavior Installer${RESET}"
     echo "  Repository: https://github.com/${REPO}"
     echo
@@ -966,7 +1054,7 @@ main() {
     # root check, download, or filesystem change, so a Mac user never gets a
     # half-finished Linux install.
     if [ "$(uname -s)" = "Darwin" ]; then
-        if [ "${1:-}" = "uninstall" ]; then
+        if [ "${SUBCOMMAND}" = "uninstall" ]; then
             warn "On macOS, uninstall with:  ./uninstall.sh   (it handles the launchd LaunchAgent)."
             exit 0
         fi
@@ -974,7 +1062,7 @@ main() {
         exit 0
     fi
 
-    if [ "${1:-}" = "uninstall" ]; then
+    if [ "${SUBCOMMAND}" = "uninstall" ]; then
         do_uninstall
         exit 0
     fi
