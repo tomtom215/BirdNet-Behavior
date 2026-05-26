@@ -66,7 +66,7 @@ pub(super) async fn analytics_sessions_partial(
                 let duration = format_duration(s.duration_secs);
                 let _ = write!(
                     html,
-                    r#"<tr><td>{sp}</td><td>{c}</td><td>{st}</td><td>{d}</td></tr>"#,
+                    r"<tr><td>{sp}</td><td>{c}</td><td>{st}</td><td>{d}</td></tr>",
                     sp = escape_html(&s.species),
                     c = s.detection_count,
                     st = escape_html(&s.start_time),
@@ -191,15 +191,12 @@ pub(super) async fn analytics_next_partial(
     })
     .await;
 
-    let trigger = match trigger_result {
-        Ok(Some(name)) => name,
-        _ => {
-            return (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, "text/html")],
-                r#"<p style="color:var(--text-muted)">No detections yet.</p>"#.to_string(),
-            );
-        }
+    let Ok(Some(trigger)) = trigger_result else {
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            r#"<p style="color:var(--text-muted)">No detections yet.</p>"#.to_string(),
+        );
     };
 
     let display = trigger.clone();

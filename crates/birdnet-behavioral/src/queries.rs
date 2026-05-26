@@ -4,8 +4,21 @@
 //! These queries are designed to be executed against a `DuckDB` connection
 //! that has the behavioral extension loaded and a `detections_ts` view
 //! with a proper TIMESTAMP column.
+//!
+//! Every builder targets the published extension's real function signatures
+//! (verified against the live extension by the tests in `connection::live`):
+//!
+//! | Function              | Shape used here                                    |
+//! |-----------------------|----------------------------------------------------|
+//! | `sessionize`          | window fn in a subquery, then `GROUP BY session_id`|
+//! | `retention`           | `retention(BOOLEAN, …)` -> `BOOLEAN[]` aggregate   |
+//! | `window_funnel`       | variadic `BOOLEAN` step conditions                 |
+//! | `sequence_match`      | `sequence_match(pattern, ts, BOOLEAN, …)` -> bool  |
+//! | `sequence_next_node`  | `(direction, mode, ts, value, BOOLEAN, …)` -> text |
 
-use crate::types::{FunnelParams, RetentionParams, SessionizeParams};
+use std::fmt::Write as _;
+
+use crate::types::{FunnelParams, PatternParams, RetentionParams, SessionizeParams};
 
 /// SQL to create the timestamp view for behavioral queries.
 ///
@@ -44,7 +57,7 @@ FORCE INSTALL behavioral FROM community;
 LOAD behavioral;
 ";
 
-/// SQL to read the loaded behavioral extension version (e.g. `v0.4.0`).
+/// SQL to read the loaded behavioral extension version (e.g. `v0.6.0`).
 ///
 /// Filters on `loaded` so it reports the version active in the current
 /// connection, not one merely present in `DuckDB`'s shared extension cache.
@@ -54,8 +67,11 @@ pub const BEHAVIORAL_EXTENSION_VERSION: &str = "SELECT extension_version FROM du
 
 /// Build SQL for activity sessionization.
 ///
-/// Uses `sessionize()` from duckdb-behavioral to group continuous
-/// bird activity into sessions.
+/// `sessionize()` is a window function that assigns a session id per detection,
+/// starting a new session whenever the gap since the same species' previous
+/// detection exceeds `gap_minutes`. A window expression cannot appear in
+/// `GROUP BY`, so the id is materialised in an inner query and the outer query
+/// aggregates each session.
 pub fn sessionize_sql(params: &SessionizeParams) -> String {
     let species_filter = params.species.as_ref().map_or_else(String::new, |s| {
         format!("WHERE Com_Name = '{}'", s.replace('\'', "''"))
@@ -63,17 +79,23 @@ pub fn sessionize_sql(params: &SessionizeParams) -> String {
 
     format!(
         "SELECT
-            Com_Name as species,
-            sessionize(detection_timestamp, INTERVAL '{gap} MINUTE')
-                OVER (PARTITION BY Sci_Name ORDER BY detection_timestamp)
-                AS session_id,
-            COUNT(*) as detection_count,
-            MIN(detection_timestamp) as start_time,
-            MAX(detection_timestamp) as end_time,
-            DATEDIFF('second', MIN(detection_timestamp), MAX(detection_timestamp)) as duration_secs
-        FROM detections_ts
-        {species_filter}
-        GROUP BY Com_Name, session_id
+            species,
+            session_id,
+            COUNT(*) AS detection_count,
+            CAST(MIN(detection_timestamp) AS VARCHAR) AS start_time,
+            CAST(MAX(detection_timestamp) AS VARCHAR) AS end_time,
+            DATEDIFF('second', MIN(detection_timestamp), MAX(detection_timestamp)) AS duration_secs
+        FROM (
+            SELECT
+                Com_Name AS species,
+                detection_timestamp,
+                sessionize(detection_timestamp, INTERVAL '{gap} MINUTE')
+                    OVER (PARTITION BY Sci_Name ORDER BY detection_timestamp)
+                    AS session_id
+            FROM detections_ts
+            {species_filter}
+        )
+        GROUP BY species, session_id
         ORDER BY start_time DESC
         LIMIT {limit}",
         gap = params.gap_minutes,
@@ -81,63 +103,106 @@ pub fn sessionize_sql(params: &SessionizeParams) -> String {
     )
 }
 
-/// Build SQL for species retention analysis.
+/// Build SQL for per-species day-N retention.
 ///
-/// Uses `retention()` from duckdb-behavioral to track species
-/// return patterns at specified day intervals.
+/// Every distinct detection day of a species is a cohort anchor. The
+/// `retention()` aggregate reports, per anchor, whether the species recurred
+/// within each day interval (its first argument anchors the cohort and is
+/// always satisfied; argument `i+1` is "seen again within interval `i`").
+/// Averaging the boolean array across a species' anchors gives its retention
+/// rate at each interval; the final (long-term) rate drives the residency
+/// classification.
+///
+/// Callers must pass at least one interval and at most 31 (the aggregate
+/// accepts 2..=32 conditions including the anchor); [`crate::connection`]
+/// enforces this before building the SQL.
 pub fn retention_sql(params: &RetentionParams) -> String {
-    let intervals_str = params
-        .intervals
-        .iter()
-        .map(std::string::ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(", ");
+    // Argument 1 anchors the cohort; one further condition per interval.
+    let conditions: Vec<String> = std::iter::once("b.d = a.d".to_string())
+        .chain(
+            params
+                .intervals
+                .iter()
+                .map(|days| format!("b.d > a.d AND b.d <= a.d + INTERVAL '{days} day'")),
+        )
+        .collect();
+    // retention()[1] is the anchor; interval `i` (0-based) is retention()[i+2].
+    let rate_exprs: Vec<String> = (0..params.intervals.len())
+        .map(|i| format!("AVG(CASE WHEN r[{}] THEN 1.0 ELSE 0.0 END)", i + 2))
+        .collect();
+    let long_term_idx = params.intervals.len(); // 1-based index of the last rate
 
     format!(
-        "SELECT
-            Com_Name as species,
-            retention(detection_date, [{intervals}]) AS retention_rates
-        FROM (
-            SELECT DISTINCT Com_Name, detection_date
-            FROM detections_ts
+        "WITH sd AS (
+            SELECT DISTINCT Com_Name, detection_date AS d FROM detections_ts
+        ),
+        cohort AS (
+            SELECT a.Com_Name AS species, a.d AS anchor,
+                   retention({conditions}) AS r
+            FROM sd a JOIN sd b ON a.Com_Name = b.Com_Name
+            GROUP BY a.Com_Name, a.d
         )
-        GROUP BY Com_Name
-        HAVING COUNT(DISTINCT detection_date) >= {min}
-        ORDER BY retention_rates[1] DESC",
-        intervals = intervals_str,
+        SELECT species, [{rates}] AS retention_rates
+        FROM cohort
+        GROUP BY species
+        HAVING COUNT(*) >= {min}
+        ORDER BY retention_rates[{long_term_idx}] DESC",
+        conditions = conditions.join(", "),
+        rates = rate_exprs.join(", "),
         min = params.min_detections,
     )
 }
 
 /// Build SQL for dawn chorus funnel analysis.
 ///
-/// Uses `window_funnel()` from duckdb-behavioral to check how many
-/// steps of an expected species sequence occur each morning.
+/// `window_funnel()` reports, per day, how many leading steps of the expected
+/// species sequence occurred within the time window. The step conditions are
+/// passed as variadic boolean arguments — the real signature — not as an array.
+///
+/// Callers must pass 2..=32 species; [`crate::connection`] enforces this.
 pub fn funnel_sql(params: &FunnelParams) -> String {
-    let conditions: Vec<String> = params
-        .species_sequence
-        .iter()
-        .map(|s| format!("Com_Name = '{}'", s.replace('\'', "''")))
-        .collect();
-
-    let conditions_array = conditions.join(",\n        ");
+    let conditions = species_conditions(&params.species_sequence);
 
     format!(
         "SELECT
-            CAST(detection_timestamp AS DATE) as date,
+            CAST(CAST(detection_timestamp AS DATE) AS VARCHAR) AS date,
             window_funnel(
                 INTERVAL '{window} MINUTE',
                 detection_timestamp,
-                [
-                    {conditions}
-                ]
+                {conditions}
             ) AS steps_completed
         FROM detections_ts
         WHERE EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
         GROUP BY CAST(detection_timestamp AS DATE)
         ORDER BY date DESC",
         window = params.window_minutes,
-        conditions = conditions_array,
+        start = params.hour_start,
+        end = params.hour_end,
+    )
+}
+
+/// Build SQL for ordered sequence pattern matching.
+///
+/// `sequence_match()` tests, per day, whether the configured species were
+/// detected in order (with any other events allowed between steps). When
+/// `max_gap_minutes` is set a `(?t<=secs)` time constraint is inserted before
+/// each subsequent step.
+///
+/// Callers must pass 2..=32 species; [`crate::connection`] enforces this.
+pub fn sequence_match_sql(params: &PatternParams) -> String {
+    let pattern = ordered_pattern(params.species_sequence.len(), params.max_gap_minutes);
+    let conditions = species_conditions(&params.species_sequence);
+
+    format!(
+        "SELECT
+            CAST(CAST(detection_timestamp AS DATE) AS VARCHAR) AS date,
+            sequence_match('{pattern}', detection_timestamp,
+                {conditions}
+            ) AS matched
+        FROM detections_ts
+        WHERE EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
+        GROUP BY CAST(detection_timestamp AS DATE)
+        ORDER BY date DESC",
         start = params.hour_start,
         end = params.hour_end,
     )
@@ -145,26 +210,67 @@ pub fn funnel_sql(params: &FunnelParams) -> String {
 
 /// Build SQL for next-species prediction.
 ///
-/// Uses `sequence_next_node()` from duckdb-behavioral to predict
-/// which species typically follows a given trigger species.
+/// The timeline is split into activity sessions separated by gaps larger than
+/// `window_minutes`; within each session `sequence_next_node()` finds the
+/// species detected immediately after the first occurrence of the trigger.
+/// Counting those across sessions yields a frequency distribution of what
+/// typically follows the trigger species.
+///
+/// `sequence_next_node(direction, mode, ts, value, base_cond, event_cond)`
+/// requires at least two boolean conditions; `forward`/`first_match` anchors on
+/// the first event matching `base_cond` (the trigger) and the `TRUE` event
+/// condition accepts whatever node comes next, so it returns that node's
+/// species (verified against the live extension in `connection::live`).
 pub fn next_species_sql(trigger_species: &str, window_minutes: u32, limit: u32) -> String {
     let escaped = trigger_species.replace('\'', "''");
     format!(
-        "SELECT
-            sequence_next_node(
-                detection_timestamp,
-                INTERVAL '{window_minutes} MINUTE',
-                Com_Name = '{escaped}',
-                1,
-                'strict'
-            ) AS predicted_species,
-            COUNT(*) as frequency
-        FROM detections_ts
-        GROUP BY predicted_species
-        HAVING predicted_species IS NOT NULL
+        "WITH sessioned AS (
+            SELECT detection_timestamp, Com_Name,
+                   sessionize(detection_timestamp, INTERVAL '{window_minutes} MINUTE')
+                       OVER (ORDER BY detection_timestamp) AS sid
+            FROM detections_ts
+        ),
+        per_session AS (
+            SELECT sequence_next_node('forward', 'first_match',
+                       detection_timestamp, Com_Name,
+                       Com_Name = '{escaped}', TRUE) AS predicted
+            FROM sessioned
+            GROUP BY sid
+        )
+        SELECT predicted AS predicted_species, COUNT(*) AS frequency
+        FROM per_session
+        WHERE predicted IS NOT NULL
+        GROUP BY predicted
         ORDER BY frequency DESC
         LIMIT {limit}",
     )
+}
+
+/// Render an ordered list of `Com_Name = '…'` boolean conditions, escaping
+/// embedded quotes, joined for use as variadic arguments.
+fn species_conditions(species: &[String]) -> String {
+    species
+        .iter()
+        .map(|s| format!("Com_Name = '{}'", s.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(",\n                ")
+}
+
+/// Build the NFA pattern string for an ordered sequence of `steps` conditions.
+///
+/// `(?1).*(?2).*…(?N)` matches the conditions in order with any events between.
+/// When `max_gap_minutes` is set, a `(?t<=secs)` constraint precedes each step
+/// after the first so consecutive steps must occur within that gap.
+fn ordered_pattern(steps: usize, max_gap_minutes: Option<u32>) -> String {
+    let mut pattern = String::from("(?1)");
+    for i in 2..=steps {
+        pattern.push_str(".*");
+        if let Some(gap) = max_gap_minutes {
+            let _ = write!(pattern, "(?t<={})", u64::from(gap) * 60);
+        }
+        let _ = write!(pattern, "(?{i})");
+    }
+    pattern
 }
 
 #[cfg(test)]
@@ -174,8 +280,11 @@ mod tests {
     #[test]
     fn sessionize_sql_all_species() {
         let sql = sessionize_sql(&SessionizeParams::default());
-        assert!(sql.contains("sessionize"));
-        assert!(sql.contains("INTERVAL '30 MINUTE'"));
+        assert!(sql.contains("sessionize(detection_timestamp, INTERVAL '30 MINUTE')"));
+        assert!(sql.contains("OVER (PARTITION BY Sci_Name ORDER BY detection_timestamp)"));
+        // The window id is grouped from an inner query, never in a top-level
+        // GROUP BY of a window expression.
+        assert!(sql.contains("GROUP BY species, session_id"));
         assert!(sql.contains("LIMIT 100"));
         assert!(!sql.contains("WHERE"));
     }
@@ -190,29 +299,68 @@ mod tests {
         let sql = sessionize_sql(&params);
         assert!(sql.contains("WHERE Com_Name = 'European Robin'"));
         assert!(sql.contains("INTERVAL '15 MINUTE'"));
+        assert!(sql.contains("LIMIT 50"));
     }
 
     #[test]
     fn retention_sql_default() {
         let sql = retention_sql(&RetentionParams::default());
-        assert!(sql.contains("retention("));
-        assert!(sql.contains("[1, 2, 3, 7, 14, 30]"));
+        // Real signature: boolean conditions, not (date, array).
+        assert!(sql.contains("retention(b.d = a.d,"));
+        assert!(sql.contains("b.d <= a.d + INTERVAL '1 day'"));
+        assert!(sql.contains("b.d <= a.d + INTERVAL '30 day'"));
+        assert!(sql.contains("AVG(CASE WHEN r[2] THEN 1.0 ELSE 0.0 END)"));
+        // 6 default intervals -> long-term rate is element 6.
+        assert!(sql.contains("ORDER BY retention_rates[6] DESC"));
         assert!(sql.contains(">= 5"));
+        // The old, non-existent `retention(date, [int,…])` form is gone.
+        assert!(!sql.contains("retention(detection_date"));
+        assert!(!sql.contains("[1, 2, 3"));
     }
 
     #[test]
     fn funnel_sql_default() {
         let sql = funnel_sql(&FunnelParams::default());
-        assert!(sql.contains("window_funnel"));
-        assert!(sql.contains("European Robin"));
+        assert!(sql.contains("window_funnel("));
+        assert!(sql.contains("Com_Name = 'European Robin'"));
         assert!(sql.contains("BETWEEN 4 AND 8"));
+        // Conditions are variadic, not wrapped in an array literal.
+        assert!(!sql.contains("[Com_Name"));
     }
 
     #[test]
-    fn next_species_sql_escapes_quotes() {
+    fn sequence_match_sql_default() {
+        let sql = sequence_match_sql(&PatternParams::default());
+        assert!(sql.contains("sequence_match('(?1).*(?2).*(?3)', detection_timestamp"));
+        assert!(sql.contains("Com_Name = 'European Robin'"));
+        assert!(sql.contains("AS matched"));
+    }
+
+    #[test]
+    fn sequence_match_sql_with_gap_inserts_time_token() {
+        let params = PatternParams {
+            species_sequence: vec!["A".into(), "B".into()],
+            max_gap_minutes: Some(30),
+            ..PatternParams::default()
+        };
+        let sql = sequence_match_sql(&params);
+        assert!(sql.contains("sequence_match('(?1).*(?t<=1800)(?2)'"));
+    }
+
+    #[test]
+    fn next_species_sql_uses_real_signature_and_escapes() {
         let sql = next_species_sql("O'Brien's Warbler", 60, 10);
-        assert!(sql.contains("O''Brien''s Warbler"));
+        assert!(sql.contains("sequence_next_node('forward', 'first_match'"));
+        assert!(sql.contains("Com_Name = 'O''Brien''s Warbler', TRUE)"));
+        assert!(sql.contains("INTERVAL '60 MINUTE'"));
         assert!(sql.contains("LIMIT 10"));
+    }
+
+    #[test]
+    fn ordered_pattern_shapes() {
+        assert_eq!(ordered_pattern(3, None), "(?1).*(?2).*(?3)");
+        assert_eq!(ordered_pattern(2, Some(60)), "(?1).*(?t<=3600)(?2)");
+        assert_eq!(ordered_pattern(1, None), "(?1)");
     }
 
     #[test]

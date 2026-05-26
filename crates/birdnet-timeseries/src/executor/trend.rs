@@ -8,7 +8,7 @@ use crate::types::{
     results::{AnomalyRow, TrendRow, YearOverYearRow},
 };
 
-impl<'conn> super::TimeSeriesDb<'conn> {
+impl super::TimeSeriesDb<'_> {
     /// N-day centred moving average of daily detections.
     ///
     /// # Errors

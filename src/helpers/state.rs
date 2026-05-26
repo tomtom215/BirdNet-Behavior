@@ -16,17 +16,20 @@ pub fn build_state_with_analytics(
         .clone()
         .or_else(|| config?.get("ANALYTICS_DB_PATH").map(PathBuf::from));
 
-    if let Some(ref analytics_path) = analytics_path {
-        tracing::info!(path = %analytics_path.display(), "enabling DuckDB analytics");
-        birdnet_web::state::AppState::new_with_analytics(
-            server_config.db_path.clone(),
-            analytics_path,
-        )
-        .map_err(|e| format!("database error: {e}").into())
-    } else {
-        birdnet_web::state::AppState::new(server_config.db_path.clone())
+    analytics_path.map_or_else(
+        || {
+            birdnet_web::state::AppState::new(server_config.db_path.clone())
+                .map_err(|e| format!("database error: {e}").into())
+        },
+        |analytics_path| {
+            tracing::info!(path = %analytics_path.display(), "enabling DuckDB analytics");
+            birdnet_web::state::AppState::new_with_analytics(
+                server_config.db_path.clone(),
+                &analytics_path,
+            )
             .map_err(|e| format!("database error: {e}").into())
-    }
+        },
+    )
 }
 
 /// Initialize the species image cache.

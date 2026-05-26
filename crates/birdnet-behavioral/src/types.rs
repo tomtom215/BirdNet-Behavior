@@ -190,6 +190,34 @@ impl Default for FunnelParams {
     }
 }
 
+/// Parameters for a sequence-pattern match query (`sequence_match`).
+#[derive(Debug, Clone)]
+pub struct PatternParams {
+    /// Ordered species the pattern must match, in sequence.
+    pub species_sequence: Vec<String>,
+    /// Optional maximum gap between consecutive steps. `None` = any gap.
+    pub max_gap_minutes: Option<u32>,
+    /// First hour of day to consider (e.g. 4 for dawn).
+    pub hour_start: u32,
+    /// Last hour of day to consider (inclusive).
+    pub hour_end: u32,
+}
+
+impl Default for PatternParams {
+    fn default() -> Self {
+        Self {
+            species_sequence: vec![
+                "European Robin".into(),
+                "Eurasian Blackbird".into(),
+                "Eurasian Wren".into(),
+            ],
+            max_gap_minutes: None,
+            hour_start: 4,
+            hour_end: 8,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

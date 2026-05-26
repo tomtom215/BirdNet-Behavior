@@ -12,7 +12,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.95"
 license = "CC-BY-NC-SA-4.0"
@@ -46,15 +46,19 @@ tokio = { version = "1.52", features = ["full"] }
 
 # Database
 rusqlite = { version = "0.39", features = ["bundled", "backup"] }
-# `~` pins the bundled DuckDB version: the `10501` component is DuckDB 1.5.1
+# `~` pins the bundled DuckDB version: the `10503` component is DuckDB 1.5.3
 # itself (the trailing `.x` is only duckdb-rs's binding revision). It MUST match
-# the DuckDB version the published `behavioral` community extension targets:
-# v0.4.0 on the community CDN is built for DuckDB 1.5.1, and DuckDB refuses to
-# LOAD an extension built for any other version (verified: even
-# `allow_extensions_metadata_mismatch` does not bypass the LOAD-time check).
-# Bump this and the lockfile to ~1.10503 only once a 1.5.3-built `behavioral`
-# extension is live on the community CDN.
-duckdb = { version = "~1.10501", features = ["bundled"] }
+# the DuckDB version the published `behavioral` community extension targets —
+# DuckDB refuses to LOAD an extension built for any other version (verified:
+# even `allow_extensions_metadata_mismatch` does not bypass the LOAD-time check).
+# The community CDN serves `behavioral` v0.6.0 built for DuckDB 1.5.3, so the
+# bundled engine matches and `LOAD behavioral` succeeds.
+#
+# When bumping, confirm the new build actually LOADs — an HTTP 200 on the
+# version path is not sufficient, because a freshly published artifact can lag
+# and still embed the previous DuckDB version in its footer until the
+# community-extensions rebuild propagates.
+duckdb = { version = "~1.10503", features = ["bundled"] }
 
 # Web
 axum = { version = "0.8.9", features = ["ws", "form"] }

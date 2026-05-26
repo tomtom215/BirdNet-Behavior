@@ -10,7 +10,7 @@ use crate::types::{
     results::{AccumulationRow, DiversityRow, PeakWindowRow},
 };
 
-impl<'conn> super::TimeSeriesDb<'conn> {
+impl super::TimeSeriesDb<'_> {
     /// Daily species richness, optionally including Shannon diversity.
     ///
     /// When `params.include_shannon` is `true`, also returns H and Pielou

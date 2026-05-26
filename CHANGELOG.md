@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-26
+
+### Added
+
+- **Dawn-chorus pattern matching — `GET /api/v2/analytics/patterns`.** The
+  previously-stubbed endpoint is implemented on the behavioral extension's
+  `sequence_match`, reporting per day whether a configured species sequence was
+  detected in order (optionally within a maximum gap between consecutive steps).
+
+### Changed
+
+- **Bundled DuckDB upgraded 1.5.1 → 1.5.3** to match the published `behavioral`
+  community extension (v0.6.0), which targets DuckDB 1.5.3. The bump is gated on
+  the CDN actually serving a 1.5.3-built extension that `LOAD`s on the bundled
+  engine — verified, not assumed from an HTTP 200.
+
+### Fixed
+
+- **Behavioral analytics were built against assumed extension signatures and had
+  never executed** (the extension could not `LOAD`, and CI does not exercise the
+  `analytics` feature), so every query was malformed against the real extension.
+  All builders are corrected and now verified end-to-end against the published
+  extension on DuckDB 1.5.3:
+  - `sessionize` materialises the window-function session id in a subquery
+    before aggregating (a window expression cannot appear in `GROUP BY`).
+  - `retention` uses the real `retention(BOOLEAN, …) -> BOOLEAN[]` aggregate
+    over per-species detection-day cohorts, replacing a non-existent
+    `retention(date, int[])` form.
+  - `window_funnel` passes step conditions as variadic booleans, not an array.
+  - `sequence_next_node` uses the real
+    `(direction, mode, timestamp, value, base_cond, …)` signature.
+
 ## [0.4.0] - 2026-05-25
 
 ### Added
@@ -893,7 +925,8 @@ x86_64 Linux.
 - systemd installer script with ALSA microphone auto-detection and
   automatic BirdNET+ model download from Zenodo.
 
-[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/tomtom215/BirdNet-Behavior/releases/tag/v0.3.0
 [0.2.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.1.0...v0.2.0
