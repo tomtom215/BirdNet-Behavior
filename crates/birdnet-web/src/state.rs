@@ -109,9 +109,11 @@ impl AppState {
     pub fn new(db_path: PathBuf) -> Result<Self, birdnet_db::sqlite::DbError> {
         let conn = birdnet_db::sqlite::open_or_create(&db_path)?;
 
-        if let Err(e) = birdnet_db::migration::migrate(&conn) {
-            tracing::warn!(error = %e, "migration warning");
-        }
+        // A migration failure is fatal: each migration is now atomic, so a
+        // failure leaves the DB at the last fully-applied version. Serving an
+        // under-migrated schema to code that expects newer columns only yields
+        // confusing runtime errors, so fail fast and let systemd surface it.
+        birdnet_db::migration::migrate(&conn)?;
 
         let recording_dir = db_path
             .parent()
@@ -153,9 +155,11 @@ impl AppState {
     ) -> Result<Self, birdnet_db::sqlite::DbError> {
         let conn = birdnet_db::sqlite::open_or_create(&db_path)?;
 
-        if let Err(e) = birdnet_db::migration::migrate(&conn) {
-            tracing::warn!(error = %e, "migration warning");
-        }
+        // A migration failure is fatal: each migration is now atomic, so a
+        // failure leaves the DB at the last fully-applied version. Serving an
+        // under-migrated schema to code that expects newer columns only yields
+        // confusing runtime errors, so fail fast and let systemd surface it.
+        birdnet_db::migration::migrate(&conn)?;
 
         let recording_dir = db_path
             .parent()
