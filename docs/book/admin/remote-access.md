@@ -54,11 +54,28 @@ server {
 }
 ```
 
-> **WebSocket matters here.** The live dashboard feed, the spectrogram, and kiosk mode all use a WebSocket (`/api/v2/ws`). Make sure your proxy forwards the `Upgrade`/`Connection` headers (shown above) or those features will silently stall.
+> **WebSocket matters here.** The live dashboard feed, the spectrogram, and kiosk mode all use WebSockets (`/api/v2/ws/detections` and `/api/v2/ws/spectrogram`). Make sure your proxy forwards the `Upgrade`/`Connection` headers (shown above) or those features will silently stall.
 
 ## Built-in HTTP Basic Auth
 
-If you'd rather not run a proxy, the binary supports HTTP Basic Auth directly and is compatible with the BirdNET-Pi `CADDY_PWD` convention. This protects the UI with a username/password but is **still plain HTTP** — only use it behind TLS, or on a trusted LAN.
+If you'd rather not run a proxy, the binary supports HTTP Basic Auth directly, compatible with the BirdNET-Pi `CADDY_PWD` convention. Set it in `birdnet.conf` or the environment (so it works under Docker too):
+
+```dotenv
+CADDY_USER=birder      # optional — defaults to "birdnet"
+CADDY_PWD=a-long-random-password
+```
+
+This protects the UI with a username/password but is **still plain HTTP** — only use it behind TLS, or on a trusted LAN. If the server binds to a non-loopback address (e.g. `0.0.0.0`) with **no** `CADDY_PWD` set, it logs a prominent warning at startup, because the admin panel would otherwise be open to the whole network. The live-detection WebSocket and `/api/v2/health` are exempt from this auth (a browser can't attach Basic-auth headers to a WebSocket handshake), so restrict those at the network layer if you need to.
+
+## Cross-origin requests (CORS)
+
+By default the API allows **no** cross-origin reads — a website you happen to visit can't read your station's data over the LAN. If you serve a separate dashboard from a different origin, allow it explicitly:
+
+```dotenv
+BIRDNET_CORS_ALLOWED_ORIGINS=https://dashboard.example.com
+```
+
+State-changing requests are protected by a CSRF guard regardless of this setting.
 
 ## A safer alternative: a private tunnel
 

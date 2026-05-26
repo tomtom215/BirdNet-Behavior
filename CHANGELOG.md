@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **CI now compiles and tests the `analytics` feature** (clippy, tests, MSRV
+  check, and rustdoc) and adds an **aarch64 (Raspberry Pi) cross-check** on
+  every PR — closing the blind spot that let analytics bugs ship undetected.
+- **`/api/v2/health` reports `detection_daemon`** (`running`/`stopped`), so
+  monitoring can tell a capturing station from one running web-only or with a
+  misconfigured model/labels/watch-dir.
+- **`BIRDNET_CORS_ALLOWED_ORIGINS`** to allow specific cross-origin origins.
+- **`docs/SECURITY_HARDENING.md`** — a deployment hardening guide (network
+  exposure, authentication, CORS, privacy, backups, and release verification).
+
+### Changed
+
+- **Configuration is validated at startup**; the daemon now refuses to start on
+  an invalid setting (e.g. a latitude outside ±90, a malformed
+  `RECORDING_SCHEDULE`) instead of running silently degraded.
+- **Database migrations are atomic** — each migration's schema change and its
+  version bump commit in one transaction — and a migration failure is now fatal
+  at startup rather than serving an under-migrated schema.
+- **The detection-event channel is bounded**, so a stalled consumer applies
+  backpressure (tripping the systemd watchdog) instead of buffering until the
+  process is OOM-killed; the `--process-existing` backlog now runs after the
+  server signals readiness.
+
+### Fixed
+
+- **Capture-subprocess stderr is drained to the log**, fixing a slow
+  pipe-buffer stall that could silently stop `arecord`/`ffmpeg` audio while the
+  process still appeared alive — and surfacing the subprocess's own errors for
+  field debugging.
+- **`BNB_BASE_URL` defaults to the server's own port** (`:8502`, was `:8080`)
+  for RSS/iCal feeds and share links.
+- **Documentation drift**: corrected the `/api/v2/health` response example, the
+  `.env.example` image-tag note (analytics is built into *every* image, no
+  separate tag), stale version pins, the feed-default port, and minor wording.
+
+### Security
+
+- **CORS is same-origin by default** — the API no longer emits a wildcard
+  `Access-Control-Allow-Origin`, so a site you visit can't read the station
+  over the LAN. Opt specific origins back in with `BIRDNET_CORS_ALLOWED_ORIGINS`.
+- **5xx API responses no longer leak internal error strings** (DB/SQL detail);
+  the detail is logged server-side and a generic message is returned.
+- **HTTP Basic Auth (`CADDY_PWD`/`CADDY_USER`) is now read from the
+  environment** as well as `birdnet.conf`, so it can be enabled under Docker;
+  the server logs a prominent warning when bound to a non-loopback address with
+  no password set.
+
 ## [0.5.0] - 2026-05-26
 
 ### Added

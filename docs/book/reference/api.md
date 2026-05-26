@@ -8,8 +8,23 @@ Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It
 
 ```bash
 curl http://localhost:8502/api/v2/health
-# {"status":"ok", ...}
 ```
+
+```json
+{
+  "status": "healthy",
+  "version": "0.5.0",
+  "database": "ok",
+  "analytics": true,
+  "detection_daemon": "running"
+}
+```
+
+`status` is `"healthy"` (HTTP `200`) or `"degraded"` (HTTP `503` — the database
+integrity check failed), so monitoring can alert on the status code alone.
+`detection_daemon` is `"running"` or `"stopped"` — `"stopped"` means web-only
+mode or an unconfigured model/labels/watch-dir, i.e. the UI is up but nothing is
+being analysed. `analytics` reports whether the DuckDB engine is active.
 
 | Endpoint | Purpose |
 |---|---|

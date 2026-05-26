@@ -6,7 +6,7 @@ It uses the **BirdNET+ V3.0** model — the same neural network as upstream Bird
 
 ## Do I need a Raspberry Pi?
 
-No. It runs on any x86_64 Linux machine too. The Pi 5 is recommended; the Pi 4B/400 and 3B+ are supported. The binary is tiny (~20–50 MB of RAM at runtime), so it's happy on modest hardware.
+No. It runs on any x86_64 Linux machine too. The Pi 5 is recommended; the Pi 4B/400 are fully supported, and the 3B+ works on the **64-bit** Pi OS (tight on RAM — see [Hardware](../getting-started/hardware.md)). The binary is tiny (~20–50 MB of RAM at runtime), so it's happy on modest hardware.
 
 ## Does it work offline / without internet?
 
