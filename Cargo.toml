@@ -12,7 +12,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.5.0"
+version = "0.5.1"
 edition = "2024"
 rust-version = "1.95"
 license = "CC-BY-NC-SA-4.0"
@@ -45,7 +45,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 tokio = { version = "1.52", features = ["full"] }
 
 # Database
-rusqlite = { version = "0.39", features = ["bundled", "backup"] }
+rusqlite = { version = "0.40", features = ["bundled", "backup"] }
 # `~` pins the bundled DuckDB version: the `10503` component is DuckDB 1.5.3
 # itself (the trailing `.x` is only duckdb-rs's binding revision). It MUST match
 # the DuckDB version the published `behavioral` community extension targets —
@@ -66,7 +66,7 @@ tower = "0.5.3"
 tower-http = { version = "0.6.11", features = ["cors", "trace", "fs"] }
 
 # HTTP client
-reqwest = { version = "0.13.3", features = ["blocking", "json"] }
+reqwest = { version = "0.13.4", features = ["blocking", "json"] }
 
 # Email (SMTP) — pure Rust TLS via rustls, no OpenSSL
 lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "smtp-transport", "builder"] }

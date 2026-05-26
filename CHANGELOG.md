@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-05-26
+
 ### Added
 
 - **CI now compiles and tests the `analytics` feature** (clippy, tests, MSRV
@@ -31,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backpressure (tripping the systemd watchdog) instead of buffering until the
   process is OOM-killed; the `--process-existing` backlog now runs after the
   server signals readiness.
+- **Routine dependency and CI-action updates** — `rusqlite` 0.39 → 0.40
+  (pulling `libsqlite3-sys` 0.38), `reqwest` 0.13.3 → 0.13.4, and
+  `codecov/codecov-action` v5 → v6.
 
 ### Fixed
 
@@ -43,6 +48,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Documentation drift**: corrected the `/api/v2/health` response example, the
   `.env.example` image-tag note (analytics is built into *every* image, no
   separate tag), stale version pins, the feed-default port, and minor wording.
+- **Release attestation no longer aborts the publish pipeline.** The SBOM
+  summary step assumed the CycloneDX 1.5 `metadata.tools` object shape while
+  cargo-cyclonedx emits the legacy array, so `jq` errored and its non-zero exit
+  killed the `package` job before the SLSA build-provenance attestation and
+  artifact upload could run. The summary now tolerates both shapes.
 
 ### Security
 
@@ -974,7 +984,8 @@ x86_64 Linux.
 - systemd installer script with ALSA microphone auto-detection and
   automatic BirdNET+ model download from Zenodo.
 
-[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/tomtom215/BirdNet-Behavior/releases/tag/v0.3.0

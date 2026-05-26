@@ -64,7 +64,7 @@ The installer detects your architecture, downloads the pre-built binary and the 
 
 ```bash
 # Install a specific version (defaults to latest)
-VERSION=0.5.0 bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh)
+VERSION=0.5.1 bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh)
 ```
 
 Re-running the installer is an **upgrade**: it stops the service, swaps in the
