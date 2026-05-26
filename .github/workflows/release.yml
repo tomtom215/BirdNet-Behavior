@@ -579,8 +579,11 @@ jobs:
             echo '### One-line installer (Raspberry Pi / bare-metal Linux)'
             echo ""
             echo '```bash'
-            echo "VERSION=${VERSION} bash <(curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh)"
+            echo "curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | sudo bash -s -- --version ${VERSION}"
             echo '```'
+            echo ""
+            echo '> Run it as root via the pipe above. Do not use `sudo bash <(curl ...)` — sudo'
+            echo '> closes the process-substitution file descriptor, so the script never loads.'
             echo ""
             echo '### Download a binary directly'
             echo ""
