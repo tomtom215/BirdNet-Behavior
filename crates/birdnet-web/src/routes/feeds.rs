@@ -309,7 +309,7 @@ fn default_base_url() -> String {
     // The host header is more reliable; the implementer can swap in
     // `axum::extract::Host` if needed. For a Pi reachable at http://birdnet.local
     // the env var works fine.
-    std::env::var("BNB_BASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string())
+    std::env::var("BNB_BASE_URL").unwrap_or_else(|_| "http://localhost:8502".to_string())
 }
 
 fn escape_xml(s: &str) -> String {
