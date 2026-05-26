@@ -434,8 +434,9 @@ jobs:
           # next to its Cargo.toml, named `<package>.cdx.{json,xml}` by
           # default — the `.cdx` infix is the default naming, there is no
           # `--output-cdx` flag. spec-version defaults to 1.3, so request
-          # 1.5 explicitly (matches the asset name and the summary jq
-          # below, which reads the 1.5 `metadata.tools.components[]` shape).
+          # 1.5 explicitly to match the asset name. Note 0.5.7 still emits
+          # the legacy `metadata.tools` array even at 1.5, so the summary
+          # jq below tolerates both that and the 1.5 object shape.
           # --all-features mirrors the release binaries (built with
           # `--features analytics`) so the statically-linked DuckDB tree
           # lands in the BOM; it's the safe workspace-wide form since only
@@ -453,10 +454,17 @@ jobs:
           cp birdnet-behavior.cdx.xml  "release/${NAME}.cdx.xml"
 
           echo "::group::SBOM summary"
+          # `metadata.tools` has two shapes across CycloneDX versions: the
+          # legacy array (`[{name,version}]`, still emitted by
+          # cargo-cyclonedx 0.5.7 even at spec-version 1.5) and the newer
+          # 1.5 object (`{components:[{name,version}]}`). Try the object
+          # path first, fall back to the array path; the trailing `?` on
+          # each suppresses the "cannot index array with string" error so
+          # `//` can fall through instead of aborting the run.
           jq '{
             spec: .specVersion,
             components: (.components | length),
-            tool: (.metadata.tools.components[0].name // "unknown")
+            tool: ((.metadata.tools.components[0].name)? // (.metadata.tools[0].name)? // "unknown")
           }' "release/${NAME}.cdx.json"
           echo "::endgroup::"
 
