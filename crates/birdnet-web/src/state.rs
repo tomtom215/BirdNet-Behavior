@@ -9,6 +9,7 @@ use birdnet_core::i18n::I18nManager;
 use birdnet_integrations::species_images::ImageCache;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use crate::metrics::{self, SharedMetrics};
@@ -62,6 +63,12 @@ struct AppStateInner {
     /// detection-event pipeline) and the metrics endpoint. Process-local;
     /// values are reset when the process restarts.
     metrics: SharedMetrics,
+    /// Set once at startup to whether the detection daemon actually came up, so
+    /// the health endpoint can distinguish a capturing-and-classifying station
+    /// from one that booted web-only or failed to start the daemon (e.g. a
+    /// misconfigured model/labels/watch dir). An `Arc<AtomicBool>` so the
+    /// orchestrator can flip it after the state has been cloned and shared.
+    detection_daemon_running: Arc<AtomicBool>,
 }
 
 /// Unwrap the `Arc<AppStateInner>`, aborting if shared (called during setup only).
@@ -129,6 +136,7 @@ impl AppState {
                 custom_image_dir: None,
                 config_path: None,
                 metrics: metrics::new_shared(),
+                detection_daemon_running: Arc::new(AtomicBool::new(false)),
             }),
         })
     }
@@ -207,6 +215,7 @@ impl AppState {
                 custom_image_dir: None,
                 config_path: None,
                 metrics: metrics::new_shared(),
+                detection_daemon_running: Arc::new(AtomicBool::new(false)),
             }),
         })
     }
@@ -235,6 +244,7 @@ impl AppState {
                 custom_image_dir: None,
                 config_path: None,
                 metrics: metrics::new_shared(),
+                detection_daemon_running: Arc::new(AtomicBool::new(false)),
             }),
         }
     }
@@ -463,5 +473,19 @@ impl AppState {
     /// Get the species info link site ("ebird", "allaboutbirds", or "none").
     pub fn info_site(&self) -> &str {
         &self.inner.info_site
+    }
+
+    /// Shared handle to the detection-daemon-running flag, for the orchestrator
+    /// to set once it knows whether the daemon started (after the state has been
+    /// cloned and shared).
+    #[must_use]
+    pub fn detection_status_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.inner.detection_daemon_running)
+    }
+
+    /// Whether the detection daemon is running, as recorded at startup.
+    #[must_use]
+    pub fn detection_daemon_running(&self) -> bool {
+        self.inner.detection_daemon_running.load(Ordering::Relaxed)
     }
 }

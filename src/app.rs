@@ -23,6 +23,37 @@ pub async fn run(
     cli: Cli,
     config: Option<birdnet_core::config::Config>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Fail fast on a misconfigured station: validate the loaded config and
+    // refuse to start if any setting is outright invalid (e.g. a latitude
+    // outside ±90 or a malformed recording schedule) rather than limping along
+    // with a silently-degraded pipeline. Warnings are logged but non-fatal.
+    // `--doctor` runs the same checks for an explicit preflight.
+    if let Some(ref cfg) = config {
+        use birdnet_core::config::validate::{Severity, is_usable, validate};
+        let findings = validate(cfg);
+        for f in &findings {
+            match f.severity {
+                Severity::Error => {
+                    tracing::error!(key = %f.key, remediation = %f.remediation, "{}", f.message);
+                }
+                Severity::Warning => {
+                    tracing::warn!(key = %f.key, remediation = %f.remediation, "{}", f.message);
+                }
+            }
+        }
+        if !is_usable(&findings) {
+            let errors = findings
+                .iter()
+                .filter(|f| f.severity == Severity::Error)
+                .count();
+            return Err(format!(
+                "configuration has {errors} error(s); fix the setting(s) logged above and restart \
+                 (run with --doctor to re-check)"
+            )
+            .into());
+        }
+    }
+
     // Startup database resilience check.
     let db_path = helpers::db_path_from_config(config.as_ref());
     let backup_dir = db_path
@@ -153,12 +184,29 @@ pub async fn run(
         )
     };
 
+    // Record whether the detection pipeline actually came up so the health
+    // endpoint can surface a station that is silently not detecting (web-only,
+    // or a misconfigured model/labels/watch dir) rather than looking healthy.
+    state.detection_status_flag().store(
+        daemon_handle.is_some(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+
     // Register Avahi mDNS service for zero-config local discovery.
     let site_name = cli.site_name.as_deref().unwrap_or("BirdNet-Behavior");
     helpers::maybe_install_avahi_service(addr.port(), site_name);
 
     // Start the web server.
     let auth_config = integrations::create_auth_config(config.as_ref());
+    if auth_config.is_none() && !addr.ip().is_loopback() {
+        tracing::warn!(
+            addr = %addr,
+            "admin web UI is bound to a non-loopback address with NO authentication — anyone on \
+             the network can change settings, trigger database backups, and update the software. \
+             Set CADDY_PWD in the config to require a password, or bind --listen to 127.0.0.1 and \
+             reach it over an SSH tunnel."
+        );
+    }
     tracing::info!(addr = %addr, "starting web server");
     let metrics_for_watchdog = state.metrics();
     let app = birdnet_web::server::build_router_with_auth(state, auth_config);

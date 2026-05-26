@@ -45,6 +45,7 @@ async fn health(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
             "version": env!("CARGO_PKG_VERSION"),
             "database": if db_ok { "ok" } else { "error" },
             "analytics": state.has_analytics(),
+            "detection_daemon": if state.detection_daemon_running() { "running" } else { "stopped" },
         })),
     )
 }

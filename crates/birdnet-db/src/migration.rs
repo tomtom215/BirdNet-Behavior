@@ -313,8 +313,13 @@ pub fn current_version(conn: &Connection) -> Result<u32, MigrationError> {
 ///
 /// # Errors
 ///
-/// Returns `MigrationError` if any migration fails. Applied migrations
-/// are committed individually, so partial progress is preserved.
+/// Returns `MigrationError` if any migration fails. Each migration's schema
+/// changes and its `schema_version` bump commit together in a single
+/// transaction, so a crash or error mid-migration rolls back cleanly: the
+/// database is always left at the last *fully* applied version, never with a
+/// changed schema whose version went unrecorded (which on the next boot would
+/// re-run the migration and hard-fail any non-idempotent step such as
+/// `ALTER TABLE ADD COLUMN`).
 pub fn migrate(conn: &Connection) -> Result<u32, MigrationError> {
     ensure_version_table(conn)?;
     let current = current_version(conn)?;
@@ -340,11 +345,17 @@ pub fn migrate(conn: &Connection) -> Result<u32, MigrationError> {
             "applying migration"
         );
 
-        conn.execute_batch(migration.up_sql)?;
-        conn.execute(
+        // Apply the migration's DDL and record its version atomically. SQLite
+        // supports transactional DDL, so a failure (or power loss) mid-migration
+        // rolls the whole step back rather than leaving the schema changed but
+        // the version unrecorded.
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(migration.up_sql)?;
+        tx.execute(
             "INSERT INTO schema_version (version, description) VALUES (?1, ?2)",
             rusqlite::params![migration.version, migration.description],
         )?;
+        tx.commit()?;
 
         applied += 1;
     }
