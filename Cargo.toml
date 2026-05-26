@@ -66,7 +66,7 @@ tower = "0.5.3"
 tower-http = { version = "0.6.11", features = ["cors", "trace", "fs"] }
 
 # HTTP client
-reqwest = { version = "0.13.3", features = ["blocking", "json"] }
+reqwest = { version = "0.13.4", features = ["blocking", "json"] }
 
 # Email (SMTP) — pure Rust TLS via rustls, no OpenSSL
 lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "smtp-transport", "builder"] }
