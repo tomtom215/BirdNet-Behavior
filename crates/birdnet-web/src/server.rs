@@ -5,11 +5,12 @@
 //! headers), mounts API routes, and manages graceful shutdown.
 
 use axum::Router;
+use axum::http::{HeaderValue, Method, header};
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::rate_limit::{RateLimitConfig, RateLimiter};
@@ -100,15 +101,45 @@ pub fn build_router_with_auth(
             crate::rate_limit::rate_limit_middleware(limiter, req, next)
         }))
         .layer(TraceLayer::new_for_http())
-        .layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods(Any)
-                .allow_headers(Any),
-        )
+        .layer(build_cors_layer())
         .layer(axum::middleware::from_fn(
             crate::security::security_headers_middleware,
         ))
+}
+
+/// Build the CORS policy.
+///
+/// Secure by default: a station's own web UI is served from the same origin it
+/// calls, so no cross-origin access is needed. Echoing the previous
+/// `Access-Control-Allow-Origin: *` let *any* website the operator's browser
+/// visited read this station's API over the LAN — so the default now allows
+/// **no** cross-origin reads. Set `BIRDNET_CORS_ALLOWED_ORIGINS` (a
+/// comma-separated origin list, e.g. `https://dash.example.com`) only when
+/// fronting the API from a different origin.
+fn build_cors_layer() -> CorsLayer {
+    let cors = CorsLayer::new()
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]);
+
+    match std::env::var("BIRDNET_CORS_ALLOWED_ORIGINS") {
+        Ok(raw) if !raw.trim().is_empty() => {
+            let origins: Vec<HeaderValue> = raw
+                .split(',')
+                .filter_map(|o| o.trim().parse::<HeaderValue>().ok())
+                .collect();
+            if origins.is_empty() {
+                cors
+            } else {
+                tracing::info!(
+                    count = origins.len(),
+                    "CORS: allowing configured cross-origin origins"
+                );
+                cors.allow_origin(origins)
+            }
+        }
+        // No configured origins → same-origin only (no ACAO header emitted).
+        _ => cors,
+    }
 }
 
 /// Start the web server.
