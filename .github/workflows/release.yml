@@ -170,18 +170,20 @@ jobs:
           - name: clippy
             toolchain: stable
             components: clippy
-            command: cargo clippy --workspace --all-targets -- -D warnings
+            command: cargo clippy --workspace --all-targets --all-features -- -D warnings
           - name: test
             toolchain: stable
             # Run the full test suite (including integration tests under
-            # tests/*.rs) so a regression there blocks the release.
-            command: cargo test --workspace
+            # tests/*.rs) with the analytics feature so a regression in the
+            # DuckDB behavioral path — which release binaries ship — blocks
+            # the release. (Release binaries are built --features analytics.)
+            command: cargo test --workspace --all-features
           - name: doc
             toolchain: stable
-            command: cargo doc --workspace --no-deps --document-private-items
+            command: cargo doc --workspace --no-deps --document-private-items --all-features
           - name: msrv
             toolchain: "1.95"
-            command: cargo check --workspace
+            command: cargo check --workspace --all-features
     env:
       RUSTDOCFLAGS: "-D warnings"
     steps:
@@ -193,6 +195,14 @@ jobs:
         with:
           toolchain: ${{ matrix.toolchain }}
           components: ${{ matrix.components || '' }}
+
+      - name: Install native build dependencies
+        # cmake + a host C++ compiler build the bundled libduckdb that the
+        # --all-features gate now compiles (analytics). Harmless for the
+        # fmt/doc matrix entries.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake g++
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
