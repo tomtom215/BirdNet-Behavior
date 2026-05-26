@@ -1,18 +1,25 @@
 //! HTTP Basic Auth config construction from the config file.
 
-/// Create an HTTP Basic Auth config from the config file.
+/// Create an HTTP Basic Auth config from the config file or the environment.
 ///
-/// Looks for `CADDY_PWD` (password) and defaults username to "birdnet"
-/// to match BirdNET-Pi's Caddy setup.
+/// Looks for `CADDY_PWD` (password) and `CADDY_USER` (username, default
+/// "birdnet") to match BirdNET-Pi's Caddy setup. The `birdnet.conf` file is
+/// checked first, then the environment — so auth can be enabled in Docker
+/// (which configures via env vars, not a config file) as well as on bare metal.
 pub fn create_auth_config(
     config: Option<&birdnet_core::config::Config>,
 ) -> Option<birdnet_web::auth::AuthConfig> {
-    let password = config?.get("CADDY_PWD")?;
+    let password = config
+        .and_then(|c| c.get("CADDY_PWD").map(str::to_owned))
+        .or_else(|| std::env::var("CADDY_PWD").ok())
+        .filter(|p| !p.is_empty())?;
     let username = config
-        .and_then(|c| c.get("CADDY_USER"))
-        .unwrap_or("birdnet");
+        .and_then(|c| c.get("CADDY_USER").map(str::to_owned))
+        .or_else(|| std::env::var("CADDY_USER").ok())
+        .filter(|u| !u.is_empty())
+        .unwrap_or_else(|| "birdnet".to_owned());
 
-    let auth = birdnet_web::auth::AuthConfig::new(username, password)?;
+    let auth = birdnet_web::auth::AuthConfig::new(&username, &password)?;
     tracing::info!(username = %username, "basic auth enabled");
     Some(auth)
 }

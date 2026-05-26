@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: ["master", "main"]
 
+# Cancel superseded runs on the same ref so a fast follow-up push does not
+# wait behind (or race) the previous one. Matches coverage.yml / supply-chain.yml.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
@@ -17,7 +23,7 @@ jobs:
     name: Format (rustfmt)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Install Rust toolchain (stable + rustfmt)
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -30,42 +36,48 @@ jobs:
     name: Clippy (pedantic + nursery)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Install Rust toolchain (stable + clippy)
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - name: Install native build dependencies
+        # cmake + a host C++ compiler build the bundled libduckdb that the
+        # `analytics` feature statically links. ubuntu-24.04 ships them, but
+        # install explicitly so the all-features lint can't silently depend on
+        # the runner image's default package set.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake g++
       - name: Cache Cargo
-        uses: actions/cache@v5
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-clippy-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-clippy-
-      - name: Run Clippy (deny warnings)
+          shared-key: ci-clippy
+      - name: Clippy — default features (deny warnings)
         run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Clippy — all features incl. analytics (deny warnings)
+        # The `analytics` feature gates the entire DuckDB query-builder surface
+        # (birdnet-behavioral / birdnet-timeseries). Without --all-features that
+        # code is never linted; lint both cfg branches so an analytics-only
+        # type/signature error can't slip through (as it did before v0.5.0).
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   # ── test ───────────────────────────────────────────────────────────────────
   test:
     name: Tests (x86_64)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake g++
       - name: Cache Cargo
-        uses: actions/cache@v5
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-test-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-test-
+          shared-key: ci-test
       - name: Run unit tests (lib + bins)
         run: cargo test --workspace --lib --bins
       - name: Run integration tests (incl. real-binary boot smoke test)
@@ -76,48 +88,51 @@ jobs:
         run: cargo test --workspace --tests
       - name: Run doc tests
         run: cargo test --workspace --doc
+      - name: Run full suite with analytics (DuckDB behavioral extension)
+        # Compiles AND runs the analytics code + tests that the default feature
+        # set never builds. This is the gate that would have caught the v0.5.0
+        # bugs (a FunnelParams field that didn't exist, query builders written
+        # against wrong DuckDB signatures). The network-gated live tests skip
+        # gracefully when the community extension is unavailable.
+        run: cargo test --workspace --all-features
 
   # ── doc ────────────────────────────────────────────────────────────────────
   doc:
     name: Rustdoc (no broken links)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake g++
       - name: Cache Cargo
-        uses: actions/cache@v5
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-doc-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-doc-
-      - name: Build docs (deny broken intra-doc links)
+          shared-key: ci-doc
+      - name: Build docs (deny broken intra-doc links, all features)
         env:
           RUSTDOCFLAGS: "-D warnings"
-        run: cargo doc --workspace --no-deps --document-private-items
+        run: cargo doc --workspace --no-deps --document-private-items --all-features
 
   # ── build-check ────────────────────────────────────────────────────────────
   build:
     name: Build (debug, all features)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake g++
       - name: Cache Cargo
-        uses: actions/cache@v5
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-build-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-build-
+          shared-key: ci-build
       - name: Build workspace (debug)
         run: cargo build --workspace
       - name: Check generated CLI help is current
@@ -131,25 +146,59 @@ jobs:
             exit 1
           fi
       - name: Build with analytics feature
-        run: cargo build --workspace --features birdnet-web/analytics
+        run: cargo build --workspace --all-features
 
   # ── msrv ───────────────────────────────────────────────────────────────────
   msrv:
     name: MSRV (Rust 1.95)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Install MSRV toolchain
         uses: dtolnay/rust-toolchain@1.95
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake g++
       - name: Cache Cargo
-        uses: actions/cache@v5
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-msrv-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-msrv-
-      - name: Check MSRV build
-        run: cargo check --workspace
+          shared-key: ci-msrv
+      - name: Check MSRV build (all features incl. bundled DuckDB)
+        # --all-features proves the DuckDB / duckdb-rs tree also builds on the
+        # declared MSRV, not just the default feature set.
+        run: cargo check --workspace --all-features
+
+  # ── aarch64 cross-check (Raspberry Pi) ───────────────────────────────────────
+  cross-aarch64:
+    name: Cross-check (aarch64 / Raspberry Pi)
+    runs-on: ubuntu-24.04
+    # Catch Pi-breaking changes (target-specific cfg, libduckdb cross-compile,
+    # pointer-width assumptions) at PR time instead of only at release tagging,
+    # which is the sole place aarch64 was built before. `check` keeps it cheap
+    # while still compiling the bundled C/C++ (libduckdb) for the target.
+    env:
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+      CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+      CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
+      AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install Rust toolchain (stable + aarch64 target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+      - name: Install native + aarch64 cross build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake g++ \
+            gcc-aarch64-linux-gnu \
+            g++-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: ci-cross-aarch64
+      - name: Check aarch64 build (all features)
+        run: cargo check --workspace --all-features --target aarch64-unknown-linux-gnu

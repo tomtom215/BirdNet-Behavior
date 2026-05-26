@@ -381,7 +381,7 @@ pub fn process_and_infer_filtered(
 #[allow(clippy::too_many_lines)]
 pub fn run_daemon(
     config: &DaemonConfig,
-    event_tx: mpsc::Sender<DetectionEvent>,
+    event_tx: mpsc::SyncSender<DetectionEvent>,
 ) -> Result<DaemonHandle, DaemonError> {
     // Load labels
     let labels = LabelSet::load(&config.labels_path)
@@ -488,21 +488,12 @@ pub fn run_daemon(
     let (file_watcher, file_rx) =
         pipeline::watch_directory(&config.watch_dir).map_err(DaemonError::Pipeline)?;
 
-    // Process existing files if requested
-    if config.process_existing {
-        process_existing_files(
-            &config.watch_dir,
-            &pipeline_config,
-            &mut model,
-            &privacy_filter,
-            &mut species_filter,
-            lat,
-            lon,
-            &event_tx,
-        );
-    }
+    // Snapshot the backlog settings to move into the loop thread; `config` is
+    // a borrow and cannot outlive this call on the spawned 'static thread.
+    let process_existing = config.process_existing;
+    let watch_dir = config.watch_dir.clone();
 
-    // Main daemon loop -- runs on current thread
+    // Main daemon loop -- runs on its own thread
     std::thread::spawn(move || {
         // Keep the watcher alive for the lifetime of this thread.
         // Without this the `RecommendedWatcher` gets dropped when
@@ -511,6 +502,24 @@ pub fn run_daemon(
         // `Disconnected` — silently breaking the watch path.
         let _watcher = file_watcher;
         tracing::info!("detection daemon started");
+
+        // Process any pre-existing backlog here, on the loop thread, rather
+        // than before signalling readiness. The event consumer is already
+        // draining by now, so a large backlog cannot block startup past the
+        // systemd TimeoutStartSec, and with a bounded event channel it applies
+        // backpressure instead of dead-locking an undrained queue.
+        if process_existing {
+            process_existing_files(
+                &watch_dir,
+                &pipeline_config,
+                &mut model,
+                &privacy_filter,
+                &mut species_filter,
+                lat,
+                lon,
+                &event_tx,
+            );
+        }
 
         loop {
             // Heartbeat: record that the loop is still cycling so a watchdog
@@ -597,7 +606,7 @@ fn process_existing_files(
     species_filter: &mut SpeciesFilter,
     lat: Option<f64>,
     lon: Option<f64>,
-    event_tx: &mpsc::Sender<DetectionEvent>,
+    event_tx: &mpsc::SyncSender<DetectionEvent>,
 ) {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
@@ -753,7 +762,7 @@ mod tests {
             species_thresholds: std::collections::HashMap::new(),
         };
 
-        let (event_tx, _event_rx) = mpsc::channel();
+        let (event_tx, _event_rx) = mpsc::sync_channel(64);
         let handle = run_daemon(&config, event_tx).expect("daemon starts with the tiny model");
 
         let hb = handle.heartbeat();

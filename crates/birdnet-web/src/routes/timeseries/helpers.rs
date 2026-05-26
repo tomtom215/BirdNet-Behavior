@@ -43,7 +43,7 @@ pub(super) fn handle_ts_result<T: serde::Serialize>(
             tracing::error!(endpoint = key, error = %e, "time-series query failed");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": e.to_string() })),
+                Json(json!({ "error": "internal server error" })),
             )
         }
         Ok(None) => ts_unavailable(key),
@@ -51,7 +51,7 @@ pub(super) fn handle_ts_result<T: serde::Serialize>(
             tracing::error!(endpoint = key, error = %e, "time-series task join failed");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": format!("task error: {e}") })),
+                Json(json!({ "error": "internal server error" })),
             )
         }
     }

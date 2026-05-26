@@ -8,7 +8,7 @@ birdnet-behavior (single binary)
 ├── birdnet-db            SQLite (OLTP) + DuckDB (OLAP), migrations, resilience, backup
 ├── birdnet-web           axum web server, REST API, WebSocket, HTMX templates
 ├── birdnet-integrations  BirdWeather, Apprise, email, Wikipedia images, MQTT, auto-update
-├── birdnet-behavioral    DuckDB behavioral analytics (feature-gated)
+├── birdnet-behavioral    DuckDB behavioral analytics (built in; on by default)
 ├── birdnet-timeseries    Activity, diversity, trend, peak, gap, session analytics
 ├── birdnet-migrate       BirdNET-Pi schema detection, validation, import
 └── birdnet-scheduler     Solar calculations, recording-window scheduling
@@ -22,7 +22,7 @@ birdnet-behavior (single binary)
 
 ## Deep-dive design documents
 
-The full architecture is documented in the repository under [`docs/architecture/`](https://github.com/tomtom215/BirdNet-Behavior/tree/main/docs/architecture):
+The complete set of 16 design documents lives in the repository under [`docs/architecture/`](https://github.com/tomtom215/BirdNet-Behavior/tree/main/docs/architecture); the most relevant:
 
 | Document | Contents |
 |---|---|

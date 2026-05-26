@@ -65,6 +65,41 @@ pub fn is_tool_available(tool: &str) -> bool {
         .is_ok_and(|s| s.success())
 }
 
+/// Drain a capture subprocess's stderr into the log, line by line.
+///
+/// `arecord` / `ffmpeg` write diagnostics (ALSA xruns, RTSP reconnects, fatal
+/// errors) to stderr. If that piped stream is never read, the OS pipe buffer
+/// (~64 KB) eventually fills and the subprocess blocks on `write(2)`: it stays
+/// alive — so the supervisor's [`CaptureProcess::is_running`] still reports it
+/// healthy — but stops producing audio, and the station goes silently deaf
+/// with no recovery. Draining the pipe in a detached reader thread both
+/// prevents that stall and surfaces the subprocess's own error messages for
+/// field debugging. The thread ends at EOF — i.e. when the child exits or is
+/// killed on stop/drop — so it needs no explicit join.
+fn drain_capture_stderr(child: &mut Child, source: &str) {
+    let Some(stderr) = child.stderr.take() else {
+        return;
+    };
+    let source = source.to_owned();
+    if let Err(e) = std::thread::Builder::new()
+        .name("capture-stderr".to_owned())
+        .spawn(move || {
+            use std::io::{BufRead, BufReader};
+            for line in BufReader::new(stderr).lines() {
+                match line {
+                    Ok(line) if !line.trim().is_empty() => {
+                        tracing::debug!(source = %source, "capture subprocess: {line}");
+                    }
+                    Ok(_) => {}
+                    Err(_) => break,
+                }
+            }
+        })
+    {
+        tracing::warn!(error = %e, "could not start capture stderr drainer thread");
+    }
+}
+
 /// Start an audio capture process for a microphone source via `arecord`.
 ///
 /// # Errors
@@ -133,7 +168,8 @@ pub fn start_microphone_capture(config: &RecordingConfig) -> Result<CaptureProce
     };
     cmd.stdout(Stdio::null()).stderr(Stdio::piped());
 
-    let child = cmd.spawn()?;
+    let mut child = cmd.spawn()?;
+    drain_capture_stderr(&mut child, device);
     tracing::info!(device = %device, "started microphone capture");
     Ok(CaptureProcess {
         child,
@@ -177,7 +213,7 @@ pub fn start_pipewire_capture(config: &RecordingConfig) -> Result<CaptureProcess
     let filename_pattern = recording_filename(None, config.format);
     let output_path = config.output_dir.join(&filename_pattern);
 
-    let child = Command::new("ffmpeg")
+    let mut child = Command::new("ffmpeg")
         .arg("-f")
         .arg("pulse")
         .arg("-i")
@@ -196,6 +232,7 @@ pub fn start_pipewire_capture(config: &RecordingConfig) -> Result<CaptureProcess
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()?;
+    drain_capture_stderr(&mut child, pulse_device);
 
     tracing::info!(
         device = pulse_device,
@@ -224,7 +261,7 @@ pub fn start_rtsp_capture(config: &RecordingConfig) -> Result<CaptureProcess, Ca
     let filename_pattern = recording_filename(Some(stream_id), config.format);
     let output_path = config.output_dir.join(&filename_pattern);
 
-    let child = Command::new("ffmpeg")
+    let mut child = Command::new("ffmpeg")
         .arg("-rtsp_transport")
         .arg("tcp")
         .arg("-i")
@@ -246,6 +283,7 @@ pub fn start_rtsp_capture(config: &RecordingConfig) -> Result<CaptureProcess, Ca
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()?;
+    drain_capture_stderr(&mut child, stream_id);
 
     tracing::info!(
         stream_id = stream_id,

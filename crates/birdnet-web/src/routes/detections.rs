@@ -99,7 +99,7 @@ async fn list_detections(
         Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({
-                "error": e.to_string(),
+                "error": crate::routes::log_internal("internal error", &e),
                 "detections": [],
                 "count": 0,
             })),
@@ -107,7 +107,7 @@ async fn list_detections(
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({
-                "error": format!("internal error: {e}"),
+                "error": crate::routes::log_internal("internal error", &e),
                 "detections": [],
                 "count": 0,
             })),
@@ -140,11 +140,11 @@ async fn recent_detections(
         }
         Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
+            Json(json!({ "error": crate::routes::log_internal("internal error", &e) })),
         ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("internal error: {e}") })),
+            Json(json!({ "error": crate::routes::log_internal("internal error", &e) })),
         ),
     }
 }
@@ -180,11 +180,11 @@ async fn daily_detections(
         }
         Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
+            Json(json!({ "error": crate::routes::log_internal("internal error", &e) })),
         ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("internal error: {e}") })),
+            Json(json!({ "error": crate::routes::log_internal("internal error", &e) })),
         ),
     }
 }

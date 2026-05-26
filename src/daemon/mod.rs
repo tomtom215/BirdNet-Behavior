@@ -38,6 +38,18 @@ mod webhook;
 #[cfg(test)]
 mod test_support;
 
+/// Bound on the detection-event channel between the daemon's detection loop
+/// (producer) and the [`event_processor`] (single consumer).
+///
+/// Bounding it means a stalled consumer — e.g. blocked on the shared SQLite
+/// mutex behind a slow query — applies backpressure to the detection loop
+/// instead of buffering unboundedly until the process is OOM-killed. When the
+/// loop blocks on a full channel its heartbeat stops advancing, so the systemd
+/// watchdog restarts a genuinely wedged daemon rather than letting memory grow.
+/// The bound is generous enough to absorb a dawn-chorus burst while the
+/// consumer keeps up.
+const DETECTION_EVENT_CHANNEL_CAP: usize = 1024;
+
 /// Start the detection daemon in a background thread.
 ///
 /// Returns the daemon handle, or `None` if the model/labels are not configured.
@@ -61,9 +73,12 @@ pub fn start_detection_daemon(
     notification_template: NotificationTemplate,
 ) -> Option<birdnet_core::detection::daemon::DaemonHandle> {
     let Some((model_path, labels_path, watch_dir)) = resolve_required_paths(cli, config) else {
-        tracing::info!("detection daemon not started: model, labels, or watch_dir not configured");
-        tracing::info!(
-            "use --model, --labels, --watch-dir flags or set MODEL_PATH, LABELS_PATH, RECS_DIR in config"
+        tracing::warn!(
+            "detection daemon NOT started: model, labels, or watch_dir not configured — the web \
+             UI will run but NO audio will be analysed and NO detections recorded"
+        );
+        tracing::warn!(
+            "configure --model, --labels, --watch-dir (or MODEL_PATH, LABELS_PATH, RECS_DIR in the config file) and restart"
         );
         return None;
     };
@@ -121,7 +136,7 @@ pub fn start_detection_daemon(
         species_thresholds,
     };
 
-    let (event_tx, event_rx) = mpsc::channel();
+    let (event_tx, event_rx) = mpsc::sync_channel(DETECTION_EVENT_CHANNEL_CAP);
 
     let thresholds_for_processor = daemon_config.species_thresholds.clone();
     let global_confidence = confidence;

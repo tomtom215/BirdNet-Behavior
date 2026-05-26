@@ -49,7 +49,7 @@ async fn top_species(
         Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({
-                "error": e.to_string(),
+                "error": crate::routes::log_internal("internal error", &e),
                 "species": [],
                 "total": 0,
             })),
@@ -57,7 +57,7 @@ async fn top_species(
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({
-                "error": format!("internal error: {e}"),
+                "error": crate::routes::log_internal("internal error", &e),
                 "species": [],
                 "total": 0,
             })),
@@ -113,7 +113,7 @@ async fn search_species(
         Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({
-                "error": e.to_string(),
+                "error": crate::routes::log_internal("internal error", &e),
                 "species": [],
                 "total": 0,
             })),
@@ -121,7 +121,7 @@ async fn search_species(
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({
-                "error": format!("internal error: {e}"),
+                "error": crate::routes::log_internal("internal error", &e),
                 "species": [],
                 "total": 0,
             })),
@@ -174,13 +174,13 @@ async fn species_detail(
         Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({
-                "error": e.to_string(),
+                "error": crate::routes::log_internal("internal error", &e),
             })),
         ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({
-                "error": format!("internal error: {e}"),
+                "error": crate::routes::log_internal("internal error", &e),
             })),
         ),
     }
@@ -223,14 +223,14 @@ async fn hourly_activity(
         Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({
-                "error": e.to_string(),
+                "error": crate::routes::log_internal("internal error", &e),
                 "activity": [],
             })),
         ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({
-                "error": format!("internal error: {e}"),
+                "error": crate::routes::log_internal("internal error", &e),
                 "activity": [],
             })),
         ),

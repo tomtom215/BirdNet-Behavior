@@ -488,6 +488,15 @@ LABELS_PATH=${MODEL_DIR}/${LABELS_FILE}
 
 # --- Site name shown in web UI ---
 # SITENAME=My Bird Station
+
+# --- Web UI authentication (recommended) ---
+# The web UI — including the admin panel that can change settings, trigger
+# database backups, and update the software — listens on ${LISTEN_ADDR} and is
+# reachable by anyone on your network. Set a password to require HTTP Basic
+# auth; without CADDY_PWD the UI is open to the whole LAN. Username defaults to
+# "birdnet". (Alternatively, set LISTEN to 127.0.0.1:8502 and use an SSH tunnel.)
+# CADDY_USER=birdnet
+# CADDY_PWD=change-me-to-a-strong-password
 EOF
     chmod 0644 "${CONFIG_FILE}"
     success "Default config written — edit ${CONFIG_FILE} to configure your station."

@@ -53,6 +53,14 @@ updates:
       prefix: "ci"
       include: "scope"
     labels: ["dependencies", "ci"]
+    ignore:
+      # dtolnay/rust-toolchain is pinned by intent: the `@stable` / `@1.95`
+      # refs select the toolchain, and the MSRV (1.95) is governed by
+      # rust-toolchain.toml + Cargo.toml `rust-version`, not by bumping the
+      # action. A prior major bump proposed an unreleased Rust 1.100 and would
+      # have broken the MSRV job — never auto-bump this action across majors.
+      - dependency-name: "dtolnay/rust-toolchain"
+        update-types: ["version-update:semver-major"]
     groups:
       actions:
         update-types: ["patch", "minor"]

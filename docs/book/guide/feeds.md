@@ -31,7 +31,7 @@ BNB_BASE_URL=http://birdnet.local        # mDNS on the LAN
 BNB_BASE_URL=https://birds.example.com    # behind a reverse proxy
 ```
 
-If unset it defaults to `http://localhost:8080`. You can also override per-request with `?base=…`, and cap item counts with `?limit=…`.
+If unset it defaults to `http://localhost:8502` (the server's own port). You can also override per-request with `?base=…`, and cap item counts with `?limit=…`.
 
 ## Caching
 

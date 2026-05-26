@@ -81,13 +81,13 @@ pub(super) async fn export_detections(
         Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             [(header::CONTENT_TYPE, "application/json")],
-            json!({"error": e.to_string()}).to_string(),
+            json!({"error": crate::routes::log_internal("internal error", &e)}).to_string(),
         )
             .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             [(header::CONTENT_TYPE, "application/json")],
-            json!({"error": format!("internal error: {e}")}).to_string(),
+            json!({"error": crate::routes::log_internal("internal error", &e)}).to_string(),
         )
             .into_response(),
     }
@@ -146,13 +146,13 @@ pub(super) async fn export_species(
         Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             [(header::CONTENT_TYPE, "application/json")],
-            json!({"error": e.to_string()}).to_string(),
+            json!({"error": crate::routes::log_internal("internal error", &e)}).to_string(),
         )
             .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             [(header::CONTENT_TYPE, "application/json")],
-            json!({"error": format!("internal error: {e}")}).to_string(),
+            json!({"error": crate::routes::log_internal("internal error", &e)}).to_string(),
         )
             .into_response(),
     }

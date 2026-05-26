@@ -3,8 +3,13 @@
 Settings are read in this priority order (highest wins):
 
 ```text
-CLI flags  >  environment variables  >  /etc/birdnet/birdnet.conf  >  built-in defaults
+CLI flag (or its BIRDNET_* env var)  >  /etc/birdnet/birdnet.conf  >  built-in defaults
 ```
+
+A CLI flag and its matching `BIRDNET_*` environment variable are the **same**
+setting — the env var is the flag's default, so set one or the other, not both.
+The `birdnet.conf` INI keys (kept for BirdNET-Pi compatibility) are consulted
+only when neither the flag nor the env var is given.
 
 On top of that, a **SQLite settings table** managed through the web UI at **`/admin/settings`** is the canonical place for everything that has no CLI flag or env var — detection confidence threshold, per-species thresholds, sensitivity, email SMTP, quarantine rules, and so on. You do **not** need to touch any of these to get started.
 
@@ -31,6 +36,16 @@ The full list lives in `.env.example` and `birdnet-behavior --help`. Each row sh
 | `BIRDNET_MQTT_HOST` | `--mqtt-host` | `MQTT_HOST` | — |
 | `BIRDNET_MQTT_HA_DISCOVERY` | `--mqtt-ha-discovery` | — | disabled |
 | `BIRDNET_MAX_FILES_PER_SPECIES` | `--max-files-per-species` | `MAX_FILES_SPECIES` | `0` |
+| `CADDY_PWD` / `CADDY_USER` | — | `CADDY_PWD` / `CADDY_USER` | — (auth off; user `birdnet`) |
+| `BIRDNET_CORS_ALLOWED_ORIGINS` | — | — | — (same-origin only) |
+
+> **Invalid settings fail fast.** On startup the daemon validates the
+> configuration and **refuses to start** on an out-of-range value (e.g. a
+> latitude outside ±90, or a malformed `RECORDING_SCHEDULE`) instead of running
+> silently degraded. Run `birdnet-behavior --doctor` to check a config before
+> deploying it. The authentication (`CADDY_PWD`) and cross-origin
+> (`BIRDNET_CORS_ALLOWED_ORIGINS`) settings are covered in
+> [Remote Access & Security](../admin/remote-access.md).
 
 ## Web-UI-only settings
 

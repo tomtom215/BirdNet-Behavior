@@ -26,7 +26,7 @@ Single Rust binary with 8 workspace crates:
 | `birdnet-core` | Audio capture, decode, resample, mel spectrogram, ML inference, detection pipeline, tmpfs, live spectrogram |
 | `birdnet-db` | SQLite (OLTP) + DuckDB (OLAP), resilience, migrations |
 | `birdnet-web` | axum web server, REST API, WebSocket, HTMX templates, audio player, admin |
-| `birdnet-integrations` | BirdWeather, Apprise, Wikipedia images, email, auto-update |
+| `birdnet-integrations` | BirdWeather, Apprise, MQTT (Home Assistant discovery), Wikipedia images, email, heartbeat, weekly reports, auto-update |
 | `birdnet-behavioral` | DuckDB behavioral analytics for bird activity patterns |
 | `birdnet-timeseries` | Time-series analytics (activity, diversity, trend, peak, gap, sessions) |
 | `birdnet-migrate` | BirdNET-Pi migration: schema detection, validation, import |
@@ -68,8 +68,8 @@ cross build --release --target aarch64-unknown-linux-gnu
 ### Coding Conventions
 
 - **No `anyhow`/`thiserror` in library crates** - hand-rolled error types
-- **No async in library crates** - birdnet-core, birdnet-db are synchronous
-- **Tokio only in application code** (birdnet-web, main binary)
+- **No async in the compute/storage library crates** (e.g. `birdnet-core`, `birdnet-db`) - they are synchronous. `birdnet-integrations` is the deliberate exception: an async *client* library for network I/O that constructs no runtime of its own
+- **The tokio runtime is owned by application code** (`birdnet-web`, main binary) - library crates never start their own runtime
 - **Blocking ops via `tokio::task::spawn_blocking`** for DB, file I/O, inference
 - **`unsafe` is denied** workspace-wide
 - **Clippy pedantic + nursery** enabled
