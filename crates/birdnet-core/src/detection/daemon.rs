@@ -9,6 +9,7 @@
 //! The daemon is synchronous internally (all audio processing and inference is CPU-bound)
 //! and designed to be spawned on a blocking thread from the async runtime.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -367,6 +368,71 @@ pub fn process_and_infer_filtered(
     Ok(events)
 }
 
+/// How long a file's size must stay unchanged before it is considered fully
+/// written and safe to decode.
+///
+/// Capture backends don't publish clips atomically — notably ffmpeg's segment
+/// muxer (used for RTSP) writes each clip *in place* over several seconds,
+/// emitting a stream of create/modify events the whole time. Decoding before
+/// the clip is finalized fails with "unexpected end of file", and the same
+/// growing file gets reprocessed on every write. Two seconds comfortably clears
+/// the inter-write gaps of a real-time PCM segment while adding latency that is
+/// negligible next to a multi-second recording.
+const FILE_SETTLE: Duration = Duration::from_secs(2);
+
+/// Debounces filesystem events so each captured file is decoded once, and only
+/// after it has finished being written.
+///
+/// A capture backend emits a burst of create/modify events while it streams a
+/// clip to disk. [`PendingFiles`] holds each path until its size has been
+/// stable for [`FILE_SETTLE`], then yields it exactly once. File size (polled
+/// via the injected sizer) is the source of truth, so a clip still settles
+/// after its final watcher event and a dropped event cannot strand it.
+#[derive(Default)]
+struct PendingFiles {
+    /// path -> (last observed size, the instant that size last changed)
+    seen: HashMap<PathBuf, (u64, Instant)>,
+}
+
+impl PendingFiles {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record watcher activity on `path`. Repeated calls for a path already
+    /// tracked are no-ops: the size poll in [`Self::drain_settled`] drives the
+    /// settle timer, not the (bursty, backend-specific) event rate.
+    fn note(&mut self, path: PathBuf, now: Instant) {
+        // `u64::MAX` is a "size not yet observed" sentinel that the first sweep
+        // always treats as a change, establishing the real baseline.
+        self.seen.entry(path).or_insert((u64::MAX, now));
+    }
+
+    /// Return the tracked files whose size has been unchanged for at least
+    /// `settle`, removing them so each is yielded exactly once. `sizer` returns
+    /// a file's current size, or `None` if it has vanished (which drops it).
+    fn drain_settled<F>(&mut self, now: Instant, settle: Duration, sizer: F) -> Vec<PathBuf>
+    where
+        F: Fn(&Path) -> Option<u64>,
+    {
+        let mut ready = Vec::new();
+        self.seen.retain(|path, (last_size, last_change)| match sizer(path) {
+            None => false,
+            Some(current) if current != *last_size => {
+                *last_size = current;
+                *last_change = now;
+                true
+            }
+            Some(current) if current > 0 && now.duration_since(*last_change) >= settle => {
+                ready.push(path.clone());
+                false
+            }
+            Some(_) => true,
+        });
+        ready
+    }
+}
+
 /// Run the detection daemon loop.
 ///
 /// Watches `watch_dir` for new audio files and processes them through
@@ -521,11 +587,15 @@ pub fn run_daemon(
             );
         }
 
+        // Debounce watcher events: a clip is decoded only once its size has
+        // been stable for FILE_SETTLE (see PendingFiles), so an in-progress
+        // ffmpeg/RTSP segment isn't decoded mid-write (which fails with
+        // "unexpected end of file" and reprocesses the same growing file).
+        let mut pending = PendingFiles::new();
+
         loop {
             // Heartbeat: record that the loop is still cycling so a watchdog
-            // can tell a hung pipeline from an idle one. Bumped per iteration;
-            // one in-flight file is processed well within the watchdog window,
-            // so per-chunk heartbeating isn't needed to avoid false restarts.
+            // can tell a hung pipeline from an idle one.
             heartbeat_loop.fetch_add(1, Ordering::Relaxed);
 
             // Check for stop signal (non-blocking)
@@ -534,58 +604,72 @@ pub fn run_daemon(
                 break;
             }
 
-            // Wait for new file with timeout
+            // Collect every watcher event currently available (blocking briefly
+            // for the first) into the pending set. A burst of modify events for
+            // a file still being written collapses into a single entry.
             match file_rx.recv_timeout(Duration::from_millis(500)) {
                 Ok(path) => {
-                    // Small delay to let the file finish writing
-                    std::thread::sleep(Duration::from_millis(200));
-
-                    // Stamp a correlation ID on every event we publish for
-                    // this file so the operator can trace one file through
-                    // the entire pipeline by grepping a single string.
-                    let correlation_id = new_event_correlation_id();
-                    tracing::info!(
-                        correlation_id = %correlation_id,
-                        file = %path.display(),
-                        "begin processing file"
-                    );
-
-                    match process_and_infer_filtered(
-                        &path,
-                        &pipeline_config,
-                        &mut model,
-                        &privacy_filter,
-                        &mut species_filter,
-                        lat,
-                        lon,
-                        0, // week will be computed by caller
-                        &correlation_id,
-                    ) {
-                        Ok(events) => {
-                            for event in events {
-                                if event_tx.send(event).is_err() {
-                                    tracing::warn!(
-                                        correlation_id = %correlation_id,
-                                        "event receiver dropped, stopping daemon"
-                                    );
-                                    return;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                correlation_id = %correlation_id,
-                                file = %path.display(),
-                                error = %e,
-                                "failed to process file"
-                            );
-                        }
+                    pending.note(path, Instant::now());
+                    while let Ok(path) = file_rx.try_recv() {
+                        pending.note(path, Instant::now());
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     tracing::info!("file watcher disconnected, stopping daemon");
                     break;
+                }
+            }
+
+            // Process whichever files have finished being written. Polling the
+            // size each sweep means a clip settles even after its last watcher
+            // event, so the final segment is never stranded.
+            for path in pending.drain_settled(Instant::now(), FILE_SETTLE, |p| {
+                std::fs::metadata(p).map(|m| m.len()).ok()
+            }) {
+                // Keep the watchdog fed if a single sweep processes several files.
+                heartbeat_loop.fetch_add(1, Ordering::Relaxed);
+
+                // Stamp a correlation ID on every event we publish for this
+                // file so the operator can trace one file through the entire
+                // pipeline by grepping a single string.
+                let correlation_id = new_event_correlation_id();
+                tracing::info!(
+                    correlation_id = %correlation_id,
+                    file = %path.display(),
+                    "begin processing file"
+                );
+
+                match process_and_infer_filtered(
+                    &path,
+                    &pipeline_config,
+                    &mut model,
+                    &privacy_filter,
+                    &mut species_filter,
+                    lat,
+                    lon,
+                    0, // week will be computed by caller
+                    &correlation_id,
+                ) {
+                    Ok(events) => {
+                        for event in events {
+                            if event_tx.send(event).is_err() {
+                                tracing::warn!(
+                                    correlation_id = %correlation_id,
+                                    "event receiver dropped, stopping daemon"
+                                );
+                                return;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            correlation_id = %correlation_id,
+                            file = %path.display(),
+                            error = %e,
+                            "failed to process file"
+                        );
+                    }
                 }
             }
         }
@@ -668,6 +752,76 @@ fn process_existing_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn pending_files_yields_only_after_size_is_stable() {
+        // Models an ffmpeg/RTSP segment growing in place, then finalizing.
+        let mut pending = PendingFiles::new();
+        let clip = PathBuf::from("/tmp/birdnet-stream/clip.wav");
+        let t0 = Instant::now();
+        pending.note(clip.clone(), t0);
+
+        let size = Cell::new(100u64);
+        let sizer = |_: &Path| Some(size.get());
+
+        // Baseline observed -> not ready.
+        assert!(
+            pending
+                .drain_settled(t0, FILE_SETTLE, &sizer)
+                .is_empty()
+        );
+        // Still growing -> the settle timer resets, still not ready.
+        size.set(200);
+        assert!(
+            pending
+                .drain_settled(t0 + Duration::from_millis(500), FILE_SETTLE, &sizer)
+                .is_empty()
+        );
+        // Size now stable, but the settle window has not elapsed yet.
+        assert!(
+            pending
+                .drain_settled(t0 + Duration::from_millis(700), FILE_SETTLE, &sizer)
+                .is_empty()
+        );
+        // Stable for >= FILE_SETTLE since the last change -> yielded once.
+        let ready =
+            pending.drain_settled(t0 + Duration::from_millis(500) + FILE_SETTLE, FILE_SETTLE, &sizer);
+        assert_eq!(ready, vec![clip], "a settled clip must be processed exactly once");
+        // ...and never again (it was removed when processed).
+        assert!(
+            pending
+                .drain_settled(t0 + Duration::from_secs(60), FILE_SETTLE, &sizer)
+                .is_empty(),
+            "a processed clip must not be reprocessed"
+        );
+    }
+
+    #[test]
+    fn pending_files_drops_vanished_and_never_yields_empty() {
+        let mut pending = PendingFiles::new();
+        let gone = PathBuf::from("/tmp/birdnet-stream/gone.wav");
+        let empty = PathBuf::from("/tmp/birdnet-stream/empty.wav");
+        let t0 = Instant::now();
+        pending.note(gone.clone(), t0);
+        pending.note(empty.clone(), t0);
+
+        let gone_for_closure = gone.clone();
+        let sizer = move |p: &Path| if p == gone_for_closure { None } else { Some(0u64) };
+
+        // A vanished file is dropped; a zero-byte file is never "stable enough"
+        // to decode no matter how long it sits.
+        assert!(
+            pending
+                .drain_settled(t0 + Duration::from_secs(10), FILE_SETTLE, &sizer)
+                .is_empty()
+        );
+        assert!(
+            pending
+                .drain_settled(t0 + Duration::from_secs(20), FILE_SETTLE, &sizer)
+                .is_empty()
+        );
+    }
 
     #[test]
     fn daemon_config_defaults() {

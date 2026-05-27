@@ -23,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restart, so `start_detection_daemon` now `create_dir_all`s the watch dir
   up front — a missing directory previously made `notify` error out and
   silently disabled detection (web UI up, nothing analysed).
+- **RTSP/segmented captures no longer fail with `decode error: ... unexpected
+  end of file`.** The watcher decoded each clip on every create/modify event,
+  so an ffmpeg segment still being written (RTSP captures a clip in place over
+  ~15 s) was decoded while incomplete and reprocessed on every write — meaning
+  **zero detections** for RTSP stations. The daemon now debounces: a file is
+  decoded once its size has been stable for a short settle window, and exactly
+  once.
 
 ### Added
 
