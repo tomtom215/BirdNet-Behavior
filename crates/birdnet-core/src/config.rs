@@ -55,6 +55,28 @@ impl fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {}
 
 impl Config {
+    /// Create an empty configuration with no entries.
+    ///
+    /// Used when no config file exists on disk but settings still need to be
+    /// supplied at runtime (e.g. overlaid from the admin settings database on a
+    /// fresh install that was configured entirely through the web UI).
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            values: HashMap::new(),
+        }
+    }
+
+    /// Insert or overwrite a single key/value pair.
+    ///
+    /// This is how runtime overrides (from the admin settings database) are
+    /// layered on top of the file-based config: the caller maps a UI setting to
+    /// its config key and calls `set`, and the new value wins over anything
+    /// parsed from `/etc/birdnet/birdnet.conf`.
+    pub fn set(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        self.values.insert(key.into(), value.into());
+    }
+
     /// Load configuration from the default path.
     ///
     /// # Errors
@@ -254,5 +276,28 @@ MODEL=BirdNET_GLOBAL_6K_V2.4_Model_FP16
     fn load_nonexistent_returns_not_found() {
         let result = Config::load_from(Path::new("/nonexistent/birdnet.conf"));
         assert!(matches!(result, Err(ConfigError::NotFound(_))));
+    }
+
+    #[test]
+    fn empty_config_has_no_entries() {
+        let config = Config::empty();
+        assert!(config.is_empty());
+        assert_eq!(config.get("CONFIDENCE"), None);
+    }
+
+    #[test]
+    fn set_inserts_new_key() {
+        let mut config = Config::empty();
+        config.set("CONFIDENCE", "0.7");
+        assert_eq!(config.get("CONFIDENCE"), Some("0.7"));
+    }
+
+    #[test]
+    fn set_overwrites_existing_key() {
+        let mut config = Config::parse("CONFIDENCE=0.25").unwrap();
+        config.set("CONFIDENCE", "0.8");
+        // The override wins over the value parsed from the file.
+        assert_eq!(config.get("CONFIDENCE"), Some("0.8"));
+        assert!((config.get_parsed::<f32>("CONFIDENCE").unwrap() - 0.8).abs() < f32::EPSILON);
     }
 }

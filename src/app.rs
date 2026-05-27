@@ -124,6 +124,14 @@ pub async fn run(
     // and validate it.
     let state = state.with_config_path(cli.config.clone());
 
+    // Overlay the admin-UI settings (SQLite `settings` table) on top of the
+    // file config so settings saved in the web UI actually take effect. Without
+    // this the settings form is write-only: the daemon and capture subsystems
+    // below read only the file config + CLI flags. The database value wins, and
+    // changes apply on restart (as the settings page already states). Done here
+    // — after the DB-backed state exists, before any subsystem reads config.
+    let config = helpers::overlay_db_settings(config, &state);
+
     // Initialize all optional subsystems.
     let state = helpers::init_image_cache(state, &cli, config.as_ref());
     let state = if let Some(ref dir) = cli.custom_image_dir {
