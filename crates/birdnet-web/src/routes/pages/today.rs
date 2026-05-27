@@ -69,7 +69,11 @@ pub struct RelabelForm {
 
 /// Render the full Today page.
 async fn today_page() -> Html<String> {
-    super::render_page("Today", TODAY_PAGE_HTML, "today")
+    // Skeleton placeholders (O-16) shown until the htmx swap targets load.
+    let body = TODAY_PAGE_HTML
+        .replace("{{skel_daystrip}}", super::skeletons::day_strip())
+        .replace("{{skel_today_results}}", &super::skeletons::feed_rows(8));
+    super::render_page("Today", &body, "today")
 }
 
 /// HTMX partial: today's detection count (for the header badge).

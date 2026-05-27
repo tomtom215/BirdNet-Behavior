@@ -40,7 +40,12 @@ pub fn router() -> Router<AppState> {
 
 async fn migration_page() -> Html<String> {
     let year = current_year();
-    let body = PAGE_HTML.replace("{{year}}", &year.to_string());
+    // Skeleton placeholders (O-16) shown until the htmx swap targets load.
+    let body = PAGE_HTML
+        .replace("{{year}}", &year.to_string())
+        .replace("{{skel_migration_stats}}", &super::skeletons::stat_row(4))
+        .replace("{{skel_ridgeline}}", super::skeletons::ridgeline())
+        .replace("{{skel_diversity}}", &super::skeletons::diversity_bars());
     render_page("Migration", &body, "migration")
 }
 

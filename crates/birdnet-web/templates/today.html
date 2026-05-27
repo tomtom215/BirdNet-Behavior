@@ -57,7 +57,7 @@
     <span class="bnb-meta">Tap an hour to jump the list</span>
   </div>
   <div id="today-daystrip" hx-get="/pages/today-daystrip" hx-trigger="load, every 30s" hx-swap="innerHTML">
-    <p class="bnb-meta">Loading timeline…</p>
+    {{skel_daystrip}}
   </div>
 </div>
 
@@ -89,7 +89,7 @@
      hx-trigger="load, every 15s"
      hx-swap="innerHTML"
      hx-include="#today-search, .seg .btn.active">
-  <p class="bnb-meta">Loading detections…</p>
+  {{skel_today_results}}
 </div>
 
 <script>

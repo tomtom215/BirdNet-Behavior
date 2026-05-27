@@ -38,6 +38,7 @@ pub mod notification_center;
 pub mod onboarding;
 pub mod quarantine;
 pub mod recordings;
+pub(crate) mod skeletons;
 pub mod species_pages;
 pub mod system_dashboard;
 pub mod timeseries_dash;

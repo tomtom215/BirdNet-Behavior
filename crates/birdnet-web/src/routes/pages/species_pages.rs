@@ -61,7 +61,14 @@ async fn species_detail_page(
     let content = SPECIES_DETAIL_HTML
         .replace("{{species_name}}", &escape_html(&name))
         .replace("{{scientific_name}}", &escape_html(&sci_name))
-        .replace("{{species_encoded}}", &encoded);
+        .replace("{{species_encoded}}", &encoded)
+        // Skeleton placeholders (O-16) shown until the htmx swap targets load.
+        .replace("{{skel_species_status}}", &super::skeletons::pill_row(3))
+        .replace("{{skel_hero}}", super::skeletons::hero_card())
+        .replace("{{skel_species_stats}}", &super::skeletons::stat_row(4))
+        .replace("{{skel_circadian}}", &super::skeletons::hourly_bars(24))
+        .replace("{{skel_trend}}", super::skeletons::trend_line())
+        .replace("{{skel_detections}}", &super::skeletons::list_rows(5));
     super::render_page(&name, &content, "species")
 }
 
