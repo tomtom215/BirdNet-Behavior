@@ -809,8 +809,8 @@ mod tests {
         let gone = PathBuf::from("/tmp/birdnet-stream/gone.wav");
         let empty = PathBuf::from("/tmp/birdnet-stream/empty.wav");
         let t0 = Instant::now();
-        pending.note(gone.clone(), t0);
-        pending.note(empty.clone(), t0);
+        pending.note(gone.clone(), t0); // keep: gone is reused by the sizer below
+        pending.note(empty, t0);
 
         // Fresh closure per call (passed by value): gone vanished (None), empty
         // is zero bytes.
