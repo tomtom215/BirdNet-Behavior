@@ -110,12 +110,13 @@ pub fn start_microphone_capture(config: &RecordingConfig) -> Result<CaptureProce
         ref device,
         sample_rate,
         channels,
+        ref stream_id,
     } = config.source
     else {
         return Err(CaptureError::Config("expected microphone source".into()));
     };
 
-    let filename_pattern = recording_filename(None, config.format);
+    let filename_pattern = recording_filename(stream_id.as_deref(), config.format);
     let output_path = config.output_dir.join(&filename_pattern);
     let segment = config.segment_duration_secs.to_string();
 
@@ -197,6 +198,7 @@ pub fn start_pipewire_capture(config: &RecordingConfig) -> Result<CaptureProcess
         ref device,
         sample_rate,
         channels,
+        ref stream_id,
     } = config.source
     else {
         return Err(CaptureError::Config("expected PipeWire source".into()));
@@ -210,7 +212,7 @@ pub fn start_pipewire_capture(config: &RecordingConfig) -> Result<CaptureProcess
         device.as_str()
     };
 
-    let filename_pattern = recording_filename(None, config.format);
+    let filename_pattern = recording_filename(stream_id.as_deref(), config.format);
     let output_path = config.output_dir.join(&filename_pattern);
 
     let mut child = Command::new("ffmpeg")
@@ -357,6 +359,7 @@ mod tests {
             device: "plughw:1,0".into(),
             sample_rate: 48_000,
             channels: 1,
+            stream_id: None,
         };
         let expected = if cfg!(target_os = "macos") {
             "ffmpeg"
@@ -387,6 +390,7 @@ mod tests {
                 device: "plughw:1,0".into(),
                 sample_rate: 48_000,
                 channels: 1,
+                stream_id: None,
             },
             output_dir: PathBuf::from("/tmp"),
             segment_duration_secs: 15,

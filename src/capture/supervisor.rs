@@ -90,7 +90,13 @@ pub(super) trait Source {
 pub(super) fn source_gauge_label(source: &CaptureSource) -> String {
     match source {
         CaptureSource::Rtsp { stream_id, .. } => stream_id.clone(),
-        CaptureSource::Microphone { .. } | CaptureSource::PipeWire { .. } => "local".to_owned(),
+        // A lone local mic has no id and collapses to `local`; when several
+        // local mics are configured each carries its own id (`MIC_1`, …) so the
+        // per-source health gauge can tell them apart — matching the label
+        // `derive_source_label` recovers from the recording filename.
+        CaptureSource::Microphone { stream_id, .. } | CaptureSource::PipeWire { stream_id, .. } => {
+            stream_id.clone().unwrap_or_else(|| "local".to_owned())
+        }
     }
 }
 
@@ -372,6 +378,7 @@ mod tests {
             device: "plughw:1,0".into(),
             sample_rate: 48_000,
             channels: 1,
+            stream_id: None,
         };
         assert_eq!(source_gauge_label(&src), "local");
     }
@@ -382,8 +389,22 @@ mod tests {
             device: String::new(),
             sample_rate: 48_000,
             channels: 1,
+            stream_id: None,
         };
         assert_eq!(source_gauge_label(&src), "local");
+    }
+
+    #[test]
+    fn label_microphone_with_id_uses_id() {
+        // With several local mics each gets its own id so the health gauge can
+        // distinguish them (round-trips with `derive_source_label`).
+        let src = CaptureSource::Microphone {
+            device: "plughw:2,0".into(),
+            sample_rate: 48_000,
+            channels: 1,
+            stream_id: Some("MIC_2".into()),
+        };
+        assert_eq!(source_gauge_label(&src), "MIC_2");
     }
 
     #[test]

@@ -112,8 +112,23 @@ pub struct Cli {
     pub image_cache_dir: Option<PathBuf>,
 
     /// ALSA device for microphone capture (e.g., `plughw:1,0`).
+    ///
+    /// For a single microphone. Use `--alsa-devices` to capture from several
+    /// local mics at once.
     #[arg(long, env = "BIRDNET_ALSA_DEVICE")]
     pub alsa_device: Option<String>,
+
+    /// ALSA devices for multi-microphone capture (semicolon-separated, or
+    /// repeat the flag).
+    ///
+    /// Each device gets its own independent capture pipeline with filenames
+    /// prefixed `MIC_1-`, `MIC_2-`, etc. (and matching per-source health
+    /// metrics). Overrides `--alsa-device` when set. A semicolon — not a comma —
+    /// separates devices because ALSA names themselves contain commas (e.g.
+    /// `plughw:1,0`). Config-file equivalent: `ALSA_CARDS` (semicolon-separated);
+    /// `ALSA_CARD` remains the single-mic key.
+    #[arg(long, env = "BIRDNET_ALSA_DEVICES", value_delimiter = ';')]
+    pub alsa_devices: Vec<String>,
 
     /// PipeWire/PulseAudio source for microphone capture.
     ///

@@ -88,16 +88,50 @@ fn resolve_rtsp_urls(cli: &Cli, config: Option<&birdnet_core::config::Config>) -
     single.into_iter().collect()
 }
 
+/// Resolve all local ALSA microphone devices from CLI flags and config.
+///
+/// Priority: `--alsa-devices` (multi) > `--alsa-device` (single) > config
+/// `ALSA_CARDS` (multi) > config `ALSA_CARD` (single). Devices are separated by
+/// `;` — not `,` — because ALSA names contain commas (`plughw:1,0`). Blank
+/// entries are dropped so a trailing separator or empty config value can't
+/// spawn a mic on `""`.
+fn resolve_alsa_devices(cli: &Cli, config: Option<&birdnet_core::config::Config>) -> Vec<String> {
+    let split = |s: &str| -> Vec<String> {
+        s.split(';')
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+            .map(ToOwned::to_owned)
+            .collect()
+    };
+
+    if !cli.alsa_devices.is_empty() {
+        return cli.alsa_devices.clone();
+    }
+    if let Some(device) = cli.alsa_device.clone().filter(|d| !d.trim().is_empty()) {
+        return vec![device];
+    }
+    if let Some(config) = config {
+        if let Some(multi) = config.get("ALSA_CARDS").map(split).filter(|v| !v.is_empty()) {
+            return multi;
+        }
+        if let Some(single) = config.get("ALSA_CARD").filter(|d| !d.trim().is_empty()) {
+            return vec![single.trim().to_owned()];
+        }
+    }
+    Vec::new()
+}
+
 /// Resolve the configured capture sources from CLI flags and config.
 ///
-/// Priority: `PipeWire` > ALSA > RTSP. A local microphone (PipeWire/ALSA) may
-/// be combined with one or more RTSP streams; RTSP-only is also supported.
+/// Priority: `PipeWire` > ALSA > RTSP. One or more local microphones
+/// (PipeWire, or one/several ALSA devices) may be combined with one or more
+/// RTSP streams; RTSP-only is also supported. A lone local mic keeps the
+/// historical id-less filename and `local` metrics label; when several local
+/// mics are configured each is labelled `MIC_1`, `MIC_2`, … so its recordings
+/// and health metric stay distinct.
 fn resolve_sources(cli: &Cli, config: Option<&birdnet_core::config::Config>) -> Vec<CaptureSource> {
     let pipewire_device = cli.pipewire_device.clone();
-    let alsa_device = cli
-        .alsa_device
-        .clone()
-        .or_else(|| config.and_then(|c| c.get("ALSA_CARD").map(String::from)));
+    let alsa_devices = resolve_alsa_devices(cli, config);
     let rtsp_urls = resolve_rtsp_urls(cli, config);
 
     let rtsp_sources = |urls: Vec<String>, mixed: bool| -> Vec<CaptureSource> {
@@ -121,15 +155,24 @@ fn resolve_sources(cli: &Cli, config: Option<&birdnet_core::config::Config>) -> 
             device,
             sample_rate: 48_000,
             channels: 1,
+            stream_id: None,
         }];
         srcs.extend(rtsp_sources(rtsp_urls, true));
         srcs
-    } else if let Some(device) = alsa_device {
-        let mut srcs = vec![CaptureSource::Microphone {
-            device,
-            sample_rate: 48_000,
-            channels: 1,
-        }];
+    } else if !alsa_devices.is_empty() {
+        let multi = alsa_devices.len() > 1;
+        let mut srcs: Vec<CaptureSource> = alsa_devices
+            .into_iter()
+            .enumerate()
+            .map(|(i, device)| CaptureSource::Microphone {
+                device,
+                sample_rate: 48_000,
+                channels: 1,
+                // A single mic keeps `None` (id-less filename, `local` label);
+                // several mics each get a stable `MIC_n` id.
+                stream_id: multi.then(|| format!("MIC_{}", i + 1)),
+            })
+            .collect();
         srcs.extend(rtsp_sources(rtsp_urls, true));
         srcs
     } else {
@@ -409,6 +452,71 @@ mod tests {
         let sources = resolve_sources(&cli(), Some(&cfg));
         assert_eq!(sources.len(), 1);
         assert!(matches!(sources[0], CaptureSource::Microphone { .. }));
+    }
+
+    /// Extract the `stream_id` of every resolved microphone, panicking on any
+    /// non-microphone source — keeps the multi-mic assertions terse.
+    fn mic_stream_ids(sources: &[CaptureSource]) -> Vec<Option<String>> {
+        sources
+            .iter()
+            .map(|s| match s {
+                CaptureSource::Microphone { stream_id, .. } => stream_id.clone(),
+                other => panic!("expected microphone, got {other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn single_alsa_device_has_no_stream_id() {
+        let mut c = cli();
+        c.alsa_device = Some("plughw:1,0".to_string());
+        let sources = resolve_sources(&c, None);
+        // A lone mic keeps the historical id-less filename and `local` label.
+        assert_eq!(mic_stream_ids(&sources), vec![None]);
+    }
+
+    #[test]
+    fn multiple_alsa_devices_get_numbered_mic_ids() {
+        let mut c = cli();
+        c.alsa_devices = vec!["plughw:1,0".to_string(), "plughw:2,0".to_string()];
+        let sources = resolve_sources(&c, None);
+        assert_eq!(
+            mic_stream_ids(&sources),
+            vec![Some("MIC_1".to_string()), Some("MIC_2".to_string())]
+        );
+    }
+
+    #[test]
+    fn alsa_cards_config_splits_on_semicolon_preserving_commas() {
+        use birdnet_core::config::Config;
+        // ALSA names contain commas, so devices are separated by ';'. The
+        // card,device commas inside each name must survive the split.
+        let cfg = Config::parse("ALSA_CARDS=plughw:1,0;plughw:2,0").unwrap();
+        let sources = resolve_sources(&cli(), Some(&cfg));
+        let devices: Vec<_> = sources
+            .iter()
+            .map(|s| match s {
+                CaptureSource::Microphone { device, .. } => device.clone(),
+                other => panic!("expected microphone, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(devices, vec!["plughw:1,0".to_string(), "plughw:2,0".to_string()]);
+        assert_eq!(
+            mic_stream_ids(&sources),
+            vec![Some("MIC_1".to_string()), Some("MIC_2".to_string())]
+        );
+    }
+
+    #[test]
+    fn alsa_devices_cli_overrides_single_and_config() {
+        use birdnet_core::config::Config;
+        let cfg = Config::parse("ALSA_CARD=plughw:9,0").unwrap();
+        let mut c = cli();
+        c.alsa_device = Some("plughw:8,0".to_string());
+        c.alsa_devices = vec!["plughw:1,0".to_string(), "plughw:2,0".to_string()];
+        // --alsa-devices wins over both --alsa-device and the config keys.
+        let devices: Vec<_> = resolve_alsa_devices(&c, Some(&cfg));
+        assert_eq!(devices, vec!["plughw:1,0".to_string(), "plughw:2,0".to_string()]);
     }
 
     #[test]

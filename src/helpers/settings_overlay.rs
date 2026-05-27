@@ -37,6 +37,7 @@ const SETTING_TO_CONFIG_KEY: &[(&str, &str)] = &[
     ("privacy_threshold", "PRIVACY_THRESHOLD"),
     // Audio capture (consumed in `crate::capture`).
     ("alsa_device", "ALSA_CARD"),
+    ("alsa_devices", "ALSA_CARDS"),
     ("rtsp_url", "RTSP_URL"),
     ("audio_format", "AUDIOFMT"),
     // Station / location.
@@ -122,6 +123,7 @@ mod tests {
         assert_eq!(config_key_for("confidence_threshold"), Some("CONFIDENCE"));
         assert_eq!(config_key_for("sensitivity"), Some("SENSITIVITY"));
         assert_eq!(config_key_for("alsa_device"), Some("ALSA_CARD"));
+        assert_eq!(config_key_for("alsa_devices"), Some("ALSA_CARDS"));
     }
 
     #[test]

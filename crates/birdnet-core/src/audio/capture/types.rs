@@ -15,6 +15,11 @@ pub enum CaptureSource {
         sample_rate: u32,
         /// Number of channels.
         channels: u16,
+        /// Stream identifier for filenames and metrics when more than one
+        /// local microphone is configured (e.g. `MIC_1`, `MIC_2`). `None` for
+        /// a lone local mic, which keeps the historical id-less filename and
+        /// the `local` metrics label.
+        stream_id: Option<String>,
     },
     /// `PipeWire` or `PulseAudio` microphone via `ffmpeg -f pulse`.
     ///
@@ -27,6 +32,9 @@ pub enum CaptureSource {
         sample_rate: u32,
         /// Number of channels.
         channels: u16,
+        /// Stream identifier for filenames and metrics when more than one
+        /// local microphone is configured. `None` for a lone local mic.
+        stream_id: Option<String>,
     },
     /// RTSP stream via `ffmpeg`.
     Rtsp {
