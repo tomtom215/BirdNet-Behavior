@@ -85,16 +85,19 @@ pub fn public_routes() -> Router<AppState> {
         .fallback(pages::not_found)
 }
 
-/// The `/admin` panel: settings, software update, system controls, backups,
-/// migrations. These can change configuration and update the software, so they
-/// are gated behind HTTP Basic Auth when a password is configured.
+/// The `/admin` panel — gated behind HTTP Basic Auth when a password is set.
+///
+/// Settings, software update, system controls, backups, migrations: these can
+/// change configuration and update the software, so they require a password.
 pub fn admin_routes() -> Router<AppState> {
     admin::router()
 }
 
-/// Build all routes: API under `/api/v2/`, admin routes at `/admin`, and page
-/// routes at `/`. The admin panel is open here; callers that want it gated use
-/// [`public_routes`] + [`admin_routes`] with auth applied to the latter.
+/// All routes with the admin panel left open.
+///
+/// API under `/api/v2/`, admin at `/admin`, pages at `/`. Callers that want the
+/// admin panel gated use [`public_routes`] + [`admin_routes`] with auth applied
+/// to the latter.
 pub fn api_routes() -> Router<AppState> {
     public_routes().merge(admin_routes())
 }
