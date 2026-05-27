@@ -72,6 +72,8 @@ repos:
         stages: [manual]
 
       # ── Shell-script lint (mirrors supply-chain.yml) ──────────────────────
+      # installer/lib/*.sh are concatenation fragments (no shebang, shared
+      # namespace) — they are linted as the assembled install.sh, not alone.
       - id: shellcheck
         name: shellcheck (advisory)
         description: Lint quickstart.sh / install.sh / entrypoint.sh.
@@ -79,6 +81,16 @@ repos:
         language: system
         pass_filenames: true
         types: [shell]
+        exclude: "^installer/lib/"
+
+      # ── install.sh is generated from installer/lib (mirrors supply-chain.yml) ──
+      - id: installer-build
+        name: install.sh matches installer/lib
+        description: Fail if install.sh is out of sync with installer/lib/*.sh.
+        entry: installer/build.sh --check
+        language: system
+        pass_filenames: false
+        files: "^(install\\.sh|installer/)"
 
   # ── Typo scan (mirrors supply-chain.yml) ──────────────────────────────────
   - repo: https://github.com/crate-ci/typos

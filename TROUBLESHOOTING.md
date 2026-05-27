@@ -50,10 +50,15 @@ Common causes and fixes:
 | Symptom in the logs                                            | Fix                                                                                                |
 | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | `config not found: /etc/birdnet/birdnet.conf`                  | Run `install.sh` again, or copy `.env.example` to `/etc/birdnet/birdnet.conf` and edit it          |
+| `Failed to set up mount namespacing: /tmp/birdnet-stream: No such file or directory` (exit `226/NAMESPACE`) | An older unit listed the tmpfs stream dir in `ReadWritePaths=`, which conflicts with `PrivateTmp=`. Upgrade to the latest release, or run `sudo bash install.sh repair` to rewrite the unit. |
 | `database recovery failed`                                     | Run `birdnet-behavior --check-db`; restore from `~/BirdNet-Behavior/backups/` if corruption is real |
 | `failed to install Ctrl+C handler` / `SIGTERM handler`         | Likely running under a non-Unix or sandboxed environment without signal support                    |
 | `address already in use`                                       | Another service is on port 8502; change `BIRDNET_PORT` or stop the conflicting service             |
-| `permission denied` reading `/etc/birdnet/birdnet.conf`        | `sudo chmod 644 /etc/birdnet/birdnet.conf` (it's not secret — credentials live in `.env`)          |
+| `permission denied` reading `/etc/birdnet/birdnet.conf`        | The config is `0640 root:<service-group>` (it holds secrets). Run `sudo bash install.sh repair` to restore correct ownership/permissions. |
+
+Still stuck? `sudo bash install.sh repair` re-creates missing directories, fixes
+ownership/permissions, rewrites the systemd unit, and restarts — fixing most
+"won't start" cases without touching your data.
 
 ### 1.2 Container exits immediately
 
