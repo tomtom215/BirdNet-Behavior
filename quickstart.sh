@@ -377,6 +377,15 @@ hdr "All set"
 LAN_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 [ -z "${LAN_IP:-}" ] && LAN_IP="localhost"
 
+# Best-effort mDNS name. Pi OS ships avahi, so http://<hostname>.local is a more
+# durable bookmark than the DHCP-assigned IP. Clients without an mDNS resolver
+# fall back to the IP shown beside it.
+MDNS_HOST=""
+if [ "$LAN_IP" != "localhost" ]; then
+    SHORT_HOST="$(hostname -s 2>/dev/null || true)"
+    [ -n "$SHORT_HOST" ] && MDNS_HOST="${SHORT_HOST}.local"
+fi
+
 say ""
 if [ "$READY" = "1" ]; then
     ok "Web server is up and healthy."
@@ -386,7 +395,12 @@ else
     warn "Check progress with:  cd $(pwd) && docker compose logs -f birdnet"
 fi
 say ""
+if [ -n "$MDNS_HOST" ]; then
+say "  ${BLD}Dashboard:${RST}   http://${MDNS_HOST}:${WEB_PORT}   (works from any device on your network)"
+say "               http://${LAN_IP}:${WEB_PORT}   (same dashboard, by IP — if the .local name doesn't resolve)"
+else
 say "  ${BLD}Dashboard:${RST}   http://${LAN_IP}:${WEB_PORT}"
+fi
 if [ "$LAN_IP" != "localhost" ]; then
 say "               http://localhost:${WEB_PORT}  (from this machine)"
 fi

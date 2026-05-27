@@ -107,10 +107,14 @@ SendSIGKILL=yes
 # 120 s window is plenty: a healthy daemon pings every ~60 s.
 WatchdogSec=120
 
-# Resource ceilings. Tuned conservatively so a runaway process can't
-# take down the whole Pi.
-MemoryMax=512M
-MemoryHigh=384M
+# Resource ceilings — cap a runaway process without starving the workload.
+# The bundled DuckDB analytics engine is on by default and its queries can be
+# memory-hungry under load; 1 GiB leaves that headroom (the FP32 model is
+# mmap'd, so its pages are reclaimable and don't count as anonymous RSS). On a
+# multi-GB Pi this is the binding limit; on a 512 MB board physical RAM + zram
+# bind first, so raising the cgroup ceiling here is harmless there.
+MemoryHigh=768M
+MemoryMax=1G
 TasksMax=512
 LimitNOFILE=65536
 LimitNPROC=256

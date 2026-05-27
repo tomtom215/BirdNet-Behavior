@@ -190,6 +190,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+      - name: Free up runner disk space
+        # The `test` entry runs `cargo test --workspace --all-features`, whose
+        # debug link of the bundled DuckDB + Arrow + ONNX Runtime closure (with
+        # full debuginfo, across every bin/test/example target) overruns the
+        # stock runner's ~14 GB root volume. rust-lld then dies with SIGBUS
+        # ("ld terminated with signal 7") writing its mmap'd output. ci.yml's
+        # test job already reclaims this space; the release gate must match it
+        # or green CI still ships a release that fails to link. Reclaim ~25-30
+        # GB of unused SDKs. Harmless no-op for the fmt/doc/msrv entries.
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
+          df -h /
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
