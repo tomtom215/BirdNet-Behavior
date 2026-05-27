@@ -34,6 +34,8 @@ BINARY_NAME="birdnet-behavior"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/birdnet"
 CONFIG_FILE="${CONFIG_DIR}/birdnet.conf"
+# Default data dir. NOTE: under sudo $HOME is usually /root, so require_root
+# re-derives this and the paths below from the service user's real home.
 DATA_DIR="${HOME}/BirdNet-Behavior"
 RECS_DIR="${DATA_DIR}/recordings"
 STREAM_DIR="/tmp/birdnet-stream"
@@ -115,6 +117,21 @@ EOF
         fatal "Run the installer via sudo from a normal user account, not as root directly, so the service isn't owned by root.  E.g.:  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sudo bash"
     fi
     SERVICE_USER="${SUDO_USER}"
+
+    # Under sudo, $HOME is usually /root, not the service user's home — so the
+    # data dir computed at the top of this script can land in /root, which the
+    # non-root service user cannot reach (and ProtectHome=read-only would block
+    # it anyway). Re-derive every home-based path from the service user's actual
+    # home so the daemon can read its database, recordings, and model.
+    local svc_home
+    svc_home="$(getent passwd "${SERVICE_USER}" | cut -d: -f6)"
+    if [ -n "${svc_home}" ]; then
+        DATA_DIR="${svc_home}/BirdNet-Behavior"
+        RECS_DIR="${DATA_DIR}/recordings"
+        IMAGE_CACHE_DIR="${DATA_DIR}/image_cache"
+        MODEL_DIR="${DATA_DIR}/models"
+        DB_PATH="${DATA_DIR}/birds.db"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -663,7 +680,9 @@ detect_first_audio_device() {
     # arecord -l output looks like: card 1: Device [USB Audio Device], device 0: ...
     local first_card first_device
     first_card="$(arecord -l 2>/dev/null | awk '/^card/{print $2; exit}' | tr -d ':')"
-    first_device="$(arecord -l 2>/dev/null | awk '/^card/{match($0,/device ([0-9]+)/,a); print a[1]; exit}')"
+    # 2-arg match() (RSTART/RLENGTH) is POSIX; the 3-arg capture form is a gawk
+    # extension that errors on mawk (the default awk on Debian / Raspberry Pi OS).
+    first_device="$(arecord -l 2>/dev/null | awk '/^card/{ if (match($0, /device [0-9]+/)) print substr($0, RSTART + 7, RLENGTH - 7); exit }')"
     if [ -n "${first_card}" ]; then
         echo "plughw:${first_card},${first_device:-0}"
     fi
