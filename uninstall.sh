@@ -55,7 +55,10 @@ REMOVE_IMAGE_CACHE=0; REMOVE_ZRAM=0; KEEP_BINARY=0; DRY_RUN=0; ASSUME_YES=0
 DATA_DIR_OVERRIDE=""
 
 # ── Output helpers ──────────────────────────────────────────────────────────
-if [ -t 1 ]; then R='\033[0;31m'; G='\033[0;32m'; Y='\033[1;33m'; B='\033[1m'; Z='\033[0m'
+# ANSI-C quoting ($'…') stores real ESC bytes, so the colours render whether
+# they land in a printf format or a %s argument (plain '\033…' only renders in
+# the format position, which printed literal escape codes in the plan output).
+if [ -t 1 ]; then R=$'\033[0;31m'; G=$'\033[0;32m'; Y=$'\033[1;33m'; B=$'\033[1m'; Z=$'\033[0m'
 else R=''; G=''; Y=''; B=''; Z=''; fi
 info()    { printf "${B}[*]${Z} %s\n" "$*"; }
 ok()      { printf "${G}[ok]${Z} %s\n" "$*"; }
@@ -224,7 +227,7 @@ plan_line "zram-swap"     "$([ "$REMOVE_ZRAM" = 1 ] && echo REMOVE || echo keep)
 echo
 if [ "$REMOVE_DB" = 1 ] || [ "$REMOVE_RECS" = 1 ] || [ "$REMOVE_CONFIG" = 1 ] || [ "$REMOVE_MODELS" = 1 ]; then
   if [ "${DATA_DIR_GUESSED:-0}" = 1 ] && [ -z "$DATA_DIR_OVERRIDE" ]; then
-    die "refusing to delete data from a GUESSED directory ($DATA_DIR). Pass --data-dir explicitly."
+    die "config + service are already gone, so the data directory had to be guessed ($DATA_DIR) — refusing to delete data from a guessed path. Re-run the same command with the path made explicit (add -y to skip the prompt):  --data-dir $DATA_DIR"
   fi
   confirm "This will permanently DELETE the data marked REMOVE above. Continue?" \
     || die "aborted — nothing changed."

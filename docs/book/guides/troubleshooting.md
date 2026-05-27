@@ -21,7 +21,17 @@ sudo journalctl -u birdnet-behavior -f
 # Common cause: no audio source set in /etc/birdnet/birdnet.conf
 ```
 
+For most "won't start" cases — a stale systemd unit, wrong permissions, a missing directory — run the installer's repair, which fixes ownership/permissions, rewrites the unit, and restarts without re-downloading or touching your data:
+
+```bash
+sudo bash install.sh repair
+```
+
+> An older unit that failed with `226/NAMESPACE` (a tmpfs stream-dir mount conflict) is fixed in current releases — upgrade, or run `install.sh repair` to rewrite the unit.
+
 ## Web UI not reachable
+
+The dashboard binds to all interfaces by default, so it's reachable from other devices on your LAN out of the box at `http://<pi-ip>:8502` (find the address with `hostname -I`). If it's unreachable:
 
 ```bash
 sudo systemctl status birdnet-behavior
@@ -29,7 +39,7 @@ ss -tlnp | grep 8502
 sudo ufw allow 8502/tcp   # if you use the Ubuntu firewall
 ```
 
-Also confirm `BIRDNET_LISTEN` is `0.0.0.0:8502` (not `127.0.0.1:8502`) if you're connecting from another machine.
+No row from `ss` means the daemon never finished starting — see [Service won't start](#service-wont-start) above. If you deliberately restricted access, `BIRDNET_LISTEN` will be `127.0.0.1:8502` (reachable only from the Pi); set it back to `0.0.0.0:8502` for LAN access. Viewing the dashboard needs no login; only `/admin` does — use the auto-generated password from the install summary (see [the admin password FAQ](./faq.md#how-do-i-find-or-reset-the-admin-password)).
 
 ## No detections appearing (bare metal)
 

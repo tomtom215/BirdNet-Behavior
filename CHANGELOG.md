@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-05-27
+
+Field-hardening release from real Raspberry Pi + RTSP testing. The service now
+starts and shuts down cleanly, RTSP stations actually record detections, the
+dashboard is reachable on the LAN with only its admin panel behind a password,
+and `install.sh` gains guided repair/update/reinstall/uninstall flows with
+pre-flight and post-install validation. No database migration is required.
+
 ### Fixed
 
 - **The systemd service no longer fails to start with
@@ -23,6 +31,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restart, so `start_detection_daemon` now `create_dir_all`s the watch dir
   up front — a missing directory previously made `notify` error out and
   silently disabled detection (web UI up, nothing analysed).
+- **The service shuts down promptly instead of hanging until SIGKILL.** A live
+  WebSocket/event-stream client (the dashboard keeps one open) kept axum's
+  graceful shutdown from ever completing, so `stop`/`restart`/uninstall blocked
+  until systemd SIGKILLed the process at `TimeoutStopSec` (30 s) and left a
+  ghost `Active: failed (timeout)`. Shutdown now caps the connection drain
+  (`SHUTDOWN_GRACE`, 10 s) and signals the detection loop to stop so the runtime
+  winds down cleanly.
+- **`install.sh uninstall` is clean, idempotent, and fool-proof.** It now runs
+  `systemctl reset-failed` so the removed unit no longer lingers as
+  `Active: failed (timeout)` in `systemctl status`, reports accurately what was
+  (or wasn't) present, can also delete data/config (interactive prompt or
+  `BIRDNET_PURGE=1`) behind a path-safety guard, and verifies at the end that no
+  service or binary remains. Re-running it when nothing is installed is a clean
+  no-op.
+- **`uninstall.sh --purge` renders its plan correctly and guides recovery.** It
+  printed literal `\033[1m…` escape codes (colours are now real ESC bytes); and
+  when the config and service are already gone, the guessed-data-dir guard now
+  prints the exact `--data-dir` argument to re-run with.
+- **RTSP/segmented captures no longer fail with `decode error: ... unexpected
+  end of file`.** The watcher decoded each clip on every create/modify event,
+  so an ffmpeg segment still being written (RTSP captures a clip in place over
+  ~15 s) was decoded while incomplete and reprocessed on every write — meaning
+  **zero detections** for RTSP stations. The daemon now debounces: a file is
+  decoded once its size has been stable for a short settle window, and exactly
+  once.
 
 ### Added
 
@@ -38,9 +71,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the binary runs, the unit verifies (`systemd-analyze verify`), directories are
   owned by the service user, the config is readable by the daemon, the doctor
   preflight passes, and the web port is listening.
+- **`install.sh` ensures the ffmpeg capture backend for RTSP stations.** When the
+  config has an `RTSP_URL` (which captures through ffmpeg), install/repair now
+  install ffmpeg automatically (`apt-get`), or warn with the exact command if it
+  can't — previously an RTSP station with no ffmpeg passed the installer but the
+  daemon then failed the doctor preflight and never started.
+
+- **The dashboard bind address persists across installer re-runs.** `repair`
+  and `update` no longer silently re-hide a LAN-exposed dashboard on localhost:
+  the bind address is read from `BIRDNET_LISTEN` (env or the config file) and,
+  failing that, carried forward from the existing service unit. A fresh install
+  records it as `BIRDNET_LISTEN=` in the config so it is visible and editable.
 
 ### Changed
 
+- **The dashboard is reachable on the LAN out of the box, with the admin panel
+  gated by a password.** The default bind is now `0.0.0.0:8502` (was
+  `127.0.0.1:8502`, which left non-technical users at "connection refused").
+  Only the `/admin` panel — settings, software update, system controls — now
+  requires HTTP Basic Auth (route-level, enforced by the binary); viewing the
+  dashboard is open. A fresh install **auto-generates a strong admin password**
+  (user `birdnet`, shown in the post-install summary and saved as `CADDY_PWD`),
+  so the admin surface is protected by default. Restrict the whole dashboard to
+  this host again with `BIRDNET_LISTEN=127.0.0.1:8502` (env, config, or the
+  interactive prompt).
 - **`install.sh` is now assembled from single-responsibility modules under
   `installer/lib/*.sh` by `installer/build.sh`** (developer-facing only — the
   shipped `install.sh` is still one self-contained, checksummed file). A CI gate
@@ -1084,7 +1138,9 @@ x86_64 Linux.
 - systemd installer script with ALSA microphone auto-detection and
   automatic BirdNET+ model download from Zenodo.
 
-[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.2...v0.5.3
+[0.5.2]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.3.0...v0.4.0

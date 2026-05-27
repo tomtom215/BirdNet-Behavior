@@ -19,10 +19,13 @@ DB_PATH="${DATA_DIR}/birds.db"
 SERVICE_FILE="/etc/systemd/system/birdnet-behavior.service"
 SERVICE_NAME="birdnet-behavior.service"
 SERVICE_USER="${SUDO_USER:-${USER:-$(id -un)}}"
-# Bind localhost by default — the admin dashboard can change settings and update
-# software, so it must not reach the LAN without an explicit (ideally password-
-# protected) opt-in. Override with BIRDNET_LISTEN= or the interactive prompt.
-LISTEN_ADDR="${BIRDNET_LISTEN:-127.0.0.1:8502}"
+# Bind to all interfaces by default so the dashboard is reachable on the LAN out
+# of the box (a localhost-only default left non-technical users staring at
+# "connection refused"). Safe because only the /admin panel is gated by a
+# password — viewing is open — and a fresh install auto-generates that admin
+# password. Override with BIRDNET_LISTEN=, the config file, or the prompt;
+# restrict to this host with 127.0.0.1:8502.
+LISTEN_ADDR="${BIRDNET_LISTEN:-0.0.0.0:8502}"
 
 # Interactive onboarding state. INTERACTIVE is decided in main(); the *_VALUE
 # vars hold answers from prompt_station_settings and are baked into the config
@@ -34,6 +37,9 @@ LATITUDE_VALUE=""
 LONGITUDE_VALUE=""
 CADDY_USER_VALUE=""
 CADDY_PWD_VALUE=""
+# Set by ensure_admin_password when it auto-generates one, so print_summary can
+# show it to the operator exactly once.
+GENERATED_ADMIN_PASSWORD=""
 
 # What main() is doing — purely for user-facing messages (install/update/
 # repair/reinstall). Set by main()/the subcommand dispatch.

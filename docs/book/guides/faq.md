@@ -24,6 +24,21 @@ Under `/data` in Docker (a named volume) or under the configured data directory 
 
 Retention is disk-based, not time-based — the oldest clips are purged once the disk fills past the threshold. **Lock** any detection (on the Today page) to pin its recording permanently. See [Backups & Recovery](../admin/backups.md).
 
+## Is the dashboard exposed on my network? Do I need a login?
+
+By default the dashboard binds to all interfaces (`0.0.0.0:8502`), so it's reachable from any device on your LAN. **Viewing needs no login; only the `/admin` panel is password-protected.** A fresh bare-metal install auto-generates that password for you. To restrict the dashboard to the local machine, set `BIRDNET_LISTEN=127.0.0.1:8502` and reach it via SSH tunnel or VPN. Don't port-forward it to the internet — put a reverse proxy with TLS or a VPN in front. See [Remote Access & Security](../admin/remote-access.md).
+
+## How do I find or reset the admin password?
+
+The bare-metal installer auto-generates a strong admin password (username `birdnet`) and prints it **once** in the post-install summary, storing it as `CADDY_PWD` in `/etc/birdnet/birdnet.conf`. To set your own, edit that file (or the `CADDY_PWD` environment variable / `.env` under Docker) and restart:
+
+```bash
+sudo nano /etc/birdnet/birdnet.conf   # set CADDY_PWD=your-new-password
+sudo systemctl restart birdnet-behavior
+```
+
+`CADDY_USER` defaults to `birdnet`. Clearing `CADDY_PWD` leaves `/admin` open to anyone who can reach the dashboard.
+
 ## Do I need anything special for behavioral analytics?
 
 No. The DuckDB engine behind the deeper behavioral views — activity sessions, species retention, next-species prediction, year-on-year trends — is **built into every release and on by default**. The installer runs the service with `--analytics-db` and Docker compose sets `BIRDNET_ANALYTICS_DB`, so there is no separate build, flag, or image to pick. (From source, build with `--features analytics`. On a very low-RAM board you can turn it off — see [Troubleshooting](./troubleshooting.md).)

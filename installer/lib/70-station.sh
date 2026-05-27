@@ -24,6 +24,33 @@ valid_coord() {
         'BEGIN { if (v ~ /^[-+]?([0-9]+\.?[0-9]*|\.[0-9]+)$/ && v+0 >= lo && v+0 <= hi) exit 0; exit 1 }'
 }
 
+# Generate a strong, shell/URL-friendly random password.
+gen_password() {
+    if command -v openssl &>/dev/null; then
+        openssl rand -base64 18 2>/dev/null | tr -dc 'A-Za-z0-9' | cut -c1-22
+    else
+        LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 22
+    fi
+}
+
+# Guarantee the /admin panel is password-protected on a fresh LAN install. The
+# dashboard binds to the LAN by default and viewing is open, but admin actions
+# (settings, software update) must require a password — so if the operator
+# didn't set one during onboarding, generate a strong one. No-ops when:
+#   - the config already exists (never touch an operator's existing credentials)
+#   - a password was already chosen during onboarding
+#   - the dashboard is bound to localhost only (admin exposure is local anyway)
+ensure_admin_password() {
+    [ -f "${CONFIG_FILE}" ] && return 0
+    [ -n "${CADDY_PWD_VALUE}" ] && return 0
+    case "${LISTEN_ADDR}" in 127.0.0.1:* | localhost:*) return 0 ;; esac
+
+    CADDY_USER_VALUE="birdnet"
+    CADDY_PWD_VALUE="$(gen_password)"
+    GENERATED_ADMIN_PASSWORD="${CADDY_PWD_VALUE}"
+    info "Generated an admin password for the dashboard (shown at the end)."
+}
+
 # Collect the audio source and station location on a fresh install. When
 # interactive we ask the operator directly (so a non-technical user gets a
 # working station without hand-editing a file); otherwise we keep the historical
@@ -88,30 +115,24 @@ prompt_station_settings() {
         fi
     fi
 
-    # ---- Web dashboard exposure ----
+    # ---- Web dashboard ----
     printf '\n  Web dashboard\n' >/dev/tty
-    printf '  By default the dashboard is reachable only from this device (localhost).\n' >/dev/tty
-    if yesno "  Make it reachable from other devices on your network?" n; then
-        printf '  Its admin can change settings and update software, so protect it.\n' >/dev/tty
-        local pw1 pw2
-        pw1="$(ask_secret "  Set a dashboard password (Enter to skip)")"
-        if [ -n "${pw1}" ]; then
-            pw2="$(ask_secret "  Confirm password")"
-            if [ "${pw1}" = "${pw2}" ]; then
-                CADDY_USER_VALUE="birdnet"
-                CADDY_PWD_VALUE="${pw1}"
-                LISTEN_ADDR="0.0.0.0:8502"
-                success "Dashboard on the LAN, password-protected (username: birdnet)."
-            else
-                warn "Passwords did not match — keeping the dashboard on localhost only."
-            fi
-        elif yesno "  Expose to the LAN with NO password?" n; then
-            LISTEN_ADDR="0.0.0.0:8502"
-            warn "Dashboard on the LAN with NO authentication — anyone on the network can change settings. Add CADDY_PWD to ${CONFIG_FILE} to fix this."
+    printf '  The dashboard is reachable from other devices on your network. Viewing is\n' >/dev/tty
+    printf '  open; the admin panel (settings, software update) is protected by a password.\n' >/dev/tty
+    local pw1 pw2
+    pw1="$(ask_secret "  Set an admin password now (Enter to auto-generate one)")"
+    if [ -n "${pw1}" ]; then
+        pw2="$(ask_secret "  Confirm password")"
+        if [ "${pw1}" = "${pw2}" ]; then
+            CADDY_USER_VALUE="birdnet"
+            CADDY_PWD_VALUE="${pw1}"
+            success "Admin password set (username: birdnet)."
         else
-            success "Keeping the dashboard on localhost only."
+            warn "Passwords did not match — a strong one will be generated instead."
         fi
-    else
-        success "Dashboard stays on this device (localhost) — SSH-tunnel in, or set BIRDNET_LISTEN to expose it."
+    fi
+    if yesno "  Restrict the dashboard to THIS device only (advanced, localhost)?" n; then
+        LISTEN_ADDR="127.0.0.1:8502"
+        success "Dashboard restricted to localhost — reach it via an SSH tunnel."
     fi
 }

@@ -36,7 +36,7 @@ BIRDNET_RTSP_URL=rtsp://cam.lan:554/stream
 BIRDNET_RTSP_URLS=rtsp://cam1.lan/stream,rtsp://cam2.lan/stream
 ```
 
-Use the [Add-RTSP wizard](../admin/audio.md#adding-an-rtsp-camera) in the UI to test reachability and sniff the audio properties before committing, and prefer **TCP** transport on busy Wi-Fi.
+RTSP capture needs **`ffmpeg`** on the host. When your config already has an `RTSP_URL`, the bare-metal installer (`install`/`repair`) installs it for you via apt, or prints the exact command if it can't; the Docker image bundles it. Use the [Add-RTSP wizard](../admin/audio.md#adding-an-rtsp-camera) in the UI to test reachability and sniff the audio properties before committing, and prefer **TCP** transport on busy Wi-Fi.
 
 ## "Watch a folder" mode
 

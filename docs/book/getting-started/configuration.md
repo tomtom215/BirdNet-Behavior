@@ -23,7 +23,7 @@ The full list lives in `.env.example` and `birdnet-behavior --help`. Each row sh
 | `BIRDNET_ALSA_DEVICE` | `--alsa-device` | `ALSA_CARD` | — |
 | `BIRDNET_PIPEWIRE_DEVICE` | `--pipewire-device` | — | — |
 | `BIRDNET_RTSP_URL` / `BIRDNET_RTSP_URLS` | `--rtsp-url` / `--rtsp-urls` | `RTSP_URL` | — |
-| `BIRDNET_LISTEN` | `--listen` | — | `127.0.0.1:8502` |
+| `BIRDNET_LISTEN` | `--listen` | — | `0.0.0.0:8502` |
 | `BIRDNET_RECORDING_SCHEDULE` | `--recording-schedule` | — | `all-day` |
 | `BIRDNET_SEGMENT_DURATION` | `--segment-duration` | `RECORDING_LENGTH` | `15` |
 | `BIRDNET_OVERLAP` | `--overlap` | `OVERLAP` | `0.0` |
@@ -36,16 +36,23 @@ The full list lives in `.env.example` and `birdnet-behavior --help`. Each row sh
 | `BIRDNET_MQTT_HOST` | `--mqtt-host` | `MQTT_HOST` | — |
 | `BIRDNET_MQTT_HA_DISCOVERY` | `--mqtt-ha-discovery` | — | disabled |
 | `BIRDNET_MAX_FILES_PER_SPECIES` | `--max-files-per-species` | `MAX_FILES_SPECIES` | `0` |
-| `CADDY_PWD` / `CADDY_USER` | — | `CADDY_PWD` / `CADDY_USER` | — (auth off; user `birdnet`) |
+| `CADDY_PWD` / `CADDY_USER` | — | `CADDY_PWD` / `CADDY_USER` | auto-set on bare-metal install; user `birdnet` |
 | `BIRDNET_CORS_ALLOWED_ORIGINS` | — | — | — (same-origin only) |
 
 > **Invalid settings fail fast.** On startup the daemon validates the
 > configuration and **refuses to start** on an out-of-range value (e.g. a
 > latitude outside ±90, or a malformed `RECORDING_SCHEDULE`) instead of running
 > silently degraded. Run `birdnet-behavior --doctor` to check a config before
-> deploying it. The authentication (`CADDY_PWD`) and cross-origin
-> (`BIRDNET_CORS_ALLOWED_ORIGINS`) settings are covered in
-> [Remote Access & Security](../admin/remote-access.md).
+> deploying it.
+
+> **`BIRDNET_LISTEN` binds all interfaces by default** (`0.0.0.0:8502`), so the
+> dashboard is reachable across your LAN out of the box. Viewing is open; only
+> the `/admin` panel requires a password. A fresh bare-metal install
+> auto-generates `CADDY_PWD` (username `birdnet`) and prints it once in the
+> post-install summary — change it via `CADDY_PWD` in `birdnet.conf`. To restrict
+> the dashboard to the local machine, set `BIRDNET_LISTEN=127.0.0.1:8502`. The
+> authentication (`CADDY_PWD`) and cross-origin (`BIRDNET_CORS_ALLOWED_ORIGINS`)
+> settings are covered in [Remote Access & Security](../admin/remote-access.md).
 
 ## Web-UI-only settings
 

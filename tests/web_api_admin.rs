@@ -194,3 +194,66 @@ async fn htmx_species_list_search_no_match() {
 
     assert!(html.contains("No matching species found"));
 }
+
+/// The admin panel is gated by basic auth, but the rest of the dashboard stays
+/// open — so a station is viewable on the LAN out of the box while settings and
+/// the software-update action stay behind a password.
+#[tokio::test]
+async fn admin_panel_requires_auth_but_dashboard_stays_open() {
+    // Fresh router per request: AppState/Router aren't Clone, and oneshot consumes.
+    let gated = || {
+        birdnet_web::server::build_router_with_auth(
+            test_state(),
+            Some(birdnet_web::auth::AuthConfig::new("birdnet", "testpw").unwrap()),
+        )
+    };
+
+    // /admin with no credentials → 401 Unauthorized.
+    let resp = gated()
+        .oneshot(
+            Request::builder()
+                .uri("/admin")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "the /admin panel must require authentication"
+    );
+
+    // /admin WITH valid Basic credentials (birdnet:testpw) → not gated.
+    let resp = gated()
+        .oneshot(
+            Request::builder()
+                .uri("/admin")
+                .header("authorization", "Basic YmlyZG5ldDp0ZXN0cHc=")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_ne!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "valid credentials must pass the admin gate"
+    );
+
+    // A public route is reachable with NO credentials.
+    let resp = gated()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_ne!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "the dashboard must stay viewable without a login"
+    );
+}

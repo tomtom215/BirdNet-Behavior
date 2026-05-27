@@ -64,10 +64,13 @@ DB_PATH="${DATA_DIR}/birds.db"
 SERVICE_FILE="/etc/systemd/system/birdnet-behavior.service"
 SERVICE_NAME="birdnet-behavior.service"
 SERVICE_USER="${SUDO_USER:-${USER:-$(id -un)}}"
-# Bind localhost by default — the admin dashboard can change settings and update
-# software, so it must not reach the LAN without an explicit (ideally password-
-# protected) opt-in. Override with BIRDNET_LISTEN= or the interactive prompt.
-LISTEN_ADDR="${BIRDNET_LISTEN:-127.0.0.1:8502}"
+# Bind to all interfaces by default so the dashboard is reachable on the LAN out
+# of the box (a localhost-only default left non-technical users staring at
+# "connection refused"). Safe because only the /admin panel is gated by a
+# password — viewing is open — and a fresh install auto-generates that admin
+# password. Override with BIRDNET_LISTEN=, the config file, or the prompt;
+# restrict to this host with 127.0.0.1:8502.
+LISTEN_ADDR="${BIRDNET_LISTEN:-0.0.0.0:8502}"
 
 # Interactive onboarding state. INTERACTIVE is decided in main(); the *_VALUE
 # vars hold answers from prompt_station_settings and are baked into the config
@@ -79,6 +82,9 @@ LATITUDE_VALUE=""
 LONGITUDE_VALUE=""
 CADDY_USER_VALUE=""
 CADDY_PWD_VALUE=""
+# Set by ensure_admin_password when it auto-generates one, so print_summary can
+# show it to the operator exactly once.
+GENERATED_ADMIN_PASSWORD=""
 
 # What main() is doing — purely for user-facing messages (install/update/
 # repair/reinstall). Set by main()/the subcommand dispatch.
@@ -454,6 +460,40 @@ check_disk_space() {
     fi
 }
 
+# RTSP capture runs through ffmpeg (so does the macOS microphone path). A
+# station configured for RTSP without ffmpeg fails the doctor preflight and the
+# service never starts, so make sure ffmpeg is present — installing it when we
+# can. Called by the install/repair flows AFTER the config is written/known
+# (an ALSA microphone on Linux uses arecord and needs no ffmpeg).
+ensure_capture_backend() {
+    local rtsp=0
+    if [ -n "${RTSP_URL_VALUE}" ]; then
+        rtsp=1
+    elif [ -f "${CONFIG_FILE}" ] \
+        && grep -qE '^[[:space:]]*RTSP_URL[[:space:]]*=[[:space:]]*[^[:space:]#]' "${CONFIG_FILE}"; then
+        rtsp=1
+    fi
+    [ "${rtsp}" = 1 ] || return 0
+
+    if command -v ffmpeg &>/dev/null; then
+        success "ffmpeg present — RTSP capture backend OK."
+        return 0
+    fi
+
+    warn "RTSP source configured but ffmpeg is not installed (required for RTSP capture)."
+    if command -v apt-get &>/dev/null; then
+        info "Installing ffmpeg…"
+        if apt-get install -y ffmpeg &>/dev/null \
+            || { apt-get update &>/dev/null && apt-get install -y ffmpeg &>/dev/null; }; then
+            success "ffmpeg installed."
+            return 0
+        fi
+        warn "Automatic ffmpeg install failed."
+    fi
+    warn "Install ffmpeg, then restart the service:"
+    warn "  sudo apt-get install -y ffmpeg && sudo systemctl restart birdnet-behavior"
+}
+
 # Detect what — if anything — is already installed, into globals the rest of
 # the script reads. Safe to call before require_root has run.
 HAVE_BINARY=0
@@ -690,6 +730,9 @@ write_config() {
     local caddy_pwd_line="# CADDY_PWD=change-me-to-a-strong-password"
     [ -n "${CADDY_USER_VALUE}" ] && caddy_user_line="CADDY_USER=${CADDY_USER_VALUE}"
     [ -n "${CADDY_PWD_VALUE}" ]  && caddy_pwd_line="CADDY_PWD=${CADDY_PWD_VALUE}"
+    # Persist the bind address so `install.sh repair`/`update` keep it (the
+    # installer reads BIRDNET_LISTEN back from here on re-run).
+    local listen_line="BIRDNET_LISTEN=${LISTEN_ADDR}"
 
     info "Writing default config to ${CONFIG_FILE}…"
     cat > "${CONFIG_FILE}" <<EOF
@@ -736,13 +779,19 @@ ${lon_line}
 # --- Site name shown in web UI ---
 # SITENAME=My Bird Station
 
-# --- Web UI authentication (recommended before exposing to the LAN) ---
-# The dashboard — including the admin panel that can change settings, trigger
-# database backups, and update the software — listens on ${LISTEN_ADDR}.
-# localhost is the safe default. To reach it from other devices, change the bind
-# to 0.0.0.0:8502 (edit --listen in ${SERVICE_FILE}, or set BIRDNET_LISTEN and
-# re-run the installer) — and set a password first, or anyone on your LAN can
-# control it. Username defaults to "birdnet".
+# --- Web dashboard bind address ---
+# Default 0.0.0.0:8502 = reachable from other devices on your LAN. Viewing the
+# dashboard is open; the /admin panel (settings, software update) is gated by
+# CADDY_PWD below. To restrict the WHOLE dashboard to this device, set
+# 127.0.0.1:8502, then apply it with:  sudo bash install.sh repair
+${listen_line}
+
+# --- Admin authentication (CADDY_USER / CADDY_PWD) ---
+# The /admin panel can change settings, trigger backups, and update the
+# software, so it requires a password (HTTP Basic Auth, enforced by the binary).
+# A fresh install sets a strong CADDY_PWD automatically; change it here any
+# time. Username defaults to "birdnet". Clearing CADDY_PWD leaves /admin OPEN to
+# anyone who can reach the dashboard.
 ${caddy_user_line}
 ${caddy_pwd_line}
 EOF
@@ -758,6 +807,41 @@ EOF
 # ---------------------------------------------------------------------------
 # Install the systemd service unit
 # ---------------------------------------------------------------------------
+
+# Decide the dashboard bind address, PRESERVING it across re-runs so a repair or
+# update never silently re-hides a LAN-exposed dashboard back on localhost.
+# Precedence (highest first):
+#   1. BIRDNET_LISTEN in the environment (explicit override; already in LISTEN_ADDR)
+#   2. BIRDNET_LISTEN= in the config file (the operator-editable source of truth)
+#   3. --listen in an existing service unit (carry the previous choice forward)
+#   4. the interactive prompt / default already in LISTEN_ADDR (fresh installs)
+resolve_listen_addr() {
+    [ -n "${BIRDNET_LISTEN:-}" ] && return 0
+
+    # The `|| true` keeps a no-match grep (exit 1) from tripping `set -o pipefail`
+    # + `set -e` and aborting the whole installer — the common case is a config
+    # with no uncommented BIRDNET_LISTEN.
+    local from_cfg=""
+    if [ -f "${CONFIG_FILE}" ]; then
+        from_cfg="$(grep -E '^[[:space:]]*BIRDNET_LISTEN[[:space:]]*=' "${CONFIG_FILE}" 2>/dev/null \
+            | tail -1 | cut -d= -f2- | tr -d '[:space:]' || true)"
+    fi
+    if [ -n "${from_cfg}" ]; then
+        LISTEN_ADDR="${from_cfg}"
+        info "Dashboard bind address from config: ${LISTEN_ADDR}"
+        return 0
+    fi
+
+    if [ -f "${SERVICE_FILE}" ]; then
+        local from_unit
+        from_unit="$(grep -oE -- '--listen [^ ]+' "${SERVICE_FILE}" 2>/dev/null \
+            | head -1 | awk '{print $2}' || true)"
+        if [ -n "${from_unit}" ] && [ "${from_unit}" != "${LISTEN_ADDR}" ]; then
+            LISTEN_ADDR="${from_unit}"
+            info "Preserving dashboard bind address from the existing unit: ${LISTEN_ADDR}"
+        fi
+    fi
+}
 
 install_service() {
     info "Installing systemd service…"
@@ -927,6 +1011,33 @@ valid_coord() {
         'BEGIN { if (v ~ /^[-+]?([0-9]+\.?[0-9]*|\.[0-9]+)$/ && v+0 >= lo && v+0 <= hi) exit 0; exit 1 }'
 }
 
+# Generate a strong, shell/URL-friendly random password.
+gen_password() {
+    if command -v openssl &>/dev/null; then
+        openssl rand -base64 18 2>/dev/null | tr -dc 'A-Za-z0-9' | cut -c1-22
+    else
+        LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 22
+    fi
+}
+
+# Guarantee the /admin panel is password-protected on a fresh LAN install. The
+# dashboard binds to the LAN by default and viewing is open, but admin actions
+# (settings, software update) must require a password — so if the operator
+# didn't set one during onboarding, generate a strong one. No-ops when:
+#   - the config already exists (never touch an operator's existing credentials)
+#   - a password was already chosen during onboarding
+#   - the dashboard is bound to localhost only (admin exposure is local anyway)
+ensure_admin_password() {
+    [ -f "${CONFIG_FILE}" ] && return 0
+    [ -n "${CADDY_PWD_VALUE}" ] && return 0
+    case "${LISTEN_ADDR}" in 127.0.0.1:* | localhost:*) return 0 ;; esac
+
+    CADDY_USER_VALUE="birdnet"
+    CADDY_PWD_VALUE="$(gen_password)"
+    GENERATED_ADMIN_PASSWORD="${CADDY_PWD_VALUE}"
+    info "Generated an admin password for the dashboard (shown at the end)."
+}
+
 # Collect the audio source and station location on a fresh install. When
 # interactive we ask the operator directly (so a non-technical user gets a
 # working station without hand-editing a file); otherwise we keep the historical
@@ -991,31 +1102,25 @@ prompt_station_settings() {
         fi
     fi
 
-    # ---- Web dashboard exposure ----
+    # ---- Web dashboard ----
     printf '\n  Web dashboard\n' >/dev/tty
-    printf '  By default the dashboard is reachable only from this device (localhost).\n' >/dev/tty
-    if yesno "  Make it reachable from other devices on your network?" n; then
-        printf '  Its admin can change settings and update software, so protect it.\n' >/dev/tty
-        local pw1 pw2
-        pw1="$(ask_secret "  Set a dashboard password (Enter to skip)")"
-        if [ -n "${pw1}" ]; then
-            pw2="$(ask_secret "  Confirm password")"
-            if [ "${pw1}" = "${pw2}" ]; then
-                CADDY_USER_VALUE="birdnet"
-                CADDY_PWD_VALUE="${pw1}"
-                LISTEN_ADDR="0.0.0.0:8502"
-                success "Dashboard on the LAN, password-protected (username: birdnet)."
-            else
-                warn "Passwords did not match — keeping the dashboard on localhost only."
-            fi
-        elif yesno "  Expose to the LAN with NO password?" n; then
-            LISTEN_ADDR="0.0.0.0:8502"
-            warn "Dashboard on the LAN with NO authentication — anyone on the network can change settings. Add CADDY_PWD to ${CONFIG_FILE} to fix this."
+    printf '  The dashboard is reachable from other devices on your network. Viewing is\n' >/dev/tty
+    printf '  open; the admin panel (settings, software update) is protected by a password.\n' >/dev/tty
+    local pw1 pw2
+    pw1="$(ask_secret "  Set an admin password now (Enter to auto-generate one)")"
+    if [ -n "${pw1}" ]; then
+        pw2="$(ask_secret "  Confirm password")"
+        if [ "${pw1}" = "${pw2}" ]; then
+            CADDY_USER_VALUE="birdnet"
+            CADDY_PWD_VALUE="${pw1}"
+            success "Admin password set (username: birdnet)."
         else
-            success "Keeping the dashboard on localhost only."
+            warn "Passwords did not match — a strong one will be generated instead."
         fi
-    else
-        success "Dashboard stays on this device (localhost) — SSH-tunnel in, or set BIRDNET_LISTEN to expose it."
+    fi
+    if yesno "  Restrict the dashboard to THIS device only (advanced, localhost)?" n; then
+        LISTEN_ADDR="127.0.0.1:8502"
+        success "Dashboard restricted to localhost — reach it via an SSH tunnel."
     fi
 }
 
@@ -1205,7 +1310,10 @@ do_install() {
     setup_tmpfs_streaming
     download_model
     prompt_station_settings
-    write_config
+    resolve_listen_addr      # finalize the bind address (env > config > unit > prompt)
+    ensure_admin_password    # auto-protect /admin on a fresh LAN install
+    write_config             # bakes BIRDNET_LISTEN + CADDY_* into the config
+    ensure_capture_backend
     install_service
     maybe_setup_zram
     maybe_start_service
@@ -1249,8 +1357,10 @@ do_repair() {
         download_model
     fi
 
-    write_config       # idempotent: fixes ownership/permissions, keeps content
-    install_service    # rewrites the unit (this is what fixes a bad unit) + reload
+    write_config             # idempotent: fixes ownership/permissions, keeps content
+    resolve_listen_addr      # preserve LAN bind across re-runs (env > config > unit)
+    ensure_capture_backend   # RTSP stations need ffmpeg or the daemon can't start
+    install_service          # rewrites the unit (this is what fixes a bad unit) + reload
 
     # Clear any failed / rate-limited state from prior crash loops, then bring
     # the service up with the repaired unit.
@@ -1273,22 +1383,101 @@ do_repair() {
     echo "  Logs:  sudo journalctl -u birdnet-behavior -f"
 }
 
-# Software-only uninstall (data preserved). For removing data/model too, point
-# the operator at the dedicated uninstall.sh, which has the data flags.
+# Remove the software cleanly. Data/config are kept unless the operator opts in
+# (interactively, or via BIRDNET_PURGE=1). Idempotent: safe to re-run when
+# nothing — or only part — is installed.
 do_uninstall() {
-    info "Stopping and removing BirdNet-Behavior (data preserved)…"
-    systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
-    systemctl disable "${SERVICE_NAME}" 2>/dev/null || true
-    rm -f "${SERVICE_FILE}"
-    # Tear down the tmpfs mount unit install may have added (escaped '-' = \x2d).
-    systemctl disable --now 'tmp-birdnet\x2dstream.mount' 2>/dev/null || true
-    rm -f '/etc/systemd/system/tmp-birdnet\x2dstream.mount'
-    systemctl daemon-reload 2>/dev/null || true
+    info "Removing BirdNet-Behavior…"
+
+    # Record what's actually present so we report accurately and stay idempotent.
+    local had_unit=0 had_binary=0
+    [ -f "${SERVICE_FILE}" ] && had_unit=1
+    [ -x "${INSTALL_DIR}/${BINARY_NAME}" ] && had_binary=1
+
+    if command -v systemctl >/dev/null 2>&1; then
+        # The daemon may take its TimeoutStopSec to drain; `|| true` keeps a
+        # slow or already-stopped unit from aborting the uninstall.
+        systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
+        systemctl disable "${SERVICE_NAME}" 2>/dev/null || true
+        systemctl disable --now 'tmp-birdnet\x2dstream.mount' 2>/dev/null || true
+    fi
+
+    rm -f "${SERVICE_FILE}" '/etc/systemd/system/tmp-birdnet\x2dstream.mount'
+
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl daemon-reload 2>/dev/null || true
+        # Clear the lingering failed/timeout state so `systemctl status` reads a
+        # clean "not-found" instead of "Active: failed" after the unit is gone.
+        systemctl reset-failed "${SERVICE_NAME}" 2>/dev/null || true
+    fi
+
     rm -f "${INSTALL_DIR}/${BINARY_NAME}"
     rm -rf "${STREAM_DIR}"
-    success "Binary, service, and tmpfs unit removed."
-    warn "Data and config preserved at ${DATA_DIR} and ${CONFIG_FILE}."
-    warn "To remove the database, recordings, and model too:  sudo ./uninstall.sh --purge"
+
+    if [ "${had_unit}" = 0 ] && [ "${had_binary}" = 0 ]; then
+        warn "No installed service or binary found — nothing to remove."
+    else
+        success "Removed the service, tmpfs unit, and binary."
+    fi
+
+    remove_data_or_keep
+    verify_uninstall
+}
+
+# Offer to delete the data + config (interactive, or BIRDNET_PURGE=1); otherwise
+# keep them and show how to remove them later. Guards against deleting anything
+# but a real "<home>/BirdNet-Behavior" data directory.
+remove_data_or_keep() {
+    [ -e "${DATA_DIR}" ] || [ -e "${CONFIG_DIR}" ] || return 0
+
+    local do_purge=0
+    if [ "${BIRDNET_PURGE:-0}" = "1" ]; then
+        do_purge=1
+    elif [ "${INTERACTIVE}" = 1 ] \
+        && yesno "  Also delete ALL data — database, recordings, model (~541 MB), config?" n; then
+        do_purge=1
+    fi
+
+    if [ "${do_purge}" = 1 ]; then
+        if [ -z "${DATA_DIR}" ] || [ "${DATA_DIR}" = "/" ] \
+            || [ "${DATA_DIR%/BirdNet-Behavior}" = "${DATA_DIR}" ]; then
+            warn "Data dir ${DATA_DIR:-<unset>} looks unsafe to auto-delete — remove it manually."
+        else
+            rm -rf "${DATA_DIR}"
+            success "Removed data directory ${DATA_DIR}."
+        fi
+        rm -rf "${CONFIG_DIR}"
+        success "Removed config ${CONFIG_DIR}."
+    else
+        warn "Kept your data and config (reinstall will reuse them):"
+        [ -e "${DATA_DIR}" ]   && warn "    data:   ${DATA_DIR}"
+        [ -e "${CONFIG_DIR}" ] && warn "    config: ${CONFIG_DIR}"
+        warn "    Remove later with:  sudo rm -rf ${DATA_DIR} ${CONFIG_DIR}"
+    fi
+}
+
+# Confirm nothing BirdNet-Behavior remains, so the operator isn't left with a
+# half-removed install.
+verify_uninstall() {
+    local problems=0
+    if [ -e "${INSTALL_DIR}/${BINARY_NAME}" ]; then
+        warn "binary still present: ${INSTALL_DIR}/${BINARY_NAME}"
+        problems=1
+    fi
+    if [ -e "${SERVICE_FILE}" ]; then
+        warn "service unit still present: ${SERVICE_FILE}"
+        problems=1
+    fi
+    if command -v systemctl >/dev/null 2>&1 \
+        && systemctl list-unit-files 2>/dev/null | grep -q "^${SERVICE_NAME}"; then
+        warn "systemd still lists ${SERVICE_NAME} — try: sudo systemctl daemon-reload"
+        problems=1
+    fi
+    if [ "${problems}" = 0 ]; then
+        success "Uninstall verified — no BirdNet-Behavior service or binary remains."
+    else
+        warn "Some components could not be removed (see above)."
+    fi
 }
 
 # Present the choices when an existing install is found (interactive only).
@@ -1341,16 +1530,8 @@ print_summary() {
     echo -e "  ${BOLD}Web UI:${RESET}  http://${web_host}:8502"
     echo
     if systemctl is-active --quiet birdnet-behavior.service 2>/dev/null; then
-        if [ "${web_host}" = "localhost" ]; then
-            echo -e "${GREEN}Your dashboard is live.${RESET}  On THIS device, open a web browser to:"
-            echo -e "      ${BOLD}http://localhost:8502${RESET}"
-            echo "  To open it from your phone or laptop, re-run the installer and answer yes to"
-            echo "  \"reachable from other devices\", or set BIRDNET_LISTEN=0.0.0.0:8502."
-        else
-            echo -e "${GREEN}Your dashboard is live.${RESET}  From a phone or computer on the same"
-            echo -e "  network, open a web browser to:  ${BOLD}http://${web_host}:8502${RESET}"
-            [ -n "${CADDY_PWD_VALUE}" ] && echo "  Sign in with username 'birdnet' and the password you just set."
-        fi
+        echo -e "${GREEN}Your dashboard is live${RESET} — open a web browser to:  ${BOLD}http://${web_host}:8502${RESET}"
+        [ "${web_host}" != "localhost" ] && echo "  (reachable from any device on your network)"
     else
         echo -e "${BOLD}Next steps:${RESET}"
         echo "  1. Set an audio source (edit as root):  sudo nano ${CONFIG_FILE}"
@@ -1361,6 +1542,19 @@ print_summary() {
         echo
         echo "  3. sudo systemctl start birdnet-behavior"
         echo "  4. Open a web browser to  http://${web_host}:8502"
+    fi
+
+    # Admin login. Viewing the dashboard is open; the admin panel (settings +
+    # software update) needs these credentials.
+    if [ -n "${GENERATED_ADMIN_PASSWORD}" ]; then
+        echo
+        echo -e "  ${BOLD}Admin panel login${RESET} (settings + software update — viewing is open):"
+        echo -e "      username:  ${BOLD}birdnet${RESET}"
+        echo -e "      password:  ${BOLD}${GENERATED_ADMIN_PASSWORD}${RESET}"
+        echo    "      (auto-generated, saved as CADDY_PWD in ${CONFIG_FILE} — change it any time)"
+    elif [ -n "${CADDY_PWD_VALUE}" ]; then
+        echo
+        echo "  Admin panel (settings + software update): sign in as 'birdnet' with the password you set."
     fi
     echo
     echo "  Logs:  sudo journalctl -u birdnet-behavior -f"

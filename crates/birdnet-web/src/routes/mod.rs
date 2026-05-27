@@ -55,8 +55,13 @@ pub(crate) fn log_internal<E: std::fmt::Display>(context: &str, err: &E) -> &'st
     "internal server error"
 }
 
-/// Build all routes: API under `/api/v2/`, admin routes at `/admin`, and page routes at `/`.
-pub fn api_routes() -> Router<AppState> {
+/// Public routes: everything except the `/admin` panel — the dashboard, API,
+/// live stream, feeds, spectrograms, static assets.
+///
+/// These are safe to serve without a login so a station is viewable on the LAN
+/// out of the box. State-changing admin actions live in [`admin_routes`], which
+/// is gated separately (see `server::build_router_with_auth`).
+pub fn public_routes() -> Router<AppState> {
     Router::new()
         .nest("/api/v2", detections::router())
         .nest("/api/v2", species::router())
@@ -76,9 +81,25 @@ pub fn api_routes() -> Router<AppState> {
         .merge(feeds::router())
         .merge(share::router())
         .merge(static_files::router())
-        .merge(admin::router())
         // Friendly branded 404 for any unmatched path (e.g. a mistyped page URL).
         .fallback(pages::not_found)
+}
+
+/// The `/admin` panel — gated behind HTTP Basic Auth when a password is set.
+///
+/// Settings, software update, system controls, backups, migrations: these can
+/// change configuration and update the software, so they require a password.
+pub fn admin_routes() -> Router<AppState> {
+    admin::router()
+}
+
+/// All routes with the admin panel left open.
+///
+/// API under `/api/v2/`, admin at `/admin`, pages at `/`. Callers that want the
+/// admin panel gated use [`public_routes`] + [`admin_routes`] with auth applied
+/// to the latter.
+pub fn api_routes() -> Router<AppState> {
+    public_routes().merge(admin_routes())
 }
 
 #[cfg(test)]

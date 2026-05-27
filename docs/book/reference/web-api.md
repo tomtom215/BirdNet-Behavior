@@ -32,6 +32,8 @@ A map of every page and admin URL the dashboard serves. For the JSON/WebSocket A
 
 ## Admin
 
+These `/admin*` routes are the **only** password-gated part of the UI — they require HTTP Basic Auth (enforced by the binary) when `CADDY_PWD` is set; a fresh bare-metal install sets it automatically. Every page above and the JSON/WebSocket API below are open. See [Remote Access & Security](../admin/remote-access.md).
+
 | URL | Description |
 |---|---|
 | `/admin/settings` | Audio, location, detection, notifications, email, MQTT, species, system |

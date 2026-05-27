@@ -1,18 +1,22 @@
 # Remote Access & Security
 
-By default BirdNet-Behavior binds to `127.0.0.1:8502` — reachable only from the machine itself. This page covers reaching it from elsewhere, safely.
+By default BirdNet-Behavior binds to `0.0.0.0:8502` — reachable from any device on your LAN. **Viewing the dashboard is open (no login); only the `/admin` panel requires a password**, which a fresh install sets for you. This page covers reaching the station from your network and from elsewhere, safely.
 
 ## On your local network
 
-To reach the dashboard from another device on your LAN, bind to all interfaces:
+Out of the box the dashboard is already reachable from other devices. Browse to `http://<pi-ip>:8502` from any device on the network — find the Pi's address with `hostname -I`.
+
+> The `0.0.0.0` default exposes the dashboard to **everyone on your network**. That's usually fine at home: the read-only views are open, and the `/admin` panel is protected by the auto-generated password (see below). On an untrusted network (a shared flat, public Wi-Fi), confirm `CADDY_PWD` is set and consider restricting the bind.
+
+## Restrict to this device only
+
+To make the dashboard reachable **only from the machine itself**, bind to loopback:
 
 ```dotenv
-BIRDNET_LISTEN=0.0.0.0:8502
+BIRDNET_LISTEN=127.0.0.1:8502
 ```
 
-Then browse to `http://<pi-ip>:8502` from any device on the network. Find the Pi's address with `hostname -I`.
-
-> Binding to `0.0.0.0` exposes the dashboard to **everyone on your network**. That's usually fine at home, but don't do it on an untrusted network (a shared flat, a public Wi-Fi) without the password protection below.
+(Or answer "restrict to this device" in the interactive installer.) Then reach it remotely with an SSH tunnel (`ssh -L 8502:localhost:8502 pi@host`) or a VPN — see [the private-tunnel section](#a-safer-alternative-a-private-tunnel) below.
 
 ## Do NOT expose it directly to the internet
 
@@ -58,14 +62,16 @@ server {
 
 ## Built-in HTTP Basic Auth
 
-If you'd rather not run a proxy, the binary supports HTTP Basic Auth directly, compatible with the BirdNET-Pi `CADDY_PWD` convention. Set it in `birdnet.conf` or the environment (so it works under Docker too):
+The binary enforces HTTP Basic Auth on the **`/admin` panel** itself — no proxy required — using the BirdNET-Pi `CADDY_PWD` convention. **Viewing the dashboard and the read-only `/api/v2/*` endpoints stay open; only `/admin*` (settings, audio config, software update, system controls, backups, migration) prompts for a password.**
+
+A fresh install **auto-generates a strong password** (username `birdnet`), prints it once in the post-install summary, and stores it as `CADDY_PWD` in `birdnet.conf`. Change it any time via `birdnet.conf` or the environment (so it works under Docker too):
 
 ```dotenv
 CADDY_USER=birder      # optional — defaults to "birdnet"
 CADDY_PWD=a-long-random-password
 ```
 
-This protects the UI with a username/password but is **still plain HTTP** — only use it behind TLS, or on a trusted LAN. If the server binds to a non-loopback address (e.g. `0.0.0.0`) with **no** `CADDY_PWD` set, it logs a prominent warning at startup, because the admin panel would otherwise be open to the whole network. The live-detection WebSocket and `/api/v2/health` are exempt from this auth (a browser can't attach Basic-auth headers to a WebSocket handshake), so restrict those at the network layer if you need to.
+After editing the config, restart the service (`sudo systemctl restart birdnet-behavior`). This is **still plain HTTP** — only rely on it behind TLS, or on a trusted LAN. **Clearing `CADDY_PWD` leaves `/admin` open** to anyone who can reach the dashboard; if the server binds to a non-loopback address (e.g. the default `0.0.0.0`) with no `CADDY_PWD` set, it logs a prominent warning at startup. The live-detection WebSocket and `/api/v2/health` are exempt from this auth (a browser can't attach Basic-auth headers to a WebSocket handshake), and are read-only and outside `/admin` in any case — restrict those at the network layer if you need to.
 
 ## Cross-origin requests (CORS)
 
@@ -83,7 +89,7 @@ For remote access without opening any ports, a mesh VPN like **Tailscale** or **
 
 ## Checklist
 
-- [ ] Bind to `0.0.0.0` only if you need LAN/remote access.
-- [ ] Never port-forward `8502` directly — always terminate TLS at a proxy or use a VPN.
-- [ ] Add a password (proxy auth, built-in basic auth, or VPN-only access).
+- [ ] Keep `CADDY_PWD` set so `/admin` stays protected (a fresh install generates one) — don't clear it on a non-loopback bind.
+- [ ] Restrict the bind to `127.0.0.1` (+ SSH/VPN) if you don't need LAN access.
+- [ ] Never port-forward `8502` directly — always terminate TLS at a proxy or use a VPN for off-LAN access.
 - [ ] Forward WebSocket upgrade headers in the proxy.

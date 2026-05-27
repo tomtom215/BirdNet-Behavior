@@ -271,16 +271,47 @@ pub async fn run(
 
     // Use `into_make_service_with_connect_info` so the per-IP rate limiter
     // can read the client socket address from request extensions.
-    axum::serve(
+    let serve = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal())
-    .await?;
+    .with_graceful_shutdown(shutdown_signal());
+
+    // Cap the graceful drain. `with_graceful_shutdown` waits for every in-flight
+    // connection to close, but a live WebSocket / event-stream client (the
+    // dashboard keeps one open) never closes on its own — so the process would
+    // hang until systemd SIGKILLs it at TimeoutStopSec. After the signal, give
+    // connections SHUTDOWN_GRACE to finish, then stop waiting and exit.
+    tokio::select! {
+        res = serve => res?,
+        () = shutdown_grace_backstop() => {
+            tracing::warn!(
+                grace_secs = SHUTDOWN_GRACE.as_secs(),
+                "shutdown grace elapsed with connection(s) still open; forcing exit"
+            );
+        }
+    }
+
+    // Stop the detection loop so its event sender drops and the (blocking) event
+    // processor returns, letting the runtime wind down cleanly instead of being
+    // left to a SIGKILL.
+    if let Some(handle) = daemon_handle.as_ref() {
+        handle.stop();
+    }
 
     sd_notify::stopping();
     tracing::info!("BirdNet-Behavior stopped");
     Ok(())
+}
+
+/// After a shutdown signal, allow in-flight connections a bounded window to
+/// drain before we stop waiting — so a long-lived WebSocket can't wedge
+/// shutdown until systemd SIGKILLs the process.
+const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+
+async fn shutdown_grace_backstop() {
+    shutdown_signal().await;
+    tokio::time::sleep(SHUTDOWN_GRACE).await;
 }
 
 /// Wait for a shutdown signal (SIGTERM or SIGINT).

@@ -2,6 +2,41 @@
 # Install the systemd service unit
 # ---------------------------------------------------------------------------
 
+# Decide the dashboard bind address, PRESERVING it across re-runs so a repair or
+# update never silently re-hides a LAN-exposed dashboard back on localhost.
+# Precedence (highest first):
+#   1. BIRDNET_LISTEN in the environment (explicit override; already in LISTEN_ADDR)
+#   2. BIRDNET_LISTEN= in the config file (the operator-editable source of truth)
+#   3. --listen in an existing service unit (carry the previous choice forward)
+#   4. the interactive prompt / default already in LISTEN_ADDR (fresh installs)
+resolve_listen_addr() {
+    [ -n "${BIRDNET_LISTEN:-}" ] && return 0
+
+    # The `|| true` keeps a no-match grep (exit 1) from tripping `set -o pipefail`
+    # + `set -e` and aborting the whole installer — the common case is a config
+    # with no uncommented BIRDNET_LISTEN.
+    local from_cfg=""
+    if [ -f "${CONFIG_FILE}" ]; then
+        from_cfg="$(grep -E '^[[:space:]]*BIRDNET_LISTEN[[:space:]]*=' "${CONFIG_FILE}" 2>/dev/null \
+            | tail -1 | cut -d= -f2- | tr -d '[:space:]' || true)"
+    fi
+    if [ -n "${from_cfg}" ]; then
+        LISTEN_ADDR="${from_cfg}"
+        info "Dashboard bind address from config: ${LISTEN_ADDR}"
+        return 0
+    fi
+
+    if [ -f "${SERVICE_FILE}" ]; then
+        local from_unit
+        from_unit="$(grep -oE -- '--listen [^ ]+' "${SERVICE_FILE}" 2>/dev/null \
+            | head -1 | awk '{print $2}' || true)"
+        if [ -n "${from_unit}" ] && [ "${from_unit}" != "${LISTEN_ADDR}" ]; then
+            LISTEN_ADDR="${from_unit}"
+            info "Preserving dashboard bind address from the existing unit: ${LISTEN_ADDR}"
+        fi
+    fi
+}
+
 install_service() {
     info "Installing systemd service…"
 

@@ -75,17 +75,23 @@ pub fn build_router_with_auth(
     // Rate limiter: 30 req/s sustained, 60-request burst per IP.
     let limiter = Arc::new(RateLimiter::new(RateLimitConfig::default()));
 
-    let router = Router::new().merge(routes::api_routes()).with_state(state);
-
-    let router = if let Some(config) = auth_config {
+    // Gate ONLY the /admin panel (settings, software update, system controls)
+    // behind basic auth; the rest of the dashboard stays viewable without a
+    // login so a station works on the LAN out of the box. When no password is
+    // configured the admin panel is left open too (the installer sets one by
+    // default, and the binary warns when bound non-loopback without auth).
+    let admin = routes::admin_routes();
+    let admin = if let Some(config) = auth_config {
         let config = Arc::new(config);
-        router.layer(axum::middleware::from_fn(move |req, next| {
+        admin.layer(axum::middleware::from_fn(move |req, next| {
             let config = Arc::clone(&config);
             async move { crate::auth::basic_auth_middleware(req, next, &config).await }
         }))
     } else {
-        router
+        admin
     };
+
+    let router = routes::public_routes().merge(admin).with_state(state);
 
     // Layer order is outermost-last. The CSRF guard runs after rate limiting
     // (so request floods are still throttled) and before auth, rejecting
