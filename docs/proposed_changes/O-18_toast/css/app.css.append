@@ -1,0 +1,100 @@
+/* Append to crates/birdnet-web/static/css/app.css — purely additive.
+   Toast / snackbar region (O-18). */
+
+/* ── Toast region (global live region, top-right) ─────────────────── */
+#bnb-toasts {
+  position: fixed;
+  top: calc(56px + 12px); /* clear the sticky topnav (~56px) + gap */
+  right: 18px;
+  z-index: 60; /* above sticky topnav (z=50), below modal (<dialog> auto z) */
+  display: flex; flex-direction: column; gap: 8px;
+  pointer-events: none; /* let clicks through gaps; toasts re-enable themselves */
+  max-width: min(96vw, 360px);
+}
+
+.bnb-toast {
+  pointer-events: auto;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 14px;
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-md);
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--fg);
+  transition: opacity .2s ease, transform .2s cubic-bezier(.2,.7,.2,1);
+}
+.bnb-toast[data-leaving="1"] {
+  opacity: 0;
+  transform: translateX(8px);
+}
+
+.bnb-toast__dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 999px;
+  background: var(--fg-3);
+  margin-top: 6px;
+  flex: 0 0 auto;
+}
+.bnb-toast[data-kind="success"] .bnb-toast__dot { background: var(--moss); }
+.bnb-toast[data-kind="warn"]    .bnb-toast__dot { background: var(--dawn); }
+.bnb-toast[data-kind="error"]   .bnb-toast__dot { background: var(--rare); }
+.bnb-toast[data-kind="info"]    .bnb-toast__dot { background: var(--fg-3); }
+
+.bnb-toast__body {
+  min-width: 0;
+  word-wrap: break-word;
+}
+.bnb-toast__body strong { font-weight: 600; }
+.bnb-toast__body a {
+  color: var(--moss-ink);
+  text-decoration: none;
+  border-bottom: 0.5px solid color-mix(in oklch, var(--moss-ink) 30%, transparent);
+}
+.bnb-toast__body a:hover { border-bottom-color: var(--moss-ink); }
+
+.bnb-toast__close {
+  background: transparent;
+  border: 0;
+  color: var(--fg-3);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: var(--r-xs);
+  margin-top: -2px;
+}
+.bnb-toast__close:hover { color: var(--fg); background: var(--surface-2); }
+
+/* Tinted backgrounds — subtle, never fights with the page */
+.bnb-toast[data-kind="success"] {
+  background: color-mix(in oklch, var(--moss-soft) 60%, var(--surface));
+  border-color: color-mix(in oklch, var(--moss) 30%, var(--border));
+}
+.bnb-toast[data-kind="warn"] {
+  background: color-mix(in oklch, var(--dawn-soft) 55%, var(--surface));
+  border-color: color-mix(in oklch, var(--dawn) 35%, var(--border));
+}
+.bnb-toast[data-kind="error"] {
+  background: color-mix(in oklch, var(--rare-soft) 55%, var(--surface));
+  border-color: color-mix(in oklch, var(--rare) 35%, var(--border));
+  color: var(--fg);
+}
+
+/* Optional action link inside a toast (e.g. "Restart now") */
+.bnb-toast__action {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--moss-ink);
+  text-decoration: none;
+  border-bottom: 0.5px solid color-mix(in oklch, var(--moss-ink) 30%, transparent);
+}
+.bnb-toast__action:hover { border-bottom-color: var(--moss-ink); }

@@ -1,0 +1,216 @@
+/* Append to crates/birdnet-web/static/css/app.css — purely additive.
+   IA fix (O-26): More dropdown in topnav, real footer. */
+
+/* ── More button in the topnav ────────────────────────────────────── */
+.bnb-more {
+  display: inline-flex; align-items: center;
+}
+.bnb-more__btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px;
+  border-radius: var(--r-sm);
+  border: 0.5px solid transparent;
+  background: transparent;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.bnb-more__btn:hover {
+  color: var(--fg);
+  background: var(--surface-2);
+}
+.bnb-more__btn[aria-expanded="true"],
+.bnb-more__btn.is-open {
+  background: var(--surface-2);
+  color: var(--fg);
+  border-color: var(--border);
+}
+.bnb-more__glyph {
+  font-family: var(--font-mono); font-size: 13px; line-height: 1;
+  color: var(--fg-3);
+}
+.bnb-more__btn:hover .bnb-more__glyph { color: var(--fg-2); }
+.bnb-more__arrow { font-size: 9px; color: var(--fg-4); }
+@media (max-width: 720px) {
+  /* On phones the bottom tabbar's own "More" slot already covers this;
+     hide the topnav variant to avoid two openers. */
+  .bnb-more { display: none; }
+}
+
+/* ── More dropdown / sheet ────────────────────────────────────────── */
+.bnb-more-menu {
+  border: 0; padding: 0;
+  background: transparent;
+  color: var(--fg);
+  /* Desktop default: anchored beneath the trigger via CSS vars set by JS. */
+  margin: 0;
+  position: fixed;
+  top: var(--bnb-more-y, 56px);
+  left: auto;
+  right: auto;
+  /* Right-align under the button. JS sets --bnb-more-x to the right edge. */
+  inset-inline-end: max(0px, calc(100vw - var(--bnb-more-x, 100vw)));
+  width: min(94vw, 520px);
+}
+.bnb-more-menu::backdrop {
+  background: color-mix(in oklch, oklch(0% 0 0) 22%, transparent);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+.bnb-more-menu__form {
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  display: flex; flex-direction: column;
+  max-height: min(70vh, 640px);
+}
+.bnb-more-menu__head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 0.5px solid var(--hairline);
+}
+.bnb-more-menu__body {
+  padding: 6px 4px;
+  overflow-y: auto;
+}
+
+.bnb-more-group { padding: 6px 8px 10px; }
+.bnb-more-group + .bnb-more-group {
+  border-top: 0.5px solid var(--hairline);
+  margin-top: 4px;
+}
+.bnb-more-group h3.bnb-eyebrow {
+  margin: 6px 8px 4px;
+}
+.bnb-more-group ul {
+  list-style: none; margin: 0; padding: 0;
+}
+.bnb-more-row {
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  gap: 8px 12px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  text-decoration: none;
+  color: var(--fg);
+  font-size: 13.5px;
+  background: transparent;
+  border: 0;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.bnb-more-row:hover {
+  background: color-mix(in oklch, var(--moss) 7%, var(--surface));
+}
+.bnb-more-row.active {
+  background: color-mix(in oklch, var(--moss) 10%, var(--surface));
+  color: var(--moss-ink);
+}
+.bnb-more-row .glyph {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--fg-3);
+  text-align: center;
+}
+.bnb-more-row.active .glyph { color: var(--moss-ink); }
+.bnb-more-row .label { font-weight: 500; }
+.bnb-more-row .sub {
+  grid-column: 2;
+  font-size: 11px;
+  color: var(--fg-3);
+  margin-top: 2px;
+}
+.bnb-more-row .sub.mono { font-family: var(--font-mono); letter-spacing: 0.02em; }
+
+/* On phone widths the menu becomes a bottom sheet — same vocabulary as
+   the mobile More sheet from O-24, kept here so this opportunity ships
+   stand-alone even before O-24 lands. */
+@media (max-width: 720px) {
+  .bnb-more-menu {
+    top: auto; bottom: 0;
+    inset-inline-end: 0;
+    margin: 0;
+    width: 100vw;
+  }
+  .bnb-more-menu__form {
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    max-height: 78vh;
+  }
+}
+
+/* ── New footer (real footer, no destination flex-wrap) ───────────── */
+.bnb-footer {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px 22px;
+  align-items: center;
+  padding: 18px 22px 22px;
+  border-top: 0.5px solid var(--hairline);
+  color: var(--fg-3);
+  font-size: 12px;
+  margin-top: var(--pad-4);
+  background: color-mix(in oklch, var(--bg) 85%, transparent);
+}
+.bnb-footer__brand {
+  display: inline-flex; align-items: center; gap: 8px;
+  color: var(--fg-3);
+}
+.bnb-footer__mark { color: var(--fg-3); flex: 0 0 auto; }
+.bnb-footer__word { font-size: 12.5px; }
+.bnb-footer__word b { color: var(--fg-2); font-weight: 600; }
+.bnb-footer__word span { color: var(--fg-3); margin-left: 2px; }
+.bnb-footer__sep { color: var(--fg-4); }
+.bnb-footer__version { font-size: 11px; color: var(--fg-3); }
+.bnb-footer__uptime {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--fg-3);
+}
+/* Hide the uptime span if the server didn't substitute a value. */
+.bnb-footer__uptime[data-empty-hide="{{uptime_short}}"],
+.bnb-footer__uptime[data-empty-hide=""]               { display: none; }
+
+.bnb-footer__meta {
+  display: inline-flex; align-items: center; gap: 8px 12px;
+  justify-self: center;
+  flex-wrap: wrap;
+}
+.bnb-footer__meta a {
+  color: var(--fg-3);
+  text-decoration: none;
+  border-bottom: 0.5px solid transparent;
+  padding-bottom: 1px;
+  transition: color .12s, border-color .12s;
+}
+.bnb-footer__meta a:hover {
+  color: var(--moss-ink);
+  border-bottom-color: color-mix(in oklch, var(--moss-ink) 35%, transparent);
+}
+
+.bnb-footer__rights {
+  font-size: 10.5px;
+  color: var(--fg-4);
+  letter-spacing: 0.02em;
+  justify-self: end;
+  white-space: nowrap;
+}
+
+/* Stack on phones. */
+@media (max-width: 720px) {
+  .bnb-footer {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    text-align: center;
+  }
+  .bnb-footer__brand,
+  .bnb-footer__meta,
+  .bnb-footer__rights {
+    justify-self: center;
+  }
+}

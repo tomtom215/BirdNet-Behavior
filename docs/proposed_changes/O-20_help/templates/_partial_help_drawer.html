@@ -1,0 +1,87 @@
+<!--
+  Help drawer · drop-in for layout.html.
+  Inline this block immediately before </body>.
+
+  Triggered by any element with [data-help-drawer="<url>"]. The drawer is a
+  right-side <dialog>; the docs page is fetched via fetch() and inserted as
+  innerHTML. We use fetch (not htmx) because the docs are static-served
+  HTML files from /help/, not htmx partials, and we want to strip the mdBook
+  chrome (its own nav / search box) before display.
+-->
+<dialog id="bnb-help-drawer" class="bnb-help-drawer" aria-labelledby="bnb-help-drawer-title">
+  <header class="bnb-help-drawer__head">
+    <div class="bnb-eyebrow">Help</div>
+    <h2 id="bnb-help-drawer-title" class="display"
+        style="font-size:22px;line-height:1.15;margin:4px 0 0;letter-spacing:-0.01em;">
+      Loading…
+    </h2>
+    <a class="bnb-help-link" id="bnb-help-drawer-openfull" href="#" target="_blank" rel="noopener">
+      Open full page
+      <span aria-hidden="true">↗</span>
+    </a>
+    <form method="dialog" style="margin-left:auto;">
+      <button type="submit" class="bnb-btn ghost" aria-label="Close">×</button>
+    </form>
+  </header>
+  <div id="bnb-help-drawer-body" class="bnb-help-drawer__body" tabindex="-1">
+    <p class="bnb-meta">Fetching docs…</p>
+  </div>
+</dialog>
+
+<script>
+(function () {
+  "use strict";
+  var dlg = document.getElementById('bnb-help-drawer');
+  if (!dlg || typeof dlg.showModal !== 'function') return;
+  var body  = document.getElementById('bnb-help-drawer-body');
+  var title = document.getElementById('bnb-help-drawer-title');
+  var openFull = document.getElementById('bnb-help-drawer-openfull');
+
+  function stripChrome(html) {
+    // mdBook output wraps content in <main>…</main>; pull only that out so the
+    // drawer doesn't import the docs site's own nav, theme picker, or search.
+    var doc = new DOMParser().parseFromString(html, 'text/html');
+    var main = doc.querySelector('main, #content, .page') || doc.body;
+    // First <h1> becomes the drawer title.
+    var h1 = main.querySelector('h1');
+    if (h1) {
+      title.textContent = h1.textContent.trim();
+      h1.remove();
+    } else {
+      title.textContent = 'Help';
+    }
+    return main.innerHTML;
+  }
+
+  async function load(url) {
+    title.textContent = 'Loading…';
+    body.innerHTML = '<p class="bnb-meta">Fetching docs…</p>';
+    openFull.href = url;
+    try {
+      var res = await fetch(url, { credentials: 'same-origin' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      var html = await res.text();
+      body.innerHTML = stripChrome(html);
+      body.focus();
+      // Honour deep-link fragment if any.
+      var hash = (new URL(url, window.location.origin)).hash;
+      if (hash) {
+        var t = body.querySelector(hash);
+        if (t) t.scrollIntoView({ block: 'start' });
+      }
+    } catch (e) {
+      title.textContent = 'Couldn\u2019t load help';
+      body.innerHTML = '<p class="bnb-meta">The docs are unavailable on this device. <a href="' + url + '" target="_blank" rel="noopener">Open in a new tab</a> instead.</p>';
+    }
+  }
+
+  document.addEventListener('click', function (e) {
+    var trigger = e.target.closest('[data-help-drawer]');
+    if (!trigger) return;
+    e.preventDefault();
+    var url = trigger.getAttribute('data-help-drawer');
+    dlg.showModal();
+    load(url);
+  });
+})();
+</script>

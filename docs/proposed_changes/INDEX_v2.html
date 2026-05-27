@@ -1,0 +1,960 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BirdNet-Behavior · proposed changes v2 · preview</title>
+<script>(function(){var t=localStorage.getItem('theme');if(t!=='light'&&t!=='dark')t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';document.documentElement.setAttribute('data-theme',t);})();</script>
+
+<!-- Production app.css (preview copy) + all v2 appends -->
+<link rel="stylesheet" href="_preview_assets/app.css">
+<link rel="stylesheet" href="_preview_assets/v2-appends.css">
+
+<style>
+  body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--font-ui); }
+
+  .v2-shell { max-width: 1200px; margin: 0 auto; padding: 40px 22px 96px; }
+  .v2-head { display:flex; align-items:flex-end; justify-content:space-between; gap:18px; flex-wrap:wrap; margin-bottom: 28px; }
+  .v2-head h1 { font-family: var(--font-display); font-size: 56px; line-height:1.02; letter-spacing:-0.025em; margin:0; }
+  .v2-head .lede { color: var(--fg-2); max-width: 64ch; margin-top: 8px; }
+
+  .v2-controls { display: inline-flex; gap: 6px; align-items: center; }
+  .v2-controls .bnb-btn { font-size: 12px; }
+
+  .v2-grid { display: grid; grid-template-columns: 1fr; gap: 18px; }
+
+  .v2-card { background: var(--surface); border: 0.5px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow-sm); overflow: hidden; }
+  .v2-card-head { padding: 14px 18px; border-bottom: 0.5px solid var(--hairline); display:flex; align-items:baseline; justify-content:space-between; gap:18px; flex-wrap:wrap; background: var(--surface-2); }
+  .v2-card-head h2 { margin:0; font-family: var(--font-display); font-size: 22px; letter-spacing:-0.01em; font-weight:400; }
+  .v2-card-head .id { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); letter-spacing: 0.04em; }
+  .v2-card-head .meta { font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-4); }
+  .v2-card-body { padding: 22px 22px 26px; }
+
+  /* Each preview gets a slightly larger drop-shadowed inner frame so artifacts
+     show against the page tone the same way they would on the real screen. */
+  .v2-preview {
+    background: var(--bg);
+    border: 0.5px dashed var(--border-2);
+    border-radius: var(--r-md);
+    padding: 18px;
+  }
+  .v2-preview.tight { padding: 0; }
+  /* Side-by-side comparison blocks: every grid child needs `min-width: 0`
+     so an internal `white-space: nowrap` element (like the footer's rights
+     line) can't bully one column wider than the other. */
+  .v2-preview > div { min-width: 0; }
+  /* And inside the preview only, let the production footer's rights line
+     soft-wrap if it would otherwise overflow. The production rule
+     (`white-space: nowrap`) is correct on real pages — this scoped override
+     only relaxes it for the half-width comparison panes. */
+  .v2-preview .bnb-footer__rights { white-space: normal; }
+  /* Production `.bnb-footer` collapses to single-column below 720px viewport,
+     but our preview pane is ~386px inside a 1200px viewport so the media
+     query doesn't fire. Mirror the production mobile layout for the preview
+     panes only — real pages are unaffected. */
+  .v2-preview .bnb-footer {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    text-align: center;
+  }
+  .v2-preview .bnb-footer__brand,
+  .v2-preview .bnb-footer__meta,
+  .v2-preview .bnb-footer__rights {
+    justify-self: center;
+  }
+
+  .v2-card-foot {
+    padding: 10px 18px;
+    border-top: 0.5px solid var(--hairline);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-3);
+    display:flex; justify-content:space-between; gap: 12px; flex-wrap: wrap;
+  }
+  .v2-card-foot a { color: var(--moss-ink); text-decoration: none; }
+  .v2-card-foot a:hover { text-decoration: underline; }
+
+  /* Sample shells used by previews ───────────────────────────────────── */
+  .sample-card { background: var(--surface); border: 0.5px solid var(--border); border-radius: var(--r-lg); padding: var(--pad-3); }
+  .sample-row { display: grid; grid-template-columns: 28px 1fr 56px; gap: 10px; align-items: center; padding: 8px 0; border-top: 0.5px solid var(--hairline); }
+  .sample-row:first-child { border-top: 0; }
+  .sample-avatar { width: 28px; height: 28px; border-radius: 999px; background: var(--moss-soft); color: var(--moss-ink); font-family: var(--font-mono); font-size: 10px; display:grid; place-items:center; font-weight:600; }
+
+  /* Make iframe-less previews of admin pages feel like the real admin shell */
+  .sample-shell-admin {
+    background: var(--bg);
+    border: 0.5px solid var(--border);
+    border-radius: var(--r-md);
+    padding: 18px 20px;
+  }
+  .sample-admin-nav { display:flex; flex-wrap:wrap; gap: 1.25rem; margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 0.5px solid var(--hairline); }
+  .sample-admin-nav a { color: var(--fg-3); text-decoration: none; font-size: .875rem; }
+  .sample-admin-nav a.active { color: var(--moss-ink); font-weight: 500; }
+</style>
+</head>
+<body>
+<div class="v2-shell">
+
+<header class="v2-head">
+  <div>
+    <div class="bnb-eyebrow mono">proposed changes · v2.0 · 14 opportunities</div>
+    <h1>The next wave.</h1>
+    <p class="lede">
+      Each card previews one drop-in artifact rendered against the production stylesheet
+      — same tokens, same atoms, same dark mode. Toggle the theme to verify both.
+      Click <span class="mono">DIFF.md →</span> on any card for the full
+      DIFF / risk / rollback notes.
+    </p>
+  </div>
+  <div class="v2-controls">
+    <button class="bnb-btn" type="button" id="theme-toggle">Toggle theme</button>
+  </div>
+</header>
+
+<div class="v2-grid">
+
+  <!-- ═══════════════════════════ O-26 IA / NAV ═══════════════════════════ -->
+  <section class="v2-card" id="O-26">
+    <header class="v2-card-head">
+      <h2>IA fix · stop using the footer as the secondary nav</h2>
+      <span class="meta">layout patch + 2 partials</span>
+      <span class="id">O-26 · foundation</span>
+    </header>
+    <div class="v2-card-body">
+
+      <!-- Before / after of the footer itself. -->
+      <div class="v2-preview" style="display:grid;grid-template-columns:1fr 1fr;gap:18px;">
+        <div>
+          <div class="bnb-eyebrow" style="margin-bottom:8px;">Today · 12 destinations as a flex-wrap</div>
+          <footer style="text-align:center;padding:18px 18px;color:var(--fg-3);font-size:12px;border-top:0.5px solid var(--hairline);background:var(--surface);border-radius:var(--r-md);">
+            <div style="display:flex;flex-wrap:wrap;gap:10px 18px;justify-content:center;margin-bottom:10px;">
+              <a href="#" style="color:var(--fg-3);">Today</a>
+              <a href="#" style="color:var(--fg-3);">History</a>
+              <a href="#" style="color:var(--fg-3);">Weekly report</a>
+              <a href="#" style="color:var(--fg-3);">Year in review</a>
+              <a href="#" style="color:var(--fg-3);">Recordings</a>
+              <a href="#" style="color:var(--fg-3);">Gallery</a>
+              <a href="#" style="color:var(--fg-3);">Time series</a>
+              <a href="#" style="color:var(--fg-3);">Co-occurrence</a>
+              <a href="#" style="color:var(--fg-3);">Notifications</a>
+              <a href="#" style="color:var(--fg-3);">System</a>
+              <a href="#" style="color:var(--fg-3);">Admin</a>
+              <a href="#" style="color:var(--fg-3);">Kiosk</a>
+            </div>
+            <div class="mono" style="opacity:.75;">BirdNet-Behavior v1.4.2 · acoustic bird classification with behavioral analytics</div>
+          </footer>
+        </div>
+        <div>
+          <div class="bnb-eyebrow" style="margin-bottom:8px;">Proposed · brand · 5 meta links · copyright</div>
+          <footer class="bnb-footer" style="margin-top:0;background:var(--surface);border-radius:var(--r-md);">
+            <div class="bnb-footer__brand">
+              <svg class="bnb-footer__mark" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="none" stroke="currentColor" stroke-width="0.8"></circle><g stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><line x1="6" y1="12" x2="6" y2="12"/><line x1="9" y1="9.5" x2="9" y2="14.5"/><line x1="12" y1="6" x2="12" y2="18"/><line x1="15" y1="8" x2="15" y2="16"/><line x1="18" y1="10.5" x2="18" y2="13.5"/></g></svg>
+              <span class="bnb-footer__word"><b>BirdNet</b><span>Behavior</span></span>
+              <span class="bnb-footer__sep">·</span>
+              <span class="bnb-footer__version mono">v1.4.2</span>
+              <span class="bnb-footer__uptime mono" data-empty-hide="14d 02h">
+                <span class="bnb-dot" style="background:var(--moss);" aria-hidden="true"></span>
+                listening · 14d 02h
+              </span>
+            </div>
+            <nav class="bnb-footer__meta" aria-label="Site meta">
+              <a href="#">Help</a><span class="bnb-footer__sep">·</span>
+              <a href="#">Changelog</a><span class="bnb-footer__sep">·</span>
+              <a href="#">RSS</a><span class="bnb-footer__sep">·</span>
+              <a href="#">iCal</a><span class="bnb-footer__sep">·</span>
+              <a href="#">About</a>
+            </nav>
+            <div class="bnb-footer__rights mono">© BirdNet-Behavior · self-hosted on this device</div>
+          </footer>
+        </div>
+      </div>
+
+      <!-- The More dropdown contents (static preview — the real menu is a <dialog>). -->
+      <div class="v2-preview" style="margin-top:18px;">
+        <div class="bnb-eyebrow" style="margin-bottom:8px;">⌗ More ▾ — grouped secondary nav, opened from the topnav</div>
+        <div class="bnb-more-menu__form" style="max-width:520px;margin:0;max-height:none;">
+          <header class="bnb-more-menu__head">
+            <h2 class="display" style="font-size:20px;line-height:1.15;margin:0;letter-spacing:-0.01em;">Sections</h2>
+            <button type="button" class="bnb-btn ghost" aria-label="Close">×</button>
+          </header>
+          <div class="bnb-more-menu__body">
+            <section class="bnb-more-group">
+              <h3 class="bnb-eyebrow">Reports</h3>
+              <ul>
+                <li><a href="#" class="bnb-more-row"><span class="glyph">◷</span><span class="label">History</span><span class="sub">calendar of past days</span></a></li>
+                <li><a href="#" class="bnb-more-row"><span class="glyph">¶</span><span class="label">Weekly report</span><span class="sub">Sunday recap</span></a></li>
+                <li><a href="#" class="bnb-more-row"><span class="glyph">⊞</span><span class="label">Year in review</span><span class="sub">annual editorial</span></a></li>
+              </ul>
+            </section>
+            <section class="bnb-more-group">
+              <h3 class="bnb-eyebrow">Audio &amp; images</h3>
+              <ul>
+                <li><a href="#" class="bnb-more-row"><span class="glyph">▶</span><span class="label">Recordings</span><span class="sub">listen to detection clips</span></a></li>
+                <li><a href="#" class="bnb-more-row"><span class="glyph">◫</span><span class="label">Gallery</span><span class="sub">species photos</span></a></li>
+              </ul>
+            </section>
+            <section class="bnb-more-group">
+              <h3 class="bnb-eyebrow">Analytics — deep dives</h3>
+              <ul>
+                <li><a href="#" class="bnb-more-row"><span class="glyph">◐</span><span class="label">Dawn chorus</span><span class="sub">per-species polar plot</span></a></li>
+                <li><a href="#" class="bnb-more-row"><span class="glyph">☰</span><span class="label">Co-occurrence</span><span class="sub">who sings with whom</span></a></li>
+                <li><a href="#" class="bnb-more-row"><span class="glyph">∷</span><span class="label">Time series</span><span class="sub">trends &amp; comparisons</span></a></li>
+              </ul>
+            </section>
+            <section class="bnb-more-group">
+              <h3 class="bnb-eyebrow">Operations</h3>
+              <ul>
+                <li><a href="#" class="bnb-more-row"><span class="glyph">≡</span><span class="label">Notifications</span><span class="sub">channels &amp; log</span></a></li>
+                <li><a href="#" class="bnb-more-row active"><span class="glyph">⌗</span><span class="label">Admin</span><span class="sub">settings, audio, backups</span></a></li>
+                <li><a href="#" class="bnb-more-row"><span class="glyph">◉</span><span class="label">Kiosk mode</span><span class="sub">wall display</span></a></li>
+              </ul>
+            </section>
+            <section class="bnb-more-group">
+              <h3 class="bnb-eyebrow">Help</h3>
+              <ul>
+                <li><a href="#" class="bnb-more-row"><span class="glyph">⌥</span><span class="label">Changelog</span><span class="sub">what's new</span></a></li>
+                <li><a href="#" class="bnb-more-row"><span class="glyph">?</span><span class="label">Help &amp; methodology</span><span class="sub">the manual</span></a></li>
+                <li><button type="button" class="bnb-more-row" style="text-align:left;"><span class="glyph">⌘</span><span class="label">Quick navigator</span><span class="sub mono">⌘K · / · search anything</span></button></li>
+              </ul>
+            </section>
+          </div>
+        </div>
+      </div>
+    </div>
+    <footer class="v2-card-foot">
+      <span>Every destination keeps multiple entry points: primary nav, More menu, and ⌘K. The footer goes back to being a footer.</span>
+      <a href="O-26_nav_ia/DIFF.md">DIFF.md →</a>
+    </footer>
+  </section>
+
+  <!-- ═══════════════════════════ O-16 SKELETONS ═══════════════════════════ -->
+  <section class="v2-card" id="O-16">
+    <header class="v2-card-head">
+      <h2>Skeleton loading states</h2>
+      <span class="meta">utility + Rust helper</span>
+      <span class="id">O-16 · foundation</span>
+    </header>
+    <div class="v2-card-body">
+      <div class="v2-preview" style="display:grid;grid-template-columns:1fr 1fr;gap:18px;">
+        <!-- 4-up stat-row skeleton -->
+        <div class="bnb-skel-stat-row" style="--n:4;">
+          <div><span class="bnb-skel line" style="width:60%;"></span><span class="bnb-skel line xl" style="width:50%;margin-top:8px;"></span><span class="bnb-skel line" style="width:70%;margin-top:auto;"></span></div>
+          <div><span class="bnb-skel line" style="width:60%;"></span><span class="bnb-skel line xl" style="width:50%;margin-top:8px;"></span><span class="bnb-skel line" style="width:70%;margin-top:auto;"></span></div>
+          <div><span class="bnb-skel line" style="width:60%;"></span><span class="bnb-skel line xl" style="width:50%;margin-top:8px;"></span><span class="bnb-skel line" style="width:70%;margin-top:auto;"></span></div>
+          <div><span class="bnb-skel line" style="width:60%;"></span><span class="bnb-skel line xl" style="width:50%;margin-top:8px;"></span><span class="bnb-skel line" style="width:70%;margin-top:auto;"></span></div>
+        </div>
+        <!-- Feed-row skeleton -->
+        <div class="sample-card" style="padding:8px 14px;">
+          <div class="feed-row bnb-skel-feed-row">
+            <span class="bnb-skel line" style="width:46px;"></span>
+            <span class="bnb-skel avatar"></span>
+            <div><span class="bnb-skel line" style="width:60%;"></span><span class="bnb-skel line" style="width:40%;margin-top:6px;"></span></div>
+            <span class="bnb-skel" style="height:22px;border-radius:3px;"></span>
+            <span class="bnb-skel" style="height:14px;border-radius:3px;"></span>
+            <span class="bnb-skel" style="width:64px;height:22px;border-radius:6px;"></span>
+          </div>
+          <div class="feed-row bnb-skel-feed-row">
+            <span class="bnb-skel line" style="width:46px;"></span>
+            <span class="bnb-skel avatar"></span>
+            <div><span class="bnb-skel line" style="width:55%;"></span><span class="bnb-skel line" style="width:35%;margin-top:6px;"></span></div>
+            <span class="bnb-skel" style="height:22px;border-radius:3px;"></span>
+            <span class="bnb-skel" style="height:14px;border-radius:3px;"></span>
+            <span class="bnb-skel" style="width:64px;height:22px;border-radius:6px;"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <footer class="v2-card-foot">
+      <span>Replaces every <span class="mono">&lt;p class="bnb-meta"&gt;Loading…&lt;/p&gt;</span> placeholder with shape-matching skeletons.</span>
+      <a href="O-16_skeletons/DIFF.md">DIFF.md →</a>
+    </footer>
+  </section>
+
+  <!-- ═══════════════════════════ O-17 CONFIRM MODAL ═══════════════════════ -->
+  <section class="v2-card" id="O-17">
+    <header class="v2-card-head">
+      <h2>Themed confirmation modal</h2>
+      <span class="meta">primitive · replaces hx-confirm sites</span>
+      <span class="id">O-17 · foundation</span>
+    </header>
+    <div class="v2-card-body">
+      <div class="v2-preview" style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="bnb-btn" id="demo-moss"
+                data-confirm-action="hx-post" data-confirm-url="#"
+                data-confirm-title="Apply settings"
+                data-confirm-body="Save changes to the detection threshold. New detections will use the updated value within a minute."
+                data-confirm-confirm-label="Apply" data-confirm-style="moss">Apply settings</button>
+        <button class="bnb-btn" id="demo-warn"
+                data-confirm-action="hx-post" data-confirm-url="#"
+                data-confirm-title="Restart required"
+                data-confirm-body="Save and restart now? The dashboard will be briefly unreachable while the audio daemon reconnects."
+                data-confirm-confirm-label="Save and restart" data-confirm-style="warn">Save and restart</button>
+        <button class="bnb-btn danger" id="demo-danger"
+                data-confirm-action="hx-post" data-confirm-url="#"
+                data-confirm-title="Factory reset"
+                data-confirm-body="Wipes every detection, recording, snapshot and setting on this station. This cannot be undone. The station name and Wikipedia photo cache are preserved."
+                data-confirm-confirm-label="Wipe everything" data-confirm-style="danger">Factory reset</button>
+      </div>
+    </div>
+    <footer class="v2-card-foot">
+      <span>Native <span class="mono">confirm()</span> stays as a JS-disabled fallback. Three tones map to moss / dawn / rare-red.</span>
+      <a href="O-17_confirm_modal/DIFF.md">DIFF.md →</a>
+    </footer>
+  </section>
+
+  <!-- ═══════════════════════════ O-18 TOAST ═══════════════════════════════ -->
+  <section class="v2-card" id="O-18">
+    <header class="v2-card-head">
+      <h2>Toast / snackbar</h2>
+      <span class="meta">primitive · OOB swap target</span>
+      <span class="id">O-18 · foundation</span>
+    </header>
+    <div class="v2-card-body">
+      <div class="v2-preview" style="display:flex;flex-direction:column;gap:10px;max-width:380px;">
+        <div class="bnb-toast" role="status" data-kind="success">
+          <span class="bnb-toast__dot" aria-hidden="true"></span>
+          <div class="bnb-toast__body">Settings saved.</div>
+          <button type="button" class="bnb-toast__close" aria-label="Dismiss">&times;</button>
+        </div>
+        <div class="bnb-toast" role="status" data-kind="warn">
+          <span class="bnb-toast__dot" aria-hidden="true"></span>
+          <div class="bnb-toast__body">
+            Restart required for changes to take effect.
+            <div><a class="bnb-toast__action" href="#">Restart now</a></div>
+          </div>
+          <button type="button" class="bnb-toast__close" aria-label="Dismiss">&times;</button>
+        </div>
+        <div class="bnb-toast" role="alert" data-kind="error" data-sticky="1">
+          <span class="bnb-toast__dot" aria-hidden="true"></span>
+          <div class="bnb-toast__body">Channel responded: HTTP 503. Retry?</div>
+          <button type="button" class="bnb-toast__close" aria-label="Dismiss">&times;</button>
+        </div>
+      </div>
+    </div>
+    <footer class="v2-card-foot">
+      <span>Top-right; auto-dismiss 4s / 6s / sticky. Server attaches OOB fragments to any partial response.</span>
+      <a href="O-18_toast/DIFF.md">DIFF.md →</a>
+    </footer>
+  </section>
+
+  <!-- ═══════════════════════════ O-25 INLINE STYLES ═══════════════════════ -->
+  <section class="v2-card" id="O-25">
+    <header class="v2-card-head">
+      <h2>Layout utility classes</h2>
+      <span class="meta">audit · CSS-only</span>
+      <span class="id">O-25 · foundation</span>
+    </header>
+    <div class="v2-card-body">
+      <div class="v2-preview" style="display:grid;grid-template-columns:1fr 1fr;gap:18px;">
+        <div class="sample-card">
+          <div class="bnb-eyebrow" style="margin-bottom:8px;">.bnb-form-row</div>
+          <div class="bnb-form-row">
+            <label>Confidence threshold<span class="hint">Detections below this are dropped.</span></label>
+            <div class="control"><input type="range" min="0" max="1" step="0.01" value="0.85" class="bnb-range"></div>
+          </div>
+          <div class="bnb-form-row">
+            <label>Quiet hours</label>
+            <div class="control"><input type="text" value="22:00 → 06:00" style="width:200px;"></div>
+          </div>
+          <div class="bnb-form-row">
+            <label>RTSP transport</label>
+            <div class="control"><select><option>auto</option><option>tcp</option><option>udp</option></select></div>
+          </div>
+        </div>
+        <div class="sample-card">
+          <div class="bnb-eyebrow" style="margin-bottom:8px;">.bnb-kv inside cards</div>
+          <div class="bnb-row wrap" style="gap:14px 18px;">
+            <span class="bnb-kv"><span class="k">CPU</span><span class="v">23%</span></span>
+            <span class="bnb-kv"><span class="k">RAM</span><span class="v">412 MB</span></span>
+            <span class="bnb-kv"><span class="k">Temp</span><span class="v">41 °C</span></span>
+            <span class="bnb-kv"><span class="k">Disk</span><span class="v">68%</span></span>
+            <span class="bnb-kv"><span class="k">Uptime</span><span class="v">14d 02h</span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <footer class="v2-card-foot">
+      <span>Promotes the inline <span class="mono">style="…"</span> patterns out of the Rust handlers. ~150 substitutions across the listed files.</span>
+      <a href="O-25_inline_styles/DIFF.md">DIFF.md →</a>
+    </footer>
+  </section>
+
+  <!-- ═══════════════════════════ O-14 LOGIN ═══════════════════════════════ -->
+  <section class="v2-card" id="O-14">
+    <header class="v2-card-head">
+      <h2>Branded login</h2>
+      <span class="meta">RFC + drop-in</span>
+      <span class="id">O-14 · access</span>
+    </header>
+    <div class="v2-card-body">
+      <div class="v2-preview" style="display:grid;place-items:center;background:var(--bg);">
+        <section class="bnb-card pad login-card" style="margin:0;">
+          <div class="login-card__head">
+            <div class="login-card__brand">
+              <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="11" fill="none" stroke="currentColor" stroke-width="0.8"></circle>
+                <g stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+                  <line x1="6" y1="12" x2="6" y2="12"/><line x1="9" y1="9.5" x2="9" y2="14.5"/>
+                  <line x1="12" y1="6" x2="12" y2="18"/><line x1="15" y1="8" x2="15" y2="16"/>
+                  <line x1="18" y1="10.5" x2="18" y2="13.5"/>
+                </g>
+              </svg>
+              <span style="font-size:15px;"><b>BirdNet</b><span style="color:var(--fg-3);"> Behavior</span></span>
+            </div>
+            <p class="bnb-eyebrow">BirdNet Behavior</p>
+            <h1 id="signin-heading" class="display" style="font-size:38px;line-height:1.05;letter-spacing:-0.012em;margin:0;">Sign in</h1>
+            <p class="bnb-meta" style="margin-top:6px;">Administer this station.</p>
+          </div>
+          <div class="login-alert is-visible" role="alert">
+            <span class="login-alert__dot" aria-hidden="true"></span>
+            <div class="login-alert__body">Incorrect username or password.</div>
+          </div>
+          <form class="login-form">
+            <div class="login-field">
+              <label class="bnb-eyebrow" for="u">Username</label>
+              <input id="u" type="text" value="admin">
+            </div>
+            <div class="login-field">
+              <label class="bnb-eyebrow" for="p">Password</label>
+              <div class="login-field__withtoggle">
+                <input id="p" type="password" value="••••••••••">
+                <button type="button" class="login-toggle">Show</button>
+              </div>
+            </div>
+            <label class="login-remember"><input type="checkbox"><span>Remember me on this device</span></label>
+            <button type="button" class="bnb-btn moss login-submit">Sign in</button>
+          </form>
+          <div class="login-card__foot">
+            <a href="#" class="bnb-help-link"><span class="bnb-help-link__arrow" aria-hidden="true">←</span> Back to dashboard</a>
+            <span class="bnb-meta mono">v1.5.0</span>
+          </div>
+        </section>
+      </div>
+    </div>
+    <footer class="v2-card-foot">
+      <span>Replaces the browser's WWW-Authenticate dialog. Cookie sessions, opt-in remember-me, branded error state.</span>
+      <a href="O-14_login/DIFF.md">DIFF.md →</a>
+    </footer>
+  </section>
+
+  <!-- ═══════════════════════════ O-15 ACCOUNTS ════════════════════════════ -->
+  <section class="v2-card" id="O-15">
+    <header class="v2-card-head">
+      <h2>Accounts &amp; sessions</h2>
+      <span class="meta">RFC + drop-in</span>
+      <span class="id">O-15 · access</span>
+    </header>
+    <div class="v2-card-body">
+      <div class="v2-preview" style="background:var(--bg);">
+        <div class="sample-shell-admin">
+          <nav class="sample-admin-nav">
+            <a href="#">Overview</a><a href="#">Settings</a><a href="#">Audio</a>
+            <a href="#" class="active">Accounts</a><a href="#">Rules</a><a href="#">System</a>
+          </nav>
+
+          <div class="bnb-card pad">
+            <div class="section-header"><div><div class="bnb-eyebrow">Active sessions</div><h3>Devices signed in to this station</h3></div></div>
+            <ul class="account-sessions">
+              <li data-current="true">
+                <span class="session-mark"></span>
+                <div><div class="session-label">This device</div><div class="session-meta">macOS · Safari 17 · last seen just now</div></div>
+                <span class="session-id">#abcd</span>
+                <span class="bnb-meta">—</span>
+              </li>
+              <li>
+                <span class="session-mark"></span>
+                <div><div class="session-label">Laptop</div><div class="session-meta">macOS · Firefox 124 · last seen 4 days ago</div></div>
+                <span class="session-id">#7e10</span>
+                <a class="bnb-btn ghost" href="#">Sign out</a>
+              </li>
+              <li>
+                <span class="session-mark"></span>
+                <div><div class="session-label">Tablet</div><div class="session-meta">iPadOS · Safari · last seen 18 days ago</div></div>
+                <span class="session-id">#33fb</span>
+                <a class="bnb-btn ghost" href="#">Sign out</a>
+              </li>
+            </ul>
+          </div>
+
+          <div class="bnb-card pad" style="margin-top:18px;">
+            <div class="section-header"><div><div class="bnb-eyebrow">Users</div><h3>Who can sign in</h3></div></div>
+            <ul class="account-users">
+              <li>
+                <span class="user-pill admin">ADMIN</span>
+                <div><div class="user-name">admin</div><div class="user-sub">created 2025-04-22</div></div>
+                <a class="bnb-btn ghost" href="#">Reset password</a>
+                <span class="bnb-meta">—</span>
+              </li>
+              <li>
+                <span class="user-pill viewer">VIEWER</span>
+                <div><div class="user-name">jess</div><div class="user-sub">created 2026-02-14</div></div>
+                <a class="bnb-btn ghost" href="#">Edit</a>
+                <a class="bnb-btn ghost" href="#" style="color:var(--rare);">Disable</a>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+    <footer class="v2-card-foot">
+      <span>Adds the optional viewer role, the active-sessions list, and the audit log preview. Depends on O-14.</span>
+      <a href="O-15_accounts/DIFF.md">DIFF.md →</a>
+    </footer>
+  </section>
+
+  <!-- ═══════════════════════════ O-13 AUDIO SOURCES ═══════════════════════ -->
+  <section class="v2-card" id="O-13">
+    <header class="v2-card-head">
+      <h2>Audio sources — first-class CRUD</h2>
+      <span class="meta">page rewrite + SQLite migration</span>
+      <span class="id">O-13 · primary feature</span>
+    </header>
+    <div class="v2-card-body">
+      <div class="v2-preview" style="background:var(--bg);">
+        <section class="bnb-card pad">
+          <div class="section-header">
+            <div><div class="bnb-eyebrow">Local microphones</div><h3>USB · ALSA · PipeWire</h3></div>
+            <div class="bnb-row"><span class="bnb-meta mono">3 connected</span>
+              <button class="bnb-btn"><span aria-hidden="true" style="color:var(--moss-ink);font-weight:600;">+</span> Add microphone</button></div>
+          </div>
+          <ul class="audio-sources">
+            <li class="audio-source">
+              <div class="audio-source__kind"><span class="audio-kind-badge usb"><span class="audio-kind-glyph"></span>USB · ALSA</span></div>
+              <div class="audio-source__id">
+                <div class="audio-source__label">Backyard feeder</div>
+                <div class="audio-source__device mono">plughw:1,0 — UMC202HD</div>
+                <div class="audio-source__detail mono">48 kHz · mono · 24-bit · gain +12 dB · up 6d 04h</div>
+              </div>
+              <div class="audio-source__right">
+                <span class="bnb-pill live"><span class="bnb-dot live"></span>Capturing</span>
+                <div class="audio-source__actions">
+                  <button class="bnb-btn ghost">Edit</button>
+                  <span class="audio-source__sep"></span>
+                  <button class="bnb-btn ghost" style="color:var(--rare);">Remove</button>
+                </div>
+              </div>
+            </li>
+            <li class="audio-source">
+              <div class="audio-source__kind"><span class="audio-kind-badge pipe"><span class="audio-kind-glyph"></span>PipeWire</span></div>
+              <div class="audio-source__id">
+                <div class="audio-source__label">Porch — directional</div>
+                <div class="audio-source__device mono">alsa_input.usb-Audio-Technica_ATR2x_USB</div>
+                <div class="audio-source__detail mono">48 kHz · mono · 16-bit · buffer 256</div>
+              </div>
+              <div class="audio-source__right">
+                <span class="bnb-pill starting"><span class="bnb-dot dawn"></span>Starting…</span>
+                <div class="audio-source__actions"><button class="bnb-btn ghost">Edit</button><span class="audio-source__sep"></span><button class="bnb-btn ghost" style="color:var(--rare);">Remove</button></div>
+              </div>
+            </li>
+            <li class="audio-source">
+              <div class="audio-source__kind"><span class="audio-kind-badge rtsp"><span class="audio-kind-glyph"></span>RTSP</span></div>
+              <div class="audio-source__id">
+                <div class="audio-source__label">Greenhouse cam</div>
+                <div class="audio-source__device mono">rtsp://greenhouse.lan:554/stream</div>
+                <div class="audio-source__detail mono">last seen 11h ago · EHOSTUNREACH · retry in 38s</div>
+              </div>
+              <div class="audio-source__right">
+                <span class="bnb-pill down"><span class="bnb-dot rare"></span>Down</span>
+                <div class="audio-source__actions"><button class="bnb-btn ghost">Edit</button><span class="audio-source__sep"></span><button class="bnb-btn ghost" style="color:var(--rare);">Remove</button></div>
+              </div>
+            </li>
+          </ul>
+        </section>
+      </div>
+    </div>
+    <footer class="v2-card-foot">
+      <span>Each source is a real row in <span class="mono">audio_sources</span>. Status pill polls every 8s. Removes go through the O-17 modal.</span>
+      <a href="O-13_audio_sources/DIFF.md">DIFF.md →</a>
+    </footer>
+  </section>
+
+  <!-- ═══════════════════════════ O-19 CMDK ════════════════════════════════ -->
+  <section class="v2-card" id="O-19">
+    <header class="v2-card-head">
+      <h2>Command palette</h2>
+      <span class="meta">⌘K / Ctrl-K / "/"</span>
+      <span class="id">O-19 · independent surface</span>
+    </header>
+    <div class="v2-card-body">
+      <div class="v2-preview" style="background:var(--bg);padding:32px 24px;">
+        <div class="bnb-cmdk__shell" style="max-width:560px;margin:0 auto;">
+          <div class="bnb-cmdk__inputwrap">
+            <span class="bnb-cmdk__icon">⌕</span>
+            <input type="text" value="card" placeholder="Search species, dates, settings…">
+            <span class="bnb-cmdk__chip mono">⌘K</span>
+            <span style="opacity:0;">…</span>
+          </div>
+          <ul class="bnb-cmdk__results">
+            <li class="bnb-cmdk__group">Pages</li>
+            <li data-href="#" class="is-active"><span class="glyph">⌬</span><span class="label">Species</span><span class="sub">all voices</span></li>
+            <li class="bnb-cmdk__group">Species</li>
+            <li data-href="#"><span class="glyph">♪</span><span class="label">Northern Cardinal</span><span class="sub">1,847 detections</span></li>
+            <li data-href="#"><span class="glyph">♪</span><span class="label">Carolina Wren</span><span class="sub">412 detections</span></li>
+            <li class="bnb-cmdk__group">Dates</li>
+            <li data-href="#"><span class="glyph">◷</span><span class="label">Yesterday</span><span class="sub">history</span></li>
+          </ul>
+          <footer class="bnb-cmdk__foot mono">
+            <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
+            <span><kbd>↵</kbd> open</span>
+            <span><kbd>esc</kbd> close</span>
+          </footer>
+        </div>
+      </div>
+    </div>
+    <footer class="v2-card-foot">
+      <span>Server-ranked results (~120 ms debounce). Indexes pages, species, dates, and admin settings.</span>
+      <a href="O-19_cmdk/DIFF.md">DIFF.md →</a>
+    </footer>
+  </section>
+
+  <!-- ═══════════════════════════ O-20 HELP LINKS ══════════════════════════ -->
+  <section class="v2-card" id="O-20">
+    <header class="v2-card-head">
+      <h2>Help / methodology</h2>
+      <span class="meta">links + drawer · embeds the mdBook</span>
+      <span class="id">O-20 · independent surface</span>
+    </header>
+    <div class="v2-card-body">
+      <div class="v2-preview" style="display:flex;flex-direction:column;gap:14px;">
+        <div class="sample-card">
+          <div class="bnb-row between" style="align-items:baseline;">
+            <div><div class="bnb-eyebrow">Behavioral analytics · phenology</div><h3 style="font-family:var(--font-display);font-size:22px;font-weight:400;letter-spacing:-0.01em;margin:0;">Arrivals and departures</h3></div>
+            <a class="bnb-help-link" href="#">
+              <span class="bnb-help-link__glyph">?</span>
+              <span>What is phenology?</span>
+              <span class="bnb-help-link__arrow">→</span>
+            </a>
+          </div>
+        </div>
+        <div class="sample-card">
+          <div class="bnb-row between" style="align-items:baseline;">
+            <div><div class="bnb-eyebrow">Admin · primary support surface</div><h3 style="font-family:var(--font-display);font-size:22px;font-weight:400;letter-spacing:-0.01em;margin:0;">Microphone setup</h3></div>
+            <button class="bnb-help-link" type="button">
+              <span class="bnb-help-link__glyph">?</span>
+              <span>Why per-source SNR matters</span>
+              <span class="bnb-help-link__arrow">↗</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <footer class="v2-card-foot">
+      <span>Two flavours: inline link (new tab) and drawer (in-place). 25 stable topics map 1:1 to mdBook pages.</span>
+      <a href="O-20_help/DIFF.md">DIFF.md →</a>
+    </footer>
+  </section>
+
+  <!-- ═══════════════════════════ O-21 CHANGELOG ═══════════════════════════ -->
+  <section class="v2-card" id="O-21">
+    <header class="v2-card-head">
+      <h2>Changelog + post-upgrade banner</h2>
+      <span class="meta">Markdown parser + dismissable banner</span>
+      <span class="id">O-21 · independent surface</span>
+    </header>
+    <div class="v2-card-body">
+      <div class="v2-preview">
+        <div class="bnb-banner">
+          <span class="bnb-pill moss">v1.5.0</span>
+          <div class="bnb-banner__copy">
+            <strong>New in v1.5.0.</strong>
+            <span>Themed confirmation modals · skeleton loading · command palette</span>
+          </div>
+          <a class="bnb-btn ghost" href="#">See all changes →</a>
+          <button type="button" class="bnb-banner__close" aria-label="Dismiss">&times;</button>
+        </div>
+        <div class="sample-card" style="margin-top:16px;">
+          <article class="changelog-release">
+            <header style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:6px 0;">
+              <h2 style="font-family:var(--font-display);font-size:24px;letter-spacing:-0.01em;margin:0;">
+                <a href="#" style="color:var(--fg);text-decoration:none;">v1.5.0</a>
+              </h2>
+              <span class="bnb-meta mono">2026-04-22</span>
+            </header>
+            <h3 style="margin:14px 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:0.08em;color:var(--fg-3);font-weight:500;">Added</h3>
+            <ul>
+              <li>Themed confirmation modal with sticky-toast follow-up</li>
+              <li>Command palette (<code class="mono">⌘K</code> / <code class="mono">/</code>)</li>
+              <li>Per-species circadian ribbons on <a href="#">/analytics/dawn-chorus</a></li>
+            </ul>
+            <h3 style="margin:14px 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:0.08em;color:var(--fg-3);font-weight:500;">Fixed</h3>
+            <ul>
+              <li>Day-strip now respects station time zone</li>
+            </ul>
+          </article>
+        </div>
+      </div>
+    </div>
+    <footer class="v2-card-foot">
+      <span>The banner only appears after an upgrade. Renders the embedded <span class="mono">CHANGELOG.md</span>.</span>
+      <a href="O-21_changelog/DIFF.md">DIFF.md →</a>
+    </footer>
+  </section>
+
+  <!-- ═══════════════════════════ O-22 QUALITY ═════════════════════════════ -->
+  <section class="v2-card" id="O-22">
+    <header class="v2-card-head">
+      <h2>Quality dashboard · two new model-trust panels</h2>
+      <span class="meta">audit + SQL helpers</span>
+      <span class="id">O-22 · independent surface</span>
+    </header>
+    <div class="v2-card-body">
+      <div class="v2-preview" style="display:grid;grid-template-columns:1fr 1fr;gap:18px;">
+        <div class="sample-card">
+          <div class="bnb-eyebrow">Review-verdict trend · 30 days</div>
+          <div class="bnb-verdict-trend" style="margin-top:10px;">
+            <!-- 30 columns of varied verdicts -->
+            <div class="col"><span class="approved" style="height:60%;"></span><span class="relabeled" style="height:6%;"></span><span class="unreviewed" style="height:14%;"></span></div>
+            <div class="col"><span class="approved" style="height:52%;"></span><span class="rejected" style="height:6%;"></span><span class="unreviewed" style="height:20%;"></span></div>
+            <div class="col"><span class="approved" style="height:70%;"></span><span class="unreviewed" style="height:16%;"></span></div>
+            <div class="col"><span class="approved" style="height:48%;"></span><span class="rejected" style="height:10%;"></span><span class="unreviewed" style="height:22%;"></span></div>
+            <div class="col"><span class="approved" style="height:64%;"></span><span class="relabeled" style="height:8%;"></span><span class="unreviewed" style="height:10%;"></span></div>
+            <div class="col"><span class="approved" style="height:58%;"></span><span class="unreviewed" style="height:18%;"></span></div>
+            <div class="col"><span class="approved" style="height:72%;"></span><span class="rejected" style="height:4%;"></span></div>
+            <div class="col"><span class="approved" style="height:54%;"></span><span class="rejected" style="height:8%;"></span><span class="unreviewed" style="height:18%;"></span></div>
+            <div class="col"><span class="approved" style="height:68%;"></span><span class="relabeled" style="height:6%;"></span></div>
+            <div class="col"><span class="approved" style="height:60%;"></span><span class="unreviewed" style="height:20%;"></span></div>
+            <div class="col"><span class="approved" style="height:46%;"></span><span class="rejected" style="height:14%;"></span><span class="unreviewed" style="height:14%;"></span></div>
+            <div class="col"><span class="approved" style="height:74%;"></span><span class="unreviewed" style="height:8%;"></span></div>
+            <div class="col"><span class="approved" style="height:62%;"></span><span class="relabeled" style="height:4%;"></span><span class="unreviewed" style="height:16%;"></span></div>
+            <div class="col"><span class="approved" style="height:58%;"></span><span class="rejected" style="height:8%;"></span></div>
+            <div class="col"><span class="approved" style="height:70%;"></span><span class="unreviewed" style="height:10%;"></span></div>
+            <div class="col"><span class="approved" style="height:48%;"></span><span class="rejected" style="height:18%;"></span><span class="unreviewed" style="height:14%;"></span></div>
+            <div class="col"><span class="approved" style="height:66%;"></span><span class="relabeled" style="height:6%;"></span></div>
+            <div class="col"><span class="approved" style="height:60%;"></span><span class="rejected" style="height:6%;"></span><span class="unreviewed" style="height:14%;"></span></div>
+            <div class="col"><span class="approved" style="height:54%;"></span><span class="unreviewed" style="height:22%;"></span></div>
+            <div class="col"><span class="approved" style="height:72%;"></span><span class="rejected" style="height:4%;"></span></div>
+            <div class="col"><span class="approved" style="height:62%;"></span><span class="relabeled" style="height:8%;"></span><span class="unreviewed" style="height:16%;"></span></div>
+            <div class="col"><span class="approved" style="height:68%;"></span><span class="rejected" style="height:6%;"></span></div>
+            <div class="col"><span class="approved" style="height:50%;"></span><span class="rejected" style="height:10%;"></span><span class="unreviewed" style="height:24%;"></span></div>
+            <div class="col"><span class="approved" style="height:74%;"></span><span class="unreviewed" style="height:8%;"></span></div>
+            <div class="col"><span class="approved" style="height:60%;"></span><span class="relabeled" style="height:6%;"></span><span class="unreviewed" style="height:14%;"></span></div>
+            <div class="col"><span class="approved" style="height:64%;"></span><span class="rejected" style="height:4%;"></span></div>
+            <div class="col"><span class="approved" style="height:70%;"></span><span class="unreviewed" style="height:12%;"></span></div>
+            <div class="col"><span class="approved" style="height:58%;"></span><span class="rejected" style="height:8%;"></span><span class="unreviewed" style="height:14%;"></span></div>
+            <div class="col"><span class="approved" style="height:66%;"></span><span class="relabeled" style="height:4%;"></span></div>
+            <div class="col"><span class="approved" style="height:72%;"></span><span class="unreviewed" style="height:10%;"></span></div>
+          </div>
+          <div class="bnb-verdict-legend">
+            <span><i class="approved"></i>approved</span>
+            <span><i class="relabeled"></i>re-labeled</span>
+            <span><i class="rejected"></i>rejected</span>
+            <span><i class="unreviewed"></i>unreviewed</span>
+          </div>
+        </div>
+        <div class="sample-card">
+          <div class="bnb-eyebrow">Model vs. human · top disagreement</div>
+          <div class="bnb-mvr" style="margin-top:10px;">
+            <div class="bnb-mvr-row">
+              <div class="bnb-mvr-name">House Wren <em>Troglodytes aedon</em></div>
+              <div class="bnb-mvr-bars">
+                <div class="bnb-mvr-bar model"><span class="fill" style="width:88%;"></span><span class="label">0.88 model</span></div>
+                <div class="bnb-mvr-bar human"><span class="fill" style="width:42%;"></span><span class="label">0.42 human</span></div>
+              </div>
+              <span class="bnb-mvr-gap">Δ 0.46</span>
+            </div>
+            <div class="bnb-mvr-row">
+              <div class="bnb-mvr-name">Carolina Wren <em>Thryothorus ludovicianus</em></div>
+              <div class="bnb-mvr-bars">
+                <div class="bnb-mvr-bar model"><span class="fill" style="width:84%;"></span><span class="label">0.84</span></div>
+                <div class="bnb-mvr-bar human"><span class="fill" style="width:55%;"></span><span class="label">0.55</span></div>
+              </div>
+              <span class="bnb-mvr-gap">Δ 0.29</span>
+            </div>
+            <div class="bnb-mvr-row">
+              <div class="bnb-mvr-name">Tufted Titmouse <em>Baeolophus bicolor</em></div>
+              <div class="bnb-mvr-bars">
+                <div class="bnb-mvr-bar model"><span class="fill" style="width:78%;"></span><span class="label">0.78</span></div>
+                <div class="bnb-mvr-bar human"><span class="fill" style="width:60%;"></span><span class="label">0.60</span></div>
+              </div>
+              <span class="bnb-mvr-gap small">Δ 0.18</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <footer class="v2-card-foot">
+      <span>Joins <span class="mono">detections × detection_reviews</span> (both shipped). Also lifts the existing page off its own <span class="mono">&lt;style&gt;</span> block.</span>
+      <a href="O-22_quality/DIFF.md">DIFF.md →</a>
+    </footer>
+  </section>
+
+  <!-- ═══════════════════════════ O-23 SIGNAL OVERLAY ══════════════════════ -->
+  <section class="v2-card" id="O-23">
+    <header class="v2-card-head">
+      <h2>Signal overlay · weather · moon · SPL</h2>
+      <span class="meta">renderers + Open-Meteo client</span>
+      <span class="id">O-23 · context</span>
+    </header>
+    <div class="v2-card-body">
+      <div class="v2-preview" style="display:flex;flex-direction:column;gap:14px;">
+        <div class="sample-card">
+          <div class="bnb-row between" style="align-items:baseline;">
+            <div>
+              <div class="bnb-eyebrow">Detection density · 24 hours</div>
+              <div class="bnb-meta" style="margin-top:4px;">Each dot = one detection · colored by species</div>
+            </div>
+            <div class="bnb-row" style="gap:14px;">
+              <span class="bnb-signal bnb-signal--moon" data-phase="full-moon">
+                <span class="bnb-signal__glyph">●</span><span class="bnb-signal__label">full moon</span>
+              </span>
+              <span class="bnb-signal" style="color:var(--fg-3);font-size:11px;">
+                <span class="bnb-signal__glyph" style="background:var(--dawn-soft);color:var(--dawn-ink);">☼</span>
+                <span class="bnb-signal__label">17 °C · 12% precip</span>
+              </span>
+            </div>
+          </div>
+          <!-- An SVG placeholder for the day-strip + overlay row underneath -->
+          <svg viewBox="0 0 1380 120" width="100%" height="80" preserveAspectRatio="none" style="margin-top:10px;background:var(--surface-2);border-radius:var(--r-md);">
+            <rect x="0" y="0" width="1380" height="80" fill="var(--surface-2)"/>
+            <!-- pretend day-strip dots -->
+            <g fill="var(--moss)">
+              <circle cx="80"  cy="40" r="2.5"/><circle cx="120" cy="32" r="3"/><circle cx="180" cy="48" r="2"/>
+              <circle cx="320" cy="36" r="3"/><circle cx="420" cy="44" r="2.5"/><circle cx="540" cy="40" r="3"/>
+              <circle cx="700" cy="38" r="2.5"/><circle cx="820" cy="44" r="3"/><circle cx="980" cy="40" r="2.5"/>
+              <circle cx="1100" cy="42" r="3"/><circle cx="1260" cy="40" r="2.5"/>
+            </g>
+          </svg>
+          <div class="bnb-overlay-strip">
+            <span class="bnb-eyebrow mono" style="font-size:10px;">overlay</span>
+            <svg viewBox="0 0 1340 22" width="100%" height="22" preserveAspectRatio="none">
+              <g class="bnb-signal bnb-signal--weather">
+                <rect x="0" y="0" width="1340" height="22" class="bnb-signal__bg"/>
+                <path class="bnb-signal__temp" d="M0,16 L50,14 L100,12 L200,10 L300,8 L400,8 L500,6 L600,4 L700,4 L800,6 L900,8 L1000,10 L1100,12 L1200,14 L1340,16"/>
+                <line class="bnb-signal__precip" x1="640" y1="18" x2="640" y2="22"/>
+                <line class="bnb-signal__precip" x1="660" y1="14" x2="660" y2="22"/>
+                <line class="bnb-signal__precip" x1="680" y1="10" x2="680" y2="22"/>
+              </g>
+            </svg>
+            <span class="bnb-meta mono" style="font-size:10px;color:var(--fg-4);">temp · precip · wind</span>
+            <span class="bnb-meta mono" style="font-size:10px;color:var(--fg-4);">Open-Meteo</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <footer class="v2-card-foot">
+      <span>Weather + moon ship together (Open-Meteo, free, no key). SPL renderer is finished; data source waits on the audio daemon.</span>
+      <a href="O-23_signal_overlay/DIFF.md">DIFF.md →</a>
+    </footer>
+  </section>
+
+  <!-- ═══════════════════════════ O-24 MOBILE / PWA ════════════════════════ -->
+  <section class="v2-card" id="O-24">
+    <header class="v2-card-head">
+      <h2>Mobile / PWA — bottom tab bar + manifest + worker</h2>
+      <span class="meta">phone-only nav · sw.js · manifest.webmanifest</span>
+      <span class="id">O-24 · reach</span>
+    </header>
+    <div class="v2-card-body">
+      <div class="v2-preview" style="display:flex;justify-content:center;background:var(--bg);padding:24px;">
+        <div style="width:340px;height:540px;background:var(--surface);border:0.5px solid var(--border);border-radius:24px;overflow:hidden;position:relative;box-shadow:var(--shadow-md);">
+          <header style="display:flex;align-items:center;gap:8px;padding:14px;border-bottom:0.5px solid var(--hairline);background:color-mix(in oklch, var(--bg) 70%, transparent);">
+            <svg width="18" height="18" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="none" stroke="currentColor" stroke-width="0.8" style="color:var(--fg)"></circle><g stroke="currentColor" stroke-width="1.4" stroke-linecap="round" style="color:var(--fg)"><line x1="6" y1="12" x2="6" y2="12"/><line x1="9" y1="9.5" x2="9" y2="14.5"/><line x1="12" y1="6" x2="12" y2="18"/><line x1="15" y1="8" x2="15" y2="16"/><line x1="18" y1="10.5" x2="18" y2="13.5"/></g></svg>
+            <span style="font-weight:600;font-size:13px;">BirdNet<span style="color:var(--fg-3);font-weight:400;"> Behavior</span></span>
+            <span style="margin-left:auto;" class="bnb-pill moss"><span class="bnb-dot live"></span> live</span>
+          </header>
+          <div style="padding:20px 16px;">
+            <div class="bnb-eyebrow">Right now</div>
+            <h1 class="display" style="font-size:30px;line-height:1.04;letter-spacing:-0.02em;margin:6px 0 8px;">The yard is <em style="color:var(--moss-ink);">singing</em>.</h1>
+            <p class="bnb-meta" style="font-size:13px;">2,481 calls · 14 species today</p>
+            <div style="margin-top:14px;border:0.5px solid var(--border);border-radius:var(--r-md);padding:10px;display:flex;flex-direction:column;gap:6px;">
+              <div class="bnb-row" style="gap:10px;"><span class="bnb-meta mono">06:14</span><span style="font-weight:500;font-size:13px;flex:1;">Northern Cardinal</span><span class="mono" style="font-size:10.5px;color:var(--fg-3);">0.94</span></div>
+              <div class="bnb-row" style="gap:10px;"><span class="bnb-meta mono">06:11</span><span style="font-weight:500;font-size:13px;flex:1;">Blue Jay</span><span class="mono" style="font-size:10.5px;color:var(--fg-3);">0.91</span></div>
+              <div class="bnb-row" style="gap:10px;"><span class="bnb-meta mono">06:08</span><span style="font-weight:500;font-size:13px;flex:1;">Carolina Wren</span><span class="mono" style="font-size:10.5px;color:var(--fg-3);">0.88</span></div>
+            </div>
+          </div>
+          <nav style="position:absolute;left:0;right:0;bottom:0;display:grid;grid-template-columns:repeat(6, 1fr);gap:2px;background:color-mix(in oklch, var(--bg) 88%, transparent);border-top:0.5px solid var(--border);padding:4px;">
+            <a href="#" style="display:inline-flex;flex-direction:column;align-items:center;gap:2px;padding:6px 4px;text-decoration:none;color:var(--moss-ink);background:color-mix(in oklch, var(--moss) 10%, transparent);border-radius:var(--r-sm);min-height:48px;"><span class="mono" style="font-size:16px;">⌂</span><span style="font-size:9px;">Now</span></a>
+            <a href="#" style="display:inline-flex;flex-direction:column;align-items:center;gap:2px;padding:6px 4px;text-decoration:none;color:var(--fg-3);min-height:48px;"><span class="mono" style="font-size:16px;">⊙</span><span style="font-size:9px;">Today</span></a>
+            <a href="#" style="display:inline-flex;flex-direction:column;align-items:center;gap:2px;padding:6px 4px;text-decoration:none;color:var(--fg-3);min-height:48px;"><span class="mono" style="font-size:16px;">⌬</span><span style="font-size:9px;">Species</span></a>
+            <a href="#" style="display:inline-flex;flex-direction:column;align-items:center;gap:2px;padding:6px 4px;text-decoration:none;color:var(--fg-3);min-height:48px;"><span class="mono" style="font-size:16px;">▦</span><span style="font-size:9px;">When</span></a>
+            <a href="#" style="display:inline-flex;flex-direction:column;align-items:center;gap:2px;padding:6px 4px;text-decoration:none;color:var(--fg-3);min-height:48px;"><span class="mono" style="font-size:16px;">∿</span><span style="font-size:9px;">Migration</span></a>
+            <a href="#" style="display:inline-flex;flex-direction:column;align-items:center;gap:2px;padding:6px 4px;text-decoration:none;color:var(--fg-3);min-height:48px;"><span class="mono" style="font-size:16px;">⌗</span><span style="font-size:9px;">More</span></a>
+          </nav>
+        </div>
+      </div>
+    </div>
+    <footer class="v2-card-foot">
+      <span>Tab bar shows only on <span class="mono">(max-width: 720px) and (pointer: coarse)</span>. Service worker caches static + idempotent public pages; never <span class="mono">/admin/*</span>.</span>
+      <a href="O-24_mobile_pwa/DIFF.md">DIFF.md →</a>
+    </footer>
+  </section>
+
+</div>
+
+<footer style="margin-top:64px;padding-top:24px;border-top:0.5px solid var(--hairline);color:var(--fg-3);text-align:center;font-family:var(--font-mono);font-size:11px;">
+  proposed_changes · v2.0 · 14 opportunities · built against <span style="color:var(--moss-ink);">tomtom215/BirdNet-Behavior@6a32dd82f692</span>
+</footer>
+
+</div>
+
+<!-- The same JS that the real layout.html mounts — kept inline here so the
+     preview shows the toggle / cmdk / confirm modal behaviours without
+     loading external scripts. -->
+<script>
+(function () {
+  // Theme toggle.
+  var btn = document.getElementById('theme-toggle');
+  var html = document.documentElement;
+  function flip() {
+    var next = html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    html.setAttribute('data-theme', next);
+    try { localStorage.setItem('theme', next); } catch (e) {}
+  }
+  if (btn) btn.addEventListener('click', flip);
+
+  // Login-card show/hide password demo.
+  var toggle = document.querySelector('.login-toggle');
+  var input  = document.getElementById('p');
+  if (toggle && input) toggle.addEventListener('click', function () {
+    var on = input.type === 'text';
+    input.type = on ? 'password' : 'text';
+    toggle.textContent = on ? 'Show' : 'Hide';
+  });
+})();
+</script>
+
+<!-- Inline copy of the confirm-modal partial so the O-17 buttons work in the
+     preview. Production lives in templates/_partial_confirm_modal.html. -->
+<dialog id="bnb-confirm" class="bnb-modal" aria-labelledby="bnb-confirm-title">
+  <form method="dialog" class="bnb-modal__form">
+    <header class="bnb-modal__head">
+      <div class="bnb-eyebrow" data-confirm-style-eyebrow>Confirm</div>
+      <h2 id="bnb-confirm-title" class="display" style="font-size:24px;line-height:1.15;margin:4px 0 0;letter-spacing:-0.01em;">Are you sure?</h2>
+    </header>
+    <div class="bnb-modal__body">
+      <p id="bnb-confirm-body" style="margin:0;color:var(--fg-2);font-size:14px;line-height:1.55;">This action cannot be undone.</p>
+    </div>
+    <footer class="bnb-modal__foot">
+      <button type="submit" value="cancel" class="bnb-btn ghost" data-confirm-cancel>Cancel</button>
+      <button type="submit" value="confirm" class="bnb-btn" data-confirm-ok>Confirm</button>
+    </footer>
+  </form>
+</dialog>
+<script>
+(function () {
+  var dialog = document.getElementById('bnb-confirm');
+  if (!dialog || typeof dialog.showModal !== 'function') return;
+  var titleEl = document.getElementById('bnb-confirm-title');
+  var bodyEl  = document.getElementById('bnb-confirm-body');
+  var eyebrow = dialog.querySelector('[data-confirm-style-eyebrow]');
+  var okBtn   = dialog.querySelector('[data-confirm-ok]');
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-confirm-action]');
+    if (!btn) return;
+    if (btn.dataset.confirmBypass === '1') return;
+    e.preventDefault(); e.stopPropagation();
+    titleEl.textContent = btn.dataset.confirmTitle || 'Are you sure?';
+    bodyEl.textContent  = btn.dataset.confirmBody  || 'This action cannot be undone.';
+    okBtn.textContent   = btn.dataset.confirmConfirmLabel || 'Confirm';
+    var style = btn.dataset.confirmStyle || 'moss';
+    eyebrow.textContent = style === 'danger' ? 'Destructive action' : style === 'warn' ? 'Heads up' : 'Confirm';
+    eyebrow.style.color = style === 'danger' ? 'var(--rare)' : style === 'warn' ? 'var(--dawn-ink)' : 'var(--fg-3)';
+    okBtn.className = 'bnb-btn ' + (style === 'danger' ? 'danger' : style === 'warn' ? 'dawn' : 'moss');
+    dialog.dataset.style = style;
+    dialog.showModal();
+  }, true);
+})();
+</script>
+
+</body>
+</html>

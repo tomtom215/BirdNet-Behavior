@@ -1,0 +1,170 @@
+/* Append to crates/birdnet-web/static/css/app.css — purely additive.
+   Layout utility classes that replace the recurring inline `style="…"`
+   shapes in the admin Rust handlers (O-25). Layout-only — no colour or
+   typography choices live here; the design system still owns those.
+*/
+
+/* ── Flex primitives ─────────────────────────────────────────────── */
+.bnb-row              { display: flex; align-items: center; gap: var(--pad-2); }
+.bnb-row.between      { justify-content: space-between; }
+.bnb-row.tight        { gap: 8px; }
+.bnb-row.wide         { gap: var(--pad-3); }
+.bnb-row.wrap         { flex-wrap: wrap; }
+.bnb-row.start        { align-items: flex-start; }
+.bnb-row.end          { align-items: flex-end; }
+
+.bnb-col              { display: flex; flex-direction: column; gap: var(--pad-2); }
+.bnb-col.tight        { gap: 8px; }
+.bnb-col.wide         { gap: var(--pad-3); }
+
+.bnb-stack            { display: grid; gap: var(--pad-2); }
+.bnb-stack.tight      { gap: 8px; }
+
+.bnb-spread {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: var(--pad-2);
+}
+
+.bnb-fill             { flex: 1; min-width: 0; }
+.bnb-shrink-0         { flex: 0 0 auto; }
+.bnb-ml-auto          { margin-left: auto; }
+.bnb-mt-auto          { margin-top: auto; }
+
+/* ── Grid templates (named shapes seen ≥4× in the codebase) ───────── */
+.bnb-grid-2           { display: grid; grid-template-columns: 1fr 1fr;           gap: var(--pad-3); }
+.bnb-grid-3           { display: grid; grid-template-columns: repeat(3, 1fr);    gap: var(--pad-3); }
+.bnb-grid-4           { display: grid; grid-template-columns: repeat(4, 1fr);    gap: var(--pad-3); }
+.bnb-grid-1-2         { display: grid; grid-template-columns: 1fr 2fr;           gap: var(--pad-3); }
+.bnb-grid-2-1         { display: grid; grid-template-columns: 2fr 1fr;           gap: var(--pad-3); }
+
+/* Sidebar / main / rail — used by audio, settings, system pages. */
+.bnb-grid-side {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr) 280px;
+  gap: var(--pad-3);
+  align-items: start;
+}
+.bnb-grid-side.wide { grid-template-columns: 240px minmax(0, 1fr) 320px; }
+.bnb-grid-side.no-rail { grid-template-columns: 200px minmax(0, 1fr); }
+@media (max-width: 980px) {
+  .bnb-grid-2, .bnb-grid-3, .bnb-grid-4,
+  .bnb-grid-1-2, .bnb-grid-2-1,
+  .bnb-grid-side, .bnb-grid-side.wide, .bnb-grid-side.no-rail
+  { grid-template-columns: 1fr; }
+}
+
+.bnb-side { position: sticky; top: 16px; align-self: start; }
+
+/* ── Form rows (settings render modules) ──────────────────────────── */
+.bnb-form-row {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 14px;
+  align-items: center;
+  padding: 12px 0;
+  border-top: 0.5px solid var(--hairline);
+}
+.bnb-form-row:first-child { border-top: 0; }
+.bnb-form-row.stacked { grid-template-columns: 1fr; gap: 6px; }
+.bnb-form-row > label { font-size: 13px; color: var(--fg-2); }
+.bnb-form-row > label .hint {
+  display: block; color: var(--fg-3); font-size: 11.5px; margin-top: 2px;
+}
+.bnb-form-row > .control { min-width: 0; }
+.bnb-form-row > .hint     { grid-column: 2; color: var(--fg-3); font-size: 11.5px; margin-top: -8px; }
+
+@media (max-width: 540px) {
+  .bnb-form-row { grid-template-columns: 1fr; }
+  .bnb-form-row > .hint { grid-column: 1; }
+}
+
+/* Range slider polish (was inline `accent-color` everywhere) */
+.bnb-range { width: 100%; accent-color: var(--moss); }
+
+/* Inline key/value (settings preview, kpi sub-text) */
+.bnb-kv {
+  display: inline-flex; gap: 6px; align-items: baseline;
+  font-size: 12.5px;
+}
+.bnb-kv .k {
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.bnb-kv .v {
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Aside: settings sub-nav (sidebar links) ──────────────────────── */
+.bnb-settings-nav {
+  display: flex; flex-direction: column; gap: 2px;
+}
+.bnb-settings-nav a {
+  display: block;
+  padding: 7px 10px;
+  border-radius: 8px;
+  text-decoration: none;
+  font-size: 13px;
+  color: var(--fg-2);
+}
+.bnb-settings-nav a:hover { background: var(--surface-2); color: var(--fg); }
+.bnb-settings-nav a.active {
+  background: var(--moss-soft);
+  color: var(--moss-ink);
+  font-weight: 500;
+}
+
+/* ── Drop zone (backup-recovery upload, etc.) ─────────────────────── */
+.bnb-dropzone {
+  border: 0.5px dashed var(--border-2);
+  border-radius: var(--r-lg);
+  padding: var(--pad-4);
+  display: grid;
+  place-items: center;
+  text-align: center;
+  background:
+    repeating-linear-gradient(45deg,
+      var(--surface-2) 0 8px, var(--bg-2) 8px 16px);
+  color: var(--fg-3);
+  font-size: 13px;
+}
+.bnb-dropzone.dragover {
+  border-style: solid;
+  border-color: var(--moss);
+  background: color-mix(in oklch, var(--moss) 8%, var(--surface));
+  color: var(--moss-ink);
+}
+.bnb-dropzone .display {
+  font-size: 22px; color: var(--fg);
+}
+.bnb-dropzone .bnb-meta { margin-top: 4px; }
+
+/* ── Danger zone card (backup-recovery) ───────────────────────────── */
+.bnb-danger-zone {
+  border: 0.5px solid color-mix(in oklch, var(--rare) 40%, var(--border));
+  border-radius: var(--r-lg);
+  padding: var(--pad-3);
+  background: color-mix(in oklch, var(--rare) 4%, var(--surface));
+}
+.bnb-danger-zone .bnb-eyebrow { color: var(--rare); }
+.bnb-danger-zone > h3 { color: var(--fg); }
+.bnb-danger-zone .bnb-divider { background: color-mix(in oklch, var(--rare) 18%, var(--hairline)); }
+
+/* ── Logs / mono code block (admin logs viewer, birdnet.conf preview) ── */
+.bnb-logblock {
+  background: var(--bg-2);
+  border: 0.5px solid var(--hairline);
+  border-radius: var(--r-md);
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-2);
+  overflow: auto;
+  max-height: 360px;
+}
+.bnb-logblock .info { color: var(--fg-2); }
+.bnb-logblock .warn { color: var(--dawn-ink); }
+.bnb-logblock .err  { color: var(--rare); }

@@ -1,0 +1,136 @@
+/* Append to crates/birdnet-web/static/css/app.css — purely additive.
+   Mobile bottom tab bar + "More" sheet (O-24). */
+
+/* ── Bottom tab bar (phone-only) ─────────────────────────────────── */
+.bnb-tabbar {
+  display: none; /* desktop default */
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 55;
+  background: color-mix(in oklch, var(--bg) 88%, transparent);
+  backdrop-filter: saturate(1.4) blur(14px);
+  -webkit-backdrop-filter: saturate(1.4) blur(14px);
+  border-top: 0.5px solid var(--border);
+  padding: 4px 4px max(4px, env(safe-area-inset-bottom));
+}
+.bnb-tabbar__slot {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px 4px;
+  border-radius: var(--r-sm);
+  text-decoration: none;
+  color: var(--fg-3);
+  font: inherit;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  min-height: 56px;
+  min-width: 44px;
+}
+.bnb-tabbar__slot .glyph {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  line-height: 1;
+}
+.bnb-tabbar__slot .label {
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.bnb-tabbar__slot:hover { color: var(--fg); }
+.bnb-tabbar__slot.active {
+  color: var(--moss-ink);
+  background: color-mix(in oklch, var(--moss) 10%, transparent);
+}
+
+/* Make room for the bar so content doesn't hide beneath it. */
+.bnb-tabbar ~ main,
+body:has(.bnb-tabbar) main { padding-bottom: 84px; }
+
+/* Visible only on coarse-pointer narrow viewports. */
+@media (max-width: 720px) and (pointer: coarse) {
+  .bnb-tabbar {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 2px;
+  }
+  /* Hide the topnav links list; brand + theme toggle stay so the user can
+     identify the station and flip dark/light from the top. */
+  .topnav-links { display: none; }
+  .topnav-right .nav-search { display: none; }
+}
+
+/* ── Bottom-sheet "More" dialog ──────────────────────────────────── */
+.bnb-sheet {
+  border: 0; padding: 0;
+  background: transparent;
+  color: var(--fg);
+  width: 100vw; max-width: 100vw;
+  margin: auto 0 0 0; /* anchored to the bottom */
+  height: 78vh; max-height: 78vh;
+}
+.bnb-sheet::backdrop {
+  background: color-mix(in oklch, oklch(0% 0 0) 32%, transparent);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+.bnb-sheet__form {
+  background: var(--surface);
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+  height: 100%;
+  overflow: hidden;
+  display: flex; flex-direction: column;
+}
+.bnb-sheet__head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 0.5px solid var(--hairline);
+}
+.bnb-sheet__list {
+  list-style: none; margin: 0; padding: 6px 0;
+  overflow-y: auto;
+}
+.bnb-sheet__row {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 18px;
+  text-decoration: none;
+  color: var(--fg);
+  font-size: 15px;
+  border-top: 0.5px solid var(--hairline);
+}
+.bnb-sheet__row:first-child { border-top: 0; }
+.bnb-sheet__row .glyph {
+  font-family: var(--font-mono); font-size: 15px; color: var(--fg-3); text-align: center;
+}
+.bnb-sheet__row:hover { background: var(--surface-2); }
+
+@media (prefers-reduced-motion: no-preference) {
+  .bnb-sheet[open] { animation: bnb-sheet-rise 240ms cubic-bezier(.2,.7,.2,1); }
+}
+@keyframes bnb-sheet-rise {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+
+/* ── Larger tap targets on coarse pointers ───────────────────────── */
+@media (pointer: coarse) {
+  .feed-row { min-height: 52px; padding: 12px 10px; }
+  .species-item { padding: 12px 0; min-height: 52px; }
+  .list-row { padding: 12px 0; min-height: 48px; }
+  .miniheat-cells > div { min-height: 16px; min-width: 16px; }
+  .bnb-btn { min-height: 40px; padding: 8px 14px; }
+}
+
+/* ── Update-available toast (paired with sw.js) ──────────────────── */
+.bnb-toast--update {
+  cursor: pointer;
+}
+.bnb-toast--update .bnb-toast__action {
+  font-weight: 600;
+}
