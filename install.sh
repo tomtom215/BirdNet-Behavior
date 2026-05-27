@@ -44,7 +44,10 @@ MODEL_DIR="${DATA_DIR}/models"
 DB_PATH="${DATA_DIR}/birds.db"
 SERVICE_FILE="/etc/systemd/system/birdnet-behavior.service"
 SERVICE_USER="${SUDO_USER:-${USER:-$(id -un)}}"
-LISTEN_ADDR="0.0.0.0:8502"
+# Bind localhost by default — the admin dashboard can change settings and update
+# software, so it must not reach the LAN without an explicit (ideally password-
+# protected) opt-in. Override with BIRDNET_LISTEN= or the interactive prompt.
+LISTEN_ADDR="${BIRDNET_LISTEN:-127.0.0.1:8502}"
 
 # Interactive onboarding state. INTERACTIVE is decided in main(); the *_VALUE
 # vars hold answers from prompt_station_settings and are baked into the config
@@ -54,6 +57,8 @@ ALSA_CARD_VALUE=""
 RTSP_URL_VALUE=""
 LATITUDE_VALUE=""
 LONGITUDE_VALUE=""
+CADDY_USER_VALUE=""
+CADDY_PWD_VALUE=""
 
 # Minimum glibc the prebuilt binaries link against (pyke's ONNX Runtime needs
 # glibc >= 2.38; Ubuntu 24.04, where we build, ships 2.39). Set
@@ -114,6 +119,15 @@ yesno() {
     printf '%s %s ' "${prompt}" "${hint}" >/dev/tty
     read -r reply </dev/tty || reply=""
     case "${reply:-${default}}" in [yY]*) return 0 ;; *) return 1 ;; esac
+}
+
+# Like ask, but does not echo the input — for passwords. Reads from /dev/tty.
+ask_secret() {
+    local prompt="$1" reply
+    printf '%s: ' "${prompt}" >/dev/tty
+    read -rs reply </dev/tty || reply=""
+    printf '\n' >/dev/tty
+    printf '%s' "${reply}"
 }
 
 # ---------------------------------------------------------------------------
@@ -536,6 +550,10 @@ write_config() {
     [ -n "${RTSP_URL_VALUE}" ]  && rtsp_line="RTSP_URL=${RTSP_URL_VALUE}"
     [ -n "${LATITUDE_VALUE}" ]  && lat_line="LATITUDE=${LATITUDE_VALUE}"
     [ -n "${LONGITUDE_VALUE}" ] && lon_line="LONGITUDE=${LONGITUDE_VALUE}"
+    local caddy_user_line="# CADDY_USER=birdnet"
+    local caddy_pwd_line="# CADDY_PWD=change-me-to-a-strong-password"
+    [ -n "${CADDY_USER_VALUE}" ] && caddy_user_line="CADDY_USER=${CADDY_USER_VALUE}"
+    [ -n "${CADDY_PWD_VALUE}" ]  && caddy_pwd_line="CADDY_PWD=${CADDY_PWD_VALUE}"
 
     info "Writing default config to ${CONFIG_FILE}…"
     cat > "${CONFIG_FILE}" <<EOF
@@ -582,14 +600,15 @@ ${lon_line}
 # --- Site name shown in web UI ---
 # SITENAME=My Bird Station
 
-# --- Web UI authentication (recommended) ---
-# The web UI — including the admin panel that can change settings, trigger
-# database backups, and update the software — listens on ${LISTEN_ADDR} and is
-# reachable by anyone on your network. Set a password to require HTTP Basic
-# auth; without CADDY_PWD the UI is open to the whole LAN. Username defaults to
-# "birdnet". (Alternatively, set LISTEN to 127.0.0.1:8502 and use an SSH tunnel.)
-# CADDY_USER=birdnet
-# CADDY_PWD=change-me-to-a-strong-password
+# --- Web UI authentication (recommended before exposing to the LAN) ---
+# The dashboard — including the admin panel that can change settings, trigger
+# database backups, and update the software — listens on ${LISTEN_ADDR}.
+# localhost is the safe default. To reach it from other devices, change the bind
+# to 0.0.0.0:8502 (edit --listen in ${SERVICE_FILE}, or set BIRDNET_LISTEN and
+# re-run the installer) — and set a password first, or anyone on your LAN can
+# control it. Username defaults to "birdnet".
+${caddy_user_line}
+${caddy_pwd_line}
 EOF
     # The config can hold secrets (CADDY_PWD, BIRDWEATHER_TOKEN), so keep it
     # readable by the service's group but never world-readable. Root owns it so
@@ -817,6 +836,33 @@ prompt_station_settings() {
             warn "Coordinates '${lat}, ${lon}' look invalid — skipping; set LATITUDE/LONGITUDE in ${CONFIG_FILE} later."
         fi
     fi
+
+    # ---- Web dashboard exposure ----
+    printf '\n  Web dashboard\n' >/dev/tty
+    printf '  By default the dashboard is reachable only from this device (localhost).\n' >/dev/tty
+    if yesno "  Make it reachable from other devices on your network?" n; then
+        printf '  Its admin can change settings and update software, so protect it.\n' >/dev/tty
+        local pw1 pw2
+        pw1="$(ask_secret "  Set a dashboard password (Enter to skip)")"
+        if [ -n "${pw1}" ]; then
+            pw2="$(ask_secret "  Confirm password")"
+            if [ "${pw1}" = "${pw2}" ]; then
+                CADDY_USER_VALUE="birdnet"
+                CADDY_PWD_VALUE="${pw1}"
+                LISTEN_ADDR="0.0.0.0:8502"
+                success "Dashboard on the LAN, password-protected (username: birdnet)."
+            else
+                warn "Passwords did not match — keeping the dashboard on localhost only."
+            fi
+        elif yesno "  Expose to the LAN with NO password?" n; then
+            LISTEN_ADDR="0.0.0.0:8502"
+            warn "Dashboard on the LAN with NO authentication — anyone on the network can change settings. Add CADDY_PWD to ${CONFIG_FILE} to fix this."
+        else
+            success "Keeping the dashboard on localhost only."
+        fi
+    else
+        success "Dashboard stays on this device (localhost) — SSH-tunnel in, or set BIRDNET_LISTEN to expose it."
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -850,8 +896,13 @@ maybe_start_service() {
 # ---------------------------------------------------------------------------
 
 print_summary() {
-    local ip
+    local ip web_host
     ip="$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost')"
+    # Show the address the dashboard actually answers on.
+    case "${LISTEN_ADDR}" in
+        127.0.0.1:* | localhost:*) web_host="localhost" ;;
+        *)                         web_host="${ip}" ;;
+    esac
 
     echo
     echo -e "${BOLD}${GREEN}Installation complete!${RESET}"
@@ -859,10 +910,11 @@ print_summary() {
     echo -e "  ${BOLD}Binary:${RESET}  ${INSTALL_DIR}/${BINARY_NAME}"
     echo -e "  ${BOLD}Config:${RESET}  ${CONFIG_FILE}"
     echo -e "  ${BOLD}Data:${RESET}    ${DATA_DIR}"
-    echo -e "  ${BOLD}Web UI:${RESET}  http://${ip}:8502"
+    echo -e "  ${BOLD}Web UI:${RESET}  http://${web_host}:8502"
     echo
     if systemctl is-active --quiet birdnet-behavior.service 2>/dev/null; then
-        echo -e "${GREEN}Service is running.${RESET} Open http://${ip}:8502 in your browser."
+        echo -e "${GREEN}Service is running.${RESET} Open http://${web_host}:8502"
+        [ "${web_host}" = "localhost" ] && echo "  (localhost only — set BIRDNET_LISTEN or edit ${SERVICE_FILE} to reach it from other devices.)"
     else
         echo -e "${BOLD}Next steps:${RESET}"
         echo "  1. Set an audio source (edit as root):  sudo nano ${CONFIG_FILE}"
