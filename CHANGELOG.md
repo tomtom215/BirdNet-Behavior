@@ -7,16 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-05-27
+
+Installer- and documentation-focused release: it repairs the bare-metal install
+flow on Raspberry Pi OS Trixie, adds guided onboarding, and tightens the install
+to least privilege. There are no functional changes to the compiled binary —
+only its reported version differs from 0.5.1.
+
+### Added
+
+- **Guided onboarding in `install.sh`.** A fresh interactive install now prompts
+  for an audio source (auto-detected ALSA device, a typed ALSA device, or an
+  RTSP URL), station latitude/longitude, and whether to expose the dashboard to
+  the LAN — writing them into the config so a non-technical user gets a working
+  station without hand-editing a file, and the post-install summary says exactly
+  which URL to open in a web browser (and from which device). Prompts read from
+  `/dev/tty`, so they work under `curl … | sudo bash`. `--noninteractive` (or
+  `BIRDNET_NONINTERACTIVE=1`) keeps unattended installs silent.
+- **`install.sh --version X.Y.Z` / `-v`** to pin a release through the pipe form
+  (`curl … | sudo bash -s -- --version X.Y.Z`); the `VERSION` environment
+  variable still works.
+
+### Security
+
+- **The web dashboard binds `127.0.0.1` by default** instead of `0.0.0.0`. The
+  admin UI can change settings and update software, so it is no longer exposed to
+  the whole LAN unauthenticated out of the box. The interactive installer offers
+  LAN exposure and captures a password (HTTP basic auth) when you opt in; the
+  bind is overridable with `BIRDNET_LISTEN`.
+- **`/etc/birdnet/birdnet.conf` is now `0640 root:<service-group>`** (was
+  world-readable `0644`), so secrets such as `CADDY_PWD` and `BIRDWEATHER_TOKEN`
+  aren't readable by other local users; existing configs are retightened on
+  upgrade.
+- **Tighter filesystem and service sandboxing.** Data, recordings, model, and
+  tmpfs-stream directories are `0750` (were `0755`); the systemd unit adds
+  `CapabilityBoundingSet=` (all dropped), `UMask=0027`, and
+  `RestrictAddressFamilies=`. Measured `systemd-analyze security` exposure
+  dropped from 4.0 to 1.6.
+
 ### Fixed
 
-- **Version-pinned installs work over `sudo` again.** `install.sh` now accepts a
-  `--version X.Y.Z` flag (the `VERSION` environment variable still works), so a
-  release can be pinned through the pipe form
-  `curl … | sudo bash -s -- --version X.Y.Z`. The docs and the generated release
-  notes no longer suggest `sudo bash <(curl …)`, which fails with
-  `/dev/fd/63: No such file or directory` because `sudo` closes the
-  process-substitution file descriptor crossing to root. The root-required error
-  message now prints a working command instead of a literal `curl ... | sudo bash`.
+- **Bare-metal install over `sudo` now works end to end on Raspberry Pi OS
+  Trixie:**
+  - Version pinning no longer needs the broken `sudo bash <(curl …)` form
+    (process substitution + `sudo` closes the pipe's file descriptor, so the
+    script vanished); docs and generated release notes use the pipe form.
+  - The resolved version is no longer corrupted by an `[INFO]` log line bleeding
+    into the captured value (which produced `curl: (3) bad range in URL`) — the
+    log helpers now write to stderr.
+  - The data directory is created under the service user's real home instead of
+    `/root` (where `sudo` pointed `$HOME`), so the non-root service can reach its
+    database, recordings, and model.
+  - ALSA microphone auto-detection no longer fails with `awk: syntax error` on
+    Debian / Raspberry Pi OS (replaced a gawk-only `match()` form with a portable
+    one).
+
+### Changed
+
+- **CI:** the `Tests (x86_64)` job frees ~25–30 GB of preinstalled SDKs before
+  the all-features build, fixing intermittent `No space left on device` failures.
 
 ## [0.5.1] - 2026-05-26
 

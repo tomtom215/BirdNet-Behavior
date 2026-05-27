@@ -34,6 +34,8 @@ BINARY_NAME="birdnet-behavior"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/birdnet"
 CONFIG_FILE="${CONFIG_DIR}/birdnet.conf"
+# Default data dir. NOTE: under sudo $HOME is usually /root, so require_root
+# re-derives this and the paths below from the service user's real home.
 DATA_DIR="${HOME}/BirdNet-Behavior"
 RECS_DIR="${DATA_DIR}/recordings"
 STREAM_DIR="/tmp/birdnet-stream"
@@ -42,7 +44,21 @@ MODEL_DIR="${DATA_DIR}/models"
 DB_PATH="${DATA_DIR}/birds.db"
 SERVICE_FILE="/etc/systemd/system/birdnet-behavior.service"
 SERVICE_USER="${SUDO_USER:-${USER:-$(id -un)}}"
-LISTEN_ADDR="0.0.0.0:8502"
+# Bind localhost by default — the admin dashboard can change settings and update
+# software, so it must not reach the LAN without an explicit (ideally password-
+# protected) opt-in. Override with BIRDNET_LISTEN= or the interactive prompt.
+LISTEN_ADDR="${BIRDNET_LISTEN:-127.0.0.1:8502}"
+
+# Interactive onboarding state. INTERACTIVE is decided in main(); the *_VALUE
+# vars hold answers from prompt_station_settings and are baked into the config
+# by write_config (empty = keep the commented example in place).
+INTERACTIVE=0
+ALSA_CARD_VALUE=""
+RTSP_URL_VALUE=""
+LATITUDE_VALUE=""
+LONGITUDE_VALUE=""
+CADDY_USER_VALUE=""
+CADDY_PWD_VALUE=""
 
 # Minimum glibc the prebuilt binaries link against (pyke's ONNX Runtime needs
 # glibc >= 2.38; Ubuntu 24.04, where we build, ships 2.39). Set
@@ -83,6 +99,37 @@ warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*" >&2; }
 error()   { echo -e "${RED}[ERROR]${RESET} $*" >&2; }
 fatal()   { error "$*"; exit 1; }
 
+# Interactive prompt helpers. They read from /dev/tty (not stdin) so they work
+# under the recommended `curl ... | sudo bash`, where stdin is the script text;
+# output goes to /dev/tty for the same reason. Gated by INTERACTIVE (set in main).
+ask() {
+    local prompt="$1" default="${2:-}" reply
+    if [ -n "${default}" ]; then
+        printf '%s [%s]: ' "${prompt}" "${default}" >/dev/tty
+    else
+        printf '%s: ' "${prompt}" >/dev/tty
+    fi
+    read -r reply </dev/tty || reply=""
+    printf '%s' "${reply:-${default}}"
+}
+
+yesno() {
+    local prompt="$1" default="${2:-y}" reply hint="[Y/n]"
+    [ "${default}" = "n" ] && hint="[y/N]"
+    printf '%s %s ' "${prompt}" "${hint}" >/dev/tty
+    read -r reply </dev/tty || reply=""
+    case "${reply:-${default}}" in [yY]*) return 0 ;; *) return 1 ;; esac
+}
+
+# Like ask, but does not echo the input — for passwords. Reads from /dev/tty.
+ask_secret() {
+    local prompt="$1" reply
+    printf '%s: ' "${prompt}" >/dev/tty
+    read -rs reply </dev/tty || reply=""
+    printf '\n' >/dev/tty
+    printf '%s' "${reply}"
+}
+
 # ---------------------------------------------------------------------------
 # Root / privilege check
 # ---------------------------------------------------------------------------
@@ -115,6 +162,21 @@ EOF
         fatal "Run the installer via sudo from a normal user account, not as root directly, so the service isn't owned by root.  E.g.:  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | sudo bash"
     fi
     SERVICE_USER="${SUDO_USER}"
+
+    # Under sudo, $HOME is usually /root, not the service user's home — so the
+    # data dir computed at the top of this script can land in /root, which the
+    # non-root service user cannot reach (and ProtectHome=read-only would block
+    # it anyway). Re-derive every home-based path from the service user's actual
+    # home so the daemon can read its database, recordings, and model.
+    local svc_home
+    svc_home="$(getent passwd "${SERVICE_USER}" | cut -d: -f6)"
+    if [ -n "${svc_home}" ]; then
+        DATA_DIR="${svc_home}/BirdNet-Behavior"
+        RECS_DIR="${DATA_DIR}/recordings"
+        IMAGE_CACHE_DIR="${DATA_DIR}/image_cache"
+        MODEL_DIR="${DATA_DIR}/models"
+        DB_PATH="${DATA_DIR}/birds.db"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -388,7 +450,7 @@ download_model() {
     info "Downloading BirdNET+ V3.0 model (~541 MB FP32 ONNX) from Zenodo…"
     info "  This may take a few minutes on a slow connection."
 
-    install -d -m 0755 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${MODEL_DIR}"
+    install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${MODEL_DIR}"
 
     # Model (Zenodo API /content endpoint handles + in filenames correctly).
     # Uses download_large so a dropped connection picks up where it left off
@@ -422,7 +484,7 @@ download_model() {
 create_directories() {
     info "Creating data directories…"
     # Directories owned by the service user, not root.
-    install -d -m 0755 -o "${SERVICE_USER}" -g "${SERVICE_USER}" \
+    install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" \
         "${DATA_DIR}" \
         "${RECS_DIR}" \
         "${IMAGE_CACHE_DIR}" \
@@ -436,7 +498,7 @@ setup_tmpfs_streaming() {
     info "Setting up tmpfs for audio streaming (SD card wear protection)…"
     # Use /tmp/birdnet-stream for raw audio capture. On most Pi distros /tmp is
     # already a tmpfs; this ensures the streaming directory exists after reboot.
-    install -d -m 0755 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${STREAM_DIR}"
+    install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${STREAM_DIR}"
 
     # If /tmp is NOT already tmpfs, create a dedicated mount.
     if ! findmnt -t tmpfs /tmp &>/dev/null; then
@@ -450,7 +512,7 @@ Before=birdnet-behavior.service
 What=tmpfs
 Where=${STREAM_DIR}
 Type=tmpfs
-Options=size=64M,mode=0755,uid=$(id -u "${SERVICE_USER}"),gid=$(id -g "${SERVICE_USER}")
+Options=size=64M,mode=0750,uid=$(id -u "${SERVICE_USER}"),gid=$(id -g "${SERVICE_USER}")
 
 [Install]
 WantedBy=multi-user.target
@@ -470,8 +532,28 @@ MEOF
 write_config() {
     if [ -f "${CONFIG_FILE}" ]; then
         warn "Config file already exists at ${CONFIG_FILE} — skipping."
+        # Upgrade from a version that left the config world-readable: tighten it
+        # without touching the user's settings.
+        chown "root:${SERVICE_USER}" "${CONFIG_FILE}" 2>/dev/null || true
+        chmod 0640 "${CONFIG_FILE}"
         return
     fi
+
+    # Bake interactive / auto-detected answers in; otherwise keep the commented
+    # examples. Heredoc expansion is single-pass, so a value containing $ or
+    # backticks (e.g. an RTSP URL with credentials) is written literally.
+    local alsa_line="# ALSA_CARD=plughw:1,0"
+    local rtsp_line="# RTSP_URL=rtsp://camera.local:554/stream"
+    local lat_line="# LATITUDE=51.5074"
+    local lon_line="# LONGITUDE=-0.1278"
+    [ -n "${ALSA_CARD_VALUE}" ] && alsa_line="ALSA_CARD=${ALSA_CARD_VALUE}"
+    [ -n "${RTSP_URL_VALUE}" ]  && rtsp_line="RTSP_URL=${RTSP_URL_VALUE}"
+    [ -n "${LATITUDE_VALUE}" ]  && lat_line="LATITUDE=${LATITUDE_VALUE}"
+    [ -n "${LONGITUDE_VALUE}" ] && lon_line="LONGITUDE=${LONGITUDE_VALUE}"
+    local caddy_user_line="# CADDY_USER=birdnet"
+    local caddy_pwd_line="# CADDY_PWD=change-me-to-a-strong-password"
+    [ -n "${CADDY_USER_VALUE}" ] && caddy_user_line="CADDY_USER=${CADDY_USER_VALUE}"
+    [ -n "${CADDY_PWD_VALUE}" ]  && caddy_pwd_line="CADDY_PWD=${CADDY_PWD_VALUE}"
 
     info "Writing default config to ${CONFIG_FILE}…"
     cat > "${CONFIG_FILE}" <<EOF
@@ -491,12 +573,12 @@ LABELS_PATH=${MODEL_DIR}/${LABELS_FILE}
 
 # --- Audio source ---
 # Use one of: ALSA microphone, RTSP stream, or an existing recordings directory.
-# ALSA_CARD=plughw:1,0
-# RTSP_URL=rtsp://camera.local:554/stream
+${alsa_line}
+${rtsp_line}
 
 # --- Location (used for species frequency filtering and BirdWeather) ---
-# LATITUDE=51.5074
-# LONGITUDE=-0.1278
+${lat_line}
+${lon_line}
 
 # --- Detection ---
 # CONFIDENCE=0.25          # 0.0–1.0, default 0.25
@@ -518,16 +600,21 @@ LABELS_PATH=${MODEL_DIR}/${LABELS_FILE}
 # --- Site name shown in web UI ---
 # SITENAME=My Bird Station
 
-# --- Web UI authentication (recommended) ---
-# The web UI — including the admin panel that can change settings, trigger
-# database backups, and update the software — listens on ${LISTEN_ADDR} and is
-# reachable by anyone on your network. Set a password to require HTTP Basic
-# auth; without CADDY_PWD the UI is open to the whole LAN. Username defaults to
-# "birdnet". (Alternatively, set LISTEN to 127.0.0.1:8502 and use an SSH tunnel.)
-# CADDY_USER=birdnet
-# CADDY_PWD=change-me-to-a-strong-password
+# --- Web UI authentication (recommended before exposing to the LAN) ---
+# The dashboard — including the admin panel that can change settings, trigger
+# database backups, and update the software — listens on ${LISTEN_ADDR}.
+# localhost is the safe default. To reach it from other devices, change the bind
+# to 0.0.0.0:8502 (edit --listen in ${SERVICE_FILE}, or set BIRDNET_LISTEN and
+# re-run the installer) — and set a password first, or anyone on your LAN can
+# control it. Username defaults to "birdnet".
+${caddy_user_line}
+${caddy_pwd_line}
 EOF
-    chmod 0644 "${CONFIG_FILE}"
+    # The config can hold secrets (CADDY_PWD, BIRDWEATHER_TOKEN), so keep it
+    # readable by the service's group but never world-readable. Root owns it so
+    # the non-root service can read but not rewrite its own config.
+    chown "root:${SERVICE_USER}" "${CONFIG_FILE}"
+    chmod 0640 "${CONFIG_FILE}"
     success "Default config written — edit ${CONFIG_FILE} to configure your station."
 }
 
@@ -623,6 +710,14 @@ RestrictNamespaces=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 NoNewPrivileges=yes
+# Drop every capability from the bounding set — a non-root network + audio
+# service needs none, and with NoNewPrivileges it can never regain them.
+CapabilityBoundingSet=
+# Files the service creates (database, recordings) are group-readable at most,
+# never world-readable.
+UMask=0027
+# Restrict sockets to what a web service + journald + local-IP lookup require.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 SystemCallArchitectures=native
 # Permit only POSIX, file I/O, networking, and signals — explicitly
 # excludes things like raw_io / module_load / ptrace / mount / reboot.
@@ -663,24 +758,110 @@ detect_first_audio_device() {
     # arecord -l output looks like: card 1: Device [USB Audio Device], device 0: ...
     local first_card first_device
     first_card="$(arecord -l 2>/dev/null | awk '/^card/{print $2; exit}' | tr -d ':')"
-    first_device="$(arecord -l 2>/dev/null | awk '/^card/{match($0,/device ([0-9]+)/,a); print a[1]; exit}')"
+    # 2-arg match() (RSTART/RLENGTH) is POSIX; the 3-arg capture form is a gawk
+    # extension that errors on mawk (the default awk on Debian / Raspberry Pi OS).
+    first_device="$(arecord -l 2>/dev/null | awk '/^card/{ if (match($0, /device [0-9]+/)) print substr($0, RSTART + 7, RLENGTH - 7); exit }')"
     if [ -n "${first_card}" ]; then
         echo "plughw:${first_card},${first_device:-0}"
     fi
 }
 
-configure_audio() {
-    local device
-    device="$(detect_first_audio_device)"
+# True (0) if v is a decimal number within [lo, hi]. Used to sanity-check
+# latitude/longitude so a typo doesn't get written into the config.
+valid_coord() {
+    awk -v v="$1" -v lo="$2" -v hi="$3" \
+        'BEGIN { if (v ~ /^[-+]?([0-9]+\.?[0-9]*|\.[0-9]+)$/ && v+0 >= lo && v+0 <= hi) exit 0; exit 1 }'
+}
 
-    if [ -n "${device}" ]; then
-        info "Auto-detected ALSA device: ${device}"
-        # Uncomment and set ALSA_CARD in the config file.
-        sed -i "s|# ALSA_CARD=plughw:1,0|ALSA_CARD=${device}|" "${CONFIG_FILE}"
-        success "Audio source set to ${device} in ${CONFIG_FILE}"
+# Collect the audio source and station location on a fresh install. When
+# interactive we ask the operator directly (so a non-technical user gets a
+# working station without hand-editing a file); otherwise we keep the historical
+# behaviour — silently auto-detect ALSA and leave location for the config file.
+# The config file always remains editable and is the source of truth afterwards.
+prompt_station_settings() {
+    # Re-install / upgrade: the config already exists and is the user's own —
+    # never re-prompt or overwrite their settings.
+    [ -f "${CONFIG_FILE}" ] && return 0
+
+    local candidate
+    candidate="$(detect_first_audio_device)"
+
+    if [ "${INTERACTIVE}" != "1" ]; then
+        if [ -n "${candidate}" ]; then
+            ALSA_CARD_VALUE="${candidate}"
+            info "Auto-detected ALSA device: ${candidate}"
+        else
+            warn "No ALSA device detected — set ALSA_CARD or RTSP_URL in ${CONFIG_FILE}."
+        fi
+        return 0
+    fi
+
+    # ---- Audio source ----
+    printf '\n  Audio source\n' >/dev/tty
+    if [ -n "${candidate}" ]; then
+        arecord -l 2>/dev/null | grep '^card' | sed 's/^/    /' >/dev/tty || true
+        yesno "  Use detected ALSA device '${candidate}'?" y && ALSA_CARD_VALUE="${candidate}"
     else
-        warn "No ALSA recording devices found."
-        warn "Edit ${CONFIG_FILE} to set ALSA_CARD or RTSP_URL before starting."
+        printf '  No ALSA capture device detected.\n' >/dev/tty
+    fi
+    if [ -z "${ALSA_CARD_VALUE}" ]; then
+        local audio_in
+        audio_in="$(ask "  Audio source — ALSA device (e.g. plughw:1,0) or rtsp:// URL (Enter to skip)" "")"
+        case "${audio_in}" in
+            '')                   : ;;
+            rtsp://* | rtsps://*) RTSP_URL_VALUE="${audio_in}" ;;
+            *)                    ALSA_CARD_VALUE="${audio_in}" ;;
+        esac
+    fi
+    if [ -n "${ALSA_CARD_VALUE}" ]; then
+        success "Audio source: ALSA ${ALSA_CARD_VALUE}"
+    elif [ -n "${RTSP_URL_VALUE}" ]; then
+        success "Audio source: RTSP ${RTSP_URL_VALUE}"
+    else
+        warn "No audio source set — add ALSA_CARD or RTSP_URL to ${CONFIG_FILE} later."
+    fi
+
+    # ---- Station location ----
+    printf '\n  Station location (solar schedule, species filter, BirdWeather)\n' >/dev/tty
+    printf '  Tip: right-click your spot on https://openstreetmap.org and read off the coordinates.\n' >/dev/tty
+    local lat lon
+    lat="$(ask "  Latitude  (e.g. 42.3601, Enter to skip)" "")"
+    if [ -n "${lat}" ]; then
+        lon="$(ask "  Longitude (e.g. -71.0589)" "")"
+        if valid_coord "${lat}" -90 90 && valid_coord "${lon}" -180 180; then
+            LATITUDE_VALUE="${lat}"
+            LONGITUDE_VALUE="${lon}"
+            success "Location: ${lat}, ${lon}"
+        else
+            warn "Coordinates '${lat}, ${lon}' look invalid — skipping; set LATITUDE/LONGITUDE in ${CONFIG_FILE} later."
+        fi
+    fi
+
+    # ---- Web dashboard exposure ----
+    printf '\n  Web dashboard\n' >/dev/tty
+    printf '  By default the dashboard is reachable only from this device (localhost).\n' >/dev/tty
+    if yesno "  Make it reachable from other devices on your network?" n; then
+        printf '  Its admin can change settings and update software, so protect it.\n' >/dev/tty
+        local pw1 pw2
+        pw1="$(ask_secret "  Set a dashboard password (Enter to skip)")"
+        if [ -n "${pw1}" ]; then
+            pw2="$(ask_secret "  Confirm password")"
+            if [ "${pw1}" = "${pw2}" ]; then
+                CADDY_USER_VALUE="birdnet"
+                CADDY_PWD_VALUE="${pw1}"
+                LISTEN_ADDR="0.0.0.0:8502"
+                success "Dashboard on the LAN, password-protected (username: birdnet)."
+            else
+                warn "Passwords did not match — keeping the dashboard on localhost only."
+            fi
+        elif yesno "  Expose to the LAN with NO password?" n; then
+            LISTEN_ADDR="0.0.0.0:8502"
+            warn "Dashboard on the LAN with NO authentication — anyone on the network can change settings. Add CADDY_PWD to ${CONFIG_FILE} to fix this."
+        else
+            success "Keeping the dashboard on localhost only."
+        fi
+    else
+        success "Dashboard stays on this device (localhost) — SSH-tunnel in, or set BIRDNET_LISTEN to expose it."
     fi
 }
 
@@ -715,8 +896,13 @@ maybe_start_service() {
 # ---------------------------------------------------------------------------
 
 print_summary() {
-    local ip
+    local ip web_host
     ip="$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost')"
+    # Show the address the dashboard actually answers on.
+    case "${LISTEN_ADDR}" in
+        127.0.0.1:* | localhost:*) web_host="localhost" ;;
+        *)                         web_host="${ip}" ;;
+    esac
 
     echo
     echo -e "${BOLD}${GREEN}Installation complete!${RESET}"
@@ -724,19 +910,29 @@ print_summary() {
     echo -e "  ${BOLD}Binary:${RESET}  ${INSTALL_DIR}/${BINARY_NAME}"
     echo -e "  ${BOLD}Config:${RESET}  ${CONFIG_FILE}"
     echo -e "  ${BOLD}Data:${RESET}    ${DATA_DIR}"
-    echo -e "  ${BOLD}Web UI:${RESET}  http://${ip}:8502"
+    echo -e "  ${BOLD}Web UI:${RESET}  http://${web_host}:8502"
     echo
     if systemctl is-active --quiet birdnet-behavior.service 2>/dev/null; then
-        echo -e "${GREEN}Service is running.${RESET} Open http://${ip}:8502 in your browser."
+        if [ "${web_host}" = "localhost" ]; then
+            echo -e "${GREEN}Your dashboard is live.${RESET}  On THIS device, open a web browser to:"
+            echo -e "      ${BOLD}http://localhost:8502${RESET}"
+            echo "  To open it from your phone or laptop, re-run the installer and answer yes to"
+            echo "  \"reachable from other devices\", or set BIRDNET_LISTEN=0.0.0.0:8502."
+        else
+            echo -e "${GREEN}Your dashboard is live.${RESET}  From a phone or computer on the same"
+            echo -e "  network, open a web browser to:  ${BOLD}http://${web_host}:8502${RESET}"
+            [ -n "${CADDY_PWD_VALUE}" ] && echo "  Sign in with username 'birdnet' and the password you just set."
+        fi
     else
         echo -e "${BOLD}Next steps:${RESET}"
-        echo "  1. Set your audio source in ${CONFIG_FILE}:"
+        echo "  1. Set an audio source (edit as root):  sudo nano ${CONFIG_FILE}"
         echo "       ALSA_CARD=plughw:1,0      (ALSA microphone)"
         echo "       RTSP_URL=rtsp://…         (RTSP camera)"
         echo
         echo "  2. (Optional) Set LATITUDE and LONGITUDE for species filtering."
         echo
         echo "  3. sudo systemctl start birdnet-behavior"
+        echo "  4. Open a web browser to  http://${web_host}:8502"
     fi
     echo
     echo "  Logs:  sudo journalctl -u birdnet-behavior -f"
@@ -1003,6 +1199,8 @@ From a saved copy of this script:
 Options:
   -v, --version X.Y.Z   Install a specific release (default: latest stable).
                         The VERSION environment variable is still honoured too.
+      --noninteractive  Don't prompt; auto-detect audio and leave location
+                        unset (also implied by BIRDNET_NONINTERACTIVE=1 or no TTY).
   -h, --help            Show this help and exit.
 
 Avoid  sudo bash <(curl ...)  — sudo closes the process-substitution file
@@ -1020,6 +1218,10 @@ parse_args() {
                 ;;
             --version=*)
                 VERSION="${1#*=}"
+                shift
+                ;;
+            --noninteractive | --non-interactive)
+                BIRDNET_NONINTERACTIVE=1
                 shift
                 ;;
             -h | --help)
@@ -1049,6 +1251,13 @@ parse_args() {
 
 main() {
     parse_args "$@"
+
+    # Prompt only with a real terminal to read from. Under `curl ... | sudo bash`
+    # stdin is the pipe, but stdout (fd 1) and /dev/tty are still the user's
+    # terminal — so gate on those, not on stdin.
+    if [ "${BIRDNET_NONINTERACTIVE:-0}" != "1" ] && [ -t 1 ] && [ -r /dev/tty ]; then
+        INTERACTIVE=1
+    fi
 
     echo -e "${BOLD}BirdNet-Behavior Installer${RESET}"
     echo "  Repository: https://github.com/${REPO}"
@@ -1094,8 +1303,8 @@ main() {
     create_directories
     setup_tmpfs_streaming
     download_model
+    prompt_station_settings
     write_config
-    configure_audio
     install_service
 
     # Offer ZRAM compressed swap on boards with ≤ 2 GB RAM (Pi Zero 2W, Pi 2, etc.)
