@@ -65,7 +65,7 @@ The installer detects your architecture, downloads the pre-built binary and the 
 ```bash
 # Install a specific version (defaults to latest). The `-s --` passes the
 # argument through to the installer.
-curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash -s -- --version 0.5.1
+curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash -s -- --version 0.5.2
 ```
 
 > **Don't run the installer with `sudo bash <(curl ...)`.** Process substitution
@@ -76,7 +76,7 @@ curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/ins
 >
 > ```bash
 > curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh -o install.sh
-> sudo bash install.sh --version 0.5.1
+> sudo bash install.sh --version 0.5.2
 > ```
 
 Re-running the installer is an **upgrade**: it stops the service, swaps in the
