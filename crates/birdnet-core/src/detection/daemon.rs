@@ -416,19 +416,20 @@ impl PendingFiles {
         F: Fn(&Path) -> Option<u64>,
     {
         let mut ready = Vec::new();
-        self.seen.retain(|path, (last_size, last_change)| match sizer(path) {
-            None => false,
-            Some(current) if current != *last_size => {
-                *last_size = current;
-                *last_change = now;
-                true
-            }
-            Some(current) if current > 0 && now.duration_since(*last_change) >= settle => {
-                ready.push(path.clone());
-                false
-            }
-            Some(_) => true,
-        });
+        self.seen
+            .retain(|path, (last_size, last_change)| match sizer(path) {
+                None => false,
+                Some(current) if current != *last_size => {
+                    *last_size = current;
+                    *last_change = now;
+                    true
+                }
+                Some(current) if current > 0 && now.duration_since(*last_change) >= settle => {
+                    ready.push(path.clone());
+                    false
+                }
+                Some(_) => true,
+            });
         ready
     }
 }
@@ -766,11 +767,7 @@ mod tests {
         let sizer = |_: &Path| Some(size.get());
 
         // Baseline observed -> not ready.
-        assert!(
-            pending
-                .drain_settled(t0, FILE_SETTLE, &sizer)
-                .is_empty()
-        );
+        assert!(pending.drain_settled(t0, FILE_SETTLE, &sizer).is_empty());
         // Still growing -> the settle timer resets, still not ready.
         size.set(200);
         assert!(
@@ -785,9 +782,16 @@ mod tests {
                 .is_empty()
         );
         // Stable for >= FILE_SETTLE since the last change -> yielded once.
-        let ready =
-            pending.drain_settled(t0 + Duration::from_millis(500) + FILE_SETTLE, FILE_SETTLE, &sizer);
-        assert_eq!(ready, vec![clip], "a settled clip must be processed exactly once");
+        let ready = pending.drain_settled(
+            t0 + Duration::from_millis(500) + FILE_SETTLE,
+            FILE_SETTLE,
+            &sizer,
+        );
+        assert_eq!(
+            ready,
+            vec![clip],
+            "a settled clip must be processed exactly once"
+        );
         // ...and never again (it was removed when processed).
         assert!(
             pending
@@ -807,7 +811,13 @@ mod tests {
         pending.note(empty.clone(), t0);
 
         let gone_for_closure = gone.clone();
-        let sizer = move |p: &Path| if p == gone_for_closure { None } else { Some(0u64) };
+        let sizer = move |p: &Path| {
+            if p == gone_for_closure {
+                None
+            } else {
+                Some(0u64)
+            }
+        };
 
         // A vanished file is dropped; a zero-byte file is never "stable enough"
         // to decode no matter how long it sits.

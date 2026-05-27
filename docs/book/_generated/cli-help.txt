@@ -10,10 +10,10 @@ Options:
           [default: /etc/birdnet/birdnet.conf]
 
       --listen <LISTEN>
-          Web server listen address
+          Web server listen address. Defaults to all interfaces so the dashboard is reachable on the LAN out of the box; the `/admin` panel is gated by a password (set `CADDY_PWD`). Bind `127.0.0.1:8502` to restrict to this host
 
           [env: BIRDNET_LISTEN=]
-          [default: 127.0.0.1:8502]
+          [default: 0.0.0.0:8502]
 
       --web-only
           Run only the web server (skip analysis daemon)

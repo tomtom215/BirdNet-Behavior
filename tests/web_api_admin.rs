@@ -210,7 +210,12 @@ async fn admin_panel_requires_auth_but_dashboard_stays_open() {
 
     // /admin with no credentials → 401 Unauthorized.
     let resp = gated()
-        .oneshot(Request::builder().uri("/admin").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/admin")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(
