@@ -20,9 +20,10 @@ only its reported version differs from 0.5.1.
   for an audio source (auto-detected ALSA device, a typed ALSA device, or an
   RTSP URL), station latitude/longitude, and whether to expose the dashboard to
   the LAN — writing them into the config so a non-technical user gets a working
-  station without hand-editing a file. Prompts read from `/dev/tty`, so they work
-  under `curl … | sudo bash`. `--noninteractive` (or `BIRDNET_NONINTERACTIVE=1`)
-  keeps unattended installs silent.
+  station without hand-editing a file, and the post-install summary says exactly
+  which URL to open in a web browser (and from which device). Prompts read from
+  `/dev/tty`, so they work under `curl … | sudo bash`. `--noninteractive` (or
+  `BIRDNET_NONINTERACTIVE=1`) keeps unattended installs silent.
 - **`install.sh --version X.Y.Z` / `-v`** to pin a release through the pipe form
   (`curl … | sudo bash -s -- --version X.Y.Z`); the `VERSION` environment
   variable still works.

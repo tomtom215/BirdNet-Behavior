@@ -913,8 +913,16 @@ print_summary() {
     echo -e "  ${BOLD}Web UI:${RESET}  http://${web_host}:8502"
     echo
     if systemctl is-active --quiet birdnet-behavior.service 2>/dev/null; then
-        echo -e "${GREEN}Service is running.${RESET} Open http://${web_host}:8502"
-        [ "${web_host}" = "localhost" ] && echo "  (localhost only — set BIRDNET_LISTEN or edit ${SERVICE_FILE} to reach it from other devices.)"
+        if [ "${web_host}" = "localhost" ]; then
+            echo -e "${GREEN}Your dashboard is live.${RESET}  On THIS device, open a web browser to:"
+            echo -e "      ${BOLD}http://localhost:8502${RESET}"
+            echo "  To open it from your phone or laptop, re-run the installer and answer yes to"
+            echo "  \"reachable from other devices\", or set BIRDNET_LISTEN=0.0.0.0:8502."
+        else
+            echo -e "${GREEN}Your dashboard is live.${RESET}  From a phone or computer on the same"
+            echo -e "  network, open a web browser to:  ${BOLD}http://${web_host}:8502${RESET}"
+            [ -n "${CADDY_PWD_VALUE}" ] && echo "  Sign in with username 'birdnet' and the password you just set."
+        fi
     else
         echo -e "${BOLD}Next steps:${RESET}"
         echo "  1. Set an audio source (edit as root):  sudo nano ${CONFIG_FILE}"
@@ -924,6 +932,7 @@ print_summary() {
         echo "  2. (Optional) Set LATITUDE and LONGITUDE for species filtering."
         echo
         echo "  3. sudo systemctl start birdnet-behavior"
+        echo "  4. Open a web browser to  http://${web_host}:8502"
     fi
     echo
     echo "  Logs:  sudo journalctl -u birdnet-behavior -f"
