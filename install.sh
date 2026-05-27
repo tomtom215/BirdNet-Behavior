@@ -46,6 +46,15 @@ SERVICE_FILE="/etc/systemd/system/birdnet-behavior.service"
 SERVICE_USER="${SUDO_USER:-${USER:-$(id -un)}}"
 LISTEN_ADDR="0.0.0.0:8502"
 
+# Interactive onboarding state. INTERACTIVE is decided in main(); the *_VALUE
+# vars hold answers from prompt_station_settings and are baked into the config
+# by write_config (empty = keep the commented example in place).
+INTERACTIVE=0
+ALSA_CARD_VALUE=""
+RTSP_URL_VALUE=""
+LATITUDE_VALUE=""
+LONGITUDE_VALUE=""
+
 # Minimum glibc the prebuilt binaries link against (pyke's ONNX Runtime needs
 # glibc >= 2.38; Ubuntu 24.04, where we build, ships 2.39). Set
 # BIRDNET_SKIP_GLIBC_CHECK=1 to bypass (e.g. you built from source).
@@ -84,6 +93,28 @@ success() { echo -e "${GREEN}[OK]${RESET}    $*" >&2; }
 warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*" >&2; }
 error()   { echo -e "${RED}[ERROR]${RESET} $*" >&2; }
 fatal()   { error "$*"; exit 1; }
+
+# Interactive prompt helpers. They read from /dev/tty (not stdin) so they work
+# under the recommended `curl ... | sudo bash`, where stdin is the script text;
+# output goes to /dev/tty for the same reason. Gated by INTERACTIVE (set in main).
+ask() {
+    local prompt="$1" default="${2:-}" reply
+    if [ -n "${default}" ]; then
+        printf '%s [%s]: ' "${prompt}" "${default}" >/dev/tty
+    else
+        printf '%s: ' "${prompt}" >/dev/tty
+    fi
+    read -r reply </dev/tty || reply=""
+    printf '%s' "${reply:-${default}}"
+}
+
+yesno() {
+    local prompt="$1" default="${2:-y}" reply hint="[Y/n]"
+    [ "${default}" = "n" ] && hint="[y/N]"
+    printf '%s %s ' "${prompt}" "${hint}" >/dev/tty
+    read -r reply </dev/tty || reply=""
+    case "${reply:-${default}}" in [yY]*) return 0 ;; *) return 1 ;; esac
+}
 
 # ---------------------------------------------------------------------------
 # Root / privilege check
@@ -490,6 +521,18 @@ write_config() {
         return
     fi
 
+    # Bake interactive / auto-detected answers in; otherwise keep the commented
+    # examples. Heredoc expansion is single-pass, so a value containing $ or
+    # backticks (e.g. an RTSP URL with credentials) is written literally.
+    local alsa_line="# ALSA_CARD=plughw:1,0"
+    local rtsp_line="# RTSP_URL=rtsp://camera.local:554/stream"
+    local lat_line="# LATITUDE=51.5074"
+    local lon_line="# LONGITUDE=-0.1278"
+    [ -n "${ALSA_CARD_VALUE}" ] && alsa_line="ALSA_CARD=${ALSA_CARD_VALUE}"
+    [ -n "${RTSP_URL_VALUE}" ]  && rtsp_line="RTSP_URL=${RTSP_URL_VALUE}"
+    [ -n "${LATITUDE_VALUE}" ]  && lat_line="LATITUDE=${LATITUDE_VALUE}"
+    [ -n "${LONGITUDE_VALUE}" ] && lon_line="LONGITUDE=${LONGITUDE_VALUE}"
+
     info "Writing default config to ${CONFIG_FILE}…"
     cat > "${CONFIG_FILE}" <<EOF
 # BirdNet-Behavior configuration
@@ -508,12 +551,12 @@ LABELS_PATH=${MODEL_DIR}/${LABELS_FILE}
 
 # --- Audio source ---
 # Use one of: ALSA microphone, RTSP stream, or an existing recordings directory.
-# ALSA_CARD=plughw:1,0
-# RTSP_URL=rtsp://camera.local:554/stream
+${alsa_line}
+${rtsp_line}
 
 # --- Location (used for species frequency filtering and BirdWeather) ---
-# LATITUDE=51.5074
-# LONGITUDE=-0.1278
+${lat_line}
+${lon_line}
 
 # --- Detection ---
 # CONFIDENCE=0.25          # 0.0–1.0, default 0.25
@@ -688,18 +731,75 @@ detect_first_audio_device() {
     fi
 }
 
-configure_audio() {
-    local device
-    device="$(detect_first_audio_device)"
+# True (0) if v is a decimal number within [lo, hi]. Used to sanity-check
+# latitude/longitude so a typo doesn't get written into the config.
+valid_coord() {
+    awk -v v="$1" -v lo="$2" -v hi="$3" \
+        'BEGIN { if (v ~ /^[-+]?([0-9]+\.?[0-9]*|\.[0-9]+)$/ && v+0 >= lo && v+0 <= hi) exit 0; exit 1 }'
+}
 
-    if [ -n "${device}" ]; then
-        info "Auto-detected ALSA device: ${device}"
-        # Uncomment and set ALSA_CARD in the config file.
-        sed -i "s|# ALSA_CARD=plughw:1,0|ALSA_CARD=${device}|" "${CONFIG_FILE}"
-        success "Audio source set to ${device} in ${CONFIG_FILE}"
+# Collect the audio source and station location on a fresh install. When
+# interactive we ask the operator directly (so a non-technical user gets a
+# working station without hand-editing a file); otherwise we keep the historical
+# behaviour — silently auto-detect ALSA and leave location for the config file.
+# The config file always remains editable and is the source of truth afterwards.
+prompt_station_settings() {
+    # Re-install / upgrade: the config already exists and is the user's own —
+    # never re-prompt or overwrite their settings.
+    [ -f "${CONFIG_FILE}" ] && return 0
+
+    local candidate
+    candidate="$(detect_first_audio_device)"
+
+    if [ "${INTERACTIVE}" != "1" ]; then
+        if [ -n "${candidate}" ]; then
+            ALSA_CARD_VALUE="${candidate}"
+            info "Auto-detected ALSA device: ${candidate}"
+        else
+            warn "No ALSA device detected — set ALSA_CARD or RTSP_URL in ${CONFIG_FILE}."
+        fi
+        return 0
+    fi
+
+    # ---- Audio source ----
+    printf '\n  Audio source\n' >/dev/tty
+    if [ -n "${candidate}" ]; then
+        arecord -l 2>/dev/null | grep '^card' | sed 's/^/    /' >/dev/tty || true
+        yesno "  Use detected ALSA device '${candidate}'?" y && ALSA_CARD_VALUE="${candidate}"
     else
-        warn "No ALSA recording devices found."
-        warn "Edit ${CONFIG_FILE} to set ALSA_CARD or RTSP_URL before starting."
+        printf '  No ALSA capture device detected.\n' >/dev/tty
+    fi
+    if [ -z "${ALSA_CARD_VALUE}" ]; then
+        local audio_in
+        audio_in="$(ask "  Audio source — ALSA device (e.g. plughw:1,0) or rtsp:// URL (Enter to skip)" "")"
+        case "${audio_in}" in
+            '')                   : ;;
+            rtsp://* | rtsps://*) RTSP_URL_VALUE="${audio_in}" ;;
+            *)                    ALSA_CARD_VALUE="${audio_in}" ;;
+        esac
+    fi
+    if [ -n "${ALSA_CARD_VALUE}" ]; then
+        success "Audio source: ALSA ${ALSA_CARD_VALUE}"
+    elif [ -n "${RTSP_URL_VALUE}" ]; then
+        success "Audio source: RTSP ${RTSP_URL_VALUE}"
+    else
+        warn "No audio source set — add ALSA_CARD or RTSP_URL to ${CONFIG_FILE} later."
+    fi
+
+    # ---- Station location ----
+    printf '\n  Station location (solar schedule, species filter, BirdWeather)\n' >/dev/tty
+    printf '  Tip: right-click your spot on https://openstreetmap.org and read off the coordinates.\n' >/dev/tty
+    local lat lon
+    lat="$(ask "  Latitude  (e.g. 42.3601, Enter to skip)" "")"
+    if [ -n "${lat}" ]; then
+        lon="$(ask "  Longitude (e.g. -71.0589)" "")"
+        if valid_coord "${lat}" -90 90 && valid_coord "${lon}" -180 180; then
+            LATITUDE_VALUE="${lat}"
+            LONGITUDE_VALUE="${lon}"
+            success "Location: ${lat}, ${lon}"
+        else
+            warn "Coordinates '${lat}, ${lon}' look invalid — skipping; set LATITUDE/LONGITUDE in ${CONFIG_FILE} later."
+        fi
     fi
 }
 
@@ -749,7 +849,7 @@ print_summary() {
         echo -e "${GREEN}Service is running.${RESET} Open http://${ip}:8502 in your browser."
     else
         echo -e "${BOLD}Next steps:${RESET}"
-        echo "  1. Set your audio source in ${CONFIG_FILE}:"
+        echo "  1. Set an audio source (edit as root):  sudo nano ${CONFIG_FILE}"
         echo "       ALSA_CARD=plughw:1,0      (ALSA microphone)"
         echo "       RTSP_URL=rtsp://…         (RTSP camera)"
         echo
@@ -1022,6 +1122,8 @@ From a saved copy of this script:
 Options:
   -v, --version X.Y.Z   Install a specific release (default: latest stable).
                         The VERSION environment variable is still honoured too.
+      --noninteractive  Don't prompt; auto-detect audio and leave location
+                        unset (also implied by BIRDNET_NONINTERACTIVE=1 or no TTY).
   -h, --help            Show this help and exit.
 
 Avoid  sudo bash <(curl ...)  — sudo closes the process-substitution file
@@ -1039,6 +1141,10 @@ parse_args() {
                 ;;
             --version=*)
                 VERSION="${1#*=}"
+                shift
+                ;;
+            --noninteractive | --non-interactive)
+                BIRDNET_NONINTERACTIVE=1
                 shift
                 ;;
             -h | --help)
@@ -1068,6 +1174,13 @@ parse_args() {
 
 main() {
     parse_args "$@"
+
+    # Prompt only with a real terminal to read from. Under `curl ... | sudo bash`
+    # stdin is the pipe, but stdout (fd 1) and /dev/tty are still the user's
+    # terminal — so gate on those, not on stdin.
+    if [ "${BIRDNET_NONINTERACTIVE:-0}" != "1" ] && [ -t 1 ] && [ -r /dev/tty ]; then
+        INTERACTIVE=1
+    fi
 
     echo -e "${BOLD}BirdNet-Behavior Installer${RESET}"
     echo "  Repository: https://github.com/${REPO}"
@@ -1113,8 +1226,8 @@ main() {
     create_directories
     setup_tmpfs_streaming
     download_model
+    prompt_station_settings
     write_config
-    configure_audio
     install_service
 
     # Offer ZRAM compressed swap on boards with ≤ 2 GB RAM (Pi Zero 2W, Pi 2, etc.)
