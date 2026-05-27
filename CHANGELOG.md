@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-05-27
+
+Field-hardening release from real Raspberry Pi + RTSP testing. The service now
+starts and shuts down cleanly, RTSP stations actually record detections, the
+dashboard is reachable on the LAN with only its admin panel behind a password,
+and `install.sh` gains guided repair/update/reinstall/uninstall flows with
+pre-flight and post-install validation. No database migration is required.
+
 ### Fixed
 
 - **The systemd service no longer fails to start with
@@ -37,6 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `BIRDNET_PURGE=1`) behind a path-safety guard, and verifies at the end that no
   service or binary remains. Re-running it when nothing is installed is a clean
   no-op.
+- **`uninstall.sh --purge` renders its plan correctly and guides recovery.** It
+  printed literal `\033[1m…` escape codes (colours are now real ESC bytes); and
+  when the config and service are already gone, the guessed-data-dir guard now
+  prints the exact `--data-dir` argument to re-run with.
 - **RTSP/segmented captures no longer fail with `decode error: ... unexpected
   end of file`.** The watcher decoded each clip on every create/modify event,
   so an ffmpeg segment still being written (RTSP captures a clip in place over
@@ -1126,7 +1138,9 @@ x86_64 Linux.
 - systemd installer script with ALSA microphone auto-detection and
   automatic BirdNET+ model download from Zenodo.
 
-[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.2...v0.5.3
+[0.5.2]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.3.0...v0.4.0
