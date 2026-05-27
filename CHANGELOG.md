@@ -23,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restart, so `start_detection_daemon` now `create_dir_all`s the watch dir
   up front — a missing directory previously made `notify` error out and
   silently disabled detection (web UI up, nothing analysed).
+- **`install.sh uninstall` is clean, idempotent, and fool-proof.** It now runs
+  `systemctl reset-failed` so the removed unit no longer lingers as
+  `Active: failed (timeout)` in `systemctl status`, reports accurately what was
+  (or wasn't) present, can also delete data/config (interactive prompt or
+  `BIRDNET_PURGE=1`) behind a path-safety guard, and verifies at the end that no
+  service or binary remains. Re-running it when nothing is installed is a clean
+  no-op.
 - **RTSP/segmented captures no longer fail with `decode error: ... unexpected
   end of file`.** The watcher decoded each clip on every create/modify event,
   so an ffmpeg segment still being written (RTSP captures a clip in place over

@@ -118,22 +118,101 @@ do_repair() {
     echo "  Logs:  sudo journalctl -u birdnet-behavior -f"
 }
 
-# Software-only uninstall (data preserved). For removing data/model too, point
-# the operator at the dedicated uninstall.sh, which has the data flags.
+# Remove the software cleanly. Data/config are kept unless the operator opts in
+# (interactively, or via BIRDNET_PURGE=1). Idempotent: safe to re-run when
+# nothing — or only part — is installed.
 do_uninstall() {
-    info "Stopping and removing BirdNet-Behavior (data preserved)…"
-    systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
-    systemctl disable "${SERVICE_NAME}" 2>/dev/null || true
-    rm -f "${SERVICE_FILE}"
-    # Tear down the tmpfs mount unit install may have added (escaped '-' = \x2d).
-    systemctl disable --now 'tmp-birdnet\x2dstream.mount' 2>/dev/null || true
-    rm -f '/etc/systemd/system/tmp-birdnet\x2dstream.mount'
-    systemctl daemon-reload 2>/dev/null || true
+    info "Removing BirdNet-Behavior…"
+
+    # Record what's actually present so we report accurately and stay idempotent.
+    local had_unit=0 had_binary=0
+    [ -f "${SERVICE_FILE}" ] && had_unit=1
+    [ -x "${INSTALL_DIR}/${BINARY_NAME}" ] && had_binary=1
+
+    if command -v systemctl >/dev/null 2>&1; then
+        # The daemon may take its TimeoutStopSec to drain; `|| true` keeps a
+        # slow or already-stopped unit from aborting the uninstall.
+        systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
+        systemctl disable "${SERVICE_NAME}" 2>/dev/null || true
+        systemctl disable --now 'tmp-birdnet\x2dstream.mount' 2>/dev/null || true
+    fi
+
+    rm -f "${SERVICE_FILE}" '/etc/systemd/system/tmp-birdnet\x2dstream.mount'
+
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl daemon-reload 2>/dev/null || true
+        # Clear the lingering failed/timeout state so `systemctl status` reads a
+        # clean "not-found" instead of "Active: failed" after the unit is gone.
+        systemctl reset-failed "${SERVICE_NAME}" 2>/dev/null || true
+    fi
+
     rm -f "${INSTALL_DIR}/${BINARY_NAME}"
     rm -rf "${STREAM_DIR}"
-    success "Binary, service, and tmpfs unit removed."
-    warn "Data and config preserved at ${DATA_DIR} and ${CONFIG_FILE}."
-    warn "To remove the database, recordings, and model too:  sudo ./uninstall.sh --purge"
+
+    if [ "${had_unit}" = 0 ] && [ "${had_binary}" = 0 ]; then
+        warn "No installed service or binary found — nothing to remove."
+    else
+        success "Removed the service, tmpfs unit, and binary."
+    fi
+
+    remove_data_or_keep
+    verify_uninstall
+}
+
+# Offer to delete the data + config (interactive, or BIRDNET_PURGE=1); otherwise
+# keep them and show how to remove them later. Guards against deleting anything
+# but a real "<home>/BirdNet-Behavior" data directory.
+remove_data_or_keep() {
+    [ -e "${DATA_DIR}" ] || [ -e "${CONFIG_DIR}" ] || return 0
+
+    local do_purge=0
+    if [ "${BIRDNET_PURGE:-0}" = "1" ]; then
+        do_purge=1
+    elif [ "${INTERACTIVE}" = 1 ] \
+        && yesno "  Also delete ALL data — database, recordings, model (~541 MB), config?" n; then
+        do_purge=1
+    fi
+
+    if [ "${do_purge}" = 1 ]; then
+        if [ -z "${DATA_DIR}" ] || [ "${DATA_DIR}" = "/" ] \
+            || [ "${DATA_DIR%/BirdNet-Behavior}" = "${DATA_DIR}" ]; then
+            warn "Data dir ${DATA_DIR:-<unset>} looks unsafe to auto-delete — remove it manually."
+        else
+            rm -rf "${DATA_DIR}"
+            success "Removed data directory ${DATA_DIR}."
+        fi
+        rm -rf "${CONFIG_DIR}"
+        success "Removed config ${CONFIG_DIR}."
+    else
+        warn "Kept your data and config (reinstall will reuse them):"
+        [ -e "${DATA_DIR}" ]   && warn "    data:   ${DATA_DIR}"
+        [ -e "${CONFIG_DIR}" ] && warn "    config: ${CONFIG_DIR}"
+        warn "    Remove later with:  sudo rm -rf ${DATA_DIR} ${CONFIG_DIR}"
+    fi
+}
+
+# Confirm nothing BirdNet-Behavior remains, so the operator isn't left with a
+# half-removed install.
+verify_uninstall() {
+    local problems=0
+    if [ -e "${INSTALL_DIR}/${BINARY_NAME}" ]; then
+        warn "binary still present: ${INSTALL_DIR}/${BINARY_NAME}"
+        problems=1
+    fi
+    if [ -e "${SERVICE_FILE}" ]; then
+        warn "service unit still present: ${SERVICE_FILE}"
+        problems=1
+    fi
+    if command -v systemctl >/dev/null 2>&1 \
+        && systemctl list-unit-files 2>/dev/null | grep -q "^${SERVICE_NAME}"; then
+        warn "systemd still lists ${SERVICE_NAME} — try: sudo systemctl daemon-reload"
+        problems=1
+    fi
+    if [ "${problems}" = 0 ]; then
+        success "Uninstall verified — no BirdNet-Behavior service or binary remains."
+    else
+        warn "Some components could not be removed (see above)."
+    fi
 }
 
 # Present the choices when an existing install is found (interactive only).
