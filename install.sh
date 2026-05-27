@@ -436,7 +436,7 @@ download_model() {
     info "Downloading BirdNET+ V3.0 model (~541 MB FP32 ONNX) from Zenodo…"
     info "  This may take a few minutes on a slow connection."
 
-    install -d -m 0755 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${MODEL_DIR}"
+    install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${MODEL_DIR}"
 
     # Model (Zenodo API /content endpoint handles + in filenames correctly).
     # Uses download_large so a dropped connection picks up where it left off
@@ -470,7 +470,7 @@ download_model() {
 create_directories() {
     info "Creating data directories…"
     # Directories owned by the service user, not root.
-    install -d -m 0755 -o "${SERVICE_USER}" -g "${SERVICE_USER}" \
+    install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" \
         "${DATA_DIR}" \
         "${RECS_DIR}" \
         "${IMAGE_CACHE_DIR}" \
@@ -484,7 +484,7 @@ setup_tmpfs_streaming() {
     info "Setting up tmpfs for audio streaming (SD card wear protection)…"
     # Use /tmp/birdnet-stream for raw audio capture. On most Pi distros /tmp is
     # already a tmpfs; this ensures the streaming directory exists after reboot.
-    install -d -m 0755 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${STREAM_DIR}"
+    install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${STREAM_DIR}"
 
     # If /tmp is NOT already tmpfs, create a dedicated mount.
     if ! findmnt -t tmpfs /tmp &>/dev/null; then
@@ -498,7 +498,7 @@ Before=birdnet-behavior.service
 What=tmpfs
 Where=${STREAM_DIR}
 Type=tmpfs
-Options=size=64M,mode=0755,uid=$(id -u "${SERVICE_USER}"),gid=$(id -g "${SERVICE_USER}")
+Options=size=64M,mode=0750,uid=$(id -u "${SERVICE_USER}"),gid=$(id -g "${SERVICE_USER}")
 
 [Install]
 WantedBy=multi-user.target
@@ -518,6 +518,10 @@ MEOF
 write_config() {
     if [ -f "${CONFIG_FILE}" ]; then
         warn "Config file already exists at ${CONFIG_FILE} — skipping."
+        # Upgrade from a version that left the config world-readable: tighten it
+        # without touching the user's settings.
+        chown "root:${SERVICE_USER}" "${CONFIG_FILE}" 2>/dev/null || true
+        chmod 0640 "${CONFIG_FILE}"
         return
     fi
 
@@ -587,7 +591,11 @@ ${lon_line}
 # CADDY_USER=birdnet
 # CADDY_PWD=change-me-to-a-strong-password
 EOF
-    chmod 0644 "${CONFIG_FILE}"
+    # The config can hold secrets (CADDY_PWD, BIRDWEATHER_TOKEN), so keep it
+    # readable by the service's group but never world-readable. Root owns it so
+    # the non-root service can read but not rewrite its own config.
+    chown "root:${SERVICE_USER}" "${CONFIG_FILE}"
+    chmod 0640 "${CONFIG_FILE}"
     success "Default config written — edit ${CONFIG_FILE} to configure your station."
 }
 
@@ -683,6 +691,14 @@ RestrictNamespaces=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 NoNewPrivileges=yes
+# Drop every capability from the bounding set — a non-root network + audio
+# service needs none, and with NoNewPrivileges it can never regain them.
+CapabilityBoundingSet=
+# Files the service creates (database, recordings) are group-readable at most,
+# never world-readable.
+UMask=0027
+# Restrict sockets to what a web service + journald + local-IP lookup require.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 SystemCallArchitectures=native
 # Permit only POSIX, file I/O, networking, and signals — explicitly
 # excludes things like raw_io / module_load / ptrace / mount / reboot.
