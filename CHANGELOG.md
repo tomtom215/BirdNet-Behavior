@@ -23,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restart, so `start_detection_daemon` now `create_dir_all`s the watch dir
   up front — a missing directory previously made `notify` error out and
   silently disabled detection (web UI up, nothing analysed).
+- **The service shuts down promptly instead of hanging until SIGKILL.** A live
+  WebSocket/event-stream client (the dashboard keeps one open) kept axum's
+  graceful shutdown from ever completing, so `stop`/`restart`/uninstall blocked
+  until systemd SIGKILLed the process at `TimeoutStopSec` (30 s) and left a
+  ghost `Active: failed (timeout)`. Shutdown now caps the connection drain
+  (`SHUTDOWN_GRACE`, 10 s) and signals the detection loop to stop so the runtime
+  winds down cleanly.
 - **`install.sh uninstall` is clean, idempotent, and fool-proof.** It now runs
   `systemctl reset-failed` so the removed unit no longer lingers as
   `Active: failed (timeout)` in `systemctl status`, reports accurately what was
