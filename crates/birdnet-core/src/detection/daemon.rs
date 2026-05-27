@@ -763,29 +763,31 @@ mod tests {
         let t0 = Instant::now();
         pending.note(clip.clone(), t0);
 
+        // Fresh closure per call (each reads the current `size`) so the sizer is
+        // passed by value — `&closure` would trip clippy::needless_borrows.
         let size = Cell::new(100u64);
-        let sizer = |_: &Path| Some(size.get());
+        let sizer = || |_: &Path| Some(size.get());
 
         // Baseline observed -> not ready.
-        assert!(pending.drain_settled(t0, FILE_SETTLE, &sizer).is_empty());
+        assert!(pending.drain_settled(t0, FILE_SETTLE, sizer()).is_empty());
         // Still growing -> the settle timer resets, still not ready.
         size.set(200);
         assert!(
             pending
-                .drain_settled(t0 + Duration::from_millis(500), FILE_SETTLE, &sizer)
+                .drain_settled(t0 + Duration::from_millis(500), FILE_SETTLE, sizer())
                 .is_empty()
         );
         // Size now stable, but the settle window has not elapsed yet.
         assert!(
             pending
-                .drain_settled(t0 + Duration::from_millis(700), FILE_SETTLE, &sizer)
+                .drain_settled(t0 + Duration::from_millis(700), FILE_SETTLE, sizer())
                 .is_empty()
         );
         // Stable for >= FILE_SETTLE since the last change -> yielded once.
         let ready = pending.drain_settled(
             t0 + Duration::from_millis(500) + FILE_SETTLE,
             FILE_SETTLE,
-            &sizer,
+            sizer(),
         );
         assert_eq!(
             ready,
@@ -795,7 +797,7 @@ mod tests {
         // ...and never again (it was removed when processed).
         assert!(
             pending
-                .drain_settled(t0 + Duration::from_secs(60), FILE_SETTLE, &sizer)
+                .drain_settled(t0 + Duration::from_secs(60), FILE_SETTLE, sizer())
                 .is_empty(),
             "a processed clip must not be reprocessed"
         );
@@ -810,12 +812,15 @@ mod tests {
         pending.note(gone.clone(), t0);
         pending.note(empty.clone(), t0);
 
-        let gone_for_closure = gone.clone();
-        let sizer = move |p: &Path| {
-            if p == gone_for_closure {
-                None
-            } else {
-                Some(0u64)
+        // Fresh closure per call (passed by value): gone vanished (None), empty
+        // is zero bytes.
+        let sizer = || {
+            |p: &Path| {
+                if p == gone.as_path() {
+                    None
+                } else {
+                    Some(0u64)
+                }
             }
         };
 
@@ -823,12 +828,12 @@ mod tests {
         // to decode no matter how long it sits.
         assert!(
             pending
-                .drain_settled(t0 + Duration::from_secs(10), FILE_SETTLE, &sizer)
+                .drain_settled(t0 + Duration::from_secs(10), FILE_SETTLE, sizer())
                 .is_empty()
         );
         assert!(
             pending
-                .drain_settled(t0 + Duration::from_secs(20), FILE_SETTLE, &sizer)
+                .drain_settled(t0 + Duration::from_secs(20), FILE_SETTLE, sizer())
                 .is_empty()
         );
     }
