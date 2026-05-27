@@ -60,12 +60,14 @@ See [Running with Docker](./docker.md) for the manual path, `docker run`, and au
 curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash
 ```
 
-The installer detects your architecture, downloads the pre-built binary and the BirdNET+ model, creates the config/recording/model directories, installs and enables a `systemd` service, auto-detects your ALSA microphone, and starts the service immediately.
+The installer runs pre-flight checks (required tools, free disk, glibc version), detects your architecture, downloads the pre-built binary and the BirdNET+ model, creates the config/recording/model directories, installs and enables a `systemd` service, auto-detects your ALSA microphone, and starts the service immediately. When it finishes it runs post-install validation — the binary runs, `systemd-analyze verify` passes, directory ownership and config are correct, the doctor preflight is clean, and the port is listening.
+
+The dashboard binds to all interfaces (`0.0.0.0:8502`) so it is reachable across your LAN right away. Viewing is open; the `/admin` panel is gated by a strong **admin password the installer auto-generates** (username `birdnet`) — it is printed once in the post-install summary and stored as `CADDY_PWD` in `/etc/birdnet/birdnet.conf`. Save it. If you answer "restrict to this device" in the interactive prompts (or set `BIRDNET_LISTEN=127.0.0.1:8502`), the dashboard is reachable only from the Pi itself. If your config has an `RTSP_URL`, the installer also installs `ffmpeg` (required for RTSP capture) via apt, or prints the exact command if it can't.
 
 ```bash
 # Install a specific version (defaults to latest). The `-s --` passes the
 # argument through to the installer.
-curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash -s -- --version 0.5.2
+curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash -s -- --version 0.5.3
 ```
 
 > **Don't run the installer with `sudo bash <(curl ...)`.** Process substitution
@@ -76,34 +78,66 @@ curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/ins
 >
 > ```bash
 > curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh -o install.sh
-> sudo bash install.sh --version 0.5.2
+> sudo bash install.sh --version 0.5.3
 > ```
 
-Re-running the installer is an **upgrade**: it stops the service, swaps in the
-new binary, and restarts it. Your configuration and the SQLite/DuckDB databases
-are preserved, and schema migrations run automatically on the next start.
+### Update, repair, reinstall, uninstall
+
+When `install.sh` detects an existing install it offers a menu — **update**,
+**repair**, **reinstall**, or **uninstall** — or you can pass the command
+explicitly:
+
+```bash
+sudo bash install.sh update      # swap in the latest binary, restart (the default)
+sudo bash install.sh repair      # fix a broken install without re-downloading
+sudo bash install.sh reinstall   # re-download and reinstall from scratch
+sudo bash install.sh uninstall   # remove the software (see Uninstalling below)
+```
+
+**Update** stops the service, swaps in the new binary, and restarts it; your
+configuration and the SQLite/DuckDB databases are preserved, and schema
+migrations run automatically on the next start. **Repair** re-creates missing
+directories, fixes ownership/permissions, rewrites the systemd unit, and
+restarts — without re-downloading anything. It is the go-to fix for a service
+that won't start (a stale unit, wrong permissions, a missing directory).
+
+A non-interactive run (no TTY, or `--noninteractive`) **auto-updates** an
+existing install rather than prompting.
 
 ### Uninstalling
 
-`uninstall.sh` ships next to the binary in every release tarball (and as a
-standalone release asset). It is **safe by default** — it removes only the
-software (the systemd service, the tmpfs mount unit, and the binary) and
-**keeps your database, recordings, settings, and the downloaded model** unless
-you opt in. It is idempotent (re-running is harmless) and refuses to touch
-system directories.
+The quickest route is the installer's own subcommand, which removes the software
+and keeps your data by default (set `BIRDNET_PURGE=1`, or answer the interactive
+prompt, to also delete the data and config):
+
+```bash
+sudo bash install.sh uninstall      # remove the software, keep all data
+sudo BIRDNET_PURGE=1 bash install.sh uninstall   # also remove data + config
+```
+
+For full control, `uninstall.sh` ships next to the binary in every release
+tarball (and as a standalone release asset). It is **safe by default** — it
+removes only the software (the systemd service, the tmpfs mount unit, and the
+binary) and **keeps your database, recordings, settings, and the downloaded
+model** unless you opt in. It is idempotent (re-running is harmless) and refuses
+to touch system directories.
 
 ```bash
 sudo ./uninstall.sh                 # remove the software, keep all data
 sudo ./uninstall.sh --dry-run       # preview the exact plan, change nothing
-sudo ./uninstall.sh --purge         # remove EVERYTHING (data, settings, model)
+sudo ./uninstall.sh --purge         # remove EVERYTHING (db, recordings, model, config, zram unit)
 
 # Or pick precisely what to delete:
 sudo ./uninstall.sh --remove-db --remove-recordings
 ```
 
 It auto-detects your real data directory from the installed config and service
-files, so it removes exactly what was installed. On macOS it instead unloads
-the launchd LaunchAgent; pass `--purge` to also remove the user data directory.
+files, so it removes exactly what was installed. If the config and service are
+**already gone**, it can't detect the data directory and refuses to delete from
+a guessed path — re-run with `--data-dir <path>` (it tells you which path it
+guessed). Both uninstallers run `systemctl reset-failed` so no ghost failed unit
+lingers. On macOS it instead unloads the launchd LaunchAgent; pass `--purge` to
+also remove the user data directory.
 
 **Docker deployments** are torn down with Compose instead — from the directory
 holding your `docker-compose.yml`:

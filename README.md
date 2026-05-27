@@ -94,7 +94,7 @@ curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/ins
 
 > On macOS it installs the `aarch64-apple-darwin` build once a release publishes one; until then it offers to `brew install` the dependencies and prints the one-time source-build steps. A Homebrew formula is planned. (See [docs/MACOS.md](docs/MACOS.md).)
 
-The BirdNET+ V3.0 model (~541 MB) downloads automatically from Zenodo on first run. When it's ready, open **<http://localhost:8502>**.
+The BirdNET+ V3.0 model (~541 MB) downloads automatically from Zenodo on first run. When it's ready, open **<http://localhost:8502>** — or, from another device on your LAN, `http://<pi-ip>:8502` (the dashboard binds to all interfaces by default). Viewing is open; only the `/admin` panel needs a login. The bare-metal installer auto-generates that admin password (user `birdnet`) and prints it once in its summary — save it. To restrict the dashboard to the machine itself, set `BIRDNET_LISTEN=127.0.0.1:8502`.
 
 **Uninstall** (ships beside the binary, and as a release asset). It removes only the software by default — your database, recordings, and settings are kept unless you opt in:
 

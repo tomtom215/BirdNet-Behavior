@@ -4,6 +4,8 @@ Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It
 
 > Base URL in the examples is `http://localhost:8502`. Adjust for your host, and remember any [reverse-proxy auth](../admin/remote-access.md) you've added.
 
+> **Auth:** the built-in HTTP Basic Auth gates only the `/admin*` UI routes. Every `/api/v2/*` endpoint, the WebSocket stream, and the health check are open to anyone who can reach the port — restrict them at the network layer (VPN / proxy allow-list) if that matters.
+
 ## Health & metrics
 
 ```bash
@@ -13,7 +15,7 @@ curl http://localhost:8502/api/v2/health
 ```json
 {
   "status": "healthy",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "database": "ok",
   "analytics": true,
   "detection_daemon": "running"

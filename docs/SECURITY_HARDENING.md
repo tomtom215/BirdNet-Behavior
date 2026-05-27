@@ -9,27 +9,33 @@ For the project's threat model and trust boundaries, see
 [`architecture/12-risks.md`](architecture/12-risks.md). To report a
 vulnerability, see [`../SECURITY.md`](../SECURITY.md).
 
-> **TL;DR for an exposed deployment:** bind to loopback (or a VPN), put a
-> reverse proxy with TLS + auth in front, set `CADDY_PWD`, leave CORS at its
-> same-origin default, and verify release artifacts before installing.
+> **TL;DR for an exposed deployment:** keep `CADDY_PWD` set (a fresh install
+> generates one automatically), restrict the bind to loopback (or a VPN) if you
+> don't need LAN access, put a reverse proxy with TLS in front for anything
+> off-LAN, leave CORS at its same-origin default, and verify release artifacts
+> before installing.
 
 ---
 
 ## 1. Network exposure
 
-The single most important decision is *what can reach the web UI*. The admin
-panel can change settings, trigger database backups, and update the software,
-so treat reachability as the primary control.
+The single most important decision is *what can reach the web UI*. **Viewing the
+dashboard requires no login; the `/admin` panel** — which can change settings,
+trigger database backups, and update the software — **is gated by HTTP Basic
+Auth enforced by the binary itself.** Treat reachability as the primary control.
 
-- **Default (safest): loopback only.** A bare-metal binary defaults to
-  `--listen 127.0.0.1:8502` — reachable only from the machine itself. Reach it
-  remotely with an SSH tunnel (`ssh -L 8502:localhost:8502 pi@host`) or a VPN.
-- **LAN access:** set `BIRDNET_LISTEN=0.0.0.0:8502` (the installer and Docker
-  default to this for convenience). This exposes the UI to **everyone on the
-  network**. Fine on a trusted home LAN; pair it with authentication anywhere
-  else.
+- **Default: all interfaces.** A bare-metal binary defaults to
+  `--listen 0.0.0.0:8502`, so the dashboard is reachable from other devices on
+  the LAN out of the box. The installer auto-generates an admin password
+  (`CADDY_PWD`) on a fresh install, so `/admin` is protected by default; the
+  open dashboard exposes only read-only views.
+- **Restrict to this host:** set `BIRDNET_LISTEN=127.0.0.1:8502` (env, the
+  config file, or answer "restrict to this device" in the interactive
+  installer) — then reach it remotely with an SSH tunnel
+  (`ssh -L 8502:localhost:8502 pi@host`) or a VPN.
 - **Startup guard.** When the server binds to a non-loopback address *and* no
-  password is configured, it logs a prominent warning at startup. If you see
+  `CADDY_PWD` is configured (e.g. you cleared it), it logs a prominent warning
+  at startup. If you see
 
   ```
   WARN admin web UI is bound to a non-loopback address with NO authentication …
@@ -46,12 +52,17 @@ so treat reachability as the primary control.
 
 ## 2. Authentication
 
-The UI ships with **no authentication** unless you enable it — appropriate for a
-loopback-only or VPN-only deployment, but not for anything LAN- or
-internet-reachable.
+Authentication gates **only the `/admin` panel** — viewing the dashboard, the
+read-only `/api/v2/*` endpoints, the WebSockets, and the health check are open
+to anyone who can reach the port. A fresh install auto-generates a strong admin
+password, so `/admin` is protected by default; for anything LAN- or
+internet-reachable, keep it set (and add TLS off-LAN).
 
-- **Built-in HTTP Basic Auth.** Set `CADDY_PWD` (and optionally `CADDY_USER`,
-  which defaults to `birdnet`) in the config or environment:
+- **Built-in HTTP Basic Auth.** A fresh install sets `CADDY_PWD` automatically
+  (username `birdnet`) and prints it once in the post-install summary, storing
+  it in `/etc/birdnet/birdnet.conf`. Change it any time via `CADDY_PWD` (and
+  optionally `CADDY_USER`, which defaults to `birdnet`) in the config or
+  environment:
 
   ```dotenv
   CADDY_USER=birder
@@ -59,16 +70,18 @@ internet-reachable.
   ```
 
   This is compatible with the BirdNET-Pi `CADDY_PWD` convention. It is **still
-  plain HTTP** — only rely on it behind TLS or on a trusted LAN.
+  plain HTTP** — only rely on it behind TLS or on a trusted LAN. **Clearing
+  `CADDY_PWD` leaves `/admin` open** to anyone who can reach the dashboard.
 - **Reverse-proxy auth** (recommended for internet exposure): terminate TLS and
   require a password at the proxy (Caddy `basic_auth`, nginx `auth_basic`), so
   credentials never cross the wire in clear text.
 - **WebSocket caveat.** The live-detection WebSocket (`/api/v2/ws/detections`)
   and the health endpoint (`/api/v2/health`) are intentionally exempt from the
   built-in Basic Auth layer, because browsers cannot attach Basic-auth headers
-  to a `WebSocket` handshake. The live detection stream is therefore readable by
-  anyone who can reach the port. If that matters, gate access at the network
-  layer (VPN / proxy allow-list) rather than relying on app-level auth.
+  to a `WebSocket` handshake. (They are read-only and outside `/admin` in any
+  case.) The live detection stream is therefore readable by anyone who can reach
+  the port. If that matters, gate access at the network layer (VPN / proxy
+  allow-list) rather than relying on app-level auth.
 
 ---
 
@@ -189,8 +202,8 @@ only opens the ports you actually use.
 
 ## Checklist for an exposed deployment
 
-- [ ] Bind to `127.0.0.1` (+ SSH/VPN) or put a TLS reverse proxy in front.
-- [ ] Set `CADDY_PWD` (and `CADDY_USER`) — or proxy/VPN auth.
+- [ ] Restrict the bind to `127.0.0.1` (+ SSH/VPN) if you don't need LAN access; for off-LAN access, put a TLS reverse proxy in front.
+- [ ] Keep `CADDY_PWD` set (a fresh install generates one) — or use proxy/VPN auth. Don't clear it on a non-loopback bind.
 - [ ] Leave CORS at its same-origin default unless you genuinely need a second origin.
 - [ ] Set `BIRDNET_PRIVACY_THRESHOLD` if voices may be captured.
 - [ ] Back up the database **off the device** and test a restore.

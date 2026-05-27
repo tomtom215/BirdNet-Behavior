@@ -37,7 +37,7 @@ Use the [Add-a-source wizard](../admin/audio.md#adding-an-rtsp-camera) on the Au
 
 ## Expose the dashboard to the internet (safely)
 
-Don't bind it to `0.0.0.0` on a public IP directly. Put it behind a reverse proxy with HTTPS and a password — see [Remote Access & Security](../admin/remote-access.md).
+The dashboard is LAN-reachable by default (`0.0.0.0:8502`) — fine at home, where viewing is open and `/admin` is protected by the auto-generated password. But never port-forward `8502` straight to a public IP: the built-in server is plain HTTP. Put it behind a reverse proxy with HTTPS and a password, or use a VPN — see [Remote Access & Security](../admin/remote-access.md). To restrict it to the local machine instead, set `BIRDNET_LISTEN=127.0.0.1:8502`.
 
 ## Send detections to Home Assistant
 
