@@ -83,6 +83,21 @@ pub fn start_detection_daemon(
         return None;
     };
 
+    // Ensure the watch directory exists before the file watcher attaches to it.
+    // Under systemd the stream dir lives in the service's PrivateTmp /tmp, which
+    // is a fresh, empty tmpfs on every start — so it is gone after each restart
+    // even though the installer created it once. `notify` errors out when asked
+    // to watch a missing directory, which would silently disable detection (web
+    // UI up, nothing analysed). Create it up front so a freshly-(re)started
+    // daemon always has somewhere to watch.
+    if let Err(e) = std::fs::create_dir_all(&watch_dir) {
+        tracing::warn!(
+            watch_dir = %watch_dir.display(),
+            error = %e,
+            "could not create watch directory; the file watcher may fail to start"
+        );
+    }
+
     let sensitivity = config
         .and_then(|c| c.get_parsed::<f32>("SENSITIVITY").ok())
         .unwrap_or(1.0);
@@ -248,6 +263,62 @@ mod tests {
         assert!(
             handle.is_some(),
             "daemon must return Some(DaemonHandle) when model+labels+watch_dir all resolve"
+        );
+        if let Some(h) = handle {
+            h.stop();
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn start_detection_daemon_creates_missing_watch_dir() {
+        // The watch dir does NOT exist up front. start_detection_daemon must
+        // create it (PrivateTmp wipes the service's /tmp on every systemd
+        // restart) so the file watcher can attach instead of silently
+        // disabling detection. Pins the create_dir_all against a mutant that
+        // removes it — without the call `run_daemon`'s watcher would error on
+        // the missing directory and the function would return None.
+        let tmp = tempfile::tempdir().unwrap();
+        let watch_dir = tmp.path().join("stream-not-created-yet");
+        assert!(
+            !watch_dir.exists(),
+            "precondition: watch dir must be absent before the daemon starts"
+        );
+
+        let model_path = tmp.path().join("model.onnx");
+        std::fs::write(&model_path, TINY_V24_MODEL_BYTES).unwrap();
+        let labels_path = tmp.path().join("labels.txt");
+        std::fs::write(&labels_path, tiny_labels_text()).unwrap();
+
+        let cli = Cli::parse_from([
+            "birdnet-behavior",
+            "--model",
+            model_path.to_str().unwrap(),
+            "--labels",
+            labels_path.to_str().unwrap(),
+            "--watch-dir",
+            watch_dir.to_str().unwrap(),
+        ]);
+
+        let db_path = tmp.path().join("birds.db");
+        let state = birdnet_web::state::AppState::new(db_path).unwrap();
+        let broadcast = state.detection_broadcast();
+        let filter = birdnet_integrations::notification::NotificationFilter {
+            trigger: birdnet_integrations::notification::TriggerMode::EachDetection,
+            species_filter: birdnet_integrations::notification::SpeciesFilter::new(None, None),
+        };
+        let template = birdnet_integrations::notification::NotificationTemplate::default();
+
+        let handle = start_detection_daemon(
+            &cli, None, state, broadcast, None, None, None, None, None, filter, template,
+        );
+
+        assert!(
+            watch_dir.exists(),
+            "start_detection_daemon must create the missing watch dir before watching"
+        );
+        assert!(
+            handle.is_some(),
+            "daemon must start once the watch dir has been created"
         );
         if let Some(h) = handle {
             h.stop();

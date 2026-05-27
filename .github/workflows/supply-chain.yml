@@ -89,16 +89,23 @@ jobs:
   # The bootstrap surface is shell — quickstart.sh, install.sh, the docker
   # entrypoint. These run unsupervised on operator machines so they get
   # the strictest static check we have.
+  #
+  # installer/lib/*.sh are concatenation fragments, not standalone scripts
+  # (they share a namespace and have no shebang), so they are linted as the
+  # assembled install.sh rather than individually — see the build-sync gate.
   shellcheck:
     name: shellcheck (bootstrap scripts)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
+      - name: install.sh is generated from installer/lib (no drift)
+        run: bash installer/build.sh --check
       - name: Run shellcheck
         uses: ludeeus/action-shellcheck@master
         with:
           severity: warning
           scandir: "."
           check_together: "no"
+          ignore_paths: installer/lib
         env:
           SHELLCHECK_OPTS: "-x"

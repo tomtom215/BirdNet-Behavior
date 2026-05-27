@@ -43,6 +43,14 @@ Open an issue with the `enhancement` label. Describe the use case — what probl
    adding or changing user-visible behaviour
 7. **Add or update an ADR** under `docs/architecture/` for non-trivial
    design decisions (use the format of the existing `14-diagnostics.md`)
+8. **Editing the installer?** `install.sh` is **generated** — never edit it by
+   hand. Edit the single-responsibility modules under `installer/lib/*.sh` and
+   regenerate it:
+   ```bash
+   installer/build.sh            # regenerate install.sh
+   installer/build.sh --check    # verify it's in sync (CI + pre-commit gate)
+   shellcheck -S warning -x install.sh
+   ```
 
 ## Code conventions
 

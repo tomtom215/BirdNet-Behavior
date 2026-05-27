@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The systemd service no longer fails to start with
+  `Failed to set up mount namespacing: /tmp/birdnet-stream: No such file or directory`
+  (exit `226/NAMESPACE`).** The unit listed the tmpfs stream directory in
+  `ReadWritePaths=` while also setting `PrivateTmp=yes`; systemd mounts a fresh
+  empty `/tmp` for the service, so bind-mounting a path *beneath* it fails
+  namespace setup and the service never starts. The stream dir is removed from
+  `ReadWritePaths=` (the private `/tmp` is already writable) and an
+  `ExecStartPre=/bin/mkdir -p` recreates it on every start. Existing broken
+  installs are fixed by `sudo bash install.sh repair` (or any update/reinstall).
+- **The detection daemon creates its watch directory before attaching the file
+  watcher.** With `PrivateTmp=yes` the service's `/tmp` is wiped on every
+  restart, so `start_detection_daemon` now `create_dir_all`s the watch dir
+  up front — a missing directory previously made `notify` error out and
+  silently disabled detection (web UI up, nothing analysed).
+
+### Added
+
+- **`install.sh` commands and an existing-install menu.** Running the installer
+  on a machine that already has BirdNet-Behavior now offers **update**,
+  **repair**, **reinstall**, and **uninstall** (interactively), or you can pass
+  one explicitly (`sudo bash install.sh repair`). Non-interactive runs keep the
+  historical auto-update behaviour. `repair` re-creates directories, fixes
+  ownership/permissions, rewrites the systemd unit, and restarts — without
+  re-downloading the binary or model.
+- **Pre-flight and post-install validation in `install.sh`.** Before downloading
+  it checks for required tools and sufficient free disk; afterwards it validates
+  the binary runs, the unit verifies (`systemd-analyze verify`), directories are
+  owned by the service user, the config is readable by the daemon, the doctor
+  preflight passes, and the web port is listening.
+
+### Changed
+
+- **`install.sh` is now assembled from single-responsibility modules under
+  `installer/lib/*.sh` by `installer/build.sh`** (developer-facing only — the
+  shipped `install.sh` is still one self-contained, checksummed file). A CI gate
+  and pre-commit hook verify the generated `install.sh` stays in sync with its
+  modules.
+
 ## [0.5.2] - 2026-05-27
 
 Installer- and documentation-focused release: it repairs the bare-metal install

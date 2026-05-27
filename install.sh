@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
+# =============================================================================
+#  install.sh — GENERATED FILE. DO NOT EDIT.
+#
+#  This file is assembled from installer/lib/*.sh by installer/build.sh.
+#  To change the installer, edit the relevant module under installer/lib/ and
+#  run `installer/build.sh`. CI verifies this file stays in sync.
+# =============================================================================
+
+# ===== installer/lib/00-usage.sh =====
 # install.sh — BirdNet-Behavior installer for Raspberry Pi and x86_64 Linux
 #
 # Usage (Linux / Raspberry Pi — installs a systemd service, so it needs root):
@@ -8,26 +17,36 @@
 #   # from a saved copy:
 #   sudo bash install.sh [--version 0.5.1]
 #
+# When an existing install is detected the script offers update / repair /
+# reinstall / uninstall. You can also pick one explicitly:
+#   sudo bash install.sh update       # swap in the latest binary, keep settings
+#   sudo bash install.sh repair       # fix dirs/permissions + rewrite the unit
+#   sudo bash install.sh reinstall    # re-download and rewrite everything
+#   sudo bash install.sh uninstall    # remove the software, keep data
+#
 # Do NOT use `sudo bash <(curl ...)`: process substitution hands bash a file
 # descriptor owned by your user, and sudo closes it crossing to root, so the
 # script disappears ("/dev/fd/63: No such file or directory"). Use the pipe.
 #
 # macOS (Apple Silicon) sets up a per-user launchd agent instead — run without sudo.
 #
-# What this script does:
-#   1. Detects the system architecture (aarch64 / x86_64)
-#   2. Downloads the pre-built binary from GitHub Releases
+# What this script does on a fresh install:
+#   1. Pre-flight checks (architecture, glibc, required tools, free disk)
+#   2. Downloads + checksum-verifies the pre-built binary from GitHub Releases
 #   3. Creates configuration, data, and recording directories
-#   4. Installs a systemd service unit (birdnet-behavior.service)
-#   5. Optionally prompts for ALSA device / RTSP URL
+#   4. Installs a hardened systemd service unit (birdnet-behavior.service)
+#   5. Optionally prompts for ALSA device / RTSP URL / location
+#   6. Post-install validation (binary, unit, directories, doctor, port)
 #
-# Requirements: curl or wget, systemd
+# Every step is idempotent — re-running the script is always safe.
+#
+# Requirements: curl or wget, tar, sha256sum, systemd
 
+# ===== installer/lib/10-config.sh =====
+# ---------------------------------------------------------------------------
+# Global configuration and shared state
+# ---------------------------------------------------------------------------
 set -euo pipefail
-
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
 
 REPO="tomtom215/BirdNet-Behavior"
 BINARY_NAME="birdnet-behavior"
@@ -43,6 +62,7 @@ IMAGE_CACHE_DIR="${DATA_DIR}/image_cache"
 MODEL_DIR="${DATA_DIR}/models"
 DB_PATH="${DATA_DIR}/birds.db"
 SERVICE_FILE="/etc/systemd/system/birdnet-behavior.service"
+SERVICE_NAME="birdnet-behavior.service"
 SERVICE_USER="${SUDO_USER:-${USER:-$(id -un)}}"
 # Bind localhost by default — the admin dashboard can change settings and update
 # software, so it must not reach the LAN without an explicit (ideally password-
@@ -60,10 +80,22 @@ LONGITUDE_VALUE=""
 CADDY_USER_VALUE=""
 CADDY_PWD_VALUE=""
 
+# What main() is doing — purely for user-facing messages (install/update/
+# repair/reinstall). Set by main()/the subcommand dispatch.
+MODE="install"
+
+# Selected action. "" means "decide from args + whether an install exists".
+SUBCOMMAND=""
+
 # Minimum glibc the prebuilt binaries link against (pyke's ONNX Runtime needs
 # glibc >= 2.38; Ubuntu 24.04, where we build, ships 2.39). Set
 # BIRDNET_SKIP_GLIBC_CHECK=1 to bypass (e.g. you built from source).
 REQUIRED_GLIBC="2.39"
+
+# Rough free-space floor for a fresh install: ~541 MB model + binary + DB
+# headroom. Below this we warn (model download would otherwise fail mid-way
+# with a less obvious error).
+REQUIRED_FREE_MB=900
 
 # Set to 1 by main() when an already-running service is stopped for an upgrade,
 # so we know to restart it afterwards rather than leave it down.
@@ -88,6 +120,11 @@ if [ -t 1 ]; then
 else
     RED='' GREEN='' YELLOW='' BLUE='' BOLD='' RESET=''
 fi
+
+# ===== installer/lib/20-log.sh =====
+# ---------------------------------------------------------------------------
+# Logging and interactive prompt helpers
+# ---------------------------------------------------------------------------
 
 # All logging goes to stderr so that stdout is reserved for a function's return
 # value. resolve_version/detect_arch return via `echo`, and callers capture them
@@ -130,8 +167,9 @@ ask_secret() {
     printf '%s' "${reply}"
 }
 
+# ===== installer/lib/30-platform.sh =====
 # ---------------------------------------------------------------------------
-# Root / privilege check
+# Privilege, architecture, and glibc preflight
 # ---------------------------------------------------------------------------
 
 require_root() {
@@ -179,10 +217,6 @@ EOF
     fi
 }
 
-# ---------------------------------------------------------------------------
-# Architecture detection
-# ---------------------------------------------------------------------------
-
 detect_arch() {
     local machine
     machine="$(uname -m)"
@@ -229,16 +263,11 @@ EOT
     esac
 }
 
-# ---------------------------------------------------------------------------
-# glibc preflight
-#
 # The prebuilt release binaries are built on Ubuntu 24.04 (glibc 2.39) because
 # pyke's prebuilt ONNX Runtime requires glibc >= 2.38. On an older system
 # (notably Raspberry Pi OS Bookworm / Debian 12, glibc 2.36) the binary loads
 # but dies with "version `GLIBC_2.39' not found". Catch that here, before we
 # download 540 MB of model, and point the user at a path that actually works.
-# ---------------------------------------------------------------------------
-
 detect_glibc_version() {
     # Prefer getconf (prints "glibc 2.36"); fall back to `ldd --version`.
     local v
@@ -292,8 +321,9 @@ EOT
     fatal "Unsupported glibc ${current} (need >= ${REQUIRED_GLIBC})."
 }
 
+# ===== installer/lib/40-download.sh =====
 # ---------------------------------------------------------------------------
-# Download helper (curl or wget)
+# Download helpers (curl or wget) and release-version resolution
 # ---------------------------------------------------------------------------
 
 download() {
@@ -308,7 +338,6 @@ download() {
     fi
 }
 
-# ---------------------------------------------------------------------------
 # Large-file download helper — resumes on interrupt, shows a progress bar
 # so the operator sees something is happening during the ~541 MB model pull.
 #
@@ -320,7 +349,6 @@ download() {
 #   - Up to 5 automatic retries with exponential backoff for transient errors.
 #   - Treat HTTP errors as failures (-f).
 #   - Leave the partial file in place on failure so the next run can resume.
-# ---------------------------------------------------------------------------
 download_large() {
     local url="$1"
     local dest="$2"
@@ -339,10 +367,6 @@ download_large() {
         fatal "Neither curl nor wget is available. Please install one and retry."
     fi
 }
-
-# ---------------------------------------------------------------------------
-# Resolve version to install
-# ---------------------------------------------------------------------------
 
 resolve_version() {
     if [ -n "${VERSION:-}" ]; then
@@ -366,8 +390,111 @@ resolve_version() {
     fatal "Could not determine latest release version. Pass --version x.y.z (or set VERSION=x.y.z) to install a specific version."
 }
 
+# ===== installer/lib/45-preflight.sh =====
 # ---------------------------------------------------------------------------
-# Download and install binary
+# Pre-install checks and installation-state detection
+#
+# These run before any download or filesystem change so a doomed install fails
+# fast with an actionable message instead of half-way through a 541 MB pull.
+# ---------------------------------------------------------------------------
+
+# Verify the tools the installer itself depends on are present. A hard-missing
+# tool is fatal (we cannot continue); optional tools only degrade a feature.
+check_required_tools() {
+    local missing=()
+
+    # A downloader is mandatory.
+    command -v curl &>/dev/null || command -v wget &>/dev/null \
+        || missing+=("curl or wget")
+
+    local t
+    for t in tar sha256sum systemctl install mkdir awk grep sed; do
+        command -v "${t}" &>/dev/null || missing+=("${t}")
+    done
+
+    if [ "${#missing[@]}" -gt 0 ]; then
+        error "Missing required tool(s): ${missing[*]}"
+        fatal "Install the missing package(s) and re-run. On Debian/Pi OS: sudo apt-get install coreutils tar curl"
+    fi
+
+    # Soft dependencies — note them but keep going.
+    command -v getent  &>/dev/null || warn "getent not found — falling back to default data paths."
+    command -v findmnt &>/dev/null || warn "findmnt not found — cannot confirm /tmp is tmpfs."
+    command -v arecord &>/dev/null || true   # only needed for ALSA auto-detect
+    success "Required tools present."
+}
+
+# Free megabytes on the filesystem backing PATH (walks up to the nearest
+# existing ancestor, since the target dir may not exist yet). Prints a number.
+free_mb_for_path() {
+    local p="$1"
+    while [ ! -d "${p}" ] && [ "${p}" != "/" ]; do
+        p="$(dirname "${p}")"
+    done
+    df -Pk "${p}" 2>/dev/null | awk 'NR==2 {printf "%d", $4/1024}'
+}
+
+# Warn (don't fail) when the data filesystem is tight. Skipped when the model
+# is already present, since that is the only large download.
+check_disk_space() {
+    if [ -f "${MODEL_DIR}/${MODEL_FILE}" ]; then
+        return 0
+    fi
+    local free_mb
+    free_mb="$(free_mb_for_path "${DATA_DIR}")"
+    if [ -z "${free_mb}" ]; then
+        warn "Could not determine free disk space for ${DATA_DIR}; continuing."
+        return 0
+    fi
+    if [ "${free_mb}" -lt "${REQUIRED_FREE_MB}" ]; then
+        warn "Only ${free_mb} MB free on the data filesystem (${DATA_DIR})."
+        warn "The BirdNET model alone is ~541 MB; free up space or the download may fail."
+    else
+        success "Disk space OK (${free_mb} MB free for ${DATA_DIR})."
+    fi
+}
+
+# Detect what — if anything — is already installed, into globals the rest of
+# the script reads. Safe to call before require_root has run.
+HAVE_BINARY=0
+HAVE_SERVICE=0
+HAVE_CONFIG=0
+INSTALLED_VERSION=""
+EXISTING_INSTALL=0
+
+detect_existing_install() {
+    HAVE_BINARY=0; HAVE_SERVICE=0; HAVE_CONFIG=0; INSTALLED_VERSION=""; EXISTING_INSTALL=0
+    if [ -x "${INSTALL_DIR}/${BINARY_NAME}" ]; then
+        HAVE_BINARY=1
+        INSTALLED_VERSION="$("${INSTALL_DIR}/${BINARY_NAME}" --version 2>/dev/null | awk '{print $NF}' || true)"
+    fi
+    [ -f "${SERVICE_FILE}" ] && HAVE_SERVICE=1
+    [ -f "${CONFIG_FILE}" ]  && HAVE_CONFIG=1
+    if [ "${HAVE_BINARY}" = 1 ] || [ "${HAVE_SERVICE}" = 1 ]; then
+        EXISTING_INSTALL=1
+    fi
+}
+
+# One-line human summary of the detected install (for the menu / messages).
+describe_existing_install() {
+    local parts=()
+    [ "${HAVE_BINARY}" = 1 ]  && parts+=("binary${INSTALLED_VERSION:+ v${INSTALLED_VERSION}}")
+    [ "${HAVE_SERVICE}" = 1 ] && parts+=("service unit")
+    [ "${HAVE_CONFIG}" = 1 ]  && parts+=("config")
+    if [ "${#parts[@]}" -eq 0 ]; then
+        echo "none"
+        return
+    fi
+    local out="" p
+    for p in "${parts[@]}"; do
+        out="${out:+${out}, }${p}"
+    done
+    echo "${out}"
+}
+
+# ===== installer/lib/50-binary.sh =====
+# ---------------------------------------------------------------------------
+# Download and install the binary
 #
 # Release artifacts are gzipped tarballs of the form
 #   birdnet-behavior-<version>-<target>.tar.gz
@@ -384,7 +511,7 @@ install_binary() {
         local old_ver
         old_ver="$("${INSTALL_DIR}/${BINARY_NAME}" --version 2>/dev/null | awk '{print $NF}' || true)"
         if [ -n "${old_ver}" ]; then
-            info "Existing install detected (v${old_ver}) — upgrading to v${version}."
+            info "Existing install detected (v${old_ver}) — installing v${version}."
         fi
     fi
 
@@ -433,6 +560,7 @@ install_binary() {
     success "Binary installed to ${INSTALL_DIR}/${BINARY_NAME}"
 }
 
+# ===== installer/lib/55-model.sh =====
 # ---------------------------------------------------------------------------
 # Download BirdNET+ V3.0 model from Zenodo
 # ---------------------------------------------------------------------------
@@ -477,8 +605,9 @@ download_model() {
     fi
 }
 
+# ===== installer/lib/60-dirs.sh =====
 # ---------------------------------------------------------------------------
-# Create directories
+# Create data directories and the tmpfs streaming directory
 # ---------------------------------------------------------------------------
 
 create_directories() {
@@ -498,6 +627,12 @@ setup_tmpfs_streaming() {
     info "Setting up tmpfs for audio streaming (SD card wear protection)…"
     # Use /tmp/birdnet-stream for raw audio capture. On most Pi distros /tmp is
     # already a tmpfs; this ensures the streaming directory exists after reboot.
+    #
+    # NOTE: under systemd the service runs with PrivateTmp=yes, so it gets its
+    # OWN /tmp and recreates /tmp/birdnet-stream there on every start (see the
+    # ExecStartPre= in install_service). This host-side directory is what a
+    # manual `birdnet-behavior --watch-dir /tmp/birdnet-stream` run (outside
+    # systemd) uses, and is harmless under the service.
     install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${STREAM_DIR}"
 
     # If /tmp is NOT already tmpfs, create a dedicated mount.
@@ -525,8 +660,9 @@ MEOF
     fi
 }
 
+# ===== installer/lib/62-config-file.sh =====
 # ---------------------------------------------------------------------------
-# Write default config
+# Write the default configuration file
 # ---------------------------------------------------------------------------
 
 write_config() {
@@ -618,8 +754,9 @@ EOF
     success "Default config written — edit ${CONFIG_FILE} to configure your station."
 }
 
+# ===== installer/lib/65-service.sh =====
 # ---------------------------------------------------------------------------
-# Install systemd service
+# Install the systemd service unit
 # ---------------------------------------------------------------------------
 
 install_service() {
@@ -648,6 +785,20 @@ StartLimitIntervalSec=300
 Type=notify
 NotifyAccess=main
 User=${SERVICE_USER}
+
+# Recreate the ephemeral stream/watch dir before anything else runs. With
+# PrivateTmp=yes (below) the service gets a FRESH, EMPTY /tmp on every start,
+# so /tmp/birdnet-stream never survives a restart — create it here so the
+# file-watcher has somewhere to attach and the doctor preflight sees a
+# writable recordings dir. The binary also creates it at startup; doing it
+# here keeps older binaries working too.
+#
+# IMPORTANT: ${STREAM_DIR} must NOT appear in ReadWritePaths= below. PrivateTmp
+# mounts a new tmpfs over /tmp, and bind-mounting a path *beneath* that new
+# mount fails namespace setup with "${STREAM_DIR}: No such file or directory"
+# (which is exactly the start failure this avoids). The private /tmp is already
+# writable, so the watch dir does not need to be in ReadWritePaths.
+ExecStartPre=/bin/mkdir -p ${STREAM_DIR}
 
 # Preflight: run the doctor before starting the main service so a broken
 # install fails fast with an actionable report in the journal, rather than
@@ -691,9 +842,11 @@ OOMPolicy=stop
 
 # ── Filesystem isolation ─────────────────────────────────────────────────
 # Read-only access to the rest of the filesystem; explicit write paths.
+# ${STREAM_DIR} is intentionally absent — it lives in the PrivateTmp /tmp
+# (see ExecStartPre= above); listing it here would break namespace setup.
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=${DATA_DIR} ${CONFIG_DIR} ${STREAM_DIR} /run /var/log
+ReadWritePaths=${DATA_DIR} ${CONFIG_DIR} /run /var/log
 PrivateTmp=yes
 ProtectKernelLogs=yes
 ProtectKernelModules=yes
@@ -747,8 +900,9 @@ EOF
     success "Service installed and enabled (Type=notify, hardened, watchdog active)."
 }
 
+# ===== installer/lib/70-station.sh =====
 # ---------------------------------------------------------------------------
-# Detect and configure audio device
+# Detect and configure the audio device + station location
 # ---------------------------------------------------------------------------
 
 # Returns the first detected ALSA capture device as "plughw:<card>,<device>",
@@ -865,8 +1019,9 @@ prompt_station_settings() {
     fi
 }
 
+# ===== installer/lib/75-start.sh =====
 # ---------------------------------------------------------------------------
-# Start service if audio is configured
+# Start the service when appropriate
 # ---------------------------------------------------------------------------
 
 maybe_start_service() {
@@ -891,6 +1046,273 @@ maybe_start_service() {
     fi
 }
 
+# ===== installer/lib/76-validate.sh =====
+# ---------------------------------------------------------------------------
+# Post-install validation
+#
+# After an install / update / repair, confirm the result is actually healthy
+# and report each check. Advisory by design: it never aborts (the install
+# already happened), but a FAIL line tells the operator exactly what to fix.
+# ---------------------------------------------------------------------------
+
+# Run a command as the service user so writability/ownership checks reflect
+# what the daemon will actually see (root can write everywhere; the service
+# user cannot). Falls back gracefully when runuser/sudo are unavailable.
+run_as_service_user() {
+    if command -v runuser &>/dev/null; then
+        runuser -u "${SERVICE_USER}" -- "$@"
+    elif command -v sudo &>/dev/null; then
+        sudo -n -u "${SERVICE_USER}" -- "$@"
+    else
+        "$@"
+    fi
+}
+
+# Number of validation problems found, for the caller's summary line.
+VALIDATION_FAILURES=0
+
+_v_pass() { success "  check: $*"; }
+_v_warn() { warn "  check: $*"; }
+_v_fail() { error "  check: $*"; VALIDATION_FAILURES=$((VALIDATION_FAILURES + 1)); }
+
+validate_install() {
+    info "Validating installation…"
+    VALIDATION_FAILURES=0
+
+    # 1. Binary runs.
+    if [ -x "${INSTALL_DIR}/${BINARY_NAME}" ] \
+        && "${INSTALL_DIR}/${BINARY_NAME}" --version &>/dev/null; then
+        _v_pass "binary executes ($("${INSTALL_DIR}/${BINARY_NAME}" --version 2>/dev/null | head -1))"
+    else
+        _v_fail "binary at ${INSTALL_DIR}/${BINARY_NAME} is missing or won't run"
+    fi
+
+    # 2. Service unit parses. systemd-analyze verify catches typos and a number
+    #    of sandboxing mistakes before they cause a start failure.
+    if [ -f "${SERVICE_FILE}" ]; then
+        if command -v systemd-analyze &>/dev/null; then
+            local verify_out
+            if verify_out="$(systemd-analyze verify "${SERVICE_FILE}" 2>&1)"; then
+                _v_pass "systemd unit verifies clean"
+            else
+                _v_warn "systemd-analyze verify reported: ${verify_out}"
+            fi
+        else
+            _v_pass "service unit present (systemd-analyze not available to verify)"
+        fi
+    else
+        _v_fail "service unit ${SERVICE_FILE} is missing"
+    fi
+
+    # 3. Data directories exist and belong to the service user.
+    local d owner
+    for d in "${DATA_DIR}" "${RECS_DIR}" "${MODEL_DIR}"; do
+        if [ ! -d "${d}" ]; then
+            _v_fail "directory missing: ${d}"
+            continue
+        fi
+        owner="$(stat -c '%U' "${d}" 2>/dev/null || echo '?')"
+        if [ "${owner}" = "${SERVICE_USER}" ]; then
+            _v_pass "${d} owned by ${SERVICE_USER}"
+        else
+            _v_fail "${d} owned by ${owner}, expected ${SERVICE_USER} (run: install.sh repair)"
+        fi
+    done
+
+    # 4. Config is readable by the daemon (service user, via group).
+    if [ -f "${CONFIG_FILE}" ]; then
+        if run_as_service_user test -r "${CONFIG_FILE}" 2>/dev/null; then
+            _v_pass "config readable by ${SERVICE_USER}"
+        else
+            _v_fail "${CONFIG_FILE} not readable by ${SERVICE_USER} (run: install.sh repair)"
+        fi
+    fi
+
+    # 5. Doctor preflight, run as the service user (mirrors ExecStartPre).
+    local rc=0
+    run_as_service_user "${INSTALL_DIR}/${BINARY_NAME}" --doctor --config "${CONFIG_FILE}" \
+        &>/dev/null || rc=$?
+    case "${rc}" in
+        0) _v_pass "doctor preflight passed" ;;
+        1) _v_warn "doctor preflight passed with warnings (run: ${BINARY_NAME} --doctor --config ${CONFIG_FILE})" ;;
+        *) _v_fail "doctor preflight reported errors (run: ${BINARY_NAME} --doctor --config ${CONFIG_FILE})" ;;
+    esac
+
+    # 6. If the service is up, confirm the web port is actually listening.
+    if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
+        local port="${LISTEN_ADDR##*:}"
+        if command -v ss &>/dev/null && ss -ltn 2>/dev/null | grep -q ":${port}\b"; then
+            _v_pass "service active and listening on port ${port}"
+        else
+            _v_warn "service active but port ${port} not seen listening yet (it may still be starting)"
+        fi
+    else
+        info "  check: service not running yet (start it once an audio source is set)."
+    fi
+
+    if [ "${VALIDATION_FAILURES}" -eq 0 ]; then
+        success "Validation passed."
+    else
+        warn "Validation found ${VALIDATION_FAILURES} problem(s) — see the check lines above."
+    fi
+}
+
+# ===== installer/lib/77-manage.sh =====
+# ---------------------------------------------------------------------------
+# Top-level flows: install / update / reinstall / repair / uninstall, and the
+# interactive menu shown when an existing install is detected.
+# ---------------------------------------------------------------------------
+
+# Stop a running service before swapping the binary. You cannot overwrite a
+# running executable in place (ETXTBSY), and a plain `systemctl start` on an
+# already-running unit would not load the new binary. Records that it was
+# running so the service is restarted afterwards.
+stop_running_service_for_swap() {
+    if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
+        SERVICE_WAS_RUNNING=1
+        info "Stopping the running service to swap the binary safely…"
+        systemctl stop "${SERVICE_NAME}" || true
+    fi
+}
+
+# Offer ZRAM compressed swap on boards with <= 2 GB RAM (Pi Zero 2W, Pi 2,
+# etc.). Silently skipped on machines with adequate RAM or where it is off.
+maybe_setup_zram() {
+    local mem_mb
+    mem_mb="$(awk '/MemTotal/ {printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo 9999)"
+    if [ "${mem_mb}" -le 2048 ] && [ "${SKIP_ZRAM:-0}" != "1" ]; then
+        info "Low-RAM system detected (${mem_mb} MB) — setting up ZRAM compressed swap…"
+        setup_zram || warn "ZRAM setup failed (non-fatal); continuing without it."
+    fi
+}
+
+# The full, idempotent install flow. Used for a fresh install and — because
+# every step is safe to repeat — for `update` and `reinstall` as well.
+do_install() {
+    local arch version
+    arch="$(detect_arch)"
+    check_glibc
+    check_required_tools
+    check_disk_space
+    version="$(resolve_version)"
+
+    info "Arch: ${arch}, Version: ${version}"
+
+    stop_running_service_for_swap
+
+    install_binary "${version}" "${arch}"
+    create_directories
+    setup_tmpfs_streaming
+    download_model
+    prompt_station_settings
+    write_config
+    install_service
+    maybe_setup_zram
+    maybe_start_service
+    validate_install
+    print_summary
+}
+
+# Repair: fix a broken or drifted install WITHOUT forcing the big downloads.
+# This is the wizard for exactly the failure that motivated it — a service unit
+# that won't start because of a bad ReadWritePaths entry, or directories that
+# went missing. It rewrites the unit, recreates directories with correct
+# ownership, fixes the config permissions, and restarts.
+do_repair() {
+    MODE="repair"
+    info "Repairing the existing BirdNet-Behavior install…"
+    check_required_tools
+
+    local was_active=0
+    systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null && was_active=1
+
+    # Binary: only (re)download if it is actually missing.
+    if [ ! -x "${INSTALL_DIR}/${BINARY_NAME}" ]; then
+        warn "Binary missing — downloading it."
+        local arch version
+        arch="$(detect_arch)"
+        check_glibc
+        version="$(resolve_version)"
+        stop_running_service_for_swap
+        install_binary "${version}" "${arch}"
+    else
+        success "Binary present ($("${INSTALL_DIR}/${BINARY_NAME}" --version 2>/dev/null | head -1))."
+    fi
+
+    create_directories
+    setup_tmpfs_streaming
+
+    if [ -f "${MODEL_DIR}/${MODEL_FILE}" ] && [ -f "${MODEL_DIR}/${LABELS_FILE}" ]; then
+        success "Model present — skipping download."
+    else
+        warn "Model files missing — downloading."
+        download_model
+    fi
+
+    write_config       # idempotent: fixes ownership/permissions, keeps content
+    install_service    # rewrites the unit (this is what fixes a bad unit) + reload
+
+    # Clear any failed / rate-limited state from prior crash loops, then bring
+    # the service up with the repaired unit.
+    systemctl reset-failed "${SERVICE_NAME}" 2>/dev/null || true
+    if [ "${was_active}" = 1 ] || grep -qE '^(ALSA_CARD|RTSP_URL)=' "${CONFIG_FILE}" 2>/dev/null; then
+        info "Starting the service with the repaired unit…"
+        if systemctl restart "${SERVICE_NAME}"; then
+            success "Service (re)started."
+        else
+            warn "Service still failed to start — inspect: journalctl -xeu ${SERVICE_NAME}"
+        fi
+    else
+        warn "No audio source configured — not starting."
+        warn "Edit ${CONFIG_FILE}, then: sudo systemctl start birdnet-behavior"
+    fi
+
+    validate_install
+    echo
+    success "Repair complete."
+    echo "  Logs:  sudo journalctl -u birdnet-behavior -f"
+}
+
+# Software-only uninstall (data preserved). For removing data/model too, point
+# the operator at the dedicated uninstall.sh, which has the data flags.
+do_uninstall() {
+    info "Stopping and removing BirdNet-Behavior (data preserved)…"
+    systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
+    systemctl disable "${SERVICE_NAME}" 2>/dev/null || true
+    rm -f "${SERVICE_FILE}"
+    # Tear down the tmpfs mount unit install may have added (escaped '-' = \x2d).
+    systemctl disable --now 'tmp-birdnet\x2dstream.mount' 2>/dev/null || true
+    rm -f '/etc/systemd/system/tmp-birdnet\x2dstream.mount'
+    systemctl daemon-reload 2>/dev/null || true
+    rm -f "${INSTALL_DIR}/${BINARY_NAME}"
+    rm -rf "${STREAM_DIR}"
+    success "Binary, service, and tmpfs unit removed."
+    warn "Data and config preserved at ${DATA_DIR} and ${CONFIG_FILE}."
+    warn "To remove the database, recordings, and model too:  sudo ./uninstall.sh --purge"
+}
+
+# Present the choices when an existing install is found (interactive only).
+# Sets SUBCOMMAND to the chosen flow.
+choose_existing_action() {
+    printf '\n  An existing BirdNet-Behavior install was detected (%s).\n' "$(describe_existing_install)" >/dev/tty
+    printf '  What would you like to do?\n\n' >/dev/tty
+    printf '    1) Update      — install the latest binary, keep all settings (default)\n' >/dev/tty
+    printf '    2) Repair      — recreate dirs, fix permissions, rewrite the service unit, restart\n' >/dev/tty
+    printf '    3) Reinstall   — re-download the binary, rewrite the unit/config (keeps data + model)\n' >/dev/tty
+    printf '    4) Uninstall   — remove the software, keep your data\n' >/dev/tty
+    printf '    5) Cancel      — do nothing\n\n' >/dev/tty
+    local choice
+    choice="$(ask "  Choose [1-5]" "1")"
+    case "${choice}" in
+        1) SUBCOMMAND="update" ;;
+        2) SUBCOMMAND="repair" ;;
+        3) SUBCOMMAND="reinstall" ;;
+        4) SUBCOMMAND="uninstall" ;;
+        *) info "Cancelled — nothing changed."; exit 0 ;;
+    esac
+}
+
+# ===== installer/lib/80-summary.sh =====
 # ---------------------------------------------------------------------------
 # Print post-install instructions
 # ---------------------------------------------------------------------------
@@ -904,8 +1326,14 @@ print_summary() {
         *)                         web_host="${ip}" ;;
     esac
 
+    local headline="Installation complete!"
+    case "${MODE}" in
+        update)    headline="Update complete!" ;;
+        reinstall) headline="Reinstall complete!" ;;
+    esac
+
     echo
-    echo -e "${BOLD}${GREEN}Installation complete!${RESET}"
+    echo -e "${BOLD}${GREEN}${headline}${RESET}"
     echo
     echo -e "  ${BOLD}Binary:${RESET}  ${INSTALL_DIR}/${BINARY_NAME}"
     echo -e "  ${BOLD}Config:${RESET}  ${CONFIG_FILE}"
@@ -939,6 +1367,7 @@ print_summary() {
     echo
 }
 
+# ===== installer/lib/82-zram.sh =====
 # ---------------------------------------------------------------------------
 # ZRAM compressed swap (optional — Pi Zero 2W and low-RAM boards)
 # ---------------------------------------------------------------------------
@@ -1012,30 +1441,15 @@ EOF
     success "ZRAM swap service installed and enabled (persists across reboots)."
 }
 
-# ---------------------------------------------------------------------------
-# Uninstall helper
-# ---------------------------------------------------------------------------
-
-do_uninstall() {
-    require_root
-    info "Stopping and removing BirdNet-Behavior…"
-    systemctl stop birdnet-behavior.service 2>/dev/null || true
-    systemctl disable birdnet-behavior.service 2>/dev/null || true
-    rm -f "${SERVICE_FILE}"
-    systemctl daemon-reload
-    rm -f "${INSTALL_DIR}/${BINARY_NAME}"
-    success "Binary and service removed."
-    warn "Data and config preserved at ${DATA_DIR} and ${CONFIG_FILE}."
-    warn "Remove them manually if no longer needed."
-}
-
+# ===== installer/lib/85-macos.sh =====
 # ---------------------------------------------------------------------------
 # macOS (Apple Silicon) install path
 #
-# The flow above is systemd-specific and would break partway on macOS. macOS
-# instead gets a per-user launchd LaunchAgent (no sudo), the aarch64-apple-darwin
-# prebuilt when a release publishes one, and clear from-source guidance until
-# then — so a Mac user who runs this script never ends up half-installed.
+# The Linux flow above is systemd-specific and would break partway on macOS.
+# macOS instead gets a per-user launchd LaunchAgent (no sudo), the
+# aarch64-apple-darwin prebuilt when a release publishes one, and clear
+# from-source guidance until then — so a Mac user who runs this script never
+# ends up half-installed.
 # ---------------------------------------------------------------------------
 MAC_DATA_DIR="${HOME}/Library/Application Support/birdnet-behavior"
 MAC_PLIST="${HOME}/Library/LaunchAgents/com.tomtom215.birdnet-behavior.plist"
@@ -1178,11 +1592,10 @@ EOF
     fi
 }
 
+# ===== installer/lib/90-args.sh =====
 # ---------------------------------------------------------------------------
-# Argument parsing
+# Argument parsing and usage
 # ---------------------------------------------------------------------------
-
-SUBCOMMAND=""
 
 usage() {
     cat <<EOF
@@ -1194,13 +1607,23 @@ Linux / Raspberry Pi (installs a systemd service, so it needs root):
 
 From a saved copy of this script:
   sudo bash install.sh [--version X.Y.Z]
-  sudo bash install.sh uninstall
+
+Commands (auto-offered as a menu when an existing install is detected):
+  install        Fresh install (the default when nothing is installed).
+  update         Install the latest (or --version) binary; keep all settings.
+  repair         Recreate directories, fix permissions, rewrite the systemd
+                 unit, and restart. Fixes a service that won't start without
+                 re-downloading anything.
+  reinstall      Re-download the binary and rewrite the unit/config
+                 (your data and the model are preserved).
+  uninstall      Remove the software (binary, service, tmpfs unit); keep data.
 
 Options:
   -v, --version X.Y.Z   Install a specific release (default: latest stable).
                         The VERSION environment variable is still honoured too.
       --noninteractive  Don't prompt; auto-detect audio and leave location
                         unset (also implied by BIRDNET_NONINTERACTIVE=1 or no TTY).
+                        With an existing install this implies 'update'.
   -h, --help            Show this help and exit.
 
 Avoid  sudo bash <(curl ...)  — sudo closes the process-substitution file
@@ -1228,8 +1651,9 @@ parse_args() {
                 usage
                 exit 0
                 ;;
-            uninstall)
-                SUBCOMMAND="uninstall"
+            install | update | repair | reinstall | uninstall)
+                [ -z "${SUBCOMMAND}" ] || fatal "Specify only one command (got '${SUBCOMMAND}' and '$1')."
+                SUBCOMMAND="$1"
                 shift
                 ;;
             --)
@@ -1245,8 +1669,9 @@ parse_args() {
     done
 }
 
+# ===== installer/lib/95-main.sh =====
 # ---------------------------------------------------------------------------
-# Main
+# Main entry point
 # ---------------------------------------------------------------------------
 
 main() {
@@ -1275,49 +1700,32 @@ main() {
         exit 0
     fi
 
-    if [ "${SUBCOMMAND}" = "uninstall" ]; then
-        do_uninstall
-        exit 0
-    fi
-
     require_root
+    detect_existing_install
 
-    local arch version
-    arch="$(detect_arch)"
-    check_glibc
-    version="$(resolve_version)"
-
-    info "Arch: ${arch}, Version: ${version}"
-
-    # Upgrade-safe: stop a running service before swapping the binary. You
-    # cannot overwrite a running executable in place (ETXTBSY), and a plain
-    # `systemctl start` on an already-running unit would not load the new
-    # binary. Record that it was running so maybe_start_service restarts it.
-    if systemctl is-active --quiet birdnet-behavior.service 2>/dev/null; then
-        SERVICE_WAS_RUNNING=1
-        info "Stopping the running service to upgrade the binary safely…"
-        systemctl stop birdnet-behavior.service || true
+    # No explicit command: a fresh box installs; an existing one offers the
+    # menu interactively, or silently updates when non-interactive (preserving
+    # the historical `curl | sudo bash` auto-upgrade behaviour for automation).
+    if [ -z "${SUBCOMMAND}" ]; then
+        if [ "${EXISTING_INSTALL}" = 1 ]; then
+            if [ "${INTERACTIVE}" = 1 ]; then
+                choose_existing_action
+            else
+                info "Existing install detected — updating (non-interactive)."
+                SUBCOMMAND="update"
+            fi
+        else
+            SUBCOMMAND="install"
+        fi
     fi
 
-    install_binary "${version}" "${arch}"
-    create_directories
-    setup_tmpfs_streaming
-    download_model
-    prompt_station_settings
-    write_config
-    install_service
-
-    # Offer ZRAM compressed swap on boards with ≤ 2 GB RAM (Pi Zero 2W, Pi 2, etc.)
-    # Silently skipped on machines with adequate RAM or where ZRAM is unavailable.
-    local mem_mb
-    mem_mb="$(awk '/MemTotal/ {printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo 9999)"
-    if [ "${mem_mb}" -le 2048 ] && [ "${SKIP_ZRAM:-0}" != "1" ]; then
-        info "Low-RAM system detected (${mem_mb} MB) — setting up ZRAM compressed swap…"
-        setup_zram || warn "ZRAM setup failed (non-fatal); continuing without it."
-    fi
-
-    maybe_start_service
-    print_summary
+    MODE="${SUBCOMMAND}"
+    case "${SUBCOMMAND}" in
+        install | update | reinstall) do_install ;;
+        repair)                       do_repair ;;
+        uninstall)                    do_uninstall ;;
+        *)                            fatal "Unknown command: ${SUBCOMMAND}" ;;
+    esac
 }
 
 main "$@"
