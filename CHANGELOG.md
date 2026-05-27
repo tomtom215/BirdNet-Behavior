@@ -38,6 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the binary runs, the unit verifies (`systemd-analyze verify`), directories are
   owned by the service user, the config is readable by the daemon, the doctor
   preflight passes, and the web port is listening.
+- **`install.sh` ensures the ffmpeg capture backend for RTSP stations.** When the
+  config has an `RTSP_URL` (which captures through ffmpeg), install/repair now
+  install ffmpeg automatically (`apt-get`), or warn with the exact command if it
+  can't — previously an RTSP station with no ffmpeg passed the installer but the
+  daemon then failed the doctor preflight and never started.
 
 ### Changed
 

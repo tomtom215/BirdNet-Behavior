@@ -46,6 +46,7 @@ do_install() {
     download_model
     prompt_station_settings
     write_config
+    ensure_capture_backend
     install_service
     maybe_setup_zram
     maybe_start_service
@@ -89,8 +90,9 @@ do_repair() {
         download_model
     fi
 
-    write_config       # idempotent: fixes ownership/permissions, keeps content
-    install_service    # rewrites the unit (this is what fixes a bad unit) + reload
+    write_config             # idempotent: fixes ownership/permissions, keeps content
+    ensure_capture_backend   # RTSP stations need ffmpeg or the daemon can't start
+    install_service          # rewrites the unit (this is what fixes a bad unit) + reload
 
     # Clear any failed / rate-limited state from prior crash loops, then bring
     # the service up with the repaired unit.

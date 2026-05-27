@@ -454,6 +454,40 @@ check_disk_space() {
     fi
 }
 
+# RTSP capture runs through ffmpeg (so does the macOS microphone path). A
+# station configured for RTSP without ffmpeg fails the doctor preflight and the
+# service never starts, so make sure ffmpeg is present — installing it when we
+# can. Called by the install/repair flows AFTER the config is written/known
+# (an ALSA microphone on Linux uses arecord and needs no ffmpeg).
+ensure_capture_backend() {
+    local rtsp=0
+    if [ -n "${RTSP_URL_VALUE}" ]; then
+        rtsp=1
+    elif [ -f "${CONFIG_FILE}" ] \
+        && grep -qE '^[[:space:]]*RTSP_URL[[:space:]]*=[[:space:]]*[^[:space:]#]' "${CONFIG_FILE}"; then
+        rtsp=1
+    fi
+    [ "${rtsp}" = 1 ] || return 0
+
+    if command -v ffmpeg &>/dev/null; then
+        success "ffmpeg present — RTSP capture backend OK."
+        return 0
+    fi
+
+    warn "RTSP source configured but ffmpeg is not installed (required for RTSP capture)."
+    if command -v apt-get &>/dev/null; then
+        info "Installing ffmpeg…"
+        if apt-get install -y ffmpeg &>/dev/null \
+            || { apt-get update &>/dev/null && apt-get install -y ffmpeg &>/dev/null; }; then
+            success "ffmpeg installed."
+            return 0
+        fi
+        warn "Automatic ffmpeg install failed."
+    fi
+    warn "Install ffmpeg, then restart the service:"
+    warn "  sudo apt-get install -y ffmpeg && sudo systemctl restart birdnet-behavior"
+}
+
 # Detect what — if anything — is already installed, into globals the rest of
 # the script reads. Safe to call before require_root has run.
 HAVE_BINARY=0
@@ -1206,6 +1240,7 @@ do_install() {
     download_model
     prompt_station_settings
     write_config
+    ensure_capture_backend
     install_service
     maybe_setup_zram
     maybe_start_service
@@ -1249,8 +1284,9 @@ do_repair() {
         download_model
     fi
 
-    write_config       # idempotent: fixes ownership/permissions, keeps content
-    install_service    # rewrites the unit (this is what fixes a bad unit) + reload
+    write_config             # idempotent: fixes ownership/permissions, keeps content
+    ensure_capture_backend   # RTSP stations need ffmpeg or the daemon can't start
+    install_service          # rewrites the unit (this is what fixes a bad unit) + reload
 
     # Clear any failed / rate-limited state from prior crash loops, then bring
     # the service up with the repaired unit.
