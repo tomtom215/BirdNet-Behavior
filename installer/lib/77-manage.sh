@@ -45,7 +45,9 @@ do_install() {
     setup_tmpfs_streaming
     download_model
     prompt_station_settings
-    write_config
+    resolve_listen_addr      # finalize the bind address (env > config > unit > prompt)
+    ensure_admin_password    # auto-protect /admin on a fresh LAN install
+    write_config             # bakes BIRDNET_LISTEN + CADDY_* into the config
     ensure_capture_backend
     install_service
     maybe_setup_zram
@@ -91,6 +93,7 @@ do_repair() {
     fi
 
     write_config             # idempotent: fixes ownership/permissions, keeps content
+    resolve_listen_addr      # preserve LAN bind across re-runs (env > config > unit)
     ensure_capture_backend   # RTSP stations need ffmpeg or the daemon can't start
     install_service          # rewrites the unit (this is what fixes a bad unit) + reload
 

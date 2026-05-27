@@ -27,6 +27,9 @@ write_config() {
     local caddy_pwd_line="# CADDY_PWD=change-me-to-a-strong-password"
     [ -n "${CADDY_USER_VALUE}" ] && caddy_user_line="CADDY_USER=${CADDY_USER_VALUE}"
     [ -n "${CADDY_PWD_VALUE}" ]  && caddy_pwd_line="CADDY_PWD=${CADDY_PWD_VALUE}"
+    # Persist the bind address so `install.sh repair`/`update` keep it (the
+    # installer reads BIRDNET_LISTEN back from here on re-run).
+    local listen_line="BIRDNET_LISTEN=${LISTEN_ADDR}"
 
     info "Writing default config to ${CONFIG_FILE}…"
     cat > "${CONFIG_FILE}" <<EOF
@@ -73,13 +76,19 @@ ${lon_line}
 # --- Site name shown in web UI ---
 # SITENAME=My Bird Station
 
-# --- Web UI authentication (recommended before exposing to the LAN) ---
-# The dashboard — including the admin panel that can change settings, trigger
-# database backups, and update the software — listens on ${LISTEN_ADDR}.
-# localhost is the safe default. To reach it from other devices, change the bind
-# to 0.0.0.0:8502 (edit --listen in ${SERVICE_FILE}, or set BIRDNET_LISTEN and
-# re-run the installer) — and set a password first, or anyone on your LAN can
-# control it. Username defaults to "birdnet".
+# --- Web dashboard bind address ---
+# Default 0.0.0.0:8502 = reachable from other devices on your LAN. Viewing the
+# dashboard is open; the /admin panel (settings, software update) is gated by
+# CADDY_PWD below. To restrict the WHOLE dashboard to this device, set
+# 127.0.0.1:8502, then apply it with:  sudo bash install.sh repair
+${listen_line}
+
+# --- Admin authentication (CADDY_USER / CADDY_PWD) ---
+# The /admin panel can change settings, trigger backups, and update the
+# software, so it requires a password (HTTP Basic Auth, enforced by the binary).
+# A fresh install sets a strong CADDY_PWD automatically; change it here any
+# time. Username defaults to "birdnet". Clearing CADDY_PWD leaves /admin OPEN to
+# anyone who can reach the dashboard.
 ${caddy_user_line}
 ${caddy_pwd_line}
 EOF

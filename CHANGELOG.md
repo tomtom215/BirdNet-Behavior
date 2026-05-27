@@ -51,8 +51,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can't — previously an RTSP station with no ffmpeg passed the installer but the
   daemon then failed the doctor preflight and never started.
 
+- **The dashboard bind address persists across installer re-runs.** `repair`
+  and `update` no longer silently re-hide a LAN-exposed dashboard on localhost:
+  the bind address is read from `BIRDNET_LISTEN` (env or the config file) and,
+  failing that, carried forward from the existing service unit. A fresh install
+  records it as `BIRDNET_LISTEN=` in the config so it is visible and editable.
+
 ### Changed
 
+- **The dashboard is reachable on the LAN out of the box, with the admin panel
+  gated by a password.** The default bind is now `0.0.0.0:8502` (was
+  `127.0.0.1:8502`, which left non-technical users at "connection refused").
+  Only the `/admin` panel — settings, software update, system controls — now
+  requires HTTP Basic Auth (route-level, enforced by the binary); viewing the
+  dashboard is open. A fresh install **auto-generates a strong admin password**
+  (user `birdnet`, shown in the post-install summary and saved as `CADDY_PWD`),
+  so the admin surface is protected by default. Restrict the whole dashboard to
+  this host again with `BIRDNET_LISTEN=127.0.0.1:8502` (env, config, or the
+  interactive prompt).
 - **`install.sh` is now assembled from single-responsibility modules under
   `installer/lib/*.sh` by `installer/build.sh`** (developer-facing only — the
   shipped `install.sh` is still one self-contained, checksummed file). A CI gate

@@ -17,8 +17,10 @@ pub struct Cli {
     )]
     pub config: PathBuf,
 
-    /// Web server listen address.
-    #[arg(long, default_value = "127.0.0.1:8502", env = "BIRDNET_LISTEN")]
+    /// Web server listen address. Defaults to all interfaces so the dashboard
+    /// is reachable on the LAN out of the box; the `/admin` panel is gated by a
+    /// password (set `CADDY_PWD`). Bind `127.0.0.1:8502` to restrict to this host.
+    #[arg(long, default_value = "0.0.0.0:8502", env = "BIRDNET_LISTEN")]
     pub listen: String,
 
     /// Run only the web server (skip analysis daemon).
