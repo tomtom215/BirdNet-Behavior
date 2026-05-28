@@ -167,6 +167,61 @@ fn render_polar_svg(ribbons: &[ChorusRibbon], sunrise_h: f64, sunset_h: f64) -> 
         r = r_outer,
     );
 
+    // O-23 follow-up — 4-segment outer moon-phase arc.
+    //
+    // The four segments map to the cardinal lunar phases (new / waxing
+    // half / full / waning half) and sit at the cardinal positions of
+    // the polar clock (top / right / bottom / left). The current
+    // phase's segment is drawn brightest; the other three fade so the
+    // wheel still reads as "where we are in the cycle".
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0_i64, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+    let phase = super::overlays::moon_phase_at(now_secs);
+    let active = super::overlays::MoonCardinal::from_phase(phase);
+    let r_moon = RING_MAX + 40.0;
+    // Each segment spans 90° minus a small gap so adjacent arcs read
+    // as distinct rather than a single continuous ring.
+    let gap = 0.08_f64; // ~4.6°
+    let half_span = PI / 4.0 - gap / 2.0;
+    let centers = [
+        (super::overlays::MoonCardinal::New, -PI / 2.0, "○"),
+        (super::overlays::MoonCardinal::WaxingHalf, 0.0, "◐"),
+        (super::overlays::MoonCardinal::Full, PI / 2.0, "●"),
+        (super::overlays::MoonCardinal::WaningHalf, PI, "◑"),
+    ];
+    for (card, center, glyph) in centers {
+        let a_start = center - half_span;
+        let a_end = center + half_span;
+        let (sx, sy) = polar(CX, CY, a_start, r_moon);
+        let (ex, ey) = polar(CX, CY, a_end, r_moon);
+        let is_active = card == active;
+        // Active segment: bright moon tint; others: muted hairline.
+        let (stroke, sw, op) = if is_active {
+            ("var(--dawn-ink, var(--fg))", 3.0, 0.92)
+        } else {
+            ("var(--fg-3)", 1.6, 0.32)
+        };
+        let _ = write!(
+            s,
+            r#"<path d="M{sx:.2},{sy:.2} A{r:.2},{r:.2} 0 0 1 {ex:.2},{ey:.2}" stroke="{stroke}" stroke-width="{sw}" stroke-opacity="{op}" fill="none" stroke-linecap="round" data-moon-segment="{seg}"/>"#,
+            r = r_moon,
+            seg = match card {
+                super::overlays::MoonCardinal::New => "new",
+                super::overlays::MoonCardinal::WaxingHalf => "waxing-half",
+                super::overlays::MoonCardinal::Full => "full",
+                super::overlays::MoonCardinal::WaningHalf => "waning-half",
+            },
+        );
+        // Glyph label slightly outside the arc, on the cardinal axis.
+        let (gx, gy) = polar(CX, CY, center, r_moon + 16.0);
+        let glyph_op = if is_active { 0.95 } else { 0.4 };
+        let _ = write!(
+            s,
+            r#"<text x="{gx:.2}" y="{gy:.2}" text-anchor="middle" dominant-baseline="central" style="font-size:13px;fill:var(--fg-2);fill-opacity:{glyph_op};">{glyph}</text>"#,
+        );
+    }
+
     // Hour ticks + labels.
     for h in 0..24 {
         let a = hour_to_angle(h as f64);
@@ -548,5 +603,21 @@ mod tests {
         // Day length should be >14 hours.
         let day_len = (set - rise).rem_euclid(24.0);
         assert!(day_len > 14.0, "day_len={day_len}");
+    }
+
+    #[test]
+    fn render_polar_svg_includes_four_moon_segments() {
+        // Empty ribbons + arbitrary sunrise/sunset are enough — the
+        // moon ring is independent of the chorus data.
+        let svg = render_polar_svg(&[], 6.0, 18.0);
+        assert!(svg.contains(r#"data-moon-segment="new""#));
+        assert!(svg.contains(r#"data-moon-segment="waxing-half""#));
+        assert!(svg.contains(r#"data-moon-segment="full""#));
+        assert!(svg.contains(r#"data-moon-segment="waning-half""#));
+        // Exactly one segment carries the "active" stroke width (3.0).
+        // The inactive stroke is 1.6; assert that the active form
+        // appears once.
+        let active_count = svg.matches("stroke-width=\"3\"").count();
+        assert_eq!(active_count, 1, "expected exactly one active moon segment");
     }
 }
