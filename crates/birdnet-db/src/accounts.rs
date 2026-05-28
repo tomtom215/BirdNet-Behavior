@@ -22,6 +22,10 @@
 
 use std::fmt;
 
+use argon2::Argon2;
+use password_hash::{
+    PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng,
+};
 use rusqlite::{Connection, OptionalExtension, params};
 
 // ---------------------------------------------------------------------------
@@ -159,6 +163,83 @@ pub struct AuditEntry {
     pub action: String,
     pub target: Option<String>,
     pub metadata: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Password hashing helpers — argon2id (O-14 / O-15 wire flip)
+// ---------------------------------------------------------------------------
+
+/// Hash a plaintext password using the default argon2id parameters.
+///
+/// Returns a self-describing PHC string that round-trips through
+/// [`verify_password`]; the salt is generated from the OS CSPRNG.
+///
+/// # Errors
+///
+/// Returns [`AccountsError::Invalid`] if the underlying hasher rejects
+/// the input (the argon2 contract guarantees this only happens for
+/// pathologically long passwords; the wrapper surface is the public-facing
+/// failure type the accounts surface already uses).
+pub fn hash_password(password: &str) -> Result<String, AccountsError> {
+    let salt = SaltString::generate(&mut OsRng);
+    Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map(|h| h.to_string())
+        .map_err(|e| AccountsError::Invalid(format!("password hash failed: {e}")))
+}
+
+/// Constant-time verification of `password` against `hash`.
+///
+/// Returns `Ok(true)` on a match, `Ok(false)` on a mismatch, and
+/// [`AccountsError::Invalid`] when the stored hash is malformed (e.g.
+/// the seed `""` placeholder before the bootstrap migration runs).
+///
+/// Pre-flip compatibility: the legacy `PLAINTEXT-PLACEHOLDER:` prefix
+/// shipped in #89 is matched as a literal-string compare so an operator
+/// who created a viewer account before this PR can still sign in. Once
+/// the wire is flipped the legacy hashes are rotated on next set-password
+/// (the helper at the top of every mutating handler does this).
+///
+/// # Errors
+///
+/// Returns [`AccountsError::Invalid`] on malformed hash material.
+pub fn verify_password(hash: &str, password: &str) -> Result<bool, AccountsError> {
+    if hash.is_empty() {
+        return Ok(false);
+    }
+    if let Some(rest) = hash.strip_prefix("PLAINTEXT-PLACEHOLDER:") {
+        // Pre-flip seed — constant-time compare so timing leakage doesn't
+        // distinguish "wrong password" from "legacy hash".
+        return Ok(constant_time_eq(rest.as_bytes(), password.as_bytes()));
+    }
+    let parsed = PasswordHash::new(hash)
+        .map_err(|e| AccountsError::Invalid(format!("malformed password hash: {e}")))?;
+    Ok(Argon2::default()
+        .verify_password(password.as_bytes(), &parsed)
+        .is_ok())
+}
+
+/// Whether `hash` is one of the legacy placeholder formats from #89's
+/// scaffolding (empty string for the seed admin, or
+/// `PLAINTEXT-PLACEHOLDER:` for viewer accounts created pre-flip).
+///
+/// Callers use this to decide whether a successful basic-auth
+/// authentication should opportunistically rotate the hash to argon2id
+/// on the fly.
+#[must_use]
+pub fn is_legacy_password_hash(hash: &str) -> bool {
+    hash.is_empty() || hash.starts_with("PLAINTEXT-PLACEHOLDER:")
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut result = 0_u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        result |= x ^ y;
+    }
+    result == 0
 }
 
 // ---------------------------------------------------------------------------
@@ -764,6 +845,53 @@ mod tests {
         let rest = conn.recent(10).unwrap();
         assert_eq!(rest.len(), 1);
         assert_eq!(rest[0].action, "recent");
+    }
+
+    #[test]
+    fn argon2_hash_round_trips_via_verify() {
+        let hash = hash_password("correct-horse-battery-staple").unwrap();
+        assert!(verify_password(&hash, "correct-horse-battery-staple").unwrap());
+        assert!(!verify_password(&hash, "wrong-password").unwrap());
+    }
+
+    #[test]
+    fn argon2_hash_generates_unique_salt_per_call() {
+        // Two hashes of the same plaintext must differ (random salt).
+        let a = hash_password("same-secret").unwrap();
+        let b = hash_password("same-secret").unwrap();
+        assert_ne!(a, b);
+        // Both still verify against the original plaintext.
+        assert!(verify_password(&a, "same-secret").unwrap());
+        assert!(verify_password(&b, "same-secret").unwrap());
+    }
+
+    #[test]
+    fn empty_hash_never_verifies() {
+        assert!(!verify_password("", "anything").unwrap());
+    }
+
+    #[test]
+    fn malformed_hash_returns_invalid_not_silent_false() {
+        let err = verify_password("not-a-phc-string", "x").unwrap_err();
+        assert!(matches!(err, AccountsError::Invalid(_)));
+    }
+
+    #[test]
+    fn legacy_plaintext_placeholder_still_verifies_during_migration() {
+        // Seeds shipped in #89 stored `PLAINTEXT-PLACEHOLDER:{password}` so
+        // an operator who set a viewer password before this PR can still
+        // sign in (and get rotated to argon2id on next use).
+        let legacy = "PLAINTEXT-PLACEHOLDER:hunter2";
+        assert!(verify_password(legacy, "hunter2").unwrap());
+        assert!(!verify_password(legacy, "wrong").unwrap());
+    }
+
+    #[test]
+    fn is_legacy_password_hash_detects_both_shapes() {
+        assert!(is_legacy_password_hash(""));
+        assert!(is_legacy_password_hash("PLAINTEXT-PLACEHOLDER:anything"));
+        let real = hash_password("real").unwrap();
+        assert!(!is_legacy_password_hash(&real));
     }
 
     #[test]

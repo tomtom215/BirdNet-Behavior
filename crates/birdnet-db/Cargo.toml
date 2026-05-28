@@ -15,6 +15,9 @@ description = "Database layer: SQLite (operational) with WAL resilience, backup,
 serde.workspace = true
 tracing.workspace = true
 rusqlite.workspace = true
+# Password hashing for the accounts surface (O-14 / O-15 wire flip).
+argon2.workspace = true
+password-hash.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
