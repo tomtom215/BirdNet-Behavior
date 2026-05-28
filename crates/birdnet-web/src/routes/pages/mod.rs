@@ -31,6 +31,7 @@ pub mod detection_reviews;
 pub mod empty_states;
 pub mod gallery;
 pub mod health;
+pub(crate) mod help;
 pub mod heatmap;
 pub mod history;
 pub mod life_list;
@@ -80,6 +81,9 @@ pub(crate) const FOOTER_HTML: &str =
     include_str!("../../../templates/_partial_footer.html");
 /// Command palette overlay (O-19), injected into every full-page shell.
 pub(crate) const CMDK_HTML: &str = include_str!("../../../templates/_partial_cmdk.html");
+/// Help-drawer dialog (O-20), injected into every full-page shell.
+pub(crate) const HELP_DRAWER_HTML: &str =
+    include_str!("../../../templates/_partial_help_drawer.html");
 
 /// Build all page and partial routes.
 pub fn router() -> Router<AppState> {
@@ -108,6 +112,7 @@ pub fn router() -> Router<AppState> {
         .merge(migration::router())
         .merge(dawn_chorus::router())
         .merge(cmdk::router())
+        .merge(help::router())
         .route(
             "/pages/today-phrase",
             get(today_phrase::today_phrase_partial),
@@ -163,7 +168,8 @@ pub(crate) fn render_page(title: &str, content: &str, active_nav: &str) -> Html<
         .replace("{{nav_help}}", nav("help"))
         .replace("{{confirm_modal}}", CONFIRM_MODAL_HTML)
         .replace("{{toast_region}}", TOAST_REGION_HTML)
-        .replace("{{cmdk_partial}}", CMDK_HTML);
+        .replace("{{cmdk_partial}}", CMDK_HTML)
+        .replace("{{help_drawer}}", HELP_DRAWER_HTML);
     Html(html)
 }
 

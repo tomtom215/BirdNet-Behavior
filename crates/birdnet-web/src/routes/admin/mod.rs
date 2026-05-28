@@ -89,6 +89,8 @@ pub(crate) fn admin_shell(title: &str, active: &str, body: &str) -> String {
     let toast_region = crate::routes::pages::TOAST_REGION_HTML;
     // Command palette overlay (O-19): ⌘K works on every page including admin.
     let cmdk_partial = crate::routes::pages::CMDK_HTML;
+    // Help drawer dialog (O-20): admin pages reference Topic links too.
+    let help_drawer = crate::routes::pages::HELP_DRAWER_HTML;
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -115,6 +117,7 @@ pub(crate) fn admin_shell(title: &str, active: &str, body: &str) -> String {
 {toast_region}
 {confirm_modal}
 {cmdk_partial}
+{help_drawer}
 </body>
 </html>"#
     )
