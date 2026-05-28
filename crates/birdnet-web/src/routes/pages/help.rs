@@ -14,15 +14,20 @@
 //!
 //! The runtime looks for the rendered docs in the directory named by the
 //! `BNB_HELP_DIR` env var, then falls back to `docs/book/_generated/html`
-//! (the project convention). When neither exists the route returns 404 —
-//! the drawer's client script handles that gracefully ("docs are
-//! unavailable on this device").
+//! — the same path the workspace `build.rs` writes to via the
+//! `[build-dependencies] mdbook` build step. When neither exists the
+//! route returns 404 and the drawer's client script handles that
+//! gracefully ("docs are unavailable on this device").
 //!
-//! TODO(O-20-followup): add a `build.rs` step that invokes
-//! `mdbook build docs/book --dest-dir docs/book/_generated/html` when
-//! `mdbook` is on PATH, so a release tarball ships with the docs
-//! pre-rendered. The DIFF specs this as option A; the helpers and route
-//! shipped here are the part that doesn't depend on the build step.
+//! Set `BNB_SKIP_DOCS=1` at build time to skip the mdBook render (e.g.
+//! for air-gapped releases that ship a pre-rendered docs tree pointed at
+//! by `BNB_HELP_DIR`). See the workspace `build.rs` docstring.
+//!
+//! TODO(O-20-followup): the per-template `help_link(Topic::…)` sweep
+//! across the ~25 analytical screens in `docs/proposed_changes/O-20_help/
+//! DIFF.md` is still outstanding. The helpers below ship; only one call
+//! site (the low-confidence species panel in `admin/quality.rs`) is
+//! wired today.
 
 use std::path::PathBuf;
 

@@ -63,3 +63,8 @@ proptest-regressions/
 
 # mdBook build output (the docs site is built + deployed by .github/workflows/docs.yml)
 docs/.book-build/
+
+# mdBook build output from the workspace `build.rs` (O-20). The runtime
+# `ServeDir` at `/help/*` reads from this directory; every cargo build
+# re-renders into it, so it's a build artifact, never a checked-in tree.
+docs/book/_generated/html/
