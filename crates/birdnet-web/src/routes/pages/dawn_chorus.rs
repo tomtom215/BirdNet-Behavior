@@ -428,13 +428,15 @@ fn current_hour_decimal() -> f64 {
 /// If unset, defaults to (40.0°N, -74.0°W) — a sensible mid-Atlantic
 /// value that keeps the polar-clock readable until coordinates are wired.
 fn station_sun_times() -> (f64, f64) {
+    // Locale-tolerant: `BNB_STATION_LAT=42,3601` (EU operators) works
+    // the same as `42.3601` here.
     let lat = std::env::var("BNB_STATION_LAT")
         .ok()
-        .and_then(|s| s.parse::<f64>().ok())
+        .and_then(|s| birdnet_core::config::locale::parse_decimal(&s).ok())
         .unwrap_or(40.0);
     let lon = std::env::var("BNB_STATION_LON")
         .ok()
-        .and_then(|s| s.parse::<f64>().ok())
+        .and_then(|s| birdnet_core::config::locale::parse_decimal(&s).ok())
         .unwrap_or(-74.0);
     let doy = current_day_of_year();
     solar_sun_times(lat, lon, doy)

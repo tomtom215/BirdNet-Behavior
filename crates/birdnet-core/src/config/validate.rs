@@ -104,7 +104,9 @@ fn check_coords(config: &Config, out: &mut Vec<Finding>) {
     let lon_raw = config.get("LONGITUDE").map(str::trim);
 
     if let Some(raw) = lat_raw {
-        match raw.parse::<f64>() {
+        // `parse_decimal` accepts both `.` and `,` as the decimal
+        // separator so EU-formatted config values aren't rejected.
+        match super::locale::parse_decimal(raw) {
             Ok(v) if !(-90.0..=90.0).contains(&v) => out.push(Finding::error(
                 "LATITUDE",
                 format!("latitude {v} is outside the valid range -90.0 to 90.0"),
@@ -113,14 +115,14 @@ fn check_coords(config: &Config, out: &mut Vec<Finding>) {
             Err(e) => out.push(Finding::error(
                 "LATITUDE",
                 format!("latitude is not a number: {e}"),
-                "use decimal degrees, e.g. LATITUDE=42.3601".to_string(),
+                "use decimal degrees, e.g. LATITUDE=42.3601 or 42,3601".to_string(),
             )),
             Ok(_) => {}
         }
     }
 
     if let Some(raw) = lon_raw {
-        match raw.parse::<f64>() {
+        match super::locale::parse_decimal(raw) {
             Ok(v) if !(-180.0..=180.0).contains(&v) => out.push(Finding::error(
                 "LONGITUDE",
                 format!("longitude {v} is outside the valid range -180.0 to 180.0"),
@@ -129,7 +131,7 @@ fn check_coords(config: &Config, out: &mut Vec<Finding>) {
             Err(e) => out.push(Finding::error(
                 "LONGITUDE",
                 format!("longitude is not a number: {e}"),
-                "use decimal degrees, e.g. LONGITUDE=-71.0589".to_string(),
+                "use decimal degrees, e.g. LONGITUDE=-71.0589 or -71,0589".to_string(),
             )),
             Ok(_) => {}
         }
@@ -293,7 +295,8 @@ fn check_lang(config: &Config, out: &mut Vec<Finding>) {
 }
 
 fn parse_float(config: &Config, key: &str) -> Option<Result<f64, std::num::ParseFloatError>> {
-    config.get(key).map(str::trim).map(str::parse::<f64>)
+    // Locale-tolerant — accepts both `42.36` and `42,36`.
+    config.get(key).map(super::locale::parse_decimal)
 }
 
 #[cfg(test)]

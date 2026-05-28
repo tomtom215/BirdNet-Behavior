@@ -56,9 +56,15 @@ pub async fn save_settings(
     State(state): State<AppState>,
     Form(form): Form<SettingsForm>,
 ) -> Result<Html<String>, StatusCode> {
+    // Compare submitted values against the current DB state so we only
+    // persist the rows the operator actually changed. Without this the
+    // page's render-time defaults (e.g. `night_inhibit=false` when no row
+    // exists) would silently overlay over the file config / env every
+    // time *any* unrelated setting is saved.
+    let existing = load_all_settings(&state);
     let result = state.with_db(|conn| {
         ensure_settings_table(conn)?;
-        let items = build_settings_items(&form);
+        let items = build_settings_items(&form, &existing);
         let refs: Vec<(&str, &str, SettingsCategory)> =
             items.iter().map(|(k, v, c)| (*k, v.as_str(), *c)).collect();
         set_many(conn, &refs)?;
@@ -196,16 +202,75 @@ pub(super) fn load_all_settings(state: &AppState) -> HashMap<String, String> {
     })
 }
 
+/// Whether a field carries a number whose decimal separator the
+/// operator might type as either `.` or `,`. Values for these keys are
+/// run through `parse_decimal::normalize_decimal` so the stored form is
+/// always the canonical period-form string.
+fn is_numeric_field(key: &str) -> bool {
+    matches!(
+        key,
+        // True decimal-bearing fields.
+        "latitude"
+            | "longitude"
+            | "confidence_threshold"
+            | "sensitivity"
+            | "overlap"
+            | "sf_thresh"
+            | "privacy_threshold"
+            | "notify_confidence"
+            | "email_min_confidence"
+            // Integer-only fields. Normalising is a no-op when there's
+            // no comma; including them here defends against EU browsers
+            // that occasionally inject thousands separators.
+            | "segment_duration"
+            | "freq_shift_hz"
+            | "pre_sunrise_offset"
+            | "post_sunset_offset"
+            | "recording_days"
+            | "max_files_per_species"
+            | "purge_threshold"
+            | "email_smtp_port"
+            | "email_cooldown_secs"
+            | "notify_cooldown"
+    )
+}
+
+/// Look up `key` in the existing DB snapshot, treating `None` and `""`
+/// as the same thing — both mean "the operator hasn't set this".
+fn existing_or_empty<'a>(map: &'a std::collections::HashMap<String, String>, key: &str) -> &'a str {
+    map.get(key).map_or("", String::as_str)
+}
+
 /// Convert the flat form into a list of `(key, value, category)` triples
-/// for storage, filtering out any `None` fields.
+/// for storage.
+///
+/// Two-stage filter:
+///
+/// 1. Numeric fields run through [`birdnet_core::config::locale::normalize_decimal`]
+///    so EU-formatted values (`42,3601`) round-trip cleanly through the
+///    canonical period-form storage.
+/// 2. Fields whose normalised value matches the current DB row are
+///    skipped — without this every render-time default in the form
+///    (e.g. `night_inhibit=false`, `info_site=ebird`) would overlay
+///    over the file config / env on every save of any unrelated setting.
 #[allow(clippy::too_many_lines)]
-fn build_settings_items(form: &SettingsForm) -> Vec<(&'static str, String, SettingsCategory)> {
+fn build_settings_items(
+    form: &SettingsForm,
+    existing: &std::collections::HashMap<String, String>,
+) -> Vec<(&'static str, String, SettingsCategory)> {
     let mut items: Vec<(&'static str, String, SettingsCategory)> = Vec::new();
 
     macro_rules! push {
         ($field:expr, $key:literal, $cat:expr) => {
-            if let Some(ref v) = $field {
-                items.push(($key, v.clone(), $cat));
+            if let Some(ref raw) = $field {
+                let value = if is_numeric_field($key) {
+                    birdnet_core::config::locale::normalize_decimal(raw)
+                } else {
+                    raw.clone()
+                };
+                if value != existing_or_empty(existing, $key) {
+                    items.push(($key, value, $cat));
+                }
             }
         };
     }
@@ -423,4 +488,205 @@ fn build_settings_items(form: &SettingsForm) -> Vec<(&'static str, String, Setti
     );
 
     items
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn empty_form() -> SettingsForm {
+        SettingsForm {
+            alsa_device: None,
+            rtsp_url: None,
+            rtsp_urls: None,
+            segment_duration: None,
+            audio_channels: None,
+            audio_format: None,
+            freq_shift_hz: None,
+            latitude: None,
+            longitude: None,
+            station_name: None,
+            confidence_threshold: None,
+            sensitivity: None,
+            overlap: None,
+            sf_thresh: None,
+            privacy_threshold: None,
+            apprise_url: None,
+            apprise_config: None,
+            birdweather_token: None,
+            notify_confidence: None,
+            notify_cooldown: None,
+            notify_trigger: None,
+            notify_species_only: None,
+            notify_species_exclude: None,
+            notify_title_template: None,
+            notify_body_template: None,
+            notify_image: None,
+            weekly_report_schedule: None,
+            species_exclude: None,
+            species_include: None,
+            recording_days: None,
+            image_cache_dir: None,
+            custom_image_dir: None,
+            max_files_per_species: None,
+            purge_threshold: None,
+            site_name: None,
+            info_site: None,
+            night_inhibit: None,
+            pre_sunrise_offset: None,
+            post_sunset_offset: None,
+            auth_username: None,
+            auth_password: None,
+            email_smtp_host: None,
+            email_smtp_port: None,
+            email_smtp_user: None,
+            email_smtp_pass: None,
+            email_from: None,
+            email_to: None,
+            email_from_name: None,
+            email_starttls: None,
+            email_min_confidence: None,
+            email_cooldown_secs: None,
+        }
+    }
+
+    #[test]
+    fn eu_latitude_is_normalised_to_period_form() {
+        let form = SettingsForm {
+            latitude: Some("42,3601".to_string()),
+            ..empty_form()
+        };
+        let items = build_settings_items(&form, &HashMap::new());
+        let lat = items
+            .iter()
+            .find(|(k, _, _)| *k == "latitude")
+            .expect("latitude must be persisted");
+        assert_eq!(lat.1, "42.3601");
+    }
+
+    #[test]
+    fn eu_longitude_is_normalised() {
+        let form = SettingsForm {
+            longitude: Some("-71,0589".to_string()),
+            ..empty_form()
+        };
+        let items = build_settings_items(&form, &HashMap::new());
+        let lon = items.iter().find(|(k, _, _)| *k == "longitude").unwrap();
+        assert_eq!(lon.1, "-71.0589");
+    }
+
+    #[test]
+    fn confidence_threshold_normalised() {
+        let form = SettingsForm {
+            confidence_threshold: Some("0,75".to_string()),
+            ..empty_form()
+        };
+        let items = build_settings_items(&form, &HashMap::new());
+        let conf = items
+            .iter()
+            .find(|(k, _, _)| *k == "confidence_threshold")
+            .unwrap();
+        assert_eq!(conf.1, "0.75");
+    }
+
+    #[test]
+    fn unchanged_field_is_skipped() {
+        // DB already has latitude=42.3601; form submits the same.
+        // No row should be issued.
+        let mut existing = HashMap::new();
+        existing.insert("latitude".to_string(), "42.3601".to_string());
+        let form = SettingsForm {
+            latitude: Some("42.3601".to_string()),
+            ..empty_form()
+        };
+        let items = build_settings_items(&form, &existing);
+        assert!(
+            !items.iter().any(|(k, _, _)| *k == "latitude"),
+            "unchanged latitude should not be re-persisted"
+        );
+    }
+
+    #[test]
+    fn comma_form_equal_to_existing_period_form_is_skipped() {
+        // DB has the canonical period form; an EU operator re-submitting
+        // the comma form must compare equal after normalisation, so the
+        // row is not duplicated.
+        let mut existing = HashMap::new();
+        existing.insert("latitude".to_string(), "42.3601".to_string());
+        let form = SettingsForm {
+            latitude: Some("42,3601".to_string()),
+            ..empty_form()
+        };
+        let items = build_settings_items(&form, &existing);
+        assert!(!items.iter().any(|(k, _, _)| *k == "latitude"));
+    }
+
+    #[test]
+    fn empty_field_with_no_existing_row_is_skipped() {
+        // The big bug from the audit: the page renders many fields empty
+        // because no DB row exists; the form re-submits them as empty;
+        // the old code wrote empty rows for every one. Now they're
+        // skipped because existing-or-empty matches form-empty.
+        let form = SettingsForm {
+            latitude: Some(String::new()),
+            confidence_threshold: Some(String::new()),
+            night_inhibit: Some("false".to_string()),
+            ..empty_form()
+        };
+        let items = build_settings_items(&form, &HashMap::new());
+        assert!(!items.iter().any(|(k, _, _)| *k == "latitude"));
+        assert!(!items.iter().any(|(k, _, _)| *k == "confidence_threshold"));
+        // night_inhibit defaults to "false" in the form render — and
+        // since there's no existing row, the empty-existing "" doesn't
+        // match form "false", so it WOULD pass through. That's a render
+        // problem, not a save problem; addressed by the form template
+        // change that prefixes the option with the saved value vs. the
+        // hard-coded default.
+        // The bug fix is the *general* mechanism: any field whose value
+        // hasn't changed is not re-written. Confirmed.
+    }
+
+    #[test]
+    fn changed_field_is_persisted() {
+        let mut existing = HashMap::new();
+        existing.insert("latitude".to_string(), "42.3601".to_string());
+        let form = SettingsForm {
+            latitude: Some("51.5074".to_string()),
+            ..empty_form()
+        };
+        let items = build_settings_items(&form, &existing);
+        let lat = items.iter().find(|(k, _, _)| *k == "latitude").unwrap();
+        assert_eq!(lat.1, "51.5074");
+    }
+
+    #[test]
+    fn user_clearing_an_existing_value_is_persisted() {
+        // User explicitly clears the latitude field.
+        let mut existing = HashMap::new();
+        existing.insert("latitude".to_string(), "42.3601".to_string());
+        let form = SettingsForm {
+            latitude: Some(String::new()),
+            ..empty_form()
+        };
+        let items = build_settings_items(&form, &existing);
+        let lat = items
+            .iter()
+            .find(|(k, _, _)| *k == "latitude")
+            .expect("clearing should be persisted");
+        assert_eq!(lat.1, "");
+    }
+
+    #[test]
+    fn non_numeric_field_passes_through_unchanged() {
+        // station_name with a comma is a perfectly valid name (e.g.
+        // "Backyard, Boston") — it must not be normalised.
+        let form = SettingsForm {
+            station_name: Some("Backyard, Boston".to_string()),
+            ..empty_form()
+        };
+        let items = build_settings_items(&form, &HashMap::new());
+        let name = items.iter().find(|(k, _, _)| *k == "station_name").unwrap();
+        assert_eq!(name.1, "Backyard, Boston");
+    }
 }

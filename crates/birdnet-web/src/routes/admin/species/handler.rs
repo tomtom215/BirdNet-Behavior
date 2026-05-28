@@ -114,10 +114,17 @@ pub async fn thresholds_partial(State(state): State<AppState>) -> Html<String> {
     Html(render_thresholds_partial(&thresholds))
 }
 
+/// Per-species threshold submission.
+///
+/// `threshold` is received as a string so the handler can accept both
+/// `.` and `,` decimal separators (EU operators) via
+/// [`birdnet_core::config::locale::parse_decimal`]. Receiving it as
+/// `f64` here would let serde's default parser reject any comma value
+/// with a 422.
 #[derive(Debug, Deserialize)]
 pub struct ThresholdForm {
     pub sci_name: String,
-    pub threshold: f64,
+    pub threshold: String,
 }
 
 /// Set a per-species confidence threshold and return the updated thresholds partial.
@@ -130,11 +137,14 @@ pub async fn set_threshold(
     Form(form): Form<ThresholdForm>,
 ) -> Result<Html<String>, StatusCode> {
     let sci_name = form.sci_name.trim().to_string();
-    if sci_name.is_empty() || !(0.0..=1.0).contains(&form.threshold) {
+    let Ok(threshold) = birdnet_core::config::locale::parse_decimal(&form.threshold) else {
+        return Err(StatusCode::BAD_REQUEST);
+    };
+    if sci_name.is_empty() || !(0.0..=1.0).contains(&threshold) {
         return Err(StatusCode::BAD_REQUEST);
     }
     state.with_db(|conn| {
-        birdnet_db::sqlite::set_species_threshold(conn, &sci_name, form.threshold).ok();
+        birdnet_db::sqlite::set_species_threshold(conn, &sci_name, threshold).ok();
     });
     let thresholds =
         state.with_db(|conn| birdnet_db::sqlite::get_species_thresholds(conn).unwrap_or_default());

@@ -68,7 +68,8 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     <div class="grid-2">
       <div>
         <label for="email_min_confidence">Alert Min Confidence</label>
-        <input id="email_min_confidence" name="email_min_confidence" type="number" value="{econf}" min="0" max="1" step="0.05">
+        <input id="email_min_confidence" name="email_min_confidence" type="text"
+               inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" value="{econf}" placeholder="0.80">
         <p class="hint">Only email for detections above this threshold</p>
       </div>
       <div>

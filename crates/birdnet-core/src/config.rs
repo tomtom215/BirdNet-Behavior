@@ -8,6 +8,7 @@
 //! The [`validate`] submodule provides range and shape checks for the parsed
 //! values so misconfiguration surfaces at startup instead of at first use.
 
+pub mod locale;
 pub mod validate;
 
 use std::collections::HashMap;

@@ -53,12 +53,18 @@ pub fn router() -> Router<AppState> {
 // ---------------------------------------------------------------------------
 
 /// Form data for creating an alert rule.
+///
+/// `confidence_min`/`confidence_max` are received as strings so the
+/// handler can accept both `.` and `,` decimal separators (EU
+/// operators) via `birdnet_core::config::locale::parse_decimal`.
+/// Receiving them as `f64` here would let serde's default parser
+/// reject any comma value with a 422.
 #[derive(Debug, Deserialize)]
 struct RuleForm {
     name: String,
     species_pattern: Option<String>,
-    confidence_min: Option<f64>,
-    confidence_max: Option<f64>,
+    confidence_min: Option<String>,
+    confidence_max: Option<String>,
     hour_start: Option<u8>,
     hour_end: Option<u8>,
     days_of_week: Option<String>,
@@ -66,6 +72,16 @@ struct RuleForm {
     action_webhook_url: Option<String>,
     action_webhook_method: Option<String>,
     action_webhook_body: Option<String>,
+}
+
+/// Locale-tolerant decimal parser for an `Option<String>` form field.
+/// Returns the parsed `f64` or the documented `default` when the field
+/// is absent, empty, or unparseable.
+fn parse_optional_decimal(raw: Option<&str>, default: f64) -> f64 {
+    raw.map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(|s| birdnet_core::config::locale::parse_decimal(s).ok())
+        .unwrap_or(default)
 }
 
 // ---------------------------------------------------------------------------
@@ -131,8 +147,10 @@ async fn create_rule(
         name: rule_name.clone(),
         enabled: true,
         species_pattern,
-        confidence_min: form.confidence_min.unwrap_or(0.0).clamp(0.0, 1.0),
-        confidence_max: form.confidence_max.unwrap_or(1.0).clamp(0.0, 1.0),
+        confidence_min: parse_optional_decimal(form.confidence_min.as_deref(), 0.0)
+            .clamp(0.0, 1.0),
+        confidence_max: parse_optional_decimal(form.confidence_max.as_deref(), 1.0)
+            .clamp(0.0, 1.0),
         hour_start: form.hour_start,
         hour_end: form.hour_end,
         days_of_week,
@@ -295,13 +313,13 @@ fn render_page(_rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
       <div class="form-grid-3">
         <div>
           <label for="confidence_min">Min Confidence (0.0–1.0)</label>
-          <input id="confidence_min" name="confidence_min" type="number"
-                 min="0" max="1" step="0.01" value="0.70">
+          <input id="confidence_min" name="confidence_min" type="text"
+                 inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" value="0.70">
         </div>
         <div>
           <label for="confidence_max">Max Confidence (0.0–1.0)</label>
-          <input id="confidence_max" name="confidence_max" type="number"
-                 min="0" max="1" step="0.01" value="1.00">
+          <input id="confidence_max" name="confidence_max" type="text"
+                 inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" value="1.00">
         </div>
         <div>
           <label for="days_of_week">Days of Week (blank = any)</label>
