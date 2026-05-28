@@ -153,10 +153,12 @@ pub fn default_ttl_ms() -> u64 {
         .map_or(DEFAULT_TTL_MS, |days| u64::from(days) * 86_400_000)
 }
 
-/// Generate a fresh session id (26-char base32 of 128 random bits per
-/// the O-15 DIFF). Sources entropy from `password-hash::rand_core::OsRng`
-/// (the same CSPRNG argon2 uses for salts), already in the dep tree
-/// via the argon2 helpers added in commit 1 of this branch.
+/// Generate a fresh session id.
+///
+/// 26 lowercase base32 chars carrying 128 bits of randomness, per the
+/// O-15 DIFF. Sources entropy from `password-hash::rand_core::OsRng`
+/// (the same CSPRNG argon2 uses for salts), already in the dep tree via
+/// the argon2 helpers shipped earlier on this branch.
 #[must_use]
 pub fn generate_session_id() -> String {
     use password_hash::rand_core::{OsRng, RngCore};

@@ -67,7 +67,7 @@ async fn login_page(req: Request) -> Html<String> {
 ///
 /// 1. DB lookup: if a user with `form.username` exists and its
 ///    `pwd_argon2` verifies the submitted password, that's the user.
-/// 2. CADDY_USER/CADDY_PWD env path: legacy basic-auth credentials
+/// 2. `CADDY_USER`/`CADDY_PWD` env path: legacy basic-auth credentials
 ///    map onto the seed admin row. This is what makes the wire flip
 ///    survive the case where the bootstrap hasn't run yet.
 /// 3. Anything else → `?error=1`.
@@ -84,23 +84,21 @@ async fn login_submit(
     // Authenticate. The order matters: DB first, env-fallback second,
     // so an operator who has rotated their password in the UI doesn't
     // hit the env-fallback path with stale credentials.
-    let auth_user_id = match authenticate(&state, &form.username, &form.password, configured_env.as_ref()) {
-        Some(id) => id,
-        None => {
-            // Wrong credentials, or no admin password configured at all.
-            // Bypass the gate when basic-auth would also have let the
-            // request through (no CADDY_USER + no DB admin password).
-            if configured_env.is_none()
-                && state
-                    .with_db(|conn| conn.find_user_by_name("admin"))
-                    .map(|u| accounts::is_legacy_password_hash(&u.pwd_argon2))
-                    .unwrap_or(true)
-            {
-                return open_bypass_redirect(&state, &next);
-            }
-            let query = format!("?error=1&next={}", urlencode_path(&next));
-            return Redirect::to(&format!("/login{query}")).into_response();
+    let Some(auth_user_id) =
+        authenticate(&state, &form.username, &form.password, configured_env.as_ref())
+    else {
+        // Wrong credentials, or no admin password configured at all.
+        // Bypass the gate when basic-auth would also have let the
+        // request through (no CADDY_USER + no DB admin password).
+        if configured_env.is_none()
+            && state
+                .with_db(|conn| conn.find_user_by_name("admin"))
+                .is_ok_and(|u| accounts::is_legacy_password_hash(&u.pwd_argon2))
+        {
+            return open_bypass_redirect(&state, &next);
         }
+        let query = format!("?error=1&next={}", urlencode_path(&next));
+        return Redirect::to(&format!("/login{query}")).into_response();
     };
 
     let ttl_ms = if form.remember.as_deref() == Some("1") {
@@ -132,7 +130,7 @@ async fn login_submit(
 }
 
 /// Verify credentials against (DB row, hash) first, falling back to
-/// (CADDY_USER, CADDY_PWD) env. Returns the user id of the verified
+/// (`CADDY_USER`, `CADDY_PWD`) env. Returns the user id of the verified
 /// row (or the seed admin's id on env-fallback).
 fn authenticate(
     state: &AppState,
@@ -175,16 +173,16 @@ fn authenticate(
     None
 }
 
-/// "Anyone can sign in" bypass — issued only when neither CADDY_PWD nor
+/// "Anyone can sign in" bypass — issued only when neither `CADDY_PWD` nor
 /// a DB-stored admin password is configured. Mirrors the basic-auth
 /// shape from #89: the surface is reachable on a freshly provisioned
 /// station before the operator has chosen a password.
 fn open_bypass_redirect(state: &AppState, next: &str) -> Response {
     let session_id = session::generate_session_id();
-    let admin_id = match state.with_db(|conn| conn.find_user_by_name("admin")) {
-        Ok(u) => u.id,
-        Err(_) => return Redirect::to(next).into_response(),
+    let Ok(admin) = state.with_db(|conn| conn.find_user_by_name("admin")) else {
+        return Redirect::to(next).into_response();
     };
+    let admin_id = admin.id;
     let expires_at = expires_at_for_ttl(session::default_ttl_ms());
     let _ = state.with_db(|conn| {
         conn.create_session(&session_id, admin_id, &expires_at, None, None)
@@ -209,7 +207,12 @@ fn expires_at_for_ttl(ttl_ms: u64) -> String {
 
 /// Format epoch seconds as SQLite's `YYYY-MM-DD HH:MM:SS` UTC. Avoids
 /// pulling chrono in — same hand-roll as the weather poll's cutoff.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::many_single_char_names)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::many_single_char_names,
+)]
 fn format_sqlite_datetime(secs: i64) -> String {
     let days = secs.div_euclid(86_400);
     let rem = secs.rem_euclid(86_400);

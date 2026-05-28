@@ -80,14 +80,17 @@ where
 /// Per-route role check. Returns `Ok` for an admin user, `Err(403)` for
 /// a viewer. Mutating `/admin/*` handlers call this at the top.
 ///
+/// `Response` is large enough that clippy flags the `Err` arm; the box
+/// keeps the result type compact without changing the call shape.
+///
 /// # Errors
 ///
 /// Returns a `403` response when the role is `Viewer`.
-pub fn require_admin(user: &RequestUser) -> Result<(), Response> {
+pub fn require_admin(user: &RequestUser) -> Result<(), Box<Response>> {
     if user.is_admin() {
         return Ok(());
     }
-    Err(forbidden_response())
+    Err(Box::new(forbidden_response()))
 }
 
 fn forbidden_response() -> Response {
@@ -99,17 +102,16 @@ fn forbidden_response() -> Response {
         .into_response()
 }
 
-/// Apply the cookie auth layer to an admin Router. Server callers do:
+/// Apply the cookie auth layer to an admin `Router`. Server callers do:
 ///
 /// ```ignore
 /// let admin = auth_middleware::apply(admin_router, state.clone());
 /// ```
 ///
-/// Returning a wrapped `Router` (vs a freestanding Layer) lets the
+/// Returning a wrapped `Router` (vs a freestanding `Layer`) lets the
 /// `Arc<AppState>` capture happen at the call site and keeps the
-/// FromFnLayer's stable-but-unnameable closure type out of the public
+/// `FromFnLayer`'s stable-but-unnameable closure type out of the public
 /// surface.
-#[must_use]
 pub fn apply(admin: axum::Router<AppState>, state: AppState) -> axum::Router<AppState> {
     let shared = Arc::new(state);
     admin.layer(axum::middleware::from_fn(move |req: Request<Body>, next: Next| {
@@ -141,15 +143,16 @@ async fn cookie_auth_middleware(
     // No admin password configured → open access. Synthesise a
     // RequestUser pointing at the seed admin so downstream handlers
     // still see an identity.
-    if !admin_password_configured(state) {
-        if let Some(synth) = synthesise_seed_admin(state) {
-            let mut req = request;
-            req.extensions_mut().insert(synth);
-            return next.run(req).await;
-        }
-        // No admin row exists yet (migration race) — fall through and
-        // 303 to login so the operator at least sees the login page.
+    if !admin_password_configured(state)
+        && let Some(synth) = synthesise_seed_admin(state)
+    {
+        let mut req = request;
+        req.extensions_mut().insert(synth);
+        return next.run(req).await;
     }
+    // If the bypass branch above didn't trigger (real password
+    // configured, or no admin row yet) fall through to the
+    // cookie-validation path.
 
     let token = request
         .headers()
@@ -157,9 +160,8 @@ async fn cookie_auth_middleware(
         .and_then(|v| v.to_str().ok())
         .and_then(session::extract_token);
 
-    let validated = match token.and_then(session::validate_token) {
-        Some(v) => v,
-        None => return redirect_to_login(&request, &original_path),
+    let Some(validated) = token.and_then(session::validate_token) else {
+        return redirect_to_login(&request, &original_path);
     };
 
     let lookup = state.with_db(|conn| -> Result<RequestUser, accounts::AccountsError> {
@@ -197,14 +199,13 @@ fn is_excluded(path: &str) -> bool {
 fn admin_password_configured(state: &AppState) -> bool {
     // Either CADDY_PWD env is set OR the seed admin row carries a real
     // password hash. The bootstrap in `helpers::auth` keeps these in sync.
-    let env_set = std::env::var("CADDY_PWD").map(|v| !v.is_empty()).unwrap_or(false);
+    let env_set = std::env::var("CADDY_PWD").is_ok_and(|v| !v.is_empty());
     if env_set {
         return true;
     }
     state
         .with_db(|conn| conn.find_user_by_name("admin"))
-        .map(|u| !accounts::is_legacy_password_hash(&u.pwd_argon2))
-        .unwrap_or(false)
+        .is_ok_and(|u| !accounts::is_legacy_password_hash(&u.pwd_argon2))
 }
 
 fn synthesise_seed_admin(state: &AppState) -> Option<RequestUser> {
