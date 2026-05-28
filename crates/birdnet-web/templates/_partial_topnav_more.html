@@ -1,0 +1,199 @@
+<!--
+  Topnav overflow menu · drop-in for layout.html.
+  Insert immediately before the theme-toggle button, inside `.topnav-right`.
+
+  Single source of truth for the secondary navigation. The mobile bottom-sheet
+  in O-24 also renders this list — both surfaces stay in sync by including
+  this partial.
+
+  Reads {{nav_*}} variables already set by `render_page()`:
+    {{nav_history}}, {{nav_weekly}}, {{nav_year_in_review}},
+    {{nav_recordings}}, {{nav_gallery}},
+    {{nav_dawn_chorus}}, {{nav_correlation}}, {{nav_timeseries}},
+    {{nav_notifications}}, {{nav_admin}}, {{nav_kiosk}},
+    {{nav_changelog}}, {{nav_help}}.
+
+  If your `render_page()` doesn't yet emit those slots, drop the empty
+  substitution and the active state simply doesn't fire — the rows still
+  navigate correctly. See O-26 DIFF.md.
+-->
+<div class="bnb-more">
+  <button type="button"
+          class="bnb-more__btn"
+          aria-haspopup="dialog"
+          aria-controls="bnb-more-menu"
+          data-open-more
+          title="More sections">
+    <span class="bnb-more__glyph" aria-hidden="true">⌗</span>
+    <span class="bnb-more__label">More</span>
+    <span class="bnb-more__arrow" aria-hidden="true">▾</span>
+  </button>
+</div>
+
+<dialog id="bnb-more-menu" class="bnb-more-menu" aria-labelledby="bnb-more-title">
+  <form method="dialog" class="bnb-more-menu__form">
+    <header class="bnb-more-menu__head">
+      <h2 id="bnb-more-title" class="display"
+          style="font-size:20px;line-height:1.15;margin:0;letter-spacing:-0.01em;">
+        Sections
+      </h2>
+      <button type="submit" class="bnb-btn ghost" aria-label="Close">×</button>
+    </header>
+
+    <div class="bnb-more-menu__body" role="navigation" aria-label="Secondary sections">
+
+      <section class="bnb-more-group">
+        <h3 class="bnb-eyebrow">Reports</h3>
+        <ul>
+          <li><a href="/history"        class="bnb-more-row {{nav_history}}">
+            <span class="glyph">◷</span>
+            <span class="label">History</span>
+            <span class="sub">calendar of past days</span>
+          </a></li>
+          <li><a href="/weekly"         class="bnb-more-row {{nav_weekly}}">
+            <span class="glyph">¶</span>
+            <span class="label">Weekly report</span>
+            <span class="sub">Sunday recap</span>
+          </a></li>
+          <li><a href="/year-in-review" class="bnb-more-row {{nav_year_in_review}}">
+            <span class="glyph">⊞</span>
+            <span class="label">Year in review</span>
+            <span class="sub">annual editorial</span>
+          </a></li>
+        </ul>
+      </section>
+
+      <section class="bnb-more-group">
+        <h3 class="bnb-eyebrow">Audio &amp; images</h3>
+        <ul>
+          <li><a href="/recordings"     class="bnb-more-row {{nav_recordings}}">
+            <span class="glyph">▶</span>
+            <span class="label">Recordings</span>
+            <span class="sub">listen to detection clips</span>
+          </a></li>
+          <li><a href="/gallery"        class="bnb-more-row {{nav_gallery}}">
+            <span class="glyph">◫</span>
+            <span class="label">Gallery</span>
+            <span class="sub">species photos</span>
+          </a></li>
+        </ul>
+      </section>
+
+      <section class="bnb-more-group">
+        <h3 class="bnb-eyebrow">Analytics — deep dives</h3>
+        <ul>
+          <li><a href="/analytics/dawn-chorus" class="bnb-more-row {{nav_dawn_chorus}}">
+            <span class="glyph">◐</span>
+            <span class="label">Dawn chorus</span>
+            <span class="sub">per-species polar plot</span>
+          </a></li>
+          <li><a href="/correlation"           class="bnb-more-row {{nav_correlation}}">
+            <span class="glyph">☰</span>
+            <span class="label">Co-occurrence</span>
+            <span class="sub">who sings with whom</span>
+          </a></li>
+          <li><a href="/timeseries"            class="bnb-more-row {{nav_timeseries}}">
+            <span class="glyph">∷</span>
+            <span class="label">Time series</span>
+            <span class="sub">trends &amp; comparisons</span>
+          </a></li>
+        </ul>
+      </section>
+
+      <section class="bnb-more-group">
+        <h3 class="bnb-eyebrow">Operations</h3>
+        <ul>
+          <li><a href="/notifications"  class="bnb-more-row {{nav_notifications}}">
+            <span class="glyph">≡</span>
+            <span class="label">Notifications</span>
+            <span class="sub">channels &amp; log</span>
+          </a></li>
+          <li><a href="/admin"          class="bnb-more-row {{nav_admin}}">
+            <span class="glyph">⌗</span>
+            <span class="label">Admin</span>
+            <span class="sub">settings, audio, backups</span>
+          </a></li>
+          <li><a href="/kiosk"          class="bnb-more-row {{nav_kiosk}}">
+            <span class="glyph">◉</span>
+            <span class="label">Kiosk mode</span>
+            <span class="sub">wall display</span>
+          </a></li>
+        </ul>
+      </section>
+
+      <section class="bnb-more-group">
+        <h3 class="bnb-eyebrow">Help</h3>
+        <ul>
+          <li><a href="/system/changelog" class="bnb-more-row {{nav_changelog}}">
+            <span class="glyph">⌥</span>
+            <span class="label">Changelog</span>
+            <span class="sub">what's new</span>
+          </a></li>
+          <li><a href="/help"             class="bnb-more-row {{nav_help}}">
+            <span class="glyph">?</span>
+            <span class="label">Help &amp; methodology</span>
+            <span class="sub">the manual</span>
+          </a></li>
+          <li><button type="button"
+                      class="bnb-more-row"
+                      data-trigger-cmdk
+                      aria-label="Open the command palette">
+            <span class="glyph">⌘</span>
+            <span class="label">Quick navigator</span>
+            <span class="sub mono">⌘K · / · search anything</span>
+          </button></li>
+        </ul>
+      </section>
+
+    </div>
+  </form>
+</dialog>
+
+<script>
+(function () {
+  "use strict";
+  var btn = document.querySelector('[data-open-more]');
+  var dlg = document.getElementById('bnb-more-menu');
+  if (!btn || !dlg) return;
+
+  // Position the menu under the trigger on desktop. On narrow viewports
+  // CSS turns it into a bottom sheet and ignores these inline styles.
+  function position() {
+    var r = btn.getBoundingClientRect();
+    dlg.style.setProperty('--bnb-more-x', (r.right) + 'px');
+    dlg.style.setProperty('--bnb-more-y', (r.bottom + 6) + 'px');
+  }
+
+  if (typeof dlg.showModal === 'function') {
+    btn.addEventListener('click', function () {
+      position();
+      dlg.showModal();
+    });
+    // Outside click → close.
+    dlg.addEventListener('click', function (e) {
+      // Native <dialog> reports clicks on the backdrop as clicks on the
+      // dialog element itself (e.target === dlg). Anywhere inside the form
+      // is treated as inside.
+      if (e.target === dlg) dlg.close();
+    });
+    window.addEventListener('resize', function () { if (dlg.open) position(); });
+  } else {
+    // Fallback: focus the first item; navigates with keyboard via tab order.
+    btn.addEventListener('click', function () {
+      dlg.setAttribute('open', '');
+      position();
+    });
+  }
+
+  // ⌘K relay for the "Quick navigator" row.
+  var cmdkTrigger = dlg.querySelector('[data-trigger-cmdk]');
+  if (cmdkTrigger) cmdkTrigger.addEventListener('click', function () {
+    dlg.close();
+    // Cmd-K is wired by the O-19 partial; defer so the dialog finishes closing.
+    window.setTimeout(function () {
+      var ev = new KeyboardEvent('keydown', { key: 'k', metaKey: true });
+      document.dispatchEvent(ev);
+    }, 0);
+  });
+})();
+</script>

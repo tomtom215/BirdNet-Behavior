@@ -63,6 +63,7 @@
                  style="display:inline-flex;align-items:center;">
                 <span class="bnb-pill"><span class="bnb-dot"></span> …</span>
             </div>
+            {{topnav_more}}
             <button class="icon-btn" id="theme-toggle" title="Toggle light/dark theme" aria-label="Toggle theme">
                 <span id="theme-icon" aria-hidden="true"></span>
             </button>
@@ -71,25 +72,7 @@
     <main id="main-content" role="main">
         {{content}}
     </main>
-    <footer role="contentinfo">
-        <div style="display:flex;flex-wrap:wrap;gap:10px 18px;justify-content:center;margin-bottom:10px;">
-            <a href="/today">Today</a>
-            <a href="/history">History</a>
-            <a href="/weekly">Weekly report</a>
-            <a href="/year-in-review">Year in review</a>
-            <a href="/recordings">Recordings</a>
-            <a href="/gallery">Gallery</a>
-            <a href="/timeseries">Time series</a>
-            <a href="/correlation">Co-occurrence</a>
-            <a href="/notifications">Notifications</a>
-            <a href="/system">System</a>
-            <a href="/admin">Admin</a>
-            <a href="/kiosk">Kiosk</a>
-        </div>
-        <div class="mono" style="opacity:.75;">
-            BirdNet-Behavior v{{version}} · acoustic bird classification with behavioral analytics
-        </div>
-    </footer>
+    {{footer}}
     <script>
     (function() {
         var DARK_ICON = '☽';   // ☽
