@@ -68,7 +68,18 @@ Every screen leads with a plain-English headline, then layers the dense numbers 
   </tr>
 </table>
 
-➡️ **See every screen in the [Field Guide](https://tomtom215.github.io/BirdNet-Behavior/guide/dashboard.html).**
+### On the phone
+
+The same design system — iPhone 13 captures of the dashboard and today screens.
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/book/images/mobile/dashboard.png" alt="Dashboard on iPhone 13" width="280"><br><sub><b>Dashboard</b> — bottom tab-bar, live signal, top species</sub></td>
+    <td width="50%"><img src="docs/book/images/mobile/today.png" alt="Today on iPhone 13" width="280"><br><sub><b>Today</b> — searchable log, hourly DayStrip, swipe-friendly</sub></td>
+  </tr>
+</table>
+
+➡️ **See every screen in the [Field Guide](https://tomtom215.github.io/BirdNet-Behavior/guide/dashboard.html)** — every PNG above has a matching `docs/book/images/mobile/` capture for the same data and chrome at iPhone 13 width.
 
 ---
 
