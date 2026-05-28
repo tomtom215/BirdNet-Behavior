@@ -9,12 +9,12 @@
 use std::fmt::Write as _;
 
 use axum::extract::{Query, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::Html;
 use axum::{Router, routing::get};
 use serde::Deserialize;
 
-use super::{escape_html, render_page};
+use super::{escape_html, render_page_for_request};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -24,13 +24,13 @@ pub fn router() -> Router<AppState> {
         .route("/pages/notif-stats", get(notif_stats_partial))
 }
 
-async fn notification_page() -> Html<String> {
+async fn notification_page(headers: HeaderMap) -> Html<String> {
     // O-20 help link in the page eyebrow.
     let body = NOTIFICATION_HTML.replace(
         "{{help_link}}",
         &super::help::help_link(super::help::Topic::AdminNotifications),
     );
-    render_page("Notifications", &body, "notifications")
+    render_page_for_request("Notifications", &body, "notifications", &headers)
 }
 
 #[derive(Deserialize)]

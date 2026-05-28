@@ -13,7 +13,7 @@
 //! `/pages/ts-peak`                 | Top busiest 15-minute windows            |
 
 use axum::extract::State;
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::Html;
 use axum::{Router, routing::get};
 #[cfg(feature = "analytics")]
@@ -35,8 +35,8 @@ pub fn router() -> Router<AppState> {
         .route("/pages/ts-peak", get(ts_peak_partial))
 }
 
-async fn timeseries_page() -> Html<String> {
-    super::render_page("Time Series", TIMESERIES_PAGE_HTML, "timeseries")
+async fn timeseries_page(headers: HeaderMap) -> Html<String> {
+    super::render_page_for_request("Time Series", TIMESERIES_PAGE_HTML, "timeseries", &headers)
 }
 
 // ---------------------------------------------------------------------------

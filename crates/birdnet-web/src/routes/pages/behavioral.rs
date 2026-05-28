@@ -7,7 +7,7 @@
 use std::fmt::Write as _;
 
 use axum::extract::State;
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::Html;
 use axum::{Router, routing::get};
 
@@ -26,8 +26,8 @@ pub fn router() -> Router<AppState> {
         .route("/pages/analytics-config", get(analytics_config_partial))
 }
 
-async fn analytics_page() -> Html<String> {
-    super::render_page("Analytics", ANALYTICS_PAGE_HTML, "analytics")
+async fn analytics_page(headers: HeaderMap) -> Html<String> {
+    super::render_page_for_request("Analytics", ANALYTICS_PAGE_HTML, "analytics", &headers)
 }
 
 /// HTMX partial: activity sessions table.

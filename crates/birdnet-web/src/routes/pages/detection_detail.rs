@@ -9,7 +9,7 @@
 use std::fmt::Write as _;
 
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::Html;
 use axum::{Router, routing::get};
 use serde::Deserialize;
@@ -35,6 +35,7 @@ pub struct DetectionDetailQuery {
 async fn detection_detail_page(
     State(state): State<AppState>,
     Query(query): Query<DetectionDetailQuery>,
+    headers: HeaderMap,
 ) -> Result<Html<String>, StatusCode> {
     let date = query.date.unwrap_or_default();
     let time = query.time.unwrap_or_default();
@@ -63,10 +64,10 @@ async fn detection_detail_page(
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let Some((det, verdict)) = found else {
-        return Ok(not_found_page(&date, &time));
+        return Ok(not_found_page(&date, &time, &headers));
     };
 
-    Ok(render_detail_page(&det, verdict.as_deref()))
+    Ok(render_detail_page(&det, verdict.as_deref(), &headers))
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +135,7 @@ fn find_detection(
 fn render_detail_page(
     det: &birdnet_db::sqlite::DetectionRow,
     verdict: Option<&str>,
+    headers: &HeaderMap,
 ) -> Html<String> {
     let enc_name = simple_url_encode(&det.com_name);
     let enc_sci = simple_url_encode(&det.sci_name);
@@ -197,7 +199,7 @@ fn render_detail_page(
 </div>"#
     );
 
-    super::render_page(&format!("{com} · {date} {time}"), &content, "today")
+    super::render_page_for_request(&format!("{com} · {date} {time}"), &content, "today", headers)
 }
 
 fn build_audio_section(det: &birdnet_db::sqlite::DetectionRow) -> String {
@@ -309,7 +311,7 @@ fn build_meta_rows(det: &birdnet_db::sqlite::DetectionRow) -> String {
     out
 }
 
-fn not_found_page(date: &str, time: &str) -> Html<String> {
+fn not_found_page(date: &str, time: &str, headers: &HeaderMap) -> Html<String> {
     let content = format!(
         r#"<div class="empty-state">
   <h1 class="display" style="font-size:32px;">Detection not found</h1>
@@ -319,7 +321,7 @@ fn not_found_page(date: &str, time: &str) -> Html<String> {
         date = escape_html(date),
         time = escape_html(time),
     );
-    super::render_page("Detection not found", &content, "today")
+    super::render_page_for_request("Detection not found", &content, "today", headers)
 }
 
 #[cfg(test)]

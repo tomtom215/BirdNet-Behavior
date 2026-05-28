@@ -128,12 +128,36 @@ pub fn router() -> Router<AppState> {
         )
 }
 
-/// Render a full page by substituting content into the layout template.
-pub(crate) fn render_page(title: &str, content: &str, active_nav: &str) -> Html<String> {
+/// Sign-out form fragment rendered into the topnav's `{{sign_out_link}}`
+/// slot when the request carries a valid `bnb-session` cookie. Posts to
+/// `/logout` which revokes the bound session row and clears the cookie.
+/// Matches the form shipped inside the admin shell for visual parity.
+pub(crate) const SIGN_OUT_LINK_HTML: &str = r#"<form action="/logout" method="post" class="topnav-signout" style="display:inline;">
+  <button type="submit" class="bnb-btn ghost" style="font-size:.875rem;padding:.25rem .75rem;">Sign out</button>
+</form>"#;
+
+/// Render a full page, populating the `{{sign_out_link}}` slot when the
+/// request carries a valid `bnb-session` cookie.
+///
+/// The check is HMAC-only (see [`crate::session::looks_signed_in`]) — no
+/// DB round-trip, no extension lookup. A revoked-but-still-in-browser
+/// cookie may surface the sign-out link; the subsequent `POST /logout`
+/// is idempotent and clears the dead cookie, so no harm done.
+pub(crate) fn render_page_for_request(
+    title: &str,
+    content: &str,
+    active_nav: &str,
+    headers: &axum::http::HeaderMap,
+) -> Html<String> {
+    render_page_inner(title, content, active_nav, crate::session::looks_signed_in(headers))
+}
+
+fn render_page_inner(title: &str, content: &str, active_nav: &str, signed_in: bool) -> Html<String> {
     let version = env!("CARGO_PKG_VERSION");
     let nav = |key| {
         if active_nav == key { "active" } else { "" }
     };
+    let sign_out_link = if signed_in { SIGN_OUT_LINK_HTML } else { "" };
     // Insert the layout partials FIRST so their own `{{nav_*}}` / `{{version}}`
     // / `{{uptime_short}}` placeholders are resolved by the subsequent passes.
     // (O-26's topnav-more + footer both reference those slots.)
@@ -145,12 +169,7 @@ pub(crate) fn render_page(title: &str, content: &str, active_nav: &str) -> Html<
         // O-24 — tabbar reads {{nav_*}}, so substitute the partial first
         // and let the nav loop below fill its slots.
         .replace("{{tabbar}}", TABBAR_HTML)
-        // O-14 — populated by the cookie auth wire once it's flipped. Empty
-        // for now so the slot is harmless on unauthenticated requests; the
-        // CSS handles the missing element gracefully (no layout shift).
-        // TODO(O-14-followup): substitute the rendered "Sign out" form when
-        // the request carries a valid `bnb-session` cookie.
-        .replace("{{sign_out_link}}", "")
+        .replace("{{sign_out_link}}", sign_out_link)
         .replace("{{version}}", version)
         // Live uptime is not wired here yet — empty value triggers the
         // `[data-empty-hide=""]` rule in the O-26 CSS so the pill stays hidden.
@@ -198,8 +217,8 @@ pub(crate) fn render_page(title: &str, content: &str, active_nav: &str) -> Html<
 /// Friendly `404` page rendered in the full app layout. Wired as the router
 /// fallback so a mistyped URL gets the branded shell and a way back, rather
 /// than an empty body.
-pub(crate) async fn not_found() -> impl axum::response::IntoResponse {
-    let body = render_page(
+pub(crate) async fn not_found(headers: axum::http::HeaderMap) -> impl axum::response::IntoResponse {
+    let body = render_page_for_request(
         "Page not found",
         r#"<section class="bnb-card" style="max-width:560px;margin:48px auto;text-align:center;padding:40px 28px;">
   <div class="display" style="font-size:48px;line-height:1;margin-bottom:8px;">404</div>
@@ -208,6 +227,7 @@ pub(crate) async fn not_found() -> impl axum::response::IntoResponse {
   <a class="bnb-btn" href="/">Back to the dashboard</a>
 </section>"#,
         "",
+        &headers,
     );
     (axum::http::StatusCode::NOT_FOUND, body)
 }
@@ -348,12 +368,34 @@ mod tests {
 
     #[test]
     fn render_page_nav_active() {
-        let html = render_page("Test", "<p>hi</p>", "dashboard");
+        use axum::http::HeaderMap;
+        let html = render_page_for_request("Test", "<p>hi</p>", "dashboard", &HeaderMap::new());
         // The active section link carries the `active` modifier alongside the
         // base `topnav-link` class, and the content is substituted in.
         assert!(html.0.contains("topnav-link active"));
         assert!(html.0.contains("<p>hi</p>"));
         // Inactive sections must not be marked active.
         assert!(!html.0.contains("{{nav_dashboard}}"));
+    }
+
+    #[test]
+    fn render_page_for_request_shows_sign_out_with_valid_cookie() {
+        use axum::http::{HeaderMap, HeaderValue, header};
+        let sid = crate::session::generate_session_id();
+        let token = crate::session::issue_token(&sid, 60_000);
+        let mut headers = HeaderMap::new();
+        let cookie = format!("{}={}", crate::session::COOKIE_NAME, token);
+        headers.insert(header::COOKIE, HeaderValue::from_str(&cookie).unwrap());
+        let html = render_page_for_request("Test", "<p>hi</p>", "dashboard", &headers);
+        assert!(html.0.contains("/logout"));
+        assert!(html.0.contains("Sign out"));
+    }
+
+    #[test]
+    fn render_page_for_request_omits_sign_out_without_cookie() {
+        use axum::http::HeaderMap;
+        let headers = HeaderMap::new();
+        let html = render_page_for_request("Test", "<p>hi</p>", "dashboard", &headers);
+        assert!(!html.0.contains("/logout"));
     }
 }

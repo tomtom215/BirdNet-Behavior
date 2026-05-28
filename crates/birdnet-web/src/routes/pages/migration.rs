@@ -17,7 +17,7 @@
 use std::fmt::Write as _;
 
 use axum::extract::{Query, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse};
 use axum::{Router, routing::get};
 use serde::Deserialize;
@@ -25,7 +25,7 @@ use serde::Deserialize;
 use crate::state::AppState;
 
 use super::atoms::{species_code, species_color};
-use super::{escape_html, render_page};
+use super::{escape_html, render_page_for_request};
 
 const PAGE_HTML: &str = include_str!("../../../templates/migration.html");
 
@@ -38,7 +38,7 @@ pub fn router() -> Router<AppState> {
         .route("/pages/migration-card", get(card_partial))
 }
 
-async fn migration_page() -> Html<String> {
+async fn migration_page(headers: HeaderMap) -> Html<String> {
     let year = current_year();
     // Skeleton placeholders (O-16) shown until the htmx swap targets load.
     // O-20 help link drops the methodology shortcut into the eyebrow.
@@ -51,7 +51,7 @@ async fn migration_page() -> Html<String> {
             "{{help_link}}",
             &super::help::help_link(super::help::Topic::Phenology),
         );
-    render_page("Migration", &body, "migration")
+    render_page_for_request("Migration", &body, "migration", &headers)
 }
 
 // ---------------------------------------------------------------------------

@@ -19,7 +19,7 @@
 use std::fmt::Write as _;
 
 use axum::extract::{Form, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse};
 use axum::{Router, routing::get};
 use serde::Deserialize;
@@ -70,7 +70,7 @@ pub struct ClearForm {
     pub sci_name: String,
 }
 
-async fn detection_reviews_page() -> Html<String> {
+async fn detection_reviews_page(headers: HeaderMap) -> Html<String> {
     let content = "<div style=\"margin-bottom:1.25rem;\">\
   <div class=\"bnb-eyebrow\">Quality control</div>\
   <h1 class=\"display\" style=\"font-size:32px;margin:0.1rem 0 0.35rem;\">Detection reviews</h1>\
@@ -81,7 +81,7 @@ async fn detection_reviews_page() -> Html<String> {
 <div id=\"dr-queue\" hx-get=\"/pages/detection-reviews-queue\" hx-trigger=\"load\" hx-swap=\"innerHTML\">\
   <p style=\"color:var(--fg-3);padding:2rem;text-align:center;\">Loading review queue…</p>\
 </div>";
-    super::render_page("Detection reviews", content, "")
+    super::render_page_for_request("Detection reviews", content, "", &headers)
 }
 
 async fn detection_reviews_queue_partial(State(state): State<AppState>) -> impl IntoResponse {

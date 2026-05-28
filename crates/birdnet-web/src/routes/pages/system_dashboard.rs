@@ -12,11 +12,11 @@
 use std::fmt::Write as _;
 
 use axum::extract::State;
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::Html;
 use axum::{Router, routing::get};
 
-use super::{escape_html, render_page};
+use super::{escape_html, render_page_for_request};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -29,11 +29,12 @@ pub fn router() -> Router<AppState> {
         .route("/pages/sys-audio", get(sys_audio_partial))
 }
 
-async fn system_page() -> Html<String> {
-    render_page(
+async fn system_page(headers: HeaderMap) -> Html<String> {
+    render_page_for_request(
         "System Health",
         &format!("{SYSTEM_DASHBOARD_HTML}{DISPLAY_PREFS_HTML}"),
         "system",
+        &headers,
     )
 }
 

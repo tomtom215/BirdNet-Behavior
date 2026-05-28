@@ -7,10 +7,11 @@
 use std::fmt::Write as _;
 
 use axum::Router;
+use axum::http::HeaderMap;
 use axum::response::Html;
 use axum::routing::get;
 
-use super::{escape_html, render_page};
+use super::{escape_html, render_page_for_request};
 use crate::state::AppState;
 
 // Embedded at build time relative to crates/birdnet-web/src/routes/pages/.
@@ -26,7 +27,7 @@ pub fn router() -> Router<AppState> {
 // Public handlers
 // ---------------------------------------------------------------------------
 
-async fn page() -> Html<String> {
+async fn page(headers: HeaderMap) -> Html<String> {
     let releases = parse_changelog(CHANGELOG_MD);
     let mut body = String::from(
         r#"<div class="page-head" style="align-items:flex-start;" data-screen-label="Changelog" data-om-validate>
@@ -54,7 +55,7 @@ async fn page() -> Html<String> {
         }
     }
     body.push_str("</div></div>");
-    render_page("Changelog", &body, "system")
+    render_page_for_request("Changelog", &body, "system", &headers)
 }
 
 async fn latest_partial() -> Html<String> {

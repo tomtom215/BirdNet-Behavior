@@ -14,6 +14,7 @@ mod kiosk;
 mod partials;
 mod stats;
 
+use axum::http::HeaderMap;
 use axum::response::Html;
 use axum::{Router, routing::get};
 
@@ -43,7 +44,7 @@ pub fn router() -> Router<AppState> {
         )
 }
 
-async fn dashboard_page() -> Html<String> {
+async fn dashboard_page(headers: HeaderMap) -> Html<String> {
     // O-16 — feed_rows skeleton on first paint. The htmx response from
     // `/pages/detections` swaps to either rendered rows or
     // `empty_states::quiet_yard()` for the 0-row case, resolving the
@@ -56,7 +57,7 @@ async fn dashboard_page() -> Html<String> {
             "{{help_link}}",
             &super::help::help_link(super::help::Topic::Dashboard),
         );
-    super::render_page("Dashboard", &content, "dashboard")
+    super::render_page_for_request("Dashboard", &content, "dashboard", &headers)
 }
 
 /// Confidence class for badge coloring.
