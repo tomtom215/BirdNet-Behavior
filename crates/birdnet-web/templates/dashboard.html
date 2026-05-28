@@ -79,29 +79,104 @@
 </div>
 
 <script>
+// Live spectrogram canvas, fed by `/api/v2/ws/spectrogram`. Each WS
+// message carries a flattened mel × time matrix (`data`); we paint it
+// across the canvas so the most recent capture window covers the hero
+// strip end-to-end.
+//
+// Fallback: when no spectrogram has been received for IDLE_AFTER_MS
+// (no detection daemon, --web-only, or the producer hasn't fired yet),
+// a quiet breathing baseline keeps the chrome from going blank.
 (function () {
     var cnv = document.getElementById('hero-pulse');
     if (!cnv || !cnv.getContext) return;
     var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     var ctx = cnv.getContext('2d');
-    function color(op) {
-        var dark = document.documentElement.getAttribute('data-theme') === 'dark';
-        return dark ? 'oklch(80% 0.14 150 / ' + op + ')' : 'oklch(48% 0.10 150 / ' + op + ')';
+    var W = 0, H = 80;
+    var lastFrameTime = 0;
+    var IDLE_AFTER_MS = 15000;
+
+    function dark() {
+        return document.documentElement.getAttribute('data-theme') === 'dark';
     }
-    var phase = 0, raf = 0;
-    function frame() {
-        var w = cnv.width = cnv.clientWidth, h = cnv.height = 80, bars = 90, bw = (w - bars * 2) / bars;
-        ctx.clearRect(0, 0, w, h);
-        for (var i = 0; i < bars; i++) {
-            var xt = i / bars, env = Math.sin(xt * Math.PI);
-            var v = env * (0.5 + 0.45 * Math.sin(i * 0.4 + phase) + 0.18 * Math.sin(i * 1.7 + phase * 1.5));
-            var bh = Math.max(4, Math.abs(v) * h * 0.85);
-            ctx.fillStyle = color((0.35 + Math.abs(v) * 0.55).toFixed(2));
-            ctx.fillRect(i * (bw + 2), (h - bh) / 2, bw, bh);
+    // Heat ramp: log-shaped green → bright yellow over the moss OKLCH
+    // ramp so it matches the static spectrograms shown elsewhere.
+    function cellColor(v) {
+        v = Math.max(0, Math.min(1, v));
+        var L = (35 + v * 55).toFixed(0);
+        var C = (0.04 + v * 0.16).toFixed(3);
+        var H = (160 - v * 70).toFixed(0);
+        return 'oklch(' + L + '% ' + C + ' ' + H + ')';
+    }
+    function resize() {
+        W = cnv.width = cnv.clientWidth;
+        cnv.height = H;
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    function drawIdle() {
+        ctx.clearRect(0, 0, W, H);
+        ctx.strokeStyle = dark()
+            ? 'oklch(60% 0.04 150 / 0.4)'
+            : 'oklch(55% 0.04 150 / 0.3)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        var t = Date.now() / 1000;
+        for (var x = 0; x < W; x++) {
+            var y = H / 2 + Math.sin((x / W) * Math.PI * 2 + t) * 4;
+            if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
         }
-        phase += 0.06;
-        raf = requestAnimationFrame(frame);
+        ctx.stroke();
     }
-    if (reduce) { phase = 1.2; frame(); cancelAnimationFrame(raf); } else { frame(); }
+
+    function drawFrame(frame) {
+        // frame.data is row-major: data[m * n_frames + f] is band m at frame f.
+        var nMels = frame.n_mels, nFrames = frame.n_frames;
+        if (!nMels || !nFrames || !frame.data) return;
+        ctx.clearRect(0, 0, W, H);
+        var colW = W / nFrames;
+        var rowH = H / nMels;
+        // Paint bottom-up so low frequencies sit at the bottom (the
+        // sonogram convention).
+        for (var f = 0; f < nFrames; f++) {
+            for (var m = 0; m < nMels; m++) {
+                var v = frame.data[m * nFrames + f] || 0;
+                if (v < 0.05) continue; // skip near-silent cells
+                ctx.fillStyle = cellColor(v);
+                var x = (f * colW) | 0;
+                var y = (H - (m + 1) * rowH) | 0;
+                ctx.fillRect(x, y, Math.ceil(colW), Math.ceil(rowH));
+            }
+        }
+        lastFrameTime = Date.now();
+    }
+
+    // Idle drawer — repaints the breathing baseline whenever no
+    // spectrogram has been received recently. Honours
+    // prefers-reduced-motion.
+    function idleLoop() {
+        if (Date.now() - lastFrameTime > IDLE_AFTER_MS) {
+            drawIdle();
+        }
+        if (!reduce) setTimeout(idleLoop, 250);
+    }
+    drawIdle();
+    if (!reduce) setTimeout(idleLoop, 250);
+
+    // WebSocket consumer. Failures (no producer, --web-only, WS blocked
+    // by a reverse proxy) fall back silently to the idle baseline.
+    try {
+        var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        var ws = new WebSocket(proto + '//' + location.host + '/api/v2/ws/spectrogram');
+        ws.onmessage = function (ev) {
+            try {
+                var msg = JSON.parse(ev.data);
+                if (msg.event === 'spectrogram') drawFrame(msg);
+            } catch (_) { /* ignore non-JSON */ }
+        };
+        ws.onerror = function () { /* idle baseline keeps drawing */ };
+        ws.onclose = function () { /* could retry; idle baseline is fine */ };
+    } catch (_) { /* no WS support → idle baseline */ }
 })();
 </script>
