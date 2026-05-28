@@ -80,6 +80,15 @@ pub fn build_router_with_auth(
     // login so a station works on the LAN out of the box. When no password is
     // configured the admin panel is left open too (the installer sets one by
     // default, and the binary warns when bound non-loopback without auth).
+    //
+    // TODO(O-14-followup): once the session-cookie RFC questions in
+    // `docs/proposed_changes/O-14_login/DIFF.md` are answered, replace this
+    // `basic_auth_middleware` with a cookie middleware that reads
+    // `bnb-session` via `crate::session::extract_token` and
+    // `crate::session::validate_token`. On an invalid/missing cookie the
+    // middleware should 303 to `/login?next={original_path}` (matching the
+    // `/login` POST flow). The cookie path and `/login` POST handler are
+    // already wired through `crate::routes::auth_pages::router()`.
     let admin = routes::admin_routes();
     let admin = if let Some(config) = auth_config {
         let config = Arc::new(config);

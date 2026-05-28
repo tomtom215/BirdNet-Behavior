@@ -30,6 +30,7 @@
 //! | `POST /admin/rules/{id}/toggle`       | Enable / disable an alert rule |
 //! | `GET  /admin/quality`                 | Data quality metrics dashboard |
 
+pub mod accounts;
 pub mod audio;
 pub mod backup;
 pub mod backup_recovery;
@@ -66,6 +67,7 @@ pub(crate) fn admin_shell(title: &str, active: &str, body: &str) -> String {
         ("rules", "/admin/rules", "Rules"),
         ("quality", "/admin/quality", "Quality"),
         ("notifications", "/admin/notifications", "Notifications"),
+        ("accounts", "/admin/accounts", "Accounts"),
         ("backups", "/admin/backups", "Backups"),
         ("system", "/admin/system", "System"),
         ("doctor", "/admin/doctor", "Diagnostics"),
@@ -153,6 +155,8 @@ pub fn router() -> Router<AppState> {
         .merge(rules::router())
         // Data quality dashboard
         .merge(quality::router())
+        // Accounts, sessions, audit log (O-15)
+        .merge(accounts::router())
     // Species filter tester (integrated into species::router via /admin/species/test)
 }
 

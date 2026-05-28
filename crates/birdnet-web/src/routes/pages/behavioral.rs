@@ -1,6 +1,9 @@
 //! Behavioral analytics HTMX partials (requires duckdb-behavioral extension).
 
-#[cfg(feature = "analytics")]
+// `analytics_config_partial` uses `write!` macro on a String regardless of
+// whether the analytics feature is enabled — the surrounding `if let Some(...)
+// = ext_status` branch is unreachable without the feature, but the macro still
+// needs the trait in scope to compile.
 use std::fmt::Write as _;
 
 use axum::extract::State;

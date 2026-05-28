@@ -124,6 +124,12 @@ pub(crate) fn render_page(title: &str, content: &str, active_nav: &str) -> Html<
         .replace("{{content}}", content)
         .replace("{{topnav_more}}", TOPNAV_MORE_HTML)
         .replace("{{footer}}", FOOTER_HTML)
+        // O-14 — populated by the cookie auth wire once it's flipped. Empty
+        // for now so the slot is harmless on unauthenticated requests; the
+        // CSS handles the missing element gracefully (no layout shift).
+        // TODO(O-14-followup): substitute the rendered "Sign out" form when
+        // the request carries a valid `bnb-session` cookie.
+        .replace("{{sign_out_link}}", "")
         .replace("{{version}}", version)
         // Live uptime is not wired here yet — empty value triggers the
         // `[data-empty-hide=""]` rule in the O-26 CSS so the pill stays hidden.
