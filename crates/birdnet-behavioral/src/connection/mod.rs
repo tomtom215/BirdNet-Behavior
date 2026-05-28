@@ -195,11 +195,7 @@ impl AnalyticsDb {
             return Ok(());
         }
         // 2) Try INSTALL FROM community (needs network on first run).
-        if self
-            .conn
-            .execute_batch(queries::INSTALL_BEHAVIORAL)
-            .is_ok()
-        {
+        if self.conn.execute_batch(queries::INSTALL_BEHAVIORAL).is_ok() {
             self.extension_loaded = true;
             return Ok(());
         }
@@ -223,14 +219,11 @@ impl AnalyticsDb {
     fn load_embedded(&mut self, bytes: &[u8]) -> Result<(), AnalyticsError> {
         let dir = std::env::temp_dir().join("birdnet-behavioral-ext");
         std::fs::create_dir_all(&dir).map_err(|e| {
-            AnalyticsError::ExtensionLoad(format!(
-                "create temp dir for embedded extension: {e}"
-            ))
+            AnalyticsError::ExtensionLoad(format!("create temp dir for embedded extension: {e}"))
         })?;
         let path = dir.join("behavioral.duckdb_extension");
-        std::fs::write(&path, bytes).map_err(|e| {
-            AnalyticsError::ExtensionLoad(format!("write embedded extension: {e}"))
-        })?;
+        std::fs::write(&path, bytes)
+            .map_err(|e| AnalyticsError::ExtensionLoad(format!("write embedded extension: {e}")))?;
         let escaped = path.display().to_string().replace('\'', "''");
         let sql = format!("LOAD '{escaped}';");
         self.conn

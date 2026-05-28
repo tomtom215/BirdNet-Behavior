@@ -156,7 +156,13 @@ fn all_pages() -> Vec<Entry> {
         make("⌂", "Dashboard", "live feed", "/", &["home", "live"]),
         make("⊙", "Today", "detection log", "/today", &["log", "now"]),
         make("⌬", "Species", "all voices", "/species", &["birds", "list"]),
-        make("▦", "Heatmap", "hour × day", "/heatmap", &["activity", "when"]),
+        make(
+            "▦",
+            "Heatmap",
+            "hour × day",
+            "/heatmap",
+            &["activity", "when"],
+        ),
         make(
             "◐",
             "Dawn chorus",
@@ -178,9 +184,21 @@ fn all_pages() -> Vec<Entry> {
             "/correlation",
             &["matrix", "pairs"],
         ),
-        make("∷", "Time series", "trends", "/timeseries", &["trend", "compare"]),
+        make(
+            "∷",
+            "Time series",
+            "trends",
+            "/timeseries",
+            &["trend", "compare"],
+        ),
         make("◷", "History", "calendar", "/history", &["browse"]),
-        make("✦", "Life list", "journal", "/life-list", &["lifer", "journal"]),
+        make(
+            "✦",
+            "Life list",
+            "journal",
+            "/life-list",
+            &["lifer", "journal"],
+        ),
         make("◫", "Gallery", "photos", "/gallery", &["photo", "image"]),
         make(
             "▶",
@@ -443,7 +461,11 @@ fn parse_date(q: &str) -> Option<Entry> {
             format!("/history?date={}", shift_date(&today, -1)),
         ),
         "this week" => ("This week", "weekly report", "/weekly".to_string()),
-        "last week" => ("Last week", "weekly report", "/weekly?offset=-1".to_string()),
+        "last week" => (
+            "Last week",
+            "weekly report",
+            "/weekly?offset=-1".to_string(),
+        ),
         "this month" => (
             "This month",
             "trends",
@@ -454,11 +476,7 @@ fn parse_date(q: &str) -> Option<Entry> {
             "trends",
             "/timeseries?period=month&offset=-1".to_string(),
         ),
-        "this year" => (
-            "This year",
-            "year in review",
-            "/year-in-review".to_string(),
-        ),
+        "this year" => ("This year", "year in review", "/year-in-review".to_string()),
         _ => return None,
     };
     Some(Entry {
@@ -514,10 +532,7 @@ mod tests {
             "Quarantine",
             "System",
         ] {
-            assert!(
-                labels.contains(&must),
-                "missing {must} in cmdk pages index"
-            );
+            assert!(labels.contains(&must), "missing {must} in cmdk pages index");
         }
     }
 

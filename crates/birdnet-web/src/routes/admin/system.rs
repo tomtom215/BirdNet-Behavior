@@ -386,7 +386,10 @@ async fn trigger_backup(State(state): State<AppState>) -> Result<Html<String>, S
             let body = Html(format!(
                 r#"<p style="color:var(--rare);">Backup failed: {e}</p>"#
             ));
-            Ok(toast::with(body, Toast::error(format!("Backup failed: {e}"))))
+            Ok(toast::with(
+                body,
+                Toast::error(format!("Backup failed: {e}")),
+            ))
         }
     }
 }

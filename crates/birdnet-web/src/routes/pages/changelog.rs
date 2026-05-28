@@ -153,14 +153,21 @@ pub fn parse_changelog(input: &str) -> Vec<Release<'_>> {
 /// "## [1.5.0] - 2026-04-22" or "## [Unreleased]" → ("1.5.0", Some("2026-04-22"))
 fn parse_release_heading(line: &str) -> Option<(String, Option<String>)> {
     let s = line.trim();
-    if !s.starts_with("## ") { return None; }
+    if !s.starts_with("## ") {
+        return None;
+    }
     let s = s.strip_prefix("## ")?.trim();
     let s = s.strip_prefix('[')?;
     let close = s.find(']')?;
     let ver = s[..close].trim().to_string();
-    if ver.eq_ignore_ascii_case("Unreleased") { return Some((ver, None)); }
+    if ver.eq_ignore_ascii_case("Unreleased") {
+        return Some((ver, None));
+    }
     let rest = s[close + 1..].trim();
-    let date = rest.strip_prefix("- ").or_else(|| rest.strip_prefix("– ")).map(|s| s.trim().to_string());
+    let date = rest
+        .strip_prefix("- ")
+        .or_else(|| rest.strip_prefix("– "))
+        .map(|s| s.trim().to_string());
     Some((ver, date))
 }
 
@@ -268,7 +275,13 @@ fn render_inline_md(input: &str) -> String {
 fn anchor(version: &str) -> String {
     version
         .chars()
-        .map(|c| if c == '.' || c.is_whitespace() { '-' } else { c })
+        .map(|c| {
+            if c == '.' || c.is_whitespace() {
+                '-'
+            } else {
+                c
+            }
+        })
         .collect()
 }
 
@@ -293,11 +306,15 @@ fn first_bullet_summary(r: &Release<'_>) -> String {
     }
     let mut out = String::new();
     for b in pool.iter().take(3) {
-        if !out.is_empty() { out.push_str(" · "); }
+        if !out.is_empty() {
+            out.push_str(" · ");
+        }
         // Strip leading "[O-NN] " tags if present so the banner stays human.
         let s = strip_lead_tag(b);
         out.push_str(s);
-        if out.chars().count() > 120 { break; }
+        if out.chars().count() > 120 {
+            break;
+        }
     }
     out
 }

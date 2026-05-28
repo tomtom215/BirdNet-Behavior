@@ -66,14 +66,10 @@ where
     type Rejection = (StatusCode, &'static str);
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        parts
-            .extensions
-            .get::<Self>()
-            .cloned()
-            .ok_or((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "request user missing — middleware not wired?",
-            ))
+        parts.extensions.get::<Self>().cloned().ok_or((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "request user missing — middleware not wired?",
+        ))
     }
 }
 
@@ -114,25 +110,24 @@ fn forbidden_response() -> Response {
 /// surface.
 pub fn apply(admin: axum::Router<AppState>, state: AppState) -> axum::Router<AppState> {
     let shared = Arc::new(state);
-    admin.layer(axum::middleware::from_fn(move |req: Request<Body>, next: Next| {
-        let shared = Arc::clone(&shared);
-        let fut: AuthFuture = Box::pin(async move {
-            cookie_auth_middleware(req, next, &shared).await
-        });
-        fut
-    }))
+    admin.layer(axum::middleware::from_fn(
+        move |req: Request<Body>, next: Next| {
+            let shared = Arc::clone(&shared);
+            let fut: AuthFuture =
+                Box::pin(async move { cookie_auth_middleware(req, next, &shared).await });
+            fut
+        },
+    ))
 }
 
 /// Boxed-future type alias for the middleware closure.
 type AuthFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Response> + Send>>;
 
-async fn cookie_auth_middleware(
-    request: Request<Body>,
-    next: Next,
-    state: &AppState,
-) -> Response {
+async fn cookie_auth_middleware(request: Request<Body>, next: Next, state: &AppState) -> Response {
     let path = request.uri().path();
-    let original_path = request.uri().path_and_query()
+    let original_path = request
+        .uri()
+        .path_and_query()
         .map_or_else(|| path.to_string(), ToString::to_string);
 
     // Excluded paths (health checks, websocket detection stream).
@@ -170,7 +165,9 @@ async fn cookie_auth_middleware(
         let _ = SessionStore::touch_session(conn, &validated.session_id);
         let user = conn.find_user(session.user_id)?;
         if user.disabled_at.is_some() {
-            return Err(accounts::AccountsError::Invalid("user disabled".to_string()));
+            return Err(accounts::AccountsError::Invalid(
+                "user disabled".to_string(),
+            ));
         }
         Ok(RequestUser {
             user,
@@ -192,8 +189,7 @@ async fn cookie_auth_middleware(
 }
 
 fn is_excluded(path: &str) -> bool {
-    matches!(path, "/api/v2/health" | "/api/v2/ws/detections")
-        || path.starts_with("/api/v2/ws/")
+    matches!(path, "/api/v2/health" | "/api/v2/ws/detections") || path.starts_with("/api/v2/ws/")
 }
 
 fn admin_password_configured(state: &AppState) -> bool {

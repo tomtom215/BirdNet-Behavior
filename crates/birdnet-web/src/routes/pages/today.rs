@@ -74,7 +74,10 @@ async fn today_page() -> Html<String> {
     let body = TODAY_PAGE_HTML
         .replace("{{skel_daystrip}}", super::skeletons::day_strip())
         .replace("{{skel_today_results}}", &super::skeletons::feed_rows(8))
-        .replace("{{help_link}}", &super::help::help_link(super::help::Topic::Today));
+        .replace(
+            "{{help_link}}",
+            &super::help::help_link(super::help::Topic::Today),
+        );
     super::render_page("Today", &body, "today")
 }
 

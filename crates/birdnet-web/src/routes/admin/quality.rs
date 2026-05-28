@@ -54,7 +54,11 @@ async fn quality_page(State(state): State<AppState>) -> Html<String> {
         .await
         .unwrap_or_else(|_| QualityData::empty());
 
-    Html(admin_shell("Data Quality", "quality", &render_quality_page(&data)))
+    Html(admin_shell(
+        "Data Quality",
+        "quality",
+        &render_quality_page(&data),
+    ))
 }
 
 async fn quality_summary_partial(State(state): State<AppState>) -> Html<String> {
@@ -550,7 +554,9 @@ fn render_model_vs_review(rows: &[ModelVsReviewRow]) -> String {
     if rows.is_empty() {
         return r#"<p class="bnb-meta">Not enough reviewed detections yet. The panel needs at least 5 detections per species and 3 reviewer verdicts to compare model and human confidence.</p>"#.to_string();
     }
-    let mut html = String::from(r#"<ul class="bnb-mvr" role="list" style="list-style:none;padding:0;margin:0;">"#);
+    let mut html = String::from(
+        r#"<ul class="bnb-mvr" role="list" style="list-style:none;padding:0;margin:0;">"#,
+    );
     for r in rows {
         let model_pct = (r.model_avg * 100.0).clamp(0.0, 100.0);
         let human_pct = (r.human_avg * 100.0).clamp(0.0, 100.0);

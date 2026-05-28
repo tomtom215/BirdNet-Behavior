@@ -183,7 +183,10 @@ async fn service_worker_js() -> impl IntoResponse {
 async fn icon_192() -> impl IntoResponse {
     (
         StatusCode::OK,
-        [(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, IMMUTABLE)],
+        [
+            (header::CONTENT_TYPE, "image/png"),
+            (header::CACHE_CONTROL, IMMUTABLE),
+        ],
         ICON_192,
     )
 }
@@ -191,7 +194,10 @@ async fn icon_192() -> impl IntoResponse {
 async fn icon_512() -> impl IntoResponse {
     (
         StatusCode::OK,
-        [(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, IMMUTABLE)],
+        [
+            (header::CONTENT_TYPE, "image/png"),
+            (header::CACHE_CONTROL, IMMUTABLE),
+        ],
         ICON_512,
     )
 }
@@ -199,7 +205,10 @@ async fn icon_512() -> impl IntoResponse {
 async fn icon_maskable_512() -> impl IntoResponse {
     (
         StatusCode::OK,
-        [(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, IMMUTABLE)],
+        [
+            (header::CONTENT_TYPE, "image/png"),
+            (header::CACHE_CONTROL, IMMUTABLE),
+        ],
         ICON_MASKABLE_512,
     )
 }

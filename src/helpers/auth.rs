@@ -43,8 +43,7 @@ pub fn bootstrap_admin_password(state: &AppState) {
             conn.set_password(admin.id, &hash)?;
             return Ok(BootstrapOutcome::RotatedLegacy);
         }
-        let verifies = accounts::verify_password(&admin.pwd_argon2, &env_pwd)
-            .unwrap_or(false);
+        let verifies = accounts::verify_password(&admin.pwd_argon2, &env_pwd).unwrap_or(false);
         if !verifies {
             let hash = accounts::hash_password(&env_pwd)?;
             conn.set_password(admin.id, &hash)?;
@@ -54,15 +53,15 @@ pub fn bootstrap_admin_password(state: &AppState) {
     });
 
     match outcome {
-        Ok(BootstrapOutcome::RotatedLegacy) => tracing::info!(
-            "admin password hash initialised from CADDY_PWD"
-        ),
-        Ok(BootstrapOutcome::RotatedAfterEnvChange) => tracing::info!(
-            "admin password hash rotated to match updated CADDY_PWD"
-        ),
-        Ok(BootstrapOutcome::AlreadyConsistent) => tracing::debug!(
-            "admin password hash already up-to-date"
-        ),
+        Ok(BootstrapOutcome::RotatedLegacy) => {
+            tracing::info!("admin password hash initialised from CADDY_PWD");
+        }
+        Ok(BootstrapOutcome::RotatedAfterEnvChange) => {
+            tracing::info!("admin password hash rotated to match updated CADDY_PWD");
+        }
+        Ok(BootstrapOutcome::AlreadyConsistent) => {
+            tracing::debug!("admin password hash already up-to-date");
+        }
         Err(e) => tracing::warn!(
             error = %e,
             "admin password bootstrap failed; basic-auth path stays usable"

@@ -51,7 +51,7 @@
     clippy::too_many_lines,
     clippy::unnecessary_cast,
     clippy::doc_markdown,
-    clippy::missing_const_for_fn,
+    clippy::missing_const_for_fn
 )]
 
 use std::path::PathBuf;
@@ -72,22 +72,22 @@ const STATION_NAME: &str = "BirdNet-Behavior Demo Garden";
 /// show even on a fresh capture.
 const SPECIES: &[(&str, &str, f32, u8)] = &[
     // (Sci_Name, Com_Name, relative-frequency weight, peak-hour bias)
-    ("Turdus migratorius",      "American Robin",         24.0,  5),
-    ("Cardinalis cardinalis",   "Northern Cardinal",      18.0,  6),
-    ("Melospiza melodia",       "Song Sparrow",           14.0,  6),
-    ("Poecile atricapillus",    "Black-capped Chickadee", 12.0,  7),
-    ("Zonotrichia albicollis",  "White-throated Sparrow", 10.0,  6),
-    ("Passer domesticus",       "House Sparrow",           9.0,  9),
-    ("Corvus brachyrhynchos",   "American Crow",           8.0,  8),
-    ("Baeolophus bicolor",      "Tufted Titmouse",         7.0,  7),
-    ("Sayornis phoebe",         "Eastern Phoebe",          6.0,  6),
-    ("Thryothorus ludovicianus", "Carolina Wren",          5.5,  6),
-    ("Sitta carolinensis",      "White-breasted Nuthatch", 5.0,  8),
-    ("Zenaida macroura",        "Mourning Dove",           4.5,  7),
-    ("Dryobates pubescens",     "Downy Woodpecker",        4.0,  9),
-    ("Troglodytes aedon",       "House Wren",              3.5,  6),
-    ("Sialia sialis",           "Eastern Bluebird",        3.0,  7),
-    ("Passerina ciris",         "Painted Bunting",         0.3, 10), // rare sentinel
+    ("Turdus migratorius", "American Robin", 24.0, 5),
+    ("Cardinalis cardinalis", "Northern Cardinal", 18.0, 6),
+    ("Melospiza melodia", "Song Sparrow", 14.0, 6),
+    ("Poecile atricapillus", "Black-capped Chickadee", 12.0, 7),
+    ("Zonotrichia albicollis", "White-throated Sparrow", 10.0, 6),
+    ("Passer domesticus", "House Sparrow", 9.0, 9),
+    ("Corvus brachyrhynchos", "American Crow", 8.0, 8),
+    ("Baeolophus bicolor", "Tufted Titmouse", 7.0, 7),
+    ("Sayornis phoebe", "Eastern Phoebe", 6.0, 6),
+    ("Thryothorus ludovicianus", "Carolina Wren", 5.5, 6),
+    ("Sitta carolinensis", "White-breasted Nuthatch", 5.0, 8),
+    ("Zenaida macroura", "Mourning Dove", 4.5, 7),
+    ("Dryobates pubescens", "Downy Woodpecker", 4.0, 9),
+    ("Troglodytes aedon", "House Wren", 3.5, 6),
+    ("Sialia sialis", "Eastern Bluebird", 3.0, 7),
+    ("Passerina ciris", "Painted Bunting", 0.3, 10), // rare sentinel
 ];
 
 #[derive(Debug)]
@@ -106,7 +106,10 @@ fn main() -> ExitCode {
     };
     match run(&args) {
         Ok(n) => {
-            println!("seed-demo-data: inserted {n} detections into {}", args.db.display());
+            println!(
+                "seed-demo-data: inserted {n} detections into {}",
+                args.db.display()
+            );
             ExitCode::SUCCESS
         }
         Err(e) => {
@@ -269,10 +272,7 @@ fn triangular(rng: &mut SplitMix64, lo: f32, hi: f32, _shape: f32) -> f32 {
     lo + (hi - lo) * (1.0 - u.sqrt())
 }
 
-fn pick_species<'a>(
-    rng: &mut SplitMix64,
-    weights_total: f32,
-) -> (&'a str, &'a str, f32, u8) {
+fn pick_species<'a>(rng: &mut SplitMix64, weights_total: f32) -> (&'a str, &'a str, f32, u8) {
     let r = uniform_01(rng) * weights_total;
     let mut acc = 0.0_f32;
     for s in SPECIES {
@@ -301,7 +301,7 @@ fn ymd_from_days_ago(days_ago: i64) -> (i32, u32, u32) {
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
-    clippy::many_single_char_names,
+    clippy::many_single_char_names
 )]
 fn epoch_to_ymd_utc(secs: i64) -> (i32, u32, u32) {
     let days = secs.div_euclid(86_400);
@@ -320,7 +320,11 @@ fn epoch_to_ymd_utc(secs: i64) -> (i32, u32, u32) {
 
 /// ISO 8601 week number. Faithful for the date range this seeder uses;
 /// the algorithm matches Hinnant's "Algorithm 6.4".
-#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
+)]
 fn iso_week(year: i32, month: u32, day: u32) -> u32 {
     let ord = ordinal_day(year, month, day);
     let dow = day_of_week(year, month, day); // 1=Mon..7=Sun
@@ -360,7 +364,11 @@ const fn is_leap(year: i32) -> bool {
 }
 
 /// Day of week: 1=Mon..7=Sun. Zeller's congruence.
-#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
+)]
 fn day_of_week(year: i32, month: u32, day: u32) -> u32 {
     let (m, y) = if month < 3 {
         (month + 12, year - 1)
@@ -480,9 +488,6 @@ mod tests {
         // The seeder draws confidences centred on 0.78 σ=0.10 then
         // clamps to [0.40, 0.99]; with N=1500 the mean should land
         // within 0.05 of the target (Chebyshev: σ/√N ≪ 0.05).
-        assert!(
-            (avg - 0.78).abs() < 0.05,
-            "avg confidence drifted: {avg}"
-        );
+        assert!((avg - 0.78).abs() < 0.05, "avg confidence drifted: {avg}");
     }
 }
