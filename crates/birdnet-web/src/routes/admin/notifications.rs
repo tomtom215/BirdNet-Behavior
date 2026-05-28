@@ -13,6 +13,7 @@ use axum::{Router, routing::get};
 
 use birdnet_db::notifications::{NotifEntry, notification_stats, recent_notifications};
 
+use crate::routes::pages::confirm::{self, Action, Confirm, Style};
 use crate::state::AppState;
 
 /// Mount notification log routes.
@@ -89,8 +90,20 @@ fn render_page(entries: &[NotifEntry], stats: (i64, i64, i64)) -> String {
     let rows_html = render_table_rows(entries);
     let count = entries.len();
 
+    // O-17: themed confirmation modal for the destructive prune action.
+    let prune_btn = confirm::confirm_button(Confirm {
+        label: "Prune Old Entries",
+        action: Action::Delete("/admin/notifications/prune"),
+        title: "Prune notifications",
+        body: "Prune notifications older than 90 days?",
+        confirm_label: "Prune",
+        style: Style::Danger,
+        target: Some("#prune-result"),
+        swap: Some("innerHTML"),
+    });
+
     format!(
-        r##"<!DOCTYPE html>
+        r#"<!DOCTYPE html>
 <html lang="en">
 <head><script src="/static/theme-guard.js"></script><link rel="stylesheet" href="/static/css/app.css">
   <meta charset="UTF-8">
@@ -136,13 +149,7 @@ fn render_page(entries: &[NotifEntry], stats: (i64, i64, i64)) -> String {
 
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem;">
     <h1 style="font-size:1.5rem;font-weight:700;color:var(--fg);">Notification History</h1>
-    <button class="btn btn-danger"
-            hx-delete="/admin/notifications/prune"
-            hx-target="#prune-result"
-            hx-swap="innerHTML"
-            hx-confirm="Prune notifications older than 90 days?">
-      Prune Old Entries
-    </button>
+    {prune_btn}
   </div>
   <div id="prune-result"></div>
 
@@ -191,7 +198,7 @@ fn render_page(entries: &[NotifEntry], stats: (i64, i64, i64)) -> String {
   </div>
 </div>
 </body>
-</html>"##
+</html>"#
     )
 }
 

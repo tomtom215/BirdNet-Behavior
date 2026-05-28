@@ -1,0 +1,49 @@
+<!--
+  Real footer · drop-in for layout.html.
+  Replaces the existing <footer role="contentinfo">…</footer> block.
+
+  Site-meta links only — destinations live in the topnav and the More menu.
+
+  Server fills:
+    {{version}}       — already substituted by render_page()
+    {{uptime_short}}  — optional; e.g. "14d 02h". Empty string is fine.
+-->
+<footer role="contentinfo" class="bnb-footer">
+  <div class="bnb-footer__brand">
+    <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" class="bnb-footer__mark">
+      <circle cx="12" cy="12" r="11" fill="none" stroke="currentColor" stroke-width="0.8"></circle>
+      <g stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+        <line x1="6" y1="12" x2="6" y2="12"></line>
+        <line x1="9" y1="9.5" x2="9" y2="14.5"></line>
+        <line x1="12" y1="6" x2="12" y2="18"></line>
+        <line x1="15" y1="8" x2="15" y2="16"></line>
+        <line x1="18" y1="10.5" x2="18" y2="13.5"></line>
+      </g>
+    </svg>
+    <span class="bnb-footer__word">
+      <b>BirdNet</b><span>Behavior</span>
+    </span>
+    <span class="bnb-footer__sep" aria-hidden="true">·</span>
+    <span class="bnb-footer__version mono">v{{version}}</span>
+    <span class="bnb-footer__uptime mono" data-empty-hide="{{uptime_short}}">
+      <span class="bnb-dot" style="background:var(--moss);" aria-hidden="true"></span>
+      listening · {{uptime_short}}
+    </span>
+  </div>
+
+  <nav class="bnb-footer__meta" aria-label="Site meta">
+    <a href="/help">Help</a>
+    <span class="bnb-footer__sep" aria-hidden="true">·</span>
+    <a href="/system/changelog">Changelog</a>
+    <span class="bnb-footer__sep" aria-hidden="true">·</span>
+    <a href="/feeds/rare.rss" type="application/rss+xml">RSS</a>
+    <span class="bnb-footer__sep" aria-hidden="true">·</span>
+    <a href="/feeds/rare.ics" type="text/calendar">iCal</a>
+    <span class="bnb-footer__sep" aria-hidden="true">·</span>
+    <a href="https://github.com/tomtom215/BirdNet-Behavior" target="_blank" rel="noopener">About</a>
+  </nav>
+
+  <div class="bnb-footer__rights mono">
+    © BirdNet-Behavior · self-hosted on this device
+  </div>
+</footer>

@@ -20,6 +20,8 @@ use std::sync::{Arc, Mutex};
 
 use birdnet_migrate::progress::{MigrationProgress, MigrationStage, ProgressHandle};
 
+use crate::routes::pages::toast::{self, Toast};
+
 use crate::state::AppState;
 
 /// Shared migration state (one active job at a time).
@@ -197,7 +199,12 @@ async fn upload_and_run_handler(
         }
     });
 
-    Ok(Html(render::import_started()))
+    // O-18: sticky warn toast so the user knows the import is in flight even
+    // after navigating away from the progress card.
+    Ok(toast::with(
+        Html(render::import_started()),
+        Toast::warn("Import running — see progress below.").sticky(),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -234,7 +241,12 @@ async fn run_handler(
             }
         }
     });
-    Ok(Html(render::import_started()))
+    // O-18: sticky warn toast so the user knows the import is in flight even
+    // after navigating away from the progress card.
+    Ok(toast::with(
+        Html(render::import_started()),
+        Toast::warn("Import running — see progress below.").sticky(),
+    ))
 }
 
 // ---------------------------------------------------------------------------

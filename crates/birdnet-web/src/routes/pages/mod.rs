@@ -21,6 +21,7 @@ pub mod atoms;
 pub mod audio_player;
 pub mod behavioral;
 pub mod charts;
+pub(crate) mod confirm;
 pub mod correlation;
 pub mod dashboard;
 pub mod dawn_chorus;
@@ -38,11 +39,13 @@ pub mod notification_center;
 pub mod onboarding;
 pub mod quarantine;
 pub mod recordings;
+pub(crate) mod skeletons;
 pub mod species_pages;
 pub mod system_dashboard;
 pub mod timeseries_dash;
 pub mod today;
 pub(crate) mod today_phrase;
+pub(crate) mod toast;
 pub mod viz;
 pub mod weekly_report;
 pub mod year_in_review;
@@ -62,6 +65,18 @@ pub(crate) const SPECIES_DETAIL_HTML: &str = include_str!("../../../templates/sp
 pub(crate) const TIMESERIES_PAGE_HTML: &str = include_str!("../../../templates/timeseries.html");
 pub(crate) const TODAY_PAGE_HTML: &str = include_str!("../../../templates/today.html");
 pub(crate) const RECORDINGS_PAGE_HTML: &str = include_str!("../../../templates/recordings.html");
+/// Themed confirmation modal (O-17), injected into every full-page shell.
+pub(crate) const CONFIRM_MODAL_HTML: &str =
+    include_str!("../../../templates/_partial_confirm_modal.html");
+/// Toast / snackbar live region (O-18), injected into every full-page shell.
+pub(crate) const TOAST_REGION_HTML: &str =
+    include_str!("../../../templates/_partial_toast_region.html");
+/// Topnav "More" overflow menu (O-26) — grouped secondary navigation.
+pub(crate) const TOPNAV_MORE_HTML: &str =
+    include_str!("../../../templates/_partial_topnav_more.html");
+/// Real footer (O-26) — site-meta only, destinations live in the topnav + More.
+pub(crate) const FOOTER_HTML: &str =
+    include_str!("../../../templates/_partial_footer.html");
 
 /// Build all page and partial routes.
 pub fn router() -> Router<AppState> {
@@ -101,10 +116,18 @@ pub(crate) fn render_page(title: &str, content: &str, active_nav: &str) -> Html<
     let nav = |key| {
         if active_nav == key { "active" } else { "" }
     };
+    // Insert the layout partials FIRST so their own `{{nav_*}}` / `{{version}}`
+    // / `{{uptime_short}}` placeholders are resolved by the subsequent passes.
+    // (O-26's topnav-more + footer both reference those slots.)
     let html = LAYOUT_HTML
         .replace("{{title}}", title)
         .replace("{{content}}", content)
+        .replace("{{topnav_more}}", TOPNAV_MORE_HTML)
+        .replace("{{footer}}", FOOTER_HTML)
         .replace("{{version}}", version)
+        // Live uptime is not wired here yet — empty value triggers the
+        // `[data-empty-hide=""]` rule in the O-26 CSS so the pill stays hidden.
+        .replace("{{uptime_short}}", "")
         .replace("{{nav_dashboard}}", nav("dashboard"))
         .replace("{{nav_today}}", nav("today"))
         .replace("{{nav_species}}", nav("species"))
@@ -118,7 +141,18 @@ pub(crate) fn render_page(title: &str, content: &str, active_nav: &str) -> Html<
         .replace("{{nav_heatmap}}", nav("heatmap"))
         .replace("{{nav_migration}}", nav("migration"))
         .replace("{{nav_system}}", nav("system"))
-        .replace("{{nav_notifications}}", nav("notifications"));
+        .replace("{{nav_notifications}}", nav("notifications"))
+        // O-26 — slots referenced by the topnav-more partial.
+        .replace("{{nav_year_in_review}}", nav("year_in_review"))
+        .replace("{{nav_gallery}}", nav("gallery"))
+        .replace("{{nav_dawn_chorus}}", nav("dawn_chorus"))
+        .replace("{{nav_correlation}}", nav("correlation"))
+        .replace("{{nav_admin}}", nav("admin"))
+        .replace("{{nav_kiosk}}", nav("kiosk"))
+        .replace("{{nav_changelog}}", nav("changelog"))
+        .replace("{{nav_help}}", nav("help"))
+        .replace("{{confirm_modal}}", CONFIRM_MODAL_HTML)
+        .replace("{{toast_region}}", TOAST_REGION_HTML);
     Html(html)
 }
 

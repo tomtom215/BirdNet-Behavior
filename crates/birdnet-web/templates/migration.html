@@ -33,10 +33,7 @@
      hx-swap="innerHTML"
      aria-live="polite"
      aria-label="Migration statistics">
-  <div class="stat-tile"><span class="label">First-of-year arrivals</span><span class="value">—</span></div>
-  <div class="stat-tile"><span class="label">Peak diversity week</span><span class="value">—</span></div>
-  <div class="stat-tile"><span class="label">Earliest vs last year</span><span class="value">—</span></div>
-  <div class="stat-tile"><span class="label">Still expected</span><span class="value">—</span></div>
+  {{skel_migration_stats}}
 </div>
 
 <!-- Ridgeline + diversity strip — Rust renders the SVG inline -->
@@ -64,7 +61,7 @@
        hx-trigger="load"
        hx-swap="innerHTML"
        style="min-height:360px;">
-    <p class="bnb-meta">Building ridgeline…</p>
+    {{skel_ridgeline}}
   </div>
 
   <div style="margin-top:14px;padding-top:14px;border-top:0.5px solid var(--hairline);">
@@ -77,6 +74,7 @@
          hx-trigger="load"
          hx-swap="innerHTML"
          style="min-height:70px;">
+      {{skel_diversity}}
     </div>
   </div>
 </div>

@@ -1,0 +1,99 @@
+<!--
+  Themed confirmation modal · drop-in for layout.html.
+  Inline this block immediately before </body>. The dialog stays hidden until
+  a button with [data-confirm-action] is clicked; the script fills it and
+  calls showModal().
+
+  Reads no template variables — fully self-contained. Every triggering
+  button supplies its own title / body / labels / endpoint via data-* attrs.
+-->
+<dialog id="bnb-confirm" class="bnb-modal" aria-labelledby="bnb-confirm-title">
+  <form method="dialog" class="bnb-modal__form">
+    <header class="bnb-modal__head">
+      <div class="bnb-eyebrow" data-confirm-style-eyebrow>Confirm</div>
+      <h2 id="bnb-confirm-title" class="display"
+          style="font-size:24px;line-height:1.15;margin:4px 0 0;letter-spacing:-0.01em;">
+        Are you sure?
+      </h2>
+    </header>
+    <div class="bnb-modal__body">
+      <p id="bnb-confirm-body" style="margin:0;color:var(--fg-2);font-size:14px;line-height:1.55;">
+        This action cannot be undone.
+      </p>
+    </div>
+    <footer class="bnb-modal__foot">
+      <button type="submit"
+              value="cancel"
+              class="bnb-btn ghost"
+              data-confirm-cancel>Cancel</button>
+      <button type="submit"
+              value="confirm"
+              class="bnb-btn"
+              data-confirm-ok>Confirm</button>
+    </footer>
+  </form>
+</dialog>
+
+<script>
+(function () {
+  "use strict";
+  var dialog = document.getElementById('bnb-confirm');
+  if (!dialog || typeof dialog.showModal !== 'function') return; // graceful: hx-confirm still gates the request
+
+  var titleEl = document.getElementById('bnb-confirm-title');
+  var bodyEl  = document.getElementById('bnb-confirm-body');
+  var eyebrow = dialog.querySelector('[data-confirm-style-eyebrow]');
+  var okBtn   = dialog.querySelector('[data-confirm-ok]');
+  var pending = null;
+
+  function open(btn) {
+    pending = btn;
+    titleEl.textContent = btn.dataset.confirmTitle || 'Are you sure?';
+    bodyEl.textContent  = btn.dataset.confirmBody  || 'This action cannot be undone.';
+    okBtn.textContent   = btn.dataset.confirmConfirmLabel || 'Confirm';
+    var style = btn.dataset.confirmStyle || 'moss';
+    eyebrow.textContent = style === 'danger' ? 'Destructive action'
+                       : style === 'warn'   ? 'Heads up'
+                       : 'Confirm';
+    eyebrow.style.color = style === 'danger' ? 'var(--rare)'
+                       : style === 'warn'   ? 'var(--dawn-ink)'
+                       : 'var(--fg-3)';
+    okBtn.className = 'bnb-btn ' + (style === 'danger' ? 'danger' : style === 'warn' ? 'dawn' : 'moss');
+    dialog.dataset.style = style;
+    dialog.showModal();
+    // Move focus to cancel (safer default than ok for destructive actions).
+    var cancel = dialog.querySelector('[data-confirm-cancel]');
+    if (cancel) cancel.focus();
+  }
+
+  function fire(btn) {
+    // Re-issue the original request without re-prompting. We temporarily strip
+    // hx-confirm so htmx doesn't re-prompt, then click() to let htmx handle it.
+    var hxc = btn.getAttribute('hx-confirm');
+    if (hxc) btn.removeAttribute('hx-confirm');
+    if (window.htmx) {
+      // Use htmx.trigger to fire the request without recursing into this handler.
+      btn.setAttribute('data-confirm-bypass', '1');
+      btn.click();
+      btn.removeAttribute('data-confirm-bypass');
+    }
+    if (hxc) btn.setAttribute('hx-confirm', hxc);
+  }
+
+  // Intercept any click on a [data-confirm-action] trigger before htmx runs.
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-confirm-action]');
+    if (!btn) return;
+    if (btn.dataset.confirmBypass === '1') return;
+    e.preventDefault();
+    e.stopPropagation();
+    open(btn);
+  }, true); // capture phase, so we beat htmx
+
+  // Resolve dialog dismissal.
+  dialog.addEventListener('close', function () {
+    if (dialog.returnValue === 'confirm' && pending) fire(pending);
+    pending = null;
+  });
+})();
+</script>

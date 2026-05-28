@@ -655,3 +655,632 @@ footer a:hover { color: var(--moss-ink); }
      can't select. */
   [style*="grid-template-columns"] { grid-template-columns: 1fr !important; }
 }
+/* Append to crates/birdnet-web/static/css/app.css — purely additive.
+   Skeleton shimmer used by pages::skeletons helpers (O-16). */
+
+/* ── Skeleton shimmer ─────────────────────────────────────────────── */
+.bnb-skel {
+  display: block;
+  background:
+    linear-gradient(
+      90deg,
+      var(--surface-2) 0%,
+      color-mix(in oklch, var(--hairline) 65%, var(--surface-2)) 40%,
+      color-mix(in oklch, var(--hairline) 65%, var(--surface-2)) 60%,
+      var(--surface-2) 100%
+    );
+  background-size: 200% 100%;
+  border-radius: var(--r-sm);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .bnb-skel { animation: bnb-skel-shimmer 1.4s cubic-bezier(.4, 0, .2, 1) infinite; }
+}
+:root[data-motion="reduced"] .bnb-skel { animation: none; }
+
+@keyframes bnb-skel-shimmer {
+  0%   { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+/* Convenience modifiers — height presets matching the shapes the helpers emit. */
+.bnb-skel.line   { height: 12px; border-radius: 3px; }
+.bnb-skel.line.lg { height: 20px; }
+.bnb-skel.line.xl { height: 32px; }
+.bnb-skel.pill   { height: 18px; width: 80px; border-radius: 999px; }
+.bnb-skel.dot    { width: 6px; height: 6px; border-radius: 999px; }
+.bnb-skel.avatar { width: 28px; height: 28px; border-radius: 999px; flex: 0 0 auto; }
+.bnb-skel.avatar.lg { width: 36px; height: 36px; }
+.bnb-skel.tile   { height: 110px; border-radius: var(--r-md); }
+.bnb-skel.box    { border-radius: var(--r-md); }
+
+/* Composite layouts the helpers use — kept in CSS so server-side helpers stay tiny. */
+.bnb-skel-feed-row {
+  display: grid;
+  grid-template-columns: 64px 36px 1fr 130px 92px auto;
+  gap: 12px; align-items: center; padding: 10px;
+}
+.bnb-skel-stat-row {
+  display: grid; grid-template-columns: repeat(var(--n, 4), 1fr); gap: 0;
+  border: 0.5px solid var(--border); border-radius: var(--r-lg); overflow: hidden;
+  background: var(--surface); box-shadow: var(--shadow-sm);
+}
+.bnb-skel-stat-row > div {
+  padding: var(--pad-3); border-right: 0.5px solid var(--hairline);
+  display: flex; flex-direction: column; gap: 12px; min-height: 150px;
+}
+.bnb-skel-stat-row > div:last-child { border-right: 0; }
+
+.bnb-skel-bars {
+  display: grid; grid-template-columns: repeat(var(--n, 24), 1fr);
+  gap: 2px; align-items: end; height: 80px;
+}
+.bnb-skel-bars > span {
+  display: block; background: var(--surface-2);
+  border-radius: 2px 2px 0 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .bnb-skel-bars > span { animation: bnb-skel-shimmer 1.4s cubic-bezier(.4,0,.2,1) infinite; background-size:200% 100%; }
+}
+
+.bnb-skel-list { display: flex; flex-direction: column; }
+.bnb-skel-list-row {
+  display: grid; grid-template-columns: 28px 1fr 56px;
+  gap: 12px; align-items: center; padding: 10px 0;
+  border-top: 0.5px solid var(--hairline);
+}
+.bnb-skel-list-row:first-child { border-top: 0; }
+/* Append to crates/birdnet-web/static/css/app.css — purely additive.
+   Themed confirmation modal (O-17). Uses the native <dialog> element. */
+
+/* ── Modal · <dialog>-based ───────────────────────────────────────── */
+.bnb-modal {
+  /* Reset native dialog chrome. */
+  border: 0; padding: 0;
+  background: transparent;
+  color: var(--fg);
+  max-width: min(92vw, 460px);
+  width: 100%;
+  margin: auto; /* centred when opened via showModal() */
+}
+.bnb-modal::backdrop {
+  background: color-mix(in oklch, oklch(0% 0 0) 38%, transparent);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
+.bnb-modal__form {
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 0;
+  display: flex; flex-direction: column;
+  font-family: var(--font-ui);
+}
+.bnb-modal__head { padding: 22px 22px 12px; }
+.bnb-modal__body { padding: 4px 22px 18px; }
+.bnb-modal__foot {
+  padding: 14px 18px;
+  border-top: 0.5px solid var(--hairline);
+  background: var(--bg-2);
+  border-radius: 0 0 var(--r-lg) var(--r-lg);
+  display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+}
+
+/* Danger / warn theming on the dialog frame */
+.bnb-modal[data-style="danger"] .bnb-modal__form {
+  border-color: color-mix(in oklch, var(--rare) 40%, var(--border));
+  box-shadow: var(--shadow-lg), 0 0 0 4px color-mix(in oklch, var(--rare) 8%, transparent);
+}
+.bnb-modal[data-style="warn"] .bnb-modal__form {
+  border-color: color-mix(in oklch, var(--dawn) 50%, var(--border));
+}
+
+/* Show/hide animation when supported */
+@media (prefers-reduced-motion: no-preference) {
+  .bnb-modal[open] .bnb-modal__form {
+    animation: bnb-modal-rise 200ms cubic-bezier(.2,.7,.2,1);
+  }
+  .bnb-modal[open]::backdrop {
+    animation: bnb-modal-fade 200ms ease-out;
+  }
+}
+@keyframes bnb-modal-rise {
+  from { opacity: 0; transform: translateY(8px) scale(.985); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes bnb-modal-fade { from { opacity: 0; } to { opacity: 1; } }
+
+/* Extra button colour used only by the modal's "warn" style */
+.bnb-btn.dawn {
+  background: var(--dawn);
+  color: oklch(20% 0.04 60);
+  border-color: transparent;
+}
+.bnb-btn.dawn:hover { background: var(--dawn-ink); color: oklch(100% 0 0); }
+/* Append to crates/birdnet-web/static/css/app.css — purely additive.
+   Toast / snackbar region (O-18). */
+
+/* ── Toast region (global live region, top-right) ─────────────────── */
+#bnb-toasts {
+  position: fixed;
+  top: calc(56px + 12px); /* clear the sticky topnav (~56px) + gap */
+  right: 18px;
+  z-index: 60; /* above sticky topnav (z=50), below modal (<dialog> auto z) */
+  display: flex; flex-direction: column; gap: 8px;
+  pointer-events: none; /* let clicks through gaps; toasts re-enable themselves */
+  max-width: min(96vw, 360px);
+}
+
+.bnb-toast {
+  pointer-events: auto;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 14px;
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-md);
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--fg);
+  transition: opacity .2s ease, transform .2s cubic-bezier(.2,.7,.2,1);
+}
+.bnb-toast[data-leaving="1"] {
+  opacity: 0;
+  transform: translateX(8px);
+}
+
+.bnb-toast__dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 999px;
+  background: var(--fg-3);
+  margin-top: 6px;
+  flex: 0 0 auto;
+}
+.bnb-toast[data-kind="success"] .bnb-toast__dot { background: var(--moss); }
+.bnb-toast[data-kind="warn"]    .bnb-toast__dot { background: var(--dawn); }
+.bnb-toast[data-kind="error"]   .bnb-toast__dot { background: var(--rare); }
+.bnb-toast[data-kind="info"]    .bnb-toast__dot { background: var(--fg-3); }
+
+.bnb-toast__body {
+  min-width: 0;
+  word-wrap: break-word;
+}
+.bnb-toast__body strong { font-weight: 600; }
+.bnb-toast__body a {
+  color: var(--moss-ink);
+  text-decoration: none;
+  border-bottom: 0.5px solid color-mix(in oklch, var(--moss-ink) 30%, transparent);
+}
+.bnb-toast__body a:hover { border-bottom-color: var(--moss-ink); }
+
+.bnb-toast__close {
+  background: transparent;
+  border: 0;
+  color: var(--fg-3);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: var(--r-xs);
+  margin-top: -2px;
+}
+.bnb-toast__close:hover { color: var(--fg); background: var(--surface-2); }
+
+/* Tinted backgrounds — subtle, never fights with the page */
+.bnb-toast[data-kind="success"] {
+  background: color-mix(in oklch, var(--moss-soft) 60%, var(--surface));
+  border-color: color-mix(in oklch, var(--moss) 30%, var(--border));
+}
+.bnb-toast[data-kind="warn"] {
+  background: color-mix(in oklch, var(--dawn-soft) 55%, var(--surface));
+  border-color: color-mix(in oklch, var(--dawn) 35%, var(--border));
+}
+.bnb-toast[data-kind="error"] {
+  background: color-mix(in oklch, var(--rare-soft) 55%, var(--surface));
+  border-color: color-mix(in oklch, var(--rare) 35%, var(--border));
+  color: var(--fg);
+}
+
+/* Optional action link inside a toast (e.g. "Restart now") */
+.bnb-toast__action {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--moss-ink);
+  text-decoration: none;
+  border-bottom: 0.5px solid color-mix(in oklch, var(--moss-ink) 30%, transparent);
+}
+.bnb-toast__action:hover { border-bottom-color: var(--moss-ink); }
+/* Append to crates/birdnet-web/static/css/app.css — purely additive.
+   Layout utility classes that replace the recurring inline `style="…"`
+   shapes in the admin Rust handlers (O-25). Layout-only — no colour or
+   typography choices live here; the design system still owns those.
+*/
+
+/* ── Flex primitives ─────────────────────────────────────────────── */
+.bnb-row              { display: flex; align-items: center; gap: var(--pad-2); }
+.bnb-row.between      { justify-content: space-between; }
+.bnb-row.tight        { gap: 8px; }
+.bnb-row.wide         { gap: var(--pad-3); }
+.bnb-row.wrap         { flex-wrap: wrap; }
+.bnb-row.start        { align-items: flex-start; }
+.bnb-row.end          { align-items: flex-end; }
+
+.bnb-col              { display: flex; flex-direction: column; gap: var(--pad-2); }
+.bnb-col.tight        { gap: 8px; }
+.bnb-col.wide         { gap: var(--pad-3); }
+
+.bnb-stack            { display: grid; gap: var(--pad-2); }
+.bnb-stack.tight      { gap: 8px; }
+
+.bnb-spread {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: var(--pad-2);
+}
+
+.bnb-fill             { flex: 1; min-width: 0; }
+.bnb-shrink-0         { flex: 0 0 auto; }
+.bnb-ml-auto          { margin-left: auto; }
+.bnb-mt-auto          { margin-top: auto; }
+
+/* ── Grid templates (named shapes seen ≥4× in the codebase) ───────── */
+.bnb-grid-2           { display: grid; grid-template-columns: 1fr 1fr;           gap: var(--pad-3); }
+.bnb-grid-3           { display: grid; grid-template-columns: repeat(3, 1fr);    gap: var(--pad-3); }
+.bnb-grid-4           { display: grid; grid-template-columns: repeat(4, 1fr);    gap: var(--pad-3); }
+.bnb-grid-1-2         { display: grid; grid-template-columns: 1fr 2fr;           gap: var(--pad-3); }
+.bnb-grid-2-1         { display: grid; grid-template-columns: 2fr 1fr;           gap: var(--pad-3); }
+
+/* Sidebar / main / rail — used by audio, settings, system pages. */
+.bnb-grid-side {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr) 280px;
+  gap: var(--pad-3);
+  align-items: start;
+}
+.bnb-grid-side.wide { grid-template-columns: 240px minmax(0, 1fr) 320px; }
+.bnb-grid-side.no-rail { grid-template-columns: 200px minmax(0, 1fr); }
+@media (max-width: 980px) {
+  .bnb-grid-2, .bnb-grid-3, .bnb-grid-4,
+  .bnb-grid-1-2, .bnb-grid-2-1,
+  .bnb-grid-side, .bnb-grid-side.wide, .bnb-grid-side.no-rail
+  { grid-template-columns: 1fr; }
+}
+
+.bnb-side { position: sticky; top: 16px; align-self: start; }
+
+/* ── Form rows (settings render modules) ──────────────────────────── */
+.bnb-form-row {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 14px;
+  align-items: center;
+  padding: 12px 0;
+  border-top: 0.5px solid var(--hairline);
+}
+.bnb-form-row:first-child { border-top: 0; }
+.bnb-form-row.stacked { grid-template-columns: 1fr; gap: 6px; }
+.bnb-form-row > label { font-size: 13px; color: var(--fg-2); }
+.bnb-form-row > label .hint {
+  display: block; color: var(--fg-3); font-size: 11.5px; margin-top: 2px;
+}
+.bnb-form-row > .control { min-width: 0; }
+.bnb-form-row > .hint     { grid-column: 2; color: var(--fg-3); font-size: 11.5px; margin-top: -8px; }
+
+@media (max-width: 540px) {
+  .bnb-form-row { grid-template-columns: 1fr; }
+  .bnb-form-row > .hint { grid-column: 1; }
+}
+
+/* Range slider polish (was inline `accent-color` everywhere) */
+.bnb-range { width: 100%; accent-color: var(--moss); }
+
+/* Inline key/value (settings preview, kpi sub-text) */
+.bnb-kv {
+  display: inline-flex; gap: 6px; align-items: baseline;
+  font-size: 12.5px;
+}
+.bnb-kv .k {
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.bnb-kv .v {
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Aside: settings sub-nav (sidebar links) ──────────────────────── */
+.bnb-settings-nav {
+  display: flex; flex-direction: column; gap: 2px;
+}
+.bnb-settings-nav a {
+  display: block;
+  padding: 7px 10px;
+  border-radius: 8px;
+  text-decoration: none;
+  font-size: 13px;
+  color: var(--fg-2);
+}
+.bnb-settings-nav a:hover { background: var(--surface-2); color: var(--fg); }
+.bnb-settings-nav a.active {
+  background: var(--moss-soft);
+  color: var(--moss-ink);
+  font-weight: 500;
+}
+
+/* ── Drop zone (backup-recovery upload, etc.) ─────────────────────── */
+.bnb-dropzone {
+  border: 0.5px dashed var(--border-2);
+  border-radius: var(--r-lg);
+  padding: var(--pad-4);
+  display: grid;
+  place-items: center;
+  text-align: center;
+  background:
+    repeating-linear-gradient(45deg,
+      var(--surface-2) 0 8px, var(--bg-2) 8px 16px);
+  color: var(--fg-3);
+  font-size: 13px;
+}
+.bnb-dropzone.dragover {
+  border-style: solid;
+  border-color: var(--moss);
+  background: color-mix(in oklch, var(--moss) 8%, var(--surface));
+  color: var(--moss-ink);
+}
+.bnb-dropzone .display {
+  font-size: 22px; color: var(--fg);
+}
+.bnb-dropzone .bnb-meta { margin-top: 4px; }
+
+/* ── Danger zone card (backup-recovery) ───────────────────────────── */
+.bnb-danger-zone {
+  border: 0.5px solid color-mix(in oklch, var(--rare) 40%, var(--border));
+  border-radius: var(--r-lg);
+  padding: var(--pad-3);
+  background: color-mix(in oklch, var(--rare) 4%, var(--surface));
+}
+.bnb-danger-zone .bnb-eyebrow { color: var(--rare); }
+.bnb-danger-zone > h3 { color: var(--fg); }
+.bnb-danger-zone .bnb-divider { background: color-mix(in oklch, var(--rare) 18%, var(--hairline)); }
+
+/* ── Logs / mono code block (admin logs viewer, birdnet.conf preview) ── */
+.bnb-logblock {
+  background: var(--bg-2);
+  border: 0.5px solid var(--hairline);
+  border-radius: var(--r-md);
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-2);
+  overflow: auto;
+  max-height: 360px;
+}
+.bnb-logblock .info { color: var(--fg-2); }
+.bnb-logblock .warn { color: var(--dawn-ink); }
+.bnb-logblock .err  { color: var(--rare); }
+/* Append to crates/birdnet-web/static/css/app.css — purely additive.
+   IA fix (O-26): More dropdown in topnav, real footer. */
+
+/* ── More button in the topnav ────────────────────────────────────── */
+.bnb-more {
+  display: inline-flex; align-items: center;
+}
+.bnb-more__btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px;
+  border-radius: var(--r-sm);
+  border: 0.5px solid transparent;
+  background: transparent;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.bnb-more__btn:hover {
+  color: var(--fg);
+  background: var(--surface-2);
+}
+.bnb-more__btn[aria-expanded="true"],
+.bnb-more__btn.is-open {
+  background: var(--surface-2);
+  color: var(--fg);
+  border-color: var(--border);
+}
+.bnb-more__glyph {
+  font-family: var(--font-mono); font-size: 13px; line-height: 1;
+  color: var(--fg-3);
+}
+.bnb-more__btn:hover .bnb-more__glyph { color: var(--fg-2); }
+.bnb-more__arrow { font-size: 9px; color: var(--fg-4); }
+@media (max-width: 720px) {
+  /* On phones the bottom tabbar's own "More" slot already covers this;
+     hide the topnav variant to avoid two openers. */
+  .bnb-more { display: none; }
+}
+
+/* ── More dropdown / sheet ────────────────────────────────────────── */
+.bnb-more-menu {
+  border: 0; padding: 0;
+  background: transparent;
+  color: var(--fg);
+  /* Desktop default: anchored beneath the trigger via CSS vars set by JS. */
+  margin: 0;
+  position: fixed;
+  top: var(--bnb-more-y, 56px);
+  left: auto;
+  right: auto;
+  /* Right-align under the button. JS sets --bnb-more-x to the right edge. */
+  inset-inline-end: max(0px, calc(100vw - var(--bnb-more-x, 100vw)));
+  width: min(94vw, 520px);
+}
+.bnb-more-menu::backdrop {
+  background: color-mix(in oklch, oklch(0% 0 0) 22%, transparent);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+.bnb-more-menu__form {
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  display: flex; flex-direction: column;
+  max-height: min(70vh, 640px);
+}
+.bnb-more-menu__head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 0.5px solid var(--hairline);
+}
+.bnb-more-menu__body {
+  padding: 6px 4px;
+  overflow-y: auto;
+}
+
+.bnb-more-group { padding: 6px 8px 10px; }
+.bnb-more-group + .bnb-more-group {
+  border-top: 0.5px solid var(--hairline);
+  margin-top: 4px;
+}
+.bnb-more-group h3.bnb-eyebrow {
+  margin: 6px 8px 4px;
+}
+.bnb-more-group ul {
+  list-style: none; margin: 0; padding: 0;
+}
+.bnb-more-row {
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  gap: 8px 12px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  text-decoration: none;
+  color: var(--fg);
+  font-size: 13.5px;
+  background: transparent;
+  border: 0;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.bnb-more-row:hover {
+  background: color-mix(in oklch, var(--moss) 7%, var(--surface));
+}
+.bnb-more-row.active {
+  background: color-mix(in oklch, var(--moss) 10%, var(--surface));
+  color: var(--moss-ink);
+}
+.bnb-more-row .glyph {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--fg-3);
+  text-align: center;
+}
+.bnb-more-row.active .glyph { color: var(--moss-ink); }
+.bnb-more-row .label { font-weight: 500; }
+.bnb-more-row .sub {
+  grid-column: 2;
+  font-size: 11px;
+  color: var(--fg-3);
+  margin-top: 2px;
+}
+.bnb-more-row .sub.mono { font-family: var(--font-mono); letter-spacing: 0.02em; }
+
+/* On phone widths the menu becomes a bottom sheet — same vocabulary as
+   the mobile More sheet from O-24, kept here so this opportunity ships
+   stand-alone even before O-24 lands. */
+@media (max-width: 720px) {
+  .bnb-more-menu {
+    top: auto; bottom: 0;
+    inset-inline-end: 0;
+    margin: 0;
+    width: 100vw;
+  }
+  .bnb-more-menu__form {
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    max-height: 78vh;
+  }
+}
+
+/* ── New footer (real footer, no destination flex-wrap) ───────────── */
+.bnb-footer {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px 22px;
+  align-items: center;
+  padding: 18px 22px 22px;
+  border-top: 0.5px solid var(--hairline);
+  color: var(--fg-3);
+  font-size: 12px;
+  margin-top: var(--pad-4);
+  background: color-mix(in oklch, var(--bg) 85%, transparent);
+}
+.bnb-footer__brand {
+  display: inline-flex; align-items: center; gap: 8px;
+  color: var(--fg-3);
+}
+.bnb-footer__mark { color: var(--fg-3); flex: 0 0 auto; }
+.bnb-footer__word { font-size: 12.5px; }
+.bnb-footer__word b { color: var(--fg-2); font-weight: 600; }
+.bnb-footer__word span { color: var(--fg-3); margin-left: 2px; }
+.bnb-footer__sep { color: var(--fg-4); }
+.bnb-footer__version { font-size: 11px; color: var(--fg-3); }
+.bnb-footer__uptime {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--fg-3);
+}
+/* Hide the uptime span if the server didn't substitute a value. */
+.bnb-footer__uptime[data-empty-hide="{{uptime_short}}"],
+.bnb-footer__uptime[data-empty-hide=""]               { display: none; }
+
+.bnb-footer__meta {
+  display: inline-flex; align-items: center; gap: 8px 12px;
+  justify-self: center;
+  flex-wrap: wrap;
+}
+.bnb-footer__meta a {
+  color: var(--fg-3);
+  text-decoration: none;
+  border-bottom: 0.5px solid transparent;
+  padding-bottom: 1px;
+  transition: color .12s, border-color .12s;
+}
+.bnb-footer__meta a:hover {
+  color: var(--moss-ink);
+  border-bottom-color: color-mix(in oklch, var(--moss-ink) 35%, transparent);
+}
+
+.bnb-footer__rights {
+  font-size: 10.5px;
+  color: var(--fg-4);
+  letter-spacing: 0.02em;
+  justify-self: end;
+  white-space: nowrap;
+}
+
+/* Stack on phones. */
+@media (max-width: 720px) {
+  .bnb-footer {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    text-align: center;
+  }
+  .bnb-footer__brand,
+  .bnb-footer__meta,
+  .bnb-footer__rights {
+    justify-self: center;
+  }
+}

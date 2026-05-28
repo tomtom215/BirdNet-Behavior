@@ -18,6 +18,7 @@ use std::fmt::Write as _;
 use birdnet_db::settings::ensure_settings_table;
 use birdnet_db::settings::get as get_setting;
 
+use crate::routes::pages::toast::{self, Toast};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -170,19 +171,32 @@ async fn test_apprise(State(state): State<AppState>) -> (StatusCode, Html<String
             .filter(|v| !v.is_empty())
     });
 
+    // O-18: toast the test outcome on every branch.
     match apprise_url {
         None => (
             StatusCode::OK,
-            Html(result_html(false, "Apprise URL not configured")),
+            toast::with(
+                Html(result_html(false, "Apprise URL not configured")),
+                Toast::warn("Apprise URL not configured."),
+            ),
         ),
         Some(url) => {
             let res = send_apprise_test(&url).await;
             match res {
                 Ok(()) => (
                     StatusCode::OK,
-                    Html(result_html(true, "Test notification sent via Apprise ✓")),
+                    toast::with(
+                        Html(result_html(true, "Test notification sent via Apprise ✓")),
+                        Toast::success("Test sent to Apprise."),
+                    ),
                 ),
-                Err(e) => (StatusCode::OK, Html(result_html(false, &e))),
+                Err(e) => (
+                    StatusCode::OK,
+                    toast::with(
+                        Html(result_html(false, &e)),
+                        Toast::error(format!("Apprise: {e}")),
+                    ),
+                ),
             }
         }
     }
@@ -196,16 +210,32 @@ async fn test_birdweather(State(state): State<AppState>) -> (StatusCode, Html<St
             .filter(|v| !v.is_empty())
     });
 
+    // O-18: toast the test outcome on every branch.
     match token {
         None => (
             StatusCode::OK,
-            Html(result_html(false, "BirdWeather token not configured")),
+            toast::with(
+                Html(result_html(false, "BirdWeather token not configured")),
+                Toast::warn("BirdWeather token not configured."),
+            ),
         ),
         Some(tok) => {
             let res = ping_birdweather(&tok).await;
             match res {
-                Ok(msg) => (StatusCode::OK, Html(result_html(true, &msg))),
-                Err(e) => (StatusCode::OK, Html(result_html(false, &e))),
+                Ok(msg) => (
+                    StatusCode::OK,
+                    toast::with(
+                        Html(result_html(true, &msg)),
+                        Toast::success(format!("BirdWeather: {msg}")),
+                    ),
+                ),
+                Err(e) => (
+                    StatusCode::OK,
+                    toast::with(
+                        Html(result_html(false, &e)),
+                        Toast::error(format!("BirdWeather: {e}")),
+                    ),
+                ),
             }
         }
     }
@@ -245,7 +275,16 @@ async fn test_all(State(state): State<AppState>) -> (StatusCode, Html<String>) {
 
     let body = lines.join("<br>");
     let ok = lines.iter().all(|r| !r.contains("274c"));
-    (StatusCode::OK, Html(result_html(ok, &body)))
+    // O-18: aggregate-test toast summarises the run.
+    let summary = if ok {
+        Toast::success("All configured channels passed.")
+    } else {
+        Toast::error("One or more channels failed — see results.")
+    };
+    (
+        StatusCode::OK,
+        toast::with(Html(result_html(ok, &body)), summary),
+    )
 }
 
 // ---------------------------------------------------------------------------

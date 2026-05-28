@@ -259,6 +259,12 @@ fn render_detection_list(
             hx-target="closest div[style*='border-bottom']"
             hx-swap="outerHTML"
             hx-confirm="Delete this recording?"
+            data-confirm-action="hx-post"
+            data-confirm-url="/pages/recordings-delete"
+            data-confirm-title="Delete recording"
+            data-confirm-body="Delete this recording?"
+            data-confirm-confirm-label="Delete"
+            data-confirm-style="danger"
             style="background:none;border:1px solid var(--danger);color:var(--danger);padding:0.2rem 0.5rem;border-radius:var(--radius);cursor:pointer;font-size:0.7rem;">
       Delete
     </button>

@@ -14,6 +14,7 @@ use axum::{Router, routing::get};
 use birdnet_core::audio::capture::{disk_usage, recording_stats};
 use birdnet_db::resilience::backup_database;
 
+use crate::routes::pages::toast::{self, Toast};
 use crate::state::AppState;
 use crate::system_info;
 
@@ -96,7 +97,13 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
               hx-post="/admin/system/service/restart"
               hx-target="#service-result"
               hx-swap="innerHTML"
-              hx-confirm="Restart the service? Detection will pause briefly during restart.">
+              hx-confirm="Restart the service? Detection will pause briefly during restart."
+              data-confirm-action="hx-post"
+              data-confirm-url="/admin/system/service/restart"
+              data-confirm-title="Restart service"
+              data-confirm-body="Restart the service? Detection will pause briefly during restart."
+              data-confirm-confirm-label="Restart"
+              data-confirm-style="warn">
         Restart Service
       </button>
       <button class="btn btn-secondary"
@@ -170,14 +177,26 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
               hx-post="/admin/system/clear-detections"
               hx-target="#clear-result"
               hx-swap="innerHTML"
-              hx-confirm="Are you sure you want to delete ALL detections and notification logs? This cannot be undone.">
+              hx-confirm="Are you sure you want to delete ALL detections and notification logs? This cannot be undone."
+              data-confirm-action="hx-post"
+              data-confirm-url="/admin/system/clear-detections"
+              data-confirm-title="Clear all detections"
+              data-confirm-body="Are you sure you want to delete ALL detections and notification logs? This cannot be undone."
+              data-confirm-confirm-label="Delete all"
+              data-confirm-style="danger">
         Clear All Detections
       </button>
       <button class="btn btn-danger"
               hx-post="/admin/system/clear-extracted"
               hx-target="#clear-result"
               hx-swap="innerHTML"
-              hx-confirm="Are you sure you want to delete ALL extracted audio clips? This cannot be undone.">
+              hx-confirm="Are you sure you want to delete ALL extracted audio clips? This cannot be undone."
+              data-confirm-action="hx-post"
+              data-confirm-url="/admin/system/clear-extracted"
+              data-confirm-title="Clear extracted audio"
+              data-confirm-body="Are you sure you want to delete ALL extracted audio clips? This cannot be undone."
+              data-confirm-confirm-label="Delete clips"
+              data-confirm-style="danger">
         Clear Extracted Audio
       </button>
     </div>
@@ -350,15 +369,25 @@ async fn trigger_backup(State(state): State<AppState>) -> Result<Html<String>, S
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     match result {
-        Ok(path) => Ok(Html(format!(
-            r#"<p style="color:var(--moss);">
-              Backup created: <code style="font-size:.8rem;">{}</code>
-            </p>"#,
-            path.display()
-        ))),
-        Err(e) => Ok(Html(format!(
-            r#"<p style="color:var(--rare);">Backup failed: {e}</p>"#
-        ))),
+        Ok(path) => {
+            let display = path.display().to_string();
+            let body = Html(format!(
+                r#"<p style="color:var(--moss);">
+              Backup created: <code style="font-size:.8rem;">{display}</code>
+            </p>"#
+            ));
+            // O-18: toast confirmation of the backup outcome.
+            Ok(toast::with(
+                body,
+                Toast::success(format!("Backup created — {display}.")),
+            ))
+        }
+        Err(e) => {
+            let body = Html(format!(
+                r#"<p style="color:var(--rare);">Backup failed: {e}</p>"#
+            ));
+            Ok(toast::with(body, Toast::error(format!("Backup failed: {e}"))))
+        }
     }
 }
 

@@ -12,6 +12,7 @@ use birdnet_db::settings::{SettingsCategory, ensure_settings_table, list, set_ma
 
 use super::form::SettingsForm;
 use super::render::{render_settings_form, render_settings_page};
+use crate::routes::pages::toast::{self, Toast};
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -65,8 +66,9 @@ pub async fn save_settings(
     });
 
     match result {
-        Ok(saved) => Ok(Html(format!(
-            r#"<div class="alert alert-success" role="alert"
+        Ok(saved) => {
+            let body = Html(format!(
+                r#"<div class="alert alert-success" role="alert"
                     hx-swap-oob="true" id="settings-feedback">
                 <svg class="inline w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
                     <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
@@ -74,15 +76,27 @@ pub async fn save_settings(
                 Settings saved ({saved} values updated).
                 <span class="text-sm text-slate-400 ml-2">Changes apply on next restart.</span>
             </div>"#
-        ))),
+            ));
+            // O-18: toast the success outcome via OOB, with a follow-up action
+            // — settings only take effect on next restart, so surface the link.
+            Ok(toast::with(
+                body,
+                Toast::success(format!("Settings saved ({saved} values updated)."))
+                    .with_action("/admin/system", "Open system →"),
+            ))
+        }
         Err(e) => {
             tracing::error!(error = %e, "failed to save settings");
-            Ok(Html(format!(
+            let body = Html(format!(
                 r#"<div class="alert alert-error" id="settings-feedback"
                         hx-swap-oob="true">
                     Failed to save settings: {e}
                 </div>"#
-            )))
+            ));
+            Ok(toast::with(
+                body,
+                Toast::error(format!("Failed to save settings: {e}")),
+            ))
         }
     }
 }

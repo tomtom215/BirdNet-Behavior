@@ -35,7 +35,11 @@ pub fn router() -> Router<AppState> {
 }
 
 async fn page() -> Html<String> {
-    render_page("Dawn chorus", PAGE_HTML, "analytics")
+    // Skeleton placeholders (O-16) shown until the htmx swap targets load.
+    let body = PAGE_HTML
+        .replace("{{skel_polar}}", super::skeletons::polar_plot())
+        .replace("{{skel_ribbons}}", &super::skeletons::species_ribbons(6));
+    render_page("Dawn chorus", &body, "analytics")
 }
 
 // ---------------------------------------------------------------------------

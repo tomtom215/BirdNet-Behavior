@@ -33,7 +33,7 @@
            hx-swap="innerHTML"
            aria-live="polite"
            aria-label="Species status">
-        <span class="bnb-pill"><span class="bnb-dot"></span> loading…</span>
+        {{skel_species_status}}
       </div>
 
       <div style="display:flex;gap:8px;margin-top:18px;flex-wrap:wrap;">
@@ -61,11 +61,7 @@
            hx-get="/pages/species-hero?name={{species_encoded}}"
            hx-trigger="load"
            hx-swap="innerHTML">
-      <div class="bnb-eyebrow" style="margin-bottom:8px;">Best detection</div>
-      <div class="bnb-photo"
-           data-caption="loading…"
-           style="aspect-ratio:4/3;border-radius:var(--r-md);"></div>
-      <p class="bnb-meta" style="margin-top:8px;">Loading clip…</p>
+      {{skel_hero}}
     </aside>
   </section>
 
@@ -74,10 +70,7 @@
        hx-get="/pages/species-summary?name={{species_encoded}}"
        hx-trigger="load"
        hx-swap="innerHTML">
-    <div class="stat-tile"><span class="label">Detections</span><span class="value">—</span></div>
-    <div class="stat-tile"><span class="label">Avg confidence</span><span class="value">—</span></div>
-    <div class="stat-tile"><span class="label">First heard</span><span class="value">—</span></div>
-    <div class="stat-tile"><span class="label">Last heard</span><span class="value">—</span></div>
+    {{skel_species_stats}}
   </div>
 
   <hr class="bnb-divider">
@@ -96,7 +89,7 @@
         </div>
         <div hx-get="/pages/species-hourly?name={{species_encoded}}"
              hx-trigger="load" hx-swap="innerHTML">
-          <p class="bnb-meta">Loading chart…</p>
+          {{skel_circadian}}
         </div>
       </div>
 
@@ -110,7 +103,7 @@
         </div>
         <div hx-get="/pages/species-daily?name={{species_encoded}}"
              hx-trigger="load" hx-swap="innerHTML">
-          <p class="bnb-meta">Loading chart…</p>
+          {{skel_trend}}
         </div>
       </div>
 
@@ -124,7 +117,7 @@
         </div>
         <div hx-get="/pages/species-detections?name={{species_encoded}}"
              hx-trigger="load" hx-swap="innerHTML">
-          <p class="bnb-meta">Loading detections…</p>
+          {{skel_detections}}
         </div>
       </div>
     </div>

@@ -3,6 +3,7 @@
 use axum::extract::State;
 use axum::response::Html;
 
+use crate::routes::pages::toast::{self, Toast};
 use crate::state::AppState;
 
 pub(super) async fn clear_detections(State(state): State<AppState>) -> Html<String> {
@@ -20,14 +21,24 @@ pub(super) async fn clear_detections(State(state): State<AppState>) -> Html<Stri
     })
     .await;
 
+    // O-18: toast the destructive outcome.
     match result {
-        Ok(Ok(msg)) => Html(format!(r#"<p style="color:var(--moss);">{msg}</p>"#)),
-        Ok(Err(e)) => Html(format!(
-            r#"<p style="color:var(--rare);">Failed to clear data: {e}</p>"#
-        )),
-        Err(e) => Html(format!(
-            r#"<p style="color:var(--rare);">Internal error: {e}</p>"#
-        )),
+        Ok(Ok(msg)) => toast::with(
+            Html(format!(r#"<p style="color:var(--moss);">{msg}</p>"#)),
+            Toast::success(msg),
+        ),
+        Ok(Err(e)) => toast::with(
+            Html(format!(
+                r#"<p style="color:var(--rare);">Failed to clear data: {e}</p>"#
+            )),
+            Toast::error(format!("Clear data failed: {e}")),
+        ),
+        Err(e) => toast::with(
+            Html(format!(
+                r#"<p style="color:var(--rare);">Internal error: {e}</p>"#
+            )),
+            Toast::error(format!("Internal error: {e}")),
+        ),
     }
 }
 
@@ -66,11 +77,21 @@ pub(super) async fn clear_extracted(State(state): State<AppState>) -> Html<Strin
     })
     .await;
 
+    // O-18: toast the outcome.
     match result {
-        Ok(Ok(msg)) => Html(format!(r#"<p style="color:var(--moss);">{msg}</p>"#)),
-        Ok(Err(e)) => Html(format!(r#"<p style="color:var(--rare);">Failed: {e}</p>"#)),
-        Err(e) => Html(format!(
-            r#"<p style="color:var(--rare);">Internal error: {e}</p>"#
-        )),
+        Ok(Ok(msg)) => toast::with(
+            Html(format!(r#"<p style="color:var(--moss);">{msg}</p>"#)),
+            Toast::success(msg),
+        ),
+        Ok(Err(e)) => toast::with(
+            Html(format!(r#"<p style="color:var(--rare);">Failed: {e}</p>"#)),
+            Toast::error(format!("Clear extracted failed: {e}")),
+        ),
+        Err(e) => toast::with(
+            Html(format!(
+                r#"<p style="color:var(--rare);">Internal error: {e}</p>"#
+            )),
+            Toast::error(format!("Internal error: {e}")),
+        ),
     }
 }

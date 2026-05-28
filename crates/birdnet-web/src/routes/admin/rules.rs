@@ -30,6 +30,7 @@ use birdnet_db::alert_rules::{
 };
 
 use crate::routes::pages::escape_html;
+use crate::routes::pages::toast::{self, Toast};
 use crate::state::AppState;
 
 /// Mount alert-rules admin routes.
@@ -125,8 +126,9 @@ async fn create_rule(
         _ => AlertAction::Log,
     };
 
+    let rule_name = form.name.trim().to_string();
     let new_rule = NewAlertRule {
-        name: form.name.trim().to_string(),
+        name: rule_name.clone(),
         enabled: true,
         species_pattern,
         confidence_min: form.confidence_min.unwrap_or(0.0).clamp(0.0, 1.0),
@@ -143,11 +145,16 @@ async fn create_rule(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Return a success message; HTMX will trigger a reload of the list via hx-on
-    Ok(Html(format!(
+    let body = Html(format!(
         "<div style=\"color:var(--moss);padding:.5rem;border-radius:.375rem;background:var(--moss-soft)33;\">Rule created successfully.</div>\
          <div hx-get=\"/admin/rules/list\" hx-trigger=\"load\" hx-target=\"{}\" hx-swap=\"innerHTML\"></div>",
         "#rules-table-container"
-    )))
+    ));
+    // O-18: toast the success outcome via OOB.
+    Ok(toast::with(
+        body,
+        Toast::success(format!("Rule '{rule_name}' enabled.")),
+    ))
 }
 
 async fn delete_rule_handler(
@@ -159,7 +166,9 @@ async fn delete_rule_handler(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    Ok(Html(String::new())) // HTMX removes the row via hx-target swap
+    // O-18: HTMX removes the row via outerHTML swap (response body is empty
+    // after OOB extraction); the OOB toast confirms the action separately.
+    Ok(toast::oob_only(Toast::success("Rule deleted.")))
 }
 
 async fn toggle_rule_handler(
@@ -179,9 +188,12 @@ async fn toggle_rule_handler(
     } else {
         "var(--fg-3)"
     };
-    Ok(Html(format!(
+    let body = Html(format!(
         r#"<span style="color:{color};font-weight:600;">{label}</span>"#
-    )))
+    ));
+    // O-18: toast the new enabled/disabled state.
+    let msg = if enabled { "Rule enabled." } else { "Rule disabled." };
+    Ok(toast::with(body, Toast::success(msg)))
 }
 
 // ---------------------------------------------------------------------------
@@ -437,7 +449,13 @@ fn render_rules_table(rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
             hx-post="/admin/rules/{id}/delete"
             hx-confirm="Delete rule '{name}'?"
             hx-target="#rule-row-{id}"
-            hx-swap="outerHTML">Delete</button>
+            hx-swap="outerHTML"
+            data-confirm-action="hx-post"
+            data-confirm-url="/admin/rules/{id}/delete"
+            data-confirm-title="Delete rule"
+            data-confirm-body="Delete rule '{name}'?"
+            data-confirm-confirm-label="Delete"
+            data-confirm-style="danger">Delete</button>
   </td>
 </tr>"##,
             id = id,
