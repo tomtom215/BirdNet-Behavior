@@ -43,9 +43,8 @@ it shares the daemon's view of the audio device.</p>"#;
 
 fn card_open() -> String {
     // O-20 — drop the troubleshooting mdBook link next to the page heading.
-    let help_link = crate::routes::pages::help::help_link(
-        crate::routes::pages::help::Topic::Troubleshooting,
-    );
+    let help_link =
+        crate::routes::pages::help::help_link(crate::routes::pages::help::Topic::Troubleshooting);
     format!(
         r#"<section class="bnb-card" style="max-width:820px;margin:8px auto;padding:24px 28px;">
 <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin:0 0 6px;">

@@ -71,10 +71,7 @@ async fn login_page(req: Request) -> Html<String> {
 ///    map onto the seed admin row. This is what makes the wire flip
 ///    survive the case where the bootstrap hasn't run yet.
 /// 3. Anything else → `?error=1`.
-async fn login_submit(
-    State(state): State<AppState>,
-    Form(form): Form<LoginForm>,
-) -> Response {
+async fn login_submit(State(state): State<AppState>, Form(form): Form<LoginForm>) -> Response {
     let next = sanitize_next(form.next.as_deref()).to_string();
     let configured_env = match (std::env::var("CADDY_USER"), std::env::var("CADDY_PWD")) {
         (Ok(u), Ok(p)) if !u.is_empty() && !p.is_empty() => Some((u, p)),
@@ -84,9 +81,12 @@ async fn login_submit(
     // Authenticate. The order matters: DB first, env-fallback second,
     // so an operator who has rotated their password in the UI doesn't
     // hit the env-fallback path with stale credentials.
-    let Some(auth_user_id) =
-        authenticate(&state, &form.username, &form.password, configured_env.as_ref())
-    else {
+    let Some(auth_user_id) = authenticate(
+        &state,
+        &form.username,
+        &form.password,
+        configured_env.as_ref(),
+    ) else {
         // Wrong credentials, or no admin password configured at all.
         // Bypass the gate when basic-auth would also have let the
         // request through (no CADDY_USER + no DB admin password).
@@ -110,15 +110,8 @@ async fn login_submit(
     // Mint a fresh session id, persist a row, and emit the bound v2 cookie.
     let session_id = session::generate_session_id();
     let expires_at = expires_at_for_ttl(ttl_ms);
-    let create_result = state.with_db(|conn| {
-        conn.create_session(
-            &session_id,
-            auth_user_id,
-            &expires_at,
-            None,
-            None,
-        )
-    });
+    let create_result = state
+        .with_db(|conn| conn.create_session(&session_id, auth_user_id, &expires_at, None, None));
     if let Err(e) = create_result {
         tracing::error!(error = %e, "create_session failed during login");
         let query = format!("?error=1&next={}", urlencode_path(&next));
@@ -143,8 +136,7 @@ fn authenticate(
         if user.disabled_at.is_some() {
             return None;
         }
-        let verifies = accounts::verify_password(&user.pwd_argon2, password)
-            .unwrap_or(false);
+        let verifies = accounts::verify_password(&user.pwd_argon2, password).unwrap_or(false);
         if verifies {
             // Best-effort: rotate a legacy hash forward on successful
             // sign-in so the next basic-auth-free path doesn't have to.
@@ -184,9 +176,8 @@ fn open_bypass_redirect(state: &AppState, next: &str) -> Response {
     };
     let admin_id = admin.id;
     let expires_at = expires_at_for_ttl(session::default_ttl_ms());
-    let _ = state.with_db(|conn| {
-        conn.create_session(&session_id, admin_id, &expires_at, None, None)
-    });
+    let _ =
+        state.with_db(|conn| conn.create_session(&session_id, admin_id, &expires_at, None, None));
     let token = session::issue_token(&session_id, session::default_ttl_ms());
     redirect_with_cookie(&token, session::default_ttl_ms(), next)
 }
@@ -211,7 +202,7 @@ fn expires_at_for_ttl(ttl_ms: u64) -> String {
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
-    clippy::many_single_char_names,
+    clippy::many_single_char_names
 )]
 fn format_sqlite_datetime(secs: i64) -> String {
     let days = secs.div_euclid(86_400);
@@ -245,9 +236,8 @@ async fn logout_submit(State(state): State<AppState>, req: Request) -> Response 
         .and_then(session::extract_token)
         && let Some(validated) = session::validate_token(token)
     {
-        let _ = state.with_db(|conn| {
-            <_ as SessionStore>::revoke_session(conn, &validated.session_id)
-        });
+        let _ =
+            state.with_db(|conn| <_ as SessionStore>::revoke_session(conn, &validated.session_id));
     }
 
     let mut resp = Redirect::to("/").into_response();
@@ -409,7 +399,10 @@ mod tests {
         assert_eq!(sanitize_next(Some("/admin/overview")), "/admin/overview");
         assert_eq!(sanitize_next(Some("/r/abc")), "/r/abc");
         assert_eq!(sanitize_next(Some("//evil.example/x")), "/admin/overview");
-        assert_eq!(sanitize_next(Some("https://evil.example")), "/admin/overview");
+        assert_eq!(
+            sanitize_next(Some("https://evil.example")),
+            "/admin/overview"
+        );
         assert_eq!(sanitize_next(None), "/admin/overview");
     }
 }

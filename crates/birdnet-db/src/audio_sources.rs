@@ -375,11 +375,7 @@ pub trait AudioSourceStore {
     /// Returns [`AudioSourceError::NotFound`] if the row is absent,
     /// [`AudioSourceError::Invalid`] on a malformed value, and
     /// [`AudioSourceError::Sqlite`] for underlying database failure.
-    fn update(
-        &self,
-        id: &str,
-        patch: &AudioSourcePatch,
-    ) -> Result<AudioSource, AudioSourceError>;
+    fn update(&self, id: &str, patch: &AudioSourcePatch) -> Result<AudioSource, AudioSourceError>;
 
     /// Mark the row soft-deleted (sets `disabled_at = datetime('now')`).
     /// Subsequent `list()` calls exclude it.
@@ -461,11 +457,7 @@ impl AudioSourceStore for Connection {
             .ok_or_else(|| AudioSourceError::NotFound(new.id.clone()))
     }
 
-    fn update(
-        &self,
-        id: &str,
-        patch: &AudioSourcePatch,
-    ) -> Result<AudioSource, AudioSourceError> {
+    fn update(&self, id: &str, patch: &AudioSourcePatch) -> Result<AudioSource, AudioSourceError> {
         if let Some(Some((s, e))) = patch.schedule_quiet.as_ref() {
             validate_hhmm(s)?;
             validate_hhmm(e)?;
@@ -488,16 +480,19 @@ impl AudioSourceStore for Connection {
         if let Some(label) = patch.label.as_ref() {
             push!(
                 "label",
-                label
-                    .as_ref()
-                    .map_or(rusqlite::types::Value::Null, |s| rusqlite::types::Value::Text(s.clone()))
+                label.as_ref().map_or(rusqlite::types::Value::Null, |s| {
+                    rusqlite::types::Value::Text(s.clone())
+                })
             );
         }
         if let Some(device_id) = patch.device_id.as_ref() {
             push!("device_id", rusqlite::types::Value::Text(device_id.clone()));
         }
         if let Some(rate) = patch.sample_rate {
-            push!("sample_rate", rusqlite::types::Value::Integer(i64::from(rate)));
+            push!(
+                "sample_rate",
+                rusqlite::types::Value::Integer(i64::from(rate))
+            );
         }
         if let Some(channels) = patch.channels {
             push!(
@@ -537,7 +532,10 @@ impl AudioSourceStore for Connection {
                 "pipeline_dc_removal",
                 rusqlite::types::Value::Integer(i64::from(p.dc_removal))
             );
-            push!("pipeline_agc", rusqlite::types::Value::Integer(i64::from(p.agc)));
+            push!(
+                "pipeline_agc",
+                rusqlite::types::Value::Integer(i64::from(p.agc))
+            );
             push!(
                 "pipeline_rtsp_keepalive",
                 rusqlite::types::Value::Integer(i64::from(p.rtsp_keepalive))

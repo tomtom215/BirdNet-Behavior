@@ -80,7 +80,9 @@ where
         let Some(config_key) = config_key_for(key) else {
             continue;
         };
-        merged.get_or_insert_with(Config::empty).set(config_key, value);
+        merged
+            .get_or_insert_with(Config::empty)
+            .set(config_key, value);
         applied += 1;
     }
 
@@ -156,7 +158,10 @@ mod tests {
     fn unknown_keys_are_ignored_in_merge() {
         let merged = apply_setting_overrides(
             None,
-            [("totally_unknown_setting", "x"), ("confidence_threshold", "0.7")],
+            [
+                ("totally_unknown_setting", "x"),
+                ("confidence_threshold", "0.7"),
+            ],
         )
         .expect("a known override should produce a config");
         assert_eq!(merged.get("CONFIDENCE"), Some("0.7"));

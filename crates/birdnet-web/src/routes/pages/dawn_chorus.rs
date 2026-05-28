@@ -46,7 +46,10 @@ async fn page() -> Html<String> {
         .replace("{{skel_polar}}", super::skeletons::polar_plot())
         .replace("{{skel_ribbons}}", &super::skeletons::species_ribbons(6))
         .replace("{{moon_badge}}", &moon_badge)
-        .replace("{{help_link}}", &super::help::help_link(super::help::Topic::DawnChorus));
+        .replace(
+            "{{help_link}}",
+            &super::help::help_link(super::help::Topic::DawnChorus),
+        );
     render_page("Dawn chorus", &body, "analytics")
 }
 

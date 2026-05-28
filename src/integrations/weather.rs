@@ -137,15 +137,13 @@ fn normalise_at(at: &str) -> String {
 }
 
 fn resolve_lat(config: Option<&Config>) -> Option<f64> {
-    resolve_decimal_env("BNB_STATION_LAT").or_else(|| {
-        config.and_then(|cfg| cfg.get_parsed::<f64>("LATITUDE").ok())
-    })
+    resolve_decimal_env("BNB_STATION_LAT")
+        .or_else(|| config.and_then(|cfg| cfg.get_parsed::<f64>("LATITUDE").ok()))
 }
 
 fn resolve_lon(config: Option<&Config>) -> Option<f64> {
-    resolve_decimal_env("BNB_STATION_LON").or_else(|| {
-        config.and_then(|cfg| cfg.get_parsed::<f64>("LONGITUDE").ok())
-    })
+    resolve_decimal_env("BNB_STATION_LON")
+        .or_else(|| config.and_then(|cfg| cfg.get_parsed::<f64>("LONGITUDE").ok()))
 }
 
 fn resolve_decimal_env(key: &str) -> Option<f64> {

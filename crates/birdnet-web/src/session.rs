@@ -232,8 +232,7 @@ pub fn issue_token(session_id: &str, ttl_ms: u64) -> String {
 fn encode_token(session_id: &str, expires_ms: u64) -> String {
     let exp_str = expires_ms.to_string();
     let payload = format!("{session_id}.{exp_str}");
-    let mut mac =
-        HmacSha256::new_from_slice(&secret()).expect("HMAC accepts any key length");
+    let mut mac = HmacSha256::new_from_slice(&secret()).expect("HMAC accepts any key length");
     mac.update(payload.as_bytes());
     let tag = mac.finalize().into_bytes();
     let mac_b64 = URL_SAFE_NO_PAD.encode(&tag[..TRUNCATED_MAC_LEN]);
@@ -292,8 +291,7 @@ pub fn validate_token(value: &str) -> Option<ValidatedToken> {
     }
 
     let payload = format!("{session_id}.{exp_str}");
-    let mut mac =
-        HmacSha256::new_from_slice(&secret()).expect("HMAC accepts any key length");
+    let mut mac = HmacSha256::new_from_slice(&secret()).expect("HMAC accepts any key length");
     mac.update(payload.as_bytes());
     mac.verify_truncated_left(&provided).ok()?;
     Some(ValidatedToken {
@@ -316,9 +314,7 @@ pub fn build_set_cookie(token: &str, ttl_ms: u64, public_url: Option<&str>) -> S
     } else {
         ""
     };
-    format!(
-        "{COOKIE_NAME}={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age={max_age_secs}{secure}"
-    )
+    format!("{COOKIE_NAME}={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age={max_age_secs}{secure}")
 }
 
 /// Build a `Set-Cookie` header value that immediately clears the cookie.

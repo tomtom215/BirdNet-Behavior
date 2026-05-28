@@ -147,10 +147,8 @@ async fn create_rule(
         name: rule_name.clone(),
         enabled: true,
         species_pattern,
-        confidence_min: parse_optional_decimal(form.confidence_min.as_deref(), 0.0)
-            .clamp(0.0, 1.0),
-        confidence_max: parse_optional_decimal(form.confidence_max.as_deref(), 1.0)
-            .clamp(0.0, 1.0),
+        confidence_min: parse_optional_decimal(form.confidence_min.as_deref(), 0.0).clamp(0.0, 1.0),
+        confidence_max: parse_optional_decimal(form.confidence_max.as_deref(), 1.0).clamp(0.0, 1.0),
         hour_start: form.hour_start,
         hour_end: form.hour_end,
         days_of_week,
@@ -210,7 +208,11 @@ async fn toggle_rule_handler(
         r#"<span style="color:{color};font-weight:600;">{label}</span>"#
     ));
     // O-18: toast the new enabled/disabled state.
-    let msg = if enabled { "Rule enabled." } else { "Rule disabled." };
+    let msg = if enabled {
+        "Rule enabled."
+    } else {
+        "Rule disabled."
+    };
     Ok(toast::with(body, Toast::success(msg)))
 }
 

@@ -127,12 +127,10 @@ const fn kind_label(kind: SourceKind) -> &'static str {
 // ---------------------------------------------------------------------------
 
 async fn page(State(state): State<AppState>) -> Html<String> {
-    let sources = state
-        .with_db(AudioSourceStore::list)
-        .unwrap_or_else(|err| {
-            tracing::error!(error = %err, "audio_sources list failed");
-            Vec::new()
-        });
+    let sources = state.with_db(AudioSourceStore::list).unwrap_or_else(|err| {
+        tracing::error!(error = %err, "audio_sources list failed");
+        Vec::new()
+    });
     let active_daemon = state.audio_source().map(ToString::to_string);
     Html(admin_shell(
         "Audio Sources",
@@ -169,7 +167,11 @@ async fn create(State(state): State<AppState>, Form(form): Form<CreateForm>) -> 
     let mut new = NewAudioSource::defaults(synth_id(kind), kind, device_id);
     new.label = form.label.and_then(|s| {
         let trimmed = s.trim().to_string();
-        if trimmed.is_empty() { None } else { Some(trimmed) }
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
     });
     if let Some(rate) = form.sample_rate {
         // Constrained by the SQL CHECK; the form select limits it to safe values.
@@ -250,7 +252,11 @@ async fn update(
     }
     let label = form.label.map(|s| {
         let trimmed = s.trim().to_string();
-        if trimmed.is_empty() { None } else { Some(trimmed) }
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
     });
     if let Some(l) = label {
         patch.label = Some(l);
@@ -325,8 +331,9 @@ fn daemon_status(row: &AudioSource, daemon_source: Option<&str>) -> Status {
 // ---------------------------------------------------------------------------
 
 fn render_body(sources: &[AudioSource], daemon_source: Option<&str>) -> String {
-    let (local, rtsp): (Vec<&AudioSource>, Vec<&AudioSource>) =
-        sources.iter().partition(|s| !matches!(s.kind, SourceKind::Rtsp));
+    let (local, rtsp): (Vec<&AudioSource>, Vec<&AudioSource>) = sources
+        .iter()
+        .partition(|s| !matches!(s.kind, SourceKind::Rtsp));
 
     let mut rows_local = String::new();
     for s in &local {
@@ -357,11 +364,19 @@ fn render_body(sources: &[AudioSource], daemon_source: Option<&str>) -> String {
         .replace("{{count_rtsp}}", &escape_html(&count_rtsp))
         .replace(
             "{{hidden_local}}",
-            if local.is_empty() && !empty_both { "hidden" } else { "" },
+            if local.is_empty() && !empty_both {
+                "hidden"
+            } else {
+                ""
+            },
         )
         .replace(
             "{{hidden_rtsp}}",
-            if rtsp.is_empty() && !empty_both { "hidden" } else { "" },
+            if rtsp.is_empty() && !empty_both {
+                "hidden"
+            } else {
+                ""
+            },
         )
         .replace("{{hidden_empty}}", if empty_both { "" } else { "hidden" })
         .replace("{{pending_changes}}", "")
@@ -461,9 +476,10 @@ fn detail_for(s: &AudioSource) -> String {
 }
 
 fn meta_for(s: &AudioSource) -> String {
-    s.disabled_at
-        .as_ref()
-        .map_or_else(|| format!("added {}", s.created_at), |ts| format!("disabled {ts}"))
+    s.disabled_at.as_ref().map_or_else(
+        || format!("added {}", s.created_at),
+        |ts| format!("disabled {ts}"),
+    )
 }
 
 fn synth_id(kind: SourceKind) -> String {
@@ -574,7 +590,10 @@ mod tests {
             updated_at: "2026-05-28 12:00:00".to_string(),
         };
         let html = render_row(&source, Status::Down);
-        assert!(!html.contains("{{"), "unsubstituted placeholder in:\n{html}");
+        assert!(
+            !html.contains("{{"),
+            "unsubstituted placeholder in:\n{html}"
+        );
         assert!(html.contains("rtsp://x"));
         assert!(html.contains("Down"));
         assert!(html.contains("untitled"));
@@ -660,13 +679,19 @@ mod tests {
             created_at: "2026-05-28".to_string(),
             updated_at: "2026-05-28".to_string(),
         };
-        assert!(matches!(daemon_status(&s, Some("hw:1,0")), Status::Capturing));
+        assert!(matches!(
+            daemon_status(&s, Some("hw:1,0")),
+            Status::Capturing
+        ));
         assert!(matches!(daemon_status(&s, Some("hw:2,0")), Status::Down));
         assert!(matches!(daemon_status(&s, None), Status::Down));
 
         let mut disabled = s;
         disabled.disabled_at = Some("2026-05-28".to_string());
-        assert!(matches!(daemon_status(&disabled, Some("hw:1,0")), Status::Down));
+        assert!(matches!(
+            daemon_status(&disabled, Some("hw:1,0")),
+            Status::Down
+        ));
     }
 
     #[test]
