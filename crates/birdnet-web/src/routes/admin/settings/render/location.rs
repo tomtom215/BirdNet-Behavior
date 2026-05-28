@@ -20,13 +20,18 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     <div class="grid-2">
       <div>
         <label for="latitude">Latitude</label>
-        <input id="latitude" name="latitude" value="{lat}" placeholder="e.g. 51.5074">
+        <input id="latitude" name="latitude" type="text" inputmode="decimal"
+               pattern="-?[0-9]*[.,]?[0-9]*" value="{lat}"
+               placeholder="e.g. 51.5074 or 51,5074">
       </div>
       <div>
         <label for="longitude">Longitude</label>
-        <input id="longitude" name="longitude" value="{lon}" placeholder="e.g. -0.1278">
+        <input id="longitude" name="longitude" type="text" inputmode="decimal"
+               pattern="-?[0-9]*[.,]?[0-9]*" value="{lon}"
+               placeholder="e.g. -0.1278 or -0,1278">
       </div>
     </div>
+    <p class="hint" style="margin:-6px 0 8px;">Decimal degrees. Either <code>.</code> or <code>,</code> works as the separator.</p>
     <div>
       <label for="station_name">Station Name</label>
       <input id="station_name" name="station_name" value="{station}" placeholder="e.g. My Garden, London">

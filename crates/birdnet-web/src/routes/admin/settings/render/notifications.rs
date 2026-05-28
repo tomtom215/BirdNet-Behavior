@@ -75,14 +75,16 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     <div class="grid-2">
       <div>
         <label for="notify_confidence">Notification Min Confidence</label>
-        <input id="notify_confidence" name="notify_confidence" type="number"
-               value="{nconf}" min="0" max="1" step="0.05">
-        <p class="hint">Only notify above this confidence (BirdNET-Pi: APPRISE_MIN_CONFIDENCE)</p>
+        <input id="notify_confidence" name="notify_confidence" type="text"
+               inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*"
+               value="{nconf}" placeholder="0.80">
+        <p class="hint">Only notify above this confidence. Either <code>.</code> or <code>,</code> works (BirdNET-Pi: APPRISE_MIN_CONFIDENCE)</p>
       </div>
       <div>
         <label for="notify_cooldown">Notification Cooldown (seconds)</label>
-        <input id="notify_cooldown" name="notify_cooldown" type="number"
-               value="{ncool}" min="0" step="60">
+        <input id="notify_cooldown" name="notify_cooldown" type="text"
+               inputmode="numeric" pattern="[0-9]*"
+               value="{ncool}" placeholder="0">
         <p class="hint">Minimum time between notifications per species (BirdNET-Pi: MIN_SECONDS_BETWEEN_NOTIFICATIONS_PER_SPECIES)</p>
       </div>
     </div>

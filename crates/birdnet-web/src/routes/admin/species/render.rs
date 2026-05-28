@@ -165,7 +165,9 @@ pub fn render_thresholds_partial(thresholds: &[birdnet_db::sqlite::SpeciesThresh
         r##"<form hx-post="/admin/species/thresholds/set" hx-target="#thresholds-section" hx-swap="innerHTML"
       style="display:flex;gap:0.5rem;align-items:center;">
     <input type="text" name="sci_name" placeholder="Scientific name (e.g. Turdus merula)" style="flex:2;margin:0;">
-    <input type="number" name="threshold" min="0" max="1" step="0.05" value="0.50" placeholder="0.0–1.0" style="flex:1;margin:0;max-width:100px;">
+    <input type="text" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*"
+           name="threshold" value="0.50" placeholder="0.0–1.0 (e.g. 0,50 or 0.50)"
+           style="flex:1;margin:0;max-width:140px;">
     <button type="submit" class="btn btn-primary">Set</button>
   </form>
 </div>"##,
