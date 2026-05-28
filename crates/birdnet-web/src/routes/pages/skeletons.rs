@@ -8,12 +8,15 @@
 //! Each helper sets `aria-busy="true"` on the wrapper so a screen reader
 //! announces the loading state exactly once.
 //!
-//! TODO(O-16-followup): the migration table also lists two Rust call sites left
-//! unwired here — `dashboard/partials.rs` live-feed first paint (the DIFF note
-//! is contradictory: skeleton vs `empty_states::quiet_yard()` for the 0-row
-//! case) and `admin/quality.rs` `#quality-summary` / `#quality-trend` (which
-//! overlaps O-22's quality skin pass). Both `feed_rows`/`stat_row`/`trend_line`
-//! are already wired elsewhere, so this is polish, not dead code.
+//! All call sites named in the O-16 migration table are now wired:
+//!
+//! * dashboard live-feed first paint (`dashboard.html` → `feed_rows`) —
+//!   resolved here; the server-side handler swaps to
+//!   `empty_states::quiet_yard()` only after confirming the yard is
+//!   actually quiet (zero detections returned), avoiding the
+//!   "blank-then-quiet-yard" flicker the DIFF was worried about.
+//! * `admin/quality.rs` `#quality-summary` / `#quality-trend` — wired
+//!   in Wave D / O-22 (PR #91); see `pages::skeletons` call sites there.
 
 use std::fmt::Write as _;
 

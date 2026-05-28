@@ -49,7 +49,7 @@
             <span class="bnb-pill moss"><span class="bnb-dot live"></span> Listening</span>
         </div>
         <div id="detections-table" class="feed" hx-get="/pages/detections" hx-trigger="load, every 15s" hx-swap="innerHTML">
-            <p class="bnb-meta">Loading detections…</p>
+            {{skel_detections}}
         </div>
     </div>
 
