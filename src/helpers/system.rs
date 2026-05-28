@@ -62,6 +62,68 @@ pub fn start_disk_manager(
     Some(handle)
 }
 
+/// Start the live-spectrogram producer as a background thread.
+///
+/// Watches the capture pipeline's recording directory; for each new
+/// audio file, computes a mel spectrogram and broadcasts the frame to
+/// every `/api/v2/ws/spectrogram` client via the `AppState`'s
+/// `SpectrogramBroadcast`. Returns `None` when no watch directory is
+/// configured (matches the basic-station "audio only via REST upload"
+/// path, which also has no detection daemon to feed the producer).
+pub fn start_live_spectrogram(
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+    state: &birdnet_web::state::AppState,
+) -> Option<std::thread::JoinHandle<()>> {
+    use birdnet_core::audio::spectrogram::live::{LiveSpectrogramConfig, SpectrogramFrame, run};
+    use birdnet_web::routes::spectrogram_ws::WsSpectrogramEvent;
+
+    let watch_dir = cli
+        .watch_dir
+        .clone()
+        .or_else(|| config?.get("RECS_DIR").map(PathBuf::from))?;
+
+    let broadcast = state.spectrogram_broadcast();
+    let cfg = LiveSpectrogramConfig {
+        watch_dir: watch_dir.clone(),
+        ..LiveSpectrogramConfig::default()
+    };
+
+    tracing::info!(
+        dir = %watch_dir.display(),
+        n_mels = cfg.mel_config.n_mels,
+        max_frames = cfg.max_frames,
+        "live spectrogram producer configured"
+    );
+
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+
+    let handle = std::thread::spawn(move || {
+        let on_frame = move |frame: SpectrogramFrame| {
+            // Translate the core `SpectrogramFrame` into the
+            // wire-shaped `WsSpectrogramEvent` the broadcast carries.
+            let event = WsSpectrogramEvent {
+                event: "spectrogram",
+                filename: frame.filename,
+                n_mels: frame.n_mels,
+                n_frames: frame.n_frames,
+                data: frame.data,
+                sample_rate: frame.sample_rate,
+            };
+            broadcast.send(&event);
+        };
+        if let Err(e) = run(&cfg, on_frame, &stop_rx) {
+            tracing::warn!(error = %e, "live spectrogram daemon exited with error");
+        }
+    });
+
+    // The receiver loop in `run` only stops when stop_tx is dropped /
+    // sends. We want the daemon to run for the lifetime of the process,
+    // so leak the sender (matches the disk-manager pattern above).
+    std::mem::forget(stop_tx);
+    Some(handle)
+}
+
 /// Generate an Avahi mDNS service file for local network discovery.
 pub fn maybe_install_avahi_service(port: u16, site_name: &str) {
     let avahi_dir = std::path::Path::new("/etc/avahi/services");

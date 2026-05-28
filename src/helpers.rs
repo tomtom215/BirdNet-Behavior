@@ -28,7 +28,7 @@ pub use settings_overlay::overlay_db_settings;
 pub use state::{
     init_audio_source, init_i18n, init_image_cache, init_site_name, run_refresh_extension,
 };
-pub use system::{maybe_install_avahi_service, start_disk_manager};
+pub use system::{maybe_install_avahi_service, start_disk_manager, start_live_spectrogram};
 
 #[cfg(feature = "analytics")]
 pub use state::build_state_with_analytics;

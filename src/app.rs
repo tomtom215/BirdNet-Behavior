@@ -171,6 +171,8 @@ pub async fn run(
 
     // Start background subsystems.
     let _disk_manager_thread = helpers::start_disk_manager(&cli, config.as_ref(), &state);
+    let _live_spectrogram_thread =
+        helpers::start_live_spectrogram(&cli, config.as_ref(), &state);
     let _capture_handle = capture::start_capture_manager(&cli, config.as_ref(), state.metrics());
 
     let daemon_handle = if cli.web_only {
