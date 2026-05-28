@@ -36,6 +36,7 @@ pub(crate) mod help;
 pub mod heatmap;
 pub mod history;
 pub mod life_list;
+pub(crate) mod listen;
 pub mod livestream;
 pub mod migration;
 pub mod notification_center;
@@ -107,6 +108,7 @@ pub fn router() -> Router<AppState> {
         .merge(correlation::router())
         .merge(quarantine::router())
         .merge(today::router())
+        .merge(listen::router())
         .merge(recordings::router())
         .merge(livestream::router())
         .merge(weekly_report::router())
@@ -178,11 +180,20 @@ pub(crate) fn render_page(title: &str, content: &str, active_nav: &str) -> Html<
         .replace("{{nav_kiosk}}", nav("kiosk"))
         .replace("{{nav_changelog}}", nav("changelog"))
         .replace("{{nav_help}}", nav("help"))
+        // Inline the update banner partial BEFORE the final `{{version}}`
+        // pass below, so the banner's `data-current-version="{{version}}"`
+        // resolves. Previously this happened after the version pass, which
+        // left the banner with the literal placeholder + the dismissal-
+        // localStorage key disabled by an empty `currentVersion`.
+        .replace("{{update_banner}}", UPDATE_BANNER_HTML)
         .replace("{{confirm_modal}}", CONFIRM_MODAL_HTML)
         .replace("{{toast_region}}", TOAST_REGION_HTML)
         .replace("{{cmdk_partial}}", CMDK_HTML)
         .replace("{{help_drawer}}", HELP_DRAWER_HTML)
-        .replace("{{update_banner}}", UPDATE_BANNER_HTML);
+        // Second `{{version}}` substitution pass — picks up any `{{version}}`
+        // tokens that landed via the partials inlined above (currently the
+        // update banner's `data-current-version`).
+        .replace("{{version}}", version);
     Html(html)
 }
 
