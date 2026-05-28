@@ -1423,3 +1423,116 @@ footer a:hover { color: var(--moss-ink); }
   .login-card { padding: 28px 22px 22px !important; border-radius: var(--r-md); }
   .login-card__head .display { font-size: 32px; }
 }
+/* Append to crates/birdnet-web/static/css/app.css — purely additive.
+   Accounts & sessions page (O-15). */
+
+/* ── Session rows ─────────────────────────────────────────────────── */
+.account-sessions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.account-sessions li {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 12px 14px;
+  align-items: center;
+  padding: 12px 4px;
+  border-top: 0.5px solid var(--hairline);
+}
+.account-sessions li:first-child { border-top: 0; }
+.account-sessions li .session-mark {
+  width: 10px; height: 10px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.account-sessions li[data-current="true"] .session-mark {
+  background: var(--moss);
+  border-color: transparent;
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--moss) 22%, transparent);
+}
+
+.account-sessions .session-label {
+  font-weight: 500; font-size: 13.5px;
+}
+.account-sessions .session-meta {
+  font-family: var(--font-mono); font-size: 11px; color: var(--fg-3);
+}
+.account-sessions .session-id {
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-4);
+  letter-spacing: 0.04em;
+}
+
+/* ── User rows ────────────────────────────────────────────────────── */
+.account-users { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.account-users li {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 12px 14px;
+  align-items: center;
+  padding: 12px 4px;
+  border-top: 0.5px solid var(--hairline);
+}
+.account-users li:first-child { border-top: 0; }
+
+.account-users .user-pill {
+  font-family: var(--font-mono); font-size: 10px;
+  letter-spacing: 0.05em;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--fg-2);
+  border: 0.5px solid var(--border);
+}
+.account-users .user-pill.admin { background: var(--moss-soft); color: var(--moss-ink); border-color: transparent; }
+.account-users .user-pill.viewer { background: var(--dawn-soft); color: var(--dawn-ink); border-color: transparent; }
+
+.account-users .user-name { font-weight: 500; font-size: 14px; }
+.account-users .user-sub  { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); }
+
+/* ── Audit rows ───────────────────────────────────────────────────── */
+.account-audit { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.account-audit li {
+  display: grid;
+  grid-template-columns: 92px 1fr auto;
+  gap: 12px 14px;
+  align-items: baseline;
+  padding: 10px 4px;
+  border-top: 0.5px solid var(--hairline);
+  font-size: 13px;
+}
+.account-audit li:first-child { border-top: 0; }
+.account-audit .audit-who {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--fg-2);
+  letter-spacing: 0.02em;
+}
+.account-audit .audit-action {
+  color: var(--fg);
+}
+.account-audit .audit-action .target {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--fg-3);
+  margin-top: 2px;
+}
+.account-audit .audit-when {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-4);
+  white-space: nowrap;
+}
+
+/* Phone */
+@media (max-width: 540px) {
+  .account-sessions li,
+  .account-users li,
+  .account-audit li {
+    grid-template-columns: 1fr;
+  }
+  .account-sessions li > :nth-child(3),
+  .account-sessions li > :nth-child(4),
+  .account-users li > :nth-child(3),
+  .account-users li > :nth-child(4) {
+    justify-self: end;
+  }
+}

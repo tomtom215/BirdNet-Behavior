@@ -276,6 +276,68 @@ pub const MIGRATIONS: &[Migration] = &[
         CREATE INDEX IF NOT EXISTS idx_detection_reviews_reviewed_at
             ON detection_reviews(reviewed_at DESC);",
     },
+    Migration {
+        version: 14,
+        description: "Create users, sessions, and audit_log tables for accounts (O-15)",
+        // O-15 adds the accounts surface that O-14's cookie sessions
+        // build on. Day-zero shape: a single seeded `admin` row so
+        // existing single-admin deployments see no behavioural change.
+        // `pwd_argon2` is the canonical column name — current installs
+        // store the password in the CADDY_PWD env var (not the DB), so
+        // the seed row writes an empty hash and the auth-middleware
+        // path still reads CADDY_PWD until the wire is flipped. See the
+        // TODO(O-15-followup) markers in `accounts.rs` and the auth
+        // module for the credential-store migration.
+        //
+        // The package's source SQL is at
+        // docs/proposed_changes/O-15_accounts/migrations/009_accounts.sql.
+        // Adapted for this chain:
+        //  - Migration version is 14, not 009 (the package was authored
+        //    against an earlier numbering scheme — the chain in main has
+        //    grown to 13 since).
+        //  - The seed step that read from `settings WHERE key =
+        //    'admin_password_hash'` was a no-op against this fork (the
+        //    settings table doesn't carry that key); collapsed to one
+        //    unconditional INSERT … WHERE NOT EXISTS.
+        up_sql: "CREATE TABLE IF NOT EXISTS users (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            username      TEXT NOT NULL UNIQUE,
+            pwd_argon2    TEXT NOT NULL,
+            role          TEXT NOT NULL CHECK (role IN ('admin','viewer')),
+            label         TEXT,
+            created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            disabled_at   TEXT
+        );
+        CREATE TABLE IF NOT EXISTS sessions (
+            id           TEXT PRIMARY KEY,
+            user_id      INTEGER NOT NULL
+                         REFERENCES users(id) ON DELETE CASCADE,
+            issued_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            last_seen    TEXT NOT NULL DEFAULT (datetime('now')),
+            expires_at   TEXT NOT NULL,
+            user_agent   TEXT,
+            ip_hash      TEXT
+        );
+        CREATE INDEX IF NOT EXISTS sessions_user_expires
+            ON sessions (user_id, expires_at);
+        CREATE INDEX IF NOT EXISTS sessions_expires
+            ON sessions (expires_at);
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            at           TEXT NOT NULL DEFAULT (datetime('now')),
+            user_id      INTEGER REFERENCES users(id),
+            action       TEXT NOT NULL,
+            target       TEXT,
+            metadata     TEXT
+        );
+        CREATE INDEX IF NOT EXISTS audit_log_at
+            ON audit_log (at DESC);
+        CREATE INDEX IF NOT EXISTS audit_log_action
+            ON audit_log (action, at DESC);
+        INSERT INTO users (username, pwd_argon2, role, label)
+        SELECT 'admin', '', 'admin', 'Administrator'
+        WHERE NOT EXISTS (SELECT 1 FROM users WHERE username = 'admin');",
+    },
 ];
 
 /// Ensure the `schema_version` tracking table exists.
