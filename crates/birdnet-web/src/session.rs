@@ -381,7 +381,10 @@ mod tests {
         let token = issue_token(&session_id, 60_000);
         let mut headers = HeaderMap::new();
         let cookie_value = format!("other=42; {COOKIE_NAME}={token}; foo=bar");
-        headers.insert(header::COOKIE, HeaderValue::from_str(&cookie_value).unwrap());
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_str(&cookie_value).unwrap(),
+        );
         assert!(looks_signed_in(&headers));
     }
 
@@ -398,7 +401,10 @@ mod tests {
         let token = encode_token("sid", 0); // already expired
         let mut headers = HeaderMap::new();
         let cookie_value = format!("{COOKIE_NAME}={token}");
-        headers.insert(header::COOKIE, HeaderValue::from_str(&cookie_value).unwrap());
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_str(&cookie_value).unwrap(),
+        );
         assert!(!looks_signed_in(&headers));
     }
 
@@ -412,7 +418,10 @@ mod tests {
         token.push('a');
         let mut headers = HeaderMap::new();
         let cookie_value = format!("{COOKIE_NAME}={token}");
-        headers.insert(header::COOKIE, HeaderValue::from_str(&cookie_value).unwrap());
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_str(&cookie_value).unwrap(),
+        );
         assert!(!looks_signed_in(&headers));
     }
 

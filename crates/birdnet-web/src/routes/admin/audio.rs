@@ -700,13 +700,22 @@ mod tests {
             created_at: "2026-05-28".to_string(),
             updated_at: "2026-05-28".to_string(),
         };
-        assert!(matches!(legacy_daemon_status(&s, Some("hw:1,0")), Status::Capturing));
-        assert!(matches!(legacy_daemon_status(&s, Some("hw:2,0")), Status::Down));
+        assert!(matches!(
+            legacy_daemon_status(&s, Some("hw:1,0")),
+            Status::Capturing
+        ));
+        assert!(matches!(
+            legacy_daemon_status(&s, Some("hw:2,0")),
+            Status::Down
+        ));
         assert!(matches!(legacy_daemon_status(&s, None), Status::Down));
 
         let mut disabled = s;
         disabled.disabled_at = Some("2026-05-28".to_string());
-        assert!(matches!(legacy_daemon_status(&disabled, Some("hw:1,0")), Status::Down));
+        assert!(matches!(
+            legacy_daemon_status(&disabled, Some("hw:1,0")),
+            Status::Down
+        ));
     }
 
     #[test]
@@ -715,10 +724,8 @@ mod tests {
         // API, and confirm the probe handler returns the matching pill.
         let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
         birdnet_db::migration::migrate(&conn).expect("migrate");
-        let state = crate::state::AppState::from_connection(
-            conn,
-            std::path::PathBuf::from(":memory:"),
-        );
+        let state =
+            crate::state::AppState::from_connection(conn, std::path::PathBuf::from(":memory:"));
 
         let row = AudioSource {
             id: "src_garden".to_string(),

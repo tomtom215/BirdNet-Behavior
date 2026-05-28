@@ -149,10 +149,20 @@ pub(crate) fn render_page_for_request(
     active_nav: &str,
     headers: &axum::http::HeaderMap,
 ) -> Html<String> {
-    render_page_inner(title, content, active_nav, crate::session::looks_signed_in(headers))
+    render_page_inner(
+        title,
+        content,
+        active_nav,
+        crate::session::looks_signed_in(headers),
+    )
 }
 
-fn render_page_inner(title: &str, content: &str, active_nav: &str, signed_in: bool) -> Html<String> {
+fn render_page_inner(
+    title: &str,
+    content: &str,
+    active_nav: &str,
+    signed_in: bool,
+) -> Html<String> {
     let version = env!("CARGO_PKG_VERSION");
     let nav = |key| {
         if active_nav == key { "active" } else { "" }
