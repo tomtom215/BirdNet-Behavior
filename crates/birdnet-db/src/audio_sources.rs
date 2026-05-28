@@ -588,7 +588,8 @@ fn row_to_source(row: &rusqlite::Row<'_>) -> rusqlite::Result<AudioSource> {
     })?;
     let q_start: Option<String> = row.get(9)?;
     let q_end: Option<String> = row.get(10)?;
-    let schedule_quiet = q_start.and_then(|s| q_end.map(|e| (s, e)));
+    // Clippy 1.96 prefers `Option::zip` over the manual and_then(|s| map(|e| (s, e))) form.
+    let schedule_quiet = q_start.zip(q_end);
     let gain: f64 = row.get(7)?;
     Ok(AudioSource {
         id: row.get(0)?,

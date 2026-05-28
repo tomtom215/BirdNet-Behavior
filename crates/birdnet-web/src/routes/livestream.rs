@@ -33,6 +33,12 @@ pub struct StreamParams {
     /// BirdNET-Pi equivalent: rubberband pitch shift filter.
     #[serde(default)]
     pub freq_shift_hz: i32,
+    /// Optional `audio_sources.id` selecting which configured source to
+    /// stream. Without it, the legacy `state.audio_source()` string is
+    /// used — preserves the BirdNET-Pi-compatible "one source per
+    /// station" contract that pre-dates the `audio_sources` entity.
+    #[serde(default)]
+    pub source_id: Option<String>,
 }
 
 /// Mount livestream and i18n routes.
@@ -117,18 +123,48 @@ async fn list_languages(State(state): State<AppState>) -> Json<Value> {
 /// `asetrate`+`aresample` technique as the extraction pipeline.
 ///
 /// If no audio source is configured, returns `503 Service Unavailable`.
+///
+/// When `?source_id=` is supplied, the row's `kind` + `device_id` from the
+/// `audio_sources` table drives the ffmpeg backend selection — the
+/// listen-now page uses this to switch between configured mics / streams
+/// without restarting the daemon. An unknown id returns `404`.
 async fn livestream(State(state): State<AppState>, Query(params): Query<StreamParams>) -> Response {
-    let Some(source) = state.audio_source() else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "no audio source configured",
-        )
-            .into_response();
+    // Resolve the audio source. Two paths:
+    //   1. `?source_id=` → DB lookup; honour the row's kind explicitly.
+    //   2. (no param) → legacy `state.audio_source()` string + heuristics.
+    let (source, kind_hint) = match params.source_id.as_deref() {
+        Some(id) if !id.is_empty() => match resolve_by_source_id(&state, id) {
+            Some(pair) => pair,
+            None => {
+                return (StatusCode::NOT_FOUND, "no such audio source").into_response();
+            }
+        },
+        _ => {
+            let Some(s) = state.audio_source() else {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "no audio source configured",
+                )
+                    .into_response();
+            };
+            (s.to_owned(), None)
+        }
     };
 
-    let source = source.to_owned();
-    let is_rtsp = source.starts_with("rtsp://") || source.starts_with("rtsps://");
-    let is_pulse = source.starts_with("pulse://") || source == "pulse" || source == "default";
+    // Honour the audio_sources kind when present; otherwise fall back to
+    // the URL-prefix heuristic that the single-string path has always used.
+    let (is_rtsp, is_pulse) = kind_hint.map_or_else(
+        || {
+            (
+                source.starts_with("rtsp://") || source.starts_with("rtsps://"),
+                source.starts_with("pulse://") || source == "pulse" || source == "default",
+            )
+        },
+        |k| {
+            use birdnet_db::audio_sources::SourceKind;
+            (matches!(k, SourceKind::Rtsp), matches!(k, SourceKind::PipeWire))
+        },
+    );
 
     // Build the audio filter chain: optional freq shift + format conversion.
     let audio_filter = freq_shift_filter(STREAM_SAMPLE_RATE, params.freq_shift_hz);
@@ -221,4 +257,55 @@ async fn livestream(State(state): State<AppState>, Query(params): Query<StreamPa
     );
 
     (StatusCode::OK, headers, body).into_response()
+}
+
+/// Resolve a `?source_id=` query value to a `(source-string, kind-hint)`
+/// pair by looking up the configured `audio_sources` row.
+///
+/// * Returns `None` when the row is missing, disabled, or the DB read
+///   itself fails. Callers treat all three as "404 no such source".
+/// * The `kind-hint` is the `SourceKind` from the DB, used to bypass the
+///   legacy URL-prefix heuristic so a PipeWire row whose `device_id` is
+///   literally `default` (operator typed `default`) still picks the
+///   PulseAudio ffmpeg backend rather than ALSA.
+fn resolve_by_source_id(
+    state: &AppState,
+    id: &str,
+) -> Option<(String, Option<birdnet_db::audio_sources::SourceKind>)> {
+    use birdnet_db::audio_sources::AudioSourceStore;
+    state.with_db(|conn| AudioSourceStore::list(conn).ok()).and_then(
+        |sources| {
+            sources.into_iter().find_map(|s| {
+                if s.id == id && s.disabled_at.is_none() {
+                    Some((s.device_id.clone(), Some(s.kind)))
+                } else {
+                    None
+                }
+            })
+        },
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn freq_shift_filter_off_when_zero() {
+        assert!(freq_shift_filter(44_100, 0).is_none());
+    }
+
+    #[test]
+    fn freq_shift_filter_clamps_to_minimum() {
+        // 44100 - 50000 = -5900 → clamped to 8000.
+        let filter = freq_shift_filter(44_100, -50_000).expect("non-zero shift returns filter");
+        assert!(filter.contains("asetrate=8000"));
+        assert!(filter.contains(",aresample=44100"));
+    }
+
+    #[test]
+    fn freq_shift_filter_shifts_up_correctly() {
+        let filter = freq_shift_filter(44_100, 3_000).expect("non-zero shift returns filter");
+        assert!(filter.contains("asetrate=47100"));
+    }
 }
