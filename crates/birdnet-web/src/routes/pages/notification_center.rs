@@ -25,7 +25,12 @@ pub fn router() -> Router<AppState> {
 }
 
 async fn notification_page() -> Html<String> {
-    render_page("Notifications", NOTIFICATION_HTML, "notifications")
+    // O-20 help link in the page eyebrow.
+    let body = NOTIFICATION_HTML.replace(
+        "{{help_link}}",
+        &super::help::help_link(super::help::Topic::AdminNotifications),
+    );
+    render_page("Notifications", &body, "notifications")
 }
 
 #[derive(Deserialize)]
@@ -147,7 +152,7 @@ async fn notif_stats_partial(State(state): State<AppState>) -> impl axum::respon
     }
 }
 
-const NOTIFICATION_HTML: &str = r#"<div class="bnb-eyebrow">Operations</div><h1 class="display" style="font-size:34px;margin-bottom:1rem;">Notifications</h1>
+const NOTIFICATION_HTML: &str = r#"<div class="bnb-eyebrow" style="display:flex;align-items:center;gap:10px;"><span>Operations</span>{{help_link}}</div><h1 class="display" style="font-size:34px;margin-bottom:1rem;">Notifications</h1>
 
 <div class="stats-grid" hx-get="/pages/notif-stats" hx-trigger="load, every 60s" hx-swap="innerHTML">
     <div class="stat-card"><div class="value">--</div><div class="label">Loading...</div></div>

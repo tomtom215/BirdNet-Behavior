@@ -123,12 +123,18 @@ fn build_page_html(active_filter: &str) -> String {
         plain_style
     };
 
+    // O-20 help link for the quarantine review surface.
+    let help_link = super::help::help_link(super::help::Topic::Reviews);
+
     // Initial HTMX load passes the active filter so the list matches the URL.
     format!(
         "<div style=\"margin-bottom:1.5rem;\">\
-  <h1 style=\"font-size:1.5rem;font-weight:700;margin-bottom:0.25rem;\">\
-    &#128269; Rare Bird Quarantine\
-  </h1>\
+  <div style=\"display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:0.25rem;\">\
+    <h1 style=\"font-size:1.5rem;font-weight:700;margin:0;\">\
+      &#128269; Rare Bird Quarantine\
+    </h1>\
+    {help_link}\
+  </div>\
   <p style=\"color:var(--text-muted);font-size:0.9rem;\">\
     Detections that passed the global confidence threshold but failed a stricter \
     per-species threshold are held here for manual review. Approve to admit into \

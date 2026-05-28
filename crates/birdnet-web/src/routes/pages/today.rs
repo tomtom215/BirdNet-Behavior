@@ -70,9 +70,11 @@ pub struct RelabelForm {
 /// Render the full Today page.
 async fn today_page() -> Html<String> {
     // Skeleton placeholders (O-16) shown until the htmx swap targets load.
+    // O-20 help link is rendered next to the eyebrow on every analytical screen.
     let body = TODAY_PAGE_HTML
         .replace("{{skel_daystrip}}", super::skeletons::day_strip())
-        .replace("{{skel_today_results}}", &super::skeletons::feed_rows(8));
+        .replace("{{skel_today_results}}", &super::skeletons::feed_rows(8))
+        .replace("{{help_link}}", &super::help::help_link(super::help::Topic::Today));
     super::render_page("Today", &body, "today")
 }
 

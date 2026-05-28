@@ -42,9 +42,17 @@ model, disk-space, and network checks, run <code>birdnet-behavior --doctor</code
 it shares the daemon's view of the audio device.</p>"#;
 
 fn card_open() -> String {
-    r#"<section class="bnb-card" style="max-width:820px;margin:8px auto;padding:24px 28px;">
-<h1 style="margin:0 0 6px;font-size:22px;">Configuration diagnostics</h1>"#
-        .to_string()
+    // O-20 — drop the troubleshooting mdBook link next to the page heading.
+    let help_link = crate::routes::pages::help::help_link(
+        crate::routes::pages::help::Topic::Troubleshooting,
+    );
+    format!(
+        r#"<section class="bnb-card" style="max-width:820px;margin:8px auto;padding:24px 28px;">
+<div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin:0 0 6px;">
+  <h1 style="margin:0;font-size:22px;">Configuration diagnostics</h1>
+  {help_link}
+</div>"#
+    )
 }
 
 fn findings_body(path: &str, findings: &[Finding]) -> String {
