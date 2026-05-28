@@ -34,9 +34,11 @@ pub struct StreamParams {
     #[serde(default)]
     pub freq_shift_hz: i32,
     /// Optional `audio_sources.id` selecting which configured source to
-    /// stream. Without it, the legacy `state.audio_source()` string is
-    /// used — preserves the BirdNET-Pi-compatible "one source per
-    /// station" contract that pre-dates the `audio_sources` entity.
+    /// stream. Without it, `/stream` resolves the first non-disabled
+    /// `audio_sources` row; on a station with no rows yet, the legacy
+    /// `state.audio_source()` string is the final fallback so the
+    /// BirdNET-Pi-compatible "one source per station" contract still
+    /// holds during migrations.
     #[serde(default)]
     pub source_id: Option<String>,
 }
@@ -128,10 +130,17 @@ async fn list_languages(State(state): State<AppState>) -> Json<Value> {
 /// `audio_sources` table drives the ffmpeg backend selection — the
 /// listen-now page uses this to switch between configured mics / streams
 /// without restarting the daemon. An unknown id returns `404`.
+///
+/// Without `?source_id=`, the first non-disabled `audio_sources` row wins
+/// (DB-driven default). On a station whose `audio_sources` table is still
+/// empty, the legacy `state.audio_source()` string is the final fallback
+/// — once an operator adds a row through `/admin/audio`, the DB row takes
+/// over without a restart.
 async fn livestream(State(state): State<AppState>, Query(params): Query<StreamParams>) -> Response {
-    // Resolve the audio source. Two paths:
-    //   1. `?source_id=` → DB lookup; honour the row's kind explicitly.
-    //   2. (no param) → legacy `state.audio_source()` string + heuristics.
+    // Resolve the audio source. Three paths:
+    //   1. `?source_id=` → DB lookup by id; honour the row's kind explicitly.
+    //   2. (no param) + audio_sources row exists → use the first row.
+    //   3. (no param) + no rows → legacy `state.audio_source()` string.
     let (source, kind_hint) = match params.source_id.as_deref() {
         Some(id) if !id.is_empty() => match resolve_by_source_id(&state, id) {
             Some(pair) => pair,
@@ -139,16 +148,16 @@ async fn livestream(State(state): State<AppState>, Query(params): Query<StreamPa
                 return (StatusCode::NOT_FOUND, "no such audio source").into_response();
             }
         },
-        _ => {
-            let Some(s) = state.audio_source() else {
+        _ => match resolve_default_source(&state) {
+            Some(pair) => pair,
+            None => {
                 return (
                     StatusCode::SERVICE_UNAVAILABLE,
                     "no audio source configured",
                 )
                     .into_response();
-            };
-            (s.to_owned(), None)
-        }
+            }
+        },
     };
 
     // Honour the audio_sources kind when present; otherwise fall back to
@@ -162,7 +171,10 @@ async fn livestream(State(state): State<AppState>, Query(params): Query<StreamPa
         },
         |k| {
             use birdnet_db::audio_sources::SourceKind;
-            (matches!(k, SourceKind::Rtsp), matches!(k, SourceKind::PipeWire))
+            (
+                matches!(k, SourceKind::Rtsp),
+                matches!(k, SourceKind::PipeWire),
+            )
         },
     );
 
@@ -273,22 +285,91 @@ fn resolve_by_source_id(
     id: &str,
 ) -> Option<(String, Option<birdnet_db::audio_sources::SourceKind>)> {
     use birdnet_db::audio_sources::AudioSourceStore;
-    state.with_db(|conn| AudioSourceStore::list(conn).ok()).and_then(
-        |sources| {
-            sources.into_iter().find_map(|s| {
-                if s.id == id && s.disabled_at.is_none() {
-                    Some((s.device_id.clone(), Some(s.kind)))
-                } else {
-                    None
-                }
-            })
-        },
-    )
+    let sources = state.with_db(|conn| AudioSourceStore::list(conn).ok())?;
+    pick_by_id(&sources, id)
+}
+
+/// Resolve the default audio source when no `?source_id=` is supplied.
+///
+/// The contract is DB-first: the first non-disabled `audio_sources` row
+/// in `created_at ASC` order wins, with its `SourceKind` returned as the
+/// kind hint. On a station whose `audio_sources` table is still empty
+/// (or whose DB read fails), the legacy `state.audio_source()` string
+/// is the fallback — that path returns `None` as the kind hint so the
+/// URL-prefix heuristic kicks back in for backwards compatibility.
+///
+/// Returns `None` only when *both* paths are unset, in which case the
+/// caller responds with `503 Service Unavailable`.
+fn resolve_default_source(
+    state: &AppState,
+) -> Option<(String, Option<birdnet_db::audio_sources::SourceKind>)> {
+    use birdnet_db::audio_sources::AudioSourceStore;
+    let sources = state
+        .with_db(|conn| AudioSourceStore::list(conn).ok())
+        .unwrap_or_default();
+    if let Some(pair) = pick_first_enabled(&sources) {
+        return Some(pair);
+    }
+    state.audio_source().map(|s| (s.to_owned(), None))
+}
+
+/// Pure helper: walk `sources` for an id-match that's still enabled.
+/// Factored out so the resolver logic is unit-testable without spinning
+/// up an `AppState`.
+fn pick_by_id(
+    sources: &[birdnet_db::audio_sources::AudioSource],
+    id: &str,
+) -> Option<(String, Option<birdnet_db::audio_sources::SourceKind>)> {
+    sources.iter().find_map(|s| {
+        if s.id == id && s.disabled_at.is_none() {
+            Some((s.device_id.clone(), Some(s.kind)))
+        } else {
+            None
+        }
+    })
+}
+
+/// Pure helper: return the first non-disabled source's `(device_id, kind)`
+/// pair. `AudioSourceStore::list` already filters disabled rows out, but
+/// we re-check here so the helper is safe with arbitrary slices in tests.
+fn pick_first_enabled(
+    sources: &[birdnet_db::audio_sources::AudioSource],
+) -> Option<(String, Option<birdnet_db::audio_sources::SourceKind>)> {
+    sources
+        .iter()
+        .find(|s| s.disabled_at.is_none())
+        .map(|s| (s.device_id.clone(), Some(s.kind)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use birdnet_db::audio_sources::{
+        AudioSource, Channels, PipelineFlags, RtspTransport, SourceKind,
+    };
+
+    fn sample(id: &str, kind: SourceKind, device_id: &str, disabled: bool) -> AudioSource {
+        AudioSource {
+            id: id.to_string(),
+            kind,
+            device_id: device_id.to_string(),
+            label: None,
+            sample_rate: 48_000,
+            channels: Channels::Mono,
+            bit_depth: 16,
+            gain_db: 0.0,
+            rtsp_transport: RtspTransport::Auto,
+            schedule_quiet: None,
+            pipeline: PipelineFlags::default(),
+            disabled_at: if disabled {
+                Some("2026-01-01".to_string())
+            } else {
+                None
+            },
+            created_at: "2026-05-01".to_string(),
+            updated_at: "2026-05-01".to_string(),
+        }
+    }
 
     #[test]
     fn freq_shift_filter_off_when_zero() {
@@ -307,5 +388,56 @@ mod tests {
     fn freq_shift_filter_shifts_up_correctly() {
         let filter = freq_shift_filter(44_100, 3_000).expect("non-zero shift returns filter");
         assert!(filter.contains("asetrate=47100"));
+    }
+
+    #[test]
+    fn pick_by_id_matches_enabled_row() {
+        let sources = vec![
+            sample("src_usb_1", SourceKind::UsbAlsa, "plughw:1,0", false),
+            sample("src_rtsp_1", SourceKind::Rtsp, "rtsp://cam/feed", false),
+        ];
+        let (dev, kind) = pick_by_id(&sources, "src_rtsp_1").expect("rtsp row found");
+        assert_eq!(dev, "rtsp://cam/feed");
+        assert!(matches!(kind, Some(SourceKind::Rtsp)));
+    }
+
+    #[test]
+    fn pick_by_id_skips_disabled_row() {
+        let sources = vec![sample("src_x", SourceKind::UsbAlsa, "plughw:0", true)];
+        assert!(pick_by_id(&sources, "src_x").is_none());
+    }
+
+    #[test]
+    fn pick_by_id_returns_none_for_unknown_id() {
+        let sources = vec![sample("src_y", SourceKind::UsbAlsa, "plughw:0", false)];
+        assert!(pick_by_id(&sources, "no_such_id").is_none());
+    }
+
+    #[test]
+    fn pick_first_enabled_returns_first_active_row() {
+        // First row is disabled — picker should skip it and pick the
+        // second (enabled) row.
+        let sources = vec![
+            sample("src_disabled", SourceKind::UsbAlsa, "plughw:0", true),
+            sample("src_active", SourceKind::PipeWire, "default", false),
+            sample("src_other", SourceKind::Rtsp, "rtsp://cam/feed", false),
+        ];
+        let (dev, kind) = pick_first_enabled(&sources).expect("an enabled row exists");
+        assert_eq!(dev, "default");
+        assert!(matches!(kind, Some(SourceKind::PipeWire)));
+    }
+
+    #[test]
+    fn pick_first_enabled_returns_none_when_all_disabled() {
+        let sources = vec![
+            sample("src_a", SourceKind::UsbAlsa, "plughw:0", true),
+            sample("src_b", SourceKind::Rtsp, "rtsp://cam", true),
+        ];
+        assert!(pick_first_enabled(&sources).is_none());
+    }
+
+    #[test]
+    fn pick_first_enabled_returns_none_for_empty_table() {
+        assert!(pick_first_enabled(&[]).is_none());
     }
 }
