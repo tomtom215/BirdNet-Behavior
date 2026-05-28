@@ -121,6 +121,86 @@ fn resolve_alsa_devices(cli: &Cli, config: Option<&birdnet_core::config::Config>
     Vec::new()
 }
 
+/// Resolve capture sources from the `audio_sources` SQLite table.
+///
+/// Returns `None` when the DB read errors (the caller treats that as
+/// "fall back to CLI/config"); returns `Some(empty)` when the table is
+/// present but every row is disabled (the caller also falls back); and
+/// `Some(non-empty)` only when at least one row is active.
+///
+/// O-13 stage 1 — additive layer over the existing CLI/config path.
+/// Subsequent stages will retire the legacy path once every deployed
+/// station has migrated its sources into the table.
+fn resolve_sources_from_db(state: &birdnet_web::state::AppState) -> Option<Vec<CaptureSource>> {
+    use birdnet_db::audio_sources::AudioSourceStore;
+    let rows = state.with_db(|conn| AudioSourceStore::list(conn).ok())?;
+    let active: Vec<_> = rows.into_iter().filter(|s| s.disabled_at.is_none()).collect();
+    if active.is_empty() {
+        return None;
+    }
+
+    // Group by kind so we can apply the same `stream_id` "single-mic
+    // keeps id-less filename" heuristic the legacy resolver uses. If
+    // there's exactly one local-mic row (UsbAlsa or PipeWire), it gets
+    // a `None` stream_id (BirdNET-Pi-compatible filename). Otherwise
+    // every local mic carries its own id.
+    let local_count = active
+        .iter()
+        .filter(|s| {
+            use birdnet_db::audio_sources::SourceKind;
+            matches!(s.kind, SourceKind::UsbAlsa | SourceKind::PipeWire)
+        })
+        .count();
+
+    let mut out = Vec::with_capacity(active.len());
+    let mut rtsp_index = 0_usize;
+    for row in active {
+        out.push(audio_source_to_capture_source(&row, local_count > 1, &mut rtsp_index));
+    }
+    Some(out)
+}
+
+/// Translate one [`birdnet_db::audio_sources::AudioSource`] row to a
+/// [`CaptureSource`] enum variant the supervisor consumes. Honours the
+/// row's `sample_rate` + `channels`; `stream_id` is the row's id with
+/// the lone-local-mic backward-compat carve-out.
+fn audio_source_to_capture_source(
+    row: &birdnet_db::audio_sources::AudioSource,
+    multi_local: bool,
+    rtsp_index: &mut usize,
+) -> CaptureSource {
+    use birdnet_db::audio_sources::{Channels, SourceKind};
+    // Mono / Left / Right all collapse to one channel — the daemon
+    // only consumes one channel today; an ffmpeg `pan` filter could
+    // pick the half for Left/Right later without changing this surface.
+    let channels: u16 = match row.channels {
+        Channels::Mono | Channels::Left | Channels::Right => 1,
+        Channels::Stereo => 2,
+    };
+    match row.kind {
+        SourceKind::UsbAlsa => CaptureSource::Microphone {
+            device: row.device_id.clone(),
+            sample_rate: row.sample_rate,
+            channels,
+            stream_id: multi_local.then(|| row.id.clone()),
+        },
+        SourceKind::PipeWire => CaptureSource::PipeWire {
+            device: row.device_id.clone(),
+            sample_rate: row.sample_rate,
+            channels,
+            stream_id: multi_local.then(|| row.id.clone()),
+        },
+        SourceKind::Rtsp => {
+            *rtsp_index += 1;
+            CaptureSource::Rtsp {
+                url: row.device_id.clone(),
+                // Keep `RTSP_N` style for backward-compatible filename pattern.
+                stream_id: format!("RTSP_{}", *rtsp_index),
+            }
+        }
+    }
+}
+
 /// Resolve the configured capture sources from CLI flags and config.
 ///
 /// Priority: `PipeWire` > ALSA > RTSP. One or more local microphones
@@ -194,19 +274,55 @@ fn log_schedule(cli: &Cli, schedule_config: &ScheduleConfig) {
     }
 }
 
-/// Start the supervised audio-capture subsystem from CLI/config settings.
+/// Start the supervised audio-capture subsystem.
 ///
 /// Returns a [`CaptureHandle`] that keeps recording alive until dropped, or
 /// `None` when no capture source is configured. Each source is supervised
 /// independently: a dead subprocess is restarted with exponential backoff,
 /// and a recording schedule (solar / fixed window) pauses and resumes capture
 /// instead of merely logging that it should.
+///
+/// ## Source resolution (O-13)
+///
+/// Two paths:
+///
+/// 1. **Database-driven**: if `state` is `Some(_)` AND the `audio_sources`
+///    table carries at least one non-disabled row, that row set is the
+///    source of truth. The admin UI's CRUD is what the daemon reads.
+/// 2. **CLI/config legacy**: otherwise, fall back to the BirdNET-Pi-style
+///    `--rtsp-url` / `--alsa-device` / `--pipewire-device` resolution
+///    that pre-dates the `audio_sources` entity. This is what every
+///    existing station does today, so the contract is preserved
+///    until the operator adds rows to the new table.
+///
+/// A single info-level log line announces which path won, so the
+/// operator can diagnose "why is my CLI arg being ignored" by reading
+/// the first ten lines of the journal.
 pub fn start_capture_manager(
     cli: &Cli,
     config: Option<&birdnet_core::config::Config>,
+    state: Option<&birdnet_web::state::AppState>,
     metrics: SharedMetrics,
 ) -> Option<CaptureHandle> {
-    let sources = resolve_sources(cli, config);
+    let sources = if let Some(state) = state
+        && let Some(db_sources) = resolve_sources_from_db(state)
+        && !db_sources.is_empty()
+    {
+        tracing::info!(
+            count = db_sources.len(),
+            "capture sources resolved from audio_sources table (O-13)"
+        );
+        db_sources
+    } else {
+        let cli_sources = resolve_sources(cli, config);
+        if !cli_sources.is_empty() {
+            tracing::info!(
+                count = cli_sources.len(),
+                "capture sources resolved from CLI/config (no audio_sources rows)"
+            );
+        }
+        cli_sources
+    };
     if sources.is_empty() {
         return None;
     }
@@ -534,5 +650,232 @@ mod tests {
     fn now_unix_secs_is_after_2020() {
         // 2020-01-01 UTC; a sanity floor that catches a broken clock helper.
         assert!(now_unix_secs() > 1_577_836_800);
+    }
+
+    // ------------------------------------------------------------------
+    // O-13 — audio_sources → CaptureSource translator + DB resolver
+    // ------------------------------------------------------------------
+
+    use birdnet_db::audio_sources::{
+        AudioSource, Channels, PipelineFlags, RtspTransport, SourceKind,
+    };
+
+    fn row(id: &str, kind: SourceKind, device_id: &str) -> AudioSource {
+        AudioSource {
+            id: id.to_string(),
+            kind,
+            device_id: device_id.to_string(),
+            label: None,
+            sample_rate: 48_000,
+            channels: Channels::Mono,
+            bit_depth: 16,
+            gain_db: 0.0,
+            rtsp_transport: RtspTransport::Auto,
+            schedule_quiet: None,
+            pipeline: PipelineFlags::default(),
+            disabled_at: None,
+            created_at: "2026-05-01".to_string(),
+            updated_at: "2026-05-01".to_string(),
+        }
+    }
+
+    #[test]
+    fn translator_usb_alsa_to_microphone_keeps_id_less_when_lone() {
+        // Lone local mic → id-less filename (BirdNET-Pi compat).
+        let r = row("src_usb_1", SourceKind::UsbAlsa, "plughw:1,0");
+        let mut idx = 0;
+        let cs = audio_source_to_capture_source(&r, false, &mut idx);
+        match cs {
+            CaptureSource::Microphone {
+                device,
+                sample_rate,
+                channels,
+                stream_id,
+            } => {
+                assert_eq!(device, "plughw:1,0");
+                assert_eq!(sample_rate, 48_000);
+                assert_eq!(channels, 1);
+                assert_eq!(stream_id, None);
+            }
+            other => panic!("expected Microphone, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn translator_usb_alsa_to_microphone_keeps_id_when_multi() {
+        let r = row("src_usb_2", SourceKind::UsbAlsa, "plughw:2,0");
+        let mut idx = 0;
+        let cs = audio_source_to_capture_source(&r, true, &mut idx);
+        match cs {
+            CaptureSource::Microphone { stream_id, .. } => {
+                assert_eq!(stream_id.as_deref(), Some("src_usb_2"));
+            }
+            other => panic!("expected Microphone, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn translator_pipewire_passes_through_device() {
+        let r = row("src_pw_1", SourceKind::PipeWire, "alsa_input.usb-Edifier");
+        let mut idx = 0;
+        let cs = audio_source_to_capture_source(&r, false, &mut idx);
+        match cs {
+            CaptureSource::PipeWire { device, .. } => {
+                assert_eq!(device, "alsa_input.usb-Edifier");
+            }
+            other => panic!("expected PipeWire, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn translator_rtsp_numbers_streams_sequentially() {
+        let r1 = row("src_rtsp_a", SourceKind::Rtsp, "rtsp://a.lan/feed");
+        let r2 = row("src_rtsp_b", SourceKind::Rtsp, "rtsp://b.lan/feed");
+        let mut idx = 0;
+        let cs1 = audio_source_to_capture_source(&r1, false, &mut idx);
+        let cs2 = audio_source_to_capture_source(&r2, false, &mut idx);
+        match (cs1, cs2) {
+            (
+                CaptureSource::Rtsp {
+                    url: u1,
+                    stream_id: s1,
+                },
+                CaptureSource::Rtsp {
+                    url: u2,
+                    stream_id: s2,
+                },
+            ) => {
+                assert_eq!(u1, "rtsp://a.lan/feed");
+                assert_eq!(s1, "RTSP_1");
+                assert_eq!(u2, "rtsp://b.lan/feed");
+                assert_eq!(s2, "RTSP_2");
+            }
+            other => panic!("expected two Rtsp variants, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn translator_honours_per_row_sample_rate() {
+        let mut r = row("src_x", SourceKind::UsbAlsa, "plughw:0,0");
+        r.sample_rate = 44_100;
+        let mut idx = 0;
+        let cs = audio_source_to_capture_source(&r, false, &mut idx);
+        match cs {
+            CaptureSource::Microphone { sample_rate, .. } => {
+                assert_eq!(sample_rate, 44_100);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    // ---- resolve_sources_from_db against a real AppState ------------
+
+    /// Build a fresh in-memory `AppState` with the schema migrated. The
+    /// equivalent helper in `helpers::test_support` is `pub(super)` so
+    /// it isn't reachable from this module — inlining the three lines
+    /// here is cheaper than widening the visibility.
+    fn fresh_state() -> birdnet_web::state::AppState {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        birdnet_web::state::AppState::from_connection(
+            conn,
+            std::path::PathBuf::from(":memory:"),
+        )
+    }
+
+    fn insert_row(
+        state: &birdnet_web::state::AppState,
+        id: &str,
+        kind: SourceKind,
+        device_id: &str,
+        disabled: bool,
+    ) {
+        use birdnet_db::audio_sources::{AudioSourceStore, NewAudioSource};
+        let new = NewAudioSource::defaults(id.to_string(), kind, device_id.to_string());
+        state
+            .with_db(|conn| AudioSourceStore::insert(conn, &new))
+            .expect("insert audio_source row");
+        if disabled {
+            state
+                .with_db(|conn| {
+                    conn.execute(
+                        "UPDATE audio_sources SET disabled_at = datetime('now') WHERE id = ?1",
+                        rusqlite::params![id],
+                    )
+                })
+                .expect("disable row");
+        }
+    }
+
+    #[test]
+    fn resolve_from_db_returns_none_when_table_empty() {
+        let state = fresh_state();
+        // Migration 15 may not seed anything when settings.audio_source is absent
+        // — confirm by inspecting the table is empty first, then assert the
+        // resolver returns None.
+        let count: i64 = state
+            .with_db(|conn| -> i64 {
+                conn.query_row("SELECT COUNT(*) FROM audio_sources", [], |r| r.get(0))
+                    .unwrap_or(0)
+            });
+        assert_eq!(count, 0, "audio_sources should be empty on a fresh state");
+        assert!(resolve_sources_from_db(&state).is_none());
+    }
+
+    #[test]
+    fn resolve_from_db_translates_active_rows_only() {
+        let state = fresh_state();
+        insert_row(&state, "src_a", SourceKind::UsbAlsa, "plughw:1,0", false);
+        insert_row(&state, "src_b", SourceKind::Rtsp, "rtsp://lan/feed", false);
+        insert_row(&state, "src_dead", SourceKind::UsbAlsa, "plughw:9,9", true);
+
+        let resolved = resolve_sources_from_db(&state).expect("non-empty DB result");
+        assert_eq!(resolved.len(), 2);
+        // The disabled row must not appear.
+        for s in &resolved {
+            match s {
+                CaptureSource::Microphone { device, .. } => assert_ne!(device, "plughw:9,9"),
+                CaptureSource::Rtsp { url, .. } => assert!(!url.contains("plughw")),
+                CaptureSource::PipeWire { .. } => {}
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_from_db_keeps_lone_mic_id_less_with_rtsp_present() {
+        let state = fresh_state();
+        insert_row(&state, "src_only_mic", SourceKind::UsbAlsa, "plughw:1,0", false);
+        insert_row(&state, "src_rtsp_1", SourceKind::Rtsp, "rtsp://lan/a", false);
+
+        let resolved = resolve_sources_from_db(&state).expect("non-empty");
+        let mic = resolved
+            .iter()
+            .find_map(|s| match s {
+                CaptureSource::Microphone { stream_id, .. } => Some(stream_id.clone()),
+                _ => None,
+            })
+            .expect("mic row");
+        // Exactly one local mic alongside any number of RTSP rows still
+        // gets the id-less filename for BirdNET-Pi compat.
+        assert_eq!(mic, None);
+    }
+
+    #[test]
+    fn resolve_from_db_assigns_ids_when_multiple_local_mics() {
+        let state = fresh_state();
+        insert_row(&state, "src_a", SourceKind::UsbAlsa, "plughw:1,0", false);
+        insert_row(&state, "src_b", SourceKind::PipeWire, "alsa_input.foo", false);
+
+        let resolved = resolve_sources_from_db(&state).expect("non-empty");
+        let ids: Vec<_> = resolved
+            .iter()
+            .filter_map(|s| match s {
+                CaptureSource::Microphone { stream_id, .. }
+                | CaptureSource::PipeWire { stream_id, .. } => stream_id.clone(),
+                CaptureSource::Rtsp { .. } => None,
+            })
+            .collect();
+        assert!(ids.contains(&"src_a".to_string()));
+        assert!(ids.contains(&"src_b".to_string()));
     }
 }

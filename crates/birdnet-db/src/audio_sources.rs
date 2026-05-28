@@ -2,10 +2,14 @@
 //!
 //! Replaces the single-string `state.audio_source()` model with a real
 //! entity that the admin UI manipulates through CRUD endpoints. Each row
-//! is one microphone or one RTSP stream; the audio daemon continues to
-//! read `state.audio_source()` until a follow-up PR teaches it to consume
-//! the table. See `TODO(O-13-followup)` in
-//! `birdnet-web/src/routes/admin/audio.rs`.
+//! is one microphone or one RTSP stream.
+//!
+//! The capture pipeline reads from this table when non-empty
+//! (`src/capture.rs::resolve_sources_from_db`), with the legacy CLI/config
+//! path as a fallback for stations that haven't migrated yet. The
+//! remaining O-13 follow-up is on `probe(id)` (still synthetic) — see
+//! `birdnet-web/src/routes/admin/audio.rs` for the per-source daemon-
+//! metrics handle that the real `probe(id)` will read.
 //!
 //! Synchronous SQLite-backed stores per the project rule. Hand-rolled
 //! error types; no `anyhow`/`thiserror`. The trait `AudioSourceStore` is

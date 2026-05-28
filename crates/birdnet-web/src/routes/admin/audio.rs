@@ -6,23 +6,32 @@
 //! `probe(id)` which today returns a stable `Capturing` for any row the
 //! audio daemon knows about and `Down` otherwise.
 //!
-//! ## TODO(O-13-followup) — audio-daemon wiring
+//! ## O-13 wiring status
 //!
-//! Two pieces of glue still belong to the daemon side:
+//! **Stage 1 (shipped, this PR's sibling)**: the capture pipeline in
+//! `src/capture.rs` resolves sources from `audio_sources` rows when the
+//! table is non-empty, falling back to the CLI/config path otherwise.
+//! See `capture::resolve_sources_from_db`. `state.audio_source()` is
+//! retained for back-compat consumers (livestream, the live-spectrogram
+//! producer, the listen-now page's "default" option) — those keep
+//! reading the legacy single-string value while operators migrate.
 //!
-//! 1. `state.audio_source()` continues to return a single string for the
-//!    daemon (set via the `with_audio_source` builder from the CLI/env).
-//!    A follow-up PR should teach the capture pipeline in `birdnet-core`
-//!    to read every non-disabled row of `audio_sources` directly. When
-//!    that lands, the seed migration's settings cross-reference and the
-//!    `with_audio_source` builder can be retired together.
+//! **TODO(O-13-followup)** — still open on the daemon side:
 //!
-//! 2. `probe(id)` is intentionally synthetic in this PR: it returns
+//! 1. `probe(id)` is intentionally synthetic in this PR: it returns
 //!    `Capturing` for the first non-disabled row and `Down` for the
 //!    others, because the per-source `is_capturing` flag does not exist
 //!    in `birdnet-core` yet. The replacement is a daemon-side metrics
 //!    handle keyed on `audio_source.id`. The handler is otherwise wired
 //!    end-to-end so the swap is one function body.
+//!
+//! 2. The seed migration's `settings.audio_source` cross-reference and
+//!    the `with_audio_source` builder stay in place during this
+//!    transition; they can be retired once every consumer of
+//!    `state.audio_source()` (livestream `/stream` default-source path,
+//!    live-spectrogram producer, listen-now "default" option, and a
+//!    handful of test fixtures) has been migrated to read the
+//!    `audio_sources` table directly.
 
 use std::fmt::Write as _;
 
