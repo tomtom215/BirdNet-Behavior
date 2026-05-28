@@ -41,11 +41,13 @@ pub fn router() -> Router<AppState> {
 async fn migration_page() -> Html<String> {
     let year = current_year();
     // Skeleton placeholders (O-16) shown until the htmx swap targets load.
+    // O-20 help link drops the methodology shortcut into the eyebrow.
     let body = PAGE_HTML
         .replace("{{year}}", &year.to_string())
         .replace("{{skel_migration_stats}}", &super::skeletons::stat_row(4))
         .replace("{{skel_ridgeline}}", super::skeletons::ridgeline())
-        .replace("{{skel_diversity}}", &super::skeletons::diversity_bars());
+        .replace("{{skel_diversity}}", &super::skeletons::diversity_bars())
+        .replace("{{help_link}}", &super::help::help_link(super::help::Topic::Phenology));
     render_page("Migration", &body, "migration")
 }
 

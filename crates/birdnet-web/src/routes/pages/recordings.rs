@@ -37,7 +37,12 @@ pub fn router() -> Router<AppState> {
 }
 
 async fn recordings_page() -> Html<String> {
-    super::render_page("Recordings", RECORDINGS_PAGE_HTML, "recordings")
+    // O-20 help link in the page-head eyebrow.
+    let body = RECORDINGS_PAGE_HTML.replace(
+        "{{help_link}}",
+        &super::help::help_link(super::help::Topic::Recordings),
+    );
+    super::render_page("Recordings", &body, "recordings")
 }
 
 /// HTMX partial: list of species with detection counts.

@@ -49,7 +49,13 @@ async fn dashboard_page() -> Html<String> {
     // `empty_states::quiet_yard()` for the 0-row case, resolving the
     // contradictory note in the DIFF: skeleton WHILE loading, quiet_yard
     // ONCE we know the yard is quiet.
-    let content = DASHBOARD_HTML.replace("{{skel_detections}}", &super::skeletons::feed_rows(8));
+    // O-20 — help link wires the hero eyebrow to the dashboard mdBook page.
+    let content = DASHBOARD_HTML
+        .replace("{{skel_detections}}", &super::skeletons::feed_rows(8))
+        .replace(
+            "{{help_link}}",
+            &super::help::help_link(super::help::Topic::Dashboard),
+        );
     super::render_page("Dashboard", &content, "dashboard")
 }
 

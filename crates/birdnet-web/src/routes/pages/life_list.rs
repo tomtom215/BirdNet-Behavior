@@ -70,7 +70,12 @@ async fn life_accumulation_partial(
 }
 
 async fn life_list_page() -> Html<String> {
-    render_page("Life List", LIFE_LIST_HTML, "life-list")
+    // O-20 help link wires the page header to the species mdBook page.
+    let body = LIFE_LIST_HTML.replace(
+        "{{help_link}}",
+        &super::help::help_link(super::help::Topic::Species),
+    );
+    render_page("Life List", &body, "life-list")
 }
 
 #[derive(Deserialize)]
@@ -307,7 +312,7 @@ async fn life_timeline_partial(State(state): State<AppState>) -> impl axum::resp
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], svg)
 }
 
-const LIFE_LIST_HTML: &str = r##"<div class="bnb-eyebrow">Journal</div><h1 class="display" style="font-size:34px;margin-bottom:0.25rem;">Life list</h1>
+const LIFE_LIST_HTML: &str = r##"<div class="bnb-eyebrow" style="display:flex;align-items:center;gap:10px;"><span>Journal</span>{{help_link}}</div><h1 class="display" style="font-size:34px;margin-bottom:0.25rem;">Life list</h1>
 <p style="color:var(--text-muted);margin-bottom:1.5rem;">Every species ever detected at this station.</p>
 
 <div class="stats-grid" hx-get="/pages/life-stats" hx-trigger="load" hx-swap="innerHTML">

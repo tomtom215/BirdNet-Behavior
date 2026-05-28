@@ -28,7 +28,12 @@ pub struct WeekParams {
 
 /// Render the full weekly report page (shell only; content loaded by HTMX).
 async fn weekly_page() -> Html<String> {
-    render_page("Weekly Report", WEEKLY_SHELL_HTML, "weekly")
+    // O-20 help link wires the eyebrow to the Reports mdBook page.
+    let body = WEEKLY_SHELL_HTML.replace(
+        "{{help_link}}",
+        &super::help::help_link(super::help::Topic::Reports),
+    );
+    render_page("Weekly Report", &body, "weekly")
 }
 
 /// HTMX partial: the weekly report content for a given week.
@@ -407,7 +412,7 @@ fn today_string() -> String {
 // ---------------------------------------------------------------------------
 
 const WEEKLY_SHELL_HTML: &str = r#"<div class="page-content" style="max-width:900px;margin:0 auto;padding:1.5rem;">
-  <div class="bnb-eyebrow">The backyard bulletin</div><h2 class="display" style="font-size:32px;margin-bottom:1rem;">Weekly report</h2>
+  <div class="bnb-eyebrow" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;"><span>The backyard bulletin</span>{{help_link}}</div><h2 class="display" style="font-size:32px;margin-bottom:1rem;">Weekly report</h2>
   <div id="weekly-content"
        hx-get="/pages/weekly-content"
        hx-trigger="load"

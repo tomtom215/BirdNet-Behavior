@@ -95,10 +95,15 @@ fn render_content(
     let mut html = String::with_capacity(8192);
 
     // ── Hero ─────────────────────────────────────────────────────────────
+    // O-20 — help link in the year-in-review masthead.
+    let help_link = super::help::help_link(super::help::Topic::Reports);
     let _ = write!(
         html,
         r#"<div class="page-head"><div>
-  <div class="bnb-eyebrow">Year in review · {year} · Station&nbsp;#001</div>
+  <div class="bnb-eyebrow" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+    <span>Year in review · {year} · Station&nbsp;#001</span>
+    {help_link}
+  </div>
   <h1 class="display" style="font-size:64px;line-height:1.05;margin-top:6px;">A year of <em style="font-style:italic;color:var(--moss-ink);">listening</em>.</h1>
   <p class="bnb-meta" style="margin-top:8px;max-width:560px;">Everything the yard sang this year — the totals, the leaderboard, the firsts, and the days it never went quiet.</p>
 </div></div>"#,

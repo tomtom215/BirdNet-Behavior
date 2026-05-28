@@ -23,11 +23,28 @@
 //! for air-gapped releases that ship a pre-rendered docs tree pointed at
 //! by `BNB_HELP_DIR`). See the workspace `build.rs` docstring.
 //!
-//! TODO(O-20-followup): the per-template `help_link(Topic::…)` sweep
-//! across the ~25 analytical screens in `docs/proposed_changes/O-20_help/
-//! DIFF.md` is still outstanding. The helpers below ship; only one call
-//! site (the low-confidence species panel in `admin/quality.rs`) is
-//! wired today.
+//! ## O-20 per-template sweep status
+//!
+//! Call sites wired so far (the high-traffic + analytical surfaces):
+//!
+//! * Dashboard hero eyebrow (`pages::dashboard::dashboard_page`).
+//! * Today detection-log eyebrow (`templates/today.html`).
+//! * Dawn-chorus circadian eyebrow (`templates/dawn_chorus.html`).
+//! * Migration phenology eyebrow (`templates/migration.html`).
+//! * Activity heatmap top eyebrow (`pages::heatmap::HEATMAP_CONTENT`).
+//! * Quarantine review header (`pages::quarantine`).
+//! * Life-list "Journal" eyebrow (`pages::life_list`).
+//! * Recordings "Browse" eyebrow (`templates/recordings.html`).
+//! * Notifications "Operations" eyebrow (`pages::notification_center`).
+//! * Weekly report "Backyard bulletin" eyebrow.
+//! * Year-in-review masthead.
+//! * Admin diagnostics → Troubleshooting (`admin::doctor::card_open`).
+//! * Quality low-confidence species → Tuning (shipped in #91).
+//!
+//! Still TODO(O-20-followup) for the remaining DIFF rows (admin settings
+//! sub-cards, admin audio post-O-13, admin remote-access, admin backups,
+//! correlation matrix, sharing, etc.) — same one-line pattern per file
+//! whenever the maintainer wants to extend.
 
 use std::path::PathBuf;
 

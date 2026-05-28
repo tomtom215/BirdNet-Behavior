@@ -37,6 +37,7 @@ pub fn router() -> Router<AppState> {
 async fn page() -> Html<String> {
     // Skeleton placeholders (O-16) shown until the htmx swap targets load.
     // O-23 moon badge — pure local computation, always safe to show.
+    // O-20 help link wires the eyebrow to the mdBook page.
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0_i64, |x| i64::try_from(x.as_secs()).unwrap_or(i64::MAX));
@@ -44,7 +45,8 @@ async fn page() -> Html<String> {
     let body = PAGE_HTML
         .replace("{{skel_polar}}", super::skeletons::polar_plot())
         .replace("{{skel_ribbons}}", &super::skeletons::species_ribbons(6))
-        .replace("{{moon_badge}}", &moon_badge);
+        .replace("{{moon_badge}}", &moon_badge)
+        .replace("{{help_link}}", &super::help::help_link(super::help::Topic::DawnChorus));
     render_page("Dawn chorus", &body, "analytics")
 }
 

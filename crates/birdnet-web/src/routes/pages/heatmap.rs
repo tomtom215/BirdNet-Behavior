@@ -49,12 +49,17 @@ struct HeatmapQuery {
 // ---------------------------------------------------------------------------
 
 async fn heatmap_page() -> Html<String> {
-    super::render_page("Activity Heatmap", HEATMAP_CONTENT, "heatmap")
+    // O-20 help link drops a methodology shortcut next to the top eyebrow.
+    let body = HEATMAP_CONTENT.replace(
+        "{{help_link}}",
+        &super::help::help_link(super::help::Topic::Analytics),
+    );
+    super::render_page("Activity Heatmap", &body, "heatmap")
 }
 
 const HEATMAP_CONTENT: &str = r#"<div class="page-head">
   <div>
-    <div class="bnb-eyebrow">Behavioral analytics</div>
+    <div class="bnb-eyebrow" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;"><span>Behavioral analytics</span>{{help_link}}</div>
     <h1 class="display" style="font-size:34px;">When the yard is alive</h1>
     <p class="bnb-meta" style="margin-top:4px;">Detection frequency by hour of day and day of week.</p>
   </div>
