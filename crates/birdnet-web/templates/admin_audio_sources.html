@@ -1,16 +1,7 @@
 <!--
   Audio Sources page · drop-in body for /admin/audio.
   Rendered inside admin_shell() — no <html>/<head>/<body>/<topnav> here.
-
-  Server fills:
-    {{rows_local}}        — concatenated `_partial_audio_source_row.html` for USB+PipeWire
-    {{rows_rtsp}}         — concatenated rows for RTSP
-    {{count_local}}       — "3 connected" or similar
-    {{count_rtsp}}        — "2 streams"
-    {{hidden_local}}      — "hidden" attr when no local sources, else empty
-    {{hidden_rtsp}}       — same for RTSP
-    {{hidden_empty}}      — empty when both groups empty, else "hidden"
-    {{pending_changes}}   — pill content for the restart-required banner
+  Server substitutions documented in crates/birdnet-web/src/routes/admin/audio.rs.
 -->
 <div data-screen-label="Audio sources" data-om-validate>
 

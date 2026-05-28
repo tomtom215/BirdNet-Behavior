@@ -1,12 +1,7 @@
 <!--
   Accounts & sessions page · drop-in body for /admin/accounts.
   Rendered inside admin_shell() — no <html>/<head>/<body>/<topnav> here.
-
-  Server fills:
-    {{session_rows}}   — concatenated session row partials
-    {{user_rows}}      — concatenated user row partials
-    {{audit_rows}}     — concatenated audit log row partials (latest 6)
-    {{current_user}}   — friendly display name of the request-time user
+  Server substitutions documented in crates/birdnet-web/src/routes/admin/accounts.rs.
 -->
 <div data-screen-label="Accounts" data-om-validate>
 
