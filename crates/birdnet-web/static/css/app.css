@@ -2103,3 +2103,93 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
   .bnb-banner__close { grid-area: close; }
   .bnb-banner > .bnb-btn { grid-area: btn; justify-self: stretch; }
 }
+/* Append to crates/birdnet-web/static/css/app.css — purely additive.
+   Quality dashboard model-trust additions (O-22). */
+
+/* ── Review-verdict trend (stacked daily bars) ────────────────────── */
+.bnb-verdict-trend {
+  display: grid;
+  grid-template-columns: repeat(30, 1fr);
+  gap: 2px;
+  align-items: end;
+  height: 110px;
+}
+.bnb-verdict-trend > .col {
+  display: flex; flex-direction: column-reverse;
+  height: 100%;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+.bnb-verdict-trend > .col > span { display: block; flex: 0 0 auto; }
+.bnb-verdict-trend > .col > .approved   { background: var(--moss); }
+.bnb-verdict-trend > .col > .relabeled  { background: var(--dawn); }
+.bnb-verdict-trend > .col > .rejected   { background: var(--rare); }
+.bnb-verdict-trend > .col > .unreviewed { background: color-mix(in oklch, var(--fg-4) 28%, var(--surface-2)); }
+
+.bnb-verdict-legend {
+  display: flex; gap: 14px; flex-wrap: wrap;
+  font-size: 11px; color: var(--fg-3); margin-top: 8px;
+}
+.bnb-verdict-legend span {
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.bnb-verdict-legend i {
+  display: inline-block; width: 10px; height: 6px; border-radius: 2px;
+}
+.bnb-verdict-legend i.approved  { background: var(--moss); }
+.bnb-verdict-legend i.relabeled { background: var(--dawn); }
+.bnb-verdict-legend i.rejected  { background: var(--rare); }
+.bnb-verdict-legend i.unreviewed { background: color-mix(in oklch, var(--fg-4) 28%, var(--surface-2)); }
+
+/* ── Model vs. human confidence rows ──────────────────────────────── */
+.bnb-mvr {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 14px;
+  align-items: center;
+}
+.bnb-mvr-row {
+  display: grid;
+  grid-template-columns: 1fr 1.6fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 0;
+  border-top: 0.5px solid var(--hairline);
+}
+.bnb-mvr-row:first-child { border-top: 0; }
+.bnb-mvr-name { font-size: 13.5px; }
+.bnb-mvr-name em { color: var(--fg-3); font-style: italic; font-weight: 400; font-size: 11px; display: block; }
+
+/* Pair of bars side by side (model on top, human on bottom). */
+.bnb-mvr-bars {
+  display: grid; grid-template-rows: 1fr 1fr;
+  gap: 3px;
+  min-width: 0;
+}
+.bnb-mvr-bar {
+  height: 8px; border-radius: 4px;
+  background: var(--surface-2);
+  position: relative;
+}
+.bnb-mvr-bar > .fill {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  border-radius: 4px;
+}
+.bnb-mvr-bar.model > .fill { background: var(--moss); }
+.bnb-mvr-bar.human > .fill { background: var(--moss-ink); }
+
+.bnb-mvr-bar > .label {
+  position: absolute; right: 0; top: -2px;
+  font-family: var(--font-mono); font-size: 10.5px;
+  color: var(--fg-3);
+  transform: translateY(-100%);
+}
+
+.bnb-mvr-gap {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--rare);
+  white-space: nowrap;
+}
+.bnb-mvr-gap.small { color: var(--fg-3); }

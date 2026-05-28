@@ -484,19 +484,16 @@ fn shift_date(date: &str, days: i32) -> String {
     format!("{y2:04}-{m2:02}-{d2:02}")
 }
 
-#[allow(clippy::cast_possible_wrap)]
+#[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
 fn ymd_to_days(y: u32, m: u32, d: u32) -> i64 {
-    let y = if m <= 2 { y - 1 } else { y } as i64;
+    let y = i64::from(if m <= 2 { y - 1 } else { y });
     let era = if y >= 0 { y } else { y - 399 } / 400;
     let yoe = (y - era * 400) as u64;
     let m = u64::from(m);
     let d = u64::from(d);
     let doy = (153 * if m > 2 { m - 3 } else { m + 9 } + 2) / 5 + d - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    #[allow(clippy::cast_possible_wrap)]
-    {
-        era * 146_097 + doe as i64 - 719_468
-    }
+    era * 146_097 + doe as i64 - 719_468
 }
 
 #[cfg(test)]
@@ -518,7 +515,7 @@ mod tests {
             "System",
         ] {
             assert!(
-                labels.iter().any(|l| *l == must),
+                labels.contains(&must),
                 "missing {must} in cmdk pages index"
             );
         }
@@ -527,8 +524,7 @@ mod tests {
     #[test]
     fn settings_index_includes_accounts_after_o15() {
         let s = all_settings();
-        let labels: Vec<_> = s.iter().map(|e| e.label.as_str()).collect();
-        assert!(labels.iter().any(|l| *l == "Accounts"));
+        assert!(s.iter().any(|e| e.label == "Accounts"));
     }
 
     #[test]

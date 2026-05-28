@@ -64,7 +64,11 @@ async fn latest_partial() -> Html<String> {
     };
     // Returns the banner subject + body — short summary plus link.
     let summary = first_bullet_summary(latest);
-    Html(format!(
+    // The "#v{anchor}" URL fragment puts `"` immediately adjacent to `#`,
+    // which would close an `r#"…"#` raw string early. Use `r##"…"##`.
+    // Clippy's needless_raw_string_hashes hint doesn't account for this.
+    #[allow(clippy::needless_raw_string_hashes)]
+    let banner = format!(
         r##"<div class="bnb-banner" data-version="{ver}">
   <span class="bnb-pill moss" aria-hidden="true">v{ver}</span>
   <div class="bnb-banner__copy">
@@ -77,7 +81,8 @@ async fn latest_partial() -> Html<String> {
         ver = escape_html(&latest.version),
         anchor = escape_html(&anchor(&latest.version)),
         summary = escape_html(&summary),
-    ))
+    );
+    Html(banner)
 }
 
 // ---------------------------------------------------------------------------
@@ -101,37 +106,47 @@ pub fn parse_changelog(input: &str) -> Vec<Release<'_>> {
         let line = raw.trim_end();
 
         if let Some((ver, date)) = parse_release_heading(line) {
-            // commit previous section + release
-            if let Some(sec) = current_section.take() {
-                if let Some(r) = current.as_mut() { r.sections.push(sec) }
+            if let Some(sec) = current_section.take()
+                && let Some(r) = current.as_mut()
+            {
+                r.sections.push(sec);
             }
             if let Some(prev) = current.take() {
                 out.push(prev);
             }
-            current = Some(Release { version: ver, date, sections: Vec::new() });
+            current = Some(Release {
+                version: ver,
+                date,
+                sections: Vec::new(),
+            });
             continue;
         }
 
         if let Some(section_name) = parse_section_heading(line) {
-            if let Some(sec) = current_section.take() {
-                if let Some(r) = current.as_mut() { r.sections.push(sec) }
+            if let Some(sec) = current_section.take()
+                && let Some(r) = current.as_mut()
+            {
+                r.sections.push(sec);
             }
             current_section = Some((section_name, Vec::new()));
             continue;
         }
 
-        if let Some(bullet) = parse_bullet(raw) {
-            if let Some((_, bullets)) = current_section.as_mut() {
-                bullets.push(bullet);
-            }
+        if let Some(bullet) = parse_bullet(raw)
+            && let Some((_, bullets)) = current_section.as_mut()
+        {
+            bullets.push(bullet);
         }
-        // Other lines (descriptions, blank) are ignored — bullet-only.
     }
 
-    if let Some(sec) = current_section.take() {
-        if let Some(r) = current.as_mut() { r.sections.push(sec) }
+    if let Some(sec) = current_section.take()
+        && let Some(r) = current.as_mut()
+    {
+        r.sections.push(sec);
     }
-    if let Some(prev) = current.take() { out.push(prev) }
+    if let Some(prev) = current.take() {
+        out.push(prev);
+    }
     out
 }
 
@@ -158,15 +173,19 @@ fn parse_section_heading(line: &str) -> Option<String> {
 /// "- bullet" → "bullet" (preserves backticks/links unchanged for later escape)
 fn parse_bullet(line: &str) -> Option<&str> {
     let trimmed = line.trim_start();
-    if let Some(b) = trimmed.strip_prefix("- ").or_else(|| trimmed.strip_prefix("* ")) {
-        Some(b.trim_end())
-    } else { None }
+    trimmed
+        .strip_prefix("- ")
+        .or_else(|| trimmed.strip_prefix("* "))
+        .map(str::trim_end)
 }
 
 // ---------------------------------------------------------------------------
 // Render
 // ---------------------------------------------------------------------------
 
+// The "#v{anchor}" URL fragment needs the `r##"…"##` raw-string form;
+// clippy's needless_raw_string_hashes hint is incorrect for this case.
+#[allow(clippy::needless_raw_string_hashes)]
 fn render_release(out: &mut String, r: &Release<'_>) {
     let anchor = anchor(&r.version);
     let date = r.date.as_deref().unwrap_or("(unreleased)");
@@ -213,23 +232,23 @@ fn render_inline_md(input: &str) -> String {
                 i += end + 2;
                 continue;
             }
-        } else if c == b'[' {
-            if let Some(rb) = bytes[i + 1..].iter().position(|&b| b == b']') {
-                let after = i + 1 + rb + 1;
-                if bytes.get(after) == Some(&b'(') {
-                    if let Some(close) = bytes[after + 1..].iter().position(|&b| b == b')') {
-                        let label = &input[i + 1..i + 1 + rb];
-                        let href = &input[after + 1..after + 1 + close];
-                        let _ = write!(
-                            out,
-                            "<a href=\"{}\">{}</a>",
-                            escape_html(href),
-                            escape_html(label)
-                        );
-                        i = after + close + 2;
-                        continue;
-                    }
-                }
+        } else if c == b'['
+            && let Some(rb) = bytes[i + 1..].iter().position(|&b| b == b']')
+        {
+            let after = i + 1 + rb + 1;
+            if bytes.get(after) == Some(&b'(')
+                && let Some(close) = bytes[after + 1..].iter().position(|&b| b == b')')
+            {
+                let label = &input[i + 1..i + 1 + rb];
+                let href = &input[after + 1..after + 1 + close];
+                let _ = write!(
+                    out,
+                    "<a href=\"{}\">{}</a>",
+                    escape_html(href),
+                    escape_html(label)
+                );
+                i = after + close + 2;
+                continue;
             }
         }
         // Default: escape character.
@@ -262,11 +281,15 @@ fn first_bullet_summary(r: &Release<'_>) -> String {
         .map(|(_, bullets)| bullets.iter().collect::<Vec<_>>())
         .unwrap_or_default();
     if pool.is_empty() {
-        return r.sections.iter()
+        return r
+            .sections
+            .iter()
             .flat_map(|(_, b)| b.iter())
             .next()
-            .map(ToString::to_string)
-            .unwrap_or_else(|| "see the changelog for details".into());
+            .map_or_else(
+                || "see the changelog for details".into(),
+                ToString::to_string,
+            );
     }
     let mut out = String::new();
     for b in pool.iter().take(3) {
@@ -281,10 +304,10 @@ fn first_bullet_summary(r: &Release<'_>) -> String {
 
 fn strip_lead_tag(s: &str) -> &str {
     let trimmed = s.trim_start();
-    if let Some(rest) = trimmed.strip_prefix('[') {
-        if let Some(end) = rest.find(']') {
-            return rest[end + 1..].trim_start();
-        }
+    if let Some(rest) = trimmed.strip_prefix('[')
+        && let Some(end) = rest.find(']')
+    {
+        return rest[end + 1..].trim_start();
     }
     trimmed
 }
@@ -293,7 +316,7 @@ fn strip_lead_tag(s: &str) -> &str {
 mod tests {
     use super::*;
 
-    const FIXTURE: &str = r#"# Changelog
+    const FIXTURE: &str = r"# Changelog
 
 ## [Unreleased]
 
@@ -311,7 +334,7 @@ mod tests {
 
 ### Added
 - Live status pill in the topnav
-"#;
+";
 
     #[test]
     fn parses_releases() {
