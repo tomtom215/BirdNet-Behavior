@@ -271,16 +271,42 @@ async fn analytics_config_partial(
     let configured = state.has_analytics();
     let db_path = escape_html(&state.db_path().display().to_string());
     let version = env!("CARGO_PKG_VERSION");
+
+    // Pull the live extension status from the AnalyticsDb when one is open. The
+    // three flags — compiled / active / extension-loaded — measure independent
+    // truths, so they're shown as three distinct rows instead of one ambiguous
+    // "Connected" pill.
+    #[cfg(feature = "analytics")]
+    let ext_status: Option<(bool, Option<String>, Option<String>)> =
+        state.with_analytics(|db| (db.extension_loaded(), db.duckdb_version(), db.extension_version()));
+    #[cfg(not(feature = "analytics"))]
+    let ext_status: Option<(bool, Option<String>, Option<String>)> = None;
+
     let mut html = format!(
         r#"<table style="font-size:0.85rem;"><tr><td style="font-weight:600;">Version</td><td>{version}</td></tr>
 <tr><td style="font-weight:600;">SQLite Database</td><td><code>{db_path}</code></td></tr>
 <tr><td style="font-weight:600;">Analytics Compiled</td><td>{compiled}</td></tr>
 <tr><td style="font-weight:600;">Analytics Active</td><td>{configured}</td></tr>"#,
     );
+    if let Some((loaded, duckdb_v, ext_v)) = ext_status {
+        let loaded_str = if loaded { "true" } else { "false" };
+        let duckdb_v_str = escape_html(duckdb_v.as_deref().unwrap_or("unknown"));
+        let ext_v_str = escape_html(ext_v.as_deref().unwrap_or("\u{2014}"));
+        let _ = write!(
+            html,
+            "<tr><td style=\"font-weight:600;\">DuckDB</td><td><code>{duckdb_v_str}</code></td></tr>\
+             <tr><td style=\"font-weight:600;\">Behavioral extension</td><td><code>{ext_v_str}</code> \u{00b7} loaded: <strong>{loaded_str}</strong></td></tr>"
+        );
+        if !loaded {
+            html.push_str(
+                r#"<tr><td colspan="2" style="color:var(--text-muted);padding-top:0.5rem;">Extension not loaded — sessions, retention and next-species queries are unavailable. Run <code>--refresh-extension</code> to fetch from the community registry, or restart with a release that bundles the extension binary (sets <code>BIRDNET_BUNDLED_EXTENSION_FILE</code> at build time, or vendors a copy under <code>crates/birdnet-behavioral/vendor/</code>).</td></tr>"#,
+            );
+        }
+    }
     if compiled && !configured {
-        html.push_str(r#"<tr><td colspan="2" style="color:var(--text-muted);padding-top:0.5rem;">Start with <code>--analytics-db &lt;path&gt;</code> to enable.</td></tr>"#);
+        html.push_str(r#"<tr><td colspan="2" style="color:var(--text-muted);padding-top:0.5rem;">Analytics is on by default — restart the service to open the DuckDB file alongside the SQLite database.</td></tr>"#);
     } else if !compiled {
-        html.push_str(r#"<tr><td colspan="2" style="color:var(--text-muted);padding-top:0.5rem;">Rebuild with <code>--features analytics</code> to enable.</td></tr>"#);
+        html.push_str(r#"<tr><td colspan="2" style="color:var(--text-muted);padding-top:0.5rem;">Rebuild with default features (or <code>--features analytics</code>) to enable.</td></tr>"#);
     }
     html.push_str("</table>");
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)

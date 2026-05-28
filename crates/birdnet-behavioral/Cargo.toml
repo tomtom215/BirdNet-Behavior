@@ -10,6 +10,7 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 description = "DuckDB behavioral analytics for bird detection patterns"
+build = "build.rs"
 
 [features]
 ## Enable the DuckDB connection module for real behavioral analytics queries.

@@ -316,6 +316,37 @@ jobs:
         with:
           shared-key: release-build-${{ matrix.target }}
 
+      - name: Fetch behavioral DuckDB extension (matching bundled DuckDB version)
+        # Embeds the community-built `behavioral` extension into the release
+        # binary via build.rs, so installs work fully offline at first run.
+        # If the download fails — restricted runner or registry hiccup — we
+        # fall through silently: the runtime loader still tries the cache and
+        # the community registry before giving up. The bundled DuckDB version
+        # here must match the duckdb-rs pin in Cargo.toml.
+        id: bundled_ext
+        shell: bash
+        run: |
+          set -eu
+          ddb_ver="v1.5.3"
+          case "${{ matrix.target }}" in
+            x86_64-*linux*)  plat="linux_amd64" ;;
+            aarch64-*linux*) plat="linux_arm64" ;;
+            *) plat="" ;;
+          esac
+          if [ -n "$plat" ]; then
+            url="http://community-extensions.duckdb.org/${ddb_ver}/${plat}/behavioral.duckdb_extension.gz"
+            tmp="$RUNNER_TEMP/behavioral.duckdb_extension"
+            if curl -fsSL --max-time 60 -o "${tmp}.gz" "$url"; then
+              gunzip -f "${tmp}.gz"
+              echo "BIRDNET_BUNDLED_EXTENSION_FILE=$tmp" >> "$GITHUB_ENV"
+              echo "embedded behavioral extension from $url"
+            else
+              echo "could not fetch $url — release falls back to runtime INSTALL FROM community"
+            fi
+          else
+            echo "no community extension for target ${{ matrix.target }} — runtime INSTALL fallback"
+          fi
+
       - name: Build release binary
         # `--features analytics` statically links the bundled DuckDB analytics
         # engine into the binary, so one binary per target ships everything;
@@ -323,6 +354,8 @@ jobs:
         # The aarch64 cross build runs on the 16 GB x86_64 runner, which has
         # more linker headroom than the 8 GB arm runner the Docker pipeline
         # builds natively on for the same DuckDB-link reason.
+        # When the previous step set BIRDNET_BUNDLED_EXTENSION_FILE, build.rs
+        # embeds the behavioral extension into the binary too.
         run: |
           cargo build \
             --release \
