@@ -1,0 +1,74 @@
+<!--
+  Single audio-source row · used in initial page render AND as the response
+  body when POST /admin/audio/sources or PATCH /admin/audio/sources/{id}
+  completes successfully.
+
+  Server fills:
+    {{id}}            — "src_usb_1"
+    {{kind_class}}    — "usb" | "pipe" | "rtsp" (drives badge tint)
+    {{kind_label}}    — "USB · ALSA" | "PipeWire" | "RTSP"
+    {{label}}         — friendly label (may be empty)
+    {{label_class}}   — "" or "untitled" (when {{label}} is empty)
+    {{label_text}}    — {{label}} or "— no friendly label —"
+    {{device_id}}     — "plughw:1,0" / "rtsp://…"
+    {{detail_line}}   — "48 kHz · mono · 24-bit · gain +12 dB"
+    {{status_class}}  — "live" | "starting" | "paused" | "down"
+    {{status_label}}  — "Capturing" | "Starting…" | "Paused (schedule)" | "Down"
+    {{meta_line}}     — "up 6d 04h" | "EHOSTUNREACH · retry in 38s" | …
+
+  Each row polls /admin/audio/sources/{id}/probe every 8s for live status.
+-->
+<li class="audio-source"
+    role="listitem"
+    data-source-id="{{id}}"
+    hx-target="this"
+    hx-swap="outerHTML">
+
+  <div class="audio-source__kind">
+    <span class="audio-kind-badge {{kind_class}}">
+      <span class="audio-kind-glyph" aria-hidden="true"></span>
+      {{kind_label}}
+    </span>
+  </div>
+
+  <div class="audio-source__id">
+    <div class="audio-source__label {{label_class}}">{{label_text}}</div>
+    <div class="audio-source__device mono">{{device_id}}</div>
+    <div class="audio-source__detail mono">{{detail_line}}</div>
+  </div>
+
+  <div class="audio-source__right">
+    <span class="bnb-pill {{status_class}}"
+          hx-get="/admin/audio/sources/{{id}}/probe"
+          hx-trigger="every 8s"
+          hx-swap="outerHTML"
+          aria-live="polite">
+      <span class="bnb-dot {{status_class}}" aria-hidden="true"></span>
+      {{status_label}}
+    </span>
+    <div class="audio-source__actions">
+      <button class="bnb-btn ghost"
+              hx-get="/admin/audio/sources/{{id}}/edit"
+              hx-target="closest li"
+              hx-swap="outerHTML">Edit</button>
+      <span class="audio-source__sep" aria-hidden="true"></span>
+      <!--
+        Remove goes through the O-17 confirmation modal — note the dual
+        attributes: hx-delete + data-confirm-* keys. Native confirm is the
+        fallback when the modal is unavailable.
+      -->
+      <button class="bnb-btn ghost"
+              style="color:var(--rare);"
+              hx-delete="/admin/audio/sources/{{id}}"
+              hx-target="closest li"
+              hx-swap="outerHTML swap:200ms"
+              hx-confirm="Remove this source?"
+              data-confirm-action="hx-delete"
+              data-confirm-url="/admin/audio/sources/{{id}}"
+              data-confirm-title="Remove source"
+              data-confirm-body="Removes this source from the station. Existing detections from this source are preserved; no audio files are deleted."
+              data-confirm-confirm-label="Remove source"
+              data-confirm-style="danger">Remove</button>
+    </div>
+  </div>
+</li>

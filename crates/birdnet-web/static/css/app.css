@@ -1536,3 +1536,212 @@ footer a:hover { color: var(--moss-ink); }
     justify-self: end;
   }
 }
+/* Append to crates/birdnet-web/static/css/app.css — purely additive.
+   Audio Sources page (O-13). Replaces the inline-style grid in the old
+   admin/audio.rs body. Reusable across the audio-sources page and any future
+   per-row partial. */
+
+/* ── Audio-source row ─────────────────────────────────────────────── */
+.audio-sources {
+  list-style: none;
+  margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 10px;
+}
+
+.audio-source {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 16px 18px;
+  align-items: center;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm);
+  transition: border-color .12s ease;
+}
+.audio-source:hover { border-color: var(--border-2); }
+
+.audio-source__kind { display: inline-flex; min-width: 96px; }
+
+.audio-kind-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10.5px; letter-spacing: 0.04em;
+  background: var(--surface-2);
+  color: var(--fg-2);
+  border: 0.5px solid var(--border);
+}
+.audio-kind-badge.usb {
+  background: color-mix(in oklch, var(--moss) 12%, var(--surface-2));
+  color: var(--moss-ink); border-color: transparent;
+}
+.audio-kind-badge.pipe {
+  background: color-mix(in oklch, var(--dawn) 10%, var(--surface-2));
+  color: var(--dawn-ink); border-color: transparent;
+}
+.audio-kind-badge.rtsp { background: var(--surface-2); color: var(--fg-2); }
+.audio-kind-glyph {
+  width: 6px; height: 6px; border-radius: 1px;
+  background: currentColor; opacity: .85;
+}
+.audio-kind-badge.rtsp .audio-kind-glyph { border-radius: 999px; }
+
+.audio-source__id { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.audio-source__label {
+  font-size: 14.5px; font-weight: 500; color: var(--fg);
+  letter-spacing: -0.01em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.audio-source__label.untitled { color: var(--fg-3); font-style: italic; font-weight: 400; }
+.audio-source__device {
+  font-size: 12px; color: var(--fg-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.audio-source__detail {
+  font-size: 10.5px; color: var(--fg-4); letter-spacing: 0.02em;
+  margin-top: 2px;
+}
+
+.audio-source__right {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
+  min-width: 152px;
+}
+.audio-source__actions { display: inline-flex; align-items: center; gap: 2px; }
+.audio-source__sep {
+  width: 0.5px; height: 14px; background: var(--hairline); margin: 0 2px;
+}
+
+/* Status pills — drive both .bnb-pill and the .bnb-dot inside it */
+.bnb-pill.live    { background: var(--moss-soft); color: var(--moss-ink); border-color: transparent; }
+.bnb-pill.live    .bnb-dot { background: var(--moss); }
+.bnb-pill.starting { background: var(--dawn-soft); color: var(--dawn-ink); border-color: transparent; }
+.bnb-pill.starting .bnb-dot {
+  background: var(--dawn);
+  animation: bnb-blink 1.2s ease-in-out infinite;
+}
+.bnb-pill.paused  { background: var(--surface-2); color: var(--fg-3); }
+.bnb-pill.paused  .bnb-dot { background: var(--fg-4); }
+.bnb-pill.down    { background: var(--rare-soft); color: var(--rare); border-color: transparent; }
+.bnb-pill.down    .bnb-dot { background: var(--rare); }
+@keyframes bnb-blink { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+:root[data-motion="reduced"] .bnb-pill.starting .bnb-dot { animation: none; }
+
+/* ── Add-source inline form ───────────────────────────────────────── */
+details.bnb-add-form {
+  margin-top: 14px;
+  border: 0.5px dashed var(--border-2);
+  border-radius: var(--r-lg);
+  background: var(--bg-2);
+  overflow: hidden;
+}
+details.bnb-add-form[open] {
+  border-style: solid;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+details.bnb-add-form > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 14px 18px;
+  display: flex; align-items: center; gap: 10px;
+  font-size: 13px;
+  color: var(--fg-2);
+  font-weight: 500;
+}
+details.bnb-add-form > summary::-webkit-details-marker { display: none; }
+details.bnb-add-form > summary:hover { color: var(--fg); }
+
+.bnb-add-form__plus {
+  width: 18px; height: 18px;
+  display: inline-grid; place-items: center;
+  border-radius: 999px;
+  background: var(--moss-soft);
+  color: var(--moss-ink);
+  font-weight: 600; font-size: 13px; line-height: 1;
+  transition: transform .15s ease;
+}
+details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
+.bnb-add-form__hint {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--fg-4);
+  letter-spacing: 0.04em;
+}
+
+.bnb-add-form__body {
+  padding: 6px 18px 18px;
+  border-top: 0.5px solid var(--hairline);
+}
+.bnb-add-form__body h4 {
+  font-family: var(--font-ui);
+  font-size: 11px; font-weight: 500;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--fg-3);
+  margin: 14px 0 10px;
+}
+
+.bnb-field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.bnb-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.bnb-field.wide { grid-column: 1 / -1; }
+.bnb-field code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 5px;
+  background: var(--surface-2);
+  border: 0.5px solid var(--hairline);
+  border-radius: var(--r-xs);
+  color: var(--fg-2);
+}
+
+.bnb-form-actions {
+  display: flex; align-items: center; justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px; padding-top: 16px;
+  border-top: 0.5px solid var(--hairline);
+}
+
+/* ── Source-type chip picker ──────────────────────────────────────── */
+.bnb-type-picker { display: inline-flex; gap: 6px; flex-wrap: wrap; position: relative; }
+.bnb-type-picker input { position: absolute; opacity: 0; pointer-events: none; }
+.bnb-type-picker label {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 7px 12px;
+  border-radius: var(--r-sm);
+  border: 0.5px solid var(--border);
+  background: var(--bg-2);
+  color: var(--fg-2);
+  font-size: 12.5px; font-weight: 500;
+  cursor: pointer;
+  transition: border-color .12s, background .12s, color .12s;
+}
+.bnb-type-picker label:hover { border-color: var(--fg-3); color: var(--fg); }
+.bnb-type-picker label.is-checked {
+  border-color: var(--moss);
+  background: color-mix(in oklch, var(--moss) 12%, var(--surface));
+  color: var(--fg);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--moss) 22%, transparent);
+}
+.bnb-type-dot {
+  width: 7px; height: 7px; border-radius: 2px; background: var(--fg-3);
+  flex: 0 0 auto;
+}
+.bnb-type-picker label[data-kind="usb"]  .bnb-type-dot { background: var(--moss); }
+.bnb-type-picker label[data-kind="pipe"] .bnb-type-dot { background: var(--dawn); }
+.bnb-type-picker label[data-kind="rtsp"] .bnb-type-dot { background: var(--fg-2); border-radius: 999px; }
+
+/* ── Phone ────────────────────────────────────────────────────────── */
+@media (max-width: 720px) {
+  .audio-source {
+    grid-template-columns: 1fr;
+    gap: 12px; padding: 14px 14px;
+  }
+  .audio-source__kind { min-width: 0; }
+  .audio-source__right {
+    flex-direction: row; align-items: center; justify-content: space-between;
+    min-width: 0; width: 100%;
+  }
+  .bnb-field-grid { grid-template-columns: 1fr; }
+}

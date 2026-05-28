@@ -1,0 +1,239 @@
+<!--
+  Audio Sources page · drop-in body for /admin/audio.
+  Rendered inside admin_shell() — no <html>/<head>/<body>/<topnav> here.
+
+  Server fills:
+    {{rows_local}}        — concatenated `_partial_audio_source_row.html` for USB+PipeWire
+    {{rows_rtsp}}         — concatenated rows for RTSP
+    {{count_local}}       — "3 connected" or similar
+    {{count_rtsp}}        — "2 streams"
+    {{hidden_local}}      — "hidden" attr when no local sources, else empty
+    {{hidden_rtsp}}       — same for RTSP
+    {{hidden_empty}}      — empty when both groups empty, else "hidden"
+    {{pending_changes}}   — pill content for the restart-required banner
+-->
+<div data-screen-label="Audio sources" data-om-validate>
+
+  <header class="page-head" style="align-items:flex-start;">
+    <div>
+      <div class="bnb-eyebrow">Station setup · primary support surface</div>
+      <h1 class="display"
+          style="font-size:48px;line-height:1.05;letter-spacing:-0.02em;text-wrap:balance;">
+        Audio sources
+      </h1>
+      <p class="bnb-meta" style="margin-top:6px;max-width:580px;">
+        Every microphone and stream this station listens to.
+      </p>
+    </div>
+    <div class="pill-row" style="margin:0;">{{pending_changes}}</div>
+  </header>
+
+  <!-- ═══════════════════════════════════════════════════════════
+       Local microphones
+       ═══════════════════════════════════════════════════════════ -->
+  <section class="bnb-card pad" {{hidden_local}}>
+    <div class="section-header">
+      <div>
+        <div class="bnb-eyebrow">Local microphones</div>
+        <h3>USB · ALSA · PipeWire</h3>
+      </div>
+      <div style="display:inline-flex;align-items:center;gap:12px;">
+        <span class="bnb-meta mono">{{count_local}}</span>
+        <button class="bnb-btn"
+                type="button"
+                onclick="document.getElementById('add-local').open = true; document.getElementById('add-local').scrollIntoView({block:'nearest'});">
+          <span aria-hidden="true" style="color:var(--moss-ink);font-weight:600;">+</span>
+          Add microphone
+        </button>
+      </div>
+    </div>
+
+    <ul id="local-list" role="list" class="audio-sources">{{rows_local}}</ul>
+
+    <details class="bnb-add-form" id="add-local">
+      <summary>
+        <span class="bnb-add-form__plus" aria-hidden="true">+</span>
+        <span>Add a microphone</span>
+        <span class="bnb-add-form__hint mono">USB · ALSA · PipeWire</span>
+      </summary>
+      <div class="bnb-add-form__body">
+        <form hx-post="/admin/audio/sources"
+              hx-target="#local-list"
+              hx-swap="beforeend"
+              hx-on::after-request="if(event.detail.successful){this.reset();document.getElementById('add-local').open=false;}">
+          <input type="hidden" name="scope" value="local">
+
+          <h4>Source type</h4>
+          <div class="bnb-type-picker" role="radiogroup" aria-label="Source type">
+            <input id="lt-usb" name="kind" type="radio" value="usb-alsa" checked>
+            <label for="lt-usb" data-kind="usb"><span class="bnb-type-dot"></span> USB · ALSA</label>
+            <input id="lt-pipe" name="kind" type="radio" value="pipewire">
+            <label for="lt-pipe" data-kind="pipe"><span class="bnb-type-dot"></span> PipeWire</label>
+          </div>
+
+          <h4 style="margin-top:18px;">Connection</h4>
+          <div class="bnb-field-grid">
+            <div class="bnb-field wide">
+              <label class="bnb-eyebrow" for="lt-id">Device id</label>
+              <input id="lt-id" class="mono" name="device_id" type="text"
+                     placeholder="plughw:1,0" required>
+              <span class="bnb-meta" data-hint-for="usb-alsa">
+                ALSA: run <code class="mono">arecord -l</code> to list devices.
+              </span>
+              <span class="bnb-meta" data-hint-for="pipewire" hidden>
+                PipeWire: run <code class="mono">pw-cli list-objects | grep node.name</code>.
+              </span>
+            </div>
+            <div class="bnb-field">
+              <label class="bnb-eyebrow" for="lt-label">Friendly label</label>
+              <input id="lt-label" name="label" type="text" placeholder="Backyard feeder">
+            </div>
+            <div class="bnb-field">
+              <label class="bnb-eyebrow" for="lt-rate">Sample rate</label>
+              <select id="lt-rate" name="sample_rate">
+                <option value="48000" selected>48 000 Hz (recommended)</option>
+                <option value="44100">44 100 Hz</option>
+                <option value="32000">32 000 Hz</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="bnb-form-actions">
+            <button type="button" class="bnb-btn ghost"
+                    onclick="document.getElementById('add-local').open=false">Cancel</button>
+            <button type="submit" class="bnb-btn moss">Save microphone</button>
+          </div>
+        </form>
+      </div>
+    </details>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════
+       Network streams (RTSP)
+       ═══════════════════════════════════════════════════════════ -->
+  <section class="bnb-card pad" style="margin-top:var(--pad-3);" {{hidden_rtsp}}>
+    <div class="section-header">
+      <div>
+        <div class="bnb-eyebrow">Network streams</div>
+        <h3>RTSP cameras</h3>
+      </div>
+      <div style="display:inline-flex;align-items:center;gap:12px;">
+        <span class="bnb-meta mono">{{count_rtsp}}</span>
+        <button class="bnb-btn"
+                type="button"
+                onclick="document.getElementById('add-rtsp').open = true; document.getElementById('add-rtsp').scrollIntoView({block:'nearest'});">
+          <span aria-hidden="true" style="color:var(--moss-ink);font-weight:600;">+</span>
+          Add stream
+        </button>
+      </div>
+    </div>
+
+    <ul id="rtsp-list" role="list" class="audio-sources">{{rows_rtsp}}</ul>
+
+    <details class="bnb-add-form" id="add-rtsp">
+      <summary>
+        <span class="bnb-add-form__plus" aria-hidden="true">+</span>
+        <span>Add an RTSP stream</span>
+        <span class="bnb-add-form__hint mono">network camera</span>
+      </summary>
+      <div class="bnb-add-form__body">
+        <form hx-post="/admin/audio/sources"
+              hx-target="#rtsp-list"
+              hx-swap="beforeend"
+              hx-on::after-request="if(event.detail.successful){this.reset();document.getElementById('add-rtsp').open=false;}">
+          <input type="hidden" name="scope" value="rtsp">
+          <input type="hidden" name="kind" value="rtsp">
+
+          <h4>Connection</h4>
+          <div class="bnb-field-grid">
+            <div class="bnb-field wide">
+              <label class="bnb-eyebrow" for="rt-url">RTSP URL</label>
+              <input id="rt-url" class="mono" name="device_id" type="url"
+                     placeholder="rtsp://host:554/stream" required>
+              <span class="bnb-meta">
+                RTSP: <code class="mono">rtsp://host:554/stream</code> — credentials go in
+                <code class="mono">user:pass@host</code>.
+              </span>
+            </div>
+            <div class="bnb-field">
+              <label class="bnb-eyebrow" for="rt-label">Friendly label</label>
+              <input id="rt-label" name="label" type="text" placeholder="Side path camera">
+            </div>
+            <div class="bnb-field">
+              <label class="bnb-eyebrow" for="rt-transport">Transport</label>
+              <select id="rt-transport" name="rtsp_transport">
+                <option value="auto" selected>auto (TCP w/ UDP fallback)</option>
+                <option value="tcp">TCP only</option>
+                <option value="udp">UDP only</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="bnb-form-actions">
+            <button type="button" class="bnb-btn ghost"
+                    onclick="document.getElementById('add-rtsp').open=false">Cancel</button>
+            <button type="submit" class="bnb-btn moss">Save stream</button>
+          </div>
+        </form>
+      </div>
+    </details>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════
+       Empty state (both groups empty)
+       ═══════════════════════════════════════════════════════════ -->
+  <section class="bnb-card pad" {{hidden_empty}}>
+    <div class="empty-state">
+      <svg width="120" height="80" viewBox="0 0 120 80" aria-hidden="true">
+        <g stroke="var(--hairline)" stroke-width="0.7" fill="none">
+          <rect x="14" y="22" width="92" height="36" rx="6"/>
+          <line x1="14" y1="40" x2="106" y2="40"/>
+        </g>
+        <circle cx="34" cy="40" r="6" fill="var(--surface-2)" stroke="var(--hairline)"/>
+        <circle cx="60" cy="40" r="6" fill="var(--surface-2)" stroke="var(--hairline)"/>
+        <circle cx="86" cy="40" r="6" fill="var(--surface-2)" stroke="var(--hairline)"/>
+      </svg>
+      <h3 class="display" style="font-size:22px;margin-top:14px;">No audio sources yet.</h3>
+      <p class="bnb-meta" style="margin-top:6px;">
+        Add a microphone or an RTSP stream to start listening.
+      </p>
+    </div>
+  </section>
+
+  <!-- Restart-required note -->
+  <p class="bnb-meta mono" style="margin-top:var(--pad-3);display:inline-flex;align-items:center;gap:8px;">
+    <span class="bnb-dot dawn" aria-hidden="true"></span>
+    Changes apply on the next restart.
+  </p>
+</div>
+
+<script>
+(function () {
+  // Type-picker: keep .is-checked synced (covers non-:has browsers).
+  document.querySelectorAll('.bnb-type-picker').forEach(function (group) {
+    function sync() {
+      group.querySelectorAll('label').forEach(function (l) {
+        var input = group.querySelector('#' + l.getAttribute('for'));
+        l.classList.toggle('is-checked', !!(input && input.checked));
+      });
+    }
+    group.querySelectorAll('input[type="radio"]').forEach(function (r) {
+      r.addEventListener('change', sync);
+    });
+    sync();
+  });
+
+  // Contextual hint swap for local-mic form.
+  (function () {
+    var f = document.getElementById('add-local');
+    if (!f) return;
+    f.querySelectorAll('input[name="kind"]').forEach(function (r) {
+      r.addEventListener('change', function () {
+        f.querySelectorAll('[data-hint-for]').forEach(function (h) {
+          h.hidden = h.getAttribute('data-hint-for') !== r.value;
+        });
+      });
+    });
+  })();
+})();
+</script>
