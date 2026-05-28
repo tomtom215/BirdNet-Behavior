@@ -19,8 +19,8 @@ use std::fmt::Write as _;
 
 use axum::Form;
 use axum::Router;
-use axum::extract::{Path, State};
-use axum::response::{Html, IntoResponse, Redirect, Response};
+use axum::extract::{Path, Query, State};
+use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use serde::Deserialize;
 
@@ -471,12 +471,247 @@ async fn revoke_others_handler(
 // GET /admin/audit — full log (linked from the accounts page)
 // ───────────────────────────────────────────────────────────────────────────
 
-async fn audit_full_page(State(state): State<AppState>) -> Response {
-    // TODO(O-15-followup): a small filter form (date range, action prefix)
-    // belongs here. For now this is a redirect back to the accounts page
-    // so the link in the template doesn't 404.
-    let _ = state;
-    Redirect::to("/admin/accounts").into_response()
+/// Query parameters for the audit-log page. All optional; sensible
+/// defaults so a bare `/admin/audit` shows the last 14 days unfiltered.
+#[derive(Debug, Deserialize, Default)]
+struct AuditParams {
+    /// Lower bound, inclusive (`YYYY-MM-DD`).
+    #[serde(default)]
+    from: Option<String>,
+    /// Upper bound, inclusive (`YYYY-MM-DD`).
+    #[serde(default)]
+    to: Option<String>,
+    /// Optional substring filter against the `action` column. The
+    /// handler wraps it in `%…%` so the operator can type `rule` and
+    /// get every `rule.*` action without writing SQL wildcards.
+    #[serde(default)]
+    action: Option<String>,
+}
+
+/// Default lookback window when `?from` is missing.
+const AUDIT_DEFAULT_DAYS: u32 = 14;
+/// Hard limit on rows rendered in a single page response.
+const AUDIT_PAGE_LIMIT: usize = 500;
+
+async fn audit_full_page(
+    State(state): State<AppState>,
+    Query(params): Query<AuditParams>,
+) -> Html<String> {
+    let (from, to) = resolve_audit_range(&params);
+    let action_filter = params.action.as_deref().unwrap_or("").trim().to_string();
+    let action_like = if action_filter.is_empty() {
+        String::new()
+    } else {
+        format!("%{action_filter}%")
+    };
+
+    let body = state.with_db(|conn| -> Result<String, AccountsError> {
+        let entries = conn.query(&from, &to, &action_like, AUDIT_PAGE_LIMIT)?;
+        let users = conn.list_users()?;
+        Ok(render_audit_page(&from, &to, &action_filter, &entries, &users))
+    });
+
+    let body = match body {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!(error = %e, "audit page render failed");
+            render_error("Audit log could not be loaded.")
+        }
+    };
+    Html(admin_shell("Audit log", "accounts", &body))
+}
+
+/// Resolve the inclusive `(from, to)` date strings for the query. When
+/// `params.from` is missing, fall back to "today minus `AUDIT_DEFAULT_DAYS`".
+/// `params.to` defaults to today.
+fn resolve_audit_range(params: &AuditParams) -> (String, String) {
+    let today = today_date_string();
+    let to = params
+        .to
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&today)
+        .to_string();
+    let from = params
+        .from
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map_or_else(
+            || date_minus_days(&today, i64::from(AUDIT_DEFAULT_DAYS)),
+            ToString::to_string,
+        );
+    (from, to)
+}
+
+/// Current UTC date as `YYYY-MM-DD`.
+fn today_date_string() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0_i64, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+    let (y, m, d) = epoch_to_ymd(secs);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// Subtract `days` from a `YYYY-MM-DD` string, returning a same-shaped
+/// `YYYY-MM-DD` string. Used to compute the default lookback bound.
+fn date_minus_days(date: &str, days: i64) -> String {
+    let secs = parse_ymd_to_epoch(date).unwrap_or(0);
+    let earlier = secs.saturating_sub(days * 86_400);
+    let (y, m, d) = epoch_to_ymd(earlier);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+fn parse_ymd_to_epoch(date: &str) -> Option<i64> {
+    let parts: Vec<&str> = date.split('-').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let y: i32 = parts[0].parse().ok()?;
+    let m: u32 = parts[1].parse().ok()?;
+    let d: u32 = parts[2].parse().ok()?;
+    Some(ymd_to_epoch(y, m, d))
+}
+
+/// Howard Hinnant civil → days conversion at 00:00:00 UTC.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::many_single_char_names,
+)]
+fn ymd_to_epoch(y: i32, m: u32, d: u32) -> i64 {
+    let y = i64::from(if m <= 2 { y - 1 } else { y });
+    let era = (if y >= 0 { y } else { y - 399 }) / 400;
+    let yoe = (y - era * 400) as u64;
+    let mp = if m <= 2 { m + 9 } else { m - 3 };
+    let doy = (153 * u64::from(mp) + 2) / 5 + u64::from(d) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe as i64 - 719_468;
+    days * 86_400
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::many_single_char_names,
+)]
+fn epoch_to_ymd(secs: i64) -> (i32, u32, u32) {
+    let days = secs.div_euclid(86_400);
+    let z = days + 719_468;
+    let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = (y + i64::from(m <= 2)) as i32;
+    (year, m as u32, d as u32)
+}
+
+fn render_audit_page(
+    from: &str,
+    to: &str,
+    action_filter: &str,
+    entries: &[AuditEntry],
+    users: &[User],
+) -> String {
+    let rows = render_audit_full_rows(entries, users);
+    let count = entries.len();
+    let truncated_note = if count >= AUDIT_PAGE_LIMIT {
+        format!(
+            r#"<p class="bnb-meta" style="margin-top:14px;">Showing the most recent {AUDIT_PAGE_LIMIT} matches — tighten the date range to see older rows.</p>"#
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        r#"<div data-screen-label="Audit log">
+  <header class="page-head">
+    <div>
+      <div class="bnb-eyebrow">Admin · access</div>
+      <h1 class="display" style="font-size:32px;">Audit log</h1>
+      <p class="bnb-meta">Every admin-side mutation lands here. Filter by date range and action prefix.</p>
+    </div>
+    <a class="action" href="/admin/accounts">← back to accounts</a>
+  </header>
+
+  <form method="get" action="/admin/audit" class="bnb-card pad" style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;">
+    <label style="display:flex;flex-direction:column;gap:4px;">
+      <span class="bnb-meta">From</span>
+      <input type="date" name="from" value="{from}" required>
+    </label>
+    <label style="display:flex;flex-direction:column;gap:4px;">
+      <span class="bnb-meta">To</span>
+      <input type="date" name="to" value="{to}" required>
+    </label>
+    <label style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:180px;">
+      <span class="bnb-meta">Action contains</span>
+      <input type="text" name="action" value="{action_esc}"
+             placeholder="rule. · settings. · password · …"
+             style="font-family:var(--font-mono);font-size:13px;">
+    </label>
+    <button type="submit" class="bnb-btn primary" style="height:36px;">Apply</button>
+    <a href="/admin/audit" class="bnb-btn ghost" style="height:36px;line-height:36px;">Reset</a>
+  </form>
+
+  <section class="bnb-card pad" style="margin-top:18px;">
+    <div class="bnb-eyebrow" style="margin-bottom:6px;">{count} {pluralised}</div>
+    <ol class="account-audit" style="list-style:none;padding:0;margin:0;">
+      {rows}
+    </ol>
+    {truncated_note}
+  </section>
+</div>"#,
+        action_esc = escape_html(action_filter),
+        count = count,
+        pluralised = if count == 1 { "entry" } else { "entries" },
+    )
+}
+
+/// Full per-row layout for the audit page. Wider than the 6-row preview
+/// on `/admin/accounts` — surfaces `target` + `metadata` and the full
+/// timestamp.
+fn render_audit_full_rows(entries: &[AuditEntry], users: &[User]) -> String {
+    if entries.is_empty() {
+        return String::from(
+            r#"<li class="account-audit__empty"><span class="bnb-meta">No matching entries.</span></li>"#,
+        );
+    }
+    let mut out = String::new();
+    for e in entries {
+        let who = e
+            .user_id
+            .and_then(|id| users.iter().find(|u| u.id == id))
+            .map_or("system", |u| u.username.as_str());
+        let target = e
+            .target
+            .as_ref()
+            .map(|t| format!(r#" <span class="target">{}</span>"#, escape_html(t)))
+            .unwrap_or_default();
+        let metadata = e
+            .metadata
+            .as_ref()
+            .map(|m| format!(r#"<div class="mono bnb-meta" style="margin-top:4px;font-size:11px;color:var(--fg-3);overflow-x:auto;">{}</div>"#, escape_html(m)))
+            .unwrap_or_default();
+        let _ = write!(
+            out,
+            r#"<li style="padding:10px 0;border-top:0.5px solid var(--hairline);display:grid;grid-template-columns:170px 120px 1fr;gap:12px;align-items:start;">
+  <span class="mono bnb-meta">{when}</span>
+  <span class="audit-who">{who}</span>
+  <div>
+    <span class="audit-action">{action}{target}</span>
+    {metadata}
+  </div>
+</li>"#,
+            when = escape_html(&e.at),
+            who = escape_html(who),
+            action = escape_html(&e.action),
+        );
+    }
+    out
 }
 
 #[cfg(test)]
@@ -570,6 +805,96 @@ mod tests {
         assert!(!body.contains("{{"));
         assert!(body.contains("Accounts &amp; sessions"));
         assert!(body.contains("Administrator"));
+    }
+
+    // ------------------------------------------------------------------
+    // /admin/audit page tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn ymd_epoch_roundtrip_anchor_dates() {
+        // 2000-01-01 = 946684800 (UTC midnight, well-known anchor).
+        assert_eq!(ymd_to_epoch(2000, 1, 1), 946_684_800);
+        assert_eq!(epoch_to_ymd(946_684_800), (2000, 1, 1));
+        // 2024-02-29 (leap) = 1709164800.
+        assert_eq!(ymd_to_epoch(2024, 2, 29), 1_709_164_800);
+        assert_eq!(epoch_to_ymd(1_709_164_800), (2024, 2, 29));
+    }
+
+    #[test]
+    fn date_minus_days_handles_month_boundary() {
+        // 14 days before 2026-05-10 is 2026-04-26.
+        assert_eq!(date_minus_days("2026-05-10", 14), "2026-04-26");
+        // 30 days before 2026-03-01 crosses a leap-aware boundary —
+        // 30 days back from March 1 lands in late January / Feb 1.
+        let earlier = date_minus_days("2026-03-01", 30);
+        assert_eq!(earlier, "2026-01-30");
+    }
+
+    #[test]
+    fn resolve_audit_range_fills_defaults() {
+        // Empty params → from = today - 14 days, to = today.
+        let p = AuditParams::default();
+        let (from, to) = resolve_audit_range(&p);
+        // Today should equal the second value.
+        assert_eq!(to, today_date_string());
+        // From should equal today_minus_14.
+        let expected_from = date_minus_days(&today_date_string(), i64::from(AUDIT_DEFAULT_DAYS));
+        assert_eq!(from, expected_from);
+    }
+
+    #[test]
+    fn resolve_audit_range_uses_supplied_bounds() {
+        let p = AuditParams {
+            from: Some("2026-04-01".to_string()),
+            to: Some("2026-04-15".to_string()),
+            action: None,
+        };
+        let (from, to) = resolve_audit_range(&p);
+        assert_eq!(from, "2026-04-01");
+        assert_eq!(to, "2026-04-15");
+    }
+
+    #[test]
+    fn render_audit_full_rows_shows_user_action_target_and_metadata() {
+        let users = vec![User {
+            id: 7,
+            username: "jess".to_string(),
+            pwd_argon2: String::new(),
+            role: Role::Viewer,
+            label: None,
+            created_at: "2026-01-01".to_string(),
+            disabled_at: None,
+        }];
+        let entries = vec![AuditEntry {
+            id: 1,
+            at: "2026-05-25 10:30:00".to_string(),
+            user_id: Some(7),
+            action: "rule.toggle".to_string(),
+            target: Some("rule:nightjar".to_string()),
+            metadata: Some(r#"{"enabled":false}"#.to_string()),
+        }];
+        let html = render_audit_full_rows(&entries, &users);
+        assert!(html.contains("2026-05-25 10:30:00"));
+        assert!(html.contains("jess"));
+        assert!(html.contains("rule.toggle"));
+        assert!(html.contains("rule:nightjar"));
+        // Metadata is escaped (JSON quoted) — verify the quote becomes an entity.
+        assert!(html.contains("&quot;enabled&quot;"));
+    }
+
+    #[test]
+    fn render_audit_full_rows_empty_message() {
+        let html = render_audit_full_rows(&[], &[]);
+        assert!(html.contains("No matching entries"));
+    }
+
+    #[test]
+    fn render_audit_page_substitutes_form_values() {
+        let html = render_audit_page("2026-05-01", "2026-05-31", "rule", &[], &[]);
+        assert!(html.contains(r#"name="from" value="2026-05-01""#));
+        assert!(html.contains(r#"name="to" value="2026-05-31""#));
+        assert!(html.contains(r#"name="action" value="rule""#));
     }
 
     #[test]
