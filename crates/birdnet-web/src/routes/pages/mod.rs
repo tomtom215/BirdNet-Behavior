@@ -21,6 +21,7 @@ pub mod atoms;
 pub mod audio_player;
 pub mod behavioral;
 pub mod charts;
+pub(crate) mod cmdk;
 pub(crate) mod confirm;
 pub mod correlation;
 pub mod dashboard;
@@ -77,6 +78,8 @@ pub(crate) const TOPNAV_MORE_HTML: &str =
 /// Real footer (O-26) — site-meta only, destinations live in the topnav + More.
 pub(crate) const FOOTER_HTML: &str =
     include_str!("../../../templates/_partial_footer.html");
+/// Command palette overlay (O-19), injected into every full-page shell.
+pub(crate) const CMDK_HTML: &str = include_str!("../../../templates/_partial_cmdk.html");
 
 /// Build all page and partial routes.
 pub fn router() -> Router<AppState> {
@@ -104,6 +107,7 @@ pub fn router() -> Router<AppState> {
         .merge(onboarding::router())
         .merge(migration::router())
         .merge(dawn_chorus::router())
+        .merge(cmdk::router())
         .route(
             "/pages/today-phrase",
             get(today_phrase::today_phrase_partial),
@@ -158,7 +162,8 @@ pub(crate) fn render_page(title: &str, content: &str, active_nav: &str) -> Html<
         .replace("{{nav_changelog}}", nav("changelog"))
         .replace("{{nav_help}}", nav("help"))
         .replace("{{confirm_modal}}", CONFIRM_MODAL_HTML)
-        .replace("{{toast_region}}", TOAST_REGION_HTML);
+        .replace("{{toast_region}}", TOAST_REGION_HTML)
+        .replace("{{cmdk_partial}}", CMDK_HTML);
     Html(html)
 }
 
