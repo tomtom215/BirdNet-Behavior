@@ -89,6 +89,9 @@ pub(crate) const HELP_DRAWER_HTML: &str =
 /// Post-upgrade banner mount (O-21), injected at the top of `<main>`.
 pub(crate) const UPDATE_BANNER_HTML: &str =
     include_str!("../../../templates/_partial_update_banner.html");
+/// Phone-only bottom tab bar (O-24), injected before `</body>`.
+pub(crate) const TABBAR_HTML: &str =
+    include_str!("../../../templates/_partial_tabbar.html");
 
 /// Build all page and partial routes.
 pub fn router() -> Router<AppState> {
@@ -139,6 +142,9 @@ pub(crate) fn render_page(title: &str, content: &str, active_nav: &str) -> Html<
         .replace("{{content}}", content)
         .replace("{{topnav_more}}", TOPNAV_MORE_HTML)
         .replace("{{footer}}", FOOTER_HTML)
+        // O-24 — tabbar reads {{nav_*}}, so substitute the partial first
+        // and let the nav loop below fill its slots.
+        .replace("{{tabbar}}", TABBAR_HTML)
         // O-14 — populated by the cookie auth wire once it's flipped. Empty
         // for now so the slot is harmless on unauthenticated requests; the
         // CSS handles the missing element gracefully (no layout shift).

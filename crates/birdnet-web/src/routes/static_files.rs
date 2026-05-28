@@ -22,6 +22,22 @@ const APP_CSS: &[u8] = include_bytes!("../../static/css/app.css");
 /// Print-only stylesheet (loaded with `media="print"` by the layout).
 const PRINT_CSS: &[u8] = include_bytes!("../../static/css/print.css");
 
+/// PWA manifest (O-24). Browsers fetch this to discover `display:standalone`
+/// + icons + shortcuts for the home-screen install flow.
+const MANIFEST_WEBMANIFEST: &[u8] = include_bytes!("../../static/manifest.webmanifest");
+
+/// Service worker (O-24). Cache-first for `/static/*`,
+/// stale-while-revalidate for public dashboard surfaces, and a hard
+/// network-only bypass for everything under `/admin/`, `/login`,
+/// `/logout`, `/r/`, `/feeds/`. The bnb-build query param invalidates
+/// the cache on a new release.
+const SERVICE_WORKER_JS: &[u8] = include_bytes!("../../static/sw.js");
+
+/// PWA icons (O-24). Three sizes per the manifest.
+const ICON_192: &[u8] = include_bytes!("../../static/icon-192.png");
+const ICON_512: &[u8] = include_bytes!("../../static/icon-512.png");
+const ICON_MASKABLE_512: &[u8] = include_bytes!("../../static/icon-maskable-512.png");
+
 /// Pre-paint theme/density guard for standalone pages (admin, kiosk, player).
 const THEME_GUARD_JS: &[u8] = include_bytes!("../../static/theme-guard.js");
 
@@ -129,6 +145,63 @@ pub fn router() -> Router<AppState> {
         .route("/static/css/app.css", get(app_css))
         .route("/static/css/print.css", get(print_css))
         .route("/static/fonts/{file}", get(font_file))
+        // O-24 PWA assets.
+        .route("/static/manifest.webmanifest", get(manifest_webmanifest))
+        .route("/static/sw.js", get(service_worker_js))
+        .route("/static/icon-192.png", get(icon_192))
+        .route("/static/icon-512.png", get(icon_512))
+        .route("/static/icon-maskable-512.png", get(icon_maskable_512))
+}
+
+async fn manifest_webmanifest() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/manifest+json"),
+            (header::CACHE_CONTROL, "public, max-age=3600"),
+        ],
+        MANIFEST_WEBMANIFEST,
+    )
+}
+
+async fn service_worker_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            // Workers self-version through `?v=` from the layout. We hint
+            // no-store so the registered file always reflects the latest
+            // shipped binary.
+            (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
+            // Lets the worker control top-level navigations.
+            ("Service-Worker-Allowed".parse().unwrap(), "/"),
+        ],
+        SERVICE_WORKER_JS,
+    )
+}
+
+async fn icon_192() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, IMMUTABLE)],
+        ICON_192,
+    )
+}
+
+async fn icon_512() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, IMMUTABLE)],
+        ICON_512,
+    )
+}
+
+async fn icon_maskable_512() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, IMMUTABLE)],
+        ICON_MASKABLE_512,
+    )
 }
 
 async fn live_detections_js() -> impl IntoResponse {

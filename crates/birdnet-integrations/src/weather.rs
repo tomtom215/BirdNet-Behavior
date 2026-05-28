@@ -6,7 +6,7 @@
 //! 2. The caller supplies station coordinates (otherwise there's
 //!    nothing to fetch for).
 //!
-//! Open-Meteo is a free, no-API-key weather service whose ToS allows
+//! Open-Meteo is a free, no-API-key weather service whose `ToS` allows
 //! non-commercial use; a single-Pi bird station qualifies. Operators
 //! uneasy about the third-party fetch can self-host Open-Meteo and
 //! point [`Client::new_with_base_url`] at it via `BNB_WEATHER_BASE_URL`.
@@ -74,6 +74,7 @@ impl From<serde_json::Error> for WeatherError {
 }
 
 /// Async client for Open-Meteo.
+#[derive(Debug, Clone)]
 pub struct Client {
     http: reqwest::Client,
     base_url: String,
@@ -145,15 +146,17 @@ impl Client {
 }
 
 /// Whether the weather poll job is enabled. Default off; opt in with
-/// `BNB_WEATHER_ENABLED=1` (the prompt's open question — flip the
-/// default once the maintainer locks the privacy/network posture).
+/// `BNB_WEATHER_ENABLED=1` — the prompt's open question; flip the
+/// default once the maintainer locks the privacy / network posture.
 #[must_use]
 pub fn is_enabled() -> bool {
     std::env::var("BNB_WEATHER_ENABLED")
-        .map(|v| v.trim() == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+        .is_ok_and(|v| v.trim() == "1" || v.eq_ignore_ascii_case("true"))
 }
 
+/// The `reason` field is captured purely so the JSON decoder doesn't
+/// silently drop it; the API surface returns `Vec<WeatherRow>` either
+/// way, so we don't expose it.
 #[derive(Debug, Deserialize)]
 struct ForecastResponse {
     #[serde(default)]
@@ -161,6 +164,7 @@ struct ForecastResponse {
     #[serde(default)]
     error: Option<bool>,
     #[serde(default)]
+    #[allow(dead_code)]
     reason: Option<String>,
 }
 
@@ -186,15 +190,15 @@ struct HourlyBlock {
 
 impl ForecastResponse {
     fn into_rows(self) -> Vec<WeatherRow> {
+        // wind_speed_10m comes back in m/s; the storage layer prefers
+        // knots so the legend chip can read in the operator's mental
+        // model. 1 m/s ≈ 1.9438 kt.
+        const MS_TO_KT: f32 = 1.943_844_5;
         if self.error.unwrap_or(false) || self.hourly.is_none() {
             return Vec::new();
         }
         let h = self.hourly.unwrap();
         let n = h.time.len();
-        // wind_speed_10m comes back in m/s; the storage layer prefers
-        // knots so the legend chip can read in the operator's mental
-        // model. 1 m/s ≈ 1.9438 kt.
-        const MS_TO_KT: f32 = 1.943_844_5;
         (0..n)
             .map(|i| WeatherRow {
                 at: h.time[i].clone(),

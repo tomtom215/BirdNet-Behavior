@@ -221,6 +221,14 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
     .await
     .unwrap_or_default();
 
+    // O-23 moon badge is always rendered — its computation is local
+    // and the operator deserves the signal even on a quiet day. This
+    // sits BEFORE the empty-state early return.
+    let now_secs_for_quiet = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0_i64, |x| i64::try_from(x.as_secs()).unwrap_or(i64::MAX));
+    let moon_badge_quiet = super::overlays::moon_badge(now_secs_for_quiet);
+
     let Ok(Ok(rows)) = result else {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -233,8 +241,12 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
         return (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
-            r#"<p class="bnb-meta" style="text-align:center;padding:1rem;">No detections yet today.</p>"#
-                .to_string(),
+            format!(
+                r#"<div class="bnb-meta" style="display:flex;gap:18px;align-items:center;justify-content:center;padding:1rem;">
+  <span>No detections yet today.</span>
+  {moon_badge_quiet}
+</div>"#
+            ),
         );
     }
 
@@ -274,7 +286,7 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
     // band renders a quiet placeholder so the chrome doesn't shift.
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |x| x.as_secs() as i64);
+        .map_or(0_i64, |x| i64::try_from(x.as_secs()).unwrap_or(i64::MAX));
     let moon_badge = super::overlays::moon_badge(now_secs);
 
     let weather_band_html = {

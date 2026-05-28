@@ -229,8 +229,10 @@ mod tests {
     #[test]
     fn range_returns_chronological() {
         let conn = open_db();
-        for h in [14, 10, 12] {
-            conn.upsert(&sample(&format!("2026-05-28T{h:02}:00:00Z"), h as f32))
+        for h in [14_i32, 10, 12] {
+            #[allow(clippy::cast_precision_loss)]
+            let temp = h as f32;
+            conn.upsert(&sample(&format!("2026-05-28T{h:02}:00:00Z"), temp))
                 .unwrap();
         }
         let rows = conn.range("2026-05-28", "2026-05-29").unwrap();

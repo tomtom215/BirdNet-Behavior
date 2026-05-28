@@ -8,6 +8,25 @@
 //! Moon phase is computed locally (Conway approximation). Weather pulls
 //! pre-aggregated rows from a `WeatherStore`. SPL is design-only here.
 
+// SVG layout is one big `as f64` party against pixel coords. Rewriting
+// each cast into `f64::from` plus `mul_add` would obfuscate the
+// geometry without buying chrome-renderer accuracy. The `spl_band` and
+// `WeatherSample` `hour`/`wind_kt` fields are part of the documented
+// O-23 API surface that the audio daemon will exercise later — flag
+// them dead-code-tolerant rather than shrinking the surface.
+#![allow(
+    clippy::cast_lossless,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::manual_clamp,
+    clippy::suboptimal_flops,
+    clippy::uninlined_format_args,
+    clippy::use_self,
+    dead_code
+)]
+
 use std::fmt::Write as _;
 
 // ---------------------------------------------------------------------------

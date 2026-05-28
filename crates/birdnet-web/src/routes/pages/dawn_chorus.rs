@@ -39,7 +39,7 @@ async fn page() -> Html<String> {
     // O-23 moon badge — pure local computation, always safe to show.
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |x| x.as_secs() as i64);
+        .map_or(0_i64, |x| i64::try_from(x.as_secs()).unwrap_or(i64::MAX));
     let moon_badge = super::overlays::moon_badge(now_secs);
     let body = PAGE_HTML
         .replace("{{skel_polar}}", super::skeletons::polar_plot())
