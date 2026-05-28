@@ -128,6 +128,12 @@ fn render_backup_list(entries: &[BackupEntry]) -> String {
                             hx-target="closest tr"
                             hx-swap="outerHTML"
                             hx-confirm="Delete {name_esc}?"
+                            data-confirm-action="hx-delete"
+                            data-confirm-url="/admin/system/backups/{name_esc}"
+                            data-confirm-title="Delete backup"
+                            data-confirm-body="Delete {name_esc}?"
+                            data-confirm-confirm-label="Delete"
+                            data-confirm-style="danger"
                             style="background:none;border:none;color:var(--rare);cursor:pointer;font-size:.8rem;">
                       Delete
                     </button>

@@ -96,7 +96,13 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
               hx-post="/admin/system/service/restart"
               hx-target="#service-result"
               hx-swap="innerHTML"
-              hx-confirm="Restart the service? Detection will pause briefly during restart.">
+              hx-confirm="Restart the service? Detection will pause briefly during restart."
+              data-confirm-action="hx-post"
+              data-confirm-url="/admin/system/service/restart"
+              data-confirm-title="Restart service"
+              data-confirm-body="Restart the service? Detection will pause briefly during restart."
+              data-confirm-confirm-label="Restart"
+              data-confirm-style="warn">
         Restart Service
       </button>
       <button class="btn btn-secondary"
@@ -170,14 +176,26 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
               hx-post="/admin/system/clear-detections"
               hx-target="#clear-result"
               hx-swap="innerHTML"
-              hx-confirm="Are you sure you want to delete ALL detections and notification logs? This cannot be undone.">
+              hx-confirm="Are you sure you want to delete ALL detections and notification logs? This cannot be undone."
+              data-confirm-action="hx-post"
+              data-confirm-url="/admin/system/clear-detections"
+              data-confirm-title="Clear all detections"
+              data-confirm-body="Are you sure you want to delete ALL detections and notification logs? This cannot be undone."
+              data-confirm-confirm-label="Delete all"
+              data-confirm-style="danger">
         Clear All Detections
       </button>
       <button class="btn btn-danger"
               hx-post="/admin/system/clear-extracted"
               hx-target="#clear-result"
               hx-swap="innerHTML"
-              hx-confirm="Are you sure you want to delete ALL extracted audio clips? This cannot be undone.">
+              hx-confirm="Are you sure you want to delete ALL extracted audio clips? This cannot be undone."
+              data-confirm-action="hx-post"
+              data-confirm-url="/admin/system/clear-extracted"
+              data-confirm-title="Clear extracted audio"
+              data-confirm-body="Are you sure you want to delete ALL extracted audio clips? This cannot be undone."
+              data-confirm-confirm-label="Delete clips"
+              data-confirm-style="danger">
         Clear Extracted Audio
       </button>
     </div>

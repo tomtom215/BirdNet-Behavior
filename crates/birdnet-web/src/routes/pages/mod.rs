@@ -21,6 +21,7 @@ pub mod atoms;
 pub mod audio_player;
 pub mod behavioral;
 pub mod charts;
+pub(crate) mod confirm;
 pub mod correlation;
 pub mod dashboard;
 pub mod dawn_chorus;
@@ -63,6 +64,9 @@ pub(crate) const SPECIES_DETAIL_HTML: &str = include_str!("../../../templates/sp
 pub(crate) const TIMESERIES_PAGE_HTML: &str = include_str!("../../../templates/timeseries.html");
 pub(crate) const TODAY_PAGE_HTML: &str = include_str!("../../../templates/today.html");
 pub(crate) const RECORDINGS_PAGE_HTML: &str = include_str!("../../../templates/recordings.html");
+/// Themed confirmation modal (O-17), injected into every full-page shell.
+pub(crate) const CONFIRM_MODAL_HTML: &str =
+    include_str!("../../../templates/_partial_confirm_modal.html");
 
 /// Build all page and partial routes.
 pub fn router() -> Router<AppState> {
@@ -119,7 +123,8 @@ pub(crate) fn render_page(title: &str, content: &str, active_nav: &str) -> Html<
         .replace("{{nav_heatmap}}", nav("heatmap"))
         .replace("{{nav_migration}}", nav("migration"))
         .replace("{{nav_system}}", nav("system"))
-        .replace("{{nav_notifications}}", nav("notifications"));
+        .replace("{{nav_notifications}}", nav("notifications"))
+        .replace("{{confirm_modal}}", CONFIRM_MODAL_HTML);
     Html(html)
 }
 

@@ -79,6 +79,9 @@ pub(crate) fn admin_shell(title: &str, active: &str, body: &str) -> String {
         };
         let _ = write!(nav_html, "<a href=\"{href}\"{style}>{label}</a>");
     }
+    // Themed confirmation modal (O-17): admin pages render through this shell,
+    // not `render_page`, so the modal is injected here too.
+    let confirm_modal = crate::routes::pages::CONFIRM_MODAL_HTML;
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -102,6 +105,7 @@ pub(crate) fn admin_shell(title: &str, active: &str, body: &str) -> String {
   <nav class="admin-nav">{nav_html}</nav>
   {body}
 </div>
+{confirm_modal}
 </body>
 </html>"#
     )

@@ -729,3 +729,72 @@ footer a:hover { color: var(--moss-ink); }
   border-top: 0.5px solid var(--hairline);
 }
 .bnb-skel-list-row:first-child { border-top: 0; }
+/* Append to crates/birdnet-web/static/css/app.css — purely additive.
+   Themed confirmation modal (O-17). Uses the native <dialog> element. */
+
+/* ── Modal · <dialog>-based ───────────────────────────────────────── */
+.bnb-modal {
+  /* Reset native dialog chrome. */
+  border: 0; padding: 0;
+  background: transparent;
+  color: var(--fg);
+  max-width: min(92vw, 460px);
+  width: 100%;
+  margin: auto; /* centred when opened via showModal() */
+}
+.bnb-modal::backdrop {
+  background: color-mix(in oklch, oklch(0% 0 0) 38%, transparent);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
+.bnb-modal__form {
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 0;
+  display: flex; flex-direction: column;
+  font-family: var(--font-ui);
+}
+.bnb-modal__head { padding: 22px 22px 12px; }
+.bnb-modal__body { padding: 4px 22px 18px; }
+.bnb-modal__foot {
+  padding: 14px 18px;
+  border-top: 0.5px solid var(--hairline);
+  background: var(--bg-2);
+  border-radius: 0 0 var(--r-lg) var(--r-lg);
+  display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+}
+
+/* Danger / warn theming on the dialog frame */
+.bnb-modal[data-style="danger"] .bnb-modal__form {
+  border-color: color-mix(in oklch, var(--rare) 40%, var(--border));
+  box-shadow: var(--shadow-lg), 0 0 0 4px color-mix(in oklch, var(--rare) 8%, transparent);
+}
+.bnb-modal[data-style="warn"] .bnb-modal__form {
+  border-color: color-mix(in oklch, var(--dawn) 50%, var(--border));
+}
+
+/* Show/hide animation when supported */
+@media (prefers-reduced-motion: no-preference) {
+  .bnb-modal[open] .bnb-modal__form {
+    animation: bnb-modal-rise 200ms cubic-bezier(.2,.7,.2,1);
+  }
+  .bnb-modal[open]::backdrop {
+    animation: bnb-modal-fade 200ms ease-out;
+  }
+}
+@keyframes bnb-modal-rise {
+  from { opacity: 0; transform: translateY(8px) scale(.985); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes bnb-modal-fade { from { opacity: 0; } to { opacity: 1; } }
+
+/* Extra button colour used only by the modal's "warn" style */
+.bnb-btn.dawn {
+  background: var(--dawn);
+  color: oklch(20% 0.04 60);
+  border-color: transparent;
+}
+.bnb-btn.dawn:hover { background: var(--dawn-ink); color: oklch(100% 0 0); }

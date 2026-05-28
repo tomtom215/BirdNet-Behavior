@@ -437,7 +437,13 @@ fn render_rules_table(rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
             hx-post="/admin/rules/{id}/delete"
             hx-confirm="Delete rule '{name}'?"
             hx-target="#rule-row-{id}"
-            hx-swap="outerHTML">Delete</button>
+            hx-swap="outerHTML"
+            data-confirm-action="hx-post"
+            data-confirm-url="/admin/rules/{id}/delete"
+            data-confirm-title="Delete rule"
+            data-confirm-body="Delete rule '{name}'?"
+            data-confirm-confirm-label="Delete"
+            data-confirm-style="danger">Delete</button>
   </td>
 </tr>"##,
             id = id,

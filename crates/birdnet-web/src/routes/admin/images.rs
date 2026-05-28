@@ -71,6 +71,12 @@ async fn images_page(State(state): State<AppState>) -> Html<String> {
              <button hx-delete=\"/admin/images/blacklist/{id}\" \
              hx-target=\"#blacklist-table\" hx-swap=\"outerHTML\" \
              hx-confirm=\"Remove this blacklist entry?\" \
+             data-confirm-action=\"hx-delete\" \
+             data-confirm-url=\"/admin/images/blacklist/{id}\" \
+             data-confirm-title=\"Remove blacklist entry\" \
+             data-confirm-body=\"Remove this blacklist entry?\" \
+             data-confirm-confirm-label=\"Remove\" \
+             data-confirm-style=\"danger\" \
              style=\"background:none;border:1px solid var(--danger);color:var(--danger);\
              padding:0.2rem 0.5rem;border-radius:var(--radius);cursor:pointer;font-size:0.8rem;\">\
              Remove</button>\

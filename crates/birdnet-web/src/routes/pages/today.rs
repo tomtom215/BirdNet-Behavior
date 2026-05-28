@@ -326,6 +326,12 @@ fn render_detection_card(html: &mut String, d: &birdnet_db::sqlite::DetectionRow
          hx-vals='{{\"date\":\"{date_raw}\",\"time\":\"{time_raw}\",\"sci_name\":\"{sci_name_raw}\"}}' \
          hx-target=\"#today-results\" hx-swap=\"innerHTML\" hx-include=\"#today-search\" \
          hx-confirm=\"Delete detection of {com_name} at {time}?\" \
+         data-confirm-action=\"hx-post\" \
+         data-confirm-url=\"/pages/today-delete\" \
+         data-confirm-title=\"Delete detection\" \
+         data-confirm-body=\"Delete detection of {com_name} at {time}?\" \
+         data-confirm-confirm-label=\"Delete\" \
+         data-confirm-style=\"danger\" \
          title=\"Delete this detection\">Delete</button>\
          </div></div>",
     );

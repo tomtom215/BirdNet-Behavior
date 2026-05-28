@@ -403,6 +403,12 @@ fn row_action_buttons(id: i64, filter_param: &str, com_name: &str) -> String {
             hx-vals='{{\"id\":{id},\"filter\":\"{filter_param}\"}}' \
             hx-target=\"{target}\" hx-swap=\"innerHTML\" \
             hx-confirm=\"Approve {com_name} and admit to detections?\" \
+            data-confirm-action=\"hx-post\" \
+            data-confirm-url=\"/pages/quarantine-approve\" \
+            data-confirm-title=\"Approve detection\" \
+            data-confirm-body=\"Approve {com_name} and admit to detections?\" \
+            data-confirm-confirm-label=\"Approve\" \
+            data-confirm-style=\"moss\" \
             style=\"background:var(--success);color:#fff;border:none;\
                    padding:0.25rem 0.6rem;border-radius:var(--radius);\
                    cursor:pointer;font-size:0.8rem;white-space:nowrap;\">\
@@ -421,6 +427,12 @@ fn row_action_buttons(id: i64, filter_param: &str, com_name: &str) -> String {
             hx-vals='{{\"id\":{id},\"filter\":\"{filter_param}\"}}' \
             hx-target=\"{target}\" hx-swap=\"innerHTML\" \
             hx-confirm=\"Permanently delete this quarantine entry?\" \
+            data-confirm-action=\"hx-post\" \
+            data-confirm-url=\"/pages/quarantine-delete\" \
+            data-confirm-title=\"Delete quarantine entry\" \
+            data-confirm-body=\"Permanently delete this quarantine entry?\" \
+            data-confirm-confirm-label=\"Delete\" \
+            data-confirm-style=\"danger\" \
             style=\"background:none;border:1px solid var(--danger);\
                    color:var(--danger);padding:0.25rem 0.6rem;\
                    border-radius:var(--radius);cursor:pointer;\
