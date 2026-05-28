@@ -1,251 +1,691 @@
-//! Audio settings — microphone (USB + RTSP) management.
+//! Audio sources management — first-class CRUD page (O-13).
 //!
-//! The primary support surface: a source list with per-input level/uptime/last
-//! detection, an expandable tuning panel (gain, sample rate, channels, bit
-//! depth, pipeline toggles), an Add-RTSP wizard and researcher options. The
-//! layout and controls are fully realised; live device enumeration / level
-//! metering / persistence are a clearly-scoped stub (a production build wires
-//! these to the audio daemon and settings store).
+//! Replaces the prior hard-coded two-row stub. The page body is rendered
+//! from `templates/admin_audio_sources.html` + per-row partials in
+//! `templates/_partial_audio_source_row.html`; live status comes from
+//! `probe(id)` which today returns a stable `Capturing` for any row the
+//! audio daemon knows about and `Down` otherwise.
+//!
+//! ## TODO(O-13-followup) — audio-daemon wiring
+//!
+//! Two pieces of glue still belong to the daemon side:
+//!
+//! 1. `state.audio_source()` continues to return a single string for the
+//!    daemon (set via the `with_audio_source` builder from the CLI/env).
+//!    A follow-up PR should teach the capture pipeline in `birdnet-core`
+//!    to read every non-disabled row of `audio_sources` directly. When
+//!    that lands, the seed migration's settings cross-reference and the
+//!    `with_audio_source` builder can be retired together.
+//!
+//! 2. `probe(id)` is intentionally synthetic in this PR: it returns
+//!    `Capturing` for the first non-disabled row and `Down` for the
+//!    others, because the per-source `is_capturing` flag does not exist
+//!    in `birdnet-core` yet. The replacement is a daemon-side metrics
+//!    handle keyed on `audio_source.id`. The handler is otherwise wired
+//!    end-to-end so the swap is one function body.
 
 use std::fmt::Write as _;
 
+use axum::Form;
 use axum::Router;
-use axum::extract::State;
-use axum::response::Html;
-use axum::routing::get;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::response::{Html, IntoResponse, Response};
+use axum::routing::{get, post};
+use serde::Deserialize;
+
+use birdnet_db::audio_sources::{
+    AudioSource, AudioSourceError, AudioSourcePatch, AudioSourceStore, NewAudioSource,
+    RtspTransport, SourceKind,
+};
 
 use super::admin_shell;
 use crate::routes::pages::escape_html;
+use crate::routes::pages::toast::{self, Toast};
 use crate::state::AppState;
 
+// Embedded templates.
+const PAGE_TPL: &str = include_str!("../../../templates/admin_audio_sources.html");
+const ROW_TPL: &str = include_str!("../../../templates/_partial_audio_source_row.html");
+
 pub fn router() -> Router<AppState> {
-    Router::new().route("/admin/audio", get(audio_page))
+    Router::new()
+        .route("/admin/audio", get(page))
+        .route("/admin/audio/sources", post(create))
+        .route(
+            "/admin/audio/sources/{id}",
+            axum::routing::delete(remove).patch(update),
+        )
+        .route("/admin/audio/sources/{id}/edit", get(edit_form))
+        .route("/admin/audio/sources/{id}/probe", get(probe))
 }
 
-async fn audio_page(State(state): State<AppState>) -> Html<String> {
-    let configured = state.audio_source().map(ToString::to_string);
+// ---------------------------------------------------------------------------
+// View model
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug)]
+// `Starting` and `Paused` are part of the documented status palette
+// (see _partial_audio_source_row.html). The synthetic `daemon_status`
+// only returns `Capturing` / `Down` today; the other two will be
+// emitted once the audio daemon's per-source signals are wired —
+// see TODO(O-13-followup) above.
+#[allow(dead_code)]
+enum Status {
+    Capturing,
+    Starting,
+    Paused,
+    Down,
+}
+
+impl Status {
+    const fn css(self) -> &'static str {
+        match self {
+            Self::Capturing => "live",
+            Self::Starting => "starting",
+            Self::Paused => "paused",
+            Self::Down => "down",
+        }
+    }
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Capturing => "Capturing",
+            Self::Starting => "Starting…",
+            Self::Paused => "Paused (schedule)",
+            Self::Down => "Down",
+        }
+    }
+}
+
+const fn kind_css(kind: SourceKind) -> &'static str {
+    match kind {
+        SourceKind::UsbAlsa => "usb",
+        SourceKind::PipeWire => "pipe",
+        SourceKind::Rtsp => "rtsp",
+    }
+}
+
+const fn kind_label(kind: SourceKind) -> &'static str {
+    match kind {
+        SourceKind::UsbAlsa => "USB · ALSA",
+        SourceKind::PipeWire => "PipeWire",
+        SourceKind::Rtsp => "RTSP",
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Handlers
+// ---------------------------------------------------------------------------
+
+async fn page(State(state): State<AppState>) -> Html<String> {
+    let sources = state
+        .with_db(AudioSourceStore::list)
+        .unwrap_or_else(|err| {
+            tracing::error!(error = %err, "audio_sources list failed");
+            Vec::new()
+        });
+    let active_daemon = state.audio_source().map(ToString::to_string);
     Html(admin_shell(
-        "Audio",
+        "Audio Sources",
         "audio",
-        &render_body(configured.as_deref()),
+        &render_body(&sources, active_daemon.as_deref()),
     ))
 }
 
-/// A horizontal level meter (0–100) with an SNR caption.
-fn level_meter(pct: u32, snr_db: f64, color: &str) -> String {
-    format!(
-        r#"<div style="display:flex;flex-direction:column;gap:3px;min-width:120px;">
-  <div style="height:7px;border-radius:4px;background:var(--surface-2);overflow:hidden;"><span style="display:block;height:100%;width:{pct}%;background:{color};"></span></div>
-  <span class="bnb-meta mono" style="font-size:10px;">{pct}% · {snr_db:.0} dB SNR</span>
-</div>"#
-    )
+#[derive(Deserialize)]
+struct CreateForm {
+    #[serde(default)]
+    scope: String,
+    kind: String,
+    device_id: String,
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    sample_rate: Option<u32>,
+    #[serde(default)]
+    rtsp_transport: Option<String>,
 }
 
-/// One source row in the 7-column grid.
-#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
-fn source_row(
-    icon: &str,
-    name: &str,
-    path: &str,
-    detail: &str,
-    meter: &str,
-    uptime: &str,
-    last: &str,
-    last_moss: bool,
-    count: i64,
-    expanded: bool,
-) -> String {
-    let last_col = if last_moss {
-        "var(--moss-ink)"
-    } else {
-        "var(--fg-3)"
-    };
-    let tune = if expanded { "▾ tune" } else { "▸ tune" };
-    format!(
-        r#"<div style="display:grid;grid-template-columns:34px 1.6fr 1.3fr 1fr 1.4fr auto auto;gap:14px;align-items:center;padding:14px 4px;border-top:0.5px solid var(--hairline);">
-  <span style="width:34px;height:34px;border-radius:8px;background:var(--surface-2);display:flex;align-items:center;justify-content:center;">{icon}</span>
-  <div style="min-width:0;overflow:hidden;"><div style="font-weight:500;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{name}</div><div class="bnb-meta mono" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{path}</div><div class="bnb-meta" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{detail}</div></div>
-  {meter}
-  <div><div class="bnb-meta">uptime</div><div class="mono" style="font-size:12.5px;">{uptime}</div></div>
-  <div><div class="bnb-meta">last detection</div><div class="mono" style="font-size:12px;color:{last_col};">{last}</div></div>
-  <div style="text-align:right;"><div class="display" style="font-size:20px;">{count}</div><div class="bnb-meta">24 h</div></div>
-  <button class="bnb-btn ghost" style="white-space:nowrap;">{tune}</button>
-</div>"#
-    )
-}
-
-#[allow(clippy::too_many_lines)]
-fn render_body(configured: Option<&str>) -> String {
-    let primary_path = configured.map_or_else(|| "hw:1,0".to_string(), escape_html);
-
-    let sections = [
-        ("Detection", "/admin/settings", false),
-        ("Audio", "/admin/audio", true),
-        ("Location", "/admin/settings", false),
-        ("Notifications", "/admin/notifications", false),
-        ("Species", "/admin/species", false),
-        ("System", "/admin/system", false),
-        ("Backups", "/admin/backups", false),
-    ];
-    let mut side = String::from(
-        r#"<aside class="bnb-card pad" style="position:sticky;top:16px;"><div class="bnb-eyebrow" style="margin-bottom:8px;">Settings</div>"#,
-    );
-    for (label, href, active) in sections {
-        let st = if active {
-            "background:var(--moss-soft);color:var(--moss-ink);font-weight:500;"
-        } else {
-            "color:var(--fg-2);"
-        };
-        let _ = write!(
-            side,
-            r#"<a href="{href}" style="display:block;padding:7px 10px;border-radius:8px;text-decoration:none;font-size:13px;margin-bottom:2px;{st}">{label}</a>"#
-        );
+async fn create(State(state): State<AppState>, Form(form): Form<CreateForm>) -> Response {
+    let _ = form.scope;
+    let device_id = form.device_id.trim().to_string();
+    if device_id.is_empty() {
+        return validation_response("Device id is required.");
     }
-    side.push_str("</aside>");
+    let kind: SourceKind = match form.kind.parse() {
+        Ok(k) => k,
+        Err(_) => return validation_response("Unknown source kind."),
+    };
 
-    let usb = source_row(
-        "🎤",
-        "UMC202HD · USB audio",
-        &primary_path,
-        "USB · 48 kHz · 24-bit · auto-detected",
-        &level_meter(64, 42.0, "var(--moss)"),
-        "14 d 02 h",
-        "8 s ago · Northern Cardinal",
-        true,
-        1284,
-        true,
+    let mut new = NewAudioSource::defaults(synth_id(kind), kind, device_id);
+    new.label = form.label.and_then(|s| {
+        let trimmed = s.trim().to_string();
+        if trimmed.is_empty() { None } else { Some(trimmed) }
+    });
+    if let Some(rate) = form.sample_rate {
+        // Constrained by the SQL CHECK; the form select limits it to safe values.
+        new.sample_rate = rate;
+    }
+    if let Some(transport) = form.rtsp_transport.as_deref() {
+        match transport.parse::<RtspTransport>() {
+            Ok(t) => new.rtsp_transport = t,
+            Err(_) => return validation_response("Unknown RTSP transport."),
+        }
+    }
+
+    let result = state.with_db(|conn| conn.insert(&new));
+    match result {
+        Ok(row) => {
+            let mut body = render_row(&row, daemon_status(&row, state.audio_source()));
+            body.push_str(
+                &Toast::success(format!(
+                    "Added {}.",
+                    row.label.as_deref().unwrap_or(&row.device_id)
+                ))
+                .with_action("/admin/system/restart", "Restart to apply")
+                .render_oob(),
+            );
+            Html(body).into_response()
+        }
+        Err(AudioSourceError::Conflict(_)) => validation_response(
+            "A source with that id already exists. Retry — a new id will be generated.",
+        ),
+        Err(AudioSourceError::Invalid(msg)) => validation_response(&msg),
+        Err(e) => {
+            tracing::error!(error = %e, "audio source insert failed");
+            internal_response("Could not add the source.")
+        }
+    }
+}
+
+async fn remove(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let result = state.with_db(|conn| conn.soft_delete(&id));
+    match result {
+        Ok(()) => toast::oob_only(
+            Toast::success("Source removed.")
+                .with_action("/admin/system/restart", "Restart to apply"),
+        )
+        .into_response(),
+        Err(AudioSourceError::NotFound(_)) => {
+            toast::oob_only(Toast::warn("Source already removed.")).into_response()
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "audio source soft-delete failed");
+            internal_response("Could not remove the source.")
+        }
+    }
+}
+
+async fn edit_form(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let result = state.with_db(|conn| conn.get(&id));
+    let row = match result {
+        Ok(Some(row)) => row,
+        Ok(None) => return not_found_row(&id),
+        Err(e) => {
+            tracing::error!(error = %e, "audio source get failed");
+            return internal_response("Could not load that source.");
+        }
+    };
+    Html(render_edit_form(&row)).into_response()
+}
+
+async fn update(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Form(form): Form<CreateForm>,
+) -> Response {
+    let mut patch = AudioSourcePatch::default();
+    let device_id = form.device_id.trim().to_string();
+    if !device_id.is_empty() {
+        patch.device_id = Some(device_id);
+    }
+    let label = form.label.map(|s| {
+        let trimmed = s.trim().to_string();
+        if trimmed.is_empty() { None } else { Some(trimmed) }
+    });
+    if let Some(l) = label {
+        patch.label = Some(l);
+    }
+    if let Some(rate) = form.sample_rate {
+        patch.sample_rate = Some(rate);
+    }
+    if let Some(transport) = form.rtsp_transport.as_deref() {
+        match transport.parse::<RtspTransport>() {
+            Ok(t) => patch.rtsp_transport = Some(t),
+            Err(_) => return validation_response("Unknown RTSP transport."),
+        }
+    }
+
+    let result = state.with_db(|conn| conn.update(&id, &patch));
+    match result {
+        Ok(row) => {
+            let mut body = render_row(&row, daemon_status(&row, state.audio_source()));
+            body.push_str(
+                &Toast::success("Source updated.")
+                    .with_action("/admin/system/restart", "Restart to apply")
+                    .render_oob(),
+            );
+            Html(body).into_response()
+        }
+        Err(AudioSourceError::NotFound(_)) => not_found_row(&id),
+        Err(AudioSourceError::Invalid(msg)) => validation_response(&msg),
+        Err(e) => {
+            tracing::error!(error = %e, "audio source update failed");
+            internal_response("Could not update the source.")
+        }
+    }
+}
+
+async fn probe(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let row = match state.with_db(|conn| conn.get(&id)) {
+        Ok(Some(row)) => row,
+        Ok(None) => return not_found_row(&id),
+        Err(e) => {
+            tracing::error!(error = %e, "audio source probe failed");
+            return internal_response("Could not probe that source.");
+        }
+    };
+    let status = daemon_status(&row, state.audio_source());
+    Html(render_status_pill(&row.id, status)).into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Daemon-side probe (synthetic until follow-up wires it for real)
+// ---------------------------------------------------------------------------
+
+/// Maps an `audio_sources` row to a status pill. Until the audio daemon
+/// exposes per-source liveness, this is synthetic: the first row whose
+/// `device_id` matches the daemon's single-string config reports
+/// `Capturing`; every other row reports `Down`. Rows with a quiet
+/// schedule that the daemon understands would report `Paused`; today the
+/// schedule is stored but not consulted, so this synthesizes
+/// `Capturing` whenever the daemon is reading the row.
+fn daemon_status(row: &AudioSource, daemon_source: Option<&str>) -> Status {
+    if row.disabled_at.is_some() {
+        return Status::Down;
+    }
+    if daemon_source.is_some_and(|s| s == row.device_id) {
+        Status::Capturing
+    } else {
+        Status::Down
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Render
+// ---------------------------------------------------------------------------
+
+fn render_body(sources: &[AudioSource], daemon_source: Option<&str>) -> String {
+    let (local, rtsp): (Vec<&AudioSource>, Vec<&AudioSource>) =
+        sources.iter().partition(|s| !matches!(s.kind, SourceKind::Rtsp));
+
+    let mut rows_local = String::new();
+    for s in &local {
+        rows_local.push_str(&render_row(s, daemon_status(s, daemon_source)));
+    }
+    let mut rows_rtsp = String::new();
+    for s in &rtsp {
+        rows_rtsp.push_str(&render_row(s, daemon_status(s, daemon_source)));
+    }
+
+    let count_local = format!(
+        "{} {}",
+        local.len(),
+        if local.len() == 1 { "mic" } else { "mics" }
     );
-    let rtsp = source_row(
-        "📡",
-        "Feeder cam (RTSP)",
-        "rtsp://192.168.1.42/audio",
-        "RTSP · 16 kHz · tcp · keepalive on",
-        &level_meter(38, 27.0, "var(--dawn)"),
-        "6 d 11 h · stable",
-        "2 m ago · Blue Jay",
-        false,
-        417,
-        false,
+    let count_rtsp = format!(
+        "{} {}",
+        rtsp.len(),
+        if rtsp.len() == 1 { "stream" } else { "streams" }
     );
 
-    // Expanded tune panel for the USB source.
-    let tune_panel = r#"<div class="bnb-card" style="margin:0 4px 8px;padding:18px;background:var(--surface-2);">
-  <div class="bnb-eyebrow" style="margin-bottom:14px;">Tuning · UMC202HD</div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px 28px;">
-    <div>
-      <label class="bnb-meta">Input gain <span class="mono" style="color:var(--fg);">+6 dB</span></label>
-      <div style="position:relative;height:26px;display:flex;align-items:center;">
-        <input type="range" min="-12" max="24" value="6" style="width:100%;accent-color:var(--moss);">
-      </div>
-      <div style="display:flex;justify-content:space-between;" class="bnb-meta mono"><span>−12</span><span>0</span><span>+24</span></div>
-    </div>
-    <div>
-      <label class="bnb-meta">Sample rate</label>
-      <select style="width:100%;padding:8px;border-radius:6px;border:0.5px solid var(--border-2);background:var(--surface);color:var(--fg);"><option>8 kHz</option><option>16 kHz</option><option>22.05 kHz</option><option>44.1 kHz</option><option selected>48 kHz</option></select>
-    </div>
-    <div>
-      <label class="bnb-meta">Channels</label>
-      <select style="width:100%;padding:8px;border-radius:6px;border:0.5px solid var(--border-2);background:var(--surface);color:var(--fg);"><option>Mono (mix)</option><option selected>Left</option><option>Right</option><option>Stereo</option></select>
-    </div>
-    <div>
-      <label class="bnb-meta">Bit depth</label>
-      <select style="width:100%;padding:8px;border-radius:6px;border:0.5px solid var(--border-2);background:var(--surface);color:var(--fg);"><option>16-bit PCM</option><option selected>24-bit PCM</option></select>
-    </div>
-  </div>
-  <div class="bnb-eyebrow" style="margin:18px 0 8px;">Pipeline</div>
-  <div style="display:flex;flex-wrap:wrap;gap:8px;">
-    <span class="bnb-pill moss">✓ High-pass filter</span>
-    <span class="bnb-pill moss">✓ DC offset removal</span>
-    <span class="bnb-pill">Auto-gain control</span>
-    <span class="bnb-pill moss">✓ RTSP keepalive</span>
-  </div>
-  <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px;">
-    <button class="bnb-btn ghost">Discard</button>
-    <button class="bnb-btn primary">Apply</button>
-  </div>
-</div>"#;
+    let empty_both = local.is_empty() && rtsp.is_empty();
 
-    let add_rtsp = r#"<div class="bnb-card pad" style="margin-top:16px;">
-  <div class="section-header"><div><div class="bnb-eyebrow">Add a source</div><h3>Network camera (RTSP)</h3></div></div>
-  <div style="display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:16px;margin-top:8px;">
-    <div>
-      <div class="bnb-meta" style="margin-bottom:5px;">1 · Stream URL</div>
-      <div style="display:flex;align-items:stretch;border:0.5px solid var(--border-2);border-radius:6px;overflow:hidden;">
-        <span class="mono" style="background:var(--surface-2);padding:8px 8px;color:var(--fg-3);font-size:12px;">rtsp://</span>
-        <input type="text" value="192.168.1.42/audio" style="border:0;flex:1;padding:8px;background:var(--surface);color:var(--fg);font:inherit;">
-      </div>
-      <div style="margin-top:8px;"><span class="bnb-pill moss">● reachable · 16 kHz mono AAC</span></div>
-    </div>
-    <div>
-      <div class="bnb-meta" style="margin-bottom:5px;">2 · Auth (optional)</div>
-      <input type="text" placeholder="username" style="width:100%;padding:8px;border-radius:6px;border:0.5px solid var(--border-2);background:var(--surface);color:var(--fg);margin-bottom:6px;">
-      <input type="password" placeholder="password" style="width:100%;padding:8px;border-radius:6px;border:0.5px solid var(--border-2);background:var(--surface);color:var(--fg);">
-    </div>
-    <div>
-      <div class="bnb-meta" style="margin-bottom:5px;">3 · Label</div>
-      <input type="text" placeholder="Feeder cam" style="width:100%;padding:8px;border-radius:6px;border:0.5px solid var(--border-2);background:var(--surface);color:var(--fg);">
-    </div>
-  </div>
-  <div style="display:flex;align-items:center;gap:12px;margin-top:14px;padding-top:14px;border-top:0.5px solid var(--hairline);">
-    <span class="waveform" aria-hidden="true" style="flex:1;height:34px;display:flex;align-items:center;gap:2px;">PREVIEW</span>
-    <button class="bnb-btn ghost">▶ Listen for 10 s</button>
-    <button class="bnb-btn primary">Add to sources</button>
-  </div>
-</div>"#;
+    PAGE_TPL
+        .replace("{{rows_local}}", &rows_local)
+        .replace("{{rows_rtsp}}", &rows_rtsp)
+        .replace("{{count_local}}", &escape_html(&count_local))
+        .replace("{{count_rtsp}}", &escape_html(&count_rtsp))
+        .replace(
+            "{{hidden_local}}",
+            if local.is_empty() && !empty_both { "hidden" } else { "" },
+        )
+        .replace(
+            "{{hidden_rtsp}}",
+            if rtsp.is_empty() && !empty_both { "hidden" } else { "" },
+        )
+        .replace("{{hidden_empty}}", if empty_both { "" } else { "hidden" })
+        .replace("{{pending_changes}}", "")
+}
 
-    let researcher = r#"<details class="bnb-card pad" style="margin-top:16px;">
-  <summary class="bnb-meta" style="cursor:pointer;">Researcher options <span class="bnb-pill">adv</span></summary>
-  <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:14px 24px;margin-top:14px;">
-    <div><label class="bnb-meta">RTSP transport</label><select style="width:100%;padding:7px;border-radius:6px;border:0.5px solid var(--border-2);background:var(--surface);color:var(--fg);"><option>auto</option><option selected>tcp</option><option>udp</option></select></div>
-    <div><label class="bnb-meta">Reconnect backoff</label><input type="text" value="2s → 32s exponential" style="width:100%;padding:7px;border-radius:6px;border:0.5px solid var(--border-2);background:var(--surface);color:var(--fg);"></div>
-    <div><label class="bnb-meta">Multi-source mode</label><select style="width:100%;padding:7px;border-radius:6px;border:0.5px solid var(--border-2);background:var(--surface);color:var(--fg);"><option selected>parallel</option><option>round-robin</option></select></div>
-    <div><label class="bnb-meta">Clock-drift correction</label><span class="bnb-pill moss" style="margin-top:6px;display:inline-flex;">✓ enabled</span></div>
-  </div>
-</details>"#;
+fn render_row(s: &AudioSource, status: Status) -> String {
+    let (label_class, label_text) = match s.label.as_deref() {
+        Some(l) if !l.is_empty() => ("", l.to_string()),
+        _ => ("untitled", "— no friendly label —".to_string()),
+    };
+    let label_raw = s.label.as_deref().unwrap_or("");
+    // `{{label}}` only appears in the template's documentation comment;
+    // substitute it for the raw value to keep the no-placeholder
+    // invariant honest after render.
+    ROW_TPL
+        .replace("{{id}}", &escape_html(&s.id))
+        .replace("{{kind_class}}", kind_css(s.kind))
+        .replace("{{kind_label}}", kind_label(s.kind))
+        .replace("{{label_class}}", label_class)
+        .replace("{{label_text}}", &escape_html(&label_text))
+        .replace("{{label}}", &escape_html(label_raw))
+        .replace("{{device_id}}", &escape_html(&s.device_id))
+        .replace("{{detail_line}}", &escape_html(&detail_for(s)))
+        .replace("{{status_class}}", status.css())
+        .replace("{{status_label}}", status.label())
+        .replace("{{meta_line}}", &escape_html(&meta_for(s)))
+}
 
-    let main = format!(
-        r#"<div>
-  <div class="bnb-card pad">
-    <div class="section-header"><div><div class="bnb-eyebrow">Inputs</div><h3>Microphone sources</h3></div><span class="bnb-pill">2 active</span></div>
-    {usb}
-    {tune_panel}
-    {rtsp}
-  </div>
-  {add_rtsp}
-  {researcher}
-</div>"#
-    );
-
-    let rail = r#"<aside style="display:flex;flex-direction:column;gap:16px;position:sticky;top:16px;">
-  <div class="bnb-card pad">
-    <div class="bnb-eyebrow">Combined input</div>
-    <div class="display" style="font-size:34px;margin-top:4px;">2 mics</div>
-    <div class="bnb-meta">1,701 detections in the last 24 h</div>
-    <div style="margin-top:12px;display:flex;flex-direction:column;gap:8px;">
-      <div><div class="bnb-meta">UMC202HD</div><div style="height:6px;border-radius:3px;background:var(--surface-2);"><span style="display:block;height:100%;width:64%;background:var(--moss);border-radius:3px;"></span></div></div>
-      <div><div class="bnb-meta">Feeder cam</div><div style="height:6px;border-radius:3px;background:var(--surface-2);"><span style="display:block;height:100%;width:38%;background:var(--dawn);border-radius:3px;"></span></div></div>
-    </div>
-  </div>
-  <div class="bnb-card pad">
-    <div class="bnb-eyebrow" style="margin-bottom:8px;">Common pitfalls</div>
-    <ul style="margin:0;padding-left:1.1rem;font-size:12.5px;color:var(--fg-2);display:flex;flex-direction:column;gap:8px;">
-      <li>Gain too high clips the loudest calls — aim for peaks near −6 dB.</li>
-      <li>USB hubs can drop audio under load; prefer a direct port on the Pi.</li>
-      <li>RTSP over UDP drops packets on busy Wi-Fi — use tcp for stability.</li>
-    </ul>
-  </div>
-</aside>"#;
-
+fn render_status_pill(id: &str, status: Status) -> String {
     format!(
-        r#"<div>
-  <div class="bnb-eyebrow">Audio · primary support surface</div>
-  <h1 class="display" style="font-size:34px;margin:6px 0 4px;">Microphone setup</h1>
-  <p class="bnb-meta" style="margin-bottom:20px;">Every input the station listens on — levels, uptime and last detection at a glance. Expand a source to tune it.</p>
-  <div style="display:grid;grid-template-columns:200px minmax(0,1fr) 280px;gap:24px;align-items:start;">
-    {side}
-    {main}
-    {rail}
-  </div>
-</div>"#
+        r#"<span class="bnb-pill {cls}"
+  hx-get="/admin/audio/sources/{id}/probe"
+  hx-trigger="every 8s"
+  hx-swap="outerHTML"
+  aria-live="polite">
+  <span class="bnb-dot {cls}" aria-hidden="true"></span>{label}</span>"#,
+        cls = status.css(),
+        label = status.label(),
+        id = escape_html(id),
     )
+}
+
+fn render_edit_form(row: &AudioSource) -> String {
+    let label = row.label.clone().unwrap_or_default();
+    format!(
+        r#"<li class="audio-source" data-source-id="{id}">
+  <form hx-patch="/admin/audio/sources/{id}"
+        hx-target="closest li"
+        hx-swap="outerHTML"
+        style="display:contents;">
+    <input type="hidden" name="kind" value="{kind}">
+    <div class="audio-source__kind">
+      <span class="audio-kind-badge {kind_class}">
+        <span class="audio-kind-glyph" aria-hidden="true"></span>
+        {kind_label}
+      </span>
+    </div>
+    <div class="audio-source__id" style="display:flex;flex-direction:column;gap:6px;">
+      <input name="label" type="text" placeholder="Friendly label" value="{label}"
+             style="font-size:14.5px;padding:6px 8px;border-radius:6px;border:0.5px solid var(--border-2);background:var(--bg-2);color:var(--fg);">
+      <input name="device_id" class="mono" type="text" value="{device_id}" required
+             style="font-size:12px;padding:6px 8px;border-radius:6px;border:0.5px solid var(--border-2);background:var(--bg-2);color:var(--fg);">
+    </div>
+    <div class="audio-source__right" style="display:inline-flex;gap:8px;">
+      <button type="submit" class="bnb-btn moss">Save</button>
+      <button type="button" class="bnb-btn ghost"
+              hx-get="/admin/audio/sources/{id}/probe"
+              hx-target="closest li"
+              hx-swap="none">Cancel</button>
+    </div>
+  </form>
+</li>"#,
+        id = escape_html(&row.id),
+        kind = row.kind.as_str(),
+        kind_class = kind_css(row.kind),
+        kind_label = kind_label(row.kind),
+        label = escape_html(&label),
+        device_id = escape_html(&row.device_id),
+    )
+}
+
+fn detail_for(s: &AudioSource) -> String {
+    let rate_khz = f64::from(s.sample_rate) / 1000.0;
+    let mut out = format!(
+        "{rate_khz:.1} kHz · {channels} · {bit}-bit",
+        channels = s.channels.as_str(),
+        bit = s.bit_depth,
+    );
+    if (s.gain_db - 0.0).abs() >= 0.05 {
+        let sign = if s.gain_db >= 0.0 { "+" } else { "" };
+        let _ = write!(out, " · gain {sign}{:.0} dB", s.gain_db);
+    }
+    if matches!(s.kind, SourceKind::Rtsp) {
+        let _ = write!(out, " · {} transport", s.rtsp_transport.as_str());
+    }
+    out
+}
+
+fn meta_for(s: &AudioSource) -> String {
+    s.disabled_at
+        .as_ref()
+        .map_or_else(|| format!("added {}", s.created_at), |ts| format!("disabled {ts}"))
+}
+
+fn synth_id(kind: SourceKind) -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let prefix = match kind {
+        SourceKind::UsbAlsa => "usb",
+        SourceKind::PipeWire => "pw",
+        SourceKind::Rtsp => "rtsp",
+    };
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    format!("src_{prefix}_{secs}")
+}
+
+// ---------------------------------------------------------------------------
+// Error rendering
+// ---------------------------------------------------------------------------
+
+fn validation_response(message: &str) -> Response {
+    (
+        StatusCode::UNPROCESSABLE_ENTITY,
+        toast::oob_only(Toast::warn(message)),
+    )
+        .into_response()
+}
+
+fn internal_response(message: &str) -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        toast::oob_only(Toast::error(message)),
+    )
+        .into_response()
+}
+
+fn not_found_row(id: &str) -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        toast::oob_only(Toast::warn(format!("Source {id} no longer exists."))),
+    )
+        .into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use birdnet_db::audio_sources::{Channels, PipelineFlags};
+    use tempfile::TempDir;
+
+    fn fixture() -> (TempDir, AppState) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("birds.db");
+        let _conn = birdnet_db::sqlite::open_or_create(&db_path).expect("open db");
+        let state = AppState::new(db_path).expect("state");
+        (dir, state)
+    }
+
+    fn insert_one(state: &AppState, id: &str, kind: SourceKind, device_id: &str) -> AudioSource {
+        let new = NewAudioSource::defaults(id, kind, device_id);
+        state
+            .with_db(|conn| conn.insert(&new))
+            .expect("insert succeeds")
+    }
+
+    #[test]
+    fn render_body_empty_shows_empty_state() {
+        let html = render_body(&[], None);
+        assert!(html.contains("No audio sources yet"));
+        // Both group cards are hidden, empty state is not.
+        assert!(html.contains("hidden"));
+    }
+
+    #[test]
+    fn render_body_partitions_by_kind() {
+        let (_d, state) = fixture();
+        insert_one(&state, "src_u", SourceKind::UsbAlsa, "hw:1,0");
+        insert_one(&state, "src_r", SourceKind::Rtsp, "rtsp://x/y");
+        let sources = state.with_db(AudioSourceStore::list).unwrap();
+        let html = render_body(&sources, None);
+        assert!(!html.contains("{{"));
+        assert!(html.contains("hw:1,0"));
+        assert!(html.contains("rtsp://x/y"));
+        // Both visible — neither group is hidden.
+        // Empty state IS hidden though.
+        assert!(html.contains(r#"<section class="bnb-card pad" hidden>"#));
+    }
+
+    #[test]
+    fn render_row_substitutes_all_placeholders() {
+        let source = AudioSource {
+            id: "src_test_1".to_string(),
+            kind: SourceKind::Rtsp,
+            device_id: "rtsp://x".to_string(),
+            label: None,
+            sample_rate: 48_000,
+            channels: Channels::Mono,
+            bit_depth: 24,
+            gain_db: 0.0,
+            rtsp_transport: RtspTransport::Tcp,
+            schedule_quiet: None,
+            pipeline: PipelineFlags::default(),
+            disabled_at: None,
+            created_at: "2026-05-28 12:00:00".to_string(),
+            updated_at: "2026-05-28 12:00:00".to_string(),
+        };
+        let html = render_row(&source, Status::Down);
+        assert!(!html.contains("{{"), "unsubstituted placeholder in:\n{html}");
+        assert!(html.contains("rtsp://x"));
+        assert!(html.contains("Down"));
+        assert!(html.contains("untitled"));
+        assert!(html.contains("RTSP"));
+    }
+
+    #[test]
+    fn render_row_includes_label_when_set() {
+        let source = AudioSource {
+            id: "src_x".to_string(),
+            kind: SourceKind::UsbAlsa,
+            device_id: "hw:1,0".to_string(),
+            label: Some("Backyard feeder".to_string()),
+            sample_rate: 48_000,
+            channels: Channels::Mono,
+            bit_depth: 24,
+            gain_db: 12.0,
+            rtsp_transport: RtspTransport::Auto,
+            schedule_quiet: None,
+            pipeline: PipelineFlags::default(),
+            disabled_at: None,
+            created_at: "2026-05-28".to_string(),
+            updated_at: "2026-05-28".to_string(),
+        };
+        let html = render_row(&source, Status::Capturing);
+        assert!(html.contains("Backyard feeder"));
+        // The "untitled" class is only added in the no-label case. The
+        // template's doc comment mentions the word, so match on the
+        // attribute instead of a substring.
+        assert!(html.contains(r#"class="audio-source__label ""#));
+        assert!(!html.contains(r#"class="audio-source__label untitled""#));
+        assert!(html.contains("gain +12 dB"));
+        assert!(html.contains("Capturing"));
+    }
+
+    #[test]
+    fn render_status_pill_html_is_self_polling() {
+        let html = render_status_pill("src_a", Status::Capturing);
+        assert!(html.contains(r#"hx-get="/admin/audio/sources/src_a/probe""#));
+        assert!(html.contains(r#"hx-trigger="every 8s""#));
+        assert!(html.contains("Capturing"));
+    }
+
+    #[test]
+    fn render_edit_form_carries_existing_values() {
+        let source = AudioSource {
+            id: "src_x".to_string(),
+            kind: SourceKind::UsbAlsa,
+            device_id: "hw:1,0".to_string(),
+            label: Some("Backyard feeder".to_string()),
+            sample_rate: 48_000,
+            channels: Channels::Mono,
+            bit_depth: 24,
+            gain_db: 0.0,
+            rtsp_transport: RtspTransport::Auto,
+            schedule_quiet: None,
+            pipeline: PipelineFlags::default(),
+            disabled_at: None,
+            created_at: "2026-05-28".to_string(),
+            updated_at: "2026-05-28".to_string(),
+        };
+        let html = render_edit_form(&source);
+        assert!(html.contains(r#"value="Backyard feeder""#));
+        assert!(html.contains(r#"value="hw:1,0""#));
+        assert!(html.contains(r#"name="kind" value="usb-alsa""#));
+    }
+
+    #[test]
+    fn daemon_status_reflects_active_source() {
+        let s = AudioSource {
+            id: "src_a".to_string(),
+            kind: SourceKind::UsbAlsa,
+            device_id: "hw:1,0".to_string(),
+            label: None,
+            sample_rate: 48_000,
+            channels: Channels::Mono,
+            bit_depth: 24,
+            gain_db: 0.0,
+            rtsp_transport: RtspTransport::Auto,
+            schedule_quiet: None,
+            pipeline: PipelineFlags::default(),
+            disabled_at: None,
+            created_at: "2026-05-28".to_string(),
+            updated_at: "2026-05-28".to_string(),
+        };
+        assert!(matches!(daemon_status(&s, Some("hw:1,0")), Status::Capturing));
+        assert!(matches!(daemon_status(&s, Some("hw:2,0")), Status::Down));
+        assert!(matches!(daemon_status(&s, None), Status::Down));
+
+        let mut disabled = s;
+        disabled.disabled_at = Some("2026-05-28".to_string());
+        assert!(matches!(daemon_status(&disabled, Some("hw:1,0")), Status::Down));
+    }
+
+    #[test]
+    fn detail_for_rtsp_includes_transport() {
+        let s = AudioSource {
+            id: "x".to_string(),
+            kind: SourceKind::Rtsp,
+            device_id: "rtsp://x".to_string(),
+            label: None,
+            sample_rate: 48_000,
+            channels: Channels::Mono,
+            bit_depth: 24,
+            gain_db: 0.0,
+            rtsp_transport: RtspTransport::Tcp,
+            schedule_quiet: None,
+            pipeline: PipelineFlags::default(),
+            disabled_at: None,
+            created_at: "x".to_string(),
+            updated_at: "x".to_string(),
+        };
+        let detail = detail_for(&s);
+        assert!(detail.contains("48.0 kHz"));
+        assert!(detail.contains("tcp transport"));
+    }
+
+    #[test]
+    fn synth_id_uses_kind_prefix() {
+        let id = synth_id(SourceKind::Rtsp);
+        assert!(id.starts_with("src_rtsp_"));
+    }
 }

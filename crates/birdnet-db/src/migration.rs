@@ -338,6 +338,81 @@ pub const MIGRATIONS: &[Migration] = &[
         SELECT 'admin', '', 'admin', 'Administrator'
         WHERE NOT EXISTS (SELECT 1 FROM users WHERE username = 'admin');",
     },
+    Migration {
+        version: 15,
+        description: "Create audio_sources table for first-class CRUD (O-13)",
+        // O-13 replaces the audio.rs stub with a real entity model. The
+        // table carries one row per microphone or RTSP stream; the audio
+        // daemon continues to read `state.audio_source()` (a single
+        // string) until a follow-up PR teaches it to consume the table
+        // directly. See TODO(O-13-followup) in `routes::admin::audio`
+        // for the daemon-side change spelled out.
+        //
+        // The seed step pulls from `settings.audio_source` when present
+        // so anyone with a configured single-string source lands on a
+        // populated page after upgrade. In this fork the source is set
+        // via the `with_audio_source` builder from CLI/env rather than
+        // the settings table, so the SELECT is typically a no-op — the
+        // table just starts empty and the operator adds rows via /admin/audio.
+        //
+        // The package's source SQL is at
+        // docs/proposed_changes/O-13_audio_sources/migrations/008_audio_sources.sql.
+        // Renumbered to 15 (the chain has grown past 008 since the
+        // package was authored).
+        up_sql: "CREATE TABLE IF NOT EXISTS audio_sources (
+            id            TEXT PRIMARY KEY,
+            kind          TEXT NOT NULL
+                          CHECK (kind IN ('usb-alsa','pipewire','rtsp')),
+            device_id     TEXT NOT NULL,
+            label         TEXT,
+            sample_rate   INTEGER NOT NULL DEFAULT 48000
+                          CHECK (sample_rate IN (8000, 16000, 22050, 32000, 44100, 48000)),
+            channels      TEXT    NOT NULL DEFAULT 'mono'
+                          CHECK (channels IN ('mono','left','right','stereo')),
+            bit_depth     INTEGER NOT NULL DEFAULT 24
+                          CHECK (bit_depth IN (16, 24)),
+            gain_db       REAL    NOT NULL DEFAULT 0.0
+                          CHECK (gain_db BETWEEN -24.0 AND 36.0),
+            rtsp_transport TEXT   NOT NULL DEFAULT 'auto'
+                          CHECK (rtsp_transport IN ('auto','tcp','udp')),
+            schedule_quiet_start  TEXT,
+            schedule_quiet_end    TEXT,
+            pipeline_high_pass        INTEGER NOT NULL DEFAULT 1,
+            pipeline_dc_removal       INTEGER NOT NULL DEFAULT 1,
+            pipeline_agc              INTEGER NOT NULL DEFAULT 0,
+            pipeline_rtsp_keepalive   INTEGER NOT NULL DEFAULT 1,
+            disabled_at   TEXT,
+            created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS audio_sources_kind_active
+            ON audio_sources (kind, disabled_at);
+        -- `settings` is created lazily at runtime by `settings::ensure_settings_table`,
+        -- not by the migration chain, so a fresh DB does not yet have it when the
+        -- seed below runs. Materialise it here (idempotent) so the SELECT … FROM
+        -- settings parses against an empty table on a fresh install and against
+        -- the runtime-populated table on an upgrade.
+        CREATE TABLE IF NOT EXISTS settings (
+            key        TEXT PRIMARY KEY NOT NULL,
+            value      TEXT NOT NULL,
+            category   TEXT NOT NULL DEFAULT 'general',
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT INTO audio_sources (id, kind, device_id, label)
+        SELECT 'src_seed_1',
+               CASE
+                 WHEN value LIKE 'rtsp://%' THEN 'rtsp'
+                 WHEN value LIKE 'alsa_%'   THEN 'pipewire'
+                 ELSE 'usb-alsa'
+               END,
+               value,
+               NULL
+          FROM settings
+         WHERE key = 'audio_source'
+           AND value IS NOT NULL
+           AND value <> ''
+           AND NOT EXISTS (SELECT 1 FROM audio_sources LIMIT 1);",
+    },
 ];
 
 /// Ensure the `schema_version` tracking table exists.
