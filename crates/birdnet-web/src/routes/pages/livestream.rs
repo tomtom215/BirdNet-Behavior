@@ -1,5 +1,6 @@
 //! Livestream page: HTML page with an embedded audio player for live audio.
 
+use axum::http::HeaderMap;
 use axum::response::Html;
 use axum::{Router, routing::get};
 
@@ -11,8 +12,8 @@ pub fn router() -> Router<AppState> {
 }
 
 /// Render the livestream page with an embedded audio player.
-async fn livestream_page() -> Html<String> {
-    super::render_page("Live Audio", LIVESTREAM_HTML, "live")
+async fn livestream_page(headers: HeaderMap) -> Html<String> {
+    super::render_page_for_request("Live Audio", LIVESTREAM_HTML, "live", &headers)
 }
 
 /// Embedded HTML template for the livestream page.

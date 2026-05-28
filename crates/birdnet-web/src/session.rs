@@ -344,6 +344,28 @@ pub fn extract_token(cookie_header: &str) -> Option<&str> {
     None
 }
 
+/// HMAC-only check that a request appears to be coming from a signed-in
+/// session — used by the layout renderer to decide whether to show the
+/// "Sign out" link in the topnav.
+///
+/// Validates the cookie's MAC and expiry, but does **not** consult the
+/// `sessions` table. The cheap signal is enough for UX purposes; if a
+/// revoked-but-still-in-browser cookie surfaces a sign-out button, the
+/// `POST /logout` action will simply clear the dead cookie (idempotent
+/// no-op on the server side).
+///
+/// Pages that need stronger guarantees (e.g. the `/admin/*` middleware)
+/// continue to do the DB lookup themselves.
+#[must_use]
+pub fn looks_signed_in(headers: &axum::http::HeaderMap) -> bool {
+    headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(extract_token)
+        .and_then(validate_token)
+        .is_some()
+}
+
 #[cfg(test)]
 mod tests {
     // Tests use the per-process random secret (no env vars set), which is
@@ -351,6 +373,48 @@ mod tests {
     // in `routes::share` tests — `unsafe_code = "deny"` workspace-wide
     // forbids the `std::env::set_var` route.
     use super::*;
+
+    #[test]
+    fn looks_signed_in_true_for_fresh_token() {
+        use axum::http::{HeaderMap, HeaderValue, header};
+        let session_id = generate_session_id();
+        let token = issue_token(&session_id, 60_000);
+        let mut headers = HeaderMap::new();
+        let cookie_value = format!("other=42; {COOKIE_NAME}={token}; foo=bar");
+        headers.insert(header::COOKIE, HeaderValue::from_str(&cookie_value).unwrap());
+        assert!(looks_signed_in(&headers));
+    }
+
+    #[test]
+    fn looks_signed_in_false_without_cookie() {
+        use axum::http::HeaderMap;
+        let headers = HeaderMap::new();
+        assert!(!looks_signed_in(&headers));
+    }
+
+    #[test]
+    fn looks_signed_in_false_for_expired_token() {
+        use axum::http::{HeaderMap, HeaderValue, header};
+        let token = encode_token("sid", 0); // already expired
+        let mut headers = HeaderMap::new();
+        let cookie_value = format!("{COOKIE_NAME}={token}");
+        headers.insert(header::COOKIE, HeaderValue::from_str(&cookie_value).unwrap());
+        assert!(!looks_signed_in(&headers));
+    }
+
+    #[test]
+    fn looks_signed_in_false_for_tampered_mac() {
+        use axum::http::{HeaderMap, HeaderValue, header};
+        let session_id = generate_session_id();
+        let mut token = issue_token(&session_id, 60_000);
+        // Flip the last byte of the MAC — invalidates the signature.
+        token.pop();
+        token.push('a');
+        let mut headers = HeaderMap::new();
+        let cookie_value = format!("{COOKIE_NAME}={token}");
+        headers.insert(header::COOKIE, HeaderValue::from_str(&cookie_value).unwrap());
+        assert!(!looks_signed_in(&headers));
+    }
 
     #[test]
     fn round_trip_validates() {

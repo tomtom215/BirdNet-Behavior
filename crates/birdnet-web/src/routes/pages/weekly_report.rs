@@ -6,11 +6,12 @@
 use std::fmt::Write as _;
 
 use axum::extract::{Query, State};
+use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse};
 use axum::{Router, routing::get};
 use serde::Deserialize;
 
-use super::{days_to_date, escape_html, render_page};
+use super::{days_to_date, escape_html, render_page_for_request};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -27,13 +28,13 @@ pub struct WeekParams {
 }
 
 /// Render the full weekly report page (shell only; content loaded by HTMX).
-async fn weekly_page() -> Html<String> {
+async fn weekly_page(headers: HeaderMap) -> Html<String> {
     // O-20 help link wires the eyebrow to the Reports mdBook page.
     let body = WEEKLY_SHELL_HTML.replace(
         "{{help_link}}",
         &super::help::help_link(super::help::Topic::Reports),
     );
-    render_page("Weekly Report", &body, "weekly")
+    render_page_for_request("Weekly Report", &body, "weekly", &headers)
 }
 
 /// HTMX partial: the weekly report content for a given week.

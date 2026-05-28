@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use axum::extract::{Query, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::Html;
 use axum::{Router, routing::get};
 use serde::Deserialize;
@@ -31,16 +31,22 @@ pub fn router() -> Router<AppState> {
         .route("/pages/species-status", get(species_status_partial))
 }
 
-async fn species_page() -> Html<String> {
-    super::render_page("Species", SPECIES_PAGE_HTML, "species")
+async fn species_page(headers: HeaderMap) -> Html<String> {
+    super::render_page_for_request("Species", SPECIES_PAGE_HTML, "species", &headers)
 }
 
 async fn species_detail_page(
     State(state): State<AppState>,
     Query(query): Query<SpeciesQuery>,
+    headers: HeaderMap,
 ) -> Html<String> {
     let Some(name) = query.name else {
-        return super::render_page("Species", "<p>No species specified.</p>", "species");
+        return super::render_page_for_request(
+            "Species",
+            "<p>No species specified.</p>",
+            "species",
+            &headers,
+        );
     };
 
     let com_name = name.clone();
@@ -69,7 +75,7 @@ async fn species_detail_page(
         .replace("{{skel_circadian}}", &super::skeletons::hourly_bars(24))
         .replace("{{skel_trend}}", super::skeletons::trend_line())
         .replace("{{skel_detections}}", &super::skeletons::list_rows(5));
-    super::render_page(&name, &content, "species")
+    super::render_page_for_request(&name, &content, "species", &headers)
 }
 
 async fn species_summary_partial(

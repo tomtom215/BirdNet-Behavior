@@ -6,12 +6,13 @@
 use std::fmt::Write as _;
 
 use axum::extract::{Query, State};
+use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse};
 use axum::{Router, routing::get};
 use serde::Deserialize;
 
 use super::charts::render_hourly_chart;
-use super::{escape_html, render_page, today_date_string};
+use super::{escape_html, render_page_for_request, today_date_string};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -29,8 +30,8 @@ pub struct HistoryParams {
 }
 
 /// Full history page (shell with HTMX-loaded content).
-async fn history_page() -> Html<String> {
-    render_page("Detection History", HISTORY_SHELL_HTML, "history")
+async fn history_page(headers: HeaderMap) -> Html<String> {
+    render_page_for_request("Detection History", HISTORY_SHELL_HTML, "history", &headers)
 }
 
 /// HTMX partial: hourly detection chart + summary for a specific date.

@@ -13,7 +13,7 @@ use std::fmt::Write as _;
 
 use axum::Router;
 use axum::extract::{Query, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::Html;
 use axum::routing::get;
 use serde::Deserialize;
@@ -48,13 +48,13 @@ struct HeatmapQuery {
 // GET /heatmap — full page
 // ---------------------------------------------------------------------------
 
-async fn heatmap_page() -> Html<String> {
+async fn heatmap_page(headers: HeaderMap) -> Html<String> {
     // O-20 help link drops a methodology shortcut next to the top eyebrow.
     let body = HEATMAP_CONTENT.replace(
         "{{help_link}}",
         &super::help::help_link(super::help::Topic::Analytics),
     );
-    super::render_page("Activity Heatmap", &body, "heatmap")
+    super::render_page_for_request("Activity Heatmap", &body, "heatmap", &headers)
 }
 
 const HEATMAP_CONTENT: &str = r#"<div class="page-head">

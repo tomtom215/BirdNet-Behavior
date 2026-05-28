@@ -8,13 +8,13 @@
 use std::fmt::Write as _;
 
 use axum::extract::{Query, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::Html;
 use axum::{Router, routing::get};
 use serde::Deserialize;
 
 use super::atoms::{species_code, species_color};
-use super::{escape_html, render_page, simple_url_encode};
+use super::{escape_html, render_page_for_request, simple_url_encode};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -23,8 +23,8 @@ pub fn router() -> Router<AppState> {
         .route("/pages/gallery-grid", get(gallery_grid_partial))
 }
 
-async fn gallery_page() -> Html<String> {
-    render_page("Species Gallery", GALLERY_HTML, "species")
+async fn gallery_page(headers: HeaderMap) -> Html<String> {
+    render_page_for_request("Species Gallery", GALLERY_HTML, "species", &headers)
 }
 
 #[derive(Deserialize)]

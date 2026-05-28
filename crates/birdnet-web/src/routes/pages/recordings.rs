@@ -7,7 +7,7 @@
 use std::fmt::Write as _;
 
 use axum::extract::{Form, Query, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::IntoResponse;
 use axum::{Router, response::Html, routing::get};
 use serde::Deserialize;
@@ -36,13 +36,13 @@ pub fn router() -> Router<AppState> {
         )
 }
 
-async fn recordings_page() -> Html<String> {
+async fn recordings_page(headers: HeaderMap) -> Html<String> {
     // O-20 help link in the page-head eyebrow.
     let body = RECORDINGS_PAGE_HTML.replace(
         "{{help_link}}",
         &super::help::help_link(super::help::Topic::Recordings),
     );
-    super::render_page("Recordings", &body, "recordings")
+    super::render_page_for_request("Recordings", &body, "recordings", &headers)
 }
 
 /// HTMX partial: list of species with detection counts.

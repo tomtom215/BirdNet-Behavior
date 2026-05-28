@@ -16,14 +16,14 @@ use std::f64::consts::PI;
 use std::fmt::Write as _;
 
 use axum::extract::State;
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse};
 use axum::{Router, routing::get};
 
 use crate::state::AppState;
 
 use super::atoms::species_color;
-use super::{escape_html, render_page};
+use super::{escape_html, render_page_for_request};
 
 const PAGE_HTML: &str = include_str!("../../../templates/dawn_chorus.html");
 
@@ -34,7 +34,7 @@ pub fn router() -> Router<AppState> {
         .route("/pages/dawn-list", get(list_partial))
 }
 
-async fn page() -> Html<String> {
+async fn page(headers: HeaderMap) -> Html<String> {
     // Skeleton placeholders (O-16) shown until the htmx swap targets load.
     // O-23 moon badge — pure local computation, always safe to show.
     // O-20 help link wires the eyebrow to the mdBook page.
@@ -50,7 +50,7 @@ async fn page() -> Html<String> {
             "{{help_link}}",
             &super::help::help_link(super::help::Topic::DawnChorus),
         );
-    render_page("Dawn chorus", &body, "analytics")
+    render_page_for_request("Dawn chorus", &body, "analytics", &headers)
 }
 
 // ---------------------------------------------------------------------------

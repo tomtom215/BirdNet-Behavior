@@ -6,7 +6,7 @@
 use std::fmt::Write as _;
 
 use axum::extract::{Form, Query, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse};
 use axum::{Router, routing::get};
 use serde::Deserialize;
@@ -68,7 +68,7 @@ pub struct RelabelForm {
 }
 
 /// Render the full Today page.
-async fn today_page() -> Html<String> {
+async fn today_page(headers: HeaderMap) -> Html<String> {
     // Skeleton placeholders (O-16) shown until the htmx swap targets load.
     // O-20 help link is rendered next to the eyebrow on every analytical screen.
     let body = TODAY_PAGE_HTML
@@ -78,7 +78,7 @@ async fn today_page() -> Html<String> {
             "{{help_link}}",
             &super::help::help_link(super::help::Topic::Today),
         );
-    super::render_page("Today", &body, "today")
+    super::render_page_for_request("Today", &body, "today", &headers)
 }
 
 /// HTMX partial: today's detection count (for the header badge).

@@ -31,12 +31,13 @@
 
 use axum::Router;
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::response::Html;
 use axum::routing::get;
 
 use birdnet_db::audio_sources::{AudioSource, AudioSourceStore, SourceKind};
 
-use super::{escape_html, render_page};
+use super::{escape_html, render_page_for_request};
 use crate::state::AppState;
 
 const PAGE_HTML: &str = include_str!("../../../templates/listen.html");
@@ -45,7 +46,7 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/listen", get(page))
 }
 
-async fn page(State(state): State<AppState>) -> Html<String> {
+async fn page(State(state): State<AppState>, headers: HeaderMap) -> Html<String> {
     let sources = state
         .with_db(|conn| AudioSourceStore::list(conn).ok().unwrap_or_default())
         .into_iter()
@@ -65,7 +66,7 @@ async fn page(State(state): State<AppState>) -> Html<String> {
     // active_nav = "today" so the existing topnav highlight lands on
     // the closest concept — "listen" isn't a separate top-level nav
     // entry, the link sits inside the audio-sources admin row.
-    render_page("Listen now", &body, "today")
+    render_page_for_request("Listen now", &body, "today", &headers)
 }
 
 /// Render the `<option>` set for the source selector. The first option

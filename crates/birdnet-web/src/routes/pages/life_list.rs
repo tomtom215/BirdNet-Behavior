@@ -11,12 +11,12 @@
 use std::fmt::Write as _;
 
 use axum::extract::{Query, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::Html;
 use axum::{Router, routing::get};
 use serde::Deserialize;
 
-use super::{escape_html, render_page, simple_url_encode};
+use super::{escape_html, render_page_for_request, simple_url_encode};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -69,13 +69,13 @@ async fn life_accumulation_partial(
     )
 }
 
-async fn life_list_page() -> Html<String> {
+async fn life_list_page(headers: HeaderMap) -> Html<String> {
     // O-20 help link wires the page header to the species mdBook page.
     let body = LIFE_LIST_HTML.replace(
         "{{help_link}}",
         &super::help::help_link(super::help::Topic::Species),
     );
-    render_page("Life List", &body, "life-list")
+    render_page_for_request("Life List", &body, "life-list", &headers)
 }
 
 #[derive(Deserialize)]
