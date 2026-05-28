@@ -477,6 +477,15 @@ pub trait SessionStore {
     /// Returns [`AccountsError::NotFound`] if the session id is unknown.
     fn touch_session(&self, id: &str) -> Result<(), AccountsError>;
 
+    /// Look up an unexpired session by id. Used by the cookie middleware
+    /// on every request to bind the cookie to a session row.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AccountsError::NotFound`] if no row matches or the row
+    /// has expired (caller treats both as "must sign in again").
+    fn find_active_session(&self, id: &str) -> Result<Session, AccountsError>;
+
     /// Delete one session by id.
     ///
     /// # Errors
@@ -548,6 +557,18 @@ impl SessionStore for Connection {
             return Err(AccountsError::NotFound(format!("session id={id}")));
         }
         Ok(())
+    }
+
+    fn find_active_session(&self, id: &str) -> Result<Session, AccountsError> {
+        self.query_row(
+            "SELECT id, user_id, issued_at, last_seen, expires_at, user_agent, ip_hash
+             FROM sessions
+             WHERE id = ?1 AND expires_at > datetime('now')",
+            params![id],
+            row_to_session,
+        )
+        .optional()?
+        .ok_or_else(|| AccountsError::NotFound(format!("active session id={id}")))
     }
 
     fn revoke_session(&self, id: &str) -> Result<(), AccountsError> {

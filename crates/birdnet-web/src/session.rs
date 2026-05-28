@@ -69,7 +69,20 @@ pub const REMEMBER_ME_TTL_MS: u64 = 90 * 24 * 60 * 60 * 1000;
 const TRUNCATED_MAC_LEN: usize = 16;
 
 /// Cookie format version. Bump when the wire format changes incompatibly.
-const FORMAT_VERSION: &str = "v1";
+///
+/// * `v1` (legacy, shipped in #89): `v1.{expires_ms}.{mac}`. Stateless
+///   carrier — couldn't be revoked, didn't bind a session id.
+/// * `v2` (current, used after the auth wire flip): `v2.{session_id}.{expires_ms}.{mac}`
+///   where the MAC covers `{session_id}.{expires_ms}`. The middleware
+///   looks up `session_id` in the `sessions` table on every request, so
+///   revoking a row in the UI also invalidates the cookie. v1 cookies
+///   are rejected — operators re-sign-in on the first request after
+///   upgrade.
+const FORMAT_VERSION: &str = "v2";
+
+/// Length of a session id, in bytes of base32 output. 26 chars carries
+/// 128 bits of randomness, matching the O-15 DIFF.
+pub const SESSION_ID_LEN: usize = 26;
 
 /// Secret used to derive a fail-secure per-process secret when neither
 /// `BNB_SESSION_SECRET` nor `CADDY_PWD` is set. Treats sessions as
@@ -140,43 +153,126 @@ pub fn default_ttl_ms() -> u64 {
         .map_or(DEFAULT_TTL_MS, |days| u64::from(days) * 86_400_000)
 }
 
-/// Issue a new session cookie value valid for `ttl_ms` from now.
+/// Generate a fresh session id (26-char base32 of 128 random bits per
+/// the O-15 DIFF). Sources entropy from `password-hash::rand_core::OsRng`
+/// (the same CSPRNG argon2 uses for salts), already in the dep tree
+/// via the argon2 helpers added in commit 1 of this branch.
 #[must_use]
-pub fn issue_token(ttl_ms: u64) -> String {
+pub fn generate_session_id() -> String {
+    use password_hash::rand_core::{OsRng, RngCore};
+    // 16 bytes = 128 bits → exactly 26 base32 chars (no padding needed
+    // since 128/5 = 25.6 → 26 chars covers it).
+    let mut bytes = [0_u8; 16];
+    if let Err(e) = OsRng.try_fill_bytes(&mut bytes) {
+        // CSPRNG failure on Linux is essentially impossible (getrandom(2)
+        // and /dev/urandom both available), so this branch is a defensive
+        // belt — log loudly and fall back to a SplitMix64 over startup
+        // entropy so the binary doesn't hard-crash on exotic kernels.
+        tracing::warn!(
+            error = %e,
+            "OsRng failed for session id; using process-time fallback"
+        );
+        let seed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0xDEAD_BEEF_u64, |d| {
+                u64::from(d.subsec_nanos()) ^ d.as_secs().rotate_left(13)
+            })
+            ^ u64::from(std::process::id());
+        let mut x = seed;
+        for b in &mut bytes {
+            x = x
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            #[allow(clippy::cast_possible_truncation)]
+            {
+                *b = (x >> 56) as u8;
+            }
+        }
+    }
+    base32_lower(&bytes)
+}
+
+/// Lowercase RFC 4648 base32 (no padding), used only for session ids
+/// (where the alphabet bias / typo resistance trade-off matches the
+/// O-15 DIFF). Inputs are exactly 16 bytes so output is exactly 26 chars.
+fn base32_lower(bytes: &[u8]) -> String {
+    const ALPHA: &[u8] = b"abcdefghijklmnopqrstuvwxyz234567";
+    let mut out = String::with_capacity((bytes.len() * 8).div_ceil(5));
+    let mut buf: u32 = 0;
+    let mut bits: u32 = 0;
+    for b in bytes {
+        buf = (buf << 8) | u32::from(*b);
+        bits += 8;
+        while bits >= 5 {
+            bits -= 5;
+            let idx = ((buf >> bits) & 0x1F) as usize;
+            out.push(ALPHA[idx] as char);
+        }
+    }
+    if bits > 0 {
+        let idx = ((buf << (5 - bits)) & 0x1F) as usize;
+        out.push(ALPHA[idx] as char);
+    }
+    out
+}
+
+/// Issue a v2 session cookie binding `session_id` for `ttl_ms` from now.
+/// Pair with a row in the `sessions` table holding the same id.
+#[must_use]
+pub fn issue_token(session_id: &str, ttl_ms: u64) -> String {
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
     let expires_ms = now_ms.saturating_add(ttl_ms);
-    encode_token(expires_ms)
+    encode_token(session_id, expires_ms)
 }
 
-fn encode_token(expires_ms: u64) -> String {
+fn encode_token(session_id: &str, expires_ms: u64) -> String {
     let exp_str = expires_ms.to_string();
+    let payload = format!("{session_id}.{exp_str}");
     let mut mac =
         HmacSha256::new_from_slice(&secret()).expect("HMAC accepts any key length");
-    mac.update(exp_str.as_bytes());
+    mac.update(payload.as_bytes());
     let tag = mac.finalize().into_bytes();
     let mac_b64 = URL_SAFE_NO_PAD.encode(&tag[..TRUNCATED_MAC_LEN]);
-    format!("{FORMAT_VERSION}.{exp_str}.{mac_b64}")
+    format!("{FORMAT_VERSION}.{payload}.{mac_b64}")
 }
 
-/// Validate a cookie value. Returns the expiry (ms since epoch) when the
-/// MAC verifies and the expiry is in the future.
+/// Validated cookie payload. Returned by [`validate_token`] when the MAC
+/// verifies and the expiry is in the future.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidatedToken {
+    pub session_id: String,
+    pub expires_ms: u64,
+}
+
+/// Validate a cookie value. Returns the `(session_id, expires_ms)` pair
+/// when the version, MAC, and expiry all check out.
+///
+/// v1 cookies (the legacy format shipped in #89) are rejected — they
+/// don't carry a session id, so the middleware cannot bind them to a
+/// session row. Operators re-sign-in on first request after upgrade.
 ///
 /// # Panics
 ///
 /// Panics if the underlying HMAC implementation rejects a key of arbitrary
 /// length — see [`secret`].
 #[must_use]
-pub fn validate_token(value: &str) -> Option<u64> {
-    let mut parts = value.split('.');
+pub fn validate_token(value: &str) -> Option<ValidatedToken> {
+    // v2 wire: v2.{session_id}.{expires_ms}.{mac}
+    let mut parts = value.splitn(4, '.');
     let version = parts.next()?;
     if version != FORMAT_VERSION {
         return None;
     }
+    let session_id = parts.next()?;
     let exp_str = parts.next()?;
     let mac_b64 = parts.next()?;
-    if parts.next().is_some() {
+    // No trailing data — splitn(4) caps at 4 components.
+    if mac_b64.contains('.') {
+        return None;
+    }
+    if session_id.is_empty() || session_id.len() > 64 {
         return None;
     }
     let expires_ms: u64 = exp_str.parse().ok()?;
@@ -193,11 +289,15 @@ pub fn validate_token(value: &str) -> Option<u64> {
         return None;
     }
 
+    let payload = format!("{session_id}.{exp_str}");
     let mut mac =
         HmacSha256::new_from_slice(&secret()).expect("HMAC accepts any key length");
-    mac.update(exp_str.as_bytes());
+    mac.update(payload.as_bytes());
     mac.verify_truncated_left(&provided).ok()?;
-    Some(expires_ms)
+    Some(ValidatedToken {
+        session_id: session_id.to_string(),
+        expires_ms,
+    })
 }
 
 /// Build a `Set-Cookie` header value for a freshly issued session.
@@ -256,68 +356,92 @@ mod tests {
 
     #[test]
     fn round_trip_validates() {
-        let token = issue_token(60_000);
-        let expiry = validate_token(&token).expect("fresh token validates");
-        assert!(expiry > 0);
+        let session_id = generate_session_id();
+        let token = issue_token(&session_id, 60_000);
+        let parsed = validate_token(&token).expect("fresh token validates");
+        assert_eq!(parsed.session_id, session_id);
+        assert!(parsed.expires_ms > 0);
     }
 
     #[test]
     fn expired_token_rejected() {
-        let token = encode_token(0); // already expired
+        let token = encode_token("sid", 0); // already expired
         assert!(validate_token(&token).is_none());
     }
 
     #[test]
-    fn tampered_version_rejected() {
-        let token = issue_token(60_000);
-        let bad = token.replacen("v1", "v2", 1);
+    fn legacy_v1_token_rejected() {
+        // The previous (pre-flip) wire format. Operators re-sign-in
+        // after upgrade because we can't bind a v1 cookie to a session row.
+        assert!(validate_token("v1.99999999999.AAAAAAAAAAAAAAAAAAAAAA").is_none());
+    }
+
+    #[test]
+    fn tampered_session_id_rejected() {
+        let token = issue_token("real-sid", 60_000);
+        let parts: Vec<&str> = token.split('.').collect();
+        let bad = format!("{}.{}.{}.{}", parts[0], "evil-sid", parts[2], parts[3]);
         assert!(validate_token(&bad).is_none());
     }
 
     #[test]
     fn tampered_mac_rejected() {
-        let token = issue_token(60_000);
+        let token = issue_token("sid", 60_000);
         let mut parts: Vec<&str> = token.split('.').collect();
-        parts[2] = "AAAAAAAAAAAAAAAAAAAAAA";
+        let len = parts.len();
+        parts[len - 1] = "AAAAAAAAAAAAAAAAAAAAAA";
         assert!(validate_token(&parts.join(".")).is_none());
     }
 
     #[test]
     fn tampered_expiry_rejected() {
-        let token = issue_token(60_000);
+        let token = issue_token("sid", 60_000);
         let parts: Vec<&str> = token.split('.').collect();
         // Bump the expiry — MAC no longer covers the modified expiry.
         let later = u64::MAX.to_string();
-        let bad = format!("{}.{}.{}", parts[0], later, parts[2]);
+        let bad = format!("{}.{}.{}.{}", parts[0], parts[1], later, parts[3]);
         assert!(validate_token(&bad).is_none());
     }
 
     #[test]
     fn malformed_tokens_rejected() {
         assert!(validate_token("").is_none());
-        assert!(validate_token("v1.123").is_none());
-        assert!(validate_token("v1.123.abc.extra").is_none());
-        assert!(validate_token("v1.notanumber.abc").is_none());
+        assert!(validate_token("v2.sid.123").is_none()); // missing mac
+        assert!(validate_token("v2.sid.notanumber.abc").is_none());
+        assert!(validate_token("v2..123.abc").is_none()); // empty sid
+        // Trailing components after the MAC are rejected (defends against
+        // any caller appending extra fields).
+        assert!(validate_token("v2.sid.123.abc.extra").is_none());
+    }
+
+    #[test]
+    fn generate_session_id_is_26_lowercase_base32_chars() {
+        let id = generate_session_id();
+        assert_eq!(id.len(), 26);
+        assert!(id.chars().all(|c| matches!(c, 'a'..='z' | '2'..='7')));
+        // Two consecutive ids must differ (collision probability ~2^-128).
+        let id2 = generate_session_id();
+        assert_ne!(id, id2);
     }
 
     #[test]
     fn extracts_cookie_from_header() {
-        let h = "foo=bar; bnb-session=v1.123.abc; other=42";
-        assert_eq!(extract_token(h), Some("v1.123.abc"));
+        let h = "foo=bar; bnb-session=v2.sid.123.abc; other=42";
+        assert_eq!(extract_token(h), Some("v2.sid.123.abc"));
         assert_eq!(extract_token("only=value"), None);
         assert_eq!(extract_token(""), None);
     }
 
     #[test]
     fn set_cookie_includes_secure_only_on_https() {
-        let v = build_set_cookie("v1.1.x", 60_000, Some("https://birds.example.com"));
+        let v = build_set_cookie("v2.sid.1.x", 60_000, Some("https://birds.example.com"));
         assert!(v.contains("Secure"));
         assert!(v.contains("Max-Age=60"));
 
-        let v = build_set_cookie("v1.1.x", 60_000, Some("http://birds.local"));
+        let v = build_set_cookie("v2.sid.1.x", 60_000, Some("http://birds.local"));
         assert!(!v.contains("Secure"));
 
-        let v = build_set_cookie("v1.1.x", 60_000, None);
+        let v = build_set_cookie("v2.sid.1.x", 60_000, None);
         assert!(!v.contains("Secure"));
     }
 

@@ -22,11 +22,13 @@
 
 use axum::Form;
 use axum::Router;
-use axum::extract::Request;
+use axum::extract::{Request, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use serde::Deserialize;
+
+use birdnet_db::accounts::{self, SessionStore, UserStore};
 
 use crate::routes::pages::escape_html;
 use crate::session;
@@ -57,49 +59,194 @@ async fn login_page(req: Request) -> Html<String> {
     }))
 }
 
-/// `POST /login` — verify credentials and issue a session cookie.
+/// `POST /login` — verify credentials and issue a v2 session cookie
+/// bound to a freshly created row in the `sessions` table.
 ///
-/// TODO(O-14-followup): once the session-cookie shape is signed off
-/// (see RFC in `docs/proposed_changes/O-14_login/DIFF.md`), wire the
-/// auth middleware to validate the cookie instead of `Authorization:
-/// Basic`. Until then this issues a cookie that the existing middleware
-/// will ignore — the credential check still passes through the Basic
-/// Auth path on the next `/admin/*` request.
-async fn login_submit(Form(form): Form<LoginForm>) -> Response {
-    let (configured_user, configured_pwd) =
-        match (std::env::var("CADDY_USER"), std::env::var("CADDY_PWD")) {
-            (Ok(u), Ok(p)) if !u.is_empty() && !p.is_empty() => (u, p),
-            _ => {
-                // No admin password configured — Basic Auth would let
-                // everyone through too, so the same defaults apply here.
-                let next = sanitize_next(form.next.as_deref());
-                return redirect_with_cookie(
-                    &session::issue_token(session::default_ttl_ms()),
-                    session::default_ttl_ms(),
-                    next,
-                );
-            }
-        };
+/// Credential verification falls back through three paths so the
+/// transition from #89's basic-auth scaffolding is graceful:
+///
+/// 1. DB lookup: if a user with `form.username` exists and its
+///    `pwd_argon2` verifies the submitted password, that's the user.
+/// 2. CADDY_USER/CADDY_PWD env path: legacy basic-auth credentials
+///    map onto the seed admin row. This is what makes the wire flip
+///    survive the case where the bootstrap hasn't run yet.
+/// 3. Anything else → `?error=1`.
+async fn login_submit(
+    State(state): State<AppState>,
+    Form(form): Form<LoginForm>,
+) -> Response {
+    let next = sanitize_next(form.next.as_deref()).to_string();
+    let configured_env = match (std::env::var("CADDY_USER"), std::env::var("CADDY_PWD")) {
+        (Ok(u), Ok(p)) if !u.is_empty() && !p.is_empty() => Some((u, p)),
+        _ => None,
+    };
 
-    if !credentials_match(&form.username, &configured_user, &form.password, &configured_pwd)
-    {
-        let next = sanitize_next(form.next.as_deref());
-        let query = format!("?error=1&next={}", urlencode_path(next));
-        return Redirect::to(&format!("/login{query}")).into_response();
-    }
+    // Authenticate. The order matters: DB first, env-fallback second,
+    // so an operator who has rotated their password in the UI doesn't
+    // hit the env-fallback path with stale credentials.
+    let auth_user_id = match authenticate(&state, &form.username, &form.password, configured_env.as_ref()) {
+        Some(id) => id,
+        None => {
+            // Wrong credentials, or no admin password configured at all.
+            // Bypass the gate when basic-auth would also have let the
+            // request through (no CADDY_USER + no DB admin password).
+            if configured_env.is_none()
+                && state
+                    .with_db(|conn| conn.find_user_by_name("admin"))
+                    .map(|u| accounts::is_legacy_password_hash(&u.pwd_argon2))
+                    .unwrap_or(true)
+            {
+                return open_bypass_redirect(&state, &next);
+            }
+            let query = format!("?error=1&next={}", urlencode_path(&next));
+            return Redirect::to(&format!("/login{query}")).into_response();
+        }
+    };
 
     let ttl_ms = if form.remember.as_deref() == Some("1") {
         session::REMEMBER_ME_TTL_MS
     } else {
         session::default_ttl_ms()
     };
-    let token = session::issue_token(ttl_ms);
-    let next = sanitize_next(form.next.as_deref());
-    redirect_with_cookie(&token, ttl_ms, next)
+
+    // Mint a fresh session id, persist a row, and emit the bound v2 cookie.
+    let session_id = session::generate_session_id();
+    let expires_at = expires_at_for_ttl(ttl_ms);
+    let create_result = state.with_db(|conn| {
+        conn.create_session(
+            &session_id,
+            auth_user_id,
+            &expires_at,
+            None,
+            None,
+        )
+    });
+    if let Err(e) = create_result {
+        tracing::error!(error = %e, "create_session failed during login");
+        let query = format!("?error=1&next={}", urlencode_path(&next));
+        return Redirect::to(&format!("/login{query}")).into_response();
+    }
+
+    let token = session::issue_token(&session_id, ttl_ms);
+    redirect_with_cookie(&token, ttl_ms, &next)
 }
 
-/// `POST /logout` — clear the cookie and redirect to the dashboard.
-async fn logout_submit() -> Response {
+/// Verify credentials against (DB row, hash) first, falling back to
+/// (CADDY_USER, CADDY_PWD) env. Returns the user id of the verified
+/// row (or the seed admin's id on env-fallback).
+fn authenticate(
+    state: &AppState,
+    username: &str,
+    password: &str,
+    configured_env: Option<&(String, String)>,
+) -> Option<i64> {
+    // Path 1: DB lookup.
+    if let Ok(user) = state.with_db(|conn| conn.find_user_by_name(username)) {
+        if user.disabled_at.is_some() {
+            return None;
+        }
+        let verifies = accounts::verify_password(&user.pwd_argon2, password)
+            .unwrap_or(false);
+        if verifies {
+            // Best-effort: rotate a legacy hash forward on successful
+            // sign-in so the next basic-auth-free path doesn't have to.
+            if accounts::is_legacy_password_hash(&user.pwd_argon2)
+                && let Ok(new_hash) = accounts::hash_password(password)
+            {
+                let _ = state.with_db(|conn| conn.set_password(user.id, &new_hash));
+            }
+            return Some(user.id);
+        }
+    }
+
+    // Path 2: CADDY_USER / CADDY_PWD env fallback. Maps onto the seed
+    // admin row's id when both env values are set and match the
+    // submitted credentials.
+    if let Some((u, p)) = configured_env
+        && constant_time_eq(username.as_bytes(), u.as_bytes())
+        && constant_time_eq(password.as_bytes(), p.as_bytes())
+    {
+        return state
+            .with_db(|conn| conn.find_user_by_name("admin"))
+            .map(|admin| admin.id)
+            .ok();
+    }
+
+    None
+}
+
+/// "Anyone can sign in" bypass — issued only when neither CADDY_PWD nor
+/// a DB-stored admin password is configured. Mirrors the basic-auth
+/// shape from #89: the surface is reachable on a freshly provisioned
+/// station before the operator has chosen a password.
+fn open_bypass_redirect(state: &AppState, next: &str) -> Response {
+    let session_id = session::generate_session_id();
+    let admin_id = match state.with_db(|conn| conn.find_user_by_name("admin")) {
+        Ok(u) => u.id,
+        Err(_) => return Redirect::to(next).into_response(),
+    };
+    let expires_at = expires_at_for_ttl(session::default_ttl_ms());
+    let _ = state.with_db(|conn| {
+        conn.create_session(&session_id, admin_id, &expires_at, None, None)
+    });
+    let token = session::issue_token(&session_id, session::default_ttl_ms());
+    redirect_with_cookie(&token, session::default_ttl_ms(), next)
+}
+
+/// Compute the `sessions.expires_at` value for a given ttl. Stored as a
+/// SQLite `datetime('now', '+N seconds')` text so comparisons line up
+/// with the `WHERE expires_at > datetime('now')` clause in
+/// `SessionStore::list_sessions`.
+fn expires_at_for_ttl(ttl_ms: u64) -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0_i64, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+    let secs = i64::try_from(ttl_ms / 1000).unwrap_or(i64::MAX);
+    let target = now_secs.saturating_add(secs);
+    format_sqlite_datetime(target)
+}
+
+/// Format epoch seconds as SQLite's `YYYY-MM-DD HH:MM:SS` UTC. Avoids
+/// pulling chrono in — same hand-roll as the weather poll's cutoff.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::many_single_char_names)]
+fn format_sqlite_datetime(secs: i64) -> String {
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    let z = days + 719_468;
+    let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = (y + i64::from(m <= 2)) as i32;
+    let hh = (rem / 3600) as u32;
+    let mm = ((rem % 3600) / 60) as u32;
+    let ss = (rem % 60) as u32;
+    format!("{year:04}-{m:02}-{d:02} {hh:02}:{mm:02}:{ss:02}")
+}
+
+/// `POST /logout` — revoke the bound session row (if any) and clear
+/// the cookie.
+async fn logout_submit(State(state): State<AppState>, req: Request) -> Response {
+    // Pull the cookie from the request and revoke the bound session
+    // before clearing the browser-side cookie. Failures are logged but
+    // never block the redirect — the cookie still gets cleared.
+    if let Some(token) = req
+        .headers()
+        .get(header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(session::extract_token)
+        && let Some(validated) = session::validate_token(token)
+    {
+        let _ = state.with_db(|conn| {
+            <_ as SessionStore>::revoke_session(conn, &validated.session_id)
+        });
+    }
+
     let mut resp = Redirect::to("/").into_response();
     let public_url = std::env::var("BNB_PUBLIC_URL").ok();
     let clear = session::build_clear_cookie(public_url.as_deref());
@@ -168,11 +315,6 @@ fn render_login(ctx: LoginContext<'_>) -> String {
         .replace("{{next_path}}", &escape_html(ctx.next))
         .replace("{{rate_limited}}", disabled)
         .replace("{{version}}", version)
-}
-
-fn credentials_match(user: &str, expected_user: &str, pwd: &str, expected_pwd: &str) -> bool {
-    constant_time_eq(user.as_bytes(), expected_user.as_bytes())
-        && constant_time_eq(pwd.as_bytes(), expected_pwd.as_bytes())
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
