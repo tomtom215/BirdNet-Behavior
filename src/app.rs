@@ -217,6 +217,16 @@ pub async fn run(
     }
     tracing::info!(addr = %addr, "starting web server");
     let metrics_for_watchdog = state.metrics();
+
+    // O-23 weather poll loop. Off by default; opt in with
+    // `BNB_WEATHER_ENABLED=1`. Spawns a background task that pulls
+    // hourly forecast rows from Open-Meteo (or a self-hosted instance
+    // via `BNB_WEATHER_BASE_URL`) every 30 minutes and feeds them to
+    // the overlay renderers in `birdnet-web::routes::pages::overlays`.
+    // The handle is kept in scope so a future `--no-weather` toggle can
+    // abort it; today the loop runs for the lifetime of the process.
+    let _weather_poll_handle = integrations::spawn_weather_poll(config.as_ref(), state.clone());
+
     let app = birdnet_web::server::build_router_with_auth(state, auth_config);
 
     // Publish Home Assistant MQTT auto-discovery if configured.
