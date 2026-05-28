@@ -5,31 +5,49 @@ use std::path::PathBuf;
 use crate::cli::Cli;
 
 /// Build app state with DuckDB analytics (feature-gated).
+///
+/// Analytics is on by default: when neither `--analytics-db` nor the
+/// `ANALYTICS_DB_PATH` config key is set, the DuckDB file is placed alongside
+/// the SQLite database with a `.duckdb` extension (e.g. `birds.db` →
+/// `birds.duckdb`). Operators who want analytics disabled can either pass an
+/// empty `--analytics-db ""` (which we honour as opt-out) or build with
+/// `--no-default-features`.
 #[cfg(feature = "analytics")]
 pub fn build_state_with_analytics(
     cli: &Cli,
     config: Option<&birdnet_core::config::Config>,
     server_config: &birdnet_web::server::ServerConfig,
 ) -> Result<birdnet_web::state::AppState, Box<dyn std::error::Error>> {
-    let analytics_path = cli
-        .analytics_db
-        .clone()
-        .or_else(|| config?.get("ANALYTICS_DB_PATH").map(PathBuf::from));
+    let cli_explicit = cli.analytics_db.clone();
+    let opt_out = cli_explicit
+        .as_ref()
+        .is_some_and(|p| p.as_os_str().is_empty());
+    if opt_out {
+        tracing::info!("DuckDB analytics disabled via empty --analytics-db");
+        return birdnet_web::state::AppState::new(server_config.db_path.clone())
+            .map_err(|e| format!("database error: {e}").into());
+    }
+    let analytics_path = cli_explicit
+        .filter(|p| !p.as_os_str().is_empty())
+        .or_else(|| config.and_then(|c| c.get("ANALYTICS_DB_PATH").map(PathBuf::from)))
+        .unwrap_or_else(|| default_analytics_path(&server_config.db_path));
 
-    analytics_path.map_or_else(
-        || {
-            birdnet_web::state::AppState::new(server_config.db_path.clone())
-                .map_err(|e| format!("database error: {e}").into())
-        },
-        |analytics_path| {
-            tracing::info!(path = %analytics_path.display(), "enabling DuckDB analytics");
-            birdnet_web::state::AppState::new_with_analytics(
-                server_config.db_path.clone(),
-                &analytics_path,
-            )
-            .map_err(|e| format!("database error: {e}").into())
-        },
+    tracing::info!(path = %analytics_path.display(), "enabling DuckDB analytics");
+    birdnet_web::state::AppState::new_with_analytics(
+        server_config.db_path.clone(),
+        &analytics_path,
     )
+    .map_err(|e| format!("database error: {e}").into())
+}
+
+/// Default analytics database path — same directory and stem as the operational
+/// SQLite database, with the `.duckdb` extension. Picked so installs that never
+/// explicitly enable analytics still get the full feature set out of the box.
+#[cfg(feature = "analytics")]
+fn default_analytics_path(db_path: &std::path::Path) -> PathBuf {
+    let mut p = db_path.to_path_buf();
+    p.set_extension("duckdb");
+    p
 }
 
 /// Initialize the species image cache.

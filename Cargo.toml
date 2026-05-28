@@ -161,6 +161,11 @@ categories.workspace = true
 description = "BirdNet-Behavior: Real-time acoustic bird classification with DuckDB behavioral analytics"
 
 [features]
+## On by default — every install gets the full behavioural-analytics experience
+## (activity sessions, retention, funnel, co-occurrence, next-species). Toggle
+## off with `--no-default-features` for slim dev builds; release binaries ship
+## with analytics compiled in regardless (see .github/workflows/release.yml).
+default = ["analytics"]
 ## Enable DuckDB-powered behavioral analytics (sessionize, retention, funnel, etc.).
 ## Requires ~7 min C++ compilation on first build due to bundled libduckdb.
 analytics = ["birdnet-behavioral/analytics", "birdnet-timeseries/analytics", "birdnet-web/analytics"]

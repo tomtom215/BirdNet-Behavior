@@ -22,6 +22,12 @@ use std::path::{Path, PathBuf};
 
 use crate::queries;
 
+// Optional compile-time embed of the `behavioral` extension binary; the
+// generated file declares `EMBEDDED_EXTENSION: Option<&[u8]>`. `Some(bytes)`
+// when the release pipeline (or a maintainer's `vendor/`) supplies the
+// extension, `None` otherwise — see `build.rs`.
+include!(concat!(env!("OUT_DIR"), "/embedded_extension.rs"));
+
 /// Errors from `DuckDB` operations.
 #[derive(Debug)]
 pub enum AnalyticsError {
@@ -107,7 +113,14 @@ impl AnalyticsDb {
     /// Returns an error if the database cannot be opened or the schema
     /// cannot be created.
     pub fn open(path: &Path) -> Result<Self, AnalyticsError> {
-        let conn = Connection::open(path)?;
+        // Open with `allow_unsigned_extensions=true` so the embedded-extension
+        // fallback in `load_extension()` can `LOAD '<path>'` from a temp file.
+        // DuckDB rejects changes to this setting once the connection is open,
+        // so it must be a connection config at open time.
+        let config = duckdb::Config::default()
+            .allow_unsigned_extensions()
+            .map_err(AnalyticsError::Database)?;
+        let conn = Connection::open_with_flags(path, config)?;
 
         // Bound DuckDB's buffer memory before any query runs, so a heavy
         // analytics query cannot OOM the process on a small Pi (DuckDB
@@ -152,16 +165,27 @@ impl AnalyticsDb {
 
     /// Load the `duckdb-behavioral` extension.
     ///
-    /// Tries loading from the local cache first (works offline), then falls
-    /// back to installing from the DuckDB community registry (requires network
-    /// on first run only). Non-fatal — the database can serve basic queries
-    /// without the extension.
+    /// Three-stage fallback so the station works fully out of the box:
+    ///   1. `LOAD behavioral` from DuckDB's local extension cache — offline,
+    ///      succeeds when a prior install (or a previous run) already cached
+    ///      the binary.
+    ///   2. `INSTALL behavioral FROM community; LOAD behavioral` — fetches
+    ///      from the community registry on first run when network is up.
+    ///   3. A build-time-embedded copy of the extension binary, staged into a
+    ///      temp file and loaded by path — the offline guarantee on a fresh
+    ///      install whose Pi cannot reach the registry. Only available when
+    ///      `build.rs` was given a binary (via `BIRDNET_BUNDLED_EXTENSION_FILE`
+    ///      or `crates/birdnet-behavioral/vendor/behavioral.duckdb_extension`).
+    ///
+    /// Non-fatal at the caller: basic DuckDB queries still work without the
+    /// extension; only the behavioural-specific functions (`sessionize`,
+    /// `retention`, `window_funnel`, `sequence_*`) require it.
     ///
     /// # Errors
     ///
-    /// Returns an error if the extension cannot be installed or loaded.
+    /// Returns an error only when all three stages fail.
     pub fn load_extension(&mut self) -> Result<(), AnalyticsError> {
-        // Try loading from local cache first (offline-safe).
+        // 1) Try the locally-cached LOAD (offline-safe).
         if self
             .conn
             .execute_batch(queries::LOAD_BEHAVIORAL_CACHED)
@@ -170,12 +194,54 @@ impl AnalyticsDb {
             self.extension_loaded = true;
             return Ok(());
         }
-
-        // Not cached — install from community registry (requires network).
-        self.conn
+        // 2) Try INSTALL FROM community (needs network on first run).
+        if self
+            .conn
             .execute_batch(queries::INSTALL_BEHAVIORAL)
-            .map_err(|e| AnalyticsError::ExtensionLoad(e.to_string()))?;
+            .is_ok()
+        {
+            self.extension_loaded = true;
+            return Ok(());
+        }
+        // 3) Final fallback: embedded binary from build.rs.
+        if let Some(bytes) = EMBEDDED_EXTENSION {
+            return self.load_embedded(bytes);
+        }
+        Err(AnalyticsError::ExtensionLoad(
+            "behavioral extension not loaded: LOAD from cache failed, \
+             INSTALL FROM community failed, and no embedded extension was bundled"
+                .to_string(),
+        ))
+    }
+
+    /// Stage embedded extension bytes to a temp file and `LOAD '<path>'`.
+    ///
+    /// The bytes themselves are the upstream community-signed build, but
+    /// `LOAD` from an ad-hoc path bypasses DuckDB's signature check by design;
+    /// `allow_unsigned_extensions=true` is set at open time (see `open`)
+    /// because DuckDB refuses to change it on an already-open connection.
+    fn load_embedded(&mut self, bytes: &[u8]) -> Result<(), AnalyticsError> {
+        let dir = std::env::temp_dir().join("birdnet-behavioral-ext");
+        std::fs::create_dir_all(&dir).map_err(|e| {
+            AnalyticsError::ExtensionLoad(format!(
+                "create temp dir for embedded extension: {e}"
+            ))
+        })?;
+        let path = dir.join("behavioral.duckdb_extension");
+        std::fs::write(&path, bytes).map_err(|e| {
+            AnalyticsError::ExtensionLoad(format!("write embedded extension: {e}"))
+        })?;
+        let escaped = path.display().to_string().replace('\'', "''");
+        let sql = format!("LOAD '{escaped}';");
+        self.conn
+            .execute_batch(&sql)
+            .map_err(|e| AnalyticsError::ExtensionLoad(format!("load embedded: {e}")))?;
         self.extension_loaded = true;
+        tracing::info!(
+            path = %path.display(),
+            bytes = bytes.len(),
+            "loaded behavioral extension from embedded bundle"
+        );
         Ok(())
     }
 
@@ -240,6 +306,27 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let db = AnalyticsDb::open(&dir.path().join("analytics.duckdb")).unwrap();
         (db, dir)
+    }
+
+    #[test]
+    fn embedded_extension_loads_when_bundled() {
+        // Only meaningful when the build embedded a binary (via
+        // `BIRDNET_BUNDLED_EXTENSION_FILE` or `vendor/`). Skips quietly
+        // otherwise so the test is safe to run on un-bundled dev builds.
+        let Some(bytes) = EMBEDDED_EXTENSION else {
+            eprintln!("skipped — build did not embed an extension binary");
+            return;
+        };
+        let (mut db, _tmp) = make_db();
+        // Call the embedded path directly so the test exercises stage + LOAD
+        // without depending on DuckDB's extension cache or network reachability.
+        db.load_embedded(bytes)
+            .expect("embedded extension should load via LOAD '<path>'");
+        assert!(db.extension_loaded());
+        assert!(
+            db.extension_version().is_some(),
+            "extension_version should report a version after the embedded load"
+        );
     }
 
     #[test]

@@ -130,7 +130,24 @@ RUN set -eu; \
 # `--verbose` is deliberate: it keeps rustc command lines in the CI log
 # so link-level failures can be diagnosed without a second build.
 COPY . .
+# Optionally fetch the matching `behavioral` DuckDB community extension and
+# embed it into the binary via build.rs, so the released station loads the
+# extension out of the box without needing network at first run. The DuckDB
+# version is the one libduckdb-sys bundles (kept in sync with the duckdb crate
+# pin in Cargo.toml). If the download fails — restricted CI / offline build —
+# the variable stays unset and the build.rs falls through to the runtime
+# LOAD / INSTALL FROM community path.
+ARG BEHAVIORAL_EXTENSION_DUCKDB_VERSION="v1.5.3"
+ARG BEHAVIORAL_EXTENSION_TARGET="linux_amd64"
 RUN set -eu; \
+    url="http://community-extensions.duckdb.org/${BEHAVIORAL_EXTENSION_DUCKDB_VERSION}/${BEHAVIORAL_EXTENSION_TARGET}/behavioral.duckdb_extension.gz"; \
+    if curl -fsSL --max-time 30 -o /tmp/behavioral.duckdb_extension.gz "$url"; then \
+        gunzip -f /tmp/behavioral.duckdb_extension.gz; \
+        echo "embedding behavioral extension from $url"; \
+        export BIRDNET_BUNDLED_EXTENSION_FILE=/tmp/behavioral.duckdb_extension; \
+    else \
+        echo "behavioral extension not fetched ($url); release will fall back to runtime INSTALL"; \
+    fi; \
     if [ -n "${BUILD_FEATURES}" ]; then \
         cargo build --release --verbose --bin birdnet-behavior --features "${BUILD_FEATURES}"; \
     else \
