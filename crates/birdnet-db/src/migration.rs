@@ -413,6 +413,29 @@ pub const MIGRATIONS: &[Migration] = &[
            AND value <> ''
            AND NOT EXISTS (SELECT 1 FROM audio_sources LIMIT 1);",
     },
+    Migration {
+        version: 16,
+        description: "Create weather table for signal-context overlays (O-23)",
+        // O-23 stores one row per 30-min slot of cached Open-Meteo data so
+        // the day-strip / dawn-chorus overlays can paint without ever
+        // network-fetching from a request handler. The poll job is
+        // off-by-default — `BNB_WEATHER_ENABLED=1` opts in.
+        //
+        // The original DIFF folder named this `010_weather.sql`; renumbered
+        // here to fit the actual chain position.
+        up_sql: "CREATE TABLE IF NOT EXISTS weather (
+            at            TEXT PRIMARY KEY,
+            temp_c        REAL,
+            precip_mm     REAL,
+            wind_kt       REAL,
+            wind_dir_deg  INTEGER,
+            pressure_hpa  REAL,
+            cloud_pct     INTEGER,
+            code          INTEGER,
+            fetched_at    TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS weather_at ON weather (at DESC);",
+    },
 ];
 
 /// Ensure the `schema_version` tracking table exists.

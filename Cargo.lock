@@ -525,6 +525,7 @@ dependencies = [
 name = "birdnet-integrations"
 version = "0.5.3"
 dependencies = [
+ "birdnet-db",
  "lettre",
  "reqwest 0.13.4",
  "serde",

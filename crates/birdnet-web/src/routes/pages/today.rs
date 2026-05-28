@@ -199,10 +199,35 @@ async fn today_partial(
 )]
 async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoResponse {
     let today = today_date_string();
+    let today_for_weather = today.clone();
+    let state_for_weather = state.clone();
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| birdnet_db::sqlite::todays_detections(conn, &today, None, 1000, 0))
     })
     .await;
+
+    // O-23 weather samples for today's overlay band. Reads from the
+    // `weather` table — empty when the Open-Meteo poll job hasn't
+    // populated it yet, in which case `overlays::weather_band` renders
+    // its quiet placeholder rather than failing.
+    let weather_samples = tokio::task::spawn_blocking(move || {
+        let from = format!("{today_for_weather}T00:00:00Z");
+        let to = format!("{today_for_weather}T23:59:59Z");
+        state_for_weather.with_db(|conn| {
+            use birdnet_db::weather::WeatherStore;
+            conn.range(&from, &to).unwrap_or_default()
+        })
+    })
+    .await
+    .unwrap_or_default();
+
+    // O-23 moon badge is always rendered — its computation is local
+    // and the operator deserves the signal even on a quiet day. This
+    // sits BEFORE the empty-state early return.
+    let now_secs_for_quiet = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0_i64, |x| i64::try_from(x.as_secs()).unwrap_or(i64::MAX));
+    let moon_badge_quiet = super::overlays::moon_badge(now_secs_for_quiet);
 
     let Ok(Ok(rows)) = result else {
         return (
@@ -216,8 +241,12 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
         return (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
-            r#"<p class="bnb-meta" style="text-align:center;padding:1rem;">No detections yet today.</p>"#
-                .to_string(),
+            format!(
+                r#"<div class="bnb-meta" style="display:flex;gap:18px;align-items:center;justify-content:center;padding:1rem;">
+  <span>No detections yet today.</span>
+  {moon_badge_quiet}
+</div>"#
+            ),
         );
     }
 
@@ -251,14 +280,49 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
     }
     let dawn: i64 = hourly[4..9].iter().sum();
 
+    // O-23 signal-context overlay: moon badge (no network, always shown)
+    // + an SVG weather band wired to the cached Open-Meteo rows. When the
+    // weather table is empty (poll job not enabled or first run), the
+    // band renders a quiet placeholder so the chrome doesn't shift.
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0_i64, |x| i64::try_from(x.as_secs()).unwrap_or(i64::MAX));
+    let moon_badge = super::overlays::moon_badge(now_secs);
+
+    let weather_band_html = {
+        let samples: Vec<super::overlays::WeatherSample> = weather_samples
+            .iter()
+            .filter_map(|row| {
+                row.at
+                    .get(11..13)
+                    .and_then(|hh| hh.parse::<u8>().ok())
+                    .map(|hour| super::overlays::WeatherSample {
+                        hour,
+                        temp_c: row.temp_c,
+                        precip_mm: row.precip_mm,
+                        wind_kt: row.wind_kt,
+                    })
+            })
+            .collect();
+        super::overlays::weather_band(&samples, 1380.0, 22.0)
+    };
+
     let caption = format!(
-        r#"<div class="bnb-meta" style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:10px;"><span class="mono">{peak_hour:02}:00 peak hour</span><span>{dawn} in the dawn chorus</span><span>{total} total today</span></div>"#
+        r#"<div class="bnb-meta" style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;margin-bottom:10px;"><span class="mono">{peak_hour:02}:00 peak hour</span><span>{dawn} in the dawn chorus</span><span>{total} total today</span>{moon_badge}</div>"#
     );
     let strip = super::viz::day_strip(&hourly, &dots, 6.0, 19.5, now_h);
+    let overlay_strip = format!(
+        r#"<div class="bnb-overlay-strip" aria-label="signal context"><span class="bnb-meta mono">weather</span><svg width="100%" height="22" viewBox="0 0 1380 22" preserveAspectRatio="none" role="presentation">{weather_band_html}</svg><span class="bnb-meta">{}</span></div>"#,
+        if weather_samples.is_empty() {
+            "no weather data"
+        } else {
+            "hourly"
+        }
+    );
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/html")],
-        format!("{caption}{strip}"),
+        format!("{caption}{strip}{overlay_strip}"),
     )
 }
 
