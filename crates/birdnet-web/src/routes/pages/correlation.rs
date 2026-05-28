@@ -48,7 +48,12 @@ struct CorrelationQuery {
 // ---------------------------------------------------------------------------
 
 async fn correlation_page(headers: HeaderMap) -> Html<String> {
-    super::render_page_for_request("Species Co-occurrence", CORRELATION_CONTENT, "analytics", &headers)
+    super::render_page_for_request(
+        "Species Co-occurrence",
+        CORRELATION_CONTENT,
+        "analytics",
+        &headers,
+    )
 }
 
 const CORRELATION_CONTENT: &str = r##"<div class="page-head">

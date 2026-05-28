@@ -90,10 +90,7 @@ pub struct ActionForm {
 /// Accepts an optional `filter` query parameter so that direct links like
 /// `/quarantine?filter=all` correctly pre-select the active filter and load
 /// the matching list via the initial HTMX trigger.
-async fn quarantine_page(
-    Query(params): Query<ListParams>,
-    headers: HeaderMap,
-) -> Html<String> {
+async fn quarantine_page(Query(params): Query<ListParams>, headers: HeaderMap) -> Html<String> {
     let filter = params.filter.as_deref().unwrap_or("pending");
     let content = build_page_html(filter);
     super::render_page_for_request("Quarantine Review", &content, "quarantine", &headers)

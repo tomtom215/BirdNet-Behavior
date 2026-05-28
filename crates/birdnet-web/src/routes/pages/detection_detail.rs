@@ -199,7 +199,12 @@ fn render_detail_page(
 </div>"#
     );
 
-    super::render_page_for_request(&format!("{com} · {date} {time}"), &content, "today", headers)
+    super::render_page_for_request(
+        &format!("{com} · {date} {time}"),
+        &content,
+        "today",
+        headers,
+    )
 }
 
 fn build_audio_section(det: &birdnet_db::sqlite::DetectionRow) -> String {

@@ -27,10 +27,7 @@ pub fn router() -> Router<AppState> {
     clippy::cast_sign_loss,
     clippy::cast_possible_truncation
 )]
-async fn year_in_review_page(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Html<String> {
+async fn year_in_review_page(State(state): State<AppState>, headers: HeaderMap) -> Html<String> {
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
             let total = birdnet_db::sqlite::detection_count(conn).unwrap_or(0);
