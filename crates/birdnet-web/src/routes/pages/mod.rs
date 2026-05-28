@@ -20,6 +20,7 @@
 pub mod atoms;
 pub mod audio_player;
 pub mod behavioral;
+pub(crate) mod changelog;
 pub mod charts;
 pub(crate) mod cmdk;
 pub(crate) mod confirm;
@@ -84,6 +85,9 @@ pub(crate) const CMDK_HTML: &str = include_str!("../../../templates/_partial_cmd
 /// Help-drawer dialog (O-20), injected into every full-page shell.
 pub(crate) const HELP_DRAWER_HTML: &str =
     include_str!("../../../templates/_partial_help_drawer.html");
+/// Post-upgrade banner mount (O-21), injected at the top of `<main>`.
+pub(crate) const UPDATE_BANNER_HTML: &str =
+    include_str!("../../../templates/_partial_update_banner.html");
 
 /// Build all page and partial routes.
 pub fn router() -> Router<AppState> {
@@ -113,6 +117,7 @@ pub fn router() -> Router<AppState> {
         .merge(dawn_chorus::router())
         .merge(cmdk::router())
         .merge(help::router())
+        .merge(changelog::router())
         .route(
             "/pages/today-phrase",
             get(today_phrase::today_phrase_partial),
@@ -169,7 +174,8 @@ pub(crate) fn render_page(title: &str, content: &str, active_nav: &str) -> Html<
         .replace("{{confirm_modal}}", CONFIRM_MODAL_HTML)
         .replace("{{toast_region}}", TOAST_REGION_HTML)
         .replace("{{cmdk_partial}}", CMDK_HTML)
-        .replace("{{help_drawer}}", HELP_DRAWER_HTML);
+        .replace("{{help_drawer}}", HELP_DRAWER_HTML)
+        .replace("{{update_banner}}", UPDATE_BANNER_HTML);
     Html(html)
 }
 
