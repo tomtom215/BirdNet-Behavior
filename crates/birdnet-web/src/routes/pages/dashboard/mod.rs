@@ -44,7 +44,13 @@ pub fn router() -> Router<AppState> {
 }
 
 async fn dashboard_page() -> Html<String> {
-    super::render_page("Dashboard", DASHBOARD_HTML, "dashboard")
+    // O-16 — feed_rows skeleton on first paint. The htmx response from
+    // `/pages/detections` swaps to either rendered rows or
+    // `empty_states::quiet_yard()` for the 0-row case, resolving the
+    // contradictory note in the DIFF: skeleton WHILE loading, quiet_yard
+    // ONCE we know the yard is quiet.
+    let content = DASHBOARD_HTML.replace("{{skel_detections}}", &super::skeletons::feed_rows(8));
+    super::render_page("Dashboard", &content, "dashboard")
 }
 
 /// Confidence class for badge coloring.
