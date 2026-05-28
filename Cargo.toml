@@ -170,6 +170,18 @@ default = ["analytics"]
 ## Requires ~7 min C++ compilation on first build due to bundled libduckdb.
 analytics = ["birdnet-behavioral/analytics", "birdnet-timeseries/analytics", "birdnet-web/analytics"]
 
+[build-dependencies]
+# Build-time dependency: renders `docs/book/**` into
+# `docs/book/_generated/html/` so the runtime `ServeDir` mounted at
+# `/help/*` by `birdnet-web::routes::pages::help::router` has content.
+# Hard-required per the maintainer's locked-in RFC answer for O-20
+# follow-up — the alternative (silent fallback to a missing PATH) was
+# rejected because docs-vs-code drift is the worse failure mode.
+#
+# Default features keep us off webp / curl-based image downloads (mdbook
+# does not need any of that for a static-HTML build of a docs-only book).
+mdbook = { version = "0.4", default-features = false }
+
 [dependencies]
 birdnet-core.workspace = true
 birdnet-db.workspace = true
