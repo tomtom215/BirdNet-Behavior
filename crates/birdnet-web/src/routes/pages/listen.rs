@@ -53,7 +53,12 @@ async fn page(State(state): State<AppState>, headers: HeaderMap) -> Html<String>
         .filter(|s| s.disabled_at.is_none())
         .collect::<Vec<_>>();
 
-    let has_default = state.audio_source().is_some();
+    // The "— default audio source —" option maps to /stream with no
+    // source_id; that path is DB-first and only falls back to the legacy
+    // single-string source. Probe whether that fallback is configured via
+    // livestream's resolver so this page no longer reads
+    // `state.audio_source()` directly (O-13).
+    let has_default = crate::routes::livestream::legacy_default_configured(&state);
     let options = render_source_options(&sources, has_default);
 
     // Trickle skeleton — reuse the feed_rows shape used on the dashboard.

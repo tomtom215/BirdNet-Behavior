@@ -313,6 +313,19 @@ fn resolve_default_source(
     state.audio_source().map(|s| (s.to_owned(), None))
 }
 
+/// Whether the legacy single-string `state.audio_source()` fallback is
+/// configured for this station.
+///
+/// This is the only signal `/stream` consults beyond the `audio_sources`
+/// table (see [`resolve_default_source`]). The listen-now page calls this
+/// to decide whether to offer its "default audio source" option on a
+/// station whose `audio_sources` table is still empty, keeping the
+/// legacy-fallback concept centralised in this module so O-13's eventual
+/// retirement of `state.audio_source()` touches one call site, not many.
+pub(crate) fn legacy_default_configured(state: &AppState) -> bool {
+    state.audio_source().is_some()
+}
+
 /// Pure helper: walk `sources` for an id-match that's still enabled.
 /// Factored out so the resolver logic is unit-testable without spinning
 /// up an `AppState`.
