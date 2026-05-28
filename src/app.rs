@@ -124,6 +124,13 @@ pub async fn run(
     // and validate it.
     let state = state.with_config_path(cli.config.clone());
 
+    // O-14 / O-15 wire-flip prep: rotate the seed admin row's password
+    // hash to a real argon2id digest of CADDY_PWD on first start (and
+    // refresh it whenever the env var changes vs the stored hash). The
+    // basic-auth surface stays functional throughout; this only makes
+    // the cookie-auth path's user lookup line up.
+    helpers::bootstrap_admin_password(&state);
+
     // Overlay the admin-UI settings (SQLite `settings` table) on top of the
     // file config so settings saved in the web UI actually take effect. Without
     // this the settings form is write-only: the daemon and capture subsystems

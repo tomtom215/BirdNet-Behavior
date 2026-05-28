@@ -15,6 +15,7 @@
 //! This module is a thin facade that re-exports the public surface so
 //! callers keep using `helpers::<fn>` unchanged.
 
+mod auth;
 mod db;
 mod settings_overlay;
 mod state;
@@ -23,6 +24,7 @@ mod system;
 #[cfg(test)]
 mod test_support;
 
+pub use auth::bootstrap_admin_password;
 pub use db::{db_path_from_config, run_backup, run_integrity_check};
 pub use settings_overlay::overlay_db_settings;
 pub use state::{

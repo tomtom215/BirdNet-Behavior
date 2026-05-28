@@ -101,6 +101,13 @@ hmac = "0.13"
 sha2 = "0.11"
 base64 = "0.22"
 
+# Password hashing — argon2id for the O-14 / O-15 cookie auth wire flip.
+# The basic-auth path stays compatible (it reads CADDY_PWD in plaintext)
+# until the wire flips; the seed admin row's hash is rotated by a one-shot
+# bootstrap on first start.
+argon2 = "0.5"
+password-hash = { version = "0.5", features = ["getrandom"] }
+
 # File watching
 notify = "8"
 

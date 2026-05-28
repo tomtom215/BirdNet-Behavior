@@ -81,6 +81,18 @@ pub(crate) fn admin_shell(title: &str, active: &str, body: &str) -> String {
         };
         let _ = write!(nav_html, "<a href=\"{href}\"{style}>{label}</a>");
     }
+    // Sign-out form — appears at the right end of the admin nav. The
+    // form posts to /logout which revokes the bound session row before
+    // clearing the cookie. Safe to always render because /admin/* is
+    // gated by the cookie middleware; if you're here, you're signed in
+    // (or in the no-password "open admin" bypass, where the action is
+    // a no-op).
+    let _ = write!(
+        nav_html,
+        r#"<form action="/logout" method="post" style="margin-left:auto;display:inline;">
+  <button type="submit" class="bnb-btn ghost" style="font-size:.875rem;padding:.25rem .75rem;">Sign out</button>
+</form>"#
+    );
     // Themed confirmation modal (O-17): admin pages render through this shell,
     // not `render_page`, so the modal is injected here too.
     let confirm_modal = crate::routes::pages::CONFIRM_MODAL_HTML;

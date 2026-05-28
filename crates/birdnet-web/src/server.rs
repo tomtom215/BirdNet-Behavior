@@ -63,42 +63,30 @@ pub fn build_router(state: AppState) -> Router {
     build_router_with_auth(state, None)
 }
 
-/// Build the axum application router with optional basic authentication.
+/// Build the axum application router with cookie-session authentication
+/// gating `/admin/*`.
 ///
 /// Applies a per-IP token-bucket rate limiter (30 req/s, burst 60) to
 /// protect the API from overload.  Static assets and WebSocket connections
 /// share the same limit bucket as API calls but are lightweight by nature.
+///
+/// The `_auth_config` argument is retained for source-compatibility with
+/// callers that still pass an `AuthConfig` built from `CADDY_USER`/
+/// `CADDY_PWD`; those values now feed the cookie middleware via the env
+/// (the bootstrap in `helpers::auth` hashes them into the seed admin
+/// row's `pwd_argon2`). Pass `None` for the open-bypass path.
 pub fn build_router_with_auth(
     state: AppState,
-    auth_config: Option<crate::auth::AuthConfig>,
+    _auth_config: Option<crate::auth::AuthConfig>,
 ) -> Router {
     // Rate limiter: 30 req/s sustained, 60-request burst per IP.
     let limiter = Arc::new(RateLimiter::new(RateLimitConfig::default()));
 
-    // Gate ONLY the /admin panel (settings, software update, system controls)
-    // behind basic auth; the rest of the dashboard stays viewable without a
-    // login so a station works on the LAN out of the box. When no password is
-    // configured the admin panel is left open too (the installer sets one by
-    // default, and the binary warns when bound non-loopback without auth).
-    //
-    // TODO(O-14-followup): once the session-cookie RFC questions in
-    // `docs/proposed_changes/O-14_login/DIFF.md` are answered, replace this
-    // `basic_auth_middleware` with a cookie middleware that reads
-    // `bnb-session` via `crate::session::extract_token` and
-    // `crate::session::validate_token`. On an invalid/missing cookie the
-    // middleware should 303 to `/login?next={original_path}` (matching the
-    // `/login` POST flow). The cookie path and `/login` POST handler are
-    // already wired through `crate::routes::auth_pages::router()`.
+    // Gate `/admin/*` behind the v2 cookie middleware. The middleware
+    // handles the "no admin password configured" bypass internally
+    // (matches the pre-flip basic-auth contract).
     let admin = routes::admin_routes();
-    let admin = if let Some(config) = auth_config {
-        let config = Arc::new(config);
-        admin.layer(axum::middleware::from_fn(move |req, next| {
-            let config = Arc::clone(&config);
-            async move { crate::auth::basic_auth_middleware(req, next, &config).await }
-        }))
-    } else {
-        admin
-    };
+    let admin = crate::auth_middleware::apply(admin, state.clone());
 
     let router = routes::public_routes().merge(admin).with_state(state);
 

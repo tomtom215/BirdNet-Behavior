@@ -25,10 +25,11 @@ use axum::routing::{delete, get, post};
 use serde::Deserialize;
 
 use birdnet_db::accounts::{
-    AccountsError, AuditEntry, AuditLog, Role, Session, SessionStore, User, UserStore,
+    self, AccountsError, AuditEntry, AuditLog, Role, Session, SessionStore, User, UserStore,
 };
 
 use super::admin_shell;
+use crate::auth_middleware::RequestUser;
 use crate::routes::pages::escape_html;
 use crate::routes::pages::toast::{self, Toast};
 use crate::state::AppState;
@@ -60,18 +61,23 @@ pub fn router() -> Router<AppState> {
 // GET /admin/accounts
 // ───────────────────────────────────────────────────────────────────────────
 
-async fn accounts_page(State(state): State<AppState>) -> Html<String> {
-    // TODO(O-15-followup): when the cookie middleware lands, pull the
-    // current user (and a `current_session_id`) out of the request
-    // extensions and use them for the `data-current` marker on the
-    // session row + the audit "you" highlight. For now the seed admin is
-    // the request-time user.
+async fn accounts_page(
+    State(state): State<AppState>,
+    request_user: RequestUser,
+) -> Html<String> {
+    let current_session_id = request_user.session_id.clone();
     let body = state.with_db(|conn| -> Result<String, AccountsError> {
-        let current_user = conn.find_user_by_name("admin")?;
+        let current_user = conn.find_user(request_user.user.id)?;
         let users = conn.list_users()?;
         let sessions = conn.list_sessions(current_user.id)?;
         let audit = conn.recent(AUDIT_PREVIEW_LIMIT)?;
-        Ok(render_body(&current_user, &users, &sessions, &audit))
+        Ok(render_body(
+            &current_user,
+            &users,
+            &sessions,
+            &audit,
+            &current_session_id,
+        ))
     });
     let body = match body {
         Ok(b) => b,
@@ -88,8 +94,9 @@ fn render_body(
     users: &[User],
     sessions: &[Session],
     audit: &[AuditEntry],
+    current_session_id: &str,
 ) -> String {
-    let session_rows = render_session_rows(sessions);
+    let session_rows = render_session_rows(sessions, current_session_id);
     let user_rows = render_user_rows(users);
     let audit_rows = render_audit_rows(audit, users);
     let display_name = current_user
@@ -104,7 +111,7 @@ fn render_body(
         .replace("{{current_user}}", &escape_html(&display_name))
 }
 
-fn render_session_rows(sessions: &[Session]) -> String {
+fn render_session_rows(sessions: &[Session], current_session_id: &str) -> String {
     if sessions.is_empty() {
         return String::from(
             r#"<li class="account-sessions__empty"><span class="bnb-meta">No active sessions yet. Sign in once to seed this list.</span></li>"#,
@@ -115,15 +122,19 @@ fn render_session_rows(sessions: &[Session]) -> String {
         let id_tail = s.id.chars().rev().take(4).collect::<String>();
         let id_tail: String = id_tail.chars().rev().collect();
         let agent = s.user_agent.as_deref().unwrap_or("Unknown device");
-        // TODO(O-15-followup): the `data-current` marker needs to compare
-        // `s.id` against the request-time session id once the cookie path
-        // is wired. For now no row gets the "This device" pill.
+        let is_current = s.id == current_session_id;
+        let current_marker = if is_current { "true" } else { "false" };
+        let current_pill = if is_current {
+            r#"<span class="session-pill current" title="The browser you're using right now">This device</span>"#
+        } else {
+            ""
+        };
         let _ = write!(
             out,
-            r##"<li data-current="false">
+            r##"<li data-current="{current_marker}">
   <span class="session-mark" aria-hidden="true"></span>
   <div>
-    <div class="session-label">{label}</div>
+    <div class="session-label">{label}{current_pill}</div>
     <div class="session-meta">last seen {last}</div>
   </div>
   <span class="session-id">#{id_tail}</span>
@@ -276,11 +287,16 @@ async fn create_user(
         .into_response();
     }
 
-    // TODO(O-15-followup): hash `form.password` with argon2id before
-    // storing once an argon2 crate lands in the workspace deps. The
-    // empty-hash seed row + CADDY_PWD env path stays compatible with
-    // single-admin deployments until then.
-    let pwd_argon2 = format!("PLAINTEXT-PLACEHOLDER:{}", form.password);
+    let pwd_argon2 = match accounts::hash_password(&form.password) {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::error!(error = %e, "hash_password failed in create_user");
+            return toast::oob_only(Toast::error(
+                "Could not hash the password. See server logs.",
+            ))
+            .into_response();
+        }
+    };
 
     let result = state.with_db(|conn| {
         conn.create_user(
@@ -368,8 +384,16 @@ async fn set_password(
         ))
         .into_response();
     }
-    // TODO(O-15-followup): replace with argon2id hashing once a crate lands.
-    let pwd_argon2 = format!("PLAINTEXT-PLACEHOLDER:{}", form.password);
+    let pwd_argon2 = match accounts::hash_password(&form.password) {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::error!(error = %e, "hash_password failed in set_password");
+            return toast::oob_only(Toast::error(
+                "Could not hash the password. See server logs.",
+            ))
+            .into_response();
+        }
+    };
     let result = state.with_db(|conn| conn.set_password(id, &pwd_argon2));
     match result {
         Ok(()) => toast::oob_only(Toast::success("Password rotated.")).into_response(),
@@ -389,6 +413,7 @@ async fn set_password(
 
 async fn revoke_session_handler(
     State(state): State<AppState>,
+    request_user: RequestUser,
     Path(id): Path<String>,
 ) -> Response {
     let result = state.with_db(|conn| conn.revoke_session(&id));
@@ -397,11 +422,11 @@ async fn revoke_session_handler(
         return toast::oob_only(Toast::error("Could not revoke that session."))
             .into_response();
     }
+    let current_session_id = request_user.session_id.clone();
     let body = state
         .with_db(|conn| -> Result<String, AccountsError> {
-            let admin = conn.find_user_by_name("admin")?;
-            let sessions = conn.list_sessions(admin.id)?;
-            Ok(render_session_rows(&sessions))
+            let sessions = conn.list_sessions(request_user.user.id)?;
+            Ok(render_session_rows(&sessions, &current_session_id))
         })
         .unwrap_or_else(|_| "<li class=\"account-sessions__empty\">—</li>".to_string());
     toast::with(Html(body), Toast::success("Session signed out.")).into_response()
@@ -411,15 +436,14 @@ async fn revoke_session_handler(
 // POST /admin/accounts/sessions/revoke-others
 // ───────────────────────────────────────────────────────────────────────────
 
-async fn revoke_others_handler(State(state): State<AppState>) -> Response {
-    // TODO(O-15-followup): pull the request-time session id from the
-    // cookie middleware once the auth wire is flipped. For now no
-    // "current" session exists, so the call effectively clears every
-    // outstanding session — which is also the right behaviour when an
-    // operator believes the password leaked.
+async fn revoke_others_handler(
+    State(state): State<AppState>,
+    request_user: RequestUser,
+) -> Response {
+    let current_session_id = request_user.session_id.clone();
+    let user_id = request_user.user.id;
     let result = state.with_db(|conn| -> Result<usize, AccountsError> {
-        let admin = conn.find_user_by_name("admin")?;
-        conn.revoke_others(admin.id, "")
+        conn.revoke_others(user_id, &current_session_id)
     });
     let n = match result {
         Ok(n) => n,
@@ -431,9 +455,8 @@ async fn revoke_others_handler(State(state): State<AppState>) -> Response {
     };
     let body = state
         .with_db(|conn| -> Result<String, AccountsError> {
-            let admin = conn.find_user_by_name("admin")?;
-            let sessions = conn.list_sessions(admin.id)?;
-            Ok(render_session_rows(&sessions))
+            let sessions = conn.list_sessions(user_id)?;
+            Ok(render_session_rows(&sessions, &current_session_id))
         })
         .unwrap_or_else(|_| "<li class=\"account-sessions__empty\">—</li>".to_string());
     let label = if n == 1 {
@@ -473,8 +496,31 @@ mod tests {
 
     #[test]
     fn render_session_rows_empty() {
-        let html = render_session_rows(&[]);
+        let html = render_session_rows(&[], "");
         assert!(html.contains("No active sessions"));
+    }
+
+    #[test]
+    fn render_session_rows_marks_current_device() {
+        let s = Session {
+            id: "sess-current".to_string(),
+            user_id: 1,
+            issued_at: "2026-05-28 10:00:00".to_string(),
+            last_seen: "2026-05-28 10:05:00".to_string(),
+            expires_at: "2099-01-01 00:00:00".to_string(),
+            user_agent: Some("Firefox 144".to_string()),
+            ip_hash: None,
+        };
+        let s_other = Session {
+            id: "sess-other".to_string(),
+            ..s.clone()
+        };
+        let html = render_session_rows(&[s, s_other], "sess-current");
+        // The matching row is marked data-current="true" and carries
+        // the "This device" pill; the other row stays neutral.
+        assert!(html.contains(r#"data-current="true""#));
+        assert!(html.contains(r#"data-current="false""#));
+        assert!(html.contains("This device"));
     }
 
     #[test]
@@ -519,7 +565,7 @@ mod tests {
             let users = conn.list_users().unwrap();
             let sessions = conn.list_sessions(admin.id).unwrap();
             let audit = conn.recent(AUDIT_PREVIEW_LIMIT).unwrap();
-            render_body(&admin, &users, &sessions, &audit)
+            render_body(&admin, &users, &sessions, &audit, "")
         });
         assert!(!body.contains("{{"));
         assert!(body.contains("Accounts &amp; sessions"));
