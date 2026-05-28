@@ -157,7 +157,9 @@ pub(super) fn apply_mel_filters(
         for frame in 0..n_frames {
             let mut sum = 0.0_f32;
             for bin in 0..n_fft_bins {
-                sum += filters[mel * n_fft_bins + bin] * power_spec[bin * n_frames + frame];
+                // Fused multiply-add (clippy::suboptimal_flops at 1.96+).
+                sum = filters[mel * n_fft_bins + bin]
+                    .mul_add(power_spec[bin * n_frames + frame], sum);
             }
             mel_spec[mel * n_frames + frame] = sum;
         }
