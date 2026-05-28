@@ -26,11 +26,15 @@ use axum::response::Html;
 use axum::{Router, routing::get};
 
 use birdnet_db::sqlite::{
-    QualitySummary, confidence_distribution, confidence_trend, detection_quality_by_hour,
-    low_confidence_species, quality_summary,
+    ModelVsReviewRow, QualitySummary, ReviewVerdictDay, confidence_distribution, confidence_trend,
+    detection_quality_by_hour, low_confidence_species, model_vs_review_by_species, quality_summary,
+    review_verdict_trend,
 };
 
+use super::admin_shell;
 use crate::routes::pages::escape_html;
+use crate::routes::pages::help::{Topic, help_link};
+use crate::routes::pages::skeletons;
 use crate::state::AppState;
 
 /// Mount data quality routes.
@@ -50,7 +54,7 @@ async fn quality_page(State(state): State<AppState>) -> Html<String> {
         .await
         .unwrap_or_else(|_| QualityData::empty());
 
-    Html(render_quality_page(&data))
+    Html(admin_shell("Data Quality", "quality", &render_quality_page(&data)))
 }
 
 async fn quality_summary_partial(State(state): State<AppState>) -> Html<String> {
@@ -77,6 +81,8 @@ struct QualityData {
     trend: Vec<(String, f64)>,
     by_hour: Vec<(u8, i64, f64)>,
     low_conf: Vec<(String, String, i64, f64)>,
+    review_trend: Vec<ReviewVerdictDay>,
+    model_vs_review: Vec<ModelVsReviewRow>,
 }
 
 impl QualityData {
@@ -87,6 +93,8 @@ impl QualityData {
             trend: Vec::new(),
             by_hour: Vec::new(),
             low_conf: Vec::new(),
+            review_trend: Vec::new(),
+            model_vs_review: Vec::new(),
         }
     }
 }
@@ -97,8 +105,9 @@ fn load_quality_data(state: &AppState) -> QualityData {
         conf_buckets: confidence_distribution(conn).unwrap_or([0; 6]),
         trend: confidence_trend(conn, 30).unwrap_or_default(),
         by_hour: detection_quality_by_hour(conn).unwrap_or_default(),
-        // Species with avg confidence < 60%, seen ≥ 3 times
         low_conf: low_confidence_species(conn, 0.60, 3).unwrap_or_default(),
+        review_trend: review_verdict_trend(conn, 30).unwrap_or_default(),
+        model_vs_review: model_vs_review_by_species(conn, 12).unwrap_or_default(),
     })
 }
 
@@ -113,122 +122,135 @@ fn render_quality_page(data: &QualityData) -> String {
     let trend_html = render_confidence_trend(&data.trend);
     let hour_html = render_hourly_quality(&data.by_hour);
     let low_conf_html = render_low_confidence_species(&data.low_conf);
+    let review_trend_html = render_review_trend(&data.review_trend);
+    let model_vs_review_html = render_model_vs_review(&data.model_vs_review);
+    let tuning_link = help_link(Topic::Tuning);
+    // Skeletons for the partials that load via hx-trigger="load" (resolves
+    // TODO(O-16-followup) for #quality-summary / #quality-trend).
+    let summary_skeleton = skeletons::stat_row(6);
+    let trend_skeleton = skeletons::hourly_bars(30);
 
     format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head><script src="/static/theme-guard.js"></script><link rel="stylesheet" href="/static/css/app.css">
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1.0">
-  <title>Data Quality — BirdNet-Behavior Admin</title>
-  <script src="/static/htmx.min.js"></script>
-  <style>
-    body {{ background:var(--bg); color:var(--fg); font-family:var(--font-ui); margin:0; }}
-    .container {{ max-width:960px; margin:0 auto; padding:2rem 1rem; }}
-    nav {{ margin-bottom:2rem; }}
-    nav a {{ color:var(--fg-3); text-decoration:none; margin-right:1.5rem; font-size:.9rem; }}
-    nav a:hover {{ color:var(--moss-ink); }}
-    h1 {{ font-size:1.5rem; font-weight:700; color:var(--fg); margin-bottom:.25rem; }}
-    .subtitle {{ color:var(--fg-4); font-size:.875rem; margin-bottom:2rem; }}
-    .card {{ background:var(--surface); border:1px solid var(--border); border-radius:.75rem; padding:1.5rem; margin-bottom:1.5rem; }}
-    .card h2 {{ font-size:1.05rem; color:var(--moss-ink); margin:0 0 1rem; font-weight:600; }}
-    .stat-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:1rem; }}
-    .stat-card {{ background:var(--bg); border:1px solid var(--surface); border-radius:.5rem; padding:1rem; text-align:center; }}
-    .stat-value {{ font-size:1.5rem; font-weight:700; margin-bottom:.25rem; }}
-    .stat-label {{ font-size:.75rem; color:var(--fg-4); text-transform:uppercase; letter-spacing:.05em; }}
-    .bar-chart {{ display:flex; align-items:flex-end; gap:.375rem; height:120px; padding:.5rem 0; }}
-    .bar-wrap {{ display:flex; flex-direction:column; align-items:center; flex:1; gap:.25rem; }}
-    .bar {{ border-radius:.25rem .25rem 0 0; min-height:2px; width:100%; transition:height .3s; }}
-    .bar-label {{ font-size:.7rem; color:var(--fg-4); white-space:nowrap; }}
-    .bar-val {{ font-size:.75rem; color:var(--fg-3); font-weight:600; }}
-    .trend-bars {{ display:flex; align-items:flex-end; gap:2px; height:80px; overflow-x:auto; padding:.25rem 0; }}
-    .trend-bar {{ min-width:8px; border-radius:.125rem .125rem 0 0; flex-shrink:0; }}
-    table {{ width:100%; border-collapse:collapse; font-size:.875rem; }}
-    th {{ text-align:left; color:var(--fg-4); font-size:.75rem; text-transform:uppercase; font-weight:600;
-           padding:.5rem .75rem; border-bottom:1px solid var(--border); }}
-    td {{ padding:.6rem .75rem; border-bottom:1px solid var(--surface); }}
-    tr:last-child td {{ border-bottom:none; }}
-    .hour-bars {{ display:grid; grid-template-columns:repeat(24, 1fr); gap:2px; align-items:end; height:80px; }}
-    .hour-bar {{ border-radius:.125rem .125rem 0 0; }}
-    .conf-meter {{ height:6px; border-radius:3px; background:var(--border); overflow:hidden; }}
-    .conf-fill {{ height:100%; border-radius:3px; }}
-    .badge {{ display:inline-block; padding:.15rem .5rem; border-radius:.25rem; font-size:.75rem; font-weight:600; }}
-    .badge-warn {{ background:var(--dawn-soft); color:var(--dawn); }}
-    .badge-ok   {{ background:var(--moss-soft); color:var(--moss); }}
-  </style>
-</head>
-<body>
-<div class="container">
-  <nav>
-    <a href="/admin/overview">Overview</a>
-    <a href="/admin/settings">Settings</a>
-    <a href="/admin/rules">Rules</a>
-    <a href="/admin/quality" style="color:var(--moss-ink);">Quality</a>
-    <a href="/admin/notifications">Notifications</a>
-    <a href="/admin/system">System</a>
-  </nav>
+        r#"<header class="page-head" style="align-items:flex-start;" data-screen-label="Data quality" data-om-validate>
+  <div>
+    <div class="bnb-eyebrow">Admin · data quality</div>
+    <h1 class="display" style="font-size:48px;line-height:1.05;letter-spacing:-0.02em;text-wrap:balance;">
+      Data quality
+    </h1>
+    <p class="bnb-meta" style="margin-top:6px;max-width:580px;">
+      Detection database health — confidence distributions, trend analysis,
+      and potential false positives.
+    </p>
+  </div>
+</header>
 
-  <h1>Data Quality</h1>
-  <p class="subtitle">
-    Detection database health metrics — confidence distributions, trend analysis,
-    and potential false-positive species identification.
+<section class="bnb-card pad">
+  <div class="section-header">
+    <div>
+      <div class="bnb-eyebrow">Summary</div>
+      <h3>At-a-glance statistics</h3>
+    </div>
+  </div>
+  <div id="quality-summary"
+       hx-get="/admin/quality/summary"
+       hx-trigger="load"
+       hx-swap="innerHTML">
+    {summary_skeleton}
+    <div hidden>{summary_html}</div>
+  </div>
+</section>
+
+<section class="bnb-card pad" style="margin-top:var(--pad-3);">
+  <div class="section-header">
+    <div>
+      <div class="bnb-eyebrow">Confidence distribution</div>
+      <h3>Six bucket histogram</h3>
+    </div>
+  </div>
+  <p class="bnb-meta" style="margin-bottom:12px;">
+    A healthy dataset skews toward higher buckets (≥70%).
   </p>
+  {dist_html}
+</section>
 
-  <div class="card">
-    <h2>Summary Statistics</h2>
-    <div id="quality-summary"
-         hx-get="/admin/quality/summary"
-         hx-trigger="load"
-         hx-swap="innerHTML">
-      {summary_html}
+<section class="bnb-card pad" style="margin-top:var(--pad-3);">
+  <div class="section-header">
+    <div>
+      <div class="bnb-eyebrow">30-day trend</div>
+      <h3>Daily average confidence</h3>
     </div>
   </div>
-
-  <div class="card">
-    <h2>Confidence Distribution</h2>
-    <p style="font-size:.8rem;color:var(--fg-4);margin-bottom:.75rem;">
-      Detection counts across six confidence buckets. A healthy dataset should
-      skew toward higher buckets (≥70%).
-    </p>
-    {dist_html}
+  <p class="bnb-meta" style="margin-bottom:12px;">
+    Sudden drops may indicate equipment issues or adverse acoustic conditions.
+  </p>
+  <div id="quality-trend"
+       hx-get="/admin/quality/trend"
+       hx-trigger="load"
+       hx-swap="innerHTML">
+    {trend_skeleton}
+    <div hidden>{trend_html}</div>
   </div>
+</section>
 
-  <div class="card">
-    <h2>30-Day Confidence Trend</h2>
-    <p style="font-size:.8rem;color:var(--fg-4);margin-bottom:.75rem;">
-      Daily average confidence. Sudden drops may indicate equipment issues or
-      adverse acoustic conditions.
-    </p>
-    <div id="quality-trend"
-         hx-get="/admin/quality/trend"
-         hx-trigger="load"
-         hx-swap="innerHTML">
-      {trend_html}
+<section class="bnb-card pad" style="margin-top:var(--pad-3);">
+  <div class="section-header">
+    <div>
+      <div class="bnb-eyebrow">Hourly profile</div>
+      <h3>When does activity peak?</h3>
     </div>
   </div>
+  <p class="bnb-meta" style="margin-bottom:12px;">
+    Detection counts (bars) and average confidence (colour intensity) by hour.
+    Dawn (04–08) and dusk (18–22) typically run the busiest.
+  </p>
+  {hour_html}
+</section>
 
-  <div class="card">
-    <h2>Hourly Quality Profile</h2>
-    <p style="font-size:.8rem;color:var(--fg-4);margin-bottom:.75rem;">
-      Detection counts (bars) and average confidence (colour intensity) by
-      hour of day. Dawn (04–08) and dusk (18–22) windows typically have
-      the most activity.
-    </p>
-    {hour_html}
+<section class="bnb-card pad" style="margin-top:var(--pad-3);">
+  <div class="section-header">
+    <div>
+      <div class="bnb-eyebrow">Review verdict trend</div>
+      <h3>Human disagreement over 30 days</h3>
+    </div>
   </div>
+  <p class="bnb-meta" style="margin-bottom:12px;">
+    Every reviewer verdict on a detection rolls up here. A rising red band
+    means the model is firing detections you keep rejecting.
+  </p>
+  {review_trend_html}
+</section>
 
-  <div class="card">
-    <h2>Low-Confidence Species (&lt;60% avg, ≥3 detections)</h2>
-    <p style="font-size:.8rem;color:var(--fg-4);margin-bottom:.75rem;">
-      Species with consistently low confidence scores are prime false-positive
-      candidates. Consider raising their per-species threshold in
-      <a href="/admin/species" style="color:var(--moss-ink);">Species settings</a>.
-    </p>
-    {low_conf_html}
+<section class="bnb-card pad" style="margin-top:var(--pad-3);">
+  <div class="section-header">
+    <div>
+      <div class="bnb-eyebrow">Model vs. human</div>
+      <h3>Where do they disagree most?</h3>
+    </div>
   </div>
-</div>
-</body>
-</html>"#
+  <p class="bnb-meta" style="margin-bottom:12px;">
+    Per-species comparison of the classifier's mean confidence (top bar) vs.
+    the share of reviewed calls that humans confirmed (bottom bar). Species
+    sorted by the gap, biggest first — these are the most likely
+    overconfident false positives.
+  </p>
+  {model_vs_review_html}
+</section>
+
+<section class="bnb-card pad" style="margin-top:var(--pad-3);">
+  <div class="section-header">
+    <div>
+      <div class="bnb-eyebrow">Low-confidence species</div>
+      <h3>Consistently uncertain calls</h3>
+    </div>
+    {tuning_link}
+  </div>
+  <p class="bnb-meta" style="margin-bottom:12px;">
+    Average confidence below 60% with at least 3 detections. Consider raising
+    the per-species threshold in
+    <a href="/admin/species" style="color:var(--moss-ink);">Species settings</a>.
+  </p>
+  {low_conf_html}
+</section>"#
     )
 }
 
@@ -474,6 +496,101 @@ fn render_low_confidence_species(low: &[(String, String, i64, f64)]) -> String {
     }
 
     html.push_str("</tbody></table>");
+    html
+}
+
+// ---------------------------------------------------------------------------
+// O-22 model-trust panels — review verdict trend + model-vs-human gap
+// ---------------------------------------------------------------------------
+
+fn render_review_trend(days: &[ReviewVerdictDay]) -> String {
+    if days.is_empty() {
+        return r#"<p class="bnb-meta">No detections in the last 30 days.</p>"#.to_string();
+    }
+    let max_total = days.iter().map(|d| d.total).max().unwrap_or(1).max(1);
+    let mut html = String::from(r#"<div class="bnb-verdict-trend">"#);
+    for d in days {
+        let label = format!(
+            "{} · {} total · {} confirmed · {} rejected · {} unreviewed",
+            d.day, d.total, d.confirmed, d.rejected, d.unreviewed
+        );
+        #[allow(clippy::cast_precision_loss)]
+        let scale = |n: i64| -> u32 {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            {
+                ((n as f64) / (max_total as f64) * 100.0).clamp(0.0, 100.0) as u32
+            }
+        };
+        let _ = write!(
+            html,
+            r#"<div class="col" title="{label}">
+  <span class="unreviewed" style="height:{u}%"></span>
+  <span class="confirmed"  style="height:{c}%" class-suffix="approved"></span>
+  <span class="approved"   style="height:{c}%"></span>
+  <span class="rejected"   style="height:{r}%"></span>
+</div>"#,
+            label = escape_html(&label),
+            u = scale(d.unreviewed),
+            c = scale(d.confirmed),
+            r = scale(d.rejected),
+        );
+    }
+    html.push_str("</div>");
+    html.push_str(
+        r#"<div class="bnb-verdict-legend">
+  <span><i class="approved"></i> Confirmed</span>
+  <span><i class="rejected"></i> Rejected</span>
+  <span><i class="unreviewed"></i> Unreviewed</span>
+</div>"#,
+    );
+    html
+}
+
+fn render_model_vs_review(rows: &[ModelVsReviewRow]) -> String {
+    if rows.is_empty() {
+        return r#"<p class="bnb-meta">Not enough reviewed detections yet. The panel needs at least 5 detections per species and 3 reviewer verdicts to compare model and human confidence.</p>"#.to_string();
+    }
+    let mut html = String::from(r#"<ul class="bnb-mvr" role="list" style="list-style:none;padding:0;margin:0;">"#);
+    for r in rows {
+        let model_pct = (r.model_avg * 100.0).clamp(0.0, 100.0);
+        let human_pct = (r.human_avg * 100.0).clamp(0.0, 100.0);
+        let gap = r.model_avg - r.human_avg;
+        let gap_class = if gap.abs() >= 0.15 { "" } else { " small" };
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let model_w = model_pct as u32;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let human_w = human_pct as u32;
+        let species_link = format!(
+            "/quarantine?species={}",
+            crate::routes::pages::simple_url_encode(&r.com_name)
+        );
+        let _ = write!(
+            html,
+            r#"<li class="bnb-mvr-row">
+  <div class="bnb-mvr-name">
+    <a href="{href}" style="color:inherit;text-decoration:none;">{com}</a>
+    <em>{sci} · {total} detections</em>
+  </div>
+  <div class="bnb-mvr-bars">
+    <div class="bnb-mvr-bar model"><span class="fill" style="width:{model_w}%"></span><span class="label">model {model_pct:.0}%</span></div>
+    <div class="bnb-mvr-bar human"><span class="fill" style="width:{human_w}%"></span><span class="label">human {human_pct:.0}%</span></div>
+  </div>
+  <div class="bnb-mvr-gap{gap_class}">Δ {gap_sign}{gap_abs:.0}%</div>
+</li>"#,
+            href = escape_html(&species_link),
+            com = escape_html(&r.com_name),
+            sci = escape_html(&r.sci_name),
+            total = r.total,
+            model_w = model_w,
+            human_w = human_w,
+            model_pct = model_pct,
+            human_pct = human_pct,
+            gap_class = gap_class,
+            gap_sign = if gap >= 0.0 { "+" } else { "−" },
+            gap_abs = (gap.abs() * 100.0),
+        );
+    }
+    html.push_str("</ul>");
     html
 }
 

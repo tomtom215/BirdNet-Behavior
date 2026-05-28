@@ -322,6 +322,145 @@ pub fn low_confidence_species(
     Ok(rows)
 }
 
+/// One day's reviewer-verdict breakdown for the quality dashboard's
+/// model-trust panel (O-22). Counts are the number of detections that
+/// each day yielded, with reviewer activity layered on top:
+///
+/// - `total`         — every detection that day
+/// - `confirmed`     — verdict = 'confirmed'
+/// - `rejected`      — verdict = 'rejected'
+/// - `unreviewed`    — still awaiting a verdict
+///
+/// Reviewers in this fork can confirm or reject; the package's
+/// `relabeled` bucket has no equivalent (see `ReviewStatus` in
+/// `queries::detection_reviews`).
+#[derive(Debug, Clone)]
+pub struct ReviewVerdictDay {
+    pub day: String,
+    pub total: i64,
+    pub confirmed: i64,
+    pub rejected: i64,
+    pub unreviewed: i64,
+}
+
+/// Trailing 30 days of reviewer-verdict counts.
+///
+/// O-22's "Review verdict trend" panel grouped-stack of daily bars.
+/// Order: ascending date.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn review_verdict_trend(
+    conn: &Connection,
+    days: u32,
+) -> Result<Vec<ReviewVerdictDay>, DbError> {
+    let mut stmt = conn.prepare(
+        "WITH per_day AS (
+             SELECT d.Date AS day,
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN r.status = 'confirmed' THEN 1 END) AS confirmed,
+                    SUM(CASE WHEN r.status = 'rejected'  THEN 1 END) AS rejected,
+                    SUM(CASE WHEN r.status IS NULL       THEN 1 END) AS unreviewed
+               FROM detections d
+          LEFT JOIN detection_reviews r
+                 ON r.date = d.Date AND r.time = d.Time AND r.sci_name = d.Sci_Name
+              WHERE d.Date >= DATE('now', '-' || ?1 || ' days')
+              GROUP BY d.Date
+         )
+         SELECT day,
+                total,
+                COALESCE(confirmed, 0),
+                COALESCE(rejected, 0),
+                COALESCE(unreviewed, 0)
+           FROM per_day
+          ORDER BY day ASC",
+    )?;
+    let rows = stmt
+        .query_map(params![days], |row| {
+            Ok(ReviewVerdictDay {
+                day: row.get(0)?,
+                total: row.get(1)?,
+                confirmed: row.get(2)?,
+                rejected: row.get(3)?,
+                unreviewed: row.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// One species' model-vs-human confidence comparison for O-22.
+///
+/// `model_avg` is the mean detection confidence the classifier reported.
+/// `human_avg` is the share of *reviewed* detections that humans
+/// confirmed — `confirmed / (confirmed + rejected)`. The gap
+/// `model_avg − human_avg` flags species the model trusts more than the
+/// operator does (the top of the list in the rendered panel).
+#[derive(Debug, Clone)]
+pub struct ModelVsReviewRow {
+    pub com_name: String,
+    pub sci_name: String,
+    pub total: i64,
+    pub model_avg: f64,
+    pub human_avg: f64,
+}
+
+/// Per-species model-vs-review average for species with at least 5
+/// detections and at least 3 review verdicts. Ordered by widest
+/// `model_avg − human_avg` gap first, capped at `limit` rows.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn model_vs_review_by_species(
+    conn: &Connection,
+    limit: u32,
+) -> Result<Vec<ModelVsReviewRow>, DbError> {
+    let mut stmt = conn.prepare(
+        "WITH per_species AS (
+             SELECT d.Com_Name AS com,
+                    d.Sci_Name AS sci,
+                    COUNT(*)                                         AS total,
+                    AVG(d.Confidence)                                AS model_avg,
+                    SUM(CASE WHEN r.status = 'confirmed' THEN 1 END) AS confirmed,
+                    SUM(CASE WHEN r.status = 'rejected'  THEN 1 END) AS rejected
+               FROM detections d
+          LEFT JOIN detection_reviews r
+                 ON r.date = d.Date AND r.time = d.Time AND r.sci_name = d.Sci_Name
+              GROUP BY d.Com_Name, d.Sci_Name
+             HAVING COUNT(*) >= 5
+                AND SUM(CASE WHEN r.status IS NOT NULL THEN 1 END) >= 3
+         )
+         SELECT com,
+                sci,
+                total,
+                model_avg,
+                CAST(COALESCE(confirmed, 0) AS REAL)
+                  / NULLIF(COALESCE(confirmed, 0) + COALESCE(rejected, 0), 0) AS human_avg
+           FROM per_species
+          ORDER BY (model_avg - COALESCE(
+                       CAST(COALESCE(confirmed, 0) AS REAL)
+                         / NULLIF(COALESCE(confirmed, 0) + COALESCE(rejected, 0), 0),
+                       0.0
+                   )) DESC
+          LIMIT ?1",
+    )?;
+    let rows = stmt
+        .query_map(params![limit], |row| {
+            let human_avg: Option<f64> = row.get(4)?;
+            Ok(ModelVsReviewRow {
+                com_name: row.get(0)?,
+                sci_name: row.get(1)?,
+                total: row.get(2)?,
+                model_avg: row.get(3)?,
+                human_avg: human_avg.unwrap_or(0.0),
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 /// Daily average confidence trend over the last `days` days.
 ///
 /// Returns `(date, avg_confidence)` pairs in chronological order.
@@ -654,5 +793,120 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let conn = open_or_create(tmp.path()).unwrap();
         assert!(latest_detection_full(&conn).unwrap().is_none());
+    }
+
+    fn add_review(conn: &Connection, date: &str, time: &str, sci: &str, com: &str, status: &str) {
+        conn.execute(
+            "INSERT INTO detection_reviews (date, time, sci_name, com_name, status)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(date, time, sci_name) DO UPDATE SET status = excluded.status",
+            params![date, time, sci, com, status],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn review_verdict_trend_returns_per_day_breakdown() {
+        let (_tmp, conn) = temp_db_with_data();
+        let recent = days_ago(&conn, 6);
+        // Confirm one detection on `recent`, reject another.
+        add_review(
+            &conn,
+            &recent,
+            "06:30:00",
+            "Turdus merula",
+            "Eurasian Blackbird",
+            "confirmed",
+        );
+        add_review(
+            &conn,
+            &recent,
+            "06:45:00",
+            "Erithacus rubecula",
+            "European Robin",
+            "rejected",
+        );
+
+        let trend = review_verdict_trend(&conn, 30).unwrap();
+        assert!(!trend.is_empty());
+        let day = trend
+            .iter()
+            .find(|d| d.day == recent)
+            .expect("recent day present");
+        assert_eq!(day.confirmed, 1);
+        assert_eq!(day.rejected, 1);
+        // The third detection on `recent` was not reviewed.
+        assert_eq!(day.unreviewed, 1);
+        assert_eq!(day.total, 3);
+    }
+
+    #[test]
+    fn review_verdict_trend_empty_when_no_recent_data() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_or_create(tmp.path()).unwrap();
+        let trend = review_verdict_trend(&conn, 30).unwrap();
+        assert!(trend.is_empty());
+    }
+
+    #[test]
+    fn model_vs_review_filters_species_below_min_count() {
+        let (_tmp, conn) = temp_db_with_data();
+        // Fixture has 2 Blackbird rows, 1 Robin, 1 Great Tit — none meet
+        // the `>= 5` total threshold, so the result is empty regardless of
+        // reviews.
+        let rows = model_vs_review_by_species(&conn, 12).unwrap();
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn model_vs_review_returns_eligible_species() {
+        let (_tmp, conn) = temp_db_with_data();
+        // Add three more Blackbird rows so the species crosses the 5-row
+        // threshold, and 3 reviewer verdicts so the HAVING clause also
+        // passes.
+        let recent = days_ago(&conn, 5);
+        for time in ["08:00:00", "09:00:00", "10:00:00"] {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                 VALUES (?1, ?2, 'Turdus merula', 'Eurasian Blackbird', 0.80)",
+                params![recent, time],
+            )
+            .unwrap();
+        }
+        // Two confirmed, one rejected.
+        add_review(
+            &conn,
+            &days_ago(&conn, 6),
+            "06:30:00",
+            "Turdus merula",
+            "Eurasian Blackbird",
+            "confirmed",
+        );
+        add_review(
+            &conn,
+            &recent,
+            "08:00:00",
+            "Turdus merula",
+            "Eurasian Blackbird",
+            "confirmed",
+        );
+        add_review(
+            &conn,
+            &recent,
+            "09:00:00",
+            "Turdus merula",
+            "Eurasian Blackbird",
+            "rejected",
+        );
+
+        let rows = model_vs_review_by_species(&conn, 12).unwrap();
+        let bb = rows
+            .iter()
+            .find(|r| r.com_name == "Eurasian Blackbird")
+            .expect("blackbird row");
+        assert_eq!(bb.total, 5);
+        assert!(bb.model_avg > 0.0);
+        // 2 confirmed / (2 + 1 rejected) = 0.66…
+        assert!((bb.human_avg - 2.0 / 3.0).abs() < 1e-6);
     }
 }
