@@ -207,6 +207,21 @@ impl MetricsRegistry {
         }
     }
 
+    /// Current value of the `audio_source_up{source}` gauge.
+    ///
+    /// Returns `Some(true)` for an up source, `Some(false)` for a known-down
+    /// source, and `None` when no gauge has ever been published under that
+    /// label — which the audio-source probe handler treats as "source not
+    /// registered with the supervisor" and falls back to the legacy
+    /// heuristic.
+    #[must_use]
+    pub fn source_up(&self, source: &str) -> Option<bool> {
+        self.audio_source_up
+            .read()
+            .ok()
+            .and_then(|map| map.get(source).map(|g| g.load(Ordering::Relaxed) == 1))
+    }
+
     /// Bump the watchdog ping counter.
     pub fn inc_watchdog_pings(&self) {
         self.watchdog_pings_total.fetch_add(1, Ordering::Relaxed);

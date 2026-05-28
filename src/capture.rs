@@ -161,13 +161,23 @@ fn resolve_sources_from_db(state: &birdnet_web::state::AppState) -> Option<Vec<C
 }
 
 /// Translate one [`birdnet_db::audio_sources::AudioSource`] row to a
-/// [`CaptureSource`] enum variant the supervisor consumes. Honours the
-/// row's `sample_rate` + `channels`; `stream_id` is the row's id with
-/// the lone-local-mic backward-compat carve-out.
+/// [`CaptureSource`] enum variant the supervisor consumes.
+///
+/// In the DB-driven path the `stream_id` is **always** `row.id` so the
+/// `audio_source_up{source}` gauge label matches the audio-source row
+/// the admin UI manipulates. The probe-pill handler reads the same
+/// `row.id` back, making `/admin/audio` show honest per-source liveness
+/// instead of the synthetic "first row Capturing, rest Down" stub.
+///
+/// The `_multi_local` / `_rtsp_index` parameters are retained for
+/// backwards-compatibility with the call shape from #102, but they're
+/// no longer consulted — every row gets its own stable `row.id`-labelled
+/// gauge, including lone-mic and RTSP rows that used to fall back to
+/// `local` / `RTSP_N`.
 fn audio_source_to_capture_source(
     row: &birdnet_db::audio_sources::AudioSource,
-    multi_local: bool,
-    rtsp_index: &mut usize,
+    _multi_local: bool,
+    _rtsp_index: &mut usize,
 ) -> CaptureSource {
     use birdnet_db::audio_sources::{Channels, SourceKind};
     // Mono / Left / Right all collapse to one channel — the daemon
@@ -182,22 +192,18 @@ fn audio_source_to_capture_source(
             device: row.device_id.clone(),
             sample_rate: row.sample_rate,
             channels,
-            stream_id: multi_local.then(|| row.id.clone()),
+            stream_id: Some(row.id.clone()),
         },
         SourceKind::PipeWire => CaptureSource::PipeWire {
             device: row.device_id.clone(),
             sample_rate: row.sample_rate,
             channels,
-            stream_id: multi_local.then(|| row.id.clone()),
+            stream_id: Some(row.id.clone()),
         },
-        SourceKind::Rtsp => {
-            *rtsp_index += 1;
-            CaptureSource::Rtsp {
-                url: row.device_id.clone(),
-                // Keep `RTSP_N` style for backward-compatible filename pattern.
-                stream_id: format!("RTSP_{}", *rtsp_index),
-            }
-        }
+        SourceKind::Rtsp => CaptureSource::Rtsp {
+            url: row.device_id.clone(),
+            stream_id: row.id.clone(),
+        },
     }
 }
 
@@ -680,8 +686,12 @@ mod tests {
     }
 
     #[test]
-    fn translator_usb_alsa_to_microphone_keeps_id_less_when_lone() {
-        // Lone local mic → id-less filename (BirdNET-Pi compat).
+    fn translator_usb_alsa_to_microphone_uses_row_id_as_stream_id() {
+        // Stage 2 — every DB-driven source carries `stream_id = Some(row.id)`
+        // so the `audio_source_up{<row.id>}` gauge matches the audio_sources
+        // row the admin UI manipulates. (The lone-mic id-less filename
+        // backward-compat carve-out from stage 1 is gone — operators who
+        // opt into the DB path accept the new naming.)
         let r = row("src_usb_1", SourceKind::UsbAlsa, "plughw:1,0");
         let mut idx = 0;
         let cs = audio_source_to_capture_source(&r, false, &mut idx);
@@ -695,7 +705,7 @@ mod tests {
                 assert_eq!(device, "plughw:1,0");
                 assert_eq!(sample_rate, 48_000);
                 assert_eq!(channels, 1);
-                assert_eq!(stream_id, None);
+                assert_eq!(stream_id.as_deref(), Some("src_usb_1"));
             }
             other => panic!("expected Microphone, got {other:?}"),
         }
@@ -728,7 +738,10 @@ mod tests {
     }
 
     #[test]
-    fn translator_rtsp_numbers_streams_sequentially() {
+    fn translator_rtsp_uses_row_id_as_stream_id() {
+        // Stage 2 — RTSP rows also carry `stream_id = row.id` (not the
+        // legacy `RTSP_N` numbering). Same probe-driven motivation as
+        // local mics.
         let r1 = row("src_rtsp_a", SourceKind::Rtsp, "rtsp://a.lan/feed");
         let r2 = row("src_rtsp_b", SourceKind::Rtsp, "rtsp://b.lan/feed");
         let mut idx = 0;
@@ -746,9 +759,9 @@ mod tests {
                 },
             ) => {
                 assert_eq!(u1, "rtsp://a.lan/feed");
-                assert_eq!(s1, "RTSP_1");
+                assert_eq!(s1, "src_rtsp_a");
                 assert_eq!(u2, "rtsp://b.lan/feed");
-                assert_eq!(s2, "RTSP_2");
+                assert_eq!(s2, "src_rtsp_b");
             }
             other => panic!("expected two Rtsp variants, got {other:?}"),
         }
@@ -842,7 +855,11 @@ mod tests {
     }
 
     #[test]
-    fn resolve_from_db_keeps_lone_mic_id_less_with_rtsp_present() {
+    fn resolve_from_db_uses_row_id_even_for_lone_mic() {
+        // Stage 2 — every DB-driven row gets `stream_id = row.id`,
+        // including a lone mic. Stage 1's lone-mic id-less carve-out
+        // is gone so the supervisor's per-source liveness gauge has a
+        // stable, row-specific label.
         let state = fresh_state();
         insert_row(&state, "src_only_mic", SourceKind::UsbAlsa, "plughw:1,0", false);
         insert_row(&state, "src_rtsp_1", SourceKind::Rtsp, "rtsp://lan/a", false);
@@ -855,9 +872,7 @@ mod tests {
                 _ => None,
             })
             .expect("mic row");
-        // Exactly one local mic alongside any number of RTSP rows still
-        // gets the id-less filename for BirdNET-Pi compat.
-        assert_eq!(mic, None);
+        assert_eq!(mic.as_deref(), Some("src_only_mic"));
     }
 
     #[test]

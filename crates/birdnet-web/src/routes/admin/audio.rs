@@ -3,35 +3,29 @@
 //! Replaces the prior hard-coded two-row stub. The page body is rendered
 //! from `templates/admin_audio_sources.html` + per-row partials in
 //! `templates/_partial_audio_source_row.html`; live status comes from
-//! `probe(id)` which today returns a stable `Capturing` for any row the
-//! audio daemon knows about and `Down` otherwise.
+//! `probe(id)` which reads the supervisor-published
+//! `birdnet_audio_source_up{source=<row.id>}` gauge.
 //!
-//! ## O-13 wiring status
+//! ## O-13 wiring status (post-stage 2)
 //!
-//! **Stage 1 (shipped, this PR's sibling)**: the capture pipeline in
-//! `src/capture.rs` resolves sources from `audio_sources` rows when the
-//! table is non-empty, falling back to the CLI/config path otherwise.
-//! See `capture::resolve_sources_from_db`. `state.audio_source()` is
-//! retained for back-compat consumers (livestream, the live-spectrogram
-//! producer, the listen-now page's "default" option) — those keep
-//! reading the legacy single-string value while operators migrate.
+//! Stage 1 (shipped in #102) — the capture pipeline reads
+//! `audio_sources` rows directly when the table is non-empty.
 //!
-//! **TODO(O-13-followup)** — still open on the daemon side:
+//! Stage 2 (shipped in this PR's sibling) — every DB-driven source's
+//! `CaptureSource` carries `stream_id = Some(row.id)`. The supervisor
+//! publishes per-source liveness to `audio_source_up{<row.id>}` on
+//! every reconcile tick. `probe(id)` reads that gauge back and
+//! returns honest `Capturing` / `Down` based on actual subprocess
+//! state, not the "first row Capturing, rest Down" synthetic stub.
 //!
-//! 1. `probe(id)` is intentionally synthetic in this PR: it returns
-//!    `Capturing` for the first non-disabled row and `Down` for the
-//!    others, because the per-source `is_capturing` flag does not exist
-//!    in `birdnet-core` yet. The replacement is a daemon-side metrics
-//!    handle keyed on `audio_source.id`. The handler is otherwise wired
-//!    end-to-end so the swap is one function body.
-//!
-//! 2. The seed migration's `settings.audio_source` cross-reference and
-//!    the `with_audio_source` builder stay in place during this
-//!    transition; they can be retired once every consumer of
-//!    `state.audio_source()` (livestream `/stream` default-source path,
-//!    live-spectrogram producer, listen-now "default" option, and a
-//!    handful of test fixtures) has been migrated to read the
-//!    `audio_sources` table directly.
+//! **Remaining TODO(O-13-followup)** — retire the legacy
+//! single-string `state.audio_source()` reader from
+//! [`crate::routes::livestream`] (default `/stream` source),
+//! the live-spectrogram producer in `src/helpers/system.rs`,
+//! the listen-now "default" option, and migration 15's
+//! `settings.audio_source` seed cross-reference once every consumer
+//! has migrated to read the `audio_sources` table directly. Until
+//! then, `legacy_daemon_status` provides the fallback path here.
 
 use std::fmt::Write as _;
 
@@ -75,10 +69,11 @@ pub fn router() -> Router<AppState> {
 
 #[derive(Clone, Copy, Debug)]
 // `Starting` and `Paused` are part of the documented status palette
-// (see _partial_audio_source_row.html). The synthetic `daemon_status`
-// only returns `Capturing` / `Down` today; the other two will be
-// emitted once the audio daemon's per-source signals are wired —
-// see TODO(O-13-followup) above.
+// (see _partial_audio_source_row.html). The metrics-driven path
+// currently only emits `Capturing` / `Down`; the supervisor would
+// need a separate "starting" / "scheduled-pause" state to drive the
+// other two pills. They stay in the enum so the partial's status
+// keys are exhaustively typed.
 #[allow(dead_code)]
 enum Status {
     Capturing,
@@ -185,7 +180,7 @@ async fn create(State(state): State<AppState>, Form(form): Form<CreateForm>) -> 
     let result = state.with_db(|conn| conn.insert(&new));
     match result {
         Ok(row) => {
-            let mut body = render_row(&row, daemon_status(&row, state.audio_source()));
+            let mut body = render_row(&row, real_or_legacy_daemon_status(&row, &state));
             body.push_str(
                 &Toast::success(format!(
                     "Added {}.",
@@ -268,7 +263,7 @@ async fn update(
     let result = state.with_db(|conn| conn.update(&id, &patch));
     match result {
         Ok(row) => {
-            let mut body = render_row(&row, daemon_status(&row, state.audio_source()));
+            let mut body = render_row(&row, real_or_legacy_daemon_status(&row, &state));
             body.push_str(
                 &Toast::success("Source updated.")
                     .with_action("/admin/system/restart", "Restart to apply")
@@ -294,22 +289,48 @@ async fn probe(State(state): State<AppState>, Path(id): Path<String>) -> Respons
             return internal_response("Could not probe that source.");
         }
     };
-    let status = daemon_status(&row, state.audio_source());
+    let status = real_or_legacy_daemon_status(&row, &state);
     Html(render_status_pill(&row.id, status)).into_response()
 }
 
 // ---------------------------------------------------------------------------
-// Daemon-side probe (synthetic until follow-up wires it for real)
+// Daemon-side probe — reads metrics::source_up(row.id) when the
+// DB-driven capture path is active; falls back to the legacy
+// single-string heuristic otherwise.
 // ---------------------------------------------------------------------------
 
-/// Maps an `audio_sources` row to a status pill. Until the audio daemon
-/// exposes per-source liveness, this is synthetic: the first row whose
-/// `device_id` matches the daemon's single-string config reports
-/// `Capturing`; every other row reports `Down`. Rows with a quiet
-/// schedule that the daemon understands would report `Paused`; today the
-/// schedule is stored but not consulted, so this synthesizes
-/// `Capturing` whenever the daemon is reading the row.
-fn daemon_status(row: &AudioSource, daemon_source: Option<&str>) -> Status {
+/// Map an `audio_sources` row to a status pill.
+///
+/// Two paths:
+///
+/// 1. **DB-driven (post-#102 stage 1 + this PR):** the capture pipeline
+///    publishes per-source liveness to the `birdnet_audio_source_up{source}`
+///    gauge using `row.id` as the label. The handler reads the same
+///    label back, so the pill reflects the supervisor's actual
+///    reconcile state — `Capturing` when up, `Down` when the
+///    subprocess is dead / backing off.
+/// 2. **Legacy single-string path:** when the operator hasn't migrated
+///    yet (no `audio_sources` rows OR running on the CLI/config
+///    fallback), the metrics map doesn't carry a gauge under row.id.
+///    Fall back to the BirdNET-Pi-compatible heuristic: the row whose
+///    `device_id` matches the daemon's single-string config reports
+///    `Capturing`; every other row reports `Down`.
+///
+/// `row.disabled_at` short-circuits to `Down` ahead of either path.
+fn real_or_legacy_daemon_status(row: &AudioSource, state: &AppState) -> Status {
+    if row.disabled_at.is_some() {
+        return Status::Down;
+    }
+    if let Some(up) = state.metrics().source_up(&row.id) {
+        return if up { Status::Capturing } else { Status::Down };
+    }
+    legacy_daemon_status(row, state.audio_source())
+}
+
+/// Pure heuristic used by the legacy path AND by the
+/// `daemon_status_reflects_active_source` test. Kept as a free
+/// function so the test doesn't need an `AppState` fixture.
+fn legacy_daemon_status(row: &AudioSource, daemon_source: Option<&str>) -> Status {
     if row.disabled_at.is_some() {
         return Status::Down;
     }
@@ -330,11 +351,11 @@ fn render_body(sources: &[AudioSource], daemon_source: Option<&str>) -> String {
 
     let mut rows_local = String::new();
     for s in &local {
-        rows_local.push_str(&render_row(s, daemon_status(s, daemon_source)));
+        rows_local.push_str(&render_row(s, legacy_daemon_status(s, daemon_source)));
     }
     let mut rows_rtsp = String::new();
     for s in &rtsp {
-        rows_rtsp.push_str(&render_row(s, daemon_status(s, daemon_source)));
+        rows_rtsp.push_str(&render_row(s, legacy_daemon_status(s, daemon_source)));
     }
 
     let count_local = format!(
@@ -660,13 +681,75 @@ mod tests {
             created_at: "2026-05-28".to_string(),
             updated_at: "2026-05-28".to_string(),
         };
-        assert!(matches!(daemon_status(&s, Some("hw:1,0")), Status::Capturing));
-        assert!(matches!(daemon_status(&s, Some("hw:2,0")), Status::Down));
-        assert!(matches!(daemon_status(&s, None), Status::Down));
+        assert!(matches!(legacy_daemon_status(&s, Some("hw:1,0")), Status::Capturing));
+        assert!(matches!(legacy_daemon_status(&s, Some("hw:2,0")), Status::Down));
+        assert!(matches!(legacy_daemon_status(&s, None), Status::Down));
 
         let mut disabled = s;
         disabled.disabled_at = Some("2026-05-28".to_string());
-        assert!(matches!(daemon_status(&disabled, Some("hw:1,0")), Status::Down));
+        assert!(matches!(legacy_daemon_status(&disabled, Some("hw:1,0")), Status::Down));
+    }
+
+    #[test]
+    fn real_probe_reads_metrics_gauge_by_row_id() {
+        // Build a state, publish a per-row gauge value via the metrics
+        // API, and confirm the probe handler returns the matching pill.
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        birdnet_db::migration::migrate(&conn).expect("migrate");
+        let state = crate::state::AppState::from_connection(
+            conn,
+            std::path::PathBuf::from(":memory:"),
+        );
+
+        let row = AudioSource {
+            id: "src_garden".to_string(),
+            kind: SourceKind::UsbAlsa,
+            device_id: "hw:1,0".to_string(),
+            label: None,
+            sample_rate: 48_000,
+            channels: Channels::Mono,
+            bit_depth: 24,
+            gain_db: 0.0,
+            rtsp_transport: RtspTransport::Auto,
+            schedule_quiet: None,
+            pipeline: PipelineFlags::default(),
+            disabled_at: None,
+            created_at: "2026-05-28".to_string(),
+            updated_at: "2026-05-28".to_string(),
+        };
+
+        // No gauge published yet → falls through to legacy path. Since
+        // state.audio_source() is None (no CLI/env wire), result is Down.
+        assert!(matches!(
+            real_or_legacy_daemon_status(&row, &state),
+            Status::Down
+        ));
+
+        // Publish gauge: row is up.
+        state.metrics().set_source_up("src_garden", true);
+        assert!(matches!(
+            real_or_legacy_daemon_status(&row, &state),
+            Status::Capturing
+        ));
+
+        // Publish gauge: row went down (subprocess died, supervisor's
+        // next reconcile would clear).
+        state.metrics().set_source_up("src_garden", false);
+        assert!(matches!(
+            real_or_legacy_daemon_status(&row, &state),
+            Status::Down
+        ));
+
+        // Disabled row short-circuits to Down regardless of the gauge.
+        let disabled = AudioSource {
+            disabled_at: Some("2026-05-28".to_string()),
+            ..row
+        };
+        state.metrics().set_source_up("src_garden", true);
+        assert!(matches!(
+            real_or_legacy_daemon_status(&disabled, &state),
+            Status::Down
+        ));
     }
 
     #[test]
