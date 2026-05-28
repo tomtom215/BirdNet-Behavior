@@ -83,6 +83,16 @@ pub trait WeatherStore {
     ///
     /// Returns [`WeatherError::Sqlite`] on database failure.
     fn prune_older_than(&self, cutoff: &str) -> Result<usize, WeatherError>;
+
+    /// Delete rows older than `days` days. Resolved via SQLite's
+    /// `julianday()`, so it tolerates any ISO-8601-shaped `at` string
+    /// (Open-Meteo emits `YYYY-MM-DDTHH:MM`; the today/dawn-chorus
+    /// renderers use `YYYY-MM-DDTHH:MM:SSZ`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WeatherError::Sqlite`] on database failure.
+    fn prune_older_than_days(&self, days: u32) -> Result<usize, WeatherError>;
 }
 
 impl WeatherStore for Connection {
@@ -143,6 +153,15 @@ impl WeatherStore for Connection {
 
     fn prune_older_than(&self, cutoff: &str) -> Result<usize, WeatherError> {
         let n = self.execute("DELETE FROM weather WHERE at < ?1", params![cutoff])?;
+        Ok(n)
+    }
+
+    fn prune_older_than_days(&self, days: u32) -> Result<usize, WeatherError> {
+        let n = self.execute(
+            "DELETE FROM weather
+             WHERE julianday(at) < julianday('now', '-' || ?1 || ' days')",
+            params![days],
+        )?;
         Ok(n)
     }
 }
@@ -252,6 +271,38 @@ mod tests {
         let rows = conn.range("2025-01-01", "2026-12-31").unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].at, "2026-05-28T00:00:00Z");
+    }
+
+    #[test]
+    fn prune_older_than_days_drops_old_rows_only() {
+        let conn = open_db();
+        // Insert an older row by hand-shifting julianday via raw INSERT so
+        // the test doesn't depend on system clock for "today".
+        conn.execute(
+            "INSERT INTO weather (at, temp_c, fetched_at) VALUES (?1, ?2, datetime('now', '-90 days'))",
+            params!["2024-01-01T00:00:00Z", 4.0_f64],
+        )
+        .unwrap();
+        conn.upsert(&sample("9999-01-01T00:00:00Z", 18.0)).unwrap();
+        let removed = conn.prune_older_than_days(30).unwrap();
+        assert_eq!(removed, 1);
+        let rows = conn.range("0000-01-01", "9999-12-31").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].at, "9999-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn prune_older_than_days_tolerates_open_meteo_format() {
+        // Open-Meteo emits `YYYY-MM-DDTHH:MM` (no seconds, no zulu).
+        // julianday() must still parse it for the prune query to work.
+        let conn = open_db();
+        conn.execute(
+            "INSERT INTO weather (at, temp_c, fetched_at) VALUES (?1, ?2, datetime('now', '-90 days'))",
+            params!["2024-05-28T13:00", 12.0_f64],
+        )
+        .unwrap();
+        let removed = conn.prune_older_than_days(30).unwrap();
+        assert_eq!(removed, 1);
     }
 
     #[test]
