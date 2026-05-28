@@ -36,9 +36,15 @@ pub fn router() -> Router<AppState> {
 
 async fn page() -> Html<String> {
     // Skeleton placeholders (O-16) shown until the htmx swap targets load.
+    // O-23 moon badge — pure local computation, always safe to show.
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |x| x.as_secs() as i64);
+    let moon_badge = super::overlays::moon_badge(now_secs);
     let body = PAGE_HTML
         .replace("{{skel_polar}}", super::skeletons::polar_plot())
-        .replace("{{skel_ribbons}}", &super::skeletons::species_ribbons(6));
+        .replace("{{skel_ribbons}}", &super::skeletons::species_ribbons(6))
+        .replace("{{moon_badge}}", &moon_badge);
     render_page("Dawn chorus", &body, "analytics")
 }
 

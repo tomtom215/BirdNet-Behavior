@@ -40,6 +40,7 @@ pub mod livestream;
 pub mod migration;
 pub mod notification_center;
 pub mod onboarding;
+pub(crate) mod overlays;
 pub mod quarantine;
 pub mod recordings;
 pub(crate) mod skeletons;

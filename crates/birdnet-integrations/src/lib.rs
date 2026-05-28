@@ -13,4 +13,5 @@ pub mod heartbeat;
 pub mod mqtt;
 pub mod notification;
 pub mod species_images;
+pub mod weather;
 pub mod weekly_report;

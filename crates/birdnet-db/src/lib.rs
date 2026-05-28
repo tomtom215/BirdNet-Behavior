@@ -12,3 +12,4 @@ pub mod notifications;
 pub mod resilience;
 pub mod settings;
 pub mod sqlite;
+pub mod weather;
