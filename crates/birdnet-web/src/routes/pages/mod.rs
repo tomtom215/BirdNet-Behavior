@@ -45,6 +45,7 @@ pub mod system_dashboard;
 pub mod timeseries_dash;
 pub mod today;
 pub(crate) mod today_phrase;
+pub(crate) mod toast;
 pub mod viz;
 pub mod weekly_report;
 pub mod year_in_review;
@@ -67,6 +68,9 @@ pub(crate) const RECORDINGS_PAGE_HTML: &str = include_str!("../../../templates/r
 /// Themed confirmation modal (O-17), injected into every full-page shell.
 pub(crate) const CONFIRM_MODAL_HTML: &str =
     include_str!("../../../templates/_partial_confirm_modal.html");
+/// Toast / snackbar live region (O-18), injected into every full-page shell.
+pub(crate) const TOAST_REGION_HTML: &str =
+    include_str!("../../../templates/_partial_toast_region.html");
 
 /// Build all page and partial routes.
 pub fn router() -> Router<AppState> {
@@ -124,7 +128,8 @@ pub(crate) fn render_page(title: &str, content: &str, active_nav: &str) -> Html<
         .replace("{{nav_migration}}", nav("migration"))
         .replace("{{nav_system}}", nav("system"))
         .replace("{{nav_notifications}}", nav("notifications"))
-        .replace("{{confirm_modal}}", CONFIRM_MODAL_HTML);
+        .replace("{{confirm_modal}}", CONFIRM_MODAL_HTML)
+        .replace("{{toast_region}}", TOAST_REGION_HTML);
     Html(html)
 }
 

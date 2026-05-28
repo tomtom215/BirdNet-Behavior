@@ -14,6 +14,7 @@ use axum::{Router, routing::get};
 use birdnet_core::audio::capture::{disk_usage, recording_stats};
 use birdnet_db::resilience::backup_database;
 
+use crate::routes::pages::toast::{self, Toast};
 use crate::state::AppState;
 use crate::system_info;
 
@@ -368,15 +369,25 @@ async fn trigger_backup(State(state): State<AppState>) -> Result<Html<String>, S
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     match result {
-        Ok(path) => Ok(Html(format!(
-            r#"<p style="color:var(--moss);">
-              Backup created: <code style="font-size:.8rem;">{}</code>
-            </p>"#,
-            path.display()
-        ))),
-        Err(e) => Ok(Html(format!(
-            r#"<p style="color:var(--rare);">Backup failed: {e}</p>"#
-        ))),
+        Ok(path) => {
+            let display = path.display().to_string();
+            let body = Html(format!(
+                r#"<p style="color:var(--moss);">
+              Backup created: <code style="font-size:.8rem;">{display}</code>
+            </p>"#
+            ));
+            // O-18: toast confirmation of the backup outcome.
+            Ok(toast::with(
+                body,
+                Toast::success(format!("Backup created — {display}.")),
+            ))
+        }
+        Err(e) => {
+            let body = Html(format!(
+                r#"<p style="color:var(--rare);">Backup failed: {e}</p>"#
+            ));
+            Ok(toast::with(body, Toast::error(format!("Backup failed: {e}"))))
+        }
     }
 }
 

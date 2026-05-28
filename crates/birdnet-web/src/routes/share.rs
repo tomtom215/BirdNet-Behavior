@@ -232,6 +232,11 @@ async fn share_page(State(state): State<AppState>, Path(token): Path<String>) ->
         .replace([',', '.'], "");
 
     let body = TEMPLATE
+        // O-18: toast live region for the share page's "Copy permalink" UX.
+        .replace(
+            "{{toast_region}}",
+            crate::routes::pages::TOAST_REGION_HTML,
+        )
         .replace("{{species_name}}", &escape_html(&det.com_name))
         .replace("{{scientific_name}}", &escape_html(&det.sci_name))
         .replace("{{species_encoded}}", &simple_url_encode(&det.com_name))

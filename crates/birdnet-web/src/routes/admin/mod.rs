@@ -82,6 +82,9 @@ pub(crate) fn admin_shell(title: &str, active: &str, body: &str) -> String {
     // Themed confirmation modal (O-17): admin pages render through this shell,
     // not `render_page`, so the modal is injected here too.
     let confirm_modal = crate::routes::pages::CONFIRM_MODAL_HTML;
+    // Toast / snackbar region (O-18): same rationale — admin POSTs attach OOB
+    // toasts that need a live region in the page.
+    let toast_region = crate::routes::pages::TOAST_REGION_HTML;
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -105,6 +108,7 @@ pub(crate) fn admin_shell(title: &str, active: &str, body: &str) -> String {
   <nav class="admin-nav">{nav_html}</nav>
   {body}
 </div>
+{toast_region}
 {confirm_modal}
 </body>
 </html>"#

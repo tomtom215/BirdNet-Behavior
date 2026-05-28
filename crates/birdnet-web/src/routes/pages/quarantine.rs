@@ -23,6 +23,7 @@ use axum::response::{Html, IntoResponse};
 use axum::{Router, routing::get};
 use serde::Deserialize;
 
+use super::toast::Toast;
 use super::{escape_html, simple_url_encode};
 use crate::state::AppState;
 
@@ -513,15 +514,23 @@ async fn quarantine_approve(
     })
     .await;
 
-    match result {
+    // O-18: outcome toast.
+    let toast = match &result {
         Ok(Ok(newly_inserted)) => {
             tracing::info!(id, newly_inserted, "quarantine entry approved");
+            Some(Toast::success("Approved."))
         }
-        Ok(Err(e)) => tracing::warn!(id, error = %e, "failed to approve quarantine entry"),
-        Err(e) => tracing::warn!(id, error = %e, "task panic approving quarantine entry"),
-    }
+        Ok(Err(e)) => {
+            tracing::warn!(id, error = %e, "failed to approve quarantine entry");
+            Some(Toast::error(format!("Approve failed: {e}")))
+        }
+        Err(e) => {
+            tracing::warn!(id, error = %e, "task panic approving quarantine entry");
+            Some(Toast::error("Approve failed."))
+        }
+    };
 
-    reload_list_response(&filter_param, offset)
+    reload_list_response(&filter_param, offset, toast)
 }
 
 async fn quarantine_reject(
@@ -537,7 +546,8 @@ async fn quarantine_reject(
     })
     .await;
 
-    reload_list_response(&filter_param, offset)
+    // O-18: outcome toast (reject is best-effort; surface the action either way).
+    reload_list_response(&filter_param, offset, Some(Toast::success("Rejected.")))
 }
 
 async fn quarantine_delete(
@@ -553,7 +563,12 @@ async fn quarantine_delete(
     })
     .await;
 
-    reload_list_response(&filter_param, offset)
+    // O-18: outcome toast.
+    reload_list_response(
+        &filter_param,
+        offset,
+        Some(Toast::success("Quarantine entry deleted.")),
+    )
 }
 
 /// Return an HTMX-trigger div that reloads the quarantine list.
@@ -561,16 +576,25 @@ async fn quarantine_delete(
 /// The `+ use<>` bound on the return type tells Rust 2024 not to capture the
 /// `filter_param` lifetime, allowing callers to pass short-lived borrows from
 /// local variables without causing `E0515` lifetime errors.
-fn reload_list_response(filter_param: &str, offset: u32) -> impl IntoResponse + use<> {
+fn reload_list_response(
+    filter_param: &str,
+    offset: u32,
+    toast: Option<Toast>,
+) -> impl IntoResponse + use<> {
     // hx-target uses a CSS ID selector (#quarantine-list).  A local variable
     // prevents the "# sequence from terminating an r#"..."# raw-string literal.
     let target = "#quarantine-list";
-    let html = format!(
+    let mut html = format!(
         "<div hx-get=\"/pages/quarantine-list?filter={filter_param}&offset={offset}\" \
          hx-trigger=\"load\" \
          hx-target=\"{target}\" \
          hx-swap=\"innerHTML\"></div>"
     );
+    // O-18: append the OOB toast fragment so htmx swaps it into #bnb-toasts
+    // alongside the list-reload trigger.
+    if let Some(t) = toast {
+        html.push_str(&t.render_oob());
+    }
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
