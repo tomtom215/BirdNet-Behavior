@@ -47,7 +47,10 @@ async fn migration_page() -> Html<String> {
         .replace("{{skel_migration_stats}}", &super::skeletons::stat_row(4))
         .replace("{{skel_ridgeline}}", super::skeletons::ridgeline())
         .replace("{{skel_diversity}}", &super::skeletons::diversity_bars())
-        .replace("{{help_link}}", &super::help::help_link(super::help::Topic::Phenology));
+        .replace(
+            "{{help_link}}",
+            &super::help::help_link(super::help::Topic::Phenology),
+        );
     render_page("Migration", &body, "migration")
 }
 

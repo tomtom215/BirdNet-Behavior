@@ -41,18 +41,31 @@ pub fn moon_phase_at(unix_seconds: i64) -> f32 {
     // Reference: a known new moon at 2000-01-06 18:14 UTC = 947_182_440 sec.
     let days_since_ref = (unix_seconds - 947_182_440) as f64 / 86_400.0;
     let mut phase = (days_since_ref / SYNODIC_DAYS).fract();
-    if phase < 0.0 { phase += 1.0; }
+    if phase < 0.0 {
+        phase += 1.0;
+    }
     phase as f32
 }
 
 /// One of the four cardinal phase buckets — useful for icon glyphs and labels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MoonCardinal { New, WaxingHalf, Full, WaningHalf }
+pub enum MoonCardinal {
+    New,
+    WaxingHalf,
+    Full,
+    WaningHalf,
+}
 
 impl MoonCardinal {
     #[must_use]
     pub fn from_phase(p: f32) -> Self {
-        let p = if p < 0.0 { 0.0 } else if p > 1.0 { 1.0 } else { p };
+        let p = if p < 0.0 {
+            0.0
+        } else if p > 1.0 {
+            1.0
+        } else {
+            p
+        };
         match (p * 4.0).round() as i32 % 4 {
             0 => MoonCardinal::New,
             1 => MoonCardinal::WaxingHalf,
@@ -108,7 +121,7 @@ pub fn moon_badge(unix_seconds: i64) -> String {
 /// One hour of weather data. `WeatherStore::range(...)` returns these.
 #[derive(Clone, Copy)]
 pub struct WeatherSample {
-    pub hour: u8,                 // 0..23 local time
+    pub hour: u8, // 0..23 local time
     pub temp_c: Option<f32>,
     pub precip_mm: Option<f32>,
     pub wind_kt: Option<f32>,
@@ -123,14 +136,17 @@ pub fn weather_band(samples: &[WeatherSample], width: f64, height: f64) -> Strin
             r#"<g class="bnb-signal bnb-signal--weather" data-state="empty">
   <rect x="0" y="0" width="{width}" height="{height}" class="bnb-signal__placeholder"/>
 </g>"#,
-            width = width, height = height
+            width = width,
+            height = height
         );
     }
     // Temperature wave: poly-line across samples, normalized to the band height.
-    let (t_min, t_max) = samples.iter().filter_map(|s| s.temp_c).fold(
-        (f32::INFINITY, f32::NEG_INFINITY),
-        |(lo, hi), v| (lo.min(v), hi.max(v)),
-    );
+    let (t_min, t_max) = samples
+        .iter()
+        .filter_map(|s| s.temp_c)
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), v| {
+            (lo.min(v), hi.max(v))
+        });
     let span = (t_max - t_min).max(1.0);
     let step = width / samples.len().max(1) as f64;
 
@@ -139,7 +155,8 @@ pub fn weather_band(samples: &[WeatherSample], width: f64, height: f64) -> Strin
         out,
         r#"<g class="bnb-signal bnb-signal--weather" aria-label="hourly weather">
   <rect x="0" y="0" width="{width}" height="{height}" class="bnb-signal__bg"/>"#,
-        width = width, height = height
+        width = width,
+        height = height
     );
 
     // Temperature wave path
@@ -155,13 +172,17 @@ pub fn weather_band(samples: &[WeatherSample], width: f64, height: f64) -> Strin
     // Precipitation droplets — one tick per hour with any precip.
     for (i, s) in samples.iter().enumerate() {
         let mm = s.precip_mm.unwrap_or(0.0);
-        if mm <= 0.0 { continue; }
+        if mm <= 0.0 {
+            continue;
+        }
         let x = i as f64 * step + step / 2.0;
         let h = (mm.min(6.0) as f64 / 6.0) * height;
         let _ = write!(
             out,
             r#"<line class="bnb-signal__precip" x1="{x:.1}" y1="{y1:.1}" x2="{x:.1}" y2="{y2:.1}"/>"#,
-            x = x, y1 = height - h, y2 = height
+            x = x,
+            y1 = height - h,
+            y2 = height
         );
     }
 
@@ -184,7 +205,8 @@ pub fn spl_band(samples: Option<&[(u32, f32)]>, width: f64, height: f64) -> Stri
   <line x1="0" y1="{mid:.1}" x2="{w}" y2="{mid:.1}" class="bnb-signal__quiet"/>
   <title>SPL data not available on this station</title>
 </g>"#,
-            mid = height / 2.0, w = width
+            mid = height / 2.0,
+            w = width
         );
     };
     if s.is_empty() {
@@ -195,9 +217,8 @@ pub fn spl_band(samples: Option<&[(u32, f32)]>, width: f64, height: f64) -> Stri
     let span = max - min;
     let step = width / s.len() as f64;
 
-    let mut out = String::from(
-        r#"<g class="bnb-signal bnb-signal--spl" aria-label="ambient SPL">"#,
-    );
+    let mut out =
+        String::from(r#"<g class="bnb-signal bnb-signal--spl" aria-label="ambient SPL">"#);
     out.push_str(r#"<path class="bnb-signal__spl" d=""#);
     for (i, (_, v)) in s.iter().enumerate() {
         let x = i as f64 * step + step / 2.0;
@@ -221,13 +242,18 @@ mod tests {
     fn moon_phase_is_bounded() {
         for ts in [0_i64, 1_700_000_000, 2_000_000_000] {
             let p = moon_phase_at(ts);
-            assert!((0.0..1.0).contains(&p), "phase out of range: {p} for ts {ts}");
+            assert!(
+                (0.0..1.0).contains(&p),
+                "phase out of range: {p} for ts {ts}"
+            );
         }
     }
 
     #[test]
     fn cardinal_partitions_into_four_buckets() {
-        let labels: Vec<_> = (0..=8).map(|i| MoonCardinal::from_phase(i as f32 / 8.0).label()).collect();
+        let labels: Vec<_> = (0..=8)
+            .map(|i| MoonCardinal::from_phase(i as f32 / 8.0).label())
+            .collect();
         // Strictly: 0,1,2,3 → new, waxing, full, waning, then wraps.
         assert_eq!(labels[0], "new moon");
         assert_eq!(labels[4], "full moon");
@@ -236,12 +262,14 @@ mod tests {
 
     #[test]
     fn weather_band_renders_path_when_samples_present() {
-        let samples: Vec<_> = (0..24).map(|h| WeatherSample {
-            hour: h as u8,
-            temp_c: Some(10.0 + (h as f32) * 0.3),
-            precip_mm: if h == 12 { Some(2.0) } else { None },
-            wind_kt: Some(5.0),
-        }).collect();
+        let samples: Vec<_> = (0..24)
+            .map(|h| WeatherSample {
+                hour: h as u8,
+                temp_c: Some(10.0 + (h as f32) * 0.3),
+                precip_mm: if h == 12 { Some(2.0) } else { None },
+                wind_kt: Some(5.0),
+            })
+            .collect();
         let svg = weather_band(&samples, 1380.0, 22.0);
         assert!(svg.contains(r#"class="bnb-signal__temp""#));
         assert!(svg.contains(r#"class="bnb-signal__precip""#));

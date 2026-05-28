@@ -280,8 +280,13 @@ async fn analytics_config_partial(
     // truths, so they're shown as three distinct rows instead of one ambiguous
     // "Connected" pill.
     #[cfg(feature = "analytics")]
-    let ext_status: Option<(bool, Option<String>, Option<String>)> =
-        state.with_analytics(|db| (db.extension_loaded(), db.duckdb_version(), db.extension_version()));
+    let ext_status: Option<(bool, Option<String>, Option<String>)> = state.with_analytics(|db| {
+        (
+            db.extension_loaded(),
+            db.duckdb_version(),
+            db.extension_version(),
+        )
+    });
     #[cfg(not(feature = "analytics"))]
     let ext_status: Option<(bool, Option<String>, Option<String>)> = None;
 

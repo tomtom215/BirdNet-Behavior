@@ -23,9 +23,7 @@
 use std::fmt;
 
 use argon2::Argon2;
-use password_hash::{
-    PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng,
-};
+use password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng};
 use rusqlite::{Connection, OptionalExtension, params};
 
 // ---------------------------------------------------------------------------
@@ -696,7 +694,10 @@ impl AuditLog for Connection {
              FROM audit_log ORDER BY at DESC, id DESC LIMIT ?1",
         )?;
         let rows = stmt
-            .query_map(params![i64::try_from(limit).unwrap_or(50)], row_to_audit_entry)?
+            .query_map(
+                params![i64::try_from(limit).unwrap_or(50)],
+                row_to_audit_entry,
+            )?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     }
@@ -722,11 +723,8 @@ impl AuditLog for Connection {
                  ORDER BY at DESC, id DESC
                  LIMIT ?3",
             )?;
-            stmt.query_map(
-                params![from_bound, to_bound, lim],
-                row_to_audit_entry,
-            )?
-            .collect::<Result<Vec<_>, _>>()?
+            stmt.query_map(params![from_bound, to_bound, lim], row_to_audit_entry)?
+                .collect::<Result<Vec<_>, _>>()?
         } else {
             let mut stmt = self.prepare(
                 "SELECT id, at, user_id, action, target, metadata
@@ -930,7 +928,12 @@ mod tests {
         .unwrap();
         conn.execute(
             "INSERT INTO audit_log (at, user_id, action, target) VALUES (?1, ?2, ?3, ?4)",
-            params!["2026-05-21 11:00:00", admin.id, "rule.toggle", "rule:nightjar"],
+            params![
+                "2026-05-21 11:00:00",
+                admin.id,
+                "rule.toggle",
+                "rule:nightjar"
+            ],
         )
         .unwrap();
         conn.execute(
@@ -940,7 +943,12 @@ mod tests {
         .unwrap();
         conn.execute(
             "INSERT INTO audit_log (at, user_id, action, target) VALUES (?1, ?2, ?3, ?4)",
-            params!["2026-06-01 14:00:00", admin.id, "settings.update", "detection"],
+            params![
+                "2026-06-01 14:00:00",
+                admin.id,
+                "settings.update",
+                "detection"
+            ],
         )
         .unwrap();
 
@@ -951,12 +959,16 @@ mod tests {
         assert_eq!(in_range[0].at, "2026-05-25 09:00:00");
 
         // Add action filter `rule.%` — only the two rule.* rows survive.
-        let rules = conn.query("2026-05-20", "2026-05-30", "rule.%", 100).unwrap();
+        let rules = conn
+            .query("2026-05-20", "2026-05-30", "rule.%", 100)
+            .unwrap();
         assert_eq!(rules.len(), 2);
         assert!(rules.iter().all(|r| r.action.starts_with("rule.")));
 
         // Tight infix match still works.
-        let toggles = conn.query("2026-05-20", "2026-05-30", "%toggle%", 100).unwrap();
+        let toggles = conn
+            .query("2026-05-20", "2026-05-30", "%toggle%", 100)
+            .unwrap();
         assert_eq!(toggles.len(), 1);
         assert_eq!(toggles[0].action, "rule.toggle");
 

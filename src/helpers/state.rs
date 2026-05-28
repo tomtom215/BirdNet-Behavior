@@ -33,11 +33,8 @@ pub fn build_state_with_analytics(
         .unwrap_or_else(|| default_analytics_path(&server_config.db_path));
 
     tracing::info!(path = %analytics_path.display(), "enabling DuckDB analytics");
-    birdnet_web::state::AppState::new_with_analytics(
-        server_config.db_path.clone(),
-        &analytics_path,
-    )
-    .map_err(|e| format!("database error: {e}").into())
+    birdnet_web::state::AppState::new_with_analytics(server_config.db_path.clone(), &analytics_path)
+        .map_err(|e| format!("database error: {e}").into())
 }
 
 /// Default analytics database path — same directory and stem as the operational

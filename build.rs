@@ -72,8 +72,8 @@ fn main() {
 /// Locate the book source directory relative to `CARGO_MANIFEST_DIR`.
 /// Defaults to `docs/book/` under the workspace root.
 fn book_source_root() -> PathBuf {
-    let manifest = std::env::var("CARGO_MANIFEST_DIR")
-        .map_or_else(|_| PathBuf::from("."), PathBuf::from);
+    let manifest =
+        std::env::var("CARGO_MANIFEST_DIR").map_or_else(|_| PathBuf::from("."), PathBuf::from);
     let candidate = manifest.join("docs/book");
     if candidate.exists() {
         return candidate;

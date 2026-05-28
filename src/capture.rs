@@ -111,7 +111,11 @@ fn resolve_alsa_devices(cli: &Cli, config: Option<&birdnet_core::config::Config>
         return vec![device];
     }
     if let Some(config) = config {
-        if let Some(multi) = config.get("ALSA_CARDS").map(split).filter(|v| !v.is_empty()) {
+        if let Some(multi) = config
+            .get("ALSA_CARDS")
+            .map(split)
+            .filter(|v| !v.is_empty())
+        {
             return multi;
         }
         if let Some(single) = config.get("ALSA_CARD").filter(|d| !d.trim().is_empty()) {
@@ -134,7 +138,10 @@ fn resolve_alsa_devices(cli: &Cli, config: Option<&birdnet_core::config::Config>
 fn resolve_sources_from_db(state: &birdnet_web::state::AppState) -> Option<Vec<CaptureSource>> {
     use birdnet_db::audio_sources::AudioSourceStore;
     let rows = state.with_db(|conn| AudioSourceStore::list(conn).ok())?;
-    let active: Vec<_> = rows.into_iter().filter(|s| s.disabled_at.is_none()).collect();
+    let active: Vec<_> = rows
+        .into_iter()
+        .filter(|s| s.disabled_at.is_none())
+        .collect();
     if active.is_empty() {
         return None;
     }
@@ -155,7 +162,11 @@ fn resolve_sources_from_db(state: &birdnet_web::state::AppState) -> Option<Vec<C
     let mut out = Vec::with_capacity(active.len());
     let mut rtsp_index = 0_usize;
     for row in active {
-        out.push(audio_source_to_capture_source(&row, local_count > 1, &mut rtsp_index));
+        out.push(audio_source_to_capture_source(
+            &row,
+            local_count > 1,
+            &mut rtsp_index,
+        ));
     }
     Some(out)
 }
@@ -622,7 +633,10 @@ mod tests {
                 other => panic!("expected microphone, got {other:?}"),
             })
             .collect();
-        assert_eq!(devices, vec!["plughw:1,0".to_string(), "plughw:2,0".to_string()]);
+        assert_eq!(
+            devices,
+            vec!["plughw:1,0".to_string(), "plughw:2,0".to_string()]
+        );
         assert_eq!(
             mic_stream_ids(&sources),
             vec![Some("MIC_1".to_string()), Some("MIC_2".to_string())]
@@ -638,7 +652,10 @@ mod tests {
         c.alsa_devices = vec!["plughw:1,0".to_string(), "plughw:2,0".to_string()];
         // --alsa-devices wins over both --alsa-device and the config keys.
         let devices: Vec<_> = resolve_alsa_devices(&c, Some(&cfg));
-        assert_eq!(devices, vec!["plughw:1,0".to_string(), "plughw:2,0".to_string()]);
+        assert_eq!(
+            devices,
+            vec!["plughw:1,0".to_string(), "plughw:2,0".to_string()]
+        );
     }
 
     #[test]
@@ -790,10 +807,7 @@ mod tests {
     fn fresh_state() -> birdnet_web::state::AppState {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         birdnet_db::migration::migrate(&conn).unwrap();
-        birdnet_web::state::AppState::from_connection(
-            conn,
-            std::path::PathBuf::from(":memory:"),
-        )
+        birdnet_web::state::AppState::from_connection(conn, std::path::PathBuf::from(":memory:"))
     }
 
     fn insert_row(
@@ -826,11 +840,10 @@ mod tests {
         // Migration 15 may not seed anything when settings.audio_source is absent
         // — confirm by inspecting the table is empty first, then assert the
         // resolver returns None.
-        let count: i64 = state
-            .with_db(|conn| -> i64 {
-                conn.query_row("SELECT COUNT(*) FROM audio_sources", [], |r| r.get(0))
-                    .unwrap_or(0)
-            });
+        let count: i64 = state.with_db(|conn| -> i64 {
+            conn.query_row("SELECT COUNT(*) FROM audio_sources", [], |r| r.get(0))
+                .unwrap_or(0)
+        });
         assert_eq!(count, 0, "audio_sources should be empty on a fresh state");
         assert!(resolve_sources_from_db(&state).is_none());
     }
@@ -861,8 +874,20 @@ mod tests {
         // is gone so the supervisor's per-source liveness gauge has a
         // stable, row-specific label.
         let state = fresh_state();
-        insert_row(&state, "src_only_mic", SourceKind::UsbAlsa, "plughw:1,0", false);
-        insert_row(&state, "src_rtsp_1", SourceKind::Rtsp, "rtsp://lan/a", false);
+        insert_row(
+            &state,
+            "src_only_mic",
+            SourceKind::UsbAlsa,
+            "plughw:1,0",
+            false,
+        );
+        insert_row(
+            &state,
+            "src_rtsp_1",
+            SourceKind::Rtsp,
+            "rtsp://lan/a",
+            false,
+        );
 
         let resolved = resolve_sources_from_db(&state).expect("non-empty");
         let mic = resolved
@@ -879,7 +904,13 @@ mod tests {
     fn resolve_from_db_assigns_ids_when_multiple_local_mics() {
         let state = fresh_state();
         insert_row(&state, "src_a", SourceKind::UsbAlsa, "plughw:1,0", false);
-        insert_row(&state, "src_b", SourceKind::PipeWire, "alsa_input.foo", false);
+        insert_row(
+            &state,
+            "src_b",
+            SourceKind::PipeWire,
+            "alsa_input.foo",
+            false,
+        );
 
         let resolved = resolve_sources_from_db(&state).expect("non-empty");
         let ids: Vec<_> = resolved

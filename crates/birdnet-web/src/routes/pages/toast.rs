@@ -113,7 +113,11 @@ impl Toast {
     #[must_use]
     pub fn render(&self) -> String {
         let kind = self.kind.as_str();
-        let sticky = if self.sticky { r#" data-sticky="1""# } else { "" };
+        let sticky = if self.sticky {
+            r#" data-sticky="1""#
+        } else {
+            ""
+        };
         let timeout = self
             .timeout_ms
             .map(|m| format!(r#" data-timeout-ms="{m}""#))

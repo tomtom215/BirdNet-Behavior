@@ -13,10 +13,10 @@
 //! * **Spectrogram** — the same `/api/v2/ws/spectrogram` consumer
 //!   shipped on the dashboard (#98); the in-page script is a narrowed
 //!   copy. Producer side is the global capture-pipeline watcher, so the
-//!   canvas shows whichever source is feeding `state.audio_source()`
-//!   into the watch dir — not strictly the listen-now selection. A
-//!   per-source spectrogram producer is the natural follow-up once
-//!   the capture pipeline iterates `audio_sources` rows (O-13).
+//!   canvas shows whichever source is feeding the watch dir — not
+//!   strictly the listen-now selection. A per-source spectrogram
+//!   producer is the natural follow-up once the capture pipeline
+//!   iterates `audio_sources` rows (O-13).
 //! * **Trickle** — `/pages/detections` (the dashboard live feed
 //!   handler) polled every 10 s. Empty DB → `empty_states::quiet_yard()`
 //!   via the existing partial.
@@ -25,7 +25,9 @@
 //! `audio_sources` plus a `(default)` entry that maps to the legacy
 //! single-string `state.audio_source()` path. On a fresh station with
 //! no `audio_sources` rows but a configured `state.audio_source()`, the
-//! selector still works via the default option.
+//! selector still works via the default option — `/stream` itself now
+//! resolves the default via the first enabled `audio_sources` row,
+//! reading `state.audio_source()` only as a final fallback.
 
 use axum::Router;
 use axum::extract::State;
@@ -77,10 +79,7 @@ fn render_source_options(sources: &[AudioSource], has_default: bool) -> String {
         out.push_str(r#"<option value="">— default audio source —</option>"#);
     }
     for s in sources {
-        let label_display = s
-            .label
-            .clone()
-            .unwrap_or_else(|| s.device_id.clone());
+        let label_display = s.label.clone().unwrap_or_else(|| s.device_id.clone());
         let kind_glyph = match s.kind {
             SourceKind::UsbAlsa => "🎙",
             SourceKind::PipeWire => "🔊",
@@ -118,7 +117,11 @@ mod tests {
             rtsp_transport: RtspTransport::Auto,
             schedule_quiet: None,
             pipeline: PipelineFlags::default(),
-            disabled_at: if disabled { Some("2026-01-01".to_string()) } else { None },
+            disabled_at: if disabled {
+                Some("2026-01-01".to_string())
+            } else {
+                None
+            },
             created_at: "2026-05-01".to_string(),
             updated_at: "2026-05-01".to_string(),
         }
@@ -158,7 +161,12 @@ mod tests {
     #[test]
     fn render_source_options_html_escapes_labels() {
         // A label like `Front <camera>` could break out of the option text.
-        let sources = vec![sample("src_x", SourceKind::Rtsp, Some("Front <cam>"), false)];
+        let sources = vec![sample(
+            "src_x",
+            SourceKind::Rtsp,
+            Some("Front <cam>"),
+            false,
+        )];
         let html = render_source_options(&sources, false);
         assert!(html.contains("Front &lt;cam&gt;"));
         assert!(!html.contains("<cam>"));

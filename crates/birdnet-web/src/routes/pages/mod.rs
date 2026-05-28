@@ -32,8 +32,8 @@ pub mod detection_reviews;
 pub mod empty_states;
 pub mod gallery;
 pub mod health;
-pub(crate) mod help;
 pub mod heatmap;
+pub(crate) mod help;
 pub mod history;
 pub mod life_list;
 pub(crate) mod listen;
@@ -48,9 +48,9 @@ pub(crate) mod skeletons;
 pub mod species_pages;
 pub mod system_dashboard;
 pub mod timeseries_dash;
+pub(crate) mod toast;
 pub mod today;
 pub(crate) mod today_phrase;
-pub(crate) mod toast;
 pub mod viz;
 pub mod weekly_report;
 pub mod year_in_review;
@@ -80,8 +80,7 @@ pub(crate) const TOAST_REGION_HTML: &str =
 pub(crate) const TOPNAV_MORE_HTML: &str =
     include_str!("../../../templates/_partial_topnav_more.html");
 /// Real footer (O-26) — site-meta only, destinations live in the topnav + More.
-pub(crate) const FOOTER_HTML: &str =
-    include_str!("../../../templates/_partial_footer.html");
+pub(crate) const FOOTER_HTML: &str = include_str!("../../../templates/_partial_footer.html");
 /// Command palette overlay (O-19), injected into every full-page shell.
 pub(crate) const CMDK_HTML: &str = include_str!("../../../templates/_partial_cmdk.html");
 /// Help-drawer dialog (O-20), injected into every full-page shell.
@@ -91,8 +90,7 @@ pub(crate) const HELP_DRAWER_HTML: &str =
 pub(crate) const UPDATE_BANNER_HTML: &str =
     include_str!("../../../templates/_partial_update_banner.html");
 /// Phone-only bottom tab bar (O-24), injected before `</body>`.
-pub(crate) const TABBAR_HTML: &str =
-    include_str!("../../../templates/_partial_tabbar.html");
+pub(crate) const TABBAR_HTML: &str = include_str!("../../../templates/_partial_tabbar.html");
 
 /// Build all page and partial routes.
 pub fn router() -> Router<AppState> {

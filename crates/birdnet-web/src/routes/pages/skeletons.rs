@@ -174,9 +174,8 @@ pub const fn trend_line() -> &'static str {
 #[must_use]
 pub fn list_rows(n: usize) -> String {
     let n = n.clamp(1, 20);
-    let mut out = String::from(
-        r#"<div class="bnb-skel-list" aria-busy="true" aria-label="Loading list">"#,
-    );
+    let mut out =
+        String::from(r#"<div class="bnb-skel-list" aria-busy="true" aria-label="Loading list">"#);
     for _ in 0..n {
         out.push_str(
             r#"<div class="bnb-skel-list-row">

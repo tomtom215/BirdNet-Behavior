@@ -34,7 +34,6 @@ use crate::routes::pages::escape_html;
 use crate::routes::pages::toast::{self, Toast};
 use crate::state::AppState;
 
-
 const ACCOUNTS_TEMPLATE: &str = include_str!("../../../templates/admin_accounts.html");
 const AUDIT_PREVIEW_LIMIT: usize = 6;
 
@@ -61,10 +60,7 @@ pub fn router() -> Router<AppState> {
 // GET /admin/accounts
 // ───────────────────────────────────────────────────────────────────────────
 
-async fn accounts_page(
-    State(state): State<AppState>,
-    request_user: RequestUser,
-) -> Html<String> {
+async fn accounts_page(State(state): State<AppState>, request_user: RequestUser) -> Html<String> {
     let current_session_id = request_user.session_id.clone();
     let body = state.with_db(|conn| -> Result<String, AccountsError> {
         let current_user = conn.find_user(request_user.user.id)?;
@@ -276,15 +272,10 @@ struct CreateUserForm {
     label: Option<String>,
 }
 
-async fn create_user(
-    State(state): State<AppState>,
-    Form(form): Form<CreateUserForm>,
-) -> Response {
+async fn create_user(State(state): State<AppState>, Form(form): Form<CreateUserForm>) -> Response {
     if form.password.len() < 10 {
-        return toast::oob_only(Toast::error(
-            "Password must be at least 10 characters.",
-        ))
-        .into_response();
+        return toast::oob_only(Toast::error("Password must be at least 10 characters."))
+            .into_response();
     }
 
     let pwd_argon2 = match accounts::hash_password(&form.password) {
@@ -326,15 +317,11 @@ async fn create_user(
             form.username
         )))
         .into_response(),
-        Err(AccountsError::Invalid(msg)) => {
-            toast::oob_only(Toast::error(msg)).into_response()
-        }
+        Err(AccountsError::Invalid(msg)) => toast::oob_only(Toast::error(msg)).into_response(),
         Err(e) => {
             tracing::error!(error = %e, "create_user failed");
-            toast::oob_only(Toast::error(
-                "Could not create the user. See server logs.",
-            ))
-            .into_response()
+            toast::oob_only(Toast::error("Could not create the user. See server logs."))
+                .into_response()
         }
     }
 }
@@ -351,9 +338,7 @@ async fn remove_user(State(state): State<AppState>, Path(id): Path<i64>) -> Resp
             let body = Html(render_user_rows(&users));
             toast::with(body, Toast::success("User removed.")).into_response()
         }
-        Err(AccountsError::Invalid(msg)) => {
-            toast::oob_only(Toast::warn(msg)).into_response()
-        }
+        Err(AccountsError::Invalid(msg)) => toast::oob_only(Toast::warn(msg)).into_response(),
         Err(AccountsError::NotFound(_)) => {
             toast::oob_only(Toast::warn("User no longer exists.")).into_response()
         }
@@ -379,10 +364,8 @@ async fn set_password(
     Form(form): Form<PasswordForm>,
 ) -> Response {
     if form.password.len() < 10 {
-        return toast::oob_only(Toast::error(
-            "Password must be at least 10 characters.",
-        ))
-        .into_response();
+        return toast::oob_only(Toast::error("Password must be at least 10 characters."))
+            .into_response();
     }
     let pwd_argon2 = match accounts::hash_password(&form.password) {
         Ok(h) => h,
@@ -419,8 +402,7 @@ async fn revoke_session_handler(
     let result = state.with_db(|conn| conn.revoke_session(&id));
     if let Err(e) = result {
         tracing::error!(error = %e, "revoke_session failed");
-        return toast::oob_only(Toast::error("Could not revoke that session."))
-            .into_response();
+        return toast::oob_only(Toast::error("Could not revoke that session.")).into_response();
     }
     let current_session_id = request_user.session_id.clone();
     let body = state
@@ -508,7 +490,13 @@ async fn audit_full_page(
     let body = state.with_db(|conn| -> Result<String, AccountsError> {
         let entries = conn.query(&from, &to, &action_like, AUDIT_PAGE_LIMIT)?;
         let users = conn.list_users()?;
-        Ok(render_audit_page(&from, &to, &action_filter, &entries, &users))
+        Ok(render_audit_page(
+            &from,
+            &to,
+            &action_filter,
+            &entries,
+            &users,
+        ))
     });
 
     let body = match body {
@@ -577,7 +565,7 @@ fn parse_ymd_to_epoch(date: &str) -> Option<i64> {
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
-    clippy::many_single_char_names,
+    clippy::many_single_char_names
 )]
 fn ymd_to_epoch(y: i32, m: u32, d: u32) -> i64 {
     let y = i64::from(if m <= 2 { y - 1 } else { y });
@@ -594,7 +582,7 @@ fn ymd_to_epoch(y: i32, m: u32, d: u32) -> i64 {
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
-    clippy::many_single_char_names,
+    clippy::many_single_char_names
 )]
 fn epoch_to_ymd(secs: i64) -> (i32, u32, u32) {
     let days = secs.div_euclid(86_400);
