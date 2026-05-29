@@ -58,27 +58,19 @@ impl fmt::Display for ServerError {
 
 impl std::error::Error for ServerError {}
 
-/// Build the axum application router with all middleware and routes.
-pub fn build_router(state: AppState) -> Router {
-    build_router_with_auth(state, None)
-}
-
-/// Build the axum application router with cookie-session authentication
-/// gating `/admin/*`.
+/// Build the axum application router with all middleware and routes,
+/// gating `/admin/*` behind the v2 cookie-session middleware.
 ///
 /// Applies a per-IP token-bucket rate limiter (30 req/s, burst 60) to
 /// protect the API from overload.  Static assets and WebSocket connections
 /// share the same limit bucket as API calls but are lightweight by nature.
 ///
-/// The `_auth_config` argument is retained for source-compatibility with
-/// callers that still pass an `AuthConfig` built from `CADDY_USER`/
-/// `CADDY_PWD`; those values now feed the cookie middleware via the env
-/// (the bootstrap in `helpers::auth` hashes them into the seed admin
-/// row's `pwd_argon2`). Pass `None` for the open-bypass path.
-pub fn build_router_with_auth(
-    state: AppState,
-    _auth_config: Option<crate::auth::AuthConfig>,
-) -> Router {
+/// Admin authentication is cookie-based (the O-14/O-15 wire flip):
+/// `CADDY_USER`/`CADDY_PWD` feed the cookie middleware via the env (the
+/// bootstrap in `helpers::auth` hashes them into the seed admin row's
+/// `pwd_argon2`), and the middleware open-bypasses when no admin password
+/// is configured — matching the fresh-Pi "no password = open admin" contract.
+pub fn build_router(state: AppState) -> Router {
     // Rate limiter: 30 req/s sustained, 60-request burst per IP.
     let limiter = Arc::new(RateLimiter::new(RateLimitConfig::default()));
 

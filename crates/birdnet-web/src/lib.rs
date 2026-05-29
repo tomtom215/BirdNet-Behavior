@@ -2,7 +2,6 @@
 //!
 //! REST API, WebSocket, and HTMX page serving via axum.
 
-pub mod auth;
 pub mod auth_middleware;
 pub mod metrics;
 pub mod rate_limit;
