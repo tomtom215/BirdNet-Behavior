@@ -1,24 +1,21 @@
 //! Branded sign-in page and session management (O-14).
 //!
-//! Adds `GET /login`, `POST /login`, and `POST /logout`. These plumb the
-//! cookie path documented in [`crate::session`] without flipping the
-//! auth wire: the basic-auth middleware in [`crate::auth`] still gates
-//! `/admin/*`. The cookie route is ready for the maintainer to enable
-//! once the open RFC questions in `docs/proposed_changes/O-14_login/DIFF.md`
-//! are resolved — see the `TODO(O-14-followup)` markers.
+//! Adds `GET /login`, `POST /login`, and `POST /logout` — the cookie path
+//! documented in [`crate::session`]. The auth wire is flipped:
+//! [`crate::auth_middleware`] is the live gate for `/admin/*`, validating
+//! the `bnb-session` cookie this page mints and enforcing the viewer/admin
+//! role split on writes.
 //!
-//! ## Verification
+//! ## Behaviour
 //!
-//! Until the wire is flipped:
 //! * `GET /login` renders the branded form (single visit, no redirect).
-//! * `POST /login` validates the same `CADDY_USER` / `CADDY_PWD` credentials
-//!   the Basic Auth middleware reads, then issues `Set-Cookie: bnb-session=…`.
-//!   Wrong credentials redirect back to `/login?error=1`.
+//! * `POST /login` validates the `CADDY_USER` / `CADDY_PWD` credentials,
+//!   then issues `Set-Cookie: bnb-session=…`. Wrong credentials redirect
+//!   back to `/login?error=1`.
 //! * `POST /logout` clears the cookie and redirects to `/`.
 //!
-//! Successful sign-in is observable as a freshly minted cookie in the
-//! response headers; the browser then carries it on subsequent requests
-//! but the existing middleware ignores it.
+//! Successful sign-in mints a cookie the admin middleware then honours on
+//! subsequent requests; signing out clears it.
 
 use axum::Form;
 use axum::Router;

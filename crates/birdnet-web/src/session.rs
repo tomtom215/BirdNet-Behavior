@@ -36,15 +36,13 @@
 //! Security goal is identical (pseudo-random function of the password
 //! material) and `hmac` + `sha2` are already in `Cargo.toml`.
 //!
-//! ## What this module deliberately does *not* do
+//! ## Scope
 //!
-//! * It does not gate `/admin/*`. The auth middleware in
-//!   [`crate::auth`] still routes requests through HTTP Basic Auth; the
-//!   cookie path is plumbed but not wired into the middleware until the
-//!   RFC questions in O-14 are signed off. See the
-//!   `TODO(O-14-followup)` markers in `server.rs` and
-//!   `routes::auth_pages`.
-//! * It does not store sessions in a database. That is O-15's job.
+//! This module is the stateless cookie *primitive* — it mints and validates
+//! the token and stores nothing itself. Gating `/admin/*` is
+//! [`crate::auth_middleware`]'s job: it validates the token minted here,
+//! binds it to a `sessions` row (O-15), touches `last_seen`, and enforces
+//! the viewer/admin role split on writes.
 
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};

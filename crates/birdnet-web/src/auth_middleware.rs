@@ -183,6 +183,25 @@ async fn cookie_auth_middleware(request: Request<Body>, next: Next, state: &AppS
         }
     };
 
+    // Authorization: viewers are read-only on `/admin`. Every unsafe method
+    // (POST / PATCH / DELETE / PUT) is gated through `require_admin`; safe
+    // methods (GET / HEAD) stay open to any authenticated user. Centralising
+    // the check here means a newly-added mutating handler is write-gated by
+    // default instead of relying on each one to call `require_admin` (O-15
+    // RBAC). Every `/admin` state change uses a non-safe method, so this
+    // cleanly separates reads from writes.
+    if !request.method().is_safe()
+        && let Err(resp) = require_admin(&user)
+    {
+        tracing::info!(
+            user = %user.user.username,
+            method = %request.method(),
+            path = %path,
+            "RBAC: viewer denied admin write"
+        );
+        return *resp;
+    }
+
     let mut req = request;
     req.extensions_mut().insert(user);
     next.run(req).await
@@ -278,5 +297,44 @@ mod tests {
     fn forbidden_response_is_403() {
         let resp = forbidden_response();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    fn fake_request_user(role: Role) -> RequestUser {
+        RequestUser {
+            user: User {
+                id: 1,
+                username: "tester".to_string(),
+                pwd_argon2: String::new(),
+                role,
+                label: None,
+                created_at: "2026-05-29".to_string(),
+                disabled_at: None,
+            },
+            session_id: "sess_test".to_string(),
+        }
+    }
+
+    #[test]
+    fn require_admin_allows_admin_denies_viewer() {
+        assert!(require_admin(&fake_request_user(Role::Admin)).is_ok());
+        let denied = require_admin(&fake_request_user(Role::Viewer));
+        let resp = denied.expect_err("a viewer must be denied admin actions");
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn admin_write_gate_targets_unsafe_methods() {
+        use axum::http::Method;
+        // The /admin write-gate fires on `!method.is_safe()`: reads stay
+        // open to any authenticated user (admin or viewer); writes require
+        // the admin role. Locks in the read/write classification the
+        // middleware relies on so a future http-crate bump can't silently
+        // re-class a method.
+        assert!(Method::GET.is_safe());
+        assert!(Method::HEAD.is_safe());
+        assert!(!Method::POST.is_safe());
+        assert!(!Method::PATCH.is_safe());
+        assert!(!Method::DELETE.is_safe());
+        assert!(!Method::PUT.is_safe());
     }
 }
