@@ -7,6 +7,8 @@
 //!   * Runs a **`PRAGMA integrity_check`** once per day at a fixed UTC
 //!     offset from boot, logging WARN on failure (also pinged to the
 //!     heartbeat URL in future versions).
+//!   * Prunes **expired login sessions** on the same daily tick so the
+//!     `sessions` table stays compact over months of continuous use.
 //!   * Runs **`VACUUM`** once per week to reclaim space from deletes
 //!     and keep the page layout from fragmenting over months of
 //!     continuous appends.
@@ -67,6 +69,7 @@ async fn run_loop(db_path: PathBuf, backup_dir: PathBuf) {
         tokio::select! {
             () = async { integrity_ticker.tick().await; } => {
                 run_integrity_check(&db_path).await;
+                run_session_prune(&db_path).await;
             }
             () = async { vacuum_ticker.tick().await; } => {
                 run_backup_and_vacuum(&db_path, &backup_dir).await;
@@ -92,6 +95,32 @@ async fn run_integrity_check(db_path: &Path) {
         ),
         Ok(Err(e)) => tracing::warn!(error = %e, "scheduled integrity check errored"),
         Err(e) => tracing::warn!(error = %e, "scheduled integrity check task panicked"),
+    }
+}
+
+/// Delete expired login-session rows so the `sessions` table does not grow
+/// without bound on a long-running install. Best-effort and fully logged; a
+/// failure never aborts the maintenance loop.
+async fn run_session_prune(db_path: &Path) {
+    if !db_path.exists() {
+        tracing::debug!("session prune skipped: db not present yet");
+        return;
+    }
+    let db_path = db_path.to_path_buf();
+    let result = tokio::task::spawn_blocking(move || -> Result<usize, String> {
+        use birdnet_db::accounts::SessionStore;
+        let conn = birdnet_db::sqlite::open_or_create(&db_path).map_err(|e| e.to_string())?;
+        conn.prune_expired_sessions().map_err(|e| e.to_string())
+    })
+    .await;
+    match result {
+        Ok(Ok(0)) => tracing::debug!("scheduled session prune: nothing expired"),
+        Ok(Ok(n)) => tracing::info!(
+            pruned = n,
+            "scheduled session prune removed expired sessions"
+        ),
+        Ok(Err(e)) => tracing::warn!(error = %e, "scheduled session prune failed"),
+        Err(e) => tracing::warn!(error = %e, "scheduled session prune task panicked"),
     }
 }
 
@@ -289,5 +318,38 @@ mod tests {
         let after = std::fs::metadata(&db).unwrap().len();
         // VACUUM should not grow the file (often shrinks it after deletes).
         assert!(after <= before, "VACUUM grew file: {before} -> {after}");
+    }
+
+    #[tokio::test]
+    async fn session_prune_removes_only_expired_rows() {
+        use birdnet_db::accounts::{SessionStore, UserStore};
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+            let admin = conn.find_user_by_name("admin").unwrap();
+            // One already-expired session and one far-future session.
+            conn.create_session("expired-sid", admin.id, "2000-01-01 00:00:00", None, None)
+                .unwrap();
+            conn.create_session("live-sid", admin.id, "2999-01-01 00:00:00", None, None)
+                .unwrap();
+        }
+
+        run_session_prune(&db).await;
+
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        let total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))
+            .unwrap();
+        let live: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE id = 'live-sid'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(total, 1, "the expired session row must be pruned");
+        assert_eq!(live, 1, "the live session row must survive");
     }
 }

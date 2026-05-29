@@ -32,7 +32,10 @@ pub fn router() -> Router<AppState> {
 async fn system_page(headers: HeaderMap) -> Html<String> {
     render_page_for_request(
         "System Health",
-        &format!("{SYSTEM_DASHBOARD_HTML}{DISPLAY_PREFS_HTML}"),
+        &format!("{SYSTEM_DASHBOARD_HTML}{DISPLAY_PREFS_HTML}").replace(
+            "{{help_link}}",
+            &super::help::help_link(super::help::Topic::AdminSystem),
+        ),
         "system",
         &headers,
     )
@@ -309,6 +312,7 @@ const SYSTEM_DASHBOARD_HTML: &str = r#"<div class="page-head" style="margin-bott
     <div>
         <div class="bnb-eyebrow">Operations</div>
         <h1 class="display" style="font-size:34px;">System health</h1>
+        {{help_link}}
         <p class="bnb-meta" style="margin-top:4px;">Live vitals for this station — CPU, memory, temperature, storage, and the audio pipeline.</p>
     </div>
 </div>

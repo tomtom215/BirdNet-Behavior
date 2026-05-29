@@ -55,6 +55,12 @@ cargo clippy --workspace --all-targets
 cargo fmt --check --all
 ```
 
+> **Cold build fails with `ort-sys ... invalid peer certificate: UnknownIssuer`?**
+> You're behind a TLS-intercepting proxy that `ort`'s bundled rustls roots don't
+> trust (sandboxed CI / Claude Code on the web). Run `scripts/setup-onnxruntime.sh`
+> once to seed the ONNX Runtime download cache via `curl`; builds then work
+> offline. Web sessions run this automatically via the SessionStart hook.
+
 ### Cross-compilation (for Raspberry Pi)
 
 ```bash

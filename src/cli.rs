@@ -108,6 +108,11 @@ pub struct Cli {
     pub longitude: Option<f64>,
 
     /// Directory for caching species images from Wikipedia.
+    ///
+    /// Defaults to an `images/` directory beside the database when unset, so a
+    /// stock install shows species photos out of the box. Pass an empty value
+    /// (`--image-cache-dir ""`) to disable image caching entirely — no
+    /// Wikipedia fetches, e.g. for air-gapped deployments.
     #[arg(long, env = "BIRDNET_IMAGE_CACHE_DIR")]
     pub image_cache_dir: Option<PathBuf>,
 

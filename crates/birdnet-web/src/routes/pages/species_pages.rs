@@ -32,7 +32,11 @@ pub fn router() -> Router<AppState> {
 }
 
 async fn species_page(headers: HeaderMap) -> Html<String> {
-    super::render_page_for_request("Species", SPECIES_PAGE_HTML, "species", &headers)
+    let body = SPECIES_PAGE_HTML.replace(
+        "{{help_link}}",
+        &super::help::help_link(super::help::Topic::Species),
+    );
+    super::render_page_for_request("Species", &body, "species", &headers)
 }
 
 async fn species_detail_page(

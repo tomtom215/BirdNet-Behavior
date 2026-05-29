@@ -36,7 +36,11 @@ pub fn router() -> Router<AppState> {
 }
 
 async fn timeseries_page(headers: HeaderMap) -> Html<String> {
-    super::render_page_for_request("Time Series", TIMESERIES_PAGE_HTML, "timeseries", &headers)
+    let body = TIMESERIES_PAGE_HTML.replace(
+        "{{help_link}}",
+        &super::help::help_link(super::help::Topic::Analytics),
+    );
+    super::render_page_for_request("Time Series", &body, "timeseries", &headers)
 }
 
 // ---------------------------------------------------------------------------

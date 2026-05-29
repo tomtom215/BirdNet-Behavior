@@ -13,17 +13,17 @@ _Last audited: 2026-05-29, against integration tip `claude/gallant-feynman-bJs95
 ## 0. How to work this repo (read first if resuming cold)
 
 **Branch model (squash-loop).** Two long-lived branches:
-- **Working branch:** `claude/dazzling-wright-60OjQ` — commit here.
+- **Working branch:** harness-assigned each session (e.g. `claude/sleepy-brown-de7jU` this cycle) — commit here; use it as-is, do not rename.
 - **Integration branch:** `claude/gallant-feynman-bJs95` — open every PR with this as the **base**.
 - `main` is the old release branch (stuck at `#86`); **do not** target it.
 
-Per-task cycle:
+Per-task cycle (`$WORK` = your assigned working branch):
 1. Ensure the working branch is at the integration tip:
    `git fetch origin claude/gallant-feynman-bJs95 && git reset --hard origin/claude/gallant-feynman-bJs95`
-2. Commit the change on `claude/dazzling-wright-60OjQ`.
-3. `git push --force-with-lease -u origin claude/dazzling-wright-60OjQ`
+2. Commit the change on `$WORK`.
+3. `git push --force-with-lease -u origin $WORK`
    (force-with-lease is expected — the working branch is rewritten each cycle after the prior squash-merge).
-4. Open a PR: head `claude/dazzling-wright-60OjQ` → base `claude/gallant-feynman-bJs95`.
+4. Open a PR: head `$WORK` → base `claude/gallant-feynman-bJs95`.
 5. After it squash-merges, go back to step 1.
 
 **Gate (run all before opening a PR — there is _no_ CI on this repo, so this is the only gate):**
@@ -31,12 +31,26 @@ Per-task cycle:
 cargo fmt --check --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --lib
+cargo test -p birdnet-behavior --bins   # the root crate is bin-only; --lib skips its ~290 unit tests
 # plus any integration test you touched, e.g.:
 cargo test --test web_api_admin
 ```
-Note: the repo's historical gate was `--lib` only, which **skips `tests/`** (they link
-libonnxruntime). Run the relevant `--test <name>` explicitly so integration-test rot
-can't hide (this is how the dead Basic-Auth test in #113 had gone stale).
+Note: `--lib` **skips `tests/`** (integration tests link libonnxruntime) **and skips the root
+binary crate's own unit tests** (it has no lib target — e.g. the `helpers::state` tests). Run
+`cargo test -p birdnet-behavior --bins` and the relevant `--test <name>` explicitly so neither
+unit- nor integration-test rot can hide (this is how the dead Basic-Auth test in #113 had gone stale).
+
+**ONNX Runtime offline note (now automated).** `ort`/`ort-sys` downloads a prebuilt ONNX Runtime
+via a bundled rustls client that does **not** trust a TLS-intercepting sandbox proxy, so a cold
+build fails with `invalid peer certificate: UnknownIssuer`. `curl` (system CA) reaches the CDN fine.
+This is now handled automatically: a **SessionStart hook** (`.claude/hooks/session-start.sh`, wired
+in `.claude/settings.json`) runs `cargo fetch` then **`scripts/setup-onnxruntime.sh`**, which reads
+the URL+sha256 from ort-sys's own `dist.txt` (falling back to the `.crate` when `registry/src` isn't
+extracted yet), curls the artifact, verifies the sha256, and unpacks `libonnxruntime.a` into the
+cache ort-sys checks before downloading. It is idempotent — run it by hand any time the cold build
+fails: `bash scripts/setup-onnxruntime.sh` (pass a target triple, e.g.
+`aarch64-unknown-linux-gnu`, when cross-compiling for a Pi). The hook only fires in the remote
+(web) environment and is non-fatal.
 
 **Conventions:** see `CLAUDE.md` — `unsafe` is denied workspace-wide (so no `std::env::set_var`
 in tests), no `anyhow`/`thiserror` in library crates, library crates are sync (tokio owned by
@@ -53,21 +67,45 @@ remains is the finish-off work below.
 
 | ID | Item | Priority | Effort | Risk |
 |----|------|----------|--------|------|
-| **BUG-1** | Bird images don't populate gallery/previews | **P1** | M | low–med |
-| **P1-1** | Dead "Reset password" button (admin accounts) | **P1** | S | low |
-| **P2-1** | Stale `accounts.rs` module doc | P2 | XS | none |
+| ~~**BUG-1**~~ | Bird images don't populate gallery/previews — ✅ **DONE** (fetch-on-miss `/file` + default-on cache) | ~~P1~~ | M | low–med |
+| ~~**P1-1**~~ | Dead "Reset password" button — ✅ **DONE** (wired to live `set_password`) | ~~P1~~ | S | low |
+| ~~**P2-1**~~ | Stale `accounts.rs` module doc — ✅ **DONE** (folded into P1-1) | ~~P2~~ | XS | none |
 | **P2-2** | CSP still allows `'unsafe-inline'` | P2 | M | med |
-| **P2-3** | Extend help links to remaining analytical screens | P2 | S | low |
+| ~~**P2-3**~~ | Extend help links to remaining analytical screens — ✅ **DONE** (6 screens) | ~~P2~~ | S | low |
 | **P3-1** | O-13 legacy `--audio-source` retirement | P3 | S + decision | low |
-| **P3-2** | No background session pruning | P3 | S | low |
+| ~~**P3-2**~~ | No background session pruning — ✅ **DONE** (daily maintenance tick) | ~~P3~~ | S | low |
 | **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) | P3 | L | low (tedious) |
 | **P3-4** | Minor cosmetics (uptime pill, migration compare) | P3 | XS | none |
+| **P3-5** | Image blacklist is inert on read path (admin UI only); doctor default img path | P3 | S | low |
 
-Recommended order: **BUG-1 → P1-1 → P2-1 (fold into P1-1) → P2-3 → P2-2/P3-3 → P3-1 (needs your call) → P3-2 → P3-4.**
+Recommended order: ~~BUG-1 → P1-1 → P2-1 → P2-3~~ (shipped) → ~~P3-2~~ (shipped) → **P2-2/P3-3** (CSP + inline-style sweep) → **P3-1** (needs your call) → **P3-5** → **P3-4**. _Also shipped: ONNX offline build tooling (SessionStart hook)._
 
 ---
 
-## BUG-1 — Bird images don't populate the gallery or previews  · **P1**
+## BUG-1 — Bird images don't populate the gallery or previews  · **P1** — ✅ DONE
+
+**✅ Shipped (this PR).** Both ranked root causes fixed:
+1. **`/file` is now fetch-on-miss.** `species_image_file` (`crates/birdnet-web/src/routes/images.rs`)
+   calls `cache.get_image()` on a cache miss (mirroring `species_image_info`), so every
+   `<img src=".../file">` self-heals on first view; 404 only when no cache is configured or the
+   species genuinely has no image. The gallery warmer stays as a pre-warm optimisation.
+2. **Image cache defaults on.** `init_image_cache` (`src/helpers/state.rs`) now defaults the cache to
+   `<db_dir>/images` when unset (mirrors `default_analytics_path`); an empty `--image-cache-dir ""`
+   or `IMAGE_CACHE_DIR=` opts out. Bare-metal installs now show photos like Docker already did.
+   _Privacy/egress: a stock install now reaches Wikipedia on demand — documented in `cli.rs` help and
+   `.env.example`; consistent with analytics default-on and BirdNET-Pi showing images by default._
+
+Regression test: `tests/web_api_images.rs` — a stubbed `ImageProvider` + throwaway localhost server
+proves `/file` returns `200 image/*` on a **cold** cache (red before, green after). Gate green
+(`fmt`, `clippy -D warnings`, `--bins` unit tests, `--test web_api_images`, `--test web_api_species`).
+
+**Follow-ups discovered (not blockers, filed below as P3-5):** the `image_blacklist` is admin-managed
+but **not consulted on any read/fetch path** today (gallery warmer, `species_image_info`, and now
+`/file` all skip it) — so it was correct to mirror `species_image_info` here rather than half-wire it
+into one endpoint. Also, `doctor::paths` only reports the image cache when explicitly set, not the new
+default. See **P3-5**.
+
+The original investigation notes are kept below for context.
 
 **Symptom (reported).** Bird images are not fetched from the web to fill the image
 gallery and species/detection previews.
@@ -138,7 +176,9 @@ asserts `/api/v2/species/image/{sci}/file` returns `200 image/*` on a cold cache
 
 ---
 
-## P1-1 — Dead "Reset password" button in admin accounts  · **P1**
+## P1-1 — Dead "Reset password" button in admin accounts  · **P1** — ✅ DONE
+
+**✅ Shipped.** `password_reset_form(id)` (`accounts.rs`) renders an inline password form posting to the live `set_password` (`POST /admin/accounts/users/{id}`); added to the seed-admin row and every non-admin row. `web_api_admin` test asserts a valid rotation changes the argon2 hash and a <10-char one does not.
 
 **Evidence.** `crates/birdnet-web/src/routes/admin/accounts.rs:176` — the seed admin's button does
 `hx-post="/admin/accounts/users/0/password-reset-stub"`, a URL with **no route** (the real route is
@@ -161,7 +201,9 @@ valid password → 200 + hash changes; <10 chars → error toast.
 
 ---
 
-## P2-1 — Stale `accounts.rs` module doc  · **P2**
+## P2-1 — Stale `accounts.rs` module doc  · **P2** — ✅ DONE
+
+**✅ Shipped** (with P1-1): module doc rewritten to describe the live central RBAC (cookie middleware + admin-only writes); the stale "(rotate password — stub)" banner dropped.
 
 **Evidence.** `accounts.rs:8-13` still says *"until the auth wire is flipped the request-time user is
 the seed admin row … see the `TODO(O-15-followup)` comments below for the call sites that need
@@ -190,7 +232,9 @@ no inline script executes without the nonce. **Effort:** M. **Risk:** med (a mis
 
 ---
 
-## P2-3 — Extend help links to the remaining analytical screens  · **P2**
+## P2-3 — Extend help links to the remaining analytical screens  · **P2** — ✅ DONE
+
+**✅ Shipped.** `help_link(Topic::…)` added to correlation, behavioral, history, species (list), timeseries, and system-dashboard headers via the `{{help_link}}` placeholder + handler `.replace` pattern. Targets: Analytics ×4, Species, AdminSystem — all existing mdBook pages.
 
 **Evidence.** `help_link(Topic::…)` is wired on 12 screens (dashboard, today, heatmap, dawn_chorus,
 life_list, recordings, quarantine, migration, notification_center, weekly_report, year_in_review, help).
@@ -216,7 +260,9 @@ flag** — flagged in #111 as a **product decision**, not code. **Decide first**
 
 ---
 
-## P3-2 — No background session pruning  · **P3**
+## P3-2 — No background session pruning  · **P3** — ✅ DONE
+
+**✅ Shipped.** `run_session_prune` folded into the existing daily maintenance tick (`src/maintenance.rs`) — opens the DB, calls `prune_expired_sessions`, logs the count; best-effort/non-fatal. Test: an expired row is pruned, a live row survives.
 
 **Evidence.** `birdnet_db::accounts::prune_expired_sessions` exists but a workspace grep shows it is
 **never called** — the `sessions` table grows until manually pruned.
@@ -251,6 +297,28 @@ count drops. **Effort:** L (many small PRs). **Risk:** low but tedious.
 
 ---
 
+## P3-5 — Image blacklist inert on the read path; doctor default image path  · **P3** _(surfaced by BUG-1)_
+
+**Evidence.** `birdnet_db::sqlite::queries::images` provides `is_image_blacklisted` /
+`blacklisted_urls_for_species`, and `/admin/images` lets admins manage the list, but a grep shows
+**no read/fetch path consults it**: the gallery warmer (`routes/pages/gallery.rs:~97`),
+`species_image_info`, and the BUG-1 `species_image_file` all call `cache.get_image()` without a
+blacklist check. So the admin feature is currently inert — a blacklisted species' image is still
+fetched and shown.
+
+**Fix (decide the layer first).** Either (a) check the blacklist in the web handlers before
+`get_image` and on the warmer (keeps the lib network-only), or (b) thread an "is blacklisted"
+predicate into `ImageCache`. Apply to **all three** call sites consistently. Mirror the existing
+`escape_html`/DB-access patterns. **Verify:** blacklisting a species → its `/file` 404s / gallery
+tile stays blank; unrelated species unaffected.
+
+**Also (XS).** `doctor::paths` reports the image cache dir only when explicitly configured; after
+BUG-1's default-on, report the resolved default (`<db_dir>/images`) too so diagnostics match reality.
+
+**Effort:** S. **Risk:** low.
+
+---
+
 ## Out of scope (documented as deliberately deferred)
 
 From `docs/proposed_changes/README_v2.md` — captured here so they aren't mistaken for gaps:
@@ -258,7 +326,8 @@ From `docs/proposed_changes/README_v2.md` — captured here so they aren't mista
 - **Web Push** — O-24 shipped PWA bones (manifest, service worker, icons) but not Web Push; needs a
   server-side push store + key-rotation story distinct from the session model.
 - **Custom species images** — `BIRDNET_CUSTOM_IMAGE_DIR` (`.env.example:223`) overrides the Wikipedia
-  cache; verify this path still works after any BUG-1 changes.
+  cache; still works after BUG-1 — `species_image_file` checks the custom dir first (unchanged), then
+  falls through to the now-fetch-on-miss Wikipedia cache.
 
 ---
 

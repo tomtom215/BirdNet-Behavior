@@ -48,21 +48,38 @@ fn default_analytics_path(db_path: &std::path::Path) -> PathBuf {
 }
 
 /// Initialize the species image cache.
+///
+/// Image caching is on by default: when neither `--image-cache-dir` nor the
+/// `IMAGE_CACHE_DIR` config key is set, the cache is placed in an `images/`
+/// subdirectory beside the operational SQLite database (mirroring
+/// [`default_analytics_path`]), so a stock install shows species photos out of
+/// the box — matching BirdNET-Pi and the analytics default. Operators who want
+/// it off (e.g. air-gapped deployments that must not reach Wikipedia on demand)
+/// can pass an empty `--image-cache-dir ""` or set `IMAGE_CACHE_DIR=`, which we
+/// honour as an opt-out.
 pub fn init_image_cache(
     state: birdnet_web::state::AppState,
     cli: &Cli,
     config: Option<&birdnet_core::config::Config>,
+    db_path: &std::path::Path,
 ) -> birdnet_web::state::AppState {
-    let cache_dir = cli
+    // CLI wins over config; an explicitly empty value is an opt-out.
+    let configured = cli
         .image_cache_dir
         .clone()
-        .or_else(|| config?.get("IMAGE_CACHE_DIR").map(PathBuf::from));
+        .or_else(|| config.and_then(|c| c.get("IMAGE_CACHE_DIR").map(PathBuf::from)));
 
-    let Some(ref cache_dir) = cache_dir else {
+    if configured
+        .as_ref()
+        .is_some_and(|p| p.as_os_str().is_empty())
+    {
+        tracing::info!("species image cache disabled via empty image-cache-dir");
         return state;
-    };
+    }
 
-    match birdnet_integrations::species_images::ImageCache::with_wikipedia(cache_dir) {
+    let cache_dir = configured.unwrap_or_else(|| default_image_cache_dir(db_path));
+
+    match birdnet_integrations::species_images::ImageCache::with_wikipedia(&cache_dir) {
         Ok(cache) => {
             tracing::info!(
                 path = %cache_dir.display(),
@@ -76,6 +93,17 @@ pub fn init_image_cache(
             state
         }
     }
+}
+
+/// Default species-image cache directory — an `images/` subdirectory beside the
+/// operational SQLite database. Mirrors [`default_analytics_path`] so a stock
+/// install shows species photos without extra configuration.
+fn default_image_cache_dir(db_path: &std::path::Path) -> PathBuf {
+    db_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("images")
 }
 
 /// Initialize i18n language settings.
@@ -339,9 +367,43 @@ mod tests {
     // ── init_image_cache ───────────────────────────────────────────────
 
     #[test]
-    fn image_cache_noop_when_neither_cli_nor_config_set() {
+    fn image_cache_defaults_on_beside_db_when_unconfigured() {
+        // Neither CLI nor config set ⇒ the cache defaults to `<db_dir>/images`
+        // so a stock install shows species photos out of the box.
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("birds.db");
         let cli = default_cli();
-        let state = init_image_cache(test_state(), &cli, None);
+        let state = init_image_cache(test_state(), &cli, None, &db_path);
+        assert!(state.image_cache().is_some());
+        assert!(
+            tmp.path().join("images").is_dir(),
+            "default cache dir should be created beside the database"
+        );
+    }
+
+    #[test]
+    fn image_cache_disabled_via_empty_cli_value() {
+        // `--image-cache-dir ""` is an explicit opt-out (e.g. air-gapped).
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("birds.db");
+        let mut cli = default_cli();
+        cli.image_cache_dir = Some(std::path::PathBuf::new());
+        let state = init_image_cache(test_state(), &cli, None, &db_path);
+        assert!(state.image_cache().is_none());
+        assert!(
+            !tmp.path().join("images").exists(),
+            "opt-out must not create the default cache dir"
+        );
+    }
+
+    #[test]
+    fn image_cache_disabled_via_empty_config_value() {
+        // `IMAGE_CACHE_DIR=` in the config file is also an opt-out.
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("birds.db");
+        let cli = default_cli();
+        let cfg = config_with(&[("IMAGE_CACHE_DIR", "")]);
+        let state = init_image_cache(test_state(), &cli, Some(&cfg), &db_path);
         assert!(state.image_cache().is_none());
     }
 
@@ -349,11 +411,12 @@ mod tests {
     fn image_cache_installed_when_cli_dir_set() {
         // The directory just needs to be writable; the cache uses
         // Wikipedia as the backing provider but only the directory
-        // matters for the construction path that this unit covers.
+        // matters for the construction path that this unit covers. The
+        // db_path is unused when an explicit dir is configured.
         let tmp = tempfile::tempdir().unwrap();
         let mut cli = default_cli();
         cli.image_cache_dir = Some(tmp.path().to_path_buf());
-        let state = init_image_cache(test_state(), &cli, None);
+        let state = init_image_cache(test_state(), &cli, None, std::path::Path::new(":memory:"));
         assert!(state.image_cache().is_some());
     }
 
@@ -365,7 +428,12 @@ mod tests {
             "IMAGE_CACHE_DIR",
             tmp.path().to_str().expect("tempdir path is utf8"),
         )]);
-        let state = init_image_cache(test_state(), &cli, Some(&cfg));
+        let state = init_image_cache(
+            test_state(),
+            &cli,
+            Some(&cfg),
+            std::path::Path::new(":memory:"),
+        );
         assert!(state.image_cache().is_some());
     }
 }
