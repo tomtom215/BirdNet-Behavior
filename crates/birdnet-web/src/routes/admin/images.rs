@@ -140,14 +140,24 @@ async fn add_blacklist(
     Form(form): Form<BlacklistForm>,
 ) -> impl IntoResponse {
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        let added = state.with_db(|conn| {
             birdnet_db::sqlite::add_image_blacklist(
                 conn,
                 &form.sci_name,
                 &form.url,
                 form.reason.as_deref(),
             )
-        })
+        });
+        // On success, evict any cached image for this species so the next
+        // `/file` request re-fetches and is refused while the URL stays
+        // blacklisted. This covers images cached before the blacklist entry,
+        // whose source URL isn't retained in the on-disk cache across restarts.
+        if added.is_ok()
+            && let Some(cache) = state.image_cache()
+        {
+            cache.remove(&form.sci_name);
+        }
+        added
     })
     .await;
 

@@ -75,10 +75,10 @@ remains is the finish-off work below.
 | **P3-1** | O-13 legacy `--audio-source` retirement | P3 | S + decision | low |
 | ~~**P3-2**~~ | No background session pruning — ✅ **DONE** (daily maintenance tick) | ~~P3~~ | S | low |
 | **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) | P3 | L | low (tedious) |
-| **P3-4** | Minor cosmetics (uptime pill, migration compare) | P3 | XS | none |
-| **P3-5** | Image blacklist is inert on read path (admin UI only); doctor default img path | P3 | S | low |
+| **P3-4** | Minor cosmetics — verified: uptime pill (deferred, low value), migration-missing (out of scope) | P3 | XS | none |
+| ~~**P3-5**~~ | Image blacklist enforcement on read path — ✅ **DONE** (serve-check + purge-on-blacklist) | ~~P3~~ | S | low |
 
-Recommended order: ~~BUG-1 → P1-1 → P2-1 → P2-3~~ (shipped) → ~~P3-2~~ (shipped) → **P2-2/P3-3** (CSP + inline-style sweep) → **P3-1** (needs your call) → **P3-5** → **P3-4**. _Also shipped: ONNX offline build tooling (SessionStart hook)._
+Recommended order: ~~BUG-1 → P1-1 → P2-1 → P2-3 → P3-2 → P3-5~~ (shipped) → **P2-2/P3-3** (CSP + inline-style sweep) → **P3-1** (needs your call). _Also shipped: ONNX offline build tooling (SessionStart hook). Remaining low-value/deferred: P3-4 cosmetics._
 
 ---
 
@@ -286,36 +286,45 @@ count drops. **Effort:** L (many small PRs). **Risk:** low but tedious.
 
 ---
 
-## P3-4 — Minor cosmetics  · **P3**
+## P3-4 — Minor cosmetics  · **P3** _(both items verified — low value / out of scope)_
 
-- **Topnav uptime pill unwired.** `crates/birdnet-web/src/routes/pages/mod.rs:~184` sets
-  `{{uptime_short}}` to `""` (hidden via the O-26 `[data-empty-hide]` CSS). Wire it to the real uptime
-  from the system snapshot, or remove the pill. Effort XS.
-- **Migration "missing species" comparison stub.** Reported by the code sweep at
-  `routes/pages/migration.rs:616` (a `missing` field hardcoded `None`, "requires comparative model").
-  _Not independently verified — confirm before acting._ Low value.
+- **Topnav uptime pill unwired.** `crates/birdnet-web/src/routes/pages/mod.rs:~186` sets
+  `{{uptime_short}}` to `""` (gracefully hidden via the O-26 `[data-empty-hide]` CSS — **not a visible
+  defect**). Wiring it is more than XS: `render_page_inner` is a pure string templater with no state, so
+  real uptime needs either a snapshot threaded through every page handler or a global process-start
+  time. Low value for a topnav chip — **deferred** (wire via a global start-time `OnceLock`, or delete
+  the slot).
+- **Migration "missing species" comparison stub.** **Verified** at `routes/pages/migration.rs:616`
+  (`"missing" => None, // requires comparative model — stubbed.`): predicting which species *should* be
+  present but are absent genuinely needs a baseline/forecast model that does not exist — **out of
+  scope**, correctly deferred (the widget already falls back to "Forecast model pending").
 
 ---
 
-## P3-5 — Image blacklist inert on the read path; doctor default image path  · **P3** _(surfaced by BUG-1)_
+## P3-5 — Image blacklist enforcement on the read path  · **P3** — ✅ DONE
 
-**Evidence.** `birdnet_db::sqlite::queries::images` provides `is_image_blacklisted` /
-`blacklisted_urls_for_species`, and `/admin/images` lets admins manage the list, but a grep shows
-**no read/fetch path consults it**: the gallery warmer (`routes/pages/gallery.rs:~97`),
-`species_image_info`, and the BUG-1 `species_image_file` all call `cache.get_image()` without a
-blacklist check. So the admin feature is currently inert — a blacklisted species' image is still
-fetched and shown.
+**✅ Shipped** (chose layer (a): enforce in the web handlers, keeping `birdnet-integrations`
+network-/DB-agnostic). The admin blacklist was inert — `/file`, `species_image_info`, and the gallery
+warmer all fetched/served without consulting it. Now:
+- `species_image_file` checks the resolved URL against `is_image_blacklisted`; a blacklisted hit 404s
+  **and** evicts the cached file. The check only runs when a URL is known (image fetched/warmed this
+  session), so warm disk-cached gallery loads add **zero** DB queries.
+- `add_blacklist` purges the species' cached file on insert, so the next `/file` re-fetches and is
+  refused while the URL stays blacklisted (covers images cached before the blacklist entry).
+- New `ImageCache::remove` / `DiskCache::remove`.
+- Tests: `DiskCache::remove` unit test + `web_api_images::species_image_file_respects_blacklist`
+  (fetch → blacklist → 404 + cached file evicted).
 
-**Fix (decide the layer first).** Either (a) check the blacklist in the web handlers before
-`get_image` and on the warmer (keeps the lib network-only), or (b) thread an "is blacklisted"
-predicate into `ImageCache`. Apply to **all three** call sites consistently. Mirror the existing
-`escape_html`/DB-access patterns. **Verify:** blacklisting a species → its `/file` 404s / gallery
-tile stays blank; unrelated species unaffected.
-
-**Also (XS).** `doctor::paths` reports the image cache dir only when explicitly configured; after
-BUG-1's default-on, report the resolved default (`<db_dir>/images`) too so diagnostics match reality.
-
-**Effort:** S. **Risk:** low.
+**Remaining (minor follow-ups, filed for later):**
+- **URL not persisted across restart.** `DiskCache::scan` rebuilds the index with `url=""`, so an image
+  cached *before* a blacklist entry and never re-fetched can't be matched by URL at serve time — handled
+  for the realistic flow by purge-on-blacklist, but a `{key}.url` sidecar (written in `update_metadata`,
+  read in `scan`) would make serve-time enforcement airtight. Low value.
+- **`doctor::paths` default image path.** Still reports the image cache only when explicitly configured;
+  after BUG-1's default-on it should also report the resolved `<db_dir>/images`. XS; needs `db_path`
+  threaded into `check_paths` (+ a one-line test update).
+- **`species_image_info`** (JSON metadata) isn't blacklist-aware; the display path (`/file`) is, which
+  is what gates what users see.
 
 ---
 

@@ -82,6 +82,16 @@ async fn species_image_info(
     }
 }
 
+/// Build a JSON `{"error": msg}` response for the image file endpoint.
+fn image_error(status: StatusCode, msg: &str) -> axum::response::Response {
+    (
+        status,
+        [(header::CONTENT_TYPE, "application/json")],
+        json!({ "error": msg }).to_string().into_bytes(),
+    )
+        .into_response()
+}
+
 /// Serve the species image file bytes.
 ///
 /// Checks the custom image directory first, then the Wikipedia cache, fetching
@@ -114,66 +124,46 @@ async fn species_image_file(
     }
 
     let Some(cache) = state.image_cache() else {
-        return (
-            StatusCode::NOT_FOUND,
-            [(header::CONTENT_TYPE, "application/json")],
-            json!({"error": "image cache not configured"})
-                .to_string()
-                .into_bytes(),
-        )
-            .into_response();
+        return image_error(StatusCode::NOT_FOUND, "image cache not configured");
     };
 
-    // Serve from the on-disk cache, fetching on miss so every `<img>` tag
-    // self-heals on first view. Mirrors `species_image_info` (which already
-    // fetches on miss); without this, file requests 404 until the gallery's
-    // background warmer happens to populate that species, leaving species- and
-    // detection-detail previews permanently broken if the gallery is never
-    // opened. `get_image` is a no-op network-wise once the file is cached.
-    let path = match cache
-        .get_cached(&scientific_name)
-        .and_then(|img| img.cached_path)
-    {
-        Some(path) => path,
+    // Resolve the image, fetching on miss so every `<img>` tag self-heals on
+    // first view. Mirrors `species_image_info` (which already fetches on miss);
+    // without this, file requests 404 until the gallery's background warmer
+    // happens to populate that species, leaving species- and detection-detail
+    // previews permanently broken if the gallery is never opened. `get_image`
+    // is a no-op network-wise once the file is already cached.
+    let image = match cache.get_cached(&scientific_name) {
+        Some(image) => image,
         None => match cache.get_image(&scientific_name).await {
-            // Fetched and cached: serve the freshly downloaded bytes.
-            Ok(image) => {
-                let Some(path) = image.cached_path else {
-                    // Provider resolved but the species genuinely has no image.
-                    return (
-                        StatusCode::NOT_FOUND,
-                        [(header::CONTENT_TYPE, "application/json")],
-                        json!({"error": "no image available"})
-                            .to_string()
-                            .into_bytes(),
-                    )
-                        .into_response();
-                };
-                path
-            }
+            Ok(image) => image,
             // Lookup/download failed (offline, rate-limited, not found, …).
-            Err(_) => {
-                return (
-                    StatusCode::NOT_FOUND,
-                    [(header::CONTENT_TYPE, "application/json")],
-                    json!({"error": "image not available"})
-                        .to_string()
-                        .into_bytes(),
-                )
-                    .into_response();
-            }
+            Err(_) => return image_error(StatusCode::NOT_FOUND, "image not available"),
         },
     };
 
+    // Honour the admin image blacklist: never serve a blacklisted URL. Only
+    // query when the URL is known (image fetched/warmed this session) — disk-
+    // only hits carry no URL and are covered by the cache purge in
+    // `add_blacklist`. A blacklisted hit also evicts the cached file so the
+    // re-fetch is refused rather than re-served from disk next time.
+    if !image.url.is_empty()
+        && state.with_db(|conn| {
+            birdnet_db::sqlite::is_image_blacklisted(conn, &scientific_name, &image.url)
+                .unwrap_or(false)
+        })
+    {
+        cache.remove(&scientific_name);
+        return image_error(StatusCode::NOT_FOUND, "image blacklisted");
+    }
+
+    // Provider resolved but the species genuinely has no cached image bytes.
+    let Some(path) = image.cached_path else {
+        return image_error(StatusCode::NOT_FOUND, "no image available");
+    };
+
     let Ok(bytes) = std::fs::read(&path) else {
-        return (
-            StatusCode::NOT_FOUND,
-            [(header::CONTENT_TYPE, "application/json")],
-            json!({"error": "cached file not readable"})
-                .to_string()
-                .into_bytes(),
-        )
-            .into_response();
+        return image_error(StatusCode::NOT_FOUND, "cached file not readable");
     };
 
     // Determine content type from extension
