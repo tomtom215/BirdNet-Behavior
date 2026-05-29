@@ -27,7 +27,11 @@ pub fn router() -> Router<AppState> {
 }
 
 async fn analytics_page(headers: HeaderMap) -> Html<String> {
-    super::render_page_for_request("Analytics", ANALYTICS_PAGE_HTML, "analytics", &headers)
+    let body = ANALYTICS_PAGE_HTML.replace(
+        "{{help_link}}",
+        &super::help::help_link(super::help::Topic::Analytics),
+    );
+    super::render_page_for_request("Analytics", &body, "analytics", &headers)
 }
 
 /// HTMX partial: activity sessions table.
