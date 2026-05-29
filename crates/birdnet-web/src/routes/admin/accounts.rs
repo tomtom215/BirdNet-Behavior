@@ -2,15 +2,15 @@
 //!
 //! Page at `/admin/accounts` with three cards: active sessions, users
 //! roster, and a 6-row preview of the audit log. Mutating endpoints
-//! cover invite/delete/disable on users and revoke on sessions; the
-//! handlers hit the stores in [`birdnet_db::accounts`].
+//! cover invite/delete on users, rotate-password on any user, and revoke
+//! on sessions; the handlers hit the stores in [`birdnet_db::accounts`].
 //!
-//! The page deliberately reads from the database with no fallback "demo"
-//! data — until the auth wire is flipped the request-time user is the
-//! seed `admin` row (the migration creates one row whether the operator
-//! visits this page or not). See the `TODO(O-15-followup)` comments
-//! below for the call sites that need `require_admin` once O-14's
-//! cookie middleware lands.
+//! Access is gated centrally, not per handler: the O-14 cookie middleware
+//! authenticates every `/admin` request and the O-15 RBAC check restricts
+//! writes to the `admin` role (wire flipped in #96, reconciled in #112), so
+//! these handlers assume an authenticated admin and carry no auth of their
+//! own. The request-time user comes from the [`RequestUser`] extractor; the
+//! seed `admin` row is created by the schema migration.
 //!
 //! Each mutating handler emits an OOB toast (success/warn) using the
 //! O-18 helper so the operator sees the result without a full reload.
@@ -153,6 +153,23 @@ fn render_session_rows(sessions: &[Session], current_session_id: &str) -> String
     out
 }
 
+/// Inline "reset password" control for a user row.
+///
+/// Posts a new password to the live [`set_password`] handler
+/// (`POST /admin/accounts/users/{id}`), replacing the dead button that used to
+/// post to a non-existent `…/password-reset-stub` route. `hx-swap="none"`
+/// because the handler answers with an out-of-band toast, not a row fragment;
+/// the 10-char minimum mirrors the server-side check so the browser blocks the
+/// obvious case before the round-trip.
+fn password_reset_form(id: i64) -> String {
+    format!(
+        r##"<form class="user-reset" hx-post="/admin/accounts/users/{id}" hx-swap="none" autocomplete="off" style="display:inline-flex;gap:8px;align-items:center;">
+  <input type="password" name="password" minlength="10" required placeholder="New password (min 10)" autocomplete="new-password" style="min-width:170px;font-size:13px;">
+  <button type="submit" class="bnb-btn ghost">Reset password</button>
+</form>"##
+    )
+}
+
 fn render_user_rows(users: &[User]) -> String {
     if users.is_empty() {
         return String::from(
@@ -170,15 +187,15 @@ fn render_user_rows(users: &[User]) -> String {
             Role::Viewer => "VIEWER",
         };
         let display = u.label.clone().unwrap_or_else(|| u.username.clone());
+        let id = u.id;
+        let reset = password_reset_form(id);
         let actions = if u.username == "admin" {
-            // Seed admin can be reset but not removed/disabled.
-            String::from(
-                r#"<button class="bnb-btn ghost" hx-post="/admin/accounts/users/0/password-reset-stub">Reset password</button>"#,
-            )
+            // Seed admin can rotate its password but not be removed/disabled.
+            reset
         } else {
-            let id = u.id;
             format!(
-                r##"<div style="display:inline-flex;gap:8px;">
+                r##"<div style="display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap;">
+  {reset}
   <button class="bnb-btn ghost"
           data-confirm-action="hx-delete"
           data-confirm-url="/admin/accounts/users/{id}"
@@ -350,7 +367,7 @@ async fn remove_user(State(state): State<AppState>, Path(id): Path<i64>) -> Resp
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// POST /admin/accounts/users/{id}  (rotate password — stub)
+// POST /admin/accounts/users/{id}  (rotate password)
 // ───────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]

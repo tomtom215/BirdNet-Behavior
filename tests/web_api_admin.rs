@@ -331,3 +331,63 @@ async fn admin_cookie_gate_and_viewer_rbac() {
         "an admin must pass the RBAC write gate"
     );
 }
+
+/// P1-1: the admin "Reset password" control posts to the live `set_password`
+/// handler (`POST /admin/accounts/users/{id}`) — not the old dead
+/// `…/password-reset-stub` route. A valid (>=10 char) rotation changes the
+/// stored hash; a too-short password is rejected without changing it.
+#[tokio::test]
+async fn admin_reset_password_rotates_hash() {
+    let (state, admin_cookie, _viewer_cookie) = gated_state_with_cookies();
+    let (admin_id, hash_before) = state
+        .with_db(|conn| -> Result<(i64, String), accounts::AccountsError> {
+            let admin = conn.find_user_by_name("admin")?;
+            Ok((admin.id, admin.pwd_argon2))
+        })
+        .expect("seed admin row");
+    let router = build_router(state.clone());
+
+    let post_password = |pw: &str| {
+        Request::builder()
+            .method("POST")
+            .uri(format!("/admin/accounts/users/{admin_id}"))
+            .header(axum::http::header::COOKIE, admin_cookie.clone())
+            .header(
+                axum::http::header::CONTENT_TYPE,
+                "application/x-www-form-urlencoded",
+            )
+            .body(Body::from(format!("password={pw}")))
+            .unwrap()
+    };
+    let stored_hash = || {
+        state
+            .with_db(|conn| conn.find_user_by_name("admin").map(|u| u.pwd_argon2))
+            .unwrap()
+    };
+
+    // Valid rotation: reaches the handler (never 401/403) and rotates the hash.
+    let resp = router
+        .clone()
+        .oneshot(post_password("rotated-pw-123"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let hash_after = stored_hash();
+    assert_ne!(
+        hash_before, hash_after,
+        "a valid reset must rotate the stored argon2 hash"
+    );
+
+    // Too-short password: rejected before hashing — the stored hash is unchanged.
+    let resp = router
+        .clone()
+        .oneshot(post_password("short"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK); // validation error surfaces as an OOB toast
+    assert_eq!(
+        hash_after,
+        stored_hash(),
+        "a too-short password must not change the stored hash"
+    );
+}
