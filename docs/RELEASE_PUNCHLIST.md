@@ -68,17 +68,17 @@ remains is the finish-off work below.
 | ID | Item | Priority | Effort | Risk |
 |----|------|----------|--------|------|
 | ~~**BUG-1**~~ | Bird images don't populate gallery/previews — ✅ **DONE** (fetch-on-miss `/file` + default-on cache) | ~~P1~~ | M | low–med |
-| **P1-1** | Dead "Reset password" button (admin accounts) | **P1** | S | low |
-| **P2-1** | Stale `accounts.rs` module doc | P2 | XS | none |
+| ~~**P1-1**~~ | Dead "Reset password" button — ✅ **DONE** (wired to live `set_password`) | ~~P1~~ | S | low |
+| ~~**P2-1**~~ | Stale `accounts.rs` module doc — ✅ **DONE** (folded into P1-1) | ~~P2~~ | XS | none |
 | **P2-2** | CSP still allows `'unsafe-inline'` | P2 | M | med |
-| **P2-3** | Extend help links to remaining analytical screens | P2 | S | low |
+| ~~**P2-3**~~ | Extend help links to remaining analytical screens — ✅ **DONE** (6 screens) | ~~P2~~ | S | low |
 | **P3-1** | O-13 legacy `--audio-source` retirement | P3 | S + decision | low |
-| **P3-2** | No background session pruning | P3 | S | low |
+| ~~**P3-2**~~ | No background session pruning — ✅ **DONE** (daily maintenance tick) | ~~P3~~ | S | low |
 | **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) | P3 | L | low (tedious) |
 | **P3-4** | Minor cosmetics (uptime pill, migration compare) | P3 | XS | none |
 | **P3-5** | Image blacklist is inert on read path (admin UI only); doctor default img path | P3 | S | low |
 
-Recommended order: ~~BUG-1~~ → **P1-1** → P2-1 (fold into P1-1) → P2-3 → P2-2/P3-3 → P3-1 (needs your call) → P3-2 → P3-4. _(BUG-1 shipped; **P1-1 is next**.)_
+Recommended order: ~~BUG-1 → P1-1 → P2-1 → P2-3~~ (shipped) → ~~P3-2~~ (shipped) → **P2-2/P3-3** (CSP + inline-style sweep) → **P3-1** (needs your call) → **P3-5** → **P3-4**. _Also shipped: ONNX offline build tooling (SessionStart hook)._
 
 ---
 
@@ -176,7 +176,9 @@ asserts `/api/v2/species/image/{sci}/file` returns `200 image/*` on a cold cache
 
 ---
 
-## P1-1 — Dead "Reset password" button in admin accounts  · **P1**
+## P1-1 — Dead "Reset password" button in admin accounts  · **P1** — ✅ DONE
+
+**✅ Shipped.** `password_reset_form(id)` (`accounts.rs`) renders an inline password form posting to the live `set_password` (`POST /admin/accounts/users/{id}`); added to the seed-admin row and every non-admin row. `web_api_admin` test asserts a valid rotation changes the argon2 hash and a <10-char one does not.
 
 **Evidence.** `crates/birdnet-web/src/routes/admin/accounts.rs:176` — the seed admin's button does
 `hx-post="/admin/accounts/users/0/password-reset-stub"`, a URL with **no route** (the real route is
@@ -199,7 +201,9 @@ valid password → 200 + hash changes; <10 chars → error toast.
 
 ---
 
-## P2-1 — Stale `accounts.rs` module doc  · **P2**
+## P2-1 — Stale `accounts.rs` module doc  · **P2** — ✅ DONE
+
+**✅ Shipped** (with P1-1): module doc rewritten to describe the live central RBAC (cookie middleware + admin-only writes); the stale "(rotate password — stub)" banner dropped.
 
 **Evidence.** `accounts.rs:8-13` still says *"until the auth wire is flipped the request-time user is
 the seed admin row … see the `TODO(O-15-followup)` comments below for the call sites that need
@@ -228,7 +232,9 @@ no inline script executes without the nonce. **Effort:** M. **Risk:** med (a mis
 
 ---
 
-## P2-3 — Extend help links to the remaining analytical screens  · **P2**
+## P2-3 — Extend help links to the remaining analytical screens  · **P2** — ✅ DONE
+
+**✅ Shipped.** `help_link(Topic::…)` added to correlation, behavioral, history, species (list), timeseries, and system-dashboard headers via the `{{help_link}}` placeholder + handler `.replace` pattern. Targets: Analytics ×4, Species, AdminSystem — all existing mdBook pages.
 
 **Evidence.** `help_link(Topic::…)` is wired on 12 screens (dashboard, today, heatmap, dawn_chorus,
 life_list, recordings, quarantine, migration, notification_center, weekly_report, year_in_review, help).
@@ -254,7 +260,9 @@ flag** — flagged in #111 as a **product decision**, not code. **Decide first**
 
 ---
 
-## P3-2 — No background session pruning  · **P3**
+## P3-2 — No background session pruning  · **P3** — ✅ DONE
+
+**✅ Shipped.** `run_session_prune` folded into the existing daily maintenance tick (`src/maintenance.rs`) — opens the DB, calls `prune_expired_sessions`, logs the count; best-effort/non-fatal. Test: an expired row is pruned, a live row survives.
 
 **Evidence.** `birdnet_db::accounts::prune_expired_sessions` exists but a workspace grep shows it is
 **never called** — the `sessions` table grows until manually pruned.
