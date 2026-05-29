@@ -67,6 +67,15 @@ a Rust binding for Microsoft's ONNX Runtime — configured with the
 the runtime self-contained: there is no system `libonnxruntime` dependency
 and no OpenSSL.
 
+> **Offline / proxied builds.** Because the prebuilt-binary download uses
+> `ort`'s bundled rustls roots, a TLS-intercepting proxy whose CA those roots
+> don't trust makes a cold build fail with `invalid peer certificate:
+> UnknownIssuer` (common in sandboxed CI / Claude Code on the web). Run
+> `scripts/setup-onnxruntime.sh` to seed the prebuilt static library into the
+> cache ort-sys checks before downloading (it fetches with `curl`, which uses
+> the system CA store, and verifies the sha256 from ort-sys's `dist.txt`). The
+> repo's SessionStart hook runs this automatically in web sessions.
+
 | Crate | Version | Notes |
 |-------|---------|-------|
 | `ort`      | `2.0.0-rc` | ONNX Runtime wrapper; handles session management, optimization levels, threading |

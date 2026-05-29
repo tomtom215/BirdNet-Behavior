@@ -40,18 +40,17 @@ binary crate's own unit tests** (it has no lib target — e.g. the `helpers::sta
 `cargo test -p birdnet-behavior --bins` and the relevant `--test <name>` explicitly so neither
 unit- nor integration-test rot can hide (this is how the dead Basic-Auth test in #113 had gone stale).
 
-**ONNX Runtime offline note.** `ort`/`ort-sys` downloads a prebuilt ONNX Runtime via a bundled
-rustls client that does **not** trust a TLS-intercepting sandbox proxy, so a cold build fails with
-`invalid peer certificate: UnknownIssuer`. `curl` (system CA) reaches the CDN fine. To unblock,
-seed the cache ort-sys checks before downloading (URL+sha256 are in
-`ort-sys/build/download/dist.txt`; the file is a raw-LZMA2 tar):
-```bash
-H=acc1cba79c337594ead1d88ca72516147aa60054c84217b53399a31caa5ba671  # none/x86_64-unknown-linux-gnu, ms@1.24.2
-D="$HOME/.cache/ort.pyke.io/dfbin/x86_64-unknown-linux-gnu/$H"; mkdir -p "$D"
-curl -fsS "https://cdn.pyke.io/0/pyke:ort-rs/ms@1.24.2/x86_64-unknown-linux-gnu.tar.lzma2" -o /tmp/ort.lz
-python3 -c "import lzma;open('/tmp/ort.tar','wb').write(lzma.LZMADecompressor(format=lzma.FORMAT_RAW,filters=[{'id':lzma.FILTER_LZMA2,'dict_size':1<<26}]).decompress(open('/tmp/ort.lz','rb').read()))"
-tar -xf /tmp/ort.tar -C "$D"   # yields libonnxruntime.a; build then skips the network
-```
+**ONNX Runtime offline note (now automated).** `ort`/`ort-sys` downloads a prebuilt ONNX Runtime
+via a bundled rustls client that does **not** trust a TLS-intercepting sandbox proxy, so a cold
+build fails with `invalid peer certificate: UnknownIssuer`. `curl` (system CA) reaches the CDN fine.
+This is now handled automatically: a **SessionStart hook** (`.claude/hooks/session-start.sh`, wired
+in `.claude/settings.json`) runs `cargo fetch` then **`scripts/setup-onnxruntime.sh`**, which reads
+the URL+sha256 from ort-sys's own `dist.txt` (falling back to the `.crate` when `registry/src` isn't
+extracted yet), curls the artifact, verifies the sha256, and unpacks `libonnxruntime.a` into the
+cache ort-sys checks before downloading. It is idempotent — run it by hand any time the cold build
+fails: `bash scripts/setup-onnxruntime.sh` (pass a target triple, e.g.
+`aarch64-unknown-linux-gnu`, when cross-compiling for a Pi). The hook only fires in the remote
+(web) environment and is non-fatal.
 
 **Conventions:** see `CLAUDE.md` — `unsafe` is denied workspace-wide (so no `std::env::set_var`
 in tests), no `anyhow`/`thiserror` in library crates, library crates are sync (tokio owned by
