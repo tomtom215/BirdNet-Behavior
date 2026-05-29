@@ -163,10 +163,10 @@ fn render_session_rows(sessions: &[Session], current_session_id: &str) -> String
 /// obvious case before the round-trip.
 fn password_reset_form(id: i64) -> String {
     format!(
-        r##"<form class="user-reset" hx-post="/admin/accounts/users/{id}" hx-swap="none" autocomplete="off" style="display:inline-flex;gap:8px;align-items:center;">
+        r#"<form class="user-reset" hx-post="/admin/accounts/users/{id}" hx-swap="none" autocomplete="off" style="display:inline-flex;gap:8px;align-items:center;">
   <input type="password" name="password" minlength="10" required placeholder="New password (min 10)" autocomplete="new-password" style="min-width:170px;font-size:13px;">
   <button type="submit" class="bnb-btn ghost">Reset password</button>
-</form>"##
+</form>"#
     )
 }
 
