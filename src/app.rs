@@ -214,8 +214,19 @@ pub async fn run(
     helpers::maybe_install_avahi_service(addr.port(), site_name);
 
     // Start the web server.
-    let auth_config = integrations::create_auth_config(config.as_ref());
-    if auth_config.is_none() && !addr.ip().is_loopback() {
+    //
+    // Warn if the admin UI is exposed off-loopback without a configured
+    // password. Keys on `CADDY_PWD` (config or env) — the same knob the
+    // cookie middleware's "no admin password → open access" bypass and the
+    // `helpers::auth` bootstrap read. (A password set directly via the
+    // accounts UI also protects the panel; this loopback warning tracks the
+    // env/config knob, matching the pre-cookie-flip behaviour.)
+    let admin_password_configured = config
+        .as_ref()
+        .and_then(|c| c.get("CADDY_PWD").map(str::to_owned))
+        .or_else(|| std::env::var("CADDY_PWD").ok())
+        .is_some_and(|pwd| !pwd.is_empty());
+    if !admin_password_configured && !addr.ip().is_loopback() {
         tracing::warn!(
             addr = %addr,
             "admin web UI is bound to a non-loopback address with NO authentication — anyone on \
@@ -236,7 +247,7 @@ pub async fn run(
     // abort it; today the loop runs for the lifetime of the process.
     let _weather_poll_handle = integrations::spawn_weather_poll(config.as_ref(), state.clone());
 
-    let app = birdnet_web::server::build_router_with_auth(state, auth_config);
+    let app = birdnet_web::server::build_router(state);
 
     // Publish Home Assistant MQTT auto-discovery if configured.
     if let Some(ref mqtt) = integrations::get_mqtt_client_ref(&cli, config.as_ref()) {

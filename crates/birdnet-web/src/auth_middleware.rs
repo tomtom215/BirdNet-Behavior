@@ -7,8 +7,8 @@
 //!
 //! ## Behaviour
 //!
-//! * Excluded paths bypass auth (matches the basic-auth path in
-//!   [`crate::auth::AuthConfig::is_excluded`]).
+//! * Excluded paths (health checks, the detection WebSocket) bypass auth —
+//!   see the `is_excluded` helper below.
 //! * No `bnb-session` cookie or an unparseable / expired token →
 //!   303 redirect to `/login?next=<original-path>`. POST / PATCH /
 //!   DELETE under `/admin/*` falls back to 401 rather than a redirect
@@ -20,7 +20,7 @@
 //!
 //! ## "No admin password configured" bypass
 //!
-//! Inherits the basic-auth behaviour from #89: if neither `CADDY_PWD`
+//! Preserves the #89 open-by-default contract: if neither `CADDY_PWD`
 //! is set nor the seed admin row carries a real password hash, the
 //! middleware lets the request through unauthenticated and attaches a
 //! synthetic `RequestUser` mapped onto the seed admin id. Matches the

@@ -61,7 +61,7 @@ pub(crate) fn log_internal<E: std::fmt::Display>(context: &str, err: &E) -> &'st
 ///
 /// These are safe to serve without a login so a station is viewable on the LAN
 /// out of the box. State-changing admin actions live in [`admin_routes`], which
-/// is gated separately (see `server::build_router_with_auth`).
+/// is gated separately (see `server::build_router`).
 pub fn public_routes() -> Router<AppState> {
     Router::new()
         .nest("/api/v2", detections::router())
