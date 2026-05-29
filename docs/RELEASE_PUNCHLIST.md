@@ -75,7 +75,7 @@ remains is the finish-off work below.
 | **P3-1** | O-13 legacy `--audio-source` retirement | P3 | S + decision | low |
 | ~~**P3-2**~~ | No background session pruning — ✅ **DONE** (daily maintenance tick) | ~~P3~~ | S | low |
 | **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) | P3 | L | low (tedious) |
-| **P3-4** | Minor cosmetics — verified: uptime pill (deferred, low value), migration-missing (out of scope) | P3 | XS | none |
+| **P3-4** | Minor cosmetics — uptime pill ✅ **wired**; migration-missing out of scope | P3 | XS | none |
 | ~~**P3-5**~~ | Image blacklist enforcement on read path — ✅ **DONE** (serve-check + purge-on-blacklist) | ~~P3~~ | S | low |
 
 Recommended order: ~~BUG-1 → P1-1 → P2-1 → P2-3 → P3-2 → P3-5~~ (shipped) → **P2-2/P3-3** (CSP + inline-style sweep) → **P3-1** (needs your call). _Also shipped: ONNX offline build tooling (SessionStart hook). Remaining low-value/deferred: P3-4 cosmetics._
@@ -286,14 +286,14 @@ count drops. **Effort:** L (many small PRs). **Risk:** low but tedious.
 
 ---
 
-## P3-4 — Minor cosmetics  · **P3** _(both items verified — low value / out of scope)_
+## P3-4 — Minor cosmetics  · **P3** _(uptime pill ✅ wired; migration-missing out of scope)_
 
-- **Topnav uptime pill unwired.** `crates/birdnet-web/src/routes/pages/mod.rs:~186` sets
-  `{{uptime_short}}` to `""` (gracefully hidden via the O-26 `[data-empty-hide]` CSS — **not a visible
-  defect**). Wiring it is more than XS: `render_page_inner` is a pure string templater with no state, so
-  real uptime needs either a snapshot threaded through every page handler or a global process-start
-  time. Low value for a topnav chip — **deferred** (wire via a global start-time `OnceLock`, or delete
-  the slot).
+- **Topnav uptime pill** — ✅ **wired.** `render_page_inner` now fills `{{uptime_short}}` from
+  `system_info::process_uptime_secs()` formatted by `format_uptime`. No state-plumbing was needed after
+  all: the `/proc/self/stat` process-uptime logic already lived in `health.rs`, so it was promoted to
+  `system_info` (returning `Option<u64>`) and reused — which also DRY'd `health.rs` and fixed its latent
+  fallback (it previously returned wall-clock epoch seconds, now `0`/`None`). Empty when unavailable
+  (non-Linux / `/proc` unreadable), so the O-26 `[data-empty-hide]` rule still hides the pill.
 - **Migration "missing species" comparison stub.** **Verified** at `routes/pages/migration.rs:616`
   (`"missing" => None, // requires comparative model — stubbed.`): predicting which species *should* be
   present but are absent genuinely needs a baseline/forecast model that does not exist — **out of
