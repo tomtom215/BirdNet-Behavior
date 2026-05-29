@@ -277,6 +277,83 @@ fn resolve_sources(cli: &Cli, config: Option<&birdnet_core::config::Config>) -> 
     }
 }
 
+/// O-13: seed the `audio_sources` table from CLI/config when it is empty.
+///
+/// Makes the table the single source of truth for both the capture daemon and
+/// the web surface (live `/stream`, the Listen page, the `/admin/audio` pills).
+/// Idempotent — it inserts nothing when the table already holds a row
+/// (including one migration 15 seeded from a legacy `settings.audio_source`),
+/// so an operator's later edits or deletions through the admin UI are never
+/// re-seeded on the next start. Returns the number of rows seeded.
+fn seed_sources_from_config(
+    state: &birdnet_web::state::AppState,
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+) -> usize {
+    use birdnet_db::audio_sources::AudioSourceStore;
+    // Only ever seed a completely empty table. A read error is treated as
+    // "already populated" so a transient failure can't double-seed — the
+    // CLI/config fallback in `start_capture_manager` still drives capture.
+    if !matches!(
+        state.with_db(|conn| AudioSourceStore::list(conn).map(|rows| rows.is_empty())),
+        Ok(true)
+    ) {
+        return 0;
+    }
+    let mut seeded = 0_usize;
+    for (i, source) in resolve_sources(cli, config).into_iter().enumerate() {
+        let new = capture_source_to_new(format!("src_seed_{}", i + 1), source);
+        match state.with_db(|conn| conn.insert(&new)) {
+            Ok(_) => seeded += 1,
+            Err(e) => tracing::warn!(error = %e, id = %new.id, "audio_sources seed failed"),
+        }
+    }
+    seeded
+}
+
+/// Map a CLI/config-resolved [`CaptureSource`] to a [`NewAudioSource`] row,
+/// preserving device, sample rate and channel count so the seeded row
+/// reconstructs the same capture stream. The inverse of
+/// [`audio_source_to_capture_source`].
+fn capture_source_to_new(
+    id: String,
+    source: CaptureSource,
+) -> birdnet_db::audio_sources::NewAudioSource {
+    use birdnet_db::audio_sources::{Channels, NewAudioSource, SourceKind};
+    let channels_of = |channels: u16| {
+        if channels >= 2 {
+            Channels::Stereo
+        } else {
+            Channels::Mono
+        }
+    };
+    match source {
+        CaptureSource::Microphone {
+            device,
+            sample_rate,
+            channels,
+            ..
+        } => {
+            let mut new = NewAudioSource::defaults(id, SourceKind::UsbAlsa, device);
+            new.sample_rate = sample_rate;
+            new.channels = channels_of(channels);
+            new
+        }
+        CaptureSource::PipeWire {
+            device,
+            sample_rate,
+            channels,
+            ..
+        } => {
+            let mut new = NewAudioSource::defaults(id, SourceKind::PipeWire, device);
+            new.sample_rate = sample_rate;
+            new.channels = channels_of(channels);
+            new
+        }
+        CaptureSource::Rtsp { url, .. } => NewAudioSource::defaults(id, SourceKind::Rtsp, url),
+    }
+}
+
 /// Log which recording schedule is in effect.
 fn log_schedule(cli: &Cli, schedule_config: &ScheduleConfig) {
     if schedule_config.fixed_window.is_some() {
@@ -301,26 +378,38 @@ fn log_schedule(cli: &Cli, schedule_config: &ScheduleConfig) {
 ///
 /// ## Source resolution (O-13)
 ///
-/// Two paths:
+/// When `state` is `Some(_)`, an empty `audio_sources` table is first seeded
+/// from the CLI/config sources (see [`seed_sources_from_config`]) so the table
+/// becomes the single source of truth — for the daemon and the web surface
+/// (live `/stream`, Listen, `/admin/audio`). Then:
 ///
-/// 1. **Database-driven**: if `state` is `Some(_)` AND the `audio_sources`
-///    table carries at least one non-disabled row, that row set is the
-///    source of truth. The admin UI's CRUD is what the daemon reads.
-/// 2. **CLI/config legacy**: otherwise, fall back to the BirdNET-Pi-style
-///    `--rtsp-url` / `--alsa-device` / `--pipewire-device` resolution
-///    that pre-dates the `audio_sources` entity. This is what every
-///    existing station does today, so the contract is preserved
-///    until the operator adds rows to the new table.
+/// 1. **Database-driven** (the normal path): the non-disabled `audio_sources`
+///    rows — what the admin UI's CRUD manages — are the source of truth.
+/// 2. **CLI/config fallback**: only when there is no `state` (a headless
+///    capture-only invocation) or the table is still empty (seeding found
+///    nothing / failed) does the BirdNET-Pi-style `--rtsp-url` /
+///    `--alsa-device` / `--pipewire-device` resolution drive capture directly.
 ///
-/// A single info-level log line announces which path won, so the
-/// operator can diagnose "why is my CLI arg being ignored" by reading
-/// the first ten lines of the journal.
+/// A single info-level log line announces which path won, so the operator can
+/// diagnose "why is my CLI arg being ignored" from the first lines of the
+/// journal.
 pub fn start_capture_manager(
     cli: &Cli,
     config: Option<&birdnet_core::config::Config>,
     state: Option<&birdnet_web::state::AppState>,
     metrics: SharedMetrics,
 ) -> Option<CaptureHandle> {
+    // O-13: seed an empty audio_sources table from CLI/config first, so the
+    // table is the single source of truth for capture and the web surface.
+    if let Some(state) = state {
+        let seeded = seed_sources_from_config(state, cli, config);
+        if seeded > 0 {
+            tracing::info!(
+                count = seeded,
+                "seeded audio_sources from CLI/config (O-13)"
+            );
+        }
+    }
     let sources = if let Some(state) = state
         && let Some(db_sources) = resolve_sources_from_db(state)
         && !db_sources.is_empty()
@@ -865,6 +954,52 @@ mod tests {
                 CaptureSource::PipeWire { .. } => {}
             }
         }
+    }
+
+    // ---- seed_sources_from_config (O-13) ----------------------------
+
+    #[test]
+    fn seed_populates_empty_table_from_cli() {
+        use birdnet_db::audio_sources::AudioSourceStore;
+        let state = fresh_state();
+        let mut c = cli();
+        c.rtsp_url = Some("rtsp://lan/feed".to_string());
+        let n = seed_sources_from_config(&state, &c, None);
+        assert_eq!(n, 1);
+        let rows = state.with_db(AudioSourceStore::list).expect("list");
+        assert_eq!(rows.len(), 1);
+        assert!(matches!(rows[0].kind, SourceKind::Rtsp));
+        assert_eq!(rows[0].device_id, "rtsp://lan/feed");
+    }
+
+    #[test]
+    fn seed_skips_when_table_already_populated() {
+        use birdnet_db::audio_sources::AudioSourceStore;
+        let state = fresh_state();
+        insert_row(
+            &state,
+            "src_existing",
+            SourceKind::UsbAlsa,
+            "plughw:1,0",
+            false,
+        );
+        let mut c = cli();
+        c.rtsp_url = Some("rtsp://lan/feed".to_string());
+        let n = seed_sources_from_config(&state, &c, None);
+        assert_eq!(n, 0, "must not seed when a row already exists");
+        let rows = state.with_db(AudioSourceStore::list).expect("list");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "src_existing");
+    }
+
+    #[test]
+    fn seed_noop_when_no_cli_sources() {
+        use birdnet_db::audio_sources::AudioSourceStore;
+        let state = fresh_state();
+        let n = seed_sources_from_config(&state, &cli(), None);
+        assert_eq!(n, 0);
+        let rows = state.with_db(AudioSourceStore::list).expect("list");
+        assert!(rows.is_empty());
     }
 
     #[test]

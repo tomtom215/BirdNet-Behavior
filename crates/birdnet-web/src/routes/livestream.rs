@@ -35,10 +35,9 @@ pub struct StreamParams {
     pub freq_shift_hz: i32,
     /// Optional `audio_sources.id` selecting which configured source to
     /// stream. Without it, `/stream` resolves the first non-disabled
-    /// `audio_sources` row; on a station with no rows yet, the legacy
-    /// `state.audio_source()` string is the final fallback so the
-    /// BirdNET-Pi-compatible "one source per station" contract still
-    /// holds during migrations.
+    /// `audio_sources` row; on a station with no rows yet, `/stream` returns
+    /// `503` (sources are managed through the `audio_sources` table — add one
+    /// via `/admin/audio`).
     #[serde(default)]
     pub source_id: Option<String>,
 }
@@ -133,14 +132,12 @@ async fn list_languages(State(state): State<AppState>) -> Json<Value> {
 ///
 /// Without `?source_id=`, the first non-disabled `audio_sources` row wins
 /// (DB-driven default). On a station whose `audio_sources` table is still
-/// empty, the legacy `state.audio_source()` string is the final fallback
-/// — once an operator adds a row through `/admin/audio`, the DB row takes
-/// over without a restart.
+/// empty, `/stream` returns `503` until an operator adds a row through
+/// `/admin/audio` — the new row then takes over without a restart.
 async fn livestream(State(state): State<AppState>, Query(params): Query<StreamParams>) -> Response {
-    // Resolve the audio source. Three paths:
+    // Resolve the audio source. Two paths:
     //   1. `?source_id=` → DB lookup by id; honour the row's kind explicitly.
-    //   2. (no param) + audio_sources row exists → use the first row.
-    //   3. (no param) + no rows → legacy `state.audio_source()` string.
+    //   2. (no param) → the first enabled `audio_sources` row, else 503.
     let (source, kind_hint) = match params.source_id.as_deref() {
         Some(id) if !id.is_empty() => match resolve_by_source_id(&state, id) {
             Some(pair) => pair,
@@ -291,15 +288,12 @@ fn resolve_by_source_id(
 
 /// Resolve the default audio source when no `?source_id=` is supplied.
 ///
-/// The contract is DB-first: the first non-disabled `audio_sources` row
-/// in `created_at ASC` order wins, with its `SourceKind` returned as the
-/// kind hint. On a station whose `audio_sources` table is still empty
-/// (or whose DB read fails), the legacy `state.audio_source()` string
-/// is the fallback — that path returns `None` as the kind hint so the
-/// URL-prefix heuristic kicks back in for backwards compatibility.
-///
-/// Returns `None` only when *both* paths are unset, in which case the
-/// caller responds with `503 Service Unavailable`.
+/// DB-only: the first non-disabled `audio_sources` row (in `created_at ASC`
+/// order) wins, with its `SourceKind` returned as the kind hint. Returns
+/// `None` when the table is empty or unreadable, in which case the caller
+/// responds with `503 Service Unavailable`. (The legacy single-string
+/// `state.audio_source()` fallback was retired in O-13 — sources are managed
+/// exclusively through the `audio_sources` table now.)
 fn resolve_default_source(
     state: &AppState,
 ) -> Option<(String, Option<birdnet_db::audio_sources::SourceKind>)> {
@@ -307,23 +301,7 @@ fn resolve_default_source(
     let sources = state
         .with_db(|conn| AudioSourceStore::list(conn).ok())
         .unwrap_or_default();
-    if let Some(pair) = pick_first_enabled(&sources) {
-        return Some(pair);
-    }
-    state.audio_source().map(|s| (s.to_owned(), None))
-}
-
-/// Whether the legacy single-string `state.audio_source()` fallback is
-/// configured for this station.
-///
-/// This is the only signal `/stream` consults beyond the `audio_sources`
-/// table (see [`resolve_default_source`]). The listen-now page calls this
-/// to decide whether to offer its "default audio source" option on a
-/// station whose `audio_sources` table is still empty, keeping the
-/// legacy-fallback concept centralised in this module so O-13's eventual
-/// retirement of `state.audio_source()` touches one call site, not many.
-pub(crate) fn legacy_default_configured(state: &AppState) -> bool {
-    state.audio_source().is_some()
+    pick_first_enabled(&sources)
 }
 
 /// Pure helper: walk `sources` for an id-match that's still enabled.

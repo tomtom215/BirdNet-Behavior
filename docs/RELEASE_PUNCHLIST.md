@@ -72,7 +72,7 @@ remains is the finish-off work below.
 | ~~**P2-1**~~ | Stale `accounts.rs` module doc — ✅ **DONE** (folded into P1-1) | ~~P2~~ | XS | none |
 | **P2-2** | CSP still allows `'unsafe-inline'` | P2 | M | med |
 | ~~**P2-3**~~ | Extend help links to remaining analytical screens — ✅ **DONE** (6 screens) | ~~P2~~ | S | low |
-| **P3-1** | O-13 legacy `--audio-source` retirement | P3 | S + decision | low |
+| **P3-1** | O-13 legacy `--audio-source` retirement — ✅ **DONE** | P3 | S | low |
 | ~~**P3-2**~~ | No background session pruning — ✅ **DONE** (daily maintenance tick) | ~~P3~~ | S | low |
 | **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) | P3 | L | low (tedious) |
 | **P3-4** | Minor cosmetics — uptime pill ✅ **wired**; migration-missing out of scope | P3 | XS | none |
@@ -248,15 +248,25 @@ screen shows the "How this works" affordance opening the right mdBook section. *
 
 ---
 
-## P3-1 — O-13 legacy `--audio-source` retirement  · **P3 (needs a product decision)**
+## P3-1 — O-13 legacy `--audio-source` retirement  · **P3** — ✅ DONE
 
-**Status:** _not a bug._ The capture daemon already reads the `audio_sources` table first
-(`src/capture.rs:138 resolve_sources_from_db`), with the legacy single-string CLI/env `--audio-source`
-as fallback (`capture.rs:135-137`). Fully functional.
+**✅ Shipped (seed-then-retire).** The `audio_sources` table (managed via `/admin/audio`) is now the
+single source of truth for capture **and** the web surface (live `/stream`, Listen, `/admin/audio`). The
+legacy single-string `state.audio_source()` live-stream fallback is retired with **no regression** for
+CLI/env-configured stations:
 
-**Remaining:** retiring the single-string fallback **deprecates the BirdNET-Pi-compat `--audio-source`
-flag** — flagged in #111 as a **product decision**, not code. **Decide first**, then the cleanup is small
-(remove `state.audio_source()` readers + the CLI/env flag, update docs/migration). **Effort:** S after the decision. **Risk:** low.
+- **Seed on startup:** when the `audio_sources` table is empty, `start_capture_manager` seeds it from the
+  CLI/config sources (reusing `resolve_sources`), so `--rtsp-url` / `--alsa-device` / `--pipewire-device`
+  / `RTSP_URL` / `ALSA_CARDS` / `ALSA_CARD` keep working — they now populate the table. Idempotent: only
+  an empty table is seeded, so admin-UI edits/deletes are never re-seeded, and migration 15's
+  `settings.audio_source` seed still wins on upgrade.
+- **Retired the legacy readers:** removed `init_audio_source`, the `with_audio_source` builder, the
+  `audio_source` AppState field/getter, and the three web fallbacks (`/stream` default resolver, Listen
+  selector, `/admin/audio` daemon-status heuristic). `/stream` now `503`s only when the table is *truly*
+  empty (no CLI/config sources either); the Listen selector then shows a disabled "no audio sources
+  configured" placeholder.
+- The capture supervisor's own CLI/config fallback remains as a safety net (state-less invocations or a
+  seed failure) — redundant once seeding runs, but harmless.
 
 ---
 

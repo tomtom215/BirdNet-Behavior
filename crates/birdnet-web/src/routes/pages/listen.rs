@@ -22,12 +22,11 @@
 //!   via the existing partial.
 //!
 //! Source-selector population: lists every non-disabled row from
-//! `audio_sources` plus a `(default)` entry that maps to the legacy
-//! single-string `state.audio_source()` path. On a fresh station with
-//! no `audio_sources` rows but a configured `state.audio_source()`, the
-//! selector still works via the default option — `/stream` itself now
-//! resolves the default via the first enabled `audio_sources` row,
-//! reading `state.audio_source()` only as a final fallback.
+//! `audio_sources` plus a `(default)` entry that maps to `/stream` with no
+//! `source_id` (resolving to the first enabled row). On a station with no
+//! `audio_sources` rows, the selector shows a disabled "no audio sources
+//! configured" placeholder — the legacy single-string `state.audio_source()`
+//! fallback was retired in O-13.
 
 use axum::Router;
 use axum::extract::State;
@@ -54,12 +53,8 @@ async fn page(State(state): State<AppState>, headers: HeaderMap) -> Html<String>
         .collect::<Vec<_>>();
 
     // The "— default audio source —" option maps to /stream with no
-    // source_id; that path is DB-first and only falls back to the legacy
-    // single-string source. Probe whether that fallback is configured via
-    // livestream's resolver so this page no longer reads
-    // `state.audio_source()` directly (O-13).
-    let has_default = crate::routes::livestream::legacy_default_configured(&state);
-    let options = render_source_options(&sources, has_default);
+    // source_id, which resolves to the first enabled `audio_sources` row.
+    let options = render_source_options(&sources);
 
     // Trickle skeleton — reuse the feed_rows shape used on the dashboard.
     let trickle_skel = super::skeletons::feed_rows(6);
@@ -74,16 +69,23 @@ async fn page(State(state): State<AppState>, headers: HeaderMap) -> Html<String>
     render_page_for_request("Listen now", &body, "today", &headers)
 }
 
-/// Render the `<option>` set for the source selector. The first option
-/// is the default-source path; configured `audio_sources` rows follow,
-/// labelled by `label` (or `device_id` when no label is set).
-fn render_source_options(sources: &[AudioSource], has_default: bool) -> String {
+/// Render the `<option>` set for the source selector. With at least one
+/// configured `audio_sources` row, the first option is the default-source
+/// path (empty value → first enabled row) and the rows follow, labelled by
+/// `label` (or `device_id` when no label). With no rows, a single disabled
+/// "no audio sources configured" placeholder is rendered instead.
+fn render_source_options(sources: &[AudioSource]) -> String {
     let mut out = String::new();
-    if has_default || sources.is_empty() {
-        // Use an empty value to map to "no source_id query" → the
-        // legacy `state.audio_source()` path in /stream.
-        out.push_str(r#"<option value="">— default audio source —</option>"#);
+    if sources.is_empty() {
+        // No rows → /stream has no source to resolve (503). Show a disabled
+        // placeholder rather than a "default" option that can't play.
+        out.push_str(
+            r#"<option value="" disabled selected>— no audio sources configured —</option>"#,
+        );
+        return out;
     }
+    // Empty value maps to "no source_id" → the first enabled row in /stream.
+    out.push_str(r#"<option value="">— default audio source —</option>"#);
     for s in sources {
         let label_display = s.label.clone().unwrap_or_else(|| s.device_id.clone());
         let kind_glyph = match s.kind {
@@ -134,13 +136,12 @@ mod tests {
     }
 
     #[test]
-    fn render_source_options_empty_yields_default_only() {
-        let html = render_source_options(&[], false);
-        // No configured rows AND no `state.audio_source()` → still
-        // render the default option so the selector isn't empty (the
-        // play button will fail gracefully in that case).
-        assert!(html.contains(r#"value="""#));
-        assert!(html.contains("default audio source"));
+    fn render_source_options_empty_yields_no_sources_notice() {
+        let html = render_source_options(&[]);
+        // No configured rows → a disabled placeholder, not a playable default.
+        assert!(html.contains("no audio sources configured"));
+        assert!(html.contains("disabled"));
+        assert!(!html.contains("— default audio source —"));
     }
 
     #[test]
@@ -150,7 +151,7 @@ mod tests {
             sample("src_rtsp_1", SourceKind::Rtsp, Some("Front camera"), false),
             sample("src_pw_1", SourceKind::PipeWire, None, false),
         ];
-        let html = render_source_options(&sources, true);
+        let html = render_source_options(&sources);
         assert!(html.contains(r#"value="src_usb_1""#));
         assert!(html.contains("Garden mic"));
         assert!(html.contains(r#"value="src_rtsp_1""#));
@@ -173,7 +174,7 @@ mod tests {
             Some("Front <cam>"),
             false,
         )];
-        let html = render_source_options(&sources, false);
+        let html = render_source_options(&sources);
         assert!(html.contains("Front &lt;cam&gt;"));
         assert!(!html.contains("<cam>"));
     }

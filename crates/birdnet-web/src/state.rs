@@ -48,8 +48,6 @@ struct AppStateInner {
     spectrogram_broadcast: SpectrogramBroadcast,
     /// Localization manager for species common names.
     i18n: Option<RwLock<I18nManager>>,
-    /// Audio source configuration for live streaming (ALSA device or RTSP URL).
-    audio_source: Option<String>,
     /// Custom site name for branding.
     site_name: Option<String>,
     /// Species info link site: "ebird", "allaboutbirds", or "none".
@@ -132,7 +130,6 @@ impl AppState {
                 log_broadcaster: LogBroadcaster::new(),
                 spectrogram_broadcast: SpectrogramBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 i18n: None,
-                audio_source: None,
                 site_name: None,
                 info_site: "ebird".to_string(),
                 custom_image_dir: None,
@@ -213,7 +210,6 @@ impl AppState {
                 log_broadcaster: LogBroadcaster::new(),
                 spectrogram_broadcast: SpectrogramBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 i18n: None,
-                audio_source: None,
                 site_name: None,
                 info_site: "ebird".to_string(),
                 custom_image_dir: None,
@@ -242,7 +238,6 @@ impl AppState {
                 log_broadcaster: LogBroadcaster::new(),
                 spectrogram_broadcast: SpectrogramBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 i18n: None,
-                audio_source: None,
                 site_name: None,
                 info_site: "ebird".to_string(),
                 custom_image_dir: None,
@@ -281,15 +276,6 @@ impl AppState {
         let inner = unwrap_inner(self.inner, "with_i18n");
         Self {
             inner: rebuild_inner(inner, |s| s.i18n = Some(RwLock::new(manager))),
-        }
-    }
-
-    /// Set the audio source for live streaming.
-    #[must_use]
-    pub fn with_audio_source(self, source: String) -> Self {
-        let inner = unwrap_inner(self.inner, "with_audio_source");
-        Self {
-            inner: rebuild_inner(inner, |s| s.audio_source = Some(source)),
         }
     }
 
@@ -454,11 +440,6 @@ impl AppState {
             let mgr = lock.read().expect("i18n rwlock poisoned");
             f(&mgr)
         })
-    }
-
-    /// Get the audio source for live streaming, if configured.
-    pub fn audio_source(&self) -> Option<&str> {
-        self.inner.audio_source.as_deref()
     }
 
     /// Get the custom species image directory, if configured.
