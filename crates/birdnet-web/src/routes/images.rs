@@ -82,11 +82,12 @@ async fn species_image_info(
     }
 }
 
-/// Serve the cached species image file.
+/// Serve the species image file bytes.
 ///
-/// Checks custom image directory first, then falls back to the Wikipedia cache.
-/// Returns the image bytes with the appropriate content type.
-/// If the image is not cached, returns 404.
+/// Checks the custom image directory first, then the Wikipedia cache, fetching
+/// on a cache miss (like `species_image_info`) so `<img>` previews populate on
+/// first view. Returns the image bytes with the appropriate content type, or
+/// 404 when no cache is configured or the species genuinely has no image.
 async fn species_image_file(
     State(state): State<AppState>,
     Path(scientific_name): Path<String>,
@@ -123,19 +124,45 @@ async fn species_image_file(
             .into_response();
     };
 
-    // Only serve from cache (no network fetch for file serving)
-    let image = cache.get_cached(&scientific_name);
-    let cached_path = image.and_then(|img| img.cached_path);
-
-    let Some(path) = cached_path else {
-        return (
-            StatusCode::NOT_FOUND,
-            [(header::CONTENT_TYPE, "application/json")],
-            json!({"error": "image not cached"})
-                .to_string()
-                .into_bytes(),
-        )
-            .into_response();
+    // Serve from the on-disk cache, fetching on miss so every `<img>` tag
+    // self-heals on first view. Mirrors `species_image_info` (which already
+    // fetches on miss); without this, file requests 404 until the gallery's
+    // background warmer happens to populate that species, leaving species- and
+    // detection-detail previews permanently broken if the gallery is never
+    // opened. `get_image` is a no-op network-wise once the file is cached.
+    let path = match cache
+        .get_cached(&scientific_name)
+        .and_then(|img| img.cached_path)
+    {
+        Some(path) => path,
+        None => match cache.get_image(&scientific_name).await {
+            // Fetched and cached: serve the freshly downloaded bytes.
+            Ok(image) => {
+                let Some(path) = image.cached_path else {
+                    // Provider resolved but the species genuinely has no image.
+                    return (
+                        StatusCode::NOT_FOUND,
+                        [(header::CONTENT_TYPE, "application/json")],
+                        json!({"error": "no image available"})
+                            .to_string()
+                            .into_bytes(),
+                    )
+                        .into_response();
+                };
+                path
+            }
+            // Lookup/download failed (offline, rate-limited, not found, …).
+            Err(_) => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    [(header::CONTENT_TYPE, "application/json")],
+                    json!({"error": "image not available"})
+                        .to_string()
+                        .into_bytes(),
+                )
+                    .into_response();
+            }
+        },
     };
 
     let Ok(bytes) = std::fs::read(&path) else {

@@ -140,7 +140,7 @@ pub async fn run(
     let config = helpers::overlay_db_settings(config, &state);
 
     // Initialize all optional subsystems.
-    let state = helpers::init_image_cache(state, &cli, config.as_ref());
+    let state = helpers::init_image_cache(state, &cli, config.as_ref(), &db_path);
     let state = if let Some(ref dir) = cli.custom_image_dir {
         tracing::info!(path = %dir.display(), "custom species image directory configured");
         state.with_custom_image_dir(dir.clone())
