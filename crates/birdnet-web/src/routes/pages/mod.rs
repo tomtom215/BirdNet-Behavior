@@ -168,6 +168,11 @@ fn render_page_inner(
         if active_nav == key { "active" } else { "" }
     };
     let sign_out_link = if signed_in { SIGN_OUT_LINK_HTML } else { "" };
+    // Live process uptime for the topnav pill; empty when unavailable (non-Linux
+    // or `/proc` unreadable) so the O-26 `[data-empty-hide=""]` rule hides it.
+    let uptime_short = crate::system_info::process_uptime_secs()
+        .map(crate::system_info::format_uptime)
+        .unwrap_or_default();
     // Insert the layout partials FIRST so their own `{{nav_*}}` / `{{version}}`
     // / `{{uptime_short}}` placeholders are resolved by the subsequent passes.
     // (O-26's topnav-more + footer both reference those slots.)
@@ -181,9 +186,7 @@ fn render_page_inner(
         .replace("{{tabbar}}", TABBAR_HTML)
         .replace("{{sign_out_link}}", sign_out_link)
         .replace("{{version}}", version)
-        // Live uptime is not wired here yet — empty value triggers the
-        // `[data-empty-hide=""]` rule in the O-26 CSS so the pill stays hidden.
-        .replace("{{uptime_short}}", "")
+        .replace("{{uptime_short}}", &uptime_short)
         .replace("{{nav_dashboard}}", nav("dashboard"))
         .replace("{{nav_today}}", nav("today"))
         .replace("{{nav_species}}", nav("species"))
@@ -386,6 +389,8 @@ mod tests {
         assert!(html.0.contains("<p>hi</p>"));
         // Inactive sections must not be marked active.
         assert!(!html.0.contains("{{nav_dashboard}}"));
+        // The uptime pill slot is always substituted (wired, never left literal).
+        assert!(!html.0.contains("{{uptime_short}}"));
     }
 
     #[test]

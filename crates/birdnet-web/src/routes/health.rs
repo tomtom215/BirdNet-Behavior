@@ -10,7 +10,6 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::{Router, routing::get};
 use std::fmt::Write as _;
-use std::time::SystemTime;
 
 use crate::metrics::render_runtime_metrics;
 use crate::state::AppState;
@@ -99,32 +98,9 @@ async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoResponse 
     )
 }
 
-/// Get process uptime in seconds (Linux-specific, falls back to 0).
+/// Get process uptime in seconds (0 when it can't be determined).
 fn get_process_uptime() -> u64 {
-    #[cfg(target_os = "linux")]
-    {
-        if let (Ok(stat), Ok(uptime_str)) = (
-            std::fs::read_to_string("/proc/self/stat"),
-            std::fs::read_to_string("/proc/uptime"),
-        ) {
-            let hz: u64 = 100; // typical on Linux
-            if let (Some(start_field), Some(uptime_field)) = (
-                stat.split_whitespace().nth(21),
-                uptime_str.split_whitespace().next(),
-            ) && let (Ok(start_jiffies), Ok(sys_uptime)) =
-                (start_field.parse::<u64>(), uptime_field.parse::<f64>())
-            {
-                #[allow(clippy::cast_precision_loss)] // hz division is small enough
-                let proc_uptime = sys_uptime - (start_jiffies / hz) as f64;
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                return proc_uptime.max(0.0) as u64;
-            }
-        }
-    }
-    // Fallback: compute from build-time epoch (less accurate).
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs())
+    crate::system_info::process_uptime_secs().unwrap_or(0)
 }
 
 /// Get process RSS and CPU count.

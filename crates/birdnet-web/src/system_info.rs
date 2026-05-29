@@ -175,6 +175,31 @@ pub fn format_uptime(secs: u64) -> String {
     }
 }
 
+/// Process uptime in seconds, or `None` when it can't be determined.
+///
+/// Returns `None` on non-Linux targets or when `/proc` is unreadable. Derived
+/// from the process start time in `/proc/self/stat` (field 22, in jiffies)
+/// against `/proc/uptime`.
+#[must_use]
+pub fn process_uptime_secs() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        let stat = std::fs::read_to_string("/proc/self/stat").ok()?;
+        let uptime = std::fs::read_to_string("/proc/uptime").ok()?;
+        let hz: u64 = 100; // typical USER_HZ on Linux
+        let start_jiffies: u64 = stat.split_whitespace().nth(21)?.parse().ok()?;
+        let sys_uptime: f64 = uptime.split_whitespace().next()?.parse().ok()?;
+        #[allow(clippy::cast_precision_loss)] // hz division is small
+        let proc_uptime = sys_uptime - (start_jiffies / hz) as f64;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        Some(proc_uptime.max(0.0) as u64)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,6 +237,17 @@ mod tests {
     #[test]
     fn format_uptime_minutes() {
         assert_eq!(format_uptime(125), "2m");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn process_uptime_is_available_on_linux() {
+        // The test process has been running, so `/proc` yields a value. We only
+        // assert it resolves (the exact seconds are timing-dependent).
+        assert!(
+            process_uptime_secs().is_some(),
+            "expected /proc-derived process uptime on Linux"
+        );
     }
 
     #[test]
