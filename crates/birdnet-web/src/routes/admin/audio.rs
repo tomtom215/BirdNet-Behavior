@@ -6,26 +6,21 @@
 //! `probe(id)` which reads the supervisor-published
 //! `birdnet_audio_source_up{source=<row.id>}` gauge.
 //!
-//! ## O-13 wiring status (post-stage 2)
+//! ## O-13 wiring status
 //!
-//! Stage 1 (shipped in #102) — the capture pipeline reads
-//! `audio_sources` rows directly when the table is non-empty.
+//! Both the initial page render and the per-row `/probe` poll resolve
+//! status through the metrics gauge `birdnet_audio_source_up{source=<row.id>}`
+//! the capture supervisor publishes each reconcile tick — honest
+//! `Capturing` / `Down`, never a synthetic "first row up" stub (#102, #107).
 //!
-//! Stage 2 (shipped in this PR's sibling) — every DB-driven source's
-//! `CaptureSource` carries `stream_id = Some(row.id)`. The supervisor
-//! publishes per-source liveness to `audio_source_up{<row.id>}` on
-//! every reconcile tick. `probe(id)` reads that gauge back and
-//! returns honest `Capturing` / `Down` based on actual subprocess
-//! state, not the "first row Capturing, rest Down" synthetic stub.
-//!
-//! **Remaining TODO(O-13-followup)** — retire the legacy
-//! single-string `state.audio_source()` reader from
-//! [`crate::routes::livestream`] (default `/stream` source),
-//! the live-spectrogram producer in `src/helpers/system.rs`,
-//! the listen-now "default" option, and migration 15's
-//! `settings.audio_source` seed cross-reference once every consumer
-//! has migrated to read the `audio_sources` table directly. Until
-//! then, `legacy_daemon_status` provides the fallback path here.
+//! **Remaining TODO(O-13-followup)** — the legacy single-string
+//! `state.audio_source()` source now survives only as a fallback: in
+//! [`crate::routes::livestream`]'s default `/stream` resolver, in this
+//! module's `legacy_daemon_status` (used when no per-row gauge exists yet),
+//! and in migration 15's `settings.audio_source` seed cross-reference.
+//! Those — and the `with_audio_source` builder that feeds them from
+//! CLI/env — retire once the `audio_sources` table is the sole source of
+//! truth.
 
 use std::fmt::Write as _;
 
@@ -126,12 +121,13 @@ async fn page(State(state): State<AppState>) -> Html<String> {
         tracing::error!(error = %err, "audio_sources list failed");
         Vec::new()
     });
-    let active_daemon = state.audio_source().map(ToString::to_string);
-    Html(admin_shell(
-        "Audio Sources",
-        "audio",
-        &render_body(&sources, active_daemon.as_deref()),
-    ))
+    // First paint resolves each pill through the same metrics-driven path
+    // the per-row `/probe` poll uses, so the initial status matches the 8 s
+    // self-poll instead of flashing a legacy single-string heuristic first.
+    // `state.audio_source()` is read only inside the resolver's fallback now
+    // (O-13) — the page no longer reads it directly.
+    let body = render_body(&sources, |row| real_or_legacy_daemon_status(row, &state));
+    Html(admin_shell("Audio Sources", "audio", &body))
 }
 
 #[derive(Deserialize)]
@@ -351,18 +347,18 @@ fn legacy_daemon_status(row: &AudioSource, daemon_source: Option<&str>) -> Statu
 // Render
 // ---------------------------------------------------------------------------
 
-fn render_body(sources: &[AudioSource], daemon_source: Option<&str>) -> String {
+fn render_body(sources: &[AudioSource], status_for: impl Fn(&AudioSource) -> Status) -> String {
     let (local, rtsp): (Vec<&AudioSource>, Vec<&AudioSource>) = sources
         .iter()
         .partition(|s| !matches!(s.kind, SourceKind::Rtsp));
 
     let mut rows_local = String::new();
     for s in &local {
-        rows_local.push_str(&render_row(s, legacy_daemon_status(s, daemon_source)));
+        rows_local.push_str(&render_row(s, status_for(s)));
     }
     let mut rows_rtsp = String::new();
     for s in &rtsp {
-        rows_rtsp.push_str(&render_row(s, legacy_daemon_status(s, daemon_source)));
+        rows_rtsp.push_str(&render_row(s, status_for(s)));
     }
 
     let count_local = format!(
@@ -571,7 +567,7 @@ mod tests {
 
     #[test]
     fn render_body_empty_shows_empty_state() {
-        let html = render_body(&[], None);
+        let html = render_body(&[], |_| Status::Down);
         assert!(html.contains("No audio sources yet"));
         // Both group cards are hidden, empty state is not.
         assert!(html.contains("hidden"));
@@ -583,13 +579,32 @@ mod tests {
         insert_one(&state, "src_u", SourceKind::UsbAlsa, "hw:1,0");
         insert_one(&state, "src_r", SourceKind::Rtsp, "rtsp://x/y");
         let sources = state.with_db(AudioSourceStore::list).unwrap();
-        let html = render_body(&sources, None);
+        let html = render_body(&sources, |_| Status::Down);
         assert!(!html.contains("{{"));
         assert!(html.contains("hw:1,0"));
         assert!(html.contains("rtsp://x/y"));
         // Both visible — neither group is hidden.
         // Empty state IS hidden though.
         assert!(html.contains(r#"<section class="bnb-card pad" hidden>"#));
+    }
+
+    #[test]
+    fn render_body_initial_paint_reflects_metrics_gauge() {
+        // First paint must agree with the per-row `/probe` poll: a source
+        // whose supervisor gauge reads "up" renders `Capturing` immediately,
+        // not a legacy heuristic. Mirrors what `page()` passes to render_body.
+        let (_d, state) = fixture();
+        insert_one(&state, "src_live", SourceKind::UsbAlsa, "hw:1,0");
+        insert_one(&state, "src_dead", SourceKind::Rtsp, "rtsp://x/y");
+        state.metrics().set_source_up("src_live", true);
+        state.metrics().set_source_up("src_dead", false);
+        let sources = state.with_db(AudioSourceStore::list).unwrap();
+        let html = render_body(&sources, |row| real_or_legacy_daemon_status(row, &state));
+        assert!(
+            html.contains("Capturing"),
+            "live row should paint Capturing"
+        );
+        assert!(html.contains("Down"), "dead row should paint Down");
     }
 
     #[test]
