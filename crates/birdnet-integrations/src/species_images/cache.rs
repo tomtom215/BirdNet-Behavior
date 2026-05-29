@@ -149,6 +149,28 @@ impl DiskCache {
         Ok(path)
     }
 
+    /// Remove a cached image: delete the file from disk and drop the index
+    /// entry. Used when an admin blacklists a species image so the next request
+    /// re-fetches (and is then refused if the resolved URL is still blacklisted).
+    ///
+    /// Returns `true` if a file was deleted. A missing file is not an error.
+    #[allow(clippy::significant_drop_tightening)]
+    pub fn remove(&self, cache_key: &str) -> bool {
+        self.index
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(cache_key);
+        let path = self.path_for(cache_key);
+        match std::fs::remove_file(&path) {
+            Ok(()) => true,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => {
+                tracing::warn!(key = cache_key, error = %e, "failed to remove cached image");
+                false
+            }
+        }
+    }
+
     /// Update the remote URL and metadata for an entry already in the index.
     ///
     /// Called after a successful fetch to persist the URL alongside the path.
@@ -280,6 +302,27 @@ mod tests {
         assert!(path.exists());
         let img = cache.get("turdus_merula").unwrap();
         assert!(img.cached_path.is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn remove_deletes_file_and_index_entry() {
+        let dir = std::env::temp_dir().join("birdnet_diskcache_remove");
+        let _ = std::fs::remove_dir_all(&dir);
+        let cache = DiskCache::new(&dir, 300).unwrap();
+        let path = cache.store("turdus_merula", b"fake-jpeg").unwrap();
+        assert!(path.exists() && cache.contains("turdus_merula"));
+
+        assert!(
+            cache.remove("turdus_merula"),
+            "reports the file was deleted"
+        );
+        assert!(!path.exists(), "file removed from disk");
+        assert!(!cache.contains("turdus_merula"), "index entry dropped");
+        assert!(
+            !cache.remove("turdus_merula"),
+            "removing an absent entry is a no-op, not an error"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

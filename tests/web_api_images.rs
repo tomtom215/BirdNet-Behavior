@@ -207,3 +207,56 @@ async fn species_image_file_404_when_cache_not_configured() {
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn species_image_file_respects_blacklist() {
+    let addr = spawn_image_server().await;
+    let base = format!("http://{addr}");
+    let tmp = tempfile::tempdir().unwrap();
+    let state = state_with_stub_cache(base.clone(), tmp.path());
+    let app = build_router(state.clone());
+
+    // Warm the cache (fetch-on-miss) so the index records the source URL.
+    let warm = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/species/image/Turdus%20merula/file")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        warm.status(),
+        StatusCode::OK,
+        "precondition: the image serves before it is blacklisted"
+    );
+
+    // Blacklist the exact URL the stub provider resolved for this species.
+    let url = format!("{base}/Turdus_merula.jpg");
+    state.with_db(|conn| {
+        birdnet_db::sqlite::add_image_blacklist(conn, "Turdus merula", &url, Some("test"))
+            .expect("insert blacklist row");
+    });
+
+    // The serve path must now refuse it (and evict the cached file).
+    let blocked = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/species/image/Turdus%20merula/file")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        blocked.status(),
+        StatusCode::NOT_FOUND,
+        "a blacklisted image must not be served"
+    );
+    assert!(
+        !tmp.path().join("turdus_merula.jpg").exists(),
+        "serving a blacklisted hit should evict the cached file"
+    );
+}

@@ -180,6 +180,14 @@ impl ImageCache {
         self.disk.get(&Self::cache_key(scientific_name))
     }
 
+    /// Evict a species image from the cache (disk file + in-memory entry).
+    ///
+    /// Returns `true` if a cached file was deleted. Used when an image is
+    /// blacklisted so it is no longer served and is re-fetched on next request.
+    pub fn remove(&self, scientific_name: &str) -> bool {
+        self.disk.remove(&Self::cache_key(scientific_name))
+    }
+
     /// Number of cached species images.
     pub fn cached_count(&self) -> usize {
         self.disk.len()
