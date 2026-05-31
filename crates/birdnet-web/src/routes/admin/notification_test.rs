@@ -94,18 +94,24 @@ fn render_test_page(apprise_ok: bool, bw_ok: bool) -> String {
       .btn { padding:0.5rem 1.5rem; border-radius:0.375rem; border:none; cursor:pointer; font-weight:600; font-size:0.875rem; }
       .btn-primary { background:var(--moss); color:#fff; }
       .btn-disabled { background:var(--border); color:var(--fg-4); cursor:not-allowed; }
-      .hint { font-size:0.75rem; color:var(--fg-4); }
+      .hint { font-size:0.75rem; color:var(--fg-4); margin-bottom:1rem; }
+      nav { margin-bottom:2rem; padding:1rem 0; border-bottom:1px solid var(--border); }
+      h1 { font-size:1.5rem; font-weight:700; margin-bottom:1.5rem; color:var(--fg); }
+      .hint a { color:var(--moss-ink); }
+      .result-banner { border:1px solid; border-radius:0.375rem; padding:0.75rem; margin-top:0.75rem; }
+      .result-banner.ok { background:var(--moss-soft); border-color:var(--moss-soft); color:var(--moss-ink); }
+      .result-banner.err { background:var(--rare-soft); border-color:var(--rare-soft); color:var(--rare); }
     </style>
 </head>
 <body>
 <div class="container">
-  <nav style="margin-bottom:2rem; padding:1rem 0; border-bottom:1px solid var(--border);">
+  <nav>
     <a href="/">Dashboard</a>
     <a href="/admin">Admin</a>
     <a href="/admin/settings">Settings</a>
     <a href="/admin/notifications/test" class="active">Test Notifications</a>
   </nav>
-  <h1 style="font-size:1.5rem;font-weight:700;margin-bottom:1.5rem;color:var(--fg);">Test Notification Channels</h1>
+  <h1>Test Notification Channels</h1>
 "#);
 
     // Apprise card
@@ -113,8 +119,8 @@ fn render_test_page(apprise_ok: bool, bw_ok: bool) -> String {
         html,
         r##"  <div class="card">
     <div class="section-title">Apprise Push Notifications</div>
-    <p class="hint" style="margin-bottom:1rem;">{apprise_icon} Status: {apprise_status}<br>
-      Configure the Apprise URL in <a href="/admin/settings" style="color:var(--moss-ink);">Settings</a>.
+    <p class="hint">{apprise_icon} Status: {apprise_status}<br>
+      Configure the Apprise URL in <a href="/admin/settings">Settings</a>.
     </p>
     <form hx-post="/admin/notifications/test/apprise" hx-target="#apprise-result" hx-swap="innerHTML">
       <button type="submit" class="btn {apprise_btn}" {apprise_disabled}>Send Test Apprise Notification</button>
@@ -130,8 +136,8 @@ fn render_test_page(apprise_ok: bool, bw_ok: bool) -> String {
         html,
         r##"  <div class="card">
     <div class="section-title">BirdWeather Station Ping</div>
-    <p class="hint" style="margin-bottom:1rem;">{bw_icon} Status: {bw_status}<br>
-      Configure the BirdWeather token in <a href="/admin/settings" style="color:var(--moss-ink);">Settings</a>.
+    <p class="hint">{bw_icon} Status: {bw_status}<br>
+      Configure the BirdWeather token in <a href="/admin/settings">Settings</a>.
     </p>
     <form hx-post="/admin/notifications/test/birdweather" hx-target="#birdweather-result" hx-swap="innerHTML">
       <button type="submit" class="btn {bw_btn}" {bw_disabled}>Ping BirdWeather API</button>
@@ -341,19 +347,23 @@ async fn ping_birdweather(token: &str) -> Result<String, String> {
 }
 
 fn result_html(ok: bool, msg: &str) -> String {
-    let bg = if ok {
-        "var(--moss-soft)"
-    } else {
-        "var(--rare-soft)"
-    };
-    let border = if ok {
-        "var(--moss-soft)"
-    } else {
-        "var(--rare-soft)"
-    };
-    let color = if ok { "var(--moss-ink)" } else { "var(--rare)" };
+    let variant = if ok { "ok" } else { "err" };
     let icon = if ok { "&#x2713;" } else { "&#x2717;" };
-    format!(
-        r#"<div style="background:{bg};border:1px solid {border};border-radius:0.375rem;padding:0.75rem;margin-top:0.75rem;color:{color};">{icon} {msg}</div>"#,
-    )
+    format!(r#"<div class="result-banner {variant}">{icon} {msg}</div>"#)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_page_has_no_inline_style_attributes() {
+        // P3-3 (O-25): no inline `style=` attributes — page-specific styling
+        // lives in this page's own <style> block, and the result banner uses
+        // enumerable `.result-banner` variants instead of computed inline colours.
+        assert!(!render_test_page(true, true).contains("style=\""));
+        assert!(!render_test_page(false, false).contains("style=\""));
+        assert!(!result_html(true, "ok").contains("style=\""));
+        assert!(!result_html(false, "err").contains("style=\""));
+    }
 }
