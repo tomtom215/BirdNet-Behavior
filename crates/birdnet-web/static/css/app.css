@@ -2514,3 +2514,28 @@ body:has(.bnb-tabbar) main { padding-bottom: 84px; }
 .doc-finding  { border-left: 3px solid var(--border-2); padding: 8px 14px; margin: 8px 0; border-radius: var(--r-sm); }
 .doc-finding-key { font-weight: 600; }
 .doc-finding-msg { margin: 2px 0; }
+
+/* ── Data quality dashboard (/admin/quality) — O-25 harmonisation ─────────
+   Static/enumerable shapes only. The chart bars keep their inline
+   height/width (computed per data point — the documented dynamic exception). */
+.q-head        { align-items: flex-start; }
+.q-h1          { font-size: 48px; line-height: 1.05; letter-spacing: -0.02em; text-wrap: balance; }
+.q-lede        { margin-top: 6px; max-width: 580px; }
+.q-section     { margin-top: var(--pad-3); }
+.q-meta-mb     { margin-bottom: 12px; }
+.q-empty       { color: var(--fg-4); }
+.q-empty.ok    { color: var(--moss); }
+.q-stat-value.moss-ink { color: var(--moss-ink); }
+.q-stat-value.moss     { color: var(--moss); }
+.q-stat-value.dawn     { color: var(--dawn); }
+.q-stat-value.sm       { font-size: 1rem; }
+.q-stat-value.sm.muted { color: var(--fg-4); }
+.q-trend-legend { display: flex; justify-content: space-between; font-size: .75rem; color: var(--fg-4); margin-top: .25rem; }
+.q-hour-axis    { display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; font-size: .65rem; color: var(--fg-4); margin-top: .25rem; }
+.q-hour-axis span { grid-column: span 6; text-align: left; }
+.q-link        { color: var(--moss-ink); }
+.q-num         { text-align: right; }
+.q-sci         { color: var(--fg-3); font-style: italic; }
+.q-conf-pct    { font-size: .8rem; color: var(--fg-3); }
+.q-mvr-list    { list-style: none; padding: 0; margin: 0; }
+.q-mvr-link    { color: inherit; text-decoration: none; }
