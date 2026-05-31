@@ -2570,3 +2570,42 @@ body:has(.bnb-tabbar) main { padding-bottom: 84px; }
 .acct-session-foot { margin-top: 12px; padding-top: 12px; border-top: 0.5px solid var(--hairline); }
 .acct-section-gap { margin-top: var(--pad-3); }
 .acct-add-form    { margin-top: 14px; }
+
+/* ── Year in Review (/year-in-review) — O-25 harmonisation ────────────────
+   Faithful extraction. Page-specific scoped classes carry the exact inline
+   values (note: the inline grid was 1.3fr 1fr, distinct from the global
+   .grid-2 = 1.35fr 1fr — so this keeps its own value rather than reusing it).
+   The week-tape colour and leaderboard bar width stay inline (computed). */
+.yir-eyebrow   { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.yir-h1        { font-size: 64px; line-height: 1.05; margin-top: 6px; }
+.yir-h1 em     { font-style: italic; color: var(--moss-ink); }
+.yir-lede      { margin-top: 8px; max-width: 560px; }
+.yir-tiles     { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--pad-3); margin-bottom: var(--pad-3); }
+.yir-tape      { display: flex; gap: 3px; align-items: stretch; margin-top: 6px; }
+.yir-tape-cell { flex: 1; height: 38px; border-radius: 3px; }
+.yir-months    { display: flex; gap: 3px; margin-top: 4px; }
+.yir-month     { flex: 1; text-align: center; font-size: 8px; }
+.yir-cols      { display: grid; grid-template-columns: 1.3fr 1fr; gap: var(--pad-3); margin-top: var(--pad-3); }
+.yir-row       { display: grid; grid-template-columns: 18px 28px 1fr auto; align-items: center; gap: 10px; padding: 7px 0; border-top: 0.5px solid var(--hairline); }
+.yir-row.first { border-top: 0; }
+.yir-row-main  { min-width: 0; }
+.yir-row-name  { font-weight: 500; color: inherit; font-size: 13px; }
+.yir-row-bar   { height: 5px; border-radius: 3px; background: var(--surface-2); margin-top: 4px; overflow: hidden; }
+.yir-row-bar > span { display: block; height: 100%; background: var(--moss); }
+.yir-row-count { font-size: 13px; color: var(--fg-2); }
+.yir-tile-value { font-size: 40px; line-height: 1; }
+.yir-tile-label { margin-top: 8px; }
+.yir-tile-sub  { margin-top: 2px; }
+.yir-ms        { padding: 10px 0; border-top: 0.5px solid var(--hairline); }
+.yir-ms-value  { font-size: 20px; margin-top: 3px; }
+.yir-close     { margin-top: var(--pad-3); text-align: center; }
+.yir-close-line { font-size: 30px; margin: 8px auto; max-width: 680px; line-height: 1.25; }
+.yir-close-line .accent { color: var(--moss-ink); }
+/* Match the original behaviour exactly: every one of these was an inline grid,
+   so on phones the global `[style*="grid-template-columns"]` reset collapsed it
+   to one column. Replicating that keeps the refactor pixel-faithful (the
+   leaderboard row's cramped phone stack included — fixing that is a separate,
+   deliberate change, not a side effect of this sweep). */
+@media (max-width: 520px) {
+  .yir-tiles, .yir-cols, .yir-row { grid-template-columns: 1fr; }
+}

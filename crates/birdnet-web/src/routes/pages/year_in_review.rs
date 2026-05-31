@@ -104,12 +104,12 @@ fn render_content(
     let _ = write!(
         html,
         r#"<div class="page-head"><div>
-  <div class="bnb-eyebrow" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+  <div class="bnb-eyebrow yir-eyebrow">
     <span>Year in review · {year} · Station&nbsp;#001</span>
     {help_link}
   </div>
-  <h1 class="display" style="font-size:64px;line-height:1.05;margin-top:6px;">A year of <em style="font-style:italic;color:var(--moss-ink);">listening</em>.</h1>
-  <p class="bnb-meta" style="margin-top:8px;max-width:560px;">Everything the yard sang this year — the totals, the leaderboard, the firsts, and the days it never went quiet.</p>
+  <h1 class="display yir-h1">A year of <em>listening</em>.</h1>
+  <p class="bnb-meta yir-lede">Everything the yard sang this year — the totals, the leaderboard, the firsts, and the days it never went quiet.</p>
 </div></div>"#,
     );
 
@@ -117,7 +117,7 @@ fn render_content(
     let busiest_count = busiest.map_or(0, |d| d.count);
     let _ = write!(
         html,
-        r#"<div class="grid-4" style="display:grid;grid-template-columns:repeat(4,1fr);gap:var(--pad-3);margin-bottom:var(--pad-3);">
+        r#"<div class="yir-tiles">
   {t0}{t1}{t2}{t3}
 </div>"#,
         t0 = tile("Detections", &group_thousands(total), "all year"),
@@ -138,7 +138,7 @@ fn render_content(
     html.push_str(
         r#"<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Every week</div><h3>The year in activity</h3></div></div>"#,
     );
-    html.push_str(r#"<div style="display:flex;gap:3px;align-items:stretch;margin-top:6px;">"#);
+    html.push_str(r#"<div class="yir-tape">"#);
     for (wk, &c) in weeks.iter().enumerate() {
         let intensity = (c as f64 / week_max).clamp(0.0, 1.0);
         let pct = (intensity * 92.0).round() as i64 + if c > 0 { 8 } else { 0 };
@@ -150,12 +150,12 @@ fn render_content(
         };
         let _ = write!(
             html,
-            r#"<span title="Week of {wy:04}-{wm:02}-{wd:02} — {c} detections" style="flex:1;height:38px;border-radius:3px;background:{bg};"></span>"#,
+            r#"<span class="yir-tape-cell" title="Week of {wy:04}-{wm:02}-{wd:02} — {c} detections" style="background:{bg};"></span>"#,
         );
     }
     html.push_str("</div>");
     // Month labels aligned beneath the tape.
-    html.push_str(r#"<div style="display:flex;gap:3px;margin-top:4px;">"#);
+    html.push_str(r#"<div class="yir-months">"#);
     let mut prev_month = 0u32;
     for wk in 0..weeks.len() {
         let (_, wm, _) = days_to_date(base + wk as u64 * 7);
@@ -170,15 +170,13 @@ fn render_content(
         };
         let _ = write!(
             html,
-            r#"<span class="bnb-meta mono" style="flex:1;text-align:center;font-size:8px;">{label}</span>"#,
+            r#"<span class="bnb-meta mono yir-month">{label}</span>"#,
         );
     }
     html.push_str("</div></div>");
 
     // ── Leaderboard + milestones (two columns) ───────────────────────────
-    html.push_str(
-        r#"<div class="grid-2" style="display:grid;grid-template-columns:1.3fr 1fr;gap:var(--pad-3);margin-top:var(--pad-3);">"#,
-    );
+    html.push_str(r#"<div class="yir-cols">"#);
 
     // Leaderboard.
     html.push_str(
@@ -192,20 +190,16 @@ fn render_content(
             let pct = (sp.count as f64 / max * 100.0).round() as i64;
             let _ = write!(
                 html,
-                r#"<div style="display:grid;grid-template-columns:18px 28px 1fr auto;align-items:center;gap:10px;padding:7px 0;border-top:{bt};">
+                r#"<div class="yir-row{first}">
   <span class="mono bnb-meta">{rank}</span>
   {av}
-  <div style="min-width:0;">
-    <a href="/species/detail?name={enc}" style="font-weight:500;color:inherit;font-size:13px;">{name}</a>
-    <div style="height:5px;border-radius:3px;background:var(--surface-2);margin-top:4px;overflow:hidden;"><span style="display:block;height:100%;width:{pct}%;background:var(--moss);"></span></div>
+  <div class="yir-row-main">
+    <a href="/species/detail?name={enc}" class="yir-row-name">{name}</a>
+    <div class="yir-row-bar"><span style="width:{pct}%"></span></div>
   </div>
-  <span class="mono tabular" style="font-size:13px;color:var(--fg-2);">{count}</span>
+  <span class="mono tabular yir-row-count">{count}</span>
 </div>"#,
-                bt = if i == 0 {
-                    "0"
-                } else {
-                    "0.5px solid var(--hairline)"
-                },
+                first = if i == 0 { " first" } else { "" },
                 rank = i + 1,
                 av = avatar(&sp.com_name, ""),
                 enc = simple_url_encode(&sp.com_name),
@@ -274,9 +268,9 @@ fn render_content(
     // ── Closing card ─────────────────────────────────────────────────────
     let _ = write!(
         html,
-        r#"<div class="bnb-card pad" style="margin-top:var(--pad-3);text-align:center;">
+        r#"<div class="bnb-card pad yir-close">
   <div class="bnb-eyebrow">The tally</div>
-  <p class="display" style="font-size:30px;margin:8px auto;max-width:680px;line-height:1.25;">{species} species and <span style="color:var(--moss-ink);">{total}</span> detections across {days} days of listening.</p>
+  <p class="display yir-close-line">{species} species and <span class="accent">{total}</span> detections across {days} days of listening.</p>
   <p class="bnb-meta">Here's to next year's first dawn chorus.</p>
 </div>"#,
         species = species,
@@ -290,7 +284,7 @@ fn render_content(
 /// A big-number stat tile.
 fn tile(label: &str, value: &str, sub: &str) -> String {
     format!(
-        r#"<div class="bnb-card pad"><div class="display" style="font-size:40px;line-height:1;">{value}</div><div class="bnb-eyebrow" style="margin-top:8px;">{label}</div><div class="bnb-meta" style="margin-top:2px;">{sub}</div></div>"#,
+        r#"<div class="bnb-card pad"><div class="display yir-tile-value">{value}</div><div class="bnb-eyebrow yir-tile-label">{label}</div><div class="bnb-meta yir-tile-sub">{sub}</div></div>"#,
         value = escape_html(value),
         label = escape_html(label),
         sub = escape_html(sub),
@@ -301,9 +295,9 @@ fn tile(label: &str, value: &str, sub: &str) -> String {
 fn milestone(html: &mut String, label: &str, value: &str, sub: &str) {
     let _ = write!(
         html,
-        r#"<div style="padding:10px 0;border-top:0.5px solid var(--hairline);">
+        r#"<div class="yir-ms">
   <div class="bnb-eyebrow">{label}</div>
-  <div class="display" style="font-size:20px;margin-top:3px;">{value}</div>
+  <div class="display yir-ms-value">{value}</div>
   <div class="bnb-meta">{sub}</div>
 </div>"#,
         label = escape_html(label),
