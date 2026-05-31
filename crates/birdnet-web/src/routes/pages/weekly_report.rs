@@ -105,7 +105,7 @@ fn render_weekly_content(
 
     // Week navigation header
     let current_badge = if is_current {
-        r"<span style='margin-left:0.5rem;font-size:0.8rem;background:var(--accent);color:#fff;padding:0.1rem 0.4rem;border-radius:4px;'>Current Week</span>"
+        r"<span class='wk-badge'>Current Week</span>"
     } else {
         ""
     };
@@ -113,18 +113,18 @@ fn render_weekly_content(
     let next_btn = if next_week <= today_s.as_str() {
         format!(
             r#"<a href='#' hx-get='/pages/weekly-content?week={next_week}' hx-target='#weekly-content' hx-swap='innerHTML'
-               style="padding:0.3rem 0.75rem;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-muted);">Next &#8594;</a>"#
+               class="wk-nav-btn">Next &#8594;</a>"#
         )
     } else {
-        r#"<span style="padding:0.3rem 0.75rem;color:var(--text-muted);opacity:0.4;">Next &#8594;</span>"#.to_string()
+        r#"<span class="wk-nav-next-off">Next &#8594;</span>"#.to_string()
     };
     let _ = write!(
         html,
-        r#"<div class="week-nav" style="display:flex;align-items:center;gap:1rem;margin-bottom:1.5rem;">
+        r#"<div class="week-nav wk-nav">
   <a href='#' hx-get='/pages/weekly-content?week={prev_week}' hx-target='#weekly-content' hx-swap='innerHTML'
-     style="padding:0.3rem 0.75rem;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-muted);">&#8592; Prev</a>
-  <div style="flex:1;text-align:center;">
-    <strong style="font-size:1.1rem;">{week_start} &ndash; {week_end}</strong>
+     class="wk-nav-btn">&#8592; Prev</a>
+  <div class="wk-nav-center">
+    <strong class="wk-nav-title">{week_start} &ndash; {week_end}</strong>
     {current_badge}
   </div>
   {next_btn}
@@ -135,18 +135,18 @@ fn render_weekly_content(
     let species_count = top.len();
     let _ = write!(
         html,
-        r#"<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1rem;margin-bottom:1.5rem;">
-  <div style="background:var(--bg-card);padding:1rem;border-radius:var(--radius);border:1px solid var(--border);text-align:center;">
-    <div style="font-size:2rem;font-weight:700;color:var(--accent);">{total}</div>
-    <div style="color:var(--text-muted);font-size:0.9rem;">Total Detections</div>
+        r#"<div class="wk-stats">
+  <div class="wk-card center">
+    <div class="wk-stat-num accent">{total}</div>
+    <div class="wk-stat-label">Total Detections</div>
   </div>
-  <div style="background:var(--bg-card);padding:1rem;border-radius:var(--radius);border:1px solid var(--border);text-align:center;">
-    <div style="font-size:2rem;font-weight:700;color:var(--success);">{species}</div>
-    <div style="color:var(--text-muted);font-size:0.9rem;">Species Detected</div>
+  <div class="wk-card center">
+    <div class="wk-stat-num success">{species}</div>
+    <div class="wk-stat-label">Species Detected</div>
   </div>
-  <div style="background:var(--bg-card);padding:1rem;border-radius:var(--radius);border:1px solid var(--border);text-align:center;">
-    <div style="font-size:2rem;font-weight:700;color:var(--warning);">{new}</div>
-    <div style="color:var(--text-muted);font-size:0.9rem;">New Species</div>
+  <div class="wk-card center">
+    <div class="wk-stat-num warning">{new}</div>
+    <div class="wk-stat-label">New Species</div>
   </div>
 </div>"#,
         total = total,
@@ -157,28 +157,25 @@ fn render_weekly_content(
     // 7-day bar chart
     let _ = write!(
         html,
-        r#"<div style="background:var(--bg-card);padding:1rem;border-radius:var(--radius);border:1px solid var(--border);margin-bottom:1.5rem;">
-  <h3 style="margin-bottom:0.75rem;font-size:1rem;">Daily Activity</h3>
+        r#"<div class="wk-card mb">
+  <h3 class="wk-card-title">Daily Activity</h3>
   {chart}
 </div>"#,
         chart = render_weekly_chart(week_start, daily),
     );
 
     // Two-column layout: top species + new species
-    let _ = write!(
-        html,
-        r#"<div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;">"#
-    );
+    let _ = write!(html, r#"<div class="wk-cols">"#);
 
     // Top 10 species
     html.push_str(
-        r#"<div style="background:var(--bg-card);padding:1rem;border-radius:var(--radius);border:1px solid var(--border);">
-<h3 style="margin-bottom:0.75rem;font-size:1rem;">Top Species This Week</h3>"#,
+        r#"<div class="wk-card">
+<h3 class="wk-card-title">Top Species This Week</h3>"#,
     );
     if top.is_empty() {
-        html.push_str(r#"<p style="color:var(--text-muted)">No detections this week.</p>"#);
+        html.push_str(r#"<p class="wk-muted">No detections this week.</p>"#);
     } else {
-        html.push_str(r#"<ol style="padding-left:1.25rem;">"#);
+        html.push_str(r#"<ol class="wk-top-list">"#);
         let max_count = top.first().map_or(1, |(_, _, c)| *c).max(1);
         for (sci, com, count) in top {
             #[allow(
@@ -191,13 +188,13 @@ fn render_weekly_content(
             let pct = (*count as f64 / max_count as f64 * 100.0) as u32;
             let _ = write!(
                 html,
-                r#"<li style="margin-bottom:0.5rem;">
-  <a href="/species/{sci_enc}" style="font-weight:600;">{com_esc}</a>
-  <div style="display:flex;align-items:center;gap:0.5rem;margin-top:2px;">
-    <div style="flex:1;height:6px;background:var(--border);border-radius:3px;">
-      <div style="width:{pct}%;height:6px;background:var(--accent);border-radius:3px;"></div>
+                r#"<li class="wk-top-item">
+  <a href="/species/{sci_enc}" class="wk-top-name">{com_esc}</a>
+  <div class="wk-top-bar-row">
+    <div class="wk-top-track">
+      <div class="wk-top-fill" style="width:{pct}%"></div>
     </div>
-    <span style="font-size:0.85rem;color:var(--text-muted);min-width:2.5rem;text-align:right;">{count}</span>
+    <span class="wk-top-count">{count}</span>
   </div>
 </li>"#,
                 sci_enc = escape_html(&super::simple_url_encode(sci)),
@@ -212,22 +209,22 @@ fn render_weekly_content(
 
     // New species
     html.push_str(
-        r#"<div style="background:var(--bg-card);padding:1rem;border-radius:var(--radius);border:1px solid var(--border);">
-<h3 style="margin-bottom:0.75rem;font-size:1rem;">New Species This Week
-  <span style="font-size:0.8rem;color:var(--text-muted);font-weight:400;">(first ever)</span>
+        r#"<div class="wk-card">
+<h3 class="wk-card-title">New Species This Week
+  <span class="sub">(first ever)</span>
 </h3>"#,
     );
     if new_species.is_empty() {
-        html.push_str(r#"<p style="color:var(--text-muted)">No new species this week.</p>"#);
+        html.push_str(r#"<p class="wk-muted">No new species this week.</p>"#);
     } else {
-        html.push_str(r#"<ul style="list-style:none;padding:0;">"#);
+        html.push_str(r#"<ul class="wk-new-list">"#);
         for (sci, com, date) in new_species {
             let _ = write!(
                 html,
-                r#"<li style="display:flex;align-items:center;gap:0.5rem;padding:0.4rem 0;border-bottom:1px solid var(--border);">
-  <span style="background:var(--success);color:#fff;font-size:0.7rem;padding:0.1rem 0.35rem;border-radius:3px;flex-shrink:0;">NEW</span>
-  <a href="/species/{sci_enc}" style="flex:1;">{com_esc}</a>
-  <span style="font-size:0.8rem;color:var(--text-muted);">{date}</span>
+                r#"<li class="wk-new-item">
+  <span class="wk-new-badge">NEW</span>
+  <a href="/species/{sci_enc}" class="wk-new-name">{com_esc}</a>
+  <span class="wk-new-date">{date}</span>
 </li>"#,
                 sci_enc = escape_html(&super::simple_url_encode(sci)),
                 com_esc = escape_html(com),
@@ -412,13 +409,13 @@ fn today_string() -> String {
 // Static HTML shell
 // ---------------------------------------------------------------------------
 
-const WEEKLY_SHELL_HTML: &str = r#"<div class="page-content" style="max-width:900px;margin:0 auto;padding:1.5rem;">
-  <div class="bnb-eyebrow" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;"><span>The backyard bulletin</span>{{help_link}}</div><h2 class="display" style="font-size:32px;margin-bottom:1rem;">Weekly report</h2>
+const WEEKLY_SHELL_HTML: &str = r#"<div class="page-content wk-content">
+  <div class="bnb-eyebrow wk-eyebrow"><span>The backyard bulletin</span>{{help_link}}</div><h2 class="display wk-h2">Weekly report</h2>
   <div id="weekly-content"
        hx-get="/pages/weekly-content"
        hx-trigger="load"
        hx-swap="innerHTML">
-    <div style="color:var(--text-muted);text-align:center;padding:3rem;">Loading weekly report...</div>
+    <div class="wk-loading">Loading weekly report...</div>
   </div>
 </div>"#;
 
