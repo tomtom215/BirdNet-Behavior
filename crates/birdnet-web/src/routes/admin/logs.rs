@@ -213,11 +213,14 @@ const LOG_PAGE_HTML: &str = r#"<!DOCTYPE html>
     .btn:hover { border-color:var(--moss-ink); color:var(--moss-ink); }
     .status { font-size:.8rem; color:var(--fg-4); }
     .status.connected { color:var(--moss); }
+    nav { margin-bottom:2rem; padding:1rem 0; border-bottom:1px solid var(--border); }
+    .ctl-label { display:flex; align-items:center; gap:.5rem; font-size:.875rem; color:var(--fg-3); }
+    .level-select { background:var(--surface); border:1px solid var(--border); color:var(--fg); border-radius:.25rem; padding:.25rem .5rem; font-size:.8rem; }
   </style>
 </head>
 <body>
 <div class="container">
-  <nav style="margin-bottom:2rem;padding:1rem 0;border-bottom:1px solid var(--border);">
+  <nav>
     <a href="/">Dashboard</a>
     <a href="/admin/settings">Settings</a>
     <a href="/admin/system">System</a>
@@ -229,14 +232,12 @@ const LOG_PAGE_HTML: &str = r#"<!DOCTYPE html>
   <div class="controls">
     <button class="btn" onclick="clearLog()">Clear</button>
     <button class="btn" id="pause-btn" onclick="togglePause()">Pause</button>
-    <label style="display:flex;align-items:center;gap:.5rem;font-size:.875rem;color:var(--fg-3);">
+    <label class="ctl-label">
       <input type="checkbox" id="scroll-lock" checked> Auto-scroll
     </label>
-    <label style="display:flex;align-items:center;gap:.5rem;font-size:.875rem;color:var(--fg-3);">
+    <label class="ctl-label">
       Filter:
-      <select id="level-filter" onchange="applyFilter()"
-              style="background:var(--surface);border:1px solid var(--border);color:var(--fg);
-                     border-radius:.25rem;padding:.25rem .5rem;font-size:.8rem;">
+      <select id="level-filter" class="level-select" onchange="applyFilter()">
         <option value="">All levels</option>
         <option value="level-error">ERROR</option>
         <option value="level-warn">WARN</option>
@@ -358,5 +359,13 @@ mod tests {
         });
         let received = rx.try_recv().unwrap();
         assert_eq!(received.level, "WARN");
+    }
+
+    #[test]
+    fn log_page_has_no_inline_style_attributes() {
+        // P3-3 (O-25): page-specific styling lives in the page's own <style>
+        // block. (The JS `line.style.display` CSSOM mutation is not a CSP
+        // style-src concern — only markup `style=` attributes are.)
+        assert!(!LOG_PAGE_HTML.contains("style=\""));
     }
 }
