@@ -74,7 +74,7 @@ async fn prune_handler(State(state): State<AppState>) -> Result<Html<String>, St
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Html(format!(
-        r#"<div style="color:var(--moss);padding:0.5rem 0;">
+        r#"<div class="prune-ok">
           Pruned {deleted} notification(s) older than 90 days.
         </div>"#
     )))
@@ -135,45 +135,61 @@ fn render_page(entries: &[NotifEntry], stats: (i64, i64, i64)) -> String {
     .btn-danger {{ background:var(--rare-soft); color:var(--rare); }}
     .btn-danger:hover {{ background:var(--rare-soft); }}
     .empty {{ color:var(--fg-4); text-align:center; padding:2rem; }}
+    nav {{ margin-bottom:2rem; padding:1rem 0; border-bottom:1px solid var(--border); }}
+    nav a.active {{ color:var(--moss-ink); }}
+    h1 {{ font-size:1.5rem; font-weight:700; color:var(--fg); }}
+    .page-head {{ display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem; }}
+    .stat-grid {{ display:grid; grid-template-columns:repeat(3,1fr); gap:1rem; margin-bottom:1.5rem; }}
+    .value.moss {{ color:var(--moss); }}
+    .value.rare {{ color:var(--rare); }}
+    .value.dawn {{ color:var(--dawn); }}
+    .card.flush {{ padding:0; overflow:hidden; }}
+    .table-head {{ padding:1rem 1.5rem; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }}
+    .th-title {{ font-weight:600; color:var(--fg); }}
+    .th-count {{ color:var(--fg-4); font-size:0.85rem; }}
+    td.col-time {{ white-space:nowrap; color:var(--fg-3); }}
+    td code {{ font-size:0.8rem; }}
+    td.col-muted {{ color:var(--fg-3); }}
+    .row-error {{ color:var(--rare); font-size:0.75rem; }}
+    .prune-ok {{ color:var(--moss); padding:0.5rem 0; }}
   </style>
 </head>
 <body>
 <div class="container">
-  <nav style="margin-bottom:2rem;padding:1rem 0;border-bottom:1px solid var(--border);">
+  <nav>
     <a href="/">Dashboard</a>
     <a href="/admin/settings">Settings</a>
     <a href="/admin/migrate">Migration</a>
     <a href="/admin/system">System</a>
-    <a href="/admin/notifications" style="color:var(--moss-ink);">Notifications</a>
+    <a href="/admin/notifications" class="active">Notifications</a>
   </nav>
 
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem;">
-    <h1 style="font-size:1.5rem;font-weight:700;color:var(--fg);">Notification History</h1>
+  <div class="page-head">
+    <h1>Notification History</h1>
     {prune_btn}
   </div>
   <div id="prune-result"></div>
 
   <!-- Stats cards -->
-  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;margin-bottom:1.5rem;">
+  <div class="stat-grid">
     <div class="card stat">
-      <div class="value" style="color:var(--moss);">{sent}</div>
+      <div class="value moss">{sent}</div>
       <div class="label">Sent (30 days)</div>
     </div>
     <div class="card stat">
-      <div class="value" style="color:var(--rare);">{failed}</div>
+      <div class="value rare">{failed}</div>
       <div class="label">Failed (30 days)</div>
     </div>
     <div class="card stat">
-      <div class="value" style="color:var(--dawn);">{skipped}</div>
+      <div class="value dawn">{skipped}</div>
       <div class="label">Skipped (30 days)</div>
     </div>
   </div>
 
-  <div class="card" style="padding:0;overflow:hidden;">
-    <div style="padding:1rem 1.5rem;border-bottom:1px solid var(--border);
-                display:flex;justify-content:space-between;align-items:center;">
-      <span style="font-weight:600;color:var(--fg);">Recent Notifications</span>
-      <span style="color:var(--fg-4);font-size:0.85rem;">{count} entries</span>
+  <div class="card flush">
+    <div class="table-head">
+      <span class="th-title">Recent Notifications</span>
+      <span class="th-count">{count} entries</span>
     </div>
     <div id="notif-table"
          hx-get="/admin/notifications/partial"
@@ -230,19 +246,19 @@ fn render_table_rows(entries: &[NotifEntry]) -> String {
             .replace('>', "&gt;");
         let error_html = e.error.as_ref().map_or_else(String::new, |err| {
             format!(
-                r#"<br><span style="color:var(--rare);font-size:0.75rem;">{}</span>"#,
+                r#"<br><span class="row-error">{}</span>"#,
                 err.replace('<', "&lt;").replace('>', "&gt;")
             )
         });
         write!(
             out,
             r#"<tr>
-                  <td style="white-space:nowrap;color:var(--fg-3);">{sent_at}</td>
-                  <td><code style="font-size:0.8rem;">{channel}</code></td>
+                  <td class="col-time">{sent_at}</td>
+                  <td><code>{channel}</code></td>
                   <td>{species}</td>
-                  <td style="color:var(--fg-3);">{confidence}</td>
+                  <td class="col-muted">{confidence}</td>
                   <td><span class="badge {badge_class}">{status}</span></td>
-                  <td style="color:var(--fg-3);">{msg}{error_html}</td>
+                  <td class="col-muted">{msg}{error_html}</td>
                 </tr>"#,
             sent_at = &e.sent_at[..16], // trim seconds
             channel = e.channel,
@@ -302,5 +318,17 @@ mod tests {
         assert!(html.contains(">5<"));
         assert!(html.contains(">2<"));
         assert!(html.contains(">1<"));
+    }
+
+    #[test]
+    fn pages_have_no_inline_style_attributes() {
+        // P3-3 (O-25): this page's own chrome and rows carry no inline `style=`
+        // attributes — page-specific styling lives in the page's <style> block,
+        // and status colours use enumerable classes. (render_page also embeds the
+        // shared confirm-modal component, migrated separately, so we assert on
+        // this file's own markup rather than a blanket zero over the whole page.)
+        assert!(!render_table_rows(&[make_entry("birdweather", "sent")]).contains("style=\""));
+        assert!(!render_table_rows(&[make_entry("apprise", "failed")]).contains("style=\""));
+        assert!(!render_page(&[], (0, 0, 0)).contains("<nav style"));
     }
 }

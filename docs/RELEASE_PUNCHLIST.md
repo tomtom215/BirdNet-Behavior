@@ -74,7 +74,7 @@ remains is the finish-off work below.
 | ~~**P2-3**~~ | Extend help links to remaining analytical screens — ✅ **DONE** (6 screens) | ~~P2~~ | S | low |
 | **P3-1** | O-13 legacy `--audio-source` retirement — ✅ **DONE** | P3 | S | low |
 | ~~**P3-2**~~ | No background session pruning — ✅ **DONE** (daily maintenance tick) | ~~P3~~ | S | low |
-| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (settings/render slice done; 1115→1089) | P3 | L | low (tedious) |
+| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (settings/render + notifications slices done; 1115→1063) | P3 | L | low (tedious) |
 | **P3-4** | Minor cosmetics — uptime pill ✅ **wired**; migration-missing out of scope | P3 | XS | none |
 | ~~**P3-5**~~ | Image blacklist enforcement on read path — ✅ **DONE** (serve-check + purge-on-blacklist) | ~~P3~~ | S | low |
 
@@ -309,12 +309,24 @@ into **nonce'd `<style>` blocks** — a symmetric extension of the shipped scrip
 (b) drops `'unsafe-inline'` from `style-src`. **Verify per PR:** visual diff unchanged; occurrence count drops.
 **Effort:** L (many small PRs). **Risk:** low but tedious.
 
+**Sequencing (verification-aware).** Two kinds of slice. *Faithful* extractions — old-style standalone admin
+pages whose inline styles are static or *enumerable* (fold into the page's own `<style>` block; status colours →
+variant classes) — are **zero visual change** and fully unit-verifiable, so they ship first. *Harmonization /
+dynamic* files (`backup_recovery`, `skeletons`, charts, spectrogram, heatmap — bespoke values that only match the
+shared `bnb-*` classes *approximately*, or computed `width/height:%`) change pixels and want a **visual diff**, so
+they batch for a Playwright-verified pass; the dynamic ones fold into the endgame `<style>`-nonce slice.
+
 **Progress.**
 - **Slice 1 — `admin/settings/render/*` (this PR).** 27 inline style attributes removed across the 8 settings
   section modules; 3 faithful width utilities added (`.bnb-w-num` / `.bnb-w-num-xs` / `.bnb-w-select`);
   page-specific bits folded into the settings page's own `<style>` block. Count **1115 → 1089**. Added the
   `settings_page_has_no_inline_style_attributes` render guard. No CSP change yet (the page still ships a
   `<style>` block, so `'unsafe-inline'` stays until the endgame).
+- **Slice 2 — `admin/notifications.rs` + `admin/notification_test.rs`.** 26 inline style attributes removed; both
+  old-style standalone pages reach **zero** inline styles via their own `<style>` blocks. The test-result banner
+  and the notification stat/status colours were *enumerable*, so they became `.result-banner.ok/.err` and
+  `.value.moss/.rare/.dawn` variant classes rather than computed inline styles. Count **1089 → 1063**. Two render
+  guards added; still no CSP change. (Deferred: the shared confirm-modal component still emits 2 inline styles.)
 
 ---
 
