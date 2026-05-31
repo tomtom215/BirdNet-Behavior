@@ -105,24 +105,23 @@ fn render_chart_content(
     let next_btn = if next <= today {
         format!(
             r"<a href='#' hx-get='/pages/history-chart?date={next}' hx-target='#chart-content' hx-swap='innerHTML'
-               style='padding:0.3rem 0.75rem;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-muted);'>&#8594;</a>",
+               class='hist-nav-btn'>&#8594;</a>",
         )
     } else {
-        r"<span style='padding:0.3rem 0.75rem;color:var(--text-muted);opacity:0.4;'>&#8594;</span>"
-            .to_string()
+        r"<span class='hist-nav-off'>&#8594;</span>".to_string()
     };
     let today_badge = if is_today {
-        r"<span style='margin-left:0.5rem;font-size:0.8rem;background:var(--accent);color:#fff;padding:0.1rem 0.4rem;border-radius:4px;'>Today</span>"
+        r"<span class='hist-badge'>Today</span>"
     } else {
         ""
     };
     let _ = write!(
         html,
-        r#"<div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem;">
+        r#"<div class="hist-nav">
   <a href='#' hx-get='/pages/history-chart?date={prev}' hx-target='#chart-content' hx-swap='innerHTML'
-     style="padding:0.3rem 0.75rem;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);color:var(--text-muted);">&#8592;</a>
-  <div style="flex:1;text-align:center;">
-    <strong style="font-size:1.1rem;">{date}</strong>
+     class="hist-nav-btn">&#8592;</a>
+  <div class="hist-nav-center">
+    <strong class="hist-nav-title">{date}</strong>
     {today_badge}
   </div>
   {next_btn}
@@ -136,14 +135,14 @@ fn render_chart_content(
     // Stats row
     let _ = write!(
         html,
-        r#"<div style="display:flex;gap:1rem;margin-bottom:1rem;">
-  <div style="background:var(--bg-card);padding:0.75rem 1.25rem;border-radius:var(--radius);border:1px solid var(--border);">
-    <span style="font-size:1.5rem;font-weight:700;color:var(--accent);">{total}</span>
-    <span style="color:var(--text-muted);margin-left:0.5rem;font-size:0.9rem;">detections</span>
+        r#"<div class="hist-stats">
+  <div class="hist-stat">
+    <span class="hist-stat-num accent">{total}</span>
+    <span class="hist-stat-unit">detections</span>
   </div>
-  <div style="background:var(--bg-card);padding:0.75rem 1.25rem;border-radius:var(--radius);border:1px solid var(--border);">
-    <span style="font-size:1.5rem;font-weight:700;color:var(--success);">{species_count}</span>
-    <span style="color:var(--text-muted);margin-left:0.5rem;font-size:0.9rem;">species</span>
+  <div class="hist-stat">
+    <span class="hist-stat-num success">{species_count}</span>
+    <span class="hist-stat-unit">species</span>
   </div>
 </div>"#,
     );
@@ -151,8 +150,8 @@ fn render_chart_content(
     // Hourly chart
     let _ = write!(
         html,
-        r#"<div style="background:var(--bg-card);padding:1rem;border-radius:var(--radius);border:1px solid var(--border);">
-  <h3 style="margin-bottom:0.75rem;font-size:0.95rem;color:var(--text-muted);">Detections by Hour</h3>
+        r#"<div class="hist-chart-card">
+  <h3 class="hist-chart-title">Detections by Hour</h3>
   {chart}
 </div>"#,
         chart = render_hourly_chart(hours),
@@ -164,19 +163,16 @@ fn render_chart_content(
 /// Render a compact list of dates with detections (newest first, for sidebar).
 fn render_date_list(dates: &[String]) -> String {
     if dates.is_empty() {
-        return r#"<p style="color:var(--text-muted);padding:1rem;">No detection history yet.</p>"#
-            .to_string();
+        return r#"<p class="hist-empty">No detection history yet.</p>"#.to_string();
     }
 
-    let mut html = String::from(
-        r#"<ul style="list-style:none;padding:0;margin:0;max-height:300px;overflow-y:auto;">"#,
-    );
+    let mut html = String::from(r#"<ul class="hist-date-list">"#);
 
     for date in dates.iter().rev().take(90) {
         let _ = write!(
             html,
             r#"<li><a href='#' hx-get='/pages/history-chart?date={date}' hx-target='#chart-content' hx-swap='innerHTML'
-               style="display:block;padding:0.3rem 0.75rem;color:var(--text-muted);font-size:0.9rem;">{date}</a></li>"#,
+               class="hist-date-link">{date}</a></li>"#,
             date = escape_html(date),
         );
     }
@@ -217,16 +213,16 @@ fn add_days(date: &str, delta: i64) -> String {
     format!("{ny}-{nm:02}-{nd:02}")
 }
 
-const HISTORY_SHELL_HTML: &str = r#"<div class="page-content" style="padding:1.5rem;">
-  <div class="bnb-eyebrow">Browse the past</div><h2 class="display" style="font-size:32px;margin-bottom:1rem;">History</h2>{{help_link}}
-  <div style="display:grid;grid-template-columns:200px 1fr;gap:1.5rem;align-items:start;">
+const HISTORY_SHELL_HTML: &str = r#"<div class="page-content hist-content">
+  <div class="bnb-eyebrow">Browse the past</div><h2 class="display hist-h2">History</h2>{{help_link}}
+  <div class="hist-layout">
     <!-- Date list sidebar -->
-    <div style="background:var(--bg-card);border-radius:var(--radius);border:1px solid var(--border);">
-      <div style="padding:0.75rem;border-bottom:1px solid var(--border);font-size:0.9rem;color:var(--text-muted);">
+    <div class="hist-side">
+      <div class="hist-side-head">
         Recent dates
       </div>
       <div hx-get="/pages/history-dates" hx-trigger="load" hx-swap="innerHTML">
-        <p style="color:var(--text-muted);padding:1rem;">Loading...</p>
+        <p class="hist-loading">Loading...</p>
       </div>
     </div>
     <!-- Chart area -->
@@ -234,7 +230,7 @@ const HISTORY_SHELL_HTML: &str = r#"<div class="page-content" style="padding:1.5
          hx-get="/pages/history-chart"
          hx-trigger="load"
          hx-swap="innerHTML">
-      <div style="color:var(--text-muted);text-align:center;padding:3rem;">Loading chart...</div>
+      <div class="hist-chart-loading">Loading chart...</div>
     </div>
   </div>
 </div>"#;

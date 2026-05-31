@@ -2655,3 +2655,35 @@ body:has(.bnb-tabbar) main { padding-bottom: 84px; }
 @media (max-width: 520px) {
   .wk-cols { grid-template-columns: 1fr; }
 }
+
+/* ── Detection history (/history) — O-25 harmonisation ────────────────────
+   Faithful extraction; preserves the page's legacy tokens. The hourly chart
+   stays as-is (its own SVG helper). */
+.hist-content   { padding: 1.5rem; }
+.hist-h2        { font-size: 32px; margin-bottom: 1rem; }
+.hist-layout    { display: grid; grid-template-columns: 200px 1fr; gap: 1.5rem; align-items: start; }
+.hist-side      { background: var(--bg-card); border-radius: var(--radius); border: 1px solid var(--border); }
+.hist-side-head { padding: 0.75rem; border-bottom: 1px solid var(--border); font-size: 0.9rem; color: var(--text-muted); }
+.hist-loading   { color: var(--text-muted); padding: 1rem; }
+.hist-chart-loading { color: var(--text-muted); text-align: center; padding: 3rem; }
+.hist-nav       { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+.hist-nav-btn   { padding: 0.3rem 0.75rem; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-muted); }
+.hist-nav-off   { padding: 0.3rem 0.75rem; color: var(--text-muted); opacity: 0.4; }
+.hist-nav-center { flex: 1; text-align: center; }
+.hist-nav-title { font-size: 1.1rem; }
+.hist-badge     { margin-left: 0.5rem; font-size: 0.8rem; background: var(--accent); color: #fff; padding: 0.1rem 0.4rem; border-radius: 4px; }
+.hist-stats     { display: flex; gap: 1rem; margin-bottom: 1rem; }
+.hist-stat      { background: var(--bg-card); padding: 0.75rem 1.25rem; border-radius: var(--radius); border: 1px solid var(--border); }
+.hist-stat-num  { font-size: 1.5rem; font-weight: 700; }
+.hist-stat-num.accent  { color: var(--accent); }
+.hist-stat-num.success { color: var(--success); }
+.hist-stat-unit { color: var(--text-muted); margin-left: 0.5rem; font-size: 0.9rem; }
+.hist-chart-card { background: var(--bg-card); padding: 1rem; border-radius: var(--radius); border: 1px solid var(--border); }
+.hist-chart-title { margin-bottom: 0.75rem; font-size: 0.95rem; color: var(--text-muted); }
+.hist-date-list { list-style: none; padding: 0; margin: 0; max-height: 300px; overflow-y: auto; }
+.hist-date-link { display: block; padding: 0.3rem 0.75rem; color: var(--text-muted); font-size: 0.9rem; }
+.hist-empty     { color: var(--text-muted); padding: 1rem; }
+/* hist-layout was an inline grid → collapsed by the global phone reset. */
+@media (max-width: 520px) {
+  .hist-layout { grid-template-columns: 1fr; }
+}
