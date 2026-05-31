@@ -74,7 +74,7 @@ remains is the finish-off work below.
 | ~~**P2-3**~~ | Extend help links to remaining analytical screens — ✅ **DONE** (6 screens) | ~~P2~~ | S | low |
 | **P3-1** | O-13 legacy `--audio-source` retirement — ✅ **DONE** | P3 | S | low |
 | ~~**P3-2**~~ | No background session pruning — ✅ **DONE** (daily maintenance tick) | ~~P3~~ | S | low |
-| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (all old-style admin pages done: settings, notifications, overview/logs, species, migration, system; 1115→946. Next: harmonization/dynamic batch + endgame) | P3 | L | low (tedious) |
+| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (all old-style admin pages done: settings, notifications, overview/logs, species, migration, system; 1115→924. Next: harmonization/dynamic batch + endgame) | P3 | L | low (tedious) |
 | **P3-4** | Minor cosmetics — uptime pill ✅ **wired**; migration-missing out of scope | P3 | XS | none |
 | ~~**P3-5**~~ | Image blacklist enforcement on read path — ✅ **DONE** (serve-check + purge-on-blacklist) | ~~P3~~ | S | low |
 
@@ -345,7 +345,7 @@ they batch for a Playwright-verified pass; the dynamic ones fold into the endgam
 
   Those remaining `width:{pct}%` fills are the **documented dynamic exception** — they move into a nonce'd
   `<style>` block in the endgame. (Raw `rg 'style="'` over the crate still counts both those and the
-  `data-confirm-style=` data-attributes, which aren't inline styles.) Workspace raw `style="` total **1052 → 946**.
+  `data-confirm-style=` data-attributes, which aren't inline styles.) Workspace raw `style="` total **1052 → 924**.
   Four new render guards (species ×1 covering 3 surfaces; migration ×3). `system.rs` has no guard — both its render
   fns are async over a full `AppState`, disproportionate to mock; covered by the sibling guards + visual review.
   Original render APIs preserved exactly. **Next:** the deferred *harmonization/dynamic* batch (`backup_recovery`,
