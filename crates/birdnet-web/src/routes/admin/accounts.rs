@@ -163,8 +163,8 @@ fn render_session_rows(sessions: &[Session], current_session_id: &str) -> String
 /// obvious case before the round-trip.
 fn password_reset_form(id: i64) -> String {
     format!(
-        r#"<form class="user-reset" hx-post="/admin/accounts/users/{id}" hx-swap="none" autocomplete="off" style="display:inline-flex;gap:8px;align-items:center;">
-  <input type="password" name="password" minlength="10" required placeholder="New password (min 10)" autocomplete="new-password" style="min-width:170px;font-size:13px;">
+        r#"<form class="user-reset acct-reset" hx-post="/admin/accounts/users/{id}" hx-swap="none" autocomplete="off">
+  <input type="password" name="password" minlength="10" required placeholder="New password (min 10)" autocomplete="new-password">
   <button type="submit" class="bnb-btn ghost">Reset password</button>
 </form>"#
     )
@@ -194,7 +194,7 @@ fn render_user_rows(users: &[User]) -> String {
             reset
         } else {
             format!(
-                r##"<div style="display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                r##"<div class="acct-actions">
   {reset}
   <button class="bnb-btn ghost"
           data-confirm-action="hx-delete"
@@ -266,10 +266,10 @@ fn render_error(message: &str) -> String {
   <header class="page-head">
     <div>
       <div class="bnb-eyebrow">Admin · access</div>
-      <h1 class="display" style="font-size:32px;">Accounts &amp; sessions</h1>
+      <h1 class="display acct-h1">Accounts &amp; sessions</h1>
     </div>
   </header>
-  <section class="bnb-card pad" style="border-color:var(--rare);color:var(--rare);">
+  <section class="bnb-card pad acct-error">
     <strong>Error.</strong> {msg}
   </section>
 </div>"#,
@@ -627,7 +627,7 @@ fn render_audit_page(
     let count = entries.len();
     let truncated_note = if count >= AUDIT_PAGE_LIMIT {
         format!(
-            r#"<p class="bnb-meta" style="margin-top:14px;">Showing the most recent {AUDIT_PAGE_LIMIT} matches — tighten the date range to see older rows.</p>"#
+            r#"<p class="bnb-meta audit-note">Showing the most recent {AUDIT_PAGE_LIMIT} matches — tighten the date range to see older rows.</p>"#
         )
     } else {
         String::new()
@@ -637,34 +637,34 @@ fn render_audit_page(
   <header class="page-head">
     <div>
       <div class="bnb-eyebrow">Admin · access</div>
-      <h1 class="display" style="font-size:32px;">Audit log</h1>
+      <h1 class="display acct-h1">Audit log</h1>
       <p class="bnb-meta">Every admin-side mutation lands here. Filter by date range and action prefix.</p>
     </div>
     <a class="action" href="/admin/accounts">← back to accounts</a>
   </header>
 
-  <form method="get" action="/admin/audit" class="bnb-card pad" style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end;">
-    <label style="display:flex;flex-direction:column;gap:4px;">
+  <form method="get" action="/admin/audit" class="bnb-card pad audit-form">
+    <label class="audit-field">
       <span class="bnb-meta">From</span>
       <input type="date" name="from" value="{from}" required>
     </label>
-    <label style="display:flex;flex-direction:column;gap:4px;">
+    <label class="audit-field">
       <span class="bnb-meta">To</span>
       <input type="date" name="to" value="{to}" required>
     </label>
-    <label style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:180px;">
+    <label class="audit-field grow">
       <span class="bnb-meta">Action contains</span>
       <input type="text" name="action" value="{action_esc}"
              placeholder="rule. · settings. · password · …"
-             style="font-family:var(--font-mono);font-size:13px;">
+             class="audit-action-input">
     </label>
-    <button type="submit" class="bnb-btn primary" style="height:36px;">Apply</button>
-    <a href="/admin/audit" class="bnb-btn ghost" style="height:36px;line-height:36px;">Reset</a>
+    <button type="submit" class="bnb-btn primary audit-btn-h">Apply</button>
+    <a href="/admin/audit" class="bnb-btn ghost audit-btn-h lh">Reset</a>
   </form>
 
-  <section class="bnb-card pad" style="margin-top:18px;">
-    <div class="bnb-eyebrow" style="margin-bottom:6px;">{count} {pluralised}</div>
-    <ol class="account-audit" style="list-style:none;padding:0;margin:0;">
+  <section class="bnb-card pad audit-section">
+    <div class="bnb-eyebrow audit-count">{count} {pluralised}</div>
+    <ol class="account-audit audit-list">
       {rows}
     </ol>
     {truncated_note}
@@ -699,11 +699,16 @@ fn render_audit_full_rows(entries: &[AuditEntry], users: &[User]) -> String {
         let metadata = e
             .metadata
             .as_ref()
-            .map(|m| format!(r#"<div class="mono bnb-meta" style="margin-top:4px;font-size:11px;color:var(--fg-3);overflow-x:auto;">{}</div>"#, escape_html(m)))
+            .map(|m| {
+                format!(
+                    r#"<div class="mono bnb-meta audit-meta-row">{}</div>"#,
+                    escape_html(m)
+                )
+            })
             .unwrap_or_default();
         let _ = write!(
             out,
-            r#"<li style="padding:10px 0;border-top:0.5px solid var(--hairline);display:grid;grid-template-columns:170px 120px 1fr;gap:12px;align-items:start;">
+            r#"<li class="audit-row">
   <span class="mono bnb-meta">{when}</span>
   <span class="audit-who">{who}</span>
   <div>

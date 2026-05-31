@@ -5,14 +5,13 @@
 -->
 <div data-screen-label="Accounts" data-om-validate>
 
-  <header class="page-head" style="align-items:flex-start;">
+  <header class="page-head acct-page-head">
     <div>
       <div class="bnb-eyebrow">Admin · access</div>
-      <h1 class="display"
-          style="font-size:48px;line-height:1.05;letter-spacing:-0.02em;text-wrap:balance;">
+      <h1 class="display acct-page-h1">
         Accounts &amp; sessions
       </h1>
-      <p class="bnb-meta" style="margin-top:6px;max-width:560px;">
+      <p class="bnb-meta acct-page-lede">
         Signed in as <span class="mono">{{current_user}}</span>. Manage who else can administer this station, and which devices are still authenticated.
       </p>
     </div>
@@ -33,7 +32,7 @@
       {{session_rows}}
     </ul>
 
-    <div class="bnb-row between" style="margin-top:12px;padding-top:12px;border-top:0.5px solid var(--hairline);">
+    <div class="bnb-row between acct-session-foot">
       <span class="bnb-meta">Sessions last up to 14 days unless "Remember me" is on. Rotating your password invalidates every session.</span>
       <button class="bnb-btn"
               data-confirm-action="hx-post"
@@ -53,7 +52,7 @@
   <!-- ═══════════════════════════════════════════════════════════
        Users
        ═══════════════════════════════════════════════════════════ -->
-  <section class="bnb-card pad" style="margin-top:var(--pad-3);">
+  <section class="bnb-card pad acct-section-gap">
     <div class="section-header">
       <div>
         <div class="bnb-eyebrow">Users</div>
@@ -69,7 +68,7 @@
       {{user_rows}}
     </ul>
 
-    <details class="bnb-add-form" id="add-user" style="margin-top:14px;">
+    <details class="bnb-add-form acct-add-form" id="add-user">
       <summary>
         <span class="bnb-add-form__plus" aria-hidden="true">+</span>
         <span>Invite a viewer</span>
@@ -107,7 +106,7 @@
   <!-- ═══════════════════════════════════════════════════════════
        Recent admin changes (audit log preview)
        ═══════════════════════════════════════════════════════════ -->
-  <section class="bnb-card pad" style="margin-top:var(--pad-3);">
+  <section class="bnb-card pad acct-section-gap">
     <div class="section-header">
       <div>
         <div class="bnb-eyebrow">Audit</div>

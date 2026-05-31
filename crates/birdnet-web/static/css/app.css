@@ -2539,3 +2539,34 @@ body:has(.bnb-tabbar) main { padding-bottom: 84px; }
 .q-conf-pct    { font-size: .8rem; color: var(--fg-3); }
 .q-mvr-list    { list-style: none; padding: 0; margin: 0; }
 .q-mvr-link    { color: inherit; text-decoration: none; }
+
+/* ── Accounts & audit-log pages (/admin/accounts, /admin/audit) — O-25 ────
+   Faithful extraction of the inline shapes accounts.rs used to build. */
+.acct-h1        { font-size: 32px; }
+.acct-error     { border-color: var(--rare); color: var(--rare); }
+.acct-reset     { display: inline-flex; gap: 8px; align-items: center; }
+.acct-reset input { min-width: 170px; font-size: 13px; }
+.acct-actions   { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+/* Audit-log filter form */
+.audit-form     { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
+.audit-field    { display: flex; flex-direction: column; gap: 4px; }
+.audit-field.grow { flex: 1; min-width: 180px; }
+.audit-action-input { font-family: var(--font-mono); font-size: 13px; }
+.audit-btn-h    { height: 36px; }
+.audit-btn-h.lh { line-height: 36px; }
+.audit-section  { margin-top: 18px; }
+.audit-count    { margin-bottom: 6px; }
+.audit-list     { list-style: none; padding: 0; margin: 0; }
+.audit-note     { margin-top: 14px; }
+.audit-row      { padding: 10px 0; border-top: 0.5px solid var(--hairline); display: grid; grid-template-columns: 170px 120px 1fr; gap: 12px; align-items: start; }
+.audit-meta-row { margin-top: 4px; font-size: 11px; color: var(--fg-3); overflow-x: auto; }
+@media (max-width: 520px) {
+  .audit-row { grid-template-columns: 1fr; }
+}
+/* Accounts page template (admin_accounts.html) */
+.acct-page-head   { align-items: flex-start; }
+.acct-page-h1     { font-size: 48px; line-height: 1.05; letter-spacing: -0.02em; text-wrap: balance; }
+.acct-page-lede   { margin-top: 6px; max-width: 560px; }
+.acct-session-foot { margin-top: 12px; padding-top: 12px; border-top: 0.5px solid var(--hairline); }
+.acct-section-gap { margin-top: var(--pad-3); }
+.acct-add-form    { margin-top: 14px; }
