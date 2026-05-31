@@ -31,13 +31,14 @@ async fn backups_page(State(state): State<AppState>) -> Html<String> {
     Html(admin_shell("Backups", "backups", &render_body(db_mb)))
 }
 
-/// A storage-breakdown tile with a usage bar.
-fn storage_tile(label: &str, value: &str, pct: u32, color: &str) -> String {
+/// A storage-breakdown tile with a usage bar. The bar fill colour is an
+/// enumerable tone (`moss`/`dawn`) class; only its width is computed inline.
+fn storage_tile(label: &str, value: &str, pct: u32, tone: &str) -> String {
     format!(
         r#"<div class="bnb-card pad">
   <div class="bnb-eyebrow">{label}</div>
-  <div class="display" style="font-size:24px;margin:4px 0 8px;">{value}</div>
-  <div style="height:6px;border-radius:3px;background:var(--surface-2);overflow:hidden;"><span style="display:block;height:100%;width:{pct}%;background:{color};border-radius:3px;"></span></div>
+  <div class="display bkr-tile-value">{value}</div>
+  <div class="bkr-bar"><span class="bkr-bar-fill {tone}" style="width:{pct}%"></span></div>
 </div>"#
     )
 }
@@ -47,11 +48,11 @@ fn render_body(db_mb: f64) -> String {
     // Stat strip.
     let stat = |label: &str, value: &str, sub: &str| {
         format!(
-            r#"<div class="bnb-card pad"><div class="display" style="font-size:30px;">{value}</div><div class="bnb-eyebrow" style="margin-top:6px;">{label}</div><div class="bnb-meta">{sub}</div></div>"#
+            r#"<div class="bnb-card pad"><div class="display bkr-stat-value">{value}</div><div class="bnb-eyebrow bkr-stat-label">{label}</div><div class="bnb-meta">{sub}</div></div>"#
         )
     };
     let stats = format!(
-        r#"<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px;">{a}{b}{c}{d}</div>"#,
+        r#"<div class="bkr-stats">{a}{b}{c}{d}</div>"#,
         a = stat("Last backup", "2 h ago", "auto · nightly 03:00"),
         b = stat("Retained", "14", "snapshots on disk"),
         c = stat(
@@ -77,22 +78,22 @@ fn render_body(db_mb: f64) -> String {
     ] {
         let _ = write!(
             exports,
-            r#"<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-top:0.5px solid var(--hairline);">
-  <div><div style="font-weight:500;font-size:13px;">{name}</div><div class="bnb-meta">{detail}</div></div>
+            r#"<div class="bkr-export-row">
+  <div><div class="bkr-row-title">{name}</div><div class="bnb-meta">{detail}</div></div>
   <button class="bnb-btn ghost">Export ↓</button>
 </div>"#
         );
     }
     let upload_export = format!(
-        r#"<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+        r#"<div class="bkr-split">
   <div class="bnb-card pad">
     <div class="section-header"><div><div class="bnb-eyebrow">Restore from file</div><h3>Upload a backup</h3></div></div>
-    <div style="border:1.5px dashed var(--border-2);border-radius:var(--r-lg);padding:28px;text-align:center;margin-top:8px;">
-      <div style="font-size:24px;">⬆</div>
-      <div style="font-weight:500;margin-top:6px;">Drop a <span class="mono">.bnb-backup</span> file</div>
+    <div class="bkr-drop">
+      <div class="bkr-drop-icon">⬆</div>
+      <div class="bkr-drop-title">Drop a <span class="mono">.bnb-backup</span> file</div>
       <div class="bnb-meta">or click to browse</div>
     </div>
-    <div class="bnb-meta" style="margin-top:10px;">🔒 Signature verified before restore — tampered or partial bundles are rejected.</div>
+    <div class="bnb-meta bkr-note-mt">🔒 Signature verified before restore — tampered or partial bundles are rejected.</div>
   </div>
   <div class="bnb-card pad">
     <div class="section-header"><div><div class="bnb-eyebrow">Export</div><h3>Download your data</h3></div></div>
@@ -114,15 +115,12 @@ fn render_body(db_mb: f64) -> String {
         ("14 days ago 03:00", "auto", false, "oldest retained"),
     ];
     for (when, kind, today, tag) in rows {
-        let dot = if kind == "manual" {
-            "var(--dawn)"
+        // Snapshot kind is an enumerable pair → dot tone class; the today
+        // highlight is a boolean → row modifier class.
+        let row_cls = if today {
+            "bkr-snap-row today"
         } else {
-            "var(--moss)"
-        };
-        let bg = if today {
-            "background:var(--moss-soft);"
-        } else {
-            ""
+            "bkr-snap-row"
         };
         let tag_html = if tag.is_empty() {
             String::new()
@@ -131,16 +129,16 @@ fn render_body(db_mb: f64) -> String {
         };
         let _ = write!(
             snaps,
-            r#"<div style="display:grid;grid-template-columns:auto 1fr auto auto;gap:12px;align-items:center;padding:10px 12px;border-radius:8px;border-top:0.5px solid var(--hairline);{bg}">
-  <span class="bnb-dot" style="background:{dot};"></span>
-  <div><span style="font-weight:500;font-size:13px;">{when}</span> <span class="bnb-meta">· {kind}</span> {tag_html}</div>
-  <button class="bnb-btn ghost" style="font-size:12px;">Restore</button>
-  <button class="bnb-btn ghost" style="font-size:12px;">⋯</button>
+            r#"<div class="{row_cls}">
+  <span class="bnb-dot bkr-dot {kind}"></span>
+  <div><span class="bkr-snap-when">{when}</span> <span class="bnb-meta">· {kind}</span> {tag_html}</div>
+  <button class="bnb-btn ghost bkr-btn-sm">Restore</button>
+  <button class="bnb-btn ghost bkr-btn-sm">⋯</button>
 </div>"#
         );
     }
     let snapshots = format!(
-        r#"<div class="bnb-card pad" style="margin-top:16px;">
+        r#"<div class="bnb-card pad bkr-mt">
   <div class="section-header"><div><div class="bnb-eyebrow">History</div><h3>Snapshots</h3></div><span class="bnb-pill moss">nightly auto-backup on</span></div>
   {snaps}
 </div>"#
@@ -148,37 +146,37 @@ fn render_body(db_mb: f64) -> String {
 
     // Storage breakdown.
     let storage = format!(
-        r#"<div class="bnb-card pad" style="margin-top:16px;">
+        r#"<div class="bnb-card pad bkr-mt">
   <div class="section-header"><div><div class="bnb-eyebrow">Disk</div><h3>Storage breakdown</h3></div></div>
-  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:8px;">
+  <div class="bkr-storage-grid">
     {a}{b}{c}{d}
   </div>
 </div>"#,
-        a = storage_tile("SQLite", &format!("{db_mb:.1} MB"), 12, "var(--moss)"),
-        b = storage_tile("DuckDB (OLAP)", "3.1 MB", 6, "var(--moss)"),
-        c = storage_tile("Recordings", "8.4 GB", 74, "var(--dawn)"),
-        d = storage_tile("Wikipedia cache", "212 MB", 18, "var(--moss)"),
+        a = storage_tile("SQLite", &format!("{db_mb:.1} MB"), 12, "moss"),
+        b = storage_tile("DuckDB (OLAP)", "3.1 MB", 6, "moss"),
+        c = storage_tile("Recordings", "8.4 GB", 74, "dawn"),
+        d = storage_tile("Wikipedia cache", "212 MB", 18, "moss"),
     );
 
     // Retention controls.
-    let retention = r#"<div class="bnb-card pad" style="margin-top:16px;">
+    let retention = r#"<div class="bnb-card pad bkr-mt">
   <div class="section-header"><div><div class="bnb-eyebrow">Policy</div><h3>Retention</h3></div></div>
-  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:8px;">
-    <div><div class="bnb-meta">Keep snapshots</div><div style="display:flex;align-items:center;gap:8px;margin-top:4px;"><span class="bnb-pill mono">14 days</span><span class="bnb-meta" style="color:var(--moss-ink);cursor:pointer;">change</span></div></div>
-    <div><div class="bnb-meta">Recordings purge at</div><div style="display:flex;align-items:center;gap:8px;margin-top:4px;"><span class="bnb-pill mono">95% disk</span><span class="bnb-meta" style="color:var(--moss-ink);cursor:pointer;">change</span></div></div>
-    <div><div class="bnb-meta">Keep locked clips</div><div style="display:flex;align-items:center;gap:8px;margin-top:4px;"><span class="bnb-pill mono">forever</span><span class="bnb-meta" style="color:var(--moss-ink);cursor:pointer;">change</span></div></div>
+  <div class="bkr-retention">
+    <div><div class="bnb-meta">Keep snapshots</div><div class="bnb-row tight bkr-mt-xs"><span class="bnb-pill mono">14 days</span><span class="bnb-meta bkr-change">change</span></div></div>
+    <div><div class="bnb-meta">Recordings purge at</div><div class="bnb-row tight bkr-mt-xs"><span class="bnb-pill mono">95% disk</span><span class="bnb-meta bkr-change">change</span></div></div>
+    <div><div class="bnb-meta">Keep locked clips</div><div class="bnb-row tight bkr-mt-xs"><span class="bnb-pill mono">forever</span><span class="bnb-meta bkr-change">change</span></div></div>
   </div>
 </div>"#;
 
     // Operations log.
-    let log = r#"<div class="bnb-card pad" style="margin-top:16px;">
+    let log = r#"<div class="bnb-card pad bkr-mt">
   <div class="section-header"><div><div class="bnb-eyebrow">Audit</div><h3>Operations log</h3></div></div>
-  <div class="mono" style="font-size:12px;background:var(--surface-2);border-radius:8px;padding:12px;line-height:1.7;overflow-x:auto;">
-    <div><span style="color:var(--fg-4);">03:00:02</span> <span style="color:var(--moss-ink);">INFO </span> nightly snapshot complete — 4.4 MB, 0.8 s</div>
-    <div><span style="color:var(--fg-4);">02:14:55</span> <span style="color:var(--dawn-ink);">WARN </span> recordings at 74% — purge threshold 95%</div>
-    <div><span style="color:var(--fg-4);">00:31:10</span> <span style="color:var(--moss-ink);">INFO </span> DuckDB sync ok — 1,284 rows</div>
-    <div><span style="color:var(--fg-4);">Mon 18:02</span> <span style="color:var(--rare);">ERROR</span> S3 upload failed — retry scheduled (network)</div>
-    <div><span style="color:var(--fg-4);">Mon 03:00</span> <span style="color:var(--moss-ink);">INFO </span> snapshot complete — verified bootable</div>
+  <div class="mono bkr-log">
+    <div><span class="ts">03:00:02</span> <span class="info">INFO </span> nightly snapshot complete — 4.4 MB, 0.8 s</div>
+    <div><span class="ts">02:14:55</span> <span class="warn">WARN </span> recordings at 74% — purge threshold 95%</div>
+    <div><span class="ts">00:31:10</span> <span class="info">INFO </span> DuckDB sync ok — 1,284 rows</div>
+    <div><span class="ts">Mon 18:02</span> <span class="err">ERROR</span> S3 upload failed — retry scheduled (network)</div>
+    <div><span class="ts">Mon 03:00</span> <span class="info">INFO </span> snapshot complete — verified bootable</div>
   </div>
 </div>"#;
 
@@ -195,50 +193,50 @@ fn render_body(db_mb: f64) -> String {
     ] {
         let _ = write!(
             danger_actions,
-            r#"<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:11px 0;border-top:0.5px solid color-mix(in oklch, var(--rare) 25%, transparent);">
-  <div><div style="font-weight:500;font-size:13px;">{title}</div><div class="bnb-meta">{detail}</div></div>
-  <button class="bnb-btn" style="border-color:var(--rare);color:var(--rare);">Confirm…</button>
+            r#"<div class="bkr-danger-row">
+  <div><div class="bkr-row-title">{title}</div><div class="bnb-meta">{detail}</div></div>
+  <button class="bnb-btn danger">Confirm…</button>
 </div>"#
         );
     }
     let danger = format!(
-        r#"<div class="bnb-card pad" style="margin-top:16px;border-color:var(--rare);">
-  <div class="section-header"><div><div class="bnb-eyebrow" style="color:var(--rare);">Danger zone</div><h3>Destructive actions</h3></div></div>
-  <p class="bnb-meta" style="margin-bottom:4px;">Each action asks for confirmation. There is no undo.</p>
+        r#"<div class="bnb-card pad bkr-mt bkr-danger">
+  <div class="section-header"><div><div class="bnb-eyebrow">Danger zone</div><h3>Destructive actions</h3></div></div>
+  <p class="bnb-meta bkr-mb-xs">Each action asks for confirmation. There is no undo.</p>
   {danger_actions}
 </div>"#
     );
 
     // Right rail.
-    let rail = r#"<aside style="display:flex;flex-direction:column;gap:16px;position:sticky;top:16px;">
+    let rail = r#"<aside class="bkr-rail">
   <div class="bnb-card pad">
-    <div class="bnb-eyebrow" style="margin-bottom:10px;">Destinations</div>
-    <div style="display:flex;flex-direction:column;gap:10px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;"><span style="font-size:13px;">Local disk</span><span class="bnb-pill moss">on</span></div>
-      <div style="display:flex;justify-content:space-between;align-items:center;"><span style="font-size:13px;">Amazon S3</span><span class="bnb-pill">off</span></div>
-      <div style="display:flex;justify-content:space-between;align-items:center;"><span style="font-size:13px;">SMB / NAS</span><span class="bnb-pill">off</span></div>
-      <div style="display:flex;justify-content:space-between;align-items:center;"><span style="font-size:13px;">Email a copy</span><span class="bnb-pill">off</span></div>
+    <div class="bnb-eyebrow bkr-mb-10">Destinations</div>
+    <div class="bkr-dest-list">
+      <div class="bkr-dest-row"><span>Local disk</span><span class="bnb-pill moss">on</span></div>
+      <div class="bkr-dest-row"><span>Amazon S3</span><span class="bnb-pill">off</span></div>
+      <div class="bkr-dest-row"><span>SMB / NAS</span><span class="bnb-pill">off</span></div>
+      <div class="bkr-dest-row"><span>Email a copy</span><span class="bnb-pill">off</span></div>
     </div>
   </div>
   <div class="bnb-card pad">
     <div class="bnb-eyebrow">Restore</div>
-    <p class="bnb-meta" style="margin:6px 0 10px;">Roll the station back to any snapshot. The current state is snapshotted first.</p>
-    <button class="bnb-btn" style="width:100%;">Choose a snapshot…</button>
+    <p class="bnb-meta bkr-rail-note">Roll the station back to any snapshot. The current state is snapshotted first.</p>
+    <button class="bnb-btn bkr-w-full">Choose a snapshot…</button>
   </div>
   <div class="bnb-card pad">
     <div class="bnb-eyebrow">System update</div>
-    <div style="display:flex;align-items:center;gap:8px;margin:6px 0;"><span class="display" style="font-size:18px;">v0.1.0</span><span class="bnb-pill moss">up to date</span></div>
-    <button class="bnb-btn" style="width:100%;">Check for updates</button>
+    <div class="bkr-update-row"><span class="display bkr-update-ver">v0.1.0</span><span class="bnb-pill moss">up to date</span></div>
+    <button class="bnb-btn bkr-w-full">Check for updates</button>
   </div>
 </aside>"#;
 
     format!(
         r#"<div>
   <div class="bnb-eyebrow">Operations</div>
-  <h1 class="display" style="font-size:34px;margin:6px 0 4px;">Backups & recovery</h1>
-  <p class="bnb-meta" style="margin-bottom:20px;">Snapshots, exports, storage and the controls you hope you never need.</p>
+  <h1 class="display bkr-h1">Backups & recovery</h1>
+  <p class="bnb-meta bkr-lede">Snapshots, exports, storage and the controls you hope you never need.</p>
   {stats}
-  <div style="display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:24px;align-items:start;">
+  <div class="bkr-main">
     <div>
       {upload_export}
       {snapshots}
@@ -251,4 +249,47 @@ fn render_body(db_mb: f64) -> String {
   </div>
 </div>"#
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_body_has_no_static_inline_styles() {
+        // P3-3 (O-25): the backups page is built from utility/page classes; the
+        // only inline `style=` left is the storage tiles' computed bar width.
+        let html = render_body(4.4);
+        let inline = html.matches("style=\"").count();
+        assert_eq!(
+            inline, 4,
+            "expected exactly 4 inline styles (the 4 storage-bar widths), found {inline}"
+        );
+        // Every inline style that remains is a computed width on a bar fill.
+        for frag in html.split("style=\"").skip(1) {
+            assert!(
+                frag.starts_with("width:"),
+                "unexpected non-width inline style: {}",
+                &frag[..frag.len().min(40)]
+            );
+        }
+    }
+
+    #[test]
+    fn storage_tile_bar_is_the_only_inline_style() {
+        let tile = storage_tile("SQLite", "4.4 MB", 12, "moss");
+        assert!(tile.contains(r#"style="width:12%""#));
+        assert!(tile.contains("bkr-bar-fill moss"));
+        assert_eq!(tile.matches("style=\"").count(), 1);
+    }
+
+    #[test]
+    fn snapshot_and_danger_use_classes_not_inline() {
+        let html = render_body(4.4);
+        // Enumerable bits became classes.
+        assert!(html.contains("bnb-dot bkr-dot auto"));
+        assert!(html.contains("bnb-dot bkr-dot manual"));
+        assert!(html.contains("bkr-snap-row today"));
+        assert!(html.contains("bnb-btn danger"));
+    }
 }

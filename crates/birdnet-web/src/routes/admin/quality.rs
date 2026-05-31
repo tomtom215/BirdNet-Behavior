@@ -135,13 +135,13 @@ fn render_quality_page(data: &QualityData) -> String {
     let trend_skeleton = skeletons::hourly_bars(30);
 
     format!(
-        r#"<header class="page-head" style="align-items:flex-start;" data-screen-label="Data quality" data-om-validate>
+        r#"<header class="page-head q-head" data-screen-label="Data quality" data-om-validate>
   <div>
     <div class="bnb-eyebrow">Admin · data quality</div>
-    <h1 class="display" style="font-size:48px;line-height:1.05;letter-spacing:-0.02em;text-wrap:balance;">
+    <h1 class="display q-h1">
       Data quality
     </h1>
-    <p class="bnb-meta" style="margin-top:6px;max-width:580px;">
+    <p class="bnb-meta q-lede">
       Detection database health — confidence distributions, trend analysis,
       and potential false positives.
     </p>
@@ -164,27 +164,27 @@ fn render_quality_page(data: &QualityData) -> String {
   </div>
 </section>
 
-<section class="bnb-card pad" style="margin-top:var(--pad-3);">
+<section class="bnb-card pad q-section">
   <div class="section-header">
     <div>
       <div class="bnb-eyebrow">Confidence distribution</div>
       <h3>Six bucket histogram</h3>
     </div>
   </div>
-  <p class="bnb-meta" style="margin-bottom:12px;">
+  <p class="bnb-meta q-meta-mb">
     A healthy dataset skews toward higher buckets (≥70%).
   </p>
   {dist_html}
 </section>
 
-<section class="bnb-card pad" style="margin-top:var(--pad-3);">
+<section class="bnb-card pad q-section">
   <div class="section-header">
     <div>
       <div class="bnb-eyebrow">30-day trend</div>
       <h3>Daily average confidence</h3>
     </div>
   </div>
-  <p class="bnb-meta" style="margin-bottom:12px;">
+  <p class="bnb-meta q-meta-mb">
     Sudden drops may indicate equipment issues or adverse acoustic conditions.
   </p>
   <div id="quality-trend"
@@ -196,42 +196,42 @@ fn render_quality_page(data: &QualityData) -> String {
   </div>
 </section>
 
-<section class="bnb-card pad" style="margin-top:var(--pad-3);">
+<section class="bnb-card pad q-section">
   <div class="section-header">
     <div>
       <div class="bnb-eyebrow">Hourly profile</div>
       <h3>When does activity peak?</h3>
     </div>
   </div>
-  <p class="bnb-meta" style="margin-bottom:12px;">
+  <p class="bnb-meta q-meta-mb">
     Detection counts (bars) and average confidence (colour intensity) by hour.
     Dawn (04–08) and dusk (18–22) typically run the busiest.
   </p>
   {hour_html}
 </section>
 
-<section class="bnb-card pad" style="margin-top:var(--pad-3);">
+<section class="bnb-card pad q-section">
   <div class="section-header">
     <div>
       <div class="bnb-eyebrow">Review verdict trend</div>
       <h3>Human disagreement over 30 days</h3>
     </div>
   </div>
-  <p class="bnb-meta" style="margin-bottom:12px;">
+  <p class="bnb-meta q-meta-mb">
     Every reviewer verdict on a detection rolls up here. A rising red band
     means the model is firing detections you keep rejecting.
   </p>
   {review_trend_html}
 </section>
 
-<section class="bnb-card pad" style="margin-top:var(--pad-3);">
+<section class="bnb-card pad q-section">
   <div class="section-header">
     <div>
       <div class="bnb-eyebrow">Model vs. human</div>
       <h3>Where do they disagree most?</h3>
     </div>
   </div>
-  <p class="bnb-meta" style="margin-bottom:12px;">
+  <p class="bnb-meta q-meta-mb">
     Per-species comparison of the classifier's mean confidence (top bar) vs.
     the share of reviewed calls that humans confirmed (bottom bar). Species
     sorted by the gap, biggest first — these are the most likely
@@ -240,7 +240,7 @@ fn render_quality_page(data: &QualityData) -> String {
   {model_vs_review_html}
 </section>
 
-<section class="bnb-card pad" style="margin-top:var(--pad-3);">
+<section class="bnb-card pad q-section">
   <div class="section-header">
     <div>
       <div class="bnb-eyebrow">Low-confidence species</div>
@@ -248,10 +248,10 @@ fn render_quality_page(data: &QualityData) -> String {
     </div>
     {tuning_link}
   </div>
-  <p class="bnb-meta" style="margin-bottom:12px;">
+  <p class="bnb-meta q-meta-mb">
     Average confidence below 60% with at least 3 detections. Consider raising
     the per-species threshold in
-    <a href="/admin/species" style="color:var(--moss-ink);">Species settings</a>.
+    <a href="/admin/species" class="q-link">Species settings</a>.
   </p>
   {low_conf_html}
 </section>"#
@@ -260,7 +260,7 @@ fn render_quality_page(data: &QualityData) -> String {
 
 fn render_summary_cards(summary: Option<&QualitySummary>) -> String {
     let Some(s) = summary else {
-        return r#"<p style="color:var(--fg-4);">No detections in database.</p>"#.to_string();
+        return r#"<p class="q-empty">No detections in database.</p>"#.to_string();
     };
 
     let low_pct = if s.total_detections > 0 {
@@ -278,27 +278,27 @@ fn render_summary_cards(summary: Option<&QualitySummary>) -> String {
     format!(
         r#"<div class="stat-grid">
   <div class="stat-card">
-    <div class="stat-value" style="color:var(--moss-ink);">{total}</div>
+    <div class="stat-value q-stat-value moss-ink">{total}</div>
     <div class="stat-label">Total Detections</div>
   </div>
   <div class="stat-card">
-    <div class="stat-value" style="color:var(--moss);">{species}</div>
+    <div class="stat-value q-stat-value moss">{species}</div>
     <div class="stat-label">Species</div>
   </div>
   <div class="stat-card">
-    <div class="stat-value" style="color:var(--moss-ink);">{avg:.1}%</div>
+    <div class="stat-value q-stat-value moss-ink">{avg:.1}%</div>
     <div class="stat-label">Avg Confidence</div>
   </div>
   <div class="stat-card">
-    <div class="stat-value" style="color:var(--dawn);">{min:.0}%–{max:.0}%</div>
+    <div class="stat-value q-stat-value dawn">{min:.0}%–{max:.0}%</div>
     <div class="stat-label">Conf Range</div>
   </div>
   <div class="stat-card">
-    <div class="stat-value" style="font-size:1rem;">{badge}</div>
+    <div class="stat-value q-stat-value sm">{badge}</div>
     <div class="stat-label">Quality Flag</div>
   </div>
   <div class="stat-card">
-    <div class="stat-value" style="font-size:1rem;color:var(--fg-4);">{earliest}</div>
+    <div class="stat-value q-stat-value sm muted">{earliest}</div>
     <div class="stat-label">Earliest Detection</div>
   </div>
 </div>"#,
@@ -348,7 +348,7 @@ fn render_confidence_distribution(buckets: &[i64; 6]) -> String {
 
 fn render_confidence_trend(trend: &[(String, f64)]) -> String {
     if trend.is_empty() {
-        return r#"<p style="color:var(--fg-4);">No data for the last 30 days.</p>"#.to_string();
+        return r#"<p class="q-empty">No data for the last 30 days.</p>"#.to_string();
     }
 
     let max_conf = trend
@@ -380,7 +380,7 @@ fn render_confidence_trend(trend: &[(String, f64)]) -> String {
     if let (Some((first, _)), Some((last, _))) = (trend.first(), trend.last()) {
         write!(
             html,
-            r#"<div style="display:flex;justify-content:space-between;font-size:.75rem;color:var(--fg-4);margin-top:.25rem;">
+            r#"<div class="q-trend-legend">
   <span>{}</span><span>{}</span>
 </div>"#,
             escape_html(first),
@@ -393,7 +393,7 @@ fn render_confidence_trend(trend: &[(String, f64)]) -> String {
 
 fn render_hourly_quality(by_hour: &[(u8, i64, f64)]) -> String {
     if by_hour.is_empty() {
-        return r#"<p style="color:var(--fg-4);">No data yet.</p>"#.to_string();
+        return r#"<p class="q-empty">No data yet.</p>"#.to_string();
     }
 
     let max_count = by_hour.iter().map(|(_, c, _)| *c).max().unwrap_or(1).max(1);
@@ -427,16 +427,10 @@ fn render_hourly_quality(by_hour: &[(u8, i64, f64)]) -> String {
     html.push_str("</div>");
 
     // Hour axis labels
-    html.push_str(
-        r#"<div style="display:grid;grid-template-columns:repeat(24,1fr);gap:2px;font-size:.65rem;color:var(--fg-4);margin-top:.25rem;">"#,
-    );
+    html.push_str(r#"<div class="q-hour-axis">"#);
     for h in 0u8..24 {
         if h % 6 == 0 {
-            write!(
-                html,
-                r#"<span style="grid-column:span 6;text-align:left;">{h:02}h</span>"#
-            )
-            .unwrap_or_default();
+            write!(html, "<span>{h:02}h</span>").unwrap_or_default();
         }
     }
     html.push_str("</div>");
@@ -445,7 +439,7 @@ fn render_hourly_quality(by_hour: &[(u8, i64, f64)]) -> String {
 
 fn render_low_confidence_species(low: &[(String, String, i64, f64)]) -> String {
     if low.is_empty() {
-        return r#"<p style="color:var(--moss);">
+        return r#"<p class="q-empty ok">
             No species with avg confidence &lt;60% (≥3 detections). Database quality looks good!
            </p>"#
             .to_string();
@@ -457,7 +451,7 @@ fn render_low_confidence_species(low: &[(String, String, i64, f64)]) -> String {
   <tr>
     <th>Common Name</th>
     <th>Scientific Name</th>
-    <th style="text-align:right">Detections</th>
+    <th class="q-num">Detections</th>
     <th>Avg Confidence</th>
     <th>Recommendation</th>
   </tr>
@@ -478,13 +472,13 @@ fn render_low_confidence_species(low: &[(String, String, i64, f64)]) -> String {
             html,
             r#"<tr>
   <td><strong>{com}</strong></td>
-  <td style="color:var(--fg-3);font-style:italic">{sci}</td>
-  <td style="text-align:right">{count}</td>
+  <td class="q-sci">{sci}</td>
+  <td class="q-num">{count}</td>
   <td>
     <div class="conf-meter">
       <div class="conf-fill" style="width:{bar_pct}%;background:{color};"></div>
     </div>
-    <span style="font-size:.8rem;color:var(--fg-3);">{pct:.1}%</span>
+    <span class="q-conf-pct">{pct:.1}%</span>
   </td>
   <td>{rec}</td>
 </tr>"#,
@@ -554,9 +548,7 @@ fn render_model_vs_review(rows: &[ModelVsReviewRow]) -> String {
     if rows.is_empty() {
         return r#"<p class="bnb-meta">Not enough reviewed detections yet. The panel needs at least 5 detections per species and 3 reviewer verdicts to compare model and human confidence.</p>"#.to_string();
     }
-    let mut html = String::from(
-        r#"<ul class="bnb-mvr" role="list" style="list-style:none;padding:0;margin:0;">"#,
-    );
+    let mut html = String::from(r#"<ul class="bnb-mvr q-mvr-list" role="list">"#);
     for r in rows {
         let model_pct = (r.model_avg * 100.0).clamp(0.0, 100.0);
         let human_pct = (r.human_avg * 100.0).clamp(0.0, 100.0);
@@ -574,7 +566,7 @@ fn render_model_vs_review(rows: &[ModelVsReviewRow]) -> String {
             html,
             r#"<li class="bnb-mvr-row">
   <div class="bnb-mvr-name">
-    <a href="{href}" style="color:inherit;text-decoration:none;">{com}</a>
+    <a href="{href}" class="q-mvr-link">{com}</a>
     <em>{sci} · {total} detections</em>
   </div>
   <div class="bnb-mvr-bars">

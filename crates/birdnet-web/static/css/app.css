@@ -2419,3 +2419,154 @@ body:has(.bnb-tabbar) main { padding-bottom: 84px; }
 .bnb-toast--update .bnb-toast__action {
   font-weight: 600;
 }
+
+/* ── Backups & recovery page (O-25 harmonisation) ─────────────────────
+   Faithful, value-preserving extraction of the inline `style="…"` shapes
+   that backup_recovery.rs used to build with `format!()`. Layout-only;
+   the only styles that stay inline are the continuous storage-bar widths. */
+.bkr-stats        { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px; }
+.bkr-stat-value   { font-size: 30px; }
+.bkr-stat-label   { margin-top: 6px; }
+.bkr-split        { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.bkr-main         { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 24px; align-items: start; }
+.bkr-h1           { font-size: 34px; margin: 6px 0 4px; }
+.bkr-lede         { margin-bottom: 20px; }
+.bkr-mt           { margin-top: 16px; }
+
+/* Upload / restore drop target (page-specific dashed box) */
+.bkr-drop         { border: 1.5px dashed var(--border-2); border-radius: var(--r-lg); padding: 28px; text-align: center; margin-top: 8px; }
+.bkr-drop-icon    { font-size: 24px; }
+.bkr-drop-title   { font-weight: 500; margin-top: 6px; }
+.bkr-note-mt      { margin-top: 10px; }
+
+/* Export rows */
+.bkr-export-row   { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; border-top: 0.5px solid var(--hairline); }
+.bkr-row-title    { font-weight: 500; font-size: 13px; }
+
+/* Storage-breakdown tile + its usage bar */
+.bkr-tile-value   { font-size: 24px; margin: 4px 0 8px; }
+.bkr-bar          { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+.bkr-bar-fill     { display: block; height: 100%; border-radius: 3px; }
+.bkr-bar-fill.moss { background: var(--moss); }
+.bkr-bar-fill.dawn { background: var(--dawn); }
+.bkr-storage-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 8px; }
+
+/* Snapshot rows */
+.bkr-snap-row     { display: grid; grid-template-columns: auto 1fr auto auto; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 8px; border-top: 0.5px solid var(--hairline); }
+.bkr-snap-row.today { background: var(--moss-soft); }
+.bkr-dot.auto     { background: var(--moss); }
+.bkr-dot.manual   { background: var(--dawn); }
+.bkr-snap-when    { font-weight: 500; font-size: 13px; }
+.bkr-btn-sm       { font-size: 12px; }
+
+/* Retention controls */
+.bkr-retention    { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 8px; }
+.bkr-mt-xs        { margin-top: 4px; }
+.bkr-change       { color: var(--moss-ink); cursor: pointer; }
+
+/* Operations log (mono block) */
+.bkr-log          { font-size: 12px; background: var(--surface-2); border-radius: 8px; padding: 12px; line-height: 1.7; overflow-x: auto; }
+.bkr-log .ts      { color: var(--fg-4); }
+.bkr-log .info    { color: var(--moss-ink); }
+.bkr-log .warn    { color: var(--dawn-ink); }
+.bkr-log .err     { color: var(--rare); }
+
+/* Danger zone (page-local; mirrors the inline values it replaces) */
+.bkr-danger       { border-color: var(--rare); }
+.bkr-danger .bnb-eyebrow { color: var(--rare); }
+.bkr-danger-row   { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 11px 0; border-top: 0.5px solid color-mix(in oklch, var(--rare) 25%, transparent); }
+.bkr-mb-xs        { margin-bottom: 4px; }
+
+/* Right rail */
+.bkr-rail         { display: flex; flex-direction: column; gap: 16px; position: sticky; top: 16px; }
+.bkr-dest-list    { display: flex; flex-direction: column; gap: 10px; }
+.bkr-dest-row     { display: flex; justify-content: space-between; align-items: center; }
+.bkr-dest-row span:first-child { font-size: 13px; }
+.bkr-mb-10        { margin-bottom: 10px; }
+.bkr-update-row   { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.bkr-update-ver   { font-size: 18px; }
+.bkr-w-full       { width: 100%; }
+.bkr-rail-note    { margin: 6px 0 10px; }
+
+/* Phone: collapse every multi-column shape to a single column. The page's
+   grids used to be inline `style="…"` and so were caught by the global
+   `[style*="grid-template-columns"]` reset; now they are classes, they carry
+   their own breakpoint. */
+@media (max-width: 520px) {
+  .bkr-stats,
+  .bkr-split,
+  .bkr-main,
+  .bkr-storage-grid,
+  .bkr-retention { grid-template-columns: 1fr; }
+}
+
+/* ── Configuration diagnostics page (/admin/doctor) — O-25 harmonisation ──
+   Faithful extraction of the inline shapes doctor.rs used to build. */
+.doc-card     { max-width: 820px; margin: 8px auto; padding: 24px 28px; }
+.doc-head     { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin: 0 0 6px; }
+.doc-head h1  { margin: 0; font-size: 22px; }
+.doc-path     { opacity: 0.7; margin: 0 0 16px; }
+.doc-path.tight { margin: 0; }
+.doc-count    { margin: 0 0 4px; }
+.doc-subhead  { font-size: 16px; margin: 18px 0 8px; }
+.doc-hr       { border: none; border-top: 1px solid var(--border-2); margin: 20px 0; }
+.doc-note     { opacity: 0.8; font-size: 14px; }
+.doc-finding  { border-left: 3px solid var(--border-2); padding: 8px 14px; margin: 8px 0; border-radius: var(--r-sm); }
+.doc-finding-key { font-weight: 600; }
+.doc-finding-msg { margin: 2px 0; }
+
+/* ── Data quality dashboard (/admin/quality) — O-25 harmonisation ─────────
+   Static/enumerable shapes only. The chart bars keep their inline
+   height/width (computed per data point — the documented dynamic exception). */
+.q-head        { align-items: flex-start; }
+.q-h1          { font-size: 48px; line-height: 1.05; letter-spacing: -0.02em; text-wrap: balance; }
+.q-lede        { margin-top: 6px; max-width: 580px; }
+.q-section     { margin-top: var(--pad-3); }
+.q-meta-mb     { margin-bottom: 12px; }
+.q-empty       { color: var(--fg-4); }
+.q-empty.ok    { color: var(--moss); }
+.q-stat-value.moss-ink { color: var(--moss-ink); }
+.q-stat-value.moss     { color: var(--moss); }
+.q-stat-value.dawn     { color: var(--dawn); }
+.q-stat-value.sm       { font-size: 1rem; }
+.q-stat-value.sm.muted { color: var(--fg-4); }
+.q-trend-legend { display: flex; justify-content: space-between; font-size: .75rem; color: var(--fg-4); margin-top: .25rem; }
+.q-hour-axis    { display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; font-size: .65rem; color: var(--fg-4); margin-top: .25rem; }
+.q-hour-axis span { grid-column: span 6; text-align: left; }
+.q-link        { color: var(--moss-ink); }
+.q-num         { text-align: right; }
+.q-sci         { color: var(--fg-3); font-style: italic; }
+.q-conf-pct    { font-size: .8rem; color: var(--fg-3); }
+.q-mvr-list    { list-style: none; padding: 0; margin: 0; }
+.q-mvr-link    { color: inherit; text-decoration: none; }
+
+/* ── Accounts & audit-log pages (/admin/accounts, /admin/audit) — O-25 ────
+   Faithful extraction of the inline shapes accounts.rs used to build. */
+.acct-h1        { font-size: 32px; }
+.acct-error     { border-color: var(--rare); color: var(--rare); }
+.acct-reset     { display: inline-flex; gap: 8px; align-items: center; }
+.acct-reset input { min-width: 170px; font-size: 13px; }
+.acct-actions   { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+/* Audit-log filter form */
+.audit-form     { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
+.audit-field    { display: flex; flex-direction: column; gap: 4px; }
+.audit-field.grow { flex: 1; min-width: 180px; }
+.audit-action-input { font-family: var(--font-mono); font-size: 13px; }
+.audit-btn-h    { height: 36px; }
+.audit-btn-h.lh { line-height: 36px; }
+.audit-section  { margin-top: 18px; }
+.audit-count    { margin-bottom: 6px; }
+.audit-list     { list-style: none; padding: 0; margin: 0; }
+.audit-note     { margin-top: 14px; }
+.audit-row      { padding: 10px 0; border-top: 0.5px solid var(--hairline); display: grid; grid-template-columns: 170px 120px 1fr; gap: 12px; align-items: start; }
+.audit-meta-row { margin-top: 4px; font-size: 11px; color: var(--fg-3); overflow-x: auto; }
+@media (max-width: 520px) {
+  .audit-row { grid-template-columns: 1fr; }
+}
+/* Accounts page template (admin_accounts.html) */
+.acct-page-head   { align-items: flex-start; }
+.acct-page-h1     { font-size: 48px; line-height: 1.05; letter-spacing: -0.02em; text-wrap: balance; }
+.acct-page-lede   { margin-top: 6px; max-width: 560px; }
+.acct-session-foot { margin-top: 12px; padding-top: 12px; border-top: 0.5px solid var(--hairline); }
+.acct-section-gap { margin-top: var(--pad-3); }
+.acct-add-form    { margin-top: 14px; }

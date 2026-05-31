@@ -74,7 +74,7 @@ remains is the finish-off work below.
 | ~~**P2-3**~~ | Extend help links to remaining analytical screens — ✅ **DONE** (6 screens) | ~~P2~~ | S | low |
 | **P3-1** | O-13 legacy `--audio-source` retirement — ✅ **DONE** | P3 | S | low |
 | ~~**P3-2**~~ | No background session pruning — ✅ **DONE** (daily maintenance tick) | ~~P3~~ | S | low |
-| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (all old-style admin pages done: settings, notifications, overview/logs, species, migration, system; 1115→924. Next: harmonization/dynamic batch + endgame) | P3 | L | low (tedious) |
+| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (all admin pages done — old-style + harmonized backups/doctor/quality/accounts, screenshot-verified; 1115→787. Next: public pages + endgame) | P3 | L | low (tedious) |
 | **P3-4** | Minor cosmetics — uptime pill ✅ **wired**; migration-missing out of scope | P3 | XS | none |
 | ~~**P3-5**~~ | Image blacklist enforcement on read path — ✅ **DONE** (serve-check + purge-on-blacklist) | ~~P3~~ | S | low |
 
@@ -348,8 +348,29 @@ they batch for a Playwright-verified pass; the dynamic ones fold into the endgam
   `data-confirm-style=` data-attributes, which aren't inline styles.) Workspace raw `style="` total **1052 → 924**.
   Four new render guards (species ×1 covering 3 surfaces; migration ×3). `system.rs` has no guard — both its render
   fns are async over a full `AppState`, disproportionate to mock; covered by the sibling guards + visual review.
-  Original render APIs preserved exactly. **Next:** the deferred *harmonization/dynamic* batch (`backup_recovery`,
-  `skeletons`, charts, spectrogram, heatmap) needs a Playwright visual pass; then the endgame `<style>`-nonce
+  Original render APIs preserved exactly.
+- **Slice 5 (batch) — admin harmonization onto `app.css` utility classes.** The admin pages built via the shared
+  `admin_shell` (no page `<style>` block) — so, per the O-25 reference design, their target is `app.css` classes,
+  not a `<style>` block. Four pages, screenshot-verified:
+  - `admin/backup_recovery.rs` → only the 4 computed storage-bar widths remain inline. Reuses the pre-existing
+    `bnb-dropzone`/`bnb-danger-zone`/`bnb-logblock` + a scoped `bkr-*` block.
+  - `admin/doctor.rs` → **zero** inline styles (`doc-*`).
+  - `admin/quality.rs` → only the computed chart bar height/width remain inline (`q-*`); stat-card/empty-state
+    tones became enumerable classes.
+  - `admin/accounts.rs` + `templates/admin_accounts.html` + the `/admin/audit` page → **zero** inline styles
+    (`acct-*`/`audit-*`).
+
+  **Self-verified in-sandbox** using the repo's own visual-QA harness — `cargo run -p birdnet-web --example
+  screenshot_server` (seeds ~9.9k synthetic detections) + Playwright (`tools/visual-qa`, chromium at
+  `/opt/pw-browsers`). Captured light/dark × desktop/mobile before/after for each page: all pixel-faithful. The
+  harness earned its keep — it caught a **mobile-only regression** on the backups page (its grids had been inline
+  `style=` and so were collapsed by the global `[style*="grid-template-columns"]{…!important}` reset at
+  `app.css:656`; moving them to classes escaped that selector, so the new grids carry their own
+  `@media(max-width:520px)` breakpoint). Three render guards on `backup_recovery`. Workspace raw `style="`
+  **924 → 787**. fmt + clippy + 311 lib tests green.
+
+  **Next:** the public-page harmonization (`pages/skeletons`, `pages/weekly_report`, the `pages/*` analytics
+  screens, the remaining `templates/*`) — same screenshot-verified approach; then the endgame `<style>`-nonce
   middleware extension that lets the remaining computed widths carry a nonce, after which `style-src
   'unsafe-inline'` is finally dropped.
 
