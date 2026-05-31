@@ -36,8 +36,8 @@ async fn doctor_page(State(state): State<AppState>) -> Html<String> {
     Html(admin_shell("Diagnostics", "doctor", &body))
 }
 
-const CLI_NOTE: &str = r#"<hr style="border:none;border-top:1px solid var(--border-2);margin:20px 0;">
-<p style="opacity:.8;font-size:14px;">This page covers <strong>configuration</strong> checks only. For audio-device,
+const CLI_NOTE: &str = r#"<hr class="doc-hr">
+<p class="doc-note">This page covers <strong>configuration</strong> checks only. For audio-device,
 model, disk-space, and network checks, run <code>birdnet-behavior --doctor</code> on the host —
 it shares the daemon's view of the audio device.</p>"#;
 
@@ -46,9 +46,9 @@ fn card_open() -> String {
     let help_link =
         crate::routes::pages::help::help_link(crate::routes::pages::help::Topic::Troubleshooting);
     format!(
-        r#"<section class="bnb-card" style="max-width:820px;margin:8px auto;padding:24px 28px;">
-<div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin:0 0 6px;">
-  <h1 style="margin:0;font-size:22px;">Configuration diagnostics</h1>
+        r#"<section class="bnb-card doc-card">
+<div class="doc-head">
+  <h1>Configuration diagnostics</h1>
   {help_link}
 </div>"#
     )
@@ -65,11 +65,7 @@ fn findings_body(path: &str, findings: &[Finding]) -> String {
         .collect();
 
     let mut out = card_open();
-    let _ = write!(
-        out,
-        r#"<p class="mono" style="opacity:.7;margin:0 0 16px;">{}</p>"#,
-        escape_html(path)
-    );
+    let _ = write!(out, r#"<p class="mono doc-path">{}</p>"#, escape_html(path));
 
     if errors.is_empty() && warnings.is_empty() {
         out.push_str(
@@ -78,22 +74,18 @@ fn findings_body(path: &str, findings: &[Finding]) -> String {
     } else {
         let _ = write!(
             out,
-            r#"<p style="margin:0 0 4px;">{} error(s), {} warning(s).</p>"#,
+            r#"<p class="doc-count">{} error(s), {} warning(s).</p>"#,
             errors.len(),
             warnings.len()
         );
     }
 
     if !errors.is_empty() {
-        out.push_str(
-            r#"<h2 style="font-size:16px;margin:18px 0 8px;">Errors — these prevent normal operation</h2>"#,
-        );
+        out.push_str(r#"<h2 class="doc-subhead">Errors — these prevent normal operation</h2>"#);
         out.push_str(&render_findings(&errors));
     }
     if !warnings.is_empty() {
-        out.push_str(
-            r#"<h2 style="font-size:16px;margin:18px 0 8px;">Warnings — functionality may be degraded</h2>"#,
-        );
+        out.push_str(r#"<h2 class="doc-subhead">Warnings — functionality may be degraded</h2>"#);
         out.push_str(&render_findings(&warnings));
     }
 
@@ -107,10 +99,10 @@ fn render_findings(findings: &[&Finding]) -> String {
     for f in findings {
         let _ = write!(
             out,
-            r#"<div style="border-left:3px solid var(--border-2);padding:8px 14px;margin:8px 0;border-radius:var(--r-sm);">
-<div class="mono" style="font-weight:600;">{key}</div>
-<div style="margin:2px 0;">{msg}</div>
-<div style="opacity:.8;font-size:14px;"><strong>Fix:</strong> {rem}</div>
+            r#"<div class="doc-finding">
+<div class="mono doc-finding-key">{key}</div>
+<div class="doc-finding-msg">{msg}</div>
+<div class="doc-note"><strong>Fix:</strong> {rem}</div>
 </div>"#,
             key = escape_html(&f.key),
             msg = escape_html(&f.message),
@@ -135,7 +127,7 @@ fn load_error_body(path: &str, err: &str) -> String {
     let _ = write!(
         out,
         r#"<p><span class="bnb-pill"><span class="bnb-dot"></span> Could not read the configuration file</span></p>
-<p class="mono" style="opacity:.7;">{path}</p>
+<p class="mono doc-path tight">{path}</p>
 <p>{err}</p>"#,
         path = escape_html(path),
         err = escape_html(err),
