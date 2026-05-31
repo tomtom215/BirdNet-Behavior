@@ -70,7 +70,7 @@ remains is the finish-off work below.
 | ~~**BUG-1**~~ | Bird images don't populate gallery/previews — ✅ **DONE** (fetch-on-miss `/file` + default-on cache) | ~~P1~~ | M | low–med |
 | ~~**P1-1**~~ | Dead "Reset password" button — ✅ **DONE** (wired to live `set_password`) | ~~P1~~ | S | low |
 | ~~**P2-1**~~ | Stale `accounts.rs` module doc — ✅ **DONE** (folded into P1-1) | ~~P2~~ | XS | none |
-| **P2-2** | CSP still allows `'unsafe-inline'` | P2 | M | med |
+| **P2-2** | CSP `script-src` hardening — ✅ **DONE** (per-request nonce + `'strict-dynamic'`, browser-verified); `style-src` half tracked by P3-3 | P2 | M | med |
 | ~~**P2-3**~~ | Extend help links to remaining analytical screens — ✅ **DONE** (6 screens) | ~~P2~~ | S | low |
 | **P3-1** | O-13 legacy `--audio-source` retirement — ✅ **DONE** | P3 | S | low |
 | ~~**P3-2**~~ | No background session pruning — ✅ **DONE** (daily maintenance tick) | ~~P3~~ | S | low |
@@ -78,7 +78,7 @@ remains is the finish-off work below.
 | **P3-4** | Minor cosmetics — uptime pill ✅ **wired**; migration-missing out of scope | P3 | XS | none |
 | ~~**P3-5**~~ | Image blacklist enforcement on read path — ✅ **DONE** (serve-check + purge-on-blacklist) | ~~P3~~ | S | low |
 
-Recommended order: ~~BUG-1 → P1-1 → P2-1 → P2-3 → P3-2 → P3-5~~ (shipped) → **P2-2/P3-3** (CSP + inline-style sweep) → **P3-1** (needs your call). _Also shipped: ONNX offline build tooling (SessionStart hook). Remaining low-value/deferred: P3-4 cosmetics._
+Recommended order: ~~BUG-1 → P1-1 → P2-1 → P2-3 → P3-2 → P3-5 → P3-1 → P2-2 (script half)~~ (shipped) → **P3-3** (inline-style sweep, then drop `style-src 'unsafe-inline'` to finish P2-2). _Also shipped: ONNX offline build tooling (SessionStart hook). Remaining low-value/deferred: P3-4 cosmetics._
 
 ---
 
@@ -216,19 +216,29 @@ admin-only via the central RBAC check). **Verify:** `cargo doc` + read-through. 
 
 ---
 
-## P2-2 — CSP still allows `'unsafe-inline'`  · **P2**
+## P2-2 — CSP `script-src` hardening  · **P2** — ✅ DONE (script half; style half tracked by P3-3)
 
-**Evidence.** `crates/birdnet-web/src/security.rs:21-31` — `style-src 'unsafe-inline'` and
-`script-src 'unsafe-inline'`, with the comment *"Tighten to nonce/hash-based `script-src` in a later
-pass."* For a LAN-exposed admin this is the main remaining hardening item.
+**✅ Shipped.** `script-src` is now **`'nonce-{random}' 'strict-dynamic'`** — `'unsafe-inline'` and
+host-allowlisting are both gone for scripts. One security-middleware pass owns the whole mechanism, so
+there is no per-render-path threading to get wrong:
 
-**Fix.** Move `script-src` to per-response **nonces** (generate a nonce in a layer, thread it into the
-few inline `<script>` bootstraps + templates, drop `'unsafe-inline'` for scripts). Dropping it for
-**styles** requires removing inline `style=` attributes first ⇒ **depends on P3-3 (O-25)**. Ship the
-script-side first; style-side after O-25.
+- **One per-request CSPRNG nonce** (`security.rs`, `OsRng` + base64) is minted in
+  `security_headers_middleware`, stamped onto every parser-inserted `<script>` of each `text/html`
+  response body, and mirrored into that response's `script-src`. Non-HTML responses — the audio
+  `/stream`, the live WebSocket upgrade, JSON, images, static assets — are skipped by content-type and
+  never buffered.
+- **No render-path threading.** Injecting in the single middleware covers the shared layout, the ~8
+  bespoke admin `<head>` shells, onboarding, kiosk, login and share uniformly — a new page or inline
+  script can't silently ship un-nonced. `'strict-dynamic'` lets htmx (itself nonced) inject fragment
+  scripts without a nonce-mismatch.
+- `style-src 'unsafe-inline'` is intentionally unchanged — dropping it still depends on the **P3-3**
+  inline-style sweep.
 
-**Verify.** Browser console shows no CSP violations across pages; `curl -I` shows the tightened header;
-no inline script executes without the nonce. **Effort:** M. **Risk:** med (a missed inline script breaks UI). **Depends on:** P3-3 (for the style half).
+**Verified (headless Chromium via Playwright).** Swept all 32 screens + interactions (command palette,
+theme toggle, live admin stats): **0 CSP violations**, header nonce == body nonce per request, static
+JS/JSON passed through byte-identical, every page renders intact. `curl` shows the tightened header.
+**Risk retired:** the "a missed inline script breaks UI" worry is gone — the injector is exhaustive and
+browser-verified. **Still depends on:** P3-3 (for the style half only).
 
 ---
 
