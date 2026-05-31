@@ -74,7 +74,7 @@ remains is the finish-off work below.
 | ~~**P2-3**~~ | Extend help links to remaining analytical screens — ✅ **DONE** (6 screens) | ~~P2~~ | S | low |
 | **P3-1** | O-13 legacy `--audio-source` retirement — ✅ **DONE** | P3 | S | low |
 | ~~**P3-2**~~ | No background session pruning — ✅ **DONE** (daily maintenance tick) | ~~P3~~ | S | low |
-| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (settings, notifications, overview/logs, species+migration done; system.rs next) | P3 | L | low (tedious) |
+| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (all old-style admin pages done: settings, notifications, overview/logs, species, migration, system; 1115→946. Next: harmonization/dynamic batch + endgame) | P3 | L | low (tedious) |
 | **P3-4** | Minor cosmetics — uptime pill ✅ **wired**; migration-missing out of scope | P3 | XS | none |
 | ~~**P3-5**~~ | Image blacklist enforcement on read path — ✅ **DONE** (serve-check + purge-on-blacklist) | ~~P3~~ | S | low |
 
@@ -332,14 +332,26 @@ they batch for a Playwright-verified pass; the dynamic ones fold into the endgam
   (moss-ink/moss/dawn/rare) was enumerable → a `.value.<tone>` class. Count **1063 → 1052**. Two render guards.
   _Counting caveat:_ `rg 'style="'` also matches `data-confirm-style="…"` data-attributes (e.g. in `rules.rs`) —
   those are **not** inline styles, so the true remaining attribute count is a little lower than the raw `rg` total.
-- **Slice 4 (batch) — `admin/species/render.rs` + `admin/migration/render.rs`.** Larger consolidated PR, per the
-  "fewer, larger PRs" steer. `species/render.rs` (both standalone pages + their HTMX fragments) → **zero** inline
-  styles; Pass/Blocked badges and filter stats became enumerable variant classes. `migration/render.rs` folds all
-  static + enumerable styles (nav/h1/cards/steps; validation check icons, result-card tone, preview table; progress
-  message/track/fill colour) into the page `<style>` block; the **only** remaining inline style is the live progress
-  bar's computed `width:{pct}%` — the documented dynamic exception that moves into a nonce'd `<style>` block in the
-  endgame. Workspace `style="` total now **1043**; three render guards; original render APIs preserved. **Next:**
-  `admin/system.rs` (52 occurrences incl. the CPU/mem/disk usage bars — the bar widths/colours are the dynamic kind).
+- **Slice 4 (batch) — `admin/species/render.rs` + `admin/migration/render.rs` + `admin/system.rs`.** One larger
+  consolidated PR, per the "fewer, larger PRs" steer.
+  - `species/render.rs` (both standalone pages + their HTMX fragments) → **zero** inline styles; Pass/Blocked
+    badges and filter stats became enumerable variant classes.
+  - `migration/render.rs` folds all static + enumerable styles (nav/h1/cards/steps; validation check icons,
+    result-card tone, preview table; progress message/track/fill colour) into the page `<style>` block; the only
+    remaining inline style is the live progress bar's computed `width:{pct}%`.
+  - `system.rs` folds nav/h1/leads/button-rows/result-slots/danger-card + disk/CPU/memory meter chrome into the
+    page `<style>` block; badge/temperature colours become enumerable `.meter-*` / `.temp-val` tone classes; the
+    only remaining inline styles are the 3 live usage-bar widths.
+
+  Those remaining `width:{pct}%` fills are the **documented dynamic exception** — they move into a nonce'd
+  `<style>` block in the endgame. (Raw `rg 'style="'` over the crate still counts both those and the
+  `data-confirm-style=` data-attributes, which aren't inline styles.) Workspace raw `style="` total **1052 → 946**.
+  Four new render guards (species ×1 covering 3 surfaces; migration ×3). `system.rs` has no guard — both its render
+  fns are async over a full `AppState`, disproportionate to mock; covered by the sibling guards + visual review.
+  Original render APIs preserved exactly. **Next:** the deferred *harmonization/dynamic* batch (`backup_recovery`,
+  `skeletons`, charts, spectrogram, heatmap) needs a Playwright visual pass; then the endgame `<style>`-nonce
+  middleware extension that lets the remaining computed widths carry a nonce, after which `style-src
+  'unsafe-inline'` is finally dropped.
 
 ---
 
