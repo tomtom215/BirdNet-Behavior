@@ -27,8 +27,10 @@ pub fn migration_page(dest_db_path: &str) -> String {
   <style>
     body {{ background:var(--bg); color:var(--fg); font-family:var(--font-ui); }}
     .container {{ max-width:860px; margin:0 auto; padding:2rem 1rem; }}
+    nav {{ margin-bottom:2rem; padding:1rem 0; border-bottom:1px solid var(--border); }}
     nav a {{ color:var(--fg-3); text-decoration:none; margin-right:1.5rem; }}
-    nav a:hover {{ color:var(--moss-ink); }}
+    nav a:hover, nav a.active {{ color:var(--moss-ink); }}
+    h1 {{ font-size:1.5rem; font-weight:700; margin-bottom:0.5rem; color:var(--fg); }}
     .card {{ background:var(--surface); border:1px solid var(--border); border-radius:0.75rem;
              padding:1.5rem; margin-bottom:1.5rem; }}
     label {{ display:block; font-size:0.85rem; color:var(--fg-3); margin-bottom:0.25rem; }}
@@ -51,30 +53,77 @@ pub fn migration_page(dest_db_path: &str) -> String {
     .tab.active {{ background:var(--moss); color:#fff; border-color:var(--moss); }}
     .tab-panel {{ display:none; }}
     .tab-panel.active {{ display:block; }}
+    /* O-25 sweep: shapes promoted out of inline style= attributes. */
+    .lede {{ color:var(--fg-3); margin-bottom:1.5rem; }}
+    .fg {{ color:var(--fg); }}
+    .card-head {{ font-weight:600; color:var(--moss-ink); margin-bottom:0.75rem; }}
+    .steps {{ padding-left:1.25rem; line-height:1.8; color:var(--fg-2); }}
+    .note {{ color:var(--fg-4); font-size:0.85rem; margin-top:0.5rem; }}
+    .mb-sm {{ margin-bottom:0.75rem; }}
+    .mt-sm {{ margin-top:0.75rem; }}
+    .mt {{ margin-top:1rem; }}
+    .actions {{ margin-top:1rem; display:flex; gap:0.75rem; }}
+    .actions.center {{ align-items:center; }}
+    .actions.wrap {{ flex-wrap:wrap; }}
+    .spinner-note {{ color:var(--fg-3); font-size:0.85rem; }}
+    .info-text {{ color:var(--fg-3); }}
+    .check-ok {{ color:var(--moss); }}
+    .check-err {{ color:var(--rare); }}
+    .check-warn {{ color:var(--dawn); }}
+    .check-list {{ list-style:none; padding:0; margin:0.75rem 0; }}
+    .check-item {{ margin-bottom:0.4rem; }}
+    .result-card.ok {{ border-color:var(--moss); }}
+    .result-card.warn {{ border-color:var(--dawn); }}
+    .result-card.err {{ border-color:var(--rare); }}
+    .result-title {{ font-weight:600; margin-bottom:0.75rem; }}
+    .result-title.sm {{ margin-bottom:0.5rem; }}
+    .result-title.ok {{ color:var(--moss); }}
+    .result-title.warn {{ color:var(--dawn); }}
+    .result-title.err {{ color:var(--rare); }}
+    .more-note {{ color:var(--fg-4); font-size:.8rem; margin-top:.5rem; }}
+    .preview-details {{ margin:1rem 0; }}
+    .preview-summary {{ cursor:pointer; color:var(--fg-3); font-size:.875rem; }}
+    .preview-table {{ width:100%; border-collapse:collapse; font-size:.8rem; margin-top:.75rem; }}
+    .preview-table td, .preview-table th {{ padding:.35rem .5rem; }}
+    .preview-table thead tr {{ border-bottom:1px solid var(--border); }}
+    .preview-table th {{ text-align:left; color:var(--fg-4); font-weight:600; }}
+    .preview-table th.num, .preview-table td.num {{ text-align:right; }}
+    .preview-table .sci {{ color:var(--fg-4); font-style:italic; font-size:.8rem; }}
+    .preview-table .muted {{ color:var(--fg-4); }}
+    .progress-track {{ background:var(--surface); border-radius:9999px; height:8px; overflow:hidden; }}
+    .progress-fill {{ height:100%; width:0; transition:width 0.3s; }}
+    .progress-fill.ok {{ background:var(--moss); }}
+    .progress-fill.err {{ background:var(--rare); }}
+    .progress-fill.warn {{ background:var(--dawn); }}
+    .progress-fill.run {{ background:var(--moss-ink); }}
+    .bar-msg {{ margin-bottom:0.5rem; }}
+    .bar-msg.ok {{ color:var(--moss); }}
+    .bar-msg.err {{ color:var(--rare); }}
+    .bar-msg.warn {{ color:var(--dawn); }}
+    .bar-msg.run {{ color:var(--moss-ink); }}
+    .bar-note {{ color:var(--fg-4); font-size:0.8rem; margin-top:0.25rem; }}
   </style>
 </head>
 <body>
 <div class="container">
-  <nav style="margin-bottom:2rem;padding:1rem 0;border-bottom:1px solid var(--border);">
+  <nav>
     <a href="/">Dashboard</a>
     <a href="/admin/settings">Settings</a>
-    <a href="/admin/migrate" style="color:var(--moss-ink);">Migration</a>
+    <a href="/admin/migrate" class="active">Migration</a>
     <a href="/admin/system">System</a>
     <a href="/admin/notifications">Notifications</a>
   </nav>
 
-  <h1 style="font-size:1.5rem;font-weight:700;margin-bottom:0.5rem;color:var(--fg);">
-    BirdNET-Pi Migration
-  </h1>
-  <p style="color:var(--fg-3);margin-bottom:1.5rem;">
+  <h1>BirdNET-Pi Migration</h1>
+  <p class="lede">
     Safely import your existing BirdNET-Pi detection history.
-    Your source file is <strong style="color:var(--fg);">never modified</strong>
+    Your source file is <strong class="fg">never modified</strong>
     and your original installation is left completely untouched.
   </p>
 
-  <div class="card" style="border-color:var(--border)">
-    <div style="font-weight:600;color:var(--moss-ink);margin-bottom:0.75rem;">How it works</div>
-    <ol style="padding-left:1.25rem;line-height:1.8;color:var(--fg-2);">
+  <div class="card">
+    <div class="card-head">How it works</div>
+    <ol class="steps">
       <li>Optionally stop BirdNET-Pi:
           <code>sudo systemctl stop birdnet_analysis birdnet_recording</code></li>
       <li>Find your BirdNET-Pi database (usually
@@ -83,7 +132,7 @@ pub fn migration_page(dest_db_path: &str) -> String {
       <li>Click <strong>Validate</strong>, review the report, then <strong>Start Import</strong>.</li>
       <li>Your original BirdNET-Pi installation is untouched and safe to restart.</li>
     </ol>
-    <p style="color:var(--fg-4);font-size:0.85rem;margin-top:0.5rem;">
+    <p class="note">
       Destination: <code>{dest_db_path}</code>
     </p>
   </div>
@@ -105,12 +154,11 @@ pub fn migration_page(dest_db_path: &str) -> String {
             hx-indicator="#upload-spinner">
         <input type="file" id="source-file" name="source_file"
                accept=".db,.txt,.sqlite,.sqlite3"
-               style="margin-bottom:0.75rem;">
+               class="mb-sm">
         <p class="hint">Accepted formats: BirdDB.txt, birds.db, *.db, *.sqlite</p>
-        <div style="margin-top:1rem;display:flex;gap:0.75rem;align-items:center;">
+        <div class="actions center">
           <button type="submit" class="btn btn-primary">Upload &amp; Import</button>
-          <span id="upload-spinner" class="htmx-indicator"
-                style="color:var(--fg-3);font-size:0.85rem;">Uploading…</span>
+          <span id="upload-spinner" class="htmx-indicator spinner-note">Uploading…</span>
         </div>
       </form>
     </div>
@@ -120,9 +168,9 @@ pub fn migration_page(dest_db_path: &str) -> String {
       <label for="migrate-source-path">Absolute path on this server</label>
       <input id="migrate-source-path" name="source_path" type="text"
              placeholder="/home/pi/BirdNET-Pi/scripts/BirdDB.txt"
-             style="margin-bottom:0.75rem;">
+             class="mb-sm">
       <p class="hint">Full path to the BirdNET-Pi BirdDB.txt or birds.db file on this machine</p>
-      <div style="margin-top:1rem;display:flex;gap:0.75rem;flex-wrap:wrap;">
+      <div class="actions wrap">
         <button class="btn btn-secondary"
                 hx-post="/admin/migrate/validate"
                 hx-include="#migrate-source-path"
@@ -131,7 +179,7 @@ pub fn migration_page(dest_db_path: &str) -> String {
           Validate Only
         </button>
       </div>
-      <div id="validate-result" style="margin-top:1rem;"></div>
+      <div id="validate-result" class="mt"></div>
     </div>
   </div>
 
@@ -170,15 +218,15 @@ pub fn validation_result(
                 let mut buf = String::new();
                 for c in &report.checks {
                     let icon = if c.passed {
-                        r#"<span style="color:var(--moss)">✔</span>"#
+                        r#"<span class="check-ok">✔</span>"#
                     } else if c.required {
-                        r#"<span style="color:var(--rare)">✘</span>"#
+                        r#"<span class="check-err">✘</span>"#
                     } else {
-                        r#"<span style="color:var(--dawn)">⚠</span>"#
+                        r#"<span class="check-warn">⚠</span>"#
                     };
                     let _ = write!(
                         buf,
-                        r#"<li style="margin-bottom:0.4rem">{icon} <strong>{}</strong>: {}</li>"#,
+                        r#"<li class="check-item">{icon} <strong>{}</strong>: {}</li>"#,
                         escape_html(&c.name),
                         escape_html(&c.detail),
                     );
@@ -186,10 +234,13 @@ pub fn validation_result(
                 buf
             };
 
-            let (color, label) = if ok {
-                ("var(--moss)", "Validation passed")
+            // Validation tone is an enumerable pair (passed / passed-with-
+            // warnings), so it is an explicit class, not a computed inline colour.
+            let tone = if ok { "ok" } else { "warn" };
+            let label = if ok {
+                "Validation passed"
             } else {
-                ("var(--dawn)", "Validation passed with warnings")
+                "Validation passed with warnings"
             };
 
             // Species breakdown table
@@ -201,12 +252,12 @@ pub fn validation_result(
 
             let quality_html = if migration_report.null_date_rows > 0 {
                 format!(
-                    r#"<p style="color:var(--dawn);">⚠ {} rows have missing dates</p>"#,
+                    r#"<p class="check-warn">⚠ {} rows have missing dates</p>"#,
                     migration_report.null_date_rows
                 )
             } else if migration_report.duplicate_rows > 0 {
                 format!(
-                    r#"<p style="color:var(--fg-3);">ℹ {} duplicate rows will be skipped</p>"#,
+                    r#"<p class="info-text">ℹ {} duplicate rows will be skipped</p>"#,
                     migration_report.duplicate_rows
                 )
             } else {
@@ -220,10 +271,10 @@ pub fn validation_result(
                     let _ = write!(
                         buf,
                         r#"<tr>
-  <td style="padding:.35rem .5rem;">{}</td>
-  <td style="padding:.35rem .5rem;color:var(--fg-4);font-style:italic;font-size:.8rem;">{}</td>
-  <td style="padding:.35rem .5rem;text-align:right;">{}</td>
-  <td style="padding:.35rem .5rem;text-align:right;color:var(--fg-4);">{:.0}%</td>
+  <td>{}</td>
+  <td class="sci">{}</td>
+  <td class="num">{}</td>
+  <td class="num muted">{:.0}%</td>
 </tr>"#,
                         escape_html(&s.common_name),
                         escape_html(&s.scientific_name),
@@ -236,7 +287,7 @@ pub fn validation_result(
 
             let more_species = if migration_report.unique_species > 10 {
                 format!(
-                    r#"<p style="color:var(--fg-4);font-size:.8rem;margin-top:.5rem;">
+                    r#"<p class="more-note">
                       … and {} more species
                     </p>"#,
                     migration_report.unique_species - 10
@@ -246,26 +297,26 @@ pub fn validation_result(
             };
 
             format!(
-                r##"<div class="card" style="border-color:{color}">
-  <div style="font-weight:600;color:{color};margin-bottom:0.75rem;">{label}</div>
+                r##"<div class="card result-card {tone}">
+  <div class="result-title {tone}">{label}</div>
   <p><strong>Schema:</strong> {schema_name}</p>
   <p><strong>Total detections:</strong> {rows}</p>
   <p><strong>Unique species:</strong> {unique}</p>
   {date_range_html}
   {quality_html}
-  <ul style="list-style:none;padding:0;margin:0.75rem 0;">{checks_html}</ul>
+  <ul class="check-list">{checks_html}</ul>
 
-  <details style="margin:1rem 0;">
-    <summary style="cursor:pointer;color:var(--fg-3);font-size:.875rem;">
+  <details class="preview-details">
+    <summary class="preview-summary">
       Top species preview (click to expand)
     </summary>
-    <table style="width:100%;border-collapse:collapse;font-size:.8rem;margin-top:.75rem;">
+    <table class="preview-table">
       <thead>
-        <tr style="border-bottom:1px solid var(--border);">
-          <th style="text-align:left;padding:.35rem .5rem;color:var(--fg-4);">Species</th>
-          <th style="text-align:left;padding:.35rem .5rem;color:var(--fg-4);">Scientific</th>
-          <th style="text-align:right;padding:.35rem .5rem;color:var(--fg-4);">Count</th>
-          <th style="text-align:right;padding:.35rem .5rem;color:var(--fg-4);">Avg Conf</th>
+        <tr>
+          <th>Species</th>
+          <th>Scientific</th>
+          <th class="num">Count</th>
+          <th class="num">Avg Conf</th>
         </tr>
       </thead>
       <tbody>{top_species_html}</tbody>
@@ -273,11 +324,10 @@ pub fn validation_result(
     {more_species}
   </details>
 
-  <button class="btn btn-primary"
+  <button class="btn btn-primary mt-sm"
           hx-post="/admin/migrate/run"
           hx-include="#migrate-source-path"
-          hx-target="#migrate-status"
-          style="margin-top:0.75rem;">
+          hx-target="#migrate-status">
     Start Import
   </button>
 </div>"##,
@@ -285,8 +335,8 @@ pub fn validation_result(
             )
         }
         Err(e) => format!(
-            r#"<div class="card" style="border-color:var(--rare)">
-  <div style="font-weight:600;color:var(--rare);margin-bottom:0.5rem;">Validation failed</div>
+            r#"<div class="card result-card err">
+  <div class="result-title err sm">Validation failed</div>
   <p>{}</p>
 </div>"#,
             escape_html(&e.to_string())
@@ -297,8 +347,8 @@ pub fn validation_result(
 /// Render an upload error partial.
 pub fn upload_error(msg: &str) -> String {
     format!(
-        r#"<div class="card" style="border-color:var(--rare)">
-  <div style="font-weight:600;color:var(--rare);margin-bottom:0.5rem;">Upload failed</div>
+        r#"<div class="card result-card err">
+  <div class="result-title err sm">Upload failed</div>
   <p>{}</p>
 </div>"#,
         escape_html(msg)
@@ -308,13 +358,13 @@ pub fn upload_error(msg: &str) -> String {
 /// Render the "import started" partial (triggers progress polling).
 pub fn import_started() -> String {
     r#"<div id="migrate-status">
-  <p style="color:var(--fg-3)">Import started. Polling for progress…</p>
+  <p class="info-text">Import started. Polling for progress…</p>
   <div id="migrate-progress"
        hx-get="/admin/migrate/progress"
        hx-trigger="every 2s"
        hx-swap="outerHTML">
-    <div style="background:var(--surface);border-radius:9999px;height:8px;overflow:hidden;">
-      <div style="background:var(--moss-ink);height:100%;width:0%;transition:width 0.3s;"></div>
+    <div class="progress-track">
+      <div class="progress-fill run"></div>
     </div>
   </div>
 </div>"#
@@ -330,19 +380,23 @@ pub fn progress_bar(p: &MigrationProgress) -> String {
     } else {
         r#" hx-get="/admin/migrate/progress" hx-trigger="every 2s" hx-swap="outerHTML""#.to_string()
     };
-    let color = match p.stage {
-        MigrationStage::Complete => "var(--moss)",
-        MigrationStage::Failed => "var(--rare)",
-        MigrationStage::Cancelled => "var(--dawn)",
-        _ => "var(--moss-ink)",
+    // Stage tone is an enumerable set, so it is a class; only the continuous
+    // bar fill width stays an inline style (computed per request). That single
+    // remaining dynamic style folds into a nonce'd <style> block in the P3-3
+    // endgame, when `style-src 'unsafe-inline'` is finally dropped.
+    let tone = match p.stage {
+        MigrationStage::Complete => "ok",
+        MigrationStage::Failed => "err",
+        MigrationStage::Cancelled => "warn",
+        _ => "run",
     };
     format!(
         r#"<div id="migrate-progress"{trigger}>
-  <p style="color:{color};margin-bottom:0.5rem;">{msg}</p>
-  <div style="background:var(--surface);border-radius:9999px;height:8px;overflow:hidden;">
-    <div style="background:{color};height:100%;width:{pct}%;transition:width 0.3s;"></div>
+  <p class="bar-msg {tone}">{msg}</p>
+  <div class="progress-track">
+    <div class="progress-fill {tone}" style="width:{pct}%"></div>
   </div>
-  <p style="color:var(--fg-4);font-size:0.8rem;margin-top:0.25rem;">
+  <p class="bar-note">
     {imported} / {total} rows
   </p>
 </div>"#,
@@ -385,6 +439,30 @@ mod tests {
             error: None,
         };
         let html = progress_bar(&p);
-        assert!(html.contains("var(--moss)"));
+        // Complete stage carries the "ok" (moss/green) tone class.
+        assert!(html.contains("progress-fill ok"));
+        assert!(html.contains("bar-msg ok"));
+    }
+
+    #[test]
+    fn migration_page_has_no_inline_style_attributes() {
+        // P3-3 (O-25): the static migration page carries no inline style
+        // attributes — everything folds into its own <style> block.
+        assert!(!migration_page("/data/birdnet.db").contains("style=\""));
+    }
+
+    #[test]
+    fn import_started_static_bar_has_no_inline_style() {
+        // The initial bar sits at a fixed 0% via the class default, so it carries
+        // no inline width. (Only the live progress_bar keeps a computed inline
+        // width — the documented P3-3 endgame exception.)
+        assert!(!import_started().contains("style=\""));
+    }
+
+    #[test]
+    fn upload_error_partial_has_no_inline_style() {
+        // The upload-failure fragment uses the enumerable result-card tone
+        // class, not a computed inline colour.
+        assert!(!upload_error("nope").contains("style=\""));
     }
 }
