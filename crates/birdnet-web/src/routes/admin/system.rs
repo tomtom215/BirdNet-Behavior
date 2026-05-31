@@ -63,20 +63,65 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
       .btn-danger {{ background:var(--rare-soft); color:var(--rare); border:1px solid var(--rare-soft); }}
       .badge-ok {{ color:var(--moss); }} .badge-warn {{ color:var(--dawn); }}
       .badge-crit {{ color:var(--rare); }}
+      /* O-25 sweep: shapes promoted out of inline style= attributes. */
+      nav {{ margin-bottom:2rem; padding:1rem 0; border-bottom:1px solid var(--border); }}
+      h1 {{ font-size:1.5rem; font-weight:700; margin-bottom:1.5rem; color:var(--fg); }}
+      .lead {{ color:var(--fg-3); font-size:.85rem; margin-bottom:1rem; }}
+      .btn-row {{ display:flex; gap:1rem; flex-wrap:wrap; }}
+      .btn-row.center {{ align-items:center; }}
+      .result-slot {{ margin-top:1rem; }}
+      .result-slot.sm {{ font-size:.85rem; }}
+      .result-slot.muted {{ color:var(--fg-3); }}
+      .btn-link {{ padding:.5rem 1.5rem; border-radius:.375rem; border:1px solid var(--border);
+                   color:var(--fg-3); font-size:.875rem; text-decoration:none; font-weight:600; }}
+      code.inline {{ background:var(--bg); padding:.1rem .4rem; border-radius:.25rem; }}
+      code.sm {{ font-size:.8rem; }}
+      .card.danger {{ border-color:var(--rare-soft); }}
+      .section-title.danger {{ color:var(--rare); }}
+      /* Resource meters: enumerable tone classes; only the bar width stays inline. */
+      .meter-row {{ display:flex; justify-content:space-between; margin-bottom:.25rem; }}
+      .meter-row.tight {{ margin-bottom:.5rem; }}
+      .meter-label {{ font-size:.875rem; }}
+      .meter-label.sm {{ font-size:.8rem; }}
+      .meter-val {{ font-weight:600; }}
+      .meter-val.sm {{ font-weight:600; font-size:.8rem; }}
+      .meter-val.ok {{ color:var(--moss); }}
+      .meter-val.warn {{ color:var(--dawn); }}
+      .meter-val.crit {{ color:var(--rare); }}
+      .meter-track {{ background:var(--bg); border-radius:9999px; height:8px; overflow:hidden; }}
+      .meter-track.sm {{ height:6px; margin-bottom:.75rem; }}
+      .meter-track.sm.last {{ margin-bottom:.5rem; }}
+      .meter-fill {{ height:100%; }}
+      .meter-fill.ok {{ background:var(--moss); }}
+      .meter-fill.warn {{ background:var(--dawn); }}
+      .meter-fill.crit {{ background:var(--rare); }}
+      .meter-note {{ color:var(--fg-4); font-size:.75rem; margin-top:.25rem; }}
+      .status-grid {{ margin-bottom:1.5rem; }}
+      .res-head {{ font-size:.8rem; color:var(--fg-4); margin-bottom:.5rem; }}
+      .res-line {{ font-size:.875rem; }}
+      .res-sub {{ font-size:.75rem; color:var(--fg-4); margin:0; }}
+      .temp-line {{ font-size:.8rem; margin:.25rem 0; }}
+      .temp-val {{ font-weight:600; }}
+      .temp-val.ok {{ color:var(--moss); }}
+      .temp-val.warn {{ color:var(--dawn); }}
+      .temp-val.crit {{ color:var(--rare); }}
+      .muted-note {{ color:var(--fg-4); }}
+      .err-note {{ color:var(--rare); }}
+      .logs-row {{ text-align:right; margin-top:.5rem; }}
+      .logs-link {{ color:var(--fg-4); font-size:.8rem; text-decoration:none; }}
+      .ok-note {{ color:var(--moss); }}
     </style>
 </head>
 <body>
 <div class="container">
-  <nav style="margin-bottom:2rem;padding:1rem 0;border-bottom:1px solid var(--border);">
+  <nav>
     <a href="/">Dashboard</a>
     <a href="/admin/settings">Settings</a>
     <a href="/admin/migrate">Migration</a>
     <a href="/admin/system" class="active">System</a>
   </nav>
 
-  <h1 style="font-size:1.5rem;font-weight:700;margin-bottom:1.5rem;color:var(--fg);">
-    System Status
-  </h1>
+  <h1>System Status</h1>
 
   <div id="system-status"
        hx-get="/admin/system/status"
@@ -88,11 +133,11 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
   <!-- Service Controls -->
   <div class="card">
     <div class="section-title">Service Controls</div>
-    <p style="color:var(--fg-3);font-size:.85rem;margin-bottom:1rem;">
+    <p class="lead">
       Control the BirdNet-Behavior detection service. The service restarts automatically
       when managed by systemd (Restart=on-failure). Reconnect after ~5 seconds.
     </p>
-    <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:center;">
+    <div class="btn-row center">
       <button class="btn btn-secondary"
               hx-post="/admin/system/service/restart"
               hx-target="#service-result"
@@ -113,11 +158,11 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
         Refresh Status
       </button>
     </div>
-    <div id="service-result" style="margin-top:1rem;"></div>
+    <div id="service-result" class="result-slot"></div>
     <div id="service-status-box"
          hx-get="/admin/system/service/status"
          hx-trigger="load"
-         style="margin-top:1rem;font-size:.85rem;color:var(--fg-3);">
+         class="result-slot sm muted">
       Loading service status…
     </div>
   </div>
@@ -125,12 +170,12 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
   <!-- Update Check -->
   <div class="card">
     <div class="section-title">Software Update</div>
-    <p style="color:var(--fg-3);font-size:.85rem;margin-bottom:1rem;">
+    <p class="lead">
       Check GitHub Releases for a newer version. If an update is available,
-      download and replace the binary with: <code style="background:var(--bg);padding:.1rem .4rem;border-radius:.25rem;">
+      download and replace the binary with: <code class="inline">
       sudo install.sh</code> or pull the latest binary from Releases.
     </p>
-    <div style="display:flex;gap:1rem;flex-wrap:wrap;align-items:center;">
+    <div class="btn-row center">
       <button class="btn btn-secondary"
               hx-get="/admin/system/update/check"
               hx-target="#update-result"
@@ -138,41 +183,38 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
         Check for Updates
       </button>
     </div>
-    <div id="update-result" style="margin-top:1rem;font-size:.85rem;"></div>
+    <div id="update-result" class="result-slot sm"></div>
   </div>
 
   <!-- Database Actions -->
   <div class="card">
     <div class="section-title">Database Actions</div>
-    <div style="display:flex;gap:1rem;flex-wrap:wrap;">
+    <div class="btn-row">
       <button class="btn btn-secondary"
               hx-post="/admin/system/backup"
               hx-target="#backup-result"
               hx-swap="innerHTML">
         Create Backup Now
       </button>
-      <a href="/admin/system/backups"
-         style="padding:.5rem 1.5rem;border-radius:.375rem;border:1px solid var(--border);
-                color:var(--fg-3);font-size:.875rem;text-decoration:none;font-weight:600;">
+      <a href="/admin/system/backups" class="btn-link">
         Manage Backups
       </a>
       <a href="/admin/system/backup/full"
          download="birdnet-backup.tar.gz"
-         style="padding:.5rem 1.5rem;border-radius:.375rem;border:1px solid var(--border);
-                color:var(--fg-3);font-size:.875rem;text-decoration:none;font-weight:600;">
+         class="btn-link">
         Full Backup (DB + Audio + Config)
       </a>
     </div>
-    <div id="backup-result" style="margin-top:1rem;"></div>
+    <div id="backup-result" class="result-slot"></div>
   </div>
 
   <!-- Danger Zone -->
-  <div class="card" style="border-color:var(--rare-soft);">
-    <div class="section-title" style="color:var(--rare);">Danger Zone</div>
-    <p style="color:var(--fg-3);font-size:.85rem;margin-bottom:1rem;">
+  <div class="card danger">
+    <div class="section-title danger">Danger Zone</div>
+    <p class="lead">
       These actions cannot be undone. Create a backup first.
     </p>
-    <div style="display:flex;gap:1rem;flex-wrap:wrap;">
+    <div class="btn-row">
       <button class="btn btn-danger"
               hx-post="/admin/system/clear-detections"
               hx-target="#clear-result"
@@ -200,7 +242,7 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
         Clear Extracted Audio
       </button>
     </div>
-    <div id="clear-result" style="margin-top:1rem;"></div>
+    <div id="clear-result" class="result-slot"></div>
   </div>
 </div>
 </body>
@@ -222,20 +264,20 @@ async fn render_status_partial(state: &AppState) -> String {
 
     let (disk_html, rec_html) = tokio::task::spawn_blocking(move || {
         // Disk usage for DB directory
-        let disk = db_path
-            .parent()
-            .and_then(|p| disk_usage(p).ok());
+        let disk = db_path.parent().and_then(|p| disk_usage(p).ok());
 
         let disk_html = disk.map_or_else(
-            || r#"<p style="color:var(--fg-4)">Disk info unavailable</p>"#.to_string(),
+            || r#"<p class="muted-note">Disk info unavailable</p>"#.to_string(),
             |d| {
                 let pct = d.used_percent();
-                let (badge, bar_color) = if d.is_critical() {
-                    ("badge-crit", "var(--rare)")
+                // Disk status is an enumerable triple → tone class; only the
+                // computed bar width stays inline (the P3-3 endgame exception).
+                let (badge, tone) = if d.is_critical() {
+                    ("badge-crit", "crit")
                 } else if d.is_low() {
-                    ("badge-warn", "var(--dawn)")
+                    ("badge-warn", "warn")
                 } else {
-                    ("badge-ok", "var(--moss)")
+                    ("badge-ok", "ok")
                 };
 
                 #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
@@ -243,14 +285,14 @@ async fn render_status_partial(state: &AppState) -> String {
 
                 format!(
                     r#"<div>
-                      <div style="display:flex;justify-content:space-between;margin-bottom:.5rem;">
-                        <span style="font-size:.875rem;">Disk Usage</span>
-                        <span class="{badge}" style="font-weight:600;">{pct_u}%</span>
+                      <div class="meter-row tight">
+                        <span class="meter-label">Disk Usage</span>
+                        <span class="{badge} meter-val">{pct_u}%</span>
                       </div>
-                      <div style="background:var(--bg);border-radius:9999px;height:8px;overflow:hidden;">
-                        <div style="background:{bar_color};height:100%;width:{pct_u}%;"></div>
+                      <div class="meter-track">
+                        <div class="meter-fill {tone}" style="width:{pct_u}%"></div>
                       </div>
-                      <p style="color:var(--fg-4);font-size:.75rem;margin-top:.25rem;">
+                      <p class="meter-note">
                         {avail} free of {total}
                       </p>
                     </div>"#,
@@ -265,10 +307,10 @@ async fn render_status_partial(state: &AppState) -> String {
             .parent()
             .and_then(|p| recording_stats(p).ok())
             .map_or_else(
-                || r#"<p style="color:var(--fg-4)">Recording stats unavailable</p>"#.to_string(),
+                || r#"<p class="muted-note">Recording stats unavailable</p>"#.to_string(),
                 |(count, size)| {
                     format!(
-                        r#"<p style="font-size:.875rem;">
+                        r#"<p class="res-line">
                           {count} audio files · {size} total
                         </p>"#,
                         size = format_bytes(size),
@@ -280,7 +322,7 @@ async fn render_status_partial(state: &AppState) -> String {
     })
     .await
     .unwrap_or_else(|_| {
-        let err = r#"<p style="color:var(--rare)">Error querying system info</p>"#.to_string();
+        let err = r#"<p class="err-note">Error querying system info</p>"#.to_string();
         (err.clone(), err)
     });
 
@@ -288,10 +330,12 @@ async fn render_status_partial(state: &AppState) -> String {
     let sys_snap = tokio::task::spawn_blocking(system_info::sample).await.ok();
 
     let sys_html = sys_snap.map_or_else(
-        || r#"<p style="color:var(--fg-4)">System info unavailable</p>"#.to_string(),
+        || r#"<p class="muted-note">System info unavailable</p>"#.to_string(),
         |snap| {
-            let cpu_color = if snap.is_cpu_high() { "var(--rare)" } else { "var(--moss)" };
-            let mem_color = if snap.is_memory_critical() { "var(--rare)" } else { "var(--moss)" };
+            // CPU/memory status are enumerable → tone classes; only the bar
+            // widths stay inline (computed per request — the endgame exception).
+            let cpu_tone = if snap.is_cpu_high() { "crit" } else { "ok" };
+            let mem_tone = if snap.is_memory_critical() { "crit" } else { "ok" };
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let cpu_pct = snap.cpu_usage_pct as u32;
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -302,30 +346,30 @@ async fn render_status_partial(state: &AppState) -> String {
                 .map(|t| {
                     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss, clippy::cast_possible_wrap, clippy::cast_lossless)]
                     let tc = t as u32;
-                    let c = if tc > 80 { "var(--rare)" } else if tc > 65 { "var(--dawn)" } else { "var(--moss)" };
-                    format!(r#"<p style="font-size:.8rem;margin:.25rem 0;">CPU Temp: <span style="color:{c};font-weight:600;">{tc}°C</span></p>"#)
+                    let temp_tone = if tc > 80 { "crit" } else if tc > 65 { "warn" } else { "ok" };
+                    format!(r#"<p class="temp-line">CPU Temp: <span class="temp-val {temp_tone}">{tc}°C</span></p>"#)
                 })
                 .unwrap_or_default();
 
             format!(
-                r#"<p style="font-size:.8rem;color:var(--fg-4);margin-bottom:.5rem;">
+                r#"<p class="res-head">
                   {cores} cores · uptime {uptime}
                 </p>
-                <div style="display:flex;justify-content:space-between;margin-bottom:.25rem;">
-                  <span style="font-size:.8rem;">CPU</span>
-                  <span style="color:{cpu_color};font-weight:600;font-size:.8rem;">{cpu_pct}%</span>
+                <div class="meter-row">
+                  <span class="meter-label sm">CPU</span>
+                  <span class="meter-val sm {cpu_tone}">{cpu_pct}%</span>
                 </div>
-                <div style="background:var(--bg);border-radius:9999px;height:6px;margin-bottom:.75rem;overflow:hidden;">
-                  <div style="background:{cpu_color};height:100%;width:{cpu_pct}%;"></div>
+                <div class="meter-track sm">
+                  <div class="meter-fill {cpu_tone}" style="width:{cpu_pct}%"></div>
                 </div>
-                <div style="display:flex;justify-content:space-between;margin-bottom:.25rem;">
-                  <span style="font-size:.8rem;">Memory</span>
-                  <span style="color:{mem_color};font-weight:600;font-size:.8rem;">{mem_pct}%</span>
+                <div class="meter-row">
+                  <span class="meter-label sm">Memory</span>
+                  <span class="meter-val sm {mem_tone}">{mem_pct}%</span>
                 </div>
-                <div style="background:var(--bg);border-radius:9999px;height:6px;margin-bottom:.5rem;overflow:hidden;">
-                  <div style="background:{mem_color};height:100%;width:{mem_pct}%;"></div>
+                <div class="meter-track sm last">
+                  <div class="meter-fill {mem_tone}" style="width:{mem_pct}%"></div>
                 </div>
-                <p style="font-size:.75rem;color:var(--fg-4);margin:0;">{mem_summary}</p>
+                <p class="res-sub">{mem_summary}</p>
                 {temp_html}"#,
                 cores = snap.cpu_count,
                 mem_summary = snap.memory_summary(),
@@ -334,7 +378,7 @@ async fn render_status_partial(state: &AppState) -> String {
     );
 
     format!(
-        r#"<div class="stat-grid" style="margin-bottom:1.5rem;">
+        r#"<div class="stat-grid status-grid">
           <div class="card">{disk_html}</div>
           <div class="card">
             <div class="stat-label">Recordings</div>
@@ -345,8 +389,8 @@ async fn render_status_partial(state: &AppState) -> String {
             {sys_html}
           </div>
         </div>
-        <div style="text-align:right;margin-top:.5rem;">
-          <a href="/admin/system/logs/page" style="color:var(--fg-4);font-size:.8rem;text-decoration:none;">
+        <div class="logs-row">
+          <a href="/admin/system/logs/page" class="logs-link">
             📋 Live Logs →
           </a>
         </div>"#
@@ -372,8 +416,8 @@ async fn trigger_backup(State(state): State<AppState>) -> Result<Html<String>, S
         Ok(path) => {
             let display = path.display().to_string();
             let body = Html(format!(
-                r#"<p style="color:var(--moss);">
-              Backup created: <code style="font-size:.8rem;">{display}</code>
+                r#"<p class="ok-note">
+              Backup created: <code class="sm">{display}</code>
             </p>"#
             ));
             // O-18: toast confirmation of the backup outcome.
@@ -383,9 +427,7 @@ async fn trigger_backup(State(state): State<AppState>) -> Result<Html<String>, S
             ))
         }
         Err(e) => {
-            let body = Html(format!(
-                r#"<p style="color:var(--rare);">Backup failed: {e}</p>"#
-            ));
+            let body = Html(format!(r#"<p class="err-note">Backup failed: {e}</p>"#));
             Ok(toast::with(
                 body,
                 Toast::error(format!("Backup failed: {e}")),
