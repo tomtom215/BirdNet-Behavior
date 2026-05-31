@@ -147,28 +147,6 @@ pub fn init_i18n(
     }
 }
 
-/// Initialize audio source for live streaming.
-pub fn init_audio_source(
-    state: birdnet_web::state::AppState,
-    cli: &Cli,
-    config: Option<&birdnet_core::config::Config>,
-) -> birdnet_web::state::AppState {
-    let source = cli
-        .rtsp_url
-        .clone()
-        .or_else(|| cli.alsa_device.clone())
-        .or_else(|| config?.get("RTSP_URL").map(String::from))
-        .or_else(|| config?.get("ALSA_CARD").map(String::from));
-
-    match source {
-        Some(src) => {
-            tracing::info!(source = %src, "live audio stream source configured");
-            state.with_audio_source(src)
-        }
-        None => state,
-    }
-}
-
 /// Initialize custom site name.
 pub fn init_site_name(
     state: birdnet_web::state::AppState,
@@ -247,51 +225,8 @@ pub fn run_refresh_extension(
 
 #[cfg(test)]
 mod tests {
-    use super::{init_audio_source, init_i18n, init_image_cache, init_site_name};
+    use super::{init_i18n, init_image_cache, init_site_name};
     use crate::helpers::test_support::{config_with, default_cli, test_state};
-
-    // ── init_audio_source ──────────────────────────────────────────────
-
-    #[test]
-    fn audio_source_prefers_cli_rtsp_over_alsa() {
-        // CLI sets both; rtsp_url wins by ordering in the helper.
-        let mut cli = default_cli();
-        cli.rtsp_url = Some("rtsp://camera.local/stream".to_owned());
-        cli.alsa_device = Some("plughw:1,0".to_owned());
-        let state = init_audio_source(test_state(), &cli, None);
-        assert_eq!(state.audio_source(), Some("rtsp://camera.local/stream"));
-    }
-
-    #[test]
-    fn audio_source_uses_cli_alsa_when_no_rtsp() {
-        let mut cli = default_cli();
-        cli.alsa_device = Some("plughw:1,0".to_owned());
-        let state = init_audio_source(test_state(), &cli, None);
-        assert_eq!(state.audio_source(), Some("plughw:1,0"));
-    }
-
-    #[test]
-    fn audio_source_falls_back_to_config_rtsp() {
-        let cli = default_cli();
-        let cfg = config_with(&[("RTSP_URL", "rtsp://config.local/cam")]);
-        let state = init_audio_source(test_state(), &cli, Some(&cfg));
-        assert_eq!(state.audio_source(), Some("rtsp://config.local/cam"));
-    }
-
-    #[test]
-    fn audio_source_falls_back_to_config_alsa() {
-        let cli = default_cli();
-        let cfg = config_with(&[("ALSA_CARD", "hw:1,0")]);
-        let state = init_audio_source(test_state(), &cli, Some(&cfg));
-        assert_eq!(state.audio_source(), Some("hw:1,0"));
-    }
-
-    #[test]
-    fn audio_source_none_when_nothing_configured() {
-        let cli = default_cli();
-        let state = init_audio_source(test_state(), &cli, None);
-        assert_eq!(state.audio_source(), None);
-    }
 
     // ── init_site_name ─────────────────────────────────────────────────
 

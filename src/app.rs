@@ -147,7 +147,6 @@ pub async fn run(
     } else {
         state
     };
-    let state = helpers::init_audio_source(state, &cli, config.as_ref());
     let state = helpers::init_site_name(state, &cli, config.as_ref());
     let state = if cli.info_site == "ebird" {
         state
