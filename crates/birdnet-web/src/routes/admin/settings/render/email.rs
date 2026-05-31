@@ -21,7 +21,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     write!(out, r#"
   <div class="card">
     <div class="section-title">Email Alerts (SMTP)</div>
-    <p class="hint" style="margin-bottom:1rem;">Leave SMTP host blank to disable email alerts.</p>
+    <p class="hint">Leave SMTP host blank to disable email alerts.</p>
     <div class="grid-2">
       <div>
         <label for="email_smtp_host">SMTP Host</label>
@@ -29,7 +29,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
       </div>
       <div>
         <label for="email_smtp_port">SMTP Port</label>
-        <input id="email_smtp_port" name="email_smtp_port" type="number" value="{port}" min="1" max="65535" style="max-width:120px">
+        <input id="email_smtp_port" name="email_smtp_port" type="number" value="{port}" min="1" max="65535" class="bnb-w-num">
       </div>
     </div>
     <div class="grid-2">
@@ -59,7 +59,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
       </div>
       <div>
         <label for="email_starttls">Use STARTTLS</label>
-        <select id="email_starttls" name="email_starttls" style="max-width:180px">
+        <select id="email_starttls" name="email_starttls" class="bnb-w-select">
           <option value="true"{tls_yes}>Yes (port 587)</option>
           <option value="false"{tls_no}>No — implicit TLS (port 465)</option>
         </select>

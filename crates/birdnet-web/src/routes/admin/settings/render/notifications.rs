@@ -48,12 +48,12 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         <p class="hint">Use apprise CLI with -c flag for 80+ notification services (BirdNET-Pi: APPRISE_CONFIG_FILE)</p>
       </div>
     </div>
-    <div style="margin-top:0.5rem;">
-      <a href="/admin/notifications/test" class="btn btn-primary" style="font-size:0.8rem;padding:0.3rem 0.8rem;text-decoration:none;">
+    <div class="mt-sm">
+      <a href="/admin/notifications/test" class="btn btn-primary btn-sm">
         Test Notifications
       </a>
     </div>
-    <div class="grid-2" style="margin-top:1rem;">
+    <div class="grid-2 mt-md">
       <div>
         <label for="notify_trigger">Notification Trigger</label>
         <select id="notify_trigger" name="notify_trigger">
@@ -65,7 +65,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
       </div>
       <div>
         <label for="notify_image">Include Species Image</label>
-        <select id="notify_image" name="notify_image" style="max-width:180px">
+        <select id="notify_image" name="notify_image" class="bnb-w-select">
           <option value="true"{img_yes}>Yes — attach image</option>
           <option value="false"{img_no}>No — text only</option>
         </select>

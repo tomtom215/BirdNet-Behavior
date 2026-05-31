@@ -59,7 +59,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     <div>
       <label for="purge_threshold">Disk Purge Threshold (%)</label>
       <input id="purge_threshold" name="purge_threshold" type="number"
-             value="{purge}" min="50" max="99" style="max-width:120px">
+             value="{purge}" min="50" max="99" class="bnb-w-num">
       <p class="hint">Start purging old recordings when disk usage exceeds this % (BirdNET-Pi: DISK_PURGE_THRESHOLD)</p>
     </div>
     <div class="grid-2">
@@ -79,7 +79,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
   </div>
   <div class="card">
     <div class="section-title">Web Authentication</div>
-    <p class="hint" style="margin-bottom:1rem;">Leave blank to disable HTTP Basic Auth (allow open access).</p>
+    <p class="hint">Leave blank to disable HTTP Basic Auth (allow open access).</p>
     <div class="grid-2">
       <div>
         <label for="auth_username">Username</label>

@@ -981,6 +981,11 @@ footer a:hover { color: var(--moss-ink); }
 /* Range slider polish (was inline `accent-color` everywhere) */
 .bnb-range { width: 100%; accent-color: var(--moss); }
 
+/* Compact control widths for short numeric inputs / selects (O-25 sweep) */
+.bnb-w-num    { max-width: 120px; }
+.bnb-w-num-xs { max-width: 80px; }
+.bnb-w-select { max-width: 180px; }
+
 /* Inline key/value (settings preview, kpi sub-text) */
 .bnb-kv {
   display: inline-flex; gap: 6px; align-items: baseline;
