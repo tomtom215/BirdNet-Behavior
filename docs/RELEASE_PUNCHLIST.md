@@ -74,7 +74,7 @@ remains is the finish-off work below.
 | ~~**P2-3**~~ | Extend help links to remaining analytical screens — ✅ **DONE** (6 screens) | ~~P2~~ | S | low |
 | **P3-1** | O-13 legacy `--audio-source` retirement — ✅ **DONE** | P3 | S | low |
 | ~~**P3-2**~~ | No background session pruning — ✅ **DONE** (daily maintenance tick) | ~~P3~~ | S | low |
-| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (settings/render + notifications slices done; 1115→1063) | P3 | L | low (tedious) |
+| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (settings/render, notifications, overview/logs slices done; 1115→1052) | P3 | L | low (tedious) |
 | **P3-4** | Minor cosmetics — uptime pill ✅ **wired**; migration-missing out of scope | P3 | XS | none |
 | ~~**P3-5**~~ | Image blacklist enforcement on read path — ✅ **DONE** (serve-check + purge-on-blacklist) | ~~P3~~ | S | low |
 
@@ -327,6 +327,11 @@ they batch for a Playwright-verified pass; the dynamic ones fold into the endgam
   and the notification stat/status colours were *enumerable*, so they became `.result-banner.ok/.err` and
   `.value.moss/.rare/.dawn` variant classes rather than computed inline styles. Count **1089 → 1063**. Two render
   guards added; still no CSP change. (Deferred: the shared confirm-modal component still emits 2 inline styles.)
+- **Slice 3 — `admin/overview.rs` + `admin/logs.rs`.** 11 inline style attributes removed; both old-style pages
+  reach **zero** inline styles via their own `<style>` blocks. The overview stat-card colour
+  (moss-ink/moss/dawn/rare) was enumerable → a `.value.<tone>` class. Count **1063 → 1052**. Two render guards.
+  _Counting caveat:_ `rg 'style="'` also matches `data-confirm-style="…"` data-attributes (e.g. in `rules.rs`) —
+  those are **not** inline styles, so the true remaining attribute count is a little lower than the raw `rg` total.
 
 ---
 
