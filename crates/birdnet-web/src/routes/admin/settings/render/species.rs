@@ -13,9 +13,9 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         r#"
   <div class="card">
     <div class="section-title">Species Filters</div>
-    <p class="hint" style="margin-bottom:1rem;">
+    <p class="hint">
       Or manage species lists interactively on the
-      <a href="/admin/species" style="color:var(--moss-ink);">Species Lists</a> page.
+      <a href="/admin/species">Species Lists</a> page.
     </p>
     <div>
       <label for="species_exclude">Excluded Species (comma-separated common names)</label>

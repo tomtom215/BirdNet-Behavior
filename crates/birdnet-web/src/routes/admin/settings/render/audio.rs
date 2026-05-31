@@ -40,19 +40,19 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     <div class="grid-2">
       <div>
         <label for="segment_duration">Segment Duration (seconds)</label>
-        <input id="segment_duration" name="segment_duration" type="number" value="{seg}" min="5" max="60" style="max-width:120px">
+        <input id="segment_duration" name="segment_duration" type="number" value="{seg}" min="5" max="60" class="bnb-w-num">
         <p class="hint">Length of each recording chunk for analysis (BirdNET-Pi: RECORDING_LENGTH)</p>
       </div>
       <div>
         <label for="audio_channels">Audio Channels</label>
-        <input id="audio_channels" name="audio_channels" type="number" value="{channels}" min="1" max="2" style="max-width:80px">
+        <input id="audio_channels" name="audio_channels" type="number" value="{channels}" min="1" max="2" class="bnb-w-num-xs">
         <p class="hint">1 = mono (recommended), 2 = stereo (BirdNET-Pi: CHANNELS)</p>
       </div>
     </div>
     <div class="grid-2">
       <div>
         <label for="audio_format">Extracted Clip Format</label>
-        <select id="audio_format" name="audio_format" style="max-width:180px">
+        <select id="audio_format" name="audio_format" class="bnb-w-select">
           <option value="wav"{fmt_wav}>WAV (lossless, default)</option>
           <option value="mp3"{fmt_mp3}>MP3 (requires ffmpeg)</option>
           <option value="flac"{fmt_flac}>FLAC (lossless compressed, requires ffmpeg)</option>
@@ -63,7 +63,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
       <div>
         <label for="freq_shift_hz">Frequency Shift (Hz, 0 = disabled)</label>
         <input id="freq_shift_hz" name="freq_shift_hz" type="number" value="{freq_shift}"
-               min="-12000" max="12000" step="500" style="max-width:120px">
+               min="-12000" max="12000" step="500" class="bnb-w-num">
         <p class="hint">Shift pitch of saved clips for accessibility (BirdNET-Pi: FREQ_SHIFT). Requires ffmpeg or sox. Typical: 1000–4000.</p>
       </div>
     </div>

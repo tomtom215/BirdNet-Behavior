@@ -42,14 +42,14 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         <label for="overlap">Analysis Overlap (0–2.9 seconds)</label>
         <input id="overlap" name="overlap" type="text"
                inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*"
-               value="{over}" placeholder="0.0" style="max-width:120px">
+               value="{over}" placeholder="0.0" class="bnb-w-num">
         <p class="hint">Overlap between 3-second analysis windows. Higher = more CPU (BirdNET-Pi: OVERLAP)</p>
       </div>
       <div>
         <label for="sf_thresh">Species Frequency Threshold (0–1)</label>
         <input id="sf_thresh" name="sf_thresh" type="text"
                inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*"
-               value="{sf}" placeholder="0.03" style="max-width:120px">
+               value="{sf}" placeholder="0.03" class="bnb-w-num">
         <p class="hint">Filter unlikely species by occurrence frequency. Lower = more species. 0 = disabled (BirdNET-Pi: SF_THRESH)</p>
       </div>
     </div>
@@ -57,7 +57,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
       <label for="privacy_threshold">Privacy Threshold (0 = disabled)</label>
       <input id="privacy_threshold" name="privacy_threshold" type="text"
              inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*"
-             value="{priv_t}" placeholder="0.0" style="max-width:120px">
+             value="{priv_t}" placeholder="0.0" class="bnb-w-num">
       <p class="hint">Suppress detections when human voice is detected. Typical: 0.01–0.03. 0 = disabled (BirdNET-Pi: PRIVACY_THRESHOLD)</p>
     </div>
   </div>"#

@@ -31,7 +31,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
                placeholder="e.g. -0.1278 or -0,1278">
       </div>
     </div>
-    <p class="hint" style="margin:-6px 0 8px;">Decimal degrees. Either <code>.</code> or <code>,</code> works as the separator.</p>
+    <p class="hint flush">Decimal degrees. Either <code>.</code> or <code>,</code> works as the separator.</p>
     <div>
       <label for="station_name">Station Name</label>
       <input id="station_name" name="station_name" value="{station}" placeholder="e.g. My Garden, London">
@@ -48,10 +48,10 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
       </div>
       <div>
         <label for="pre_sunrise_offset">Extra minutes before sunrise</label>
-        <input id="pre_sunrise_offset" name="pre_sunrise_offset" type="number" value="{pre}" min="0" max="120" style="max-width:120px">
+        <input id="pre_sunrise_offset" name="pre_sunrise_offset" type="number" value="{pre}" min="0" max="120" class="bnb-w-num">
         <br>
-        <label for="post_sunset_offset" style="margin-top:0.5rem;">Extra minutes after sunset</label>
-        <input id="post_sunset_offset" name="post_sunset_offset" type="number" value="{post}" min="0" max="120" style="max-width:120px">
+        <label for="post_sunset_offset" class="mt-sm">Extra minutes after sunset</label>
+        <input id="post_sunset_offset" name="post_sunset_offset" type="number" value="{post}" min="0" max="120" class="bnb-w-num">
       </div>
     </div>
   </div>"#).unwrap_or_default();

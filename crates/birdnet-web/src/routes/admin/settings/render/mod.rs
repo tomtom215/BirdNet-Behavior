@@ -66,11 +66,22 @@ pub(super) fn render_settings_page(settings: &HashMap<String, String>) -> String
                        border-radius: 0.375rem; padding: 0.75rem 1rem; margin-bottom: 1rem; }}
       .hint {{ font-size: 0.75rem; color: var(--fg-4); margin-top: -0.75rem; margin-bottom: 1rem; }}
       @media (max-width: 520px) {{ .grid-2 {{ grid-template-columns: 1fr; }} }}
+      nav {{ margin-bottom: 2rem; padding: 1rem 0; border-bottom: 1px solid var(--border); }}
+      h1 {{ font-size: 1.5rem; font-weight: 700; margin-bottom: 1.5rem; color: var(--fg); }}
+      a.btn {{ text-decoration: none; }}
+      .btn.btn-sm {{ font-size: 0.8rem; padding: 0.3rem 0.8rem; }}
+      .hint a {{ color: var(--moss-ink); }}
+      .hint.flush {{ margin: -6px 0 8px; }}
+      .mt-sm {{ margin-top: 0.5rem; }}
+      .mt-md {{ margin-top: 1rem; }}
+      .save-row {{ display: flex; align-items: center; gap: 1rem; }}
+      .save-note {{ color: var(--fg-3); font-size: 0.875rem; }}
+      .save-note.dim {{ color: var(--fg-4); font-size: 0.8rem; }}
     </style>
 </head>
 <body>
 <div class="container">
-  <nav style="margin-bottom:2rem; padding:1rem 0; border-bottom:1px solid var(--border);">
+  <nav>
     <a href="/">Dashboard</a>
     <a href="/species">Species</a>
     <a href="/admin" class="active">Admin</a>
@@ -79,7 +90,7 @@ pub(super) fn render_settings_page(settings: &HashMap<String, String>) -> String
     <a href="/admin/system">System</a>
   </nav>
 
-  <h1 style="font-size:1.5rem;font-weight:700;margin-bottom:1.5rem;color:var(--fg);">
+  <h1>
     Admin Settings
   </h1>
 
@@ -107,12 +118,12 @@ pub(super) fn render_settings_form(settings: &HashMap<String, String>) -> String
     email::render(&mut out, settings);
     out.push_str(
         r#"
-  <div style="display:flex; align-items:center; gap:1rem;">
+  <div class="save-row">
     <button type="submit" class="btn btn-primary">Save Settings</button>
-    <span id="save-spinner" class="htmx-indicator" style="color:var(--fg-3); font-size:0.875rem;">
+    <span id="save-spinner" class="htmx-indicator save-note">
       Saving…
     </span>
-    <span style="color:var(--fg-4); font-size:0.8rem;">
+    <span class="save-note dim">
       Most settings require a restart to take effect.
     </span>
   </div>
@@ -174,5 +185,24 @@ mod tests {
         // Email
         assert!(html.contains("email_smtp_host"));
         assert!(html.contains("email_to"));
+    }
+
+    #[test]
+    fn settings_page_has_no_inline_style_attributes() {
+        // P3-3 (O-25): the settings render modules must not emit inline style
+        // attributes — those can't carry a CSP nonce, so they are
+        // the blocker for dropping `style-src 'unsafe-inline'`. Reusable
+        // layout/width shapes live in app.css utility classes; page-specific
+        // styling lives in this page's own <style> block. This guard fails if a
+        // new field silently ships an un-migrated inline style.
+        let settings = HashMap::new();
+        assert!(
+            !render_settings_page(&settings).contains("style=\""),
+            "settings page still emits an inline style attribute"
+        );
+        assert!(
+            !render_settings_form(&settings).contains("style=\""),
+            "settings form fragment still emits an inline style attribute"
+        );
     }
 }

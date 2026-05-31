@@ -74,7 +74,7 @@ remains is the finish-off work below.
 | ~~**P2-3**~~ | Extend help links to remaining analytical screens — ✅ **DONE** (6 screens) | ~~P2~~ | S | low |
 | **P3-1** | O-13 legacy `--audio-source` retirement — ✅ **DONE** | P3 | S | low |
 | ~~**P3-2**~~ | No background session pruning — ✅ **DONE** (daily maintenance tick) | ~~P3~~ | S | low |
-| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) | P3 | L | low (tedious) |
+| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (settings/render slice done; 1115→1089) | P3 | L | low (tedious) |
 | **P3-4** | Minor cosmetics — uptime pill ✅ **wired**; migration-missing out of scope | P3 | XS | none |
 | ~~**P3-5**~~ | Image blacklist enforcement on read path — ✅ **DONE** (serve-check + purge-on-blacklist) | ~~P3~~ | S | low |
 
@@ -295,14 +295,26 @@ task is spawned at startup. **Effort:** S. **Risk:** low.
 
 ## P3-3 — O-25 inline-style sweep  · **P3 (tedious; unlocks P2-2 style-src)**
 
-**Evidence.** ~**991** `style="…"` occurrences across **88** files (`rg -c 'style="' crates/birdnet-web/`).
-Cosmetic on its own, but removing them is the prerequisite for dropping `style-src 'unsafe-inline'` (P2-2).
-Reference design: `docs/proposed_changes/O-25_inline_styles/` (utility classes in `css/app.css.append`).
+**Evidence.** ~**1.1k** inline `style="…"` attributes across ~**88** files (`rg -c 'style="' crates/birdnet-web/`).
+Cosmetic on their own, but inline style *attributes* can't carry a CSP nonce, so eliminating them is the
+prerequisite for dropping `style-src 'unsafe-inline'` (P2-2). The utility-class vocabulary is already landed
+in `app.css` (`bnb-row` / `bnb-grid-*` / `bnb-form-row` / `bnb-kv` / …); reference design:
+`docs/proposed_changes/O-25_inline_styles/`.
 
-**Fix.** **Do not** attempt in one PR. Agree a utility-class vocabulary, then sweep **one area per PR**
-(e.g. admin settings renderers first), substituting inline `style=` for classes. Track coverage so the
-final PR can drop `'unsafe-inline'` from `style-src`. **Verify per PR:** visual diff unchanged; occurrence
-count drops. **Effort:** L (many small PRs). **Risk:** low but tedious.
+**Fix.** **Do not** attempt in one PR. Sweep **one area per PR**, substituting inline `style=` for the existing
+utility classes (reusable shapes) or page-scoped `<style>` rules (page-specific styling), with a per-page
+render guard so new fields can't silently reintroduce an inline style. Track coverage; the **final** PR
+(a) handles the remaining *dynamic* inline styles (computed bar widths, `--sp:` avatar colours) by moving them
+into **nonce'd `<style>` blocks** — a symmetric extension of the shipped script-nonce middleware — and then
+(b) drops `'unsafe-inline'` from `style-src`. **Verify per PR:** visual diff unchanged; occurrence count drops.
+**Effort:** L (many small PRs). **Risk:** low but tedious.
+
+**Progress.**
+- **Slice 1 — `admin/settings/render/*` (this PR).** 27 inline style attributes removed across the 8 settings
+  section modules; 3 faithful width utilities added (`.bnb-w-num` / `.bnb-w-num-xs` / `.bnb-w-select`);
+  page-specific bits folded into the settings page's own `<style>` block. Count **1115 → 1089**. Added the
+  `settings_page_has_no_inline_style_attributes` render guard. No CSP change yet (the page still ships a
+  `<style>` block, so `'unsafe-inline'` stays until the endgame).
 
 ---
 
