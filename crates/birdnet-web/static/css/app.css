@@ -2687,3 +2687,61 @@ body:has(.bnb-tabbar) main { padding-bottom: 84px; }
 @media (max-width: 520px) {
   .hist-layout { grid-template-columns: 1fr; }
 }
+
+/* ── Life list (/life-list) — O-25 harmonisation ──────────────────────────
+   Faithful extraction; preserves the page's legacy tokens. SVG charts stay
+   in their helpers. */
+.ll-eyebrow    { display: flex; align-items: center; gap: 10px; }
+.ll-h1         { font-size: 34px; margin-bottom: 0.25rem; }
+.ll-lede       { color: var(--text-muted); margin-bottom: 1.5rem; }
+.ll-card-mb    { margin-bottom: 1rem; }
+.ll-card-note  { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 0.75rem; }
+.ll-loading    { color: var(--text-muted); }
+.ll-head-row   { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; }
+.ll-head-row h2 { margin-bottom: 0; }
+/* `input.`/`select.` prefix so these beat the global `input[type=…]` /
+   `select` rule (attribute/element specificity), exactly as the original
+   inline style did. */
+input.ll-search  { flex: 1; min-width: 200px; padding: 0.4rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--input-bg); color: var(--text); font-size: 0.9rem; }
+select.ll-sort   { padding: 0.4rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--input-bg); color: var(--text); font-size: 0.85rem; }
+.ll-muted      { color: var(--text-muted); }
+.ll-center     { text-align: center; }
+.ll-empty      { color: var(--text-muted); text-align: center; padding: 2rem; }
+.ll-num        { color: var(--text-muted); }
+.ll-name-link  { color: inherit; }
+.ll-first-seen { font-size: 0.85rem; color: var(--text-muted); }
+
+/* ── Recordings (/recordings) — O-25 harmonisation ────────────────────────
+   Faithful extraction; preserves legacy tokens. */
+.rec-muted     { color: var(--text-muted); }
+.rec-item      { cursor: pointer; }
+.rec-item-main { flex: 1; min-width: 0; }
+.rec-sci       { font-style: italic; display: block; }
+.rec-count-note { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 0.75rem; }
+.rec-audio     { width: 100%; height: 32px; margin-top: 0.5rem; }
+.rec-date      { color: var(--text-muted); font-size: 0.8rem; }
+.rec-row       { display: flex; gap: 1rem; align-items: flex-start; padding: 0.6rem 0; border-bottom: 1px solid var(--border); }
+.rec-row-main  { flex: 1; min-width: 0; }
+.rec-row-head  { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.rec-name-link { font-weight: 500; color: var(--text); text-decoration: none; }
+.rec-sub       { color: var(--text-muted); font-size: 0.8rem; }
+.rec-actions   { display: flex; flex-direction: column; gap: 0.25rem; flex-shrink: 0; }
+.rec-del-btn   { background: none; border: 1px solid var(--danger); color: var(--danger); padding: 0.2rem 0.5rem; border-radius: var(--radius); cursor: pointer; font-size: 0.7rem; }
+.rec-relabel-ok { color: var(--success); font-size: 0.85rem; }
+
+/* ── Dawn chorus right-rail list (/analytics/dawn-chorus) — O-25 ──────────
+   Only the non-SVG list rows are harmonised; the polar plot + hour strips are
+   computed SVG and stay inline. The avatar's `--sp:` custom property is a
+   per-species computed value and remains inline. */
+.dc-row        { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; padding: 10px 0; border-top: 0.5px solid var(--hairline); }
+.dc-row.first  { border-top: 0; }
+.dc-row-main   { min-width: 0; }
+.dc-row-head   { display: flex; align-items: center; gap: 6px; }
+.dc-row-name   { font-weight: 500; }
+.dc-strip      { margin-top: 4px; }
+.dc-offchorus  { font-size: 9.5px; }
+/* dc-row was an inline grid → collapsed to one column on phones by the global
+   `[style*="grid-template-columns"]` reset. Match that exactly. */
+@media (max-width: 520px) {
+  .dc-row { grid-template-columns: 1fr; }
+}

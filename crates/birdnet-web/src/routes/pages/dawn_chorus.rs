@@ -392,35 +392,31 @@ async fn list_partial(State(state): State<AppState>) -> impl IntoResponse {
 
     let mut s = String::new();
     for (i, ribbon) in ribbons.iter().enumerate() {
-        let border = if i == 0 {
-            "0"
-        } else {
-            "0.5px solid var(--hairline)"
-        };
+        let row_cls = if i == 0 { "dc-row first" } else { "dc-row" };
         let off_chorus = !(5..=8).contains(&ribbon.peak_hour);
         let peak_label = fmt_hour(ribbon.peak_hour as f64);
         let strip = render_hour_strip(&ribbon.hours, &ribbon.color);
         let _ = write!(
             s,
-            r#"<div style="display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:12px;padding:10px 0;border-top:{border};">
+            r#"<div class="{row_cls}">
 <span class="bnb-avatar" style="--sp:{color};">{short}</span>
-<div style="min-width:0;">
-  <div style="display:flex;align-items:center;gap:6px;">
-    <span style="font-weight:500;">{name}</span>
+<div class="dc-row-main">
+  <div class="dc-row-head">
+    <span class="dc-row-name">{name}</span>
     <span class="bnb-meta mono">peak {peak}</span>
     {off_chorus_html}
   </div>
-  <div style="margin-top:4px;">{strip}</div>
+  <div class="dc-strip">{strip}</div>
 </div>
 <span class="mono tabular bnb-meta">{total}</span>
 </div>"#,
-            border = border,
+            row_cls = row_cls,
             color = ribbon.color,
             short = escape_html(&alpha_code(&ribbon.name)),
             name = escape_html(&ribbon.name),
             peak = peak_label,
             off_chorus_html = if off_chorus {
-                r#"<span class="bnb-pill" style="font-size:9.5px;">off-chorus</span>"#
+                r#"<span class="bnb-pill dc-offchorus">off-chorus</span>"#
             } else {
                 ""
             },
