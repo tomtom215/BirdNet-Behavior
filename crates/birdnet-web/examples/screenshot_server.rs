@@ -510,6 +510,22 @@ async fn main() {
         .unwrap_or(0);
     eprintln!("seeded {total} detections");
 
+    // Run exactly like the shipped binary: analytics on *and active*, not
+    // merely compiled in. Reopen the seeded SQLite through the analytics-aware
+    // constructor so the DuckDB analytics database is opened and the detections
+    // synced — the timeseries (window-function) screens then render live,
+    // mirroring the real, zero-config user experience. Slim
+    // `--no-default-features` builds fall back to the SQLite-only state.
+    #[cfg(feature = "analytics")]
+    let state = {
+        drop(conn);
+        let analytics_path = std::env::temp_dir().join("bnb_screenshots.duckdb");
+        let _ = std::fs::remove_file(&analytics_path);
+        AppState::new_with_analytics(path, &analytics_path)
+            .expect("open analytics database")
+            .with_site_name("BirdNet-Behavior".to_string())
+    };
+    #[cfg(not(feature = "analytics"))]
     let state =
         AppState::from_connection(conn, path).with_site_name("BirdNet-Behavior".to_string());
     let app = build_router(state);
