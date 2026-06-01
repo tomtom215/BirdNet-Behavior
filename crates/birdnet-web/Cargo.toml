@@ -12,6 +12,13 @@ categories.workspace = true
 description = "Web server: REST API, WebSocket, and HTMX pages via axum"
 
 [features]
+## On by default: analytics ships enabled so the behavioural-analytics screens
+## work out of the box — embedded and invisible to the user, matching the
+## `birdnet-behavior` binary (which also defaults it on). The binary depends on
+## this crate with `default-features = false` and re-enables analytics through
+## its own `analytics` feature, so a slim `--no-default-features` build stays
+## free of the bundled-libduckdb dependency.
+default = ["analytics"]
 ## Enable DuckDB-powered behavioral analytics endpoints.
 analytics = ["birdnet-behavioral/analytics", "birdnet-timeseries/analytics"]
 

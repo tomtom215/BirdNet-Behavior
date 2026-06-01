@@ -115,7 +115,7 @@ async fn species_summary_partial(
         Ok(Ok(None)) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
-            r#"<p style="color:var(--text-muted)">Species not found.</p>"#.to_string(),
+            r#"<p class="spp-muted">Species not found.</p>"#.to_string(),
         ),
         _ => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -205,7 +205,7 @@ async fn species_detections_partial(
                 return (
                     StatusCode::OK,
                     [(header::CONTENT_TYPE, "text/html")],
-                    r#"<p style="color:var(--text-muted)">No detections found.</p>"#.to_string(),
+                    r#"<p class="spp-muted">No detections found.</p>"#.to_string(),
                 );
             }
             let mut html = String::from(
@@ -295,16 +295,12 @@ async fn species_info_partial(
             let enc = simple_url_encode(&img_key);
             let _ = write!(
                 html,
-                r#"<img src="/api/v2/species/image/{enc}/file" alt="{alt}" style="width:100%;border-radius:var(--radius);margin-bottom:1rem;" />"#,
+                r#"<img src="/api/v2/species/image/{enc}/file" alt="{alt}" class="spp-info-img" />"#,
                 alt = escape_html(&name),
             );
         }
         if let Some(desc) = &image.description {
-            let _ = write!(
-                html,
-                r#"<p style="font-size:0.9rem;line-height:1.5;margin-bottom:0.75rem;">{}</p>"#,
-                escape_html(desc),
-            );
+            let _ = write!(html, r#"<p class="spp-desc">{}</p>"#, escape_html(desc));
         }
         if let Some(url) = &image.wiki_url {
             let _ = write!(
@@ -317,8 +313,8 @@ async fn species_info_partial(
 
     if html.is_empty() {
         html = format!(
-            r#"<p style="color:var(--text-muted)">No additional info for <em>{}</em>.</p>
-<p style="color:var(--text-muted);font-size:0.85rem;">Enable <code>--image-cache-dir</code> to fetch species images.</p>"#,
+            r#"<p class="spp-muted">No additional info for <em>{}</em>.</p>
+<p class="spp-muted-sm">Enable <code>--image-cache-dir</code> to fetch species images.</p>"#,
             escape_html(&name),
         );
     }
@@ -332,14 +328,14 @@ async fn species_info_partial(
             "allaboutbirds" => {
                 let _ = write!(
                     html,
-                    r#"<p style="margin-top:0.75rem;"><a href="https://www.allaboutbirds.org/guide/{encoded_com}" target="_blank" rel="noopener" style="color:var(--accent,#89b4fa);">View on All About Birds</a></p>"#,
+                    r#"<p class="spp-mt"><a href="https://www.allaboutbirds.org/guide/{encoded_com}" target="_blank" rel="noopener" class="spp-link">View on All About Birds</a></p>"#,
                 );
             }
             _ => {
                 // Default to eBird
                 let _ = write!(
                     html,
-                    r#"<p style="margin-top:0.75rem;"><a href="https://ebird.org/species/{encoded_sci}" target="_blank" rel="noopener" style="color:var(--accent,#89b4fa);">View on eBird</a></p>"#,
+                    r#"<p class="spp-mt"><a href="https://ebird.org/species/{encoded_sci}" target="_blank" rel="noopener" class="spp-link">View on eBird</a></p>"#,
                 );
             }
         }
@@ -426,9 +422,9 @@ async fn species_hero_partial(
     .flatten();
 
     let Some((date, time, conf, file_name)) = best else {
-        let html = r#"<div class="bnb-eyebrow" style="margin-bottom:8px;">Best detection</div>
-<div class="bnb-photo" data-caption="no clip yet" style="aspect-ratio:4/3;border-radius:var(--r-md);"></div>
-<p class="bnb-meta" style="margin-top:8px;">No recording captured for this species yet.</p>"#;
+        let html = r#"<div class="bnb-eyebrow spp-mb8">Best detection</div>
+<div class="bnb-photo spp-photo-empty" data-caption="no clip yet"></div>
+<p class="bnb-meta spp-mt8">No recording captured for this species yet.</p>"#;
         return (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
@@ -448,10 +444,10 @@ async fn species_hero_partial(
     // call. The species reference photo lives in the "About this species" card
     // below, so it isn't shown (cropped, and a second time) on the same page.
     let html = format!(
-        r#"<div class="bnb-eyebrow" style="margin-bottom:8px;">Best detection</div>
-<img src="/api/v2/spectrogram/{safe_file}" alt="Spectrogram of the loudest detected call" onerror="this.style.display='none'" style="width:100%;border-radius:var(--r-md);border:0.5px solid var(--border);display:block;" />
-<audio controls preload="metadata" style="width:100%;margin-top:10px;"><source src="/api/v2/recordings/{safe_file}" type="audio/wav"></audio>
-<div class="bnb-meta mono" style="margin-top:8px;">{conf_pct:.0}% confidence · {date} {time_short}</div>"#,
+        r#"<div class="bnb-eyebrow spp-mb8">Best detection</div>
+<img src="/api/v2/spectrogram/{safe_file}" alt="Spectrogram of the loudest detected call" onerror="this.style.display='none'" class="spp-spectrogram" />
+<audio controls preload="metadata" class="spp-audio"><source src="/api/v2/recordings/{safe_file}" type="audio/wav"></audio>
+<div class="bnb-meta mono spp-mt8">{conf_pct:.0}% confidence · {date} {time_short}</div>"#,
     );
 
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
@@ -481,8 +477,7 @@ async fn species_companions_partial(
                 return (
                     StatusCode::OK,
                     [(header::CONTENT_TYPE, "text/html")],
-                    r#"<p style="color:var(--text-muted)">No companion species data yet.</p>"#
-                        .to_string(),
+                    r#"<p class="spp-muted">No companion species data yet.</p>"#.to_string(),
                 );
             }
             let mut html = String::from(
@@ -492,7 +487,7 @@ async fn species_companions_partial(
                 let enc = simple_url_encode(&c.companion);
                 let _ = write!(
                     html,
-                    r#"<tr><td><a href="/species/detail?name={enc}" style="color:inherit;">{name}</a></td><td>{count}</td></tr>"#,
+                    r#"<tr><td><a href="/species/detail?name={enc}" class="spp-inherit">{name}</a></td><td>{count}</td></tr>"#,
                     name = escape_html(&c.companion),
                     count = c.shared_days,
                 );

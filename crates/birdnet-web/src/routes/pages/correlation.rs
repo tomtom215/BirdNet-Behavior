@@ -58,9 +58,9 @@ async fn correlation_page(headers: HeaderMap) -> Html<String> {
 const CORRELATION_CONTENT: &str = r##"<div class="page-head">
   <div>
     <div class="bnb-eyebrow">Behavioral analytics</div>
-    <h1 class="display" style="font-size:34px;">Who sings with whom</h1>
+    <h1 class="display co-h1">Who sings with whom</h1>
     {{help_link}}
-    <p class="bnb-meta" style="margin-top:4px;">Which species are detected together most often.</p>
+    <p class="bnb-meta co-mt">Which species are detected together most often.</p>
   </div>
   <div class="seg" id="range-controls">
     <button class="btn active" onclick="loadDays(30, this)">30 days</button>
@@ -79,7 +79,7 @@ const CORRELATION_CONTENT: &str = r##"<div class="page-head">
 
 <div class="bnb-card pad">
   <div class="section-header"><div><div class="bnb-eyebrow">The acoustic network</div><h3>Who connects to whom</h3></div><span class="bnb-pill">ρ ≥ 0.20</span></div>
-  <p class="bnb-meta" style="margin:4px 0 12px;">The same data as the matrix, drawn as ribbons — thicker links co-occur more often, and each species' arc length is its total connectedness in the soundscape.</p>
+  <p class="bnb-meta co-meta-gap">The same data as the matrix, drawn as ribbons — thicker links co-occur more often, and each species' arc length is its total connectedness in the soundscape.</p>
   <div id="acoustic-network" hx-get="/pages/acoustic-network?days=30" hx-trigger="load" hx-swap="innerHTML">
     <p class="bnb-meta">Loading…</p>
   </div>
@@ -94,9 +94,9 @@ const CORRELATION_CONTENT: &str = r##"<div class="page-head">
 
 <div class="bnb-card pad">
   <div class="section-header"><div><div class="bnb-eyebrow">Lookup</div><h3>Companion species</h3></div></div>
-  <p class="bnb-meta" style="margin:4px 0 12px;">Enter a species to see which others are commonly detected on the same day.</p>
-  <div style="display:flex;gap:.75rem;margin-bottom:1rem;">
-    <input type="text" id="species-input" style="width:280px;"
+  <p class="bnb-meta co-meta-gap">Enter a species to see which others are commonly detected on the same day.</p>
+  <div class="co-lookup-row">
+    <input type="text" id="species-input" class="co-species-input"
            placeholder="e.g. European Robin"
            hx-get="/pages/companion-species"
            hx-trigger="keyup changed delay:400ms"
@@ -148,7 +148,7 @@ async fn correlation_pairs_partial(
         _ => (
             StatusCode::INTERNAL_SERVER_ERROR,
             [(header::CONTENT_TYPE, "text/html")],
-            "<p style='color:var(--rare)'>Error loading co-occurrence data</p>".to_string(),
+            "<p class='co-err'>Error loading co-occurrence data</p>".to_string(),
         ),
     }
 }
@@ -301,9 +301,9 @@ fn render_pairs_table(pairs: &[birdnet_db::sqlite::SpeciesPair], _days: u32) -> 
   <td><a class="species-link" href="/species/detail?name={enc_b}">{b}</a></td>
   <td>{days}</td>
   <td>
-    <div style="display:flex;align-items:center;gap:.5rem;">
+    <div class="co-bar-row">
       <div class="bar" style="width:{bar_pct}%;min-width:4px;"></div>
-      <span style="font-size:.75rem;color:var(--fg-3);">{days} days</span>
+      <span class="co-bar-label">{days} days</span>
     </div>
   </td>
 </tr>"#,
@@ -331,8 +331,7 @@ async fn companion_partial(
             return (
                 StatusCode::OK,
                 [(header::CONTENT_TYPE, "text/html")],
-                r#"<p style="color:var(--fg-3);font-size:.875rem;">Type a species name above…</p>"#
-                    .to_string(),
+                r#"<p class="co-hint">Type a species name above…</p>"#.to_string(),
             );
         }
     };
@@ -352,14 +351,14 @@ async fn companion_partial(
         _ => (
             StatusCode::INTERNAL_SERVER_ERROR,
             [(header::CONTENT_TYPE, "text/html")],
-            "<p style='color:var(--rare)'>Error loading companion species</p>".to_string(),
+            "<p class='co-err'>Error loading companion species</p>".to_string(),
         ),
     }
 }
 
 fn render_companion_table(companions: &[birdnet_db::sqlite::FollowOn]) -> String {
     if companions.is_empty() {
-        return r#"<p style="color:var(--fg-3);font-size:.875rem;">
+        return r#"<p class="co-hint">
           No companion species found. Try a different name or extend the time window.
         </p>"#
             .to_string();

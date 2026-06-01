@@ -26,7 +26,11 @@ categories = ["science", "multimedia::audio"]
 # Internal crates
 birdnet-core = { path = "crates/birdnet-core" }
 birdnet-db = { path = "crates/birdnet-db" }
-birdnet-web = { path = "crates/birdnet-web" }
+# `default-features = false`: the binary drives analytics through its own
+# `analytics` feature (which enables `birdnet-web/analytics`), so a slim
+# `--no-default-features` build stays free of the bundled-libduckdb dependency
+# even though birdnet-web now enables analytics by default for standalone use.
+birdnet-web = { path = "crates/birdnet-web", default-features = false }
 birdnet-integrations = { path = "crates/birdnet-integrations" }
 birdnet-behavioral = { path = "crates/birdnet-behavioral" }
 birdnet-timeseries = { path = "crates/birdnet-timeseries" }

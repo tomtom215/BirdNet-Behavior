@@ -47,6 +47,12 @@ const SWEPT_FILES: &[&str] = &[
     "src/routes/pages/recordings.rs",
     "src/routes/pages/dawn_chorus.rs",
     "src/routes/pages/quarantine.rs",
+    // ── analytics screens (slice 9) ──
+    "src/routes/pages/behavioral.rs",
+    "src/routes/pages/correlation.rs",
+    "src/routes/pages/timeseries_dash.rs",
+    "src/routes/pages/species_pages.rs",
+    "src/routes/pages/detection_detail.rs",
 ];
 
 /// Returns true if the inline-style payload (the text inside `style="…"`) is a
