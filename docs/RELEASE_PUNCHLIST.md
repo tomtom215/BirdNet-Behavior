@@ -74,7 +74,7 @@ remains is the finish-off work below.
 | ~~**P2-3**~~ | Extend help links to remaining analytical screens — ✅ **DONE** (6 screens) | ~~P2~~ | S | low |
 | **P3-1** | O-13 legacy `--audio-source` retirement — ✅ **DONE** | P3 | S | low |
 | ~~**P3-2**~~ | No background session pruning — ✅ **DONE** (daily maintenance tick) | ~~P3~~ | S | low |
-| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (all admin pages + first public pages done, pixel-diff verified; 1115→701. Next: rest of `pages/*` + endgame) | P3 | L | low (tedious) |
+| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (all admin pages + 6 public pages done, batch pixel-diff verified; 1115→661. Next: rest of `pages/*` + endgame) | P3 | L | low (tedious) |
 | **P3-4** | Minor cosmetics — uptime pill ✅ **wired**; migration-missing out of scope | P3 | XS | none |
 | ~~**P3-5**~~ | Image blacklist enforcement on read path — ✅ **DONE** (serve-check + purge-on-blacklist) | ~~P3~~ | S | low |
 
@@ -388,9 +388,26 @@ they batch for a Playwright-verified pass; the dynamic ones fold into the endgam
   `.wk-nav-next-off` mirroring the original bare span). Workspace raw `style="` **787 → 701**. fmt + clippy +
   311 lib tests green.
 
-  **Next:** the remaining `pages/*` (`life_list`, `recordings`, `quarantine`, the analytics screens, …) and
-  `templates/*`, same pixel-diff method; then the endgame `<style>`-nonce middleware extension that lets the
-  remaining computed widths/colours carry a nonce, after which `style-src 'unsafe-inline'` is finally dropped.
+- **Slice 7 (batch) — more public pages, batch pixel-diff verified.** `pages/life_list.rs`, `pages/recordings.rs`,
+  `pages/dawn_chorus.rs` swept onto scoped `ll-*`/`rec-*`/`dc-*` classes (legacy tokens preserved). Promoted the
+  ad-hoc per-page diffing into a reusable runner — `tools/visual-qa/vqa.mjs` (`snap <label> name=/route …` /
+  `diff <before> <after>`), content-vs-chrome aware (the topnav pulse-dot + footer ticker are reported separately
+  and don't fail the gate). All three pages 0 content-pixel diff on desktop; residuals are the shared chrome and
+  the dawn-chorus polar clock (a time-varying SVG, not touched — confirmed by region-splitting away from the
+  species rail + a same-build self-diff). Workspace raw `style="` **701 → 661**.
+
+  The runner caught **three** real regressions pre-merge: (a) life-list's search `<input>`/`<select>` lost to the
+  global `input[type=…]`/`select` rule on specificity once moved off the inline style (padding 6.4→6 px, font
+  14.4→13 px) — fixed by scoping as `input.ll-search`/`select.ll-sort`; (b) dawn-chorus species rows and
+  (c) the same inline-grid-vs-phone-reset trap as year-in-review — fixed with matching `@media(max-width:520px)`
+  single-column collapses. **Lesson now generalised:** any inline `style=` that was a multi-column grid, or an
+  `<input>/<select>`/element the global element-selectors style, must reproduce the original specificity/breakpoint
+  when moved to a class — the pixel-diff is what makes that reliably catchable.
+
+  **Next:** remaining `pages/*` (`quarantine` — inline-heavy with `--primary`/`--bg-hover`; analytics
+  `behavioral`/`correlation`/`timeseries_dash`/`species_pages`/`detection_detail`) and `templates/*`, same runner;
+  then the endgame `<style>`-nonce middleware extension that lets the remaining computed widths/colours carry a
+  nonce, after which `style-src 'unsafe-inline'` is finally dropped.
 
 ---
 
