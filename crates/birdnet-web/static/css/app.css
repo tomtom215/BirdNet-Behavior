@@ -2789,3 +2789,74 @@ select.ll-sort   { padding: 0.4rem 0.75rem; border: 1px solid var(--border); bor
 .qz-loadmore   { background: var(--bg-hover); border: 1px solid var(--border); color: var(--text); padding: 0.5rem 1.5rem; border-radius: var(--radius); cursor: pointer; font-size: 0.9rem; }
 .qz-err        { color: var(--danger); }
 .qz-pending-badge { background: var(--warning); color: #000; border-radius: 9999px; padding: 0.1rem 0.45rem; font-size: 0.7rem; font-weight: 700; margin-left: 0.25rem; }
+
+/* ── Behavioral analytics partials (/analytics) — O-25 harmonisation ───────
+   Faithful extraction of the static inline styles the behavioral.rs HTMX
+   partials built with format!/write!. Preserves the page's legacy
+   --text-muted token verbatim; the config-table key cells become a class. */
+.bh-muted        { color: var(--text-muted); }
+.bh-note         { color: var(--text-muted); font-size: 0.8rem; margin-top: 0.5rem; }
+.bh-muted-sm     { color: var(--text-muted); font-size: 0.8rem; }
+.bh-cell-note    { color: var(--text-muted); padding-top: 0.5rem; }
+.bh-after        { font-size: 0.85rem; margin-bottom: 0.75rem; }
+.bh-config-table { font-size: 0.85rem; }
+.bh-key          { font-weight: 600; }
+
+/* ── Species co-occurrence (/correlation) — O-25 harmonisation ─────────────
+   Faithful extraction. The two co-occurrence data-bars keep their computed
+   inline width:{pct}% (documented dynamic exception); the species lookup box
+   is scoped `input.` so its width beats the global input[type=…] rule. */
+.co-h1           { font-size: 34px; }
+.co-mt           { margin-top: 4px; }
+.co-meta-gap     { margin: 4px 0 12px; }
+.co-lookup-row   { display: flex; gap: .75rem; margin-bottom: 1rem; }
+input.co-species-input { width: 280px; }
+.co-err          { color: var(--rare); }
+.co-bar-row      { display: flex; align-items: center; gap: .5rem; }
+.co-bar-label    { font-size: .75rem; color: var(--fg-3); }
+.co-hint         { color: var(--fg-3); font-size: .875rem; }
+
+/* ── Time-series dashboard partials (/timeseries) — O-25 harmonisation ─────
+   Faithful extraction of the static inline styles in the timeseries_dash.rs
+   HTMX partials. The hourly-heatmap bar keeps its computed inline width:{pct}%
+   (dynamic exception). Legacy --text-muted preserved verbatim. */
+.tsd-muted       { color: var(--text-muted); }
+.tsd-key         { font-weight: 600; }
+.tsd-ok          { color: var(--success); }
+.tsd-err         { color: var(--danger); }
+
+/* ── Species list + detail (/species, /species/detail) — O-25 harmonisation ─
+   Faithful extraction. The reference-photo / spectrogram <img> dimensions and
+   the audio scrubber become classes; the eBird/AllAboutBirds and companion
+   links are scoped `a.` so their colour beats the global `a {…}` rule. The
+   spectrogram's JS onerror handler and the avatar --sp: custom property are
+   untouched. Legacy --radius/--accent/--text-muted preserved verbatim. */
+.spp-muted       { color: var(--text-muted); }
+.spp-muted-sm    { color: var(--text-muted); font-size: 0.85rem; }
+.spp-info-img    { width: 100%; border-radius: var(--radius); margin-bottom: 1rem; }
+.spp-desc        { font-size: 0.9rem; line-height: 1.5; margin-bottom: 0.75rem; }
+.spp-mt          { margin-top: 0.75rem; }
+a.spp-link       { color: var(--accent, #89b4fa); }
+.spp-mb8         { margin-bottom: 8px; }
+.spp-photo-empty { aspect-ratio: 4/3; border-radius: var(--r-md); }
+.spp-mt8         { margin-top: 8px; }
+.spp-spectrogram { width: 100%; border-radius: var(--r-md); border: 0.5px solid var(--border); display: block; }
+.spp-audio       { width: 100%; margin-top: 10px; }
+a.spp-inherit    { color: inherit; }
+
+/* ── Detection detail (/detections/detail) — O-25 harmonisation ────────────
+   Faithful extraction. The spectrogram <img> keeps its JS onerror handler and
+   the correlation-id <code> keeps its DOM id (referenced by the copy script);
+   only their static style attributes move to classes. */
+.dd-h1           { font-size: 40px; line-height: 1.05; }
+.dd-sci          { color: var(--fg-3); font-style: italic; margin-top: 4px; }
+.dd-actions      { display: flex; gap: 8px; flex-wrap: wrap; }
+.dd-mb8          { margin-bottom: 8px; }
+.dd-spectrogram  { width: 100%; border-radius: var(--r-md); border: 0.5px solid var(--border); display: block; margin-bottom: 12px; }
+.dd-audio        { width: 100%; }
+.dd-mb           { margin-bottom: 0.75rem; }
+.dd-id-row       { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.dd-id-code      { background: var(--surface-2); padding: 0.5rem 0.75rem; border-radius: var(--r-sm); font-family: var(--font-mono); color: var(--moss-ink); }
+.dd-h1-nf        { font-size: 32px; }
+.dd-mt8          { margin-top: 8px; }
+.dd-mt16         { margin-top: 16px; }

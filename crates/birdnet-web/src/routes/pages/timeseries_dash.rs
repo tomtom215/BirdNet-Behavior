@@ -255,7 +255,7 @@ async fn ts_peak_partial(State(_): State<AppState>) -> impl axum::response::Into
 #[cfg(feature = "analytics")]
 fn render_heatmap_table(rows: &[birdnet_timeseries::types::results::HourlyHeatmapRow]) -> String {
     if rows.is_empty() {
-        return r#"<p style="color:var(--text-muted)">No heatmap data yet.</p>"#.to_string();
+        return r#"<p class="tsd-muted">No heatmap data yet.</p>"#.to_string();
     }
     let max_avg = rows
         .iter()
@@ -271,7 +271,7 @@ fn render_heatmap_table(rows: &[birdnet_timeseries::types::results::HourlyHeatma
         let _ = write!(
             html,
             r#"<tr>
-<td style="font-weight:600;">{h:02}:00</td>
+<td class="tsd-key">{h:02}:00</td>
 <td>{avg:.1}</td>
 <td>{total}</td>
 <td><div style="width:{pct:.0}%;height:8px;background:var(--accent);border-radius:4px;min-width:2px;"></div></td>
@@ -289,7 +289,7 @@ fn render_heatmap_table(rows: &[birdnet_timeseries::types::results::HourlyHeatma
 #[cfg(feature = "analytics")]
 fn render_trend_table(rows: &[birdnet_timeseries::types::results::TrendRow]) -> String {
     if rows.is_empty() {
-        return r#"<p style="color:var(--text-muted)">No trend data yet.</p>"#.to_string();
+        return r#"<p class="tsd-muted">No trend data yet.</p>"#.to_string();
     }
     let mut html = String::from(
         r"<table><thead><tr><th>Date</th><th>Detections</th><th>7-Day Avg</th></tr></thead><tbody>",
@@ -313,7 +313,7 @@ fn render_trend_table(rows: &[birdnet_timeseries::types::results::TrendRow]) -> 
 #[cfg(feature = "analytics")]
 fn render_diversity_table(rows: &[birdnet_timeseries::types::results::DiversityRow]) -> String {
     if rows.is_empty() {
-        return r#"<p style="color:var(--text-muted)">No diversity data yet.</p>"#.to_string();
+        return r#"<p class="tsd-muted">No diversity data yet.</p>"#.to_string();
     }
     let mut html = String::from(
         r"<table><thead><tr><th>Date</th><th>Richness</th><th>Shannon H′</th><th>Evenness</th></tr></thead><tbody>",
@@ -341,7 +341,7 @@ fn render_diversity_table(rows: &[birdnet_timeseries::types::results::DiversityR
 #[cfg(feature = "analytics")]
 fn render_sessions_table(rows: &[birdnet_timeseries::types::results::SessionRow]) -> String {
     if rows.is_empty() {
-        return r#"<p style="color:var(--text-muted)">No activity sessions found.</p>"#.to_string();
+        return r#"<p class="tsd-muted">No activity sessions found.</p>"#.to_string();
     }
     let mut html = String::from(
         r"<table><thead><tr><th>Start</th><th>Duration</th><th>Detections</th><th>Species</th></tr></thead><tbody>",
@@ -364,7 +364,7 @@ fn render_sessions_table(rows: &[birdnet_timeseries::types::results::SessionRow]
 fn render_anomaly_table(rows: &[birdnet_timeseries::types::results::AnomalyRow]) -> String {
     let anomalous: Vec<_> = rows.iter().filter(|r| r.anomaly_flag != "normal").collect();
     if anomalous.is_empty() {
-        return r#"<p style="color:var(--success)">✓ No anomalies detected in the last 90 days.</p>"#.to_string();
+        return r#"<p class="tsd-ok">✓ No anomalies detected in the last 90 days.</p>"#.to_string();
     }
     let mut html = String::from(
         r"<table><thead><tr><th>Date</th><th>Detections</th><th>Z-Score</th><th>Type</th></tr></thead><tbody>",
@@ -393,7 +393,7 @@ fn render_anomaly_table(rows: &[birdnet_timeseries::types::results::AnomalyRow])
 #[cfg(feature = "analytics")]
 fn render_peak_table(rows: &[birdnet_timeseries::types::results::PeakWindowRow]) -> String {
     if rows.is_empty() {
-        return r#"<p style="color:var(--text-muted)">No peak window data today.</p>"#.to_string();
+        return r#"<p class="tsd-muted">No peak window data today.</p>"#.to_string();
     }
     let mut html = String::from(
         r"<table><thead><tr><th>Window Start</th><th>Window End</th><th>Detections</th><th>Species</th></tr></thead><tbody>",
@@ -419,11 +419,11 @@ fn render_peak_table(rows: &[birdnet_timeseries::types::results::PeakWindowRow])
 fn ts_unavailable(endpoint: &str) -> (StatusCode, [(header::HeaderName, &'static str); 1], String) {
     let msg = if cfg!(feature = "analytics") {
         format!(
-            r#"<p style="color:var(--text-muted)">{endpoint}: start with <code>--analytics-db</code> to enable.</p>"#
+            r#"<p class="tsd-muted">{endpoint}: start with <code>--analytics-db</code> to enable.</p>"#
         )
     } else {
         format!(
-            r#"<p style="color:var(--text-muted)">{endpoint}: rebuild with <code>--features analytics</code>.</p>"#
+            r#"<p class="tsd-muted">{endpoint}: rebuild with <code>--features analytics</code>.</p>"#
         )
     };
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], msg)
@@ -434,9 +434,6 @@ fn ts_error(error: &str) -> (StatusCode, [(header::HeaderName, &'static str); 1]
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         [(header::CONTENT_TYPE, "text/html")],
-        format!(
-            r#"<p style="color:var(--danger)">Error: {}</p>"#,
-            escape_html(error)
-        ),
+        format!(r#"<p class="tsd-err">Error: {}</p>"#, escape_html(error)),
     )
 }

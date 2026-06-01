@@ -168,10 +168,10 @@ fn render_detail_page(
         r#"<div class="page-head">
   <div>
     <div class="bnb-eyebrow">Detection · {date} {time}</div>
-    <h1 class="display" style="font-size:40px;line-height:1.05;">{com}</h1>
-    <p class="mono" style="color:var(--fg-3);font-style:italic;margin-top:4px;">{sci}</p>
+    <h1 class="display dd-h1">{com}</h1>
+    <p class="mono dd-sci">{sci}</p>
   </div>
-  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+  <div class="dd-actions">
     <a class="bnb-btn" href="/species/detail?name={enc_name}">All detections →</a>
     {share_button}
   </div>
@@ -193,7 +193,7 @@ fn render_detail_page(
   </div>
   <div class="bnb-card pad">
     <div class="section-header"><div><div class="bnb-eyebrow">Related</div><h3>Explore</h3></div></div>
-    <p style="margin-bottom:8px;"><a href="/species/detail?name={enc_name}">All detections of {com} →</a></p>
+    <p class="dd-mb8"><a href="/species/detail?name={enc_name}">All detections of {com} →</a></p>
     <p><a href="/api/v2/species/image/{enc_sci}/file">Species photo (Wikipedia) →</a></p>
   </div>
 </div>"#
@@ -225,9 +225,9 @@ fn build_audio_section(det: &birdnet_db::sqlite::DetectionRow) -> String {
   <div class="section-header"><div><div class="bnb-eyebrow">Recording</div><h3>The 3-second clip</h3></div></div>
   <img src="/api/v2/spectrogram/{safe}"
        alt="Spectrogram"
-       style="width:100%;border-radius:var(--r-md);border:0.5px solid var(--border);display:block;margin-bottom:12px;"
+       class="dd-spectrogram"
        onerror="this.style.display='none'">
-  <audio controls style="width:100%;">
+  <audio controls class="dd-audio">
     <source src="/api/v2/recordings/{safe}" type="audio/wav">
     Your browser does not support audio playback.
   </audio>
@@ -264,16 +264,14 @@ fn build_correlation_section(det: &birdnet_db::sqlite::DetectionRow) -> String {
     format!(
         r#"<div class="bnb-card pad">
   <div class="section-header"><div><div class="bnb-eyebrow">Operator</div><h3>Daemon log trace</h3></div></div>
-  <p class="bnb-meta" style="margin-bottom:0.75rem;">
+  <p class="bnb-meta dd-mb">
     Every event the detection daemon emitted for this audio file is
     tagged with the correlation ID below.
     Run <code>journalctl -u birdnet | grep {safe}</code> to see the
     exact decode/infer/notify slice that produced this row.
   </p>
-  <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
-    <code id="correlation-id"
-          style="background:var(--surface-2);padding:0.5rem 0.75rem;border-radius:var(--r-sm);
-                 font-family:var(--font-mono);color:var(--moss-ink);">{safe}</code>
+  <div class="dd-id-row">
+    <code id="correlation-id" class="dd-id-code">{safe}</code>
     <button type="button" id="copy-correlation-id" class="bnb-btn"
             onclick="(function(){{
               const el=document.getElementById('correlation-id');
@@ -319,9 +317,9 @@ fn build_meta_rows(det: &birdnet_db::sqlite::DetectionRow) -> String {
 fn not_found_page(date: &str, time: &str, headers: &HeaderMap) -> Html<String> {
     let content = format!(
         r#"<div class="empty-state">
-  <h1 class="display" style="font-size:32px;">Detection not found</h1>
-  <p class="bnb-meta" style="margin-top:8px;">No detection found for date <code>{date}</code> time <code>{time}</code>.</p>
-  <p style="margin-top:16px;"><a class="bnb-btn" href="/">← Back to dashboard</a></p>
+  <h1 class="display dd-h1-nf">Detection not found</h1>
+  <p class="bnb-meta dd-mt8">No detection found for date <code>{date}</code> time <code>{time}</code>.</p>
+  <p class="dd-mt16"><a class="bnb-btn" href="/">← Back to dashboard</a></p>
 </div>"#,
         date = escape_html(date),
         time = escape_html(time),

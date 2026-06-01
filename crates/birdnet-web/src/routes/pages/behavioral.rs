@@ -62,8 +62,7 @@ pub(super) async fn analytics_sessions_partial(
                 return (
                     StatusCode::OK,
                     [(header::CONTENT_TYPE, "text/html")],
-                    r#"<p style="color:var(--text-muted)">No activity sessions detected yet.</p>"#
-                        .to_string(),
+                    r#"<p class="bh-muted">No activity sessions detected yet.</p>"#.to_string(),
                 );
             }
             let mut html = String::from(
@@ -84,7 +83,7 @@ pub(super) async fn analytics_sessions_partial(
             if sessions.len() > 20 {
                 let _ = write!(
                     html,
-                    r#"<p style="color:var(--text-muted);font-size:0.8rem;margin-top:0.5rem;">Showing 20 of {} sessions.</p>"#,
+                    r#"<p class="bh-note">Showing 20 of {} sessions.</p>"#,
                     sessions.len()
                 );
             }
@@ -134,7 +133,7 @@ pub(super) async fn analytics_retention_partial(
                 return (
                     StatusCode::OK,
                     [(header::CONTENT_TYPE, "text/html")],
-                    r#"<p style="color:var(--text-muted)">No retention data yet.</p>"#.to_string(),
+                    r#"<p class="bh-muted">No retention data yet.</p>"#.to_string(),
                 );
             }
             let mut html = String::from(
@@ -202,7 +201,7 @@ pub(super) async fn analytics_next_partial(
         return (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
-            r#"<p style="color:var(--text-muted)">No detections yet.</p>"#.to_string(),
+            r#"<p class="bh-muted">No detections yet.</p>"#.to_string(),
         );
     };
 
@@ -227,13 +226,13 @@ pub(super) async fn analytics_next_partial(
                     StatusCode::OK,
                     [(header::CONTENT_TYPE, "text/html")],
                     format!(
-                        r#"<p style="color:var(--text-muted)">No predictions for <strong>{}</strong> yet.</p>"#,
+                        r#"<p class="bh-muted">No predictions for <strong>{}</strong> yet.</p>"#,
                         escape_html(&display)
                     ),
                 );
             }
             let mut html = format!(
-                r#"<p style="font-size:0.85rem;margin-bottom:0.75rem;">After <strong>{}</strong>:</p><table><thead><tr><th>Species</th><th>Probability</th><th>Observed</th></tr></thead><tbody>"#,
+                r#"<p class="bh-after">After <strong>{}</strong>:</p><table><thead><tr><th>Species</th><th>Probability</th><th>Observed</th></tr></thead><tbody>"#,
                 escape_html(&display),
             );
             for p in &predictions {
@@ -295,10 +294,10 @@ async fn analytics_config_partial(
     let ext_status: Option<(bool, Option<String>, Option<String>)> = None;
 
     let mut html = format!(
-        r#"<table style="font-size:0.85rem;"><tr><td style="font-weight:600;">Version</td><td>{version}</td></tr>
-<tr><td style="font-weight:600;">SQLite Database</td><td><code>{db_path}</code></td></tr>
-<tr><td style="font-weight:600;">Analytics Compiled</td><td>{compiled}</td></tr>
-<tr><td style="font-weight:600;">Analytics Active</td><td>{configured}</td></tr>"#,
+        r#"<table class="bh-config-table"><tr><td class="bh-key">Version</td><td>{version}</td></tr>
+<tr><td class="bh-key">SQLite Database</td><td><code>{db_path}</code></td></tr>
+<tr><td class="bh-key">Analytics Compiled</td><td>{compiled}</td></tr>
+<tr><td class="bh-key">Analytics Active</td><td>{configured}</td></tr>"#,
     );
     if let Some((loaded, duckdb_v, ext_v)) = ext_status {
         let loaded_str = if loaded { "true" } else { "false" };
@@ -306,19 +305,19 @@ async fn analytics_config_partial(
         let ext_v_str = escape_html(ext_v.as_deref().unwrap_or("\u{2014}"));
         let _ = write!(
             html,
-            "<tr><td style=\"font-weight:600;\">DuckDB</td><td><code>{duckdb_v_str}</code></td></tr>\
-             <tr><td style=\"font-weight:600;\">Behavioral extension</td><td><code>{ext_v_str}</code> \u{00b7} loaded: <strong>{loaded_str}</strong></td></tr>"
+            "<tr><td class=\"bh-key\">DuckDB</td><td><code>{duckdb_v_str}</code></td></tr>\
+             <tr><td class=\"bh-key\">Behavioral extension</td><td><code>{ext_v_str}</code> \u{00b7} loaded: <strong>{loaded_str}</strong></td></tr>"
         );
         if !loaded {
             html.push_str(
-                r#"<tr><td colspan="2" style="color:var(--text-muted);padding-top:0.5rem;">Extension not loaded — sessions, retention and next-species queries are unavailable. Run <code>--refresh-extension</code> to fetch from the community registry, or restart with a release that bundles the extension binary (sets <code>BIRDNET_BUNDLED_EXTENSION_FILE</code> at build time, or vendors a copy under <code>crates/birdnet-behavioral/vendor/</code>).</td></tr>"#,
+                r#"<tr><td colspan="2" class="bh-cell-note">Extension not loaded — sessions, retention and next-species queries are unavailable. Run <code>--refresh-extension</code> to fetch from the community registry, or restart with a release that bundles the extension binary (sets <code>BIRDNET_BUNDLED_EXTENSION_FILE</code> at build time, or vendors a copy under <code>crates/birdnet-behavioral/vendor/</code>).</td></tr>"#,
             );
         }
     }
     if compiled && !configured {
-        html.push_str(r#"<tr><td colspan="2" style="color:var(--text-muted);padding-top:0.5rem;">Analytics is on by default — restart the service to open the DuckDB file alongside the SQLite database.</td></tr>"#);
+        html.push_str(r#"<tr><td colspan="2" class="bh-cell-note">Analytics is on by default — restart the service to open the DuckDB file alongside the SQLite database.</td></tr>"#);
     } else if !compiled {
-        html.push_str(r#"<tr><td colspan="2" style="color:var(--text-muted);padding-top:0.5rem;">Rebuild with default features (or <code>--features analytics</code>) to enable.</td></tr>"#);
+        html.push_str(r#"<tr><td colspan="2" class="bh-cell-note">Rebuild with default features (or <code>--features analytics</code>) to enable.</td></tr>"#);
     }
     html.push_str("</table>");
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
@@ -329,11 +328,11 @@ fn analytics_unavailable_html(
 ) -> (StatusCode, [(header::HeaderName, &'static str); 1], String) {
     let msg = if cfg!(feature = "analytics") {
         format!(
-            r#"<p style="color:var(--text-muted)">{feature} requires DuckDB analytics. Start with <code>--analytics-db</code>.</p>"#
+            r#"<p class="bh-muted">{feature} requires DuckDB analytics. Start with <code>--analytics-db</code>.</p>"#
         )
     } else {
         format!(
-            r#"<p style="color:var(--text-muted)">{feature} requires the analytics feature. Rebuild with <code>--features analytics</code>.</p>"#
+            r#"<p class="bh-muted">{feature} requires the analytics feature. Rebuild with <code>--features analytics</code>.</p>"#
         )
     };
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], msg)
@@ -345,8 +344,8 @@ fn extension_error_html(
     error: &str,
 ) -> (StatusCode, [(header::HeaderName, &'static str); 1], String) {
     let html = format!(
-        r#"<p style="color:var(--text-muted)">The <code>duckdb-behavioral</code> extension is required for {func}.</p>
-<p style="color:var(--text-muted);font-size:0.8rem;">{error}</p>"#,
+        r#"<p class="bh-muted">The <code>duckdb-behavioral</code> extension is required for {func}.</p>
+<p class="bh-muted-sm">{error}</p>"#,
         error = escape_html(error),
     );
     // Return 200 (not 503) so HTMX swaps this informative fragment into the

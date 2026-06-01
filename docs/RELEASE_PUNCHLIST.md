@@ -74,7 +74,7 @@ remains is the finish-off work below.
 | ~~**P2-3**~~ | Extend help links to remaining analytical screens — ✅ **DONE** (6 screens) | ~~P2~~ | S | low |
 | **P3-1** | O-13 legacy `--audio-source` retirement — ✅ **DONE** | P3 | S | low |
 | ~~**P3-2**~~ | No background session pruning — ✅ **DONE** (daily maintenance tick) | ~~P3~~ | S | low |
-| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (all admin + 7 public pages done; 27-file regression guard added; 1115→657. Next: analytics/skeletons/templates + endgame) | P3 | L | low (tedious) |
+| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (all admin + 7 public + 5 analytics pages done; 32-file regression guard; analytics now default-active in QA; 1115→588. Next: skeletons/onboarding/un-swept-admin/templates + endgame) | P3 | L | low (tedious) |
 | **P3-4** | Minor cosmetics — uptime pill ✅ **wired**; migration-missing out of scope | P3 | XS | none |
 | ~~**P3-5**~~ | Image blacklist enforcement on read path — ✅ **DONE** (serve-check + purge-on-blacklist) | ~~P3~~ | S | low |
 
@@ -420,10 +420,36 @@ they batch for a Playwright-verified pass; the dynamic ones fold into the endgam
   static sizing → a `.dc-polar-svg` class. Workspace raw `style="` **661 → 657** (the remaining quarantine matches
   are `data-confirm-style` attributes).
 
-  **Next:** the analytics screens (`behavioral`/`correlation`/`timeseries_dash`/`species_pages`/`detection_detail`),
-  `pages/skeletons.rs` (~45, pure computed placeholders), `pages/onboarding.rs`, and `templates/*`, same runner +
-  guard; then the endgame `<style>`-nonce middleware extension that lets the remaining computed widths/colours
-  carry a nonce, after which `style-src 'unsafe-inline'` is finally dropped.
+- **Slice 9 (batch) — the analytics screens, + analytics made default-active in the QA harness.** Swept
+  `pages/behavioral.rs` (`/analytics` partials), `pages/correlation.rs`, `pages/timeseries_dash.rs`
+  (`/timeseries` partials), `pages/species_pages.rs` (`/species` + `/species/detail`) and
+  `pages/detection_detail.rs` onto scoped `bh-*`/`co-*`/`tsd-*`/`spp-*`/`dd-*` classes. Legacy tokens
+  (`--text-muted`/`--accent`/`--radius`) preserved verbatim; the eBird/AllAboutBirds + companion links scoped
+  `a.spp-link`/`a.spp-inherit` to beat the global `a{color}` rule; the lookup box scoped
+  `input.co-species-input`. The only inline styles left are the **3 computed data-bars** (correlation ×2,
+  timeseries heatmap ×1 — the documented `width:{pct}%` exception). Also swept two single-quoted
+  `style='color:var(--rare)'` error strings the `style="` scan never counted. Workspace raw `style="`
+  **657 → 588**; guard grows **27 → 32 files**.
+
+  **Verified with analytics actually running.** The screenshot QA server was analytics-*compiled* but never
+  analytics-*active* — it built `AppState` via `from_connection()` (the SQLite-only path), so the gated
+  analytics tables never rendered (`Active: false`). Fixed so the swept screens are verified as users see
+  them: `birdnet-web` now enables `analytics` **by default** (embedded + invisible, matching the shipped
+  binary; the binary depends on it with `default-features = false` and re-enables via its own `analytics`
+  feature, so a `--no-default-features` slim build stays DuckDB-free — verified **0 vs 3** duckdb crates in
+  the feature graph), and the example reopens through `new_with_analytics()` so DuckDB is opened + synced.
+  With analytics live, `correlation`/`species`/`detection-detail` (real SQLite data) and `behavioral` (real
+  sessionize/retention/next tables) pixel-diff to **0 content px** on the deterministic variants. The residual
+  analytics-light-desktop + all-timeseries diffs trace to **non-deterministic DuckDB row ordering** — the
+  next-species/timeseries queries reshuffle tied rows per request (confirmed by a same-build self-diff and by
+  highlighting the diff to differing *species names*, not CSS); a pre-existing data-layer wart, **out of P3-3
+  scope** (a follow-up should add stable `ORDER BY` tiebreaks). fmt + clippy (`--all-targets`, analytics now
+  default) + 311 lib tests + guard all green.
+
+  **Next:** `pages/skeletons.rs` (~45, pure computed placeholders), `pages/onboarding.rs`, the un-swept admin
+  pages (`system_controls/*`, `backup`, `rules`, `audio`), and `templates/*`, same runner + guard; then the
+  endgame `<style>`-nonce middleware extension that lets the remaining computed widths/colours carry a nonce,
+  after which `style-src 'unsafe-inline'` is finally dropped.
 
 ---
 
