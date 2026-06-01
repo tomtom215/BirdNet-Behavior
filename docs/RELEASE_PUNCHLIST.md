@@ -74,7 +74,7 @@ remains is the finish-off work below.
 | ~~**P2-3**~~ | Extend help links to remaining analytical screens — ✅ **DONE** (6 screens) | ~~P2~~ | S | low |
 | **P3-1** | O-13 legacy `--audio-source` retirement — ✅ **DONE** | P3 | S | low |
 | ~~**P3-2**~~ | No background session pruning — ✅ **DONE** (daily maintenance tick) | ~~P3~~ | S | low |
-| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (all admin pages + 6 public pages done, batch pixel-diff verified; 1115→661. Next: rest of `pages/*` + endgame) | P3 | L | low (tedious) |
+| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (all admin + 7 public pages done; 27-file regression guard added; 1115→657. Next: analytics/skeletons/templates + endgame) | P3 | L | low (tedious) |
 | **P3-4** | Minor cosmetics — uptime pill ✅ **wired**; migration-missing out of scope | P3 | XS | none |
 | ~~**P3-5**~~ | Image blacklist enforcement on read path — ✅ **DONE** (serve-check + purge-on-blacklist) | ~~P3~~ | S | low |
 
@@ -404,10 +404,26 @@ they batch for a Playwright-verified pass; the dynamic ones fold into the endgam
   `<input>/<select>`/element the global element-selectors style, must reproduce the original specificity/breakpoint
   when moved to a class — the pixel-diff is what makes that reliably catchable.
 
-  **Next:** remaining `pages/*` (`quarantine` — inline-heavy with `--primary`/`--bg-hover`; analytics
-  `behavioral`/`correlation`/`timeseries_dash`/`species_pages`/`detection_detail`) and `templates/*`, same runner;
-  then the endgame `<style>`-nonce middleware extension that lets the remaining computed widths/colours carry a
-  nonce, after which `style-src 'unsafe-inline'` is finally dropped.
+- **Slice 8 — `pages/quarantine.rs` + a permanent regression guard.** Swept the inline-heaviest public page
+  (filter tabs, 4 stat cards, the review table, the approve/reject/delete/share button group, load-more, the
+  pending-count nav badge) onto a scoped `qz-*` block; legacy tokens preserved; **zero** inline styles. Pixel-diff
+  verified 0 content px on desktop + light-mobile. The runner caught a **nested-flex** regression (the inner
+  button group, originally `flex` *without* `align-items:center`, inherited centering when routed through the
+  outer `.qz-actions` — fixed with a distinct `.qz-btn-group`). The dark-mobile residual traced to the browser's
+  **native `<audio>` control** rendering its volume widget non-deterministically (inside `<audio controls>`,
+  unstyled here) — confirmed by a 0-px same-build self-diff; not a CSS regression.
+
+  **Bar raised — the sweep now defends itself.** New crate test `tests/inline_style_guard.rs` scans all **27**
+  swept files and fails if a bare static inline `style="…"` reappears, with a documented allowlist for the genuine
+  dynamic exceptions (computed bar width/height, data-driven background/fill, `--sp:` avatar, SVG text fills) and
+  `data-confirm-style=` data-attributes. Wiring it surfaced one straggler — dawn-chorus's polar `<svg>` root
+  static sizing → a `.dc-polar-svg` class. Workspace raw `style="` **661 → 657** (the remaining quarantine matches
+  are `data-confirm-style` attributes).
+
+  **Next:** the analytics screens (`behavioral`/`correlation`/`timeseries_dash`/`species_pages`/`detection_detail`),
+  `pages/skeletons.rs` (~45, pure computed placeholders), `pages/onboarding.rs`, and `templates/*`, same runner +
+  guard; then the endgame `<style>`-nonce middleware extension that lets the remaining computed widths/colours
+  carry a nonce, after which `style-src 'unsafe-inline'` is finally dropped.
 
 ---
 
