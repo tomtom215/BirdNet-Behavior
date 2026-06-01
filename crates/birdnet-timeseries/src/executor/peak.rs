@@ -16,8 +16,16 @@ impl super::TimeSeriesDb<'_> {
         let q = PeakWindows {
             window_minutes: params.window_minutes,
             hop_minutes: params.hop_minutes,
-            range_start: format!("CURRENT_TIMESTAMP - INTERVAL {days} DAYS"),
-            range_end: "CURRENT_TIMESTAMP".into(),
+            // Anchor the window grid to the newest detection rather than
+            // wall-clock CURRENT_TIMESTAMP. Anchoring to now() makes every
+            // window boundary drift by the seconds elapsed between requests, so
+            // the table visibly reshuffles on each refresh; anchoring to the
+            // data is both deterministic and more meaningful — "the busiest
+            // windows in the last N days of recorded activity".
+            range_start: format!(
+                "(SELECT max(detection_timestamp) FROM detections_ts) - INTERVAL {days} DAYS"
+            ),
+            range_end: "(SELECT max(detection_timestamp) FROM detections_ts)".into(),
             limit: params.limit,
         };
         let sql = q.sql();
