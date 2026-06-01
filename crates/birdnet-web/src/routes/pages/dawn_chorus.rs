@@ -153,7 +153,7 @@ fn render_polar_svg(ribbons: &[ChorusRibbon], sunrise_h: f64, sunset_h: f64) -> 
 
     let _ = write!(
         s,
-        r#"<svg viewBox="0 0 {SIZE} {SIZE}" width="100%" height="100%" style="max-width:540px;max-height:540px;display:block;" data-sunrise="{sr}" data-sunset="{ss}">"#,
+        r#"<svg viewBox="0 0 {SIZE} {SIZE}" width="100%" height="100%" class="dc-polar-svg" data-sunrise="{sr}" data-sunset="{ss}">"#,
         sr = sunrise_str,
         ss = sunset_str,
     );

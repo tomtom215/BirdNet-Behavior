@@ -2740,6 +2740,7 @@ select.ll-sort   { padding: 0.4rem 0.75rem; border: 1px solid var(--border); bor
 .dc-row-name   { font-weight: 500; }
 .dc-strip      { margin-top: 4px; }
 .dc-offchorus  { font-size: 9.5px; }
+.dc-polar-svg  { max-width: 540px; max-height: 540px; display: block; }
 /* dc-row was an inline grid → collapsed to one column on phones by the global
    `[style*="grid-template-columns"]` reset. Match that exactly. */
 @media (max-width: 520px) {
