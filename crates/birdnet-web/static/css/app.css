@@ -2570,3 +2570,120 @@ body:has(.bnb-tabbar) main { padding-bottom: 84px; }
 .acct-session-foot { margin-top: 12px; padding-top: 12px; border-top: 0.5px solid var(--hairline); }
 .acct-section-gap { margin-top: var(--pad-3); }
 .acct-add-form    { margin-top: 14px; }
+
+/* ── Year in Review (/year-in-review) — O-25 harmonisation ────────────────
+   Faithful extraction. Page-specific scoped classes carry the exact inline
+   values (note: the inline grid was 1.3fr 1fr, distinct from the global
+   .grid-2 = 1.35fr 1fr — so this keeps its own value rather than reusing it).
+   The week-tape colour and leaderboard bar width stay inline (computed). */
+.yir-eyebrow   { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.yir-h1        { font-size: 64px; line-height: 1.05; margin-top: 6px; }
+.yir-h1 em     { font-style: italic; color: var(--moss-ink); }
+.yir-lede      { margin-top: 8px; max-width: 560px; }
+.yir-tiles     { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--pad-3); margin-bottom: var(--pad-3); }
+.yir-tape      { display: flex; gap: 3px; align-items: stretch; margin-top: 6px; }
+.yir-tape-cell { flex: 1; height: 38px; border-radius: 3px; }
+.yir-months    { display: flex; gap: 3px; margin-top: 4px; }
+.yir-month     { flex: 1; text-align: center; font-size: 8px; }
+.yir-cols      { display: grid; grid-template-columns: 1.3fr 1fr; gap: var(--pad-3); margin-top: var(--pad-3); }
+.yir-row       { display: grid; grid-template-columns: 18px 28px 1fr auto; align-items: center; gap: 10px; padding: 7px 0; border-top: 0.5px solid var(--hairline); }
+.yir-row.first { border-top: 0; }
+.yir-row-main  { min-width: 0; }
+.yir-row-name  { font-weight: 500; color: inherit; font-size: 13px; }
+.yir-row-bar   { height: 5px; border-radius: 3px; background: var(--surface-2); margin-top: 4px; overflow: hidden; }
+.yir-row-bar > span { display: block; height: 100%; background: var(--moss); }
+.yir-row-count { font-size: 13px; color: var(--fg-2); }
+.yir-tile-value { font-size: 40px; line-height: 1; }
+.yir-tile-label { margin-top: 8px; }
+.yir-tile-sub  { margin-top: 2px; }
+.yir-ms        { padding: 10px 0; border-top: 0.5px solid var(--hairline); }
+.yir-ms-value  { font-size: 20px; margin-top: 3px; }
+.yir-close     { margin-top: var(--pad-3); text-align: center; }
+.yir-close-line { font-size: 30px; margin: 8px auto; max-width: 680px; line-height: 1.25; }
+.yir-close-line .accent { color: var(--moss-ink); }
+/* Match the original behaviour exactly: every one of these was an inline grid,
+   so on phones the global `[style*="grid-template-columns"]` reset collapsed it
+   to one column. Replicating that keeps the refactor pixel-faithful (the
+   leaderboard row's cramped phone stack included — fixing that is a separate,
+   deliberate change, not a side effect of this sweep). */
+@media (max-width: 520px) {
+  .yir-tiles, .yir-cols, .yir-row { grid-template-columns: 1fr; }
+}
+
+/* ── Weekly report (/weekly) — O-25 harmonisation ─────────────────────────
+   Faithful extraction. Preserves the page's legacy design tokens
+   (--bg-card / --radius / --text-muted / --accent / --success / --warning)
+   exactly — restyling to the modern palette is a separate decision. The SVG
+   chart and the top-species bar widths stay inline (computed). */
+.wk-content    { max-width: 900px; margin: 0 auto; padding: 1.5rem; }
+.wk-eyebrow    { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.wk-h2         { font-size: 32px; margin-bottom: 1rem; }
+.wk-loading    { color: var(--text-muted); text-align: center; padding: 3rem; }
+.wk-nav        { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; }
+.wk-nav-btn    { padding: 0.3rem 0.75rem; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-muted); }
+/* Disabled "Next" was a bare <span> (padding + muted colour + opacity, no
+   border/background) — keep it that way, not a bordered .wk-nav-btn. */
+.wk-nav-next-off { padding: 0.3rem 0.75rem; color: var(--text-muted); opacity: 0.4; }
+.wk-nav-center { flex: 1; text-align: center; }
+.wk-nav-title  { font-size: 1.1rem; }
+.wk-badge      { margin-left: 0.5rem; font-size: 0.8rem; background: var(--accent); color: #fff; padding: 0.1rem 0.4rem; border-radius: 4px; }
+.wk-stats      { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.wk-card       { background: var(--bg-card); padding: 1rem; border-radius: var(--radius); border: 1px solid var(--border); }
+.wk-card.center { text-align: center; }
+.wk-card.mb    { margin-bottom: 1.5rem; }
+.wk-stat-num   { font-size: 2rem; font-weight: 700; }
+.wk-stat-num.accent  { color: var(--accent); }
+.wk-stat-num.success { color: var(--success); }
+.wk-stat-num.warning { color: var(--warning); }
+.wk-stat-label { color: var(--text-muted); font-size: 0.9rem; }
+.wk-card-title { margin-bottom: 0.75rem; font-size: 1rem; }
+.wk-card-title .sub { font-size: 0.8rem; color: var(--text-muted); font-weight: 400; }
+.wk-cols       { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+.wk-muted      { color: var(--text-muted); }
+.wk-top-list   { padding-left: 1.25rem; }
+.wk-top-item   { margin-bottom: 0.5rem; }
+.wk-top-name   { font-weight: 600; }
+.wk-top-bar-row { display: flex; align-items: center; gap: 0.5rem; margin-top: 2px; }
+.wk-top-track  { flex: 1; height: 6px; background: var(--border); border-radius: 3px; }
+.wk-top-fill   { height: 6px; background: var(--accent); border-radius: 3px; }
+.wk-top-count  { font-size: 0.85rem; color: var(--text-muted); min-width: 2.5rem; text-align: right; }
+.wk-new-list   { list-style: none; padding: 0; }
+.wk-new-item   { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0; border-bottom: 1px solid var(--border); }
+.wk-new-badge  { background: var(--success); color: #fff; font-size: 0.7rem; padding: 0.1rem 0.35rem; border-radius: 3px; flex-shrink: 0; }
+.wk-new-name   { flex: 1; }
+.wk-new-date   { font-size: 0.8rem; color: var(--text-muted); }
+@media (max-width: 520px) {
+  .wk-cols { grid-template-columns: 1fr; }
+}
+
+/* ── Detection history (/history) — O-25 harmonisation ────────────────────
+   Faithful extraction; preserves the page's legacy tokens. The hourly chart
+   stays as-is (its own SVG helper). */
+.hist-content   { padding: 1.5rem; }
+.hist-h2        { font-size: 32px; margin-bottom: 1rem; }
+.hist-layout    { display: grid; grid-template-columns: 200px 1fr; gap: 1.5rem; align-items: start; }
+.hist-side      { background: var(--bg-card); border-radius: var(--radius); border: 1px solid var(--border); }
+.hist-side-head { padding: 0.75rem; border-bottom: 1px solid var(--border); font-size: 0.9rem; color: var(--text-muted); }
+.hist-loading   { color: var(--text-muted); padding: 1rem; }
+.hist-chart-loading { color: var(--text-muted); text-align: center; padding: 3rem; }
+.hist-nav       { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+.hist-nav-btn   { padding: 0.3rem 0.75rem; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-muted); }
+.hist-nav-off   { padding: 0.3rem 0.75rem; color: var(--text-muted); opacity: 0.4; }
+.hist-nav-center { flex: 1; text-align: center; }
+.hist-nav-title { font-size: 1.1rem; }
+.hist-badge     { margin-left: 0.5rem; font-size: 0.8rem; background: var(--accent); color: #fff; padding: 0.1rem 0.4rem; border-radius: 4px; }
+.hist-stats     { display: flex; gap: 1rem; margin-bottom: 1rem; }
+.hist-stat      { background: var(--bg-card); padding: 0.75rem 1.25rem; border-radius: var(--radius); border: 1px solid var(--border); }
+.hist-stat-num  { font-size: 1.5rem; font-weight: 700; }
+.hist-stat-num.accent  { color: var(--accent); }
+.hist-stat-num.success { color: var(--success); }
+.hist-stat-unit { color: var(--text-muted); margin-left: 0.5rem; font-size: 0.9rem; }
+.hist-chart-card { background: var(--bg-card); padding: 1rem; border-radius: var(--radius); border: 1px solid var(--border); }
+.hist-chart-title { margin-bottom: 0.75rem; font-size: 0.95rem; color: var(--text-muted); }
+.hist-date-list { list-style: none; padding: 0; margin: 0; max-height: 300px; overflow-y: auto; }
+.hist-date-link { display: block; padding: 0.3rem 0.75rem; color: var(--text-muted); font-size: 0.9rem; }
+.hist-empty     { color: var(--text-muted); padding: 1rem; }
+/* hist-layout was an inline grid → collapsed by the global phone reset. */
+@media (max-width: 520px) {
+  .hist-layout { grid-template-columns: 1fr; }
+}

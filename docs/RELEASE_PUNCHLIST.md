@@ -74,7 +74,7 @@ remains is the finish-off work below.
 | ~~**P2-3**~~ | Extend help links to remaining analytical screens — ✅ **DONE** (6 screens) | ~~P2~~ | S | low |
 | **P3-1** | O-13 legacy `--audio-source` retirement — ✅ **DONE** | P3 | S | low |
 | ~~**P3-2**~~ | No background session pruning — ✅ **DONE** (daily maintenance tick) | ~~P3~~ | S | low |
-| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (all admin pages done — old-style + harmonized backups/doctor/quality/accounts, screenshot-verified; 1115→787. Next: public pages + endgame) | P3 | L | low (tedious) |
+| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (all admin pages + first public pages done, pixel-diff verified; 1115→701. Next: rest of `pages/*` + endgame) | P3 | L | low (tedious) |
 | **P3-4** | Minor cosmetics — uptime pill ✅ **wired**; migration-missing out of scope | P3 | XS | none |
 | ~~**P3-5**~~ | Image blacklist enforcement on read path — ✅ **DONE** (serve-check + purge-on-blacklist) | ~~P3~~ | S | low |
 
@@ -369,10 +369,28 @@ they batch for a Playwright-verified pass; the dynamic ones fold into the endgam
   `@media(max-width:520px)` breakpoint). Three render guards on `backup_recovery`. Workspace raw `style="`
   **924 → 787**. fmt + clippy + 311 lib tests green.
 
-  **Next:** the public-page harmonization (`pages/skeletons`, `pages/weekly_report`, the `pages/*` analytics
-  screens, the remaining `templates/*`) — same screenshot-verified approach; then the endgame `<style>`-nonce
-  middleware extension that lets the remaining computed widths carry a nonce, after which `style-src
-  'unsafe-inline'` is finally dropped.
+  Original render APIs preserved exactly.
+- **Slice 6 (batch) — public-page harmonization, pixel-diff verified.** `pages/year_in_review.rs` (→ only the
+  computed week-tape colour + leaderboard bar width inline), `pages/weekly_report.rs` and `pages/history.rs`
+  (→ zero inline except the computed top-species/SVG bars). The two legacy-token pages (weekly, history) keep
+  their `--bg-card`/`--radius`/`--text-muted`/`--accent`/`--success`/`--warning` tokens verbatim — restyling to
+  the modern palette is a separate decision, deliberately out of scope for a faithful sweep.
+
+  **Verification bar raised from eyeball to measurement.** Added two durable tools: `tools/visual-qa/shot.mjs`
+  (capture one route, light/dark × desktop/mobile) and `tools/visual-qa/diff_pair.mjs` (quantitative before/after
+  RGBA pixel diff, exit-coded). Every page verified to **0 differing pixels in its content region**; the only
+  residual whole-image diffs are the shared topnav live-status pulse dot and the footer uptime ticker (isolated
+  by region-splitting the diff and confirmed against a same-build self-diff that shows 0 content px). The diff
+  caught **two real regressions** unit tests never would: (a) year-in-review's leaderboard grid silently
+  un-collapsing on mobile (the inline grid had relied on the global phone reset; fixed with a matching
+  `@media(max-width:520px)` rule); (b) weekly's disabled "Next" button gaining a border when routed through the
+  shared button class, shifting the flex-centred week label ~2400 px across the nav row (fixed with a borderless
+  `.wk-nav-next-off` mirroring the original bare span). Workspace raw `style="` **787 → 701**. fmt + clippy +
+  311 lib tests green.
+
+  **Next:** the remaining `pages/*` (`life_list`, `recordings`, `quarantine`, the analytics screens, …) and
+  `templates/*`, same pixel-diff method; then the endgame `<style>`-nonce middleware extension that lets the
+  remaining computed widths/colours carry a nonce, after which `style-src 'unsafe-inline'` is finally dropped.
 
 ---
 
