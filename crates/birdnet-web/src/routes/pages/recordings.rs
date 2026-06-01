@@ -58,8 +58,7 @@ async fn species_list_partial(State(state): State<AppState>) -> impl IntoRespons
                 return (
                     StatusCode::OK,
                     [(header::CONTENT_TYPE, "text/html")],
-                    r#"<p style="color:var(--text-muted)">No species detected yet.</p>"#
-                        .to_string(),
+                    r#"<p class="rec-muted">No species detected yet.</p>"#.to_string(),
                 );
             }
             let mut html = String::with_capacity(2048);
@@ -67,15 +66,15 @@ async fn species_list_partial(State(state): State<AppState>) -> impl IntoRespons
                 let enc = simple_url_encode(&s.com_name);
                 let _ = write!(
                     html,
-                    r##"<div class="species-item" style="cursor:pointer;"
+                    r##"<div class="species-item rec-item"
                          hx-get="/pages/recordings-by-species?name={enc}"
                          hx-target="#recordings-detail-content"
                          hx-swap="innerHTML"
                          onclick="document.getElementById(&quot;recordings-detail&quot;).style.display=&quot;&quot;">
   {av}
-  <div style="flex:1;min-width:0;">
+  <div class="rec-item-main">
     <span class="species-name">{name}</span>
-    <span class="bnb-meta" style="font-style:italic;display:block;">{sci}</span>
+    <span class="bnb-meta rec-sci">{sci}</span>
   </div>
   <span class="species-count">{count}</span>
 </div>"##,
@@ -108,8 +107,7 @@ async fn date_list_partial(State(state): State<AppState>) -> impl IntoResponse {
                 return (
                     StatusCode::OK,
                     [(header::CONTENT_TYPE, "text/html")],
-                    r#"<p style="color:var(--text-muted)">No detection dates found.</p>"#
-                        .to_string(),
+                    r#"<p class="rec-muted">No detection dates found.</p>"#.to_string(),
                 );
             }
             let mut html = String::with_capacity(1024);
@@ -117,7 +115,7 @@ async fn date_list_partial(State(state): State<AppState>) -> impl IntoResponse {
                 let enc = simple_url_encode(date);
                 let _ = write!(
                     html,
-                    r##"<div class="species-item" style="cursor:pointer;"
+                    r##"<div class="species-item rec-item"
                          hx-get="/pages/recordings-by-date?date={enc}"
                          hx-target="#recordings-detail-content"
                          hx-swap="innerHTML"
@@ -203,13 +201,13 @@ fn render_detection_list(
     show_date: bool,
 ) -> String {
     if detections.is_empty() {
-        return r#"<p style="color:var(--text-muted)">No recordings found.</p>"#.to_string();
+        return r#"<p class="rec-muted">No recordings found.</p>"#.to_string();
     }
 
     let mut html = String::with_capacity(4096);
     let _ = write!(
         html,
-        r#"<p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:0.75rem;">{count} recordings</p>"#,
+        r#"<p class="rec-count-note">{count} recordings</p>"#,
         count = detections.len(),
     );
 
@@ -229,7 +227,7 @@ fn render_detection_list(
                     .unwrap_or_default();
                 let safe = escape_html(&basename);
                 format!(
-                    r#"<audio controls preload="none" style="width:100%;height:32px;margin-top:0.5rem;">
+                    r#"<audio controls preload="none" class="rec-audio">
                       <source src="/api/v2/recordings/{safe}" type="audio/wav">
                     </audio>"#
                 )
@@ -237,31 +235,28 @@ fn render_detection_list(
             .unwrap_or_default();
 
         let date_display = if show_date {
-            format!(
-                r#"<span style="color:var(--text-muted);font-size:0.8rem;">{}</span>"#,
-                escape_html(&d.date)
-            )
+            format!(r#"<span class="rec-date">{}</span>"#, escape_html(&d.date))
         } else {
             String::new()
         };
 
         let _ = write!(
             html,
-            r#"<div style="display:flex;gap:1rem;align-items:flex-start;padding:0.6rem 0;border-bottom:1px solid var(--border);">
+            r#"<div class="rec-row">
   {av}
-  <div style="flex:1;min-width:0;">
-    <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
-      <a href="/species/detail?name={enc_name}" style="font-weight:500;color:var(--text);text-decoration:none;">{com_name}</a>
+  <div class="rec-row-main">
+    <div class="rec-row-head">
+      <a href="/species/detail?name={enc_name}" class="rec-name-link">{com_name}</a>
       <span class="conf {cls}">{conf_pct:.0}%</span>
       {date_display}
     </div>
-    <div style="color:var(--text-muted);font-size:0.8rem;">{time} &middot; <i>{sci_name}</i></div>
+    <div class="rec-sub">{time} &middot; <i>{sci_name}</i></div>
     {audio}
   </div>
-  <div style="display:flex;flex-direction:column;gap:0.25rem;flex-shrink:0;">
+  <div class="rec-actions">
     <button hx-post="/pages/recordings-delete"
             hx-vals='{{"date":"{date_raw}","time":"{time_raw}","sci_name":"{sci_raw}"}}'
-            hx-target="closest div[style*='border-bottom']"
+            hx-target="closest .rec-row"
             hx-swap="outerHTML"
             hx-confirm="Delete this recording?"
             data-confirm-action="hx-post"
@@ -270,7 +265,7 @@ fn render_detection_list(
             data-confirm-body="Delete this recording?"
             data-confirm-confirm-label="Delete"
             data-confirm-style="danger"
-            style="background:none;border:1px solid var(--danger);color:var(--danger);padding:0.2rem 0.5rem;border-radius:var(--radius);cursor:pointer;font-size:0.7rem;">
+            class="rec-del-btn">
       Delete
     </button>
   </div>
@@ -344,7 +339,8 @@ async fn relabel_recording(
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/html")],
-        r#"<p style="color:var(--success);font-size:0.85rem;">Re-labeled successfully. Refresh to see changes.</p>"#.to_string(),
+        r#"<p class="rec-relabel-ok">Re-labeled successfully. Refresh to see changes.</p>"#
+            .to_string(),
     )
 }
 

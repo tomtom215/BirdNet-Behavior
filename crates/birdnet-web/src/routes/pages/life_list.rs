@@ -165,7 +165,7 @@ async fn life_table_partial(
                 let body = if search_lower.is_empty() {
                     super::empty_states::no_life_list()
                 } else {
-                    r#"<p style="color:var(--text-muted);text-align:center;padding:2rem;">No species found.</p>"#.to_string()
+                    r#"<p class="ll-empty">No species found.</p>"#.to_string()
                 };
                 return (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], body);
             }
@@ -197,9 +197,9 @@ async fn life_table_partial(
                 let _ = write!(
                     html,
                     "<tr>\
-                     <td style=\"color:var(--text-muted);\">{num}</td>\
-                     <td><a href=\"/species/detail?name={enc}\" style=\"color:inherit;\">{name}</a></td>\
-                     <td style=\"font-size:0.85rem;color:var(--text-muted);\">{first}</td>\
+                     <td class=\"ll-num\">{num}</td>\
+                     <td><a href=\"/species/detail?name={enc}\" class=\"ll-name-link\">{name}</a></td>\
+                     <td class=\"ll-first-seen\">{first}</td>\
                      <td>{count}</td>\
                      <td><span class=\"conf {cls}\">{conf_pct:.0}%</span></td>\
                      </tr>",
@@ -257,8 +257,7 @@ async fn life_timeline_partial(State(state): State<AppState>) -> impl axum::resp
         return (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
-            r#"<p style="color:var(--text-muted);text-align:center;">No discovery data yet.</p>"#
-                .to_string(),
+            r#"<p class="ll-muted ll-center">No discovery data yet.</p>"#.to_string(),
         );
     }
 
@@ -312,52 +311,52 @@ async fn life_timeline_partial(State(state): State<AppState>) -> impl axum::resp
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], svg)
 }
 
-const LIFE_LIST_HTML: &str = r##"<div class="bnb-eyebrow" style="display:flex;align-items:center;gap:10px;"><span>Journal</span>{{help_link}}</div><h1 class="display" style="font-size:34px;margin-bottom:0.25rem;">Life list</h1>
-<p style="color:var(--text-muted);margin-bottom:1.5rem;">Every species ever detected at this station.</p>
+const LIFE_LIST_HTML: &str = r##"<div class="bnb-eyebrow ll-eyebrow"><span>Journal</span>{{help_link}}</div><h1 class="display ll-h1">Life list</h1>
+<p class="ll-lede">Every species ever detected at this station.</p>
 
 <div class="stats-grid" hx-get="/pages/life-stats" hx-trigger="load" hx-swap="innerHTML">
     <div class="stat-card"><div class="value">--</div><div class="label">Loading...</div></div>
 </div>
 
-<div class="card" style="margin-bottom:1rem;">
+<div class="card ll-card-mb">
     <h2>The list, growing</h2>
-    <p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:0.75rem;">
+    <p class="ll-card-note">
         Cumulative species recorded at this station over time.
     </p>
     <div hx-get="/pages/life-accumulation" hx-trigger="load" hx-swap="innerHTML">
-        <p style="color:var(--text-muted);">Loading curve...</p>
+        <p class="ll-muted">Loading curve...</p>
     </div>
 </div>
 
-<div class="card" style="margin-bottom:1rem;">
+<div class="card ll-card-mb">
     <h2>New Species Over Time</h2>
-    <p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:0.75rem;">
+    <p class="ll-card-note">
         Number of new species discovered each month.
     </p>
     <div hx-get="/pages/life-timeline" hx-trigger="load" hx-swap="innerHTML">
-        <p style="color:var(--text-muted);">Loading timeline...</p>
+        <p class="ll-muted">Loading timeline...</p>
     </div>
 </div>
 
 <div class="card">
-    <div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem;flex-wrap:wrap;">
-        <h2 style="margin-bottom:0;">All Species</h2>
+    <div class="ll-head-row">
+        <h2>All Species</h2>
         <input type="text" id="life-search" name="q" placeholder="Search species..."
                hx-get="/pages/life-table" hx-trigger="keyup changed delay:300ms"
                hx-target="#life-table-body" hx-swap="innerHTML"
                hx-include="#life-sort"
-               style="flex:1;min-width:200px;padding:0.4rem 0.75rem;border:1px solid var(--border);border-radius:var(--radius);background:var(--input-bg);color:var(--text);font-size:0.9rem;">
+               class="ll-search">
         <select id="life-sort" name="sort"
                 hx-get="/pages/life-table" hx-trigger="change"
                 hx-target="#life-table-body" hx-swap="innerHTML"
                 hx-include="#life-search"
-                style="padding:0.4rem 0.75rem;border:1px solid var(--border);border-radius:var(--radius);background:var(--input-bg);color:var(--text);font-size:0.85rem;">
+                class="ll-sort">
             <option value="count">Most Detections</option>
             <option value="name">Alphabetical</option>
             <option value="newest">Newest First</option>
         </select>
     </div>
     <div id="life-table-body" hx-get="/pages/life-table" hx-trigger="load" hx-swap="innerHTML">
-        <p style="color:var(--text-muted);">Loading life list...</p>
+        <p class="ll-muted">Loading life list...</p>
     </div>
 </div>"##;
