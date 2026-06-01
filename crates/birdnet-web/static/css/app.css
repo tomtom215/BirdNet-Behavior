@@ -2740,8 +2740,52 @@ select.ll-sort   { padding: 0.4rem 0.75rem; border: 1px solid var(--border); bor
 .dc-row-name   { font-weight: 500; }
 .dc-strip      { margin-top: 4px; }
 .dc-offchorus  { font-size: 9.5px; }
+.dc-polar-svg  { max-width: 540px; max-height: 540px; display: block; }
 /* dc-row was an inline grid → collapsed to one column on phones by the global
    `[style*="grid-template-columns"]` reset. Match that exactly. */
 @media (max-width: 520px) {
   .dc-row { grid-template-columns: 1fr; }
 }
+
+/* ── Rare-bird quarantine (/quarantine) — O-25 harmonisation ──────────────
+   Faithful extraction; preserves the page's legacy tokens
+   (--primary/--warning/--success/--danger/--bg-hover/--text/--text-muted).
+   Only the audio player keeps an inline width (self-contained control). */
+.qz-head       { margin-bottom: 1.5rem; }
+.qz-title-row  { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 0.25rem; }
+.qz-h1         { font-size: 1.5rem; font-weight: 700; margin: 0; }
+.qz-lede       { color: var(--text-muted); font-size: 0.9rem; }
+.qz-lede a     { color: var(--primary); }
+.qz-loading    { color: var(--text-muted); }
+.qz-stats-flush { margin-bottom: 0; }
+.qz-stat.warn    { color: var(--warning); }
+.qz-stat.success { color: var(--success); }
+.qz-stat.danger  { color: var(--danger); }
+.qz-filter-card { margin-top: 1rem; }
+.qz-filter-row { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.75rem; }
+.qz-filter-label { color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.qz-filter-link { font-size: 0.9rem; color: var(--text-muted); }
+.qz-filter-link.active { font-weight: 700; color: var(--primary); border-bottom: 2px solid var(--primary); padding-bottom: 0.1rem; }
+.qz-list-loading { color: var(--text-muted); text-align: center; padding: 2rem; }
+.qz-name       { font-weight: 600; color: var(--text); }
+.qz-sci        { color: var(--text-muted); font-size: 0.8rem; font-style: italic; }
+.qz-sf         { color: var(--text-muted); font-size: 0.75rem; }
+.qz-reason     { color: var(--text-muted); font-size: 0.85rem; }
+.qz-datetime   { font-size: 0.85rem; }
+.qz-time       { color: var(--text-muted); }
+.qz-status     { font-size: 0.85rem; }
+.qz-status.approved   { color: var(--success); }
+.qz-status.rejected   { color: var(--danger); }
+.qz-status.pending    { color: var(--warning); }
+.qz-audio      { width: 100%; height: 28px; margin-top: 0.4rem; }
+.qz-actions    { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center; }
+.qz-btn-group  { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.qz-btn        { padding: 0.25rem 0.6rem; border-radius: var(--radius); cursor: pointer; font-size: 0.8rem; white-space: nowrap; }
+.qz-btn.approve { background: var(--success); color: #fff; border: none; }
+.qz-btn.reject  { background: none; border: 1px solid var(--warning); color: var(--warning); }
+.qz-btn.delete  { background: none; border: 1px solid var(--danger); color: var(--danger); }
+.qz-btn.share   { background: none; border: 1px solid var(--border); color: var(--text); }
+.qz-loadmore-row { text-align: center; padding: 1rem; }
+.qz-loadmore   { background: var(--bg-hover); border: 1px solid var(--border); color: var(--text); padding: 0.5rem 1.5rem; border-radius: var(--radius); cursor: pointer; font-size: 0.9rem; }
+.qz-err        { color: var(--danger); }
+.qz-pending-badge { background: var(--warning); color: #000; border-radius: 9999px; padding: 0.1rem 0.45rem; font-size: 0.7rem; font-weight: 700; margin-left: 0.25rem; }

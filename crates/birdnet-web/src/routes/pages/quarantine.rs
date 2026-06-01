@@ -97,73 +97,58 @@ async fn quarantine_page(Query(params): Query<ListParams>, headers: HeaderMap) -
 }
 
 fn build_page_html(active_filter: &str) -> String {
-    // Active filter tab style — highlighted vs plain.
-    let active_style = "font-size:0.9rem;font-weight:700;color:var(--primary);\
-                        border-bottom:2px solid var(--primary);padding-bottom:0.1rem;";
-    let plain_style = "font-size:0.9rem;color:var(--text-muted);";
-
-    let s_pending = if active_filter == "pending" {
-        active_style
-    } else {
-        plain_style
+    // Active filter tab → highlighted vs plain, as enumerable classes.
+    let cls = |f: &str| {
+        if active_filter == f {
+            "qz-filter-link active"
+        } else {
+            "qz-filter-link"
+        }
     };
-    let s_approved = if active_filter == "approved" {
-        active_style
-    } else {
-        plain_style
-    };
-    let s_rejected = if active_filter == "rejected" {
-        active_style
-    } else {
-        plain_style
-    };
-    let s_all = if active_filter == "all" {
-        active_style
-    } else {
-        plain_style
-    };
+    let s_pending = cls("pending");
+    let s_approved = cls("approved");
+    let s_rejected = cls("rejected");
+    let s_all = cls("all");
 
     // O-20 help link for the quarantine review surface.
     let help_link = super::help::help_link(super::help::Topic::Reviews);
 
     // Initial HTMX load passes the active filter so the list matches the URL.
     format!(
-        "<div style=\"margin-bottom:1.5rem;\">\
-  <div style=\"display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:0.25rem;\">\
-    <h1 style=\"font-size:1.5rem;font-weight:700;margin:0;\">\
+        "<div class=\"qz-head\">\
+  <div class=\"qz-title-row\">\
+    <h1 class=\"qz-h1\">\
       &#128269; Rare Bird Quarantine\
     </h1>\
     {help_link}\
   </div>\
-  <p style=\"color:var(--text-muted);font-size:0.9rem;\">\
+  <p class=\"qz-lede\">\
     Detections that passed the global confidence threshold but failed a stricter \
     per-species threshold are held here for manual review. Approve to admit into \
     the detection log; reject or delete to discard. To confirm or reject \
     detections already in the log, use \
-    <a href=\"/detection-reviews\" style=\"color:var(--primary);\">Detection reviews</a>.\
+    <a href=\"/detection-reviews\">Detection reviews</a>.\
   </p>\
 </div>\
 <div id=\"quarantine-stats\" \
      hx-get=\"/pages/quarantine-stats\" \
      hx-trigger=\"load\" \
      hx-swap=\"innerHTML\">\
-  <p style=\"color:var(--text-muted);\">Loading stats\u{2026}</p>\
+  <p class=\"qz-loading\">Loading stats\u{2026}</p>\
 </div>\
-<div class=\"card\" style=\"margin-top:1rem;\">\
-  <div style=\"display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;\
-               margin-bottom:1rem;border-bottom:1px solid var(--border);padding-bottom:0.75rem;\">\
-    <strong style=\"color:var(--text-muted);font-size:0.85rem;text-transform:uppercase;\
-                    letter-spacing:0.05em;\">Filter</strong>\
-    <a href=\"/quarantine\" style=\"{s_pending}\">Pending</a>\
-    <a href=\"/quarantine?filter=approved\" style=\"{s_approved}\">Approved</a>\
-    <a href=\"/quarantine?filter=rejected\" style=\"{s_rejected}\">Rejected</a>\
-    <a href=\"/quarantine?filter=all\" style=\"{s_all}\">All</a>\
+<div class=\"card qz-filter-card\">\
+  <div class=\"qz-filter-row\">\
+    <strong class=\"qz-filter-label\">Filter</strong>\
+    <a href=\"/quarantine\" class=\"{s_pending}\">Pending</a>\
+    <a href=\"/quarantine?filter=approved\" class=\"{s_approved}\">Approved</a>\
+    <a href=\"/quarantine?filter=rejected\" class=\"{s_rejected}\">Rejected</a>\
+    <a href=\"/quarantine?filter=all\" class=\"{s_all}\">All</a>\
   </div>\
   <div id=\"quarantine-list\" \
        hx-get=\"/pages/quarantine-list?filter={active_filter}\" \
        hx-trigger=\"load\" \
        hx-swap=\"innerHTML\">\
-    <p style=\"color:var(--text-muted);text-align:center;padding:2rem;\">Loading\u{2026}</p>\
+    <p class=\"qz-list-loading\">Loading\u{2026}</p>\
   </div>\
 </div>"
     )
@@ -183,17 +168,17 @@ async fn quarantine_stats_partial(State(state): State<AppState>) -> impl IntoRes
             let mut html = String::with_capacity(512);
             let _ = write!(
                 html,
-                r#"<div class="stats-grid" style="margin-bottom:0;">
+                r#"<div class="stats-grid qz-stats-flush">
   <div class="stat-card">
-    <div class="value" style="color:var(--warning);">{pending}</div>
+    <div class="value qz-stat warn">{pending}</div>
     <div class="label">Pending Review</div>
   </div>
   <div class="stat-card">
-    <div class="value" style="color:var(--success);">{approved}</div>
+    <div class="value qz-stat success">{approved}</div>
     <div class="label">Approved</div>
   </div>
   <div class="stat-card">
-    <div class="value" style="color:var(--danger);">{rejected}</div>
+    <div class="value qz-stat danger">{rejected}</div>
     <div class="label">Rejected</div>
   </div>
   <div class="stat-card">
@@ -211,7 +196,7 @@ async fn quarantine_stats_partial(State(state): State<AppState>) -> impl IntoRes
         _ => (
             StatusCode::INTERNAL_SERVER_ERROR,
             [(header::CONTENT_TYPE, "text/html")],
-            "<p style=\"color:var(--danger);\">Error loading stats</p>".to_string(),
+            "<p class=\"qz-err\">Error loading stats</p>".to_string(),
         ),
     }
 }
@@ -228,8 +213,7 @@ async fn quarantine_pending_count_partial(State(state): State<AppState>) -> impl
 
     let html = if count > 0 {
         format!(
-            r#"<span style="background:var(--warning);color:#000;border-radius:9999px;
-               padding:0.1rem 0.45rem;font-size:0.7rem;font-weight:700;margin-left:0.25rem;">
+            r#"<span class="qz-pending-badge">
                {count}
             </span>"#
         )
@@ -286,13 +270,11 @@ async fn quarantine_list_partial(
                 let target = "#quarantine-list";
                 let _ = write!(
                     html,
-                    "<div style=\"text-align:center;padding:1rem;\">\
+                    "<div class=\"qz-loadmore-row\">\
                     <button \
                     hx-get=\"/pages/quarantine-list?filter={filter_param}&offset={shown}&limit={limit}\" \
                     hx-target=\"{target}\" hx-swap=\"innerHTML\" \
-                    style=\"background:var(--bg-hover);border:1px solid var(--border);\
-                           color:var(--text);padding:0.5rem 1.5rem;\
-                           border-radius:var(--radius);cursor:pointer;font-size:0.9rem;\">\
+                    class=\"qz-loadmore\">\
                       Load {limit} more ({remaining} remaining)\
                     </button></div>",
                 );
@@ -303,7 +285,7 @@ async fn quarantine_list_partial(
         _ => (
             StatusCode::INTERNAL_SERVER_ERROR,
             [(header::CONTENT_TYPE, "text/html")],
-            "<p style=\"color:var(--danger);\">Error loading quarantine list</p>".to_string(),
+            "<p class=\"qz-err\">Error loading quarantine list</p>".to_string(),
         ),
     }
 }
@@ -346,22 +328,17 @@ fn render_quarantine_row(
         escape_html(birdnet_db::sqlite::QuarantineReason::from_db_str(&row.reason).label());
     let sf_info = row
         .sf_probability
-        .map(|p| {
-            format!(
-                "<div style=\"color:var(--text-muted);font-size:0.75rem;\">SF prob: {:.1}%</div>",
-                p * 100.0
-            )
-        })
+        .map(|p| format!("<div class=\"qz-sf\">SF prob: {:.1}%</div>", p * 100.0))
         .unwrap_or_default();
     let enc_species = simple_url_encode(&row.com_name);
     let status = if row.reviewed {
         if row.approved {
-            r#"<span style="color:var(--success);">&#10003; Approved</span>"#
+            r#"<span class="qz-status approved">&#10003; Approved</span>"#
         } else {
-            r#"<span style="color:var(--danger);">&#10007; Rejected</span>"#
+            r#"<span class="qz-status rejected">&#10007; Rejected</span>"#
         }
     } else {
-        r#"<span style="color:var(--warning);">&#9679; Pending</span>"#
+        r#"<span class="qz-status pending">&#9679; Pending</span>"#
     };
     let id = row.id;
     // O-07: a public, HMAC-signed share link for this rare-bird row. The share
@@ -373,7 +350,7 @@ fn render_quarantine_row(
         row_action_buttons(id, filter_param, &com_name)
     };
     let actions = format!(
-        "<div style=\"display:flex;gap:0.4rem;flex-wrap:wrap;align-items:center;\">{base_actions}{}</div>",
+        "<div class=\"qz-actions\">{base_actions}{}</div>",
         row_share_button(&token)
     );
     let audio = row_audio_player(row.file_name.as_deref());
@@ -382,17 +359,16 @@ fn render_quarantine_row(
         r#"<tr>
           <td>
             <div>
-              <a href="/species/detail?name={enc_species}"
-                 style="font-weight:600;color:var(--text);">{com_name}</a>
+              <a href="/species/detail?name={enc_species}" class="qz-name">{com_name}</a>
             </div>
-            <div style="color:var(--text-muted);font-size:0.8rem;font-style:italic;">{sci_name}</div>
+            <div class="qz-sci">{sci_name}</div>
             {sf_info}
             {audio}
           </td>
           <td><span class="conf {conf_cls}">{conf_pct:.0}%</span></td>
-          <td style="color:var(--text-muted);font-size:0.85rem;">{reason_label}</td>
-          <td style="font-size:0.85rem;">{date}<br><span style="color:var(--text-muted);">{time}</span></td>
-          <td style="font-size:0.85rem;">{status}</td>
+          <td class="qz-reason">{reason_label}</td>
+          <td class="qz-datetime">{date}<br><span class="qz-time">{time}</span></td>
+          <td class="qz-status">{status}</td>
           <td>{actions}</td>
         </tr>"#,
     );
@@ -405,7 +381,7 @@ fn render_quarantine_row(
 fn row_action_buttons(id: i64, filter_param: &str, com_name: &str) -> String {
     let target = "#quarantine-list";
     format!(
-        "<div style=\"display:flex;gap:0.4rem;flex-wrap:wrap;\">\
+        "<div class=\"qz-btn-group\">\
           <button hx-post=\"/pages/quarantine-approve\" \
             hx-vals='{{\"id\":{id},\"filter\":\"{filter_param}\"}}' \
             hx-target=\"{target}\" hx-swap=\"innerHTML\" \
@@ -416,18 +392,13 @@ fn row_action_buttons(id: i64, filter_param: &str, com_name: &str) -> String {
             data-confirm-body=\"Approve {com_name} and admit to detections?\" \
             data-confirm-confirm-label=\"Approve\" \
             data-confirm-style=\"moss\" \
-            style=\"background:var(--success);color:#fff;border:none;\
-                   padding:0.25rem 0.6rem;border-radius:var(--radius);\
-                   cursor:pointer;font-size:0.8rem;white-space:nowrap;\">\
+            class=\"qz-btn approve\">\
             &#10003; Approve\
           </button>\
           <button hx-post=\"/pages/quarantine-reject\" \
             hx-vals='{{\"id\":{id},\"filter\":\"{filter_param}\"}}' \
             hx-target=\"{target}\" hx-swap=\"innerHTML\" \
-            style=\"background:none;border:1px solid var(--warning);\
-                   color:var(--warning);padding:0.25rem 0.6rem;\
-                   border-radius:var(--radius);cursor:pointer;\
-                   font-size:0.8rem;white-space:nowrap;\">\
+            class=\"qz-btn reject\">\
             Reject\
           </button>\
           <button hx-post=\"/pages/quarantine-delete\" \
@@ -440,10 +411,7 @@ fn row_action_buttons(id: i64, filter_param: &str, com_name: &str) -> String {
             data-confirm-body=\"Permanently delete this quarantine entry?\" \
             data-confirm-confirm-label=\"Delete\" \
             data-confirm-style=\"danger\" \
-            style=\"background:none;border:1px solid var(--danger);\
-                   color:var(--danger);padding:0.25rem 0.6rem;\
-                   border-radius:var(--radius);cursor:pointer;\
-                   font-size:0.8rem;white-space:nowrap;\">\
+            class=\"qz-btn delete\">\
             Delete\
           </button>\
         </div>",
@@ -458,10 +426,7 @@ fn row_delete_button(id: i64, filter_param: &str) -> String {
            hx-vals='{{\"id\":{id},\"filter\":\"{filter_param}\"}}' \
            hx-target=\"{target}\" hx-swap=\"innerHTML\" \
            hx-confirm=\"Permanently delete this quarantine entry?\" \
-           style=\"background:none;border:1px solid var(--danger);\
-                  color:var(--danger);padding:0.25rem 0.6rem;\
-                  border-radius:var(--radius);cursor:pointer;\
-                  font-size:0.8rem;\">\
+           class=\"qz-btn delete\">\
            Delete\
         </button>",
     )
@@ -473,9 +438,7 @@ fn row_delete_button(id: i64, filter_param: &str) -> String {
 fn row_share_button(token: &str) -> String {
     format!(
         "<button type=\"button\" title=\"Copy a public share link\" \
-           style=\"background:none;border:1px solid var(--border);color:var(--text);\
-                  padding:0.25rem 0.6rem;border-radius:var(--radius);cursor:pointer;\
-                  font-size:0.8rem;white-space:nowrap;\" \
+           class=\"qz-btn share\" \
            onclick=\"(function(b){{var u=location.origin+'/r/{token}';\
              if(navigator.clipboard){{navigator.clipboard.writeText(u).then(function(){{\
                b.textContent='Copied';setTimeout(function(){{b.textContent='Share';}},1500);}});}}\
@@ -494,8 +457,7 @@ fn row_audio_player(file_name: Option<&str>) -> String {
                 .unwrap_or_default();
             let safe = escape_html(&basename);
             format!(
-                "<audio controls preload=\"none\" \
-                    style=\"width:100%;height:28px;margin-top:0.4rem;\">\
+                "<audio controls preload=\"none\" class=\"qz-audio\">\
                   <source src=\"/api/v2/recordings/{safe}\" type=\"audio/wav\">\
                   </audio>",
             )
