@@ -24,15 +24,23 @@ const MAX_HTML_REWRITE_BYTES: usize = 8 * 1024 * 1024;
 /// `script-src 'nonce-…' 'strict-dynamic'` admits exactly the parser-inserted
 /// `<script>`s we stamp the nonce onto; `'strict-dynamic'` then lets those
 /// trusted scripts (htmx) inject further scripts — e.g. into HTMX-swapped
-/// fragments — without re-opening an inline-script free-for-all. `'unsafe-inline'`
-/// is gone for scripts; it remains under `style-src` only (inline `style="…"`
-/// attributes, tightened in a later pass). `connect-src 'self'` covers the
-/// same-origin live WebSocket (`ws://<host>/…`).
+/// fragments — without re-opening an inline-script free-for-all.
+///
+/// `style-src 'self' 'nonce-…'` is the same idea for styles, with one twist:
+/// there is no `'strict-dynamic'` for styles, and a per-request nonce on a
+/// `<style>` in an HTMX-swapped fragment would never match the *host page's*
+/// nonce. So inline `style="…"` **attributes** are eliminated entirely —
+/// computed values move to a `data-style` attribute applied via a CSSOM
+/// `el.style` writer (which CSP does not police) that re-runs on
+/// `htmx:afterSwap`; static ones become `app.css` classes (`'self'`). The
+/// nonce then only has to admit our own full-document `<style>` blocks. With
+/// that, `'unsafe-inline'` is gone for styles too. `connect-src 'self'` covers
+/// the same-origin live WebSocket (`ws://<host>/…`).
 fn content_security_policy(nonce: &str) -> String {
     format!(
         "default-src 'self'; \
          img-src 'self' data: https:; \
-         style-src 'self' 'unsafe-inline'; \
+         style-src 'self' 'nonce-{nonce}'; \
          script-src 'nonce-{nonce}' 'strict-dynamic'; \
          connect-src 'self'; \
          font-src 'self'; \
@@ -70,6 +78,76 @@ fn inject_script_nonce(html: &str, nonce: &str) -> String {
         .replace("<script>", &format!("<script nonce=\"{nonce}\">"))
 }
 
+/// Stamp `nonce="…"` onto every parser-inserted `<style>` opening tag, the
+/// `style-src` counterpart of [`inject_script_nonce`]. Style **attributes**
+/// (`style="…"`) cannot carry a nonce, so they are eliminated in the renderers;
+/// only `<style>` **elements** are nonceable, and this admits exactly the ones
+/// our own page renderers emit. Unlike scripts there is no `'strict-dynamic'`
+/// for styles, so this only covers full-document renders — an HTMX-swapped
+/// fragment is inserted under the *host page's* nonce and cannot match its own.
+fn inject_style_nonce(html: &str, nonce: &str) -> String {
+    html.replace("<style ", &format!("<style nonce=\"{nonce}\" "))
+        .replace("<style>", &format!("<style nonce=\"{nonce}\">"))
+}
+
+/// The CSSOM applier that lets computed styles ride a `data-style` attribute
+/// instead of a (now CSP-forbidden) inline `style=""`. It writes each
+/// declaration onto `element.style` via `setProperty`, which CSP does not
+/// police, and re-runs on `htmx:afterSwap` so swapped-in fragments are styled
+/// before paint.
+///
+/// Injected here, once per full document, rather than living in a template:
+/// the app has ~20 distinct full-page shells (the main `layout.html`, the
+/// admin shells, and standalone pages like `/admin/system`, `/player`,
+/// `kiosk`, `onboarding`), and threading the applier through each one would
+/// let a new page silently ship `data-style` markup that never gets applied —
+/// the same failure mode the per-request nonce design avoids for scripts.
+/// HTMX fragment responses (no `</body>`) are left alone; their host page's
+/// applier styles them on swap.
+const DYN_STYLE_APPLIER: &str = r"<script>
+(function () {
+  function apply(el) {
+    var d = el.getAttribute('data-style');
+    if (!d) return;
+    var decls = d.split(';');
+    for (var i = 0; i < decls.length; i++) {
+      var c = decls[i].indexOf(':');
+      if (c < 0) continue;
+      var p = decls[i].slice(0, c).trim();
+      if (p) el.style.setProperty(p, decls[i].slice(c + 1).trim());
+    }
+  }
+  function walk(root) {
+    if (root.nodeType === 1 && root.hasAttribute('data-style')) apply(root);
+    var els = root.querySelectorAll ? root.querySelectorAll('[data-style]') : [];
+    for (var i = 0; i < els.length; i++) apply(els[i]);
+  }
+  walk(document);
+  if (document.body) document.body.addEventListener('htmx:afterSwap', function (e) { walk(e.target); });
+})();
+</script>";
+
+/// Insert [`DYN_STYLE_APPLIER`] just before `</body>` of a full document. HTMX
+/// fragments carry no `</body>`, so they pass through untouched.
+fn inject_dyn_style_applier(html: &str) -> String {
+    html.rfind("</body>").map_or_else(
+        || html.to_string(),
+        |pos| format!("{}{}{}", &html[..pos], DYN_STYLE_APPLIER, &html[pos..]),
+    )
+}
+
+/// On init htmx appends an inline `.htmx-indicator` `<style>` to `<head>`; with
+/// a nonce `style-src` that un-nonced element is refused. Disable it via the
+/// `htmx-config` meta (htmx reads config before injecting the style) — our own,
+/// fuller `.htmx-indicator` rules already live in `app.css`. Inserted right
+/// after `<head>`; HTMX fragments have no `<head>`, so they pass through.
+const HTMX_CONFIG_META: &str =
+    r#"<meta name="htmx-config" content='{"includeIndicatorStyles":false}'>"#;
+
+fn inject_htmx_config(html: &str) -> String {
+    html.replacen("<head>", &format!("<head>{HTMX_CONFIG_META}"), 1)
+}
+
 /// Attach defence-in-depth response headers to every response.
 ///
 /// Added as the outermost layer so it decorates errors (401/404/429), static
@@ -98,7 +176,14 @@ pub async fn security_headers_middleware(req: Request, next: Next) -> Response {
     let body = if is_html {
         match axum::body::to_bytes(body, MAX_HTML_REWRITE_BYTES).await {
             Ok(bytes) => {
-                let stamped = inject_script_nonce(String::from_utf8_lossy(&bytes).as_ref(), &nonce);
+                let html = String::from_utf8_lossy(&bytes);
+                // Suppress htmx's un-nonceable indicator <style> (its rules are
+                // already in app.css), then add the data-style applier; its
+                // <script> is nonced by the pass below like any other.
+                let configured = inject_htmx_config(html.as_ref());
+                let with_applier = inject_dyn_style_applier(&configured);
+                let scripted = inject_script_nonce(&with_applier, &nonce);
+                let stamped = inject_style_nonce(&scripted, &nonce);
                 // The body length changed; let the stack recompute it.
                 parts.headers.remove(header::CONTENT_LENGTH);
                 axum::body::Body::from(stamped)
@@ -222,8 +307,51 @@ mod tests {
     fn content_security_policy_carries_nonce_and_strict_dynamic() {
         let csp = content_security_policy("XYZ");
         assert!(csp.contains("script-src 'nonce-XYZ' 'strict-dynamic'"));
-        // 'unsafe-inline' must be gone for scripts (kept only under style-src).
-        assert!(!csp.contains("script-src 'self' 'unsafe-inline'"));
+        // Styles are nonced now too, and 'unsafe-inline' is gone everywhere:
+        // inline style="" attributes are eliminated in the renderers (moved to
+        // data-style + a CSSOM applier), and the only <style> elements left are
+        // our own full-page blocks, admitted by this nonce.
+        assert!(csp.contains("style-src 'self' 'nonce-XYZ'"));
+        assert!(!csp.contains("'unsafe-inline'"));
+    }
+
+    #[test]
+    fn inject_style_nonce_stamps_each_opening_tag_once() {
+        let html = concat!(
+            r#"<style>.a{color:red}</style>"#,
+            r#"<style type="text/css">.b{color:blue}</style>"#,
+        );
+        let out = inject_style_nonce(html, "ABC");
+        assert_eq!(out.matches(r#"nonce="ABC""#).count(), 2);
+        assert!(out.contains(r#"<style nonce="ABC">.a"#));
+        assert!(out.contains(r#"<style nonce="ABC" type="text/css">.b"#));
+        // Close tags are left alone.
+        assert_eq!(out.matches("</style>").count(), 2);
+    }
+
+    #[test]
+    fn dyn_style_applier_injected_only_into_full_documents() {
+        // Full document: the applier is inserted once, before </body>.
+        let page = r#"<html><body><div data-style="width:42%"></div></body></html>"#;
+        let out = inject_dyn_style_applier(page);
+        assert_eq!(out.matches("htmx:afterSwap").count(), 1);
+        assert!(out.find("htmx:afterSwap").unwrap() < out.rfind("</body>").unwrap());
+        // HTMX fragment (no </body>): left untouched — its host page applies it.
+        let frag = r#"<div data-style="width:42%"></div>"#;
+        assert_eq!(inject_dyn_style_applier(frag), frag);
+    }
+
+    #[test]
+    fn htmx_config_meta_disables_indicator_styles_in_head() {
+        let page = "<html><head><title>x</title></head><body></body></html>";
+        let out = inject_htmx_config(page);
+        assert!(out.contains(r#"<meta name="htmx-config""#));
+        assert!(out.contains(r#""includeIndicatorStyles":false"#));
+        // Inserted inside <head>, before the existing head content.
+        assert!(out.find("htmx-config").unwrap() < out.find("<title>").unwrap());
+        // Fragment with no <head>: untouched.
+        let frag = r#"<div class="x"></div>"#;
+        assert_eq!(inject_htmx_config(frag), frag);
     }
 
     #[test]

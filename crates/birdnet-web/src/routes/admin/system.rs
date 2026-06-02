@@ -290,7 +290,7 @@ async fn render_status_partial(state: &AppState) -> String {
                         <span class="{badge} meter-val">{pct_u}%</span>
                       </div>
                       <div class="meter-track">
-                        <div class="meter-fill {tone}" style="width:{pct_u}%"></div>
+                        <div class="meter-fill {tone}" data-style="width:{pct_u}%"></div>
                       </div>
                       <p class="meter-note">
                         {avail} free of {total}
@@ -360,14 +360,14 @@ async fn render_status_partial(state: &AppState) -> String {
                   <span class="meter-val sm {cpu_tone}">{cpu_pct}%</span>
                 </div>
                 <div class="meter-track sm">
-                  <div class="meter-fill {cpu_tone}" style="width:{cpu_pct}%"></div>
+                  <div class="meter-fill {cpu_tone}" data-style="width:{cpu_pct}%"></div>
                 </div>
                 <div class="meter-row">
                   <span class="meter-label sm">Memory</span>
                   <span class="meter-val sm {mem_tone}">{mem_pct}%</span>
                 </div>
                 <div class="meter-track sm last">
-                  <div class="meter-fill {mem_tone}" style="width:{mem_pct}%"></div>
+                  <div class="meter-fill {mem_tone}" data-style="width:{mem_pct}%"></div>
                 </div>
                 <p class="res-sub">{mem_summary}</p>
                 {temp_html}"#,

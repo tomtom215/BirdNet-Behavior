@@ -223,7 +223,7 @@ fn render_polar_svg(ribbons: &[ChorusRibbon], sunrise_h: f64, sunset_h: f64) -> 
         let glyph_op = if is_active { 0.95 } else { 0.4 };
         let _ = write!(
             s,
-            r#"<text x="{gx:.2}" y="{gy:.2}" text-anchor="middle" dominant-baseline="central" style="font-size:13px;fill:var(--fg-2);fill-opacity:{glyph_op};">{glyph}</text>"#,
+            r#"<text x="{gx:.2}" y="{gy:.2}" text-anchor="middle" dominant-baseline="central" data-style="font-size:13px;fill:var(--fg-2);fill-opacity:{glyph_op};">{glyph}</text>"#,
         );
     }
 
@@ -252,7 +252,7 @@ fn render_polar_svg(ribbons: &[ChorusRibbon], sunrise_h: f64, sunset_h: f64) -> 
         };
         let _ = write!(
             s,
-            r#"<text x="{lx:.2}" y="{ly:.2}" text-anchor="middle" dominant-baseline="central" class="mono" style="font-size:11px;fill:var(--fg-3);">{label}</text>"#,
+            r#"<text x="{lx:.2}" y="{ly:.2}" text-anchor="middle" dominant-baseline="central" class="mono dcv-hr">{label}</text>"#,
         );
     }
 
@@ -295,12 +295,12 @@ fn render_polar_svg(ribbons: &[ChorusRibbon], sunrise_h: f64, sunset_h: f64) -> 
     );
     let _ = write!(
         s,
-        r#"<text x="{CX}" y="{cy:.2}" text-anchor="middle" class="display" style="font-size:14px;fill:var(--fg-3);">chorus</text>"#,
+        r#"<text x="{CX}" y="{cy:.2}" text-anchor="middle" class="display dcv-ctr">chorus</text>"#,
         cy = CY - 10.0,
     );
     let _ = write!(
         s,
-        r#"<text x="{CX}" y="{cy:.2}" text-anchor="middle" class="mono" style="font-size:11px;fill:var(--fg-2);">24 h</text>"#,
+        r#"<text x="{CX}" y="{cy:.2}" text-anchor="middle" class="mono dcv-ctr-sub">24 h</text>"#,
         cy = CY + 10.0,
     );
 
@@ -338,7 +338,7 @@ fn write_sun_marker(s: &mut String, cx: f64, cy: f64, h: f64, r: f64, kind: &str
     );
     let _ = write!(
         s,
-        r#"<text x="{x:.2}" y="{ty:.2}" text-anchor="middle" class="mono" style="font-size:9.5px;fill:var(--fg-3);">{icon} {kind} {label}</text>"#,
+        r#"<text x="{x:.2}" y="{ty:.2}" text-anchor="middle" class="mono dcv-sun">{icon} {kind} {label}</text>"#,
         ty = y + dy,
     );
 }
@@ -399,7 +399,7 @@ async fn list_partial(State(state): State<AppState>) -> impl IntoResponse {
         let _ = write!(
             s,
             r#"<div class="{row_cls}">
-<span class="bnb-avatar" style="--sp:{color};">{short}</span>
+<span class="bnb-avatar" data-style="--sp:{color};">{short}</span>
 <div class="dc-row-main">
   <div class="dc-row-head">
     <span class="dc-row-name">{name}</span>

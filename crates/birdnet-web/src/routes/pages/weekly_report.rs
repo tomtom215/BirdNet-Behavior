@@ -192,7 +192,7 @@ fn render_weekly_content(
   <a href="/species/{sci_enc}" class="wk-top-name">{com_esc}</a>
   <div class="wk-top-bar-row">
     <div class="wk-top-track">
-      <div class="wk-top-fill" style="width:{pct}%"></div>
+      <div class="wk-top-fill" data-style="width:{pct}%"></div>
     </div>
     <span class="wk-top-count">{count}</span>
   </div>
@@ -268,7 +268,7 @@ fn render_weekly_chart(week_start: &str, daily: &[birdnet_db::sqlite::DailyCount
     let left_pad = 10;
 
     let mut svg = format!(
-        r#"<svg viewBox="0 0 {w} {h}" style="width:100%;height:auto;display:block;" xmlns="http://www.w3.org/2000/svg">"#,
+        r#"<svg viewBox="0 0 {w} {h}" class="cht-svg" xmlns="http://www.w3.org/2000/svg">"#,
         w = chart_w,
         h = chart_h + 25,
     );

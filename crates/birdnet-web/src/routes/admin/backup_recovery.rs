@@ -38,7 +38,7 @@ fn storage_tile(label: &str, value: &str, pct: u32, tone: &str) -> String {
         r#"<div class="bnb-card pad">
   <div class="bnb-eyebrow">{label}</div>
   <div class="display bkr-tile-value">{value}</div>
-  <div class="bkr-bar"><span class="bkr-bar-fill {tone}" style="width:{pct}%"></span></div>
+  <div class="bkr-bar"><span class="bkr-bar-fill {tone}" data-style="width:{pct}%"></span></div>
 </div>"#
     )
 }
@@ -257,19 +257,27 @@ mod tests {
 
     #[test]
     fn render_body_has_no_static_inline_styles() {
-        // P3-3 (O-25): the backups page is built from utility/page classes; the
-        // only inline `style=` left is the storage tiles' computed bar width.
+        // P3-3 (O-25): the backups page is built from utility/page classes and
+        // carries no inline `style=` attributes at all (those can't take a CSP
+        // nonce). The storage tiles' computed bar width rides a `data-style`
+        // attribute that the global CSSOM applier writes onto element.style.
         let html = render_body(4.4);
-        let inline = html.matches("style=\"").count();
-        assert_eq!(
-            inline, 4,
-            "expected exactly 4 inline styles (the 4 storage-bar widths), found {inline}"
+        // Match the bare attribute (space-prefixed) so `data-style="` — which
+        // ends in `style="` — does not trip this guard.
+        assert!(
+            !html.contains(" style=\""),
+            "backups page still emits an inline style attribute"
         );
-        // Every inline style that remains is a computed width on a bar fill.
-        for frag in html.split("style=\"").skip(1) {
+        let computed = html.matches("data-style=\"").count();
+        assert_eq!(
+            computed, 4,
+            "expected exactly 4 computed data-style widths (the 4 storage bars), found {computed}"
+        );
+        // Every computed style that remains is a width on a bar fill.
+        for frag in html.split("data-style=\"").skip(1) {
             assert!(
                 frag.starts_with("width:"),
-                "unexpected non-width inline style: {}",
+                "unexpected non-width data-style: {}",
                 &frag[..frag.len().min(40)]
             );
         }
@@ -278,9 +286,12 @@ mod tests {
     #[test]
     fn storage_tile_bar_is_the_only_inline_style() {
         let tile = storage_tile("SQLite", "4.4 MB", 12, "moss");
-        assert!(tile.contains(r#"style="width:12%""#));
+        assert!(tile.contains(r#"data-style="width:12%""#));
         assert!(tile.contains("bkr-bar-fill moss"));
-        assert_eq!(tile.matches("style=\"").count(), 1);
+        // No bare inline style attribute (space-prefixed); only the CSSOM-applied
+        // `data-style` carries the computed width.
+        assert!(!tile.contains(" style=\""));
+        assert_eq!(tile.matches("data-style=\"").count(), 1);
     }
 
     #[test]

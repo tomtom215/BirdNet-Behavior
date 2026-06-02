@@ -150,7 +150,7 @@ fn render_content(
         };
         let _ = write!(
             html,
-            r#"<span class="yir-tape-cell" title="Week of {wy:04}-{wm:02}-{wd:02} — {c} detections" style="background:{bg};"></span>"#,
+            r#"<span class="yir-tape-cell" title="Week of {wy:04}-{wm:02}-{wd:02} — {c} detections" data-style="background:{bg};"></span>"#,
         );
     }
     html.push_str("</div>");
@@ -195,7 +195,7 @@ fn render_content(
   {av}
   <div class="yir-row-main">
     <a href="/species/detail?name={enc}" class="yir-row-name">{name}</a>
-    <div class="yir-row-bar"><span style="width:{pct}%"></span></div>
+    <div class="yir-row-bar"><span data-style="width:{pct}%"></span></div>
   </div>
   <span class="mono tabular yir-row-count">{count}</span>
 </div>"#,

@@ -399,7 +399,7 @@ pub fn progress_bar(p: &MigrationProgress) -> String {
         r#"<div id="migrate-progress"{trigger}>
   <p class="bar-msg {tone}">{msg}</p>
   <div class="progress-track">
-    <div class="progress-fill {tone}" style="width:{pct}%"></div>
+    <div class="progress-fill {tone}" data-style="width:{pct}%"></div>
   </div>
   <p class="bar-note">
     {imported} / {total} rows

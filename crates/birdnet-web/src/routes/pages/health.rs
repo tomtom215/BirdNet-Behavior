@@ -70,7 +70,7 @@ async fn disk_status_partial(State(state): State<AppState>) -> impl axum::respon
       <span class="bnb-meta mono">{avail_gb:.1} GB free</span>
     </div>
     <div class="display tabular he-pct">{pct:.0}%</div>
-    <div class="progress"><div class="progress-bar" style="width:{pct:.0}%;background:{bar_color};"></div></div>
+    <div class="progress"><div class="progress-bar" data-style="width:{pct:.0}%;background:{bar_color};"></div></div>
 </div>"#,
             );
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)

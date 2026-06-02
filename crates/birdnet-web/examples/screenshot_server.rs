@@ -528,6 +528,23 @@ async fn main() {
     #[cfg(not(feature = "analytics"))]
     let state =
         AppState::from_connection(conn, path).with_site_name("BirdNet-Behavior".to_string());
+
+    // Wire a Wikipedia-backed species image cache, like the shipped binary, so
+    // the gallery and species photos actually populate (without it the
+    // `/species/image/<sci>/file` endpoint returns "image cache not configured"
+    // and the gallery only ever shows the coloured code placeholders). Fetches
+    // are cached under a temp dir; if construction fails the server still runs,
+    // just with placeholder thumbnails.
+    let state = match birdnet_integrations::species_images::ImageCache::with_wikipedia(
+        &std::env::temp_dir().join("bnb_screenshots_images"),
+    ) {
+        Ok(cache) => state.with_image_cache(cache),
+        Err(e) => {
+            eprintln!("image cache unavailable ({e}); gallery will show code placeholders");
+            state
+        }
+    };
+
     let app = build_router(state);
 
     let addr = "127.0.0.1:8502";

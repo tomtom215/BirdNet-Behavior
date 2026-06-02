@@ -75,7 +75,7 @@ pub(crate) fn avatar(common: &str, size: &str) -> String {
         format!("bnb-avatar {size}")
     };
     format!(
-        r#"<span class="{cls}" style="--sp:{color}" title="{title}">{code}</span>"#,
+        r#"<span class="{cls}" data-style="--sp:{color}" title="{title}">{code}</span>"#,
         color = species_color(common),
         title = escape_html(common),
         code = species_code(common),
@@ -97,7 +97,7 @@ pub(crate) fn conf_bar(value: f64) -> String {
     };
     let pct = (v * 100.0).round() as i64;
     format!(
-        r#"<span class="bnb-conf {cls}"><span class="track"><span class="fill" style="width:{pct}%"></span></span><span class="val">{v:.2}</span></span>"#,
+        r#"<span class="bnb-conf {cls}"><span class="track"><span class="fill" data-style="width:{pct}%"></span></span><span class="val">{v:.2}</span></span>"#,
     )
 }
 
@@ -121,7 +121,7 @@ pub(crate) fn waveform(seed: u64, bars: usize) -> String {
         let env = (t * std::f64::consts::PI).sin();
         let v = env.mul_add(0.55 + next() * 0.40, 0.25);
         let h = (v * 22.0).round().clamp(2.0, 22.0) as i64;
-        let _ = write!(out, r#"<span style="height:{h}px"></span>"#);
+        let _ = write!(out, r#"<span data-style="height:{h}px"></span>"#);
     }
     out.push_str("</span>");
     out
@@ -199,7 +199,7 @@ mod tests {
     #[test]
     fn waveform_has_requested_bar_count() {
         let w = waveform(42, 24);
-        assert_eq!(w.matches("<span style=\"height:").count(), 24);
+        assert_eq!(w.matches("<span data-style=\"height:").count(), 24);
     }
 
     #[test]

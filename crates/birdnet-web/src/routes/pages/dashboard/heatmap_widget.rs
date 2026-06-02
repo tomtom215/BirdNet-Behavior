@@ -24,8 +24,7 @@ pub(super) async fn activity_heatmap_partial(
             return (
                 StatusCode::OK,
                 [(header::CONTENT_TYPE, "text/html")],
-                "<p style=\"color:var(--text-muted);text-align:center;padding:1rem 0;\">No activity recorded today.</p>"
-                    .to_string(),
+                "<p class=\"ah-empty\">No activity recorded today.</p>".to_string(),
             );
         }
     };
@@ -44,17 +43,9 @@ pub(super) async fn activity_heatmap_partial(
     let max_count = cells.iter().map(|(_, _, c)| *c).max().unwrap_or(1).max(1);
 
     let mut html = String::with_capacity(8192);
-    html.push_str(
-        "<style>\
-        .ah{display:grid;grid-template-columns:9rem repeat(24,1fr);gap:2px;overflow-x:auto;}\
-        .ah-lbl{font-size:.75rem;color:var(--text);overflow:hidden;text-overflow:ellipsis;\
-                white-space:nowrap;padding-right:.25rem;align-self:center;}\
-        .ah-hr{font-size:.6rem;color:var(--text-muted);text-align:center;padding:.1rem 0;}\
-        .ah-cell{height:20px;border-radius:3px;transition:opacity .15s;cursor:default;}\
-        .ah-cell:hover{outline:1px solid var(--accent);z-index:1;position:relative;}\
-        </style>\
-        <div class=\"ah\">",
-    );
+    // Grid rules live in app.css (.ah*) — this is an HTMX fragment, so a nonced
+    // <style> here could not match the host page's per-request nonce.
+    html.push_str("<div class=\"ah\">");
 
     // Header row: empty label + hour columns 0..23
     html.push_str("<div></div>");
@@ -72,10 +63,7 @@ pub(super) async fn activity_heatmap_partial(
         );
         for (h, &count) in hours.iter().enumerate() {
             if count == 0 {
-                let _ = write!(
-                    html,
-                    "<div class=\"ah-cell\" style=\"background:var(--bg-hover);\"></div>",
-                );
+                let _ = write!(html, "<div class=\"ah-cell ah-zero\"></div>");
             } else {
                 #[allow(clippy::cast_precision_loss)]
                 let ratio = count as f64 / max_count as f64;
@@ -85,7 +73,7 @@ pub(super) async fn activity_heatmap_partial(
                 let _ = write!(
                     html,
                     "<div class=\"ah-cell\" \
-                       style=\"background:rgba(var(--accent-rgb),{alpha:.2});\" \
+                       data-style=\"background:rgba(var(--accent-rgb),{alpha:.2});\" \
                        title=\"{safe_title}\"></div>",
                 );
             }

@@ -70,15 +70,15 @@ remains is the finish-off work below.
 | ~~**BUG-1**~~ | Bird images don't populate gallery/previews — ✅ **DONE** (fetch-on-miss `/file` + default-on cache) | ~~P1~~ | M | low–med |
 | ~~**P1-1**~~ | Dead "Reset password" button — ✅ **DONE** (wired to live `set_password`) | ~~P1~~ | S | low |
 | ~~**P2-1**~~ | Stale `accounts.rs` module doc — ✅ **DONE** (folded into P1-1) | ~~P2~~ | XS | none |
-| **P2-2** | CSP `script-src` hardening — ✅ **DONE** (per-request nonce + `'strict-dynamic'`, browser-verified); `style-src` half tracked by P3-3 | P2 | M | med |
+| ~~**P2-2**~~ | CSP hardening — ✅ **DONE (both halves)**. `script-src 'nonce' 'strict-dynamic'` **and** `style-src 'self' 'nonce'` — `'unsafe-inline'` fully dropped. Computed styles ride a `data-style` CSSOM applier (middleware-injected, re-runs on `htmx:afterSwap`), statics are app.css classes. Browser-verified **0** CSP violations across 20 pages + HTMX fragments. | ~~P2~~ | M | med |
 | ~~**P2-3**~~ | Extend help links to remaining analytical screens — ✅ **DONE** (6 screens) | ~~P2~~ | S | low |
 | **P3-1** | O-13 legacy `--audio-source` retirement — ✅ **DONE** | P3 | S | low |
 | ~~**P3-2**~~ | No background session pruning — ✅ **DONE** (daily maintenance tick) | ~~P3~~ | S | low |
-| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **static sweep essentially COMPLETE** (every screen + the complete admin/cross-cutting surface + the last page render-modules + recordings/share_rare done; **80-file guard catches escaped `style=\"` too**; raw `style="` 1115→203 — the remainder is *all* genuinely-computed/dynamic: `viz`/`charts`/`gallery`/`skeletons`/`atoms`/`migration` SVG+`--sp` colours + allowlisted bar-widths, i.e. the **endgame's input**). Next: the endgame — emit those as nonce'd `<style>` blocks + drop `style-src 'unsafe-inline'`. ✅ Slice 17 converted every inline `on*=` handler app-wide to `addEventListener`/CSS/`data-*` delegation (CSP-clean, browser-verified) — the style-src endgame is now the only remaining work. | P3 | L | low (tedious) |
+| ~~**P3-3**~~ | O-25 inline-style sweep (unlocked P2-2 style-src) — ✅ **DONE**. Every served `style="…"` attribute eliminated: static shapes → app.css classes, computed values → a `data-style` attribute applied via CSSOM. The guard now scans the *whole* crate and forbids **any** inline style. The endgame (slice 18) added `inject_style_nonce` + the `data-style` applier and dropped `style-src 'unsafe-inline'`. | ~~P3~~ | L | low (tedious) |
 | **P3-4** | Minor cosmetics — uptime pill ✅ **wired**; migration-missing out of scope | P3 | XS | none |
 | ~~**P3-5**~~ | Image blacklist enforcement on read path — ✅ **DONE** (serve-check + purge-on-blacklist) | ~~P3~~ | S | low |
 
-Recommended order: ~~BUG-1 → P1-1 → P2-1 → P2-3 → P3-2 → P3-5 → P3-1 → P2-2 (script half)~~ (shipped) → **P3-3** (inline-style sweep, then drop `style-src 'unsafe-inline'` to finish P2-2). _Also shipped: ONNX offline build tooling (SessionStart hook). Remaining low-value/deferred: P3-4 cosmetics._
+Recommended order: ~~BUG-1 → P1-1 → P2-1 → P2-3 → P3-2 → P3-5 → P3-1 → P2-2 (script half) → P3-3 (inline-style sweep) → P2-2 (style-src drop)~~ — **all shipped; `style-src 'unsafe-inline'` is gone**. _Also shipped: ONNX offline build tooling (SessionStart hook). Remaining low-value/deferred: P3-4 cosmetics._
 
 ---
 
@@ -216,7 +216,7 @@ admin-only via the central RBAC check). **Verify:** `cargo doc` + read-through. 
 
 ---
 
-## P2-2 — CSP `script-src` hardening  · **P2** — ✅ DONE (script half; style half tracked by P3-3)
+## P2-2 — CSP hardening (`script-src` + `style-src`)  · **P2** — ✅ DONE (both halves)
 
 **✅ Shipped.** `script-src` is now **`'nonce-{random}' 'strict-dynamic'`** — `'unsafe-inline'` and
 host-allowlisting are both gone for scripts. One security-middleware pass owns the whole mechanism, so
@@ -231,14 +231,22 @@ there is no per-render-path threading to get wrong:
   bespoke admin `<head>` shells, onboarding, kiosk, login and share uniformly — a new page or inline
   script can't silently ship un-nonced. `'strict-dynamic'` lets htmx (itself nonced) inject fragment
   scripts without a nonce-mismatch.
-- `style-src 'unsafe-inline'` is intentionally unchanged — dropping it still depends on the **P3-3**
-  inline-style sweep.
+- **`style-src` is now `'self' 'nonce-{random}'` too** (P3-3 endgame, slice 18) — `'unsafe-inline'` is
+  gone for styles as well. The same middleware stamps the nonce onto every `<style>` *element*; inline
+  `style="…"` **attributes** were eliminated entirely (they can't carry a nonce, and a per-request-nonced
+  `<style>` couldn't match the host page's nonce inside an HTMX-swapped fragment anyway). Computed values
+  ride a `data-style` attribute applied by a tiny CSSOM writer the middleware injects into every full
+  document and re-runs on `htmx:afterSwap`; static values are `app.css` classes. htmx's own auto-injected
+  indicator `<style>` is disabled via the `htmx-config` meta (its rules already live in `app.css`).
 
-**Verified (headless Chromium via Playwright).** Swept all 32 screens + interactions (command palette,
-theme toggle, live admin stats): **0 CSP violations**, header nonce == body nonce per request, static
-JS/JSON passed through byte-identical, every page renders intact. `curl` shows the tightened header.
-**Risk retired:** the "a missed inline script breaks UI" worry is gone — the injector is exhaustive and
-browser-verified. **Still depends on:** P3-3 (for the style half only).
+**Verified (headless Chromium via Playwright).** **Script half:** all 32 screens + interactions (command
+palette, theme toggle, live admin stats) — 0 violations, header nonce == body nonce, static JS/JSON
+byte-identical. **Style half:** a `securitypolicyviolation` sweep of 20 pages **plus** their HTMX fragment
+swaps (feed, heatmap grid, gallery grid, recordings tabs, range buttons) reports **0** CSP violations
+under `style-src 'self' 'nonce'`, and the `data-style` applier is confirmed to style pages, standalone
+admin shells, and swapped-in fragments (avatar `--sp`, conf-bar widths, gallery swatches, system usage
+bars all apply); gallery/migration/dashboard pixel-checked for parity. **Risk retired:** a missed inline
+script *or style* can no longer silently break the UI — both injectors are exhaustive and browser-verified.
 
 ---
 
@@ -697,6 +705,44 @@ they batch for a Playwright-verified pass; the dynamic ones fold into the endgam
   an injected `img[data-hide-on-error]` resolves to `display:none`. fmt + clippy (`--all-targets`) + **311**
   lib tests + the inline-style guard all green. No CSP directive change in this PR (handlers only) — the
   `style-src 'unsafe-inline'` drop remains the endgame's job, now unblocked of its last behavioural hazard.
+
+- **Slice 18 — the endgame: drop `style-src 'unsafe-inline'`. ✅ This completes P2-2 and P3-3.** Flipped
+  `style-src` to **`'self' 'nonce-{random}'`** and eliminated *every* remaining inline `style="…"` attribute.
+  The decisive constraint, verified in-browser first: per-request nonces mean a nonced `<style>` works in a
+  full-page render but is **blocked** when it rides an HTMX-swapped fragment (the fragment response mints its
+  own nonce ≠ the host page's, and there is no `'strict-dynamic'` for styles). So rather than nonce'd `<style>`
+  blocks, **computed** styles move to a `data-style` attribute applied via CSSOM — `el.style.setProperty(…)`,
+  which CSP does not police — by a tiny applier the **security middleware injects into every full document**
+  (so none of the ~20 page shells can forget it) that also re-runs on `htmx:afterSwap`; **static** styles
+  become `app.css` classes.
+  - **Mechanism** (`security.rs`): `inject_style_nonce` (sibling of `inject_script_nonce`) stamps the nonce on
+    `<style>` *elements*; `inject_dyn_style_applier` adds the CSSOM applier before `</body>`;
+    `inject_htmx_config` adds `<meta name="htmx-config" content='{"includeIndicatorStyles":false}'>` so htmx
+    stops appending its own un-nonceable indicator `<style>` (those rules already live in `app.css`).
+  - **Conversions**: `atoms.rs` (avatar `--sp`, conf-bar `width`, waveform `height` → `data-style` — these
+    three alone cover most feed/list dynamic styles); `viz.rs`/`charts.rs` (static SVG-wrapper layout → `viz-`/
+    `cht-` classes, legend swatch colours → `data-style`; SVG `fill=`/`stroke=` are presentation attributes,
+    untouched); `gallery.rs` (full `ga-*` card vocabulary + computed `color-mix` swatch / code colour →
+    `data-style`); `migration.rs` (`mig-*` SVG `<text>` label classes + computed eyebrow colour); `skeletons.rs`
+    (uniform `data-style` with a `.bnb-skel-bars>span{height:45%}` FOUC default); `heatmap_widget.rs` (its
+    `<style>` block **moved to `app.css`** — a fragment can't nonce one); plus ~16 smaller renderers via two
+    delegated sub-agents. Workspace served-HTML inline `style="` count → **0**.
+  - **Guard rewritten** (`tests/inline_style_guard.rs`): from an allowlist of swept files to a **crate-wide**
+    scan of every `src/**/*.rs` + `templates/**/*.html` that forbids **any** real inline `style=` (the dynamic
+    allowlist is gone — `data-style`/`data-confirm-style`/search-strings are skipped; the dead, never-served
+    `_empty_states.html` is excluded).
+  - **QA**: wired a Wikipedia-backed `ImageCache` into the `screenshot_server` example so the gallery/species
+    photos actually populate during visual QA (previously the endpoint returned "image cache not configured"
+    and only code placeholders showed) — unrelated to CSP, but it surfaced while verifying the gallery card.
+
+  **Verified (headless Chromium + Playwright, `securitypolicyviolation` listener).** **0** CSP violations
+  across **20 pages** *and* their HTMX fragment swaps (feed, heatmap grid, gallery grid, recordings tabs,
+  range buttons). The `data-style` applier is confirmed on regular pages, **standalone admin shells** (via the
+  middleware injection), and **swapped-in fragments** (avatar `--sp`, conf-bar widths, gallery swatch + code
+  colours, `/admin/system` usage bars all apply). Gallery (grid + tinted swatches + real photos), migration
+  (ridgeline + all SVG labels), dashboard (avatars/conf-bars/waveforms) and `/admin/system` (usage bars)
+  screenshot-checked for parity. `fmt` + `clippy --all-targets` (0 warnings) + **314** lib tests + the
+  crate-wide guard all green.
 
 ---
 
