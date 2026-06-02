@@ -76,7 +76,7 @@ the integration-test and first-run-UX holes.
 | Disk-full degrades gracefully + self-recovers | ✅ DiskManager purge + per-species caps |
 | Network-loss degrades gracefully + self-recovers | ✅ capped-backoff integrations |
 | DB corruption self-recovers | ✅ SQLite quarantine/restore (DuckDB analytics DB: G-11) |
-| Soak run shows no resource growth | ⚠️ bounded queues exist; **no soak test proving it** (G-06) |
+| Soak run shows no resource growth | ✅ compressed soak test (G-06) drives 20k inserts through the real path, asserts bounded RSS/fd/DB |
 | All gates + CI green | ✅ green on `main`; AI-branch PRs now gated (G-02 done); dependabot clippy red is a stale weekly target (G-03 deferred) |
 | Cross-compiled artifacts build | ✅ release.yml + CI aarch64 cross-check |
 | Docs let a non-technical user install/upgrade/troubleshoot | ✅ strong; minor drift (onboarding wizard claim — G-09) |
@@ -147,9 +147,9 @@ Verdicts: ✅ EXISTS (solid) · 🟡 PARTIAL · ❌ MISSING. Evidence is `file:l
 | inline-style guard | ✅ | `crates/birdnet-web/tests/inline_style_guard.rs` (runs under `cargo test --tests`) |
 | Coverage / Mutation / Supply-chain / Docs / Docker | ✅ | `coverage.yml` (llvm-cov), `mutation.yml` (cargo-mutants), `supply-chain.yml` (deny/audit/machete/typos/shellcheck), `docs.yml` (mdbook→Pages), `docker.yml` (multi-arch GHCR) |
 | Dependabot CI green | ❌ | cargo-bump branch fails **Clippy (pedantic+nursery, -D warnings)** — `main` unaffected (G-03) |
-| Full-pipeline E2E (audio→infer→DB→web) | ❌ | only isolated stages (`tests/inference_e2e.rs` opt-in, `audio_pipeline.rs`, `boot_smoke.rs`) (G-04) |
-| BirdNET-Pi migration integration test | ❌ | `crates/birdnet-migrate` has unit tests + CLI but no end-to-end import test (G-05) |
-| Longevity / soak test | ❌ | none (G-06) |
+| Full-pipeline E2E (audio→infer→DB→web) | ✅ | `tests/pipeline_e2e.rs`: CI layer (real decode/resample + real `insert_detection`→web read) + model-gated full chain (G-04) |
+| BirdNET-Pi migration integration test | ✅ | `crates/birdnet-migrate/tests/migration_e2e.rs`: fixture→import→assert dest rows/values/schema + idempotency + clamping + CSV (G-05) |
+| Longevity / soak test | ✅ | `tests/soak.rs`: 20k inserts, asserts bounded RSS/fd/DB (G-06) |
 
 ### Track F — Docs
 
@@ -238,18 +238,24 @@ and `main` is unaffected (green). Chasing it isn't tractable or release-relevant
 to address the lint **when a current bump trips it** (best handled in the maintainer's dependabot
 flow). Re-open if a *fresh* dependabot bump lands red on the integration branch.
 
-**G-04 — Full-pipeline E2E test.** *(Track E · P2 · M · low)* No audio→infer→DB→web test.
-**Fix:** integration test that feeds a known WAV through decode→mel→inference (gated on a test
-model)→DB insert→web `/api` read, asserting the detection surfaces. **Verify:** runs in
-`cargo test --tests` (opt-in on model like `inference_e2e.rs`).
+**G-04 — Full-pipeline E2E test.** *(Track E · P2 · M · low)* ✅ **DONE (Wave 2).**
+`tests/pipeline_e2e.rs` has two layers: a **CI-runnable** layer (real `decode::decode_file` +
+`resample` on the bundled `Pica_pica_30s.wav`; a detection written through the production
+`insert_detection` path and read back over `/api/v2/detections` + `/api/v2/stats`), and a
+**model-gated** layer (skipped unless `BIRDNET_TEST_MODEL`/`_LABELS` set, like `inference_e2e.rs`)
+that runs decode→resample→inference→DB→web and asserts the Magpie surfaces on the API.
 
-**G-05 — BirdNET-Pi migration integration test.** *(Track E · P2 · M · low)* **Fix:** fixture
-legacy `birds.db` → run `birdnet-migrate` import → assert row counts/schema/idempotency.
-**Verify:** `cargo test -p birdnet-migrate --test …`.
+**G-05 — BirdNET-Pi migration integration test.** *(Track E · P2 · M · low)* ✅ **DONE (Wave 2).**
+`crates/birdnet-migrate/tests/migration_e2e.rs` builds fixture legacy SQLite + CSV databases,
+runs the public `run_migration`, then **opens the destination and asserts** rows/values landed,
+the full migrated schema is present (>12 columns), idempotency (re-import inserts 0 — surfaced and
+fixed the SQLite NULL-`File_Name` dedupe subtlety), confidence clamping/NULL→0, and the
+`validate_source` preview. Pure SQLite, so it runs in CI without the model.
 
-**G-06 — Soak / longevity test.** *(Track E · P2 · M · med)* Prove no resource growth.
-**Fix:** compressed soak harness — drive N hours of synthetic detections at speed, sample RSS /
-DB size / fd count, assert bounded. **Verify:** CI job (nightly/manual) with thresholds.
+**G-06 — Soak / longevity test.** *(Track E · P2 · M · med)* ✅ **DONE (Wave 2).** `tests/soak.rs`
+drives `BIRDNET_SOAK_N` (default 20k) detections through `insert_detection` on an on-disk DB and
+asserts bounded growth: resident memory (`/proc/self/status` VmRSS) < 128 MiB, no fd leak
+(`/proc/self/fd`), and WAL-inclusive DB size linear-bounded. Env-tunable for a heavier local soak.
 
 **G-07 — Doctor self-heal.** *(Track C · P2 · M · med)* **Fix:** opt-in `--doctor --fix` (or a
 web button) for *safe* heals only: recreate missing dirs, fix ownership/perms, recreate tmpfs
@@ -294,10 +300,10 @@ intended. **Verify:** broker-down test drops nothing within the bound.
   - PR1: **G-01** auto-update integrity verification + pre-swap smoke test — ✅ done.
   - PR2: **G-02** CI gates `claude/**` PRs — ✅ done.
   - PR3: **G-03** dependabot clippy red — ⏸️ deferred (stale weekly target; `main` green).
-- **Wave 2 — prove the resilience that already exists.**
-  - PR4: **G-04** full-pipeline E2E test.
-  - PR5: **G-05** migration integration test.
-  - PR6: **G-06** soak/longevity harness.
+- **Wave 2 — prove the resilience that already exists.** ✅ in this branch.
+  - PR4: **G-04** full-pipeline E2E test — ✅ done (`tests/pipeline_e2e.rs`).
+  - PR5: **G-05** migration integration test — ✅ done (`crates/birdnet-migrate/tests/migration_e2e.rs`).
+  - PR6: **G-06** soak/longevity harness — ✅ done (`tests/soak.rs`).
 - **Wave 3 — first-run UX *(pending D-4/D-5)*.**
   - PR7: **G-09** onboarding persistence.
   - PR8: **G-08** geolocation + timezone.
