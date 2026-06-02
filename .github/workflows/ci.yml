@@ -4,7 +4,13 @@ on:
   push:
     branches: ["master", "main"]
   pull_request:
-    branches: ["master", "main"]
+    # `claude/**` also gates the AI-assisted working/integration branches, so a
+    # slice runs the full gate (fmt, clippy, tests, MSRV, aarch64 cross-check)
+    # at PR time before it is squash-merged toward `main` — previously only PRs
+    # whose base was `main`/`master` ran CI, leaving the integration branch
+    # un-gated. Costs nothing for ordinary contributors (no such branches);
+    # `concurrency.cancel-in-progress` keeps superseded runs from piling up.
+    branches: ["master", "main", "claude/**"]
 
 # Cancel superseded runs on the same ref so a fast follow-up push does not
 # wait behind (or race) the previous one. Matches coverage.yml / supply-chain.yml.
