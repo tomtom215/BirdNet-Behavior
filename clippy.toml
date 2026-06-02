@@ -32,6 +32,7 @@ doc-valid-idents = [
     "Apprise", "SMTP", "OAuth", "TOTP",
     "eBird", "AllAboutBirds", "iNaturalist", "Cornell",
     "Mel", "FFT", "STFT", "SNR", "ML", "FP16", "FP32",
+    "SLSA", "SHA-256", "SHA256SUMS", "CycloneDX", "SBOM",
     "..",
 ]
 
