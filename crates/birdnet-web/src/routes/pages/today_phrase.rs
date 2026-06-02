@@ -77,10 +77,10 @@ pub async fn today_phrase_partial(State(state): State<AppState>) -> impl IntoRes
     let time_phrase = morning_or_day();
 
     let html = format!(
-        r#"<h1 class="display" style="font-size:48px;line-height:1.05;letter-spacing:-0.02em;">
-A <em style="color:var(--{color})">{verb}</em> {time_phrase}.
+        r#"<h1 class="display td-h1">
+A <em class="tp-c-{color}">{verb}</em> {time_phrase}.
 </h1>
-<p class="bnb-meta" style="margin-top:6px;">
+<p class="bnb-meta td-sub">
   <span class="mono tabular">{count}</span> detections ·
   <span class="mono tabular">{species}</span> species ·
   {pct_str} vs your last 30 days.
@@ -93,10 +93,10 @@ A <em style="color:var(--{color})">{verb}</em> {time_phrase}.
 }
 
 fn static_fallback() -> &'static str {
-    r#"<h1 class="display" style="font-size:48px;line-height:1.05;letter-spacing:-0.02em;">
+    r#"<h1 class="display td-h1">
 You're listening.
 </h1>
-<p class="bnb-meta" style="margin-top:6px;">Detections roll in below.</p>"#
+<p class="bnb-meta td-sub">Detections roll in below.</p>"#
 }
 
 /// 0..1 percentile of `value` within `samples`. Empty samples → 0.5 (middle).

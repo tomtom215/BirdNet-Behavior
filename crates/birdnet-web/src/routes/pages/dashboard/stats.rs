@@ -58,7 +58,7 @@ pub(super) async fn stats_partial(
         html,
         r#"<div class="stat-tile"><span class="label">Detections</span>
              <div><div class="value tabular">{total}</div><div class="sub">all time</div></div>
-             <div style="margin-top:auto">{spark}</div></div>"#,
+             <div class="ds-spark">{spark}</div></div>"#,
         total = group_thousands(total),
     );
     // Tile 2 — Species (all-time unique).
@@ -78,8 +78,8 @@ pub(super) async fn stats_partial(
     // Tile 4 — Last hour (dawn accent for the live-ish number).
     let _ = write!(
         html,
-        r#"<div class="stat-tile"><span class="label" style="display:flex;align-items:center;gap:6px;">Last hour <span class="bnb-dot live"></span></span>
-             <div><div class="value tabular" style="color:var(--dawn-ink)">{last_hour}</div><div class="sub">rolling 60 min</div></div></div>"#,
+        r#"<div class="stat-tile"><span class="label ds-label-live">Last hour <span class="bnb-dot live"></span></span>
+             <div><div class="value tabular ds-last-hour">{last_hour}</div><div class="sub">rolling 60 min</div></div></div>"#,
     );
 
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)

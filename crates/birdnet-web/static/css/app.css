@@ -3034,3 +3034,79 @@ a.login-about    { color: var(--fg-3); }
 .aas-empty-h3   { font-size: 22px; margin-top: 14px; }
 .aas-empty-sub  { margin-top: 6px; }
 .aas-restart    { margin-top: var(--pad-3); display: inline-flex; align-items: center; gap: 8px; }
+
+/* ══ O-25 sweep — home (/) + today (/today) ecosystem ══════════════════════
+   Faithful extraction of the static inline styles in the dashboard/today render
+   modules + dashboard.html. Legacy --text-muted/--bg-hover/--border/--text/
+   --radius/--fg-2/--fg-4/--dawn-ink tokens preserved verbatim. Computed bar
+   widths/colours stay inline (the documented dynamic exception). */
+
+/* ── Today list cards (today.rs) ────────────────────────────────────────── */
+.tdl-empty        { color: var(--text-muted); text-align: center; padding: 2rem; }
+.tdl-more         { text-align: center; padding: 1rem; }
+.tdl-more-btn     { background: var(--bg-hover); border: 1px solid var(--border); color: var(--text); padding: 0.5rem 1.5rem; border-radius: var(--radius); cursor: pointer; font-size: 0.9rem; }
+.tdl-strip-empty  { display: flex; gap: 18px; align-items: center; justify-content: center; padding: 1rem; }
+.tdl-caption      { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+.tdl-card         { display: flex; gap: 14px; align-items: center; padding: 10px 14px; margin-bottom: 8px; }
+.tdl-card-main    { flex: 1; min-width: 0; }
+.tdl-card-head    { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+a.tdl-name        { font-weight: 500; color: inherit; font-size: 14px; }
+.tdl-card-sci     { margin-top: 2px; }
+a.tdl-time        { color: inherit; }
+.tdl-card-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.tdl-audio        { height: 30px; width: 200px; max-width: 100%; margin-top: 6px; }
+
+/* ── Today comparative phrase (today_phrase.rs) — reuses td-h1/td-sub; the
+      per-tier emphasis colour is an enumerable set. ──────────────────────── */
+.tp-c-fg-3     { color: var(--fg-3); }
+.tp-c-fg-2     { color: var(--fg-2); }
+.tp-c-fg       { color: var(--fg); }
+.tp-c-moss-ink { color: var(--moss-ink); }
+.tp-c-rare     { color: var(--rare); }
+
+/* ── Disk / health widgets (health.rs) — bar width/colour stays inline. ──── */
+.he-row  { display: flex; justify-content: space-between; align-items: baseline; }
+.he-pct  { font-size: 26px; margin: 4px 0 8px; }
+.he-dash { font-size: 22px; }
+.he-hint { color: var(--text-muted); font-size: 0.8rem; margin-top: 0.5rem; }
+
+/* ── Dashboard stat tiles (dashboard/stats.rs) ──────────────────────────── */
+.ds-spark      { margin-top: auto; }
+.ds-label-live { display: flex; align-items: center; gap: 6px; }
+.stat-tile .value.ds-last-hour { color: var(--dawn-ink); }
+
+/* ── Dashboard hero shell (dashboard.html) ──────────────────────────────── */
+.db-eyebrow     { margin-bottom: 8px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.db-signal-card { display: flex; flex-direction: column; gap: 6px; }
+.db-signal-head { display: flex; justify-content: space-between; align-items: baseline; }
+.db-live-pill   { font-size: 10px; }
+.db-pulse       { width: 100%; height: 80px; display: block; }
+.db-signal-foot { display: flex; justify-content: space-between; }
+
+/* ── Dashboard feed / top-species / species-list / most-recent partials
+      (dashboard/partials.rs). The list-row column override relied on the global
+      [style*="grid-template-columns"] ≤520px reset → own breakpoint. ──────── */
+.dp-badge       { font-size: 9.5px; }
+.dp-audio-row   { height: 30px; width: 120px; }
+a.dp-ago        { color: inherit; text-decoration: none; }
+a.dp-link       { color: inherit; }
+.dp-top-row     { grid-template-columns: auto 1fr auto 56px; }
+.dp-min0        { min-width: 0; }
+.dp-name        { font-weight: 500; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dp-ellipsis    { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dp-count       { font-size: 13px; color: var(--fg-2); }
+.dp-th-num      { width: 32px; }
+.dp-rank        { color: var(--fg-4); font-size: 11px; }
+.dp-cell        { display: flex; align-items: center; gap: 10px; }
+.dp-name-strong { font-weight: 500; }
+.dp-empty       { color: var(--text-muted); text-align: center; padding: 1.5rem 0; }
+.dp-audio       { width: 100%; margin-top: 0.6rem; height: 32px; }
+.dp-recent      { display: flex; align-items: flex-start; gap: 1rem; flex-wrap: wrap; }
+.dp-recent-main { flex: 1; min-width: 200px; }
+.dp-recent-head { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.2rem; }
+a.dp-recent-name { font-size: 1.1rem; font-weight: 700; color: var(--text); }
+.dp-recent-sci  { color: var(--text-muted); font-size: 0.85rem; font-style: italic; }
+.dp-recent-date { color: var(--text-muted); font-size: 0.8rem; margin-top: 0.2rem; }
+@media (max-width: 520px) {
+  .dp-top-row { grid-template-columns: 1fr; }
+}

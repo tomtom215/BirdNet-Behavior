@@ -65,11 +65,11 @@ async fn disk_status_partial(State(state): State<AppState>) -> impl axum::respon
 
             let html = format!(
                 r#"<div class="bnb-card pad">
-    <div style="display:flex;justify-content:space-between;align-items:baseline;">
+    <div class="he-row">
       <div class="bnb-eyebrow"><span class="bnb-dot {dot}"></span> Disk</div>
       <span class="bnb-meta mono">{avail_gb:.1} GB free</span>
     </div>
-    <div class="display tabular" style="font-size:26px;margin:4px 0 8px;">{pct:.0}%</div>
+    <div class="display tabular he-pct">{pct:.0}%</div>
     <div class="progress"><div class="progress-bar" style="width:{pct:.0}%;background:{bar_color};"></div></div>
 </div>"#,
             );
@@ -78,7 +78,7 @@ async fn disk_status_partial(State(state): State<AppState>) -> impl axum::respon
         _ => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
-            r#"<div class="bnb-card pad"><div class="bnb-eyebrow">Disk</div><div class="display" style="font-size:22px;">—</div></div>"#.to_string(),
+            r#"<div class="bnb-card pad"><div class="bnb-eyebrow">Disk</div><div class="display he-dash">—</div></div>"#.to_string(),
         ),
     }
 }
@@ -114,7 +114,7 @@ async fn analytics_status_partial(
     let html = format!(
         r#"<div class="value"><span class="dot {css_class}"></span> {status}</div>
 <div class="label">Analytics Engine</div>
-<p style="color:var(--text-muted);font-size:0.8rem;margin-top:0.5rem;">{hint}</p>"#,
+<p class="he-hint">{hint}</p>"#,
     );
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }

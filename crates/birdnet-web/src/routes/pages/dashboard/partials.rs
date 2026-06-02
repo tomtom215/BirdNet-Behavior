@@ -79,10 +79,9 @@ fn render_feed_row(
 
     let badge = first_seen.get(&d.sci_name).map_or(String::new(), |fs| {
         if fs == today {
-            r#" <span class="bnb-pill moss" style="font-size:9.5px;">first today</span>"#
-                .to_string()
+            r#" <span class="bnb-pill moss dp-badge">first today</span>"#.to_string()
         } else if fs == &d.date {
-            r#" <span class="bnb-pill rare" style="font-size:9.5px;">rare</span>"#.to_string()
+            r#" <span class="bnb-pill rare dp-badge">rare</span>"#.to_string()
         } else {
             String::new()
         }
@@ -101,7 +100,7 @@ fn render_feed_row(
                     .unwrap_or_default();
                 let safe = escape_html(&basename);
                 format!(
-                    r#"<audio controls preload="none" style="height:30px;width:120px;"><source src="/api/v2/recordings/{safe}" type="audio/wav"></audio>"#
+                    r#"<audio controls preload="none" class="dp-audio-row"><source src="/api/v2/recordings/{safe}" type="audio/wav"></audio>"#
                 )
             },
         );
@@ -109,7 +108,7 @@ fn render_feed_row(
     let fresh_cls = if fresh { " fresh bnb-rise" } else { "" };
     let _ = write!(
         html,
-        r#"<div class="feed-row{fresh_cls}"><a class="ago mono" href="/detections/detail?date={date_enc}&time={time_enc}&name={enc}" style="color:inherit;text-decoration:none;" title="Open detection detail">{time_short}</a>{avatar}<div class="who"><div class="name"><a href="/species/detail?name={enc}" style="color:inherit;">{name}</a>{badge}</div><div class="sci mono">{sci}</div></div>{wave}{conf}{play}</div>"#,
+        r#"<div class="feed-row{fresh_cls}"><a class="ago mono dp-ago" href="/detections/detail?date={date_enc}&time={time_enc}&name={enc}" title="Open detection detail">{time_short}</a>{avatar}<div class="who"><div class="name"><a href="/species/detail?name={enc}" class="dp-link">{name}</a>{badge}</div><div class="sci mono">{sci}</div></div>{wave}{conf}{play}</div>"#,
         avatar = avatar(&d.com_name, ""),
         name = escape_html(&d.com_name),
         sci = escape_html(&d.sci_name),
@@ -153,7 +152,7 @@ pub(super) async fn top_species_partial(
                     .unwrap_or_default();
                 let _ = write!(
                     html,
-                    r#"<div class="list-row" style="grid-template-columns:auto 1fr auto 56px;">{avatar}<div style="min-width:0"><div style="font-weight:500;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"><a href="/species/detail?name={enc}" style="color:inherit;">{n}</a></div><div class="sci mono bnb-meta" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{sci}</div></div><span class="mono tabular" style="font-size:13px;color:var(--fg-2)">{c}</span>{spark}</div>"#,
+                    r#"<div class="list-row dp-top-row">{avatar}<div class="dp-min0"><div class="dp-name"><a href="/species/detail?name={enc}" class="dp-link">{n}</a></div><div class="sci mono bnb-meta dp-ellipsis">{sci}</div></div><span class="mono tabular dp-count">{c}</span>{spark}</div>"#,
                     avatar = avatar(&s.com_name, ""),
                     n = escape_html(&s.com_name),
                     sci = escape_html(&s.sci_name),
@@ -211,7 +210,7 @@ pub(super) async fn species_list_partial(
                 return (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], body);
             }
             let mut html = String::from(
-                r#"<table><thead><tr><th style="width:32px;">#</th><th>Species</th><th>14-day</th><th>Detections</th><th>Confidence</th></tr></thead><tbody>"#,
+                r#"<table><thead><tr><th class="dp-th-num">#</th><th>Species</th><th>14-day</th><th>Detections</th><th>Confidence</th></tr></thead><tbody>"#,
             );
             for (i, s) in species.iter().enumerate() {
                 let enc = simple_url_encode(&s.com_name);
@@ -222,7 +221,7 @@ pub(super) async fn species_list_partial(
                     .unwrap_or_default();
                 let _ = write!(
                     html,
-                    r#"<tr><td class="mono" style="color:var(--fg-4);font-size:11px;">{rank}</td><td><div style="display:flex;align-items:center;gap:10px;">{avatar}<div style="min-width:0;"><div style="font-weight:500;"><a href="/species/detail?name={enc}" style="color:inherit;">{n}</a></div><div class="sci mono bnb-meta">{sci}</div></div></div></td><td>{spark}</td><td class="mono tabular">{c}</td><td>{conf}</td></tr>"#,
+                    r#"<tr><td class="mono dp-rank">{rank}</td><td><div class="dp-cell">{avatar}<div class="dp-min0"><div class="dp-name-strong"><a href="/species/detail?name={enc}" class="dp-link">{n}</a></div><div class="sci mono bnb-meta">{sci}</div></div></div></td><td>{spark}</td><td class="mono tabular">{c}</td><td>{conf}</td></tr>"#,
                     rank = i + 1,
                     avatar = avatar(&s.com_name, ""),
                     n = escape_html(&s.com_name),
@@ -326,8 +325,7 @@ pub(super) async fn most_recent_partial(
         return (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
-            "<p style=\"color:var(--text-muted);text-align:center;padding:1.5rem 0;\">No detections yet.</p>"
-                .to_string(),
+            "<p class=\"dp-empty\">No detections yet.</p>".to_string(),
         );
     };
 
@@ -351,7 +349,7 @@ pub(super) async fn most_recent_partial(
             let safe_b = escape_html(&basename);
             format!(
                 "<audio controls preload=\"metadata\" \
-                    style=\"width:100%;margin-top:0.6rem;height:32px;\">\
+                    class=\"dp-audio\">\
                   <source src=\"/api/v2/recordings/{safe_b}\" type=\"audio/wav\">\
                 </audio>",
             )
@@ -359,15 +357,15 @@ pub(super) async fn most_recent_partial(
         .unwrap_or_default();
 
     let html = format!(
-        "<div style=\"display:flex;align-items:flex-start;gap:1rem;flex-wrap:wrap;\">\
-           <div style=\"flex:1;min-width:200px;\">\
-             <div style=\"display:flex;align-items:center;gap:0.5rem;margin-bottom:0.2rem;\">\
+        "<div class=\"dp-recent\">\
+           <div class=\"dp-recent-main\">\
+             <div class=\"dp-recent-head\">\
                <a href=\"/species/detail?name={enc}\" \
-                  style=\"font-size:1.1rem;font-weight:700;color:var(--text);\">{com_safe}</a>\
+                  class=\"dp-recent-name\">{com_safe}</a>\
                <span class=\"conf {cls}\">{conf_pct:.0}%</span>\
              </div>\
-             <div style=\"color:var(--text-muted);font-size:0.85rem;font-style:italic;\">{sci_safe}</div>\
-             <div style=\"color:var(--text-muted);font-size:0.8rem;margin-top:0.2rem;\">\
+             <div class=\"dp-recent-sci\">{sci_safe}</div>\
+             <div class=\"dp-recent-date\">\
                {date_safe} &nbsp;&#9679;&nbsp; {time_safe}\
              </div>\
              {audio_html}\

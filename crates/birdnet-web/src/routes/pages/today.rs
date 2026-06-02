@@ -145,9 +145,7 @@ async fn today_partial(
             let mut html = String::with_capacity(4096);
 
             if detections.is_empty() && offset == 0 {
-                html.push_str(
-                    "<p style=\"color:var(--text-muted);text-align:center;padding:2rem;\">No detections found today.</p>",
-                );
+                html.push_str("<p class=\"tdl-empty\">No detections found today.</p>");
                 return (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html);
             }
 
@@ -174,11 +172,10 @@ async fn today_partial(
                 let remaining = total_u.saturating_sub(shown);
                 let _ = write!(
                     html,
-                    "<div style=\"text-align:center;padding:1rem;\">\
+                    "<div class=\"tdl-more\">\
                      <button hx-get=\"/pages/today-list?offset={shown}&limit={limit}{search_param}\" \
                      hx-target=\"#today-results\" hx-swap=\"innerHTML\" \
-                     style=\"background:var(--bg-hover);border:1px solid var(--border);color:var(--text);\
-                     padding:0.5rem 1.5rem;border-radius:var(--radius);cursor:pointer;font-size:0.9rem;\">\
+                     class=\"tdl-more-btn\">\
                      Load {limit} more ({remaining} remaining)\
                      </button></div>",
                 );
@@ -247,7 +244,7 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
             format!(
-                r#"<div class="bnb-meta" style="display:flex;gap:18px;align-items:center;justify-content:center;padding:1rem;">
+                r#"<div class="bnb-meta tdl-strip-empty">
   <span>No detections yet today.</span>
   {moon_badge_quiet}
 </div>"#
@@ -313,7 +310,7 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
     };
 
     let caption = format!(
-        r#"<div class="bnb-meta" style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;margin-bottom:10px;"><span class="mono">{peak_hour:02}:00 peak hour</span><span>{dawn} in the dawn chorus</span><span>{total} total today</span>{moon_badge}</div>"#
+        r#"<div class="bnb-meta tdl-caption"><span class="mono">{peak_hour:02}:00 peak hour</span><span>{dawn} in the dawn chorus</span><span>{total} total today</span>{moon_badge}</div>"#
     );
     let strip = super::viz::day_strip(&hourly, &dots, 6.0, 19.5, now_h);
     let overlay_strip = format!(
@@ -355,7 +352,7 @@ fn render_detection_card(html: &mut String, d: &birdnet_db::sqlite::DetectionRow
                 .unwrap_or_default();
             let safe = escape_html(&basename);
             format!(
-                "<audio controls preload=\"none\" style=\"height:30px;width:200px;max-width:100%;margin-top:6px;\">\
+                "<audio controls preload=\"none\" class=\"tdl-audio\">\
                  <source src=\"/api/v2/recordings/{safe}\" type=\"audio/wav\">\
                  </audio>"
             )
@@ -375,18 +372,18 @@ fn render_detection_card(html: &mut String, d: &birdnet_db::sqlite::DetectionRow
 
     let _ = write!(
         html,
-        "<div class=\"bnb-card\" style=\"display:flex;gap:14px;align-items:center;padding:10px 14px;margin-bottom:8px;\">\
+        "<div class=\"bnb-card tdl-card\">\
          {av}\
-         <div style=\"flex:1;min-width:0;\">\
-         <div style=\"display:flex;align-items:center;gap:10px;flex-wrap:wrap;\">\
-         <a href=\"/species/detail?name={enc_name}\" style=\"font-weight:500;color:inherit;font-size:14px;\">{com_name}</a>\
+         <div class=\"tdl-card-main\">\
+         <div class=\"tdl-card-head\">\
+         <a href=\"/species/detail?name={enc_name}\" class=\"tdl-name\">{com_name}</a>\
          {conf}\
          </div>\
-         <div class=\"bnb-meta mono\" style=\"margin-top:2px;\">{sci_name} · \
-         <a href=\"/detections/detail?date={date_enc}&time={time_enc}&name={enc_name}\" style=\"color:inherit;\">{time}</a></div>\
+         <div class=\"bnb-meta mono tdl-card-sci\">{sci_name} · \
+         <a href=\"/detections/detail?date={date_enc}&time={time_enc}&name={enc_name}\" class=\"tdl-time\">{time}</a></div>\
          {audio}\
          </div>\
-         <div style=\"display:flex;gap:6px;flex-shrink:0;\">\
+         <div class=\"tdl-card-actions\">\
          <button class=\"bnb-btn ghost\" hx-post=\"/pages/today-lock\" \
          hx-vals='{{\"date\":\"{date_raw}\",\"time\":\"{time_raw}\",\"sci_name\":\"{sci_name_raw}\"}}' \
          hx-target=\"#today-results\" hx-swap=\"innerHTML\" hx-include=\"#today-search\" \
