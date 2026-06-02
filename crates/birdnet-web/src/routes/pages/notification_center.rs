@@ -63,7 +63,7 @@ async fn notif_history_partial(
                 return (
                     StatusCode::OK,
                     [(header::CONTENT_TYPE, "text/html")],
-                    r#"<p style="color:var(--text-muted);text-align:center;padding:2rem;">No notifications sent yet.</p>"#.to_string(),
+                    r#"<p class="nc-empty">No notifications sent yet.</p>"#.to_string(),
                 );
             }
 
@@ -89,11 +89,11 @@ async fn notif_history_partial(
                 let _ = write!(
                     html,
                     "<tr>\
-                     <td style=\"font-size:0.85rem;color:var(--text-muted);white-space:nowrap;\">{time}</td>\
-                     <td><span style=\"background:var(--bg-hover);padding:0.1rem 0.5rem;border-radius:4px;font-size:0.8rem;\">{channel}</span></td>\
+                     <td class=\"nc-time\">{time}</td>\
+                     <td><span class=\"nc-channel\">{channel}</span></td>\
                      <td>{species}</td>\
                      <td><span class=\"conf {status_cls}\">{status}</span></td>\
-                     <td style=\"font-size:0.85rem;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;\">{msg}</td>\
+                     <td class=\"nc-msg\">{msg}</td>\
                      </tr>",
                     time = escape_html(&e.sent_at),
                     channel = escape_html(&e.channel),
@@ -130,15 +130,15 @@ async fn notif_stats_partial(State(state): State<AppState>) -> impl axum::respon
                   <div class=\"label\">Total (30 days)</div>\
                 </div>\
                 <div class=\"stat-card\">\
-                  <div class=\"value\" style=\"color:var(--success);\">{sent}</div>\
+                  <div class=\"value nc-v-sent\">{sent}</div>\
                   <div class=\"label\">Sent</div>\
                 </div>\
                 <div class=\"stat-card\">\
-                  <div class=\"value\" style=\"color:var(--danger);\">{failed}</div>\
+                  <div class=\"value nc-v-failed\">{failed}</div>\
                   <div class=\"label\">Failed</div>\
                 </div>\
                 <div class=\"stat-card\">\
-                  <div class=\"value\" style=\"color:var(--warning);\">{skipped}</div>\
+                  <div class=\"value nc-v-skipped\">{skipped}</div>\
                   <div class=\"label\">Skipped</div>\
                 </div>",
             );
@@ -152,7 +152,7 @@ async fn notif_stats_partial(State(state): State<AppState>) -> impl axum::respon
     }
 }
 
-const NOTIFICATION_HTML: &str = r#"<div class="bnb-eyebrow" style="display:flex;align-items:center;gap:10px;"><span>Operations</span>{{help_link}}</div><h1 class="display" style="font-size:34px;margin-bottom:1rem;">Notifications</h1>
+const NOTIFICATION_HTML: &str = r#"<div class="bnb-eyebrow nc-eyebrow"><span>Operations</span>{{help_link}}</div><h1 class="display nc-h1">Notifications</h1>
 
 <div class="stats-grid" hx-get="/pages/notif-stats" hx-trigger="load, every 60s" hx-swap="innerHTML">
     <div class="stat-card"><div class="value">--</div><div class="label">Loading...</div></div>
@@ -160,10 +160,10 @@ const NOTIFICATION_HTML: &str = r#"<div class="bnb-eyebrow" style="display:flex;
 
 <div class="card">
     <h2>Notification History</h2>
-    <p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:1rem;">
+    <p class="nc-lede">
         Recent notifications across all channels (last 30 days).
     </p>
     <div hx-get="/pages/notif-history" hx-trigger="load, every 30s" hx-swap="innerHTML">
-        <p style="color:var(--text-muted);">Loading history...</p>
+        <p class="nc-loading">Loading history...</p>
     </div>
 </div>"#;

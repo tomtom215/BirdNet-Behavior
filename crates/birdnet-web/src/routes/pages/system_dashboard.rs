@@ -116,9 +116,9 @@ async fn sys_vitals_partial(State(_state): State<AppState>) -> impl axum::respon
             // Uptime is a duration, not a ratio — keep it as a clean value tile.
             let _ = write!(
                 html,
-                "<div class=\"stat-card\" style=\"display:flex;flex-direction:column;align-items:center;justify-content:center;\">\
-                  <div class=\"display\" style=\"font-size:24px;\">{uptime}</div>\
-                  <div class=\"label\" style=\"margin-top:6px;\">System uptime</div>\
+                "<div class=\"stat-card sys-uptime-card\">\
+                  <div class=\"display sys-uptime-val\">{uptime}</div>\
+                  <div class=\"label sys-uptime-label\">System uptime</div>\
                 </div>",
                 uptime = escape_html(&uptime),
             );
@@ -153,14 +153,14 @@ fn arc_gauge(pct: f64, center: &str, label: &str, sub: &str, color: &str) -> Str
     let (vx, vy) = xy(start + v_sweep);
     let large_v = i32::from(v_sweep > 180.0);
     format!(
-        "<div class=\"stat-card\" style=\"display:flex;flex-direction:column;align-items:center;\">\
-          <svg viewBox=\"0 0 120 100\" width=\"128\" style=\"max-width:100%;\" aria-hidden=\"true\">\
+        "<div class=\"stat-card sys-gauge-card\">\
+          <svg viewBox=\"0 0 120 100\" width=\"128\" class=\"sys-gauge-svg\" aria-hidden=\"true\">\
             <path d=\"M{sx:.1},{sy:.1} A{r},{r} 0 1 1 {ex:.1},{ey:.1}\" fill=\"none\" stroke=\"var(--surface-2)\" stroke-width=\"9\" stroke-linecap=\"round\"/>\
             <path d=\"M{sx:.1},{sy:.1} A{r},{r} 0 {large_v} 1 {vx:.1},{vy:.1}\" fill=\"none\" stroke=\"{color}\" stroke-width=\"9\" stroke-linecap=\"round\"/>\
-            <text x=\"60\" y=\"62\" text-anchor=\"middle\" class=\"display\" style=\"font-size:24px;fill:var(--fg);\">{center}</text>\
+            <text x=\"60\" y=\"62\" text-anchor=\"middle\" class=\"display sys-gauge-text\">{center}</text>\
           </svg>\
-          <div class=\"label\" style=\"font-weight:500;\">{label}</div>\
-          <div class=\"bnb-meta\" style=\"font-size:10.5px;\">{sub}</div>\
+          <div class=\"label sys-gauge-label\">{label}</div>\
+          <div class=\"bnb-meta sys-gauge-sub\">{sub}</div>\
         </div>",
     )
 }
@@ -184,10 +184,10 @@ async fn sys_disk_partial(State(state): State<AppState>) -> impl axum::response:
             #[allow(clippy::cast_precision_loss)]
             let db_mb = db_size as f64 / 1_048_576.0;
             let html = format!(
-                "<table style=\"font-size:0.9rem;\">\
-                 <tr><td style=\"font-weight:600;padding-right:1rem;\">Database Path</td>\
+                "<table class=\"sys-table\">\
+                 <tr><td class=\"sys-th\">Database Path</td>\
                  <td><code>{dir}</code></td></tr>\
-                 <tr><td style=\"font-weight:600;padding-right:1rem;\">Database Size</td>\
+                 <tr><td class=\"sys-th\">Database Size</td>\
                  <td>{db_mb:.1} MB</td></tr>\
                  </table>",
                 dir = escape_html(&dir),
@@ -218,19 +218,19 @@ async fn sys_database_partial(State(state): State<AppState>) -> impl axum::respo
     match result {
         Ok((total, species, days, integrity)) => {
             let status_badge = if integrity {
-                r#"<span style="color:var(--success);font-weight:600;">OK</span>"#
+                r#"<span class="sys-ok">OK</span>"#
             } else {
-                r#"<span style="color:var(--danger);font-weight:600;">CORRUPT</span>"#
+                r#"<span class="sys-bad">CORRUPT</span>"#
             };
             let html = format!(
-                "<table style=\"font-size:0.9rem;\">\
-                 <tr><td style=\"font-weight:600;padding-right:1rem;\">Total Detections</td>\
+                "<table class=\"sys-table\">\
+                 <tr><td class=\"sys-th\">Total Detections</td>\
                  <td>{total}</td></tr>\
-                 <tr><td style=\"font-weight:600;padding-right:1rem;\">Unique Species</td>\
+                 <tr><td class=\"sys-th\">Unique Species</td>\
                  <td>{species}</td></tr>\
-                 <tr><td style=\"font-weight:600;padding-right:1rem;\">Days with Data</td>\
+                 <tr><td class=\"sys-th\">Days with Data</td>\
                  <td>{days}</td></tr>\
-                 <tr><td style=\"font-weight:600;padding-right:1rem;\">Integrity Check</td>\
+                 <tr><td class=\"sys-th\">Integrity Check</td>\
                  <td>{status_badge}</td></tr>\
                  </table>",
             );
@@ -250,12 +250,12 @@ async fn sys_uptime_partial(State(_state): State<AppState>) -> impl axum::respon
     let rust_version = env!("CARGO_PKG_RUST_VERSION");
 
     let html = format!(
-        "<table style=\"font-size:0.9rem;\">\
-         <tr><td style=\"font-weight:600;padding-right:1rem;\">Version</td>\
+        "<table class=\"sys-table\">\
+         <tr><td class=\"sys-th\">Version</td>\
          <td>v{version}</td></tr>\
-         <tr><td style=\"font-weight:600;padding-right:1rem;\">MSRV</td>\
+         <tr><td class=\"sys-th\">MSRV</td>\
          <td>Rust {rust_version}</td></tr>\
-         <tr><td style=\"font-weight:600;padding-right:1rem;\">Analytics</td>\
+         <tr><td class=\"sys-th\">Analytics</td>\
          <td>{analytics}</td></tr>\
          </table>",
         analytics = if cfg!(feature = "analytics") {
@@ -288,10 +288,10 @@ async fn sys_audio_partial(State(state): State<AppState>) -> impl axum::response
     match result {
         Ok((dir, count)) => {
             let html = format!(
-                "<table style=\"font-size:0.9rem;\">\
-                 <tr><td style=\"font-weight:600;padding-right:1rem;\">Recording Directory</td>\
+                "<table class=\"sys-table\">\
+                 <tr><td class=\"sys-th\">Recording Directory</td>\
                  <td><code>{dir}</code></td></tr>\
-                 <tr><td style=\"font-weight:600;padding-right:1rem;\">Audio Files</td>\
+                 <tr><td class=\"sys-th\">Audio Files</td>\
                  <td>{count}</td></tr>\
                  </table>",
                 dir = escape_html(&dir),
@@ -308,12 +308,12 @@ async fn sys_audio_partial(State(state): State<AppState>) -> impl axum::response
 
 const DISPLAY_PREFS_HTML: &str = include_str!("../../../templates/_partial_display_prefs.html");
 
-const SYSTEM_DASHBOARD_HTML: &str = r#"<div class="page-head" style="margin-bottom:var(--pad-3);">
+const SYSTEM_DASHBOARD_HTML: &str = r#"<div class="page-head sys-head">
     <div>
         <div class="bnb-eyebrow">Operations</div>
-        <h1 class="display" style="font-size:34px;">System health</h1>
+        <h1 class="display sys-h1">System health</h1>
         {{help_link}}
-        <p class="bnb-meta" style="margin-top:4px;">Live vitals for this station — CPU, memory, temperature, storage, and the audio pipeline.</p>
+        <p class="bnb-meta sys-lede">Live vitals for this station — CPU, memory, temperature, storage, and the audio pipeline.</p>
     </div>
 </div>
 
@@ -329,14 +329,14 @@ const SYSTEM_DASHBOARD_HTML: &str = r#"<div class="page-head" style="margin-bott
         <div class="card">
             <h2>Database</h2>
             <div hx-get="/pages/sys-database" hx-trigger="load, every 60s" hx-swap="innerHTML">
-                <p style="color:var(--text-muted);">Loading...</p>
+                <p class="sys-loading">Loading...</p>
             </div>
         </div>
 
         <div class="card">
             <h2>Disk</h2>
             <div hx-get="/pages/sys-disk" hx-trigger="load, every 60s" hx-swap="innerHTML">
-                <p style="color:var(--text-muted);">Loading...</p>
+                <p class="sys-loading">Loading...</p>
             </div>
         </div>
     </div>
@@ -345,14 +345,14 @@ const SYSTEM_DASHBOARD_HTML: &str = r#"<div class="page-head" style="margin-bott
         <div class="card">
             <h2>Version &amp; Runtime</h2>
             <div hx-get="/pages/sys-uptime" hx-trigger="load" hx-swap="innerHTML">
-                <p style="color:var(--text-muted);">Loading...</p>
+                <p class="sys-loading">Loading...</p>
             </div>
         </div>
 
         <div class="card">
             <h2>Audio Pipeline</h2>
             <div hx-get="/pages/sys-audio" hx-trigger="load, every 30s" hx-swap="innerHTML">
-                <p style="color:var(--text-muted);">Loading...</p>
+                <p class="sys-loading">Loading...</p>
             </div>
         </div>
     </div>

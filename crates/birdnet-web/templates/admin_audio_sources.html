@@ -5,18 +5,17 @@
 -->
 <div data-screen-label="Audio sources" data-om-validate>
 
-  <header class="page-head" style="align-items:flex-start;">
+  <header class="page-head aas-head">
     <div>
       <div class="bnb-eyebrow">Station setup · primary support surface</div>
-      <h1 class="display"
-          style="font-size:48px;line-height:1.05;letter-spacing:-0.02em;text-wrap:balance;">
+      <h1 class="display aas-h1">
         Audio sources
       </h1>
-      <p class="bnb-meta" style="margin-top:6px;max-width:580px;">
+      <p class="bnb-meta aas-lede">
         Every microphone and stream this station listens to.
       </p>
     </div>
-    <div class="pill-row" style="margin:0;">{{pending_changes}}</div>
+    <div class="pill-row aas-pills">{{pending_changes}}</div>
   </header>
 
   <!-- ═══════════════════════════════════════════════════════════
@@ -28,12 +27,12 @@
         <div class="bnb-eyebrow">Local microphones</div>
         <h3>USB · ALSA · PipeWire</h3>
       </div>
-      <div style="display:inline-flex;align-items:center;gap:12px;">
+      <div class="aas-count">
         <span class="bnb-meta mono">{{count_local}}</span>
         <button class="bnb-btn"
                 type="button"
                 onclick="document.getElementById('add-local').open = true; document.getElementById('add-local').scrollIntoView({block:'nearest'});">
-          <span aria-hidden="true" style="color:var(--moss-ink);font-weight:600;">+</span>
+          <span aria-hidden="true" class="aas-plus">+</span>
           Add microphone
         </button>
       </div>
@@ -62,7 +61,7 @@
             <label for="lt-pipe" data-kind="pipe"><span class="bnb-type-dot"></span> PipeWire</label>
           </div>
 
-          <h4 style="margin-top:18px;">Connection</h4>
+          <h4 class="aas-h4-mt">Connection</h4>
           <div class="bnb-field-grid">
             <div class="bnb-field wide">
               <label class="bnb-eyebrow" for="lt-id">Device id</label>
@@ -102,18 +101,18 @@
   <!-- ═══════════════════════════════════════════════════════════
        Network streams (RTSP)
        ═══════════════════════════════════════════════════════════ -->
-  <section class="bnb-card pad" style="margin-top:var(--pad-3);" {{hidden_rtsp}}>
+  <section class="bnb-card pad aas-section-mt" {{hidden_rtsp}}>
     <div class="section-header">
       <div>
         <div class="bnb-eyebrow">Network streams</div>
         <h3>RTSP cameras</h3>
       </div>
-      <div style="display:inline-flex;align-items:center;gap:12px;">
+      <div class="aas-count">
         <span class="bnb-meta mono">{{count_rtsp}}</span>
         <button class="bnb-btn"
                 type="button"
                 onclick="document.getElementById('add-rtsp').open = true; document.getElementById('add-rtsp').scrollIntoView({block:'nearest'});">
-          <span aria-hidden="true" style="color:var(--moss-ink);font-weight:600;">+</span>
+          <span aria-hidden="true" class="aas-plus">+</span>
           Add stream
         </button>
       </div>
@@ -184,15 +183,15 @@
         <circle cx="60" cy="40" r="6" fill="var(--surface-2)" stroke="var(--hairline)"/>
         <circle cx="86" cy="40" r="6" fill="var(--surface-2)" stroke="var(--hairline)"/>
       </svg>
-      <h3 class="display" style="font-size:22px;margin-top:14px;">No audio sources yet.</h3>
-      <p class="bnb-meta" style="margin-top:6px;">
+      <h3 class="display aas-empty-h3">No audio sources yet.</h3>
+      <p class="bnb-meta aas-empty-sub">
         Add a microphone or an RTSP stream to start listening.
       </p>
     </div>
   </section>
 
   <!-- Restart-required note -->
-  <p class="bnb-meta mono" style="margin-top:var(--pad-3);display:inline-flex;align-items:center;gap:8px;">
+  <p class="bnb-meta mono aas-restart">
     <span class="bnb-dot dawn" aria-hidden="true"></span>
     Changes apply on the next restart.
   </p>

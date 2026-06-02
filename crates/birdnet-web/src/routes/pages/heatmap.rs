@@ -59,9 +59,9 @@ async fn heatmap_page(headers: HeaderMap) -> Html<String> {
 
 const HEATMAP_CONTENT: &str = r#"<div class="page-head">
   <div>
-    <div class="bnb-eyebrow" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;"><span>Behavioral analytics</span>{{help_link}}</div>
-    <h1 class="display" style="font-size:34px;">When the yard is alive</h1>
-    <p class="bnb-meta" style="margin-top:4px;">Detection frequency by hour of day and day of week.</p>
+    <div class="bnb-eyebrow hm-eyebrow"><span>Behavioral analytics</span>{{help_link}}</div>
+    <h1 class="display hm-h1">When the yard is alive</h1>
+    <p class="bnb-meta hm-lede">Detection frequency by hour of day and day of week.</p>
   </div>
   <div class="seg" id="range-controls">
     <button class="btn active" onclick="loadDays(7, this)">7 days</button>
@@ -310,7 +310,7 @@ const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 #[allow(clippy::too_many_lines)]
 fn render_heatmap_svg(cells: &[HeatmapCell]) -> String {
     if cells.is_empty() {
-        return r#"<p style="color:var(--fg-4);text-align:center;padding:2rem;">
+        return r#"<p class="hm-empty">
             No data available for the selected period.
         </p>"#
             .to_string();
@@ -336,9 +336,9 @@ fn render_heatmap_svg(cells: &[HeatmapCell]) -> String {
     let svg_h = label_h + 7 * cell_h + 40;
 
     let mut svg = format!(
-        r#"<div style="overflow-x:auto;">
+        r#"<div class="hm-scroll">
 <svg xmlns="http://www.w3.org/2000/svg" width="{svg_w}" height="{svg_h}"
-     style="font-family:system-ui,sans-serif;">
+     class="hm-svg">
   <!-- Background -->
   <rect width="{svg_w}" height="{svg_h}" fill="var(--surface)" rx="8"/>
 "#
@@ -459,7 +459,7 @@ fn heat_color(t: f64) -> String {
 
 fn render_hourly_bars(totals: &[birdnet_db::sqlite::HourTotal]) -> String {
     if totals.is_empty() {
-        return r#"<p style="color:var(--fg-4);text-align:center;padding:2rem;">
+        return r#"<p class="hm-empty">
             No data available for the selected period.
         </p>"#
             .to_string();
@@ -474,7 +474,7 @@ fn render_hourly_bars(totals: &[birdnet_db::sqlite::HourTotal]) -> String {
 
     let mut svg = format!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="{svg_w}" height="{svg_h}"
-             style="font-family:system-ui,sans-serif;display:block;">
+             class="hm-svg-block">
   <rect width="{svg_w}" height="{svg_h}" fill="var(--surface)" rx="8"/>
 "#
     );

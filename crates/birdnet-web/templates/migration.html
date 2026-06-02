@@ -6,23 +6,22 @@
   Drop-in: register at /migration (see DIFF.md). Renames the existing
   /admin/migration → /admin/import to free the URL.
 -->
-<div class="page-head" style="align-items:flex-start;" data-screen-label="Migration" data-om-validate>
+<div class="page-head mig-head" data-screen-label="Migration" data-om-validate>
   <div>
-    <div class="bnb-eyebrow" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+    <div class="bnb-eyebrow mig-eyebrow">
       <span>Behavioral analytics · phenology</span>
       {{help_link}}
     </div>
-    <h1 class="display"
-        style="font-size:48px;line-height:1.05;letter-spacing:-0.02em;text-wrap:balance;">
-      Arrivals and <em style="color:var(--moss-ink);">departures</em>.
+    <h1 class="display mig-h1">
+      Arrivals and <em>departures</em>.
     </h1>
-    <p class="bnb-meta" style="margin-top:6px;max-width:620px;">
+    <p class="bnb-meta mig-lede">
       Weekly abundance index for migratory species this year. Each ridge is normalized
       to its own peak so small-population species stay readable. Spring window highlighted
       in green, fall in amber.
     </p>
   </div>
-  <div class="pill-row" style="margin:0;">
+  <div class="pill-row mig-pills">
     <span class="bnb-pill">Calendar year {{year}}</span>
     <span class="bnb-pill">Migratory only</span>
     <span class="bnb-pill">vs. last year</span>
@@ -46,13 +45,13 @@
       <div class="bnb-eyebrow">Ridgeline · per-species weekly index</div>
       <h3>Twelve months of migrants</h3>
     </div>
-    <div style="display:flex;gap:14px;align-items:center;">
-      <span class="bnb-meta" style="display:inline-flex;align-items:center;gap:6px;">
-        <span style="width:10px;height:6px;border-radius:2px;background:color-mix(in oklch, var(--moss) 60%, transparent);"></span>
+    <div class="mig-legend">
+      <span class="bnb-meta mig-legend-item">
+        <span class="mig-swatch spring"></span>
         spring window
       </span>
-      <span class="bnb-meta" style="display:inline-flex;align-items:center;gap:6px;">
-        <span style="width:10px;height:6px;border-radius:2px;background:color-mix(in oklch, var(--dawn) 60%, transparent);"></span>
+      <span class="bnb-meta mig-legend-item">
+        <span class="mig-swatch fall"></span>
         fall window
       </span>
       <span class="bnb-meta mono">w 1 — 52</span>
@@ -63,12 +62,12 @@
        hx-get="/pages/migration-ridgeline"
        hx-trigger="load"
        hx-swap="innerHTML"
-       style="min-height:360px;">
+       class="mig-ridge">
     {{skel_ridgeline}}
   </div>
 
-  <div style="margin-top:14px;padding-top:14px;border-top:0.5px solid var(--hairline);">
-    <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
+  <div class="mig-divider">
+    <div class="mig-divider-head">
       <div class="bnb-eyebrow">Weekly diversity · all species combined</div>
       <span id="migration-diversity-caption" class="bnb-meta mono">—</span>
     </div>
@@ -76,33 +75,33 @@
          hx-get="/pages/migration-diversity"
          hx-trigger="load"
          hx-swap="innerHTML"
-         style="min-height:70px;">
+         class="mig-diversity">
       {{skel_diversity}}
     </div>
   </div>
 </div>
 
 <!-- Editorial cards: just arrived / currently peaking / missing -->
-<div class="grid-2" style="grid-template-columns:1fr 1fr 1fr;">
+<div class="grid-2 mig-cards">
   <div class="bnb-card pad"
        hx-get="/pages/migration-card?kind=arrived"
        hx-trigger="load, every 30m"
        hx-swap="innerHTML">
-    <div class="bnb-eyebrow" style="color:var(--moss-ink);">Just arrived</div>
-    <div class="display" style="font-size:20px;margin-top:8px;">Loading…</div>
+    <div class="bnb-eyebrow mig-card-eb arrived">Just arrived</div>
+    <div class="display mig-card-val">Loading…</div>
   </div>
   <div class="bnb-card pad"
        hx-get="/pages/migration-card?kind=peaking"
        hx-trigger="load, every 30m"
        hx-swap="innerHTML">
-    <div class="bnb-eyebrow" style="color:var(--dawn-ink);">Currently peaking</div>
-    <div class="display" style="font-size:20px;margin-top:8px;">Loading…</div>
+    <div class="bnb-eyebrow mig-card-eb peaking">Currently peaking</div>
+    <div class="display mig-card-val">Loading…</div>
   </div>
   <div class="bnb-card pad"
        hx-get="/pages/migration-card?kind=missing"
        hx-trigger="load, every 30m"
        hx-swap="innerHTML">
-    <div class="bnb-eyebrow" style="color:var(--rare);">Missing</div>
-    <div class="display" style="font-size:20px;margin-top:8px;">Loading…</div>
+    <div class="bnb-eyebrow mig-card-eb missing">Missing</div>
+    <div class="display mig-card-val">Loading…</div>
   </div>
 </div>

@@ -74,7 +74,7 @@ remains is the finish-off work below.
 | ~~**P2-3**~~ | Extend help links to remaining analytical screens — ✅ **DONE** (6 screens) | ~~P2~~ | S | low |
 | **P3-1** | O-13 legacy `--audio-source` retirement — ✅ **DONE** | P3 | S | low |
 | ~~**P3-2**~~ | No background session pruning — ✅ **DONE** (daily maintenance tick) | ~~P3~~ | S | low |
-| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (all admin + 7 public + 5 analytics + onboarding + 6 page templates done; 39-file guard; analytics default-active in QA + query-ordering fix; 1115→479. Next: remaining templates/un-swept-admin/skeletons + endgame) | P3 | L | low (tedious) |
+| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (all admin + 7 public + 5 analytics + onboarding + 6 page templates + 8 standalone admin/system pages done; 47-file guard; analytics default-active in QA + query-ordering fix; 1115→391, all single-quoted `style='` eliminated. Next: system_controls/backup/audio fragments, remaining templates, dynamic skeletons/viz/charts + endgame) | P3 | L | low (tedious) |
 | **P3-4** | Minor cosmetics — uptime pill ✅ **wired**; migration-missing out of scope | P3 | XS | none |
 | ~~**P3-5**~~ | Image blacklist enforcement on read path — ✅ **DONE** (serve-check + purge-on-blacklist) | ~~P3~~ | S | low |
 
@@ -503,6 +503,41 @@ they batch for a Playwright-verified pass; the dynamic ones fold into the endgam
   single-quoted `style='…'`, `audio`), and `pages/skeletons.rs`/`viz.rs`/`charts.rs` (mostly computed, fold
   into the endgame); then the endgame `<style>`-nonce middleware extension after which
   `style-src 'unsafe-inline'` is finally dropped.
+
+- **Slice 12 (batch) — standalone admin & system pages, pixel-diff verified.** Swept eight more screens onto
+  scoped classes: `pages/changelog.rs` (`cl-`), `pages/heatmap.rs` (`hm-`), `pages/notification_center.rs`
+  (`nc-`), `pages/system_dashboard.rs` (`sys-`, distinct from the slice-11 `sd-*`), `admin/rules.rs` (folded
+  into its own `<style>` block — `nav a.here`/`.rule-success`/`.toggle-state.on|off`/`.nowrap`/`.any`/…), and
+  the `login.html` / `migration.html` / `admin_audio_sources.html` templates (`login-*`/`mig-`/`aas-`). The
+  toggle-state and notification-stat colours became enumerable classes; the migration 3-col `.grid-2` override
+  carries its own ≤520px collapse. Legacy `--text-muted`/`--accent`/`--success`/`--danger`/`--warning`/
+  `--bg-hover` tokens preserved verbatim. **This also retired the last two single-quoted `style='…'`** (in
+  `rules.rs`), so the whole crate is now free of single-quoted inline styles (`rg "style='"` → **0**). Guard
+  **39 → 47 files**; workspace raw `style="` **479 → 391** (the residual matches are the documented dynamic
+  exceptions in already-swept files + `data-confirm-style=` data-attributes).
+
+  **Verified (analytics-active QA server + Playwright, light/dark × desktop/mobile).** `audio` / `rules` /
+  `changelog` / `login` / `notifications` pixel-diff to **0 content px** on every variant; `migration` 0 except
+  the shared ~45 px dark-mobile chrome. `heatmap` and `system` residuals are the documented dynamic content —
+  heatmap loads the `/pages/dawn-chorus` polar (a wall-clock "now" hand) + many AA'd SVG cells, system shows
+  live CPU/memory/temperature gauges — confirmed non-CSS by a same-build self-diff of equal magnitude and a
+  side-by-side image check (the styled hero/grid/table regions are pixel-identical). The pixel-diff caught
+  **three real specificity regressions** unit tests never would, all the same `.container element`-beats-`.class`
+  trap the inline styles used to win on: (a) changelog section headers reverted to `.bnb-help-drawer__body h2/h3`
+  (15px + 22px margins ×~70 sections → **+598 px** page height) — fixed by scoping `.cl-body .cl-rel-h2`/
+  `.cl-sec-h3`; (b) login's `<h1>` lost to the mobile `.login-card__head .display{font-size:32px}` rule, and the
+  centred `.login-main` amplified the 6 px shrink into a ~119 k-px vertical shift — fixed with
+  `.login-card__head .login-h1`; (c) the notification stat values lost their colour to `.stat-card .value{color}`
+  — fixed with `.stat-card .value.nc-v-*`. fmt + clippy (`-p birdnet-web --all-targets`) + 311 lib tests + guard
+  all green.
+
+  **Next:** the remaining admin control fragments (`system_controls/{service,update,data,backup}.rs`,
+  `admin/backup.rs`, `admin/audio.rs` row/probe) — mostly POST-triggered result banners, faithfully extractable
+  onto a shared `.ctl-*` vocabulary like slices 2–3; the remaining templates (`share_rare` once the QA server
+  mints a token, `dashboard`, `listen`, JS-toggle `recordings`, cross-cutting `layout`/`_partial_*`); and the
+  computed-heavy `pages/{skeletons,viz,charts,gallery}.rs` (per-element `{…}`/`--sp:` values that fold into the
+  endgame). Then the endgame `<style>`-nonce middleware extension after which `style-src 'unsafe-inline'` is
+  dropped.
 
 ---
 
