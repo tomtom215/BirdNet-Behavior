@@ -132,8 +132,8 @@ pub fn router() -> Router<AppState> {
 /// slot when the request carries a valid `bnb-session` cookie. Posts to
 /// `/logout` which revokes the bound session row and clears the cookie.
 /// Matches the form shipped inside the admin shell for visual parity.
-pub(crate) const SIGN_OUT_LINK_HTML: &str = r#"<form action="/logout" method="post" class="topnav-signout" style="display:inline;">
-  <button type="submit" class="bnb-btn ghost" style="font-size:.875rem;padding:.25rem .75rem;">Sign out</button>
+pub(crate) const SIGN_OUT_LINK_HTML: &str = r#"<form action="/logout" method="post" class="topnav-signout pm-signout-form">
+  <button type="submit" class="bnb-btn ghost pm-signout-btn">Sign out</button>
 </form>"#;
 
 /// Render a full page, populating the `{{sign_out_link}}` slot when the
@@ -233,10 +233,10 @@ fn render_page_inner(
 pub(crate) async fn not_found(headers: axum::http::HeaderMap) -> impl axum::response::IntoResponse {
     let body = render_page_for_request(
         "Page not found",
-        r#"<section class="bnb-card" style="max-width:560px;margin:48px auto;text-align:center;padding:40px 28px;">
-  <div class="display" style="font-size:48px;line-height:1;margin-bottom:8px;">404</div>
-  <h1 style="margin:0 0 10px;font-size:20px;">That page flew off</h1>
-  <p style="opacity:.8;margin:0 0 20px;">The link may be stale, or the page may have moved. Check the address, or head back to the dashboard.</p>
+        r#"<section class="bnb-card pm-404-card">
+  <div class="display pm-404-code">404</div>
+  <h1 class="pm-404-title">That page flew off</h1>
+  <p class="pm-404-text">The link may be stale, or the page may have moved. Check the address, or head back to the dashboard.</p>
   <a class="bnb-btn" href="/">Back to the dashboard</a>
 </section>"#,
         "",

@@ -100,6 +100,14 @@ const SWEPT_FILES: &[&str] = &[
     "templates/_partial_confirm_modal.html",
     "templates/_partial_audio_source_row.html",
     "templates/_partial_display_prefs.html",
+    // ── last-mile page render-modules + recordings/share templates (slice 16) ──
+    "src/routes/pages/audio_player.rs",
+    "src/routes/pages/dashboard/kiosk.rs",
+    "src/routes/pages/mod.rs",
+    "src/routes/pages/empty_states.rs",
+    "src/routes/share.rs",
+    "templates/recordings.html",
+    "templates/share_rare.html",
 ];
 
 /// Returns true if the inline-style payload (the text inside `style="…"`) is a

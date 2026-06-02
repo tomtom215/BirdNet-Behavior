@@ -3240,3 +3240,76 @@ select.ls-select { font-family: var(--font-mono); font-size: 13px; padding: 8px 
 .asr-remove      { color: var(--rare); }
 .dpf-label       { font-weight: 500; }
 .dpf-foot        { margin-top: 14px; padding-top: 14px; border-top: 0.5px solid var(--hairline); }
+
+/* ══ O-25 sweep — last-mile page render-modules + recordings/share templates ══ */
+
+/* audio_player.rs (player page). The pause icon's display:none + the play/pause
+   toggle were converted from `.style.display=` to a `.ap-hidden` class toggle
+   (CSP-clean: no source inline style). */
+.ap-speed-label  { margin-left: 1rem; }
+.ap-download     { margin-left: auto; }
+.ap-page         { max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+.ap-nav          { margin-bottom: 1.5rem; }
+a.ap-back        { color: var(--accent, var(--moss-ink)); text-decoration: none; }
+.ap-hidden       { display: none; }
+
+/* dashboard/kiosk.rs (standalone kiosk page). */
+.ki-fg           { color: var(--fg); }
+.ki-fg3          { color: var(--fg-3); }
+.ki-loading      { text-align: center; color: var(--fg-3); }
+
+/* pages/mod.rs (sign-out fragment + 404 page). */
+.pm-signout-form { display: inline; }
+.pm-signout-btn  { font-size: .875rem; padding: .25rem .75rem; }
+.pm-404-card     { max-width: 560px; margin: 48px auto; text-align: center; padding: 40px 28px; }
+.pm-404-code     { font-size: 48px; line-height: 1; margin-bottom: 8px; }
+.pm-404-title    { margin: 0 0 10px; font-size: 20px; }
+.pm-404-text     { opacity: .8; margin: 0 0 20px; }
+
+/* empty_states.rs (6 blocks reuse .es-h / .es-sub; one a.es-link). */
+.es-h            { font-size: 22px; margin-top: 14px; }
+.es-sub          { margin-top: 6px; }
+a.es-link        { color: var(--moss-ink); }
+
+/* share.rs ("clip is gone" error page, standalone). */
+.sh-gone         { max-width: 520px; margin: 0 auto; padding: 80px 24px; text-align: center; }
+.sh-gone-title   { font-size: 48px; }
+.sh-gone-text    { margin-top: 8px; }
+
+/* Recordings page template (recordings.html) — rt- avoids recordings.rs's rec-*.
+   Tabs + view toggling are now pure class toggles (.rt-tab.active / .rt-hidden). */
+.rt-head         { margin-bottom: var(--pad-3); }
+.rt-eyebrow      { display: flex; align-items: center; gap: 10px; }
+.rt-h1           { font-size: 34px; }
+.rt-card-mb      { margin-bottom: 1rem; }
+.rt-tabs         { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+.rt-tab          { padding: 0.4rem 1rem; border-radius: var(--radius); border: 1px solid var(--border); cursor: pointer; font-size: 0.9rem; background: var(--bg-card); color: var(--text-muted); }
+.rt-tab.active   { background: var(--bg-hover); color: var(--text); }
+.rt-loading      { color: var(--text-muted); }
+.rt-hidden       { display: none; }
+
+/* Public share page (share_rare.html, standalone). The about-grid override
+   relied on the global [style*="grid-template-columns"] ≤520px reset. */
+.sr-main         { max-width: 780px; margin: 0 auto; padding: 48px 24px 64px; }
+.sr-id-strip     { display: flex; align-items: center; gap: 10px; padding-bottom: 24px; border-bottom: 0.5px solid var(--hairline); margin-bottom: 32px; }
+.sr-logo         { color: var(--fg); }
+.sr-brand        { display: flex; flex-direction: column; line-height: 1.15; }
+.sr-brand-name   { font-weight: 600; font-size: 13px; }
+.sr-brand-sub    { color: var(--fg-3); }
+.sr-handle       { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+.sr-eyebrow-mb   { margin-bottom: 8px; }
+.sr-h1           { font-size: 64px; line-height: 1.02; letter-spacing: -0.025em; text-wrap: balance; }
+.sr-sci          { color: var(--fg-3); font-style: italic; font-size: 14px; margin-top: 6px; }
+.sr-pills-mt     { margin-top: 16px; }
+.sr-mt-32        { margin-top: 32px; }
+.sr-spec-img     { width: 100%; display: block; border-radius: var(--r-md); background: var(--surface-2); }
+.sr-audio        { width: 100%; margin-top: 14px; height: 36px; }
+.sr-about-grid   { margin-top: 32px; grid-template-columns: 1fr 1fr; }
+.sr-about-p      { margin-top: 8px; font-size: 13.5px; line-height: 1.55; color: var(--fg-2); }
+.sr-cta          { margin-top: 12px; padding-left: 0; }
+.sr-share-row    { margin-top: 32px; display: flex; gap: 8px; flex-wrap: wrap; }
+.sr-footer       { margin-top: 48px; padding-top: 24px; border-top: 0.5px solid var(--hairline); color: var(--fg-3); font-size: 12px; }
+a.sr-about       { color: var(--fg-3); }
+@media (max-width: 520px) {
+  .sr-about-grid { grid-template-columns: 1fr; }
+}

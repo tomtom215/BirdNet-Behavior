@@ -35,20 +35,20 @@ const KIOSK_HTML: &str = r#"<!DOCTYPE html>
 <body>
 <div class="kiosk-head">
   <svg width="32" height="32" viewBox="0 0 24 24" aria-hidden="true">
-    <circle cx="12" cy="12" r="11" fill="none" stroke="currentColor" stroke-width="0.8" style="color:var(--fg)"></circle>
-    <g stroke="currentColor" stroke-width="1.4" stroke-linecap="round" style="color:var(--fg)">
+    <circle cx="12" cy="12" r="11" fill="none" stroke="currentColor" stroke-width="0.8" class="ki-fg"></circle>
+    <g stroke="currentColor" stroke-width="1.4" stroke-linecap="round" class="ki-fg">
       <line x1="6" y1="12" x2="6" y2="12"></line><line x1="9" y1="9.5" x2="9" y2="14.5"></line>
       <line x1="12" y1="6" x2="12" y2="18"></line><line x1="15" y1="8" x2="15" y2="16"></line>
       <line x1="18" y1="10.5" x2="18" y2="13.5"></line>
     </g>
   </svg>
-  <span class="title">BirdNet<span style="color:var(--fg-3)">Behavior</span></span>
+  <span class="title">BirdNet<span class="ki-fg3">Behavior</span></span>
 </div>
 <div id="kiosk-content"
      hx-get="/pages/kiosk-content"
      hx-trigger="load, every 30s"
      hx-swap="innerHTML">
-  <p style="text-align:center;color:var(--fg-3);">Loading…</p>
+  <p class="ki-loading">Loading…</p>
 </div>
 <script src="/static/htmx.min.js"></script>
 </body>

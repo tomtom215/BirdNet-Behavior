@@ -74,7 +74,7 @@ remains is the finish-off work below.
 | ~~**P2-3**~~ | Extend help links to remaining analytical screens — ✅ **DONE** (6 screens) | ~~P2~~ | S | low |
 | **P3-1** | O-13 legacy `--audio-source` retirement — ✅ **DONE** | P3 | S | low |
 | ~~**P3-2**~~ | No background session pruning — ✅ **DONE** (daily maintenance tick) | ~~P3~~ | S | low |
-| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (all admin/public/analytics/system screens + home/today + the complete admin control surface + cross-cutting layout/partials done; **73-file guard catches escaped `style=\"` too**; analytics default-active in QA + query-ordering fix; raw `style="` 1115→270, all single-quoted `style='` eliminated. Next: the last page render-modules (migration/audio_player/kiosk/empty_states/mod/share) + recordings/share_rare templates, then the computed-heavy skeletons/viz/charts/gallery fold into the endgame) | P3 | L | low (tedious) |
+| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **static sweep essentially COMPLETE** (every screen + the complete admin/cross-cutting surface + the last page render-modules + recordings/share_rare done; **80-file guard catches escaped `style=\"` too**; raw `style="` 1115→203 — the remainder is *all* genuinely-computed/dynamic: `viz`/`charts`/`gallery`/`skeletons`/`atoms`/`migration` SVG+`--sp` colours + allowlisted bar-widths, i.e. the **endgame's input**). Next: the endgame — emit those as nonce'd `<style>` blocks + drop `style-src 'unsafe-inline'`. ⚠️ Surfaced: P2-2's shipped `script-src` (no `'unsafe-inline'`) blocks inline `on*=` handlers app-wide — separate from this sweep, needs a decision. | P3 | L | low (tedious) |
 | **P3-4** | Minor cosmetics — uptime pill ✅ **wired**; migration-missing out of scope | P3 | XS | none |
 | ~~**P3-5**~~ | Image blacklist enforcement on read path — ✅ **DONE** (serve-check + purge-on-blacklist) | ~~P3~~ | S | low |
 
@@ -630,6 +630,35 @@ they batch for a Playwright-verified pass; the dynamic ones fold into the endgam
   `atoms` + the allowlisted bar widths in already-swept files — which is exactly the input to the **endgame**:
   emit them as per-request nonce'd `<style>` blocks, add the `<style>`-nonce injector sibling to
   `inject_script_nonce`, mirror the nonce into `style-src`, and drop `'unsafe-inline'`.
+
+- **Slice 16 — the static sweep's last mile (sub-agent + 2 templates) + a significant CSP finding.** Swept
+  the 5 remaining clean page render-modules via a delegated sub-agent — `pages/audio_player.rs` (`ap-*`),
+  `dashboard/kiosk.rs` (`ki-*`), `pages/mod.rs` (`pm-*`; sign-out + 404 page), `empty_states.rs` (`es-*`, one
+  heading/subtext class reused ×6), `share.rs` (`sh-*`; the "clip is gone" error page) — plus, by hand, the two
+  tricky templates: `recordings.html` (`rt-*`; the `display:none`/`switchTab` toggling rewritten to a
+  `.rt-hidden`/`.active` **class toggle**, and recordings.rs's `onclick` `style.display=` → `classList`) and
+  `share_rare.html` (`sr-*`; standalone share page, the about-grid carrying its own ≤520px collapse). The
+  `audio_player` play/pause icon was likewise converted from `.style.display=` to a `.ap-hidden` class toggle
+  so the file is inline-style-free. Guard **73 → 80 files**; raw `style="` **270 → 203**. **The static sweep is
+  now essentially complete** — every remaining inline style is genuinely computed (`viz`/`charts`/`gallery`/
+  `skeletons`/`atoms`/`migration` SVG fills + `--sp` colours, `confirm.rs`'s interpolated style) or trivial
+  (the `security.rs` CSP doc-comment; dead un-served `_empty_states.html`).
+
+  **Verified (QA server + Playwright; before-baseline via `git stash` of just the rendering files; a temporary
+  `/r/<token>` mint in the example, reverted before commit, + a fixed `BNB_SHARE_SECRET` for a stable URL).**
+  `/recordings`, the `/r/<token>` **share page** (the 24-style `share_rare`), the share **error** page, and the
+  **404** page all pixel-diff to **0 content px on all four variants**.
+
+  **⚠️ Significant finding (pre-existing, NOT this sweep) — P2-2's `script-src` blocks inline `on*=` handlers.**
+  A click-test of the recordings tabs failed; the browser console shows *"Refused to execute inline event
+  handler because it violates ... script-src 'nonce-…' 'strict-dynamic'."* The shipped P2-2 script-half
+  (`script-src 'nonce' 'strict-dynamic'`, no `'unsafe-inline'`) blocks **every inline event handler**
+  (`onclick`/`onchange`/`onmouseover`/`onerror`/`oninput`), so interactions on ~15 files — recordings tabs,
+  the audio player, heatmap day-switcher, gallery, rules' action select, admin system controls, quarantine,
+  etc. — silently no-op under CSP. P2-2's spot-check passed because the interactions it exercised (theme
+  toggle, command palette) use `addEventListener` in nonced `<script>`s, which work. The fix is to convert
+  inline `on*=` handlers to `addEventListener` (or nonced inline scripts). **Scope/approach is a decision for
+  the maintainer** — tracked separately from the style-src endgame.
 
 ---
 
