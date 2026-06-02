@@ -2,12 +2,10 @@
 
 <div class="card rt-card-mb">
     <div class="rt-tabs">
-        <button class="tab-btn rt-tab active" id="tab-by-species"
-                onclick="switchTab('species')">
+        <button class="tab-btn rt-tab active" id="tab-by-species">
             By Species
         </button>
-        <button class="tab-btn rt-tab" id="tab-by-date"
-                onclick="switchTab('date')">
+        <button class="tab-btn rt-tab" id="tab-by-date">
             By Date
         </button>
     </div>
@@ -51,4 +49,13 @@ function switchTab(tab) {
         htmx.trigger(dateView, 'revealed');
     }
 }
+
+// CSP-safe wiring (no inline on* handlers): tab buttons + delegated row clicks.
+document.getElementById('tab-by-species').addEventListener('click', function () { switchTab('species'); });
+document.getElementById('tab-by-date').addEventListener('click', function () { switchTab('date'); });
+document.addEventListener('click', function (e) {
+    if (e.target.closest('.rec-item')) {
+        document.getElementById('recordings-detail').classList.remove('rt-hidden');
+    }
+});
 </script>

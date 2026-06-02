@@ -102,6 +102,37 @@
         });
     })();
     </script>
+    <!-- Global delegated UI behaviors (CSP-safe; no inline on* handlers):
+         hide opt-in broken images, and copy-to-clipboard buttons. -->
+    <script>
+    (function () {
+        // Hide images that opt in (data-hide-on-error) when they fail to load.
+        document.addEventListener('error', function (e) {
+            var t = e.target;
+            if (t && t.tagName === 'IMG' && t.hasAttribute('data-hide-on-error')) {
+                t.style.display = 'none';
+            }
+        }, true);
+        // Copy-to-clipboard: data-copy-url (origin + path) or data-copy-from
+        // (#id textContent). Optional data-copied-label for the confirmation.
+        document.addEventListener('click', function (e) {
+            var b = e.target.closest('[data-copy-url],[data-copy-from]');
+            if (!b) return;
+            e.preventDefault();
+            var txt = b.hasAttribute('data-copy-url')
+                ? location.origin + b.getAttribute('data-copy-url')
+                : ((document.getElementById(b.getAttribute('data-copy-from')) || {}).textContent || '');
+            var label = b.getAttribute('data-copied-label') || 'Copied!';
+            var orig = b.textContent;
+            var done = function () { b.textContent = label; setTimeout(function () { b.textContent = orig; }, 1500); };
+            if (navigator.clipboard) {
+                navigator.clipboard.writeText(txt).then(done, function () { window.prompt('Copy this:', txt); });
+            } else {
+                window.prompt('Copy this:', txt);
+            }
+        });
+    })();
+    </script>
     <!-- Live detection stream: keeps a reconnecting WebSocket to surface a
          live/offline indicator and dispatch birdnet:detection events. -->
     <script src="/static/live-detections.js" defer></script>

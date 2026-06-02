@@ -31,7 +31,7 @@
         <span class="bnb-meta mono">{{count_local}}</span>
         <button class="bnb-btn"
                 type="button"
-                onclick="document.getElementById('add-local').open = true; document.getElementById('add-local').scrollIntoView({block:'nearest'});">
+                id="add-local-open">
           <span aria-hidden="true" class="aas-plus">+</span>
           Add microphone
         </button>
@@ -90,7 +90,7 @@
 
           <div class="bnb-form-actions">
             <button type="button" class="bnb-btn ghost"
-                    onclick="document.getElementById('add-local').open=false">Cancel</button>
+                    id="add-local-cancel">Cancel</button>
             <button type="submit" class="bnb-btn moss">Save microphone</button>
           </div>
         </form>
@@ -111,7 +111,7 @@
         <span class="bnb-meta mono">{{count_rtsp}}</span>
         <button class="bnb-btn"
                 type="button"
-                onclick="document.getElementById('add-rtsp').open = true; document.getElementById('add-rtsp').scrollIntoView({block:'nearest'});">
+                id="add-rtsp-open">
           <span aria-hidden="true" class="aas-plus">+</span>
           Add stream
         </button>
@@ -161,7 +161,7 @@
 
           <div class="bnb-form-actions">
             <button type="button" class="bnb-btn ghost"
-                    onclick="document.getElementById('add-rtsp').open=false">Cancel</button>
+                    id="add-rtsp-cancel">Cancel</button>
             <button type="submit" class="bnb-btn moss">Save stream</button>
           </div>
         </form>
@@ -225,5 +225,25 @@
       });
     });
   })();
+
+  // Add / Cancel toggles for the <details> add-forms.
+  function wireAddForm(detailsId, openBtnId, cancelBtnId) {
+    var details = document.getElementById(detailsId);
+    var openBtn = document.getElementById(openBtnId);
+    var cancelBtn = document.getElementById(cancelBtnId);
+    if (openBtn && details) {
+      openBtn.addEventListener('click', function () {
+        details.open = true;
+        details.scrollIntoView({ block: 'nearest' });
+      });
+    }
+    if (cancelBtn && details) {
+      cancelBtn.addEventListener('click', function () {
+        details.open = false;
+      });
+    }
+  }
+  wireAddForm('add-local', 'add-local-open', 'add-local-cancel');
+  wireAddForm('add-rtsp', 'add-rtsp-open', 'add-rtsp-cancel');
 })();
 </script>

@@ -445,7 +445,7 @@ async fn species_hero_partial(
     // below, so it isn't shown (cropped, and a second time) on the same page.
     let html = format!(
         r#"<div class="bnb-eyebrow spp-mb8">Best detection</div>
-<img src="/api/v2/spectrogram/{safe_file}" alt="Spectrogram of the loudest detected call" onerror="this.style.display='none'" class="spp-spectrogram" />
+<img src="/api/v2/spectrogram/{safe_file}" alt="Spectrogram of the loudest detected call" data-hide-on-error class="spp-spectrogram" />
 <audio controls preload="metadata" class="spp-audio"><source src="/api/v2/recordings/{safe_file}" type="audio/wav"></audio>
 <div class="bnb-meta mono spp-mt8">{conf_pct:.0}% confidence · {date} {time_short}</div>"#,
     );

@@ -138,9 +138,9 @@ pub fn migration_page(dest_db_path: &str) -> String {
   </div>
 
   <div class="card">
-    <div class="tabs">
-      <button class="tab active" onclick="switchTab('upload')">Upload File</button>
-      <button class="tab" onclick="switchTab('path')">Server Path</button>
+    <div class="tabs" id="migrate-tabs">
+      <button class="tab active" data-tab="upload">Upload File</button>
+      <button class="tab" data-tab="path">Server Path</button>
     </div>
 
     <!-- File upload tab -->
@@ -191,8 +191,13 @@ function switchTab(name) {{
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
-  event.target.classList.add('active');
+  var trigger = document.querySelector('.tab[data-tab="' + name + '"]');
+  if (trigger) trigger.classList.add('active');
 }}
+document.getElementById('migrate-tabs').addEventListener('click', function(e) {{
+  var btn = e.target.closest('button[data-tab]');
+  if (btn) switchTab(btn.dataset.tab);
+}});
 </script>
 </body>
 </html>"##

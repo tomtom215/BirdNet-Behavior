@@ -230,14 +230,14 @@ const LOG_PAGE_HTML: &str = r#"<!DOCTYPE html>
   <h1>Live Log Stream</h1>
 
   <div class="controls">
-    <button class="btn" onclick="clearLog()">Clear</button>
-    <button class="btn" id="pause-btn" onclick="togglePause()">Pause</button>
+    <button class="btn" id="clear-btn">Clear</button>
+    <button class="btn" id="pause-btn">Pause</button>
     <label class="ctl-label">
       <input type="checkbox" id="scroll-lock" checked> Auto-scroll
     </label>
     <label class="ctl-label">
       Filter:
-      <select id="level-filter" class="level-select" onchange="applyFilter()">
+      <select id="level-filter" class="level-select">
         <option value="">All levels</option>
         <option value="level-error">ERROR</option>
         <option value="level-warn">WARN</option>
@@ -289,6 +289,10 @@ const LOG_PAGE_HTML: &str = r#"<!DOCTYPE html>
       line.style.display = (!filter || line.classList.contains(filter)) ? '' : 'none';
     }
   }
+
+  document.getElementById('clear-btn').addEventListener('click', clearLog);
+  document.getElementById('pause-btn').addEventListener('click', togglePause);
+  document.getElementById('level-filter').addEventListener('change', applyFilter);
 </script>
 </body>
 </html>"#;

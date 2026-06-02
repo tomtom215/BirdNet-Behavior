@@ -129,9 +129,7 @@ async fn gallery_grid_partial(
                 let _ = write!(
                     html,
                     "<a href=\"/species/detail?name={enc}\" style=\"text-decoration:none;color:inherit;\">\
-                     <div class=\"card\" style=\"padding:0;overflow:hidden;transition:transform 0.15s,box-shadow 0.15s;cursor:pointer;\" \
-                          onmouseover=\"this.style.transform='translateY(-2px)';this.style.boxShadow='0 4px 12px rgba(0,0,0,0.15)'\" \
-                          onmouseout=\"this.style.transform='';this.style.boxShadow=''\">\
+                     <div class=\"card ga-hover\" style=\"padding:0;overflow:hidden;transition:transform 0.15s,box-shadow 0.15s;cursor:pointer;\">\
                        <div style=\"height:120px;overflow:hidden;position:relative;\">\
                          <div style=\"position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:color-mix(in oklch, {color} 15%, var(--surface));\">\
                            <span class=\"display\" style=\"font-size:1.7rem;letter-spacing:0.04em;color:{color};\">{code}</span>\
@@ -139,7 +137,7 @@ async fn gallery_grid_partial(
                          <img src=\"/api/v2/species/image/{enc_img}/file\" alt=\"{name}\" \
                               loading=\"lazy\" \
                               style=\"position:relative;width:100%;height:100%;object-fit:cover;\" \
-                              onerror=\"this.style.display='none'\">\
+                              data-hide-on-error>\
                        </div>\
                        <div style=\"padding:0.75rem;\">\
                          <div style=\"font-weight:600;font-size:0.9rem;margin-bottom:0.25rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;\">{name}</div>\
