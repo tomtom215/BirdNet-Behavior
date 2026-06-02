@@ -77,7 +77,7 @@ the integration-test and first-run-UX holes.
 | Network-loss degrades gracefully + self-recovers | ✅ capped-backoff integrations |
 | DB corruption self-recovers | ✅ SQLite quarantine/restore (DuckDB analytics DB: G-11) |
 | Soak run shows no resource growth | ⚠️ bounded queues exist; **no soak test proving it** (G-06) |
-| All gates + CI green | ⚠️ green on `main`; **integration-branch PRs un-gated** (G-02); dependabot CI red on a clippy lint (G-03) |
+| All gates + CI green | ✅ green on `main`; AI-branch PRs now gated (G-02 done); dependabot clippy red is a stale weekly target (G-03 deferred) |
 | Cross-compiled artifacts build | ✅ release.yml + CI aarch64 cross-check |
 | Docs let a non-technical user install/upgrade/troubleshoot | ✅ strong; minor drift (onboarding wizard claim — G-09) |
 | Safe auto-update (verify + rollback) | ⚠️ atomic swap + `.bak` rollback, **no integrity verification** (G-01) |
@@ -163,6 +163,12 @@ Verdicts: ✅ EXISTS (solid) · 🟡 PARTIAL · ❌ MISSING. Evidence is `file:l
 
 ## 3. Open decisions (architecturally significant — need maintainer call before building)
 
+> **Resolved 2026-06-02 (maintainer):** **D-1 →** spike an Ubuntu 22.04 (glibc 2.35)
+> release build first; if ONNX Runtime still links, Bookworm is covered with no code
+> change. **D-2 →** attach the model as a shared GitHub release asset, and *possibly* also
+> ship a heavy offline bundle. **D-3 →** yes, gate the AI branches (done in this wave, see
+> G-02). **D-4 / D-5** still open (deferred to their waves). Start point: **Wave 1**.
+
 These shape the plan; I'll verify the facts and bring a recommendation, but the call is yours.
 
 **D-1 — glibc floor / Pi OS Bookworm (G-14).** The native binary needs **glibc ≥ 2.39**
@@ -203,23 +209,34 @@ endpoints, or **de-scope** it and adjust the README. *Recommend wiring it — th
 
 Each gap is independently shippable. `Blocked-by` references the decisions above.
 
-**G-01 — Auto-update has no integrity verification.** *(Track B · P1 · S–M · low risk)*
-`auto_update.rs:188-293` swaps the binary after a plain download; `:323-326` *skips*
-`SHA256SUMS`. Releases publish `SHA256SUMS` (+ SLSA), so the digest is available.
-**Fix:** download `SHA256SUMS`, compute sha256 of the downloaded asset, refuse the swap on
-mismatch; add a rollback-on-failed-start guard/test (restore `.bak` if the new binary fails a
-`--version` smoke). **Verify:** unit test red→green on a tampered byte; manual end-to-end on a
-staged release.
+**G-01 — Auto-update has no integrity verification.** *(Track B · P1 · S–M · low risk)* ✅ **DONE (this wave).**
+`auto_update.rs` previously swapped the binary after a plain download and *skipped* `SHA256SUMS`.
+Now: `check_for_update` parses the release's `SHA256SUMS` into `UpdateInfo.sha256`; `apply_update`
+takes `expected_sha256` and **verifies the downloaded archive before anything touches disk**
+(refusing on mismatch via the new `UpdateError::Integrity`), then **smoke-tests the staged binary**
+(`<binary> --version`) before the swap — a wrong-arch/truncated/incompatible binary is discarded
+and the running binary is left untouched (`UpdateError::SmokeTest`). Defense in depth: checksum
+when available + always smoke-test. Pure helpers (`parse_sha256sums`, `sha256_hex`,
+`verify_integrity`) and the smoke test are unit-tested (FIPS sha256("abc") vector, mismatch
+rejection, exec-fail). Not a signature check — SLSA provenance remains the out-of-band authenticity path.
 
-**G-02 — CI doesn't gate the integration branch.** *(Track E · P1 · XS · low)* `ci.yml:3-7`.
-**Fix:** add the integration branch glob to `push`/`pull_request` (mirror coverage/supply-chain
-if they already do). **Blocked-by:** D-3. **Verify:** open a no-op PR into the integration
-branch and confirm CI runs.
+**G-02 — CI doesn't gate the AI integration branch.** *(Track E · P1 · XS · low)* ✅ **DONE (this wave).**
+Nuance from the audit: the maintainer's real integration branch is **`main`** (dependabot,
+docs, all gates target it) and it *is* CI-gated and green. The un-gated branch is the
+**AI-session** integration branch (`claude/gallant-feynman-*`), since `ci.yml` only triggered on
+`main`/`master`. Fix: added `claude/**` to `ci.yml` `pull_request.branches`, so a slice runs the
+full gate at PR time before it is squash-merged toward `main`. Least-invasive (PR-time only, no
+per-push cost; no-op for ordinary contributors). **Verify:** open a PR into a `claude/**` base and
+confirm CI runs. *(Judgment call — flagged to maintainer; trivially reverted if AI-branch globs in
+committed CI are unwanted.)*
 
-**G-03 — Dependabot CI red on clippy.** *(Track E · P2 · S · low)* The cargo-bump branch fails
-`Clippy (pedantic+nursery, -D warnings)`. **Fix:** reproduce locally on the bumped deps, fix the
-new lints (or `allow` with justification), so the dependency train can land. **Verify:** clippy
-all-features green on the bumped lockfile.
+**G-03 — Dependabot CI red on clippy.** *(Track E · P2 · S · low)* ⏸️ **DEFERRED (documented).**
+The failing run (`cargo-patch-and-minor`, sha `d72a1559`, 2026-06-01) is **stale** — its lockfile
+predates the current tip (e.g. it still carries `sha2 0.10.9`; tip is on `sha2 0.11`). Dependabot
+regenerates this branch weekly, so the specific clippy break is a moving, already-superseded target,
+and `main` is unaffected (green). Chasing it isn't tractable or release-relevant; the right fix is
+to address the lint **when a current bump trips it** (best handled in the maintainer's dependabot
+flow). Re-open if a *fresh* dependabot bump lands red on the integration branch.
 
 **G-04 — Full-pipeline E2E test.** *(Track E · P2 · M · low)* No audio→infer→DB→web test.
 **Fix:** integration test that feeds a known WAV through decode→mel→inference (gated on a test
@@ -273,10 +290,10 @@ intended. **Verify:** broker-down test drops nothing within the bound.
 
 - **Wave 0 — decisions.** Resolve D-1…D-5 (this doc + the questions raised alongside it). Run
   the D-1 glibc spike (try an Ubuntu 22.04 build) so the call is fact-based.
-- **Wave 1 — safety & gate (low ambiguity, high value).**
-  - PR1: **G-01** auto-update integrity verification + rollback-on-failed-start test.
-  - PR2: **G-02** CI triggers on the integration branch *(pending D-3)*.
-  - PR3: **G-03** fix the dependabot clippy red.
+- **Wave 1 — safety & gate (low ambiguity, high value).** ✅ in this branch.
+  - PR1: **G-01** auto-update integrity verification + pre-swap smoke test — ✅ done.
+  - PR2: **G-02** CI gates `claude/**` PRs — ✅ done.
+  - PR3: **G-03** dependabot clippy red — ⏸️ deferred (stale weekly target; `main` green).
 - **Wave 2 — prove the resilience that already exists.**
   - PR4: **G-04** full-pipeline E2E test.
   - PR5: **G-05** migration integration test.
