@@ -74,12 +74,12 @@ pub(crate) fn admin_shell(title: &str, active: &str, body: &str) -> String {
     ];
     let mut nav_html = String::new();
     for (key, href, label) in nav {
-        let style = if key == active {
-            " style=\"color:var(--moss-ink);font-weight:500;\""
+        let attr = if key == active {
+            " class=\"am-nav-active\""
         } else {
             ""
         };
-        let _ = write!(nav_html, "<a href=\"{href}\"{style}>{label}</a>");
+        let _ = write!(nav_html, "<a href=\"{href}\"{attr}>{label}</a>");
     }
     // Sign-out form — appears at the right end of the admin nav. The
     // form posts to /logout which revokes the bound session row before
@@ -89,8 +89,8 @@ pub(crate) fn admin_shell(title: &str, active: &str, body: &str) -> String {
     // a no-op).
     let _ = write!(
         nav_html,
-        r#"<form action="/logout" method="post" style="margin-left:auto;display:inline;">
-  <button type="submit" class="bnb-btn ghost" style="font-size:.875rem;padding:.25rem .75rem;">Sign out</button>
+        r#"<form action="/logout" method="post" class="am-logout-form">
+  <button type="submit" class="bnb-btn ghost am-signout-btn">Sign out</button>
 </form>"#
     );
     // Themed confirmation modal (O-17): admin pages render through this shell,

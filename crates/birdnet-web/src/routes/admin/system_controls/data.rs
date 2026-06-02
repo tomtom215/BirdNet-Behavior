@@ -24,19 +24,17 @@ pub(super) async fn clear_detections(State(state): State<AppState>) -> Html<Stri
     // O-18: toast the destructive outcome.
     match result {
         Ok(Ok(msg)) => toast::with(
-            Html(format!(r#"<p style="color:var(--moss);">{msg}</p>"#)),
+            Html(format!(r#"<p class="ctl-ok">{msg}</p>"#)),
             Toast::success(msg),
         ),
         Ok(Err(e)) => toast::with(
             Html(format!(
-                r#"<p style="color:var(--rare);">Failed to clear data: {e}</p>"#
+                r#"<p class="ctl-err">Failed to clear data: {e}</p>"#
             )),
             Toast::error(format!("Clear data failed: {e}")),
         ),
         Err(e) => toast::with(
-            Html(format!(
-                r#"<p style="color:var(--rare);">Internal error: {e}</p>"#
-            )),
+            Html(format!(r#"<p class="ctl-err">Internal error: {e}</p>"#)),
             Toast::error(format!("Internal error: {e}")),
         ),
     }
@@ -80,17 +78,15 @@ pub(super) async fn clear_extracted(State(state): State<AppState>) -> Html<Strin
     // O-18: toast the outcome.
     match result {
         Ok(Ok(msg)) => toast::with(
-            Html(format!(r#"<p style="color:var(--moss);">{msg}</p>"#)),
+            Html(format!(r#"<p class="ctl-ok">{msg}</p>"#)),
             Toast::success(msg),
         ),
         Ok(Err(e)) => toast::with(
-            Html(format!(r#"<p style="color:var(--rare);">Failed: {e}</p>"#)),
+            Html(format!(r#"<p class="ctl-err">Failed: {e}</p>"#)),
             Toast::error(format!("Clear extracted failed: {e}")),
         ),
         Err(e) => toast::with(
-            Html(format!(
-                r#"<p style="color:var(--rare);">Internal error: {e}</p>"#
-            )),
+            Html(format!(r#"<p class="ctl-err">Internal error: {e}</p>"#)),
             Toast::error(format!("Internal error: {e}")),
         ),
     }

@@ -74,7 +74,7 @@ remains is the finish-off work below.
 | ~~**P2-3**~~ | Extend help links to remaining analytical screens — ✅ **DONE** (6 screens) | ~~P2~~ | S | low |
 | **P3-1** | O-13 legacy `--audio-source` retirement — ✅ **DONE** | P3 | S | low |
 | ~~**P3-2**~~ | No background session pruning — ✅ **DONE** (daily maintenance tick) | ~~P3~~ | S | low |
-| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (admin + public + analytics + onboarding + page templates + home/today + detection-reviews/image-blacklist done; **55-file guard catches escaped `style=\"` too**; analytics default-active in QA + query-ordering fix; raw `style="` 1115→354, escaped `style=\"` 95→43, all single-quoted `style='` eliminated. Next: system_controls/backup/audio fragments, remaining templates, dynamic skeletons/viz/charts/gallery + endgame) | P3 | L | low (tedious) |
+| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (all admin/public/analytics/system screens + home/today + the complete admin control surface + cross-cutting layout/partials done; **73-file guard catches escaped `style=\"` too**; analytics default-active in QA + query-ordering fix; raw `style="` 1115→270, all single-quoted `style='` eliminated. Next: the last page render-modules (migration/audio_player/kiosk/empty_states/mod/share) + recordings/share_rare templates, then the computed-heavy skeletons/viz/charts/gallery fold into the endgame) | P3 | L | low (tedious) |
 | **P3-4** | Minor cosmetics — uptime pill ✅ **wired**; migration-missing out of scope | P3 | XS | none |
 | ~~**P3-5**~~ | Image blacklist enforcement on read path — ✅ **DONE** (serve-check + purge-on-blacklist) | ~~P3~~ | S | low |
 
@@ -600,6 +600,36 @@ they batch for a Playwright-verified pass; the dynamic ones fold into the endgam
   (`share_rare`, `listen`, `recordings`, `layout`/`_partial_*`) and the computed-heavy
   `skeletons`/`viz`/`charts`/`gallery`. With those done the static sweep is essentially complete and the
   endgame (`<style>`-nonce middleware + drop `style-src 'unsafe-inline'`) is ready for design sign-off.
+
+- **Slice 15 (large batch) — the complete admin control surface + cross-cutting layout/partials + listen.**
+  18 files in one PR. The 7 admin files (`system_controls/{service,update,data,backup}.rs` + `admin/backup.rs`
+  + `admin/audio.rs` + `admin/mod.rs`) were swept by a **delegated sub-agent** following the established
+  conventions (shared `.ctl-*` result-banner vocabulary; `bk-*` backup list; `aud-*` edit form scoped
+  `input.`; `a.am-nav-active` scoped to beat the global `a{}`; appended at app.css end so `.aud-edit-*`/
+  `.am-signout-btn` win their cascade over `.audio-source__*`/`.bnb-btn`); I integrated its CSS and
+  centrally verified. The remaining 11 templates I swept directly: `listen.html` (`ls-*`; the animated
+  spectrogram canvas, `select.ls-select` scoped, the always-hidden `<audio>`), the shared `layout.html`
+  (`lay-*` — logo/vrule/inline-flex pills, **on every page**), and the 9 `_partial_*` (`ft-`/`tb-`/`tm-`/
+  `ck-`/`ub-`/`hd-`/`cm-`/`asr-`/`dpf-` — footer dot, the `<dialog>` headings, the display-prefs labels,
+  the audio-source-row remove button). Legacy tokens preserved verbatim. Guard **55 → 73 files**; raw
+  `style="` **354 → 270**.
+
+  **Verified (analytics-active QA server + Playwright, light/dark × desktop/mobile; before-baseline captured
+  via `git stash`).** `/admin/audio` and `/admin/system/backups` pixel-diff to **0 content px on all four
+  variants** — and since they render through the same swept `layout.html` + partials, that *proves the
+  cross-cutting sweep is faithful* (a layout regression would hit every page). The non-zero pages all carry
+  live content — `/admin/system`'s service-status table (PID/uptime/memory), `/system`'s CPU/mem/temp gauges,
+  `/today`'s feed, `/listen`'s animated canvas — confirmed non-CSS by a same-build self-diff of equal
+  magnitude, plus an image check of `/admin/system` showing the `ctl-*` status table + `am-nav-active` shell
+  nav render correctly. fmt + clippy (`-p birdnet-web --all-targets`) + 311 lib tests + hardened guard green.
+
+  **Next (the static sweep's last mile):** the remaining page render-modules — `pages/migration.rs`,
+  `audio_player.rs`, `dashboard/kiosk.rs`, `confirm.rs`, `pages/mod.rs`, `empty_states.rs`, `share.rs` — plus
+  the JS-toggle `recordings.html` and `share_rare.html` (needs the QA server to mint a share token). After
+  that the only inline styles left are the genuinely-computed ones in `skeletons`/`viz`/`charts`/`gallery`/
+  `atoms` + the allowlisted bar widths in already-swept files — which is exactly the input to the **endgame**:
+  emit them as per-request nonce'd `<style>` blocks, add the `<style>`-nonce injector sibling to
+  `inject_script_nonce`, mirror the nonce into `style-src`, and drop `'unsafe-inline'`.
 
 ---
 

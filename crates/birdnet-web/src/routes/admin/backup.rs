@@ -105,7 +105,7 @@ struct BackupEntry {
 
 fn render_backup_list(entries: &[BackupEntry]) -> String {
     let rows = if entries.is_empty() {
-        "<tr><td colspan=\"3\" style=\"color:var(--fg-4);text-align:center;\">No backups found</td></tr>".to_string()
+        "<tr><td colspan=\"3\" class=\"bk-empty\">No backups found</td></tr>".to_string()
     } else {
         {
             use std::fmt::Write as _;
@@ -117,13 +117,13 @@ fn render_backup_list(entries: &[BackupEntry]) -> String {
                 let _ = write!(
                     buf,
                     r#"<tr>
-                  <td style="font-family:monospace;font-size:.8rem;">{name_esc}</td>
-                  <td style="color:var(--fg-3);">{size_str}</td>
-                  <td style="color:var(--fg-4);">{date_str}</td>
-                  <td style="display:flex;gap:.5rem;">
+                  <td class="bk-name">{name_esc}</td>
+                  <td class="bk-size">{size_str}</td>
+                  <td class="bk-date">{date_str}</td>
+                  <td class="bk-actions">
                     <a href="/admin/system/backups/{name_esc}"
                        download="{name_esc}"
-                       style="color:var(--moss-ink);font-size:.8rem;text-decoration:none;">Download</a>
+                       class="bk-download">Download</a>
                     <button hx-delete="/admin/system/backups/{name_esc}"
                             hx-target="closest tr"
                             hx-swap="outerHTML"
@@ -134,7 +134,7 @@ fn render_backup_list(entries: &[BackupEntry]) -> String {
                             data-confirm-body="Delete {name_esc}?"
                             data-confirm-confirm-label="Delete"
                             data-confirm-style="danger"
-                            style="background:none;border:none;color:var(--rare);cursor:pointer;font-size:.8rem;">
+                            class="bk-delete">
                       Delete
                     </button>
                   </td>
@@ -148,13 +148,13 @@ fn render_backup_list(entries: &[BackupEntry]) -> String {
     format!(
         r#"<div class="card">
           <div class="section-title">Database Backups</div>
-          <table style="width:100%;border-collapse:collapse;font-size:.875rem;">
+          <table class="bk-table">
             <thead>
-              <tr style="border-bottom:1px solid var(--border);color:var(--fg-4);text-align:left;">
-                <th style="padding:.5rem;">Filename</th>
-                <th style="padding:.5rem;">Size</th>
-                <th style="padding:.5rem;">Created</th>
-                <th style="padding:.5rem;">Actions</th>
+              <tr class="bk-head-row">
+                <th class="bk-th">Filename</th>
+                <th class="bk-th">Size</th>
+                <th class="bk-th">Created</th>
+                <th class="bk-th">Actions</th>
               </tr>
             </thead>
             <tbody>{rows}</tbody>

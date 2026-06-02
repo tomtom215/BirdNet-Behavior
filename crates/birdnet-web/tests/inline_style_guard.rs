@@ -81,6 +81,25 @@ const SWEPT_FILES: &[&str] = &[
     // ── escaped-quote files the hardened guard surfaced (slice 14) ──
     "src/routes/pages/detection_reviews.rs",
     "src/routes/admin/images.rs",
+    // ── admin control surface + listen + cross-cutting layout/partials (slice 15) ──
+    "src/routes/admin/system_controls/service.rs",
+    "src/routes/admin/system_controls/update.rs",
+    "src/routes/admin/system_controls/data.rs",
+    "src/routes/admin/system_controls/backup.rs",
+    "src/routes/admin/backup.rs",
+    "src/routes/admin/audio.rs",
+    "src/routes/admin/mod.rs",
+    "templates/listen.html",
+    "templates/layout.html",
+    "templates/_partial_footer.html",
+    "templates/_partial_tabbar.html",
+    "templates/_partial_topnav_more.html",
+    "templates/_partial_cmdk.html",
+    "templates/_partial_update_banner.html",
+    "templates/_partial_help_drawer.html",
+    "templates/_partial_confirm_modal.html",
+    "templates/_partial_audio_source_row.html",
+    "templates/_partial_display_prefs.html",
 ];
 
 /// Returns true if the inline-style payload (the text inside `style="…"`) is a

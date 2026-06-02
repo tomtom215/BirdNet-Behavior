@@ -128,16 +128,14 @@ pub(super) async fn restore_backup(
                     file_data = Some(bytes.to_vec());
                 }
                 Err(e) => {
-                    return Html(format!(
-                        r#"<p style="color:var(--rare);">Upload failed: {e}</p>"#
-                    ));
+                    return Html(format!(r#"<p class="ctl-err">Upload failed: {e}</p>"#));
                 }
             }
         }
     }
 
     let Some(data) = file_data else {
-        return Html(r#"<p style="color:var(--rare);">No backup file uploaded.</p>"#.to_string());
+        return Html(r#"<p class="ctl-err">No backup file uploaded.</p>"#.to_string());
     };
 
     let db_path = state.db_path().to_path_buf();
@@ -203,12 +201,8 @@ pub(super) async fn restore_backup(
     .await;
 
     match result {
-        Ok(Ok(msg)) => Html(format!(r#"<p style="color:var(--moss);">{msg}</p>"#)),
-        Ok(Err(e)) => Html(format!(
-            r#"<p style="color:var(--rare);">Restore failed: {e}</p>"#
-        )),
-        Err(e) => Html(format!(
-            r#"<p style="color:var(--rare);">Internal error: {e}</p>"#
-        )),
+        Ok(Ok(msg)) => Html(format!(r#"<p class="ctl-ok">{msg}</p>"#)),
+        Ok(Err(e)) => Html(format!(r#"<p class="ctl-err">Restore failed: {e}</p>"#)),
+        Err(e) => Html(format!(r#"<p class="ctl-err">Internal error: {e}</p>"#)),
     }
 }

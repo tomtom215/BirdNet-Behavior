@@ -413,7 +413,7 @@ fn render_edit_form(row: &AudioSource) -> String {
   <form hx-patch="/admin/audio/sources/{id}"
         hx-target="closest li"
         hx-swap="outerHTML"
-        style="display:contents;">
+        class="aud-edit-form">
     <input type="hidden" name="kind" value="{kind}">
     <div class="audio-source__kind">
       <span class="audio-kind-badge {kind_class}">
@@ -421,13 +421,12 @@ fn render_edit_form(row: &AudioSource) -> String {
         {kind_label}
       </span>
     </div>
-    <div class="audio-source__id" style="display:flex;flex-direction:column;gap:6px;">
+    <div class="audio-source__id aud-edit-id">
       <input name="label" type="text" placeholder="Friendly label" value="{label}"
-             style="font-size:14.5px;padding:6px 8px;border-radius:6px;border:0.5px solid var(--border-2);background:var(--bg-2);color:var(--fg);">
-      <input name="device_id" class="mono" type="text" value="{device_id}" required
-             style="font-size:12px;padding:6px 8px;border-radius:6px;border:0.5px solid var(--border-2);background:var(--bg-2);color:var(--fg);">
+             class="aud-edit-label">
+      <input name="device_id" class="mono aud-edit-device" type="text" value="{device_id}" required>
     </div>
-    <div class="audio-source__right" style="display:inline-flex;gap:8px;">
+    <div class="audio-source__right aud-edit-right">
       <button type="submit" class="bnb-btn moss">Save</button>
       <button type="button" class="bnb-btn ghost"
               hx-get="/admin/audio/sources/{id}/probe"
