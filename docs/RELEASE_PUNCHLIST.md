@@ -74,7 +74,7 @@ remains is the finish-off work below.
 | ~~**P2-3**~~ | Extend help links to remaining analytical screens — ✅ **DONE** (6 screens) | ~~P2~~ | S | low |
 | **P3-1** | O-13 legacy `--audio-source` retirement — ✅ **DONE** | P3 | S | low |
 | ~~**P3-2**~~ | No background session pruning — ✅ **DONE** (daily maintenance tick) | ~~P3~~ | S | low |
-| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (all admin + 7 public + 5 analytics + onboarding + 6 page templates + 8 standalone admin/system pages done; 47-file guard; analytics default-active in QA + query-ordering fix; 1115→391, all single-quoted `style='` eliminated. Next: system_controls/backup/audio fragments, remaining templates, dynamic skeletons/viz/charts + endgame) | P3 | L | low (tedious) |
+| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (admin + public + analytics + onboarding + 6 page templates + 8 standalone admin/system pages + home/today ecosystem done; **53-file guard now also catches escaped `style=\"`**; analytics default-active in QA + query-ordering fix; raw `style="` 1115→354, all single-quoted `style='` eliminated. Next: system_controls/backup/audio fragments, detection_reviews/images, remaining templates, dynamic skeletons/viz/charts/gallery + endgame) | P3 | L | low (tedious) |
 | **P3-4** | Minor cosmetics — uptime pill ✅ **wired**; migration-missing out of scope | P3 | XS | none |
 | ~~**P3-5**~~ | Image blacklist enforcement on read path — ✅ **DONE** (serve-check + purge-on-blacklist) | ~~P3~~ | S | low |
 
@@ -538,6 +538,44 @@ they batch for a Playwright-verified pass; the dynamic ones fold into the endgam
   computed-heavy `pages/{skeletons,viz,charts,gallery}.rs` (per-element `{…}`/`--sp:` values that fold into the
   endgame). Then the endgame `<style>`-nonce middleware extension after which `style-src 'unsafe-inline'` is
   dropped.
+
+- **Slice 13 (batch) — guard hardened for escaped quotes + the home/today ecosystem swept.** Two parts:
+
+  **(a) Closed a guard blind spot.** Both `rg 'style="'` and the regression guard only matched the *literal*
+  `style="`, so inline styles emitted by ordinary Rust `write!`/`format!` string literals — which appear in
+  source as the **escaped** `style=\"…\"` — were invisible to both. The guard now scans for the escaped form
+  too, with a colon-gate (`payload.contains(':')`) so it skips the legitimate non-styles that contain the
+  characters `style=\"`: render-guard search-strings (`html.split("style=\"")`) and escaped data-attribute
+  values (`data-confirm-style=\"danger\"`). **Audited every previously-swept file under the hardened guard —
+  all 47 still pass**, confirming the earlier slices left no escaped static styles (their `style=\"` hits were
+  exactly those two false-positive kinds). Added unit cases for the escaped form. This also surfaced two
+  un-inventoried surfaces for later — `pages/detection_reviews.rs` (29) and `admin/images.rs` (24).
+
+  **(b) Swept the home (`/`) + today (`/today`) ecosystem** (the highest-traffic pages): `pages/today.rs`
+  (`tdl-`), `pages/today_phrase.rs` (reuses slice-11 `td-h1`/`td-sub`; the per-tier `<em>` colour became the
+  enumerable `tp-c-*` set), `pages/health.rs` (`he-`; the computed disk-bar `width:{pct}%;background:{c}` stays
+  inline — the documented dynamic exception), `pages/dashboard/stats.rs` (`ds-`; the last-hour value scoped
+  `.stat-tile .value.ds-last-hour` to beat `.stat-tile .value`), `pages/dashboard/partials.rs` (`dp-`; feed
+  rows / top-species / species-list / most-recent — the `<a>` colour-inherit links scoped `a.dp-*`, the
+  list-row column override carries its own ≤520px collapse), and `dashboard.html` (`db-`; reuses `bnb-col wide`).
+  Legacy `--text-muted`/`--bg-hover`/`--border`/`--text`/`--radius`/`--fg-2`/`--fg-4`/`--dawn-ink` tokens
+  preserved verbatim. Guard **47 → 53 files**; raw `style="` **391 → 354** (escaped forms in these files all
+  removed too — verified with `rg -F 'style=\"'`).
+
+  **Verified (analytics-active QA server + Playwright, light/dark × desktop/mobile).** Both pages are
+  **visually pixel-identical** before/after. The residual pixel diffs are the documented dynamic content —
+  the live detection feeds (`/pages/detections`, `/pages/today-list`, time-relative seed data) plus the home
+  hero's **animated live-signal canvas** (a wall-clock breathing baseline, now under pixel-test for the first
+  time) — confirmed non-CSS by a same-build self-diff and a longer-gap self-diff whose magnitude scales with
+  the capture interval (today desktop's 1218 px before→after ≈ its 991 px same-build feed drift; home's larger
+  number tracks the feed+canvas drift over the multi-minute edit gap, maxΔ matching the canvas not a regression).
+  fmt + clippy (`-p birdnet-web --all-targets`) + 311 lib tests + hardened guard all green.
+
+  **Next:** `detection_reviews.rs`/`images.rs` (newly surfaced), the admin control fragments
+  (`system_controls/*`, `admin/backup.rs`, `admin/audio.rs`), the remaining templates (`share_rare`, `listen`,
+  JS-toggle `recordings`, `layout`/`_partial_*`), and the computed-heavy `skeletons`/`viz`/`charts`/`gallery`
+  that fold into the endgame; then the `<style>`-nonce middleware extension after which `style-src
+  'unsafe-inline'` is dropped.
 
 ---
 

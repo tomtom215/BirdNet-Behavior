@@ -71,6 +71,13 @@ const SWEPT_FILES: &[&str] = &[
     "templates/login.html",
     "templates/migration.html",
     "templates/admin_audio_sources.html",
+    // ── home (/) + today (/today) ecosystem (slice 13) ──
+    "src/routes/pages/today.rs",
+    "src/routes/pages/today_phrase.rs",
+    "src/routes/pages/health.rs",
+    "src/routes/pages/dashboard/stats.rs",
+    "src/routes/pages/dashboard/partials.rs",
+    "templates/dashboard.html",
 ];
 
 /// Returns true if the inline-style payload (the text inside `style="…"`) is a
@@ -91,34 +98,51 @@ fn is_allowed_dynamic(payload: &str) -> bool {
     false
 }
 
-/// Scan one file, returning each disallowed inline `style="…"` occurrence as
+/// Scan one file, returning each disallowed inline style occurrence as
 /// `(line_number, payload)`.
+///
+/// Catches both the literal `style="…"` (templates and raw-string Rust) **and**
+/// the escaped `style=\"…\"` that ordinary Rust `write!`/`format!` string
+/// literals emit — the rendered HTML carries an inline style either way, so the
+/// escaped form (invisible to a plain `style="` search) must be guarded too.
 fn disallowed_inline_styles(src: &str) -> Vec<(usize, String)> {
     let mut hits = Vec::new();
     for (lineno, line) in src.lines().enumerate() {
-        let mut rest = line;
-        while let Some(idx) = rest.find("style=\"") {
-            // `data-confirm-style="…"` ends in `-style="`, so the char before
-            // the match (if any) being part of an identifier means it's a
-            // data-attribute, not a bare `style=`.
-            let before = &rest[..idx];
-            let is_data_attr = before
-                .chars()
-                .last()
-                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '-');
-            let after = &rest[idx + "style=\"".len()..];
-            if let Some(end) = after.find('"') {
-                let payload = &after[..end];
-                if !is_data_attr && !is_allowed_dynamic(payload) {
-                    hits.push((lineno + 1, payload.to_string()));
-                }
-                rest = &after[end + 1..];
-            } else {
-                break;
-            }
-        }
+        scan_inline_styles(line, "style=\"", "\"", lineno, &mut hits);
+        scan_inline_styles(line, "style=\\\"", "\\\"", lineno, &mut hits);
     }
     hits
+}
+
+/// Record every disallowed `{open}…{close}` inline-style run on one line.
+fn scan_inline_styles(
+    line: &str,
+    open: &str,
+    close: &str,
+    lineno: usize,
+    hits: &mut Vec<(usize, String)>,
+) {
+    let mut rest = line;
+    while let Some(idx) = rest.find(open) {
+        // `data-confirm-style="…"` ends in `-style="`, so the char before the
+        // match being part of an identifier means it's a data-attribute, not a
+        // bare `style=`.
+        let is_data_attr = rest[..idx]
+            .chars()
+            .last()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '-');
+        let after = &rest[idx + open.len()..];
+        let Some(end) = after.find(close) else { break };
+        let payload = &after[..end];
+        // A real inline style is `prop:value…` and always contains a colon;
+        // Rust search-strings (`html.split("style=\"")`) and bare data-attribute
+        // values (`data-confirm-style=\"danger\"`) have none, so the colon gate
+        // skips those while still catching every genuine inline style.
+        if !is_data_attr && payload.contains(':') && !is_allowed_dynamic(payload) {
+            hits.push((lineno + 1, payload.to_string()));
+        }
+        rest = &after[end + close.len()..];
+    }
 }
 
 fn crate_root() -> PathBuf {
@@ -167,4 +191,15 @@ fn guard_itself_classifies_correctly() {
     assert!(disallowed_inline_styles(r#"<span style="--sp:{color};">"#).is_empty());
     // data-confirm-style is a data-attribute, not an inline style.
     assert!(disallowed_inline_styles(r#"<button data-confirm-style="danger">"#).is_empty());
+
+    // Escaped-quote inline styles (Rust write!/format! literals) are caught too.
+    assert_eq!(
+        disallowed_inline_styles(r#"write!(h, "<div style=\"display:flex\">")"#).len(),
+        1
+    );
+    assert!(disallowed_inline_styles(r#"format!("<i style=\"width:{p}%\">")"#).is_empty());
+    // …but a Rust search-string for the literal attribute is not a style (no colon)
+    assert!(disallowed_inline_styles(r#"assert!(html.split("style=\"").count() == 1)"#).is_empty());
+    // …nor is an escaped data-attribute value.
+    assert!(disallowed_inline_styles(r#"format!("<b data-confirm-style=\"danger\">")"#).is_empty());
 }
