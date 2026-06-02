@@ -78,6 +78,9 @@ const SWEPT_FILES: &[&str] = &[
     "src/routes/pages/dashboard/stats.rs",
     "src/routes/pages/dashboard/partials.rs",
     "templates/dashboard.html",
+    // ── escaped-quote files the hardened guard surfaced (slice 14) ──
+    "src/routes/pages/detection_reviews.rs",
+    "src/routes/admin/images.rs",
 ];
 
 /// Returns true if the inline-style payload (the text inside `style="…"`) is a
