@@ -74,7 +74,7 @@ remains is the finish-off work below.
 | ~~**P2-3**~~ | Extend help links to remaining analytical screens — ✅ **DONE** (6 screens) | ~~P2~~ | S | low |
 | **P3-1** | O-13 legacy `--audio-source` retirement — ✅ **DONE** | P3 | S | low |
 | ~~**P3-2**~~ | No background session pruning — ✅ **DONE** (daily maintenance tick) | ~~P3~~ | S | low |
-| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (all admin + 7 public + 5 analytics + onboarding done; 33-file guard; analytics default-active in QA + query-ordering fix; 1115→543. Next: skeletons/un-swept-admin/templates + endgame) | P3 | L | low (tedious) |
+| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (all admin + 7 public + 5 analytics + onboarding + 6 page templates done; 39-file guard; analytics default-active in QA + query-ordering fix; 1115→479. Next: remaining templates/un-swept-admin/skeletons + endgame) | P3 | L | low (tedious) |
 | **P3-4** | Minor cosmetics — uptime pill ✅ **wired**; migration-missing out of scope | P3 | XS | none |
 | ~~**P3-5**~~ | Image blacklist enforcement on read path — ✅ **DONE** (serve-check + purge-on-blacklist) | ~~P3~~ | S | low |
 
@@ -473,6 +473,36 @@ they batch for a Playwright-verified pass; the dynamic ones fold into the endgam
   (`system_controls/*`, `backup`, `rules`, `audio`), and `templates/*`, same runner + guard; then the endgame
   `<style>`-nonce middleware extension that lets the remaining computed widths/colours carry a nonce, after
   which `style-src 'unsafe-inline'` is finally dropped.
+
+- **Slice 11 (batch) — served HTML page templates, pixel-diff verified.** Swept the six biggest served
+  `templates/*.html` shells — `today`, `dawn_chorus`, `species`, `species_detail`, `analytics`, `timeseries`
+  — onto scoped `td-`/`dc-`/`sp-`/`sd-`/`an-`/`tsh-` classes in `app.css` (`species_detail` folds into its own
+  `<style>` block; the `dc-`/`tsh-` prefixes avoid the already-swept `dawn_chorus.rs` `dc-*` and
+  `timeseries_dash.rs` `tsd-*` partial classes). Legacy `--text-muted`/`--accent`/`--pad-3` tokens preserved
+  verbatim; the two `.grid-2` column overrides (dawn `1.05fr 0.95fr`, species-detail `1.5fr 1fr`) that had
+  relied on the global `[style*="grid-template-columns"]` ≤520px reset now carry their own breakpoint; the two
+  flex-column stacks in `species_detail` reuse the existing `bnb-col wide` utility (exact match). **Zero**
+  inline styles in all six; guard **33 → 39 files**. Workspace raw `style="` **543 → 479**.
+
+  **Verified (analytics-active QA server + Playwright, light/dark × desktop/mobile).** The four deterministic
+  pages (`analytics`/`species`/`species_detail`/`timeseries`) pixel-diff to **0 content px** on desktop. The
+  `today` and `dawn_chorus` residuals are the documented dynamic content — `today`'s live detection feed
+  (`/pages/today-list`, 15-s refresh on time-relative seed data) and `dawn_chorus`'s polar clock + ribbon
+  strips (`/pages/dawn-polar`/`dawn-list`) — confirmed by a same-build self-diff (equally large) and a +4-min
+  same-build diff (today then drops to ~1.1k px, symmetric light/dark; an unlucky feed-boundary crossing had
+  ballooned one dark capture to 178k px), plus a side-by-side image check showing the styled header/grid
+  regions pixel-identical and only the dynamic SVG/feed differing. The persistent ~45 px mobile diff is the
+  shared topnav/chrome the runner's band doesn't fully exclude at 390 px — identical in the self-diff, not CSS.
+  `_empty_states.html` is **not** `include_str!`-served (a dead file) so it is skipped; `share_rare.html` is
+  deferred (its `/r/{token}` route needs a signed token the QA server doesn't seed). fmt + clippy
+  (`-p birdnet-web --all-targets`, analytics default) + 311 lib tests + guard all green.
+
+  **Next:** the remaining `templates/*` (`share_rare` once the QA server mints a token; `migration`,
+  `admin_audio_sources`, `login`, `dashboard`, `listen`; the JS-toggle `recordings`; the cross-cutting
+  `layout`/`_partial_*`), the un-swept admin pages (`system_controls/*`, `backup`, `rules` incl. its two
+  single-quoted `style='…'`, `audio`), and `pages/skeletons.rs`/`viz.rs`/`charts.rs` (mostly computed, fold
+  into the endgame); then the endgame `<style>`-nonce middleware extension after which
+  `style-src 'unsafe-inline'` is finally dropped.
 
 ---
 

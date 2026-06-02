@@ -1,17 +1,17 @@
 <!-- Time Series Analytics Dashboard -->
 <div class="bnb-eyebrow">Analytics</div>
-<h1 class="display" style="font-size:34px;margin-bottom:4px;">Time series</h1>
+<h1 class="display tsh-h1">Time series</h1>
 {{help_link}}
-<p style="color: var(--text-muted); margin-bottom: 1.5rem; font-size: 0.9rem;">
+<p class="tsh-lede">
     DuckDB window function analytics — tumbling, hopping, sliding and session windows.
     No behavioral extension required.
 </p>
 
 <!-- Row 1: Heatmap + Peak Windows -->
-<div class="grid-2" style="margin-bottom: 1rem;">
+<div class="grid-2 tsh-row">
     <div class="card">
         <h2>Hour-of-Day Activity Heatmap
-            <span style="font-size:0.75rem;color:var(--accent);margin-left:0.5rem;">90-day average</span>
+            <span class="tsh-badge">90-day average</span>
         </h2>
         <div hx-get="/pages/ts-heatmap"
              hx-trigger="load"
@@ -22,7 +22,7 @@
 
     <div class="card">
         <h2>Peak 15-Minute Windows
-            <span style="font-size:0.75rem;color:var(--accent);margin-left:0.5rem;">today</span>
+            <span class="tsh-badge">today</span>
         </h2>
         <div hx-get="/pages/ts-peak"
              hx-trigger="load"
@@ -33,10 +33,10 @@
 </div>
 
 <!-- Row 2: Daily Trend + Species Diversity -->
-<div class="grid-2" style="margin-bottom: 1rem;">
+<div class="grid-2 tsh-row">
     <div class="card">
         <h2>Daily Detection Trend
-            <span style="font-size:0.75rem;color:var(--accent);margin-left:0.5rem;">last 60 days · 7-day moving avg</span>
+            <span class="tsh-badge">last 60 days · 7-day moving avg</span>
         </h2>
         <div hx-get="/pages/ts-daily"
              hx-trigger="load"
@@ -47,7 +47,7 @@
 
     <div class="card">
         <h2>Species Diversity
-            <span style="font-size:0.75rem;color:var(--accent);margin-left:0.5rem;">last 30 days · Shannon H′</span>
+            <span class="tsh-badge">last 30 days · Shannon H′</span>
         </h2>
         <div hx-get="/pages/ts-diversity"
              hx-trigger="load"
@@ -58,12 +58,12 @@
 </div>
 
 <!-- Row 3: Activity Sessions + Anomaly Detection -->
-<div class="grid-2" style="margin-bottom: 1rem;">
+<div class="grid-2 tsh-row">
     <div class="card">
         <h2>Activity Sessions
-            <span style="font-size:0.75rem;color:var(--accent);margin-left:0.5rem;">last 3 days · gap ≥ 30 min</span>
+            <span class="tsh-badge">last 3 days · gap ≥ 30 min</span>
         </h2>
-        <p style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 0.75rem;">
+        <p class="tsh-card-lede">
             Continuous-presence windows separated by inactivity gaps.
         </p>
         <div hx-get="/pages/ts-sessions"
@@ -75,9 +75,9 @@
 
     <div class="card">
         <h2>Anomaly Detection
-            <span style="font-size:0.75rem;color:var(--accent);margin-left:0.5rem;">90 days · z &gt; 2.0</span>
+            <span class="tsh-badge">90 days · z &gt; 2.0</span>
         </h2>
-        <p style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 0.75rem;">
+        <p class="tsh-card-lede">
             Days where detection counts deviate &gt; 2 standard deviations from the 30-day rolling mean.
         </p>
         <div hx-get="/pages/ts-anomalies"
@@ -89,15 +89,15 @@
 </div>
 
 <!-- Row 4: Polar Activity Clock + Species Accumulation -->
-<div class="grid-2" style="margin-bottom: 1rem;">
+<div class="grid-2 tsh-row">
     <div class="card">
         <h2>Polar Activity Clock
-            <span style="font-size:0.75rem;color:var(--accent);margin-left:0.5rem;">90-day hourly average</span>
+            <span class="tsh-badge">90-day hourly average</span>
         </h2>
-        <p style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 0.75rem;">
+        <p class="tsh-card-lede">
             Radial chart showing bird activity intensity by hour of day. Each spoke = 1 hour (0–23).
         </p>
-        <div id="polar-clock-container" style="display:flex;justify-content:center;">
+        <div id="polar-clock-container" class="tsh-polar-center">
             <svg id="polar-clock" width="320" height="320" viewBox="0 0 320 320"
                  aria-label="Polar activity clock" role="img">
                 <text x="160" y="170" text-anchor="middle" fill="var(--text-muted)"
@@ -108,9 +108,9 @@
 
     <div class="card">
         <h2>Species Accumulation
-            <span style="font-size:0.75rem;color:var(--accent);margin-left:0.5rem;">cumulative discovery</span>
+            <span class="tsh-badge">cumulative discovery</span>
         </h2>
-        <p style="color: var(--text-muted); font-size: 0.8rem; margin-bottom: 0.75rem;">
+        <p class="tsh-card-lede">
             Cumulative new species discovered over time — species accumulation curve.
         </p>
         <div hx-get="/pages/life-accumulation"
@@ -263,7 +263,7 @@
 <!-- API reference card -->
 <div class="card">
     <h2>API Endpoints</h2>
-    <table style="font-size: 0.85rem;">
+    <table class="tsh-api-table">
         <thead><tr><th>Endpoint</th><th>Description</th><th>Parameters</th></tr></thead>
         <tbody>
         <tr><td><code>/api/v2/timeseries/hourly</code></td><td>Hourly tumbling windows</td><td>days=7, species=…</td></tr>

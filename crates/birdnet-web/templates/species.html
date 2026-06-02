@@ -1,14 +1,14 @@
 <div class="page-head">
     <div>
         <div class="bnb-eyebrow">Browse</div>
-        <h1 class="display" style="font-size:34px;">Every voice</h1>
+        <h1 class="display sp-h1">Every voice</h1>
         {{help_link}}
-        <p class="bnb-meta" style="margin-top:4px;">All species detected at this station. Search across common and scientific names.</p>
+        <p class="bnb-meta sp-lede">All species detected at this station. Search across common and scientific names.</p>
     </div>
     <input type="search" name="q" placeholder="Search species…"
            hx-get="/pages/species-list" hx-trigger="input changed delay:300ms, search"
            hx-target="#species-list" hx-swap="innerHTML"
-           style="width:240px;" aria-label="Search species">
+           class="sp-search" aria-label="Search species">
 </div>
 
 <div class="bnb-card pad">

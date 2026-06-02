@@ -15,14 +15,13 @@
   <!-- ── Hero ────────────────────────────────────────────────────────── -->
   <section class="species-hero">
     <div class="species-hero__title">
-      <a class="bnb-eyebrow" href="/species" style="display:inline-flex;align-items:center;gap:6px;color:var(--fg-3);text-decoration:none;">
+      <a class="bnb-eyebrow sd-back" href="/species">
         ← All species
       </a>
-      <h1 class="display"
-          style="font-size:64px;line-height:1.02;letter-spacing:-0.025em;text-wrap:balance;margin-top:6px;">
+      <h1 class="display sd-h1">
         {{species_name}}
       </h1>
-      <p class="mono" style="color:var(--fg-3);font-style:italic;font-size:14px;margin-top:6px;">
+      <p class="mono sd-sci">
         {{scientific_name}}
       </p>
 
@@ -36,7 +35,7 @@
         {{skel_species_status}}
       </div>
 
-      <div style="display:flex;gap:8px;margin-top:18px;flex-wrap:wrap;">
+      <div class="sd-actions">
         <a class="bnb-btn primary" href="/today?search={{species_encoded}}">
           View in today's log →
         </a>
@@ -76,8 +75,8 @@
   <hr class="bnb-divider">
 
   <!-- ── Body: 2-col (charts) + 1-col (info rail) ───────────────────── -->
-  <div class="grid-2" style="grid-template-columns:1.5fr 1fr;">
-    <div style="display:flex;flex-direction:column;gap:var(--pad-3);">
+  <div class="grid-2 sd-body">
+    <div class="bnb-col wide">
 
       <div class="bnb-card pad">
         <div class="section-header">
@@ -123,7 +122,7 @@
     </div>
 
     <!-- Info rail -->
-    <div style="display:flex;flex-direction:column;gap:var(--pad-3);">
+    <div class="bnb-col wide">
 
       <div class="bnb-card pad">
         <div class="section-header">
@@ -133,7 +132,7 @@
           </div>
           <a class="action" href="/correlation?focus={{species_encoded}}">Matrix →</a>
         </div>
-        <p class="bnb-meta" style="margin-bottom:10px;">
+        <p class="bnb-meta sd-comp-note">
           Species detected within a 5-minute window of this one, last 60 days.
         </p>
         <div hx-get="/pages/species-companions?name={{species_encoded}}"
@@ -173,5 +172,18 @@
   .species-hero__media { margin: 0; }
   @media (max-width: 980px) {
     .species-hero { grid-template-columns: 1fr; }
+  }
+
+  /* O-25 sweep — faithful extraction of this page's static inline styles.
+     The body grid override used to rely on the global ≤520px
+     [style*="grid-template-columns"] reset, so it carries its own breakpoint. */
+  a.sd-back     { display: inline-flex; align-items: center; gap: 6px; color: var(--fg-3); text-decoration: none; }
+  .sd-h1        { font-size: 64px; line-height: 1.02; letter-spacing: -0.025em; text-wrap: balance; margin-top: 6px; }
+  .sd-sci       { color: var(--fg-3); font-style: italic; font-size: 14px; margin-top: 6px; }
+  .sd-actions   { display: flex; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
+  .sd-body      { grid-template-columns: 1.5fr 1fr; }
+  .sd-comp-note { margin-bottom: 10px; }
+  @media (max-width: 520px) {
+    .sd-body { grid-template-columns: 1fr; }
   }
 </style>
