@@ -53,6 +53,8 @@ const SWEPT_FILES: &[&str] = &[
     "src/routes/pages/timeseries_dash.rs",
     "src/routes/pages/species_pages.rs",
     "src/routes/pages/detection_detail.rs",
+    // ── onboarding wizard (slice 10) ──
+    "src/routes/pages/onboarding.rs",
 ];
 
 /// Returns true if the inline-style payload (the text inside `style="…"`) is a

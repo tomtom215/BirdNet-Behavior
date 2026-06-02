@@ -74,7 +74,7 @@ remains is the finish-off work below.
 | ~~**P2-3**~~ | Extend help links to remaining analytical screens — ✅ **DONE** (6 screens) | ~~P2~~ | S | low |
 | **P3-1** | O-13 legacy `--audio-source` retirement — ✅ **DONE** | P3 | S | low |
 | ~~**P3-2**~~ | No background session pruning — ✅ **DONE** (daily maintenance tick) | ~~P3~~ | S | low |
-| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (all admin + 7 public + 5 analytics pages done; 32-file regression guard; analytics now default-active in QA; 1115→588. Next: skeletons/onboarding/un-swept-admin/templates + endgame) | P3 | L | low (tedious) |
+| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (all admin + 7 public + 5 analytics + onboarding done; 33-file guard; analytics default-active in QA + query-ordering fix; 1115→543. Next: skeletons/un-swept-admin/templates + endgame) | P3 | L | low (tedious) |
 | **P3-4** | Minor cosmetics — uptime pill ✅ **wired**; migration-missing out of scope | P3 | XS | none |
 | ~~**P3-5**~~ | Image blacklist enforcement on read path — ✅ **DONE** (serve-check + purge-on-blacklist) | ~~P3~~ | S | low |
 
@@ -446,10 +446,33 @@ they batch for a Playwright-verified pass; the dynamic ones fold into the endgam
   scope** (a follow-up should add stable `ORDER BY` tiebreaks). fmt + clippy (`--all-targets`, analytics now
   default) + 311 lib tests + guard all green.
 
-  **Next:** `pages/skeletons.rs` (~45, pure computed placeholders), `pages/onboarding.rs`, the un-swept admin
-  pages (`system_controls/*`, `backup`, `rules`, `audio`), and `templates/*`, same runner + guard; then the
-  endgame `<style>`-nonce middleware extension that lets the remaining computed widths/colours carry a nonce,
-  after which `style-src 'unsafe-inline'` is finally dropped.
+- **Slice 10 — onboarding wizard, + the analytics query-ordering fix folded in.** Swept
+  `pages/onboarding.rs` (the standalone `/onboarding` setup flow, which has its own `<style>` block) onto
+  scoped `ob-*` classes; the per-`<i>` staggered VU/calibration `animation-delay`s became clean `:nth-child`
+  rules, and the lat/lon + notify grids carry their own `@media(max-width:520px)` single-column stacks (they
+  had relied on the global `[style*="grid-template-columns"]` reset). **Zero** inline styles; guard **32 → 33**.
+  Workspace raw `style="` **588 → 543**.
+
+  **Folded-in fix — analytics tables no longer reshuffle on refresh** (the wart slice 9 surfaced). Now that
+  the QA harness runs analytics-active, the timeseries `peak` and behavioral `next-species` tables visibly
+  reshuffled on every request. Root causes + fixes:
+  - **Peak windows were anchored to wall-clock `CURRENT_TIMESTAMP`** (`birdnet-timeseries`), so every window
+    boundary drifted by the seconds elapsed between requests. Now anchored to `max(detection_timestamp)` —
+    deterministic *and* more meaningful ("the busiest windows in the last N days of recorded activity") — plus
+    an `ORDER BY detection_count DESC, window_start` tiebreak.
+  - **`next_species` tied predictions** (`birdnet-behavioral`) came back in non-deterministic order →
+    `ORDER BY frequency DESC, predicted_species` makes the top-N selection *and* order stable.
+
+  Verified against the live analytics QA server: all **9** analytics/timeseries partials are now hash-stable
+  across repeated requests (previously `ts-peak` + `analytics-next` reshuffled). The one intermittent
+  `ts-heatmap` blip was the startup SQLite→DuckDB sync race, not query non-determinism — its
+  `COUNT(*) · 1.0 / COUNT(DISTINCT date)` is exact. fmt + clippy (`birdnet-web` / `birdnet-timeseries` /
+  `birdnet-behavioral`, `--all-targets`) + lib tests + guard all green.
+
+  **Next:** `pages/skeletons.rs` (~45, pure computed placeholders), the un-swept admin pages
+  (`system_controls/*`, `backup`, `rules`, `audio`), and `templates/*`, same runner + guard; then the endgame
+  `<style>`-nonce middleware extension that lets the remaining computed widths/colours carry a nonce, after
+  which `style-src 'unsafe-inline'` is finally dropped.
 
 ---
 

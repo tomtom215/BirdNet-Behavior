@@ -75,7 +75,7 @@ LEFT JOIN detections_ts d
     ON d.detection_timestamp >= w.window_start
    AND d.detection_timestamp <  w.window_end
 GROUP BY w.window_start, w.window_end
-ORDER BY detection_count DESC
+ORDER BY detection_count DESC, window_start
 LIMIT {limit}"
         )
     }

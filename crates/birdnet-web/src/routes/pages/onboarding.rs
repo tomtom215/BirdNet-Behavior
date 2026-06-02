@@ -72,13 +72,44 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
   @media (prefers-reduced-motion: reduce) {
     .ob-step, .vu i, .calib i, .sonar * { animation:none !important; }
   }
+  /* O-25: static inline style= attributes folded into this page's own <style>
+     block (faithful, value-preserving). */
+  .ob-center { display:flex; align-items:center; justify-content:center; }
+  .ob-grow { flex:1; }
+  .ob-mt-6 { margin-top:6px; }
+  .ob-mt-16 { margin-top:16px; }
+  .ob-mt-18 { margin-top:18px; }
+  .ob-mb-18 { margin-bottom:18px; }
+  .ob-ml-4 { margin-left:4px; }
+  .ob-ml-6 { margin-left:6px; }
+  .ob-latlon { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:16px; }
+  .ob-map { background:var(--surface-2); border-radius:var(--r-lg); border:0.5px solid var(--border); }
+  .ob-cards.cols2 { grid-template-columns:repeat(2,1fr); }
+  .ob-summary { cursor:pointer; }
+  .ob-calib-m { margin:14px 0; }
+  .ob-hidden-init { visibility:hidden; }
+  /* Staggered VU / calibration bar animation delays (were per-<i> inline). */
+  .vu i:nth-child(1) { animation-delay:0s; }   .vu i:nth-child(2) { animation-delay:.1s; }
+  .vu i:nth-child(3) { animation-delay:.2s; }  .vu i:nth-child(4) { animation-delay:.05s; }
+  .vu i:nth-child(5) { animation-delay:.25s; } .vu i:nth-child(6) { animation-delay:.15s; }
+  .vu i:nth-child(7) { animation-delay:.3s; }  .vu i:nth-child(8) { animation-delay:.08s; }
+  .calib i:nth-child(1) { animation-delay:0s; }    .calib i:nth-child(2) { animation-delay:.1s; }
+  .calib i:nth-child(3) { animation-delay:.2s; }   .calib i:nth-child(4) { animation-delay:.3s; }
+  .calib i:nth-child(5) { animation-delay:.15s; }  .calib i:nth-child(6) { animation-delay:.25s; }
+  .calib i:nth-child(7) { animation-delay:.05s; }  .calib i:nth-child(8) { animation-delay:.35s; }
+  .calib i:nth-child(9) { animation-delay:.12s; }  .calib i:nth-child(10) { animation-delay:.22s; }
+  .calib i:nth-child(11) { animation-delay:.32s; } .calib i:nth-child(12) { animation-delay:.18s; }
   /* Phones: drop the step labels (numbered dots + connectors stay), tighten
-     padding, and stack the two-column step bodies so nothing overflows 390px. */
+     padding, and stack the two-column step bodies so nothing overflows 390px.
+     The lat/lon + notify grids were inline grids caught by the global
+     `[style*="grid-template-columns"]` reset; now classes, they carry their own. */
   @media (max-width:520px) {
     .ob-root { padding:0 14px; }
     .ob-pip .nm { display:none; }
     .ob-pip .bar { width:16px; }
     .ob-two { grid-template-columns:1fr; gap:18px; }
+    .ob-latlon { grid-template-columns:1fr; }
+    .ob-cards.cols2 { grid-template-columns:1fr; }
   }
 </style>
 </head>
@@ -110,7 +141,7 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
             <li><span class="tick">✓</span> Always tweakable — change anything later in Settings</li>
           </ul>
         </div>
-        <div style="display:flex;align-items:center;justify-content:center;">
+        <div class="ob-center">
           <svg class="sonar" width="240" height="240" viewBox="0 0 240 240" aria-hidden="true">
             <g fill="none" stroke="var(--moss)" stroke-width="1">
               <circle cx="120" cy="120" r="30"><animate attributeName="r" values="30;110" dur="5s" repeatCount="indefinite"/><animate attributeName="stroke-opacity" values="0.7;0" dur="5s" repeatCount="indefinite"/></circle>
@@ -134,17 +165,17 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
           <div class="ob-eyebrow">Where</div>
           <h1 class="ob-h">Where is the station?</h1>
           <p class="ob-p">Your coordinates let BirdNET weight species by what's actually likely in your area, and compute sunrise / sunset for the dawn-chorus window.</p>
-          <div style="margin-top:18px;">
+          <div class="ob-mt-18">
             <button class="bnb-btn" type="button">⌖ Auto-detect (ipapi.co)</button>
           </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px;">
+          <div class="ob-latlon">
             <div class="ob-field"><label>Latitude</label><input type="text" value="42.3601" inputmode="decimal"></div>
             <div class="ob-field"><label>Longitude</label><input type="text" value="-71.0589" inputmode="decimal"></div>
           </div>
-          <div class="bnb-pill moss" style="margin-top:6px;">✓ Boston, MA · 247 species expected · sunrise 5:21 AM</div>
+          <div class="bnb-pill moss ob-mt-6">✓ Boston, MA · 247 species expected · sunrise 5:21 AM</div>
         </div>
-        <div style="display:flex;align-items:center;justify-content:center;">
-          <svg width="280" height="220" viewBox="0 0 280 220" aria-hidden="true" style="background:var(--surface-2);border-radius:var(--r-lg);border:0.5px solid var(--border);">
+        <div class="ob-center">
+          <svg width="280" height="220" viewBox="0 0 280 220" aria-hidden="true" class="ob-map">
             <g fill="none" stroke="var(--border-2)" stroke-width="0.75" opacity="0.7">
               <ellipse cx="140" cy="110" rx="40" ry="28"/><ellipse cx="140" cy="110" rx="70" ry="50"/>
               <ellipse cx="140" cy="110" rx="100" ry="72"/><ellipse cx="140" cy="110" rx="128" ry="94"/>
@@ -162,12 +193,12 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
     <section class="ob-step" data-step="3">
       <div class="ob-eyebrow">How it hears</div>
       <h1 class="ob-h">Pick a microphone.</h1>
-      <p class="ob-p" style="margin-bottom:18px;">We found a USB mic already. You can also add a network (RTSP) camera or watch a folder of recordings.</p>
+      <p class="ob-p ob-mb-18">We found a USB mic already. You can also add a network (RTSP) camera or watch a folder of recordings.</p>
       <div class="ob-cards" id="mic-cards">
-        <div class="ob-card sel" data-radio="mic"><span class="ic">🎤</span><div style="flex:1;"><div class="t">UMC202HD · USB audio <span class="bnb-pill moss" style="margin-left:6px;">recommended</span></div><div class="s">card 1 · 48 kHz · detected automatically</div></div><span class="vu"><i style="animation-delay:0s"></i><i style="animation-delay:.1s"></i><i style="animation-delay:.2s"></i><i style="animation-delay:.05s"></i><i style="animation-delay:.25s"></i><i style="animation-delay:.15s"></i><i style="animation-delay:.3s"></i><i style="animation-delay:.08s"></i></span></div>
-        <div class="ob-card" data-radio="mic"><span class="ic">🎤</span><div style="flex:1;"><div class="t">Built-in microphone</div><div class="s">card 0 · 44.1 kHz</div></div></div>
-        <div class="ob-card" data-radio="mic"><span class="ic">📡</span><div style="flex:1;"><div class="t">Add an RTSP camera</div><div class="s">rtsp://… — bird-box or feeder cam audio</div></div></div>
-        <div class="ob-card" data-radio="mic"><span class="ic">📁</span><div style="flex:1;"><div class="t">Watch a folder</div><div class="s">classify existing recordings on disk</div></div></div>
+        <div class="ob-card sel" data-radio="mic"><span class="ic">🎤</span><div class="ob-grow"><div class="t">UMC202HD · USB audio <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s">card 1 · 48 kHz · detected automatically</div></div><span class="vu"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></div>
+        <div class="ob-card" data-radio="mic"><span class="ic">🎤</span><div class="ob-grow"><div class="t">Built-in microphone</div><div class="s">card 0 · 44.1 kHz</div></div></div>
+        <div class="ob-card" data-radio="mic"><span class="ic">📡</span><div class="ob-grow"><div class="t">Add an RTSP camera</div><div class="s">rtsp://… — bird-box or feeder cam audio</div></div></div>
+        <div class="ob-card" data-radio="mic"><span class="ic">📁</span><div class="ob-grow"><div class="t">Watch a folder</div><div class="s">classify existing recordings on disk</div></div></div>
       </div>
     </section>
 
@@ -175,15 +206,15 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
     <section class="ob-step" data-step="4">
       <div class="ob-eyebrow">Who gets told</div>
       <h1 class="ob-h">When should we ping you?</h1>
-      <p class="ob-p" style="margin-bottom:18px;">Start simple — you can wire up channels (Telegram, email, MQTT…) any time.</p>
-      <div class="ob-cards" style="grid-template-columns:repeat(2,1fr);">
-        <div class="ob-card" data-radio="notify"><div style="flex:1;"><div class="t">Quiet</div><div class="s">Never notify — just log everything</div></div></div>
-        <div class="ob-card sel" data-radio="notify"><div style="flex:1;"><div class="t">Rare only <span class="bnb-pill moss" style="margin-left:6px;">recommended</span></div><div class="s">Only first-of-station / unusual birds</div></div></div>
-        <div class="ob-card" data-radio="notify"><div style="flex:1;"><div class="t">Daily digest</div><div class="s">One summary each evening</div></div></div>
-        <div class="ob-card" data-radio="notify"><div style="flex:1;"><div class="t">Everything</div><div class="s">Every detection (chatty!)</div></div></div>
+      <p class="ob-p ob-mb-18">Start simple — you can wire up channels (Telegram, email, MQTT…) any time.</p>
+      <div class="ob-cards cols2">
+        <div class="ob-card" data-radio="notify"><div class="ob-grow"><div class="t">Quiet</div><div class="s">Never notify — just log everything</div></div></div>
+        <div class="ob-card sel" data-radio="notify"><div class="ob-grow"><div class="t">Rare only <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s">Only first-of-station / unusual birds</div></div></div>
+        <div class="ob-card" data-radio="notify"><div class="ob-grow"><div class="t">Daily digest</div><div class="s">One summary each evening</div></div></div>
+        <div class="ob-card" data-radio="notify"><div class="ob-grow"><div class="t">Everything</div><div class="s">Every detection (chatty!)</div></div></div>
       </div>
-      <details style="margin-top:16px;">
-        <summary class="bnb-meta" style="cursor:pointer;">Pick channels now <span class="bnb-pill">optional</span></summary>
+      <details class="ob-mt-16">
+        <summary class="bnb-meta ob-summary">Pick channels now <span class="bnb-pill">optional</span></summary>
         <div class="chips">
           <span class="bnb-pill">Telegram</span><span class="bnb-pill">Email</span><span class="bnb-pill">MQTT</span>
           <span class="bnb-pill">Webhook</span><span class="bnb-pill">Slack</span><span class="bnb-pill">Discord</span>
@@ -200,7 +231,7 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
           <div class="ob-eyebrow">All set</div>
           <h1 class="ob-h">You're <em>listening</em>.</h1>
           <p class="ob-p">The pipeline is warming up. Within a minute or two you'll see the first detections roll in.</p>
-          <div class="bnb-card pad" style="margin-top:16px;">
+          <div class="bnb-card pad ob-mt-16">
             <div class="summary-row"><span class="k">Location</span><span>Boston, MA · 42.36, −71.06</span></div>
             <div class="summary-row"><span class="k">Microphone</span><span>UMC202HD · USB · 48 kHz</span></div>
             <div class="summary-row"><span class="k">Alerts</span><span>Rare birds only</span></div>
@@ -210,8 +241,8 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
         <div>
           <div class="bnb-card pad">
             <div class="ob-eyebrow">Warming up</div>
-            <div class="calib" style="margin:14px 0;"><i style="animation-delay:0s"></i><i style="animation-delay:.1s"></i><i style="animation-delay:.2s"></i><i style="animation-delay:.3s"></i><i style="animation-delay:.15s"></i><i style="animation-delay:.25s"></i><i style="animation-delay:.05s"></i><i style="animation-delay:.35s"></i><i style="animation-delay:.12s"></i><i style="animation-delay:.22s"></i><i style="animation-delay:.32s"></i><i style="animation-delay:.18s"></i></div>
-            <div class="bnb-meta">Calibrating noise floor… <span class="bnb-pill moss" style="margin-left:4px;">BirdNET+ V3.0</span></div>
+            <div class="calib ob-calib-m"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="bnb-meta">Calibrating noise floor… <span class="bnb-pill moss ob-ml-4">BirdNET+ V3.0</span></div>
           </div>
         </div>
       </div>
@@ -219,7 +250,7 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
   </div>
 
   <div class="ob-nav">
-    <button class="bnb-btn ghost" id="ob-back" type="button" style="visibility:hidden;">← Back</button>
+    <button class="bnb-btn ghost ob-hidden-init" id="ob-back" type="button">← Back</button>
     <div class="bnb-meta">Step <span id="ob-cur">1</span> of 5</div>
     <a class="bnb-btn primary" id="ob-next" href="#" role="button">Continue →</a>
   </div>

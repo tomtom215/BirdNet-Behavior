@@ -241,7 +241,7 @@ pub fn next_species_sql(trigger_species: &str, window_minutes: u32, limit: u32) 
         FROM per_session
         WHERE predicted IS NOT NULL
         GROUP BY predicted
-        ORDER BY frequency DESC
+        ORDER BY frequency DESC, predicted_species
         LIMIT {limit}",
     )
 }
