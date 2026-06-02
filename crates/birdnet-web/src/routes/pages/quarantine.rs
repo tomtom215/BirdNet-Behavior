@@ -433,16 +433,13 @@ fn row_delete_button(id: i64, filter_param: &str) -> String {
 }
 
 /// Render a "Share" button that copies a public `/r/<token>` link for the row
-/// (O-07). The token is base64url, so it is safe inside the single-quoted JS
-/// string literal.
+/// (O-07). The copy runs through the global delegated `data-copy-url` handler
+/// (layout.html); the base64url token is safe inside the HTML attribute.
 fn row_share_button(token: &str) -> String {
     format!(
         "<button type=\"button\" title=\"Copy a public share link\" \
            class=\"qz-btn share\" \
-           onclick=\"(function(b){{var u=location.origin+'/r/{token}';\
-             if(navigator.clipboard){{navigator.clipboard.writeText(u).then(function(){{\
-               b.textContent='Copied';setTimeout(function(){{b.textContent='Share';}},1500);}});}}\
-             else{{window.prompt('Copy this link:',u);}}}})(this)\">Share</button>"
+           data-copy-url=\"/r/{token}\" data-copied-label=\"Copied\">Share</button>"
     )
 }
 

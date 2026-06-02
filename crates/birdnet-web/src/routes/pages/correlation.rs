@@ -63,10 +63,10 @@ const CORRELATION_CONTENT: &str = r##"<div class="page-head">
     <p class="bnb-meta co-mt">Which species are detected together most often.</p>
   </div>
   <div class="seg" id="range-controls">
-    <button class="btn active" onclick="loadDays(30, this)">30 days</button>
-    <button class="btn" onclick="loadDays(90, this)">90 days</button>
-    <button class="btn" onclick="loadDays(180, this)">6 months</button>
-    <button class="btn" onclick="loadDays(365, this)">1 year</button>
+    <button class="btn active" data-days="30">30 days</button>
+    <button class="btn" data-days="90">90 days</button>
+    <button class="btn" data-days="180">6 months</button>
+    <button class="btn" data-days="365">1 year</button>
   </div>
 </div>
 
@@ -123,6 +123,10 @@ function loadDays(days, btn) {
     htmx.ajax('GET', '/pages/companion-species?species=' + encodeURIComponent(species) + '&days=' + days, '#companion-results');
   }
 }
+document.getElementById('range-controls').addEventListener('click', function(e) {
+  const btn = e.target.closest('button[data-days]');
+  if (btn) loadDays(parseInt(btn.dataset.days, 10), btn);
+});
 </script>"##;
 
 // ---------------------------------------------------------------------------

@@ -68,7 +68,7 @@ async fn player_page(
     </audio>
 
     <div class="transport">
-      <button id="play-btn" onclick="togglePlayback()" aria-label="Play/Pause">
+      <button id="play-btn" aria-label="Play/Pause">
         <svg id="play-icon" viewBox="0 0 24 24" width="28" height="28">
           <polygon points="5,3 19,12 5,21" fill="currentColor"/>
         </svg>
@@ -78,7 +78,7 @@ async fn player_page(
         </svg>
       </button>
 
-      <div class="progress-bar" id="progress-bar" onclick="seek(event)">
+      <div class="progress-bar" id="progress-bar">
         <div class="progress-fill" id="progress-fill"></div>
       </div>
 
@@ -87,12 +87,11 @@ async fn player_page(
 
     <div class="volume-row">
       <label for="vol-slider">Vol</label>
-      <input type="range" id="vol-slider" min="0" max="100" value="80"
-             oninput="setVol(this.value)">
+      <input type="range" id="vol-slider" min="0" max="100" value="80">
       <span id="vol-pct">80%</span>
 
       <label for="speed-select" class="ap-speed-label">Speed</label>
-      <select id="speed-select" onchange="setSpeed(this.value)">
+      <select id="speed-select">
         <option value="0.5">0.5x</option>
         <option value="0.75">0.75x</option>
         <option value="1" selected>1x</option>
@@ -100,7 +99,7 @@ async fn player_page(
         <option value="2">2x</option>
       </select>
 
-      <button class="btn-small ap-download" onclick="downloadClip()">
+      <button class="btn-small ap-download" id="download-btn">
         Download
       </button>
     </div>
@@ -251,6 +250,12 @@ audio.addEventListener('ended', function() {
 });
 
 audio.addEventListener('loadedmetadata', updateProgress);
+
+playBtn.addEventListener('click', togglePlayback);
+document.getElementById('progress-bar').addEventListener('click', seek);
+document.getElementById('vol-slider').addEventListener('input', function() { setVol(this.value); });
+document.getElementById('speed-select').addEventListener('change', function() { setSpeed(this.value); });
+document.getElementById('download-btn').addEventListener('click', downloadClip);
 ";
 
 #[cfg(test)]

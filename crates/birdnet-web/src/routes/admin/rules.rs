@@ -313,8 +313,7 @@ fn render_page(_rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
         </div>
         <div>
           <label for="action_type">Action</label>
-          <select id="action_type" name="action_type"
-                  onchange="document.getElementById('webhook-fields').style.display=this.value==='webhook'?'block':'none'">
+          <select id="action_type" name="action_type">
             <option value="log">Log (structured INFO entry)</option>
             <option value="webhook">Webhook (HTTP request)</option>
             <option value="suppress">Suppress (block all notifications)</option>
@@ -391,6 +390,11 @@ fn render_page(_rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
     </div>
   </div>
 </div>
+<script>
+  document.getElementById('action_type').addEventListener('change', function() {
+    document.getElementById('webhook-fields').style.display = this.value === 'webhook' ? 'block' : 'none';
+  });
+</script>
 </body>
 </html>"##
     .to_owned()

@@ -74,7 +74,7 @@ remains is the finish-off work below.
 | ~~**P2-3**~~ | Extend help links to remaining analytical screens — ✅ **DONE** (6 screens) | ~~P2~~ | S | low |
 | **P3-1** | O-13 legacy `--audio-source` retirement — ✅ **DONE** | P3 | S | low |
 | ~~**P3-2**~~ | No background session pruning — ✅ **DONE** (daily maintenance tick) | ~~P3~~ | S | low |
-| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **static sweep essentially COMPLETE** (every screen + the complete admin/cross-cutting surface + the last page render-modules + recordings/share_rare done; **80-file guard catches escaped `style=\"` too**; raw `style="` 1115→203 — the remainder is *all* genuinely-computed/dynamic: `viz`/`charts`/`gallery`/`skeletons`/`atoms`/`migration` SVG+`--sp` colours + allowlisted bar-widths, i.e. the **endgame's input**). Next: the endgame — emit those as nonce'd `<style>` blocks + drop `style-src 'unsafe-inline'`. ⚠️ Surfaced: P2-2's shipped `script-src` (no `'unsafe-inline'`) blocks inline `on*=` handlers app-wide — separate from this sweep, needs a decision. | P3 | L | low (tedious) |
+| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **static sweep essentially COMPLETE** (every screen + the complete admin/cross-cutting surface + the last page render-modules + recordings/share_rare done; **80-file guard catches escaped `style=\"` too**; raw `style="` 1115→203 — the remainder is *all* genuinely-computed/dynamic: `viz`/`charts`/`gallery`/`skeletons`/`atoms`/`migration` SVG+`--sp` colours + allowlisted bar-widths, i.e. the **endgame's input**). Next: the endgame — emit those as nonce'd `<style>` blocks + drop `style-src 'unsafe-inline'`. ✅ Slice 17 converted every inline `on*=` handler app-wide to `addEventListener`/CSS/`data-*` delegation (CSP-clean, browser-verified) — the style-src endgame is now the only remaining work. | P3 | L | low (tedious) |
 | **P3-4** | Minor cosmetics — uptime pill ✅ **wired**; migration-missing out of scope | P3 | XS | none |
 | ~~**P3-5**~~ | Image blacklist enforcement on read path — ✅ **DONE** (serve-check + purge-on-blacklist) | ~~P3~~ | S | low |
 
@@ -659,6 +659,44 @@ they batch for a Playwright-verified pass; the dynamic ones fold into the endgam
   toggle, command palette) use `addEventListener` in nonced `<script>`s, which work. The fix is to convert
   inline `on*=` handlers to `addEventListener` (or nonced inline scripts). **Scope/approach is a decision for
   the maintainer** — tracked separately from the style-src endgame.
+
+- **Slice 17 — inline `on*=` handler conversion (resolves slice 16's CSP finding; its own PR).** Converted
+  **every** inline DOM event handler the slice-16 finding flagged — `onclick`/`onchange`/`oninput`/
+  `onmouseover`/`onmouseout`/`onerror` — to `addEventListener` / CSS / `data-*` delegation across **16 files**,
+  so the shipped `script-src 'nonce' 'strict-dynamic'` no longer silently no-ops interactions. A broad grep
+  (`[[:space:]]on[a-z]+=`, excluding HTMX `hx-on`) now returns **zero** matches across `crates/birdnet-web/src`
+  + `templates`. Patterns:
+  - **Two global delegated listeners in `layout.html`** (one nonced `<script>`, present on every page): a
+    capture-phase `error` listener that hides any `img[data-hide-on-error]` that fails to load (replaces four
+    `onerror="this.style.display='none'"`), and a `click` listener for copy-to-clipboard buttons keyed by
+    `data-copy-url` (origin + path) or `data-copy-from` (`#id` textContent) with an optional
+    `data-copied-label` — replacing the three bespoke clipboard IIFEs (detection-detail share + correlation-id,
+    quarantine row share).
+  - **Range day-switchers** (`heatmap.rs`, `correlation.rs`): `onclick="loadDays(N,this)"` → `data-days="N"`
+    + one delegated listener on the existing `#range-controls`.
+  - **Tabs / rows**: `recordings.html` wires `#tab-by-species`/`#tab-by-date` via `addEventListener` plus a
+    delegated `.rec-item` listener that un-hides `#recordings-detail` (replacing recordings.rs's two row
+    `onclick`s); `migration/render.rs` `.tabs` → `data-tab` + delegated listener (the `switchTab` body's
+    `event.target` swapped for a `[data-tab]` query so it no longer needs the implicit global `event`).
+  - **Media players** (`audio_player.rs`, `livestream.rs`): play/seek/volume/speed/download wired by id at the
+    end of the existing scripts (`oninput`/`onchange` preserved via `this.value` wrappers).
+  - **Form toggles**: `rules.rs` action-type `<select>` → `change` listener (CSSOM `.style.display`, allowed
+    under CSP); `admin_audio_sources.html` four `<details>` open/cancel buttons via a `wireAddForm` helper;
+    `admin_accounts.html` cancel button.
+  - **Gallery hover** (`gallery.rs`): `onmouseover`/`onmouseout` transform/shadow → a `.ga-hover:hover` rule in
+    `app.css` (the card keeps its inline transition; gallery's *computed* `{color}` styles stay deferred to the
+    endgame); its broken-image `onerror` → `data-hide-on-error`.
+
+  **Verified (QA server + Playwright with a `securitypolicyviolation` listener installed pre-navigation).** A
+  CSP sweep of **15 pages** (`/`, `/today`, `/species`, `/heatmap`, `/migration`, `/analytics`, `/life-list`,
+  `/quarantine`, `/system`, `/recordings`, `/correlation`, `/listen`, `/admin/rules`, `/admin/migrate`,
+  `/admin/system/logs`) reports **zero** CSP violations. Behavioural click-tests pass: the recordings **tab
+  switch + row click** (the exact interaction that failed in slice 16) now toggles the views and un-hides the
+  detail panel; the heatmap/correlation range buttons fire; the detection-detail **share** button flips to
+  "Link copied" with a real `/r/<token>` URL on the clipboard; the quarantine share button flips to "Copied";
+  an injected `img[data-hide-on-error]` resolves to `display:none`. fmt + clippy (`--all-targets`) + **311**
+  lib tests + the inline-style guard all green. No CSP directive change in this PR (handlers only) — the
+  `style-src 'unsafe-inline'` drop remains the endgame's job, now unblocked of its last behavioural hazard.
 
 ---
 

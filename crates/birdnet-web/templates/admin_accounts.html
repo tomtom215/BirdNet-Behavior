@@ -95,7 +95,7 @@
           </div>
           <div class="bnb-form-actions">
             <button type="button" class="bnb-btn ghost"
-                    onclick="document.getElementById('add-user').open=false">Cancel</button>
+                    id="add-user-cancel">Cancel</button>
             <button type="submit" class="bnb-btn moss">Invite viewer</button>
           </div>
         </form>
@@ -121,3 +121,15 @@
   </section>
 
 </div>
+
+<script>
+(function () {
+  var cancel = document.getElementById('add-user-cancel');
+  var details = document.getElementById('add-user');
+  if (cancel && details) {
+    cancel.addEventListener('click', function () {
+      details.open = false;
+    });
+  }
+})();
+</script>

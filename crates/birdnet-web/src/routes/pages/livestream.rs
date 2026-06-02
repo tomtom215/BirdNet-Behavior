@@ -31,13 +31,12 @@ const LIVESTREAM_HTML: &str = r#"<div class="livestream-container">
     <div class="controls">
         <div class="volume-control">
             <label for="volume-slider">Volume:</label>
-            <input type="range" id="volume-slider" min="0" max="100" value="80"
-                   oninput="setVolume(this.value)">
+            <input type="range" id="volume-slider" min="0" max="100" value="80">
             <span id="volume-display">80%</span>
         </div>
 
         <div class="stream-controls">
-            <button id="play-btn" onclick="toggleStream()">Play</button>
+            <button id="play-btn">Play</button>
             <span id="stream-status" class="status-indicator">Stopped</span>
         </div>
     </div>
@@ -158,4 +157,7 @@ audio.addEventListener('error', function() {
     statusEl.className = 'status-indicator';
     playBtn.textContent = 'Play';
 });
+
+volumeSlider.addEventListener('input', function() { setVolume(this.value); });
+playBtn.addEventListener('click', toggleStream);
 </script>"#;

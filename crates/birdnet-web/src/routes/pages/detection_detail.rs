@@ -161,7 +161,7 @@ fn render_detail_page(
     let token = crate::routes::share::issue_token_for(&det.date, &det.time, &det.com_name);
     let share_path = format!("/r/{token}");
     let share_button = format!(
-        r#"<button type="button" class="bnb-btn" title="Copy a public share link" onclick="(function(b){{var u=location.origin+'{share_path}';if(navigator.clipboard){{navigator.clipboard.writeText(u).then(function(){{b.textContent='Link copied';setTimeout(function(){{b.textContent='Share clip';}},1500);}});}}else{{window.prompt('Copy this link:',u);}}}})(this)">Share clip</button>"#
+        r#"<button type="button" class="bnb-btn" title="Copy a public share link" data-copy-url="{share_path}" data-copied-label="Link copied">Share clip</button>"#
     );
 
     let content = format!(
@@ -226,7 +226,7 @@ fn build_audio_section(det: &birdnet_db::sqlite::DetectionRow) -> String {
   <img src="/api/v2/spectrogram/{safe}"
        alt="Spectrogram"
        class="dd-spectrogram"
-       onerror="this.style.display='none'">
+       data-hide-on-error>
   <audio controls class="dd-audio">
     <source src="/api/v2/recordings/{safe}" type="audio/wav">
     Your browser does not support audio playback.
@@ -256,11 +256,10 @@ fn build_correlation_section(det: &birdnet_db::sqlite::DetectionRow) -> String {
         return String::new();
     }
     let safe = escape_html(id);
-    // Vanilla JS clipboard copy with a clear fallback affordance. We
-    // ship inline because the admin pages don't have a shared script
-    // bundle yet and a single 4-line script is cheaper than wiring one.
-    // The button intentionally shows the ID inline so an operator on a
-    // browser without clipboard access can read it directly.
+    // The "Copy" button is wired by the global delegated copy handler in
+    // layout.html (data-copy-from): CSP-safe, no inline on* handler. The
+    // button shows the ID inline so an operator on a browser without
+    // clipboard access can still read it directly.
     format!(
         r#"<div class="bnb-card pad">
   <div class="section-header"><div><div class="bnb-eyebrow">Operator</div><h3>Daemon log trace</h3></div></div>
@@ -273,18 +272,7 @@ fn build_correlation_section(det: &birdnet_db::sqlite::DetectionRow) -> String {
   <div class="dd-id-row">
     <code id="correlation-id" class="dd-id-code">{safe}</code>
     <button type="button" id="copy-correlation-id" class="bnb-btn"
-            onclick="(function(){{
-              const el=document.getElementById('correlation-id');
-              const txt=el.textContent;
-              if(navigator.clipboard){{navigator.clipboard.writeText(txt);}}
-              else{{const r=document.createRange();r.selectNode(el);
-                    window.getSelection().removeAllRanges();
-                    window.getSelection().addRange(r);
-                    document.execCommand('copy');}}
-              const b=document.getElementById('copy-correlation-id');
-              b.textContent='Copied!';
-              setTimeout(()=>{{b.textContent='Copy';}}, 1500);
-            }})()">Copy</button>
+            data-copy-from="correlation-id">Copy</button>
   </div>
 </div>"#
     )

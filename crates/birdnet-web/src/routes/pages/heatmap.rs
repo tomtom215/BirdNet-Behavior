@@ -64,10 +64,10 @@ const HEATMAP_CONTENT: &str = r#"<div class="page-head">
     <p class="bnb-meta hm-lede">Detection frequency by hour of day and day of week.</p>
   </div>
   <div class="seg" id="range-controls">
-    <button class="btn active" onclick="loadDays(7, this)">7 days</button>
-    <button class="btn" onclick="loadDays(14, this)">14 days</button>
-    <button class="btn" onclick="loadDays(30, this)">30 days</button>
-    <button class="btn" onclick="loadDays(90, this)">90 days</button>
+    <button class="btn active" data-days="7">7 days</button>
+    <button class="btn" data-days="14">14 days</button>
+    <button class="btn" data-days="30">30 days</button>
+    <button class="btn" data-days="90">90 days</button>
   </div>
 </div>
 
@@ -115,6 +115,10 @@ function loadDays(days, btn) {
   htmx.ajax('GET', '/pages/heatmap-grid?days=' + days, '#heatmap-grid');
   htmx.ajax('GET', '/pages/hourly-totals?days=' + days, '#hourly-totals');
 }
+document.getElementById('range-controls').addEventListener('click', function(e) {
+  const btn = e.target.closest('button[data-days]');
+  if (btn) loadDays(parseInt(btn.dataset.days, 10), btn);
+});
 </script>"#;
 
 // ---------------------------------------------------------------------------
