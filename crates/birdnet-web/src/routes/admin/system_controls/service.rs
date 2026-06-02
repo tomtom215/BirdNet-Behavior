@@ -46,14 +46,10 @@ pub(super) async fn service_restart() -> Html<String> {
 
     match result {
         Ok(Ok(msg)) => Html(format!(
-            r#"<p style="color:var(--moss);">{msg} Reconnect in a few seconds.</p>"#
+            r#"<p class="ctl-ok">{msg} Reconnect in a few seconds.</p>"#
         )),
-        Ok(Err(e)) => Html(format!(
-            r#"<p style="color:var(--rare);">Restart failed: {e}</p>"#
-        )),
-        Err(e) => Html(format!(
-            r#"<p style="color:var(--rare);">Internal error: {e}</p>"#
-        )),
+        Ok(Err(e)) => Html(format!(r#"<p class="ctl-err">Restart failed: {e}</p>"#)),
+        Err(e) => Html(format!(r#"<p class="ctl-err">Internal error: {e}</p>"#)),
     }
 }
 
@@ -74,18 +70,18 @@ pub(super) async fn service_status() -> Html<String> {
     };
 
     let systemd_badge = if service_active {
-        r#"<span style="color:var(--moss);font-weight:600;">● active</span>"#
+        r#"<span class="ctl-ok-strong">● active</span>"#
     } else {
-        r#"<span style="color:var(--fg-3);">○ not managed by systemd</span>"#
+        r#"<span class="ctl-muted">○ not managed by systemd</span>"#
     };
 
     Html(format!(
-        r#"<table style="width:100%;border-collapse:collapse;font-size:.875rem;">
-          <tr><td style="color:var(--fg-4);padding:.25rem 0;">Version</td><td style="font-weight:600;">v{version}</td></tr>
-          <tr><td style="color:var(--fg-4);padding:.25rem 0;">PID</td><td>{pid}</td></tr>
-          <tr><td style="color:var(--fg-4);padding:.25rem 0;">Uptime</td><td>{uptime_str}</td></tr>
-          <tr><td style="color:var(--fg-4);padding:.25rem 0;">Memory (RSS)</td><td>{memory_mb:.1} MB</td></tr>
-          <tr><td style="color:var(--fg-4);padding:.25rem 0;">systemd service</td><td>{systemd_badge}</td></tr>
+        r#"<table class="ctl-table">
+          <tr><td class="ctl-k">Version</td><td class="ctl-v-strong">v{version}</td></tr>
+          <tr><td class="ctl-k">PID</td><td>{pid}</td></tr>
+          <tr><td class="ctl-k">Uptime</td><td>{uptime_str}</td></tr>
+          <tr><td class="ctl-k">Memory (RSS)</td><td>{memory_mb:.1} MB</td></tr>
+          <tr><td class="ctl-k">systemd service</td><td>{systemd_badge}</td></tr>
         </table>"#
     ))
 }

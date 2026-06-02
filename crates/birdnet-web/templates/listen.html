@@ -1,6 +1,6 @@
 <section class="hero" data-screen-label="Listen now">
     <div>
-        <div class="bnb-eyebrow" style="margin-bottom:8px;">Listen</div>
+        <div class="bnb-eyebrow ls-eyebrow">Listen</div>
         <h1>The yard, <em>live</em>.</h1>
         <p class="hero-lead">
             Pick a configured microphone or stream and listen along with what the
@@ -14,13 +14,13 @@
     </div>
 
     <aside aria-label="Live signal">
-        <div class="bnb-card pad" style="display:flex;flex-direction:column;gap:6px;">
-            <div style="display:flex;justify-content:space-between;align-items:baseline;">
+        <div class="bnb-card pad ls-signal-card">
+            <div class="ls-signal-head">
                 <span class="bnb-eyebrow">Live spectrogram</span>
-                <span class="bnb-pill moss" style="font-size:10px;"><span class="bnb-dot live"></span> 48 kHz · 128 mels</span>
+                <span class="bnb-pill moss ls-live-pill"><span class="bnb-dot live"></span> 48 kHz · 128 mels</span>
             </div>
-            <canvas id="listen-spectrogram" height="120" style="width:100%;height:120px;display:block;"></canvas>
-            <div style="display:flex;justify-content:space-between;">
+            <canvas id="listen-spectrogram" height="120" class="ls-pulse"></canvas>
+            <div class="ls-signal-foot">
                 <span class="mono bnb-meta" id="listen-source-label">no source</span>
                 <span class="mono bnb-meta" id="listen-frames">— frames</span>
                 <span class="mono bnb-meta">BirdNET V3.0</span>
@@ -40,28 +40,27 @@
             </div>
         </div>
 
-        <div style="display:flex;flex-direction:column;gap:14px;">
-            <label style="display:flex;flex-direction:column;gap:6px;">
+        <div class="ls-audio-col">
+            <label class="ls-field">
                 <span class="bnb-meta">Source</span>
-                <select id="listen-source-select"
-                        style="font-family:var(--font-mono);font-size:13px;padding:8px 10px;background:var(--surface);color:var(--fg);border:0.5px solid var(--border);border-radius:6px;">
+                <select id="listen-source-select" class="ls-select">
                     {{source_options}}
                 </select>
             </label>
 
-            <div style="display:flex;gap:10px;align-items:center;">
-                <button type="button" id="listen-play" class="bnb-btn primary" style="min-width:120px;">
+            <div class="ls-play-row">
+                <button type="button" id="listen-play" class="bnb-btn primary ls-play-btn">
                     <span id="listen-play-glyph" aria-hidden="true">▶</span>
-                    <span id="listen-play-label" style="margin-left:6px;">Play</span>
+                    <span id="listen-play-label" class="ls-play-label">Play</span>
                 </button>
                 <span class="bnb-meta" id="listen-help">Tap play, then keep the tab focused — browsers pause background audio aggressively.</span>
             </div>
 
-            <audio id="listen-audio" preload="none" controls="false" style="display:none;"></audio>
+            <audio id="listen-audio" preload="none" controls="false" class="ls-audio-hidden"></audio>
         </div>
     </div>
 
-    <div class="bnb-card pad" style="min-height:480px;">
+    <div class="bnb-card pad ls-trickle-card">
         <div class="section-header">
             <div>
                 <div class="bnb-eyebrow">Trickle</div>

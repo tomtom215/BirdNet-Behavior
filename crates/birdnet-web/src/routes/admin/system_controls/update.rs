@@ -39,11 +39,11 @@ pub(super) async fn check_update() -> axum::response::Response {
                     let published = release.published_at.unwrap_or_default();
                     let html = if update_available {
                         format!(
-                            r#"<div style="color:var(--moss);font-weight:600;">
+                            r#"<div class="ctl-ok-strong">
                               ⬆ Update available: v{latest} (published {published})<br>
                               <a href="{url}" target="_blank" rel="noopener"
-                                 style="color:var(--moss-ink);">View release notes →</a><br>
-                              <span style="color:var(--fg-3);font-size:.8rem;">
+                                 class="ctl-link">View release notes →</a><br>
+                              <span class="ctl-muted-sm">
                                 Run: <code>curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash</code>
                               </span>
                             </div>"#,
@@ -51,28 +51,24 @@ pub(super) async fn check_update() -> axum::response::Response {
                         )
                     } else {
                         format!(
-                            r#"<div style="color:var(--fg-3);">
+                            r#"<div class="ctl-muted">
                               ✓ Up to date (v{current}). Latest: v{latest} ({published}).
                             </div>"#
                         )
                     };
                     Html(html).into_response()
                 }
-                Err(e) => Html(format!(
-                    r#"<p style="color:var(--rare);">Parse error: {e}</p>"#
-                ))
-                .into_response(),
+                Err(e) => {
+                    Html(format!(r#"<p class="ctl-err">Parse error: {e}</p>"#)).into_response()
+                }
             }
         }
         Ok(r) => Html(format!(
-            r#"<p style="color:var(--rare);">GitHub API returned {}</p>"#,
+            r#"<p class="ctl-err">GitHub API returned {}</p>"#,
             r.status()
         ))
         .into_response(),
-        Err(e) => Html(format!(
-            r#"<p style="color:var(--rare);">Network error: {e}</p>"#
-        ))
-        .into_response(),
+        Err(e) => Html(format!(r#"<p class="ctl-err">Network error: {e}</p>"#)).into_response(),
     }
 }
 
