@@ -25,7 +25,7 @@ pub(crate) fn render_hourly_chart(hours: &[birdnet_db::sqlite::HourlyCount]) -> 
     }
 
     if counts.iter().all(|&c| c == 0) {
-        return r#"<p style="color: var(--text-muted)">No detections today yet.</p>"#.to_string();
+        return r#"<p class="cht-empty">No detections today yet.</p>"#.to_string();
     }
 
     let max_count = counts.iter().copied().max().unwrap_or(1).max(1);
@@ -36,7 +36,7 @@ pub(crate) fn render_hourly_chart(hours: &[birdnet_db::sqlite::HourlyCount]) -> 
     let left_pad = 5;
 
     let mut svg = format!(
-        r#"<svg viewBox="0 0 {svg_w} {svg_h}" style="width: 100%; height: auto; display: block;" xmlns="http://www.w3.org/2000/svg">"#,
+        r#"<svg viewBox="0 0 {svg_w} {svg_h}" class="cht-svg" xmlns="http://www.w3.org/2000/svg">"#,
         svg_w = chart_w,
         svg_h = chart_h + 20,
     );
@@ -88,7 +88,7 @@ pub(crate) fn render_hourly_chart(hours: &[birdnet_db::sqlite::HourlyCount]) -> 
 )]
 pub(crate) fn render_daily_chart(days: &[birdnet_db::sqlite::DailyCount]) -> String {
     if days.is_empty() {
-        return r#"<p style="color: var(--text-muted)">No detection data yet.</p>"#.to_string();
+        return r#"<p class="cht-empty">No detection data yet.</p>"#.to_string();
     }
 
     let max_count = days.iter().map(|d| d.count).max().unwrap_or(1).max(1);
@@ -99,7 +99,7 @@ pub(crate) fn render_daily_chart(days: &[birdnet_db::sqlite::DailyCount]) -> Str
     let left_pad = 5;
 
     let mut svg = format!(
-        r#"<svg viewBox="0 0 {svg_w} {svg_h}" style="width: 100%; height: auto; display: block;" xmlns="http://www.w3.org/2000/svg">"#,
+        r#"<svg viewBox="0 0 {svg_w} {svg_h}" class="cht-svg" xmlns="http://www.w3.org/2000/svg">"#,
         svg_w = chart_w,
         svg_h = chart_h + 22,
     );
@@ -150,7 +150,7 @@ pub(crate) fn render_daily_chart(days: &[birdnet_db::sqlite::DailyCount]) -> Str
 pub(crate) fn render_confidence_chart(buckets: &[i64; 6]) -> String {
     let total: i64 = buckets.iter().sum();
     if total == 0 {
-        return r#"<p style="color: var(--text-muted)">No detection data yet.</p>"#.to_string();
+        return r#"<p class="cht-empty">No detection data yet.</p>"#.to_string();
     }
 
     let max_count = buckets.iter().copied().max().unwrap_or(1).max(1);
@@ -172,7 +172,7 @@ pub(crate) fn render_confidence_chart(buckets: &[i64; 6]) -> String {
     let svg_h = 6 * (bar_h + gap);
 
     let mut svg = format!(
-        r#"<svg viewBox="0 0 {chart_w} {svg_h}" style="width: 100%; height: auto; display: block;" xmlns="http://www.w3.org/2000/svg">"#,
+        r#"<svg viewBox="0 0 {chart_w} {svg_h}" class="cht-svg" xmlns="http://www.w3.org/2000/svg">"#,
     );
 
     for (i, (&count, (&label, &color))) in buckets

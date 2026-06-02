@@ -133,6 +133,9 @@
         });
     })();
     </script>
+    <!-- The data-style CSSOM applier is injected once into every full document
+         by the security middleware (security.rs), so it can't be forgotten on a
+         new page; it is not threaded through this template. -->
     <!-- Live detection stream: keeps a reconnecting WebSocket to surface a
          live/offline indicator and dispatch birdnet:detection events. -->
     <script src="/static/live-detections.js" defer></script>

@@ -77,7 +77,7 @@ async fn gallery_grid_partial(
                 return (
                     StatusCode::OK,
                     [(header::CONTENT_TYPE, "text/html")],
-                    r#"<p style="color:var(--text-muted);text-align:center;padding:3rem;">No species found.</p>"#.to_string(),
+                    r#"<p class="ga-msg">No species found.</p>"#.to_string(),
                 );
             }
 
@@ -102,9 +102,7 @@ async fn gallery_grid_partial(
             }
 
             let mut html = String::with_capacity(species.len() * 300);
-            html.push_str(
-                "<div style=\"display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:1rem;\">",
-            );
+            html.push_str("<div class=\"ga-grid\">");
 
             for s in &species {
                 // Detail link is keyed by common name (the URL the rest of the
@@ -128,21 +126,21 @@ async fn gallery_grid_partial(
 
                 let _ = write!(
                     html,
-                    "<a href=\"/species/detail?name={enc}\" style=\"text-decoration:none;color:inherit;\">\
-                     <div class=\"card ga-hover\" style=\"padding:0;overflow:hidden;transition:transform 0.15s,box-shadow 0.15s;cursor:pointer;\">\
-                       <div style=\"height:120px;overflow:hidden;position:relative;\">\
-                         <div style=\"position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:color-mix(in oklch, {color} 15%, var(--surface));\">\
-                           <span class=\"display\" style=\"font-size:1.7rem;letter-spacing:0.04em;color:{color};\">{code}</span>\
+                    "<a href=\"/species/detail?name={enc}\" class=\"ga-card-link\">\
+                     <div class=\"card ga-hover ga-card\">\
+                       <div class=\"ga-thumb\">\
+                         <div class=\"ga-thumb-bg\" data-style=\"background:color-mix(in oklch, {color} 15%, var(--surface))\">\
+                           <span class=\"display ga-code\" data-style=\"color:{color}\">{code}</span>\
                          </div>\
                          <img src=\"/api/v2/species/image/{enc_img}/file\" alt=\"{name}\" \
                               loading=\"lazy\" \
-                              style=\"position:relative;width:100%;height:100%;object-fit:cover;\" \
+                              class=\"ga-img\" \
                               data-hide-on-error>\
                        </div>\
-                       <div style=\"padding:0.75rem;\">\
-                         <div style=\"font-weight:600;font-size:0.9rem;margin-bottom:0.25rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;\">{name}</div>\
-                         <div style=\"display:flex;justify-content:space-between;align-items:center;\">\
-                           <span style=\"font-size:0.8rem;color:var(--text-muted);\">{count} det.</span>\
+                       <div class=\"ga-body\">\
+                         <div class=\"ga-name\">{name}</div>\
+                         <div class=\"ga-row\">\
+                           <span class=\"ga-count\">{count} det.</span>\
                            <span class=\"conf {cls}\">{conf_pct:.0}%</span>\
                          </div>",
                     name = escape_html(&s.com_name),
@@ -151,10 +149,7 @@ async fn gallery_grid_partial(
                     code = species_code(&s.com_name),
                 );
                 if !first.is_empty() {
-                    let _ = write!(
-                        html,
-                        "<div style=\"font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem;\">First: {first}</div>",
-                    );
+                    let _ = write!(html, "<div class=\"ga-first\">First: {first}</div>");
                 }
                 html.push_str("</div></div></a>");
             }
@@ -170,15 +165,15 @@ async fn gallery_grid_partial(
     }
 }
 
-const GALLERY_HTML: &str = r##"<div class="bnb-eyebrow">Browse</div><h1 class="display" style="font-size:34px;margin-bottom:0.25rem;">Gallery</h1>
-<p style="color:var(--text-muted);margin-bottom:1.5rem;">Photo gallery of all detected species.</p>
+const GALLERY_HTML: &str = r##"<div class="bnb-eyebrow">Browse</div><h1 class="display ga-h1">Gallery</h1>
+<p class="ga-lede">Photo gallery of all detected species.</p>
 
-<div style="display:flex;align-items:center;gap:1rem;margin-bottom:1.5rem;flex-wrap:wrap;">
+<div class="ga-controls">
     <input type="text" id="gallery-search" name="q" placeholder="Search species..."
            hx-get="/pages/gallery-grid" hx-trigger="keyup changed delay:300ms"
            hx-target="#gallery-grid" hx-swap="innerHTML"
            hx-include="#gallery-sort"
-           style="flex:1;min-width:200px;">
+           class="ga-search">
     <select id="gallery-sort" name="sort"
             hx-get="/pages/gallery-grid" hx-trigger="change"
             hx-target="#gallery-grid" hx-swap="innerHTML"
@@ -190,5 +185,5 @@ const GALLERY_HTML: &str = r##"<div class="bnb-eyebrow">Browse</div><h1 class="d
 </div>
 
 <div id="gallery-grid" hx-get="/pages/gallery-grid" hx-trigger="load" hx-swap="innerHTML">
-    <p style="color:var(--text-muted);text-align:center;padding:3rem;">Loading gallery...</p>
+    <p class="ga-msg">Loading gallery...</p>
 </div>"##;

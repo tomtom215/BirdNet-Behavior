@@ -271,7 +271,7 @@ async fn life_timeline_partial(State(state): State<AppState>) -> impl axum::resp
     let svg_w = content_w.max(400);
 
     let mut svg = format!(
-        r#"<svg viewBox="0 0 {svg_w} {sh}" style="width:100%;max-height:180px;display:block;" xmlns="http://www.w3.org/2000/svg">"#,
+        r#"<svg viewBox="0 0 {svg_w} {sh}" class="ll-chart" xmlns="http://www.w3.org/2000/svg">"#,
         sh = chart_h + 22,
     );
 

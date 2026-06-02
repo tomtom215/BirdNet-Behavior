@@ -24,7 +24,7 @@ use std::fmt::Write as _;
 use super::atoms::{species_code, species_color};
 use super::escape_html;
 
-const EMPTY: &str = r#"<p class="bnb-meta" style="text-align:center;padding:1.5rem;">Not enough data yet for this view.</p>"#;
+const EMPTY: &str = r#"<p class="bnb-meta viz-empty">Not enough data yet for this view.</p>"#;
 
 /// (x, y) on a circle centred at (`cx`, `cy`).
 fn polar(cx: f64, cy: f64, r: f64, ang: f64) -> (f64, f64) {
@@ -53,7 +53,7 @@ pub(crate) fn cooccurrence_matrix(labels: &[String], m: &[Vec<f64>]) -> String {
     let size_h = gutter + n as i32 * cell + 8;
 
     let mut svg = format!(
-        r#"<div style="overflow-x:auto;"><svg width="{size_w}" height="{size_h}" viewBox="0 0 {size_w} {size_h}" role="img" aria-label="Species co-occurrence matrix">"#
+        r#"<div class="viz-scroll"><svg width="{size_w}" height="{size_h}" viewBox="0 0 {size_w} {size_h}" role="img" aria-label="Species co-occurrence matrix">"#
     );
 
     // Column labels (rotated) + row labels.
@@ -135,7 +135,7 @@ pub(crate) fn streamgraph(series: &[(String, Vec<i64>)]) -> String {
     let val_y = |v: f64| mid - v * scale;
 
     let mut svg = format!(
-        r#"<div style="overflow-x:auto;"><svg width="100%" viewBox="0 0 {w:.0} {h:.0}" preserveAspectRatio="none" role="img" aria-label="Activity streamgraph" style="display:block;">"#
+        r#"<div class="viz-scroll"><svg width="100%" viewBox="0 0 {w:.0} {h:.0}" preserveAspectRatio="none" role="img" aria-label="Activity streamgraph" class="viz-svg-block">"#
     );
 
     // Stack bands from a centred baseline.
@@ -179,11 +179,11 @@ pub(crate) fn streamgraph(series: &[(String, Vec<i64>)]) -> String {
 
     svg.push_str("</svg></div>");
     // Legend.
-    svg.push_str(r#"<div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:10px;">"#);
+    svg.push_str(r#"<div class="viz-legend">"#);
     for (name, _) in series {
         let _ = write!(
             svg,
-            r#"<span class="bnb-meta" style="display:inline-flex;align-items:center;gap:5px;"><span style="width:9px;height:9px;border-radius:2px;background:{c};display:inline-block;"></span>{n}</span>"#,
+            r#"<span class="bnb-meta viz-legend-item"><span class="viz-swatch" data-style="background:{c}"></span>{n}</span>"#,
             c = species_color(name),
             n = escape_html(name),
         );
@@ -231,7 +231,7 @@ pub(crate) fn accumulation_curve(points: &[(String, i64)]) -> String {
     );
 
     let mut svg = format!(
-        r#"<svg width="100%" viewBox="0 0 {w:.0} {h:.0}" preserveAspectRatio="none" role="img" aria-label="Species accumulation over time" style="display:block;">"#
+        r#"<svg width="100%" viewBox="0 0 {w:.0} {h:.0}" preserveAspectRatio="none" role="img" aria-label="Species accumulation over time" class="viz-svg-block">"#
     );
     let _ = write!(
         svg,
@@ -291,7 +291,7 @@ pub(crate) fn circadian_polar(series: &[(String, [f64; 24])], now_h: f64) -> Str
     let amp = band * 0.42;
 
     let mut svg = format!(
-        r#"<svg width="{size:.0}" height="{size:.0}" viewBox="0 0 {size:.0} {size:.0}" role="img" aria-label="Dawn chorus circadian plot" style="max-width:100%;height:auto;display:block;margin:0 auto;">"#
+        r#"<svg width="{size:.0}" height="{size:.0}" viewBox="0 0 {size:.0} {size:.0}" role="img" aria-label="Dawn chorus circadian plot" class="viz-svg-center">"#
     );
 
     // Night wedge (≈20:00 → 05:00, wrapping through midnight at the top).
@@ -392,11 +392,11 @@ pub(crate) fn circadian_polar(series: &[(String, [f64; 24])], now_h: f64) -> Str
 
     svg.push_str("</svg>");
     // Legend.
-    svg.push_str(r#"<div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center;margin-top:8px;">"#);
+    svg.push_str(r#"<div class="viz-legend center">"#);
     for (name, _) in series {
         let _ = write!(
             svg,
-            r#"<span class="bnb-meta" style="display:inline-flex;align-items:center;gap:5px;"><span style="width:9px;height:9px;border-radius:50%;background:{c};display:inline-block;"></span>{n}</span>"#,
+            r#"<span class="bnb-meta viz-legend-item"><span class="viz-swatch round" data-style="background:{c}"></span>{n}</span>"#,
             c = species_color(name),
             n = escape_html(name),
         );
@@ -446,7 +446,7 @@ pub(crate) fn ridgeline(series: &[(String, Vec<i64>)]) -> String {
     defs.push_str("</defs>");
 
     let mut svg = format!(
-        r#"<div style="overflow-x:auto;"><svg width="{w:.0}" height="{h:.0}" viewBox="0 0 {w:.0} {h:.0}" role="img" aria-label="Migration phenology ridgeline">{defs}"#
+        r#"<div class="viz-scroll"><svg width="{w:.0}" height="{h:.0}" viewBox="0 0 {w:.0} {h:.0}" role="img" aria-label="Migration phenology ridgeline">{defs}"#
     );
 
     // Spring (~weeks 12–21) and fall (~weeks 30–43) migration bands, behind.
@@ -591,7 +591,7 @@ pub(crate) fn chord_diagram(labels: &[String], m: &[Vec<f64>]) -> String {
     ribbons.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
 
     let mut svg = format!(
-        r#"<svg viewBox="0 0 {size:.0} {size:.0}" width="100%" role="img" aria-label="Acoustic co-occurrence network" style="max-width:560px;height:auto;display:block;margin:0 auto;">"#
+        r#"<svg viewBox="0 0 {size:.0} {size:.0}" width="100%" role="img" aria-label="Acoustic co-occurrence network" class="viz-svg-chord">"#
     );
 
     // Gradient defs (one per ribbon, oriented midpoint → midpoint).
@@ -700,7 +700,7 @@ pub(crate) fn day_strip(
     let x_of = |hour: f64| hour / 24.0 * w;
 
     let mut svg = format!(
-        r#"<svg viewBox="0 0 {w:.0} {h:.0}" width="100%" height="auto" role="img" aria-label="Detections across the day" style="display:block;">"#
+        r#"<svg viewBox="0 0 {w:.0} {h:.0}" width="100%" height="auto" role="img" aria-label="Detections across the day" class="viz-svg-block">"#
     );
 
     // Night bands (midnight→sunrise, sunset→midnight).

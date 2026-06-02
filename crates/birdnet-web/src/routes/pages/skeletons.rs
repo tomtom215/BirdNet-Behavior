@@ -28,12 +28,12 @@ pub fn feed_rows(n: usize) -> String {
     for _ in 0..n {
         out.push_str(
             r#"<div class="feed-row bnb-skel-feed-row">
-  <span class="bnb-skel line" style="width:46px;"></span>
+  <span class="bnb-skel line" data-style="width:46px;"></span>
   <span class="bnb-skel avatar"></span>
-  <div><span class="bnb-skel line" style="width:60%;"></span><span class="bnb-skel line" style="width:40%;margin-top:6px;"></span></div>
-  <span class="bnb-skel" style="height:22px;border-radius:3px;"></span>
-  <span class="bnb-skel" style="height:14px;border-radius:3px;"></span>
-  <span class="bnb-skel" style="width:64px;height:22px;border-radius:6px;"></span>
+  <div><span class="bnb-skel line" data-style="width:60%;"></span><span class="bnb-skel line" data-style="width:40%;margin-top:6px;"></span></div>
+  <span class="bnb-skel" data-style="height:22px;border-radius:3px;"></span>
+  <span class="bnb-skel" data-style="height:14px;border-radius:3px;"></span>
+  <span class="bnb-skel" data-style="width:64px;height:22px;border-radius:6px;"></span>
 </div>"#,
         );
     }
@@ -46,14 +46,14 @@ pub fn feed_rows(n: usize) -> String {
 pub fn stat_row(n: usize) -> String {
     let n = n.clamp(2, 6);
     let mut out = format!(
-        r#"<div class="bnb-skel-stat-row" style="--n:{n};" aria-busy="true" aria-label="Loading statistics">"#
+        r#"<div class="bnb-skel-stat-row" data-style="--n:{n};" aria-busy="true" aria-label="Loading statistics">"#
     );
     for _ in 0..n {
         out.push_str(
             r#"<div>
-  <span class="bnb-skel line" style="width:60%;"></span>
-  <span class="bnb-skel line xl" style="width:50%;margin-top:8px;"></span>
-  <span class="bnb-skel line" style="width:70%;margin-top:auto;"></span>
+  <span class="bnb-skel line" data-style="width:60%;"></span>
+  <span class="bnb-skel line xl" data-style="width:50%;margin-top:8px;"></span>
+  <span class="bnb-skel line" data-style="width:70%;margin-top:auto;"></span>
 </div>"#,
         );
     }
@@ -65,14 +65,14 @@ pub fn stat_row(n: usize) -> String {
 #[must_use]
 pub const fn day_strip() -> &'static str {
     r#"<div aria-busy="true" aria-label="Loading day strip">
-  <div class="bnb-skel-bars" style="--n:24;height:62px;">
-    <span style="height:30%"></span><span style="height:42%"></span><span style="height:58%"></span><span style="height:70%"></span><span style="height:62%"></span><span style="height:48%"></span><span style="height:38%"></span><span style="height:32%"></span><span style="height:28%"></span><span style="height:26%"></span><span style="height:24%"></span><span style="height:22%"></span><span style="height:24%"></span><span style="height:28%"></span><span style="height:36%"></span><span style="height:42%"></span><span style="height:52%"></span><span style="height:60%"></span><span style="height:54%"></span><span style="height:44%"></span><span style="height:34%"></span><span style="height:26%"></span><span style="height:20%"></span><span style="height:18%"></span>
+  <div class="bnb-skel-bars" data-style="--n:24;height:62px;">
+    <span data-style="height:30%"></span><span data-style="height:42%"></span><span data-style="height:58%"></span><span data-style="height:70%"></span><span data-style="height:62%"></span><span data-style="height:48%"></span><span data-style="height:38%"></span><span data-style="height:32%"></span><span data-style="height:28%"></span><span data-style="height:26%"></span><span data-style="height:24%"></span><span data-style="height:22%"></span><span data-style="height:24%"></span><span data-style="height:28%"></span><span data-style="height:36%"></span><span data-style="height:42%"></span><span data-style="height:52%"></span><span data-style="height:60%"></span><span data-style="height:54%"></span><span data-style="height:44%"></span><span data-style="height:34%"></span><span data-style="height:26%"></span><span data-style="height:20%"></span><span data-style="height:18%"></span>
   </div>
-  <div style="display:grid;grid-template-columns:repeat(4,1fr);margin-top:8px;">
-    <span class="bnb-skel line" style="width:38px;"></span>
-    <span class="bnb-skel line" style="width:38px;justify-self:center;"></span>
-    <span class="bnb-skel line" style="width:38px;justify-self:center;"></span>
-    <span class="bnb-skel line" style="width:38px;justify-self:end;"></span>
+  <div data-style="display:grid;grid-template-columns:repeat(4,1fr);margin-top:8px;">
+    <span class="bnb-skel line" data-style="width:38px;"></span>
+    <span class="bnb-skel line" data-style="width:38px;justify-self:center;"></span>
+    <span class="bnb-skel line" data-style="width:38px;justify-self:center;"></span>
+    <span class="bnb-skel line" data-style="width:38px;justify-self:end;"></span>
   </div>
 </div>"#
 }
@@ -80,26 +80,26 @@ pub const fn day_strip() -> &'static str {
 /// Polar plot square (dawn-chorus). Just a centred concentric ring.
 #[must_use]
 pub const fn polar_plot() -> &'static str {
-    r#"<div aria-busy="true" aria-label="Loading polar plot" style="aspect-ratio:1;max-width:480px;width:100%;margin:0 auto;position:relative;">
-  <span class="bnb-skel box" style="position:absolute;inset:0;border-radius:50%;"></span>
-  <span class="bnb-skel box" style="position:absolute;inset:14%;border-radius:50%;background:var(--surface);"></span>
-  <span class="bnb-skel box" style="position:absolute;inset:32%;border-radius:50%;"></span>
-  <span class="bnb-skel box" style="position:absolute;inset:46%;border-radius:50%;background:var(--surface);"></span>
+    r#"<div aria-busy="true" aria-label="Loading polar plot" data-style="aspect-ratio:1;max-width:480px;width:100%;margin:0 auto;position:relative;">
+  <span class="bnb-skel box" data-style="position:absolute;inset:0;border-radius:50%;"></span>
+  <span class="bnb-skel box" data-style="position:absolute;inset:14%;border-radius:50%;background:var(--surface);"></span>
+  <span class="bnb-skel box" data-style="position:absolute;inset:32%;border-radius:50%;"></span>
+  <span class="bnb-skel box" data-style="position:absolute;inset:46%;border-radius:50%;background:var(--surface);"></span>
 </div>"#
 }
 
 /// Ridgeline placeholder — 8 stacked horizontal "ridges".
 #[must_use]
 pub const fn ridgeline() -> &'static str {
-    r#"<div aria-busy="true" aria-label="Loading ridgeline" style="display:flex;flex-direction:column;gap:6px;min-height:340px;">
-  <span class="bnb-skel" style="height:34px;border-radius:18px 18px 4px 4px;"></span>
-  <span class="bnb-skel" style="height:30px;border-radius:14px 14px 4px 4px;"></span>
-  <span class="bnb-skel" style="height:38px;border-radius:18px 18px 4px 4px;"></span>
-  <span class="bnb-skel" style="height:32px;border-radius:14px 14px 4px 4px;"></span>
-  <span class="bnb-skel" style="height:40px;border-radius:18px 18px 4px 4px;"></span>
-  <span class="bnb-skel" style="height:28px;border-radius:14px 14px 4px 4px;"></span>
-  <span class="bnb-skel" style="height:36px;border-radius:18px 18px 4px 4px;"></span>
-  <span class="bnb-skel" style="height:30px;border-radius:14px 14px 4px 4px;"></span>
+    r#"<div aria-busy="true" aria-label="Loading ridgeline" data-style="display:flex;flex-direction:column;gap:6px;min-height:340px;">
+  <span class="bnb-skel" data-style="height:34px;border-radius:18px 18px 4px 4px;"></span>
+  <span class="bnb-skel" data-style="height:30px;border-radius:14px 14px 4px 4px;"></span>
+  <span class="bnb-skel" data-style="height:38px;border-radius:18px 18px 4px 4px;"></span>
+  <span class="bnb-skel" data-style="height:32px;border-radius:14px 14px 4px 4px;"></span>
+  <span class="bnb-skel" data-style="height:40px;border-radius:18px 18px 4px 4px;"></span>
+  <span class="bnb-skel" data-style="height:28px;border-radius:14px 14px 4px 4px;"></span>
+  <span class="bnb-skel" data-style="height:36px;border-radius:18px 18px 4px 4px;"></span>
+  <span class="bnb-skel" data-style="height:30px;border-radius:14px 14px 4px 4px;"></span>
 </div>"#
 }
 
@@ -107,7 +107,7 @@ pub const fn ridgeline() -> &'static str {
 #[must_use]
 pub fn diversity_bars() -> String {
     let mut out = String::from(
-        r#"<div class="bnb-skel-bars" style="--n:52;height:60px;" aria-busy="true" aria-label="Loading weekly diversity">"#,
+        r#"<div class="bnb-skel-bars" data-style="--n:52;height:60px;" aria-busy="true" aria-label="Loading weekly diversity">"#,
     );
     // Pre-baked heights so it looks like a real distribution.
     let h = [
@@ -116,7 +116,7 @@ pub fn diversity_bars() -> String {
         34, 28, 24, 22, 20, 18,
     ];
     for &p in &h {
-        let _ = write!(out, r#"<span style="height:{p}%"></span>"#);
+        let _ = write!(out, r#"<span data-style="height:{p}%"></span>"#);
     }
     out.push_str("</div>");
     out
@@ -133,8 +133,8 @@ pub fn species_ribbons(n: usize) -> String {
         out.push_str(
             r#"<div class="bnb-skel-list-row">
   <span class="bnb-skel avatar"></span>
-  <div><span class="bnb-skel line" style="width:55%;"></span><span class="bnb-skel" style="height:14px;border-radius:3px;margin-top:6px;"></span></div>
-  <span class="bnb-skel" style="width:42px;height:42px;border-radius:50%;"></span>
+  <div><span class="bnb-skel line" data-style="width:55%;"></span><span class="bnb-skel" data-style="height:14px;border-radius:3px;margin-top:6px;"></span></div>
+  <span class="bnb-skel" data-style="width:42px;height:42px;border-radius:50%;"></span>
 </div>"#,
         );
     }
@@ -148,13 +148,13 @@ pub fn species_ribbons(n: usize) -> String {
 pub fn hourly_bars(n: usize) -> String {
     let n = n.clamp(8, 96);
     let mut out = format!(
-        r#"<div class="bnb-skel-bars" style="--n:{n};" aria-busy="true" aria-label="Loading hourly activity">"#
+        r#"<div class="bnb-skel-bars" data-style="--n:{n};" aria-busy="true" aria-label="Loading hourly activity">"#
     );
     // Bell-curve heights.
     for i in 0..n {
         let t = (i as f64) / (n as f64);
         let h = ((t * std::f64::consts::PI).sin() * 0.85 + 0.10) * 100.0;
-        let _ = write!(out, r#"<span style="height:{h:.0}%"></span>"#);
+        let _ = write!(out, r#"<span data-style="height:{h:.0}%"></span>"#);
     }
     out.push_str("</div>");
     out
@@ -164,8 +164,8 @@ pub fn hourly_bars(n: usize) -> String {
 #[must_use]
 pub const fn trend_line() -> &'static str {
     r#"<div aria-busy="true" aria-label="Loading trend">
-  <div class="bnb-skel-bars" style="--n:14;height:120px;">
-    <span style="height:18%"></span><span style="height:32%"></span><span style="height:24%"></span><span style="height:46%"></span><span style="height:58%"></span><span style="height:72%"></span><span style="height:68%"></span><span style="height:52%"></span><span style="height:62%"></span><span style="height:78%"></span><span style="height:86%"></span><span style="height:74%"></span><span style="height:64%"></span><span style="height:56%"></span>
+  <div class="bnb-skel-bars" data-style="--n:14;height:120px;">
+    <span data-style="height:18%"></span><span data-style="height:32%"></span><span data-style="height:24%"></span><span data-style="height:46%"></span><span data-style="height:58%"></span><span data-style="height:72%"></span><span data-style="height:68%"></span><span data-style="height:52%"></span><span data-style="height:62%"></span><span data-style="height:78%"></span><span data-style="height:86%"></span><span data-style="height:74%"></span><span data-style="height:64%"></span><span data-style="height:56%"></span>
   </div>
 </div>"#
 }
@@ -180,8 +180,8 @@ pub fn list_rows(n: usize) -> String {
         out.push_str(
             r#"<div class="bnb-skel-list-row">
   <span class="bnb-skel avatar"></span>
-  <div><span class="bnb-skel line" style="width:60%;"></span><span class="bnb-skel line" style="width:40%;margin-top:6px;"></span></div>
-  <span class="bnb-skel line" style="width:42px;"></span>
+  <div><span class="bnb-skel line" data-style="width:60%;"></span><span class="bnb-skel line" data-style="width:40%;margin-top:6px;"></span></div>
+  <span class="bnb-skel line" data-style="width:42px;"></span>
 </div>"#,
         );
     }
@@ -193,8 +193,9 @@ pub fn list_rows(n: usize) -> String {
 #[must_use]
 pub fn pill_row(n: usize) -> String {
     let n = n.clamp(1, 6);
-    let mut out =
-        String::from(r#"<div style="display:flex;gap:8px;" aria-busy="true" aria-hidden="true">"#);
+    let mut out = String::from(
+        r#"<div data-style="display:flex;gap:8px;" aria-busy="true" aria-hidden="true">"#,
+    );
     for _ in 0..n {
         out.push_str(r#"<span class="bnb-skel pill"></span>"#);
     }
@@ -206,10 +207,10 @@ pub fn pill_row(n: usize) -> String {
 #[must_use]
 pub const fn hero_card() -> &'static str {
     r#"<div aria-busy="true" aria-label="Loading best detection">
-  <span class="bnb-skel line" style="width:38%;"></span>
-  <span class="bnb-skel box" style="aspect-ratio:4/3;width:100%;margin-top:10px;"></span>
-  <span class="bnb-skel line" style="width:60%;margin-top:12px;"></span>
-  <span class="bnb-skel" style="height:36px;width:100%;margin-top:10px;border-radius:6px;"></span>
+  <span class="bnb-skel line" data-style="width:38%;"></span>
+  <span class="bnb-skel box" data-style="aspect-ratio:4/3;width:100%;margin-top:10px;"></span>
+  <span class="bnb-skel line" data-style="width:60%;margin-top:12px;"></span>
+  <span class="bnb-skel" data-style="height:36px;width:100%;margin-top:10px;border-radius:6px;"></span>
 </div>"#
 }
 
@@ -234,6 +235,9 @@ mod tests {
     #[test]
     fn hourly_bars_emits_n_bars() {
         let html = hourly_bars(24);
-        assert_eq!(html.matches("<span style=\"height:").count(), 24);
+        // Heights ride data-style (CSP forbids inline style=""); the CSSOM
+        // applier writes them onto element.style after parse.
+        assert_eq!(html.matches("<span data-style=\"height:").count(), 24);
+        assert!(!html.contains("<span style=\"height:"));
     }
 }

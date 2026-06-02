@@ -336,7 +336,7 @@ fn render_confidence_distribution(buckets: &[i64; 6]) -> String {
             html,
             r#"<div class="bar-wrap">
   <div class="bar-val">{count}</div>
-  <div class="bar" style="height:{height_pct}%;background:{color};"></div>
+  <div class="bar" data-style="height:{height_pct}%;background:{color};"></div>
   <div class="bar-label">{label}</div>
 </div>"#
         )
@@ -365,7 +365,7 @@ fn render_confidence_trend(trend: &[(String, f64)]) -> String {
         let color = conf_to_color(*conf);
         write!(
             html,
-            r#"<div class="trend-bar" style="height:{height_pct}%;background:{color};"
+            r#"<div class="trend-bar" data-style="height:{height_pct}%;background:{color};"
                  title="{date}: {conf:.1}%"></div>"#,
             date = escape_html(date),
             conf = conf * 100.0,
@@ -414,7 +414,7 @@ fn render_hourly_quality(by_hour: &[(u8, i64, f64)]) -> String {
         let height_pct = (count * 100) / max_count;
         write!(
             html,
-            r#"<div class="hour-bar" style="height:{height_pct}%;background:{color};"
+            r#"<div class="hour-bar" data-style="height:{height_pct}%;background:{color};"
                  title="{hour:02}:00 — {count} detections, avg {conf:.0}%"></div>"#,
             height_pct = height_pct,
             color = color,
@@ -476,7 +476,7 @@ fn render_low_confidence_species(low: &[(String, String, i64, f64)]) -> String {
   <td class="q-num">{count}</td>
   <td>
     <div class="conf-meter">
-      <div class="conf-fill" style="width:{bar_pct}%;background:{color};"></div>
+      <div class="conf-fill" data-style="width:{bar_pct}%;background:{color};"></div>
     </div>
     <span class="q-conf-pct">{pct:.1}%</span>
   </td>
@@ -522,10 +522,10 @@ fn render_review_trend(days: &[ReviewVerdictDay]) -> String {
         let _ = write!(
             html,
             r#"<div class="col" title="{label}">
-  <span class="unreviewed" style="height:{u}%"></span>
-  <span class="confirmed"  style="height:{c}%" class-suffix="approved"></span>
-  <span class="approved"   style="height:{c}%"></span>
-  <span class="rejected"   style="height:{r}%"></span>
+  <span class="unreviewed" data-style="height:{u}%"></span>
+  <span class="confirmed"  data-style="height:{c}%" class-suffix="approved"></span>
+  <span class="approved"   data-style="height:{c}%"></span>
+  <span class="rejected"   data-style="height:{r}%"></span>
 </div>"#,
             label = escape_html(&label),
             u = scale(d.unreviewed),
@@ -570,8 +570,8 @@ fn render_model_vs_review(rows: &[ModelVsReviewRow]) -> String {
     <em>{sci} · {total} detections</em>
   </div>
   <div class="bnb-mvr-bars">
-    <div class="bnb-mvr-bar model"><span class="fill" style="width:{model_w}%"></span><span class="label">model {model_pct:.0}%</span></div>
-    <div class="bnb-mvr-bar human"><span class="fill" style="width:{human_w}%"></span><span class="label">human {human_pct:.0}%</span></div>
+    <div class="bnb-mvr-bar model"><span class="fill" data-style="width:{model_w}%"></span><span class="label">model {model_pct:.0}%</span></div>
+    <div class="bnb-mvr-bar human"><span class="fill" data-style="width:{human_w}%"></span><span class="label">human {human_pct:.0}%</span></div>
   </div>
   <div class="bnb-mvr-gap{gap_class}">Δ {gap_sign}{gap_abs:.0}%</div>
 </li>"#,

@@ -306,7 +306,7 @@ fn render_pairs_table(pairs: &[birdnet_db::sqlite::SpeciesPair], _days: u32) -> 
   <td>{days}</td>
   <td>
     <div class="co-bar-row">
-      <div class="bar" style="width:{bar_pct}%;min-width:4px;"></div>
+      <div class="bar" data-style="width:{bar_pct}%;min-width:4px;"></div>
       <span class="co-bar-label">{days} days</span>
     </div>
   </td>
@@ -408,7 +408,7 @@ fn render_companion_table(companions: &[birdnet_db::sqlite::FollowOn]) -> String
   <td>{days}</td>
   <td>{conf}%</td>
   <td>
-    <div class="bar" style="width:{bar_pct}%;min-width:4px;"></div>
+    <div class="bar" data-style="width:{bar_pct}%;min-width:4px;"></div>
   </td>
 </tr>"#,
             name = escape_html(&c.companion),

@@ -717,6 +717,10 @@ footer a:hover { color: var(--moss-ink); }
 .bnb-skel-bars > span {
   display: block; background: var(--surface-2);
   border-radius: 2px 2px 0 0;
+  /* FOUC default: skeleton bar heights ride data-style (computed/varied),
+     applied via CSSOM after parse; this keeps them from collapsing to 0 in
+     the sub-frame before the applier runs. The data-style height overrides. */
+  height: 45%;
 }
 @media (prefers-reduced-motion: no-preference) {
   .bnb-skel-bars > span { animation: bnb-skel-shimmer 1.4s cubic-bezier(.4,0,.2,1) infinite; background-size:200% 100%; }
@@ -3318,3 +3322,85 @@ a.sr-about       { color: var(--fg-3); }
    onmouseover/onmouseout handlers. The card keeps its inline transition;
    gallery's computed inline styles are swept later in the CSP endgame. */
 .ga-hover:hover  { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); }
+
+/* ========================================================================
+   P2-2 endgame — the static halves of the last computed inline styles.
+   Every remaining style="" attribute was either lifted into a class here
+   (static) or moved to a data-style attribute applied via CSSOM (computed),
+   so style-src can drop 'unsafe-inline'. SVG fill/stroke are presentation
+   attributes, not style="", so they are untouched.
+   ======================================================================== */
+
+/* Bespoke analytics SVG viz (viz.rs). Computed species colours ride
+   data-style="background:{species_color}" on the swatch. */
+.viz-empty        { text-align: center; padding: 1.5rem; }
+.viz-scroll       { overflow-x: auto; }
+.viz-svg-block    { display: block; }
+.viz-svg-center   { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+.viz-svg-chord    { max-width: 560px; height: auto; display: block; margin: 0 auto; }
+.viz-legend       { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
+.viz-legend.center { justify-content: center; margin-top: 8px; }
+.viz-legend-item  { display: inline-flex; align-items: center; gap: 5px; }
+.viz-swatch       { width: 9px; height: 9px; display: inline-block; border-radius: 2px; }
+.viz-swatch.round { border-radius: 50%; }
+
+/* SVG bar charts (charts.rs) — all-static; colours are SVG fill attributes. */
+.cht-empty        { color: var(--text-muted); }
+.cht-svg          { width: 100%; height: auto; display: block; }
+
+/* Gallery grid + cards (gallery.rs). The card is fragment-swapped, so the two
+   computed species colours ride data-style (applied pre-paint on afterSwap):
+   the thumb background (color-mix) and the code colour. */
+.ga-grid       { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 1rem; }
+.ga-msg        { color: var(--text-muted); text-align: center; padding: 3rem; }
+.ga-card-link  { text-decoration: none; color: inherit; }
+.ga-card       { padding: 0; overflow: hidden; transition: transform 0.15s, box-shadow 0.15s; cursor: pointer; }
+.ga-thumb      { height: 120px; overflow: hidden; position: relative; }
+.ga-thumb-bg   { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.ga-code       { font-size: 1.7rem; letter-spacing: 0.04em; }
+.ga-img        { position: relative; width: 100%; height: 100%; object-fit: cover; }
+.ga-body       { padding: 0.75rem; }
+.ga-name       { font-weight: 600; font-size: 0.9rem; margin-bottom: 0.25rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ga-row        { display: flex; justify-content: space-between; align-items: center; }
+.ga-count      { font-size: 0.8rem; color: var(--text-muted); }
+.ga-first      { font-size: 0.7rem; color: var(--text-muted); margin-top: 0.25rem; }
+.ga-h1         { font-size: 34px; margin-bottom: 0.25rem; }
+.ga-lede       { color: var(--text-muted); margin-bottom: 1.5rem; }
+.ga-controls   { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+.ga-search     { flex: 1; min-width: 200px; }
+
+/* Migration phenology page (migration.rs). SVG <text> label styles (font-size
+   + fill are CSS properties on SVG, so they live in classes); only the
+   eyebrow accent colour is computed and rides data-style. */
+.mig-svg         { display: block; }
+.mig-tick        { font-size: 11px; fill: var(--fg-3); }
+.mig-band-spring { font-size: 10px; fill: var(--moss-ink); }
+.mig-band-fall   { font-size: 10px; fill: var(--dawn-ink); }
+.mig-name        { font-size: 12px; fill: var(--fg); font-weight: 500; }
+.mig-sub         { font-size: 9.5px; fill: var(--fg-3); }
+.mig-today       { font-size: 10px; fill: var(--bg); }
+.mig-peak-val    { font-size: 28px; }
+.mig-headline    { font-size: 20px; margin-top: 8px; }
+.mig-sub-line    { margin-top: 4px; }
+
+/* Dashboard activity heatmap widget (dashboard/heatmap_widget.rs). This is an
+   HTMX fragment, so its rules must live here ('self') — a per-request-nonced
+   <style> inside a swapped fragment can't match the host page's nonce. Active
+   cell intensities are computed and ride data-style. */
+.ah        { display: grid; grid-template-columns: 9rem repeat(24, 1fr); gap: 2px; overflow-x: auto; }
+.ah-lbl    { font-size: .75rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: .25rem; align-self: center; }
+.ah-hr     { font-size: .6rem; color: var(--text-muted); text-align: center; padding: .1rem 0; }
+.ah-cell   { height: 20px; border-radius: 3px; transition: opacity .15s; cursor: default; }
+.ah-cell:hover { outline: 1px solid var(--accent); z-index: 1; position: relative; }
+.ah-zero   { background: var(--bg-hover); }
+.ah-empty  { color: var(--text-muted); text-align: center; padding: 1rem 0; }
+
+/* Dawn-chorus polar viz SVG labels (dawn_chorus.rs) — static font/fill. */
+.dcv-hr      { font-size: 11px; fill: var(--fg-3); }
+.dcv-ctr     { font-size: 14px; fill: var(--fg-3); }
+.dcv-ctr-sub { font-size: 11px; fill: var(--fg-2); }
+.dcv-sun     { font-size: 9.5px; fill: var(--fg-3); }
+/* Life-list monthly discovery chart svg (life_list.rs). */
+.ll-chart    { width: 100%; max-height: 180px; display: block; }
+/* Admin migration status "none in progress" fallback (admin/migration.rs). */
+.amig-empty  { color: var(--fg-4); }

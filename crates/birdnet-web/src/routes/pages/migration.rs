@@ -179,7 +179,7 @@ fn render_ridgeline_svg(ridges: &[SpeciesRidge], today_week: u8) -> String {
     let mut s = String::with_capacity(8 * 1024);
     let _ = write!(
         s,
-        r#"<svg viewBox="0 0 {W} {H}" width="100%" height="auto" preserveAspectRatio="none" style="display:block;">"#,
+        r#"<svg viewBox="0 0 {W} {H}" width="100%" height="auto" preserveAspectRatio="none" class="mig-svg">"#,
     );
 
     // Month gridlines.
@@ -193,7 +193,7 @@ fn render_ridgeline_svg(ridges: &[SpeciesRidge], today_week: u8) -> String {
         );
         let _ = write!(
             s,
-            r#"<text x="{x:.2}" y="{y}" text-anchor="middle" class="mono" style="font-size:11px;fill:var(--fg-3);">{label}</text>"#,
+            r#"<text x="{x:.2}" y="{y}" text-anchor="middle" class="mono mig-tick">{label}</text>"#,
             x = x(*week as f64),
             y = PAD_T + inner_h + 18.0,
         );
@@ -210,7 +210,7 @@ fn render_ridgeline_svg(ridges: &[SpeciesRidge], today_week: u8) -> String {
     );
     let _ = write!(
         s,
-        r#"<text x="{x:.2}" y="{y:.2}" text-anchor="middle" class="mono" style="font-size:10px;fill:var(--moss-ink);">spring migration</text>"#,
+        r#"<text x="{x:.2}" y="{y:.2}" text-anchor="middle" class="mono mig-band-spring">spring migration</text>"#,
         x = x(14.0),
         y = PAD_T + 12.0,
     );
@@ -224,7 +224,7 @@ fn render_ridgeline_svg(ridges: &[SpeciesRidge], today_week: u8) -> String {
     );
     let _ = write!(
         s,
-        r#"<text x="{x:.2}" y="{y:.2}" text-anchor="middle" class="mono" style="font-size:10px;fill:var(--dawn-ink);">fall migration</text>"#,
+        r#"<text x="{x:.2}" y="{y:.2}" text-anchor="middle" class="mono mig-band-fall">fall migration</text>"#,
         x = x(39.0),
         y = PAD_T + 12.0,
     );
@@ -317,14 +317,14 @@ fn render_ridgeline_svg(ridges: &[SpeciesRidge], today_week: u8) -> String {
         // Species label.
         let _ = write!(
             s,
-            r#"<text x="{x:.2}" y="{y:.2}" text-anchor="end" style="font-size:12px;fill:var(--fg);font-weight:500;">{name}</text>"#,
+            r#"<text x="{x:.2}" y="{y:.2}" text-anchor="end" class="mig-name">{name}</text>"#,
             x = PAD_L - 8.0,
             y = y_base - 6.0,
             name = escape_html(&ridge.name),
         );
         let _ = write!(
             s,
-            r#"<text x="{x:.2}" y="{y:.2}" text-anchor="end" class="mono" style="font-size:9.5px;fill:var(--fg-3);">{short} · peak w{pw}</text>"#,
+            r#"<text x="{x:.2}" y="{y:.2}" text-anchor="end" class="mono mig-sub">{short} · peak w{pw}</text>"#,
             x = PAD_L - 8.0,
             y = y_base + 8.0,
             short = escape_html(&ridge.short),
@@ -350,7 +350,7 @@ fn render_ridgeline_svg(ridges: &[SpeciesRidge], today_week: u8) -> String {
     );
     let _ = write!(
         s,
-        r#"<text x="{x:.2}" y="{y:.2}" text-anchor="middle" class="mono" style="font-size:10px;fill:var(--bg);">today</text></g>"#,
+        r#"<text x="{x:.2}" y="{y:.2}" text-anchor="middle" class="mono mig-today">today</text></g>"#,
         x = x(today_week as f64),
         y = PAD_T + 8.0,
     );
@@ -445,7 +445,7 @@ fn render_diversity_svg(weekly: &[i64; 52], today_week: u8) -> String {
     );
     let _ = write!(
         s,
-        r#"<text x="{x:.2}" y="{y:.2}" text-anchor="end" class="mono" style="font-size:9.5px;fill:var(--fg-3);">species / wk</text>"#,
+        r#"<text x="{x:.2}" y="{y:.2}" text-anchor="end" class="mono mig-sub">species / wk</text>"#,
         x = PAD_L - 8.0,
         y = H - 12.0,
     );
@@ -568,7 +568,7 @@ async fn stats_partial(State(state): State<AppState>) -> impl IntoResponse {
 
     let html = format!(
         r#"<div class="stat-tile"><span class="label">First-of-year arrivals</span><span class="value">{foy}</span></div>
-<div class="stat-tile"><span class="label">Peak diversity week</span><span class="value" style="font-size:28px;">w{peak_week}</span><span class="bnb-meta mono">{peak_n} species</span></div>
+<div class="stat-tile"><span class="label">Peak diversity week</span><span class="value mig-peak-val">w{peak_week}</span><span class="bnb-meta mono">{peak_n} species</span></div>
 <div class="stat-tile"><span class="label">Earliest vs last year</span>{earliest_html}</div>
 <div class="stat-tile"><span class="label">Still expected</span>{expected_html}</div>"#,
     );
@@ -632,9 +632,9 @@ async fn card_partial(
         },
     };
     let html = format!(
-        r#"<div class="bnb-eyebrow" style="color:{accent};">{eyebrow}</div>
-<div class="display" style="font-size:20px;margin-top:8px;">{headline}</div>
-<div class="bnb-meta" style="margin-top:4px;">{sub}</div>"#,
+        r#"<div class="bnb-eyebrow" data-style="color:{accent}">{eyebrow}</div>
+<div class="display mig-headline">{headline}</div>
+<div class="bnb-meta mig-sub-line">{sub}</div>"#,
         accent = card_color(&kind),
         eyebrow = escape_html(eyebrow),
         headline = escape_html(&headline),
