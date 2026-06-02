@@ -30,13 +30,13 @@
 </head>
 <body data-screen-label="Share · {{species_name}}">
 <a href="#main-content" class="skip-link">Skip to content</a>
-<main id="main-content" style="max-width:780px;margin:0 auto;padding:48px 24px 64px;">
+<main id="main-content" class="sr-main">
 
   <!-- Plain identity strip (no full topnav — this is a public page) -->
-  <header style="display:flex;align-items:center;gap:10px;padding-bottom:24px;border-bottom:0.5px solid var(--hairline);margin-bottom:32px;">
+  <header class="sr-id-strip">
     <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
-      <circle cx="12" cy="12" r="11" fill="none" stroke="currentColor" stroke-width="0.8" style="color:var(--fg)"></circle>
-      <g stroke="currentColor" stroke-width="1.4" stroke-linecap="round" style="color:var(--fg)">
+      <circle cx="12" cy="12" r="11" fill="none" stroke="currentColor" stroke-width="0.8" class="sr-logo"></circle>
+      <g stroke="currentColor" stroke-width="1.4" stroke-linecap="round" class="sr-logo">
         <line x1="6" y1="12" x2="6" y2="12"/>
         <line x1="9" y1="9.5" x2="9" y2="14.5"/>
         <line x1="12" y1="6" x2="12" y2="18"/>
@@ -44,77 +44,77 @@
         <line x1="18" y1="10.5" x2="18" y2="13.5"/>
       </g>
     </svg>
-    <div style="display:flex;flex-direction:column;line-height:1.15;">
-      <span style="font-weight:600;font-size:13px;">BirdNet<span style="color:var(--fg-3);">Behavior</span></span>
+    <div class="sr-brand">
+      <span class="sr-brand-name">BirdNet<span class="sr-brand-sub">Behavior</span></span>
       <span class="bnb-meta">a listening station shared this clip</span>
     </div>
-    <div style="margin-left:auto;display:flex;gap:6px;align-items:center;">
+    <div class="sr-handle">
       <span class="bnb-pill mono">{{station_handle}}</span>
     </div>
   </header>
 
-  <div class="bnb-eyebrow" style="margin-bottom:8px;">
+  <div class="bnb-eyebrow sr-eyebrow-mb">
     Detected · {{date}} · {{time}} · <span class="mono">{{ago_phrase}}</span>
   </div>
-  <h1 class="display" style="font-size:64px;line-height:1.02;letter-spacing:-0.025em;text-wrap:balance;">
+  <h1 class="display sr-h1">
     {{species_name}}
   </h1>
-  <p class="mono" style="color:var(--fg-3);font-style:italic;font-size:14px;margin-top:6px;">
+  <p class="mono sr-sci">
     {{scientific_name}}
   </p>
 
-  <div class="pill-row" style="margin-top:16px;">
+  <div class="pill-row sr-pills-mt">
     <span class="bnb-pill {{conf_class_pill}}">conf {{confidence_pct}}</span>
     <span class="bnb-pill">heard at {{station_label}}</span>
   </div>
 
   <!-- Spectrogram -->
-  <div class="bnb-card pad" style="margin-top:32px;">
-    <div class="bnb-eyebrow" style="margin-bottom:8px;">Spectrogram</div>
+  <div class="bnb-card pad sr-mt-32">
+    <div class="bnb-eyebrow sr-eyebrow-mb">Spectrogram</div>
     <img src="{{spectrogram_url}}"
          alt="Spectrogram of {{species_name}} recorded {{date}} {{time}}"
-         style="width:100%;display:block;border-radius:var(--r-md);background:var(--surface-2);">
+         class="sr-spec-img">
     <audio controls preload="metadata"
            src="{{audio_url}}"
-           style="width:100%;margin-top:14px;height:36px;"></audio>
+           class="sr-audio"></audio>
   </div>
 
   <!-- About the species + about the project -->
-  <div class="grid-2" style="margin-top:32px;grid-template-columns:1fr 1fr;">
+  <div class="grid-2 sr-about-grid">
     <div class="bnb-card pad">
       <div class="bnb-eyebrow">About this species</div>
-      <p style="margin-top:8px;font-size:13.5px;line-height:1.55;color:var(--fg-2);">
+      <p class="sr-about-p">
         {{species_name}} (<em>{{scientific_name}}</em>) was identified from its
         call by an on-device neural network. For its range, habitat, songs and
         similar species, open the full species account.
       </p>
-      <a class="bnb-btn ghost" style="margin-top:12px;padding-left:0;"
+      <a class="bnb-btn ghost sr-cta"
          href="https://www.allaboutbirds.org/guide/{{species_encoded}}"
          target="_blank" rel="noopener">All About Birds →</a>
     </div>
     <div class="bnb-card pad">
       <div class="bnb-eyebrow">About this clip</div>
-      <p style="margin-top:8px;font-size:13.5px;line-height:1.55;color:var(--fg-2);">
+      <p class="sr-about-p">
         Recorded automatically by a BirdNET-Behavior listening station and
         classified offline on the device. No bird was disturbed; the only
         human in the loop confirmed the species.
       </p>
-      <a class="bnb-btn ghost" style="margin-top:12px;padding-left:0;"
+      <a class="bnb-btn ghost sr-cta"
          href="https://github.com/tomtom215/BirdNet-Behavior"
          target="_blank" rel="noopener">Run your own →</a>
     </div>
   </div>
 
   <!-- Copy / share row -->
-  <div style="margin-top:32px;display:flex;gap:8px;flex-wrap:wrap;">
+  <div class="sr-share-row">
     <button class="bnb-btn primary" data-share="link">Copy permalink</button>
     <a class="bnb-btn" href="{{audio_url}}" download>Download wav</a>
     <a class="bnb-btn" href="{{spectrogram_url}}" download>Download spectrogram</a>
   </div>
 
-  <footer style="margin-top:48px;padding-top:24px;border-top:0.5px solid var(--hairline);color:var(--fg-3);font-size:12px;">
+  <footer class="sr-footer">
     Shared by a BirdNET-Behavior station ·
-    <a href="https://github.com/tomtom215/BirdNet-Behavior" style="color:var(--fg-3);">about</a>
+    <a href="https://github.com/tomtom215/BirdNet-Behavior" class="sr-about">about</a>
   </footer>
 </main>
 <script>

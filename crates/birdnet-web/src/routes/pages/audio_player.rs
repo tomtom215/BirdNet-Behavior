@@ -72,7 +72,7 @@ async fn player_page(
         <svg id="play-icon" viewBox="0 0 24 24" width="28" height="28">
           <polygon points="5,3 19,12 5,21" fill="currentColor"/>
         </svg>
-        <svg id="pause-icon" viewBox="0 0 24 24" width="28" height="28" style="display:none">
+        <svg id="pause-icon" viewBox="0 0 24 24" width="28" height="28" class="ap-hidden">
           <rect x="5" y="3" width="4" height="18" fill="currentColor"/>
           <rect x="15" y="3" width="4" height="18" fill="currentColor"/>
         </svg>
@@ -91,7 +91,7 @@ async fn player_page(
              oninput="setVol(this.value)">
       <span id="vol-pct">80%</span>
 
-      <label for="speed-select" style="margin-left:1rem;">Speed</label>
+      <label for="speed-select" class="ap-speed-label">Speed</label>
       <select id="speed-select" onchange="setSpeed(this.value)">
         <option value="0.5">0.5x</option>
         <option value="0.75">0.75x</option>
@@ -100,7 +100,7 @@ async fn player_page(
         <option value="2">2x</option>
       </select>
 
-      <button class="btn-small" onclick="downloadClip()" style="margin-left:auto;">
+      <button class="btn-small ap-download" onclick="downloadClip()">
         Download
       </button>
     </div>
@@ -119,9 +119,9 @@ async fn player_page(
   <style>{PLAYER_CSS}</style>
 </head>
 <body>
-<div class="container" style="max-width:720px;margin:2rem auto;padding:0 1rem;">
-  <nav style="margin-bottom:1.5rem;">
-    <a href="/" style="color:var(--accent,var(--moss-ink));text-decoration:none;">&larr; Dashboard</a>
+<div class="container ap-page">
+  <nav class="ap-nav">
+    <a href="/" class="ap-back">&larr; Dashboard</a>
   </nav>
   {content}
 </div>
@@ -179,13 +179,13 @@ function fmt(s) {
 function togglePlayback() {
   if (audio.paused) {
     audio.play();
-    playIcon.style.display = 'none';
-    pauseIcon.style.display = '';
+    playIcon.classList.add('ap-hidden');
+    pauseIcon.classList.remove('ap-hidden');
     animate();
   } else {
     audio.pause();
-    playIcon.style.display = '';
-    pauseIcon.style.display = 'none';
+    playIcon.classList.remove('ap-hidden');
+    pauseIcon.classList.add('ap-hidden');
     cancelAnimationFrame(animFrame);
   }
 }
@@ -244,8 +244,8 @@ function downloadClip() {
 }
 
 audio.addEventListener('ended', function() {
-  playIcon.style.display = '';
-  pauseIcon.style.display = 'none';
+  playIcon.classList.remove('ap-hidden');
+  pauseIcon.classList.add('ap-hidden');
   cancelAnimationFrame(animFrame);
   updateProgress();
 });

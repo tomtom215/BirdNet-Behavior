@@ -1,15 +1,13 @@
-<div class="page-head" style="margin-bottom:var(--pad-3);"><div><div class="bnb-eyebrow" style="display:flex;align-items:center;gap:10px;"><span>Browse</span>{{help_link}}</div><h1 class="display" style="font-size:34px;">Recordings</h1></div></div>
+<div class="page-head rt-head"><div><div class="bnb-eyebrow rt-eyebrow"><span>Browse</span>{{help_link}}</div><h1 class="display rt-h1">Recordings</h1></div></div>
 
-<div class="card" style="margin-bottom:1rem;">
-    <div style="display:flex;gap:0.5rem;margin-bottom:1rem;">
-        <button class="tab-btn active" id="tab-by-species"
-                onclick="switchTab('species')"
-                style="padding:0.4rem 1rem;border-radius:var(--radius);border:1px solid var(--border);background:var(--bg-hover);color:var(--text);cursor:pointer;font-size:0.9rem;">
+<div class="card rt-card-mb">
+    <div class="rt-tabs">
+        <button class="tab-btn rt-tab active" id="tab-by-species"
+                onclick="switchTab('species')">
             By Species
         </button>
-        <button class="tab-btn" id="tab-by-date"
-                onclick="switchTab('date')"
-                style="padding:0.4rem 1rem;border-radius:var(--radius);border:1px solid var(--border);background:var(--bg-card);color:var(--text-muted);cursor:pointer;font-size:0.9rem;">
+        <button class="tab-btn rt-tab" id="tab-by-date"
+                onclick="switchTab('date')">
             By Date
         </button>
     </div>
@@ -18,18 +16,18 @@
          hx-get="/pages/recordings-species-list"
          hx-trigger="load"
          hx-swap="innerHTML">
-        <p style="color:var(--text-muted)">Loading species...</p>
+        <p class="rt-loading">Loading species...</p>
     </div>
 
-    <div id="view-date" style="display:none;"
+    <div id="view-date" class="rt-hidden"
          hx-get="/pages/recordings-date-list"
          hx-trigger="revealed"
          hx-swap="innerHTML">
-        <p style="color:var(--text-muted)">Loading dates...</p>
+        <p class="rt-loading">Loading dates...</p>
     </div>
 </div>
 
-<div id="recordings-detail" class="card" style="display:none;">
+<div id="recordings-detail" class="card rt-hidden">
     <div id="recordings-detail-content">
     </div>
 </div>
@@ -41,19 +39,15 @@ function switchTab(tab) {
     var btnSpecies = document.getElementById('tab-by-species');
     var btnDate = document.getElementById('tab-by-date');
     if (tab === 'species') {
-        speciesView.style.display = '';
-        dateView.style.display = 'none';
-        btnSpecies.style.background = 'var(--bg-hover)';
-        btnSpecies.style.color = 'var(--text)';
-        btnDate.style.background = 'var(--bg-card)';
-        btnDate.style.color = 'var(--text-muted)';
+        speciesView.classList.remove('rt-hidden');
+        dateView.classList.add('rt-hidden');
+        btnSpecies.classList.add('active');
+        btnDate.classList.remove('active');
     } else {
-        speciesView.style.display = 'none';
-        dateView.style.display = '';
-        btnDate.style.background = 'var(--bg-hover)';
-        btnDate.style.color = 'var(--text)';
-        btnSpecies.style.background = 'var(--bg-card)';
-        btnSpecies.style.color = 'var(--text-muted)';
+        speciesView.classList.add('rt-hidden');
+        dateView.classList.remove('rt-hidden');
+        btnDate.classList.add('active');
+        btnSpecies.classList.remove('active');
         htmx.trigger(dateView, 'revealed');
     }
 }

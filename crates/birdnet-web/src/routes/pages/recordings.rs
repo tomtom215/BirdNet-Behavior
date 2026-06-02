@@ -70,7 +70,7 @@ async fn species_list_partial(State(state): State<AppState>) -> impl IntoRespons
                          hx-get="/pages/recordings-by-species?name={enc}"
                          hx-target="#recordings-detail-content"
                          hx-swap="innerHTML"
-                         onclick="document.getElementById(&quot;recordings-detail&quot;).style.display=&quot;&quot;">
+                         onclick="document.getElementById(&quot;recordings-detail&quot;).classList.remove(&quot;rt-hidden&quot;)">
   {av}
   <div class="rec-item-main">
     <span class="species-name">{name}</span>
@@ -119,7 +119,7 @@ async fn date_list_partial(State(state): State<AppState>) -> impl IntoResponse {
                          hx-get="/pages/recordings-by-date?date={enc}"
                          hx-target="#recordings-detail-content"
                          hx-swap="innerHTML"
-                         onclick="document.getElementById(&quot;recordings-detail&quot;).style.display=&quot;&quot;">
+                         onclick="document.getElementById(&quot;recordings-detail&quot;).classList.remove(&quot;rt-hidden&quot;)">
   <span class="species-name">{date}</span>
 </div>"##,
                     date = escape_html(date),

@@ -360,7 +360,7 @@ fn html_ok(body: String) -> Response {
 }
 
 fn gone_page() -> Response {
-    let html = r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Not found</title><meta name="robots" content="noindex"><link rel="stylesheet" href="/static/css/app.css"></head><body style="max-width:520px;margin:0 auto;padding:80px 24px;text-align:center;"><h1 class="display" style="font-size:48px;">This clip is gone.</h1><p class="bnb-meta" style="margin-top:8px;">The link expired or never existed. The station owner can share a fresh one.</p></body></html>"#;
+    let html = r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Not found</title><meta name="robots" content="noindex"><link rel="stylesheet" href="/static/css/app.css"></head><body class="sh-gone"><h1 class="display sh-gone-title">This clip is gone.</h1><p class="bnb-meta sh-gone-text">The link expired or never existed. The station owner can share a fresh one.</p></body></html>"#;
     (
         StatusCode::NOT_FOUND,
         [(
