@@ -2918,3 +2918,119 @@ a.spp-inherit    { color: inherit; }
 .tsh-card-lede   { color: var(--text-muted); font-size: 0.8rem; margin-bottom: 0.75rem; }
 .tsh-polar-center { display: flex; justify-content: center; }
 .tsh-api-table   { font-size: 0.85rem; }
+
+/* ══ O-25 sweep — standalone admin & system pages ══════════════════════════
+   Faithful extraction of the static inline styles in the changelog / heatmap /
+   notifications / system-health / migration / audio-sources / login screens.
+   Exact original values; legacy --text-muted/--accent/--success/--danger/
+   --warning/--bg-hover tokens preserved verbatim. Grid overrides that relied on
+   the global [style*="grid-template-columns"] ≤520px reset carry their own
+   breakpoint. rules.rs keeps its own page <style> block. */
+
+/* ── Changelog (/system/changelog) ──────────────────────────────────────── */
+.cl-head     { align-items: flex-start; }
+.cl-h1       { font-size: 48px; line-height: 1.05; letter-spacing: -0.02em; text-wrap: balance; }
+.cl-h1 em    { color: var(--moss-ink); }
+.cl-lede     { margin-top: 6px; max-width: 620px; }
+.cl-card     { margin-top: var(--pad-3); }
+.cl-body     { height: auto; padding: 0; }
+/* Scoped under .cl-body to beat the .bnb-help-drawer__body h2/h3/a/pre
+   element rules this page reuses — the inline styles used to win on
+   specificity, so the classes must too. */
+.cl-body .cl-pre      { white-space: pre-wrap; }
+.cl-body .cl-rel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 24px 0 6px; }
+.cl-body .cl-rel-h2   { font-family: var(--font-display); font-size: 24px; letter-spacing: -0.01em; margin: 0; }
+.cl-body a.cl-rel-link { color: var(--fg); text-decoration: none; }
+.cl-body .cl-sec-h3   { margin: 14px 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--fg-3); font-weight: 500; }
+
+/* ── Activity heatmap (/heatmap) ────────────────────────────────────────── */
+.hm-eyebrow   { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.hm-h1        { font-size: 34px; }
+.hm-lede      { margin-top: 4px; }
+.hm-empty     { color: var(--fg-4); text-align: center; padding: 2rem; }
+.hm-scroll    { overflow-x: auto; }
+.hm-svg       { font-family: system-ui, sans-serif; }
+.hm-svg-block { font-family: system-ui, sans-serif; display: block; }
+
+/* ── Notification center (/notifications) — legacy tokens preserved. ──────── */
+.nc-eyebrow   { display: flex; align-items: center; gap: 10px; }
+.nc-h1        { font-size: 34px; margin-bottom: 1rem; }
+.nc-lede      { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem; }
+.nc-loading   { color: var(--text-muted); }
+.nc-empty     { color: var(--text-muted); text-align: center; padding: 2rem; }
+.nc-time      { font-size: 0.85rem; color: var(--text-muted); white-space: nowrap; }
+.nc-channel   { background: var(--bg-hover); padding: 0.1rem 0.5rem; border-radius: 4px; font-size: 0.8rem; }
+.nc-msg       { font-size: 0.85rem; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Scoped .stat-card .value.X to beat the .stat-card .value{color} rule
+   (the inline color used to win). */
+.stat-card .value.nc-v-sent    { color: var(--success); }
+.stat-card .value.nc-v-failed  { color: var(--danger); }
+.stat-card .value.nc-v-skipped { color: var(--warning); }
+
+/* ── System health (/system) — legacy tokens preserved; sys- avoids the
+      species_detail sd-* classes. ──────────────────────────────────────── */
+.sys-head        { margin-bottom: var(--pad-3); }
+.sys-h1          { font-size: 34px; }
+.sys-lede        { margin-top: 4px; }
+.sys-loading     { color: var(--text-muted); }
+.sys-gauge-card  { display: flex; flex-direction: column; align-items: center; }
+.sys-gauge-svg   { max-width: 100%; }
+.sys-gauge-text  { font-size: 24px; fill: var(--fg); }
+.sys-gauge-label { font-weight: 500; }
+.sys-gauge-sub   { font-size: 10.5px; }
+.sys-uptime-card { display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.sys-uptime-val  { font-size: 24px; }
+.sys-uptime-label { margin-top: 6px; }
+.sys-table       { font-size: 0.9rem; }
+.sys-th          { font-weight: 600; padding-right: 1rem; }
+.sys-ok          { color: var(--success); font-weight: 600; }
+.sys-bad         { color: var(--danger); font-weight: 600; }
+
+/* ── Sign-in page (/login) — standalone; extends the login-* family. ──────── */
+.login-logo      { color: var(--fg); }
+.login-vrule     { height: 16px; align-self: center; }
+.login-main      { display: grid; place-items: center; min-height: calc(100dvh - 56px - 64px); padding: 36px 18px; }
+.login-brand     { font-size: 15px; }
+.login-brand-sub { color: var(--fg-3); }
+.login-card__head .login-h1 { font-size: 38px; line-height: 1.05; letter-spacing: -0.012em; margin: 0; }
+.login-sub       { margin-top: 6px; }
+.login-footer    { text-align: center; padding: 14px 20px; color: var(--fg-4); font-family: var(--font-mono); font-size: 11px; border-top: 0.5px solid var(--hairline); }
+a.login-about    { color: var(--fg-3); }
+
+/* ── Migration / phenology (/migration) ─────────────────────────────────── */
+.mig-head        { align-items: flex-start; }
+.mig-eyebrow     { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.mig-h1          { font-size: 48px; line-height: 1.05; letter-spacing: -0.02em; text-wrap: balance; }
+.mig-h1 em       { color: var(--moss-ink); }
+.mig-lede        { margin-top: 6px; max-width: 620px; }
+.mig-pills       { margin: 0; }
+.mig-legend      { display: flex; gap: 14px; align-items: center; }
+.mig-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.mig-swatch      { width: 10px; height: 6px; border-radius: 2px; }
+.mig-swatch.spring { background: color-mix(in oklch, var(--moss) 60%, transparent); }
+.mig-swatch.fall   { background: color-mix(in oklch, var(--dawn) 60%, transparent); }
+.mig-ridge       { min-height: 360px; }
+.mig-divider     { margin-top: 14px; padding-top: 14px; border-top: 0.5px solid var(--hairline); }
+.mig-divider-head { display: flex; justify-content: space-between; margin-bottom: 6px; }
+.mig-diversity   { min-height: 70px; }
+.mig-cards       { grid-template-columns: 1fr 1fr 1fr; }
+.mig-card-eb.arrived { color: var(--moss-ink); }
+.mig-card-eb.peaking { color: var(--dawn-ink); }
+.mig-card-eb.missing { color: var(--rare); }
+.mig-card-val    { font-size: 20px; margin-top: 8px; }
+@media (max-width: 520px) {
+  .mig-cards { grid-template-columns: 1fr; }
+}
+
+/* ── Audio sources (/admin/audio) ───────────────────────────────────────── */
+.aas-head       { align-items: flex-start; }
+.aas-h1         { font-size: 48px; line-height: 1.05; letter-spacing: -0.02em; text-wrap: balance; }
+.aas-lede       { margin-top: 6px; max-width: 580px; }
+.aas-pills      { margin: 0; }
+.aas-count      { display: inline-flex; align-items: center; gap: 12px; }
+.aas-plus       { color: var(--moss-ink); font-weight: 600; }
+.aas-h4-mt      { margin-top: 18px; }
+.aas-section-mt { margin-top: var(--pad-3); }
+.aas-empty-h3   { font-size: 22px; margin-top: 14px; }
+.aas-empty-sub  { margin-top: 6px; }
+.aas-restart    { margin-top: var(--pad-3); display: inline-flex; align-items: center; gap: 8px; }

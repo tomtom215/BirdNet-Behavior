@@ -62,6 +62,15 @@ const SWEPT_FILES: &[&str] = &[
     "templates/species_detail.html",
     "templates/analytics.html",
     "templates/timeseries.html",
+    // ── standalone admin & system pages (slice 12) ──
+    "src/routes/pages/changelog.rs",
+    "src/routes/pages/heatmap.rs",
+    "src/routes/pages/notification_center.rs",
+    "src/routes/pages/system_dashboard.rs",
+    "src/routes/admin/rules.rs",
+    "templates/login.html",
+    "templates/migration.html",
+    "templates/admin_audio_sources.html",
 ];
 
 /// Returns true if the inline-style payload (the text inside `style="…"`) is a

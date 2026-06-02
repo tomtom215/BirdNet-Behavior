@@ -162,7 +162,7 @@ async fn create_rule(
 
     // Return a success message; HTMX will trigger a reload of the list via hx-on
     let body = Html(format!(
-        "<div style=\"color:var(--moss);padding:.5rem;border-radius:.375rem;background:var(--moss-soft)33;\">Rule created successfully.</div>\
+        "<div class=\"rule-success\">Rule created successfully.</div>\
          <div hx-get=\"/admin/rules/list\" hx-trigger=\"load\" hx-target=\"{}\" hx-swap=\"innerHTML\"></div>",
         "#rules-table-container"
     ));
@@ -199,13 +199,9 @@ async fn toggle_rule_handler(
 
     let enabled = new_state.unwrap_or(false);
     let label = if enabled { "Enabled" } else { "Disabled" };
-    let color = if enabled {
-        "var(--moss)"
-    } else {
-        "var(--fg-3)"
-    };
+    let cls = if enabled { "on" } else { "off" };
     let body = Html(format!(
-        r#"<span style="color:{color};font-weight:600;">{label}</span>"#
+        r#"<span class="toggle-state {cls}">{label}</span>"#
     ));
     // O-18: toast the new enabled/disabled state.
     let msg = if enabled {
@@ -265,6 +261,20 @@ fn render_page(_rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
       .badge-yellow{ background:var(--dawn-soft); color:var(--dawn); }
       #webhook-fields { display:none; }
       .hint { color:var(--fg-4); font-size:.75rem; margin-top:.25rem; }
+      /* O-25 sweep — faithful extraction of this page's inline styles. */
+      nav a.here { color:var(--moss-ink); }
+      .form-actions { margin-top:1.25rem; }
+      #form-result { margin-top:.75rem; }
+      .rule-success { color:var(--moss); padding:.5rem; border-radius:.375rem; background:var(--moss-soft)33; }
+      .tbl-loading { color:var(--fg-4); }
+      .tbl-empty { color:var(--fg-4); text-align:center; padding:2rem 0; }
+      .any { color:var(--fg-4); }
+      .url-frag { font-size:.75rem; color:var(--fg-3); }
+      .nowrap { white-space:nowrap; }
+      .toggle-cell { cursor:pointer; user-select:none; }
+      .toggle-state { font-weight:600; }
+      .toggle-state.on { color:var(--moss); }
+      .toggle-state.off { color:var(--fg-3); }
     </style>
 </head>
 <body>
@@ -272,7 +282,7 @@ fn render_page(_rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
   <nav>
     <a href="/admin/overview">Overview</a>
     <a href="/admin/settings">Settings</a>
-    <a href="/admin/rules" style="color:var(--moss-ink);">Rules</a>
+    <a href="/admin/rules" class="here">Rules</a>
     <a href="/admin/notifications">Notifications</a>
     <a href="/admin/system">System</a>
   </nav>
@@ -363,10 +373,10 @@ fn render_page(_rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
         </div>
       </div>
 
-      <div style="margin-top:1.25rem;">
+      <div class="form-actions">
         <button type="submit" class="btn btn-primary">Create Rule</button>
       </div>
-      <div id="form-result" style="margin-top:.75rem;"></div>
+      <div id="form-result"></div>
     </form>
   </div>
 
@@ -377,7 +387,7 @@ fn render_page(_rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
          hx-get="/admin/rules/list"
          hx-trigger="load"
          hx-swap="innerHTML">
-      <p style="color:var(--fg-4);">Loading…</p>
+      <p class="tbl-loading">Loading…</p>
     </div>
   </div>
 </div>
@@ -388,7 +398,7 @@ fn render_page(_rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
 
 fn render_rules_table(rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
     if rules.is_empty() {
-        return r#"<p style="color:var(--fg-4);text-align:center;padding:2rem 0;">
+        return r#"<p class="tbl-empty">
             No alert rules defined. Create one above.
         </p>"#
             .to_string();
@@ -418,10 +428,10 @@ fn render_rules_table(rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
             r#"<span class="badge badge-gray">Disabled</span>"#
         };
 
-        let species_display = rule.species_pattern.as_deref().map_or_else(
-            || "<em style='color:var(--fg-4)'>any</em>".to_string(),
-            escape_html,
-        );
+        let species_display = rule
+            .species_pattern
+            .as_deref()
+            .map_or_else(|| "<em class='any'>any</em>".to_string(), escape_html);
 
         let conf_display = format!(
             "{:.0}%–{:.0}%",
@@ -431,7 +441,7 @@ fn render_rules_table(rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
 
         let window_display = match (rule.hour_start, rule.hour_end) {
             (Some(s), Some(e)) => format!("{s:02}:00–{e:02}:59"),
-            _ => "<em style='color:var(--fg-4)'>any time</em>".to_string(),
+            _ => "<em class='any'>any time</em>".to_string(),
         };
 
         let action_badge = match &rule.action {
@@ -442,7 +452,7 @@ fn render_rules_table(rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
                     url.clone()
                 };
                 format!(
-                    r#"<span class="badge badge-blue">{method}</span> <span style="font-size:.75rem;color:var(--fg-3);">{}</span>"#,
+                    r#"<span class="badge badge-blue">{method}</span> <span class="url-frag">{}</span>"#,
                     escape_html(&url_short)
                 )
             }
@@ -456,13 +466,13 @@ fn render_rules_table(rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
             r##"<tr id="rule-row-{id}">
   <td><strong>{name}</strong></td>
   <td>{species_display}</td>
-  <td style="white-space:nowrap">{conf_display}</td>
-  <td style="white-space:nowrap">{window_display}</td>
+  <td class="nowrap">{conf_display}</td>
+  <td class="nowrap">{window_display}</td>
   <td>{action_badge}</td>
   <td hx-post="/admin/rules/{id}/toggle"
       hx-swap="innerHTML"
       hx-target="this"
-      style="cursor:pointer;user-select:none;"
+      class="toggle-cell"
       title="Click to toggle">{status_badge}</td>
   <td>
     <button class="btn btn-danger btn-sm"

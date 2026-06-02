@@ -30,23 +30,23 @@ pub fn router() -> Router<AppState> {
 async fn page(headers: HeaderMap) -> Html<String> {
     let releases = parse_changelog(CHANGELOG_MD);
     let mut body = String::from(
-        r#"<div class="page-head" style="align-items:flex-start;" data-screen-label="Changelog" data-om-validate>
+        r#"<div class="page-head cl-head" data-screen-label="Changelog" data-om-validate>
   <div>
     <div class="bnb-eyebrow">System · release history</div>
-    <h1 class="display" style="font-size:48px;line-height:1.05;letter-spacing:-0.02em;text-wrap:balance;">
-      What's <em style="color:var(--moss-ink);">changed</em>.
+    <h1 class="display cl-h1">
+      What's <em>changed</em>.
     </h1>
-    <p class="bnb-meta" style="margin-top:6px;max-width:620px;">
+    <p class="bnb-meta cl-lede">
       Every release of BirdNet-Behavior. Click a version to permalink it.
     </p>
   </div>
 </div>
-<div class="bnb-card pad" style="margin-top:var(--pad-3);">
-  <div class="bnb-help-drawer__body" style="height:auto;padding:0;">"#,
+<div class="bnb-card pad cl-card">
+  <div class="bnb-help-drawer__body cl-body">"#,
     );
 
     if releases.is_empty() {
-        body.push_str(r#"<pre style="white-space:pre-wrap;">"#);
+        body.push_str(r#"<pre class="cl-pre">"#);
         body.push_str(&escape_html(CHANGELOG_MD));
         body.push_str("</pre>");
     } else {
@@ -200,9 +200,9 @@ fn render_release(out: &mut String, r: &Release<'_>) {
     let _ = write!(
         out,
         r##"<article id="v{anchor}" class="changelog-release">
-  <header style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:24px 0 6px;">
-    <h2 style="font-family:var(--font-display);font-size:24px;letter-spacing:-0.01em;margin:0;">
-      <a href="#v{anchor}" style="color:var(--fg);text-decoration:none;">v{ver}</a>
+  <header class="cl-rel-head">
+    <h2 class="cl-rel-h2">
+      <a href="#v{anchor}" class="cl-rel-link">v{ver}</a>
     </h2>
     <span class="bnb-meta mono">{date}</span>
   </header>"##,
@@ -213,7 +213,7 @@ fn render_release(out: &mut String, r: &Release<'_>) {
     for (heading, bullets) in &r.sections {
         let _ = write!(
             out,
-            r#"<h3 style="margin:14px 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:0.08em;color:var(--fg-3);font-weight:500;">{}</h3><ul>"#,
+            r#"<h3 class="cl-sec-h3">{}</h3><ul>"#,
             escape_html(heading)
         );
         for b in bullets {
