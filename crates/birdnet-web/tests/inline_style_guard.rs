@@ -55,6 +55,13 @@ const SWEPT_FILES: &[&str] = &[
     "src/routes/pages/detection_detail.rs",
     // ── onboarding wizard (slice 10) ──
     "src/routes/pages/onboarding.rs",
+    // ── served HTML templates (slice 11) ──
+    "templates/today.html",
+    "templates/dawn_chorus.html",
+    "templates/species.html",
+    "templates/species_detail.html",
+    "templates/analytics.html",
+    "templates/timeseries.html",
 ];
 
 /// Returns true if the inline-style payload (the text inside `style="…"`) is a

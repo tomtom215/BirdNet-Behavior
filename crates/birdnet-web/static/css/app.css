@@ -2860,3 +2860,61 @@ a.spp-inherit    { color: inherit; }
 .dd-h1-nf        { font-size: 32px; }
 .dd-mt8          { margin-top: 8px; }
 .dd-mt16         { margin-top: 16px; }
+
+/* ══ O-25 template sweep — content/data page shells ════════════════════════
+   Faithful extraction of the static inline styles in the served HTML templates
+   (today / dawn_chorus / species / analytics / timeseries). Exact original
+   values; legacy --text-muted/--accent/--pad-3 tokens preserved verbatim. The
+   grid overrides that used to be inline relied on the global
+   `[style*="grid-template-columns"]` ≤520px reset, so each carries a matching
+   single-column breakpoint. species_detail keeps its own <style> block. */
+
+/* ── Today (/today) ─────────────────────────────────────────────────────── */
+.td-head      { align-items: flex-start; }
+.td-eyebrow   { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.td-phrase    { margin-top: 8px; }
+.td-h1        { font-size: 48px; line-height: 1.05; letter-spacing: -0.02em; }
+.td-sub       { margin-top: 6px; }
+.td-searchbar { position: sticky; top: 54px; z-index: 5; }
+.td-form      { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.td-search    { flex: 1; min-width: 240px; }
+
+/* ── Dawn chorus (/analytics/dawn-chorus) — shell only; dawn_chorus.rs owns
+      the dc-row*/dc-strip/dc-polar-svg partial classes already. ──────────── */
+.dc-head       { align-items: flex-start; }
+.dc-eyebrow    { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.dc-h1         { font-size: 48px; line-height: 1.05; letter-spacing: -0.02em; text-wrap: balance; }
+.dc-h1 em      { color: var(--moss-ink); }
+.dc-lede       { margin-top: 6px; max-width: 620px; }
+.dc-pills      { margin: 0; }
+.dc-cols       { grid-template-columns: 1.05fr 0.95fr; }
+.dc-polar-card { display: flex; align-items: center; justify-content: center; min-height: 560px; }
+.dc-polar-wrap { width: 100%; display: flex; align-items: center; justify-content: center; }
+.dc-list-card  { display: flex; flex-direction: column; gap: 10px; }
+.dc-foot       { padding-top: 10px; border-top: 0.5px solid var(--hairline); }
+@media (max-width: 520px) {
+  .dc-cols { grid-template-columns: 1fr; }
+}
+
+/* ── Species list (/species) ────────────────────────────────────────────── */
+.sp-h1     { font-size: 34px; }
+.sp-lede   { margin-top: 4px; }
+.sp-search { width: 240px; }
+
+/* ── Analytics shell (/analytics) — legacy --text-muted/--pad-3 preserved. ─ */
+.an-head      { margin-bottom: var(--pad-3); }
+.an-h1        { font-size: 34px; }
+.an-lede      { margin-top: 4px; }
+.an-status    { margin: 0; min-width: 220px; }
+.an-card-lede { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem; }
+.an-loading   { color: var(--text-muted); }
+
+/* ── Time series shell (/timeseries) — legacy --text-muted/--accent preserved.
+      tsh- prefix avoids the timeseries_dash.rs tsd-* partial classes. ────── */
+.tsh-h1          { font-size: 34px; margin-bottom: 4px; }
+.tsh-lede        { color: var(--text-muted); margin-bottom: 1.5rem; font-size: 0.9rem; }
+.tsh-row         { margin-bottom: 1rem; }
+.tsh-badge       { font-size: 0.75rem; color: var(--accent); margin-left: 0.5rem; }
+.tsh-card-lede   { color: var(--text-muted); font-size: 0.8rem; margin-bottom: 0.75rem; }
+.tsh-polar-center { display: flex; justify-content: center; }
+.tsh-api-table   { font-size: 0.85rem; }

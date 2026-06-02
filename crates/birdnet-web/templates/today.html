@@ -8,36 +8,30 @@
   Optional new partial (graceful fallback if missing):
     /pages/today-phrase  — comparative phrase + percentile vs 30-day baseline
 -->
-<div class="page-head" style="align-items:flex-start;" data-screen-label="Today" data-om-validate>
+<div class="page-head td-head" data-screen-label="Today" data-om-validate>
   <div>
-    <div class="bnb-eyebrow" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+    <div class="bnb-eyebrow td-eyebrow">
       <span>Detection log · <span id="today-date" class="mono"></span></span>
       {{help_link}}
     </div>
 
     <!--
-      Comparative headline. /pages/today-phrase returns a tiny snippet like:
-
-        <span class="display" style="font-size:48px;line-height:1.05;">
-          A <em style="color:var(--moss-ink)">loud</em> morning.
-        </span>
-        <p class="bnb-meta" style="margin-top:6px;">
-          3,142 detections · 41 species · 92nd percentile vs your last 30 days.
-        </p>
-
-      Until the partial exists, the static fallback below stays visible.
+      Comparative headline. /pages/today-phrase returns a tiny snippet — a
+      `.display` headline (with one emphasised word) over a `.bnb-meta` line of
+      counts and the percentile vs the last 30 days. Until the partial exists,
+      the static fallback below stays visible.
     -->
     <div id="today-phrase"
+         class="td-phrase"
          hx-get="/pages/today-phrase"
          hx-trigger="load, every 5m"
          hx-swap="innerHTML"
-         style="margin-top:8px;"
          aria-live="polite"
          aria-label="Day summary">
-      <h1 class="display" style="font-size:48px;line-height:1.05;letter-spacing:-0.02em;">
+      <h1 class="display td-h1">
         You're listening.
       </h1>
-      <p class="bnb-meta" style="margin-top:6px;">Detections roll in below.</p>
+      <p class="bnb-meta td-sub">Detections roll in below.</p>
     </div>
   </div>
 
@@ -63,11 +57,11 @@
 </div>
 
 <!-- Section chunker — purely client-side; data partial groups rows by hour-band -->
-<div class="bnb-card pad" style="position:sticky;top:54px;z-index:5;">
-  <form id="search-form" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+<div class="bnb-card pad td-searchbar">
+  <form id="search-form" class="td-form">
     <input type="search" name="search" id="today-search"
            placeholder="Search species…  (prefix NOT to exclude)"
-           style="flex:1;min-width:240px;"
+           class="td-search"
            hx-get="/pages/today-list"
            hx-trigger="input changed delay:300ms, search"
            hx-target="#today-results"

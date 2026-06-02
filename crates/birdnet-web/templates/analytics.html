@@ -1,11 +1,11 @@
-<div class="page-head" style="margin-bottom:var(--pad-3);">
+<div class="page-head an-head">
     <div>
         <div class="bnb-eyebrow">The deep dive</div>
-        <h1 class="display" style="font-size:34px;">Behavioral Analytics</h1>
+        <h1 class="display an-h1">Behavioral Analytics</h1>
         {{help_link}}
-        <p class="bnb-meta" style="margin-top:4px;">When birds sing, who they sing with, and which species follow which.</p>
+        <p class="bnb-meta an-lede">When birds sing, who they sing with, and which species follow which.</p>
     </div>
-    <div class="bnb-card pad" style="margin:0;min-width:220px;" hx-get="/pages/analytics-status" hx-trigger="load" hx-swap="innerHTML">
+    <div class="bnb-card pad an-status" hx-get="/pages/analytics-status" hx-trigger="load" hx-swap="innerHTML">
         <div class="value">--</div>
         <div class="label">Analytics Status</div>
     </div>
@@ -16,22 +16,22 @@
         <!-- Sessions Card -->
         <div class="card">
             <h2>Activity Sessions</h2>
-            <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem;">
+            <p class="an-card-lede">
                 Species activity grouped by time gaps. Shows when birds are actively visiting your area.
             </p>
             <div hx-get="/pages/analytics-sessions" hx-trigger="load" hx-swap="innerHTML">
-                <p style="color: var(--text-muted)">Loading sessions...</p>
+                <p class="an-loading">Loading sessions...</p>
             </div>
         </div>
 
         <!-- Retention Card -->
         <div class="card">
             <h2>Species Retention</h2>
-            <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem;">
+            <p class="an-card-lede">
                 Which species return day after day? Higher retention means a species is a regular visitor.
             </p>
             <div hx-get="/pages/analytics-retention" hx-trigger="load" hx-swap="innerHTML">
-                <p style="color: var(--text-muted)">Loading retention data...</p>
+                <p class="an-loading">Loading retention data...</p>
             </div>
         </div>
     </div>
@@ -40,11 +40,11 @@
         <!-- Next Species Prediction -->
         <div class="card">
             <h2>Next Species Prediction</h2>
-            <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem;">
+            <p class="an-card-lede">
                 After detecting one species, which species tends to appear next?
             </p>
             <div hx-get="/pages/analytics-next" hx-trigger="load" hx-swap="innerHTML">
-                <p style="color: var(--text-muted)">Loading predictions...</p>
+                <p class="an-loading">Loading predictions...</p>
             </div>
         </div>
 
@@ -52,7 +52,7 @@
         <div class="card">
             <h2>Analytics Configuration</h2>
             <div hx-get="/pages/analytics-config" hx-trigger="load" hx-swap="innerHTML">
-                <p style="color: var(--text-muted)">Loading config...</p>
+                <p class="an-loading">Loading config...</p>
             </div>
         </div>
     </div>
