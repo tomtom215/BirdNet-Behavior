@@ -74,7 +74,7 @@ remains is the finish-off work below.
 | ~~**P2-3**~~ | Extend help links to remaining analytical screens — ✅ **DONE** (6 screens) | ~~P2~~ | S | low |
 | **P3-1** | O-13 legacy `--audio-source` retirement — ✅ **DONE** | P3 | S | low |
 | ~~**P3-2**~~ | No background session pruning — ✅ **DONE** (daily maintenance tick) | ~~P3~~ | S | low |
-| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (admin + public + analytics + onboarding + 6 page templates + 8 standalone admin/system pages + home/today ecosystem done; **53-file guard now also catches escaped `style=\"`**; analytics default-active in QA + query-ordering fix; raw `style="` 1115→354, all single-quoted `style='` eliminated. Next: system_controls/backup/audio fragments, detection_reviews/images, remaining templates, dynamic skeletons/viz/charts/gallery + endgame) | P3 | L | low (tedious) |
+| **P3-3** | O-25 inline-style sweep (unlocks P2-2 style-src) — 🔄 **in progress** (admin + public + analytics + onboarding + page templates + home/today + detection-reviews/image-blacklist done; **55-file guard catches escaped `style=\"` too**; analytics default-active in QA + query-ordering fix; raw `style="` 1115→354, escaped `style=\"` 95→43, all single-quoted `style='` eliminated. Next: system_controls/backup/audio fragments, remaining templates, dynamic skeletons/viz/charts/gallery + endgame) | P3 | L | low (tedious) |
 | **P3-4** | Minor cosmetics — uptime pill ✅ **wired**; migration-missing out of scope | P3 | XS | none |
 | ~~**P3-5**~~ | Image blacklist enforcement on read path — ✅ **DONE** (serve-check + purge-on-blacklist) | ~~P3~~ | S | low |
 
@@ -576,6 +576,30 @@ they batch for a Playwright-verified pass; the dynamic ones fold into the endgam
   JS-toggle `recordings`, `layout`/`_partial_*`), and the computed-heavy `skeletons`/`viz`/`charts`/`gallery`
   that fold into the endgame; then the `<style>`-nonce middleware extension after which `style-src
   'unsafe-inline'` is dropped.
+
+- **Slice 14 — the escaped-quote files the hardened guard surfaced.** Swept the two screens that slice 13's
+  guard hardening exposed (their inline styles were emitted only as escaped `style=\"…\"`, so every prior
+  inventory missed them): `pages/detection_reviews.rs` (`dr-*`; `/detection-reviews` + the inline review widget
+  on `/detections/detail`) and `admin/images.rs` (`img-*`; `/admin/images` — a standalone old-style page with
+  no `<style>` block, so its inline styles fold onto `app.css` like `share_rare`). The `<a>` colour links
+  (`--primary`/`--fg`) were scoped `a.dr-link`/`a.dr-row-name` and the form inputs `input.img-input*`
+  preemptively (from the slice-12 specificity lessons); enumerable verdict/badge tones reuse the `bnb-pill`
+  variants. Legacy `--fg`/`--fg-2`/`--fg-3`/`--primary`/`--danger`/`--moss`/`--bg`/`--hairline`/`--text-muted`/
+  `--card-bg`/`--border`/`--radius`/`--accent`/`--bg-hover` tokens preserved verbatim. Guard **53 → 55 files**.
+  This removed **52 escaped inline styles** (`rg -F 'style=\"'` over `src` **95 → 43**) — the raw `style="`
+  count is *unchanged* at 354, which is exactly the point: these files were invisible to the raw scan, and the
+  hardened guard is what made them findable and keeps them swept.
+
+  **Verified — the cleanest result of the sweep so far.** Both screens pixel-diff to **0 content px on all four
+  variants** (light/dark × desktop/mobile) — no dynamic-content caveat needed (the only non-zero numbers are
+  the excluded topnav/footer chrome). The preemptive `a.`/`input.` scoping meant zero specificity regressions
+  this round. fmt + clippy (`-p birdnet-web --all-targets`) + 311 lib tests + hardened guard all green.
+
+  **Next:** the admin control fragments (`system_controls/{service,update,data,backup}.rs`, `admin/backup.rs`,
+  `admin/audio.rs`, `admin/mod.rs`) — a coherent `.ctl-*` result-banner batch; then the remaining templates
+  (`share_rare`, `listen`, `recordings`, `layout`/`_partial_*`) and the computed-heavy
+  `skeletons`/`viz`/`charts`/`gallery`. With those done the static sweep is essentially complete and the
+  endgame (`<style>`-nonce middleware + drop `style-src 'unsafe-inline'`) is ready for design sign-off.
 
 ---
 

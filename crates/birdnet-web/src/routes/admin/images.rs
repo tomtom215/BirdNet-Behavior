@@ -63,11 +63,11 @@ async fn images_page(State(state): State<AppState>) -> Html<String> {
         write!(
             rows,
             "<tr>\
-             <td style=\"padding:0.5rem;\">{sci}</td>\
-             <td style=\"padding:0.5rem;word-break:break-all;\">{url}</td>\
-             <td style=\"padding:0.5rem;\">{reason}</td>\
-             <td style=\"padding:0.5rem;\">{at}</td>\
-             <td style=\"padding:0.5rem;\">\
+             <td class=\"img-td\">{sci}</td>\
+             <td class=\"img-td-url\">{url}</td>\
+             <td class=\"img-td\">{reason}</td>\
+             <td class=\"img-td\">{at}</td>\
+             <td class=\"img-td\">\
              <button hx-delete=\"/admin/images/blacklist/{id}\" \
              hx-target=\"#blacklist-table\" hx-swap=\"outerHTML\" \
              hx-confirm=\"Remove this blacklist entry?\" \
@@ -77,8 +77,7 @@ async fn images_page(State(state): State<AppState>) -> Html<String> {
              data-confirm-body=\"Remove this blacklist entry?\" \
              data-confirm-confirm-label=\"Remove\" \
              data-confirm-style=\"danger\" \
-             style=\"background:none;border:1px solid var(--danger);color:var(--danger);\
-             padding:0.2rem 0.5rem;border-radius:var(--radius);cursor:pointer;font-size:0.8rem;\">\
+             class=\"img-del-btn\">\
              Remove</button>\
              </td></tr>"
         )
@@ -92,38 +91,28 @@ async fn images_page(State(state): State<AppState>) -> Html<String> {
          <script src=\"/static/htmx.min.js\"></script>\
          <script src=\"/static/theme-guard.js\"></script><link rel=\"stylesheet\" href=\"/static/css/app.css\">\
          </head><body>\
-         <div style=\"max-width:960px;margin:2rem auto;padding:0 1rem;\">\
-         <h1 style=\"font-size:1.5rem;margin-bottom:1rem;\">Species Image Blacklist</h1>\
-         <p style=\"color:var(--text-muted);margin-bottom:1.5rem;\">\
+         <div class=\"img-wrap\">\
+         <h1 class=\"img-h1\">Species Image Blacklist</h1>\
+         <p class=\"img-lede\">\
          Block URLs from being displayed as species images. \
          {count} entr{pl} blacklisted.\
          </p>\
          <form hx-post=\"/admin/images/blacklist\" hx-target=\"#blacklist-table\" hx-swap=\"outerHTML\"\
-         style=\"background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);\
-         padding:1rem;margin-bottom:1.5rem;\">\
-         <h2 style=\"font-size:1rem;margin-bottom:0.75rem;\">Add Blacklist Entry</h2>\
-         <div style=\"display:flex;gap:0.5rem;flex-wrap:wrap;\">\
-         <input name=\"sci_name\" placeholder=\"Scientific name\" required \
-         style=\"flex:1;min-width:150px;padding:0.4rem 0.6rem;border:1px solid var(--border);\
-         border-radius:var(--radius);background:var(--bg);color:var(--text);\">\
-         <input name=\"url\" placeholder=\"Image URL\" required \
-         style=\"flex:2;min-width:250px;padding:0.4rem 0.6rem;border:1px solid var(--border);\
-         border-radius:var(--radius);background:var(--bg);color:var(--text);\">\
-         <input name=\"reason\" placeholder=\"Reason (optional)\" \
-         style=\"flex:1;min-width:150px;padding:0.4rem 0.6rem;border:1px solid var(--border);\
-         border-radius:var(--radius);background:var(--bg);color:var(--text);\">\
-         <button type=\"submit\" \
-         style=\"padding:0.4rem 1rem;background:var(--accent);color:#fff;\
-         border:none;border-radius:var(--radius);cursor:pointer;\">Add</button>\
+         class=\"img-form\">\
+         <h2 class=\"img-h2\">Add Blacklist Entry</h2>\
+         <div class=\"img-field-row\">\
+         <input name=\"sci_name\" placeholder=\"Scientific name\" required class=\"img-input\">\
+         <input name=\"url\" placeholder=\"Image URL\" required class=\"img-input-wide\">\
+         <input name=\"reason\" placeholder=\"Reason (optional)\" class=\"img-input\">\
+         <button type=\"submit\" class=\"img-add-btn\">Add</button>\
          </div></form>\
-         <table id=\"blacklist-table\" style=\"width:100%;border-collapse:collapse;\
-         background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);\">\
-         <thead><tr style=\"background:var(--bg-hover);\">\
-         <th style=\"padding:0.5rem;text-align:left;\">Species</th>\
-         <th style=\"padding:0.5rem;text-align:left;\">URL</th>\
-         <th style=\"padding:0.5rem;text-align:left;\">Reason</th>\
-         <th style=\"padding:0.5rem;text-align:left;\">Added</th>\
-         <th style=\"padding:0.5rem;text-align:left;\">Action</th>\
+         <table id=\"blacklist-table\" class=\"img-table\">\
+         <thead><tr class=\"img-thead-row\">\
+         <th class=\"img-th\">Species</th>\
+         <th class=\"img-th\">URL</th>\
+         <th class=\"img-th\">Reason</th>\
+         <th class=\"img-th\">Added</th>\
+         <th class=\"img-th\">Action</th>\
          </tr></thead>\
          <tbody>{rows}</tbody>\
          </table>\

@@ -71,15 +71,15 @@ pub struct ClearForm {
 }
 
 async fn detection_reviews_page(headers: HeaderMap) -> Html<String> {
-    let content = "<div style=\"margin-bottom:1.25rem;\">\
+    let content = "<div class=\"dr-head\">\
   <div class=\"bnb-eyebrow\">Quality control</div>\
-  <h1 class=\"display\" style=\"font-size:32px;margin:0.1rem 0 0.35rem;\">Detection reviews</h1>\
-  <p style=\"color:var(--fg-2);max-width:60ch;margin:0;\">Confirm detections that look right or reject likely misidentifications. \
+  <h1 class=\"display dr-h1\">Detection reviews</h1>\
+  <p class=\"dr-lede\">Confirm detections that look right or reject likely misidentifications. \
   Verdicts are annotations — nothing is deleted. For uncertain rare birds held out of the log, see \
-  <a href=\"/quarantine\" style=\"color:var(--primary);\">Quarantine</a>.</p>\
+  <a href=\"/quarantine\" class=\"dr-link\">Quarantine</a>.</p>\
 </div>\
 <div id=\"dr-queue\" hx-get=\"/pages/detection-reviews-queue\" hx-trigger=\"load\" hx-swap=\"innerHTML\">\
-  <p style=\"color:var(--fg-3);padding:2rem;text-align:center;\">Loading review queue…</p>\
+  <p class=\"dr-loading\">Loading review queue…</p>\
 </div>";
     super::render_page_for_request("Detection reviews", content, "", &headers)
 }
@@ -103,7 +103,7 @@ async fn detection_reviews_queue_partial(State(state): State<AppState>) -> impl 
         _ => (
             StatusCode::INTERNAL_SERVER_ERROR,
             [(header::CONTENT_TYPE, "text/html")],
-            "<p style=\"color:var(--danger);\">Error loading the review queue.</p>".to_string(),
+            "<p class=\"dr-error\">Error loading the review queue.</p>".to_string(),
         ),
     }
 }
@@ -118,7 +118,7 @@ fn render_queue(
 
     let _ = write!(
         html,
-        "<div style=\"display:flex;gap:0.75rem;flex-wrap:wrap;margin-bottom:1rem;\">\
+        "<div class=\"dr-counts\">\
   <span class=\"bnb-pill moss\">&#10003; {confirmed} confirmed</span>\
   <span class=\"bnb-pill rare\">&#10007; {rejected} rejected</span>\
   <span class=\"bnb-pill\">{} awaiting review</span>\
@@ -126,11 +126,11 @@ fn render_queue(
         pending.len()
     );
 
-    html.push_str("<div class=\"bnb-card pad\" style=\"margin-bottom:1.25rem;\">");
-    html.push_str("<h2 style=\"font-size:1.1rem;margin:0 0 0.75rem;\">Awaiting review</h2>");
+    html.push_str("<div class=\"bnb-card pad dr-card-mb\">");
+    html.push_str("<h2 class=\"dr-h2\">Awaiting review</h2>");
     if pending.is_empty() {
         html.push_str(
-            "<p style=\"color:var(--fg-3);margin:0;\">Every recent detection has a verdict. Nice and tidy.</p>",
+            "<p class=\"dr-empty\">Every recent detection has a verdict. Nice and tidy.</p>",
         );
     } else {
         for d in pending {
@@ -140,9 +140,9 @@ fn render_queue(
     html.push_str("</div>");
 
     html.push_str("<div class=\"bnb-card pad\">");
-    html.push_str("<h2 style=\"font-size:1.1rem;margin:0 0 0.75rem;\">Recent verdicts</h2>");
+    html.push_str("<h2 class=\"dr-h2\">Recent verdicts</h2>");
     if recent.is_empty() {
-        html.push_str("<p style=\"color:var(--fg-3);margin:0;\">No verdicts recorded yet.</p>");
+        html.push_str("<p class=\"dr-empty\">No verdicts recorded yet.</p>");
     } else {
         for r in recent {
             render_verdict_row(&mut html, r);
@@ -173,21 +173,19 @@ fn render_pending_row(html: &mut String, d: &birdnet_db::sqlite::UnreviewedDetec
     let _ = write!(
         html,
         "<form hx-post=\"/pages/detection-review\" hx-target=\"#dr-queue\" hx-swap=\"innerHTML\" \
-          style=\"display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;padding:0.6rem 0;border-top:0.5px solid var(--hairline);\">\
+          class=\"dr-prow\">\
   <input type=\"hidden\" name=\"date\" value=\"{date}\">\
   <input type=\"hidden\" name=\"time\" value=\"{time}\">\
   <input type=\"hidden\" name=\"sci_name\" value=\"{sci}\">\
   <input type=\"hidden\" name=\"com_name\" value=\"{com}\">\
-  <div style=\"flex:1 1 200px;min-width:0;\">\
-    <a href=\"/species/detail?name={enc_com}\" style=\"font-weight:600;color:var(--fg);\">{com}</a>\
-    <div style=\"color:var(--fg-3);font-size:0.8rem;font-style:italic;\">{sci}</div>\
-    <div style=\"color:var(--fg-3);font-size:0.8rem;\">{date} · {time}</div>\
+  <div class=\"dr-row-main\">\
+    <a href=\"/species/detail?name={enc_com}\" class=\"dr-row-name\">{com}</a>\
+    <div class=\"dr-row-sci\">{sci}</div>\
+    <div class=\"dr-row-meta\">{date} · {time}</div>\
   </div>\
   <span class=\"conf {conf_cls}\">{conf_pct:.0}%</span>\
-  <button type=\"submit\" name=\"status\" value=\"confirmed\" class=\"bnb-btn\" \
-    style=\"background:var(--moss);color:var(--bg);border:none;white-space:nowrap;\">&#10003; Confirm</button>\
-  <button type=\"submit\" name=\"status\" value=\"rejected\" class=\"bnb-btn ghost\" \
-    style=\"white-space:nowrap;\">&#10007; Reject</button>\
+  <button type=\"submit\" name=\"status\" value=\"confirmed\" class=\"bnb-btn dr-confirm-btn\">&#10003; Confirm</button>\
+  <button type=\"submit\" name=\"status\" value=\"rejected\" class=\"bnb-btn ghost dr-nowrap\">&#10007; Reject</button>\
 </form>"
     );
 }
@@ -205,14 +203,14 @@ fn render_verdict_row(html: &mut String, r: &birdnet_db::sqlite::DetectionReview
     let _ = write!(
         html,
         "<form hx-post=\"/pages/detection-review-clear\" hx-target=\"#dr-queue\" hx-swap=\"innerHTML\" \
-          style=\"display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;padding:0.5rem 0;border-top:0.5px solid var(--hairline);\">\
+          class=\"dr-vrow\">\
   <input type=\"hidden\" name=\"date\" value=\"{date}\">\
   <input type=\"hidden\" name=\"time\" value=\"{time}\">\
   <input type=\"hidden\" name=\"sci_name\" value=\"{sci}\">\
   <span class=\"bnb-pill {badge_cls}\">{badge}</span>\
-  <div style=\"flex:1 1 180px;min-width:0;font-weight:500;\">{com}\
-    <span style=\"color:var(--fg-3);font-weight:400;font-size:0.8rem;\"> · {date} {time}</span></div>\
-  <button type=\"submit\" class=\"bnb-btn ghost\" style=\"white-space:nowrap;font-size:0.8rem;\">Undo</button>\
+  <div class=\"dr-vrow-main\">{com}\
+    <span class=\"dr-vrow-meta\"> · {date} {time}</span></div>\
+  <button type=\"submit\" class=\"bnb-btn ghost dr-undo-btn\">Undo</button>\
 </form>"
     );
 }
@@ -324,20 +322,18 @@ pub(crate) fn render_review_widget(
         "bnb-btn ghost"
     };
     format!(
-        "<div id=\"dr-review-widget\" class=\"bnb-card pad\" style=\"margin-top:16px;\">\
+        "<div id=\"dr-review-widget\" class=\"bnb-card pad dr-widget\">\
   <div class=\"section-header\"><div><div class=\"bnb-eyebrow\">Quality control</div><h3>Review this detection</h3></div>{badge}</div>\
   <form hx-post=\"/pages/detection-review-inline\" hx-target=\"#dr-review-widget\" hx-swap=\"outerHTML\" \
-        style=\"display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;\">\
+        class=\"dr-widget-form\">\
     <input type=\"hidden\" name=\"date\" value=\"{date_e}\">\
     <input type=\"hidden\" name=\"time\" value=\"{time_e}\">\
     <input type=\"hidden\" name=\"sci_name\" value=\"{sci_e}\">\
     <input type=\"hidden\" name=\"com_name\" value=\"{com_e}\">\
-    <button type=\"submit\" name=\"status\" value=\"confirmed\" class=\"{confirm_cls}\" \
-      style=\"white-space:nowrap;\">&#10003; Confirm</button>\
-    <button type=\"submit\" name=\"status\" value=\"rejected\" class=\"{reject_cls}\" \
-      style=\"white-space:nowrap;\">&#10007; Reject</button>\
+    <button type=\"submit\" name=\"status\" value=\"confirmed\" class=\"{confirm_cls} dr-nowrap\">&#10003; Confirm</button>\
+    <button type=\"submit\" name=\"status\" value=\"rejected\" class=\"{reject_cls} dr-nowrap\">&#10007; Reject</button>\
   </form>\
-  <p class=\"bnb-meta\" style=\"margin-top:8px;\">Records a verdict in the <a href=\"/detection-reviews\" style=\"color:var(--primary);\">review queue</a>. Nothing is deleted.</p>\
+  <p class=\"bnb-meta dr-widget-note\">Records a verdict in the <a href=\"/detection-reviews\" class=\"dr-link\">review queue</a>. Nothing is deleted.</p>\
 </div>"
     )
 }

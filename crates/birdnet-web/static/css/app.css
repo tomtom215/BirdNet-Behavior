@@ -3110,3 +3110,54 @@ a.dp-recent-name { font-size: 1.1rem; font-weight: 700; color: var(--text); }
 @media (max-width: 520px) {
   .dp-top-row { grid-template-columns: 1fr; }
 }
+
+/* ══ O-25 sweep — detection reviews + image blacklist ══════════════════════
+   Faithful extraction of two screens that escaped earlier inventories because
+   they emit inline styles as escaped `style=\"…\"` in Rust write!/format!.
+   Legacy --fg/--fg-2/--fg-3/--primary/--danger/--moss/--bg/--hairline/
+   --text-muted/--card-bg/--border/--radius/--accent/--bg-hover preserved. */
+
+/* ── Detection reviews (/detection-reviews) + the inline review widget on
+      /detections/detail. ──────────────────────────────────────────────── */
+.dr-head       { margin-bottom: 1.25rem; }
+.dr-h1         { font-size: 32px; margin: 0.1rem 0 0.35rem; }
+.dr-lede       { color: var(--fg-2); max-width: 60ch; margin: 0; }
+a.dr-link      { color: var(--primary); }
+.dr-loading    { color: var(--fg-3); padding: 2rem; text-align: center; }
+.dr-error      { color: var(--danger); }
+.dr-counts     { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
+.dr-card-mb    { margin-bottom: 1.25rem; }
+.dr-h2         { font-size: 1.1rem; margin: 0 0 0.75rem; }
+.dr-empty      { color: var(--fg-3); margin: 0; }
+.dr-prow       { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; padding: 0.6rem 0; border-top: 0.5px solid var(--hairline); }
+.dr-row-main   { flex: 1 1 200px; min-width: 0; }
+a.dr-row-name  { font-weight: 600; color: var(--fg); }
+.dr-row-sci    { color: var(--fg-3); font-size: 0.8rem; font-style: italic; }
+.dr-row-meta   { color: var(--fg-3); font-size: 0.8rem; }
+.dr-confirm-btn { background: var(--moss); color: var(--bg); border: none; white-space: nowrap; }
+.dr-nowrap     { white-space: nowrap; }
+.dr-vrow       { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; padding: 0.5rem 0; border-top: 0.5px solid var(--hairline); }
+.dr-vrow-main  { flex: 1 1 180px; min-width: 0; font-weight: 500; }
+.dr-vrow-meta  { color: var(--fg-3); font-weight: 400; font-size: 0.8rem; }
+.dr-undo-btn   { white-space: nowrap; font-size: 0.8rem; }
+.dr-widget     { margin-top: 16px; }
+.dr-widget-form { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.dr-widget-note { margin-top: 8px; }
+
+/* ── Image blacklist (/admin/images) — standalone old-style page, no <style>
+      block, so its inline styles fold onto app.css classes. ─────────────── */
+.img-wrap       { max-width: 960px; margin: 2rem auto; padding: 0 1rem; }
+.img-h1         { font-size: 1.5rem; margin-bottom: 1rem; }
+.img-lede       { color: var(--text-muted); margin-bottom: 1.5rem; }
+.img-form       { background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; margin-bottom: 1.5rem; }
+.img-h2         { font-size: 1rem; margin-bottom: 0.75rem; }
+.img-field-row  { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+input.img-input      { flex: 1; min-width: 150px; padding: 0.4rem 0.6rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); }
+input.img-input-wide { flex: 2; min-width: 250px; padding: 0.4rem 0.6rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); }
+.img-add-btn    { padding: 0.4rem 1rem; background: var(--accent); color: #fff; border: none; border-radius: var(--radius); cursor: pointer; }
+.img-table      { width: 100%; border-collapse: collapse; background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); }
+.img-thead-row  { background: var(--bg-hover); }
+.img-th         { padding: 0.5rem; text-align: left; }
+.img-td         { padding: 0.5rem; }
+.img-td-url     { padding: 0.5rem; word-break: break-all; }
+.img-del-btn    { background: none; border: 1px solid var(--danger); color: var(--danger); padding: 0.2rem 0.5rem; border-radius: var(--radius); cursor: pointer; font-size: 0.8rem; }
