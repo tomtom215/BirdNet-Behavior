@@ -33,6 +33,7 @@ runs on boot). Warm species photos with
 | `qa.mjs` | Capture every route × `THEMES` × `VPS`; writes `report.json` flagging overflow, console errors, broken images, stuck "loading…". |
 | `share.mjs` | Capture the `/r/{token}` share page, the tampered "gone" page, and the 404. |
 | `book.mjs` | Regenerate `docs/book/images/*.png` at a consistent 1440 width, height-clipped for docs. |
+| `book-mobile.mjs` | Regenerate `docs/book/images/mobile/*.png` (iPhone-13 class — 390 CSS px @ DPR 3 → 1170×1992). |
 | `seed.py` | Deterministic demo-data generator (the community used in the screenshots). |
 | `montage.mjs` | Build a contact sheet from a shots dir for quick eyeballing. |
 | `probe.mjs` / `onboarding.mjs` | Font/console probe; onboarding step capture. |
@@ -40,8 +41,9 @@ runs on boot). Warm species photos with
 ## Regenerate the book screenshots
 
 ```bash
-BASE=http://127.0.0.1:8502 node book.mjs      # -> docs/book/images/*.png
-BASE=http://127.0.0.1:8502 node share.mjs     # share-page__light__desktop.png
+BASE=http://127.0.0.1:8502 node book.mjs         # -> docs/book/images/*.png (desktop)
+BASE=http://127.0.0.1:8502 node book-mobile.mjs  # -> docs/book/images/mobile/*.png
+BASE=http://127.0.0.1:8502 node share.mjs        # share-page__light__desktop.png (needs BNB_SHARE_SECRET)
 cp shots/share-page__light__desktop.png ../../docs/book/images/share-page.png
 ```
 
