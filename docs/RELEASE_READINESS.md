@@ -79,7 +79,7 @@ the integration-test and first-run-UX holes.
 | Soak run shows no resource growth | ✅ compressed soak test (G-06) drives 20k inserts through the real path, asserts bounded RSS/fd/DB |
 | All gates + CI green | ✅ green on `main`; AI-branch PRs now gated (G-02 done); dependabot clippy red is a stale weekly target (G-03 deferred) |
 | Cross-compiled artifacts build | ✅ release.yml + CI aarch64 cross-check |
-| Docs let a non-technical user install/upgrade/troubleshoot | ✅ strong; minor drift (onboarding wizard claim — G-09) |
+| Docs let a non-technical user install/upgrade/troubleshoot | ✅ strong; onboarding wizard now real (G-09) |
 | Safe auto-update (verify + rollback) | ⚠️ atomic swap + `.bak` rollback, **no integrity verification** (G-01) |
 
 ---
@@ -101,7 +101,7 @@ Verdicts: ✅ EXISTS (solid) · 🟡 PARTIAL · ❌ MISSING. Evidence is `file:l
 | Help docs embedded | ✅ | `build.rs` renders mdBook into `_generated/html/`, served at `/help/*` |
 | Analytics ON by default | ✅ | `installer/lib/65-service.sh:90` hardcodes `--analytics-db …`; release built `--features analytics` |
 | Audio device auto-detect | ✅ | `installer/lib/70-station.sh` `detect_first_audio_device()` (`arecord -l`) |
-| Location / timezone auto-detect | 🟡 | IP-geolocation exists (`/admin/settings/detect-location` → ip-api.com); now returns IANA tz + doctor clock/tz check (G-08); onboarding wiring in G-09 |
+| Location / timezone auto-detect | ✅ | IP-geolocation (`/admin/settings/detect-location` → ip-api.com) returns IANA tz (G-08) and is wired into the onboarding wizard's auto-detect (G-09); doctor clock/tz check (G-08) |
 | systemd install + enable + dashboard URL print | ✅ | `65-service.sh`, `75-start.sh`, `80-summary.sh:38` (URL + mDNS + IP) |
 | Release pipeline cross-compile + publish | ✅ | `release.yml`: aarch64 + x86_64 (GCC cross, **not** zigbuild — ONNX needs GNU libstdc++ cxx11 ABI); SHA256SUMS, SLSA, CycloneDX SBOM |
 | Pi OS Bookworm (glibc 2.36) native support | ❌ | glibc ≥ 2.39 floor from ONNX Runtime baseline; Bookworm → Docker only (G-14) |
@@ -127,9 +127,9 @@ Verdicts: ✅ EXISTS (solid) · 🟡 PARTIAL · ❌ MISSING. Evidence is `file:l
 | First-run admin password | ✅ | argon2id `crates/birdnet-db/src/accounts.rs`; `src/helpers/auth.rs` bootstrap; installer auto-generates a strong password (user `birdnet`) and prints it once |
 | Health/doctor page (CLI + web) | ✅ | `src/doctor/*` (audio/model/db/paths/disk/env/config/watchdog) + `/admin/doctor`; plain-language remediation per finding |
 | Doctor **self-heal** | ✅ | `--fix` creates missing configured dirs (recordings + image-cache) before reporting; safe/idempotent, never needs root (G-07) |
-| Web onboarding wizard persists | 🟡 | `crates/birdnet-web/src/routes/pages/onboarding.rs:7` is an explicit client-side **stub** — renders 5 steps but does not POST/persist; installer prompts cover real first-run config (G-09) |
-| Audio auto-detect at first run | ✅ (installer) / 🟡 (web) | installer detects; onboarding shows a **mockup** card not live state |
-| Location/timezone/lat-lon defaults | 🟡 | lat/lon are *advisory* in `validate.rs` (warn, not required); IP-geolocation + IANA tz + doctor clock check shipped (G-08); first-run capture in G-09 |
+| Web onboarding wizard persists | ✅ | `POST /onboarding/save` persists location/timezone/notify + `onboarding_complete`; fresh box is redirected to the wizard; auto-detect wired (G-09) |
+| Audio auto-detect at first run | ✅ (installer) / 🟡 (web links to Settings → Audio) | installer detects the device; the wizard delegates audio config to Settings → Audio per D-5 |
+| Location/timezone/lat-lon defaults | ✅ | lat/lon are *advisory* in `validate.rs`; IP-geolocation + IANA tz + doctor clock check (G-08); captured + persisted at first run by the wizard (G-09) |
 
 ### Track D — Polish
 
@@ -279,10 +279,17 @@ timestamps come from the recording filenames (OS-local), and solar windows are c
 full chrono-tz refactor was deliberately **not** done per D-4. Wiring geolocation into the
 onboarding wizard lands in G-09.
 
-**G-09 — Web onboarding persistence.** *(Track C · P2 · M · low)* **Blocked-by:** D-5. **Fix:**
-POST each step to settings/audio endpoints; reflect live audio detection; gate first paint on
-"not yet onboarded". **Verify:** `web_api_pages`-style test that a POST persists and re-load
-reflects it.
+**G-09 — Web onboarding persistence.** *(Track C · P2 · M · low)* ✅ **DONE (Wave 3; decision D-5 =
+"full: persist + first-boot redirect").** The wizard is now real: it submits to a new
+`POST /onboarding/save` that persists latitude/longitude/timezone (Location) + the chosen
+notification mode and sets an `onboarding_complete` flag, then 303s to `/`. The Location step's
+auto-detect button calls the existing `/admin/settings/detect-location` (fetch, CSP-safe) to fill
+coordinates + timezone; the Boston example became a *placeholder* so clicking through never
+persists a wrong default. `GET /` now redirects a fresh station (no detections **and** not
+onboarded) to `/onboarding`, failing safe on any DB error so the operator is never trapped. Audio
+selection links to Settings → Audio per D-5. Tests: `tests/web_api_onboarding.rs` (redirect on/off,
+save persists + completes, empty submit completes without writing blanks); `boot_smoke` updated to
+accept the first-boot 303 and assert the wizard serves.
 
 **G-10 — Polish sweep.** *(Track D · P3 · M · low)* Finish P3-4; a11y/responsive/dark-light/
 reduced-motion pass (Playwright visual-QA in `tools/visual-qa/`). **Verify:** visual-regression
@@ -317,10 +324,10 @@ intended. **Verify:** broker-down test drops nothing within the bound.
   - PR4: **G-04** full-pipeline E2E test — ✅ done (`tests/pipeline_e2e.rs`).
   - PR5: **G-05** migration integration test — ✅ done (`crates/birdnet-migrate/tests/migration_e2e.rs`).
   - PR6: **G-06** soak/longevity harness — ✅ done (`tests/soak.rs`).
-- **Wave 3 — first-run UX *(pending D-4/D-5)*.**
-  - PR7: **G-09** onboarding persistence.
-  - PR8: **G-08** geolocation + timezone.
-  - PR9: **G-07** doctor self-heal.
+- **Wave 3 — first-run UX.** ✅ in this branch (decisions D-4 = rely-on-OS-clock, D-5 = full persist + redirect).
+  - PR7: **G-09** onboarding persistence + first-boot redirect — ✅ done.
+  - PR8: **G-08** geolocation timezone surfacing + doctor clock check — ✅ done.
+  - PR9: **G-07** doctor self-heal (`--fix`) — ✅ done.
 - **Wave 4 — portability & offline *(pending D-1/D-2)*.**
   - PR10: **G-14** glibc/Bookworm.
   - PR11: **G-13** model bundling.

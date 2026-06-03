@@ -1,23 +1,91 @@
 //! First-run onboarding wizard.
 //!
 //! A full-bleed, no-chrome five-step setup flow (Welcome → Location →
-//! Microphone → Notifications → Done) served at `/onboarding`. The steps are
-//! fully styled and client-navigable; persistence and device detection are
-//! intentionally out of scope here (a clearly-scoped stub) — a production
-//! build would POST each step to the settings/audio endpoints.
+//! Microphone → Notifications → Done) served at `/onboarding`. The wizard now
+//! persists: the Location step auto-detects coordinates (and the timezone) via
+//! the existing `/admin/settings/detect-location` endpoint and submits to
+//! `POST /onboarding/save`, which writes the chosen settings and marks
+//! onboarding complete. Audio device selection is intentionally delegated to
+//! Settings → Audio (richer ALSA/RTSP handling lives there).
+//!
+//! A fresh station (no detections yet, not onboarded) is redirected here from
+//! the dashboard — see `pages::dashboard`.
 
-use axum::Router;
-use axum::response::Html;
-use axum::routing::get;
+use axum::extract::State;
+use axum::response::{Html, Redirect};
+use axum::routing::{get, post};
+use axum::{Form, Router};
+
+use birdnet_db::settings::{self, SettingsCategory};
 
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/onboarding", get(onboarding_page))
+    Router::new()
+        .route("/onboarding", get(onboarding_page))
+        .route("/onboarding/save", post(onboarding_save))
 }
 
 async fn onboarding_page() -> Html<String> {
     Html(ONBOARDING_HTML.to_string())
+}
+
+/// Fields the first-run wizard submits. All optional: clicking straight through
+/// still marks onboarding complete (so the first-boot redirect stops firing)
+/// without writing empty settings.
+#[derive(Debug, Default, serde::Deserialize)]
+struct OnboardingForm {
+    #[serde(default)]
+    latitude: String,
+    #[serde(default)]
+    longitude: String,
+    #[serde(default)]
+    timezone: String,
+    #[serde(default)]
+    notification_mode: String,
+}
+
+/// Persist the wizard's choices and mark onboarding complete, then return to the
+/// dashboard. Only non-empty values are written; the DB settings overlay applies
+/// latitude/longitude on the next start.
+async fn onboarding_save(
+    State(state): State<AppState>,
+    Form(form): Form<OnboardingForm>,
+) -> Redirect {
+    state.with_db(|conn| {
+        // Idempotent safety net; the table is also created by migration 14.
+        settings::ensure_settings_table(conn).ok();
+
+        let mut items: Vec<(&str, &str, SettingsCategory)> = Vec::new();
+        let lat = form.latitude.trim();
+        let lon = form.longitude.trim();
+        let tz = form.timezone.trim();
+        let mode = form.notification_mode.trim();
+        if !lat.is_empty() {
+            items.push(("latitude", lat, SettingsCategory::Location));
+        }
+        if !lon.is_empty() {
+            items.push(("longitude", lon, SettingsCategory::Location));
+        }
+        if !tz.is_empty() {
+            items.push(("timezone", tz, SettingsCategory::Location));
+        }
+        if !mode.is_empty() {
+            items.push(("notification_mode", mode, SettingsCategory::Notifications));
+        }
+        if !items.is_empty() {
+            let _ = settings::set_many(conn, &items);
+        }
+        // Set the completion flag last so a fresh box stops being redirected here
+        // even if a settings write above failed.
+        let _ = settings::set(
+            conn,
+            "onboarding_complete",
+            "true",
+            SettingsCategory::System,
+        );
+    });
+    Redirect::to("/")
 }
 
 const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
@@ -115,6 +183,7 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
 </head>
 <body>
 <div class="ob-root">
+  <form id="ob-form" method="post" action="/onboarding/save">
   <div class="ob-stepper" id="ob-stepper">
     <div class="ob-pip" data-pip="1"><span class="dot">1</span><span class="nm">Welcome</span></div>
     <span class="bar"></span>
@@ -166,13 +235,14 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
           <h1 class="ob-h">Where is the station?</h1>
           <p class="ob-p">Your coordinates let BirdNET weight species by what's actually likely in your area, and compute sunrise / sunset for the dawn-chorus window.</p>
           <div class="ob-mt-18">
-            <button class="bnb-btn" type="button">⌖ Auto-detect (ipapi.co)</button>
+            <button class="bnb-btn" type="button" id="ob-detect">⌖ Auto-detect my location</button>
           </div>
           <div class="ob-latlon">
-            <div class="ob-field"><label>Latitude</label><input type="text" value="42.3601" inputmode="decimal"></div>
-            <div class="ob-field"><label>Longitude</label><input type="text" value="-71.0589" inputmode="decimal"></div>
+            <div class="ob-field"><label for="ob-lat">Latitude</label><input id="ob-lat" name="latitude" type="text" placeholder="e.g. 42.3601" inputmode="decimal"></div>
+            <div class="ob-field"><label for="ob-lon">Longitude</label><input id="ob-lon" name="longitude" type="text" placeholder="e.g. -71.0589" inputmode="decimal"></div>
           </div>
-          <div class="bnb-pill moss ob-mt-6">✓ Boston, MA · 247 species expected · sunrise 5:21 AM</div>
+          <input type="hidden" name="timezone" id="ob-tz">
+          <div class="bnb-pill ob-mt-6" id="ob-loc-pill">Auto-detect, or type your coordinates — you can change this any time in Settings.</div>
         </div>
         <div class="ob-center">
           <svg width="280" height="220" viewBox="0 0 280 220" aria-hidden="true" class="ob-map">
@@ -200,6 +270,7 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
         <div class="ob-card" data-radio="mic"><span class="ic">📡</span><div class="ob-grow"><div class="t">Add an RTSP camera</div><div class="s">rtsp://… — bird-box or feeder cam audio</div></div></div>
         <div class="ob-card" data-radio="mic"><span class="ic">📁</span><div class="ob-grow"><div class="t">Watch a folder</div><div class="s">classify existing recordings on disk</div></div></div>
       </div>
+      <p class="bnb-meta ob-mt-16">Your audio device is set up by the installer — fine-tune it (USB, RTSP, gain) any time in <a href="/admin">Settings → Audio</a>.</p>
     </section>
 
     <!-- Step 4 — Notifications -->
@@ -208,11 +279,12 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
       <h1 class="ob-h">When should we ping you?</h1>
       <p class="ob-p ob-mb-18">Start simple — you can wire up channels (Telegram, email, MQTT…) any time.</p>
       <div class="ob-cards cols2">
-        <div class="ob-card" data-radio="notify"><div class="ob-grow"><div class="t">Quiet</div><div class="s">Never notify — just log everything</div></div></div>
-        <div class="ob-card sel" data-radio="notify"><div class="ob-grow"><div class="t">Rare only <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s">Only first-of-station / unusual birds</div></div></div>
-        <div class="ob-card" data-radio="notify"><div class="ob-grow"><div class="t">Daily digest</div><div class="s">One summary each evening</div></div></div>
-        <div class="ob-card" data-radio="notify"><div class="ob-grow"><div class="t">Everything</div><div class="s">Every detection (chatty!)</div></div></div>
+        <div class="ob-card" data-radio="notify" data-value="quiet"><div class="ob-grow"><div class="t">Quiet</div><div class="s">Never notify — just log everything</div></div></div>
+        <div class="ob-card sel" data-radio="notify" data-value="rare"><div class="ob-grow"><div class="t">Rare only <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s">Only first-of-station / unusual birds</div></div></div>
+        <div class="ob-card" data-radio="notify" data-value="daily"><div class="ob-grow"><div class="t">Daily digest</div><div class="s">One summary each evening</div></div></div>
+        <div class="ob-card" data-radio="notify" data-value="everything"><div class="ob-grow"><div class="t">Everything</div><div class="s">Every detection (chatty!)</div></div></div>
       </div>
+      <input type="hidden" name="notification_mode" id="ob-notify" value="rare">
       <details class="ob-mt-16">
         <summary class="bnb-meta ob-summary">Pick channels now <span class="bnb-pill">optional</span></summary>
         <div class="chips">
@@ -251,18 +323,21 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
 
   <div class="ob-nav">
     <button class="bnb-btn ghost ob-hidden-init" id="ob-back" type="button">← Back</button>
-    <div class="bnb-meta">Step <span id="ob-cur">1</span> of 5</div>
+    <div class="bnb-meta">Step <span id="ob-cur">1</span> of 5 · <a href="#" id="ob-skip">Skip for now</a></div>
     <a class="bnb-btn primary" id="ob-next" href="#" role="button">Continue →</a>
   </div>
+  </form>
 </div>
 
 <script>
 (function () {
   var step = 1, total = 5;
+  var form = document.getElementById('ob-form');
   var stepsEls = document.querySelectorAll('.ob-step');
   var pips = document.querySelectorAll('.ob-pip');
   var back = document.getElementById('ob-back');
   var next = document.getElementById('ob-next');
+  var skip = document.getElementById('ob-skip');
   var cur = document.getElementById('ob-cur');
 
   function render() {
@@ -274,24 +349,59 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
     });
     cur.textContent = step;
     back.style.visibility = step === 1 ? 'hidden' : 'visible';
-    if (step === total) { next.textContent = 'Go to dashboard →'; next.setAttribute('href', '/'); }
-    else { next.textContent = 'Continue →'; next.setAttribute('href', '#'); }
+    next.textContent = step === total ? 'Finish & go to dashboard →' : 'Continue →';
   }
+  function finish() { form.requestSubmit(); }
+
   back.addEventListener('click', function () { if (step > 1) { step--; render(); } });
   next.addEventListener('click', function (e) {
-    if (step < total) { e.preventDefault(); step++; render(); }
-    // on last step the anchor navigates to "/"
+    e.preventDefault();
+    if (step < total) { step++; render(); } else { finish(); }
   });
+  skip.addEventListener('click', function (e) { e.preventDefault(); finish(); });
 
-  // Single-select radio cards.
+  // Single-select radio cards; mirror the notification choice into the form.
+  var notify = document.getElementById('ob-notify');
   document.querySelectorAll('[data-radio]').forEach(function (card) {
     card.addEventListener('click', function () {
       document.querySelectorAll('[data-radio="' + card.dataset.radio + '"]').forEach(function (c) {
         c.classList.remove('sel');
       });
       card.classList.add('sel');
+      if (card.dataset.radio === 'notify' && notify && card.dataset.value) {
+        notify.value = card.dataset.value;
+      }
     });
   });
+
+  // Auto-detect coordinates + timezone via the existing settings endpoint
+  // (same-origin fetch; the endpoint itself queries ip-api.com server-side).
+  var detect = document.getElementById('ob-detect');
+  var pill = document.getElementById('ob-loc-pill');
+  if (detect) {
+    detect.addEventListener('click', function () {
+      var prev = detect.textContent;
+      detect.disabled = true;
+      detect.textContent = 'Detecting…';
+      fetch('/admin/settings/detect-location')
+        .then(function (r) { if (!r.ok) { throw new Error('lookup failed'); } return r.json(); })
+        .then(function (d) {
+          if (d.lat != null) { document.getElementById('ob-lat').value = d.lat; }
+          if (d.lon != null) { document.getElementById('ob-lon').value = d.lon; }
+          if (d.timezone) { document.getElementById('ob-tz').value = d.timezone; }
+          if (pill) {
+            var where = [d.city, d.country].filter(Boolean).join(', ');
+            pill.textContent = '✓ ' + (where || 'Location found') + (d.timezone ? ' · ' + d.timezone : '');
+            pill.classList.add('moss');
+          }
+        })
+        .catch(function () {
+          if (pill) { pill.textContent = 'Could not auto-detect — enter your coordinates manually.'; }
+        })
+        .finally(function () { detect.disabled = false; detect.textContent = prev; });
+    });
+  }
+
   render();
 })();
 </script>
