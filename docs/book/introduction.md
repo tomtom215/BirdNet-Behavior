@@ -24,7 +24,7 @@ BirdNet-Behavior is a ground-up Rust rewrite of [BirdNET-Pi](https://github.com/
 | | BirdNET-Pi (Python) | BirdNet-Behavior (Rust) |
 |---|---|---|
 | Runtime | CPython interpreter + virtualenv | One native binary — no interpreter |
-| Install | `pip` into a venv + system packages | one file, or one `curl … \| sudo bash` |
+| Install | `pip` into a venv + system packages | one file, or one `curl` installer |
 | Upgrade | re-resolve pip dependencies | replace one file |
 | Inference | TensorFlow Lite (Python) | ONNX Runtime, linked in-process |
 | Analytics | — | DuckDB behavioral engine, built in |
