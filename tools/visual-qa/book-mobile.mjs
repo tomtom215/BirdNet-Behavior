@@ -17,6 +17,14 @@ const T = new Date();
 const TODAY = `${T.getUTCFullYear()}-${String(T.getUTCMonth() + 1).padStart(2, '0')}-${String(T.getUTCDate()).padStart(2, '0')}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Detail-page targets come from the live fixture (the regen wrapper reads them
+// from the seeded DB), so the species-detail and detection-detail shots always
+// land on a real species/detection rather than a hardcoded one that may not
+// exist in the dataset.
+const DETAIL_NAME = process.env.DETAIL_NAME || 'Northern Cardinal';
+const DETAIL_DATE = process.env.DETAIL_DATE || TODAY;
+const DETAIL_TIME = process.env.DETAIL_TIME || '06:00:00';
+
 // Mirrors book.mjs PAGES (the desktop set), minus desktop-only chrome that has
 // no phone layout. [outputName, route, theme]
 const PAGES = [
@@ -24,8 +32,8 @@ const PAGES = [
   ['dashboard-dark.png', '/', 'dark'],
   ['today.png', '/today', 'light'],
   ['species-list.png', '/species', 'light'],
-  ['species-detail.png', `/species/detail?name=${enc('European Robin')}`, 'light'],
-  ['detection-detail.png', `/detections/detail?date=${TODAY}&time=05:14:08&name=${enc('Eurasian Magpie')}`, 'light'],
+  ['species-detail.png', `/species/detail?name=${enc(DETAIL_NAME)}`, 'light'],
+  ['detection-detail.png', `/detections/detail?date=${DETAIL_DATE}&time=${DETAIL_TIME}&name=${enc(DETAIL_NAME)}`, 'light'],
   ['detection-reviews.png', '/detection-reviews', 'light'],
   ['heatmap.png', '/heatmap', 'light'],
   ['migration.png', '/migration', 'light'],
