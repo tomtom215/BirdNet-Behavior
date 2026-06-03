@@ -6,6 +6,10 @@ set -euo pipefail
 REPO="tomtom215/BirdNet-Behavior"
 BINARY_NAME="birdnet-behavior"
 INSTALL_DIR="/usr/local/bin"
+# Rendered operator manual (mdBook), bundled in the release tarball and served
+# at /help/* via BNB_HELP_DIR. A read-only system path so the sandboxed service
+# (ProtectSystem=strict) can read it without any ReadWritePaths grant.
+HELP_DIR="/usr/local/share/birdnet-behavior/help"
 CONFIG_DIR="/etc/birdnet"
 CONFIG_FILE="${CONFIG_DIR}/birdnet.conf"
 # Default data dir. NOTE: under sudo $HOME is usually /root, so require_root

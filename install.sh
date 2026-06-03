@@ -51,6 +51,10 @@ set -euo pipefail
 REPO="tomtom215/BirdNet-Behavior"
 BINARY_NAME="birdnet-behavior"
 INSTALL_DIR="/usr/local/bin"
+# Rendered operator manual (mdBook), bundled in the release tarball and served
+# at /help/* via BNB_HELP_DIR. A read-only system path so the sandboxed service
+# (ProtectSystem=strict) can read it without any ReadWritePaths grant.
+HELP_DIR="/usr/local/share/birdnet-behavior/help"
 CONFIG_DIR="/etc/birdnet"
 CONFIG_FILE="${CONFIG_DIR}/birdnet.conf"
 # Default data dir. NOTE: under sudo $HOME is usually /root, so require_root
@@ -560,8 +564,9 @@ describe_existing_install() {
 # Release artifacts are gzipped tarballs of the form
 #   birdnet-behavior-<version>-<target>.tar.gz
 # containing a single top-level directory with the stripped binary alongside
-# README, LICENSE, LICENSE-UPSTREAM, CHANGELOG, and this script. A single
-# SHA256SUMS file is attached to each GitHub Release for verification.
+# README, LICENSE, LICENSE-UPSTREAM, CHANGELOG, this script, and (since 0.6.0)
+# a help/ directory holding the rendered operator manual served at /help/*. A
+# single SHA256SUMS file is attached to each GitHub Release for verification.
 # ---------------------------------------------------------------------------
 
 install_binary() {
@@ -619,6 +624,22 @@ install_binary() {
 
     install -m 0755 "${extracted_binary}" "${INSTALL_DIR}/${BINARY_NAME}"
     success "Binary installed to ${INSTALL_DIR}/${BINARY_NAME}"
+
+    # Install the bundled operator manual (mdBook) if this release ships it, so
+    # the dashboard's /help/* links work fully offline. The service points
+    # BNB_HELP_DIR at ${HELP_DIR} (see 65-service.sh). Older releases have no
+    # help/ in the tarball — we just skip, and /help 404s as it did before.
+    local extracted_help
+    extracted_help="$(find "${workdir}" -mindepth 2 -maxdepth 3 -type d -name help | head -1)"
+    if [ -n "${extracted_help}" ] && [ -d "${extracted_help}" ]; then
+        rm -rf "${HELP_DIR}"
+        install -d -m 0755 "$(dirname "${HELP_DIR}")"
+        cp -a "${extracted_help}" "${HELP_DIR}"
+        chmod -R a+rX "${HELP_DIR}"
+        success "Operator manual installed to ${HELP_DIR} (served at /help)"
+    else
+        info "This release has no bundled manual; /help will be unavailable until you upgrade."
+    fi
 }
 
 # ===== installer/lib/55-model.sh =====
@@ -975,6 +996,11 @@ StartLimitIntervalSec=300
 Type=notify
 NotifyAccess=main
 User=${SERVICE_USER}
+
+# Serve the bundled operator manual (mdBook) at /help/*. install.sh installs it
+# from the release tarball to ${HELP_DIR}; harmless if absent on older releases —
+# the ServeDir simply returns 404 for /help, exactly as before.
+Environment=BNB_HELP_DIR=${HELP_DIR}
 
 # Recreate the ephemeral stream/watch dir before anything else runs. With
 # PrivateTmp=yes (below) the service gets a FRESH, EMPTY /tmp on every start,
@@ -1523,6 +1549,9 @@ do_uninstall() {
 
     rm -f "${INSTALL_DIR}/${BINARY_NAME}"
     rm -rf "${STREAM_DIR}"
+    # Bundled operator manual (and its parent dir if now empty).
+    rm -rf "${HELP_DIR}"
+    rmdir "$(dirname "${HELP_DIR}")" 2>/dev/null || true
 
     if [ "${had_unit}" = 0 ] && [ "${had_binary}" = 0 ]; then
         warn "No installed service or binary found — nothing to remove."

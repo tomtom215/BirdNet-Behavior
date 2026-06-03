@@ -292,9 +292,11 @@ jobs:
         # libduckdb (the `analytics` feature) from source. GitHub's ubuntu-24.04
         # image ships build-essential, but install cmake explicitly so the build
         # doesn't silently depend on the runner image's default package set.
+        # imagemagick + pngquant downscale the operator-manual screenshots staged
+        # into the tarball (best-effort; the source/Pages copy stays full-res).
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake g++
+          sudo apt-get install -y --no-install-recommends cmake g++ imagemagick pngquant
 
       - name: Install native build dependencies (macOS)
         if: runner.os == 'macOS'
@@ -383,6 +385,26 @@ jobs:
           mkdir -p "$STAGE"
           cp "target/${{ matrix.target }}/release/birdnet-behavior" "$STAGE/"
           cp README.md LICENSE LICENSE-UPSTREAM CHANGELOG.md install.sh uninstall.sh "$STAGE/"
+
+          # Bundle the rendered operator manual so install.sh can serve it at
+          # /help/* fully offline (build.rs rendered it into
+          # docs/book/_generated/html during the cargo build above). Downscale
+          # the screenshots best-effort to keep the tarball lean — the committed
+          # source, and therefore the GitHub Pages site, stays full-res.
+          if [ -d docs/book/_generated/html ]; then
+            cp -a docs/book/_generated/html "$STAGE/help"
+            if command -v mogrify >/dev/null 2>&1 && command -v pngquant >/dev/null 2>&1; then
+              find "$STAGE/help/images" -type f -name '*.png' -print0 \
+                | xargs -0 -r mogrify -resize '1000x>' -strip || true
+              find "$STAGE/help/images" -type f -name '*.png' -print0 \
+                | xargs -0 -r pngquant --force --skip-if-larger --quality=65-90 --ext .png || true
+            fi
+            echo "::group::Staged operator manual"
+            du -sh "$STAGE/help" || true
+            echo "::endgroup::"
+          else
+            echo "::warning::docs/book/_generated/html not found — tarball ships without /help docs"
+          fi
 
           echo "NAME=${NAME}" >> "$GITHUB_ENV"
           echo "STAGE=${STAGE}" >> "$GITHUB_ENV"
@@ -640,10 +662,11 @@ jobs:
             echo "| \`x86_64-unknown-linux-gnu\`        | Standard 64-bit Linux                 |"
             echo ""
             echo "Archives are gzipped tarballs containing the stripped binary,"
-            echo '`README.md`, `CHANGELOG.md`, `LICENSE`, `LICENSE-UPSTREAM`, and'
-            echo '`install.sh`. Each binary ships the DuckDB behavioral-analytics'
-            echo 'engine built in; `install.sh` enables it by default (for a manual'
-            echo 'run, pass `--analytics-db`).'
+            echo '`README.md`, `CHANGELOG.md`, `LICENSE`, `LICENSE-UPSTREAM`,'
+            echo '`install.sh`, and a `help/` directory with the rendered operator'
+            echo 'manual (served offline at `/help`). Each binary ships the DuckDB'
+            echo 'behavioral-analytics engine built in; `install.sh` enables it by'
+            echo 'default (for a manual run, pass `--analytics-db`).'
             echo ""
             echo '> **Runtime requirement: glibc 2.39 or newer** — Raspberry Pi OS'
             echo '> **Trixie**, Debian 13, or Ubuntu 24.04. Pi OS **Bookworm**'

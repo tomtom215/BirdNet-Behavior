@@ -64,6 +64,11 @@ Type=notify
 NotifyAccess=main
 User=${SERVICE_USER}
 
+# Serve the bundled operator manual (mdBook) at /help/*. install.sh installs it
+# from the release tarball to ${HELP_DIR}; harmless if absent on older releases —
+# the ServeDir simply returns 404 for /help, exactly as before.
+Environment=BNB_HELP_DIR=${HELP_DIR}
+
 # Recreate the ephemeral stream/watch dir before anything else runs. With
 # PrivateTmp=yes (below) the service gets a FRESH, EMPTY /tmp on every start,
 # so /tmp/birdnet-stream never survives a restart — create it here so the

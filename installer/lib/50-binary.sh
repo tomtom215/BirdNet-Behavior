@@ -4,8 +4,9 @@
 # Release artifacts are gzipped tarballs of the form
 #   birdnet-behavior-<version>-<target>.tar.gz
 # containing a single top-level directory with the stripped binary alongside
-# README, LICENSE, LICENSE-UPSTREAM, CHANGELOG, and this script. A single
-# SHA256SUMS file is attached to each GitHub Release for verification.
+# README, LICENSE, LICENSE-UPSTREAM, CHANGELOG, this script, and (since 0.6.0)
+# a help/ directory holding the rendered operator manual served at /help/*. A
+# single SHA256SUMS file is attached to each GitHub Release for verification.
 # ---------------------------------------------------------------------------
 
 install_binary() {
@@ -63,4 +64,20 @@ install_binary() {
 
     install -m 0755 "${extracted_binary}" "${INSTALL_DIR}/${BINARY_NAME}"
     success "Binary installed to ${INSTALL_DIR}/${BINARY_NAME}"
+
+    # Install the bundled operator manual (mdBook) if this release ships it, so
+    # the dashboard's /help/* links work fully offline. The service points
+    # BNB_HELP_DIR at ${HELP_DIR} (see 65-service.sh). Older releases have no
+    # help/ in the tarball — we just skip, and /help 404s as it did before.
+    local extracted_help
+    extracted_help="$(find "${workdir}" -mindepth 2 -maxdepth 3 -type d -name help | head -1)"
+    if [ -n "${extracted_help}" ] && [ -d "${extracted_help}" ]; then
+        rm -rf "${HELP_DIR}"
+        install -d -m 0755 "$(dirname "${HELP_DIR}")"
+        cp -a "${extracted_help}" "${HELP_DIR}"
+        chmod -R a+rX "${HELP_DIR}"
+        success "Operator manual installed to ${HELP_DIR} (served at /help)"
+    else
+        info "This release has no bundled manual; /help will be unavailable until you upgrade."
+    fi
 }

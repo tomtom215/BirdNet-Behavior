@@ -39,6 +39,7 @@ set -euo pipefail
 # ── Defaults (mirror install.sh) ────────────────────────────────────────────
 BINARY_NAME="birdnet-behavior"
 BIN_PATH="/usr/local/bin/${BINARY_NAME}"
+HELP_DIR="/usr/local/share/birdnet-behavior/help"
 CONFIG_DIR="/etc/birdnet"
 CONFIG_FILE="${CONFIG_DIR}/birdnet.conf"
 SERVICE_FILE="/etc/systemd/system/birdnet-behavior.service"
@@ -215,7 +216,7 @@ if [ -f "$SERVICE_FILE" ] || [ -e "$BIN_PATH" ]; then HAD_NATIVE=1; fi
 # ── Plan ─────────────────────────────────────────────────────────────────────
 echo
 info "${B}BirdNet-Behavior uninstaller${Z}${DRY_LABEL}"
-echo "  Software (always removed): systemd service, tmpfs mount unit, ${STREAM_DIR}$([ "$KEEP_BINARY" = 1 ] && echo "" || echo ", binary")"
+echo "  Software (always removed): systemd service, tmpfs mount unit, ${STREAM_DIR}$([ "$KEEP_BINARY" = 1 ] && echo "" || echo ", binary, operator manual")"
 echo "  Detected data dir:         ${DATA_DIR}$([ "${DATA_DIR_GUESSED:-0}" = 1 ] && echo "  (guessed — config already gone)")"
 plan_line() { printf "    %-18s %s\n" "$1" "$2"; }
 plan_line "database"      "$([ "$REMOVE_DB" = 1 ] && echo REMOVE || echo keep)   (${DB_PATH}, ${ANALYTICS_DB}, ${BACKUPS_DIR})"
@@ -253,6 +254,9 @@ rm_path "$TMPFS_UNIT_FILE" "tmpfs mount unit"
 [ "$REMOVE_ZRAM" = 1 ] && rm_path "$ZRAM_FILE" "zram-swap unit"
 rm_path "$STREAM_DIR" "tmpfs stream dir"
 [ "$KEEP_BINARY" = 1 ] || rm_path "$BIN_PATH" "binary"
+# The bundled operator manual is software, removed with the binary. Tidy the
+# now-empty parent dir too (best-effort; ignored if other files live there).
+[ "$KEEP_BINARY" = 1 ] || { rm_path "$HELP_DIR" "operator manual"; [ "$DRY_RUN" = 1 ] || rmdir "$(dirname "$HELP_DIR")" 2>/dev/null || true; }
 
 if command -v systemctl >/dev/null 2>&1 && [ "$DRY_RUN" != 1 ]; then
   systemctl daemon-reload 2>/dev/null || true

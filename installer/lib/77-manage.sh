@@ -148,6 +148,9 @@ do_uninstall() {
 
     rm -f "${INSTALL_DIR}/${BINARY_NAME}"
     rm -rf "${STREAM_DIR}"
+    # Bundled operator manual (and its parent dir if now empty).
+    rm -rf "${HELP_DIR}"
+    rmdir "$(dirname "${HELP_DIR}")" 2>/dev/null || true
 
     if [ "${had_unit}" = 0 ] && [ "${had_binary}" = 0 ]; then
         warn "No installed service or binary found — nothing to remove."
