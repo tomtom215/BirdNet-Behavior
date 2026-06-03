@@ -126,7 +126,7 @@ Verdicts: ✅ EXISTS (solid) · 🟡 PARTIAL · ❌ MISSING. Evidence is `file:l
 |---|---|---|
 | First-run admin password | ✅ | argon2id `crates/birdnet-db/src/accounts.rs`; `src/helpers/auth.rs` bootstrap; installer auto-generates a strong password (user `birdnet`) and prints it once |
 | Health/doctor page (CLI + web) | ✅ | `src/doctor/*` (audio/model/db/paths/disk/env/config/watchdog) + `/admin/doctor`; plain-language remediation per finding |
-| Doctor **self-heal** | ❌ | diagnostic-only by design; brief wants opt-in self-heal (recreate dirs, fix perms) (G-07) |
+| Doctor **self-heal** | ✅ | `--fix` creates missing configured dirs (recordings + image-cache) before reporting; safe/idempotent, never needs root (G-07) |
 | Web onboarding wizard persists | 🟡 | `crates/birdnet-web/src/routes/pages/onboarding.rs:7` is an explicit client-side **stub** — renders 5 steps but does not POST/persist; installer prompts cover real first-run config (G-09) |
 | Audio auto-detect at first run | ✅ (installer) / 🟡 (web) | installer detects; onboarding shows a **mockup** card not live state |
 | Location/timezone/lat-lon defaults | ❌ | `crates/birdnet-core/src/config/validate.rs` **requires** lat/lon; no geolocation; solar is UTC-only (`crates/birdnet-scheduler/src/solar.rs`) (G-08) |
@@ -257,10 +257,14 @@ drives `BIRDNET_SOAK_N` (default 20k) detections through `insert_detection` on a
 asserts bounded growth: resident memory (`/proc/self/status` VmRSS) < 128 MiB, no fd leak
 (`/proc/self/fd`), and WAL-inclusive DB size linear-bounded. Env-tunable for a heavier local soak.
 
-**G-07 — Doctor self-heal.** *(Track C · P2 · M · med)* **Fix:** opt-in `--doctor --fix` (or a
-web button) for *safe* heals only: recreate missing dirs, fix ownership/perms, recreate tmpfs
-stream dir, re-checkpoint WAL. Never destructive. **Verify:** unit tests per heal + a dry-run
-default.
+**G-07 — Doctor self-heal.** *(Track C · P2 · M · med)* ✅ **DONE (Wave 3).** Added a `--fix`
+flag (`src/doctor/fix.rs`) that implies the doctor and runs *safe, idempotent* repairs before the
+diagnostic: it creates any missing configured directories (recordings/watch + image-cache — the #1
+"service runs but nothing is recorded" cause after a tmpfs reset), reports each as a `Repair:`
+check, and the subsequent checks reflect the healed state. Ownership/packages (root-only) are
+reported, not changed, so `--fix` is safe as the unprivileged service user. Unit-tested (create /
+idempotent / skip) + dispatch tests. *Deliberately scoped:* chown and WAL-checkpoint were left out
+(root-only / already covered by the maintenance tick).
 
 **G-08 — Geolocation + timezone.** *(Track C · P2 · M · med)* **Blocked-by:** D-4. **Fix:**
 optional IP-geolocation to seed lat/lon with manual override; store IANA tz; localize solar.

@@ -56,6 +56,19 @@ pub struct Cli {
     #[arg(long)]
     pub doctor_json: bool,
 
+    /// Attempt safe automatic repairs, then run the diagnostic.
+    ///
+    /// Implies `--doctor` (use with `--doctor-json` for machine-readable
+    /// output). Repairs are idempotent and never destructive — currently they
+    /// create any missing configured directories (the recordings/watch
+    /// directory and the image-cache directory), the most common cause of
+    /// "service runs but nothing is recorded" (e.g. after a tmpfs reset on
+    /// reboot). The diagnostic then runs as usual and reflects the repaired
+    /// state. Anything that needs root (ownership, packages) is reported, not
+    /// changed.
+    #[arg(long)]
+    pub fix: bool,
+
     /// Path to the ONNX model file (overrides config).
     #[arg(long, env = "BIRDNET_MODEL")]
     pub model: Option<PathBuf>,

@@ -57,7 +57,8 @@ enum Action {
 /// Precedence matches the original inline `if` chain in `main`:
 /// `--check-db` > `--backup-db` > doctor preflight > run the server. The
 /// first matching flag wins, so e.g. `--check-db --doctor` runs the
-/// integrity check and never reaches the doctor.
+/// integrity check and never reaches the doctor. `--fix` implies the doctor
+/// (it runs safe repairs, then the diagnostic).
 const fn dispatch_subcommand(cli: &Cli) -> Action {
     if cli.check_db {
         Action::CheckDb
@@ -65,9 +66,10 @@ const fn dispatch_subcommand(cli: &Cli) -> Action {
         Action::BackupDb
     } else if cli.refresh_extension {
         Action::RefreshExtension
-    } else if cli.doctor || cli.doctor_json {
+    } else if cli.doctor || cli.doctor_json || cli.fix {
         // `--doctor-json` wins the format choice when both are passed so a
         // monitoring script that sets both still gets machine-readable output.
+        // `--fix` alone implies the human-readable doctor.
         let format = if cli.doctor_json {
             doctor::Format::Json
         } else {
@@ -218,6 +220,24 @@ mod tests {
         assert_eq!(
             dispatch_subcommand(&cli(&["--doctor"])),
             Action::Doctor(doctor::Format::Text)
+        );
+    }
+
+    #[test]
+    fn fix_flag_implies_doctor_text() {
+        // `--fix` runs repairs then the diagnostic, so on its own it selects the
+        // human-readable doctor rather than falling through to the server.
+        assert_eq!(
+            dispatch_subcommand(&cli(&["--fix"])),
+            Action::Doctor(doctor::Format::Text)
+        );
+    }
+
+    #[test]
+    fn fix_with_doctor_json_keeps_json_format() {
+        assert_eq!(
+            dispatch_subcommand(&cli(&["--fix", "--doctor-json"])),
+            Action::Doctor(doctor::Format::Json)
         );
     }
 
