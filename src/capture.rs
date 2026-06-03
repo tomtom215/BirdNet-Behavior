@@ -311,7 +311,7 @@ fn seed_sources_from_config(
     seeded
 }
 
-/// Map a CLI/config-resolved [`CaptureSource`] to a [`NewAudioSource`] row,
+/// Map a CLI/config-resolved [`CaptureSource`] to a `NewAudioSource` row,
 /// preserving device, sample rate and channel count so the seeded row
 /// reconstructs the same capture stream. The inverse of
 /// [`audio_source_to_capture_source`].

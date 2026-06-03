@@ -151,7 +151,7 @@ pub fn parse_changelog(input: &str) -> Vec<Release<'_>> {
     out
 }
 
-/// "## [1.5.0] - 2026-04-22" or "## [Unreleased]" → ("1.5.0", Some("2026-04-22"))
+/// `## [1.5.0] - 2026-04-22` or `## [Unreleased]` → ("1.5.0", Some("2026-04-22"))
 fn parse_release_heading(line: &str) -> Option<(String, Option<String>)> {
     let s = line.trim();
     if !s.starts_with("## ") {
@@ -224,8 +224,8 @@ fn render_release(out: &mut String, r: &Release<'_>) {
     out.push_str("</article>");
 }
 
-/// Tiny inline-md renderer: backticks → <code>, [label](href) → <a>, escape
-/// the rest. Used for changelog bullets — does **not** support all of CommonMark.
+/// Tiny inline-md renderer: backticks → `<code>`, `[label](href)` → `<a>`, escape
+/// the rest. Used for changelog bullets — does **not** support all of `CommonMark`.
 fn render_inline_md(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let bytes = input.as_bytes();

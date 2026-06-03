@@ -19,6 +19,9 @@ tracing.workspace = true
 reqwest = { workspace = true, features = ["blocking", "json"] }
 tokio.workspace = true
 lettre.workspace = true
+# SHA-256 verification of downloaded auto-update archives against the
+# release's published `SHA256SUMS` before the new binary is swapped in.
+sha2.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

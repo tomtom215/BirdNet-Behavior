@@ -38,6 +38,11 @@ Options:
 
           Same checks and exit codes as `--doctor`, but the output is a machine-readable JSON object with `summary` and `checks` fields. Use for monitoring scripts (Nagios / Zabbix / Prometheus textfile collector / Home Assistant command sensor).
 
+      --fix
+          Attempt safe automatic repairs, then run the diagnostic.
+
+          Implies `--doctor` (use with `--doctor-json` for machine-readable output). Repairs are idempotent and never destructive — currently they create any missing configured directories (the recordings/watch directory and the image-cache directory), the most common cause of "service runs but nothing is recorded" (e.g. after a tmpfs reset on reboot). The diagnostic then runs as usual and reflects the repaired state. Anything that needs root (ownership, packages) is reported, not changed.
+
       --model <MODEL>
           Path to the ONNX model file (overrides config)
 
@@ -95,14 +100,25 @@ Options:
           [env: BIRDNET_LONGITUDE=]
 
       --image-cache-dir <IMAGE_CACHE_DIR>
-          Directory for caching species images from Wikipedia
+          Directory for caching species images from Wikipedia.
+
+          Defaults to an `images/` directory beside the database when unset, so a stock install shows species photos out of the box. Pass an empty value (`--image-cache-dir ""`) to disable image caching entirely — no Wikipedia fetches, e.g. for air-gapped deployments.
 
           [env: BIRDNET_IMAGE_CACHE_DIR=]
 
       --alsa-device <ALSA_DEVICE>
-          ALSA device for microphone capture (e.g., `plughw:1,0`)
+          ALSA device for microphone capture (e.g., `plughw:1,0`).
+
+          For a single microphone. Use `--alsa-devices` to capture from several local mics at once.
 
           [env: BIRDNET_ALSA_DEVICE=]
+
+      --alsa-devices <ALSA_DEVICES>
+          ALSA devices for multi-microphone capture (semicolon-separated, or repeat the flag).
+
+          Each device gets its own independent capture pipeline with filenames prefixed `MIC_1-`, `MIC_2-`, etc. (and matching per-source health metrics). Overrides `--alsa-device` when set. A semicolon — not a comma — separates devices because ALSA names themselves contain commas (e.g. `plughw:1,0`). Config-file equivalent: `ALSA_CARDS` (semicolon-separated); `ALSA_CARD` remains the single-mic key.
+
+          [env: BIRDNET_ALSA_DEVICES=]
 
       --pipewire-device <PIPEWIRE_DEVICE>
           PipeWire/PulseAudio source for microphone capture.

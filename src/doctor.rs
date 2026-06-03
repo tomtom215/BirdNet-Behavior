@@ -33,10 +33,12 @@ use birdnet_core::config::Config;
 use crate::cli::Cli;
 
 mod audio;
+mod clock;
 mod config;
 mod database;
 mod disk;
 mod environment;
+mod fix;
 mod model;
 mod paths;
 mod render;
@@ -138,9 +140,19 @@ pub enum Format {
 
 /// Run every preflight check and print a report in the given format.
 ///
+/// When `cli.fix` is set, safe idempotent repairs run first (creating missing
+/// configured directories) and their outcomes are reported alongside the
+/// checks, which then reflect the repaired state.
+///
 /// Returns the process exit code that should be used (`0`/`1`/`2`).
 pub fn run_with_format(cli: &Cli, config: Option<&Config>, format: Format) -> i32 {
     let mut checks: Vec<Check> = Vec::new();
+
+    // Repairs run before the checks so the subsequent diagnostics observe the
+    // healed state (e.g. a recreated recordings directory now reads as Pass).
+    if cli.fix {
+        checks.extend(fix::repair(cli, config));
+    }
 
     checks.extend(environment::check_runtime_environment());
     checks.push(config::check_config_file(cli, config));
@@ -148,6 +160,7 @@ pub fn run_with_format(cli: &Cli, config: Option<&Config>, format: Format) -> i3
         checks.extend(config::check_config_values(cfg));
     }
     checks.push(config::check_listen_address(cli));
+    checks.extend(clock::check_clock(config));
     checks.extend(database::check_database(cli, config));
     checks.extend(paths::check_paths(cli, config));
     checks.extend(audio::check_audio_source(cli, config));

@@ -1,5 +1,7 @@
 //! Boot smoke test: spawn the real compiled binary in `--web-only` mode and
-//! confirm it serves `GET /` with HTTP 200.
+//! confirm it serves HTTP. On a fresh database (no detections, not onboarded)
+//! `GET /` now 303-redirects to the first-run wizard, so this accepts 200 or
+//! 303 there and additionally checks that `GET /onboarding` returns 200.
 //!
 //! The in-process router tests (`web_api_*.rs`) build an `AppState` and call
 //! the router via `tower::ServiceExt::oneshot`, so they never exercise
@@ -97,13 +99,22 @@ fn web_only_boots_and_serves_root() {
         }
         if let Some(line) = http_status_line(port, "/") {
             last = line.clone();
-            if line.contains("200") {
+            // A fresh database has no detections and isn't onboarded, so `/`
+            // 303-redirects to the first-run wizard. Either a direct 200 or that
+            // redirect proves the server booted and reached the database.
+            if line.contains("200") || line.contains("303") {
+                // The wizard it redirects to must itself serve.
+                let ob = http_status_line(port, "/onboarding");
+                assert!(
+                    ob.as_deref().is_some_and(|l| l.contains("200")),
+                    "GET /onboarding did not return 200 (got {ob:?})"
+                );
                 return; // booted and serving — success
             }
         }
         assert!(
             Instant::now() < deadline,
-            "server did not serve GET / with 200 within 45s (last: {last})"
+            "server did not serve GET / (200 or 303) within 45s (last: {last})"
         );
         std::thread::sleep(Duration::from_millis(300));
     }

@@ -3,7 +3,7 @@
 //! Operators in countries that use a comma as the decimal separator
 //! (most of continental Europe, Latin America, large parts of Africa and
 //! the Middle East) routinely type `42,3601` for latitude and `0,75` for
-//! confidence thresholds. The std library's [`f64::from_str`] only
+//! confidence thresholds. The std library's `f64::from_str` only
 //! accepts the period form, so without normalisation a perfectly valid
 //! EU-formatted number silently fails parsing at runtime — or, worse,
 //! survives the round-trip through `<input type="number">` where

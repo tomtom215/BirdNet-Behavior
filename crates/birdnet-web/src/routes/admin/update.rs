@@ -72,6 +72,10 @@ async fn apply_update() -> Result<Json<serde_json::Value>, (StatusCode, String)>
 
     let download_url = info.download_url.clone();
     let latest_version = info.latest_version.clone();
+    // Verified against the release's published SHA256SUMS before the swap; the
+    // staged binary is also smoke-tested. `None` (older release) falls back to
+    // the smoke test alone.
+    let expected_sha256 = info.sha256.clone();
 
     let current_binary = std::env::current_exe().map_err(|e| {
         (
@@ -80,15 +84,17 @@ async fn apply_update() -> Result<Json<serde_json::Value>, (StatusCode, String)>
         )
     })?;
 
-    tokio::task::spawn_blocking(move || auto_update::apply_update(&download_url, &current_binary))
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("task join error: {e}"),
-            )
-        })?
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?;
+    tokio::task::spawn_blocking(move || {
+        auto_update::apply_update(&download_url, &current_binary, expected_sha256.as_deref())
+    })
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("task join error: {e}"),
+        )
+    })?
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")))?;
 
     Ok(Json(serde_json::json!({
         "status": "updated",

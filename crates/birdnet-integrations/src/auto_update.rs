@@ -33,6 +33,14 @@ pub enum UpdateError {
     Parse(String),
     /// File-system I/O error.
     Io(std::io::Error),
+    /// The downloaded archive's SHA-256 did not match the release's
+    /// published `SHA256SUMS` — the download is corrupt or tampered, so the
+    /// swap is refused and the running binary is left untouched.
+    Integrity(String),
+    /// The freshly downloaded binary failed its pre-swap smoke test
+    /// (`<binary> --version`), so it is discarded rather than installed over a
+    /// working binary (wrong architecture, truncated download, missing runtime).
+    SmokeTest(String),
     /// No update is available (current version is up-to-date).
     NotAvailable,
 }
@@ -43,6 +51,8 @@ impl fmt::Display for UpdateError {
             Self::Network(msg) => write!(f, "update network error: {msg}"),
             Self::Parse(msg) => write!(f, "update parse error: {msg}"),
             Self::Io(e) => write!(f, "update I/O error: {e}"),
+            Self::Integrity(msg) => write!(f, "update integrity error: {msg}"),
+            Self::SmokeTest(msg) => write!(f, "update smoke-test failed: {msg}"),
             Self::NotAvailable => write!(f, "no update available"),
         }
     }
@@ -76,6 +86,12 @@ pub struct UpdateInfo {
     pub latest_version: String,
     /// Direct download URL for the release asset.
     pub download_url: String,
+    /// Expected lowercase hex SHA-256 of the download asset, parsed from the
+    /// release's `SHA256SUMS`. `None` when the release ships no checksum file
+    /// or no line matches the chosen asset (older releases); `apply_update`
+    /// then falls back to the smoke test alone.
+    #[serde(default)]
+    pub sha256: Option<String>,
     /// Release notes / body from the GitHub release.
     pub release_notes: String,
     /// Whether the latest version is newer than the current version.
@@ -163,12 +179,25 @@ pub fn check_for_update(current_version: &str) -> Result<UpdateInfo, UpdateError
     let download_url = find_asset_url(&body)
         .unwrap_or_else(|| body["tarball_url"].as_str().unwrap_or("").to_string());
 
+    // Best-effort: look up the asset's published SHA-256 from the release's
+    // `SHA256SUMS`. A miss (older release, source tarball fallback, network
+    // hiccup) leaves `sha256` as `None` — `apply_update` still smoke-tests the
+    // staged binary before swapping, so this never blocks a legitimate update.
+    let sha256 = asset_filename_from_url(&download_url).and_then(|fname| {
+        find_sha256sums_url(&body)
+            .and_then(|sums_url| fetch_expected_sha256(&client, &sums_url, &fname))
+    });
+    if sha256.is_none() {
+        tracing::debug!("no SHA256SUMS entry found for the update asset; will rely on smoke test");
+    }
+
     let update_available = is_newer(current_version, tag).unwrap_or(false);
 
     Ok(UpdateInfo {
         current_version: current_version.to_string(),
         latest_version: tag.to_string(),
         download_url,
+        sha256,
         release_notes,
         update_available,
     })
@@ -182,18 +211,33 @@ pub fn check_for_update(current_version: &str) -> Result<UpdateInfo, UpdateError
 /// ELF binary are still supported transparently.
 ///
 /// Steps:
-/// 1. Download the asset to a temp file next to `current_binary`.
-/// 2. If the asset is a tar.gz, extract it and locate the binary inside.
-/// 3. Set executable permissions on the new binary.
-/// 4. Rename the current binary to `{name}.bak`.
-/// 5. Rename the new binary into place.
+/// 1. Download the asset bytes.
+/// 2. Verify the download against `expected_sha256` (when supplied) **before**
+///    anything is written — a mismatch aborts with the running binary untouched.
+/// 3. If the asset is a tar.gz, extract it and locate the binary inside.
+/// 4. Set executable permissions on the new binary.
+/// 5. Smoke-test the staged binary (`<binary> --version`) — if it cannot run,
+///    abort and leave the running binary in place (no rollback needed).
+/// 6. Rename the current binary to `{name}.bak`.
+/// 7. Rename the new binary into place.
+///
+/// `expected_sha256` is the lowercase hex digest from the release's
+/// `SHA256SUMS` (see [`UpdateInfo::sha256`]). Pass `None` only when no checksum
+/// is available; the smoke test still guards against a broken binary. This is
+/// an integrity check, not a signature check — release archives additionally
+/// carry SLSA build provenance for out-of-band authenticity verification.
 ///
 /// # Errors
 ///
-/// Returns `UpdateError::Network` on download failures, `UpdateError::Io` on
-/// filesystem errors, and `UpdateError::Parse` if the archive layout is
-/// unexpected or the embedded binary cannot be located.
-pub fn apply_update(asset_url: &str, current_binary: &Path) -> Result<(), UpdateError> {
+/// Returns `UpdateError::Network` on download failures, `UpdateError::Integrity`
+/// on a checksum mismatch, `UpdateError::SmokeTest` if the new binary will not
+/// run, `UpdateError::Io` on filesystem errors, and `UpdateError::Parse` if the
+/// archive layout is unexpected or the embedded binary cannot be located.
+pub fn apply_update(
+    asset_url: &str,
+    current_binary: &Path,
+    expected_sha256: Option<&str>,
+) -> Result<(), UpdateError> {
     let parent = current_binary.parent().unwrap_or_else(|| Path::new("."));
 
     let file_name = current_binary
@@ -228,6 +272,18 @@ pub fn apply_update(asset_url: &str, current_binary: &Path) -> Result<(), Update
     let bytes = resp
         .bytes()
         .map_err(|e| UpdateError::Network(format!("failed to read response body: {e}")))?;
+
+    // 2. Verify integrity *before* writing anything to disk, so a corrupt or
+    //    tampered download never lands next to the running binary.
+    if let Some(expected) = expected_sha256 {
+        verify_integrity(&bytes, expected)?;
+        tracing::info!("update asset sha256 verified");
+    } else {
+        tracing::warn!(
+            "no sha256 checksum available for the update asset; \
+             integrity not verified (relying on the staged-binary smoke test)"
+        );
+    }
 
     {
         let mut f = fs::File::create(&download_path)?;
@@ -274,7 +330,7 @@ pub fn apply_update(asset_url: &str, current_binary: &Path) -> Result<(), Update
         fs::rename(&download_path, &staged_path)?;
     }
 
-    // 3. Set executable permissions on the staged binary.
+    // 4. Set executable permissions on the staged binary.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -282,13 +338,21 @@ pub fn apply_update(asset_url: &str, current_binary: &Path) -> Result<(), Update
         fs::set_permissions(&staged_path, perms)?;
     }
 
-    // 4. Backup current binary (best-effort).
+    // 5. Smoke-test the staged binary before it can replace a working one. A
+    //    wrong-arch, truncated, or runtime-incompatible binary fails `--version`
+    //    here and is discarded, leaving the running binary untouched.
+    if let Err(e) = smoke_test_binary(&staged_path) {
+        let _ = fs::remove_file(&staged_path);
+        return Err(e);
+    }
+
+    // 6. Backup current binary (best-effort).
     if current_binary.exists() {
         tracing::info!("backing up current binary to {}", bak_path.display());
         fs::rename(current_binary, &bak_path)?;
     }
 
-    // 5. Move new binary into place.
+    // 7. Move new binary into place.
     tracing::info!("installing new binary to {}", current_binary.display());
     fs::rename(&staged_path, current_binary)?;
 
@@ -400,6 +464,121 @@ fn find_extracted_binary(dir: &Path, binary_name: &str) -> Result<PathBuf, Updat
         "binary '{binary_name}' not found in extracted archive at {}",
         dir.display()
     )))
+}
+
+/// Extract the bare filename (last path segment, query/fragment stripped) from a
+/// download URL so it can be matched against a `SHA256SUMS` line.
+fn asset_filename_from_url(url: &str) -> Option<String> {
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    path.rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+}
+
+/// Locate the `SHA256SUMS` asset's download URL in a release payload.
+fn find_sha256sums_url(release: &serde_json::Value) -> Option<String> {
+    let assets = release["assets"].as_array()?;
+    for asset in assets {
+        if asset["name"]
+            .as_str()
+            .is_some_and(|n| n.eq_ignore_ascii_case("SHA256SUMS"))
+        {
+            return asset["browser_download_url"].as_str().map(String::from);
+        }
+    }
+    None
+}
+
+/// Fetch the `SHA256SUMS` file and return the expected digest for `filename`.
+/// Best-effort: any network/parse failure yields `None`.
+fn fetch_expected_sha256(
+    client: &reqwest::blocking::Client,
+    sums_url: &str,
+    filename: &str,
+) -> Option<String> {
+    let resp = client.get(sums_url).send().ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let text = resp.text().ok()?;
+    parse_sha256sums(&text, filename)
+}
+
+/// Parse a `sha256sum`-format file and return the lowercase hex digest whose
+/// line names `filename`. Lines are `"<64-hex>␠␠<name>"` (a leading `*` for
+/// binary mode and any directory prefix on the name are tolerated).
+fn parse_sha256sums(contents: &str, filename: &str) -> Option<String> {
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut fields = line.split_whitespace();
+        let (Some(hex), Some(name)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        let name = name.strip_prefix('*').unwrap_or(name);
+        let name = name.rsplit('/').next().unwrap_or(name);
+        if name == filename && hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Some(hex.to_ascii_lowercase());
+        }
+    }
+    None
+}
+
+/// Compute the lowercase hex SHA-256 of `bytes`.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write as _;
+
+    let digest = Sha256::digest(bytes);
+    let mut hex = String::with_capacity(64);
+    for byte in &digest {
+        // Infallible: writing to a String never errors.
+        let _ = write!(hex, "{byte:02x}");
+    }
+    hex
+}
+
+/// Verify `bytes` hashes to `expected_hex` (case-insensitive).
+///
+/// # Errors
+///
+/// Returns `UpdateError::Integrity` when the computed digest differs.
+fn verify_integrity(bytes: &[u8], expected_hex: &str) -> Result<(), UpdateError> {
+    let actual = sha256_hex(bytes);
+    if actual.eq_ignore_ascii_case(expected_hex.trim()) {
+        Ok(())
+    } else {
+        Err(UpdateError::Integrity(format!(
+            "sha256 mismatch: expected {}, got {actual}",
+            expected_hex.trim()
+        )))
+    }
+}
+
+/// Run `<binary> --version` and require a clean exit, proving the freshly
+/// downloaded binary can actually execute on this host before it replaces the
+/// running one. `--version` is intercepted by clap and never starts the daemon.
+///
+/// # Errors
+///
+/// Returns `UpdateError::SmokeTest` if the binary cannot be executed or exits
+/// non-zero.
+fn smoke_test_binary(path: &Path) -> Result<(), UpdateError> {
+    let output = Command::new(path)
+        .arg("--version")
+        .output()
+        .map_err(|e| UpdateError::SmokeTest(format!("cannot execute staged binary: {e}")))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(UpdateError::SmokeTest(format!(
+            "staged binary `--version` exited with {}",
+            output.status
+        )))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -525,5 +704,139 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let err = find_extracted_binary(tmp.path(), "birdnet-behavior").unwrap_err();
         assert!(matches!(err, UpdateError::Parse(_)));
+    }
+
+    // -- integrity verification --------------------------------------------
+
+    #[test]
+    fn sha256_hex_matches_known_vector() {
+        // FIPS 180-2 test vector: sha256("abc").
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn verify_integrity_accepts_match_case_insensitively() {
+        let upper = "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD";
+        assert!(verify_integrity(b"abc", upper).is_ok());
+    }
+
+    #[test]
+    fn verify_integrity_rejects_mismatch() {
+        let err = verify_integrity(b"abc", &"0".repeat(64)).unwrap_err();
+        assert!(matches!(err, UpdateError::Integrity(_)));
+    }
+
+    #[test]
+    fn parse_sha256sums_extracts_matching_digest() {
+        let want = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        let contents = format!(
+            "{want}  birdnet-behavior-0.5.3-aarch64-unknown-linux-gnu.tar.gz\n\
+             {}  birdnet-behavior-0.5.3-x86_64-unknown-linux-gnu.tar.gz\n",
+            "1".repeat(64)
+        );
+        assert_eq!(
+            parse_sha256sums(
+                &contents,
+                "birdnet-behavior-0.5.3-aarch64-unknown-linux-gnu.tar.gz"
+            )
+            .as_deref(),
+            Some(want)
+        );
+    }
+
+    #[test]
+    fn parse_sha256sums_tolerates_binary_marker_and_path() {
+        let want = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        // Binary-mode `*` marker and a leading directory component.
+        let contents = format!("{want} *./dist/archive.tar.gz\n");
+        assert_eq!(
+            parse_sha256sums(&contents, "archive.tar.gz").as_deref(),
+            Some(want)
+        );
+    }
+
+    #[test]
+    fn parse_sha256sums_returns_none_when_absent_or_malformed() {
+        let contents = "deadbeef  short-hex.tar.gz\n# a comment\n";
+        assert!(parse_sha256sums(contents, "short-hex.tar.gz").is_none());
+        assert!(parse_sha256sums(contents, "missing.tar.gz").is_none());
+    }
+
+    #[test]
+    fn asset_filename_from_url_strips_path_and_query() {
+        assert_eq!(
+            asset_filename_from_url(
+                "https://example.com/releases/download/v0.5.3/archive.tar.gz?token=abc"
+            )
+            .as_deref(),
+            Some("archive.tar.gz")
+        );
+        assert_eq!(
+            asset_filename_from_url("https://example.com/").as_deref(),
+            None
+        );
+    }
+
+    #[test]
+    fn find_sha256sums_url_locates_asset() {
+        let release = serde_json::json!({
+            "assets": [
+                {"name": "archive.tar.gz", "browser_download_url": "https://example.com/a.tgz"},
+                {"name": "SHA256SUMS", "browser_download_url": "https://example.com/SHA256SUMS"}
+            ]
+        });
+        assert_eq!(
+            find_sha256sums_url(&release).as_deref(),
+            Some("https://example.com/SHA256SUMS")
+        );
+        let no_sums = serde_json::json!({"assets": [{"name": "x", "browser_download_url": "u"}]});
+        assert!(find_sha256sums_url(&no_sums).is_none());
+    }
+
+    // -- pre-swap smoke test -----------------------------------------------
+
+    #[cfg(unix)]
+    fn write_exec_script(dir: &Path, name: &str, body: &[u8]) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join(name);
+        std::fs::write(&path, body).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn smoke_test_passes_when_binary_runs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = write_exec_script(
+            tmp.path(),
+            "ok-bin",
+            b"#!/bin/sh\necho 'birdnet-behavior 9.9.9'\nexit 0\n",
+        );
+        assert!(smoke_test_binary(&bin).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn smoke_test_fails_on_nonzero_exit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = write_exec_script(tmp.path(), "broken-bin", b"#!/bin/sh\nexit 3\n");
+        assert!(matches!(
+            smoke_test_binary(&bin).unwrap_err(),
+            UpdateError::SmokeTest(_)
+        ));
+    }
+
+    #[test]
+    fn smoke_test_errors_when_binary_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("does-not-exist");
+        assert!(matches!(
+            smoke_test_binary(&missing).unwrap_err(),
+            UpdateError::SmokeTest(_)
+        ));
     }
 }
