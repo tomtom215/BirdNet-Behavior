@@ -26,7 +26,7 @@ There are two supported ways to install BirdNet-Behavior. **Docker is the fastes
   - a USB microphone or USB sound card (`arecord` from `alsa-utils`), or
   - an IP camera or any RTSP stream (`ffmpeg`).
 
-The BirdNET+ V3.0 model (~541 MB) and species labels are downloaded automatically from Zenodo on first run — you never pick, locate, or install a model yourself.
+The BirdNET+ V3.0 model (~541 MB) and species labels are downloaded automatically on first run — sha256-verified, from the same GitHub release line as the binary, with Zenodo (the upstream source) as a fallback. You never pick, locate, or install a model yourself.
 
 ## Option 1 — Docker quick start (recommended)
 

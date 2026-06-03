@@ -2,7 +2,7 @@
 
 **Real-time acoustic bird classification with behavioral analytics — written in Rust, runs on a Raspberry Pi.**
 
-BirdNet-Behavior listens to your microphone or RTSP camera, identifies birds in real time with the BirdNET+ neural network, and serves a fast, beautiful web dashboard you open in any browser. It ships as a **single static binary** — no Python, no pip, no virtualenv. Drop it on a Pi and run it.
+BirdNet-Behavior listens to your microphone or RTSP camera, identifies birds in real time with the BirdNET+ neural network, and serves a fast, beautiful web dashboard you open in any browser. It ships as **one self-contained binary** — the ONNX Runtime and DuckDB analytics engine are compiled in, so there's no Python, no `pip`, no virtualenv. Drop it on a modern 64-bit Pi and run it.
 
 ![The BirdNet-Behavior dashboard](./images/dashboard.png)
 
@@ -23,11 +23,12 @@ BirdNet-Behavior is a ground-up Rust rewrite of [BirdNET-Pi](https://github.com/
 
 | | BirdNET-Pi (Python) | BirdNet-Behavior (Rust) |
 |---|---|---|
-| Memory | 400–600 MB | ~20–50 MB |
-| Cold start | 5–15 s | < 1 s |
-| Dependencies | pip + venv + system libs | None — one binary |
-| Upgrade | pip breakage, virtualenv rot | copy one file |
-| Concurrency | GIL-constrained | Lock-free parallel audio |
+| Runtime | CPython interpreter + virtualenv | One native binary — no interpreter |
+| Install | `pip` into a venv + system packages | one file, or one `curl … \| sudo bash` |
+| Upgrade | re-resolve pip dependencies | replace one file |
+| Inference | TensorFlow Lite (Python) | ONNX Runtime, linked in-process |
+| Analytics | — | DuckDB behavioral engine, built in |
+| Each release ships | — | signed SLSA provenance + CycloneDX SBOM |
 
 > It is a **clean rewrite, not a fork.** See [Credits & License](./about.md) for full attribution.
 

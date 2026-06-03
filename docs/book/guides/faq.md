@@ -2,11 +2,11 @@
 
 ## Is it accurate? Which model does it use?
 
-It uses the **BirdNET+ V3.0** model — the same neural network as upstream BirdNET, so identification accuracy matches BirdNET-Pi. The model (~541 MB) downloads automatically from Zenodo on first run.
+It uses the **BirdNET+ V3.0** model — the same neural network as upstream BirdNET, so identification accuracy matches BirdNET-Pi. The model (~541 MB) downloads automatically on first run — sha256-verified, from the same GitHub release line as the binary, falling back to Zenodo (the upstream source) if that asset is unavailable.
 
 ## Do I need a Raspberry Pi?
 
-No. It runs on any x86_64 Linux machine too. The Pi 5 is recommended; the Pi 4B/400 are fully supported, and the 3B+ works on the **64-bit** Pi OS (tight on RAM — see [Hardware](../getting-started/hardware.md)). The binary is tiny (~20–50 MB of RAM at runtime), so it's happy on modest hardware.
+No. It runs on any x86_64 Linux machine too. The Pi 5 is recommended; the Pi 4B/400 are fully supported, and the 3B+ works on the **64-bit** Pi OS (tight on RAM — see [Hardware](../getting-started/hardware.md)). There's no Python interpreter or virtualenv overhead around the model, so it's happy on modest hardware.
 
 ## Does it work offline / without internet?
 
