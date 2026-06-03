@@ -109,8 +109,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && apt-get install -y --no-install-recommends \
         cmake \
         g++ \
+        imagemagick \
         libasound2-dev \
-        pkg-config
+        pkg-config \
+        pngquant
 
 # Cook dependencies — this layer is only invalidated when Cargo.lock or a
 # workspace manifest changes.  Cook the entire workspace so every
@@ -166,6 +168,23 @@ RUN set -eu; \
 RUN install -D -m 0755 target/release/birdnet-behavior \
         /staging/usr/local/bin/birdnet-behavior
 
+# Stage the operator manual the binary serves at /help/*. build.rs rendered the
+# mdBook into docs/book/_generated/html during the cargo build above. Downscale
+# only this baked-in copy of the screenshots (the committed source — and thus
+# the GitHub Pages site — stays full-res), then stage it; the runtime stage
+# points BNB_HELP_DIR here. `test -d` fails the build loudly if the render is
+# ever missing, so a docs regression can't silently ship a help-less image. The
+# downscale itself is best-effort (|| true) — a tooling hiccup must not fail the
+# release build, it just leaves those images at full size.
+RUN set -eu; \
+    test -d docs/book/_generated/html; \
+    find docs/book/_generated/html/images -type f -name '*.png' -print0 \
+        | xargs -0 -r mogrify -resize '1000x>' -strip || true; \
+    find docs/book/_generated/html/images -type f -name '*.png' -print0 \
+        | xargs -0 -r pngquant --force --skip-if-larger --quality=65-90 --ext .png || true; \
+    install -d /staging/usr/local/share/birdnet-behavior; \
+    cp -a docs/book/_generated/html /staging/usr/local/share/birdnet-behavior/help
+
 # -----------------------------------------------------------------------------
 # Stage 4 — runtime
 #
@@ -195,8 +214,13 @@ ARG DEBIAN_CODENAME
 ARG BUILD_FEATURES="analytics"
 
 # Environment knobs
+# BNB_HELP_DIR points the /help/* ServeDir at the operator manual staged from
+# the builder (see the "Stage the operator manual" step). Without it the binary
+# would look for docs/book/_generated/html relative to WORKDIR (/data), which
+# the image doesn't carry, so /help/* would 404.
 ENV BIRDNET_LISTEN=0.0.0.0:8502 \
     BIRDNET_MODEL_DIR=/data/model \
+    BNB_HELP_DIR=/usr/local/share/birdnet-behavior/help \
     RUST_BACKTRACE=1
 
 # Install runtime packages and create a non-root user in a single layer so

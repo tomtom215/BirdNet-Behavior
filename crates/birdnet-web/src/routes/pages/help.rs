@@ -49,6 +49,10 @@
 use std::path::PathBuf;
 
 use axum::Router;
+use axum::extract::Request;
+use axum::http::Uri;
+use axum::middleware::Next;
+use axum::response::Response;
 use tower_http::services::ServeDir;
 
 use crate::state::AppState;
@@ -71,9 +75,53 @@ fn help_dir() -> PathBuf {
 /// page router. If the resolved directory doesn't exist, the route still
 /// mounts cleanly — `ServeDir` returns 404 for every request, which the
 /// drawer JS surfaces as the "docs unavailable" friendly message.
+///
+/// A small middleware rewrites extensionless page URLs — the clean form
+/// `Topic::href()` and every in-app help link use, e.g. `/help/guide/dashboard`
+/// — to the `.html` file mdBook actually emits (`guide/dashboard.html`).
+/// `ServeDir` never appends `.html`, so without this every deep help link would
+/// 404. `/help/` (served as `index.html`) and asset requests (`.css`, `.png`,
+/// `.woff2`, …) pass through untouched.
 pub fn router() -> Router<AppState> {
     let dir = help_dir();
-    Router::new().nest_service("/help", ServeDir::new(dir))
+    Router::new()
+        .nest_service("/help", ServeDir::new(dir))
+        .layer(axum::middleware::from_fn(rewrite_extensionless_help))
+}
+
+/// If `path` is an extensionless `/help/…` page URL, return it with `.html`
+/// appended; otherwise `None` (the request passes through unchanged).
+///
+/// Pure, so the URL logic is unit-tested without spinning up a server.
+fn help_html_rewrite(path: &str) -> Option<String> {
+    let rest = path.strip_prefix("/help/")?;
+    let last = rest.rsplit('/').next().unwrap_or_default();
+    // Skip `/help/` itself (ServeDir serves its `index.html`) and anything that
+    // already carries an extension — the `.html` pages plus css/js/png/woff2
+    // assets mdBook references with relative paths.
+    if last.is_empty() || last.contains('.') {
+        return None;
+    }
+    Some(format!("{path}.html"))
+}
+
+/// Rewrite an extensionless `/help/…` request to the `.html` file mdBook emits
+/// before it reaches `ServeDir`. See [`router`].
+async fn rewrite_extensionless_help(mut req: Request, next: Next) -> Response {
+    if let Some(new_path) = help_html_rewrite(req.uri().path()) {
+        let query = req
+            .uri()
+            .query()
+            .map_or_else(String::new, |q| format!("?{q}"));
+        if let Ok(path_and_query) = format!("{new_path}{query}").parse() {
+            let mut parts = req.uri().clone().into_parts();
+            parts.path_and_query = Some(path_and_query);
+            if let Ok(uri) = Uri::from_parts(parts) {
+                *req.uri_mut() = uri;
+            }
+        }
+    }
+    next.run(req).await
 }
 
 /// Stable identifier for a docs page. Maps 1:1 to `docs/book/<section>/<page>.md`.
@@ -212,6 +260,36 @@ pub fn help_drawer(topic: Topic, label: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn help_rewrite_appends_html_to_page_urls() {
+        assert_eq!(
+            help_html_rewrite("/help/guide/dashboard").as_deref(),
+            Some("/help/guide/dashboard.html")
+        );
+        assert_eq!(
+            help_html_rewrite("/help/admin/settings").as_deref(),
+            Some("/help/admin/settings.html")
+        );
+        assert_eq!(
+            help_html_rewrite("/help/guides/tuning").as_deref(),
+            Some("/help/guides/tuning.html")
+        );
+    }
+
+    #[test]
+    fn help_rewrite_passes_through_index_assets_and_non_help() {
+        // `/help/` is served as index.html by ServeDir's directory handling.
+        assert_eq!(help_html_rewrite("/help/"), None);
+        // Already-.html pages and static assets keep their path verbatim.
+        assert_eq!(help_html_rewrite("/help/guide/dashboard.html"), None);
+        assert_eq!(help_html_rewrite("/help/css/app.css"), None);
+        assert_eq!(help_html_rewrite("/help/images/dashboard.png"), None);
+        assert_eq!(help_html_rewrite("/help/fonts/open-sans.woff2"), None);
+        // Non-help paths are never touched.
+        assert_eq!(help_html_rewrite("/api/v2/health"), None);
+        assert_eq!(help_html_rewrite("/"), None);
+    }
 
     #[test]
     fn every_topic_has_unique_href() {
