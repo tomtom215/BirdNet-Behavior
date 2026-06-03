@@ -70,6 +70,31 @@ digest, then merges to one multi-arch manifest tagged
 The manifest is **signed with keyless cosign** (GitHub OIDC → Fulcio +
 Rekor), with buildx `provenance` and `sbom` attestations attached.
 
+## The shared model release (`models-v3.0-preview3`)
+
+The ~541 MB BirdNET+ V3.0 model + labels are **not** attached to each app
+release. They live in one stable, arch-independent GitHub release —
+`models-v3.0-preview3` — that every app release's `install.sh` and Docker
+entrypoint pull from (sha256-verified), falling back to Zenodo (the upstream
+source) when that asset is absent or unreachable. The model is identical across
+app versions, so it is uploaded **once**, not re-pushed per patch (which also
+keeps each app release lean and provenance focused on the binaries).
+
+Publish or refresh it with the **`publish-model.yml`** workflow (Actions →
+*Publish model release* → *Run workflow*). It mirrors the files from Zenodo,
+**fails unless their sha256 matches the values pinned in
+`installer/lib/10-config.sh`** (so the published asset and the installer's
+verification hash can never drift), writes a `SHA256SUMS`, attaches a SLSA
+build-provenance attestation, and creates/updates the release idempotently
+(marked non-latest so it never shadows the app release's *Latest* badge).
+
+Run it again only when the model file or its pinned checksums change: bump
+`MODEL_RELEASE_TAG` + `MODEL_SHA256` + `LABELS_SHA256` in
+`installer/lib/10-config.sh` (and the matching constants in
+`docker/entrypoint.sh`) first, then dispatch the workflow with the new tag.
+A fresh release line whose model release has not been published yet still
+installs cleanly — the installer simply falls back to Zenodo until it exists.
+
 ## Rehearsing a release (dry run)
 
 `release.yml` has a `workflow_dispatch` entry. Triggering it from the
@@ -149,6 +174,9 @@ isn't half-done:
   starts changing incompatibly between releases.)
 - **Crates.io publishing.** Not published to crates.io (this is an
   application, not a library).
+- **The shared model release.** `publish-model.yml` is a manual, one-shot
+  workflow run per *model* version, not per app release — see "The shared model
+  release" above. A normal app release never touches it.
 
 ## Troubleshooting
 

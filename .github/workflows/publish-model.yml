@@ -1,0 +1,235 @@
+# Publish the shared BirdNET+ model release.
+#
+# This workflow mirrors the ~541 MB BirdNET+ V3.0 model + labels from Zenodo
+# (the upstream source) into a **stable, arch-independent GitHub release** that
+# every app release's install.sh / Docker entrypoint pulls from. It is run
+# **once per model version** (manually, via the "Run workflow" button), not on
+# every app release — the model is identical across app versions, so re-uploading
+# 541 MB per patch would be pure waste. Re-run it only if the model file or its
+# pinned checksums in installer/lib/10-config.sh change.
+#
+# What it guarantees:
+#   * The bytes published to GitHub are byte-for-byte the bytes pinned in
+#     installer/lib/10-config.sh (MODEL_SHA256 / LABELS_SHA256) — the job fails
+#     if Zenodo's content does not match, so the release asset and the
+#     installer's verification hash can never drift.
+#   * The release carries a SHA256SUMS asset and a SLSA build-provenance
+#     attestation over the model + labels, so consumers can verify both.
+#
+# Why a separate release (not an asset on each vX.Y.Z release): the model is
+# arch- and app-version-independent. One stable `models-v3.0-preview3` release
+# is uploaded once and referenced by all app releases (installer falls back to
+# Zenodo for older app releases whose line predates this release). GitHub caps a
+# single asset at 2 GB; 541 MB is comfortably under it.
+#
+# See RELEASING.md → "The shared model release" for the runbook.
+
+name: Publish model release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag for the model assets (must match MODEL_RELEASE_TAG in installer/lib/10-config.sh)."
+        required: false
+        default: "models-v3.0-preview3"
+        type: string
+
+# Never run two publishes for the same tag at once.
+concurrency:
+  group: publish-model-${{ inputs.tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish-model:
+    name: Mirror model from Zenodo and publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write     # create the release + upload assets
+      id-token: write     # OIDC token for SLSA attestation
+      attestations: write # attach the attestation to the repository
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Read model metadata from installer config
+        id: cfg
+        shell: bash
+        env:
+          WANT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          cfg="installer/lib/10-config.sh"
+
+          # installer/lib/10-config.sh is the single source of truth for the
+          # filenames, the Zenodo record, the model release tag, and the pinned
+          # sha256 hashes. Parse them here so this workflow and the installer can
+          # never disagree about what "the model" is.
+          record=$(grep -oP '^ZENODO_RECORD="\K[0-9]+'              "$cfg")
+          model_file=$(grep -oP '^MODEL_FILE="\K[^"]+'             "$cfg")
+          labels_file=$(grep -oP '^LABELS_FILE="\K[^"]+'           "$cfg")
+          model_sha=$(grep -oP '^MODEL_SHA256="\K[0-9a-f]{64}'     "$cfg")
+          labels_sha=$(grep -oP '^LABELS_SHA256="\K[0-9a-f]{64}'   "$cfg")
+          cfg_tag=$(grep -oP '^MODEL_RELEASE_TAG="\K[^"]+'         "$cfg")
+
+          # The dispatch input must match the tag the installer points at, or we
+          # would publish assets nobody fetches.
+          want_tag="${WANT_TAG}"
+          if [[ "$want_tag" != "$cfg_tag" ]]; then
+            echo "::error::Input tag '$want_tag' != MODEL_RELEASE_TAG '$cfg_tag' in $cfg."
+            echo "Update one so they match before publishing."
+            exit 1
+          fi
+
+          for v in record model_file labels_file model_sha labels_sha; do
+            if [[ -z "${!v}" ]]; then
+              echo "::error::Could not parse '$v' from $cfg"
+              exit 1
+            fi
+          done
+
+          {
+            echo "record=$record"
+            echo "model_file=$model_file"
+            echo "labels_file=$labels_file"
+            echo "model_sha=$model_sha"
+            echo "labels_sha=$labels_sha"
+            echo "tag=$cfg_tag"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "::group::Model metadata"
+          echo "tag=$cfg_tag  record=$record"
+          echo "model=$model_file ($model_sha)"
+          echo "labels=$labels_file ($labels_sha)"
+          echo "::endgroup::"
+
+      - name: Download model + labels from Zenodo
+        shell: bash
+        env:
+          RECORD: ${{ steps.cfg.outputs.record }}
+          MODEL_FILE: ${{ steps.cfg.outputs.model_file }}
+          LABELS_FILE: ${{ steps.cfg.outputs.labels_file }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          base="https://zenodo.org/api/records/${RECORD}/files"
+
+          echo "Fetching ${MODEL_FILE} (~541 MB)…"
+          curl -fSL --retry 5 --retry-delay 5 --retry-all-errors \
+            -o "dist/${MODEL_FILE}" "${base}/${MODEL_FILE}/content"
+
+          echo "Fetching ${LABELS_FILE}…"
+          curl -fSL --retry 5 --retry-delay 5 --retry-all-errors \
+            -o "dist/${LABELS_FILE}" "${base}/${LABELS_FILE}/content"
+
+          ls -lh dist/
+
+      - name: Verify Zenodo bytes against the pinned checksums
+        shell: bash
+        env:
+          MODEL_FILE: ${{ steps.cfg.outputs.model_file }}
+          LABELS_FILE: ${{ steps.cfg.outputs.labels_file }}
+          MODEL_SHA: ${{ steps.cfg.outputs.model_sha }}
+          LABELS_SHA: ${{ steps.cfg.outputs.labels_sha }}
+        run: |
+          set -euo pipefail
+          cd dist
+          # If these fail, Zenodo's content no longer matches the hashes pinned
+          # in the installer — either the upstream file changed (bump the pins +
+          # the release tag) or the download was corrupted. Either way, do not
+          # publish a mismatched asset.
+          echo "${MODEL_SHA}  ${MODEL_FILE}"   | sha256sum -c -
+          echo "${LABELS_SHA}  ${LABELS_FILE}" | sha256sum -c -
+          echo "Checksums match the pinned values in installer/lib/10-config.sh."
+
+      - name: Generate SHA256SUMS
+        shell: bash
+        working-directory: dist
+        env:
+          MODEL_FILE: ${{ steps.cfg.outputs.model_file }}
+          LABELS_FILE: ${{ steps.cfg.outputs.labels_file }}
+        run: |
+          set -euo pipefail
+          sha256sum "${MODEL_FILE}" "${LABELS_FILE}" | tee SHA256SUMS
+
+      - name: Attest build provenance (SLSA)
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: |
+            dist/${{ steps.cfg.outputs.model_file }}
+            dist/${{ steps.cfg.outputs.labels_file }}
+
+      - name: Create or update the model release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.cfg.outputs.tag }}
+          MODEL_FILE: ${{ steps.cfg.outputs.model_file }}
+          LABELS_FILE: ${{ steps.cfg.outputs.labels_file }}
+          MODEL_SHA: ${{ steps.cfg.outputs.model_sha }}
+          LABELS_SHA: ${{ steps.cfg.outputs.labels_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TITLE="BirdNET+ V3.0 model assets (developer preview 3)"
+
+          # Release body. This is a *data* release shared by every app release —
+          # mark it non-latest so it never shadows the app release's "Latest"
+          # badge.
+          {
+            echo "Shared, arch-independent BirdNET+ V3.0 (developer preview 3) model"
+            echo "assets, mirrored from the upstream Zenodo record"
+            echo "(<https://doi.org/10.5281/zenodo.18247420>) so that \`install.sh\` and"
+            echo "the Docker entrypoint fetch the binary **and** the model from the same"
+            echo "host (GitHub). Every app release references this one release; it is not"
+            echo "re-uploaded per app version."
+            echo ""
+            echo "The model is the FP32 ONNX BirdNET-Pi also uses (~541 MB), and works on"
+            echo "every platform. The installer verifies each file against the sha256 below"
+            echo "before accepting it, and falls back to Zenodo if these assets are absent."
+            echo ""
+            echo "### Files"
+            echo ""
+            echo "| File | sha256 |"
+            echo "|------|--------|"
+            echo "| \`${MODEL_FILE}\` | \`${MODEL_SHA}\` |"
+            echo "| \`${LABELS_FILE}\` | \`${LABELS_SHA}\` |"
+            echo ""
+            echo "### Verify"
+            echo ""
+            echo '```bash'
+            echo "sha256sum -c SHA256SUMS"
+            echo "gh attestation verify --repo ${{ github.repository }} ${MODEL_FILE}"
+            echo '```'
+            echo ""
+            echo "### License"
+            echo ""
+            echo "The BirdNET+ V3.0 developer-preview model and labels are © their"
+            echo "authors (Lasseck, Eibl, Klinck, Kahl) and licensed **CC-BY-SA-4.0**;"
+            echo "this release only mirrors them. See the upstream record's"
+            echo "\`TERMS_OF_USE.txt\` and <https://github.com/birdnet-team/birdnet-V3.0-dev>."
+          } > release_body.md
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::warning::Release ${TAG} already exists — updating in place."
+            gh release edit "$TAG" \
+              --title "$TITLE" \
+              --notes-file release_body.md \
+              --latest=false
+            gh release upload "$TAG" --clobber \
+              "dist/${MODEL_FILE}" \
+              "dist/${LABELS_FILE}" \
+              dist/SHA256SUMS
+          else
+            gh release create "$TAG" \
+              --title "$TITLE" \
+              --notes-file release_body.md \
+              --latest=false \
+              "dist/${MODEL_FILE}" \
+              "dist/${LABELS_FILE}" \
+              dist/SHA256SUMS
+          fi
+
+          echo "::notice::Published model release ${TAG}"

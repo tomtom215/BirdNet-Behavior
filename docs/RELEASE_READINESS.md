@@ -8,9 +8,9 @@ it can be picked up cold: every item carries evidence (`file:line`), root cause,
 effort/risk, blockers, and how to verify. Companion to `docs/RELEASE_PUNCHLIST.md` (the
 functional punchlist, which is essentially complete — only P3-4 cosmetics remain there).
 
-_Last audited: 2026-06-02, against working branch `claude/epic-wozniak-iLHW8` ==
-integration tip `claude/gallant-feynman-bJs95` (`4116f64`, after PR #138). Re-run the
-inventory greps if the tree has moved._
+_Last audited: 2026-06-03, against integration tip `claude/gallant-feynman-bJs95` (`dc7d3c1`,
+after PR #139); G-13 (model bundling) landed this cycle. Re-run the inventory greps if the tree
+has moved._
 
 ---
 
@@ -69,7 +69,7 @@ the integration-test and first-run-UX holes.
 
 | Done-bar criterion | Status |
 |---|---|
-| Clean target runs one-liner → recording + classifying + analytics dashboard, zero manual steps | ✅ *with internet* (model is a separate 541 MB Zenodo fetch — see G-13) on **Trixie/glibc ≥ 2.39**; ❌ on Pi OS **Bookworm** natively (G-14) |
+| Clean target runs one-liner → recording + classifying + analytics dashboard, zero manual steps | ✅ *with internet* (binary + model both from one GitHub origin, sha256-verified, resumable, Zenodo fallback — G-13 done) on **Trixie/glibc ≥ 2.39**; ❌ on Pi OS **Bookworm** natively (G-14) |
 | Killing the process auto-restarts it | ✅ `Restart=always`, `RestartSec=10` |
 | Reboot brings it back | ✅ `systemctl enable` |
 | Audio unplug degrades gracefully + self-recovers | ✅ supervisor, capped backoff, UI gauge |
@@ -96,7 +96,7 @@ Verdicts: ✅ EXISTS (solid) · 🟡 PARTIAL · ❌ MISSING. Evidence is `file:l
 | Arch detection (Pi 5/4B/400, x86_64) | ✅ | `installer/lib/30-platform.sh:50` `detect_arch()`; rejects armv6/armv7 with guidance |
 | Prebuilt-binary fetch (no on-device compile) | ✅ | `installer/lib/50-binary.sh:11`; GH Releases URL; `sha256sum -c SHA256SUMS` verify |
 | ONNX Runtime in the binary | ✅ static | `ort` `download-binaries` links `libonnxruntime.a` at **build** time; released tarball ships **binary only** and runs (empirically confirmed by v0.5.x field installs) |
-| Models/labels embedded | ❌ | `installer/lib/55-model.sh:5` downloads ~541 MB from Zenodo on first install — **not** bundled (G-13) |
+| Models/labels as shared GitHub asset, sha256-verified | ✅ | `installer/lib/55-model.sh` + `docker/entrypoint.sh` fetch the ~541 MB model from the stable `models-v3.0-preview3` GitHub release (same origin as the binary, resumable), verify the pinned sha256, fall back to Zenodo; published once by `publish-model.yml` (G-13) |
 | Web assets / fonts | ✅ | server-rendered (axum/HTMX); self-hosted fonts; no separate bundling needed |
 | Help docs embedded | ✅ | `build.rs` renders mdBook into `_generated/html/`, served at `/help/*` |
 | Analytics ON by default | ✅ | `installer/lib/65-service.sh:90` hardcodes `--analytics-db …`; release built `--features analytics` |
@@ -303,7 +303,24 @@ fault-injection: corrupt analytics.db → next start rebuilds.
 store-and-forward queue for missed publishes (Apprise-style), or document fire-and-forget as
 intended. **Verify:** broker-down test drops nothing within the bound.
 
-**G-13 — Model bundling / one-fetch offline.** *(Track A · P2 · M · low)* **Blocked-by:** D-2.
+**G-13 — Model bundling / one-fetch offline.** *(Track A · P2 · M · low)* ✅ **DONE (decision D-2 =
+"stable shared GitHub release asset").** The ~541 MB BirdNET+ V3.0 model + labels now publish to a
+single, stable, arch-independent GitHub release (`models-v3.0-preview3`) via the new
+`.github/workflows/publish-model.yml` — it mirrors the files from Zenodo, **fails unless their
+sha256 matches the values pinned in `installer/lib/10-config.sh`** (so the asset and the installer's
+verification hash can never drift), writes `SHA256SUMS`, attaches a SLSA attestation, and
+creates/updates the release idempotently (non-latest, so it never shadows the app release). The
+bare-metal installer (`installer/lib/55-model.sh`) and the Docker entrypoint
+(`docker/entrypoint.sh`) now fetch from that GitHub release **first** (same origin as the binary,
+resumable `download_large`), **verify every file against the pinned sha256**, and **fall back to
+Zenodo** when the asset is absent (older release lines) or unreachable — so the model is uploaded
+once, not per app release, and a fresh install needs a single network origin and is offline-capable
+afterwards. Verified in a real run (local GitHub stand-in + live Zenodo): GitHub-primary
+fetch+verify (Zenodo untouched), a tampered asset is detected and falls back, a file that fails on
+**both** origins is **never** left on disk (fatal), and a GitHub 404 falls back to live Zenodo —
+11/11 assertions green. Mirrored in README, RELEASING.md ("The shared model release"), the release
+notes, and quickstart. **Operational note:** publish `models-v3.0-preview3` (run the workflow) so
+0.6.0+ installs hit GitHub first; until then they transparently fall back to Zenodo.
 
 **G-14 — glibc / Bookworm portability.** *(Track A · P1 · M–L · med)* **Blocked-by:** D-1.
 
@@ -330,7 +347,7 @@ intended. **Verify:** broker-down test drops nothing within the bound.
   - PR9: **G-07** doctor self-heal (`--fix`) — ✅ done.
 - **Wave 4 — portability & offline *(pending D-1/D-2)*.**
   - PR10: **G-14** glibc/Bookworm.
-  - PR11: **G-13** model bundling.
+  - PR11: **G-13** model bundling — ✅ done (shared `models-v3.0-preview3` GitHub release; installer + Docker fetch GitHub-first, sha256-verified, resumable, Zenodo fallback; `publish-model.yml`).
 - **Wave 5 — polish.**
   - PR12: **G-10** cosmetics + a11y sweep; **G-11** DuckDB resilience; **G-12** MQTT buffer.
 

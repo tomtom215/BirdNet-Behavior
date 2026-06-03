@@ -338,7 +338,7 @@ ok "Container started"
 # ---------------------------------------------------------------------------
 hdr "Waiting for the web server to come up"
 say "On first run, the container downloads the BirdNET+ V3.0 model"
-say "(${MODEL_SIZE_HINT}) from Zenodo. That takes:"
+say "(${MODEL_SIZE_HINT}), sha256-verified, from GitHub (Zenodo fallback). That takes:"
 say "    • fibre:           ~1 min"
 say "    • home broadband:  5-15 min"
 say ""

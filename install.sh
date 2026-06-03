@@ -107,12 +107,33 @@ REQUIRED_FREE_MB=900
 # so we know to restart it afterwards rather than leave it down.
 SERVICE_WAS_RUNNING=0
 
-# BirdNET+ V3.0 model files (Zenodo — direct download, no login required).
-# FP32 ONNX (~541 MB): same model used by BirdNET-Pi, works on all platforms.
-ZENODO_RECORD="18247420"
+# BirdNET+ V3.0 model files. FP32 ONNX (~541 MB): the same model BirdNET-Pi
+# uses, arch-independent and working on every platform.
+#
+# Primary origin is a stable, arch-independent GitHub release shared by all app
+# releases (uploaded once, never re-pushed per patch), so a fresh install pulls
+# the binary AND the model from the same host (GitHub) and is offline-capable
+# after that single fetch. Zenodo is the upstream source and the fallback when
+# the GitHub asset is absent (older app releases) or unreachable.
+#
+# Both files are verified against the pinned sha256 below regardless of which
+# origin served them — these hashes are the integrity root of trust (they live
+# in version-controlled, provenance-attested source), so a corrupted or tampered
+# download from either host is rejected. The same hashes are published as the
+# `SHA256SUMS` asset of the models release; publish-model.yml cross-checks the
+# Zenodo bytes against these values before it uploads, so the two never drift.
 MODEL_FILE="BirdNET+_V3.0-preview3_Global_11K_FP32.onnx"
 LABELS_FILE="BirdNET+_V3.0-preview3_Global_11K_Labels.csv"
-# Use the Zenodo API content endpoint (handles + in filenames correctly).
+MODEL_SHA256="2a0f9efba1a98e3193ad3dfcb8323116a7de88e39545f3619a7ea46e3bb7d743"
+LABELS_SHA256="8124b0ea2d187104c5e2cd95a0f937165647e20349c8fd34d4d5ef991821f8f0"
+
+# Primary origin: the stable GitHub models release (one per model version).
+MODEL_RELEASE_TAG="models-v3.0-preview3"
+MODEL_GH_BASE="https://github.com/${REPO}/releases/download/${MODEL_RELEASE_TAG}"
+
+# Fallback origin: Zenodo. The API /content endpoint handles the + in the
+# filenames correctly and needs no login.
+ZENODO_RECORD="18247420"
 ZENODO_API="https://zenodo.org/api/records/${ZENODO_RECORD}/files"
 
 # Colour codes (used only when stdout is a terminal)
@@ -602,8 +623,89 @@ install_binary() {
 
 # ===== installer/lib/55-model.sh =====
 # ---------------------------------------------------------------------------
-# Download BirdNET+ V3.0 model from Zenodo
+# Download the BirdNET+ V3.0 model + labels.
+#
+# Origin: the stable, arch-independent `models-v3.0-preview3` GitHub release
+# (so the binary and the model are fetched from the *same* host and the install
+# is offline-capable after that one fetch), falling back to Zenodo — the
+# upstream source — when the GitHub asset is missing (e.g. installing an older
+# app release whose line predates the model release) or unreachable.
+#
+# Whichever host serves the bytes, each file is verified against the sha256
+# pinned in 10-config.sh before it is accepted: those hashes are the integrity
+# root of trust (they live in version-controlled, provenance-attested source),
+# so a corrupted or tampered download from either origin is rejected and the
+# next source is tried. The same hashes are published as the `SHA256SUMS` asset
+# of the models release.
 # ---------------------------------------------------------------------------
+
+# Verify that FILE has the expected sha256. Returns 0 on a match, 1 on a
+# mismatch. If sha256sum is somehow unavailable (it is part of coreutils, which
+# preflight requires) we warn and treat the file as unverifiable rather than
+# blocking the install — consistent with install_binary's checksum handling.
+verify_model_sha256() {
+    local file="$1" expected="$2"
+    if ! command -v sha256sum &>/dev/null; then
+        warn "sha256sum not found — cannot verify $(basename "${file}") integrity."
+        return 0
+    fi
+    local actual
+    actual="$(sha256sum "${file}" | awk '{print $1}')"
+    if [ "${actual}" = "${expected}" ]; then
+        return 0
+    fi
+    warn "  Checksum mismatch for $(basename "${file}")"
+    warn "    expected: ${expected}"
+    warn "    actual:   ${actual}"
+    return 1
+}
+
+# Fetch one model file, trying GitHub first then Zenodo, and verify it against
+# its pinned sha256. The downloaded file is only accepted once the checksum
+# matches; a mismatch discards it and falls through to the next source.
+#
+#   fetch_verified_model DEST FILENAME EXPECTED_SHA HUMAN_NAME RESUMABLE
+#
+# RESUMABLE=1 routes through download_large (resume + progress bar) for the
+# ~541 MB model; any other value uses the plain download helper (small labels).
+# Returns 0 once a verified copy is in place, 1 if every source failed.
+fetch_verified_model() {
+    local dest="$1" filename="$2" expected_sha="$3" human="$4" resumable="$5"
+    local src url label
+
+    for src in github zenodo; do
+        if [ "${src}" = "github" ]; then
+            url="${MODEL_GH_BASE}/${filename}"
+            label="GitHub release ${MODEL_RELEASE_TAG}"
+        else
+            url="${ZENODO_API}/${filename}/content"
+            label="Zenodo"
+        fi
+
+        info "  Fetching ${human} from ${label}…"
+        if [ "${resumable}" = "1" ]; then
+            if ! download_large "${url}" "${dest}" "${human}"; then
+                warn "  ${human}: download from ${label} failed; trying the next source."
+                continue
+            fi
+        else
+            if ! download "${url}" "${dest}"; then
+                warn "  ${human}: download from ${label} failed; trying the next source."
+                continue
+            fi
+        fi
+
+        if verify_model_sha256 "${dest}" "${expected_sha}"; then
+            success "  ${human}: sha256 verified (${label})."
+            return 0
+        fi
+
+        warn "  ${human}: discarding the file from ${label} and trying the next source."
+        rm -f "${dest}"
+    done
+
+    return 1
+}
 
 download_model() {
     local model_dest="${MODEL_DIR}/${MODEL_FILE}"
@@ -615,33 +717,37 @@ download_model() {
         return
     fi
 
-    info "Downloading BirdNET+ V3.0 model (~541 MB FP32 ONNX) from Zenodo…"
-    info "  This may take a few minutes on a slow connection."
+    info "Fetching the BirdNET+ V3.0 model (~541 MB FP32 ONNX) + labels…"
+    info "  Primary source: GitHub release ${MODEL_RELEASE_TAG} (sha256-verified)."
+    info "  Fallback:       Zenodo. This may take a few minutes on a slow link."
 
     install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${MODEL_DIR}"
 
-    # Model (Zenodo API /content endpoint handles + in filenames correctly).
-    # Uses download_large so a dropped connection picks up where it left off
-    # on the next run instead of restarting from 0 MB.
+    # Model (~541 MB) — resumable so a dropped connection picks up where it left
+    # off on the next run instead of restarting from 0 MB.
     if [ ! -f "${model_dest}" ]; then
-        if ! download_large "${ZENODO_API}/${MODEL_FILE}/content" "${model_dest}" "BirdNET+ V3.0 model (~541 MB)"; then
-            warn "Model download was interrupted; the partial file is kept at:"
+        if ! fetch_verified_model "${model_dest}" "${MODEL_FILE}" "${MODEL_SHA256}" \
+            "BirdNET+ V3.0 model (~541 MB)" 1; then
+            warn "Model download failed or could not be verified from any source."
+            warn "Any partial file is kept at:"
             warn "  ${model_dest}"
             warn "Re-run this installer to resume from where it stopped."
-            warn "Common causes: no internet connection, Zenodo temporarily down, or disk full."
+            warn "Common causes: no internet connection, GitHub/Zenodo temporarily"
+            warn "down, or disk full."
             fatal "Model download failed. Check the cause above and retry."
         fi
         chown "${SERVICE_USER}:${SERVICE_USER}" "${model_dest}"
-        success "Model downloaded to ${model_dest}"
+        success "Model installed to ${model_dest}"
     fi
 
-    # Labels (small file — no resume needed, but keep the consistent helper).
+    # Labels (small file — no resume needed).
     if [ ! -f "${labels_dest}" ]; then
-        if ! download "${ZENODO_API}/${LABELS_FILE}/content" "${labels_dest}"; then
-            fatal "Labels download failed. Check your internet connection and retry."
+        if ! fetch_verified_model "${labels_dest}" "${LABELS_FILE}" "${LABELS_SHA256}" \
+            "species labels CSV" 0; then
+            fatal "Labels download failed or could not be verified. Check your internet connection and retry."
         fi
         chown "${SERVICE_USER}:${SERVICE_USER}" "${labels_dest}"
-        success "Labels downloaded to ${labels_dest}"
+        success "Labels installed to ${labels_dest}"
     fi
 }
 

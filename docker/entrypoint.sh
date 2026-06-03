@@ -3,9 +3,11 @@
 # BirdNet-Behavior container entrypoint
 #
 # Responsibilities:
-#   1. Auto-download the BirdNET+ V3.0 model from Zenodo (first run only)
-#      with resume support, progress logging every 15 s, and clear failure
-#      diagnostics.
+#   1. Auto-download the BirdNET+ V3.0 model on first run only, with resume
+#      support, progress logging every 15 s, sha256 verification, and clear
+#      failure diagnostics. The model is pulled from the project's stable GitHub
+#      models release (sha256-verified), falling back to Zenodo (the upstream
+#      source) when that asset is absent or unreachable.
 #   2. Set container-appropriate defaults (listen on all interfaces).
 #   3. Exec the birdnet-behavior binary, forwarding any extra arguments.
 #
@@ -60,7 +62,18 @@ remote_size() {
 MODEL_DIR="${BIRDNET_MODEL_DIR:-/data/model}"
 MODEL_FILE="BirdNET+_V3.0-preview3_Global_11K_FP32.onnx"
 LABELS_FILE="BirdNET+_V3.0-preview3_Global_11K_Labels.csv"
-ZENODO_BASE="https://zenodo.org/api/records/18247420/files"
+
+# Primary origin: the stable, arch-independent GitHub models release (shared by
+# every app release). Fallback: Zenodo, the upstream source. Each file is
+# verified against the pinned sha256 below before it is accepted, regardless of
+# which origin served it — these hashes match installer/lib/10-config.sh and the
+# models release's SHA256SUMS. (Override the origins for an air-gapped mirror via
+# BIRDNET_MODEL_BASE / BIRDNET_ZENODO_BASE.)
+MODEL_RELEASE_TAG="models-v3.0-preview3"
+GH_BASE="${BIRDNET_MODEL_BASE:-https://github.com/tomtom215/BirdNet-Behavior/releases/download/${MODEL_RELEASE_TAG}}"
+ZENODO_BASE="${BIRDNET_ZENODO_BASE:-https://zenodo.org/api/records/18247420/files}"
+MODEL_SHA256="2a0f9efba1a98e3193ad3dfcb8323116a7de88e39545f3619a7ea46e3bb7d743"
+LABELS_SHA256="8124b0ea2d187104c5e2cd95a0f937165647e20349c8fd34d4d5ef991821f8f0"
 
 # Respect explicit overrides; otherwise use the default paths under MODEL_DIR.
 : "${BIRDNET_MODEL:=${MODEL_DIR}/${MODEL_FILE}}"
@@ -68,26 +81,40 @@ ZENODO_BASE="https://zenodo.org/api/records/18247420/files"
 export BIRDNET_MODEL BIRDNET_LABELS
 
 # ---------------------------------------------------------------------------
-# Download with resume + periodic progress logging
+# sha256 verification
+# ---------------------------------------------------------------------------
+# Return 0 when FILE matches EXPECTED, 1 otherwise. If sha256sum is somehow
+# missing (it ships in coreutils) we warn and treat the file as unverifiable
+# rather than blocking startup.
+verify_sha256() {
+    file="$1"
+    expected="$2"
+    if ! command -v sha256sum >/dev/null 2>&1; then
+        warn "sha256sum not available — cannot verify ${file##*/} integrity."
+        return 0
+    fi
+    actual="$(sha256sum "$file" | awk '{print $1}')"
+    [ "$actual" = "$expected" ]
+}
+
+# ---------------------------------------------------------------------------
+# Single-URL download with resume + periodic progress logging
 # ---------------------------------------------------------------------------
 #
 # curl runs in the background so a companion loop can print a single log line
 # every 15 s (readable in `docker compose logs`, unlike the raw \r-based
 # progress meter which is unreadable in non-TTY log streams).
 #
-# Partial downloads are resumed via `--continue-at -` so that a lost
-# connection on a 500 MB fetch does not force the user to start over.
+# Partial downloads are resumed via `--continue-at -` so that a lost connection
+# on a 500 MB fetch does not force the user to start over. On success the file
+# is moved into place and 0 returned; on failure the partial is kept (for the
+# next attempt to resume) and curl's exit code returned — the caller decides
+# whether to fall back to another origin.
 # ---------------------------------------------------------------------------
-download_if_missing() {
+fetch_one() {
     dest="$1"
     url="$2"
     desc="$3"
-
-    if [ -f "$dest" ]; then
-        actual="$(wc -c < "$dest" 2>/dev/null || echo 0)"
-        log "${desc}: already cached ($(human_bytes "$actual")) — skipping download."
-        return 0
-    fi
 
     # Pre-flight: how big is the file on the server?
     total="$(remote_size "$url")"
@@ -160,19 +187,69 @@ download_if_missing() {
         return 0
     fi
 
-    # Failure path — keep the partial file so the next restart can resume.
+    # Failure path — keep the partial file so the next attempt can resume.
     partial=0
     [ -f "${tmpfile}" ] && partial="$(wc -c < "${tmpfile}" 2>/dev/null || echo 0)"
     warn "${desc}: curl exited ${rc} after ${elapsed}s"
     if [ "${partial}" -gt 0 ] 2>/dev/null; then
         warn "Partial file ($(human_bytes "${partial}")) kept at ${tmpfile}."
-        warn "The next container start will resume from where it left off."
+        warn "The next attempt will resume from where it left off."
     fi
+    return "${rc}"
+}
+
+# ---------------------------------------------------------------------------
+# Multi-origin, verified model fetch
+# ---------------------------------------------------------------------------
+#
+# Fetch DEST trying GitHub (the stable models release) first, then Zenodo (the
+# upstream source), and accept the result only once it matches EXPECTED sha256.
+# A mismatch discards the file and falls through to the next origin. Both hosts
+# serve the byte-identical file, so a partial left by a failed GitHub attempt is
+# safely resumed against Zenodo, and the final sha256 check is the backstop.
+# ---------------------------------------------------------------------------
+ensure_model_file() {
+    dest="$1"
+    gh_url="$2"
+    zenodo_url="$3"
+    expected="$4"
+    desc="$5"
+
+    if [ -f "$dest" ]; then
+        actual="$(wc -c < "$dest" 2>/dev/null || echo 0)"
+        log "${desc}: already cached ($(human_bytes "$actual")) — skipping download."
+        return 0
+    fi
+
+    for src in github zenodo; do
+        if [ "$src" = "github" ]; then
+            url="$gh_url"
+            origin="GitHub release ${MODEL_RELEASE_TAG}"
+        else
+            url="$zenodo_url"
+            origin="Zenodo"
+        fi
+
+        log "Fetching ${desc} from ${origin}…"
+        if ! fetch_one "$dest" "$url" "$desc"; then
+            warn "${desc}: ${origin} download failed — trying the next source."
+            continue
+        fi
+
+        if verify_sha256 "$dest" "$expected"; then
+            log "  ${desc}: sha256 verified (${origin})."
+            return 0
+        fi
+
+        warn "${desc}: sha256 mismatch from ${origin} — discarding and trying the next source."
+        rm -f "$dest" "${dest}.tmp"
+    done
+
     warn "Common causes:"
     warn "  • no internet in the container (check the host's DNS/firewall)"
-    warn "  • Zenodo is temporarily unreachable (retry in a few minutes)"
+    warn "  • GitHub and Zenodo both temporarily unreachable (retry shortly)"
     warn "  • the volume is out of disk (df -h on the host's docker root)"
-    die "Failed to download ${desc} from ${url}"
+    die "Failed to download a verified ${desc} from GitHub or Zenodo."
 }
 
 # ---------------------------------------------------------------------------
@@ -188,15 +265,20 @@ else
     # Announce the model source once, up front, so users know what's happening
     # even if the model is already cached and no download is needed.
     log "BirdNET+ V3.0 model directory: ${MODEL_DIR}"
+    log "Source: GitHub models release ${MODEL_RELEASE_TAG} (sha256-verified), Zenodo fallback."
 
-    download_if_missing \
+    ensure_model_file \
         "${BIRDNET_MODEL}" \
+        "${GH_BASE}/${MODEL_FILE}" \
         "${ZENODO_BASE}/${MODEL_FILE}/content" \
+        "${MODEL_SHA256}" \
         "BirdNET+ V3.0 model (ONNX)"
 
-    download_if_missing \
+    ensure_model_file \
         "${BIRDNET_LABELS}" \
+        "${GH_BASE}/${LABELS_FILE}" \
         "${ZENODO_BASE}/${LABELS_FILE}/content" \
+        "${LABELS_SHA256}" \
         "species labels CSV"
 
     log "Model ready."

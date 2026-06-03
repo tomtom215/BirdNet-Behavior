@@ -651,6 +651,16 @@ jobs:
             echo '> Docker image instead (it bundles its own runtime) or upgrade to'
             echo '> Trixie. There is no 32-bit (armv7) binary — use the 64-bit Pi OS.'
             echo ""
+            echo "### Model"
+            echo ""
+            echo 'The BirdNET+ V3.0 model (~541 MB) is not bundled in the archive.'
+            echo 'On first run, `install.sh` and the Docker image fetch it'
+            echo '(sha256-verified) from the shared, arch-independent model release'
+            echo "<https://github.com/${{ github.repository }}/releases/tag/models-v3.0-preview3>"
+            echo '— the same GitHub origin as the binary — falling back to Zenodo'
+            echo '(the upstream source) if that asset is unavailable. The install is'
+            echo 'offline-capable after that one fetch.'
+            echo ""
             echo "### Docker"
             echo ""
             echo '```bash'
