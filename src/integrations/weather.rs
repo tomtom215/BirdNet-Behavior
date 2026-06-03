@@ -4,7 +4,7 @@
 //! NOT phone home until the operator sets `BNB_WEATHER_ENABLED=1`. When
 //! enabled and station coordinates resolve, this spawns a background
 //! tokio task that calls [`birdnet_integrations::weather::Client::fetch_hourly`]
-//! every [`POLL_INTERVAL`], upserts the rows into the `weather` SQLite table,
+//! every `POLL_INTERVAL`, upserts the rows into the `weather` SQLite table,
 //! and prunes rows older than 30 days.
 //!
 //! Coordinate resolution order:
