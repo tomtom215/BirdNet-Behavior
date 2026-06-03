@@ -225,7 +225,7 @@ fn render_release(out: &mut String, r: &Release<'_>) {
 }
 
 /// Tiny inline-md renderer: backticks → `<code>`, `[label](href)` → `<a>`, escape
-/// the rest. Used for changelog bullets — does **not** support all of CommonMark.
+/// the rest. Used for changelog bullets — does **not** support all of `CommonMark`.
 fn render_inline_md(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let bytes = input.as_bytes();
