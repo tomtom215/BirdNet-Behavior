@@ -33,7 +33,7 @@
 
 A ground-up Rust rewrite of [BirdNET-Pi](https://github.com/mcguirepr89/BirdNET-Pi). It listens to a USB microphone or RTSP stream, identifies birds in real time with the BirdNET+ V3.0 neural network, and serves a fast, responsive web dashboard you open in any browser.
 
-It ships as **one self-contained binary**. The ONNX Runtime inference engine and the DuckDB analytics engine are compiled in — there is no Python, no `pip`, no virtualenv, and nothing else to install. The binary links against the host's system C library, so it targets modern 64-bit Linux (**glibc ≥ 2.39** — Raspberry Pi OS Trixie, Debian 13, Ubuntu 24.04); a Docker image carries its own runtime for everything older. Upgrading is replacing one file.
+It ships as **one self-contained binary** (~75 MB). The ONNX Runtime inference engine and the DuckDB analytics engine are compiled in — there is no Python, no `pip`, no virtualenv, and nothing else to install. The binary links against the host's system C library, so it targets modern 64-bit Linux (**glibc ≥ 2.39** — Raspberry Pi OS Trixie, Debian 13, Ubuntu 24.04); a Docker image carries its own runtime for everything older. Upgrading is replacing one file.
 
 > **It is a clean rewrite, not a fork.** See [Credits & Attribution](#credits--attribution).
 
