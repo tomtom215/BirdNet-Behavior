@@ -33,6 +33,7 @@ use birdnet_core::config::Config;
 use crate::cli::Cli;
 
 mod audio;
+mod clock;
 mod config;
 mod database;
 mod disk;
@@ -159,6 +160,7 @@ pub fn run_with_format(cli: &Cli, config: Option<&Config>, format: Format) -> i3
         checks.extend(config::check_config_values(cfg));
     }
     checks.push(config::check_listen_address(cli));
+    checks.extend(clock::check_clock(config));
     checks.extend(database::check_database(cli, config));
     checks.extend(paths::check_paths(cli, config));
     checks.extend(audio::check_audio_source(cli, config));

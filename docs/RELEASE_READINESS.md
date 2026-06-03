@@ -101,7 +101,7 @@ Verdicts: ✅ EXISTS (solid) · 🟡 PARTIAL · ❌ MISSING. Evidence is `file:l
 | Help docs embedded | ✅ | `build.rs` renders mdBook into `_generated/html/`, served at `/help/*` |
 | Analytics ON by default | ✅ | `installer/lib/65-service.sh:90` hardcodes `--analytics-db …`; release built `--features analytics` |
 | Audio device auto-detect | ✅ | `installer/lib/70-station.sh` `detect_first_audio_device()` (`arecord -l`) |
-| Location / timezone auto-detect | ❌ | installer **prompts** lat/lon (optional); no IP-geolocation; no timezone inference (G-08) |
+| Location / timezone auto-detect | 🟡 | IP-geolocation exists (`/admin/settings/detect-location` → ip-api.com); now returns IANA tz + doctor clock/tz check (G-08); onboarding wiring in G-09 |
 | systemd install + enable + dashboard URL print | ✅ | `65-service.sh`, `75-start.sh`, `80-summary.sh:38` (URL + mDNS + IP) |
 | Release pipeline cross-compile + publish | ✅ | `release.yml`: aarch64 + x86_64 (GCC cross, **not** zigbuild — ONNX needs GNU libstdc++ cxx11 ABI); SHA256SUMS, SLSA, CycloneDX SBOM |
 | Pi OS Bookworm (glibc 2.36) native support | ❌ | glibc ≥ 2.39 floor from ONNX Runtime baseline; Bookworm → Docker only (G-14) |
@@ -129,7 +129,7 @@ Verdicts: ✅ EXISTS (solid) · 🟡 PARTIAL · ❌ MISSING. Evidence is `file:l
 | Doctor **self-heal** | ✅ | `--fix` creates missing configured dirs (recordings + image-cache) before reporting; safe/idempotent, never needs root (G-07) |
 | Web onboarding wizard persists | 🟡 | `crates/birdnet-web/src/routes/pages/onboarding.rs:7` is an explicit client-side **stub** — renders 5 steps but does not POST/persist; installer prompts cover real first-run config (G-09) |
 | Audio auto-detect at first run | ✅ (installer) / 🟡 (web) | installer detects; onboarding shows a **mockup** card not live state |
-| Location/timezone/lat-lon defaults | ❌ | `crates/birdnet-core/src/config/validate.rs` **requires** lat/lon; no geolocation; solar is UTC-only (`crates/birdnet-scheduler/src/solar.rs`) (G-08) |
+| Location/timezone/lat-lon defaults | 🟡 | lat/lon are *advisory* in `validate.rs` (warn, not required); IP-geolocation + IANA tz + doctor clock check shipped (G-08); first-run capture in G-09 |
 
 ### Track D — Polish
 
@@ -266,9 +266,18 @@ reported, not changed, so `--fix` is safe as the unprivileged service user. Unit
 idempotent / skip) + dispatch tests. *Deliberately scoped:* chown and WAL-checkpoint were left out
 (root-only / already covered by the maintenance tick).
 
-**G-08 — Geolocation + timezone.** *(Track C · P2 · M · med)* **Blocked-by:** D-4. **Fix:**
-optional IP-geolocation to seed lat/lon with manual override; store IANA tz; localize solar.
-**Verify:** real-run check that detection timestamps + dawn/dusk windows are correct off-UTC.
+**G-08 — Geolocation + timezone.** *(Track C · P2 · M · med)* ✅ **DONE (Wave 3; decision D-4 =
+"rely on OS clock, surface it").** Audit correction: IP-geolocation **already existed**
+(`GET /admin/settings/detect-location` → ip-api.com) and lat/lon are *advisory* (a warning, not a
+hard requirement) in `validate.rs`. This wave: (1) `detect_location` now also returns the IANA
+`timezone` ip-api.com reports, so onboarding/settings can capture it; (2) a new doctor check
+(`src/doctor/clock.rs`) surfaces the time stack in plain language — it warns when the system clock
+reads before 2020 (unset/NTP-unsynced → wrong timestamps + continuous recording) and, since the
+recording-window gate is evaluated in **UTC**, warns that a *fixed* window's hours mean UTC (solar
+schedules are timezone-independent, so they pass). Verified time-frame finding: detection
+timestamps come from the recording filenames (OS-local), and solar windows are correct in UTC; a
+full chrono-tz refactor was deliberately **not** done per D-4. Wiring geolocation into the
+onboarding wizard lands in G-09.
 
 **G-09 — Web onboarding persistence.** *(Track C · P2 · M · low)* **Blocked-by:** D-5. **Fix:**
 POST each step to settings/audio endpoints; reflect live audio detection; gate first paint on

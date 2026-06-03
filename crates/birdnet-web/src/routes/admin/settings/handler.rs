@@ -118,12 +118,17 @@ pub struct LocationResult {
     pub lon: f64,
     pub city: String,
     pub country: String,
+    /// IANA timezone name (e.g. `"America/New_York"`) reported by ip-api.com.
+    /// Empty when the service omits it. Surfaced so first-run onboarding can
+    /// store it for display and the doctor's clock check (the OS clock remains
+    /// the source of truth for wall-clock times — see `doctor::clock`).
+    pub timezone: String,
 }
 
 /// Detect the station's approximate location using the public ip-api.com service.
 ///
-/// Returns `{"lat": ..., "lon": ..., "city": ..., "country": ...}` on success,
-/// or `500` with an error message on failure.
+/// Returns `{"lat": ..., "lon": ..., "city": ..., "country": ..., "timezone": ...}`
+/// on success, or `500` with an error message on failure.
 ///
 /// BirdNET-Pi equivalent: `birdnet_analysis.sh` calls `curl ipinfo.io` on startup
 /// to auto-populate `LATITUDE` / `LONGITUDE` when not configured.
@@ -141,6 +146,8 @@ pub async fn detect_location() -> Result<Json<LocationResult>, (StatusCode, Stri
         city: String,
         #[serde(default)]
         country: String,
+        #[serde(default)]
+        timezone: String,
         status: String,
     }
 
@@ -186,6 +193,7 @@ pub async fn detect_location() -> Result<Json<LocationResult>, (StatusCode, Stri
         lon: data.lon,
         city: data.city,
         country: data.country,
+        timezone: data.timezone,
     }))
 }
 
