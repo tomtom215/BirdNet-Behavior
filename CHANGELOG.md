@@ -7,6 +7,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-03
+
+The largest release since the first public one. BirdNet-Behavior gets a
+ground-up dashboard redesign, **DuckDB behavioral analytics on by default**, a
+real first-run onboarding wizard, account-based authentication, and a
+fully self-contained, offline-capable install — the binary, the ~541 MB
+BirdNET+ model, and the operator manual all come from a single GitHub origin,
+checksum-verified. The release/CI pipeline is hardened end to end (the
+integration branch is now gated, the auto-updater verifies what it installs,
+and there are full-pipeline, migration, and soak tests). New schema migrations
+(audio sources, accounts/sessions) run automatically and idempotently on first
+start — no manual steps.
+
+### Added
+
+- **A ground-up dashboard redesign.** 20+ server-rendered HTMX pages on a
+  unified design system: OKLCH color tokens, first-class dark/light and
+  reduced-motion support, self-hosted fonts, and SVG-rendered visualizations.
+  New surfaces include a command palette, a live homepage spectrogram fed by a
+  WebSocket producer, a `/listen` page wiring per-source audio + spectrogram, a
+  polar dawn-chorus moon-phase ring, an in-app help drawer, and an
+  `/admin/audit` log with date-range and action filters.
+- **DuckDB behavioral analytics on by default.** The analytics engine
+  (sessionize, retention, funnel, sequence, next-species) is compiled into
+  every binary *and enabled out of the box*. The community `behavioral` DuckDB
+  extension is embedded into the release binary at build time, so analytics
+  work fully offline on first run with no network `INSTALL`.
+- **Multi-source audio capture.** Audio sources are now first-class,
+  CRUD-managed rows (ALSA / PipeWire / RTSP / multiple RTSP), seeded from the
+  CLI and config; the capture pipeline, `/listen`, and the metrics gauges all
+  read from them, retiring the legacy single-string source.
+- **Account-based authentication.** argon2id password hashing with cookie
+  sessions and a CSRF guard, role-based access control enforced on every
+  `/admin` write, an admin password reset, and session pruning. The legacy
+  HTTP Basic Auth path is removed.
+- **A real first-run onboarding wizard.** It persists location, timezone, and
+  notification settings and redirects a fresh station to `/onboarding`, with an
+  IP-geolocation auto-detect that fills latitude/longitude and the IANA
+  timezone. A new doctor clock/timezone check surfaces an unset or unsynced
+  system clock in plain language.
+- **`doctor --fix` self-heal.** Safe, idempotent repairs (recreating missing
+  configured directories — the #1 "service runs but records nothing" cause)
+  run before the diagnostic, as the unprivileged service user.
+- **Offline-capable model + manual bundling.** The ~541 MB BirdNET+ V3.0 model
+  and labels are now a single shared, arch-independent GitHub release asset
+  (`models-v3.0-preview3`), fetched from the same origin as the binary,
+  **verified against a pinned sha256**, resumable, and falling back to Zenodo
+  (the upstream source) when unavailable — so a fresh install needs one network
+  origin and is offline-capable afterwards. A `publish-model.yml` workflow
+  mirrors the model with checksum-pinned provenance (SHA256SUMS + SLSA).
+- **An embedded operator manual at `/help`.** The mdBook manual is rendered at
+  build time and shipped both in the Docker image and the install tarball
+  (screenshots downscaled for the bundle; the committed source and the GitHub
+  Pages site stay full-res), served offline at `/help`. The in-app help links
+  are wired across 19 screens.
+- **A hardened release & test pipeline.** CI now gates the integration branch
+  (`claude/**` PRs run fmt, clippy, tests, rustdoc, MSRV, and an aarch64
+  cross-check); a full-pipeline E2E test (audio → infer → DB → web), a
+  BirdNET-Pi migration integration test, and a compressed soak/longevity test
+  assert bounded memory/fd/DB growth. A deterministic demo-data seeder feeds a
+  refreshed 48-image screenshot set.
+- Weather-poll bootstrap (default-off).
+
+### Changed
+
+- **Content-Security-Policy hardened.** `script-src` is now a per-request nonce
+  plus `strict-dynamic`; every inline `on*` handler moved to
+  `addEventListener`; and `style-src 'unsafe-inline'` is dropped — the entire
+  template surface was swept off inline styles onto utility classes, guarded by
+  an inline-style regression test.
+- **The auto-updater now verifies what it installs.** The downloaded archive is
+  sha256-checked against the release `SHA256SUMS` and the staged binary is
+  smoke-tested (`<binary> --version`) *before* the atomic swap; a wrong-arch,
+  truncated, or corrupt download is rejected and the running binary is left
+  untouched. (SLSA provenance remains the out-of-band authenticity path.)
+- Settings accept locale-tolerant decimals and skip unchanged fields on save.
+
+### Fixed
+
+- **`/help` deep links no longer 404.** mdBook emits `<page>.html`, but the
+  in-app help links use clean, extensionless URLs; a small middleware now
+  rewrites `/help/…` to the rendered `.html` before serving, while `/help/`
+  and static assets pass through.
+- **The Docker image builds again and ships correct analytics.** `CHANGELOG.md`
+  is kept in the build context (it is embedded into the binary at compile
+  time), and each architecture embeds its matching DuckDB `behavioral`
+  extension instead of defaulting to the amd64 build.
+- Wikipedia species images are fetched on cache-miss, and the admin image
+  blacklist is enforced on the serve path.
+
+### Security
+
+- CSP per-request nonce + `strict-dynamic`, with no inline script or style.
+- Admin actions require an authenticated session with the right role (RBAC);
+  passwords are argon2id-hashed; a stateless CSRF guard covers state changes.
+- The auto-updater and the bundled model are both integrity-verified
+  (sha256) against a provenance-attested origin before anything touches disk.
+
 ## [0.5.3] - 2026-05-27
 
 Field-hardening release from real Raspberry Pi + RTSP testing. The service now
@@ -1138,7 +1236,8 @@ x86_64 Linux.
 - systemd installer script with ALSA microphone auto-detection and
   automatic BirdNET+ model download from Zenodo.
 
-[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.0...v0.5.1
