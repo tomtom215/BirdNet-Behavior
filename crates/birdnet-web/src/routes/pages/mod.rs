@@ -190,6 +190,7 @@ fn render_page_inner(
         .replace("{{nav_dashboard}}", nav("dashboard"))
         .replace("{{nav_today}}", nav("today"))
         .replace("{{nav_species}}", nav("species"))
+        .replace("{{nav_listen}}", nav("listen"))
         .replace("{{nav_recordings}}", nav("recordings"))
         .replace("{{nav_analytics}}", nav("analytics"))
         .replace("{{nav_timeseries}}", nav("timeseries"))

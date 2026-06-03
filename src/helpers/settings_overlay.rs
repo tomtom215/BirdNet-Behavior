@@ -20,44 +20,77 @@
 //! Changes take effect on the next restart, matching the "Changes apply on next
 //! restart" notice the settings page already shows.
 
+use crate::cli::Cli;
 use birdnet_core::config::Config;
-use birdnet_db::settings::{ensure_settings_table, list};
+use birdnet_db::settings::{SettingsCategory, ensure_settings_table, list, set};
 use birdnet_web::state::AppState;
+use std::collections::{BTreeMap, HashSet};
 
-/// Explicit map from an admin-UI settings key to the config key the runtime
-/// reads. Only settings with a verified runtime consumer and no external
-/// side-effect are listed; anything absent is still stored but, as before, has
-/// no effect on the running daemon.
-const SETTING_TO_CONFIG_KEY: &[(&str, &str)] = &[
+/// Bridge specs: `(admin-UI key, runtime config key, category)`. Single source
+/// of truth for both directions of the settings ↔ config bridge:
+///
+/// * [`overlay_db_settings`] reads the settings table and applies each row on
+///   top of the file config (UI key → config key) so settings saved in the web
+///   UI take effect on the daemon.
+/// * [`seed_db_settings_from_config`] does the inverse on first run: it copies
+///   the installer-written file config *into* the settings table (config key →
+///   UI key, tagged with `category`) so the values the operator entered during
+///   installation actually appear in — and can be edited from — the web UI.
+///
+/// Only settings with a verified runtime consumer and no external side-effect
+/// are listed; anything absent is still stored but has no effect on the daemon.
+/// Notification/integration and auth settings are deliberately excluded — they
+/// are applied (and seeded, where relevant) by their own subsystems.
+const SETTING_SPECS: &[(&str, &str, SettingsCategory)] = &[
     // Detection tuning (consumed in `crate::daemon`).
-    ("confidence_threshold", "CONFIDENCE"),
-    ("sensitivity", "SENSITIVITY"),
-    ("overlap", "OVERLAP"),
-    ("sf_thresh", "SF_THRESH"),
-    ("privacy_threshold", "PRIVACY_THRESHOLD"),
+    (
+        "confidence_threshold",
+        "CONFIDENCE",
+        SettingsCategory::Detection,
+    ),
+    ("sensitivity", "SENSITIVITY", SettingsCategory::Detection),
+    ("overlap", "OVERLAP", SettingsCategory::Detection),
+    ("sf_thresh", "SF_THRESH", SettingsCategory::Detection),
+    (
+        "privacy_threshold",
+        "PRIVACY_THRESHOLD",
+        SettingsCategory::Detection,
+    ),
     // Audio capture (consumed in `crate::capture`).
-    ("alsa_device", "ALSA_CARD"),
-    ("alsa_devices", "ALSA_CARDS"),
-    ("rtsp_url", "RTSP_URL"),
-    ("audio_format", "AUDIOFMT"),
+    ("alsa_device", "ALSA_CARD", SettingsCategory::Audio),
+    ("alsa_devices", "ALSA_CARDS", SettingsCategory::Audio),
+    ("rtsp_url", "RTSP_URL", SettingsCategory::Audio),
+    ("audio_format", "AUDIOFMT", SettingsCategory::Audio),
     // Station / location.
-    ("latitude", "LATITUDE"),
-    ("longitude", "LONGITUDE"),
-    ("station_name", "STATION_NAME"),
-    ("site_name", "SITENAME"),
-    ("info_site", "INFO_SITE"),
+    ("latitude", "LATITUDE", SettingsCategory::Location),
+    ("longitude", "LONGITUDE", SettingsCategory::Location),
+    ("station_name", "STATION_NAME", SettingsCategory::Location),
+    ("site_name", "SITENAME", SettingsCategory::System),
+    ("info_site", "INFO_SITE", SettingsCategory::System),
     // System / disk management.
-    ("image_cache_dir", "IMAGE_CACHE_DIR"),
-    ("max_files_per_species", "MAX_FILES_SPECIES"),
-    ("purge_threshold", "DISK_PURGE_THRESHOLD"),
+    (
+        "image_cache_dir",
+        "IMAGE_CACHE_DIR",
+        SettingsCategory::System,
+    ),
+    (
+        "max_files_per_species",
+        "MAX_FILES_SPECIES",
+        SettingsCategory::System,
+    ),
+    (
+        "purge_threshold",
+        "DISK_PURGE_THRESHOLD",
+        SettingsCategory::System,
+    ),
 ];
 
 /// Resolve the runtime config key a given admin-UI setting maps to, if any.
 fn config_key_for(setting_key: &str) -> Option<&'static str> {
-    SETTING_TO_CONFIG_KEY
+    SETTING_SPECS
         .iter()
-        .find(|(ui, _)| *ui == setting_key)
-        .map(|(_, cfg)| *cfg)
+        .find(|(ui, _, _)| *ui == setting_key)
+        .map(|(_, cfg, _)| *cfg)
 }
 
 /// Layer the given settings rows on top of the file config as overrides.
@@ -114,6 +147,127 @@ pub fn overlay_db_settings(config: Option<Config>, state: &AppState) -> Option<C
 
     let pairs: Vec<(String, String)> = rows.into_iter().map(|s| (s.key, s.value)).collect();
     apply_setting_overrides(config, pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+}
+
+/// Compute the settings rows to seed from the file config.
+///
+/// Pure (no I/O) so the mapping is unit-testable without a database. For each
+/// bridge spec, a row is produced only when the config carries a non-empty
+/// value for the runtime key **and** the settings table does not already hold
+/// the UI key — so an operator's later UI edits (which create the row) are
+/// never overwritten, and re-running with the same config is a no-op.
+fn settings_to_seed(
+    config: &Config,
+    existing: &HashSet<String>,
+) -> Vec<(&'static str, String, SettingsCategory)> {
+    let mut out = Vec::new();
+    for &(ui_key, config_key, category) in SETTING_SPECS {
+        if existing.contains(ui_key) {
+            continue;
+        }
+        if let Some(value) = config.get(config_key) {
+            let value = value.trim();
+            if !value.is_empty() {
+                out.push((ui_key, value.to_string(), category));
+            }
+        }
+    }
+    out
+}
+
+/// Trim a borrowed value and drop it if it is empty.
+fn nonblank(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|v| !v.is_empty())
+}
+
+/// Station settings the operator supplies via CLI flag or `BIRDNET_*`
+/// environment variable rather than a config-file line — the Docker path, where
+/// `docker run -e BIRDNET_LATITUDE=…` never touches `birdnet.conf`. Mapped to
+/// the same admin-UI keys + categories as the file-config bridge so a container
+/// configured purely through the environment seeds the same settings rows and
+/// is no more "re-prompted" than a bare-metal install.
+fn cli_station_settings(cli: &Cli) -> Vec<(&'static str, String, SettingsCategory)> {
+    let mut out = Vec::new();
+    if let Some(lat) = cli.latitude {
+        out.push(("latitude", lat.to_string(), SettingsCategory::Location));
+    }
+    if let Some(lon) = cli.longitude {
+        out.push(("longitude", lon.to_string(), SettingsCategory::Location));
+    }
+    if let Some(dev) = nonblank(cli.alsa_device.as_deref()) {
+        out.push(("alsa_device", dev.to_string(), SettingsCategory::Audio));
+    }
+    if let Some(url) = nonblank(cli.rtsp_url.as_deref()) {
+        out.push(("rtsp_url", url.to_string(), SettingsCategory::Audio));
+    }
+    if !cli.rtsp_urls.is_empty() {
+        out.push((
+            "rtsp_urls",
+            cli.rtsp_urls.join(","),
+            SettingsCategory::Audio,
+        ));
+    }
+    out
+}
+
+/// Seed the admin-UI `settings` table from the station's installed
+/// configuration on first run.
+///
+/// The operator supplies station settings (latitude/longitude, audio device,
+/// station name, …) at install time: the bare-metal installer writes them to
+/// `/etc/birdnet/birdnet.conf`, and the Docker image passes them as `BIRDNET_*`
+/// environment variables (i.e. CLI flags). The admin settings form and the
+/// first-run onboarding check, however, read **only** the SQLite `settings`
+/// table. Without this bridge a freshly-installed station shows blank settings
+/// fields and is bounced to the onboarding wizard even though it is already
+/// fully configured — the "installation input is not respected" bug. This
+/// copies each known, non-empty installed value into the settings table so it
+/// appears in, and can be edited from, the web UI.
+///
+/// Both install paths are covered: file-config and CLI/env values are merged,
+/// with the CLI/env value winning for a given key (matching how the daemon
+/// resolves an input supplied both ways). Insert-only: a key that already has a
+/// row is left untouched, so this never clobbers a setting the operator changed
+/// in the UI, and it is safe to call on every startup. Returns the number of
+/// rows seeded.
+pub fn seed_db_settings_from_config(config: Option<&Config>, cli: &Cli, state: &AppState) -> usize {
+    state.with_db(|conn| {
+        // The table may not exist yet on a brand-new database; treat that (and
+        // any read error) as "nothing already present" rather than failing.
+        ensure_settings_table(conn).ok();
+        let existing: HashSet<String> = list(conn, None)
+            .map(|rows| rows.into_iter().map(|s| s.key).collect())
+            .unwrap_or_default();
+
+        // Merge the two install sources into one row-per-key set. File config
+        // first; CLI/env then overrides for the same key. A BTreeMap keeps the
+        // seed order (and the logged count) deterministic.
+        let mut merged: BTreeMap<&'static str, (String, SettingsCategory)> = BTreeMap::new();
+        if let Some(config) = config {
+            for (key, value, category) in settings_to_seed(config, &existing) {
+                merged.insert(key, (value, category));
+            }
+        }
+        for (key, value, category) in cli_station_settings(cli) {
+            if !existing.contains(key) {
+                merged.insert(key, (value, category));
+            }
+        }
+
+        let mut seeded = 0_usize;
+        for (key, (value, category)) in &merged {
+            if set(conn, key, value, *category).is_ok() {
+                seeded += 1;
+            }
+        }
+        if seeded > 0 {
+            tracing::info!(
+                count = seeded,
+                "seeded admin settings from the installed configuration (installer/env values are now editable at /admin/settings)"
+            );
+        }
+        seeded
+    })
 }
 
 #[cfg(test)]
@@ -185,5 +339,117 @@ mod tests {
         let file = Config::parse("CONFIDENCE=0.42").unwrap();
         let merged = apply_setting_overrides(Some(file), [("unknown", "v")]).unwrap();
         assert_eq!(merged.get("CONFIDENCE"), Some("0.42"));
+    }
+
+    #[test]
+    fn seeds_known_keys_from_config_with_categories() {
+        // The installer-written file config is copied into the settings table
+        // under the UI keys + categories the admin form reads.
+        let config =
+            Config::parse("LATITUDE=42.36\nRTSP_URL=rtsp://cam/stream\nCONFIDENCE=0.7").unwrap();
+        let seed = settings_to_seed(&config, &HashSet::new());
+
+        let lat = seed
+            .iter()
+            .find(|(k, _, _)| *k == "latitude")
+            .expect("latitude seeded");
+        assert_eq!(lat.1, "42.36");
+        assert_eq!(lat.2, SettingsCategory::Location);
+
+        let rtsp = seed
+            .iter()
+            .find(|(k, _, _)| *k == "rtsp_url")
+            .expect("rtsp_url seeded");
+        assert_eq!(rtsp.1, "rtsp://cam/stream");
+        assert_eq!(rtsp.2, SettingsCategory::Audio);
+
+        let conf = seed
+            .iter()
+            .find(|(k, _, _)| *k == "confidence_threshold")
+            .expect("confidence seeded");
+        assert_eq!(conf.2, SettingsCategory::Detection);
+    }
+
+    #[test]
+    fn seed_skips_keys_already_present() {
+        // A key that already has a row (an operator edit made in the UI) is
+        // never re-seeded, so seeding can run on every startup without
+        // clobbering changes.
+        let config = Config::parse("LATITUDE=42.36\nLONGITUDE=-71.06").unwrap();
+        let mut existing = HashSet::new();
+        existing.insert("latitude".to_string());
+        let seed = settings_to_seed(&config, &existing);
+        assert!(!seed.iter().any(|(k, _, _)| *k == "latitude"));
+        assert!(seed.iter().any(|(k, _, _)| *k == "longitude"));
+    }
+
+    #[test]
+    fn seed_skips_empty_values_and_unmapped_keys() {
+        let mut config = Config::empty();
+        config.set("ALSA_CARD", ""); // installer skipped → empty, must not seed
+        config.set("SOME_UNMAPPED_KEY", "x"); // not a bridge key → never seeded
+        config.set("LATITUDE", "51.5");
+        let seed = settings_to_seed(&config, &HashSet::new());
+        assert!(!seed.iter().any(|(k, _, _)| *k == "alsa_device"));
+        assert!(seed.iter().any(|(k, _, _)| *k == "latitude"));
+        // Only mapped UI keys are ever produced.
+        assert!(seed.iter().all(|(k, _, _)| config_key_for(k).is_some()));
+    }
+
+    #[test]
+    fn seed_and_overlay_are_inverse_through_the_same_mapping() {
+        // Round-trip invariant: a value seeded under a UI key overlays back onto
+        // exactly the config key it was read from.
+        let config = Config::parse("LATITUDE=12.34").unwrap();
+        let seed = settings_to_seed(&config, &HashSet::new());
+        let (ui_key, value, _) = seed
+            .iter()
+            .find(|(k, _, _)| *k == "latitude")
+            .expect("latitude seeded");
+        let merged = apply_setting_overrides(None, [(*ui_key, value.as_str())]).unwrap();
+        assert_eq!(merged.get("LATITUDE"), Some("12.34"));
+    }
+
+    #[test]
+    fn cli_station_settings_maps_provided_flags() {
+        // The Docker path: settings arrive as flags / BIRDNET_* env, not a file.
+        let mut cli = crate::helpers::test_support::default_cli();
+        cli.latitude = Some(42.36);
+        cli.longitude = Some(-71.06);
+        cli.alsa_device = Some("plughw:1,0".to_string());
+        cli.rtsp_url = Some("   ".to_string()); // blank → must be skipped
+        cli.rtsp_urls = vec!["rtsp://a".to_string(), "rtsp://b".to_string()];
+        let seeds = cli_station_settings(&cli);
+
+        let get = |k: &str| {
+            seeds
+                .iter()
+                .find(|(key, _, _)| *key == k)
+                .map(|(_, v, c)| (v.clone(), *c))
+        };
+        assert_eq!(
+            get("latitude"),
+            Some(("42.36".to_string(), SettingsCategory::Location))
+        );
+        assert_eq!(
+            get("longitude"),
+            Some(("-71.06".to_string(), SettingsCategory::Location))
+        );
+        assert_eq!(
+            get("alsa_device"),
+            Some(("plughw:1,0".to_string(), SettingsCategory::Audio))
+        );
+        assert!(get("rtsp_url").is_none(), "blank rtsp_url must not seed");
+        // rtsp_urls joins on comma — the delimiter the settings form expects.
+        assert_eq!(
+            get("rtsp_urls"),
+            Some(("rtsp://a,rtsp://b".to_string(), SettingsCategory::Audio))
+        );
+    }
+
+    #[test]
+    fn cli_station_settings_empty_when_nothing_supplied() {
+        let cli = crate::helpers::test_support::default_cli();
+        assert!(cli_station_settings(&cli).is_empty());
     }
 }

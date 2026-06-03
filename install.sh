@@ -379,6 +379,12 @@ download() {
 #   - Print a progress bar to the terminal (-#).
 #   - Up to 5 automatic retries with exponential backoff for transient errors.
 #   - Treat HTTP errors as failures (-f).
+#   - A definitive HTTP 404 fails immediately (no retries) so a missing asset
+#     falls through to the next source at once instead of stalling ~10 s on
+#     five back-off retries — `fetch_verified_model` then tries Zenodo. We do
+#     NOT pass --retry-all-errors (which would retry the 404); curl's default
+#     --retry already covers the transient cases (timeouts, 5xx, 429), and
+#     --retry-connrefused keeps a slow-to-wake CDN resilient.
 #   - Leave the partial file in place on failure so the next run can resume.
 download_large() {
     local url="$1"
@@ -386,9 +392,9 @@ download_large() {
     local name="${3:-${dest##*/}}"
     info "  Fetching ${name}…"
     if command -v curl &>/dev/null; then
-        # -C - : resume; -# : progress bar; --retry-all-errors handles flaky CDNs.
+        # -C - : resume; -# : progress bar.
         curl -fL -C - -# \
-            --retry 5 --retry-delay 2 --retry-all-errors --retry-max-time 600 \
+            --retry 5 --retry-delay 2 --retry-connrefused --retry-max-time 600 \
             --connect-timeout 30 \
             -o "${dest}" "${url}"
     elif command -v wget &>/dev/null; then

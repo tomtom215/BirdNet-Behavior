@@ -43,6 +43,7 @@
       <li><a href="/analytics/dawn-chorus" class="bnb-sheet__row"><span class="glyph">◐</span> Dawn chorus</a></li>
       <li><a href="/correlation"    class="bnb-sheet__row"><span class="glyph">☰</span> Co-occurrence</a></li>
       <li><a href="/timeseries"     class="bnb-sheet__row"><span class="glyph">∷</span> Trends</a></li>
+      <li><a href="/listen"         class="bnb-sheet__row"><span class="glyph">♪</span> Live audio</a></li>
       <li><a href="/recordings"     class="bnb-sheet__row"><span class="glyph">▶</span> Recordings</a></li>
       <li><a href="/gallery"        class="bnb-sheet__row"><span class="glyph">◫</span> Gallery</a></li>
       <li><a href="/history"        class="bnb-sheet__row"><span class="glyph">◷</span> History</a></li>
@@ -58,7 +59,10 @@
 <script>
 (function () {
   "use strict";
-  var btn = document.querySelector('[data-open-more]');
+  // Scope to THIS opener (the tabbar one) by its aria-controls — the topnav
+  // ships another [data-open-more] button earlier in the DOM, so a bare
+  // querySelector would grab that one instead and this sheet would never open.
+  var btn = document.querySelector('[data-open-more][aria-controls="bnb-more-sheet"]');
   var sheet = document.getElementById('bnb-more-sheet');
   if (!btn || !sheet || typeof sheet.showModal !== 'function') return;
   btn.addEventListener('click', function () { sheet.showModal(); });

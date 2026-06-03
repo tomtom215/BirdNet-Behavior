@@ -65,6 +65,11 @@
       <section class="bnb-more-group">
         <h3 class="bnb-eyebrow">Audio &amp; images</h3>
         <ul>
+          <li><a href="/listen"         class="bnb-more-row {{nav_listen}}">
+            <span class="glyph">♪</span>
+            <span class="label">Live audio</span>
+            <span class="sub">listen now &amp; test your mic</span>
+          </a></li>
           <li><a href="/recordings"     class="bnb-more-row {{nav_recordings}}">
             <span class="glyph">▶</span>
             <span class="label">Recordings</span>
@@ -151,7 +156,12 @@
 <script>
 (function () {
   "use strict";
-  var btn = document.querySelector('[data-open-more]');
+  // Scope to THIS opener (the topnav one) by its aria-controls. The mobile
+  // tabbar ships a second [data-open-more] button; a bare
+  // querySelector('[data-open-more]') would match whichever comes first in the
+  // DOM, cross-wiring the two openers so one button opened both dialogs (they
+  // rendered stacked/overlapping) while the other opened none.
+  var btn = document.querySelector('[data-open-more][aria-controls="bnb-more-menu"]');
   var dlg = document.getElementById('bnb-more-menu');
   if (!btn || !dlg) return;
 

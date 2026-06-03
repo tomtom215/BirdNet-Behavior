@@ -26,7 +26,7 @@ mod test_support;
 
 pub use auth::bootstrap_admin_password;
 pub use db::{db_path_from_config, run_backup, run_integrity_check};
-pub use settings_overlay::overlay_db_settings;
+pub use settings_overlay::{overlay_db_settings, seed_db_settings_from_config};
 pub use state::{init_i18n, init_image_cache, init_site_name, run_refresh_extension};
 pub use system::{maybe_install_avahi_service, start_disk_manager, start_live_spectrogram};
 
