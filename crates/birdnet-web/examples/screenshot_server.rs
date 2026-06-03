@@ -269,10 +269,11 @@ fn species_table() -> Vec<Species> {
             rare: true,
             intro: 205,
         },
-        // Non-Latin common name: exercises the async Noto Sans fallback font.
+        // Rare vagrant — a vivid, plainly out-of-range bird that gives the
+        // rare-bird, quarantine, and notification surfaces a clear example.
         Species {
-            sci: "Corvus macrorhynchos",
-            com: "ハシブトガラス",
+            sci: "Passerina ciris",
+            com: "Painted Bunting",
             weight: 0.05,
             base_conf: 0.72,
             profile: Diurnal,
@@ -363,8 +364,8 @@ fn seed_quarantine(conn: &Connection, today_days: i64) {
             0,
         ),
         (
-            "Corvus macrorhynchos",
-            "ハシブトガラス",
+            "Passerina ciris",
+            "Painted Bunting",
             0.72,
             0.01,
             "below_sf_thresh",
@@ -436,7 +437,7 @@ fn seed_notifications(conn: &Connection, today_days: i64) {
     let sp = [
         ("Great Horned Owl", "Bubo virginianus", 0.79),
         ("Northern Cardinal", "Cardinalis cardinalis", 0.94),
-        ("ハシブトガラス", "Corvus macrorhynchos", 0.72),
+        ("Painted Bunting", "Passerina ciris", 0.72),
         ("Bald Eagle", "Haliaeetus leucocephalus", 0.81),
     ];
     let (y, m, d) = civil_from_days(today_days);
@@ -484,7 +485,7 @@ fn seed_thresholds(conn: &Connection) {
         [],
     );
     let _ = conn.execute(
-        "INSERT OR IGNORE INTO species_thresholds (sci_name, confidence_threshold) VALUES ('Corvus macrorhynchos', 0.9)",
+        "INSERT OR IGNORE INTO species_thresholds (sci_name, confidence_threshold) VALUES ('Passerina ciris', 0.9)",
         [],
     );
 }
