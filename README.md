@@ -4,7 +4,9 @@
 <p align="center">
   <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/"><img src="https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg" alt="License"></a>
   <img src="https://img.shields.io/badge/Rust-1.95%2B-orange" alt="MSRV">
+  <img src="https://img.shields.io/badge/edition-2024-orange" alt="Edition 2024">
   <img src="https://img.shields.io/badge/platform-aarch64%20%7C%20x86__64-blue" alt="Platforms">
+  <img src="https://img.shields.io/badge/unsafe-forbidden-success" alt="Unsafe forbidden">
   <img src="https://img.shields.io/badge/clippy-pedantic%20%2B%20nursery-green" alt="Clippy">
   <img src="https://img.shields.io/badge/Docker-ghcr.io-2496ED" alt="Docker">
 </p>
@@ -29,19 +31,24 @@
 
 ## What is BirdNet-Behavior?
 
-A ground-up Rust rewrite of [BirdNET-Pi](https://github.com/mcguirepr89/BirdNET-Pi). It runs on a Raspberry Pi, listens to your microphone or RTSP camera, identifies birds in real time using the BirdNET+ neural network, and serves a fast, beautiful web dashboard you open in any browser.
+A ground-up Rust rewrite of [BirdNET-Pi](https://github.com/mcguirepr89/BirdNET-Pi). It listens to a USB microphone or RTSP stream, identifies birds in real time with the BirdNET+ V3.0 neural network, and serves a fast, responsive web dashboard you open in any browser.
 
-It ships as a **single static binary** — no Python, no pip, no virtualenv. Drop it on a Pi and run it.
-
-| | BirdNET-Pi (Python) | BirdNet-Behavior (Rust) |
-|---|---|---|
-| Memory | 400–600 MB | ~20–50 MB |
-| Cold start | 5–15 s | < 1 s |
-| Dependencies | pip + venv + system libs | None — one binary |
-| Upgrade | pip breakage, virtualenv rot | copy one file |
-| Concurrency | GIL-constrained | Lock-free parallel audio |
+It ships as **one self-contained binary**. The ONNX Runtime inference engine and the DuckDB analytics engine are compiled in — there is no Python, no `pip`, no virtualenv, and nothing else to install. The binary links against the host's system C library, so it targets modern 64-bit Linux (**glibc ≥ 2.39** — Raspberry Pi OS Trixie, Debian 13, Ubuntu 24.04); a Docker image carries its own runtime for everything older. Upgrading is replacing one file.
 
 > **It is a clean rewrite, not a fork.** See [Credits & Attribution](#credits--attribution).
+
+### How it compares to BirdNET-Pi
+
+|  | BirdNET-Pi (Python) | BirdNet-Behavior (Rust) |
+|---|---|---|
+| Runtime | CPython interpreter + virtualenv | One native binary — no interpreter |
+| Install | `pip` into a venv + system packages | one file, or one `curl … \| sudo bash` |
+| Upgrade | re-resolve pip dependencies | replace one file |
+| Inference | TensorFlow Lite (Python) | ONNX Runtime, linked in-process |
+| Analytics | — | DuckDB behavioral engine, built in |
+| Each release ships | — | signed SLSA provenance + CycloneDX SBOM |
+
+Every BirdNET build is dominated by the model itself — the BirdNET+ weights cost the same memory whichever runtime loads them. What Rust removes is the overhead *around* the model: no interpreter to warm up, no virtualenv, no GIL serializing the request path. Audio capture and the detection loop run on a dedicated thread; the web server answers requests concurrently on a single Tokio runtime. It runs comfortably on a 2 GB Raspberry Pi.
 
 ---
 
@@ -130,25 +137,58 @@ sudo ./uninstall.sh --purge      # remove everything, including data + model
 | **Pi OS Bookworm** (glibc 2.36) | ⚠️ Docker only | Native binary needs glibc ≥ 2.39 — use Docker (bundles its own runtime) or upgrade to Trixie |
 | **Pi 3 / Zero 2 W on 32-bit OS** (armv7) | ❌ | No prebuilt ONNX Runtime — reflash with 64-bit Pi OS |
 
-**Runtime requirement: glibc ≥ 2.39** (Pi OS Trixie / Debian 13 / Ubuntu 24.04). The prebuilt binaries are built on Ubuntu 24.04 to match pyke's ONNX Runtime baseline; `install.sh` refuses to install on an older glibc and points you to Docker. Every prebuilt binary and the Docker image ship the DuckDB behavioral-analytics engine **built in and on by default** — the installer and Docker compose set the analytics database path automatically (for a manual binary run, pass `--analytics-db`; from source it is `cargo build --features analytics`).
+**Runtime requirement: glibc ≥ 2.39** (Pi OS Trixie / Debian 13 / Ubuntu 24.04). The prebuilt binaries are built on Ubuntu 24.04 to match pyke's ONNX Runtime baseline; `install.sh` refuses to install on an older glibc and points you to Docker. Every prebuilt binary and the Docker image ship the DuckDB behavioral-analytics engine **built in and on by default** — the installer and Docker compose set the analytics database path automatically (for a manual binary run, pass `--analytics-db`; from source it is on by default, or build `--no-default-features` to omit it).
 
 ---
 
 ## Features
 
-**Everything BirdNET-Pi does** — real-time detection from a USB mic or RTSP stream, the BirdNET+ V3.0 model, a SQLite detection database, per-species pages, Apprise notifications (Telegram/Slack/Discord + 80 more), BirdWeather uploads, email alerts, CSV/JSON export, web-based admin, database backup/restore, and HTTP basic auth.
+**Everything BirdNET-Pi does** — real-time detection from a USB mic or RTSP stream, the BirdNET+ V3.0 model, a SQLite detection database, per-species pages, Apprise notifications (Telegram, Slack, Discord, and dozens more), BirdWeather uploads, email alerts, CSV/JSON export, web-based admin, database backup/restore, and HTTP basic auth.
 
 **New in BirdNet-Behavior:**
 
-- **A redesigned UI** — 20+ pages, OKLCH light/dark themes, self-hosted fonts, bespoke SVG visualizations (streamgraph, circadian polar, co-occurrence chord diagram, migration ridgeline, DayStrip), fully responsive down to a phone.
-- **Behavioral analytics** (built into every release, on by default; `--features analytics` for source builds) — activity sessions, resident vs. migrant classification, dawn-chorus validation, species co-occurrence, migration phenology.
+- **A redesigned UI** — two-dozen-plus screens, OKLCH light/dark themes, self-hosted fonts, bespoke SVG visualizations (streamgraph, circadian polar, co-occurrence chord diagram, migration ridgeline, DayStrip), fully responsive down to a phone.
+- **Behavioral analytics** (built into every release, on by default; `--no-default-features` to omit) — activity sessions, resident vs. migrant classification, dawn-chorus validation, species co-occurrence, migration phenology.
 - **IoT / Home Automation** — pure-Rust MQTT 3.1.1 publishing with Home Assistant auto-discovery.
-- **Editorial reports** — Weekly Report and a celebratory Year in Review.
+- **Editorial reports** — a Weekly Report and a celebratory Year in Review.
 - **Share & follow** — a per-detection [detail page](https://tomtom215.github.io/BirdNet-Behavior/guide/sharing.html) with spectrogram + audio, signed public **share links** (`/r/<token>`, HMAC-SHA256, 30-day expiry), and **RSS/iCal feeds** for rare and daily detections. Print stylesheet for the reports.
 - **Per-device display preferences** — theme, density, motion and contrast, applied before first paint (no flash on reload).
 - **Operational polish** — rare-bird quarantine queue, audio quality pre-filtering, a built-in `--doctor` diagnostic, Prometheus metrics, kiosk mode, a live spectrogram, and a first-run onboarding wizard.
 
 ➡️ Tour them all in the [Field Guide](https://tomtom215.github.io/BirdNet-Behavior/guide/dashboard.html). New environment variables for these features — `BNB_SHARE_SECRET`, `BNB_BASE_URL`, `BNB_STATION_LAT`/`BNB_STATION_LON` — are documented in [`.env.example`](.env.example) and the [configuration reference](https://tomtom215.github.io/BirdNet-Behavior/reference/configuration-reference.html).
+
+---
+
+## Engineering
+
+The project is built to be read as well as run:
+
+- **Language** — Rust 2024, **MSRV 1.95**, enforced by a dedicated CI job so a newer-toolchain feature can't slip in unnoticed.
+- **Safety** — `unsafe` code is **denied** across the entire workspace (`unsafe_code = "deny"`).
+- **Lints** — Clippy `pedantic` + `nursery` + `cargo`, and CI fails on any warning (`-D warnings`). `rustfmt` is checked, not just suggested.
+- **Errors** — library crates use hand-rolled error types; no `anyhow`/`thiserror` reaching for a `Box<dyn Error>`.
+- **Runtime discipline** — the compute and storage crates (`birdnet-core`, `birdnet-db`) are deliberately *synchronous* and own no async runtime. The application layer owns the single Tokio runtime and pushes blocking work — inference, SQLite, DuckDB, file I/O — onto `spawn_blocking`. The detection loop hands finished detections to the async layer over a **bounded** channel, so a slow consumer applies backpressure instead of leaking memory.
+- **Tests** — a workspace suite spanning unit, integration, property-based (`proptest`), and a soak test that drives tens of thousands of inserts through the real path and asserts bounded memory, file-descriptor, and database growth.
+- **Supply chain** — every release publishes cross-compiled binaries (aarch64 + x86_64) carrying a signed **SLSA build-provenance** attestation and a **CycloneDX 1.5 SBOM**; the model is fetched from a single origin, sha256-verified, and the install runs fully offline afterward.
+
+---
+
+## Architecture
+
+A single binary built from eight Rust workspace crates:
+
+| Crate | Responsibility |
+|---|---|
+| `birdnet-core` | Audio capture, decode, resample, mel spectrogram, ONNX inference, the detection pipeline, live spectrogram |
+| `birdnet-db` | SQLite (OLTP) + DuckDB (OLAP), migrations, resilience |
+| `birdnet-web` | axum web server, REST API, WebSocket, HTMX templates, audio player, admin |
+| `birdnet-integrations` | BirdWeather, Apprise, MQTT (Home Assistant discovery), Wikipedia images, email, heartbeat, weekly reports, auto-update |
+| `birdnet-behavioral` | DuckDB behavioral analytics (sessionization, retention, funnel, sequence matching) |
+| `birdnet-timeseries` | Time-series analytics (activity, diversity, trend, peak, gap, sessions) |
+| `birdnet-migrate` | BirdNET-Pi migration: schema detection, validation, import |
+| `birdnet-scheduler` | Solar calculations, recording-window scheduling |
+
+📖 [Architecture overview](https://tomtom215.github.io/BirdNet-Behavior/reference/architecture.html) · full design docs in [`docs/architecture/`](docs/architecture/).
 
 ---
 
@@ -162,18 +202,18 @@ Safe, non-destructive import — the source database is opened read-only and nev
 
 ## Building from source
 
-**Prerequisites:** [Rust 1.95+](https://rustup.rs) and `git`.
+**Prerequisites:** [Rust 1.95+](https://rustup.rs) and `git`. The first build also compiles the bundled DuckDB (a few minutes of C++), so `cmake` and a C++ compiler must be on `PATH`.
 
 ```bash
 git clone https://github.com/tomtom215/BirdNet-Behavior.git
 cd BirdNet-Behavior
 
-cargo build --release                              # optimized build
-cargo build --release --features analytics         # + DuckDB analytics
+cargo build --release                       # optimized build — analytics on by default
+cargo build --release --no-default-features # slim build, without the DuckDB analytics engine
 cross build --release --target aarch64-unknown-linux-gnu   # cross-compile for a Pi
 
-cargo test --workspace                             # run tests
-cargo clippy --workspace --all-targets -- -D warnings   # lint (pedantic + nursery)
+cargo test --workspace --all-features                    # run tests
+cargo clippy --workspace --all-targets --all-features -- -D warnings   # lint (pedantic + nursery)
 ```
 
 ---
@@ -191,17 +231,9 @@ docker compose exec birdnet birdnet-behavior --doctor   # Docker
 
 ---
 
-## Architecture
-
-A single binary built from eight Rust workspace crates — `birdnet-core` (audio + ML), `birdnet-db` (SQLite + DuckDB), `birdnet-web` (axum + HTMX), `birdnet-integrations`, `birdnet-behavioral`, `birdnet-timeseries`, `birdnet-migrate`, and `birdnet-scheduler`.
-
-📖 [Architecture overview](https://tomtom215.github.io/BirdNet-Behavior/reference/architecture.html) · full design docs in [`docs/architecture/`](docs/architecture/).
-
----
-
 ## Documentation
 
-The complete, navigable documentation lives at **[tomtom215.github.io/BirdNet-Behavior](https://tomtom215.github.io/BirdNet-Behavior/)** — installation, a screen-by-screen field guide, configuration, administration, migration, an FAQ, and troubleshooting. It is built with [mdBook](https://rust-lang.github.io/mdBook/) from the Markdown in [`docs/book/`](docs/book/) and published automatically on every push to `main`.
+The complete, navigable documentation lives at **[tomtom215.github.io/BirdNet-Behavior](https://tomtom215.github.io/BirdNet-Behavior/)** — installation, a screen-by-screen field guide, configuration, administration, migration, an FAQ, and troubleshooting. It is built with [mdBook](https://rust-lang.github.io/mdBook/) from the Markdown in [`docs/book/`](docs/book/) and published automatically on every push to `main`. The same rendered manual ships inside each release tarball and is served offline at `/help`.
 
 ---
 
