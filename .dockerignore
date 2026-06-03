@@ -19,10 +19,20 @@ target/
 .env.local
 *.local
 
-# Documentation (not needed in image)
-docs/
+# Documentation. docs/book/ is the operator manual the image build renders
+# (build.rs → mdBook) and serves at /help/* via BNB_HELP_DIR, so its source —
+# including images/ — must stay in the build context. Only the regenerated
+# output tree is excluded (the build rebuilds it; `*.md` below is root-level
+# only, so it never touches the book's Markdown). The rest of docs/ is small,
+# harmless in the context, and never copied into the final image.
+docs/book/_generated/
 *.md
 !README.md
+# CHANGELOG.md is embedded into the binary at build time by
+# crates/birdnet-web/src/routes/pages/changelog.rs (include_str!), so — unlike
+# the other Markdown — it must stay in the Docker build context or the image
+# fails to compile birdnet-web (os error 2: No such file or directory).
+!CHANGELOG.md
 
 # Test fixtures / benchmarks
 tests/

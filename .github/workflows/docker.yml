@@ -147,6 +147,13 @@ jobs:
           platforms: linux/${{ matrix.platform.arch }}
           build-args: |
             BUILD_FEATURES=analytics
+            # Embed the behavioral extension matching THIS platform (the
+            # Dockerfile default is linux_amd64; without this the arm64 image
+            # would bake in the amd64 extension and fall back to a network
+            # INSTALL at runtime — i.e. not offline-capable). matrix arch
+            # (amd64/arm64) maps directly to the community-extensions platform
+            # names, the same linux_amd64/linux_arm64 release.yml uses.
+            BEHAVIORAL_EXTENSION_TARGET=linux_${{ matrix.platform.arch }}
           labels: ${{ steps.meta.outputs.labels }}
           # Per-arch cache scope keeps the two platforms' caches from colliding.
           cache-from: type=gha,scope=${{ matrix.platform.arch }}
