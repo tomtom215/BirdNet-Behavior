@@ -29,7 +29,7 @@ BIRDNET_ALSA_DEVICE=plughw:1,0          # USB/ALSA mic  (use `arecord -l` to fin
 # BIRDNET_RTSP_URL=rtsp://cam.lan:554/stream
 # BIRDNET_PIPEWIRE_DEVICE=default
 
-# Image tag — pin a release like 0.5.3, or leave as latest (analytics is built in)
+# Image tag — pin a release like 0.6.0, or leave as latest (analytics is built in)
 BIRDNET_IMAGE_TAG=latest
 ```
 
@@ -91,7 +91,7 @@ For RTSP, drop `--device /dev/snd --group-add audio` and set `BIRDNET_RTSP_URL=`
 | Tag | Contents |
 |---|---|
 | `ghcr.io/tomtom215/birdnet-behavior:latest` | Latest release — includes DuckDB behavioral analytics |
-| `ghcr.io/tomtom215/birdnet-behavior:0.5.3` | A specific version (same contents) |
+| `ghcr.io/tomtom215/birdnet-behavior:0.6.0` | A specific version (same contents) |
 
 Published for `linux/amd64` and `linux/arm64`, and signed with [cosign](https://docs.sigstore.dev/) (keyless). There is no separate `-analytics` image — every image has analytics built in.
 
