@@ -23,6 +23,11 @@ target/
 docs/
 *.md
 !README.md
+# CHANGELOG.md is embedded into the binary at build time by
+# crates/birdnet-web/src/routes/pages/changelog.rs (include_str!), so — unlike
+# the other Markdown — it must stay in the Docker build context or the image
+# fails to compile birdnet-web (os error 2: No such file or directory).
+!CHANGELOG.md
 
 # Test fixtures / benchmarks
 tests/
