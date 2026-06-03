@@ -11,7 +11,7 @@ You don't need much — a Raspberry Pi (or any Linux box) and something to liste
 | **Raspberry Pi 3B+** | Works on the 64-bit Pi OS. Tight on RAM — consider disabling analytics (remove `--analytics-db`) to keep memory low. |
 | **Any x86_64 Linux** | Fully supported — an old laptop or mini-PC is a great always-on host. |
 
-BirdNet-Behavior is light (~20–50 MB of RAM at runtime), so the limiting factor is usually storage for recordings, not CPU. Budget **~1.5 GB free** to start (541 MB of that is the model).
+BirdNet-Behavior is undemanding — there's no Python interpreter or virtualenv resident around the model — so the limiting factor is usually storage for recordings, not compute. Budget **~1.5 GB free** to start (541 MB of that is the model).
 
 ## Which microphone?
 

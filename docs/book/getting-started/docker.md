@@ -52,7 +52,7 @@ Your recordings, database, and cached model live in the `birdnet-data` named vol
 
 ## 4. Watch the first-run model download
 
-On a fresh install the container downloads the BirdNET+ model from Zenodo before starting the web server. This happens **exactly once** per named volume.
+On a fresh install the container downloads the BirdNET+ model (~541 MB) — from the same GitHub release line as the image, sha256-verified, falling back to Zenodo — before starting the web server. This happens **exactly once** per named volume.
 
 ```bash
 docker compose logs -f birdnet

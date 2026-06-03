@@ -16,7 +16,7 @@ birdnet-behavior (single binary)
 
 ## Design principles
 
-- **One static binary** — no Python, no runtime dependencies. Deploy by copying a file.
+- **One self-contained binary** — the ONNX Runtime and DuckDB analytics engine are compiled in; no Python, no virtualenv. Deploy by copying a file (it links the host's system glibc, ≥ 2.39).
 - **Synchronous, `unsafe`-free library crates** — `birdnet-core` and `birdnet-db` are blocking; async (Tokio) lives only in the application layer. Blocking work runs on `tokio::task::spawn_blocking`.
 - **Hand-rolled error types** in libraries (no `anyhow`/`thiserror`), with `unsafe` denied workspace-wide and Clippy pedantic + nursery enforced.
 

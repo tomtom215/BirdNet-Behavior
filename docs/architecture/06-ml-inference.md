@@ -45,7 +45,7 @@ Audio chunk (f32, model sample rate)
 
 | Model | Species | Input | Metadata | Notes |
 |-------|---------|-------|----------|-------|
-| BirdNET+ V3.0 | ~11 000 | 3 s audio @ 48 kHz | Optional | Default (shipped by the installer from Zenodo) |
+| BirdNET+ V3.0 | ~11 000 | 3 s audio @ 48 kHz | Optional | Default (fetched by the installer from GitHub, Zenodo fallback) |
 | BirdNET V2.4 FP16 | 6 362 | 3 s audio @ 48 kHz | Separate metadata model | Legacy compatibility |
 | BirdNET V1 | 6 000+ | 3 s audio @ 48 kHz | Lat/lon/week tensor | Legacy |
 

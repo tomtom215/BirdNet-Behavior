@@ -101,7 +101,8 @@ curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/ins
 
 The installer detects the host architecture, downloads the matching
 pre-built binary from GitHub Releases, downloads the BirdNET+ V3.0 model
-from Zenodo, writes the systemd unit, and starts the service.
+(from the same GitHub release line, sha256-verified, Zenodo fallback),
+writes the systemd unit, and starts the service.
 
 For manual installation:
 
@@ -169,11 +170,10 @@ sudo systemctl enable --now birdnet-behavior
 
 | Metric | Python BirdNET-Pi | Rust BirdNet-Behavior |
 |--------|------------------|----------------------|
-| Binary / install size | ~500 MB (venv + deps) | ~15–30 MB (single binary) |
-| RSS memory (idle) | ~200 MB | ~10–20 MB |
-| RSS memory (analyzing) | ~400–600 MB | ~30–50 MB |
-| Cold start time | 5–15 seconds | <1 second |
-| Inference latency (3s clip) | ~1–2 seconds | ~0.5–1 second |
+| Install footprint | venv + interpreter + deps | one ~75 MB binary (ONNX Runtime + DuckDB compiled in) |
+| Resident memory (running) | model + a full Python/TFLite interpreter stack | model + a thin native process (no interpreter on top) |
+| Cold start | interpreter + numpy/scipy/librosa import | native process start (model load dominates) |
+| Inference latency (3 s clip) | ~1–2 seconds | ~0.5–1 second |
 | Disk write durability | WAL | WAL + fsync control |
 | Number of systemd services | 6+ | 1 |
 

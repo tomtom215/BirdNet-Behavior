@@ -28,11 +28,11 @@
 | Advantage | BirdNET-Pi Benefit |
 |-----------|-------------------|
 | Zero-cost abstractions | Mel spectrogram computation without runtime overhead |
-| Predictable memory | 20–50 MB RSS for entire station binary |
+| Lean overhead | only the model's own footprint — no interpreter or venv resident on top |
 | No GC | Deterministic latency for real-time audio pipeline |
 | Single binary | `scp birdnet-behavior pi@station:` — done. No pip, no venv, no apt |
 | Cross-compilation | Build for aarch64 on CI, deploy anywhere |
-| Fearless concurrency | Safe parallel audio processing and async web serving |
+| Fearless concurrency | A dedicated capture/detection thread alongside async web serving — data-race-free by construction |
 | Long-running stability | No memory leaks from reference cycles, no GIL contention |
 | Pure Rust ecosystem | Audio pipeline (symphonia, rubato) has zero C dependencies |
 | Embedded databases | rusqlite (SQLite) and DuckDB both have quality Rust bindings |
