@@ -68,7 +68,7 @@ start — no manual steps.
   BirdNET-Pi migration integration test, and a compressed soak/longevity test
   assert bounded memory/fd/DB growth. A deterministic demo-data seeder feeds a
   refreshed 48-image screenshot set.
-- Weather-poll bootstrap (default-off).
+- **Weather polling** — records conditions alongside detections; off by default.
 
 ### Changed
 
