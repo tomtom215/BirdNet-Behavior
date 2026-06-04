@@ -56,6 +56,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `--rtsp-urls` flag, and a multi-stream station no longer mislabels its
   first stream `rtsp` (every stream is numbered `RTSP_1`, `RTSP_2`, … once there
   is more than one).
+- **Restoring a backup works for real archives.** `/admin/system/restore` had the
+  same flaw as the import — it inherited the 2 MiB body limit and buffered the
+  whole `.tar.gz` in memory — so restoring any real backup (database + recordings,
+  often several GB) was rejected or OOM-ed the process. It now streams the upload
+  to disk and lifts the limit on that admin-only route.
+- **The system-status panel no longer blocks the async runtime.**
+  `/admin/system/service/status` read `/proc` and spawned `getconf` / `systemctl`
+  synchronously inside the request handler; that work now runs on a blocking
+  thread so a slow `/proc` or a hung `systemctl` can't stall unrelated requests.
+- **Navigation is consolidated and consistent.** The desktop top-nav, the "More"
+  dropdown, the mobile tab bar + sheet, the breadcrumb trail, and the ⌘K command
+  palette were separately hand-maintained lists that had drifted: `/live` was an
+  orphan reachable from no menu, the mobile sheet was missing `/kiosk` and
+  `/help`, `/analytics` was absent from mobile entirely, and seven pages
+  highlighted the wrong section. They now all derive from — or are parity-tested
+  against — a single navigation manifest. Added **breadcrumbs** on secondary
+  pages (there were none), grouped the previously-flat mobile sheet, corrected the
+  seven active-state mismatches, and redirected the orphaned `/live` to the
+  maintained `/listen`.
 
 ## [0.6.0] - 2026-06-03
 
