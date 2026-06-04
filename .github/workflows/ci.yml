@@ -103,13 +103,40 @@ jobs:
         run: cargo test --workspace --tests
       - name: Run doc tests
         run: cargo test --workspace --doc
+      - name: Embed the behavioral extension (offline-load coverage)
+        # Fetch the community-built `behavioral` extension and point build.rs at
+        # it (the same mechanism release.yml uses to embed it in the shipped
+        # binary). With it embedded, the `--all-features` build below carries the
+        # extension bytes, so `embedded_extension_loads_when_bundled` runs its
+        # real assertion — proving `LOAD behavioral` works with NO network —
+        # instead of skipping. Best-effort: if the CDN is unreachable the test
+        # skips exactly as before, so this never adds flakiness.
+        shell: bash
+        run: |
+          set -eu
+          url="http://community-extensions.duckdb.org/v1.5.3/linux_amd64/behavioral.duckdb_extension.gz"
+          tmp="$RUNNER_TEMP/behavioral.duckdb_extension"
+          if curl -fsSL --retry 3 --retry-delay 2 --max-time 120 -o "${tmp}.gz" "$url"; then
+            gunzip -f "${tmp}.gz"
+            echo "BIRDNET_BUNDLED_EXTENSION_FILE=$tmp" >> "$GITHUB_ENV"
+            echo "embedded behavioral extension — offline-load test will assert"
+          else
+            echo "::warning::could not fetch the behavioral extension; offline-load test will skip"
+          fi
       - name: Run full suite with analytics (DuckDB behavioral extension)
         # Compiles AND runs the analytics code + tests that the default feature
         # set never builds. This is the gate that would have caught the v0.5.0
         # bugs (a FunnelParams field that didn't exist, query builders written
         # against wrong DuckDB signatures). The network-gated live tests skip
-        # gracefully when the community extension is unavailable.
+        # gracefully when the community extension is unavailable; with the
+        # extension embedded above, the offline-load test asserts instead.
         run: cargo test --workspace --all-features
+      - name: Prove the behavioral extension loads offline (embedded)
+        # Surface the offline-load result explicitly in the log. When the embed
+        # step above succeeded this asserts the extension loads from the embedded
+        # bytes with no network (the air-gapped guarantee); otherwise it prints a
+        # skip line. Already built by the step above, so this is near-instant.
+        run: cargo test -p birdnet-behavioral --features analytics embedded_extension_loads_when_bundled -- --nocapture
 
   # ── doc ────────────────────────────────────────────────────────────────────
   doc:

@@ -138,6 +138,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### CI
 
+- **CI now proves the behavioral extension loads with no network.** Analytics
+  ships bundled — the release binary embeds the community `behavioral` extension
+  so `LOAD behavioral` works offline on a fresh, air-gapped install — but the
+  test that proves it (`embedded_extension_loads_when_bundled`) previously
+  *skipped* in CI because no extension was embedded in the test build. The
+  `--all-features` test job now fetches and embeds the extension first (the same
+  mechanism release.yml uses), so the test runs its real assertion — loading the
+  extension from the embedded bytes via a temp file with no network — and a
+  dedicated step surfaces the result. Best-effort: if the registry is
+  unreachable the test skips as before, adding no flakiness.
 - **The mutation-testing job timeout is now matrix-driven.** The three
   binary-crate shards (`src/daemon/`, `src/capture/supervisor.rs`,
   `src/capture/schedule.rs`) rebuild the binary + web tree per mutant and were
