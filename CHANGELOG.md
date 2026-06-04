@@ -76,6 +76,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   seven active-state mismatches, and redirected the orphaned `/live` to the
   maintained `/listen`.
 
+### CI
+
+- **The mutation-testing job timeout is now matrix-driven.** The three
+  binary-crate shards (`src/daemon/`, `src/capture/supervisor.rs`,
+  `src/capture/schedule.rs`) rebuild the binary + web tree per mutant and were
+  being `cancelled` at the flat 45-minute limit on cold caches. The job now uses
+  `timeout-minutes: ${{ matrix.timeout_minutes || 45 }}` and those three rows set
+  `timeout_minutes: 90`, so they report `success` instead of `cancelled`.
+
 ## [0.6.0] - 2026-06-03
 
 The largest release since the first public one. BirdNet-Behavior gets a
