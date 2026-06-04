@@ -120,23 +120,61 @@ pub(super) async fn restore_backup(
     State(state): State<AppState>,
     mut multipart: axum::extract::Multipart,
 ) -> Html<String> {
-    let mut file_data: Option<Vec<u8>> = None;
-    while let Ok(Some(field)) = multipart.next_field().await {
-        if field.name() == Some("backup") {
-            match field.bytes().await {
-                Ok(bytes) => {
-                    file_data = Some(bytes.to_vec());
+    use tokio::io::AsyncWriteExt as _;
+
+    // Stream the uploaded archive straight to a temp file. A full backup
+    // (database + recordings) routinely runs to many GB — far past axum's 2 MiB
+    // default body limit — and the previous code buffered the whole thing in
+    // memory (twice, via `field.bytes()` + `to_vec()`), which rejected real
+    // backups and would OOM a Pi. Streaming keeps memory flat regardless of
+    // archive size. NamedTempFile auto-removes the file on drop (even on an
+    // early return), replacing the previous manual cleanup.
+    let Ok(Ok(tmp)) =
+        tokio::task::spawn_blocking(|| tempfile::Builder::new().suffix(".tar.gz").tempfile()).await
+    else {
+        return Html(
+            r#"<p class="ctl-err">Internal error: could not allocate a temp file.</p>"#.to_string(),
+        );
+    };
+    let tmp_path = tmp.path().to_path_buf();
+
+    let mut bytes_written: u64 = 0;
+    let mut found = false;
+    loop {
+        let mut field = match multipart.next_field().await {
+            Ok(Some(f)) => f,
+            Ok(None) => break,
+            Err(e) => return Html(format!(r#"<p class="ctl-err">Upload failed: {e}</p>"#)),
+        };
+        if field.name() != Some("backup") {
+            continue;
+        }
+        let mut out = match tokio::fs::File::create(&tmp_path).await {
+            Ok(f) => f,
+            Err(e) => return Html(format!(r#"<p class="ctl-err">Internal error: {e}</p>"#)),
+        };
+        loop {
+            match field.chunk().await {
+                Ok(Some(chunk)) => {
+                    if let Err(e) = out.write_all(&chunk).await {
+                        return Html(format!(r#"<p class="ctl-err">Internal error: {e}</p>"#));
+                    }
+                    bytes_written += chunk.len() as u64;
                 }
-                Err(e) => {
-                    return Html(format!(r#"<p class="ctl-err">Upload failed: {e}</p>"#));
-                }
+                Ok(None) => break,
+                Err(e) => return Html(format!(r#"<p class="ctl-err">Upload failed: {e}</p>"#)),
             }
         }
+        if let Err(e) = out.flush().await {
+            return Html(format!(r#"<p class="ctl-err">Internal error: {e}</p>"#));
+        }
+        found = true;
+        break;
     }
 
-    let Some(data) = file_data else {
+    if !found || bytes_written == 0 {
         return Html(r#"<p class="ctl-err">No backup file uploaded.</p>"#.to_string());
-    };
+    }
 
     let db_path = state.db_path().to_path_buf();
     let target_dir = db_path
@@ -145,22 +183,17 @@ pub(super) async fn restore_backup(
         .to_path_buf();
 
     let result = tokio::task::spawn_blocking(move || {
-        let tmp = std::env::temp_dir().join(format!(
-            "birdnet-restore-{}.tar.gz",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-        ));
-        std::fs::write(&tmp, &data).map_err(|e| format!("failed to write temp file: {e}"))?;
+        // Keep the NamedTempFile alive for the duration of the tar operations;
+        // it unlinks the archive automatically when this closure returns.
+        let _archive = tmp;
+        let tmp_str = tmp_path.to_string_lossy().to_string();
 
         let list_output = std::process::Command::new("tar")
-            .args(["tzf", &tmp.to_string_lossy()])
+            .args(["tzf", &tmp_str])
             .output()
             .map_err(|e| format!("failed to list archive: {e}"))?;
 
         if !list_output.status.success() {
-            let _ = std::fs::remove_file(&tmp);
             return Err("invalid archive (tar returned error)".to_string());
         }
 
@@ -173,21 +206,13 @@ pub(super) async fn restore_backup(
         });
 
         if !has_db {
-            let _ = std::fs::remove_file(&tmp);
             return Err("archive does not contain a database file".to_string());
         }
 
         let status = std::process::Command::new("tar")
-            .args([
-                "xzf",
-                &tmp.to_string_lossy(),
-                "-C",
-                &target_dir.to_string_lossy(),
-            ])
+            .args(["xzf", &tmp_str, "-C", &target_dir.to_string_lossy()])
             .status()
             .map_err(|e| format!("failed to extract: {e}"))?;
-
-        let _ = std::fs::remove_file(&tmp);
 
         if status.success() {
             Ok(
