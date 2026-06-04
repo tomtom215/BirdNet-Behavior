@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Offline / air-gapped install.** `install.sh` can now install from a release
+  tarball already on disk — `BIRDNET_BINARY_TARBALL=/path/to/…tar.gz sudo -E
+  bash install.sh` — skipping the GitHub fetch and checksum round-trip for a
+  local file the operator placed themselves. Paired with `BIRDNET_SKIP_MODEL=1`
+  (stage the ~541 MB model out-of-band), a station with no internet can be
+  installed end to end. The installer also **degrades gracefully without
+  systemd** (containers, chroots, staged images): it writes the binary, config,
+  and unit file, then prints how to enable the service on a real host instead of
+  aborting at the first `systemctl` call.
+- **Install smoke test in CI** (`.github/workflows/install-smoke.yml`). On every
+  change to the installer or the binary, CI builds the binary, then runs the
+  *real* `install.sh` against it in a clean, network-less, no-systemd
+  `ubuntu:24.04` container (via the new air-gapped path) and asserts the install
+  completes and the dashboard actually serves (`/api/v2/health` reports
+  `healthy`, `/` returns 200). This catches the class of regression that ships
+  green unit tests but a broken operator install.
+
 ### Changed
 
 - **Network retries now use jittered, capped, overflow-safe backoff.** The

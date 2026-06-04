@@ -40,7 +40,25 @@
 #
 # Every step is idempotent — re-running the script is always safe.
 #
-# Requirements: curl or wget, tar, sha256sum, systemd
+# Offline / air-gapped install (no internet on the target):
+#   BIRDNET_BINARY_TARBALL=/path/to/birdnet-behavior-<ver>-<target>.tar.gz \
+#     BIRDNET_SKIP_MODEL=1 sudo -E bash install.sh
+#   Installs the binary from a tarball you already downloaded (skips the GitHub
+#   fetch + checksum round-trip — you vouch for the local file), and skips the
+#   ~541 MB model pull. Place the model in <data>/models and restart afterwards.
+#
+# Environment overrides (all optional):
+#   BIRDNET_BINARY_TARBALL=PATH  install the binary from a local tarball (offline)
+#   BIRDNET_SKIP_MODEL=1         do not download the model (stage it out-of-band)
+#   BIRDNET_NONINTERACTIVE=1     never prompt; take env/config/defaults
+#   BIRDNET_LISTEN=HOST:PORT     dashboard bind address (default 0.0.0.0:8502)
+#   BIRDNET_SKIP_GLIBC_CHECK=1   bypass the glibc floor check (built from source)
+#
+# Without systemd (a container, chroot, or staged image) the script still lays
+# down the binary, config, and unit file, then tells you how to enable it on a
+# real host — it does not abort.
+#
+# Requirements: curl or wget, tar, sha256sum (systemd recommended, not required)
 
 # ===== installer/lib/10-config.sh =====
 # ---------------------------------------------------------------------------
@@ -202,6 +220,18 @@ ask_secret() {
 # ---------------------------------------------------------------------------
 # Privilege, architecture, and glibc preflight
 # ---------------------------------------------------------------------------
+
+# Whether systemd is the running init, so `systemctl` calls will actually work.
+#
+# `systemctl` can be present on a system where systemd is NOT PID 1 — minimal
+# containers, chroots, WSL1, some CI runners — and there every systemctl call
+# fails. `/run/systemd/system` is systemd's own "I am running" marker, so this
+# is the canonical guard. When it returns false the installer writes the unit
+# but skips enable/start, degrading cleanly instead of aborting (see
+# install_service / maybe_start_service).
+has_systemd() {
+    command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]
+}
 
 require_root() {
     if [ "$(id -u)" -ne 0 ]; then
@@ -445,13 +475,25 @@ check_required_tools() {
         || missing+=("curl or wget")
 
     local t
-    for t in tar sha256sum systemctl install mkdir awk grep sed; do
+    for t in tar sha256sum install mkdir awk grep sed; do
         command -v "${t}" &>/dev/null || missing+=("${t}")
     done
 
     if [ "${#missing[@]}" -gt 0 ]; then
         error "Missing required tool(s): ${missing[*]}"
         fatal "Install the missing package(s) and re-run. On Debian/Pi OS: sudo apt-get install coreutils tar curl"
+    fi
+
+    # systemd is the normal service manager, but the install can still lay down
+    # the binary, config, and unit file without it (containers, chroots, an
+    # air-gapped stage-then-boot flow). Degrade with a clear note rather than
+    # hard-failing — install_service / maybe_start_service skip the systemctl
+    # steps when has_systemd is false.
+    if has_systemd; then
+        success "systemd is running — the service will be enabled and started."
+    else
+        warn "systemd is not running here — the unit will be written but not enabled/started."
+        warn "  On a systemd host: sudo systemctl daemon-reload && sudo systemctl enable --now birdnet-behavior"
     fi
 
     # Soft dependencies — note them but keep going.
@@ -597,22 +639,35 @@ install_binary() {
     # shellcheck disable=SC2064
     trap "rm -rf '${workdir}'" RETURN
 
-    info "Downloading ${archive}…"
-    if ! download "${archive_url}" "${workdir}/${archive}"; then
-        fatal "Archive download failed. Check that release v${version} exists for ${arch}."
-    fi
-
-    info "Downloading SHA256SUMS for verification…"
-    if download "${sums_url}" "${workdir}/SHA256SUMS" 2>/dev/null; then
-        # sha256sum -c expects files referenced in SHA256SUMS to be present
-        # in the working directory, so verify from inside workdir.
-        if (cd "${workdir}" && sha256sum -c SHA256SUMS --ignore-missing --status --strict) 2>/dev/null; then
-            success "Checksum verified against SHA256SUMS"
-        else
-            fatal "Checksum mismatch for ${archive} against published SHA256SUMS. Aborting install."
+    # Air-gapped / offline install: BIRDNET_BINARY_TARBALL points at a release
+    # tarball already on disk (downloaded on another machine, or shipped on
+    # media), so the install needs no network for the binary. The operator
+    # vouches for a local file they placed themselves, so we skip the
+    # SHA256SUMS round-trip and verify only the archive's internal layout.
+    if [ -n "${BIRDNET_BINARY_TARBALL:-}" ]; then
+        if [ ! -f "${BIRDNET_BINARY_TARBALL}" ]; then
+            fatal "BIRDNET_BINARY_TARBALL=${BIRDNET_BINARY_TARBALL} is not a file."
         fi
+        info "Using local binary tarball ${BIRDNET_BINARY_TARBALL} (offline install)."
+        cp "${BIRDNET_BINARY_TARBALL}" "${workdir}/${archive}"
     else
-        warn "SHA256SUMS could not be downloaded — continuing without checksum verification."
+        info "Downloading ${archive}…"
+        if ! download "${archive_url}" "${workdir}/${archive}"; then
+            fatal "Archive download failed. Check that release v${version} exists for ${arch}."
+        fi
+
+        info "Downloading SHA256SUMS for verification…"
+        if download "${sums_url}" "${workdir}/SHA256SUMS" 2>/dev/null; then
+            # sha256sum -c expects files referenced in SHA256SUMS to be present
+            # in the working directory, so verify from inside workdir.
+            if (cd "${workdir}" && sha256sum -c SHA256SUMS --ignore-missing --status --strict) 2>/dev/null; then
+                success "Checksum verified against SHA256SUMS"
+            else
+                fatal "Checksum mismatch for ${archive} against published SHA256SUMS. Aborting install."
+            fi
+        else
+            warn "SHA256SUMS could not be downloaded — continuing without checksum verification."
+        fi
     fi
 
     info "Extracting archive…"
@@ -744,6 +799,18 @@ download_model() {
         return
     fi
 
+    # Explicit skip: BIRDNET_SKIP_MODEL=1 lets an air-gapped operator stage the
+    # ~541 MB model out-of-band (place it at ${MODEL_DIR} later), and lets a CI
+    # install smoke test exercise the full flow without the large download. The
+    # daemon won't detect until the model is in place, but the install, config,
+    # unit, and web UI all come up.
+    if [ "${BIRDNET_SKIP_MODEL:-0}" = "1" ]; then
+        install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${MODEL_DIR}"
+        warn "BIRDNET_SKIP_MODEL=1 — skipping the model download."
+        warn "  Place ${MODEL_FILE} and ${LABELS_FILE} in ${MODEL_DIR}, then restart the service."
+        return
+    fi
+
     info "Fetching the BirdNET+ V3.0 model (~541 MB FP32 ONNX) + labels…"
     info "  Primary source: GitHub release ${MODEL_RELEASE_TAG} (sha256-verified)."
     info "  Fallback:       Zenodo. This may take a few minutes on a slow link."
@@ -809,7 +876,9 @@ setup_tmpfs_streaming() {
     install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${STREAM_DIR}"
 
     # If /tmp is NOT already tmpfs, create a dedicated mount.
-    if ! findmnt -t tmpfs /tmp &>/dev/null; then
+    if findmnt -t tmpfs /tmp &>/dev/null; then
+        success "/tmp is already tmpfs — ${STREAM_DIR} is RAM-backed"
+    elif has_systemd; then
         local MOUNT_UNIT="/etc/systemd/system/tmp-birdnet\\x2dstream.mount"
         cat > "${MOUNT_UNIT}" <<MEOF
 [Unit]
@@ -829,7 +898,9 @@ MEOF
         systemctl enable --now "tmp-birdnet\\x2dstream.mount" 2>/dev/null || true
         success "tmpfs mount unit installed for ${STREAM_DIR}"
     else
-        success "/tmp is already tmpfs — ${STREAM_DIR} is RAM-backed"
+        # No systemd to manage a tmpfs mount; the plain directory created above
+        # is enough for a manual / container run (it just isn't RAM-backed).
+        success "Streaming directory ${STREAM_DIR} ready (no systemd tmpfs mount)."
     fi
 }
 
@@ -1124,9 +1195,16 @@ LogRateLimitBurst=1000
 WantedBy=multi-user.target
 EOF
 
-    systemctl daemon-reload
-    systemctl enable birdnet-behavior.service
-    success "Service installed and enabled (Type=notify, hardened, watchdog active)."
+    if has_systemd; then
+        systemctl daemon-reload
+        systemctl enable birdnet-behavior.service
+        success "Service installed and enabled (Type=notify, hardened, watchdog active)."
+    else
+        success "Service unit written to ${SERVICE_FILE} (Type=notify, hardened, watchdog active)."
+        warn "systemd is not running here — not enabling/starting the unit."
+        warn "  On a systemd host, finish with:"
+        warn "    sudo systemctl daemon-reload && sudo systemctl enable --now birdnet-behavior"
+    fi
 }
 
 # ===== installer/lib/70-station.sh =====
@@ -1275,6 +1353,13 @@ prompt_station_settings() {
 # ---------------------------------------------------------------------------
 
 maybe_start_service() {
+    # No systemd here (container / chroot / staged install): the unit is on disk
+    # but there is nothing to start it. install_service already told the operator
+    # how to finish on a real host; nothing more to do.
+    if ! has_systemd; then
+        return
+    fi
+
     # Upgrade path: if we stopped a running service to swap the binary, bring
     # it back on the new version. Schema migrations run automatically on
     # startup, and the SQLite/DuckDB data + config were left untouched.
@@ -1418,6 +1503,7 @@ validate_install() {
 # already-running unit would not load the new binary. Records that it was
 # running so the service is restarted afterwards.
 stop_running_service_for_swap() {
+    has_systemd || return 0
     if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
         SERVICE_WAS_RUNNING=1
         info "Stopping the running service to swap the binary safely…"
@@ -1477,7 +1563,9 @@ do_repair() {
     check_required_tools
 
     local was_active=0
-    systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null && was_active=1
+    if has_systemd; then
+        systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null && was_active=1
+    fi
 
     # Binary: only (re)download if it is actually missing.
     if [ ! -x "${INSTALL_DIR}/${BINARY_NAME}" ]; then
@@ -1509,8 +1597,10 @@ do_repair() {
 
     # Clear any failed / rate-limited state from prior crash loops, then bring
     # the service up with the repaired unit.
-    systemctl reset-failed "${SERVICE_NAME}" 2>/dev/null || true
-    if [ "${was_active}" = 1 ] || grep -qE '^(ALSA_CARD|RTSP_URL)=' "${CONFIG_FILE}" 2>/dev/null; then
+    if ! has_systemd; then
+        warn "systemd is not running here — rewrote the unit but did not (re)start it."
+    elif [ "${was_active}" = 1 ] || grep -qE '^(ALSA_CARD|RTSP_URL)=' "${CONFIG_FILE}" 2>/dev/null; then
+        systemctl reset-failed "${SERVICE_NAME}" 2>/dev/null || true
         info "Starting the service with the repaired unit…"
         if systemctl restart "${SERVICE_NAME}"; then
             success "Service (re)started."
@@ -1795,9 +1885,13 @@ ExecStop=/bin/sh -c 'swapoff -a 2>/dev/null; zramctl --list 2>/dev/null | awk "N
 WantedBy=multi-user.target
 EOF
 
-    systemctl daemon-reload
-    systemctl enable zram-swap.service &>/dev/null
-    success "ZRAM swap service installed and enabled (persists across reboots)."
+    if has_systemd; then
+        systemctl daemon-reload
+        systemctl enable zram-swap.service &>/dev/null
+        success "ZRAM swap service installed and enabled (persists across reboots)."
+    else
+        success "ZRAM swap unit written (enable it with systemctl on a systemd host)."
+    fi
 }
 
 # ===== installer/lib/85-macos.sh =====

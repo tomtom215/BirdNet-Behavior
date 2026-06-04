@@ -1,0 +1,179 @@
+# Install smoke test.
+#
+# Proves the bare-metal one-liner install actually works end to end: build the
+# binary, then run the *real* install.sh against it in a clean container and
+# assert the install completes and the web UI serves.
+#
+# Why a container, and why offline:
+#   * A PR has no published GitHub Release, so install.sh can't download its
+#     binary. The installer's air-gapped path (BIRDNET_BINARY_TARBALL) installs
+#     the freshly-built tarball instead — exercising the same assembly, arch
+#     detection, checksum-skip, extraction, directory, config, and unit-writing
+#     code the real install runs.
+#   * BIRDNET_SKIP_MODEL=1 skips the ~541 MB model pull; the web server binds and
+#     serves regardless (the detection daemon is what needs the model), so the
+#     "service comes up and the dashboard answers" guarantee is still tested.
+#   * A plain ubuntu:24.04 container has no systemd (PID 1), which exercises the
+#     installer's graceful no-systemd degradation (write the unit, skip
+#     enable/start) — the same path a container or staged install takes. We then
+#     start the installed binary in --web-only mode and curl it, a deterministic
+#     stand-in for "systemd started the service" without systemd-in-Docker.
+#
+# Scope: this gates the operator install → service → dashboard flow on a slim
+# (--no-default-features) build, which links no DuckDB and so runs in a minimal
+# container with high reliability. The analytics-on build and the offline
+# `LOAD behavioral` path are gated separately by ci.yml's
+# `cargo test --workspace --all-features` job and the behavioral crate's
+# embedded-extension test.
+#
+# This catches the class of regression that ships green unit tests but a broken
+# operator install (a bad module concatenation, a tool the installer assumes, a
+# path/permission mistake, a binary that won't bind its socket).
+
+name: Install smoke test
+
+on:
+  push:
+    branches: ["main", "master"]
+    paths:
+      - "install.sh"
+      - "installer/lib/**"
+      - "src/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/install-smoke.yml"
+  pull_request:
+    branches: ["main", "master"]
+    paths:
+      - "install.sh"
+      - "installer/lib/**"
+      - "src/**"
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/install-smoke.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  smoke:
+    name: install.sh → web UI (offline, no-systemd container)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: install-smoke
+
+      - name: Verify install.sh is in sync with installer/lib
+        # A stale install.sh would smoke-test the wrong script; fail fast.
+        run: bash installer/build.sh --check
+
+      - name: Build the binary (slim)
+        run: cargo build --no-default-features --bin birdnet-behavior
+
+      - name: Package an offline install tarball
+        id: pkg
+        shell: bash
+        run: |
+          set -eu
+          VER="$(awk '/^\[workspace\.package\]/{f=1;next} /^\[/{f=0} f&&/^version = /{gsub(/[" ]/,"",$3);print $3;exit}' Cargo.toml)"
+          TARGET="x86_64-unknown-linux-gnu"
+          STAGE="dist/birdnet-behavior-${VER}-${TARGET}"
+          mkdir -p "$STAGE"
+          cp target/debug/birdnet-behavior "$STAGE/"
+          tar -C dist -czf "dist/birdnet-behavior-${VER}-${TARGET}.tar.gz" "birdnet-behavior-${VER}-${TARGET}"
+          echo "version=${VER}" >> "$GITHUB_OUTPUT"
+          echo "tarball_rel=dist/birdnet-behavior-${VER}-${TARGET}.tar.gz" >> "$GITHUB_OUTPUT"
+          ls -lh "dist/birdnet-behavior-${VER}-${TARGET}.tar.gz"
+
+      - name: Run install.sh + assert the web UI serves (no-systemd container)
+        shell: bash
+        env:
+          VER: ${{ steps.pkg.outputs.version }}
+          TARBALL_REL: ${{ steps.pkg.outputs.tarball_rel }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD:/work" -w /work \
+            -e VER -e TARBALL_REL \
+            ubuntu:24.04 bash -euo pipefail -c '
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update -qq
+              # coreutils/tar/awk/grep/sed ship in the base image; the installer
+              # needs a downloader (curl), and the binary links libstdc++. ss
+              # (iproute2) is handy for the listen check.
+              apt-get install -y -qq curl ca-certificates iproute2 libstdc++6 >/dev/null
+              # install.sh refuses to own the service as root, so give it a real
+              # SUDO_USER — the air-gapped/offline operator flow.
+              useradd -m bnbtest
+
+              echo "::group::install.sh (offline tarball, skip-model, no-systemd)"
+              VERSION="$VER" \
+              BIRDNET_BINARY_TARBALL="/work/${TARBALL_REL}" \
+              BIRDNET_SKIP_MODEL=1 \
+              BIRDNET_NONINTERACTIVE=1 \
+              BIRDNET_SKIP_GLIBC_CHECK=1 \
+              BIRDNET_LISTEN=127.0.0.1:8599 \
+              SUDO_USER=bnbtest \
+              bash install.sh
+              echo "::endgroup::"
+
+              # The install must have laid down the binary, config, and unit.
+              test -x /usr/local/bin/birdnet-behavior
+              test -f /etc/birdnet/birdnet.conf
+              test -f /etc/systemd/system/birdnet-behavior.service
+              /usr/local/bin/birdnet-behavior --version
+
+              # Run --doctor for log visibility. We deliberately do NOT gate on
+              # its exit code here: BIRDNET_SKIP_MODEL means there is no model, so
+              # the doctor correctly reports a model error (exit 2) — that is the
+              # expected, healthy behaviour for a model-less smoke install, not a
+              # failure of the install flow this job tests.
+              runuser -u bnbtest -- /usr/local/bin/birdnet-behavior \
+                --doctor --config /etc/birdnet/birdnet.conf || \
+                echo "(doctor flagged the absent model — expected with BIRDNET_SKIP_MODEL)"
+
+              echo "::group::start the service (web-only) and probe the dashboard"
+              runuser -u bnbtest -- /usr/local/bin/birdnet-behavior \
+                --web-only --config /etc/birdnet/birdnet.conf \
+                --listen 127.0.0.1:8599 > /tmp/web.log 2>&1 &
+              srv=$!
+              ok=0
+              for _ in $(seq 1 60); do
+                if curl -fsS -o /dev/null "http://127.0.0.1:8599/api/v2/health" 2>/dev/null; then ok=1; break; fi
+                sleep 1
+              done
+              if [ "$ok" != 1 ]; then echo "web server never came up:"; cat /tmp/web.log; exit 1; fi
+
+              health="$(curl -fsS http://127.0.0.1:8599/api/v2/health)"
+              echo "health: $health"
+              echo "$health" | grep -q "\"status\":\"healthy\"" || { echo "health not healthy"; exit 1; }
+
+              # The dashboard answers (a fresh DB redirects / to onboarding — 200
+              # after following the redirect).
+              code="$(curl -fsSL -o /dev/null -w "%{http_code}" http://127.0.0.1:8599/)"
+              test "$code" = 200 || { echo "dashboard / returned $code"; exit 1; }
+
+              kill "$srv" 2>/dev/null || true
+              echo "::endgroup::"
+              echo "install smoke test PASSED — install completed and the web UI served."
+            '

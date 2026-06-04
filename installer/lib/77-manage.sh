@@ -8,6 +8,7 @@
 # already-running unit would not load the new binary. Records that it was
 # running so the service is restarted afterwards.
 stop_running_service_for_swap() {
+    has_systemd || return 0
     if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
         SERVICE_WAS_RUNNING=1
         info "Stopping the running service to swap the binary safely…"
@@ -67,7 +68,9 @@ do_repair() {
     check_required_tools
 
     local was_active=0
-    systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null && was_active=1
+    if has_systemd; then
+        systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null && was_active=1
+    fi
 
     # Binary: only (re)download if it is actually missing.
     if [ ! -x "${INSTALL_DIR}/${BINARY_NAME}" ]; then
@@ -99,8 +102,10 @@ do_repair() {
 
     # Clear any failed / rate-limited state from prior crash loops, then bring
     # the service up with the repaired unit.
-    systemctl reset-failed "${SERVICE_NAME}" 2>/dev/null || true
-    if [ "${was_active}" = 1 ] || grep -qE '^(ALSA_CARD|RTSP_URL)=' "${CONFIG_FILE}" 2>/dev/null; then
+    if ! has_systemd; then
+        warn "systemd is not running here — rewrote the unit but did not (re)start it."
+    elif [ "${was_active}" = 1 ] || grep -qE '^(ALSA_CARD|RTSP_URL)=' "${CONFIG_FILE}" 2>/dev/null; then
+        systemctl reset-failed "${SERVICE_NAME}" 2>/dev/null || true
         info "Starting the service with the repaired unit…"
         if systemctl restart "${SERVICE_NAME}"; then
             success "Service (re)started."

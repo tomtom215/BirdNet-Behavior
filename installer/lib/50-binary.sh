@@ -31,22 +31,35 @@ install_binary() {
     # shellcheck disable=SC2064
     trap "rm -rf '${workdir}'" RETURN
 
-    info "Downloading ${archive}…"
-    if ! download "${archive_url}" "${workdir}/${archive}"; then
-        fatal "Archive download failed. Check that release v${version} exists for ${arch}."
-    fi
-
-    info "Downloading SHA256SUMS for verification…"
-    if download "${sums_url}" "${workdir}/SHA256SUMS" 2>/dev/null; then
-        # sha256sum -c expects files referenced in SHA256SUMS to be present
-        # in the working directory, so verify from inside workdir.
-        if (cd "${workdir}" && sha256sum -c SHA256SUMS --ignore-missing --status --strict) 2>/dev/null; then
-            success "Checksum verified against SHA256SUMS"
-        else
-            fatal "Checksum mismatch for ${archive} against published SHA256SUMS. Aborting install."
+    # Air-gapped / offline install: BIRDNET_BINARY_TARBALL points at a release
+    # tarball already on disk (downloaded on another machine, or shipped on
+    # media), so the install needs no network for the binary. The operator
+    # vouches for a local file they placed themselves, so we skip the
+    # SHA256SUMS round-trip and verify only the archive's internal layout.
+    if [ -n "${BIRDNET_BINARY_TARBALL:-}" ]; then
+        if [ ! -f "${BIRDNET_BINARY_TARBALL}" ]; then
+            fatal "BIRDNET_BINARY_TARBALL=${BIRDNET_BINARY_TARBALL} is not a file."
         fi
+        info "Using local binary tarball ${BIRDNET_BINARY_TARBALL} (offline install)."
+        cp "${BIRDNET_BINARY_TARBALL}" "${workdir}/${archive}"
     else
-        warn "SHA256SUMS could not be downloaded — continuing without checksum verification."
+        info "Downloading ${archive}…"
+        if ! download "${archive_url}" "${workdir}/${archive}"; then
+            fatal "Archive download failed. Check that release v${version} exists for ${arch}."
+        fi
+
+        info "Downloading SHA256SUMS for verification…"
+        if download "${sums_url}" "${workdir}/SHA256SUMS" 2>/dev/null; then
+            # sha256sum -c expects files referenced in SHA256SUMS to be present
+            # in the working directory, so verify from inside workdir.
+            if (cd "${workdir}" && sha256sum -c SHA256SUMS --ignore-missing --status --strict) 2>/dev/null; then
+                success "Checksum verified against SHA256SUMS"
+            else
+                fatal "Checksum mismatch for ${archive} against published SHA256SUMS. Aborting install."
+            fi
+        else
+            warn "SHA256SUMS could not be downloaded — continuing without checksum verification."
+        fi
     fi
 
     info "Extracting archive…"

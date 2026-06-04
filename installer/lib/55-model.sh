@@ -93,6 +93,18 @@ download_model() {
         return
     fi
 
+    # Explicit skip: BIRDNET_SKIP_MODEL=1 lets an air-gapped operator stage the
+    # ~541 MB model out-of-band (place it at ${MODEL_DIR} later), and lets a CI
+    # install smoke test exercise the full flow without the large download. The
+    # daemon won't detect until the model is in place, but the install, config,
+    # unit, and web UI all come up.
+    if [ "${BIRDNET_SKIP_MODEL:-0}" = "1" ]; then
+        install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${MODEL_DIR}"
+        warn "BIRDNET_SKIP_MODEL=1 — skipping the model download."
+        warn "  Place ${MODEL_FILE} and ${LABELS_FILE} in ${MODEL_DIR}, then restart the service."
+        return
+    fi
+
     info "Fetching the BirdNET+ V3.0 model (~541 MB FP32 ONNX) + labels…"
     info "  Primary source: GitHub release ${MODEL_RELEASE_TAG} (sha256-verified)."
     info "  Fallback:       Zenodo. This may take a few minutes on a slow link."
