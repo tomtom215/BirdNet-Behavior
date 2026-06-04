@@ -66,7 +66,11 @@ ExecStop=/bin/sh -c 'swapoff -a 2>/dev/null; zramctl --list 2>/dev/null | awk "N
 WantedBy=multi-user.target
 EOF
 
-    systemctl daemon-reload
-    systemctl enable zram-swap.service &>/dev/null
-    success "ZRAM swap service installed and enabled (persists across reboots)."
+    if has_systemd; then
+        systemctl daemon-reload
+        systemctl enable zram-swap.service &>/dev/null
+        success "ZRAM swap service installed and enabled (persists across reboots)."
+    else
+        success "ZRAM swap unit written (enable it with systemctl on a systemd host)."
+    fi
 }

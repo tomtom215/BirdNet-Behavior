@@ -152,17 +152,45 @@ fn resolve_alsa_devices(cli: &Cli, config: Option<&birdnet_core::config::Config>
     Vec::new()
 }
 
+/// A capture source resolved from the DB (or CLI/config), bundled with the
+/// per-source runtime knobs the supervisor and capture command apply:
+/// `gain_db` (software gain, applied in the capture command) and `quiet`
+/// (a pause window enforced by the supervisor). The CLI/config path carries
+/// unity gain and no quiet window — those are admin-UI / `audio_sources`
+/// concepts that the bare BirdNET-Pi-style flags don't express.
+struct ResolvedSource {
+    source: CaptureSource,
+    gain_db: f32,
+    quiet: Option<supervisor::QuietWindow>,
+}
+
+/// Parse a DB `schedule_quiet` (`HH:MM`, `HH:MM`) pair into the supervisor's
+/// minute-based [`supervisor::QuietWindow`].
+///
+/// Returns `None` when there is no window, or when either endpoint is malformed
+/// — the `audio_sources` insert/update path validates `HH:MM`, so a malformed
+/// value here is unexpected, but we degrade to "no quiet window" rather than
+/// fail capture for the source.
+fn parse_quiet_window(quiet: Option<&(String, String)>) -> Option<supervisor::QuietWindow> {
+    let (start, end) = quiet?;
+    let start_min = schedule::parse_hhmm(start)?;
+    let end_min = schedule::parse_hhmm(end)?;
+    Some(supervisor::QuietWindow::new(start_min, end_min))
+}
+
 /// Resolve capture sources from the `audio_sources` SQLite table.
 ///
 /// Returns `None` when the DB read errors (the caller treats that as
 /// "fall back to CLI/config"); returns `Some(empty)` when the table is
 /// present but every row is disabled (the caller also falls back); and
-/// `Some(non-empty)` only when at least one row is active.
+/// `Some(non-empty)` only when at least one row is active. Each resolved
+/// source carries the row's `gain_db` and (parsed) `schedule_quiet`, so the
+/// admin-UI per-source gain and quiet window actually take effect.
 ///
 /// O-13 stage 1 — additive layer over the existing CLI/config path.
 /// Subsequent stages will retire the legacy path once every deployed
 /// station has migrated its sources into the table.
-fn resolve_sources_from_db(state: &birdnet_web::state::AppState) -> Option<Vec<CaptureSource>> {
+fn resolve_sources_from_db(state: &birdnet_web::state::AppState) -> Option<Vec<ResolvedSource>> {
     use birdnet_db::audio_sources::AudioSourceStore;
     let rows = state.with_db(|conn| AudioSourceStore::list(conn).ok())?;
     let active: Vec<_> = rows
@@ -189,11 +217,12 @@ fn resolve_sources_from_db(state: &birdnet_web::state::AppState) -> Option<Vec<C
     let mut out = Vec::with_capacity(active.len());
     let mut rtsp_index = 0_usize;
     for row in active {
-        out.push(audio_source_to_capture_source(
-            &row,
-            local_count > 1,
-            &mut rtsp_index,
-        ));
+        let source = audio_source_to_capture_source(&row, local_count > 1, &mut rtsp_index);
+        out.push(ResolvedSource {
+            source,
+            gain_db: row.gain_db,
+            quiet: parse_quiet_window(row.schedule_quiet.as_ref()),
+        });
     }
     Some(out)
 }
@@ -464,7 +493,7 @@ pub fn start_capture_manager(
             );
         }
     }
-    let sources = if let Some(state) = state
+    let sources: Vec<ResolvedSource> = if let Some(state) = state
         && let Some(db_sources) = resolve_sources_from_db(state)
         && !db_sources.is_empty()
     {
@@ -481,7 +510,16 @@ pub fn start_capture_manager(
                 "capture sources resolved from CLI/config (no audio_sources rows)"
             );
         }
+        // The bare CLI/config flags carry no gain or quiet window — those are
+        // admin-UI / audio_sources concepts — so resolve to unity gain, none.
         cli_sources
+            .into_iter()
+            .map(|source| ResolvedSource {
+                source,
+                gain_db: 0.0,
+                quiet: None,
+            })
+            .collect()
     };
     if sources.is_empty() {
         return None;
@@ -496,18 +534,29 @@ pub fn start_capture_manager(
     let schedule_config = schedule::parse_schedule_config(cli, config);
     log_schedule(cli, &schedule_config);
 
-    let supervised: Vec<(CaptureManager, String)> = sources
+    let supervised: Vec<(CaptureManager, String, Option<supervisor::QuietWindow>)> = sources
         .into_iter()
-        .map(|source| {
+        .map(|resolved| {
+            let ResolvedSource {
+                source,
+                gain_db,
+                quiet,
+            } = resolved;
             let label = source_gauge_label(&source);
-            tracing::info!(source = %label, "audio source configured");
+            tracing::info!(
+                source = %label,
+                gain_db,
+                quiet = quiet.is_some(),
+                "audio source configured"
+            );
             let recording_config = RecordingConfig {
                 source,
                 output_dir: output_dir.clone(),
                 segment_duration_secs: cli.segment_duration,
                 format: AudioFormat::Wav,
+                gain_db,
             };
-            (CaptureManager::new(recording_config), label)
+            (CaptureManager::new(recording_config), label, quiet)
         })
         .collect();
 
@@ -558,6 +607,7 @@ fn run_supervisor(
         supervisor.tick(
             Instant::now(),
             recording_allowed(schedule_config, secs),
+            quiet_minute_of_day(secs),
             metrics,
         );
         sleep_with_stop(SUPERVISE_TICK, stop);
@@ -582,6 +632,14 @@ fn recording_allowed(config: &ScheduleConfig, secs: u64) -> bool {
 fn schedule_allows_at(config: &ScheduleConfig, secs: u64) -> bool {
     let (year, month, day, minutes_now) = schedule::civil_from_unix_secs(secs);
     DailySchedule::for_date(config, year, month, day).is_allowed(minutes_now)
+}
+
+/// The current minute-of-day (UTC) used to evaluate per-source quiet windows,
+/// or `None` while the clock looks unsynced. Quiet windows fail **open** just
+/// like the schedule — a bogus boot-time date must not pause a source — so the
+/// supervisor only enforces them once the clock is trustworthy.
+fn quiet_minute_of_day(secs: u64) -> Option<u32> {
+    schedule::secs_look_synced(secs).then(|| schedule::civil_from_unix_secs(secs).3)
 }
 
 /// Log a one-line notice when the clock's apparent sync state changes.
@@ -1070,7 +1128,7 @@ mod tests {
         assert_eq!(resolved.len(), 2);
         // The disabled row must not appear.
         for s in &resolved {
-            match s {
+            match &s.source {
                 CaptureSource::Microphone { device, .. } => assert_ne!(device, "plughw:9,9"),
                 CaptureSource::Rtsp { url, .. } => assert!(!url.contains("plughw")),
                 CaptureSource::PipeWire { .. } => {}
@@ -1149,7 +1207,7 @@ mod tests {
         let resolved = resolve_sources_from_db(&state).expect("non-empty");
         let mic = resolved
             .iter()
-            .find_map(|s| match s {
+            .find_map(|s| match &s.source {
                 CaptureSource::Microphone { stream_id, .. } => Some(stream_id.clone()),
                 _ => None,
             })
@@ -1172,7 +1230,7 @@ mod tests {
         let resolved = resolve_sources_from_db(&state).expect("non-empty");
         let ids: Vec<_> = resolved
             .iter()
-            .filter_map(|s| match s {
+            .filter_map(|s| match &s.source {
                 CaptureSource::Microphone { stream_id, .. }
                 | CaptureSource::PipeWire { stream_id, .. } => stream_id.clone(),
                 CaptureSource::Rtsp { .. } => None,
@@ -1180,5 +1238,82 @@ mod tests {
             .collect();
         assert!(ids.contains(&"src_a".to_string()));
         assert!(ids.contains(&"src_b".to_string()));
+    }
+
+    // ---- gain_db + schedule_quiet threading (Workstream D) ----------------
+
+    #[test]
+    fn resolve_from_db_carries_gain_and_quiet_window() {
+        use birdnet_db::audio_sources::{AudioSourceStore, NewAudioSource};
+        let state = fresh_state();
+        let mut new = NewAudioSource::defaults("src_gain", SourceKind::UsbAlsa, "plughw:1,0");
+        new.gain_db = 12.0;
+        new.schedule_quiet = Some(("22:00".to_string(), "06:00".to_string()));
+        state
+            .with_db(|conn| AudioSourceStore::insert(conn, &new))
+            .expect("insert row with gain + quiet");
+
+        let resolved = resolve_sources_from_db(&state).expect("non-empty");
+        assert_eq!(resolved.len(), 1);
+        // The per-source gain reaches the resolved source (and thence the
+        // RecordingConfig / capture command).
+        assert!((resolved[0].gain_db - 12.0).abs() < 1e-4);
+        // 22:00–06:00 parses to a wraparound quiet window the supervisor enforces.
+        assert_eq!(
+            resolved[0].quiet,
+            Some(supervisor::QuietWindow::new(22 * 60, 6 * 60))
+        );
+    }
+
+    #[test]
+    fn resolve_from_db_defaults_to_unity_gain_and_no_quiet() {
+        let state = fresh_state();
+        insert_row(
+            &state,
+            "src_plain",
+            SourceKind::UsbAlsa,
+            "plughw:1,0",
+            false,
+        );
+        let resolved = resolve_sources_from_db(&state).expect("non-empty");
+        assert!((resolved[0].gain_db - 0.0).abs() < 1e-6);
+        assert_eq!(resolved[0].quiet, None);
+    }
+
+    // ---- parse_quiet_window -----------------------------------------------
+
+    #[test]
+    fn parse_quiet_window_parses_valid_pair() {
+        let q = parse_quiet_window(Some(&("22:00".to_string(), "06:00".to_string())));
+        assert_eq!(q, Some(supervisor::QuietWindow::new(1320, 360)));
+    }
+
+    #[test]
+    fn parse_quiet_window_none_for_absent_or_malformed() {
+        assert_eq!(parse_quiet_window(None), None);
+        // A malformed endpoint degrades to "no quiet window" rather than panic.
+        assert_eq!(
+            parse_quiet_window(Some(&("25:00".to_string(), "06:00".to_string()))),
+            None
+        );
+        assert_eq!(
+            parse_quiet_window(Some(&("22:00".to_string(), "nope".to_string()))),
+            None
+        );
+    }
+
+    // ---- quiet_minute_of_day ----------------------------------------------
+
+    #[test]
+    fn quiet_minute_of_day_none_when_clock_unsynced() {
+        // At the epoch the clock is untrusted → quiet windows fail open (None).
+        assert_eq!(quiet_minute_of_day(0), None);
+    }
+
+    #[test]
+    fn quiet_minute_of_day_is_utc_minute_when_synced() {
+        // 2024-01-01 06:30:00 UTC → minute-of-day 390, and the clock looks synced.
+        let secs = 1_704_067_200 + 6 * 3600 + 30 * 60;
+        assert_eq!(quiet_minute_of_day(secs), Some(6 * 60 + 30));
     }
 }

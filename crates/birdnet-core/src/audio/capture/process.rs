@@ -100,11 +100,53 @@ fn drain_capture_stderr(child: &mut Child, source: &str) {
     }
 }
 
-/// Start an audio capture process for a microphone source via `arecord`.
+/// The smallest absolute gain (in dB) we bother applying. Below this the gain
+/// is treated as "off": local microphone capture stays on the lighter-weight
+/// `arecord` path and the ffmpeg sources omit the `volume` filter entirely.
+/// `0.05` dB is well below audible and matches the threshold the admin UI uses
+/// to decide whether to *show* a gain badge, so "looks like no gain in the UI"
+/// and "no gain applied at capture" always agree.
+const GAIN_EPSILON_DB: f32 = 0.05;
+
+/// Whether a configured `gain_db` is large enough to apply.
+///
+/// Pure so the boundary is unit-testable. The `abs()` makes a cut (negative dB)
+/// active just like a boost; only a value within `GAIN_EPSILON_DB` of unity
+/// is treated as "no gain".
+#[must_use]
+pub fn gain_is_active(gain_db: f32) -> bool {
+    gain_db.abs() >= GAIN_EPSILON_DB
+}
+
+/// The ffmpeg `volume` filter expression that applies `gain_db`.
+///
+/// `None` when the gain is effectively unity. ffmpeg's `volume` filter accepts a
+/// dB suffix, e.g. `volume=12.00dB` (boost) or `volume=-6.00dB` (cut). Pure so it
+/// can be unit-tested without spawning ffmpeg.
+#[must_use]
+pub fn gain_volume_filter(gain_db: f32) -> Option<String> {
+    gain_is_active(gain_db).then(|| format!("volume={gain_db:.2}dB"))
+}
+
+/// Append `-af volume=<gain>dB` to `cmd` when the gain is active; a no-op at
+/// unity gain so the ffmpeg command line is unchanged for sources without gain.
+fn apply_gain_filter(cmd: &mut Command, gain_db: f32) {
+    if let Some(filter) = gain_volume_filter(gain_db) {
+        cmd.arg("-af").arg(filter);
+    }
+}
+
+/// Start an audio capture process for a microphone source.
+///
+/// Uses `arecord` (ALSA) at unity gain — the historical, lightest path. When a
+/// non-zero `gain_db` is configured, capture is routed through `ffmpeg -f alsa`
+/// instead, because `arecord` has no software-gain control; the gain is applied
+/// with ffmpeg's `volume` filter. macOS always uses `ffmpeg`'s avfoundation
+/// input (ALSA is Linux-only), with the same optional gain filter.
 ///
 /// # Errors
 ///
-/// Returns `CaptureError` if `arecord` cannot be started.
+/// Returns `CaptureError` if the capture tool cannot be started.
 pub fn start_microphone_capture(config: &RecordingConfig) -> Result<CaptureProcess, CaptureError> {
     let CaptureSource::Microphone {
         ref device,
@@ -119,11 +161,14 @@ pub fn start_microphone_capture(config: &RecordingConfig) -> Result<CaptureProce
     let filename_pattern = recording_filename(stream_id.as_deref(), config.format);
     let output_path = config.output_dir.join(&filename_pattern);
     let segment = config.segment_duration_secs.to_string();
+    let gain = config.gain_db;
 
     // macOS captures the system microphone through ffmpeg's avfoundation input
-    // (ALSA's `arecord` is Linux-only); every other target uses `arecord`. Both
-    // branches are compiled on every platform via `cfg!` (not `#[cfg]`), so the
-    // macOS path is type-checked and linted even when the build runs on Linux.
+    // (ALSA's `arecord` is Linux-only); on Linux we use `arecord` unless a gain
+    // is configured, in which case we use `ffmpeg -f alsa` so the `volume`
+    // filter can apply it (arecord has no software gain). Both ffmpeg branches
+    // are compiled on every platform via `cfg!` (not `#[cfg]`), so the macOS
+    // path is type-checked and linted even when the build runs on Linux.
     let mut cmd = if cfg!(target_os = "macos") {
         // The avfoundation input spec is "[video]:[audio]"; ":<n>" selects audio
         // device <n> with no video capture. ALSA-style device names (e.g.
@@ -142,8 +187,30 @@ pub fn start_microphone_capture(config: &RecordingConfig) -> Result<CaptureProce
             .arg("-ar")
             .arg(sample_rate.to_string())
             .arg("-ac")
-            .arg(channels.to_string())
-            .arg("-f")
+            .arg(channels.to_string());
+        apply_gain_filter(&mut cmd, gain);
+        cmd.arg("-f")
+            .arg("segment")
+            .arg("-segment_time")
+            .arg(&segment)
+            .arg("-strftime")
+            .arg("1")
+            .arg(output_path.to_string_lossy().as_ref());
+        cmd
+    } else if gain_is_active(gain) {
+        // Linux microphone WITH gain: ffmpeg's ALSA input + `volume` filter.
+        // `-f alsa -i <device>` takes the same device name `arecord -D` would.
+        let mut cmd = Command::new("ffmpeg");
+        cmd.arg("-f")
+            .arg("alsa")
+            .arg("-i")
+            .arg(device)
+            .arg("-ar")
+            .arg(sample_rate.to_string())
+            .arg("-ac")
+            .arg(channels.to_string());
+        apply_gain_filter(&mut cmd, gain);
+        cmd.arg("-f")
             .arg("segment")
             .arg("-segment_time")
             .arg(&segment)
@@ -152,6 +219,8 @@ pub fn start_microphone_capture(config: &RecordingConfig) -> Result<CaptureProce
             .arg(output_path.to_string_lossy().as_ref());
         cmd
     } else {
+        // Linux microphone at unity gain: the historical, lightest `arecord`
+        // path, byte-for-byte unchanged.
         let mut cmd = Command::new("arecord");
         cmd.arg("-D")
             .arg(device)
@@ -171,7 +240,7 @@ pub fn start_microphone_capture(config: &RecordingConfig) -> Result<CaptureProce
 
     let mut child = cmd.spawn()?;
     drain_capture_stderr(&mut child, device);
-    tracing::info!(device = %device, "started microphone capture");
+    tracing::info!(device = %device, gain_db = gain, "started microphone capture");
     Ok(CaptureProcess {
         child,
         source: config.source.clone(),
@@ -215,15 +284,17 @@ pub fn start_pipewire_capture(config: &RecordingConfig) -> Result<CaptureProcess
     let filename_pattern = recording_filename(stream_id.as_deref(), config.format);
     let output_path = config.output_dir.join(&filename_pattern);
 
-    let mut child = Command::new("ffmpeg")
-        .arg("-f")
+    let mut cmd = Command::new("ffmpeg");
+    cmd.arg("-f")
         .arg("pulse")
         .arg("-i")
         .arg(pulse_device)
         .arg("-ar")
         .arg(sample_rate.to_string())
         .arg("-ac")
-        .arg(channels.to_string())
+        .arg(channels.to_string());
+    apply_gain_filter(&mut cmd, config.gain_db);
+    let mut child = cmd
         .arg("-f")
         .arg("segment")
         .arg("-segment_time")
@@ -238,6 +309,7 @@ pub fn start_pipewire_capture(config: &RecordingConfig) -> Result<CaptureProcess
 
     tracing::info!(
         device = pulse_device,
+        gain_db = config.gain_db,
         "started PipeWire/PulseAudio capture via ffmpeg pulse"
     );
     Ok(CaptureProcess {
@@ -264,8 +336,8 @@ pub fn start_rtsp_capture(config: &RecordingConfig) -> Result<CaptureProcess, Ca
     let filename_pattern = recording_filename(Some(stream_id), config.format);
     let output_path = config.output_dir.join(&filename_pattern);
 
-    let mut child = Command::new("ffmpeg")
-        .arg("-rtsp_transport")
+    let mut cmd = Command::new("ffmpeg");
+    cmd.arg("-rtsp_transport")
         .arg(transport.ffmpeg_arg())
         .arg("-i")
         .arg(url)
@@ -275,7 +347,9 @@ pub fn start_rtsp_capture(config: &RecordingConfig) -> Result<CaptureProcess, Ca
         .arg("-ar")
         .arg("48000")
         .arg("-ac")
-        .arg("1")
+        .arg("1");
+    apply_gain_filter(&mut cmd, config.gain_db);
+    let mut child = cmd
         .arg("-f")
         .arg("segment")
         .arg("-segment_time")
@@ -291,6 +365,7 @@ pub fn start_rtsp_capture(config: &RecordingConfig) -> Result<CaptureProcess, Ca
     tracing::info!(
         stream_id = stream_id,
         url = url,
+        gain_db = config.gain_db,
         "started RTSP capture via ffmpeg"
     );
     Ok(CaptureProcess {
@@ -397,7 +472,62 @@ mod tests {
             output_dir: PathBuf::from("/tmp"),
             segment_duration_secs: 15,
             format: AudioFormat::Wav,
+            gain_db: 0.0,
         };
         assert!(start_microphone_capture(&config).is_err());
+    }
+
+    // ---- gain decision helpers (pure) -------------------------------------
+
+    #[test]
+    fn gain_inactive_at_and_below_epsilon() {
+        // Unity gain and anything within the epsilon band is "no gain".
+        assert!(!gain_is_active(0.0));
+        assert!(!gain_is_active(0.04));
+        assert!(!gain_is_active(-0.04));
+        // Just under the 0.05 boundary stays inactive.
+        assert!(!gain_is_active(0.049));
+    }
+
+    #[test]
+    fn gain_active_at_or_above_epsilon_either_sign() {
+        // Exactly at the boundary is active (>=, not >), and a cut counts via abs().
+        assert!(gain_is_active(0.05));
+        assert!(gain_is_active(-0.05));
+        assert!(gain_is_active(12.0));
+        assert!(gain_is_active(-6.0));
+    }
+
+    #[test]
+    fn volume_filter_none_at_unity() {
+        assert_eq!(gain_volume_filter(0.0), None);
+        assert_eq!(gain_volume_filter(0.04), None);
+    }
+
+    #[test]
+    fn volume_filter_formats_db_with_two_decimals() {
+        // ffmpeg's `volume` filter wants a dB suffix; we always emit 2 decimals
+        // so a boost and a cut format identically (and the sign is preserved).
+        assert_eq!(gain_volume_filter(12.0).as_deref(), Some("volume=12.00dB"));
+        assert_eq!(gain_volume_filter(-6.5).as_deref(), Some("volume=-6.50dB"));
+        assert_eq!(gain_volume_filter(3.25).as_deref(), Some("volume=3.25dB"));
+    }
+
+    #[test]
+    fn apply_gain_filter_only_adds_args_when_active() {
+        // At unity gain the ffmpeg command line is unchanged; with gain it gains
+        // exactly the `-af volume=...dB` pair. We assert on the rendered argv.
+        let argv = |gain: f32| -> Vec<String> {
+            let mut cmd = Command::new("ffmpeg");
+            apply_gain_filter(&mut cmd, gain);
+            cmd.get_args()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect()
+        };
+        assert!(argv(0.0).is_empty(), "unity gain adds no args");
+        assert_eq!(
+            argv(9.0),
+            vec!["-af".to_string(), "volume=9.00dB".to_string()]
+        );
     }
 }

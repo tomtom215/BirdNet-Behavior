@@ -218,19 +218,14 @@ async fn toggle_rule_handler(
 
 #[allow(clippy::too_many_lines)]
 fn render_page(_rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
-    r##"<!DOCTYPE html>
-<html lang="en">
-<head><script src="/static/theme-guard.js"></script><link rel="stylesheet" href="/static/css/app.css">
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width,initial-scale=1.0">
-    <title>Alert Rules — BirdNet-Behavior Admin</title>
-    <script src="/static/htmx.min.js"></script>
-    <style>
-      body { background:var(--bg); color:var(--fg); font-family:var(--font-ui); margin:0; }
-      .container { max-width:960px; margin:0 auto; padding:2rem 1rem; }
-      nav { margin-bottom:2rem; }
-      nav a { color:var(--fg-3); text-decoration:none; margin-right:1.5rem; font-size:.9rem; }
-      nav a:hover { color:var(--moss-ink); }
+    crate::routes::admin::admin_shell("Alert Rules", "rules", &rules_body())
+}
+
+/// Page-specific body (scoped `<style>` + content). Kept separate from the
+/// shared shell so the inline-style guard checks the page's own markup; the
+/// `.container` / bare `nav` rules are dropped since the shell owns layout + nav.
+fn rules_body() -> String {
+    r##"<style>
       h1 { font-size:1.5rem; font-weight:700; color:var(--fg); margin-bottom:.25rem; }
       .subtitle { color:var(--fg-4); font-size:.875rem; margin-bottom:2rem; }
       .card { background:var(--surface); border:1px solid var(--border); border-radius:.75rem; padding:1.5rem; margin-bottom:1.5rem; }
@@ -262,7 +257,6 @@ fn render_page(_rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
       #webhook-fields { display:none; }
       .hint { color:var(--fg-4); font-size:.75rem; margin-top:.25rem; }
       /* O-25 sweep — faithful extraction of this page's inline styles. */
-      nav a.here { color:var(--moss-ink); }
       .form-actions { margin-top:1.25rem; }
       #form-result { margin-top:.75rem; }
       .rule-success { color:var(--moss); padding:.5rem; border-radius:.375rem; background:var(--moss-soft)33; }
@@ -276,16 +270,6 @@ fn render_page(_rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
       .toggle-state.on { color:var(--moss); }
       .toggle-state.off { color:var(--fg-3); }
     </style>
-</head>
-<body>
-<div class="container">
-  <nav>
-    <a href="/admin/overview">Overview</a>
-    <a href="/admin/settings">Settings</a>
-    <a href="/admin/rules" class="here">Rules</a>
-    <a href="/admin/notifications">Notifications</a>
-    <a href="/admin/system">System</a>
-  </nav>
 
   <h1>Alert Rules</h1>
   <p class="subtitle">
@@ -389,14 +373,11 @@ fn render_page(_rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
       <p class="tbl-loading">Loading…</p>
     </div>
   </div>
-</div>
 <script>
   document.getElementById('action_type').addEventListener('change', function() {
     document.getElementById('webhook-fields').style.display = this.value === 'webhook' ? 'block' : 'none';
   });
-</script>
-</body>
-</html>"##
+</script>"##
     .to_owned()
 }
 

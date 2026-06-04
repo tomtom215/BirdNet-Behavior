@@ -7,8 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-04
+
+### Added
+
+- **`--doctor` now checks the analytics preconditions.** The diagnostic gained
+  an "Analytics (behavioral)" check that reports, with an actionable fix,
+  whether behavioral analytics will actually work on this install: it **warns**
+  when an analytics database is configured but the binary was built without
+  analytics (a slim build pointed at a release config — the dashboards would
+  silently stay empty), notes when analytics is explicitly disabled, and
+  otherwise confirms analytics is enabled and that its DuckDB directory is
+  writable. It deliberately opens no DuckDB during the preflight, so it adds no
+  startup contention when the unit runs `--doctor` as `ExecStartPre`.
+- **Offline / air-gapped install.** `install.sh` can now install from a release
+  tarball already on disk — `BIRDNET_BINARY_TARBALL=/path/to/…tar.gz sudo -E
+  bash install.sh` — skipping the GitHub fetch and checksum round-trip for a
+  local file the operator placed themselves. Paired with `BIRDNET_SKIP_MODEL=1`
+  (stage the ~541 MB model out-of-band), a station with no internet can be
+  installed end to end. The installer also **degrades gracefully without
+  systemd** (containers, chroots, staged images): it writes the binary, config,
+  and unit file, then prints how to enable the service on a real host instead of
+  aborting at the first `systemctl` call.
+- **Install smoke test in CI** (`.github/workflows/install-smoke.yml`). On every
+  change to the installer or the binary, CI builds the binary, then runs the
+  *real* `install.sh` against it in a clean, network-less, no-systemd
+  `ubuntu:24.04` container (via the new air-gapped path) and asserts the install
+  completes and the dashboard actually serves (`/api/v2/health` reports
+  `healthy`, `/` returns 200). This catches the class of regression that ships
+  green unit tests but a broken operator install.
+
+### Changed
+
+- **Network retries now use jittered, capped, overflow-safe backoff.** The
+  BirdWeather and Apprise clients retried transient failures on a fixed
+  `2^attempt` schedule, so concurrent retries — and many stations posting on the
+  same cadence — would wake in lockstep and hammer a recovering endpoint (a
+  thundering herd). Both now share a backoff helper that adds **equal jitter**
+  (each retry lands in a window rather than at one instant), **caps** the delay
+  at 32 s so a long outage settles at a steady cadence, and is **overflow-safe**
+  regardless of the attempt count.
+- **The admin panel now renders entirely through one shared shell.** Six admin
+  pages — Overview, Settings, Audio (already), Migration, Rules, System, and
+  Notifications — each shipped (or, for the nav tabs, several still shipped)
+  their own standalone HTML document with a bespoke top `<nav>` that disagreed
+  with the admin shell's nav and with each other. **Every admin nav destination**
+  now renders through the shared `admin_shell`, whose navigation is generated
+  from a **single admin-nav manifest** (`routes/admin/nav.rs`) — so they show the
+  same tabs with consistent active-state, gain a breadcrumb trail, and pick up
+  the command palette / help drawer / toast region. The Migration tab, which was
+  missing from the shell nav, is now part of the manifest. A parity test
+  (`admin_router_serves_every_nav_destination`) guards that every admin nav
+  destination resolves to a real route, and a runtime test
+  (`folded_pages_render_through_the_shared_shell`) confirms each folded page
+  actually composes the shell — mirroring `cmdk_covers_every_nav_destination`
+  for the main nav.
+- **Species management is now a first-class admin tab, and the admin sub-pages
+  follow the standard "sense of place" pattern.** Managing which birds are
+  detected/excluded is core to running a station, so **Species** is now its own
+  admin nav tab rather than a quick-link a non-technical operator has to hunt
+  for. The remaining sub-pages — the species **Filter test**, **Test
+  notifications**, and the **Species images** blacklist — now render through the
+  shared shell too: each highlights its **parent tab** (Species or Notifications)
+  and shows a breadcrumb down to itself (`Home › Admin › <Parent> › <page>`), so
+  you always know where you are and have a one-click way back. No admin page
+  ships bespoke chrome any more.
+
 ### Fixed
 
+- **The installer's completion summary shows the real dashboard port.** When an
+  operator set a custom `BIRDNET_LISTEN` (e.g. `…:8599`), the post-install
+  summary still printed the URL with the hardcoded `:8502`. It now derives the
+  port from the configured listen address.
 - **Installation input is now respected in the web UI.** The installer writes
   station settings (latitude/longitude, audio device, station name, …) to
   `/etc/birdnet/birdnet.conf`, and the Docker image passes them as `BIRDNET_*`
@@ -51,6 +121,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transport the admin UI exposes was silently dropped and ffmpeg was always
   forced to TCP, so a camera that only speaks UDP could never be captured. The
   choice now reaches the capture command (`Auto` keeps the TCP default).
+- **A per-source capture gain (`gain_db`) is now applied.** The gain the admin
+  UI stores and displays for each source had no effect on capture. A non-zero
+  gain now routes that source through `ffmpeg`'s `volume` filter
+  (`-af volume=<n>dB`) — for a local microphone this switches it from `arecord`
+  to `ffmpeg -f alsa`, since `arecord` has no software-gain control; unity-gain
+  microphones stay on the lighter `arecord` path unchanged. A negative value
+  cuts the level just as a positive one boosts it.
+- **A per-source quiet window (`schedule_quiet`) is now enforced.** The quiet
+  window stored per source was previously inert. The capture supervisor now
+  pauses a source while the wall clock is inside its window and resumes it
+  afterwards, on top of the global recording schedule (the source records only
+  when the schedule allows it **and** it is outside its quiet window). The
+  window uses the same clock basis as the recording schedule (UTC), wraps past
+  midnight (e.g. `22:00`–`06:00`), and — like the schedule — is not enforced
+  while the clock looks unsynced, so a bogus boot-time date can't silence a
+  source. Editing gain or the quiet window takes effect on the next service
+  restart, consistent with the other per-source settings. See
+  `docs/FIELD_DEPLOYMENT.md` § 7 for the manual hardware-verification steps.
 - **Multiple RTSP streams can be configured from the config file.** A new
   comma-separated `RTSP_URLS` config key drives several RTSP captures without
   the `--rtsp-urls` flag, and a multi-stream station no longer mislabels its
@@ -75,6 +163,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pages (there were none), grouped the previously-flat mobile sheet, corrected the
   seven active-state mismatches, and redirected the orphaned `/live` to the
   maintained `/listen`.
+
+### CI
+
+- **CI now proves the behavioral extension loads with no network.** Analytics
+  ships bundled — the release binary embeds the community `behavioral` extension
+  so `LOAD behavioral` works offline on a fresh, air-gapped install — but the
+  test that proves it (`embedded_extension_loads_when_bundled`) previously
+  *skipped* in CI because no extension was embedded in the test build. The
+  `--all-features` test job now fetches and embeds the extension first (the same
+  mechanism release.yml uses), so the test runs its real assertion — loading the
+  extension from the embedded bytes via a temp file with no network — and a
+  dedicated step surfaces the result. Best-effort: if the registry is
+  unreachable the test skips as before, adding no flakiness.
+- **The mutation-testing job timeout is now matrix-driven.** The three
+  binary-crate shards (`src/daemon/`, `src/capture/supervisor.rs`,
+  `src/capture/schedule.rs`) rebuild the binary + web tree per mutant and were
+  being `cancelled` at the flat 45-minute limit on cold caches. The job now uses
+  `timeout-minutes: ${{ matrix.timeout_minutes || 45 }}` and those three rows set
+  `timeout_minutes: 90`, so they report `success` instead of `cancelled`.
 
 ## [0.6.0] - 2026-06-03
 
@@ -1305,7 +1412,8 @@ x86_64 Linux.
 - systemd installer script with ALSA microphone auto-detection and
   automatic BirdNET+ model download from Zenodo.
 
-[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.1...v0.5.2

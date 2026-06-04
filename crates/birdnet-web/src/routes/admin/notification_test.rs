@@ -54,6 +54,18 @@ async fn test_page(State(state): State<AppState>) -> Html<String> {
 }
 
 fn render_test_page(apprise_ok: bool, bw_ok: bool) -> String {
+    crate::routes::admin::admin_subpage_shell(
+        "Test notifications",
+        "notifications",
+        "Test",
+        &test_notifications_body(apprise_ok, bw_ok),
+    )
+}
+
+/// Page-specific body (scoped `<style>` + cards). The shared shell supplies the
+/// chrome, the nav (with the Notifications tab active), and the
+/// `Admin › Notifications › Test` breadcrumb.
+fn test_notifications_body(apprise_ok: bool, bw_ok: bool) -> String {
     let apprise_status = if apprise_ok {
         "Configured"
     } else {
@@ -76,43 +88,22 @@ fn render_test_page(apprise_ok: bool, bw_ok: bool) -> String {
     let bw_btn = if bw_ok { "btn-primary" } else { "btn-disabled" };
 
     let mut html = String::with_capacity(4096);
-    html.push_str(r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Test Notifications — BirdNet-Behavior</title>
-    <script src="/static/htmx.min.js"></script>
-    <script src="/static/theme-guard.js"></script><link rel="stylesheet" href="/static/css/app.css">
-    <style>
-      body { background:var(--bg); color:var(--fg); font-family:var(--font-ui); }
-      .container { max-width:800px; margin:0 auto; padding:2rem 1rem; }
-      nav a { color:var(--fg-3); text-decoration:none; margin-right:1.5rem; }
-      nav a.active, nav a:hover { color:var(--moss-ink); }
+    html.push_str(r"<style>
       .card { background:var(--surface); border:1px solid var(--border); border-radius:0.75rem; padding:1.5rem; margin-bottom:1.5rem; }
       .section-title { font-size:1.1rem; font-weight:600; color:var(--moss-ink); margin-bottom:1rem; border-bottom:1px solid var(--border); padding-bottom:0.5rem; }
       .btn { padding:0.5rem 1.5rem; border-radius:0.375rem; border:none; cursor:pointer; font-weight:600; font-size:0.875rem; }
       .btn-primary { background:var(--moss); color:#fff; }
       .btn-disabled { background:var(--border); color:var(--fg-4); cursor:not-allowed; }
       .hint { font-size:0.75rem; color:var(--fg-4); margin-bottom:1rem; }
-      nav { margin-bottom:2rem; padding:1rem 0; border-bottom:1px solid var(--border); }
       h1 { font-size:1.5rem; font-weight:700; margin-bottom:1.5rem; color:var(--fg); }
       .hint a { color:var(--moss-ink); }
       .result-banner { border:1px solid; border-radius:0.375rem; padding:0.75rem; margin-top:0.75rem; }
       .result-banner.ok { background:var(--moss-soft); border-color:var(--moss-soft); color:var(--moss-ink); }
       .result-banner.err { background:var(--rare-soft); border-color:var(--rare-soft); color:var(--rare); }
     </style>
-</head>
-<body>
-<div class="container">
-  <nav>
-    <a href="/">Dashboard</a>
-    <a href="/admin">Admin</a>
-    <a href="/admin/settings">Settings</a>
-    <a href="/admin/notifications/test" class="active">Test Notifications</a>
-  </nav>
+
   <h1>Test Notification Channels</h1>
-"#);
+");
 
     // Apprise card
     write!(
@@ -156,10 +147,7 @@ fn render_test_page(apprise_ok: bool, bw_ok: bool) -> String {
       <button type="submit" class="btn btn-primary">Test All Configured Channels</button>
     </form>
     <div id="all-result"></div>
-  </div>
-</div>
-</body>
-</html>"##,
+  </div>"##,
     );
 
     html
@@ -361,8 +349,10 @@ mod tests {
         // P3-3 (O-25): no inline `style=` attributes — page-specific styling
         // lives in this page's own <style> block, and the result banner uses
         // enumerable `.result-banner` variants instead of computed inline colours.
-        assert!(!render_test_page(true, true).contains("style=\""));
-        assert!(!render_test_page(false, false).contains("style=\""));
+        // Check the page body, not `render_test_page` (the shared shell adds
+        // `data-confirm-style` attributes a naive `style="` check would flag).
+        assert!(!test_notifications_body(true, true).contains("style=\""));
+        assert!(!test_notifications_body(false, false).contains("style=\""));
         assert!(!result_html(true, "ok").contains("style=\""));
         assert!(!result_html(false, "err").contains("style=\""));
     }

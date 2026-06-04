@@ -5,21 +5,19 @@ use std::fmt::Write as _;
 use crate::routes::pages::escape_html;
 
 pub fn render_species_page(exclude: &[String], include: &[String]) -> String {
+    crate::routes::admin::admin_shell(
+        "Species lists",
+        "species",
+        &species_lists_body(exclude, include),
+    )
+}
+
+/// Page-specific body (scoped `<style>` + content). Kept separate from the
+/// shared shell so the inline-style guard checks the page's own markup; the
+/// `.container` / bare `nav` rules are dropped since the shell owns layout + nav.
+fn species_lists_body(exclude: &[String], include: &[String]) -> String {
     format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Species Lists — BirdNet-Behavior</title>
-    <script src="/static/htmx.min.js"></script>
-    <script src="/static/theme-guard.js"></script><link rel="stylesheet" href="/static/css/app.css">
-    <style>
-      body {{ background:var(--bg); color:var(--fg); font-family:var(--font-ui); }}
-      .container {{ max-width:900px; margin:0 auto; padding:2rem 1rem; }}
-      nav {{ margin-bottom:2rem; padding:1rem 0; border-bottom:1px solid var(--border); }}
-      nav a {{ color:var(--fg-3); text-decoration:none; margin-right:1.5rem; }}
-      nav a.active, nav a:hover {{ color:var(--moss-ink); }}
+        r#"<style>
       h1 {{ font-size:1.5rem; font-weight:700; margin-bottom:1.5rem; color:var(--fg); }}
       .card {{ background:var(--surface); border:1px solid var(--border); border-radius:0.75rem; padding:1.5rem; margin-bottom:1.5rem; }}
       .section-title {{ font-size:1.1rem; font-weight:600; color:var(--moss-ink); margin-bottom:1rem; border-bottom:1px solid var(--border); padding-bottom:0.5rem; }}
@@ -46,24 +44,11 @@ pub fn render_species_page(exclude: &[String], include: &[String]) -> String {
       .cell-right {{ text-align:right; }}
       .del-btn {{ padding:0.2rem 0.6rem; font-size:0.75rem; }}
     </style>
-</head>
-<body>
-<div class="container">
-  <nav>
-    <a href="/">Dashboard</a>
-    <a href="/species">Species</a>
-    <a href="/admin">Admin</a>
-    <a href="/admin/species" class="active">Species Lists</a>
-    <a href="/admin/species/test">Filter Test</a>
-    <a href="/admin/settings">Settings</a>
-  </nav>
+
   <h1>Species List Management</h1>
   <div id="species-lists">
     {inner}
-  </div>
-</div>
-</body>
-</html>"#,
+  </div>"#,
         inner = render_species_partial(exclude, include)
     )
 }
@@ -198,6 +183,22 @@ pub fn render_thresholds_partial(thresholds: &[birdnet_db::sqlite::SpeciesThresh
 pub fn render_filter_test_page(
     exclude: &[String],
     include: &[String],
+    species: &[(String, String, u64)],
+) -> String {
+    crate::routes::admin::admin_subpage_shell(
+        "Filter test",
+        "species",
+        "Filter test",
+        &filter_test_body(exclude, include, species),
+    )
+}
+
+/// Page-specific body for the species filter-test sub-page (scoped `<style>` +
+/// content). The shared shell supplies the chrome, the nav (with the Species tab
+/// active), and the `Admin › Species › Filter test` breadcrumb.
+fn filter_test_body(
+    exclude: &[String],
+    include: &[String],
     species: &[(String, String, u64)], // (sci_name, com_name, count)
 ) -> String {
     use std::collections::HashSet;
@@ -243,20 +244,7 @@ pub fn render_filter_test_page(
     }
 
     format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Species Filter Test — BirdNet-Behavior</title>
-    <script src="/static/htmx.min.js"></script>
-    <script src="/static/theme-guard.js"></script><link rel="stylesheet" href="/static/css/app.css">
-    <style>
-      body {{ background:var(--bg); color:var(--fg); font-family:var(--font-ui); }}
-      .container {{ max-width:960px; margin:0 auto; padding:2rem 1rem; }}
-      nav {{ margin-bottom:2rem; padding:1rem 0; border-bottom:1px solid var(--border); }}
-      nav a {{ color:var(--fg-3); text-decoration:none; margin-right:1.5rem; }}
-      nav a.active, nav a:hover {{ color:var(--moss-ink); }}
+        r#"<style>
       h1 {{ font-size:1.5rem; font-weight:700; margin-bottom:0.5rem; color:var(--fg); }}
       .card {{ background:var(--surface); border:1px solid var(--border); border-radius:0.75rem; padding:1.5rem; margin-bottom:1.5rem; }}
       .section-title {{ font-size:1.1rem; font-weight:600; color:var(--moss-ink); margin-bottom:1rem; border-bottom:1px solid var(--border); padding-bottom:0.5rem; }}
@@ -280,17 +268,7 @@ pub fn render_filter_test_page(
       .cell-center {{ text-align:center; }}
       .pill-sm {{ display:inline-block; background:var(--bg); border:1px solid var(--border); border-radius:999px; padding:0.15rem 0.6rem; font-size:0.8rem; margin:0.15rem; }}
     </style>
-</head>
-<body>
-<div class="container">
-  <nav>
-    <a href="/">Dashboard</a>
-    <a href="/species">Species</a>
-    <a href="/admin">Admin</a>
-    <a href="/admin/species">Species Lists</a>
-    <a href="/admin/species/test" class="active">Filter Test</a>
-    <a href="/admin/settings">Settings</a>
-  </nav>
+
   <h1>Species Filter Preview</h1>
   <p class="hint">Shows which species from your detection history pass or are blocked by the current exclude/allow-list filters.</p>
 
@@ -315,10 +293,7 @@ pub fn render_filter_test_page(
       <span class="muted-sm">{total} species in history</span>
     </div>
     {table_or_empty}
-  </div>
-</div>
-</body>
-</html>"#,
+  </div>"#,
         excl_pills = pills_or_none(exclude),
         incl_pills = pills_or_none(include),
         pass_count = pass_count,
@@ -381,7 +356,10 @@ mod tests {
         // P3-3 (O-25): both species pages and their HTMX fragments carry no
         // inline `style=` attributes — styling lives in each page's own <style>
         // block; Pass/Blocked badges and filter stats use enumerable classes.
-        assert!(!render_species_page(&["House Sparrow".to_string()], &[]).contains("style=\""));
+        // Check the page *bodies*, not the full `render_*` (the shared admin
+        // shell adds `data-confirm-style` attributes a naive substring check
+        // would otherwise flag).
+        assert!(!species_lists_body(&["House Sparrow".to_string()], &[]).contains("style=\""));
         assert!(!render_species_partial(&["House Sparrow".to_string()], &[]).contains("style=\""));
         let species = vec![
             (
@@ -396,8 +374,20 @@ mod tests {
             ),
         ];
         assert!(
-            !render_filter_test_page(&["House Sparrow".to_string()], &[], &species)
-                .contains("style=\"")
+            !filter_test_body(&["House Sparrow".to_string()], &[], &species).contains("style=\"")
         );
+    }
+
+    #[test]
+    fn species_pages_render_through_admin_shell() {
+        // Both species pages render through the shared shell with the Species
+        // tab active; the filter-test sub-page also carries the breadcrumb.
+        let lists = render_species_page(&[], &[]);
+        assert!(lists.contains(r#"href="/admin/species" class="am-nav-active""#));
+        assert!(lists.contains("Species List Management"));
+        let test = render_filter_test_page(&[], &[], &[]);
+        assert!(test.contains(r#"href="/admin/species" class="am-nav-active""#));
+        assert!(test.contains("bnb-crumbs"));
+        assert!(test.contains("Filter test"));
     }
 }

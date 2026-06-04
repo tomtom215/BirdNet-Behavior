@@ -3,6 +3,13 @@
 # ---------------------------------------------------------------------------
 
 maybe_start_service() {
+    # No systemd here (container / chroot / staged install): the unit is on disk
+    # but there is nothing to start it. install_service already told the operator
+    # how to finish on a real host; nothing more to do.
+    if ! has_systemd; then
+        return
+    fi
+
     # Upgrade path: if we stopped a running service to swap the binary, bring
     # it back on the new version. Schema migrations run automatically on
     # startup, and the SQLite/DuckDB data + config were left untouched.

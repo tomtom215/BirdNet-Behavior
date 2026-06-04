@@ -30,4 +30,22 @@
 #
 # Every step is idempotent — re-running the script is always safe.
 #
-# Requirements: curl or wget, tar, sha256sum, systemd
+# Offline / air-gapped install (no internet on the target):
+#   BIRDNET_BINARY_TARBALL=/path/to/birdnet-behavior-<ver>-<target>.tar.gz \
+#     BIRDNET_SKIP_MODEL=1 sudo -E bash install.sh
+#   Installs the binary from a tarball you already downloaded (skips the GitHub
+#   fetch + checksum round-trip — you vouch for the local file), and skips the
+#   ~541 MB model pull. Place the model in <data>/models and restart afterwards.
+#
+# Environment overrides (all optional):
+#   BIRDNET_BINARY_TARBALL=PATH  install the binary from a local tarball (offline)
+#   BIRDNET_SKIP_MODEL=1         do not download the model (stage it out-of-band)
+#   BIRDNET_NONINTERACTIVE=1     never prompt; take env/config/defaults
+#   BIRDNET_LISTEN=HOST:PORT     dashboard bind address (default 0.0.0.0:8502)
+#   BIRDNET_SKIP_GLIBC_CHECK=1   bypass the glibc floor check (built from source)
+#
+# Without systemd (a container, chroot, or staged image) the script still lays
+# down the binary, config, and unit file, then tells you how to enable it on a
+# real host — it does not abort.
+#
+# Requirements: curl or wget, tar, sha256sum (systemd recommended, not required)

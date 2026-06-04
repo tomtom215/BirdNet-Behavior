@@ -15,13 +15,25 @@ check_required_tools() {
         || missing+=("curl or wget")
 
     local t
-    for t in tar sha256sum systemctl install mkdir awk grep sed; do
+    for t in tar sha256sum install mkdir awk grep sed; do
         command -v "${t}" &>/dev/null || missing+=("${t}")
     done
 
     if [ "${#missing[@]}" -gt 0 ]; then
         error "Missing required tool(s): ${missing[*]}"
         fatal "Install the missing package(s) and re-run. On Debian/Pi OS: sudo apt-get install coreutils tar curl"
+    fi
+
+    # systemd is the normal service manager, but the install can still lay down
+    # the binary, config, and unit file without it (containers, chroots, an
+    # air-gapped stage-then-boot flow). Degrade with a clear note rather than
+    # hard-failing — install_service / maybe_start_service skip the systemctl
+    # steps when has_systemd is false.
+    if has_systemd; then
+        success "systemd is running — the service will be enabled and started."
+    else
+        warn "systemd is not running here — the unit will be written but not enabled/started."
+        warn "  On a systemd host: sudo systemctl daemon-reload && sudo systemctl enable --now birdnet-behavior"
     fi
 
     # Soft dependencies — note them but keep going.

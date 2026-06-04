@@ -103,20 +103,16 @@ fn stat_card(label: &str, value: &str, tone: &str) -> String {
 
 #[allow(clippy::too_many_lines)]
 fn render_overview_page(stats_html: &str) -> String {
+    crate::routes::admin::admin_shell("Overview", "overview", &overview_body(stats_html))
+}
+
+/// Page-specific body (scoped `<style>` + content). Kept separate from the
+/// shared shell so the inline-style guard checks the page's own markup, not the
+/// shell's chrome (whose confirm modal uses `data-confirm-style` attributes). The
+/// old `.container` / bare `nav` rules are dropped — the shell owns layout + nav.
+fn overview_body(stats_html: &str) -> String {
     format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Overview — BirdNet-Behavior</title>
-    <script src="/static/htmx.min.js"></script>
-    <script src="/static/theme-guard.js"></script><link rel="stylesheet" href="/static/css/app.css">
-    <style>
-      body {{ background:var(--bg); color:var(--fg); font-family:var(--font-ui); }}
-      .container {{ max-width:1000px; margin:0 auto; padding:2rem 1rem; }}
-      nav a {{ color:var(--fg-3); text-decoration:none; margin-right:1.5rem; }}
-      nav a.active, nav a:hover {{ color:var(--moss-ink); }}
+        r#"<style>
       .card {{ background:var(--surface); border:1px solid var(--border); border-radius:0.75rem; padding:1.5rem; margin-bottom:1.5rem; }}
       .section-title {{ font-size:1.1rem; font-weight:600; color:var(--moss-ink); margin-bottom:1rem; border-bottom:1px solid var(--border); padding-bottom:0.5rem; }}
       .quick-links {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:1rem; }}
@@ -124,7 +120,6 @@ fn render_overview_page(stats_html: &str) -> String {
       .quick-link:hover {{ border-color:var(--moss-ink); color:var(--moss-ink); }}
       .quick-link-title {{ font-weight:600; font-size:0.95rem; }}
       .quick-link-desc {{ font-size:0.75rem; color:var(--fg-4); margin-top:0.25rem; }}
-      nav {{ margin-bottom:2rem; padding:1rem 0; border-bottom:1px solid var(--border); }}
       h1 {{ font-size:1.5rem; font-weight:700; margin-bottom:1.5rem; color:var(--fg); }}
       .stat-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:1rem; }}
       .stat-grid.mb {{ margin-bottom:1.5rem; }}
@@ -136,15 +131,6 @@ fn render_overview_page(stats_html: &str) -> String {
       .stat-card .value.rare {{ color:var(--rare); }}
       .stat-card .label {{ font-size:0.8rem; color:var(--fg-3); margin-top:0.25rem; }}
     </style>
-</head>
-<body>
-<div class="container">
-  <nav>
-    <a href="/">Dashboard</a>
-    <a href="/species">Species</a>
-    <a href="/admin/overview" class="active">Admin</a>
-    <a href="/admin/settings">Settings</a>
-  </nav>
 
   <h1>Admin Overview</h1>
 
@@ -219,10 +205,7 @@ fn render_overview_page(stats_html: &str) -> String {
         <div class="quick-link-desc">Download all detections as CSV</div>
       </a>
     </div>
-  </div>
-</div>
-</body>
-</html>"#
+  </div>"#
     )
 }
 
@@ -234,8 +217,21 @@ mod tests {
     fn page_has_no_inline_style_attributes() {
         // P3-3 (O-25): page chrome lives in the page's own <style> block; the
         // stat-card tone (moss-ink/moss/dawn/rare) is an enumerable class, not a
-        // computed inline colour.
-        assert!(!render_overview_page("").contains("style=\""));
+        // computed inline colour. Check the page body, not the full
+        // `render_overview_page` (the shared shell adds `data-confirm-style`
+        // attributes a naive `style="` substring check would otherwise flag).
+        assert!(!overview_body("").contains("style=\""));
         assert!(!stat_card("CPU", "42%", "dawn").contains("style=\""));
+    }
+
+    #[test]
+    fn overview_renders_through_admin_shell() {
+        let page = render_overview_page("");
+        assert!(page.contains("admin-nav"), "missing shared admin nav");
+        assert!(
+            page.contains(r#"href="/admin/overview" class="am-nav-active""#),
+            "Overview tab should be active in the shell nav"
+        );
+        assert!(page.contains("Admin Overview"), "missing page heading");
     }
 }

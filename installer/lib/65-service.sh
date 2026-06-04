@@ -182,7 +182,14 @@ LogRateLimitBurst=1000
 WantedBy=multi-user.target
 EOF
 
-    systemctl daemon-reload
-    systemctl enable birdnet-behavior.service
-    success "Service installed and enabled (Type=notify, hardened, watchdog active)."
+    if has_systemd; then
+        systemctl daemon-reload
+        systemctl enable birdnet-behavior.service
+        success "Service installed and enabled (Type=notify, hardened, watchdog active)."
+    else
+        success "Service unit written to ${SERVICE_FILE} (Type=notify, hardened, watchdog active)."
+        warn "systemd is not running here — not enabling/starting the unit."
+        warn "  On a systemd host, finish with:"
+        warn "    sudo systemctl daemon-reload && sudo systemctl enable --now birdnet-behavior"
+    fi
 }

@@ -28,7 +28,9 @@ setup_tmpfs_streaming() {
     install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${STREAM_DIR}"
 
     # If /tmp is NOT already tmpfs, create a dedicated mount.
-    if ! findmnt -t tmpfs /tmp &>/dev/null; then
+    if findmnt -t tmpfs /tmp &>/dev/null; then
+        success "/tmp is already tmpfs — ${STREAM_DIR} is RAM-backed"
+    elif has_systemd; then
         local MOUNT_UNIT="/etc/systemd/system/tmp-birdnet\\x2dstream.mount"
         cat > "${MOUNT_UNIT}" <<MEOF
 [Unit]
@@ -48,6 +50,8 @@ MEOF
         systemctl enable --now "tmp-birdnet\\x2dstream.mount" 2>/dev/null || true
         success "tmpfs mount unit installed for ${STREAM_DIR}"
     else
-        success "/tmp is already tmpfs — ${STREAM_DIR} is RAM-backed"
+        # No systemd to manage a tmpfs mount; the plain directory created above
+        # is enough for a manual / container run (it just isn't RAM-backed).
+        success "Streaming directory ${STREAM_DIR} ready (no systemd tmpfs mount)."
     fi
 }

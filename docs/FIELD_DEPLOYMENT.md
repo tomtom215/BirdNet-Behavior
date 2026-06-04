@@ -166,6 +166,50 @@ journalctl -u birdnet-behavior -f
 # Expect: "Watchdog timeout" then "Restarting" within 120 s.
 ```
 
+### Per-source gain and quiet window (manual hardware checks)
+
+Each audio source in **Admin → Audio** carries a software **gain** (dB) and an
+optional **quiet window**. Like every other per-source setting (device, sample
+rate, RTSP transport), these are read when the capture subsystem starts, so
+**restart the service after editing them** for the change to take effect:
+
+```bash
+sudo systemctl restart birdnet-behavior
+```
+
+**Gain (`gain_db`).** At unity gain (0 dB) a local microphone records through
+`arecord` (the lightest path). A non-zero gain routes that source through
+`ffmpeg` instead so the gain can actually be applied — verify on real hardware:
+
+```bash
+# Set a source's gain to e.g. +12 dB in Admin → Audio, restart, then:
+ps -ww -C ffmpeg -o args= | grep -- '-af volume'
+# USB mic with gain → ffmpeg: "-f alsa -i <device> … -af volume=12.00dB"
+# Set the gain back to 0, restart, and confirm the mic is back on arecord:
+pgrep -a arecord            # present again at unity gain
+# RTSP / PipeWire sources are always ffmpeg; the filter appears only with gain.
+```
+
+A captured clip from the gained source should be audibly louder (or quieter for
+a negative dB cut) than at unity gain.
+
+**Quiet window (`schedule_quiet`).** Set a window that *currently* includes the
+time of day, **in UTC** — the quiet window shares the recording schedule's clock
+basis (the fixed/solar window is evaluated in UTC too). Within ~2 reconcile
+ticks (≈ a few seconds) the source's capture subprocess stops:
+
+```bash
+journalctl -u birdnet-behavior -f
+# Expect: "recording paused (outside schedule or in quiet window)" for the source,
+# and the birdnet_audio_source_up{source=<id>} gauge drops to 0 on /metrics.
+# Move the window so "now" is outside it, restart, and confirm the subprocess
+# is respawned and the gauge returns to 1.
+```
+
+While the system clock looks unsynced (no RTC yet at boot, NTP not ready) the
+quiet window is **not** enforced — capture fails open exactly as the schedule
+does, so a bogus boot-time date can never silence a source.
+
 ## 8. Database and backup policy
 
 The daemon runs a scheduled maintenance task in the background (no

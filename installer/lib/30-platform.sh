@@ -2,6 +2,18 @@
 # Privilege, architecture, and glibc preflight
 # ---------------------------------------------------------------------------
 
+# Whether systemd is the running init, so `systemctl` calls will actually work.
+#
+# `systemctl` can be present on a system where systemd is NOT PID 1 — minimal
+# containers, chroots, WSL1, some CI runners — and there every systemctl call
+# fails. `/run/systemd/system` is systemd's own "I am running" marker, so this
+# is the canonical guard. When it returns false the installer writes the unit
+# but skips enable/start, degrading cleanly instead of aborting (see
+# install_service / maybe_start_service).
+has_systemd() {
+    command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]
+}
+
 require_root() {
     if [ "$(id -u)" -ne 0 ]; then
         error "This installer needs root — it installs a systemd service."
