@@ -50,7 +50,7 @@ async fn page(headers: HeaderMap) -> Html<String> {
             "{{help_link}}",
             &super::help::help_link(super::help::Topic::DawnChorus),
         );
-    render_page_for_request("Dawn chorus", &body, "analytics", &headers)
+    render_page_for_request("Dawn chorus", &body, "dawn_chorus", &headers)
 }
 
 // ---------------------------------------------------------------------------

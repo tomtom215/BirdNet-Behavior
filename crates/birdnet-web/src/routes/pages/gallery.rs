@@ -24,7 +24,7 @@ pub fn router() -> Router<AppState> {
 }
 
 async fn gallery_page(headers: HeaderMap) -> Html<String> {
-    render_page_for_request("Species Gallery", GALLERY_HTML, "species", &headers)
+    render_page_for_request("Species Gallery", GALLERY_HTML, "gallery", &headers)
 }
 
 #[derive(Deserialize)]
