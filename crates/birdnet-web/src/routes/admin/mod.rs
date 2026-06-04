@@ -61,12 +61,35 @@ use crate::state::AppState;
 /// theme guard, the design-system stylesheet, HTMX and a slim nav row. `active`
 /// highlights the matching nav link.
 pub(crate) fn admin_shell(title: &str, active: &str, body: &str) -> String {
+    admin_shell_with(title, active, &nav::breadcrumb(active), body)
+}
+
+/// Like [`admin_shell`] but for a **sub-page** that lives beneath nav tab
+/// `parent_key`: the parent tab stays highlighted and the breadcrumb gains the
+/// sub-page leaf (`Home › Admin › <Parent> › <subpage>`), so an operator on,
+/// say, the species Filter-test page still sees "Species" lit in the nav and a
+/// one-click trail back up.
+pub(crate) fn admin_subpage_shell(
+    title: &str,
+    parent_key: &str,
+    subpage: &str,
+    body: &str,
+) -> String {
+    admin_shell_with(
+        title,
+        parent_key,
+        &nav::breadcrumb_subpage(parent_key, subpage),
+        body,
+    )
+}
+
+/// Shared shell renderer. `active` highlights its nav tab; `breadcrumb` is the
+/// pre-rendered trail (a top-level crumb from [`nav::breadcrumb`] or a sub-page
+/// crumb from [`nav::breadcrumb_subpage`]).
+fn admin_shell_with(title: &str, active: &str, breadcrumb: &str, body: &str) -> String {
     // The nav row is generated from the single-source manifest in `nav.rs`, so
     // every admin page renders the same tabs with consistent active-state.
     let mut nav_html = nav::nav_links(active);
-    // Breadcrumb trail (Home › Admin › <Page>), matching the main-nav crumbs on
-    // secondary pages. Empty for an unknown key.
-    let breadcrumb = nav::breadcrumb(active);
     // Sign-out form — appears at the right end of the admin nav. The
     // form posts to /logout which revokes the bound session row before
     // clearing the cookie. Safe to always render because /admin/* is

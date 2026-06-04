@@ -45,6 +45,14 @@ pub const ADMIN_NAV: &[AdminNav] = &[
         path: "/admin/audio",
         label: "Audio",
     },
+    // Managing which species are detected/excluded is a core station function —
+    // a first-class tab so a non-technical operator finds it in the menu rather
+    // than only via a quick-link. Its Filter-test page is a sub-page beneath it.
+    AdminNav {
+        key: "species",
+        path: "/admin/species",
+        label: "Species",
+    },
     // Migration was reachable from the standalone pages' bespoke navs but was
     // absent from the shared shell nav — folding the pages in surfaces it here.
     AdminNav {
@@ -120,6 +128,23 @@ pub fn breadcrumb(active: &str) -> String {
     format!(
         r#"<nav class="bnb-crumbs" aria-label="Breadcrumb"><a href="/">Home</a><span class="sep" aria-hidden="true">›</span><a href="/admin/overview">Admin</a><span class="sep" aria-hidden="true">›</span><span class="cur" aria-current="page">{}</span></nav>"#,
         n.label
+    )
+}
+
+/// A breadcrumb for a **sub-page** that lives beneath nav tab `parent_key`.
+///
+/// Renders `Home › Admin › <Parent> › <subpage>`, with Home/Admin/Parent all
+/// links so an operator always has a one-click way back up. The parent tab is
+/// what [`nav_links`] highlights for these pages, giving a clear sense of place
+/// even though the sub-page has no tab of its own. Empty for an unknown parent.
+#[must_use]
+pub fn breadcrumb_subpage(parent_key: &str, subpage: &str) -> String {
+    let Some(parent) = ADMIN_NAV.iter().find(|n| n.key == parent_key) else {
+        return String::new();
+    };
+    format!(
+        r#"<nav class="bnb-crumbs" aria-label="Breadcrumb"><a href="/">Home</a><span class="sep" aria-hidden="true">›</span><a href="/admin/overview">Admin</a><span class="sep" aria-hidden="true">›</span><a href="{}">{}</a><span class="sep" aria-hidden="true">›</span><span class="cur" aria-current="page">{subpage}</span></nav>"#,
+        parent.path, parent.label
     )
 }
 
@@ -236,6 +261,7 @@ mod tests {
             ("/admin/overview", "Admin Overview"),
             ("/admin/rules", "Alert Rules"),
             ("/admin/notifications", "Notification History"),
+            ("/admin/species", "Species List Management"),
         ] {
             let (status, body) = get_admin(path).await;
             assert!(status.is_success(), "{path} returned {status}");
@@ -252,6 +278,48 @@ mod tests {
                 body.contains(marker),
                 "{path} missing its content: {marker}"
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn subpages_render_under_their_parent_tab() {
+        // Admin sub-pages have no tab of their own, so they highlight their
+        // PARENT tab (sense of place) and carry a breadcrumb down to the leaf
+        // (Home › Admin › <Parent> › <leaf>) — the standard, intuitive pattern.
+        // (path, parent tab path, breadcrumb leaf, page content marker)
+        for (path, parent, leaf, marker) in [
+            (
+                "/admin/species/test",
+                "/admin/species",
+                "Filter test",
+                "Species Filter Preview",
+            ),
+            (
+                "/admin/notifications/test",
+                "/admin/notifications",
+                "Test",
+                "Test Notification Channels",
+            ),
+            (
+                "/admin/images",
+                "/admin/species",
+                "Images",
+                "Species Image Blacklist",
+            ),
+        ] {
+            let (status, body) = get_admin(path).await;
+            assert!(status.is_success(), "{path} returned {status}");
+            // The PARENT tab is lit, not a tab for the sub-page itself.
+            assert!(
+                body.contains(&format!(r#"href="{parent}" class="am-nav-active""#)),
+                "{path} should highlight its parent tab {parent}"
+            );
+            // The breadcrumb's current (leaf) crumb names the sub-page.
+            assert!(
+                body.contains(&format!(r#"aria-current="page">{leaf}</span>"#)),
+                "{path} breadcrumb should end at {leaf}"
+            );
+            assert!(body.contains(marker), "{path} missing content: {marker}");
         }
     }
 }

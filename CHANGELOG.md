@@ -60,6 +60,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`folded_pages_render_through_the_shared_shell`) confirms each folded page
   actually composes the shell — mirroring `cmdk_covers_every_nav_destination`
   for the main nav.
+- **Species management is now a first-class admin tab, and the admin sub-pages
+  follow the standard "sense of place" pattern.** Managing which birds are
+  detected/excluded is core to running a station, so **Species** is now its own
+  admin nav tab rather than a quick-link a non-technical operator has to hunt
+  for. The remaining sub-pages — the species **Filter test**, **Test
+  notifications**, and the **Species images** blacklist — now render through the
+  shared shell too: each highlights its **parent tab** (Species or Notifications)
+  and shows a breadcrumb down to itself (`Home › Admin › <Parent> › <page>`), so
+  you always know where you are and have a one-click way back. No admin page
+  ships bespoke chrome any more.
 
 ### Fixed
 

@@ -85,13 +85,8 @@ async fn images_page(State(state): State<AppState>) -> Html<String> {
     }
 
     let count = entries.len();
-    let html = format!(
-        "<!DOCTYPE html><html><head>\
-         <title>Image Blacklist — Admin</title>\
-         <script src=\"/static/htmx.min.js\"></script>\
-         <script src=\"/static/theme-guard.js\"></script><link rel=\"stylesheet\" href=\"/static/css/app.css\">\
-         </head><body>\
-         <div class=\"img-wrap\">\
+    let body = format!(
+        "<div class=\"img-wrap\">\
          <h1 class=\"img-h1\">Species Image Blacklist</h1>\
          <p class=\"img-lede\">\
          Block URLs from being displayed as species images. \
@@ -116,11 +111,16 @@ async fn images_page(State(state): State<AppState>) -> Html<String> {
          </tr></thead>\
          <tbody>{rows}</tbody>\
          </table>\
-         </div></body></html>",
+         </div>",
         pl = if count == 1 { "y" } else { "ies" },
     );
 
-    Html(html)
+    Html(crate::routes::admin::admin_subpage_shell(
+        "Species images",
+        "species",
+        "Images",
+        &body,
+    ))
 }
 
 /// Add a URL to the image blacklist.
