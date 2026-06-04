@@ -4,28 +4,15 @@
 
   Visible only on `(max-width: 720px) and (pointer: coarse)`. Desktop users
   with a narrow window keep the topnav. The "More" slot opens a <dialog>-
-  as-bottom-sheet listing the secondary destinations from the topnav.
+  as-bottom-sheet listing the secondary destinations.
 
-  Server fills:
-    {{nav_dashboard}} / {{nav_today}} / … — same nav-active substitutions
-                                            as layout.html. Reuse them.
+  The bottom-bar tabs and the sheet rows are generated from the single nav
+  manifest (routes::pages::nav) and inlined via the slots below, so this surface
+  can never drift from the desktop top-nav and "More" dropdown.
 -->
 <nav class="bnb-tabbar" role="navigation" aria-label="Primary (mobile)">
-  <a href="/"          class="bnb-tabbar__slot {{nav_dashboard}}" aria-label="Dashboard">
-    <span class="glyph" aria-hidden="true">⌂</span><span class="label">Now</span>
-  </a>
-  <a href="/today"     class="bnb-tabbar__slot {{nav_today}}" aria-label="Today">
-    <span class="glyph" aria-hidden="true">⊙</span><span class="label">Today</span>
-  </a>
-  <a href="/species"   class="bnb-tabbar__slot {{nav_species}}" aria-label="Species">
-    <span class="glyph" aria-hidden="true">⌬</span><span class="label">Species</span>
-  </a>
-  <a href="/heatmap"   class="bnb-tabbar__slot {{nav_heatmap}}" aria-label="Heatmap">
-    <span class="glyph" aria-hidden="true">▦</span><span class="label">When</span>
-  </a>
-  <a href="/migration" class="bnb-tabbar__slot {{nav_migration}}" aria-label="Migration">
-    <span class="glyph" aria-hidden="true">∿</span><span class="label">Migration</span>
-  </a>
+  <!-- Bottom-bar tabs are generated from the nav manifest (routes::pages::nav). -->
+  {{tabbar_slots}}
   <button type="button" class="bnb-tabbar__slot" aria-haspopup="dialog" aria-controls="bnb-more-sheet" data-open-more>
     <span class="glyph" aria-hidden="true">⌗</span><span class="label">More</span>
   </button>
@@ -38,23 +25,10 @@
       <button type="submit" class="bnb-btn ghost" aria-label="Close">×</button>
     </header>
     <ul class="bnb-sheet__list">
-      <li><a href="/life-list"      class="bnb-sheet__row"><span class="glyph">✦</span> Life list</a></li>
-      <li><a href="/quarantine"     class="bnb-sheet__row"><span class="glyph">⚠</span> Quarantine</a></li>
-      <li><a href="/analytics/dawn-chorus" class="bnb-sheet__row"><span class="glyph">◐</span> Dawn chorus</a></li>
-      <li><a href="/correlation"    class="bnb-sheet__row"><span class="glyph">☰</span> Co-occurrence</a></li>
-      <li><a href="/timeseries"     class="bnb-sheet__row"><span class="glyph">∷</span> Trends</a></li>
-      <li><a href="/listen"         class="bnb-sheet__row"><span class="glyph">♪</span> Live audio</a></li>
-      <li><a href="/recordings"     class="bnb-sheet__row"><span class="glyph">▶</span> Recordings</a></li>
-      <li><a href="/gallery"        class="bnb-sheet__row"><span class="glyph">◫</span> Gallery</a></li>
-      <li><a href="/history"        class="bnb-sheet__row"><span class="glyph">◷</span> History</a></li>
-      <li><a href="/weekly"         class="bnb-sheet__row"><span class="glyph">¶</span> Weekly</a></li>
-      <li><a href="/year-in-review" class="bnb-sheet__row"><span class="glyph">⊞</span> Year in review</a></li>
-      <li><a href="/system"         class="bnb-sheet__row"><span class="glyph">⚙</span> System</a></li>
-      <li><a href="/notifications"  class="bnb-sheet__row"><span class="glyph">≡</span> Notifications</a></li>
-      <li><a href="/admin"          class="bnb-sheet__row"><span class="glyph">⌗</span> Admin</a></li>
-      <li><a href="/kiosk"          class="bnb-sheet__row"><span class="glyph">◉</span> Kiosk mode</a></li>
-      <li><a href="/system/changelog" class="bnb-sheet__row"><span class="glyph">⌥</span> Changelog</a></li>
-      <li><a href="/help"           class="bnb-sheet__row"><span class="glyph">?</span> Help &amp; methodology</a></li>
+      <!-- Rows are generated from the nav manifest (routes::pages::nav): the
+           top-level sections that aren't bottom-bar tabs, then every secondary
+           destination, grouped — same source as the desktop "More" dropdown. -->
+      {{sheet_rows}}
     </ul>
   </form>
 </dialog>

@@ -2398,6 +2398,27 @@ body:has(.bnb-tabbar) main { padding-bottom: 84px; }
   font-family: var(--font-mono); font-size: 15px; color: var(--fg-3); text-align: center;
 }
 .bnb-sheet__row:hover { background: var(--surface-2); }
+.bnb-sheet__row.active { background: color-mix(in oklch, var(--moss) 10%, var(--surface)); color: var(--moss-ink); }
+.bnb-sheet__row.active .glyph { color: var(--moss-ink); }
+/* Group sub-headings inside the mobile sheet (manifest-generated), so it reads
+   as grouped sections instead of one flat wall. */
+.bnb-sheet__group {
+  list-style: none;
+  padding: 16px 18px 4px;
+  font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--fg-4); font-weight: 600;
+}
+
+/* Breadcrumb trail — generated from the nav manifest for secondary pages
+   (top-level tabs and the dashboard show none). */
+.bnb-crumbs {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 0 0 16px; font-size: 12.5px; color: var(--fg-3);
+}
+.bnb-crumbs a { color: var(--fg-3); text-decoration: none; }
+.bnb-crumbs a:hover { color: var(--moss-ink); }
+.bnb-crumbs .sep { color: var(--fg-4); }
+.bnb-crumbs .cur { color: var(--fg); font-weight: 500; }
 
 @media (prefers-reduced-motion: no-preference) {
   .bnb-sheet[open] { animation: bnb-sheet-rise 240ms cubic-bezier(.2,.7,.2,1); }

@@ -39,6 +39,7 @@ pub mod life_list;
 pub(crate) mod listen;
 pub mod livestream;
 pub mod migration;
+pub(crate) mod nav;
 pub mod notification_center;
 pub mod onboarding;
 pub(crate) mod overlays;
@@ -164,53 +165,38 @@ fn render_page_inner(
     signed_in: bool,
 ) -> Html<String> {
     let version = env!("CARGO_PKG_VERSION");
-    let nav = |key| {
-        if active_nav == key { "active" } else { "" }
-    };
     let sign_out_link = if signed_in { SIGN_OUT_LINK_HTML } else { "" };
     // Live process uptime for the topnav pill; empty when unavailable (non-Linux
     // or `/proc` unreadable) so the O-26 `[data-empty-hide=""]` rule hides it.
     let uptime_short = crate::system_info::process_uptime_secs()
         .map(crate::system_info::format_uptime)
         .unwrap_or_default();
-    // Insert the layout partials FIRST so their own `{{nav_*}}` / `{{version}}`
-    // / `{{uptime_short}}` placeholders are resolved by the subsequent passes.
-    // (O-26's topnav-more + footer both reference those slots.)
+    // Every navigation surface is generated from the single `nav` manifest, so
+    // the top-nav, the "More" dropdown, the mobile tab bar + sheet, and the
+    // breadcrumb can't drift apart (they were four hand-maintained HTML lists).
+    // Active-state is derived from the page's `active_nav` key.
+    let topnav_links = nav::topnav_links(active_nav);
+    let more_groups = nav::more_groups(active_nav);
+    let tabbar_slots = nav::tabbar_slots(active_nav);
+    let sheet_rows = nav::sheet_rows(active_nav);
+    let breadcrumb = nav::breadcrumb(active_nav);
+    // The partial *shells* (the `<dialog>`/`<nav>` chrome + their scripts) are
+    // inlined first; their `{{more_groups}}` / `{{tabbar_slots}}` / `{{sheet_rows}}`
+    // slots are filled by the manifest-generated lists in the same pass.
     let html = LAYOUT_HTML
         .replace("{{title}}", title)
         .replace("{{content}}", content)
+        .replace("{{topnav_links}}", &topnav_links)
+        .replace("{{breadcrumb}}", &breadcrumb)
         .replace("{{topnav_more}}", TOPNAV_MORE_HTML)
         .replace("{{footer}}", FOOTER_HTML)
-        // O-24 — tabbar reads {{nav_*}}, so substitute the partial first
-        // and let the nav loop below fill its slots.
         .replace("{{tabbar}}", TABBAR_HTML)
+        .replace("{{more_groups}}", &more_groups)
+        .replace("{{tabbar_slots}}", &tabbar_slots)
+        .replace("{{sheet_rows}}", &sheet_rows)
         .replace("{{sign_out_link}}", sign_out_link)
         .replace("{{version}}", version)
         .replace("{{uptime_short}}", &uptime_short)
-        .replace("{{nav_dashboard}}", nav("dashboard"))
-        .replace("{{nav_today}}", nav("today"))
-        .replace("{{nav_species}}", nav("species"))
-        .replace("{{nav_listen}}", nav("listen"))
-        .replace("{{nav_recordings}}", nav("recordings"))
-        .replace("{{nav_analytics}}", nav("analytics"))
-        .replace("{{nav_timeseries}}", nav("timeseries"))
-        .replace("{{nav_history}}", nav("history"))
-        .replace("{{nav_weekly}}", nav("weekly"))
-        .replace("{{nav_quarantine}}", nav("quarantine"))
-        .replace("{{nav_life_list}}", nav("life-list"))
-        .replace("{{nav_heatmap}}", nav("heatmap"))
-        .replace("{{nav_migration}}", nav("migration"))
-        .replace("{{nav_system}}", nav("system"))
-        .replace("{{nav_notifications}}", nav("notifications"))
-        // O-26 — slots referenced by the topnav-more partial.
-        .replace("{{nav_year_in_review}}", nav("year_in_review"))
-        .replace("{{nav_gallery}}", nav("gallery"))
-        .replace("{{nav_dawn_chorus}}", nav("dawn_chorus"))
-        .replace("{{nav_correlation}}", nav("correlation"))
-        .replace("{{nav_admin}}", nav("admin"))
-        .replace("{{nav_kiosk}}", nav("kiosk"))
-        .replace("{{nav_changelog}}", nav("changelog"))
-        .replace("{{nav_help}}", nav("help"))
         // Inline the update banner partial BEFORE the final `{{version}}`
         // pass below, so the banner's `data-current-version="{{version}}"`
         // resolves. Previously this happened after the version pass, which

@@ -1,21 +1,11 @@
 <!--
-  Topnav overflow menu · drop-in for layout.html.
-  Insert immediately before the theme-toggle button, inside `.topnav-right`.
+  Topnav overflow ("More") menu · drop-in for layout.html, inside `.topnav-right`.
 
-  Single source of truth for the secondary navigation. The mobile bottom-sheet
-  in O-24 also renders this list — both surfaces stay in sync by including
-  this partial.
-
-  Reads {{nav_*}} variables already set by `render_page()`:
-    {{nav_history}}, {{nav_weekly}}, {{nav_year_in_review}},
-    {{nav_recordings}}, {{nav_gallery}},
-    {{nav_dawn_chorus}}, {{nav_correlation}}, {{nav_timeseries}},
-    {{nav_notifications}}, {{nav_admin}}, {{nav_kiosk}},
-    {{nav_changelog}}, {{nav_help}}.
-
-  If your `render_page()` doesn't yet emit those slots, drop the empty
-  substitution and the active state simply doesn't fire — the rows still
-  navigate correctly. See O-26 DIFF.md.
+  The grouped rows are generated from the single nav manifest
+  (routes::pages::nav) and inlined into the server-filled slot below, with
+  active-state derived from each page's active key. The desktop dropdown, the
+  mobile bottom sheet, the top-nav, and the breadcrumb all render from that same
+  manifest, so the surfaces cannot drift apart.
 -->
 <div class="bnb-more">
   <button type="button"
@@ -41,103 +31,14 @@
 
     <div class="bnb-more-menu__body" role="navigation" aria-label="Secondary sections">
 
-      <section class="bnb-more-group">
-        <h3 class="bnb-eyebrow">Reports</h3>
-        <ul>
-          <li><a href="/history"        class="bnb-more-row {{nav_history}}">
-            <span class="glyph">◷</span>
-            <span class="label">History</span>
-            <span class="sub">calendar of past days</span>
-          </a></li>
-          <li><a href="/weekly"         class="bnb-more-row {{nav_weekly}}">
-            <span class="glyph">¶</span>
-            <span class="label">Weekly report</span>
-            <span class="sub">Sunday recap</span>
-          </a></li>
-          <li><a href="/year-in-review" class="bnb-more-row {{nav_year_in_review}}">
-            <span class="glyph">⊞</span>
-            <span class="label">Year in review</span>
-            <span class="sub">annual editorial</span>
-          </a></li>
-        </ul>
-      </section>
+      <!-- Groups + rows are generated from the single nav manifest
+           (routes::pages::nav) so this dropdown, the mobile sheet, the top-nav,
+           and the command palette can never drift apart. -->
+      {{more_groups}}
 
       <section class="bnb-more-group">
-        <h3 class="bnb-eyebrow">Audio &amp; images</h3>
+        <h3 class="bnb-eyebrow">Find</h3>
         <ul>
-          <li><a href="/listen"         class="bnb-more-row {{nav_listen}}">
-            <span class="glyph">♪</span>
-            <span class="label">Live audio</span>
-            <span class="sub">listen now &amp; test your mic</span>
-          </a></li>
-          <li><a href="/recordings"     class="bnb-more-row {{nav_recordings}}">
-            <span class="glyph">▶</span>
-            <span class="label">Recordings</span>
-            <span class="sub">listen to detection clips</span>
-          </a></li>
-          <li><a href="/gallery"        class="bnb-more-row {{nav_gallery}}">
-            <span class="glyph">◫</span>
-            <span class="label">Gallery</span>
-            <span class="sub">species photos</span>
-          </a></li>
-        </ul>
-      </section>
-
-      <section class="bnb-more-group">
-        <h3 class="bnb-eyebrow">Analytics — deep dives</h3>
-        <ul>
-          <li><a href="/analytics/dawn-chorus" class="bnb-more-row {{nav_dawn_chorus}}">
-            <span class="glyph">◐</span>
-            <span class="label">Dawn chorus</span>
-            <span class="sub">per-species polar plot</span>
-          </a></li>
-          <li><a href="/correlation"           class="bnb-more-row {{nav_correlation}}">
-            <span class="glyph">☰</span>
-            <span class="label">Co-occurrence</span>
-            <span class="sub">who sings with whom</span>
-          </a></li>
-          <li><a href="/timeseries"            class="bnb-more-row {{nav_timeseries}}">
-            <span class="glyph">∷</span>
-            <span class="label">Time series</span>
-            <span class="sub">trends &amp; comparisons</span>
-          </a></li>
-        </ul>
-      </section>
-
-      <section class="bnb-more-group">
-        <h3 class="bnb-eyebrow">Operations</h3>
-        <ul>
-          <li><a href="/notifications"  class="bnb-more-row {{nav_notifications}}">
-            <span class="glyph">≡</span>
-            <span class="label">Notifications</span>
-            <span class="sub">channels &amp; log</span>
-          </a></li>
-          <li><a href="/admin"          class="bnb-more-row {{nav_admin}}">
-            <span class="glyph">⌗</span>
-            <span class="label">Admin</span>
-            <span class="sub">settings, audio, backups</span>
-          </a></li>
-          <li><a href="/kiosk"          class="bnb-more-row {{nav_kiosk}}">
-            <span class="glyph">◉</span>
-            <span class="label">Kiosk mode</span>
-            <span class="sub">wall display</span>
-          </a></li>
-        </ul>
-      </section>
-
-      <section class="bnb-more-group">
-        <h3 class="bnb-eyebrow">Help</h3>
-        <ul>
-          <li><a href="/system/changelog" class="bnb-more-row {{nav_changelog}}">
-            <span class="glyph">⌥</span>
-            <span class="label">Changelog</span>
-            <span class="sub">what's new</span>
-          </a></li>
-          <li><a href="/help"             class="bnb-more-row {{nav_help}}">
-            <span class="glyph">?</span>
-            <span class="label">Help &amp; methodology</span>
-            <span class="sub">the manual</span>
-          </a></li>
           <li><button type="button"
                       class="bnb-more-row"
                       data-trigger-cmdk

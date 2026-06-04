@@ -46,19 +46,7 @@
             <span class="name">BirdNet</span><span class="sub">Behavior</span>
         </a>
         <span class="bnb-vrule lay-vrule"></span>
-        <nav class="topnav-links" aria-label="Sections">
-            <a href="/" class="topnav-link {{nav_dashboard}}">Dashboard</a>
-            <a href="/today" class="topnav-link {{nav_today}}">Today</a>
-            <a href="/species" class="topnav-link {{nav_species}}">Species</a>
-            <a href="/heatmap" class="topnav-link {{nav_heatmap}}">Heatmap</a>
-            <a href="/migration" class="topnav-link {{nav_migration}}">Migration</a>
-            <a href="/analytics" class="topnav-link {{nav_analytics}}">Analytics</a>
-            <a href="/life-list" class="topnav-link {{nav_life_list}}">Life&nbsp;list</a>
-            <a href="/quarantine" class="topnav-link {{nav_quarantine}} lay-iflex-gap">
-                Quarantine<span hx-get="/pages/quarantine-pending-count" hx-trigger="load, every 60s" hx-swap="innerHTML"></span>
-            </a>
-            <a href="/system" class="topnav-link {{nav_system}}">System</a>
-        </nav>
+        <nav class="topnav-links" aria-label="Sections">{{topnav_links}}</nav>
         <div class="topnav-right">
             <form action="/species" method="get" class="nav-search" role="search">
                 <input type="search" name="q" placeholder="Search species…" aria-label="Search species">
@@ -79,6 +67,7 @@
     </header>
     <main id="main-content" role="main">
         {{update_banner}}
+        {{breadcrumb}}
         {{content}}
     </main>
     {{footer}}
