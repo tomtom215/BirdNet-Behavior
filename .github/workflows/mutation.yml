@@ -93,10 +93,12 @@ jobs:
     runs-on: ubuntu-24.04
     # Matrix-driven so the slow binary-crate shards get a longer budget. The
     # library-crate shards (birdnet-core / birdnet-db) reuse a warm `target/`
-    # and finish well inside 45 min; the binary-crate shards
-    # (src/daemon/, src/capture/*) rebuild the binary + web tree per mutant and
-    # were getting `cancelled` first at 45 then at 90 min on cold caches — they
-    # set `timeout_minutes: 120` in the matrix below.
+    # and finish well inside 45 min; the binary-crate shards (the binary's own
+    # src/daemon/ + src/capture/* modules) relink the statically-bundled DuckDB
+    # per mutant, so the larger files are split across several `--shard` jobs
+    # (see the matrix) and each sets `timeout_minutes: 120`. Splitting keeps the
+    # critical path near one baseline build instead of growing with the whole
+    # file's mutant count, which had been overrunning the wall.
     timeout-minutes: ${{ matrix.timeout_minutes || 45 }}
     strategy:
       # One file's surviving mutants must not abort the rest of the matrix —
@@ -161,75 +163,75 @@ jobs:
             # observable, but the gate stays at 0 missed so a future
             # regression of the same shape lights up immediately.
             max_missed: 0
-          - label: src/daemon/
-            slug: src-daemon
-            # Binary-crate shard: rebuilds the binary + web tree per mutant, so
-            # it needs well over the 45-min default; 90 still hit the cap on a
-            # cold cache (the build + per-mutant rebuilds of the bundled DuckDB
-            # tree ran right up to the wall), so give it real margin.
-            timeout_minutes: 120
-            # The whole daemon module tree. The orchestrator was split from a
-            # single src/daemon.rs into src/daemon/{mod,config,disposition,
-            # webhook,processor}.rs for readability, so the gate globs the
-            # directory to keep mutating every moved function. The glob
-            # `src/daemon/*.rs` matches all submodules (test_support.rs is
-            # cfg(test) and generates no mutants).
-            file: src/daemon/*.rs
-            package: birdnet-behavior
-            # 0 missed is held by the same coverage as before the split:
-            #   * config.rs     — per-config builders + resolve_f32_with_default
-            #     / resolve_required_paths / species_thresholds_log_count, each
-            #     with a unit test pinning every field/branch individually.
-            #   * disposition.rs — decide_disposition, the confidence-% and
-            #     latency arithmetic, and the boolean notification gates
-            #     (passes_filter / should_dispatch_notification), all pure and
-            #     unit-tested.
-            #   * webhook.rs    — build_webhook_spec (unit-tested decision
-            #     matrix); dispatch_webhook returns Result<u16, WebhookError>
-            #     so its body-replacement mutant is unviable by return type.
-            #   * processor.rs  — event_processor, covered by in-process
-            #     integration tests (in-memory AppState + tempdir) for the
-            #     accept / quarantine / drop / alert-rule paths.
-            #   * mod.rs        — start_detection_daemon, covered by the
-            #     in-process test against the tiny V2.4 ONNX model.
-            max_missed: 0
-          - label: src/capture/supervisor.rs
-            slug: src-capture-supervisor.rs
-            # Binary-crate shard: rebuilds the binary + web tree per mutant, so
-            # it needs well over the 45-min default; 90 still hit the cap on a
-            # cold cache (the build + per-mutant rebuilds of the bundled DuckDB
-            # tree ran right up to the wall), so give it real margin.
-            timeout_minutes: 120
-            file: src/capture/supervisor.rs
-            package: birdnet-behavior
-            # The capture supervisor — the field-survival core: a dead
-            # arecord/ffmpeg subprocess is restarted with capped exponential
-            # backoff, the recording schedule pauses/resumes capture, and the
-            # birdnet_audio_source_up gauge is driven from real process health.
-            # Every restart/backoff/schedule decision lives in `reconcile` +
-            # the pure helpers (`backoff_delay`, `should_warn_down`,
-            # `source_gauge_label`) behind the `Source` trait, so a fake source
-            # drives each branch — death -> backoff -> recovery, the schedule
-            # gate, the boundary of the backoff window — without a real
-            # capture tool on the runner. 0 missed at introduction.
-            max_missed: 0
-          - label: src/capture/schedule.rs
-            slug: src-capture-schedule.rs
-            # Binary-crate shard: rebuilds the binary + web tree per mutant, so
-            # it needs well over the 45-min default; 90 still hit the cap on a
-            # cold cache (the build + per-mutant rebuilds of the bundled DuckDB
-            # tree ran right up to the wall), so give it real margin.
-            timeout_minutes: 120
-            file: src/capture/schedule.rs
-            package: birdnet-behavior
-            # Schedule parsing + the hand-rolled UTC clock. `utc_now`'s date
-            # arithmetic was extracted into the pure `civil_from_unix_secs`,
-            # which is cross-checked against an independent inverse oracle for
-            # every calendar day across two centuries (every month length,
-            # every leap day, and the 2100 century rule) plus a proptest
-            # round-trip, so its arithmetic mutants die. The parse helpers and
-            # `resolve_location` have per-branch/boundary tests. 0 missed.
-            max_missed: 0
+          # ── Binary-crate shards (the birdnet-behavior binary) ───────────────
+          # These mutate the binary's own modules, so every mutant relinks the
+          # binary against the statically-bundled DuckDB — ~1.6 min/mutant on top
+          # of a one-time baseline build (measured locally + on CI). One job per
+          # file ran the heavier files past the wall: schedule.rs has 107 mutants
+          # and src/daemon/ 63 (cargo-mutants v27), so they were `cancelled`
+          # mid-run — and since the summary step is `always()`, the PR comment
+          # showed a *partial* "0 missed" that had not actually finished. So the
+          # large files are split across several jobs with cargo-mutants' native
+          # `--shard k/n` (deterministic under --no-shuffle): the shards
+          # partition the file's mutants with no overlap or gaps, each enforces
+          # 0-missed on its own slice (the file is clean iff every shard is), and
+          # they run in parallel — so the critical path is one baseline build
+          # plus ~13 mutants, not the whole file. Counts are sized to ~13
+          # mutants/shard. The library shards above need no split: they reuse a
+          # warm target/ with no per-mutant DuckDB relink and finish in minutes.
+
+          # src/capture/schedule.rs — 107 mutants. Schedule parsing + the
+          # hand-rolled UTC clock: `utc_now`'s date arithmetic was extracted into
+          # the pure `civil_from_unix_secs`, cross-checked against an independent
+          # inverse oracle for every calendar day across two centuries (every
+          # month length, every leap day, the 2100 century rule) plus a proptest
+          # round-trip, so its arithmetic mutants die; the parse helpers and
+          # `resolve_location` have per-branch/boundary tests. 0 missed.
+          - { label: "src/capture/schedule.rs [1/8]", slug: src-capture-schedule.rs-1, shard: "0/8", file: "src/capture/schedule.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
+          - { label: "src/capture/schedule.rs [2/8]", slug: src-capture-schedule.rs-2, shard: "1/8", file: "src/capture/schedule.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
+          - { label: "src/capture/schedule.rs [3/8]", slug: src-capture-schedule.rs-3, shard: "2/8", file: "src/capture/schedule.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
+          - { label: "src/capture/schedule.rs [4/8]", slug: src-capture-schedule.rs-4, shard: "3/8", file: "src/capture/schedule.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
+          - { label: "src/capture/schedule.rs [5/8]", slug: src-capture-schedule.rs-5, shard: "4/8", file: "src/capture/schedule.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
+          - { label: "src/capture/schedule.rs [6/8]", slug: src-capture-schedule.rs-6, shard: "5/8", file: "src/capture/schedule.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
+          - { label: "src/capture/schedule.rs [7/8]", slug: src-capture-schedule.rs-7, shard: "6/8", file: "src/capture/schedule.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
+          - { label: "src/capture/schedule.rs [8/8]", slug: src-capture-schedule.rs-8, shard: "7/8", file: "src/capture/schedule.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
+
+          # src/daemon/*.rs — 63 mutants across the orchestrator tree (split from
+          # a single src/daemon.rs into {mod,config,disposition,webhook,
+          # processor}.rs; the glob mutates every moved function — test_support.rs
+          # is cfg(test) and generates none). 0 missed is held by:
+          #   * config.rs      — per-config builders + resolve_f32_with_default /
+          #     resolve_required_paths / species_thresholds_log_count, each with a
+          #     unit test pinning every field/branch.
+          #   * disposition.rs — decide_disposition, the confidence-%/latency
+          #     arithmetic, and the boolean notification gates (passes_filter /
+          #     should_dispatch_notification), all pure and unit-tested.
+          #   * webhook.rs     — build_webhook_spec (unit-tested decision matrix);
+          #     dispatch_webhook returns Result<u16, WebhookError> so its
+          #     body-replacement mutant is unviable by return type.
+          #   * processor.rs   — event_processor, covered by in-process
+          #     integration tests (in-memory AppState + tempdir) for the
+          #     accept / quarantine / drop / alert-rule paths.
+          #   * mod.rs         — start_detection_daemon, covered by the in-process
+          #     test against the tiny V2.4 ONNX model.
+          - { label: "src/daemon/*.rs [1/5]", slug: src-daemon-1, shard: "0/5", file: "src/daemon/*.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
+          - { label: "src/daemon/*.rs [2/5]", slug: src-daemon-2, shard: "1/5", file: "src/daemon/*.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
+          - { label: "src/daemon/*.rs [3/5]", slug: src-daemon-3, shard: "2/5", file: "src/daemon/*.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
+          - { label: "src/daemon/*.rs [4/5]", slug: src-daemon-4, shard: "3/5", file: "src/daemon/*.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
+          - { label: "src/daemon/*.rs [5/5]", slug: src-daemon-5, shard: "4/5", file: "src/daemon/*.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
+
+          # src/capture/supervisor.rs — 40 mutants. The field-survival core: a
+          # dead arecord/ffmpeg subprocess is restarted with capped exponential
+          # backoff, the recording schedule pauses/resumes capture, and the
+          # birdnet_audio_source_up gauge is driven from real process health.
+          # Every restart/backoff/schedule decision lives in `reconcile` + the
+          # pure helpers (`backoff_delay`, `should_warn_down`,
+          # `source_gauge_label`) behind the `Source` trait, so a fake source
+          # drives each branch — death -> backoff -> recovery, the schedule gate,
+          # the backoff-window boundary — without a real capture tool. 0 missed.
+          - { label: "src/capture/supervisor.rs [1/3]", slug: src-capture-supervisor.rs-1, shard: "0/3", file: "src/capture/supervisor.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
+          - { label: "src/capture/supervisor.rs [2/3]", slug: src-capture-supervisor.rs-2, shard: "1/3", file: "src/capture/supervisor.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
+          - { label: "src/capture/supervisor.rs [3/3]", slug: src-capture-supervisor.rs-3, shard: "2/3", file: "src/capture/supervisor.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
     steps:
       - uses: actions/checkout@v6
 
@@ -279,6 +281,15 @@ jobs:
         # crates or the binary itself.
         run: |
           set +e
+          # Large files are split across jobs via the matrix `shard` field
+          # ("k/n", k zero-based); cargo-mutants slices the mutant list
+          # deterministically (with --no-shuffle below) so the shards partition
+          # it with no overlap or gaps. Unsharded rows leave `shard` empty and
+          # run the file's whole mutant set in one job.
+          shard_args=()
+          if [ -n "${{ matrix.shard }}" ]; then
+            shard_args=(--shard "${{ matrix.shard }}")
+          fi
           cargo mutants \
             --workspace \
             --package "${{ matrix.package || 'birdnet-core' }}" \
@@ -286,6 +297,7 @@ jobs:
             --in-place \
             --timeout 120 \
             --no-shuffle \
+            "${shard_args[@]}" \
             --json
           status=$?
           if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
@@ -327,9 +339,22 @@ jobs:
             head -50 missed.txt
             echo 'MUT_EOF'
           } >> "$GITHUB_OUTPUT"
+          # Per-job line in the Actions run summary, so sharded files (which do
+          # not post a PR comment) still surface their counts in the UI.
+          shard="${{ matrix.shard }}"
+          {
+            printf '### 🧬 `%s`%s\n\n' "${{ matrix.file }}" "${shard:+ (shard $shard)}"
+            printf '| total | caught | missed | unviable | timeout |\n'
+            printf '| --- | --- | --- | --- | --- |\n'
+            printf '| %s | %s | %s | %s | %s |\n' "$mutants" "$caught" "$missed" "$unviable" "$timeout"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Comment summary on PR
-        if: github.event_name == 'pull_request' && always()
+        # Only unsharded rows comment: a sharded file would otherwise post one
+        # comment per shard (e.g. 8 for schedule.rs), burying the PR. Each
+        # shard's counts still land in the job's Step Summary (above) and its
+        # artifact, and its pass/fail shows as its own check.
+        if: github.event_name == 'pull_request' && always() && ! matrix.shard
         uses: marocchino/sticky-pull-request-comment@v3
         with:
           header: mutants-${{ matrix.slug }}
