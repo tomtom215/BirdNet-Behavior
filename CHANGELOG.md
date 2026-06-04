@@ -40,9 +40,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entrypoint.
 - **Importing a real BirdNET-Pi database works again.** The upload endpoint
   inherited axum's default 2 MiB request-body limit, so any real `birds.db`
-  (tens to hundreds of MB) was rejected before the importer ever ran — the
-  import feature was effectively dead. The DB-upload route now accepts large
-  files (admin-only, so the higher ceiling is not a public surface).
+  (tens to hundreds of MB, sometimes several GB) was rejected before the importer
+  ever ran — the import feature was effectively dead. The DB-upload route now
+  accepts large files (admin-only) **and streams the upload straight to disk**
+  rather than buffering it (twice) in memory: a 163 MB upload now adds ~7 MB to
+  peak RSS instead of ~330 MB, so a multi-hundred-MB database imports with flat
+  memory instead of OOM-ing a Raspberry Pi. (For a database already on the Pi,
+  the "Server Path" tab imports it with no upload at all.)
 - **An RTSP source's transport (TCP/UDP/Auto) is now honoured.** The per-source
   transport the admin UI exposes was silently dropped and ffmpeg was always
   forced to TCP, so a camera that only speaks UDP could never be captured. The

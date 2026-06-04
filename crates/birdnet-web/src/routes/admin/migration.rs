@@ -108,44 +108,61 @@ async fn upload_and_run_handler(
     mut multipart: axum::extract::Multipart,
     migration_state: MigrationState,
 ) -> Result<Html<String>, StatusCode> {
-    let mut file_bytes: Option<Vec<u8>> = None;
-    let mut file_name = String::from("upload.db");
+    // Stream the uploaded multipart field straight to a temp file in chunks
+    // (the Migrator later opens that file read-only). Streaming — rather than
+    // buffering the whole upload in memory — keeps RAM flat regardless of
+    // database size: a real BirdNET-Pi `birds.db` is routinely hundreds of MB
+    // and can reach several GB, and the previous `field.bytes()` + `to_vec()`
+    // held two full copies in memory at once, which would OOM a Raspberry Pi.
+    use tokio::io::AsyncWriteExt as _;
 
-    while let Some(field) = multipart
+    let mut file_name = String::from("upload.db");
+    // NamedTempFile reserves a unique path and auto-cleans it on drop (even on
+    // an early return); we stream into that path asynchronously below.
+    let tmp = tokio::task::spawn_blocking(|| tempfile::Builder::new().suffix(".db").tempfile())
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let tmp_path = tmp.path().to_path_buf();
+
+    let mut bytes_written: u64 = 0;
+    let mut found_field = false;
+    while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|_| StatusCode::BAD_REQUEST)?
     {
-        if field.name().is_some_and(|n| n == "source_file") {
-            if let Some(name) = field.file_name() {
-                file_name = name.to_string();
-            }
-            let data = field.bytes().await.map_err(|_| StatusCode::BAD_REQUEST)?;
-            file_bytes = Some(data.to_vec());
-            break;
+        if field.name().is_none_or(|n| n != "source_file") {
+            continue;
         }
+        if let Some(name) = field.file_name() {
+            file_name = name.to_string();
+        }
+        let mut out = tokio::fs::File::create(&tmp_path)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        while let Some(chunk) = field.chunk().await.map_err(|_| StatusCode::BAD_REQUEST)? {
+            out.write_all(&chunk)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            bytes_written += chunk.len() as u64;
+        }
+        out.flush()
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        found_field = true;
+        break;
     }
 
-    let Some(bytes) = file_bytes else {
+    if !found_field {
         return Ok(Html(render::upload_error(
             "No file field 'source_file' in upload",
         )));
-    };
-    if bytes.is_empty() {
+    }
+    if bytes_written == 0 {
         return Ok(Html(render::upload_error("Uploaded file is empty")));
     }
 
-    // Write to a temp file; the Migrator opens it read-only.
-    let tmp = tokio::task::spawn_blocking(move || -> std::io::Result<tempfile::NamedTempFile> {
-        let mut tmp = tempfile::Builder::new().suffix(".db").tempfile()?;
-        std::io::Write::write_all(&mut tmp, &bytes)?;
-        Ok(tmp)
-    })
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let tmp_path = tmp.path().to_path_buf();
     let dest_path = state.db_path().to_path_buf();
 
     // Validate first (read-only; never modifies the temp file).
