@@ -25,7 +25,7 @@ const MAX_SHIFT: u32 = 20;
 /// Delay before retry `attempt` (1-based) using **equal jitter**.
 ///
 /// The deterministic component grows as `2^attempt` seconds, capped at
-/// [`BACKOFF_CAP_SECS`]; half of it is fixed and the other half is randomised
+/// `BACKOFF_CAP_SECS`; half of it is fixed and the other half is randomised
 /// by `jitter_frac` (clamped to `[0.0, 1.0]`). So retry 1 lands in `[1s, 2s]`,
 /// retry 2 in `[2s, 4s]`, retry 3 in `[4s, 8s]`, … each spread across a window
 /// rather than firing at one instant. `attempt == 0` is the first try and

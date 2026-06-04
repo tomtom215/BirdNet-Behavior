@@ -9,7 +9,7 @@
 //! nav, and Migration was missing from the shell entirely.
 //!
 //! Active-state is derived from the page's key — the same key each page passes
-//! to [`super::admin_shell`] — so the highlight can't disagree with the menu it
+//! to `super::admin_shell` — so the highlight can't disagree with the menu it
 //! highlights. `admin_router_serves_every_nav_destination` parity-tests that
 //! every entry here resolves to a real admin route.
 
@@ -19,7 +19,7 @@ use std::fmt::Write as _;
 /// and a route the parity test guards.
 #[derive(Debug)]
 pub struct AdminNav {
-    /// Stable key matching the page's `active` argument to [`super::admin_shell`].
+    /// Stable key matching the page's `active` argument to `super::admin_shell`.
     pub key: &'static str,
     /// The route this tab links to (a real `GET` route under `/admin`).
     pub path: &'static str,

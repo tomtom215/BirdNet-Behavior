@@ -111,7 +111,7 @@ const GAIN_EPSILON_DB: f32 = 0.05;
 /// Whether a configured `gain_db` is large enough to apply.
 ///
 /// Pure so the boundary is unit-testable. The `abs()` makes a cut (negative dB)
-/// active just like a boost; only a value within [`GAIN_EPSILON_DB`] of unity
+/// active just like a boost; only a value within `GAIN_EPSILON_DB` of unity
 /// is treated as "no gain".
 #[must_use]
 pub fn gain_is_active(gain_db: f32) -> bool {
