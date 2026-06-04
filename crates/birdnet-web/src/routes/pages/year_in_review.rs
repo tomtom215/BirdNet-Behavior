@@ -46,7 +46,7 @@ async fn year_in_review_page(State(state): State<AppState>, headers: HeaderMap) 
         return render_page_for_request(
             "Year in Review",
             "<p class=\"bnb-meta\">Failed to load the year in review.</p>",
-            "",
+            "year_in_review",
             &headers,
         );
     };
@@ -54,7 +54,7 @@ async fn year_in_review_page(State(state): State<AppState>, headers: HeaderMap) 
     render_page_for_request(
         "Year in Review",
         &render_content(total, species, &dates, &all, &first_seen, &daily),
-        "",
+        "year_in_review",
         &headers,
     )
 }

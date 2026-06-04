@@ -30,7 +30,7 @@ pub use tmpfs::{
     TmpfsConfig, TmpfsError, generate_systemd_mount_unit, is_tmpfs_mounted, mount_tmpfs,
     unmount_tmpfs,
 };
-pub use types::{AudioFormat, CaptureError, CaptureSource, RecordingConfig};
+pub use types::{AudioFormat, CaptureError, CaptureSource, RecordingConfig, RtspTransport};
 
 // Internal re-export for detection pipeline modules (daemon.rs, pipeline.rs).
 pub(crate) use process::is_audio_file;

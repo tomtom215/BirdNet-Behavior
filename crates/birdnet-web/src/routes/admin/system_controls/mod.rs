@@ -33,7 +33,13 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/admin/system/restore",
-            routing::post(backup::restore_backup),
+            // A full backup (database + recordings) is far larger than axum's
+            // 2 MiB default body limit; without lifting it, restoring a real
+            // backup is rejected before it starts. The handler streams the
+            // upload to disk (constant memory), and the route is admin-only
+            // (RBAC), so an operator restoring their own archive of any size is
+            // safe — disk free space, not a body cap, is the real bound.
+            routing::post(backup::restore_backup).layer(axum::extract::DefaultBodyLimit::disable()),
         )
         .route(
             "/admin/system/service/restart",

@@ -42,7 +42,39 @@ pub enum CaptureSource {
         url: String,
         /// Stream identifier for filenames.
         stream_id: String,
+        /// Transport ffmpeg should negotiate with the camera.
+        transport: RtspTransport,
     },
+}
+
+/// RTSP transport preference passed to ffmpeg's `-rtsp_transport`.
+///
+/// Mirrors the `rtsp_transport` column the admin UI exposes per audio source.
+/// Before this was threaded through, the transport was hard-coded to TCP and
+/// the UI control had no effect — a camera that only speaks UDP could never be
+/// captured. `Auto` resolves to TCP (the most NAT-/firewall-robust choice, and
+/// the behaviour every prior release shipped); `Tcp` / `Udp` force the choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RtspTransport {
+    /// Let the station pick the robust default (TCP).
+    #[default]
+    Auto,
+    /// Force RTP-over-RTSP (TCP interleaved).
+    Tcp,
+    /// Force RTP-over-UDP.
+    Udp,
+}
+
+impl RtspTransport {
+    /// The value to pass to ffmpeg's `-rtsp_transport`. ffmpeg has no literal
+    /// "auto", so `Auto` resolves to the TCP default here.
+    #[must_use]
+    pub const fn ffmpeg_arg(self) -> &'static str {
+        match self {
+            Self::Auto | Self::Tcp => "tcp",
+            Self::Udp => "udp",
+        }
+    }
 }
 
 /// Configuration for a recording session.
@@ -153,5 +185,16 @@ mod tests {
     fn audio_format_extension() {
         assert_eq!(AudioFormat::Wav.extension(), "wav");
         assert_eq!(AudioFormat::Flac.extension(), "flac");
+    }
+
+    #[test]
+    fn rtsp_transport_ffmpeg_arg() {
+        // Auto resolves to TCP (ffmpeg has no literal "auto"); explicit choices
+        // pass through. This is what makes the per-source UDP/TCP control work.
+        assert_eq!(RtspTransport::Auto.ffmpeg_arg(), "tcp");
+        assert_eq!(RtspTransport::Tcp.ffmpeg_arg(), "tcp");
+        assert_eq!(RtspTransport::Udp.ffmpeg_arg(), "udp");
+        // The default is Auto.
+        assert_eq!(RtspTransport::default(), RtspTransport::Auto);
     }
 }

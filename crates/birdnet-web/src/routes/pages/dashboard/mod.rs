@@ -67,15 +67,24 @@ async fn dashboard_page(State(state): State<AppState>, headers: HeaderMap) -> Re
     super::render_page_for_request("Dashboard", &content, "dashboard", &headers).into_response()
 }
 
-/// Whether to bounce a fresh station to the onboarding wizard: no detections yet
-/// **and** onboarding not marked complete. Fails safe — any DB error is treated
-/// as "already set up" so a hiccup never traps the operator on `/onboarding`.
+/// Whether to bounce a fresh station to the onboarding wizard: no detections
+/// yet, onboarding not marked complete, **and** no location configured. Fails
+/// safe — any DB error is treated as "already set up" so a hiccup never traps
+/// the operator on `/onboarding`.
+///
+/// The location check is what stops a station the installer already configured
+/// (latitude/longitude written to the config file, then seeded into the
+/// `settings` table at startup — see `helpers::seed_db_settings_from_config`)
+/// from being re-prompted for setup it already completed during installation.
 fn first_run_needs_onboarding(state: &AppState) -> bool {
     state.with_db(|conn| {
         let onboarded = birdnet_db::settings::get_or(conn, "onboarding_complete", "false")
             .map_or(true, |v| v == "true");
         let has_detections = birdnet_db::sqlite::detection_count(conn).map_or(true, |n| n > 0);
-        !onboarded && !has_detections
+        let lat = birdnet_db::settings::get_or(conn, "latitude", "").unwrap_or_default();
+        let lon = birdnet_db::settings::get_or(conn, "longitude", "").unwrap_or_default();
+        let has_location = !lat.trim().is_empty() && !lon.trim().is_empty();
+        !onboarded && !has_detections && !has_location
     })
 }
 

@@ -54,3 +54,7 @@ inh = "inh"           # short for "inhibit" — used as local var name
 unparseable = "unparseable" # alternative spelling of "unparsable", widely used
 cardinalis = "cardinalis" # Latin species epithet — Cardinalis cardinalis (Northern Cardinal)
 ater = "ater"         # Latin species epithet — Periparus ater (Coal Tit)
+aas = "aas"           # CSS class prefix for the admin_audio_sources templates
+thr = "thr"           # CSS class prefix for the species threshold table
+woth = "woth"         # four-letter banding code for Wood Thrush (Hylocichla mustelina)
+iif = "iif"           # token split from "IIFE" (immediately-invoked function expression)

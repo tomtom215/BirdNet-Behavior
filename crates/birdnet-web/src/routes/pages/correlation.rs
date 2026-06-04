@@ -52,7 +52,7 @@ async fn correlation_page(headers: HeaderMap) -> Html<String> {
         "{{help_link}}",
         &super::help::help_link(super::help::Topic::Analytics),
     );
-    super::render_page_for_request("Species Co-occurrence", &body, "analytics", &headers)
+    super::render_page_for_request("Species Co-occurrence", &body, "correlation", &headers)
 }
 
 const CORRELATION_CONTENT: &str = r##"<div class="page-head">

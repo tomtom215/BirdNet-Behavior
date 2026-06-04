@@ -56,9 +56,19 @@ pub(super) async fn service_restart() -> Html<String> {
 /// Return HTML with current process status (PID, uptime, memory, version).
 pub(super) async fn service_status() -> Html<String> {
     let pid = std::process::id();
-    let uptime_secs = get_process_uptime_secs(pid);
-    let memory_mb = get_process_memory_mb(pid);
-    let service_active = check_systemd_service_active("birdnet-behavior");
+    // Gathering status reads `/proc` and spawns `getconf` / `systemctl`
+    // subprocesses — all blocking. Run it off the async runtime so a slow
+    // `/proc` (e.g. NFS-mounted) or a hung `systemctl` can't stall the request
+    // executor and wedge unrelated requests.
+    let (uptime_secs, memory_mb, service_active) = tokio::task::spawn_blocking(move || {
+        (
+            get_process_uptime_secs(pid),
+            get_process_memory_mb(pid),
+            check_systemd_service_active("birdnet-behavior"),
+        )
+    })
+    .await
+    .unwrap_or((0, 0.0, false));
     let version = env!("CARGO_PKG_VERSION");
 
     let uptime_str = if uptime_secs >= 3600 {

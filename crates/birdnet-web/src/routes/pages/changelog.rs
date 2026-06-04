@@ -55,7 +55,7 @@ async fn page(headers: HeaderMap) -> Html<String> {
         }
     }
     body.push_str("</div></div>");
-    render_page_for_request("Changelog", &body, "system", &headers)
+    render_page_for_request("Changelog", &body, "changelog", &headers)
 }
 
 async fn latest_partial() -> Html<String> {

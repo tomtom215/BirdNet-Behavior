@@ -131,6 +131,15 @@ pub async fn run(
     // the cookie-auth path's user lookup line up.
     helpers::bootstrap_admin_password(&state);
 
+    // Seed the admin-UI `settings` table from the installed configuration on
+    // first run, so the values supplied at install time — the bare-metal
+    // installer's `birdnet.conf` and the Docker image's `BIRDNET_*` env/flags
+    // alike — show up in, and are editable from, the web settings form, and a
+    // configured station is not bounced back through the onboarding wizard.
+    // Insert-only, so it never overwrites a setting the operator later changed
+    // in the UI.
+    helpers::seed_db_settings_from_config(config.as_ref(), &cli, &state);
+
     // Overlay the admin-UI settings (SQLite `settings` table) on top of the
     // file config so settings saved in the web UI actually take effect. Without
     // this the settings form is write-only: the daemon and capture subsystems

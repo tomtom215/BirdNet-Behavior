@@ -7,6 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Installation input is now respected in the web UI.** The installer writes
+  station settings (latitude/longitude, audio device, station name, …) to
+  `/etc/birdnet/birdnet.conf`, and the Docker image passes them as `BIRDNET_*`
+  environment variables — but the admin settings form and the first-run
+  onboarding check read only the SQLite `settings` table, so a fully-configured
+  station showed blank fields and was bounced to the onboarding wizard it had
+  already effectively completed. The installed configuration (file **and**
+  env/flags) is now seeded into the `settings` table on first start — insert-only,
+  so a value the operator later changes in the UI is never overwritten — and a
+  station that already has coordinates is no longer redirected to onboarding.
+- **The "More" navigation menu no longer renders as overlapping/garbled text.**
+  The topnav dropdown and the mobile bottom sheet both ship a `data-open-more`
+  opener, and each opener's script selected the *first* one in the DOM — so the
+  topnav button opened **both** menus at once (stacked on top of each other) and
+  the mobile button opened none. Each opener is now scoped to its own dialog via
+  `aria-controls`.
+- **The Admin → Settings "saved" confirmation no longer renders a full-screen
+  checkmark.** The success icon referenced utility classes that don't exist in
+  the hand-written stylesheet, so the SVG rendered unconstrained; it now carries
+  an explicit 16×16 size.
+- **Live audio is reachable from the navigation.** The `/listen` page (per-source
+  playback + live spectrogram + a live detection trickle) is now linked from the
+  "More" menu, the mobile sheet, and the Audio settings section — so confirming a
+  microphone is working no longer requires typing the URL by hand.
+- **The installer falls back to Zenodo immediately when the GitHub model release
+  is absent.** The ~541 MB model fetch no longer retries a definitive `404` five
+  times with back-off before trying the next source; a missing GitHub asset now
+  falls through to Zenodo at once, matching the labels fetch and the Docker
+  entrypoint.
+- **Importing a real BirdNET-Pi database works again.** The upload endpoint
+  inherited axum's default 2 MiB request-body limit, so any real `birds.db`
+  (tens to hundreds of MB, sometimes several GB) was rejected before the importer
+  ever ran — the import feature was effectively dead. The DB-upload route now
+  accepts large files (admin-only) **and streams the upload straight to disk**
+  rather than buffering it (twice) in memory: a 163 MB upload now adds ~7 MB to
+  peak RSS instead of ~330 MB, so a multi-hundred-MB database imports with flat
+  memory instead of OOM-ing a Raspberry Pi. (For a database already on the Pi,
+  the "Server Path" tab imports it with no upload at all.)
+- **An RTSP source's transport (TCP/UDP/Auto) is now honoured.** The per-source
+  transport the admin UI exposes was silently dropped and ffmpeg was always
+  forced to TCP, so a camera that only speaks UDP could never be captured. The
+  choice now reaches the capture command (`Auto` keeps the TCP default).
+- **Multiple RTSP streams can be configured from the config file.** A new
+  comma-separated `RTSP_URLS` config key drives several RTSP captures without
+  the `--rtsp-urls` flag, and a multi-stream station no longer mislabels its
+  first stream `rtsp` (every stream is numbered `RTSP_1`, `RTSP_2`, … once there
+  is more than one).
+- **Restoring a backup works for real archives.** `/admin/system/restore` had the
+  same flaw as the import — it inherited the 2 MiB body limit and buffered the
+  whole `.tar.gz` in memory — so restoring any real backup (database + recordings,
+  often several GB) was rejected or OOM-ed the process. It now streams the upload
+  to disk and lifts the limit on that admin-only route.
+- **The system-status panel no longer blocks the async runtime.**
+  `/admin/system/service/status` read `/proc` and spawned `getconf` / `systemctl`
+  synchronously inside the request handler; that work now runs on a blocking
+  thread so a slow `/proc` or a hung `systemctl` can't stall unrelated requests.
+- **Navigation is consolidated and consistent.** The desktop top-nav, the "More"
+  dropdown, the mobile tab bar + sheet, the breadcrumb trail, and the ⌘K command
+  palette were separately hand-maintained lists that had drifted: `/live` was an
+  orphan reachable from no menu, the mobile sheet was missing `/kiosk` and
+  `/help`, `/analytics` was absent from mobile entirely, and seven pages
+  highlighted the wrong section. They now all derive from — or are parity-tested
+  against — a single navigation manifest. Added **breadcrumbs** on secondary
+  pages (there were none), grouped the previously-flat mobile sheet, corrected the
+  seven active-state mismatches, and redirected the orphaned `/live` to the
+  maintained `/listen`.
+
 ## [0.6.0] - 2026-06-03
 
 The largest release since the first public one. BirdNet-Behavior gets a

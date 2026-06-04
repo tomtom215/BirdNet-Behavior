@@ -20,6 +20,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     write!(out, r#"
   <div class="card">
     <div class="section-title">Audio Capture</div>
+    <p class="hint flush"><a href="/listen">▸ Listen live &amp; test your microphone →</a> — confirm the mic is picking up sound before tuning thresholds.</p>
     <div class="grid-2">
       <div>
         <label for="alsa_device">ALSA Device</label>

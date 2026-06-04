@@ -63,10 +63,9 @@ async fn page(State(state): State<AppState>, headers: HeaderMap) -> Html<String>
         .replace("{{source_options}}", &options)
         .replace("{{skel_trickle}}", &trickle_skel);
 
-    // active_nav = "today" so the existing topnav highlight lands on
-    // the closest concept — "listen" isn't a separate top-level nav
-    // entry, the link sits inside the audio-sources admin row.
-    render_page_for_request("Listen now", &body, "today", &headers)
+    // "listen" highlights the Live-audio entry in the More menu / mobile sheet
+    // (the {{nav_listen}} slot); it is not a top-level tab.
+    render_page_for_request("Listen now", &body, "listen", &headers)
 }
 
 /// Render the `<option>` set for the source selector. With at least one
