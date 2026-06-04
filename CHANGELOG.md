@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`--doctor` now checks the analytics preconditions.** The diagnostic gained
+  an "Analytics (behavioral)" check that reports, with an actionable fix,
+  whether behavioral analytics will actually work on this install: it **warns**
+  when an analytics database is configured but the binary was built without
+  analytics (a slim build pointed at a release config — the dashboards would
+  silently stay empty), notes when analytics is explicitly disabled, and
+  otherwise confirms analytics is enabled and that its DuckDB directory is
+  writable. It deliberately opens no DuckDB during the preflight, so it adds no
+  startup contention when the unit runs `--doctor` as `ExecStartPre`.
 - **Offline / air-gapped install.** `install.sh` can now install from a release
   tarball already on disk — `BIRDNET_BINARY_TARBALL=/path/to/…tar.gz sudo -E
   bash install.sh` — skipping the GitHub fetch and checksum round-trip for a
