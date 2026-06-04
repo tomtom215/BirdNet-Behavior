@@ -178,7 +178,10 @@ impl Client {
 
         for attempt in 0..MAX_RETRIES {
             if attempt > 0 {
-                let delay = Duration::from_secs(2_u64.pow(attempt));
+                // Jittered, capped exponential backoff so concurrent retries —
+                // and many stations hitting the same endpoint — don't
+                // synchronise into a thundering herd.
+                let delay = crate::retry::backoff_delay(attempt, crate::retry::jitter_frac());
                 tracing::debug!(
                     attempt,
                     delay_secs = delay.as_secs(),

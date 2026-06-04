@@ -12,6 +12,8 @@ pub mod email;
 pub mod heartbeat;
 pub mod mqtt;
 pub mod notification;
+/// Shared retry backoff with jitter, used by the HTTP integration clients.
+mod retry;
 pub mod species_images;
 pub mod weather;
 pub mod weekly_report;

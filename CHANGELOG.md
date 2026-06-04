@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Network retries now use jittered, capped, overflow-safe backoff.** The
+  BirdWeather and Apprise clients retried transient failures on a fixed
+  `2^attempt` schedule, so concurrent retries — and many stations posting on the
+  same cadence — would wake in lockstep and hammer a recovering endpoint (a
+  thundering herd). Both now share a backoff helper that adds **equal jitter**
+  (each retry lands in a window rather than at one instant), **caps** the delay
+  at 32 s so a long outage settles at a steady cadence, and is **overflow-safe**
+  regardless of the attempt count.
 - **The admin panel now renders entirely through one shared shell.** The
   Settings, System, and Migration pages each shipped their own standalone HTML
   document with a bespoke top `<nav>` (which disagreed with the admin shell's

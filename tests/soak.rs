@@ -141,3 +141,97 @@ async fn soak_insertions_stay_bounded() {
         );
     }
 }
+
+/// One detection row for `db_path`'s connection, keyed distinctly by `i`.
+fn insert_n(conn: &rusqlite::Connection, base: usize, count: usize) {
+    for i in base..base + count {
+        let time = format!("{:02}:{:02}:{:02}", (i / 3600) % 24, (i / 60) % 60, i % 60);
+        let file_name = format!("fault-{i:08}.wav");
+        let record = DetectionRecord {
+            date: "2026-03-16",
+            time: &time,
+            sci_name: "Turdus merula",
+            com_name: "Eurasian Blackbird",
+            confidence: 0.8,
+            lat: None,
+            lon: None,
+            cutoff: None,
+            week: Some(11),
+            sensitivity: None,
+            overlap: None,
+            file_name: &file_name,
+            #[allow(clippy::cast_precision_loss)]
+            chunk_offset_secs: Some(i as f64),
+            correlation_id: None,
+        };
+        insert_detection(conn, &record).expect("insert failed");
+    }
+}
+
+/// Fault-injection soak: a station must survive an unclean-shutdown / power-loss
+/// database corruption and resume recording with no operator action.
+///
+/// Models the real recovery cycle: run → snapshot backup → (power loss corrupts
+/// the file) → restart detects corruption and recovers from the backup → keep
+/// recording. Asserts the recovered data is intact, post-recovery writes persist,
+/// and the process doesn't leak file descriptors across the fault. This is the
+/// "recovers from an injected fault" half of the 24/7 soak acceptance; the
+/// kill-capture, clock-skew, and disk-purge faults are covered by the supervisor,
+/// schedule, and disk-manager unit tests respectively.
+#[test]
+fn soak_recovers_from_db_corruption_at_restart() {
+    use birdnet_db::resilience::{RecoveryAction, backup_database, check_and_recover};
+
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("station.db");
+    let backup_dir = dir.path().join("backups");
+
+    let fd_before = open_fd_count();
+
+    // 1. Normal operation: record a batch, then take a hot backup (as the
+    //    scheduled maintenance task does before VACUUM).
+    {
+        let conn = birdnet_db::sqlite::open_or_create(&db_path).expect("open db");
+        insert_n(&conn, 0, 500);
+        backup_database(&db_path, &backup_dir).expect("backup");
+        // Connection dropped here — the station "shuts down".
+    }
+
+    // 2. Power loss mid-write corrupts the main database file.
+    std::fs::write(&db_path, b"\x00\x01 not a sqlite file at all \xff\xfe").unwrap();
+
+    // 3. Restart: the resilience layer detects the corruption and restores the
+    //    most recent good backup — no operator action, no data loss back to the
+    //    snapshot, and crucially the station does NOT write to the corrupt file.
+    let recovery = check_and_recover(&db_path, &backup_dir).expect("recovery should succeed");
+    assert!(recovery.healthy, "database must be healthy after recovery");
+    assert_eq!(
+        recovery.action,
+        RecoveryAction::Recovered,
+        "a corrupt DB with a good backup must be recovered, not left as-is"
+    );
+
+    // 4. The station resumes: the recovered rows are intact and new detections
+    //    persist on the same path the daemon would reopen.
+    {
+        let conn = birdnet_db::sqlite::open_or_create(&db_path).expect("reopen after recovery");
+        let recovered: i64 = conn
+            .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(recovered, 500, "all pre-fault detections recovered");
+
+        insert_n(&conn, 500, 500);
+        let total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(total, 1000, "station keeps recording after recovery");
+    }
+
+    // No descriptor leak across the corrupt → recover → resume cycle.
+    if let (Some(before), Some(after)) = (fd_before, open_fd_count()) {
+        assert!(
+            after <= before + 8,
+            "open fds grew from {before} to {after} across the recovery cycle — possible leak"
+        );
+    }
+}
