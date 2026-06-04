@@ -60,6 +60,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The installer's completion summary shows the real dashboard port.** When an
+  operator set a custom `BIRDNET_LISTEN` (e.g. `…:8599`), the post-install
+  summary still printed the URL with the hardcoded `:8502`. It now derives the
+  port from the configured listen address.
 - **Installation input is now respected in the web UI.** The installer writes
   station settings (latitude/longitude, audio device, station name, …) to
   `/etc/birdnet/birdnet.conf`, and the Docker image passes them as `BIRDNET_*`
