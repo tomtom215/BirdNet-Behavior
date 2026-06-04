@@ -16,20 +16,8 @@ pub fn escape_html(s: &str) -> String {
 /// Render the full migration page.
 #[allow(clippy::too_many_lines)]
 pub fn migration_page(dest_db_path: &str) -> String {
-    format!(
-        r##"<!DOCTYPE html>
-<html lang="en">
-<head><script src="/static/theme-guard.js"></script><link rel="stylesheet" href="/static/css/app.css">
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>BirdNET-Pi Migration - BirdNet-Behavior</title>
-  <script src="/static/htmx.min.js"></script>
-  <style>
-    body {{ background:var(--bg); color:var(--fg); font-family:var(--font-ui); }}
-    .container {{ max-width:860px; margin:0 auto; padding:2rem 1rem; }}
-    nav {{ margin-bottom:2rem; padding:1rem 0; border-bottom:1px solid var(--border); }}
-    nav a {{ color:var(--fg-3); text-decoration:none; margin-right:1.5rem; }}
-    nav a:hover, nav a.active {{ color:var(--moss-ink); }}
+    let body = format!(
+        r##"<style>
     h1 {{ font-size:1.5rem; font-weight:700; margin-bottom:0.5rem; color:var(--fg); }}
     .card {{ background:var(--surface); border:1px solid var(--border); border-radius:0.75rem;
              padding:1.5rem; margin-bottom:1.5rem; }}
@@ -103,16 +91,6 @@ pub fn migration_page(dest_db_path: &str) -> String {
     .bar-msg.run {{ color:var(--moss-ink); }}
     .bar-note {{ color:var(--fg-4); font-size:0.8rem; margin-top:0.25rem; }}
   </style>
-</head>
-<body>
-<div class="container">
-  <nav>
-    <a href="/">Dashboard</a>
-    <a href="/admin/settings">Settings</a>
-    <a href="/admin/migrate" class="active">Migration</a>
-    <a href="/admin/system">System</a>
-    <a href="/admin/notifications">Notifications</a>
-  </nav>
 
   <h1>BirdNET-Pi Migration</h1>
   <p class="lede">
@@ -184,7 +162,6 @@ pub fn migration_page(dest_db_path: &str) -> String {
   </div>
 
   <div id="migrate-status"></div>
-</div>
 
 <script>
 function switchTab(name) {{
@@ -198,10 +175,9 @@ document.getElementById('migrate-tabs').addEventListener('click', function(e) {{
   var btn = e.target.closest('button[data-tab]');
   if (btn) switchTab(btn.dataset.tab);
 }});
-</script>
-</body>
-</html>"##
-    )
+</script>"##
+    );
+    crate::routes::admin::admin_shell("Migration", "migrate", &body)
 }
 
 /// Render the validation result partial.

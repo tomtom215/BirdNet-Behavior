@@ -311,6 +311,24 @@ mod tests {
     }
 
     #[test]
+    fn migration_page_renders_through_admin_shell() {
+        // Folded into the shared shell (Workstream E): the page must carry the
+        // shell's admin nav with Migration active, not a bespoke per-page nav.
+        let html = render::migration_page("/home/pi/birds.db");
+        assert!(html.contains("admin-nav"), "missing shared admin nav");
+        assert!(
+            html.contains(r#"href="/admin/migrate" class="am-nav-active""#),
+            "Migration tab should be active in the shell nav"
+        );
+        // The old standalone nav linked Dashboard/Settings/System as bare top
+        // links; those are gone now that the shell owns navigation.
+        assert!(
+            !html.contains(r#"<a href="/">Dashboard</a>"#),
+            "bespoke per-page nav should be gone"
+        );
+    }
+
+    #[test]
     fn render_upload_error_escapes_html() {
         let html = render::upload_error("<script>alert(1)</script>");
         assert!(!html.contains("<script>"));

@@ -33,19 +33,13 @@ pub fn router() -> Router<AppState> {
 #[allow(clippy::too_many_lines)]
 async fn system_page(State(state): State<AppState>) -> Html<String> {
     let status_html = render_status_partial(&state).await;
-    Html(format!(
-        r##"<!DOCTYPE html>
-<html lang="en">
-<head><script src="/static/theme-guard.js"></script><link rel="stylesheet" href="/static/css/app.css">
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width,initial-scale=1.0">
-    <title>System — BirdNet-Behavior Admin</title>
-    <script src="/static/htmx.min.js"></script>
-    <style>
-      body {{ background:var(--bg); color:var(--fg); font-family:var(--font-ui); }}
-      .container {{ max-width:900px; margin:0 auto; padding:2rem 1rem; }}
-      nav a {{ color:var(--fg-3); text-decoration:none; margin-right:1.5rem; }}
-      nav a:hover, nav a.active {{ color:var(--moss-ink); }}
+    // Page body only — the document chrome (theme guard, app.css, htmx, the
+    // admin nav, breadcrumbs, ⌘K/help/toasts) comes from `admin_shell`. The
+    // page-specific CSS stays as a scoped <style> block; the old `.container`
+    // and bare `nav` rules are dropped because the shell owns both now (a bare
+    // `nav` selector would otherwise re-style the shell's `.admin-nav`).
+    let body = format!(
+        r##"<style>
       .card {{ background:var(--surface); border:1px solid var(--border); border-radius:.75rem;
                padding:1.5rem; margin-bottom:1.5rem; }}
       .section-title {{ font-size:1.1rem; font-weight:600; color:var(--moss-ink);
@@ -64,7 +58,6 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
       .badge-ok {{ color:var(--moss); }} .badge-warn {{ color:var(--dawn); }}
       .badge-crit {{ color:var(--rare); }}
       /* O-25 sweep: shapes promoted out of inline style= attributes. */
-      nav {{ margin-bottom:2rem; padding:1rem 0; border-bottom:1px solid var(--border); }}
       h1 {{ font-size:1.5rem; font-weight:700; margin-bottom:1.5rem; color:var(--fg); }}
       .lead {{ color:var(--fg-3); font-size:.85rem; margin-bottom:1rem; }}
       .btn-row {{ display:flex; gap:1rem; flex-wrap:wrap; }}
@@ -111,15 +104,6 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
       .logs-link {{ color:var(--fg-4); font-size:.8rem; text-decoration:none; }}
       .ok-note {{ color:var(--moss); }}
     </style>
-</head>
-<body>
-<div class="container">
-  <nav>
-    <a href="/">Dashboard</a>
-    <a href="/admin/settings">Settings</a>
-    <a href="/admin/migrate">Migration</a>
-    <a href="/admin/system" class="active">System</a>
-  </nav>
 
   <h1>System Status</h1>
 
@@ -243,11 +227,9 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
       </button>
     </div>
     <div id="clear-result" class="result-slot"></div>
-  </div>
-</div>
-</body>
-</html>"##
-    ))
+  </div>"##
+    );
+    Html(super::admin_shell("System", "system", &body))
 }
 
 // ---------------------------------------------------------------------------

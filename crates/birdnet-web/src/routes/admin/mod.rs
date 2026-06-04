@@ -38,6 +38,7 @@ pub mod doctor;
 pub mod images;
 pub mod logs;
 pub mod migration;
+pub mod nav;
 pub mod notification_test;
 pub mod notifications;
 pub mod overview;
@@ -60,27 +61,12 @@ use crate::state::AppState;
 /// theme guard, the design-system stylesheet, HTMX and a slim nav row. `active`
 /// highlights the matching nav link.
 pub(crate) fn admin_shell(title: &str, active: &str, body: &str) -> String {
-    let nav = [
-        ("overview", "/admin/overview", "Overview"),
-        ("settings", "/admin/settings", "Settings"),
-        ("audio", "/admin/audio", "Audio"),
-        ("rules", "/admin/rules", "Rules"),
-        ("quality", "/admin/quality", "Quality"),
-        ("notifications", "/admin/notifications", "Notifications"),
-        ("accounts", "/admin/accounts", "Accounts"),
-        ("backups", "/admin/backups", "Backups"),
-        ("system", "/admin/system", "System"),
-        ("doctor", "/admin/doctor", "Diagnostics"),
-    ];
-    let mut nav_html = String::new();
-    for (key, href, label) in nav {
-        let attr = if key == active {
-            " class=\"am-nav-active\""
-        } else {
-            ""
-        };
-        let _ = write!(nav_html, "<a href=\"{href}\"{attr}>{label}</a>");
-    }
+    // The nav row is generated from the single-source manifest in `nav.rs`, so
+    // every admin page renders the same tabs with consistent active-state.
+    let mut nav_html = nav::nav_links(active);
+    // Breadcrumb trail (Home › Admin › <Page>), matching the main-nav crumbs on
+    // secondary pages. Empty for an unknown key.
+    let breadcrumb = nav::breadcrumb(active);
     // Sign-out form — appears at the right end of the admin nav. The
     // form posts to /logout which revokes the bound session row before
     // clearing the cookie. Safe to always render because /admin/* is
@@ -124,6 +110,7 @@ pub(crate) fn admin_shell(title: &str, active: &str, body: &str) -> String {
 <body>
 <div class="admin-wrap">
   <nav class="admin-nav">{nav_html}</nav>
+  {breadcrumb}
   {body}
 </div>
 {toast_region}

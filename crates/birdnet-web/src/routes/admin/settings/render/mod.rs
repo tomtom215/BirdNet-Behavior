@@ -31,21 +31,23 @@ pub(in crate::routes::admin::settings) fn get_setting<'a>(
 }
 
 pub(super) fn render_settings_page(settings: &HashMap<String, String>) -> String {
+    // The document chrome (theme guard, app.css, htmx, the admin nav,
+    // breadcrumbs, ⌘K/help/toasts) comes from the shared `admin_shell`; this
+    // page contributes only its scoped <style> + content.
+    crate::routes::admin::admin_shell("Settings", "settings", &settings_body(settings))
+}
+
+/// The page-specific body: a scoped `<style>` block plus the settings form.
+///
+/// Kept separate from [`render_settings_page`] so the inline-style guard can
+/// assert on just the settings-owned markup (the shared shell's partials use
+/// `data-*-style` attributes that a naive `style="` substring check would
+/// otherwise trip over). The old `.container` / bare `nav` rules are dropped —
+/// the shell owns layout and the nav now.
+fn settings_body(settings: &HashMap<String, String>) -> String {
     let form_html = render_settings_form(settings);
     format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Settings — BirdNet-Behavior</title>
-    <script src="/static/htmx.min.js"></script>
-    <script src="/static/theme-guard.js"></script><link rel="stylesheet" href="/static/css/app.css">
-    <style>
-      body {{ background: var(--bg); color: var(--fg); font-family: var(--font-ui); }}
-      .container {{ max-width: 900px; margin: 0 auto; padding: 2rem 1rem; }}
-      nav a {{ color: var(--fg-3); text-decoration: none; margin-right: 1.5rem; }}
-      nav a.active, nav a:hover {{ color: var(--moss-ink); }}
+        r#"<style>
       .card {{ background: var(--surface); border: 1px solid var(--border); border-radius: 0.75rem;
                padding: 1.5rem; margin-bottom: 1.5rem; }}
       .section-title {{ font-size: 1.1rem; font-weight: 600; color: var(--moss-ink);
@@ -67,7 +69,6 @@ pub(super) fn render_settings_page(settings: &HashMap<String, String>) -> String
       .alert-icon {{ vertical-align: -2px; margin-right: 0.4rem; }}
       .hint {{ font-size: 0.75rem; color: var(--fg-4); margin-top: -0.75rem; margin-bottom: 1rem; }}
       @media (max-width: 520px) {{ .grid-2 {{ grid-template-columns: 1fr; }} }}
-      nav {{ margin-bottom: 2rem; padding: 1rem 0; border-bottom: 1px solid var(--border); }}
       h1 {{ font-size: 1.5rem; font-weight: 700; margin-bottom: 1.5rem; color: var(--fg); }}
       a.btn {{ text-decoration: none; }}
       .btn.btn-sm {{ font-size: 0.8rem; padding: 0.3rem 0.8rem; }}
@@ -79,17 +80,6 @@ pub(super) fn render_settings_page(settings: &HashMap<String, String>) -> String
       .save-note {{ color: var(--fg-3); font-size: 0.875rem; }}
       .save-note.dim {{ color: var(--fg-4); font-size: 0.8rem; }}
     </style>
-</head>
-<body>
-<div class="container">
-  <nav>
-    <a href="/">Dashboard</a>
-    <a href="/species">Species</a>
-    <a href="/admin" class="active">Admin</a>
-    <a href="/admin/species">Species Lists</a>
-    <a href="/admin/migrate">Migration</a>
-    <a href="/admin/system">System</a>
-  </nav>
 
   <h1>
     Admin Settings
@@ -97,10 +87,7 @@ pub(super) fn render_settings_page(settings: &HashMap<String, String>) -> String
 
   <div id="settings-feedback"></div>
 
-  {form_html}
-</div>
-</body>
-</html>"#
+  {form_html}"#
     )
 }
 
@@ -197,13 +184,36 @@ mod tests {
         // styling lives in this page's own <style> block. This guard fails if a
         // new field silently ships an un-migrated inline style.
         let settings = HashMap::new();
+        // Check the page-specific body (scoped <style> block + form), not the
+        // full `render_settings_page`: the shared admin shell injects partials
+        // that use `data-*-style` attributes, which a naive `style="` substring
+        // check would flag even though they are not inline style attributes.
         assert!(
-            !render_settings_page(&settings).contains("style=\""),
-            "settings page still emits an inline style attribute"
+            !settings_body(&settings).contains("style=\""),
+            "settings page body still emits an inline style attribute"
         );
         assert!(
             !render_settings_form(&settings).contains("style=\""),
             "settings form fragment still emits an inline style attribute"
         );
+    }
+
+    #[test]
+    fn settings_page_renders_through_admin_shell() {
+        // After the E consolidation the page renders via the shared shell: it
+        // must carry the shell's admin nav (with Settings active) and the page
+        // content, not a bespoke per-page nav.
+        let settings = HashMap::new();
+        let page = render_settings_page(&settings);
+        assert!(page.contains("admin-nav"), "missing shared admin nav");
+        assert!(
+            page.contains(r#"href="/admin/settings" class="am-nav-active""#),
+            "Settings tab should be active in the shell nav"
+        );
+        assert!(page.contains("Admin Settings"), "missing page heading");
+        // The shell wraps the body in `.admin-wrap` and emits a breadcrumb for
+        // non-overview pages — proof we render through it, not a bespoke page.
+        assert!(page.contains("admin-wrap"), "missing shared shell wrapper");
+        assert!(page.contains("bnb-crumbs"), "missing shell breadcrumb");
     }
 }

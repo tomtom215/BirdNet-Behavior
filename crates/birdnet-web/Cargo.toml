@@ -53,5 +53,11 @@ base64.workspace = true
 # without adding a fresh top-level dependency.
 password-hash.workspace = true
 
+[dev-dependencies]
+# `tower::ServiceExt::oneshot` drives the admin router in the nav route-parity
+# test (admin_router_serves_every_nav_destination). Test-only — the production
+# code reaches tower's middleware through tower-http, as the dep comment notes.
+tower.workspace = true
+
 [lints]
 workspace = true

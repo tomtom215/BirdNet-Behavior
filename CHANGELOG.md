@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The admin panel now renders entirely through one shared shell.** The
+  Settings, System, and Migration pages each shipped their own standalone HTML
+  document with a bespoke top `<nav>` (which disagreed with the admin shell's
+  nav and with each other) and duplicated chrome. They now render through the
+  shared `admin_shell`, whose navigation is generated from a **single
+  admin-nav manifest** (`routes/admin/nav.rs`) — so every admin page shows the
+  same tabs with consistent active-state, gains a breadcrumb trail, and picks up
+  the command palette / help drawer / toast region. The Migration tab, which was
+  missing from the shell nav, is now part of the manifest. A parity test
+  (`admin_router_serves_every_nav_destination`) guards that every admin nav
+  destination resolves to a real route, mirroring `cmdk_covers_every_nav_destination`
+  for the main nav.
+
 ### Fixed
 
 - **Installation input is now respected in the web UI.** The installer writes
