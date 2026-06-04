@@ -238,6 +238,21 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Free disk space for the cache restore
+        # The cached `target/` (a debug build whose test binaries each
+        # statically link the bundled DuckDB) restores to ~15 GB. On a runner
+        # with only ~14 GB free that overran the disk mid-extraction
+        # (`tar: Wrote only N of M bytes` = ENOSPC), failing the job before
+        # cargo-mutants ever ran. Drop the large preinstalled SDKs we never use
+        # in a Rust job so the restore — and the per-mutant rebuilds on top of
+        # it — have ample headroom.
+        run: |
+          echo "Disk before:"; df -h /
+          sudo rm -rf /usr/local/lib/android /opt/hostedtoolcache/CodeQL \
+                      /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/share/swift
+          sudo docker image prune --all --force >/dev/null 2>&1 || true
+          echo "Disk after:"; df -h /
+
       - name: Cache Cargo
         uses: actions/cache@v5
         with:
