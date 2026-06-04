@@ -233,6 +233,9 @@ mod tests {
             ("/admin/settings", "Admin Settings"),
             ("/admin/system", "System Status"),
             ("/admin/migrate", "BirdNET-Pi Migration"),
+            ("/admin/overview", "Admin Overview"),
+            ("/admin/rules", "Alert Rules"),
+            ("/admin/notifications", "Notification History"),
         ] {
             let (status, body) = get_admin(path).await;
             assert!(status.is_success(), "{path} returned {status}");

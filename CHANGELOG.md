@@ -45,17 +45,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (each retry lands in a window rather than at one instant), **caps** the delay
   at 32 s so a long outage settles at a steady cadence, and is **overflow-safe**
   regardless of the attempt count.
-- **The admin panel now renders entirely through one shared shell.** The
-  Settings, System, and Migration pages each shipped their own standalone HTML
-  document with a bespoke top `<nav>` (which disagreed with the admin shell's
-  nav and with each other) and duplicated chrome. They now render through the
-  shared `admin_shell`, whose navigation is generated from a **single
-  admin-nav manifest** (`routes/admin/nav.rs`) — so every admin page shows the
-  same tabs with consistent active-state, gains a breadcrumb trail, and picks up
+- **The admin panel now renders entirely through one shared shell.** Six admin
+  pages — Overview, Settings, Audio (already), Migration, Rules, System, and
+  Notifications — each shipped (or, for the nav tabs, several still shipped)
+  their own standalone HTML document with a bespoke top `<nav>` that disagreed
+  with the admin shell's nav and with each other. **Every admin nav destination**
+  now renders through the shared `admin_shell`, whose navigation is generated
+  from a **single admin-nav manifest** (`routes/admin/nav.rs`) — so they show the
+  same tabs with consistent active-state, gain a breadcrumb trail, and pick up
   the command palette / help drawer / toast region. The Migration tab, which was
   missing from the shell nav, is now part of the manifest. A parity test
   (`admin_router_serves_every_nav_destination`) guards that every admin nav
-  destination resolves to a real route, mirroring `cmdk_covers_every_nav_destination`
+  destination resolves to a real route, and a runtime test
+  (`folded_pages_render_through_the_shared_shell`) confirms each folded page
+  actually composes the shell — mirroring `cmdk_covers_every_nav_destination`
   for the main nav.
 
 ### Fixed

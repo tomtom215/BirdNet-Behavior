@@ -102,19 +102,8 @@ fn render_page(entries: &[NotifEntry], stats: (i64, i64, i64)) -> String {
         swap: Some("innerHTML"),
     });
 
-    format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head><script src="/static/theme-guard.js"></script><link rel="stylesheet" href="/static/css/app.css">
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1.0">
-  <title>Notification History - BirdNet-Behavior</title>
-  <script src="/static/htmx.min.js"></script>
-  <style>
-    body {{ background:var(--bg); color:var(--fg); font-family:var(--font-ui); }}
-    .container {{ max-width:1100px; margin:0 auto; padding:2rem 1rem; }}
-    nav a {{ color:var(--fg-3); text-decoration:none; margin-right:1.5rem; }}
-    nav a:hover {{ color:var(--moss-ink); }}
+    let body = format!(
+        r#"<style>
     .card {{ background:var(--surface); border:1px solid var(--border); border-radius:0.75rem;
              padding:1.5rem; margin-bottom:1.5rem; }}
     .stat {{ text-align:center; }}
@@ -135,8 +124,6 @@ fn render_page(entries: &[NotifEntry], stats: (i64, i64, i64)) -> String {
     .btn-danger {{ background:var(--rare-soft); color:var(--rare); }}
     .btn-danger:hover {{ background:var(--rare-soft); }}
     .empty {{ color:var(--fg-4); text-align:center; padding:2rem; }}
-    nav {{ margin-bottom:2rem; padding:1rem 0; border-bottom:1px solid var(--border); }}
-    nav a.active {{ color:var(--moss-ink); }}
     h1 {{ font-size:1.5rem; font-weight:700; color:var(--fg); }}
     .page-head {{ display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem; }}
     .stat-grid {{ display:grid; grid-template-columns:repeat(3,1fr); gap:1rem; margin-bottom:1.5rem; }}
@@ -153,16 +140,6 @@ fn render_page(entries: &[NotifEntry], stats: (i64, i64, i64)) -> String {
     .row-error {{ color:var(--rare); font-size:0.75rem; }}
     .prune-ok {{ color:var(--moss); padding:0.5rem 0; }}
   </style>
-</head>
-<body>
-<div class="container">
-  <nav>
-    <a href="/">Dashboard</a>
-    <a href="/admin/settings">Settings</a>
-    <a href="/admin/migrate">Migration</a>
-    <a href="/admin/system">System</a>
-    <a href="/admin/notifications" class="active">Notifications</a>
-  </nav>
 
   <div class="page-head">
     <h1>Notification History</h1>
@@ -211,11 +188,9 @@ fn render_page(entries: &[NotifEntry], stats: (i64, i64, i64)) -> String {
         </tbody>
       </table>
     </div>
-  </div>
-</div>
-</body>
-</html>"#
-    )
+  </div>"#
+    );
+    crate::routes::admin::admin_shell("Notifications", "notifications", &body)
 }
 
 fn render_table_rows(entries: &[NotifEntry]) -> String {
