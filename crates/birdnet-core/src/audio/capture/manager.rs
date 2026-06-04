@@ -101,6 +101,7 @@ mod tests {
             output_dir: PathBuf::from("/tmp/birdnet_test_manager"),
             segment_duration_secs: 15,
             format: AudioFormat::Wav,
+            gain_db: 0.0,
         }
     }
 
@@ -134,6 +135,7 @@ mod tests {
             output_dir: std::env::temp_dir().join("birdnet_rtsp_test"),
             segment_duration_secs: 15,
             format: AudioFormat::Wav,
+            gain_db: 0.0,
         };
         let mut mgr = CaptureManager::new(config);
         assert!(mgr.start().is_err());

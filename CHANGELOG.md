@@ -51,6 +51,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transport the admin UI exposes was silently dropped and ffmpeg was always
   forced to TCP, so a camera that only speaks UDP could never be captured. The
   choice now reaches the capture command (`Auto` keeps the TCP default).
+- **A per-source capture gain (`gain_db`) is now applied.** The gain the admin
+  UI stores and displays for each source had no effect on capture. A non-zero
+  gain now routes that source through `ffmpeg`'s `volume` filter
+  (`-af volume=<n>dB`) — for a local microphone this switches it from `arecord`
+  to `ffmpeg -f alsa`, since `arecord` has no software-gain control; unity-gain
+  microphones stay on the lighter `arecord` path unchanged. A negative value
+  cuts the level just as a positive one boosts it.
+- **A per-source quiet window (`schedule_quiet`) is now enforced.** The quiet
+  window stored per source was previously inert. The capture supervisor now
+  pauses a source while the wall clock is inside its window and resumes it
+  afterwards, on top of the global recording schedule (the source records only
+  when the schedule allows it **and** it is outside its quiet window). The
+  window uses the same clock basis as the recording schedule (UTC), wraps past
+  midnight (e.g. `22:00`–`06:00`), and — like the schedule — is not enforced
+  while the clock looks unsynced, so a bogus boot-time date can't silence a
+  source. Editing gain or the quiet window takes effect on the next service
+  restart, consistent with the other per-source settings. See
+  `docs/FIELD_DEPLOYMENT.md` § 7 for the manual hardware-verification steps.
 - **Multiple RTSP streams can be configured from the config file.** A new
   comma-separated `RTSP_URLS` config key drives several RTSP captures without
   the `--rtsp-urls` flag, and a multi-stream station no longer mislabels its

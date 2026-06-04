@@ -135,10 +135,53 @@ fn should_warn_down(down_since: Option<Instant>, last_warn: Option<Instant>, now
     last_warn.is_none_or(|last| now.saturating_duration_since(last) >= DOWN_WARN_EVERY)
 }
 
+/// A per-source "quiet" window during which capture is paused, expressed in
+/// minutes since midnight on the **same clock basis as the recording schedule**
+/// (`schedule::civil_from_unix_secs`, i.e. UTC). The admin UI stores it as an
+/// `HH:MM`–`HH:MM` pair; `super` parses that to minutes once, at construction,
+/// so the supervisor only ever deals with already-validated integers.
+///
+/// A window where `start == end` is treated as empty (never quiet), matching
+/// how clearing both fields reads to an operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct QuietWindow {
+    start_min: u32,
+    end_min: u32,
+}
+
+impl QuietWindow {
+    /// Build a window from start/end minutes-since-midnight (each `0..=1439`).
+    pub(super) const fn new(start_min: u32, end_min: u32) -> Self {
+        Self { start_min, end_min }
+    }
+}
+
+/// Whether `now_min` (minutes since midnight) falls inside the quiet window
+/// `[start, end)`, handling windows that wrap past midnight (e.g. 22:00–06:00).
+///
+/// The window is half-open: the start minute is quiet, the end minute is not,
+/// so a 22:00–06:00 window pauses at 22:00 and resumes exactly at 06:00. An
+/// empty window (`start == end`) is never quiet.
+#[must_use]
+fn in_quiet_window(now_min: u32, start_min: u32, end_min: u32) -> bool {
+    use std::cmp::Ordering;
+    match start_min.cmp(&end_min) {
+        // Empty window — recording is never suppressed by it.
+        Ordering::Equal => false,
+        // Same-day window: quiet on [start, end).
+        Ordering::Less => now_min >= start_min && now_min < end_min,
+        // Wraps midnight: quiet on [start, 24:00) ∪ [00:00, end).
+        Ordering::Greater => now_min >= start_min || now_min < end_min,
+    }
+}
+
 /// One supervised capture source plus its restart bookkeeping.
 struct SupervisedSource<S: Source> {
     source: S,
     label: String,
+    /// Per-source quiet window, if the operator configured one. `None` means
+    /// "no quiet window" — this source follows only the global schedule gate.
+    quiet: Option<QuietWindow>,
     /// Consecutive (re)start attempts that have not yet produced a process
     /// observed alive on a later tick. Drives the backoff delay; reset to
     /// `0` the moment the process is seen running.
@@ -154,14 +197,28 @@ struct SupervisedSource<S: Source> {
 }
 
 impl<S: Source> SupervisedSource<S> {
-    const fn new(source: S, label: String) -> Self {
+    const fn new(source: S, label: String, quiet: Option<QuietWindow>) -> Self {
         Self {
             source,
             label,
+            quiet,
             attempts_since_healthy: 0,
             next_attempt_at: None,
             down_since: None,
             last_down_warn: None,
+        }
+    }
+
+    /// Whether this source is currently inside its quiet window.
+    ///
+    /// `now_min` is `None` when the wall clock is untrusted (unsynced) — we do
+    /// not enforce quiet windows then, mirroring the schedule's fail-open
+    /// behaviour so a bogus boot-time date can't silence a source. A source
+    /// with no configured window is never quiet.
+    fn in_quiet(&self, now_min: Option<u32>) -> bool {
+        match (self.quiet, now_min) {
+            (Some(q), Some(min)) => in_quiet_window(min, q.start_min, q.end_min),
+            _ => false,
         }
     }
 
@@ -190,12 +247,30 @@ impl<S: Source> SupervisedSource<S> {
     }
 
     /// Reconcile this one source toward its desired state for this tick.
-    fn reconcile(&mut self, now: Instant, recording_allowed: bool, metrics: &SharedMetrics) {
-        // Outside the schedule: ensure stopped, clear fault state, gauge 0.
-        if !recording_allowed {
+    ///
+    /// `recording_allowed` is the global schedule gate (solar / fixed window);
+    /// `now_min` is the current minute-of-day (UTC) used to evaluate this
+    /// source's own quiet window, or `None` when the clock is untrusted. The
+    /// source should record only when the global schedule allows it **and** it
+    /// is not inside its quiet window.
+    fn reconcile(
+        &mut self,
+        now: Instant,
+        recording_allowed: bool,
+        now_min: Option<u32>,
+        metrics: &SharedMetrics,
+    ) {
+        let allowed = recording_allowed && !self.in_quiet(now_min);
+
+        // Outside the schedule (or inside this source's quiet window): ensure
+        // stopped, clear fault state, gauge 0.
+        if !allowed {
             if self.source.is_running() {
                 self.source.stop();
-                tracing::info!(source = %self.label, "recording schedule closed — capture paused");
+                tracing::info!(
+                    source = %self.label,
+                    "recording paused (outside schedule or in quiet window)"
+                );
             }
             self.clear_fault();
             metrics.set_source_up(&self.label, false);
@@ -263,12 +338,12 @@ pub(super) struct Supervisor<S: Source> {
 }
 
 impl<S: Source> Supervisor<S> {
-    /// Build a supervisor over `(source, gauge_label)` pairs.
-    pub(super) fn new(sources: Vec<(S, String)>) -> Self {
+    /// Build a supervisor over `(source, gauge_label, quiet_window)` triples.
+    pub(super) fn new(sources: Vec<(S, String, Option<QuietWindow>)>) -> Self {
         Self {
             sources: sources
                 .into_iter()
-                .map(|(source, label)| SupervisedSource::new(source, label))
+                .map(|(source, label, quiet)| SupervisedSource::new(source, label, quiet))
                 .collect(),
         }
     }
@@ -276,12 +351,19 @@ impl<S: Source> Supervisor<S> {
     /// Run one reconciliation pass over every source.
     ///
     /// `now` is the monotonic clock used for backoff/down timing;
-    /// `recording_allowed` is the schedule gate evaluated against the wall
-    /// clock by the caller. Splitting the two clocks keeps this method
-    /// deterministically testable.
-    pub(super) fn tick(&mut self, now: Instant, recording_allowed: bool, metrics: &SharedMetrics) {
+    /// `recording_allowed` is the global schedule gate, and `now_min` is the
+    /// current minute-of-day (UTC) used per source for its quiet window — both
+    /// evaluated against the wall clock by the caller. Splitting the monotonic
+    /// and wall clocks keeps this method deterministically testable.
+    pub(super) fn tick(
+        &mut self,
+        now: Instant,
+        recording_allowed: bool,
+        now_min: Option<u32>,
+        metrics: &SharedMetrics,
+    ) {
         for source in &mut self.sources {
-            source.reconcile(now, recording_allowed, metrics);
+            source.reconcile(now, recording_allowed, now_min, metrics);
         }
     }
 }
@@ -368,7 +450,12 @@ mod tests {
     }
 
     fn one(source: FakeSource) -> Supervisor<FakeSource> {
-        Supervisor::new(vec![(source, "local".to_owned())])
+        Supervisor::new(vec![(source, "local".to_owned(), None)])
+    }
+
+    /// A supervisor over one source that carries a quiet window.
+    fn one_with_quiet(source: FakeSource, quiet: QuietWindow) -> Supervisor<FakeSource> {
+        Supervisor::new(vec![(source, "local".to_owned(), Some(quiet))])
     }
 
     // ---- source_gauge_label ------------------------------------------------
@@ -493,7 +580,7 @@ mod tests {
     fn schedule_closed_stops_running_source() {
         let m = metrics();
         let mut sup = one(FakeSource::healthy());
-        sup.tick(Instant::now(), false, &m);
+        sup.tick(Instant::now(), false, None, &m);
         assert_eq!(sup.sources[0].source.stop_calls, 1);
         assert!(!sup.sources[0].source.running);
         assert_eq!(gauge(&m, "local"), Some(0));
@@ -503,7 +590,7 @@ mod tests {
     fn schedule_closed_leaves_stopped_source_alone() {
         let m = metrics();
         let mut sup = one(FakeSource::dead());
-        sup.tick(Instant::now(), false, &m);
+        sup.tick(Instant::now(), false, None, &m);
         assert_eq!(sup.sources[0].source.start_calls, 0);
         assert_eq!(sup.sources[0].source.stop_calls, 0);
         assert_eq!(gauge(&m, "local"), Some(0));
@@ -515,7 +602,7 @@ mod tests {
     fn healthy_source_not_touched_and_gauge_up() {
         let m = metrics();
         let mut sup = one(FakeSource::healthy());
-        sup.tick(Instant::now(), true, &m);
+        sup.tick(Instant::now(), true, None, &m);
         assert_eq!(sup.sources[0].source.start_calls, 0);
         assert_eq!(sup.sources[0].source.stop_calls, 0);
         assert_eq!(gauge(&m, "local"), Some(1));
@@ -531,14 +618,14 @@ mod tests {
 
         // Tick 1: observed down → one start attempt fires, source comes
         // back to life, but the gauge is only confirmed up next tick.
-        sup.tick(t0, true, &m);
+        sup.tick(t0, true, None, &m);
         assert_eq!(sup.sources[0].source.start_calls, 1);
         assert!(sup.sources[0].source.running);
         assert_eq!(gauge(&m, "local"), Some(0));
         assert!(sup.sources[0].down_since.is_some());
 
         // Tick 2: observed running → gauge up, fault state cleared.
-        sup.tick(t0 + Duration::from_secs(1), true, &m);
+        sup.tick(t0 + Duration::from_secs(1), true, None, &m);
         assert_eq!(sup.sources[0].source.start_calls, 1, "no spurious restart");
         assert_eq!(gauge(&m, "local"), Some(1));
         assert_eq!(sup.sources[0].attempts_since_healthy, 0);
@@ -553,19 +640,19 @@ mod tests {
         let mut sup = one(FakeSource::healthy());
         let t0 = Instant::now();
 
-        sup.tick(t0, true, &m);
+        sup.tick(t0, true, None, &m);
         assert_eq!(gauge(&m, "local"), Some(1));
 
         // Fault injection: the subprocess dies.
         sup.sources[0].source.running = false;
 
         // Next tick notices and issues a restart.
-        sup.tick(t0 + Duration::from_secs(1), true, &m);
+        sup.tick(t0 + Duration::from_secs(1), true, None, &m);
         assert_eq!(sup.sources[0].source.start_calls, 1);
         assert!(sup.sources[0].source.running);
 
         // And it is confirmed back up.
-        sup.tick(t0 + Duration::from_secs(2), true, &m);
+        sup.tick(t0 + Duration::from_secs(2), true, None, &m);
         assert_eq!(gauge(&m, "local"), Some(1));
     }
 
@@ -578,24 +665,24 @@ mod tests {
         let t0 = Instant::now();
 
         // First tick: immediate attempt (attempt #1), next allowed at +2s.
-        sup.tick(t0, true, &m);
+        sup.tick(t0, true, None, &m);
         assert_eq!(sup.sources[0].source.start_calls, 1);
         assert_eq!(gauge(&m, "local"), Some(0));
 
         // Just before the 2s backoff elapses: no new attempt.
-        sup.tick(t0 + Duration::from_secs(1), true, &m);
+        sup.tick(t0 + Duration::from_secs(1), true, None, &m);
         assert_eq!(sup.sources[0].source.start_calls, 1);
 
         // Exactly at the 2s boundary: attempt #2, next allowed at +4s.
-        sup.tick(t0 + Duration::from_secs(2), true, &m);
+        sup.tick(t0 + Duration::from_secs(2), true, None, &m);
         assert_eq!(sup.sources[0].source.start_calls, 2);
 
         // Within the new 4s window: no attempt.
-        sup.tick(t0 + Duration::from_secs(5), true, &m);
+        sup.tick(t0 + Duration::from_secs(5), true, None, &m);
         assert_eq!(sup.sources[0].source.start_calls, 2);
 
         // Past 2+4 = 6s: attempt #3.
-        sup.tick(t0 + Duration::from_secs(6), true, &m);
+        sup.tick(t0 + Duration::from_secs(6), true, None, &m);
         assert_eq!(sup.sources[0].source.start_calls, 3);
     }
 
@@ -606,13 +693,13 @@ mod tests {
         let m = metrics();
         let mut sup = one(FakeSource::always_failing());
         let t0 = Instant::now();
-        sup.tick(t0, true, &m);
+        sup.tick(t0, true, None, &m);
         let next = sup.sources[0].next_attempt_at.expect("attempt armed");
         // One nanosecond before: still backing off.
-        sup.tick(earlier(next, Duration::from_nanos(1)), true, &m);
+        sup.tick(earlier(next, Duration::from_nanos(1)), true, None, &m);
         assert_eq!(sup.sources[0].source.start_calls, 1);
         // Exactly at the boundary: fire.
-        sup.tick(next, true, &m);
+        sup.tick(next, true, None, &m);
         assert_eq!(sup.sources[0].source.start_calls, 2);
     }
 
@@ -629,15 +716,15 @@ mod tests {
         let mut sup = one(src);
         let t0 = Instant::now();
 
-        sup.tick(t0, true, &m); // attempt #1 fails
+        sup.tick(t0, true, None, &m); // attempt #1 fails
         assert_eq!(sup.sources[0].attempts_since_healthy, 1);
-        sup.tick(t0 + Duration::from_secs(2), true, &m); // #2 fails
+        sup.tick(t0 + Duration::from_secs(2), true, None, &m); // #2 fails
         assert_eq!(sup.sources[0].attempts_since_healthy, 2);
-        sup.tick(t0 + Duration::from_secs(6), true, &m); // #3 succeeds
+        sup.tick(t0 + Duration::from_secs(6), true, None, &m); // #3 succeeds
         assert!(sup.sources[0].source.running);
 
         // Confirmed running → counters reset.
-        sup.tick(t0 + Duration::from_secs(7), true, &m);
+        sup.tick(t0 + Duration::from_secs(7), true, None, &m);
         assert_eq!(sup.sources[0].attempts_since_healthy, 0);
         assert!(sup.sources[0].next_attempt_at.is_none());
         assert_eq!(gauge(&m, "local"), Some(1));
@@ -649,10 +736,10 @@ mod tests {
     fn sources_are_supervised_independently() {
         let m = metrics();
         let mut sup = Supervisor::new(vec![
-            (FakeSource::healthy(), "local".to_owned()),
-            (FakeSource::dead(), "RTSP_1".to_owned()),
+            (FakeSource::healthy(), "local".to_owned(), None),
+            (FakeSource::dead(), "RTSP_1".to_owned(), None),
         ]);
-        sup.tick(Instant::now(), true, &m);
+        sup.tick(Instant::now(), true, None, &m);
         // Healthy one untouched, dead one restarted.
         assert_eq!(sup.sources[0].source.start_calls, 0);
         assert_eq!(sup.sources[1].source.start_calls, 1);
@@ -671,17 +758,122 @@ mod tests {
         let mut sup = one(FakeSource::always_failing());
         let t0 = Instant::now();
 
-        sup.tick(t0, true, &m);
+        sup.tick(t0, true, None, &m);
         assert!(
             sup.sources[0].last_down_warn.is_none(),
             "no warning before the threshold elapses"
         );
 
         // Still down well past the warn threshold.
-        sup.tick(t0 + DOWN_WARN_AFTER + Duration::from_secs(1), true, &m);
+        sup.tick(
+            t0 + DOWN_WARN_AFTER + Duration::from_secs(1),
+            true,
+            None,
+            &m,
+        );
         assert!(
             sup.sources[0].last_down_warn.is_some(),
             "a source down past the threshold must record a warning"
         );
+    }
+
+    // ---- in_quiet_window (pure) -------------------------------------------
+
+    #[test]
+    fn empty_quiet_window_is_never_quiet() {
+        // start == end → empty; no minute is inside it.
+        assert!(!in_quiet_window(0, 360, 360));
+        assert!(!in_quiet_window(360, 360, 360));
+        assert!(!in_quiet_window(1439, 360, 360));
+    }
+
+    #[test]
+    fn same_day_quiet_window_is_half_open() {
+        // 06:00–12:00 → quiet on [360, 720).
+        assert!(!in_quiet_window(359, 360, 720)); // 05:59 — before start
+        assert!(in_quiet_window(360, 360, 720)); // 06:00 — start is inclusive
+        assert!(in_quiet_window(719, 360, 720)); // 11:59 — inside
+        assert!(!in_quiet_window(720, 360, 720)); // 12:00 — end is exclusive
+        assert!(!in_quiet_window(721, 360, 720)); // 12:01 — after end
+    }
+
+    #[test]
+    fn wraparound_quiet_window_spans_midnight() {
+        // 22:00–06:00 → quiet on [1320, 24:00) ∪ [00:00, 360).
+        assert!(!in_quiet_window(1319, 1320, 360)); // 21:59 — before start
+        assert!(in_quiet_window(1320, 1320, 360)); // 22:00 — start inclusive
+        assert!(in_quiet_window(0, 1320, 360)); // 00:00 — across midnight
+        assert!(in_quiet_window(359, 1320, 360)); // 05:59 — inside
+        assert!(!in_quiet_window(360, 1320, 360)); // 06:00 — end exclusive
+        assert!(!in_quiet_window(720, 1320, 360)); // 12:00 — outside both legs
+    }
+
+    // ---- SupervisedSource::in_quiet (method) ------------------------------
+
+    #[test]
+    fn in_quiet_requires_both_a_window_and_a_trusted_clock() {
+        let inside = SupervisedSource::new(FakeSource::healthy(), "s".to_owned(), None);
+        // No window configured → never quiet, regardless of the clock.
+        assert!(!inside.in_quiet(Some(400)));
+
+        let win = SupervisedSource::new(
+            FakeSource::healthy(),
+            "s".to_owned(),
+            Some(QuietWindow::new(360, 720)),
+        );
+        // Window set + clock untrusted (None) → not enforced (fail open).
+        assert!(!win.in_quiet(None));
+        // Window set + clock inside the window → quiet.
+        assert!(win.in_quiet(Some(400)));
+        // Window set + clock outside the window → not quiet.
+        assert!(!win.in_quiet(Some(800)));
+    }
+
+    // ---- reconcile: per-source quiet window -------------------------------
+
+    #[test]
+    fn quiet_window_pauses_a_running_source_then_resumes_it() {
+        let m = metrics();
+        // 06:00–12:00 quiet window.
+        let mut sup = one_with_quiet(FakeSource::healthy(), QuietWindow::new(360, 720));
+        let t0 = Instant::now();
+
+        // Inside the window, even though the global schedule allows recording:
+        // the source must be stopped and the gauge driven to 0.
+        sup.tick(t0, true, Some(400), &m);
+        assert_eq!(sup.sources[0].source.stop_calls, 1);
+        assert!(!sup.sources[0].source.running);
+        assert_eq!(gauge(&m, "local"), Some(0));
+
+        // Outside the window: the source is desired ON again, so a (re)start
+        // attempt fires.
+        sup.tick(t0 + Duration::from_secs(1), true, Some(800), &m);
+        assert_eq!(sup.sources[0].source.start_calls, 1);
+        assert!(sup.sources[0].source.running);
+    }
+
+    #[test]
+    fn quiet_window_not_enforced_when_clock_untrusted() {
+        let m = metrics();
+        // The window covers "now", but the clock is unsynced (now_min = None),
+        // so we fail open and keep recording rather than trust a bogus time.
+        let mut sup = one_with_quiet(FakeSource::healthy(), QuietWindow::new(360, 720));
+        sup.tick(Instant::now(), true, None, &m);
+        assert_eq!(sup.sources[0].source.stop_calls, 0);
+        assert!(sup.sources[0].source.running);
+        assert_eq!(gauge(&m, "local"), Some(1));
+    }
+
+    #[test]
+    fn quiet_window_outside_does_not_pause() {
+        let m = metrics();
+        // now_min is outside the 06:00–12:00 window, so a healthy source is
+        // left running — this pins the `!in_quiet` term (a mutant dropping it
+        // would still pass, but the pause test above would then fail).
+        let mut sup = one_with_quiet(FakeSource::healthy(), QuietWindow::new(360, 720));
+        sup.tick(Instant::now(), true, Some(720), &m);
+        assert_eq!(sup.sources[0].source.stop_calls, 0);
+        assert!(sup.sources[0].source.running);
+        assert_eq!(gauge(&m, "local"), Some(1));
     }
 }

@@ -70,7 +70,10 @@ fn parse_fixed_window(spec: &str) -> Option<RecordingWindow> {
 }
 
 /// Parse `"HH:MM"` into minutes since midnight.
-fn parse_hhmm(s: &str) -> Option<u32> {
+///
+/// `pub(super)` so the per-source quiet-window parsing in [`super`] can reuse
+/// the same validated `HH:MM` → minutes conversion the schedule uses.
+pub(super) fn parse_hhmm(s: &str) -> Option<u32> {
     let parts: Vec<&str> = s.trim().split(':').collect();
     if parts.len() != 2 {
         return None;

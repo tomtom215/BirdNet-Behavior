@@ -88,6 +88,12 @@ pub struct RecordingConfig {
     pub segment_duration_secs: u32,
     /// Audio format for output files.
     pub format: AudioFormat,
+    /// Software capture gain in decibels, applied via ffmpeg's `volume` audio
+    /// filter. `0.0` is unity gain (no boost/cut) and keeps local-microphone
+    /// capture on the lighter-weight `arecord` path; a non-zero value routes
+    /// microphone capture through ffmpeg so the gain can actually be applied.
+    /// Mirrors the per-source `gain_db` the admin UI exposes for each source.
+    pub gain_db: f32,
 }
 
 /// Output audio format.
