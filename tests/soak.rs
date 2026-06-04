@@ -44,6 +44,21 @@ fn total_db_bytes(db_path: &std::path::Path) -> u64 {
         .sum()
 }
 
+/// Both soak tests read **process-wide** counters (`VmRSS` and the
+/// `/proc/self/fd` count), so they must not run concurrently: cargo runs the
+/// tests in a file in parallel by default, and one test's allocations / open
+/// descriptors would pollute the other's measurement (which is exactly what made
+/// the bounded-RSS assertion flap once a second resource-measuring test joined
+/// the file). Serialise them on a shared lock, recovering from poisoning so a
+/// panic in one surfaces as that test's failure instead of cascading.
+static SOAK_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn soak_serial() -> std::sync::MutexGuard<'static, ()> {
+    SOAK_SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[tokio::test]
 #[allow(
     clippy::cast_precision_loss,
@@ -51,6 +66,9 @@ fn total_db_bytes(db_path: &std::path::Path) -> u64 {
     clippy::cast_sign_loss
 )]
 async fn soak_insertions_stay_bounded() {
+    // Held for the whole test so the process-wide RSS/fd readings below aren't
+    // polluted by the other soak test running in parallel.
+    let _serial = soak_serial();
     let n: usize = std::env::var("BIRDNET_SOAK_N")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -181,6 +199,10 @@ fn insert_n(conn: &rusqlite::Connection, base: usize, count: usize) {
 #[test]
 fn soak_recovers_from_db_corruption_at_restart() {
     use birdnet_db::resilience::{RecoveryAction, backup_database, check_and_recover};
+
+    // Serialise against the bounded-RSS soak test so neither pollutes the
+    // other's process-wide fd / memory measurement (see `soak_serial`).
+    let _serial = soak_serial();
 
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("station.db");
