@@ -95,8 +95,8 @@ jobs:
     # library-crate shards (birdnet-core / birdnet-db) reuse a warm `target/`
     # and finish well inside 45 min; the binary-crate shards
     # (src/daemon/, src/capture/*) rebuild the binary + web tree per mutant and
-    # were getting `cancelled` at 45 min on cold caches — they set
-    # `timeout_minutes: 90` in the matrix below.
+    # were getting `cancelled` first at 45 then at 90 min on cold caches — they
+    # set `timeout_minutes: 120` in the matrix below.
     timeout-minutes: ${{ matrix.timeout_minutes || 45 }}
     strategy:
       # One file's surviving mutants must not abort the rest of the matrix —
@@ -164,8 +164,10 @@ jobs:
           - label: src/daemon/
             slug: src-daemon
             # Binary-crate shard: rebuilds the binary + web tree per mutant, so
-            # it needs more than the 45-min default to avoid a `cancelled` run.
-            timeout_minutes: 90
+            # it needs well over the 45-min default; 90 still hit the cap on a
+            # cold cache (the build + per-mutant rebuilds of the bundled DuckDB
+            # tree ran right up to the wall), so give it real margin.
+            timeout_minutes: 120
             # The whole daemon module tree. The orchestrator was split from a
             # single src/daemon.rs into src/daemon/{mod,config,disposition,
             # webhook,processor}.rs for readability, so the gate globs the
@@ -194,8 +196,10 @@ jobs:
           - label: src/capture/supervisor.rs
             slug: src-capture-supervisor.rs
             # Binary-crate shard: rebuilds the binary + web tree per mutant, so
-            # it needs more than the 45-min default to avoid a `cancelled` run.
-            timeout_minutes: 90
+            # it needs well over the 45-min default; 90 still hit the cap on a
+            # cold cache (the build + per-mutant rebuilds of the bundled DuckDB
+            # tree ran right up to the wall), so give it real margin.
+            timeout_minutes: 120
             file: src/capture/supervisor.rs
             package: birdnet-behavior
             # The capture supervisor — the field-survival core: a dead
@@ -212,8 +216,10 @@ jobs:
           - label: src/capture/schedule.rs
             slug: src-capture-schedule.rs
             # Binary-crate shard: rebuilds the binary + web tree per mutant, so
-            # it needs more than the 45-min default to avoid a `cancelled` run.
-            timeout_minutes: 90
+            # it needs well over the 45-min default; 90 still hit the cap on a
+            # cold cache (the build + per-mutant rebuilds of the bundled DuckDB
+            # tree ran right up to the wall), so give it real margin.
+            timeout_minutes: 120
             file: src/capture/schedule.rs
             package: birdnet-behavior
             # Schedule parsing + the hand-rolled UTC clock. `utc_now`'s date
