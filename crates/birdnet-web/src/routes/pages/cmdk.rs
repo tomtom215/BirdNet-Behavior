@@ -238,6 +238,34 @@ fn all_pages() -> Vec<Entry> {
         ),
         make("⚙", "System", "health", "/system", &["pi", "cpu", "disk"]),
         make("⌗", "Admin", "settings", "/admin", &["config"]),
+        make(
+            "⊕",
+            "Analytics",
+            "behavioral",
+            "/analytics",
+            &["behavioral", "sessions", "funnel", "retention", "sequence"],
+        ),
+        make(
+            "♪",
+            "Live audio",
+            "test your mic",
+            "/listen",
+            &["stream", "mic", "live", "listen"],
+        ),
+        make(
+            "⌥",
+            "Changelog",
+            "what's new",
+            "/system/changelog",
+            &["changes", "release", "version"],
+        ),
+        make(
+            "?",
+            "Help & methodology",
+            "the manual",
+            "/help",
+            &["docs", "manual", "methodology", "guide"],
+        ),
     ]
 }
 
@@ -593,5 +621,30 @@ mod tests {
         assert!(out.contains("subs &amp; co"));
         assert!(out.contains("&lt;g&gt;"));
         assert!(out.contains("/?x=&quot;y&quot;"));
+    }
+
+    #[test]
+    fn cmdk_covers_every_nav_destination() {
+        // Parity guard: the command palette must reach every destination in the
+        // nav manifest, so a page reachable from the menus is always reachable
+        // from ⌘K too. This locks the fourth surface to the single source of
+        // truth — adding a page to `nav` without a palette entry fails here.
+        use crate::routes::pages::nav;
+        let pages = all_pages();
+        let hrefs: Vec<&str> = pages.iter().map(|e| e.href.as_str()).collect();
+        for p in nav::PRIMARY {
+            assert!(
+                hrefs.contains(&p.path),
+                "command palette missing primary destination {}",
+                p.path
+            );
+        }
+        for m in nav::MORE {
+            assert!(
+                hrefs.contains(&m.path),
+                "command palette missing destination {}",
+                m.path
+            );
+        }
     }
 }
