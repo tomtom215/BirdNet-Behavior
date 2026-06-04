@@ -887,6 +887,9 @@ LABELS_PATH=${MODEL_DIR}/${LABELS_FILE}
 # Use one of: ALSA microphone, RTSP stream, or an existing recordings directory.
 ${alsa_line}
 ${rtsp_line}
+# Multiple RTSP cameras: comma-separated. Each becomes its own capture stream
+# (filenames/metrics prefixed RTSP_1, RTSP_2, …). Overrides RTSP_URL when set.
+# RTSP_URLS=rtsp://cam1:554/stream,rtsp://cam2:554/stream
 
 # --- Location (used for species frequency filtering and BirdWeather) ---
 ${lat_line}

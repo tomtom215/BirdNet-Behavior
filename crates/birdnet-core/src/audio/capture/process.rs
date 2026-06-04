@@ -255,6 +255,7 @@ pub fn start_rtsp_capture(config: &RecordingConfig) -> Result<CaptureProcess, Ca
     let CaptureSource::Rtsp {
         ref url,
         ref stream_id,
+        transport,
     } = config.source
     else {
         return Err(CaptureError::Config("expected RTSP source".into()));
@@ -265,7 +266,7 @@ pub fn start_rtsp_capture(config: &RecordingConfig) -> Result<CaptureProcess, Ca
 
     let mut child = Command::new("ffmpeg")
         .arg("-rtsp_transport")
-        .arg("tcp")
+        .arg(transport.ffmpeg_arg())
         .arg("-i")
         .arg(url)
         .arg("-vn")
@@ -328,7 +329,7 @@ pub const fn required_tool(source: &CaptureSource) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::super::types::AudioFormat;
+    use super::super::types::{AudioFormat, RtspTransport};
     use super::*;
     use std::path::PathBuf;
 
@@ -374,6 +375,7 @@ mod tests {
         let src = CaptureSource::Rtsp {
             url: "rtsp://cam.local/stream".into(),
             stream_id: "cam1".into(),
+            transport: RtspTransport::Auto,
         };
         assert_eq!(required_tool(&src), "ffmpeg");
     }

@@ -38,6 +38,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   times with back-off before trying the next source; a missing GitHub asset now
   falls through to Zenodo at once, matching the labels fetch and the Docker
   entrypoint.
+- **Importing a real BirdNET-Pi database works again.** The upload endpoint
+  inherited axum's default 2 MiB request-body limit, so any real `birds.db`
+  (tens to hundreds of MB) was rejected before the importer ever ran — the
+  import feature was effectively dead. The DB-upload route now accepts large
+  files (admin-only, so the higher ceiling is not a public surface).
+- **An RTSP source's transport (TCP/UDP/Auto) is now honoured.** The per-source
+  transport the admin UI exposes was silently dropped and ffmpeg was always
+  forced to TCP, so a camera that only speaks UDP could never be captured. The
+  choice now reaches the capture command (`Auto` keeps the TCP default).
+- **Multiple RTSP streams can be configured from the config file.** A new
+  comma-separated `RTSP_URLS` config key drives several RTSP captures without
+  the `--rtsp-urls` flag, and a multi-stream station no longer mislabels its
+  first stream `rtsp` (every stream is numbered `RTSP_1`, `RTSP_2`, … once there
+  is more than one).
 
 ## [0.6.0] - 2026-06-03
 

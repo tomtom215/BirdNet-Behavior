@@ -289,6 +289,7 @@ impl<S: Source> Supervisor<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use birdnet_core::audio::capture::RtspTransport;
     use std::sync::Arc;
 
     use birdnet_web::metrics::MetricsRegistry;
@@ -412,6 +413,7 @@ mod tests {
         let src = CaptureSource::Rtsp {
             url: "rtsp://cam.local/s".into(),
             stream_id: "RTSP_2".into(),
+            transport: RtspTransport::Auto,
         };
         assert_eq!(source_gauge_label(&src), "RTSP_2");
     }

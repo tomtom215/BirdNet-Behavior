@@ -18,7 +18,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use birdnet_core::audio::capture::{
-    AudioFormat, CaptureError, CaptureManager, CaptureSource, RecordingConfig,
+    AudioFormat, CaptureError, CaptureManager, CaptureSource, RecordingConfig, RtspTransport,
 };
 use birdnet_scheduler::{DailySchedule, ScheduleConfig};
 use birdnet_web::metrics::SharedMetrics;
@@ -76,15 +76,42 @@ impl Drop for CaptureHandle {
 
 /// Resolve all RTSP URLs from CLI flags and config.
 ///
-/// Priority: `--rtsp-urls` (multi) > `--rtsp-url` (single) > config `RTSP_URL`.
+/// Priority, first match wins: `--rtsp-urls`, then config `RTSP_URLS`
+/// (comma-separated, multi), then `--rtsp-url`, then config `RTSP_URL` (single).
+/// The comma-separated config key lets a config-file / installer station drive
+/// **several** RTSP streams without the CLI — RTSP URLs never contain commas
+/// (unlike ALSA device names), so the comma split is unambiguous. Blank entries
+/// are dropped.
 fn resolve_rtsp_urls(cli: &Cli, config: Option<&birdnet_core::config::Config>) -> Vec<String> {
     if !cli.rtsp_urls.is_empty() {
         return cli.rtsp_urls.clone();
     }
+    if let Some(config) = config {
+        let multi: Vec<String> = config
+            .get("RTSP_URLS")
+            .map(|s| {
+                s.split(',')
+                    .map(str::trim)
+                    .filter(|u| !u.is_empty())
+                    .map(ToOwned::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !multi.is_empty() {
+            return multi;
+        }
+    }
     let single = cli
         .rtsp_url
         .clone()
-        .or_else(|| config?.get("RTSP_URL").map(String::from));
+        .filter(|u| !u.trim().is_empty())
+        .or_else(|| {
+            config?
+                .get("RTSP_URL")
+                .map(str::trim)
+                .filter(|u| !u.is_empty())
+                .map(String::from)
+        });
     single.into_iter().collect()
 }
 
@@ -214,7 +241,23 @@ fn audio_source_to_capture_source(
         SourceKind::Rtsp => CaptureSource::Rtsp {
             url: row.device_id.clone(),
             stream_id: row.id.clone(),
+            // Honour the per-source transport the admin UI exposes — previously
+            // dropped here, so ffmpeg was always forced to TCP and a UDP-only
+            // camera could never be captured.
+            transport: map_rtsp_transport(row.rtsp_transport),
         },
+    }
+}
+
+/// Map a `birdnet-db` RTSP transport (the admin-UI/storage enum) to the
+/// `birdnet-core` capture enum the ffmpeg command consumes. Kept here, in the
+/// crate that depends on both, so `birdnet-core` need not know about `birdnet-db`.
+const fn map_rtsp_transport(transport: birdnet_db::audio_sources::RtspTransport) -> RtspTransport {
+    use birdnet_db::audio_sources::RtspTransport as DbTransport;
+    match transport {
+        DbTransport::Auto => RtspTransport::Auto,
+        DbTransport::Tcp => RtspTransport::Tcp,
+        DbTransport::Udp => RtspTransport::Udp,
     }
 }
 
@@ -232,17 +275,28 @@ fn resolve_sources(cli: &Cli, config: Option<&birdnet_core::config::Config>) -> 
     let rtsp_urls = resolve_rtsp_urls(cli, config);
 
     let rtsp_sources = |urls: Vec<String>, mixed: bool| -> Vec<CaptureSource> {
+        // A lone RTSP stream (one URL, no local mic) keeps the plain "rtsp" id
+        // for filename backward-compatibility; the moment there is more than one
+        // stream — whether from `--rtsp-urls`, config `RTSP_URLS`, or mixed with
+        // a local mic — every stream is numbered so filenames and metrics stay
+        // distinct. (Previously this keyed off `cli.rtsp_urls.is_empty()`, so a
+        // multi-stream config left the first stream mislabeled "rtsp".)
+        let single = urls.len() == 1;
         urls.into_iter()
             .enumerate()
             .map(|(i, url)| {
-                let stream_id = if i == 0 && !mixed && cli.rtsp_urls.is_empty() {
-                    // Single --rtsp-url with no local mic: keep the plain
-                    // "rtsp" id for backward compatibility with filenames.
+                let stream_id = if i == 0 && !mixed && single {
                     "rtsp".to_string()
                 } else {
                     format!("RTSP_{}", i + 1)
                 };
-                CaptureSource::Rtsp { url, stream_id }
+                CaptureSource::Rtsp {
+                    url,
+                    stream_id,
+                    // A bare CLI/config URL carries no transport preference; the
+                    // admin UI is where TCP/UDP is chosen per source.
+                    transport: RtspTransport::Auto,
+                }
             })
             .collect()
     };
@@ -668,6 +722,72 @@ mod tests {
     }
 
     #[test]
+    fn resolve_rtsp_urls_reads_multiple_from_config() {
+        use birdnet_core::config::Config;
+        // The comma-separated RTSP_URLS config key drives several streams from a
+        // config file / installer, without needing the --rtsp-urls CLI flag.
+        let cfg =
+            Config::parse("RTSP_URLS=rtsp://a.lan/s , rtsp://b.lan/s,rtsp://c.lan/s").unwrap();
+        assert_eq!(
+            resolve_rtsp_urls(&cli(), Some(&cfg)),
+            vec![
+                "rtsp://a.lan/s".to_string(),
+                "rtsp://b.lan/s".to_string(),
+                "rtsp://c.lan/s".to_string(),
+            ],
+            "RTSP_URLS must split on commas, trim, and drop blanks"
+        );
+        // RTSP_URLS (multi) takes precedence over RTSP_URL (single).
+        let cfg2 =
+            Config::parse("RTSP_URLS=rtsp://a.lan/s,rtsp://b.lan/s\nRTSP_URL=rtsp://x.lan/s")
+                .unwrap();
+        assert_eq!(resolve_rtsp_urls(&cli(), Some(&cfg2)).len(), 2);
+    }
+
+    #[test]
+    fn resolve_sources_builds_multiple_rtsp_streams_from_config() {
+        use birdnet_core::config::Config;
+        let cfg = Config::parse("RTSP_URLS=rtsp://a.lan/s,rtsp://b.lan/s").unwrap();
+        let sources = resolve_sources(&cli(), Some(&cfg));
+        assert_eq!(sources.len(), 2, "two RTSP streams must both be captured");
+        let ids: Vec<_> = sources
+            .iter()
+            .map(|s| match s {
+                CaptureSource::Rtsp { stream_id, .. } => stream_id.clone(),
+                other => panic!("expected RTSP, got {other:?}"),
+            })
+            .collect();
+        // RTSP-only (no local mic) → numbered RTSP_n ids so filenames/metrics stay distinct.
+        assert_eq!(ids, vec!["RTSP_1".to_string(), "RTSP_2".to_string()]);
+    }
+
+    #[test]
+    fn map_rtsp_transport_covers_all_variants() {
+        // Bare `RtspTransport` in this test module is the birdnet-db enum
+        // (explicitly imported); spell out the birdnet-core target type.
+        use birdnet_core::audio::capture::RtspTransport as Core;
+        use birdnet_db::audio_sources::RtspTransport as Db;
+        assert_eq!(map_rtsp_transport(Db::Auto), Core::Auto);
+        assert_eq!(map_rtsp_transport(Db::Tcp), Core::Tcp);
+        assert_eq!(map_rtsp_transport(Db::Udp), Core::Udp);
+    }
+
+    #[test]
+    fn translator_rtsp_preserves_per_row_transport() {
+        // The admin UI's per-source TCP/UDP choice must reach the capture
+        // command — previously it was dropped (always TCP).
+        let mut r = row("src_rtsp_udp", SourceKind::Rtsp, "rtsp://cam/feed");
+        r.rtsp_transport = RtspTransport::Udp;
+        let mut idx = 0;
+        match audio_source_to_capture_source(&r, false, &mut idx) {
+            CaptureSource::Rtsp { transport, .. } => {
+                assert_eq!(transport, birdnet_core::audio::capture::RtspTransport::Udp);
+            }
+            other => panic!("expected Rtsp, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn resolve_sources_reads_alsa_card_from_config() {
         use birdnet_core::config::Config;
         let cfg = Config::parse("ALSA_CARD=plughw:2,0").unwrap();
@@ -858,10 +978,12 @@ mod tests {
                 CaptureSource::Rtsp {
                     url: u1,
                     stream_id: s1,
+                    ..
                 },
                 CaptureSource::Rtsp {
                     url: u2,
                     stream_id: s2,
+                    ..
                 },
             ) => {
                 assert_eq!(u1, "rtsp://a.lan/feed");

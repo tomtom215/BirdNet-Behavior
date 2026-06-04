@@ -10,7 +10,7 @@
 
 mod render;
 
-use axum::extract::State;
+use axum::extract::{DefaultBodyLimit, State};
 use axum::http::StatusCode;
 use axum::response::Html;
 use axum::{Form, Router, routing::get};
@@ -27,6 +27,14 @@ use crate::state::AppState;
 /// Shared migration state (one active job at a time).
 type MigrationState = Arc<Mutex<Option<ProgressHandle>>>;
 
+/// Upper bound on an uploaded BirdNET-Pi database. axum's default request-body
+/// limit is a mere 2 MiB — far smaller than a real `birds.db` (tens to hundreds
+/// of MB after a season of detections), so without this override every genuine
+/// upload is rejected and the import feature is dead on arrival. 4 GiB
+/// comfortably covers even a multi-year station; the route is admin-only (RBAC),
+/// so the larger ceiling is not a public denial-of-service surface.
+const MAX_UPLOAD_BYTES: usize = 4 * 1024 * 1024 * 1024;
+
 /// Mount migration routes.
 pub fn router() -> Router<AppState> {
     let migration_state: MigrationState = Arc::new(Mutex::new(None));
@@ -42,7 +50,10 @@ pub fn router() -> Router<AppState> {
             axum::routing::post({
                 let ms = Arc::clone(&migration_state);
                 move |state, multipart| upload_and_run_handler(state, multipart, ms)
-            }),
+            })
+            // Raise the body limit for the DB upload specifically (see
+            // MAX_UPLOAD_BYTES) so a real BirdNET-Pi database isn't rejected.
+            .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
         )
         .route(
             "/admin/migrate/run",

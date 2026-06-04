@@ -87,7 +87,7 @@ impl Drop for CaptureManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::capture::types::{AudioFormat, CaptureSource};
+    use crate::audio::capture::types::{AudioFormat, CaptureSource, RtspTransport};
     use std::path::PathBuf;
 
     fn microphone_config() -> RecordingConfig {
@@ -129,6 +129,7 @@ mod tests {
             source: CaptureSource::Rtsp {
                 url: "rtsp://example.com/stream".into(),
                 stream_id: "cam1".into(),
+                transport: RtspTransport::Auto,
             },
             output_dir: std::env::temp_dir().join("birdnet_rtsp_test"),
             segment_duration_secs: 15,
