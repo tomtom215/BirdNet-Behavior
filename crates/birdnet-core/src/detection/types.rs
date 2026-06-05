@@ -33,7 +33,10 @@ impl Detection {
     /// Confidence as integer percentage (0-100).
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn confidence_pct(&self) -> u32 {
-        (self.confidence * 100.0).round() as u32
+        // Clamp to [0, 1] before the cast so the result is always a sane 0-100:
+        // confidence is bounded upstream, but a stray out-of-range value would
+        // otherwise exceed 100, and this pins the invariant at the boundary.
+        (self.confidence.clamp(0.0, 1.0) * 100.0).round() as u32
     }
 
     /// Common name with spaces replaced by underscores (for filenames).

@@ -131,6 +131,30 @@ fn is_newer(current: &str, latest: &str) -> Result<bool, UpdateError> {
     Ok(l > c)
 }
 
+/// Reject a download URL that is not HTTPS on a trusted GitHub release host.
+///
+/// GitHub serves release assets and the `SHA256SUMS` manifest from `github.com`
+/// (and its redirect targets under `*.githubusercontent.com`); pinning to those
+/// hosts keeps an unexpected or tampered `asset_url` from being downloaded and
+/// installed as the running binary.
+fn validate_release_url(url: &str) -> Result<(), UpdateError> {
+    let rest = url
+        .strip_prefix("https://")
+        .ok_or_else(|| UpdateError::Network(format!("refusing non-HTTPS update URL: {url}")))?;
+    // Host is everything up to the first `/`, `:` (port), `?`, or `#`.
+    let host = rest.split(['/', ':', '?', '#']).next().unwrap_or("");
+    let trusted = host == "github.com"
+        || host.ends_with(".github.com")
+        || host.ends_with(".githubusercontent.com");
+    if trusted {
+        Ok(())
+    } else {
+        Err(UpdateError::Network(format!(
+            "refusing update URL from untrusted host {host:?}: {url}"
+        )))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -238,6 +262,14 @@ pub fn apply_update(
     current_binary: &Path,
     expected_sha256: Option<&str>,
 ) -> Result<(), UpdateError> {
+    // Defense-in-depth: the downloaded bytes are written next to the running
+    // binary and (after checksum + smoke test) installed as the executable, so
+    // refuse any asset URL that isn't HTTPS on a GitHub release host before
+    // fetching a single byte. The release flow only ever passes
+    // github.com / *.githubusercontent.com URLs; this rejects a tampered API
+    // response or a future caller that supplies an arbitrary URL.
+    validate_release_url(asset_url)?;
+
     let parent = current_binary.parent().unwrap_or_else(|| Path::new("."));
 
     let file_name = current_binary
@@ -497,6 +529,10 @@ fn fetch_expected_sha256(
     sums_url: &str,
     filename: &str,
 ) -> Option<String> {
+    // Pin the checksum source to a GitHub host too: a checksum fetched from an
+    // attacker-controlled URL could be made to match a malicious binary. (The
+    // binary download is independently pinned in `apply_update`.)
+    validate_release_url(sums_url).ok()?;
     let resp = client.get(sums_url).send().ok()?;
     if !resp.status().is_success() {
         return None;
@@ -613,6 +649,24 @@ fn smoke_test_binary(path: &Path) -> Result<(), UpdateError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validate_release_url_accepts_github_hosts() {
+        assert!(validate_release_url("https://github.com/o/r/releases/download/v1/a.tgz").is_ok());
+        assert!(validate_release_url("https://api.github.com/repos/o/r/releases").is_ok());
+        assert!(validate_release_url("https://objects.githubusercontent.com/abc/a.tgz").is_ok());
+        assert!(validate_release_url("https://codeload.github.com/o/r/tar.gz/v1").is_ok());
+    }
+
+    #[test]
+    fn validate_release_url_rejects_untrusted_and_non_https() {
+        assert!(validate_release_url("https://evil.com/payload").is_err());
+        assert!(validate_release_url("http://github.com/o/r/a.tgz").is_err()); // not HTTPS
+        // Lookalike hosts must not pass the suffix check.
+        assert!(validate_release_url("https://github.com.evil.com/a").is_err());
+        assert!(validate_release_url("https://notgithub.com/a").is_err());
+        assert!(validate_release_url("ftp://github.com/a").is_err());
+    }
 
     #[test]
     fn parse_version_with_prefix() {
