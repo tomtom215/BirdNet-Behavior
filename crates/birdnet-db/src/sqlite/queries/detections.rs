@@ -814,7 +814,13 @@ mod tests {
         insert("06:00:04", "Erithacus rubecula", Some("cam2"), 0.95);
 
         let hits = concurrent_detections_from_other_sources(
-            &conn, "2026-05-19", "06:00:00", "Pica pica", "cam1", 30.0, 8,
+            &conn,
+            "2026-05-19",
+            "06:00:00",
+            "Pica pica",
+            "cam1",
+            30.0,
+            8,
         )
         .unwrap();
         assert_eq!(

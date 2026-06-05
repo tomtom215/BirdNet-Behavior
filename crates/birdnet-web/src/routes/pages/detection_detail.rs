@@ -62,7 +62,13 @@ async fn detection_detail_page(
             // (historical / imported rows are NULL → no corroboration shown).
             let corroboration = det.source.as_deref().map_or_else(Vec::new, |src| {
                 birdnet_db::sqlite::concurrent_detections_from_other_sources(
-                    conn, &det.date, &det.time, &det.sci_name, src, 30.0, 8,
+                    conn,
+                    &det.date,
+                    &det.time,
+                    &det.sci_name,
+                    src,
+                    30.0,
+                    8,
                 )
                 .unwrap_or_default()
             });
@@ -371,7 +377,7 @@ fn not_found_page(date: &str, time: &str, headers: &HeaderMap) -> Html<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_corroboration_section, build_correlation_section};
+    use super::{build_correlation_section, build_corroboration_section};
     use birdnet_db::sqlite::{ConcurrentDetection, DetectionRow};
 
     #[test]
@@ -388,7 +394,10 @@ mod tests {
         }];
         let html = build_corroboration_section(&hits);
         assert!(html.contains("Also heard by"), "should render the card");
-        assert!(html.contains("cam2"), "should list the corroborating source");
+        assert!(
+            html.contains("cam2"),
+            "should list the corroborating source"
+        );
         assert!(html.contains("85%"), "should show the confidence");
     }
 
