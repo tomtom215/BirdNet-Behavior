@@ -306,8 +306,8 @@ task is spawned at startup. **Effort:** S. **Risk:** low.
 **Evidence.** ~**1.1k** inline `style="…"` attributes across ~**88** files (`rg -c 'style="' crates/birdnet-web/`).
 Cosmetic on their own, but inline style *attributes* can't carry a CSP nonce, so eliminating them is the
 prerequisite for dropping `style-src 'unsafe-inline'` (P2-2). The utility-class vocabulary is already landed
-in `app.css` (`bnb-row` / `bnb-grid-*` / `bnb-form-row` / `bnb-kv` / …); reference design:
-`docs/proposed_changes/O-25_inline_styles/`.
+in `app.css` (`bnb-row` / `bnb-grid-*` / `bnb-form-row` / `bnb-kv` / …); the O-25
+inline-style audit that specified it has shipped and was removed from the repo.
 
 **Fix.** **Do not** attempt in one PR. Sweep **one area per PR**, substituting inline `style=` for the existing
 utility classes (reusable shapes) or page-scoped `<style>` rules (page-specific styling), with a per-page
@@ -790,7 +790,7 @@ warmer all fetched/served without consulting it. Now:
 
 ## Out of scope (documented as deliberately deferred)
 
-From `docs/proposed_changes/README_v2.md` — captured here so they aren't mistaken for gaps:
+From the v2 design proposals (since shipped and removed from the repo — see git history) — captured here so they aren't mistaken for gaps:
 - **Multi-station compare** ("your station vs neighbour's") — needs a storage/shape decision.
 - **Web Push** — O-24 shipped PWA bones (manifest, service worker, icons) but not Web Push; needs a
   server-side push store + key-rotation story distinct from the session model.

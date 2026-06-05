@@ -289,9 +289,8 @@ pub const MIGRATIONS: &[Migration] = &[
         // TODO(O-15-followup) markers in `accounts.rs` and the auth
         // module for the credential-store migration.
         //
-        // The package's source SQL is at
-        // docs/proposed_changes/O-15_accounts/migrations/009_accounts.sql.
-        // Adapted for this chain:
+        // Adapted from the O-15 accounts proposal's 009_accounts.sql for this
+        // chain:
         //  - Migration version is 14, not 009 (the package was authored
         //    against an earlier numbering scheme — the chain in main has
         //    grown to 13 since).
@@ -355,8 +354,7 @@ pub const MIGRATIONS: &[Migration] = &[
         // the settings table, so the SELECT is typically a no-op — the
         // table just starts empty and the operator adds rows via /admin/audio.
         //
-        // The package's source SQL is at
-        // docs/proposed_changes/O-13_audio_sources/migrations/008_audio_sources.sql.
+        // Adapted from the O-13 audio-sources proposal's 008_audio_sources.sql.
         // Renumbered to 15 (the chain has grown past 008 since the
         // package was authored).
         up_sql: "CREATE TABLE IF NOT EXISTS audio_sources (

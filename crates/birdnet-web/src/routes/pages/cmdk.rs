@@ -4,13 +4,11 @@
 //! source. The client owns only the open/close/arrow-key behaviour; ranking
 //! and filtering live here so they can hit SQLite directly.
 //!
-//! Adapted from `docs/proposed_changes/O-19_cmdk/src/cmdk.rs`. The package
+//! Adapted from the O-19 command-palette design proposal. The package
 //! queried a hypothetical `species_aggregate` table that does not exist in
 //! this fork's schema — both species hits and recent detections are now
 //! satisfied directly from `detections` using the actual column names
 //! (`Com_Name` / `Sci_Name` / `Date` / `Time`).
-//!
-//! See O-19 DIFF.md.
 
 use std::fmt::Write as _;
 
