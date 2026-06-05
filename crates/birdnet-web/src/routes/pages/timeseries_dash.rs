@@ -22,7 +22,14 @@ use std::fmt::Write as _;
 use super::TIMESERIES_PAGE_HTML;
 #[cfg(feature = "analytics")]
 use super::escape_html;
+#[cfg(feature = "analytics")]
+use crate::analytics_cache::cached_fragment;
 use crate::state::AppState;
+
+/// Fallback served (uncached) when a DuckDB time-series query errors after the
+/// analytics database is otherwise available.
+#[cfg(feature = "analytics")]
+const TS_FALLBACK: &str = r#"<p class="tsd-muted">Analytics temporarily unavailable.</p>"#;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -48,26 +55,30 @@ async fn timeseries_page(headers: HeaderMap) -> Html<String> {
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "analytics")]
-async fn ts_heatmap_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {
-    if !state.has_analytics() {
-        return ts_unavailable("hourly heatmap");
-    }
+fn compute_ts_heatmap(state: &AppState) -> Option<String> {
     let params = birdnet_timeseries::types::params::HourlyParams {
         lookback_days: 90,
         species: None,
     };
-    let result =
-        tokio::task::spawn_blocking(move || state.with_timeseries(|ts| ts.hourly_heatmap(&params)))
-            .await;
-
-    match result {
-        Ok(Some(Ok(rows))) => {
-            let html = render_heatmap_table(&rows);
-            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
-        }
-        Ok(Some(Err(e))) => ts_error(&e.to_string()),
-        _ => ts_unavailable("hourly heatmap"),
+    match state.with_timeseries(|ts| ts.hourly_heatmap(&params)) {
+        Some(Ok(rows)) => Some(render_heatmap_table(&rows)),
+        _ => None,
     }
+}
+
+#[cfg(feature = "analytics")]
+async fn ts_heatmap_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {
+    if !state.has_analytics() {
+        return ts_unavailable("hourly heatmap");
+    }
+    let html = cached_fragment(
+        &state,
+        "ts-heatmap".to_string(),
+        TS_FALLBACK,
+        compute_ts_heatmap,
+    )
+    .await;
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
 #[cfg(not(feature = "analytics"))]
@@ -80,29 +91,32 @@ async fn ts_heatmap_partial(State(_): State<AppState>) -> impl axum::response::I
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "analytics")]
-async fn ts_daily_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {
-    if !state.has_analytics() {
-        return ts_unavailable("daily trend");
-    }
+fn compute_ts_daily(state: &AppState) -> Option<String> {
     let params = birdnet_timeseries::types::params::TrendParams {
         window_days: 7,
         from_date: Some("CURRENT_DATE - INTERVAL 60 DAYS".into()),
         to_date: None,
         species: None,
     };
-    let result =
-        tokio::task::spawn_blocking(move || state.with_timeseries(|ts| ts.moving_average(&params)))
-            .await;
-
-    match result {
-        Ok(Some(Ok(rows))) => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/html")],
-            render_trend_table(&rows),
-        ),
-        Ok(Some(Err(e))) => ts_error(&e.to_string()),
-        _ => ts_unavailable("daily trend"),
+    match state.with_timeseries(|ts| ts.moving_average(&params)) {
+        Some(Ok(rows)) => Some(render_trend_table(&rows)),
+        _ => None,
     }
+}
+
+#[cfg(feature = "analytics")]
+async fn ts_daily_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {
+    if !state.has_analytics() {
+        return ts_unavailable("daily trend");
+    }
+    let html = cached_fragment(
+        &state,
+        "ts-daily".to_string(),
+        TS_FALLBACK,
+        compute_ts_daily,
+    )
+    .await;
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
 #[cfg(not(feature = "analytics"))]
@@ -115,27 +129,30 @@ async fn ts_daily_partial(State(_): State<AppState>) -> impl axum::response::Int
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "analytics")]
-async fn ts_diversity_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {
-    if !state.has_analytics() {
-        return ts_unavailable("diversity");
-    }
+fn compute_ts_diversity(state: &AppState) -> Option<String> {
     let params = birdnet_timeseries::types::params::DiversityParams {
         lookback_days: 30,
         include_shannon: true,
     };
-    let result =
-        tokio::task::spawn_blocking(move || state.with_timeseries(|ts| ts.daily_richness(&params)))
-            .await;
-
-    match result {
-        Ok(Some(Ok(rows))) => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/html")],
-            render_diversity_table(&rows),
-        ),
-        Ok(Some(Err(e))) => ts_error(&e.to_string()),
-        _ => ts_unavailable("diversity"),
+    match state.with_timeseries(|ts| ts.daily_richness(&params)) {
+        Some(Ok(rows)) => Some(render_diversity_table(&rows)),
+        _ => None,
     }
+}
+
+#[cfg(feature = "analytics")]
+async fn ts_diversity_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {
+    if !state.has_analytics() {
+        return ts_unavailable("diversity");
+    }
+    let html = cached_fragment(
+        &state,
+        "ts-diversity".to_string(),
+        TS_FALLBACK,
+        compute_ts_diversity,
+    )
+    .await;
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
 #[cfg(not(feature = "analytics"))]
@@ -148,30 +165,32 @@ async fn ts_diversity_partial(State(_): State<AppState>) -> impl axum::response:
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "analytics")]
-async fn ts_sessions_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {
-    if !state.has_analytics() {
-        return ts_unavailable("activity sessions");
-    }
+fn compute_ts_sessions(state: &AppState) -> Option<String> {
     let params = birdnet_timeseries::types::params::SessionParams {
         gap_minutes: 30,
         date_filter: None,
         lookback_days: 3,
         limit: 50,
     };
-    let result = tokio::task::spawn_blocking(move || {
-        state.with_timeseries(|ts| ts.activity_sessions(&params))
-    })
-    .await;
-
-    match result {
-        Ok(Some(Ok(rows))) => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/html")],
-            render_sessions_table(&rows),
-        ),
-        Ok(Some(Err(e))) => ts_error(&e.to_string()),
-        _ => ts_unavailable("activity sessions"),
+    match state.with_timeseries(|ts| ts.activity_sessions(&params)) {
+        Some(Ok(rows)) => Some(render_sessions_table(&rows)),
+        _ => None,
     }
+}
+
+#[cfg(feature = "analytics")]
+async fn ts_sessions_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {
+    if !state.has_analytics() {
+        return ts_unavailable("activity sessions");
+    }
+    let html = cached_fragment(
+        &state,
+        "ts-sessions".to_string(),
+        TS_FALLBACK,
+        compute_ts_sessions,
+    )
+    .await;
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
 #[cfg(not(feature = "analytics"))]
@@ -184,28 +203,31 @@ async fn ts_sessions_partial(State(_): State<AppState>) -> impl axum::response::
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "analytics")]
-async fn ts_anomaly_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {
-    if !state.has_analytics() {
-        return ts_unavailable("anomaly detection");
-    }
+fn compute_ts_anomaly(state: &AppState) -> Option<String> {
     let params = birdnet_timeseries::types::params::AnomalyParams {
         z_threshold: 2.0,
         window_days: 30,
         lookback_days: 90,
     };
-    let result =
-        tokio::task::spawn_blocking(move || state.with_timeseries(|ts| ts.anomalies(&params)))
-            .await;
-
-    match result {
-        Ok(Some(Ok(rows))) => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/html")],
-            render_anomaly_table(&rows),
-        ),
-        Ok(Some(Err(e))) => ts_error(&e.to_string()),
-        _ => ts_unavailable("anomaly detection"),
+    match state.with_timeseries(|ts| ts.anomalies(&params)) {
+        Some(Ok(rows)) => Some(render_anomaly_table(&rows)),
+        _ => None,
     }
+}
+
+#[cfg(feature = "analytics")]
+async fn ts_anomaly_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {
+    if !state.has_analytics() {
+        return ts_unavailable("anomaly detection");
+    }
+    let html = cached_fragment(
+        &state,
+        "ts-anomalies".to_string(),
+        TS_FALLBACK,
+        compute_ts_anomaly,
+    )
+    .await;
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
 #[cfg(not(feature = "analytics"))]
@@ -218,29 +240,26 @@ async fn ts_anomaly_partial(State(_): State<AppState>) -> impl axum::response::I
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "analytics")]
-async fn ts_peak_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {
-    if !state.has_analytics() {
-        return ts_unavailable("peak windows");
-    }
+fn compute_ts_peak(state: &AppState) -> Option<String> {
     let params = birdnet_timeseries::types::params::PeakParams {
         window_minutes: 15,
         hop_minutes: 5,
         lookback_days: 1,
         limit: 5,
     };
-    let result =
-        tokio::task::spawn_blocking(move || state.with_timeseries(|ts| ts.peak_windows(&params)))
-            .await;
-
-    match result {
-        Ok(Some(Ok(rows))) => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/html")],
-            render_peak_table(&rows),
-        ),
-        Ok(Some(Err(e))) => ts_error(&e.to_string()),
-        _ => ts_unavailable("peak windows"),
+    match state.with_timeseries(|ts| ts.peak_windows(&params)) {
+        Some(Ok(rows)) => Some(render_peak_table(&rows)),
+        _ => None,
     }
+}
+
+#[cfg(feature = "analytics")]
+async fn ts_peak_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {
+    if !state.has_analytics() {
+        return ts_unavailable("peak windows");
+    }
+    let html = cached_fragment(&state, "ts-peak".to_string(), TS_FALLBACK, compute_ts_peak).await;
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
 #[cfg(not(feature = "analytics"))]
@@ -429,11 +448,29 @@ fn ts_unavailable(endpoint: &str) -> (StatusCode, [(header::HeaderName, &'static
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], msg)
 }
 
+/// Pre-compute and cache all six time-series dashboard fragments so the first
+/// visit (and each background refresh) is instant. No-op without an analytics DB.
 #[cfg(feature = "analytics")]
-fn ts_error(error: &str) -> (StatusCode, [(header::HeaderName, &'static str); 1], String) {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        [(header::CONTENT_TYPE, "text/html")],
-        format!(r#"<p class="tsd-err">Error: {}</p>"#, escape_html(error)),
-    )
+pub fn prewarm(state: &AppState) {
+    if !state.has_analytics() {
+        return;
+    }
+    let cache = state.analytics_cache();
+    let fragments = [
+        ("ts-heatmap", compute_ts_heatmap(state)),
+        ("ts-daily", compute_ts_daily(state)),
+        ("ts-diversity", compute_ts_diversity(state)),
+        ("ts-sessions", compute_ts_sessions(state)),
+        ("ts-anomalies", compute_ts_anomaly(state)),
+        ("ts-peak", compute_ts_peak(state)),
+    ];
+    for (key, html) in fragments {
+        if let Some(html) = html {
+            cache.put(key.to_string(), html);
+        }
+    }
 }
+
+/// No-op pre-warm when analytics is not compiled in.
+#[cfg(not(feature = "analytics"))]
+pub fn prewarm(_state: &AppState) {}

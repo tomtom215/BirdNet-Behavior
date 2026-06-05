@@ -105,6 +105,9 @@ pub(crate) const TABBAR_HTML: &str = include_str!("../../../templates/_partial_t
 /// rest.
 pub fn prewarm_analytics(state: &AppState) {
     heatmap::prewarm(state);
+    migration::prewarm(state);
+    correlation::prewarm(state);
+    timeseries_dash::prewarm(state);
 }
 
 /// Build all page and partial routes.

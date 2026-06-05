@@ -252,12 +252,9 @@ fn compute_dawn_chorus(state: &AppState) -> String {
 }
 
 async fn dawn_chorus_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {
-    let html = cached_fragment(
-        &state,
-        "dawn-chorus".to_string(),
-        FRAGMENT_ERR,
-        |s| Some(compute_dawn_chorus(s)),
-    )
+    let html = cached_fragment(&state, "dawn-chorus".to_string(), FRAGMENT_ERR, |s| {
+        Some(compute_dawn_chorus(s))
+    })
     .await;
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }

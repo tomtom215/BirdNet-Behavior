@@ -22,12 +22,19 @@ use axum::response::{Html, IntoResponse};
 use axum::{Router, routing::get};
 use serde::Deserialize;
 
+use crate::analytics_cache::cached_fragment;
 use crate::state::AppState;
 
 use super::atoms::{species_code, species_color};
 use super::{escape_html, render_page_for_request};
 
 const PAGE_HTML: &str = include_str!("../../../templates/migration.html");
+
+/// Empty-state body served (uncached) when the phenology ridgeline has no data.
+const RIDGELINE_EMPTY: &str =
+    r#"<p class="bnb-meta">No migratory species detected yet this year.</p>"#;
+/// Empty-state body served (uncached) when the diversity strip has no data.
+const DIVERSITY_EMPTY: &str = r#"<p class="bnb-meta">No data for diversity bars yet.</p>"#;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -147,20 +154,24 @@ fn collect_ridges(
 // Ridgeline SVG
 // ---------------------------------------------------------------------------
 
-async fn ridgeline_partial(State(state): State<AppState>) -> impl IntoResponse {
+fn compute_ridgeline(state: &AppState) -> Option<String> {
     let year = current_year();
-    let result =
-        tokio::task::spawn_blocking(move || state.with_db(|conn| collect_ridges(conn, year, 12)))
-            .await;
+    let ridges = state.with_db(|conn| collect_ridges(conn, year, 12)).ok()?;
+    if ridges.is_empty() {
+        return None;
+    }
+    Some(render_ridgeline_svg(&ridges, current_week()))
+}
 
-    let ridges = match result {
-        Ok(Ok(r)) if !r.is_empty() => r,
-        _ => return empty_state("No migratory species detected yet this year."),
-    };
-
-    let today_week = current_week();
-    let svg = render_ridgeline_svg(&ridges, today_week);
-    ok_html(svg)
+async fn ridgeline_partial(State(state): State<AppState>) -> impl IntoResponse {
+    let html = cached_fragment(
+        &state,
+        "migration-ridgeline".to_string(),
+        RIDGELINE_EMPTY,
+        compute_ridgeline,
+    )
+    .await;
+    ok_html(html)
 }
 
 fn render_ridgeline_svg(ridges: &[SpeciesRidge], today_week: u8) -> String {
@@ -363,10 +374,10 @@ fn render_ridgeline_svg(ridges: &[SpeciesRidge], today_week: u8) -> String {
 // Diversity strip
 // ---------------------------------------------------------------------------
 
-async fn diversity_partial(State(state): State<AppState>) -> impl IntoResponse {
+fn compute_diversity(state: &AppState) -> Option<String> {
     let year = current_year();
-    let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+    let weekly = state
+        .with_db(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT CAST(strftime('%W', Date) AS INTEGER) AS wk, \
                         COUNT(DISTINCT Com_Name) \
@@ -388,17 +399,22 @@ async fn diversity_partial(State(state): State<AppState>) -> impl IntoResponse {
             }
             Ok::<_, rusqlite::Error>(weekly)
         })
-    })
+        .ok()?;
+    if weekly.iter().all(|&n| n == 0) {
+        return None;
+    }
+    Some(render_diversity_svg(&weekly, current_week()))
+}
+
+async fn diversity_partial(State(state): State<AppState>) -> impl IntoResponse {
+    let html = cached_fragment(
+        &state,
+        "migration-diversity".to_string(),
+        DIVERSITY_EMPTY,
+        compute_diversity,
+    )
     .await;
-
-    let weekly = match result {
-        Ok(Ok(w)) => w,
-        _ => return empty_state("No data for diversity bars yet."),
-    };
-
-    let today_week = current_week();
-    let svg = render_diversity_svg(&weekly, today_week);
-    ok_html(svg)
+    ok_html(html)
 }
 
 fn render_diversity_svg(weekly: &[i64; 52], today_week: u8) -> String {
@@ -464,10 +480,14 @@ fn render_diversity_svg(weekly: &[i64; 52], today_week: u8) -> String {
 // ---------------------------------------------------------------------------
 
 async fn stats_partial(State(state): State<AppState>) -> impl IntoResponse {
+    if let Some(html) = state.analytics_cache().get("migration-stats") {
+        return ok_html(html);
+    }
     let year = current_year();
     let prior = year - 1;
+    let state_for_blocking = state.clone();
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state_for_blocking.with_db(|conn| {
             // First-of-year arrivals = species with first_date in this year so far.
             let foy: i64 = conn.query_row(
                 "SELECT COUNT(*) FROM ( \
@@ -572,6 +592,9 @@ async fn stats_partial(State(state): State<AppState>) -> impl IntoResponse {
 <div class="stat-tile"><span class="label">Earliest vs last year</span>{earliest_html}</div>
 <div class="stat-tile"><span class="label">Still expected</span>{expected_html}</div>"#,
     );
+    state
+        .analytics_cache()
+        .put("migration-stats".to_string(), html.clone());
     ok_html(html)
 }
 
@@ -721,9 +744,17 @@ fn ok_html(body: String) -> (StatusCode, [(header::HeaderName, &'static str); 1]
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], body)
 }
 
-fn empty_state(msg: &str) -> (StatusCode, [(header::HeaderName, &'static str); 1], String) {
-    let body = format!(r#"<p class="bnb-meta">{}</p>"#, escape_html(msg));
-    ok_html(body)
+/// Pre-compute and cache the heavy phenology fragments (ridgeline + diversity)
+/// so the first visit (and each background refresh) is instant. The stats tiles
+/// cache per-request; the editorial cards are cheap single-row lookups.
+pub fn prewarm(state: &AppState) {
+    let cache = state.analytics_cache();
+    if let Some(h) = compute_ridgeline(state) {
+        cache.put("migration-ridgeline".to_string(), h);
+    }
+    if let Some(h) = compute_diversity(state) {
+        cache.put("migration-diversity".to_string(), h);
+    }
 }
 
 #[cfg(test)]

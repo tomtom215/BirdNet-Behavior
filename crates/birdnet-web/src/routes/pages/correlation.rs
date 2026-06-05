@@ -22,7 +22,11 @@ use birdnet_db::sqlite::{companion_species, top_cooccurrence_pairs};
 
 use super::escape_html;
 use super::simple_url_encode;
+use crate::analytics_cache::cached_fragment;
 use crate::state::AppState;
+
+/// Fallback served (uncached) when a co-occurrence query errors.
+const CORR_ERR: &str = r#"<p class="co-err">Co-occurrence data temporarily unavailable.</p>"#;
 
 /// Mount correlation routes.
 pub fn router() -> Router<AppState> {
@@ -133,85 +137,72 @@ document.getElementById('range-controls').addEventListener('click', function(e) 
 // GET /pages/correlation-pairs — top co-occurring pairs partial
 // ---------------------------------------------------------------------------
 
+fn compute_correlation_pairs(state: &AppState, days: u32) -> Option<String> {
+    let pairs = state
+        .with_db(|conn| top_cooccurrence_pairs(conn, days, 25, 2))
+        .ok()?;
+    Some(render_pairs_table(&pairs, days))
+}
+
 async fn correlation_pairs_partial(
     State(state): State<AppState>,
     Query(query): Query<CorrelationQuery>,
 ) -> impl axum::response::IntoResponse {
     let days = query.days.unwrap_or(30).min(365);
-
-    let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| top_cooccurrence_pairs(conn, days, 25, 2))
+    let html = cached_fragment(&state, format!("corr-pairs:{days}"), CORR_ERR, move |s| {
+        compute_correlation_pairs(s, days)
     })
     .await;
-
-    match result {
-        Ok(Ok(pairs)) => {
-            let html = render_pairs_table(&pairs, days);
-            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
-        }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p class='co-err'>Error loading co-occurrence data</p>".to_string(),
-        ),
-    }
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
 // ---------------------------------------------------------------------------
 // GET /pages/cooccurrence-matrix — N×N intensity grid
 // ---------------------------------------------------------------------------
 
+fn compute_cooccurrence_matrix(state: &AppState, days: u32) -> Option<String> {
+    let pairs = state
+        .with_db(|conn| top_cooccurrence_pairs(conn, days, 120, 1))
+        .ok()?;
+    let (labels, matrix) = build_matrix(&pairs, 10);
+    Some(super::viz::cooccurrence_matrix(&labels, &matrix))
+}
+
 async fn cooccurrence_matrix_partial(
     State(state): State<AppState>,
     Query(query): Query<CorrelationQuery>,
 ) -> impl axum::response::IntoResponse {
     let days = query.days.unwrap_or(30).min(365);
-    let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| top_cooccurrence_pairs(conn, days, 120, 1))
+    let html = cached_fragment(&state, format!("corr-matrix:{days}"), CORR_ERR, move |s| {
+        compute_cooccurrence_matrix(s, days)
     })
     .await;
-
-    match result {
-        Ok(Ok(pairs)) => {
-            let (labels, matrix) = build_matrix(&pairs, 10);
-            let html = super::viz::cooccurrence_matrix(&labels, &matrix);
-            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
-        }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading matrix</p>".to_string(),
-        ),
-    }
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
 // ---------------------------------------------------------------------------
 // GET /pages/acoustic-network — chord diagram of the co-occurrence graph
 // ---------------------------------------------------------------------------
 
+fn compute_acoustic_network(state: &AppState, days: u32) -> Option<String> {
+    let pairs = state
+        .with_db(|conn| top_cooccurrence_pairs(conn, days, 120, 1))
+        .ok()?;
+    // Fewer arcs read more clearly as a chord than the 10-wide matrix.
+    let (labels, matrix) = build_matrix(&pairs, 9);
+    Some(super::viz::chord_diagram(&labels, &matrix))
+}
+
 async fn acoustic_network_partial(
     State(state): State<AppState>,
     Query(query): Query<CorrelationQuery>,
 ) -> impl axum::response::IntoResponse {
     let days = query.days.unwrap_or(30).min(365);
-    let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| top_cooccurrence_pairs(conn, days, 120, 1))
+    let html = cached_fragment(&state, format!("corr-network:{days}"), CORR_ERR, move |s| {
+        compute_acoustic_network(s, days)
     })
     .await;
-
-    match result {
-        Ok(Ok(pairs)) => {
-            // Fewer arcs read more clearly as a chord than the 10-wide matrix.
-            let (labels, matrix) = build_matrix(&pairs, 9);
-            let html = super::viz::chord_diagram(&labels, &matrix);
-            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
-        }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading network</p>".to_string(),
-        ),
-    }
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
 /// Reduce co-occurrence pairs to a square matrix over the `max_species` most
@@ -325,6 +316,13 @@ fn render_pairs_table(pairs: &[birdnet_db::sqlite::SpeciesPair], _days: u32) -> 
 // GET /pages/companion-species — companion lookup partial
 // ---------------------------------------------------------------------------
 
+fn compute_companion(state: &AppState, species: &str, days: u32) -> Option<String> {
+    let companions = state
+        .with_db(|conn| companion_species(conn, species, days, 15))
+        .ok()?;
+    Some(render_companion_table(&companions))
+}
+
 async fn companion_partial(
     State(state): State<AppState>,
     Query(query): Query<CorrelationQuery>,
@@ -339,25 +337,13 @@ async fn companion_partial(
             );
         }
     };
-
     let days = query.days.unwrap_or(30).min(365);
-
-    let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| companion_species(conn, &species, days, 15))
+    let key = format!("corr-companion:{days}:{species}");
+    let html = cached_fragment(&state, key, CORR_ERR, move |s| {
+        compute_companion(s, &species, days)
     })
     .await;
-
-    match result {
-        Ok(Ok(companions)) => {
-            let html = render_companion_table(&companions);
-            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
-        }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p class='co-err'>Error loading companion species</p>".to_string(),
-        ),
-    }
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
 fn render_companion_table(companions: &[birdnet_db::sqlite::FollowOn]) -> String {
@@ -419,6 +405,21 @@ fn render_companion_table(companions: &[birdnet_db::sqlite::FollowOn]) -> String
 
     html.push_str("</tbody></table>");
     html
+}
+
+/// Pre-compute and cache the default 30-day co-occurrence fragments so the
+/// first visit (and each background refresh) is instant.
+pub fn prewarm(state: &AppState) {
+    let cache = state.analytics_cache();
+    if let Some(h) = compute_cooccurrence_matrix(state, 30) {
+        cache.put("corr-matrix:30".to_string(), h);
+    }
+    if let Some(h) = compute_acoustic_network(state, 30) {
+        cache.put("corr-network:30".to_string(), h);
+    }
+    if let Some(h) = compute_correlation_pairs(state, 30) {
+        cache.put("corr-pairs:30".to_string(), h);
+    }
 }
 
 #[cfg(test)]
