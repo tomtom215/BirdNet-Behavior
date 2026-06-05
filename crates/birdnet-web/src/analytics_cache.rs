@@ -28,7 +28,13 @@ use std::time::{Duration, Instant};
 /// queries only every few minutes — gentle on a Raspberry Pi — instead of
 /// continuously. Periodically-polled live surfaces (the dashboard feed and stat
 /// tiles) are deliberately not routed through this cache.
-pub const DEFAULT_TTL: Duration = Duration::from_secs(300);
+///
+/// Ten minutes: long enough that the background pre-warmer can keep every cached
+/// fragment hot while running the heavy queries only about once every eight
+/// minutes — a gentle background load on a Raspberry Pi competing with live
+/// detection — yet short enough that aggregate trends never look meaningfully
+/// stale.
+pub const DEFAULT_TTL: Duration = Duration::from_secs(600);
 
 /// Hard cap on distinct cached keys so an adversarial spread of query
 /// parameters (e.g. `?days=`) cannot grow the map without bound.

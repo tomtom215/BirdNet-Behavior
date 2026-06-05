@@ -256,17 +256,19 @@ pub async fn run(
     let _weather_poll_handle = integrations::spawn_weather_poll(config.as_ref(), state.clone());
 
     // Pre-warm the heavy-analytics fragment cache so the first visit to the
-    // Heatmap / phenology pages is instant, then keep it warm on an interval a
-    // little under the cache TTL. Each pass runs the same aggregate queries a
-    // page visit would, on the blocking pool, so it never stalls the runtime;
-    // it is best-effort and decoupled from request handling.
+    // Heatmap / phenology / co-occurrence / time-series pages is instant, then
+    // keep it warm on an interval a little under the cache TTL (10 min). Each
+    // pass runs the same aggregate queries a page visit would, on the blocking
+    // pool, so it never stalls the runtime; it is best-effort and decoupled from
+    // request handling. The eight-minute cadence keeps the recurring background
+    // query load gentle on a Raspberry Pi competing with live detection.
     {
         let prewarm_state = state.clone();
         tokio::spawn(async move {
             // Let the initial SQLite→DuckDB sync and the first detections settle
             // before the first (cold) pass.
             tokio::time::sleep(std::time::Duration::from_secs(20)).await;
-            let mut tick = tokio::time::interval(std::time::Duration::from_secs(240));
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(480));
             loop {
                 tick.tick().await;
                 let s = prewarm_state.clone();
