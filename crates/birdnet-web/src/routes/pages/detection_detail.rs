@@ -57,17 +57,37 @@ async fn detection_detail_page(
                     .ok()
                     .flatten()
                     .map(|r| r.status);
-            Some((det, verdict))
+            // Multi-stream corroboration: other sources that heard this species
+            // near the same time. Only meaningful for rows with a known source
+            // (historical / imported rows are NULL → no corroboration shown).
+            let corroboration = det.source.as_deref().map_or_else(Vec::new, |src| {
+                birdnet_db::sqlite::concurrent_detections_from_other_sources(
+                    conn,
+                    &det.date,
+                    &det.time,
+                    &det.sci_name,
+                    src,
+                    30.0,
+                    8,
+                )
+                .unwrap_or_default()
+            });
+            Some((det, verdict, corroboration))
         })
     })
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let Some((det, verdict)) = found else {
+    let Some((det, verdict, corroboration)) = found else {
         return Ok(not_found_page(&date, &time, &headers));
     };
 
-    Ok(render_detail_page(&det, verdict.as_deref(), &headers))
+    Ok(render_detail_page(
+        &det,
+        verdict.as_deref(),
+        &corroboration,
+        &headers,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -85,7 +105,7 @@ fn find_detection(
 
     if com_name.is_empty() {
         conn.query_row(
-            "SELECT Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id
+            "SELECT Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id, Source
              FROM detections WHERE Date = ?1 AND Time = ?2 LIMIT 1",
             params![date, time],
             |row| Ok(DetectionRow {
@@ -102,11 +122,12 @@ fn find_detection(
                 overlap: row.get(10)?,
                 file_name: row.get(11)?,
                 correlation_id: row.get(12)?,
+                source: row.get(13)?,
             }),
         ).ok()
     } else {
         conn.query_row(
-            "SELECT Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id
+            "SELECT Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id, Source
              FROM detections WHERE Date = ?1 AND Time = ?2 AND Com_Name = ?3 LIMIT 1",
             params![date, time, com_name],
             |row| Ok(DetectionRow {
@@ -123,6 +144,7 @@ fn find_detection(
                 overlap: row.get(10)?,
                 file_name: row.get(11)?,
                 correlation_id: row.get(12)?,
+                source: row.get(13)?,
             }),
         ).ok()
     }
@@ -135,6 +157,7 @@ fn find_detection(
 fn render_detail_page(
     det: &birdnet_db::sqlite::DetectionRow,
     verdict: Option<&str>,
+    corroboration: &[birdnet_db::sqlite::ConcurrentDetection],
     headers: &HeaderMap,
 ) -> Html<String> {
     let enc_name = simple_url_encode(&det.com_name);
@@ -147,6 +170,7 @@ fn render_detail_page(
     let audio_section = build_audio_section(det);
     let meta = build_meta_rows(det);
     let correlation_section = build_correlation_section(det);
+    let corroboration_section = build_corroboration_section(corroboration);
     let conf = conf_bar(det.confidence);
     let review_widget = super::detection_reviews::render_review_widget(
         &det.date,
@@ -188,6 +212,7 @@ fn render_detail_page(
         {meta}
       </table>
     </div>
+    {corroboration_section}
     {review_widget}
     {correlation_section}
   </div>
@@ -232,6 +257,41 @@ fn build_audio_section(det: &birdnet_db::sqlite::DetectionRow) -> String {
     Your browser does not support audio playback.
   </audio>
 </div>"#
+    )
+}
+
+/// Render the multi-stream "also heard by" corroboration card.
+///
+/// Lists other audio sources that detected the same species at nearly the same
+/// time — turning a multi-stream "duplicate" into a confidence signal rather
+/// than noise. Returns an empty string (no card) when nothing corroborates, so
+/// single-mic stations never see it. Non-destructive: it only *reads* rows that
+/// are already stored, and reuses the page's existing card vocabulary.
+fn build_corroboration_section(hits: &[birdnet_db::sqlite::ConcurrentDetection]) -> String {
+    if hits.is_empty() {
+        return String::new();
+    }
+    let mut rows = String::new();
+    for h in hits {
+        let _ = write!(
+            rows,
+            r#"<tr><td><span class="bnb-pill">{src}</span></td><td class="mono">{time}</td><td class="mono">{conf:.0}%</td></tr>"#,
+            src = escape_html(&h.source),
+            time = escape_html(h.time.get(0..8).unwrap_or(&h.time)),
+            conf = h.confidence * 100.0,
+        );
+    }
+    let label = if hits.len() == 1 { "source" } else { "sources" };
+    format!(
+        r#"<div class="bnb-card pad">
+  <div class="section-header"><div><div class="bnb-eyebrow">Multi-stream</div><h3>Also heard by</h3></div><span class="bnb-pill moss">{n} {label}</span></div>
+  <p class="bnb-meta">Other audio sources detected this species at nearly the same time — corroboration that it's a real detection.</p>
+  <table>
+    <tr><td class="bnb-meta">Source</td><td class="bnb-meta">Time</td><td class="bnb-meta">Confidence</td></tr>
+    {rows}
+  </table>
+</div>"#,
+        n = hits.len(),
     )
 }
 
@@ -317,8 +377,29 @@ fn not_found_page(date: &str, time: &str, headers: &HeaderMap) -> Html<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::build_correlation_section;
-    use birdnet_db::sqlite::DetectionRow;
+    use super::{build_correlation_section, build_corroboration_section};
+    use birdnet_db::sqlite::{ConcurrentDetection, DetectionRow};
+
+    #[test]
+    fn corroboration_section_empty_when_no_hits() {
+        assert_eq!(build_corroboration_section(&[]), "");
+    }
+
+    #[test]
+    fn corroboration_section_lists_other_sources() {
+        let hits = vec![ConcurrentDetection {
+            source: "cam2".into(),
+            time: "06:00:05".into(),
+            confidence: 0.85,
+        }];
+        let html = build_corroboration_section(&hits);
+        assert!(html.contains("Also heard by"), "should render the card");
+        assert!(
+            html.contains("cam2"),
+            "should list the corroborating source"
+        );
+        assert!(html.contains("85%"), "should show the confidence");
+    }
 
     fn row_with_id(id: Option<&str>) -> DetectionRow {
         DetectionRow {
@@ -335,6 +416,7 @@ mod tests {
             overlap: None,
             file_name: None,
             correlation_id: id.map(str::to_owned),
+            source: None,
         }
     }
 

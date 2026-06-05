@@ -395,14 +395,20 @@ else
     warn "Check progress with:  cd $(pwd) && docker compose logs -f birdnet"
 fi
 say ""
-if [ -n "$MDNS_HOST" ]; then
-say "  ${BLD}Dashboard:${RST}   http://${MDNS_HOST}:${WEB_PORT}   (works from any device on your network)"
-say "               http://${LAN_IP}:${WEB_PORT}   (same dashboard, by IP — if the .local name doesn't resolve)"
-else
-say "  ${BLD}Dashboard:${RST}   http://${LAN_IP}:${WEB_PORT}"
-fi
+# Lead with the IP: it works for every device on the LAN. The mDNS `.local`
+# name is friendlier but NOT universal — some phones / networks never resolve
+# it — so it is a clearly-secondary convenience, never the only address shown.
 if [ "$LAN_IP" != "localhost" ]; then
-say "               http://localhost:${WEB_PORT}  (from this machine)"
+    say "  ${BLD}Dashboard:${RST}   http://${LAN_IP}:${WEB_PORT}   (works from any device on your network)"
+    [ -n "$MDNS_HOST" ] && say "               http://${MDNS_HOST}:${WEB_PORT}   (friendlier name — works on most devices, but not all)"
+    say "               http://localhost:${WEB_PORT}  (from this machine)"
+    if command -v qrencode >/dev/null 2>&1; then
+        say ""
+        say "  ${BLD}Scan to open on your phone${RST} (same Wi-Fi network):"
+        qrencode -t ANSIUTF8 -m 2 "http://${LAN_IP}:${WEB_PORT}" 2>/dev/null | sed 's/^/    /' || true
+    fi
+else
+    say "  ${BLD}Dashboard:${RST}   http://localhost:${WEB_PORT}  (from this machine)"
 fi
 say ""
 say "  ${BLD}Working dir:${RST}   $(pwd)"

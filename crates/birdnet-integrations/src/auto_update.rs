@@ -567,17 +567,42 @@ fn verify_integrity(bytes: &[u8], expected_hex: &str) -> Result<(), UpdateError>
 /// Returns `UpdateError::SmokeTest` if the binary cannot be executed or exits
 /// non-zero.
 fn smoke_test_binary(path: &Path) -> Result<(), UpdateError> {
-    let output = Command::new(path)
-        .arg("--version")
-        .output()
-        .map_err(|e| UpdateError::SmokeTest(format!("cannot execute staged binary: {e}")))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(UpdateError::SmokeTest(format!(
-            "staged binary `--version` exited with {}",
-            output.status
-        )))
+    // Executing a binary we have just written can transiently fail to *spawn*:
+    // ETXTBSY ("text file busy") when a concurrent fork in another thread still
+    // holds a writable descriptor to the freshly-staged file, or EAGAIN under
+    // fork pressure. Both clear within milliseconds, so retry the spawn a few
+    // times rather than failing a perfectly good update (or flaking a parallel
+    // test run). A genuinely unrunnable binary (missing, not executable) yields
+    // a permanent error kind, is not retried, and still surfaces immediately.
+    const MAX_ATTEMPTS: u32 = 5;
+    let mut attempt: u32 = 0;
+    loop {
+        attempt += 1;
+        match Command::new(path).arg("--version").output() {
+            Ok(output) if output.status.success() => return Ok(()),
+            Ok(output) => {
+                return Err(UpdateError::SmokeTest(format!(
+                    "staged binary `--version` exited with {}",
+                    output.status
+                )));
+            }
+            Err(e)
+                if attempt < MAX_ATTEMPTS
+                    && matches!(
+                        e.kind(),
+                        std::io::ErrorKind::ExecutableFileBusy
+                            | std::io::ErrorKind::ResourceBusy
+                            | std::io::ErrorKind::WouldBlock
+                    ) =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(20 * u64::from(attempt)));
+            }
+            Err(e) => {
+                return Err(UpdateError::SmokeTest(format!(
+                    "cannot execute staged binary: {e}"
+                )));
+            }
+        }
     }
 }
 

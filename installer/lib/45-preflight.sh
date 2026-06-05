@@ -40,6 +40,12 @@ check_required_tools() {
     command -v getent  &>/dev/null || warn "getent not found — falling back to default data paths."
     command -v findmnt &>/dev/null || warn "findmnt not found — cannot confirm /tmp is tmpfs."
     command -v arecord &>/dev/null || true   # only needed for ALSA auto-detect
+    # qrencode is optional: it lets the final summary print a scannable QR of the
+    # dashboard URL so a phone can open it without anyone typing an IP. Best-effort
+    # and silent — a missing QR helper must never fail or slow the install.
+    if ! command -v qrencode &>/dev/null && command -v apt-get &>/dev/null; then
+        apt-get install -y qrencode &>/dev/null || true
+    fi
     success "Required tools present."
 }
 

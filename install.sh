@@ -500,6 +500,12 @@ check_required_tools() {
     command -v getent  &>/dev/null || warn "getent not found — falling back to default data paths."
     command -v findmnt &>/dev/null || warn "findmnt not found — cannot confirm /tmp is tmpfs."
     command -v arecord &>/dev/null || true   # only needed for ALSA auto-detect
+    # qrencode is optional: it lets the final summary print a scannable QR of the
+    # dashboard URL so a phone can open it without anyone typing an IP. Best-effort
+    # and silent — a missing QR helper must never fail or slow the install.
+    if ! command -v qrencode &>/dev/null && command -v apt-get &>/dev/null; then
+        apt-get install -y qrencode &>/dev/null || true
+    fi
     success "Required tools present."
 }
 
@@ -967,14 +973,14 @@ ${lat_line}
 ${lon_line}
 
 # --- Detection ---
-# CONFIDENCE=0.25          # 0.0–1.0, default 0.25
-# SENSITIVITY=1.0          # 0.5–1.5, default 1.0
+# CONFIDENCE=0.7           # 0.0–1.0, default 0.7 (detections below this are discarded)
+# SENSITIVITY=1.25         # 0.5–1.5, default 1.25 (V2.4 models only; V3.0 ignores it)
 # OVERLAP=0.0              # seconds of 3 s analysis window overlap
 # SF_THRESH=0.03           # species-frequency metadata-filter threshold
 # DATABASE_LANG=en
 
 # --- Disk management ---
-# MAX_FILES_SPECIES=100
+# MAX_FILES_SPECIES=0      # 0 = keep all recordings per species; set e.g. 100 to cap
 # DISK_PURGE_THRESHOLD=95
 
 # --- Notifications (Apprise) ---
@@ -1341,10 +1347,13 @@ prompt_station_settings() {
             warn "Passwords did not match — a strong one will be generated instead."
         fi
     fi
-    if yesno "  Restrict the dashboard to THIS device only (advanced, localhost)?" n; then
-        LISTEN_ADDR="127.0.0.1:8502"
-        success "Dashboard restricted to localhost — reach it via an SSH tunnel."
-    fi
+    # The dashboard intentionally binds all interfaces (0.0.0.0:8502) so it is
+    # reachable from a phone or laptop out of the box. Restricting it to this
+    # host is an advanced, easy-to-misfire choice — it strands a non-technical
+    # operator who then "can't open the page" — so it is deliberately NOT a
+    # setup-wizard question. Advanced users opt in explicitly by setting
+    # BIRDNET_LISTEN=127.0.0.1:8502 in the environment or the config file, which
+    # resolve_listen_addr honours (and the installer preserves across re-runs).
 }
 
 # ===== installer/lib/75-start.sh =====
@@ -1744,8 +1753,22 @@ choose_existing_action() {
 # Print post-install instructions
 # ---------------------------------------------------------------------------
 
+# Print a scannable QR of the dashboard URL when possible, so a phone can open
+# the dashboard without anyone typing an IP. Best-effort: needs qrencode and a
+# LAN-reachable host (a localhost-only bind has nothing for another device to
+# scan). The IP URL is encoded on purpose — it always resolves on the LAN,
+# whereas mDNS `.local` is not universal (some phones / networks never resolve it).
+print_dashboard_qr() {
+    local host="$1" port="$2"
+    [ "${host}" = "localhost" ] && return 0
+    command -v qrencode &>/dev/null || return 0
+    echo
+    echo -e "  ${BOLD}Scan to open on your phone${RESET} (same Wi-Fi network):"
+    qrencode -t ANSIUTF8 -m 2 "http://${host}:${port}" 2>/dev/null | sed 's/^/    /' || true
+}
+
 print_summary() {
-    local ip web_host mdns_host browse_host
+    local ip web_host mdns_host
     ip="$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost')"
     # Show the address — and port — the dashboard actually answers on, so an
     # operator who set a custom BIRDNET_LISTEN sees the right URL, not the default.
@@ -1768,7 +1791,6 @@ print_summary() {
         short="$(hostname -s 2>/dev/null || true)"
         [ -n "${short}" ] && mdns_host="${short}.local"
     fi
-    browse_host="${mdns_host:-${web_host}}"
 
     local headline="Installation complete!"
     case "${MODE}" in
@@ -1782,16 +1804,17 @@ print_summary() {
     echo -e "  ${BOLD}Binary:${RESET}  ${INSTALL_DIR}/${BINARY_NAME}"
     echo -e "  ${BOLD}Config:${RESET}  ${CONFIG_FILE}"
     echo -e "  ${BOLD}Data:${RESET}    ${DATA_DIR}"
-    echo -e "  ${BOLD}Web UI:${RESET}  http://${browse_host}:${web_port}"
-    [ -n "${mdns_host}" ] && echo -e "           http://${web_host}:${web_port}  (same dashboard, by IP — if the .local name doesn't resolve)"
+    # Lead with the IP address: it works for every device on the LAN. The mDNS
+    # `.local` name is friendlier but NOT universal — some phones and networks
+    # don't resolve it — so it is shown as a clearly-secondary convenience, never
+    # the only address the operator is handed.
+    echo -e "  ${BOLD}Web UI:${RESET}  http://${web_host}:${web_port}   (works from any device on your network)"
+    [ -n "${mdns_host}" ] && echo -e "           http://${mdns_host}:${web_port}   (friendlier name — works on most devices, but not all)"
+    print_dashboard_qr "${web_host}" "${web_port}"
     echo
     if systemctl is-active --quiet birdnet-behavior.service 2>/dev/null; then
-        echo -e "${GREEN}Your dashboard is live${RESET} — open a web browser to:  ${BOLD}http://${browse_host}:${web_port}${RESET}"
-        if [ -n "${mdns_host}" ]; then
-            echo "  (or http://${web_host}:${web_port} by IP — reachable from any device on your network)"
-        elif [ "${web_host}" != "localhost" ]; then
-            echo "  (reachable from any device on your network)"
-        fi
+        echo -e "${GREEN}Your dashboard is live${RESET} — open a web browser to:  ${BOLD}http://${web_host}:${web_port}${RESET}"
+        [ "${web_host}" != "localhost" ] && echo "  (reachable from any device on your network)"
     else
         echo -e "${BOLD}Next steps:${RESET}"
         echo "  1. Set an audio source (edit as root):  sudo nano ${CONFIG_FILE}"
@@ -1801,7 +1824,7 @@ print_summary() {
         echo "  2. (Optional) Set LATITUDE and LONGITUDE for species filtering."
         echo
         echo "  3. sudo systemctl start birdnet-behavior"
-        echo "  4. Open a web browser to  http://${browse_host}:${web_port}"
+        echo "  4. Open a web browser to  http://${web_host}:${web_port}"
     fi
 
     # Admin login. Viewing the dashboard is open; the admin panel (settings +

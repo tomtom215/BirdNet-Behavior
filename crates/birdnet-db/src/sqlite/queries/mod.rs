@@ -23,9 +23,10 @@ pub use detection_reviews::{
     unreviewed_recent_detections,
 };
 pub use detections::{
-    all_detections, delete_detection, detection_count, detection_count_for_date,
-    detection_count_for_species_date, detection_dates, detections_by_date, detections_by_species,
-    insert_detection, is_detection_locked, lock_detection, locked_file_names, recent_detections,
+    all_detections, best_detections_for_date, concurrent_detections_from_other_sources,
+    delete_detection, detection_count, detection_count_for_date, detection_count_for_species_date,
+    detection_dates, detections_by_date, detections_by_species, insert_detection,
+    is_detection_locked, lock_detection, locked_file_names, recent_detections,
     recent_detections_page, relabel_detection, species_for_date, todays_detection_count,
     todays_detections, unlock_detection,
 };
@@ -43,5 +44,6 @@ pub use quarantine::{
 pub use species::{
     SpeciesThreshold, delete_species_threshold, get_species_threshold_map, get_species_thresholds,
     recent_by_species, search_species, set_species_threshold, species_count, species_daily_counts,
-    species_first_seen, species_hourly_activity, species_sparklines, species_summary, top_species,
+    species_first_seen, species_hourly_activity, species_hourly_activity_batch, species_sparklines,
+    species_summary, top_species,
 };

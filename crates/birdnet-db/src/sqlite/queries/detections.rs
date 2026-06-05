@@ -3,7 +3,9 @@
 use rusqlite::{Connection, params};
 
 use crate::sqlite::connection::DbError;
-use crate::sqlite::types::{DETECTION_COLS, DetectionRecord, DetectionRow, map_detection_row};
+use crate::sqlite::types::{
+    ConcurrentDetection, DETECTION_COLS, DetectionRecord, DetectionRow, map_detection_row,
+};
 
 /// Insert a detection record into the database.
 ///
@@ -18,8 +20,8 @@ pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Resu
     // this write path working unchanged.
     conn.execute(
         "INSERT INTO detections \
-         (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, chunk_offset_secs, correlation_id) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+         (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, chunk_offset_secs, correlation_id, Source) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
             record.date,
             record.time,
@@ -35,6 +37,7 @@ pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Resu
             record.file_name,
             record.chunk_offset_secs,
             record.correlation_id,
+            record.source,
         ],
     )?;
     Ok(())
@@ -109,6 +112,76 @@ pub fn recent_detections(conn: &Connection, limit: u32) -> Result<Vec<DetectionR
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
         .query_map(params![limit], map_detection_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Highest-confidence detections for a given date that have a playable clip.
+///
+/// Powers the dashboard "best recordings" at-a-glance widget (BirdNET-Pi
+/// parity): the day's most confident detections, each with audio. Rows with no
+/// recording file are excluded so every result is playable.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn best_detections_for_date(
+    conn: &Connection,
+    date: &str,
+    limit: u32,
+) -> Result<Vec<DetectionRow>, DbError> {
+    let sql = format!(
+        "SELECT {DETECTION_COLS} FROM detections \
+         WHERE Date = ?1 AND File_Name IS NOT NULL AND TRIM(File_Name) <> '' \
+         ORDER BY Confidence DESC, Time DESC LIMIT ?2"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(params![date, limit], map_detection_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Detections of the same species from **other** audio sources within
+/// `window_secs` of the given detection's instant.
+///
+/// Powers the multi-stream "also heard by" corroboration display — purely
+/// read-only, never collapses or hides anything. Only rows with a non-NULL
+/// `Source` different from `exclude_source` are returned, ordered by closeness
+/// in time. A ±1-day `Date` bound keeps the scan tight (and correct across a
+/// midnight-straddling window) so a very common species stays cheap.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn concurrent_detections_from_other_sources(
+    conn: &Connection,
+    date: &str,
+    time: &str,
+    sci_name: &str,
+    exclude_source: &str,
+    window_secs: f64,
+    limit: u32,
+) -> Result<Vec<ConcurrentDetection>, DbError> {
+    let sql = "SELECT Source, Time, Confidence FROM detections \
+               WHERE Sci_Name = ?1 \
+                 AND Source IS NOT NULL AND Source <> ?2 \
+                 AND Date >= date(?3, '-1 day') AND Date <= date(?3, '+1 day') \
+                 AND ABS((julianday(Date || ' ' || Time) - julianday(?3 || ' ' || ?4)) * 86400.0) <= ?5 \
+               ORDER BY ABS(julianday(Date || ' ' || Time) - julianday(?3 || ' ' || ?4)) ASC, Source \
+               LIMIT ?6";
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt
+        .query_map(
+            params![sci_name, exclude_source, date, time, window_secs, limit],
+            |row| {
+                Ok(ConcurrentDetection {
+                    source: row.get(0)?,
+                    time: row.get(1)?,
+                    confidence: row.get(2)?,
+                })
+            },
+        )?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -588,6 +661,7 @@ mod tests {
             file_name: "test.wav",
             chunk_offset_secs: Some(0.0),
             correlation_id: None,
+            source: None,
         };
         insert_detection(&conn, &record).unwrap();
         assert_eq!(detection_count(&conn).unwrap(), 1);
@@ -599,6 +673,163 @@ mod tests {
         let rows = detections_by_date(&conn, "2026-03-11").unwrap();
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].time, "07:00:00");
+    }
+
+    #[test]
+    fn best_detections_for_date_orders_by_confidence_and_requires_clip() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_or_create(tmp.path()).unwrap();
+        for (date, time, sci, com, conf, file) in [
+            // Target day, with clips:
+            (
+                "2026-03-11",
+                "06:30:00",
+                "Turdus merula",
+                "Blackbird",
+                0.80,
+                Some("a.wav"),
+            ),
+            (
+                "2026-03-11",
+                "06:45:00",
+                "Erithacus rubecula",
+                "Robin",
+                0.95,
+                Some("b.wav"),
+            ),
+            // Target day, highest confidence but NO clip → must be excluded:
+            (
+                "2026-03-11",
+                "07:00:00",
+                "Parus major",
+                "Great Tit",
+                0.99,
+                None,
+            ),
+            // Another day → must be excluded by the date filter:
+            (
+                "2026-03-10",
+                "18:00:00",
+                "Cyanistes caeruleus",
+                "Blue Tit",
+                0.99,
+                Some("c.wav"),
+            ),
+        ] {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name) VALUES (?1,?2,?3,?4,?5,?6)",
+                params![date, time, sci, com, conf, file],
+            )
+            .unwrap();
+        }
+        let rows = best_detections_for_date(&conn, "2026-03-11", 5).unwrap();
+        // Only the two clipped target-day rows, most confident first.
+        assert_eq!(
+            rows.len(),
+            2,
+            "clip-less and other-day rows must be excluded"
+        );
+        assert_eq!(rows[0].com_name, "Robin"); // 0.95
+        assert_eq!(rows[1].com_name, "Blackbird"); // 0.80
+    }
+
+    #[test]
+    fn source_column_tags_streams_and_leaves_historical_null() {
+        // Stage 1 contract: a new detection is tagged with its stream/source
+        // label; a row written without a source (historical / imported) stays
+        // NULL and reads back as None — non-destructive.
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_or_create(tmp.path()).unwrap();
+        let tagged = DetectionRecord {
+            date: "2026-05-19",
+            time: "06:00:00",
+            sci_name: "Pica pica",
+            com_name: "Eurasian Magpie",
+            confidence: 0.9,
+            lat: None,
+            lon: None,
+            cutoff: None,
+            week: None,
+            sensitivity: None,
+            overlap: None,
+            file_name: "2026-05-19-birdnet-cam1-06:00:00.wav",
+            chunk_offset_secs: Some(0.0),
+            correlation_id: None,
+            source: Some("cam1"),
+        };
+        // A second row at a different second with no source = the historical
+        // shape (e.g. an imported BirdNET-Pi row).
+        let untagged = DetectionRecord {
+            time: "06:00:01",
+            source: None,
+            ..tagged.clone()
+        };
+        insert_detection(&conn, &tagged).unwrap();
+        insert_detection(&conn, &untagged).unwrap();
+
+        let by_time: std::collections::HashMap<String, Option<String>> =
+            recent_detections(&conn, 10)
+                .unwrap()
+                .into_iter()
+                .map(|r| (r.time, r.source))
+                .collect();
+        assert_eq!(by_time["06:00:00"].as_deref(), Some("cam1"));
+        assert_eq!(
+            by_time["06:00:01"], None,
+            "untagged row must read back NULL"
+        );
+    }
+
+    #[test]
+    fn concurrent_detections_finds_other_sources_within_window() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_or_create(tmp.path()).unwrap();
+        let insert = |time: &str, sci: &str, src: Option<&str>, conf: f64| {
+            let r = DetectionRecord {
+                date: "2026-05-19",
+                time,
+                sci_name: sci,
+                com_name: "X",
+                confidence: conf,
+                lat: None,
+                lon: None,
+                cutoff: None,
+                week: None,
+                sensitivity: None,
+                overlap: None,
+                file_name: "f.wav",
+                chunk_offset_secs: Some(0.0),
+                correlation_id: None,
+                source: src,
+            };
+            insert_detection(&conn, &r).unwrap();
+        };
+        // "This" detection on cam1, plus: a concurrent cam2 (within window),
+        // a far-off cam3 (outside window), a same-source cam1 (excluded), and a
+        // different species on cam2 (excluded).
+        insert("06:00:00", "Pica pica", Some("cam1"), 0.90);
+        insert("06:00:05", "Pica pica", Some("cam2"), 0.85);
+        insert("06:02:00", "Pica pica", Some("cam3"), 0.80);
+        insert("06:00:03", "Pica pica", Some("cam1"), 0.70);
+        insert("06:00:04", "Erithacus rubecula", Some("cam2"), 0.95);
+
+        let hits = concurrent_detections_from_other_sources(
+            &conn,
+            "2026-05-19",
+            "06:00:00",
+            "Pica pica",
+            "cam1",
+            30.0,
+            8,
+        )
+        .unwrap();
+        assert_eq!(
+            hits.len(),
+            1,
+            "only cam2 qualifies (same species, within 30 s, other source)"
+        );
+        assert_eq!(hits[0].source, "cam2");
+        assert_eq!(hits[0].time, "06:00:05");
     }
 
     #[test]
@@ -930,6 +1161,7 @@ mod tests {
             file_name: "test.wav",
             chunk_offset_secs: Some(0.0),
             correlation_id: None,
+            source: None,
         };
 
         insert_detection(&conn, &record).unwrap();
@@ -980,6 +1212,7 @@ mod tests {
             file_name: "magpie.wav",
             chunk_offset_secs: Some(0.0),
             correlation_id: None,
+            source: None,
         };
         insert_detection(&conn, &base).unwrap();
         let chunk2 = DetectionRecord {
@@ -1027,11 +1260,13 @@ mod tests {
             file_name: "magpie.wav",
             chunk_offset_secs: Some(0.0),
             correlation_id: Some("e-20260519-abc123"),
+            source: Some("local"),
         };
         insert_detection(&conn, &record).unwrap();
         let rows = recent_detections(&conn, 10).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].correlation_id.as_deref(), Some("e-20260519-abc123"));
+        assert_eq!(rows[0].source.as_deref(), Some("local"));
     }
 
     #[test]
@@ -1213,6 +1448,7 @@ mod tests {
                 file_name: if cid == Some("e-A") { "a.wav" } else { "b.wav" },
                 chunk_offset_secs: Some(offset),
                 correlation_id: cid,
+                source: None,
             };
             insert_detection(&conn, &r).unwrap();
         }

@@ -258,11 +258,19 @@ async fn run_handler(
         progress.set_stage(MigrationStage::Detecting, "Detecting schema…");
         match birdnet_migrate::birdnet_pi::run_migration(&source_path, &dest_path, false, &progress)
         {
-            Ok(s) => tracing::info!(
-                imported = s.imported_rows,
-                skipped = s.skipped_rows,
-                "migration completed"
-            ),
+            Ok(s) => {
+                tracing::info!(
+                    imported = s.imported_rows,
+                    skipped = s.skipped_rows,
+                    "migration completed"
+                );
+                // The import wrote back-dated history straight to SQLite. Rebuild
+                // the DuckDB analytics copy so that history reaches the
+                // behavioural / time-series analytics with its original
+                // timestamps — the incremental startup sync would skip every
+                // imported row as "older than the latest already synced".
+                rebuild_analytics_after_import(&state, &progress);
+            }
             Err(e) => {
                 tracing::error!(error = %e, "migration failed");
                 progress.fail(e.to_string());
@@ -276,6 +284,43 @@ async fn run_handler(
         Toast::warn("Import running — see progress below.").sticky(),
     ))
 }
+
+/// Rebuild the `DuckDB` analytics copy from `SQLite` after a successful import
+/// and surface the step in the migration progress UI.
+///
+/// Best-effort: the import already succeeded and lives in `SQLite`, so a failed
+/// analytics rebuild is logged and the migration is still reported complete
+/// (a restart re-runs the startup sync). Re-enters a non-terminal stage first
+/// so the progress poller keeps running during the (potentially long) rebuild.
+#[cfg(feature = "analytics")]
+fn rebuild_analytics_after_import(state: &AppState, progress: &ProgressHandle) {
+    if !state.has_analytics() {
+        return;
+    }
+    progress.set_stage(MigrationStage::Verifying, "Rebuilding analytics…");
+    match state.resync_analytics_full() {
+        Some(Ok(rows)) => {
+            tracing::info!(rows, "rebuilt analytics after import");
+            progress.set_stage(
+                MigrationStage::Complete,
+                format!("Import complete — analytics rebuilt ({rows} rows)."),
+            );
+        }
+        Some(Err(e)) => {
+            tracing::warn!(error = %e, "analytics rebuild after import failed (non-fatal)");
+            progress.set_stage(
+                MigrationStage::Complete,
+                "Import complete — analytics rebuild failed; restart to retry.".to_string(),
+            );
+        }
+        None => {}
+    }
+}
+
+/// No-op when the `analytics` feature is disabled: there is no `DuckDB` copy to
+/// rebuild, and `run_migration` has already marked the import complete.
+#[cfg(not(feature = "analytics"))]
+fn rebuild_analytics_after_import(_state: &AppState, _progress: &ProgressHandle) {}
 
 // ---------------------------------------------------------------------------
 // GET /admin/migrate/progress

@@ -78,6 +78,19 @@
     </div>
 </div>
 
+<div class="bnb-card pad">
+    <div class="section-header">
+        <div>
+            <div class="bnb-eyebrow">Today · highest confidence</div>
+            <h3>Best recordings</h3>
+        </div>
+        <a class="action" href="/recordings">Browse all →</a>
+    </div>
+    <div id="best-detections" class="feed" hx-get="/pages/best-detections" hx-trigger="load, every 60s" hx-swap="innerHTML">
+        <p class="bnb-meta">Loading best recordings…</p>
+    </div>
+</div>
+
 <script>
 // Live spectrogram canvas, fed by `/api/v2/ws/spectrogram`. Each WS
 // message carries a flattened mel × time matrix (`data`); we paint it
@@ -90,11 +103,33 @@
 (function () {
     var cnv = document.getElementById('hero-pulse');
     if (!cnv || !cnv.getContext) return;
-    var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     var ctx = cnv.getContext('2d');
     var W = 0, H = 80;
     var lastFrameTime = 0;
-    var IDLE_AFTER_MS = 15000;
+    // Go "idle" only after a gap longer than the capture segment cadence, so a
+    // normal pause between segments doesn't flicker the indicator; a real idle
+    // (no daemon, --web-only, or capture stopped) crosses it quickly.
+    var IDLE_AFTER_MS = 30000;
+    var pill = document.querySelector('.db-live-pill');
+    var pillState = '';
+    // Reflect REAL liveness: "live" only while genuine spectrogram frames are
+    // arriving from the capture device, "idle" otherwise. Never animate a fake
+    // signal that could be mistaken for live audio.
+    function setLive(isLive) {
+        if (!pill) return;
+        var next = isLive ? 'live' : 'idle';
+        if (pillState === next) return;
+        pillState = next;
+        if (isLive) {
+            pill.classList.add('moss');
+            pill.innerHTML = '<span class="bnb-dot live"></span> live';
+            pill.title = 'Live audio from the capture device';
+        } else {
+            pill.classList.remove('moss');
+            pill.innerHTML = '<span class="bnb-dot"></span> idle';
+            pill.title = 'No audio captured recently — the signal updates as new audio is recorded';
+        }
+    }
 
     function dark() {
         return document.documentElement.getAttribute('data-theme') === 'dark';
@@ -115,18 +150,17 @@
     resize();
     window.addEventListener('resize', resize);
 
+    // Honest "no signal" baseline: a flat, static line — NOT an animated
+    // waveform that could be mistaken for live audio.
     function drawIdle() {
         ctx.clearRect(0, 0, W, H);
         ctx.strokeStyle = dark()
-            ? 'oklch(60% 0.04 150 / 0.4)'
-            : 'oklch(55% 0.04 150 / 0.3)';
+            ? 'oklch(60% 0.02 150 / 0.35)'
+            : 'oklch(55% 0.02 150 / 0.28)';
         ctx.lineWidth = 1;
         ctx.beginPath();
-        var t = Date.now() / 1000;
-        for (var x = 0; x < W; x++) {
-            var y = H / 2 + Math.sin((x / W) * Math.PI * 2 + t) * 4;
-            if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-        }
+        ctx.moveTo(0, H / 2);
+        ctx.lineTo(W, H / 2);
         ctx.stroke();
     }
 
@@ -150,19 +184,25 @@
             }
         }
         lastFrameTime = Date.now();
+        setLive(true);
     }
 
     // Idle drawer — repaints the breathing baseline whenever no
     // spectrogram has been received recently. Honours
     // prefers-reduced-motion.
+    // The flat idle baseline is static, so this poll is reduced-motion-safe and
+    // runs regardless of the preference. It flips the indicator to "idle" and
+    // repaints the baseline only once a real frame gap exceeds the threshold.
     function idleLoop() {
         if (Date.now() - lastFrameTime > IDLE_AFTER_MS) {
+            setLive(false);
             drawIdle();
         }
-        if (!reduce) setTimeout(idleLoop, 250);
+        setTimeout(idleLoop, 1000);
     }
+    setLive(false);
     drawIdle();
-    if (!reduce) setTimeout(idleLoop, 250);
+    setTimeout(idleLoop, 1000);
 
     // WebSocket consumer. Failures (no producer, --web-only, WS blocked
     // by a reverse proxy) fall back silently to the idle baseline.

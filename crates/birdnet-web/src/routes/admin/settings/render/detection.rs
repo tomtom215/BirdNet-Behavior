@@ -6,8 +6,15 @@ use std::fmt::Write as _;
 use super::get_setting;
 
 pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
-    let conf = get_setting(s, "confidence_threshold", "0.70");
-    let sens = get_setting(s, "sensitivity", "1.0");
+    // Display default mirrors the daemon's enforced default so the form never
+    // advertises a threshold the station does not apply. `{:.2}` keeps the
+    // familiar two-decimal form (0.70) from the shared 0.7 constant.
+    let conf_default = format!("{:.2}", birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD);
+    let conf = get_setting(s, "confidence_threshold", &conf_default);
+    // Sensitivity default also mirrors the daemon's shared constant (BirdNET-Pi's
+    // 1.25), so the form never advertises a value the station does not apply.
+    let sens_default = format!("{:.2}", birdnet_core::config::DEFAULT_SENSITIVITY);
+    let sens = get_setting(s, "sensitivity", &sens_default);
     let over = get_setting(s, "overlap", "0.0");
     let sf = get_setting(s, "sf_thresh", "0.03");
     let priv_t = get_setting(s, "privacy_threshold", "0.0");
@@ -26,15 +33,15 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         <label for="confidence_threshold">Minimum Confidence (0–1)</label>
         <input id="confidence_threshold" name="confidence_threshold" type="text"
                inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*"
-               value="{conf}" placeholder="0.70">
+               value="{conf}" placeholder="{conf_default}">
         <p class="hint">Detections below this threshold are discarded. Decimal separator: <code>.</code> or <code>,</code> (BirdNET-Pi: CONFIDENCE)</p>
       </div>
       <div>
         <label for="sensitivity">Sensitivity (0.5–1.5)</label>
         <input id="sensitivity" name="sensitivity" type="text"
                inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*"
-               value="{sens}" placeholder="1.0">
-        <p class="hint">Higher = more sensitive, more false positives (BirdNET-Pi: SENSITIVITY)</p>
+               value="{sens}" placeholder="{sens_default}">
+        <p class="hint">Higher = more sensitive, more false positives. Applies to V2.4 models; the bundled V3.0 model uses calibrated probabilities and ignores it (BirdNET-Pi: SENSITIVITY)</p>
       </div>
     </div>
     <div class="grid-2">
@@ -62,4 +69,53 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     </div>
   </div>"#
     ).unwrap_or_default();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn confidence_default_matches_daemon_constant() {
+        // Regression guard for the UI/daemon default drift: with no saved
+        // value the form must show exactly the threshold the daemon enforces
+        // when `CONFIDENCE` is unset, so the operator never sees an advertised
+        // threshold the station does not apply.
+        let mut out = String::new();
+        render(&mut out, &HashMap::new());
+        let expected = format!(
+            r#"value="{:.2}""#,
+            birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD
+        );
+        assert!(
+            out.contains(&expected),
+            "confidence field should default to the shared constant ({expected})"
+        );
+        // And that shared default is BirdNET-Pi's 0.7, not the old 0.25.
+        assert!(
+            (birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD - 0.7).abs() < f32::EPSILON,
+            "default confidence should be 0.7"
+        );
+    }
+
+    #[test]
+    fn sensitivity_default_matches_daemon_constant() {
+        // Same drift guard for sensitivity: the form must show exactly the value
+        // the daemon enforces when `SENSITIVITY` is unset.
+        let mut out = String::new();
+        render(&mut out, &HashMap::new());
+        let expected = format!(
+            r#"value="{:.2}""#,
+            birdnet_core::config::DEFAULT_SENSITIVITY
+        );
+        assert!(
+            out.contains(&expected),
+            "sensitivity field should default to the shared constant ({expected})"
+        );
+        // And that shared default is BirdNET-Pi's 1.25.
+        assert!(
+            (birdnet_core::config::DEFAULT_SENSITIVITY - 1.25).abs() < f32::EPSILON,
+            "default sensitivity should be 1.25"
+        );
+    }
 }

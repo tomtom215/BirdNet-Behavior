@@ -1,8 +1,8 @@
 //! Accounts, sessions, and audit log (O-15).
 //!
 //! This module defines the data shapes and the synchronous `SQLite`-backed
-//! stores for the accounts surface described in
-//! `docs/proposed_changes/O-15_accounts/DIFF.md`. The cookie path that the
+//! stores for the accounts surface described in the O-15 accounts design
+//! proposal. The cookie path that the
 //! `sessions` table binds itself to is plumbed by `birdnet-web::session`
 //! (O-14); these stores stay quiet until the auth wire is flipped — see
 //! the `TODO(O-15-followup)` markers below.

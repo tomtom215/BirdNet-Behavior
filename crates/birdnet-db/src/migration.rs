@@ -289,9 +289,8 @@ pub const MIGRATIONS: &[Migration] = &[
         // TODO(O-15-followup) markers in `accounts.rs` and the auth
         // module for the credential-store migration.
         //
-        // The package's source SQL is at
-        // docs/proposed_changes/O-15_accounts/migrations/009_accounts.sql.
-        // Adapted for this chain:
+        // Adapted from the O-15 accounts proposal's 009_accounts.sql for this
+        // chain:
         //  - Migration version is 14, not 009 (the package was authored
         //    against an earlier numbering scheme — the chain in main has
         //    grown to 13 since).
@@ -355,8 +354,7 @@ pub const MIGRATIONS: &[Migration] = &[
         // the settings table, so the SELECT is typically a no-op — the
         // table just starts empty and the operator adds rows via /admin/audio.
         //
-        // The package's source SQL is at
-        // docs/proposed_changes/O-13_audio_sources/migrations/008_audio_sources.sql.
+        // Adapted from the O-13 audio-sources proposal's 008_audio_sources.sql.
         // Renumbered to 15 (the chain has grown past 008 since the
         // package was authored).
         up_sql: "CREATE TABLE IF NOT EXISTS audio_sources (
@@ -435,6 +433,34 @@ pub const MIGRATIONS: &[Migration] = &[
             fetched_at    TEXT NOT NULL DEFAULT (datetime('now'))
         );
         CREATE INDEX IF NOT EXISTS weather_at ON weather (at DESC);",
+    },
+    Migration {
+        version: 17,
+        description: "Add (Date, Com_Name) composite index for per-species range analytics",
+        // The heaviest analytics queries scan a date range and aggregate by
+        // species: species_sparklines (streamgraph / phenology / diversity),
+        // the co-occurrence self-joins on distinct (Date, Com_Name), and the
+        // phenology year scan. A leading-Date composite covers the range filter
+        // and the species grouping in one index, so these become index-range
+        // scans instead of full-table scans — the biggest single win for
+        // page-to-page navigation on a Raspberry Pi. The existing single-column
+        // idx_detections_date stays for pure date lookups.
+        up_sql: "CREATE INDEX IF NOT EXISTS idx_detections_date_species
+                     ON detections(Date, Com_Name);",
+    },
+    Migration {
+        version: 18,
+        description: "Add Source column to tag detections by audio stream",
+        // Multi-stream stations run several RTSP mics/cameras at once; the same
+        // bird heard by two streams is recorded as two detections (the unique
+        // key includes File_Name, which carries the stream id). To make that
+        // attributable — and to enable an optional, opt-in cross-stream collapse
+        // later — every new detection is tagged with its source label: the RTSP
+        // stream id (e.g. `cam1`) or `local` for the on-board mic. Nullable, so
+        // historical / imported BirdNET-Pi rows (unknown source) stay NULL and
+        // nothing is rewritten. Indexed for per-source filtering and grouping.
+        up_sql: "ALTER TABLE detections ADD COLUMN Source TEXT;
+                 CREATE INDEX IF NOT EXISTS idx_detections_source ON detections(Source);",
     },
 ];
 

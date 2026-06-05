@@ -93,6 +93,23 @@ pub(crate) const UPDATE_BANNER_HTML: &str =
 /// Phone-only bottom tab bar (O-24), injected before `</body>`.
 pub(crate) const TABBAR_HTML: &str = include_str!("../../../templates/_partial_tabbar.html");
 
+/// Pre-compute and cache the heaviest analytics fragments at their default
+/// parameters.
+///
+/// Called once shortly after startup and then periodically by a background task
+/// so the multi-second aggregate queries behind the Heatmap / phenology /
+/// co-occurrence / time-series pages are already warm when an operator first
+/// opens them — the "pre-warmed queries" that keep page-to-page navigation snappy
+/// on a Raspberry Pi. Each page contributes its own `prewarm`; failures inside a
+/// page are swallowed there (best-effort), so one slow query never blocks the
+/// rest.
+pub fn prewarm_analytics(state: &AppState) {
+    heatmap::prewarm(state);
+    migration::prewarm(state);
+    correlation::prewarm(state);
+    timeseries_dash::prewarm(state);
+}
+
 /// Build all page and partial routes.
 pub fn router() -> Router<AppState> {
     dashboard::router()

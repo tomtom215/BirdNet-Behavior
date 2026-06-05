@@ -18,6 +18,24 @@ use std::path::Path;
 /// Default configuration file path.
 pub const DEFAULT_CONFIG_PATH: &str = "/etc/birdnet/birdnet.conf";
 
+/// Default minimum-confidence threshold for recording a detection.
+///
+/// Matches BirdNET-Pi's `CONFIDENCE` default and is the single source of truth
+/// shared by the detection daemon (the value it enforces when no `CONFIDENCE`
+/// is configured) and the admin settings form (the value it displays), so the
+/// two can never drift apart — a drift that previously let the daemon record at
+/// 0.25 while the UI advertised 0.70.
+pub const DEFAULT_CONFIDENCE_THRESHOLD: f32 = 0.7;
+
+/// Default detection sensitivity, matching BirdNET-Pi's `SENSITIVITY` default.
+///
+/// Like [`DEFAULT_CONFIDENCE_THRESHOLD`], this is shared by the daemon and the
+/// settings form so they cannot drift. Sensitivity is a pre-sigmoid scale factor
+/// that only affects the V2.4 model path; the bundled BirdNET V3.0 model emits
+/// calibrated probabilities and ignores it, so this default is a no-op there and
+/// exists mainly for familiarity and for operators who swap in a V2.4 model.
+pub const DEFAULT_SENSITIVITY: f32 = 1.25;
+
 /// Parsed BirdNET-Pi configuration.
 #[derive(Debug, Clone)]
 pub struct Config {
