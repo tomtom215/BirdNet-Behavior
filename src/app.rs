@@ -283,6 +283,9 @@ pub async fn run(
         });
     }
 
+    // Keep a handle to the state so the graceful-shutdown hook can wake live
+    // WebSocket/SSE handlers (`begin_shutdown`); `build_router` moves `state`.
+    let shutdown_state = state.clone();
     let app = birdnet_web::server::build_router(state);
 
     // Publish Home Assistant MQTT auto-discovery if configured.
@@ -349,13 +352,19 @@ pub async fn run(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal());
+    .with_graceful_shutdown(async move {
+        shutdown_signal().await;
+        // Wake live WebSocket/SSE handlers (dashboard, spectrogram, admin logs)
+        // so they close their sockets and axum's drain finishes in
+        // milliseconds, instead of every restart waiting out SHUTDOWN_GRACE.
+        shutdown_state.begin_shutdown();
+    });
 
-    // Cap the graceful drain. `with_graceful_shutdown` waits for every in-flight
-    // connection to close, but a live WebSocket / event-stream client (the
-    // dashboard keeps one open) never closes on its own — so the process would
-    // hang until systemd SIGKILLs it at TimeoutStopSec. After the signal, give
-    // connections SHUTDOWN_GRACE to finish, then stop waiting and exit.
+    // Backstop the graceful drain. The hook above signals live WebSocket /
+    // event-stream clients (the dashboard keeps one open) to close, so the
+    // drain normally completes at once. SHUTDOWN_GRACE only fires if a
+    // connection ignores the signal — without it a stuck client would hang the
+    // process until systemd SIGKILLs it at TimeoutStopSec.
     tokio::select! {
         res = serve => res?,
         () = shutdown_grace_backstop() => {

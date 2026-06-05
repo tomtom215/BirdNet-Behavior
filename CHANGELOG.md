@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`stop`, `restart`, and upgrades no longer stall ~10 s on every shutdown.**
+  The live dashboard holds a WebSocket open (the listen page a second one, and
+  the admin Live Logs page an SSE stream). On `SIGTERM`, axum's graceful drain
+  waited for those to close on their own, so with any tab open it always hit the
+  `SHUTDOWN_GRACE` cap and force-exited with `shutdown grace elapsed with
+  connection(s) still open`. The server now signals those handlers to close the
+  moment shutdown begins, so the drain finishes in milliseconds and shutdown is
+  clean and quiet. The 10 s cap stays only as a backstop for a client that
+  ignores the close.
+
 ## [0.7.1] - 2026-06-05
 
 ### Fixed

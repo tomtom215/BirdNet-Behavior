@@ -20,8 +20,8 @@ use axum::extract::State;
 use axum::response::{Html, Sse, sse::Event};
 use axum::routing::get;
 use tokio::sync::broadcast;
-use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::{Stream, StreamExt};
+use tokio_stream::Stream;
+use tokio_stream::wrappers::ReceiverStream;
 
 use crate::state::AppState;
 
@@ -121,19 +121,46 @@ async fn log_stream(
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let broadcaster = state.log_broadcaster();
     let recent = broadcaster.recent(50);
-    let rx = broadcaster.subscribe();
+    let mut rx = broadcaster.subscribe();
+    let mut shutdown = state.subscribe_shutdown();
 
-    // Build the stream: first drain recent lines, then follow live
-    let recent_stream =
-        tokio_stream::iter(recent).map(|line| Ok::<Event, Infallible>(log_line_to_event(&line)));
+    // Forward log lines into a bounded channel from a task that also watches the
+    // shutdown latch. When the server begins shutting down the task returns,
+    // ending the SSE stream so this long-lived response stops holding axum's
+    // graceful drain open until the grace backstop force-exits. (tokio-stream
+    // has no `take_until`, so termination is driven explicitly here.)
+    let (tx, out) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(64);
+    tokio::spawn(async move {
+        // Already shutting down? Don't start a long-lived stream at all.
+        let already_shutting_down = *shutdown.borrow_and_update();
+        if already_shutting_down {
+            return;
+        }
+        // Replay the recent backlog first so a (re)connecting client has context.
+        for line in recent {
+            if tx.send(Ok(log_line_to_event(&line))).await.is_err() {
+                return; // client disconnected
+            }
+        }
+        loop {
+            tokio::select! {
+                // Server is shutting down — end the stream so the drain finishes.
+                _ = shutdown.changed() => return,
+                line = rx.recv() => match line {
+                    Ok(line) => {
+                        if tx.send(Ok(log_line_to_event(&line))).await.is_err() {
+                            return; // client disconnected
+                        }
+                    }
+                    // Drop lagged lines (matches the previous filter_map(ok)).
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => return,
+                }
+            }
+        }
+    });
 
-    let live_stream = BroadcastStream::new(rx)
-        .filter_map(std::result::Result::ok)
-        .map(|line| Ok::<Event, Infallible>(log_line_to_event(&line)));
-
-    let combined = recent_stream.chain(live_stream);
-
-    Sse::new(combined).keep_alive(
+    Sse::new(ReceiverStream::new(out)).keep_alive(
         axum::response::sse::KeepAlive::new()
             .interval(Duration::from_secs(15))
             .text("keep-alive"),

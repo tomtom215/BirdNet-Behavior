@@ -13,6 +13,7 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
+use tokio::sync::watch;
 
 use crate::metrics::{self, SharedMetrics};
 use crate::routes::admin::logs::LogBroadcaster;
@@ -48,6 +49,12 @@ struct AppStateInner {
     log_broadcaster: LogBroadcaster,
     /// Broadcast channel for live spectrogram WebSocket streaming.
     spectrogram_broadcast: SpectrogramBroadcast,
+    /// Shutdown latch. Flips from `false` to `true` once, when the server
+    /// begins graceful shutdown. Long-lived streaming handlers (detection and
+    /// spectrogram WebSocket streams, the admin log SSE stream) watch this and
+    /// close promptly so axum's connection drain finishes, instead of holding
+    /// the socket open until the `SHUTDOWN_GRACE` backstop force-exits.
+    shutdown: watch::Sender<bool>,
     /// Localization manager for species common names.
     i18n: Option<RwLock<I18nManager>>,
     /// Custom site name for branding.
@@ -135,6 +142,7 @@ impl AppState {
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 log_broadcaster: LogBroadcaster::new(),
                 spectrogram_broadcast: SpectrogramBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
+                shutdown: watch::channel(false).0,
                 i18n: None,
                 site_name: None,
                 info_site: "ebird".to_string(),
@@ -216,6 +224,7 @@ impl AppState {
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 log_broadcaster: LogBroadcaster::new(),
                 spectrogram_broadcast: SpectrogramBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
+                shutdown: watch::channel(false).0,
                 i18n: None,
                 site_name: None,
                 info_site: "ebird".to_string(),
@@ -245,6 +254,7 @@ impl AppState {
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 log_broadcaster: LogBroadcaster::new(),
                 spectrogram_broadcast: SpectrogramBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
+                shutdown: watch::channel(false).0,
                 i18n: None,
                 site_name: None,
                 info_site: "ebird".to_string(),
@@ -468,6 +478,27 @@ impl AppState {
         self.inner.spectrogram_broadcast.clone()
     }
 
+    /// Subscribe to the shutdown latch.
+    ///
+    /// The returned receiver's value flips to `true` exactly once, when the
+    /// server begins graceful shutdown. Long-lived streaming handlers select on
+    /// this so they stop and let axum's connection drain finish, instead of
+    /// holding the socket open until the `SHUTDOWN_GRACE` backstop force-exits.
+    #[must_use]
+    pub fn subscribe_shutdown(&self) -> watch::Receiver<bool> {
+        self.inner.shutdown.subscribe()
+    }
+
+    /// Signal every live connection to close. Called once when shutdown begins.
+    ///
+    /// Uses `send_replace` so the latch is set even when no receiver is
+    /// currently subscribed: a connection still mid-upgrade when the signal
+    /// arrives subscribes afterwards and observes the latched value, so it
+    /// closes promptly rather than wedging the drain.
+    pub fn begin_shutdown(&self) {
+        self.inner.shutdown.send_replace(true);
+    }
+
     /// Execute a closure with a reference to the i18n manager.
     ///
     /// # Panics
@@ -513,5 +544,46 @@ impl AppState {
     #[must_use]
     pub fn detection_daemon_running(&self) -> bool {
         self.inner.detection_daemon_running.load(Ordering::Relaxed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_state() -> AppState {
+        AppState::from_connection(
+            Connection::open_in_memory().expect("open in-memory sqlite"),
+            PathBuf::from("test.db"),
+        )
+    }
+
+    #[tokio::test]
+    async fn shutdown_latch_starts_closed_then_latches_open() {
+        let state = test_state();
+        let mut rx = state.subscribe_shutdown();
+        assert!(!*rx.borrow(), "latch should start closed");
+
+        state.begin_shutdown();
+
+        // Value is already `true`, so `wait_for` resolves immediately — this is
+        // exactly what the streaming handlers observe to close on shutdown.
+        // Copy the bool out so the borrow guard isn't held past this line.
+        let opened = *rx.wait_for(|&v| v).await.expect("sender stays alive");
+        assert!(opened, "latch should be open after begin_shutdown");
+    }
+
+    #[tokio::test]
+    async fn subscribe_after_shutdown_observes_latched_value() {
+        let state = test_state();
+        // No subscribers yet — `send_replace` must still set the latch so a
+        // connection that subscribes during the drain window closes promptly.
+        state.begin_shutdown();
+
+        let mut rx = state.subscribe_shutdown();
+        assert!(
+            *rx.borrow_and_update(),
+            "late subscriber must observe the latched shutdown value"
+        );
     }
 }
