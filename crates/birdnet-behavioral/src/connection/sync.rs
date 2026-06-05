@@ -85,7 +85,10 @@ impl AnalyticsDb {
         // that loaded zero rows.
         self.conn
             .execute_batch(queries::CREATE_DETECTIONS_TS_VIEW)?;
-        tracing::info!(rows = count, "rebuilt DuckDB detections from SQLite (full resync)");
+        tracing::info!(
+            rows = count,
+            "rebuilt DuckDB detections from SQLite (full resync)"
+        );
 
         Ok(count)
     }
@@ -361,8 +364,15 @@ mod tests {
         // A rebuild against an empty source truncates the OLAP copy and leaves a
         // working timestamp view (no rows, but queryable).
         let (db, _tmp) = make_db();
-        db.insert_detection("2026-06-05", "10:00:00", "Parus major", "Great Tit", 0.9, "x.wav")
-            .unwrap();
+        db.insert_detection(
+            "2026-06-05",
+            "10:00:00",
+            "Parus major",
+            "Great Tit",
+            0.9,
+            "x.wav",
+        )
+        .unwrap();
 
         let sqlite_dir = TempDir::new().unwrap();
         let sc = rusqlite::Connection::open(sqlite_dir.path().join("b.db")).unwrap();

@@ -78,6 +78,19 @@
     </div>
 </div>
 
+<div class="bnb-card pad">
+    <div class="section-header">
+        <div>
+            <div class="bnb-eyebrow">Today · highest confidence</div>
+            <h3>Best recordings</h3>
+        </div>
+        <a class="action" href="/recordings">Browse all →</a>
+    </div>
+    <div id="best-detections" class="feed" hx-get="/pages/best-detections" hx-trigger="load, every 60s" hx-swap="innerHTML">
+        <p class="bnb-meta">Loading best recordings…</p>
+    </div>
+</div>
+
 <script>
 // Live spectrogram canvas, fed by `/api/v2/ws/spectrogram`. Each WS
 // message carries a flattened mel × time matrix (`data`); we paint it

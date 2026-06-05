@@ -113,6 +113,32 @@ pub fn recent_detections(conn: &Connection, limit: u32) -> Result<Vec<DetectionR
     Ok(rows)
 }
 
+/// Highest-confidence detections for a given date that have a playable clip.
+///
+/// Powers the dashboard "best recordings" at-a-glance widget (BirdNET-Pi
+/// parity): the day's most confident detections, each with audio. Rows with no
+/// recording file are excluded so every result is playable.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn best_detections_for_date(
+    conn: &Connection,
+    date: &str,
+    limit: u32,
+) -> Result<Vec<DetectionRow>, DbError> {
+    let sql = format!(
+        "SELECT {DETECTION_COLS} FROM detections \
+         WHERE Date = ?1 AND File_Name IS NOT NULL AND TRIM(File_Name) <> '' \
+         ORDER BY Confidence DESC, Time DESC LIMIT ?2"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(params![date, limit], map_detection_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 /// Query recent detections with limit and offset for pagination.
 ///
 /// # Errors
@@ -599,6 +625,64 @@ mod tests {
         let rows = detections_by_date(&conn, "2026-03-11").unwrap();
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].time, "07:00:00");
+    }
+
+    #[test]
+    fn best_detections_for_date_orders_by_confidence_and_requires_clip() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_or_create(tmp.path()).unwrap();
+        for (date, time, sci, com, conf, file) in [
+            // Target day, with clips:
+            (
+                "2026-03-11",
+                "06:30:00",
+                "Turdus merula",
+                "Blackbird",
+                0.80,
+                Some("a.wav"),
+            ),
+            (
+                "2026-03-11",
+                "06:45:00",
+                "Erithacus rubecula",
+                "Robin",
+                0.95,
+                Some("b.wav"),
+            ),
+            // Target day, highest confidence but NO clip → must be excluded:
+            (
+                "2026-03-11",
+                "07:00:00",
+                "Parus major",
+                "Great Tit",
+                0.99,
+                None,
+            ),
+            // Another day → must be excluded by the date filter:
+            (
+                "2026-03-10",
+                "18:00:00",
+                "Cyanistes caeruleus",
+                "Blue Tit",
+                0.99,
+                Some("c.wav"),
+            ),
+        ] {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name) VALUES (?1,?2,?3,?4,?5,?6)",
+                params![date, time, sci, com, conf, file],
+            )
+            .unwrap();
+        }
+        let rows = best_detections_for_date(&conn, "2026-03-11", 5).unwrap();
+        // Only the two clipped target-day rows, most confident first.
+        assert_eq!(
+            rows.len(),
+            2,
+            "clip-less and other-day rows must be excluded"
+        );
+        assert_eq!(rows[0].com_name, "Robin"); // 0.95
+        assert_eq!(rows[1].com_name, "Blackbird"); // 0.80
     }
 
     #[test]

@@ -118,6 +118,53 @@ fn render_feed_row(
 }
 
 // ---------------------------------------------------------------------------
+// Best recordings partial (BirdNET-Pi-style at-a-glance)
+// ---------------------------------------------------------------------------
+
+/// The day's highest-confidence detections that have a playable clip.
+///
+/// Brings back the BirdNET-Pi "best recordings" overview so the most confident
+/// captures of the day are one glance away on the dashboard rather than a hunt
+/// through the recordings browser. Reuses the live-feed row so the look matches.
+pub(super) async fn best_detections_partial(
+    State(state): State<AppState>,
+) -> impl axum::response::IntoResponse {
+    let today = today_date_string();
+    let today_for_query = today.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| {
+            let best = birdnet_db::sqlite::best_detections_for_date(conn, &today_for_query, 5)?;
+            let first_seen = birdnet_db::sqlite::species_first_seen(conn).unwrap_or_default();
+            Ok::<_, birdnet_db::sqlite::DbError>((best, first_seen))
+        })
+    })
+    .await;
+
+    match result {
+        Ok(Ok((best, first_seen))) => {
+            if best.is_empty() {
+                return (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, "text/html")],
+                    r#"<p class="bnb-meta">No recordings yet today — best captures appear here as detections come in.</p>"#
+                        .to_string(),
+                );
+            }
+            let mut html = String::new();
+            for d in &best {
+                render_feed_row(&mut html, d, &first_seen, &today, false);
+            }
+            (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+        }
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading best recordings</p>".to_string(),
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Top species partial
 // ---------------------------------------------------------------------------
 

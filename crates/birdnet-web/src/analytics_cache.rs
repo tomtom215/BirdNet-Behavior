@@ -71,7 +71,9 @@ impl AnalyticsCache {
         let now = Instant::now();
         let mut map = self.lock();
         match map.get(key) {
-            Some(entry) if now.duration_since(entry.stored) <= self.ttl => Some(entry.value.clone()),
+            Some(entry) if now.duration_since(entry.stored) <= self.ttl => {
+                Some(entry.value.clone())
+            }
             Some(_) => {
                 map.remove(key);
                 None
