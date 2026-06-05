@@ -483,13 +483,17 @@ fn ensure_version_table(conn: &Connection) -> Result<(), MigrationError> {
 /// Returns `MigrationError` on query failure.
 pub fn current_version(conn: &Connection) -> Result<u32, MigrationError> {
     ensure_version_table(conn)?;
-    let version: u32 = conn
-        .query_row(
-            "SELECT COALESCE(MAX(version), 0) FROM schema_version",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
+    // Propagate the error rather than swallowing it with `unwrap_or(0)`.
+    // `COALESCE(MAX(version), 0)` already returns 0 for the empty table, so the
+    // only thing `unwrap_or(0)` ever masked was a *real* error (e.g. a transient
+    // `SQLITE_BUSY` past the busy timeout) — which would report version 0 on an
+    // already-migrated DB and make `migrate` re-apply migration 1, hitting a
+    // PRIMARY KEY conflict and turning a momentary lock into a fatal startup.
+    let version: u32 = conn.query_row(
+        "SELECT COALESCE(MAX(version), 0) FROM schema_version",
+        [],
+        |row| row.get(0),
+    )?;
     Ok(version)
 }
 

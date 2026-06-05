@@ -67,9 +67,23 @@ impl From<std::io::Error> for ResilienceError {
 /// Returns `ResilienceError` if the database cannot be opened or WAL cannot be set.
 pub fn enforce_wal_mode(db_path: &Path) -> Result<(), ResilienceError> {
     let conn = Connection::open(db_path)?;
+    // `PRAGMA journal_mode=WAL` returns the *resulting* mode and silently stays
+    // in the previous mode (e.g. `delete`) on filesystems that can't back WAL's
+    // shared-memory index — some network mounts and container overlay/tmpfs
+    // combos. The whole crash-recovery design assumes WAL, so verify it took.
+    // Warn rather than error: a degraded journal mode is still usable, and
+    // failing here would block startup on those filesystems.
+    let mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
+    if !mode.eq_ignore_ascii_case("wal") {
+        tracing::warn!(
+            journal_mode = %mode,
+            path = %db_path.display(),
+            "could not enable WAL journal mode (filesystem may not support it); \
+             crash resilience is reduced — incomplete writes may not roll back cleanly"
+        );
+    }
     conn.execute_batch(
-        "PRAGMA journal_mode=WAL;
-         PRAGMA synchronous=NORMAL;
+        "PRAGMA synchronous=NORMAL;
          PRAGMA wal_autocheckpoint=1000;",
     )?;
     Ok(())
@@ -230,9 +244,16 @@ pub fn restore_from_backup(backup_path: &Path, db_path: &Path) -> Result<(), Res
     // Remove corrupt destination if it exists (cannot open corrupt files with SQLite)
     if db_path.exists() {
         std::fs::remove_file(db_path)?;
-        // Also remove WAL/SHM journal files if present
-        let wal_path = db_path.with_extension("db-wal");
-        let shm_path = db_path.with_extension("db-shm");
+        // Also remove WAL/SHM journal files if present. Use `with_suffix` (raw
+        // append) rather than `with_extension`: the WAL/SHM sidecars are
+        // `<db_path>-wal` / `-shm`, and `with_extension("db-wal")` only produces
+        // that for a path literally ending in `.db`. For any other name (e.g.
+        // `/data/station` or `my.archive.db`) it would target the wrong file and
+        // leave the real sidecars attached to the freshly restored DB, risking
+        // re-corruption — the same bug `quarantine_corrupt_database` already
+        // avoids with `with_suffix`.
+        let wal_path = with_suffix(db_path, "-wal");
+        let shm_path = with_suffix(db_path, "-shm");
         if let Err(e) = std::fs::remove_file(&wal_path)
             && e.kind() != std::io::ErrorKind::NotFound
         {

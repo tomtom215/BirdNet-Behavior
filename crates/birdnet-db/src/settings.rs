@@ -250,18 +250,27 @@ pub fn set_many(
     conn: &Connection,
     items: &[(&str, &str, SettingsCategory)],
 ) -> Result<(), SettingsError> {
-    let mut stmt = conn.prepare(
-        "INSERT INTO settings (key, value, category, updated_at)
-         VALUES (?1, ?2, ?3, datetime('now'))
-         ON CONFLICT(key) DO UPDATE SET
-             value      = excluded.value,
-             category   = excluded.category,
-             updated_at = datetime('now')",
-    )?;
+    // Atomic: either every upsert lands or none does. `set_many` powers the
+    // onboarding wizard and the admin Settings save, where a mid-list failure
+    // must not persist a half-applied config (e.g. a new latitude without its
+    // matching longitude). `unchecked_transaction` takes `&self` so this keeps
+    // the shared-`&Connection` signature, matching `approve_quarantine`/`migrate`.
+    let tx = conn.unchecked_transaction()?;
+    {
+        let mut stmt = tx.prepare(
+            "INSERT INTO settings (key, value, category, updated_at)
+             VALUES (?1, ?2, ?3, datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET
+                 value      = excluded.value,
+                 category   = excluded.category,
+                 updated_at = datetime('now')",
+        )?;
 
-    for (key, value, category) in items {
-        stmt.execute(params![key, value, category.as_str()])?;
+        for (key, value, category) in items {
+            stmt.execute(params![key, value, category.as_str()])?;
+        }
     }
+    tx.commit()?;
 
     Ok(())
 }
