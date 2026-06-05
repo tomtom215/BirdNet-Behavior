@@ -974,13 +974,13 @@ ${lon_line}
 
 # --- Detection ---
 # CONFIDENCE=0.7           # 0.0–1.0, default 0.7 (detections below this are discarded)
-# SENSITIVITY=1.0          # 0.5–1.5, default 1.0
+# SENSITIVITY=1.25         # 0.5–1.5, default 1.25 (V2.4 models only; V3.0 ignores it)
 # OVERLAP=0.0              # seconds of 3 s analysis window overlap
 # SF_THRESH=0.03           # species-frequency metadata-filter threshold
 # DATABASE_LANG=en
 
 # --- Disk management ---
-# MAX_FILES_SPECIES=100
+# MAX_FILES_SPECIES=0      # 0 = keep all recordings per species; set e.g. 100 to cap
 # DISK_PURGE_THRESHOLD=95
 
 # --- Notifications (Apprise) ---
