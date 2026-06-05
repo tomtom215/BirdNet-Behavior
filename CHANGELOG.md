@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-06-05
+
+### Fixed
+
+- **Imported history now reaches the behavioural analytics with its original
+  timestamps.** A BirdNET-Pi import writes back-dated detections straight to
+  SQLite, but the DuckDB analytics copy only ever synced *incrementally* (rows
+  newer than the latest already synced) and was never refreshed after an import —
+  so a year of imported history was silently invisible to the behavioural and
+  time-series dashboards. The import now rebuilds the DuckDB copy in full once the
+  rows land, and the migration progress UI shows the "Rebuilding analytics…" step.
+- **The confidence threshold is no longer advertised at one value and enforced at
+  another.** The detection daemon defaulted to recording everything ≥ 0.25 while
+  the settings form displayed 0.70, so a stock station recorded far more than the
+  operator believed. Both now read a single shared default (0.7, matching
+  BirdNET-Pi), and the installer's documented default matches.
+- **The System page disk panel shows real filesystem usage.** It previously
+  reported only the database file's size; it now reports actual used/free space
+  for the data filesystem (with a "running low" / "critically low" note) — the
+  metric that determines whether recording will run out of room.
+- **CPU temperature now reads on a Raspberry Pi.** `sysinfo`'s component sensors
+  are routinely empty on a Pi; the System page now falls back to the Linux
+  thermal-zone sysfs (`/sys/class/thermal`), preferring the CPU/SoC zone.
+- **The dashboard "live signal" is honest.** The idle state no longer animates a
+  synthetic sine wave that could be mistaken for live audio — it draws a flat
+  baseline, and the indicator reads "live" only while genuine spectrogram frames
+  are arriving from the capture device, "idle" otherwise.
+- **First-run setup no longer offers a lockout footgun.** The interactive
+  installer dropped the "Restrict the dashboard to THIS device only?" prompt that
+  could strand a non-technical operator on localhost; the restriction remains an
+  explicit, advanced `BIRDNET_LISTEN=127.0.0.1:8502` knob.
+
+### Added
+
+- **A pre-warmed query cache for the heavy analytics.** A short-TTL in-memory
+  cache now backs the heaviest fragments on the Heatmap, Migration/phenology,
+  Co-occurrence, and Time-series (DuckDB) pages, and a background task pre-warms
+  the default views shortly after startup and every few minutes after — so jumping
+  between analytics pages is snappy on a Raspberry Pi 4 instead of re-running
+  multi-second aggregate scans on every visit. Live surfaces (the detection feed
+  and stat tiles) stay uncached and real-time.
+- **BirdNET-Pi-style "Best recordings" on the dashboard.** A new at-a-glance card
+  shows the day's highest-confidence detections that have a playable clip, so the
+  best captures are one glance away instead of a hunt through the recordings
+  browser.
+- **A composite `(Date, Com_Name)` index** so the per-species date-range
+  aggregates (sparklines, phenology, co-occurrence) are index-range scans rather
+  than full-table scans.
+- **A scannable QR of the dashboard URL** in `install.sh` and `quickstart.sh`, so
+  a phone can open the station without anyone typing an IP (best-effort via
+  `qrencode`).
+
+### Changed
+
+- **The post-install URL is IP-first.** Both installers now lead with the LAN IP
+  (which always resolves on the network) and demote the mDNS `.local` name to a
+  clearly-captioned secondary — mDNS is not universal, and leading with it could
+  leave a phone unable to open the page.
+- **`sysinfo` 0.39.2 → 0.39.3** for a Linux fix that hardens process-information
+  retrieval when a process exits mid-refresh (supersedes Dependabot #130).
+- **The dawn-chorus query is no longer N+1**: the top species' hourly histograms
+  are fetched in a single grouped scan instead of one query per species.
+
 ## [0.7.0] - 2026-06-04
 
 ### Added
