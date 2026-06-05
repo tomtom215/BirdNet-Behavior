@@ -369,6 +369,32 @@ impl AppState {
         })
     }
 
+    /// Rebuild the `DuckDB` analytics copy from the full `SQLite` detections
+    /// table.
+    ///
+    /// The startup sync is incremental (only rows newer than the latest already
+    /// in `DuckDB`), so a bulk historical import — whose rows are back-dated —
+    /// would otherwise never reach the behavioural / time-series analytics. This
+    /// runs a full rebuild so imported history appears with its original
+    /// timestamps. Returns `None` when analytics is not enabled, otherwise the
+    /// number of rows loaded (or the rebuild error).
+    ///
+    /// # Panics
+    ///
+    /// Panics if either mutex is poisoned.
+    #[cfg(feature = "analytics")]
+    pub fn resync_analytics_full(
+        &self,
+    ) -> Option<Result<u64, birdnet_behavioral::connection::AnalyticsError>> {
+        let analytics = self.inner.analytics_db.as_ref()?;
+        // Lock the SQLite connection first, then analytics — the only ordering
+        // used elsewhere is sequential (the processor writes SQLite then DuckDB
+        // without nesting), so this cannot deadlock.
+        let conn = self.inner.db.lock().expect("database mutex poisoned");
+        let adb = analytics.lock().expect("analytics mutex poisoned");
+        Some(adb.full_resync_from_sqlite(&conn))
+    }
+
     /// Whether the `DuckDB` analytics database is available.
     #[cfg(feature = "analytics")]
     pub fn has_analytics(&self) -> bool {

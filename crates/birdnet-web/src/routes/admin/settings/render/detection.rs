@@ -6,7 +6,11 @@ use std::fmt::Write as _;
 use super::get_setting;
 
 pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
-    let conf = get_setting(s, "confidence_threshold", "0.70");
+    // Display default mirrors the daemon's enforced default so the form never
+    // advertises a threshold the station does not apply. `{:.2}` keeps the
+    // familiar two-decimal form (0.70) from the shared 0.7 constant.
+    let conf_default = format!("{:.2}", birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD);
+    let conf = get_setting(s, "confidence_threshold", &conf_default);
     let sens = get_setting(s, "sensitivity", "1.0");
     let over = get_setting(s, "overlap", "0.0");
     let sf = get_setting(s, "sf_thresh", "0.03");
@@ -26,7 +30,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         <label for="confidence_threshold">Minimum Confidence (0–1)</label>
         <input id="confidence_threshold" name="confidence_threshold" type="text"
                inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*"
-               value="{conf}" placeholder="0.70">
+               value="{conf}" placeholder="{conf_default}">
         <p class="hint">Detections below this threshold are discarded. Decimal separator: <code>.</code> or <code>,</code> (BirdNET-Pi: CONFIDENCE)</p>
       </div>
       <div>
@@ -62,4 +66,32 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     </div>
   </div>"#
     ).unwrap_or_default();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn confidence_default_matches_daemon_constant() {
+        // Regression guard for the UI/daemon default drift: with no saved
+        // value the form must show exactly the threshold the daemon enforces
+        // when `CONFIDENCE` is unset, so the operator never sees an advertised
+        // threshold the station does not apply.
+        let mut out = String::new();
+        render(&mut out, &HashMap::new());
+        let expected = format!(
+            r#"value="{:.2}""#,
+            birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD
+        );
+        assert!(
+            out.contains(&expected),
+            "confidence field should default to the shared constant ({expected})"
+        );
+        // And that shared default is BirdNET-Pi's 0.7, not the old 0.25.
+        assert!(
+            (birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD - 0.7).abs() < f32::EPSILON,
+            "default confidence should be 0.7"
+        );
+    }
 }

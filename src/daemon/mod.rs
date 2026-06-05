@@ -104,7 +104,7 @@ pub fn start_detection_daemon(
 
     let confidence = config
         .and_then(|c| c.get_parsed::<f32>("CONFIDENCE").ok())
-        .unwrap_or(0.25);
+        .unwrap_or(birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD);
 
     let metadata_model_path = cli
         .metadata_model

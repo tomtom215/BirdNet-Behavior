@@ -967,7 +967,7 @@ ${lat_line}
 ${lon_line}
 
 # --- Detection ---
-# CONFIDENCE=0.25          # 0.0–1.0, default 0.25
+# CONFIDENCE=0.7           # 0.0–1.0, default 0.7 (detections below this are discarded)
 # SENSITIVITY=1.0          # 0.5–1.5, default 1.0
 # OVERLAP=0.0              # seconds of 3 s analysis window overlap
 # SF_THRESH=0.03           # species-frequency metadata-filter threshold
