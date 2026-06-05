@@ -1341,10 +1341,13 @@ prompt_station_settings() {
             warn "Passwords did not match — a strong one will be generated instead."
         fi
     fi
-    if yesno "  Restrict the dashboard to THIS device only (advanced, localhost)?" n; then
-        LISTEN_ADDR="127.0.0.1:8502"
-        success "Dashboard restricted to localhost — reach it via an SSH tunnel."
-    fi
+    # The dashboard intentionally binds all interfaces (0.0.0.0:8502) so it is
+    # reachable from a phone or laptop out of the box. Restricting it to this
+    # host is an advanced, easy-to-misfire choice — it strands a non-technical
+    # operator who then "can't open the page" — so it is deliberately NOT a
+    # setup-wizard question. Advanced users opt in explicitly by setting
+    # BIRDNET_LISTEN=127.0.0.1:8502 in the environment or the config file, which
+    # resolve_listen_addr honours (and the installer preserves across re-runs).
 }
 
 # ===== installer/lib/75-start.sh =====
