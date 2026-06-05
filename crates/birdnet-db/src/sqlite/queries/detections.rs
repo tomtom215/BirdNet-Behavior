@@ -721,13 +721,17 @@ mod tests {
         insert_detection(&conn, &tagged).unwrap();
         insert_detection(&conn, &untagged).unwrap();
 
-        let by_time: std::collections::HashMap<String, Option<String>> = recent_detections(&conn, 10)
-            .unwrap()
-            .into_iter()
-            .map(|r| (r.time, r.source))
-            .collect();
+        let by_time: std::collections::HashMap<String, Option<String>> =
+            recent_detections(&conn, 10)
+                .unwrap()
+                .into_iter()
+                .map(|r| (r.time, r.source))
+                .collect();
         assert_eq!(by_time["06:00:00"].as_deref(), Some("cam1"));
-        assert_eq!(by_time["06:00:01"], None, "untagged row must read back NULL");
+        assert_eq!(
+            by_time["06:00:01"], None,
+            "untagged row must read back NULL"
+        );
     }
 
     #[test]
