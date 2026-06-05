@@ -165,30 +165,53 @@ fn arc_gauge(pct: f64, center: &str, label: &str, sub: &str, color: &str) -> Str
     )
 }
 
-/// HTMX partial: disk usage.
+/// HTMX partial: real filesystem disk usage for the data directory.
 async fn sys_disk_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {
     let db_path = state.db_path().to_path_buf();
     let result = tokio::task::spawn_blocking(move || {
-        // Get filesystem stats for the DB directory
-        let dir = db_path.parent().unwrap_or(&db_path);
+        let dir = db_path.parent().unwrap_or(&db_path).to_path_buf();
         let dir_str = dir.to_string_lossy().to_string();
-
-        // Use statvfs via std::fs metadata as a proxy — count directory size
+        // Real statvfs-backed usage for the filesystem the data lives on — the
+        // metric that actually matters for "will recording run out of space".
+        let usage = birdnet_core::audio::capture::disk_usage(&dir).ok();
         let db_size = std::fs::metadata(&db_path).map_or(0, |m| m.len());
-        (dir_str, db_size)
+        (dir_str, usage, db_size)
     })
     .await;
 
     match result {
-        Ok((dir, db_size)) => {
+        Ok((dir, usage, db_size)) => {
             #[allow(clippy::cast_precision_loss)]
             let db_mb = db_size as f64 / 1_048_576.0;
+            let disk_row = usage.map_or_else(
+                || {
+                    String::from(
+                        "<tr><td class=\"sys-th\">Disk Usage</td><td>unavailable</td></tr>",
+                    )
+                },
+                |d| {
+                    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                    let pct = d.used_percent() as u64;
+                    let status = if d.is_critical() {
+                        " — critically low"
+                    } else if d.is_low() {
+                        " — running low"
+                    } else {
+                        ""
+                    };
+                    format!(
+                        "<tr><td class=\"sys-th\">Disk Usage</td>\
+                         <td>{pct}% used · {avail} free of {total}{status}</td></tr>",
+                        avail = crate::system_info::format_bytes(d.available_bytes),
+                        total = crate::system_info::format_bytes(d.total_bytes),
+                    )
+                },
+            );
             let html = format!(
                 "<table class=\"sys-table\">\
-                 <tr><td class=\"sys-th\">Database Path</td>\
-                 <td><code>{dir}</code></td></tr>\
-                 <tr><td class=\"sys-th\">Database Size</td>\
-                 <td>{db_mb:.1} MB</td></tr>\
+                 <tr><td class=\"sys-th\">Database Path</td><td><code>{dir}</code></td></tr>\
+                 {disk_row}\
+                 <tr><td class=\"sys-th\">Database Size</td><td>{db_mb:.1} MB</td></tr>\
                  </table>",
                 dir = escape_html(&dir),
             );

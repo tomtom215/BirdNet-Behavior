@@ -134,13 +134,64 @@ fn sample_cpu_temperature() -> Option<f32> {
     let mut components = Components::new_with_refreshed_list();
     components.refresh(true);
 
-    components
+    let from_sysinfo = components
         .iter()
         .find(|c: &&Component| {
             let label = c.label().to_ascii_lowercase();
             label.contains("cpu") || label.contains("core") || label.contains("package")
         })
-        .and_then(|c: &Component| c.temperature())
+        .and_then(|c: &Component| c.temperature());
+
+    // sysinfo's component sensors are routinely empty on a Raspberry Pi (and
+    // several other ARM SBCs), where the CPU temperature is exposed only through
+    // the thermal-zone sysfs. Fall back to that so the System page shows a real
+    // reading on a Pi instead of a blank.
+    #[cfg(target_os = "linux")]
+    {
+        from_sysinfo.or_else(read_thermal_zone_temp)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        from_sysinfo
+    }
+}
+
+/// Read the CPU temperature from the Linux thermal-zone sysfs (°C).
+///
+/// Prefers a zone whose `type` names the CPU/SoC (e.g. `cpu-thermal` on a
+/// Raspberry Pi, `x86_pkg_temp` on x86); otherwise takes the first zone, since
+/// `thermal_zone0` is the package/CPU on most boards. Zone temperatures are in
+/// millidegrees Celsius; implausible values are rejected so a bogus sensor never
+/// renders a wild reading.
+#[cfg(target_os = "linux")]
+fn read_thermal_zone_temp() -> Option<f32> {
+    let mut zones: Vec<std::path::PathBuf> = std::fs::read_dir("/sys/class/thermal")
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("thermal_zone"))
+        })
+        .collect();
+    zones.sort();
+
+    let cpu_zone = zones.iter().find(|z| {
+        std::fs::read_to_string(z.join("type")).is_ok_and(|t| {
+            let t = t.to_ascii_lowercase();
+            t.contains("cpu") || t.contains("soc") || t.contains("x86_pkg")
+        })
+    });
+    let zone = cpu_zone.or_else(|| zones.first())?;
+
+    let milli: f32 = std::fs::read_to_string(zone.join("temp"))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    let celsius = milli / 1000.0;
+    (celsius > -40.0 && celsius < 150.0).then_some(celsius)
 }
 
 /// Format bytes as human-readable string.
@@ -203,6 +254,16 @@ pub fn process_uptime_secs() -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cpu_temperature_is_plausible_or_absent() {
+        // Whichever path is taken (a sysinfo component sensor or the Linux
+        // thermal-zone fallback), the reading must be a sane Celsius value or
+        // None — never a panic and never a wild number from a misread sensor.
+        if let Some(t) = sample_cpu_temperature() {
+            assert!(t > -40.0 && t < 150.0, "implausible CPU temperature: {t}");
+        }
+    }
 
     #[test]
     fn format_bytes_gib() {
