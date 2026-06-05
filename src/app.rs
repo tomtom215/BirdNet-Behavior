@@ -255,6 +255,32 @@ pub async fn run(
     // abort it; today the loop runs for the lifetime of the process.
     let _weather_poll_handle = integrations::spawn_weather_poll(config.as_ref(), state.clone());
 
+    // Pre-warm the heavy-analytics fragment cache so the first visit to the
+    // Heatmap / phenology pages is instant, then keep it warm on an interval a
+    // little under the cache TTL. Each pass runs the same aggregate queries a
+    // page visit would, on the blocking pool, so it never stalls the runtime;
+    // it is best-effort and decoupled from request handling.
+    {
+        let prewarm_state = state.clone();
+        tokio::spawn(async move {
+            // Let the initial SQLite→DuckDB sync and the first detections settle
+            // before the first (cold) pass.
+            tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(240));
+            loop {
+                tick.tick().await;
+                let s = prewarm_state.clone();
+                if let Err(e) = tokio::task::spawn_blocking(move || {
+                    birdnet_web::routes::pages::prewarm_analytics(&s);
+                })
+                .await
+                {
+                    tracing::debug!(error = %e, "analytics pre-warm pass did not complete");
+                }
+            }
+        });
+    }
+
     let app = birdnet_web::server::build_router(state);
 
     // Publish Home Assistant MQTT auto-discovery if configured.

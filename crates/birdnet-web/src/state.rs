@@ -6,6 +6,8 @@
 #[cfg(feature = "analytics")]
 use birdnet_behavioral::connection::AnalyticsDb;
 use birdnet_core::i18n::I18nManager;
+
+use crate::analytics_cache::AnalyticsCache;
 use birdnet_integrations::species_images::ImageCache;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -67,6 +69,10 @@ struct AppStateInner {
     /// misconfigured model/labels/watch dir). An `Arc<AtomicBool>` so the
     /// orchestrator can flip it after the state has been cloned and shared.
     detection_daemon_running: Arc<AtomicBool>,
+    /// Short-TTL cache for rendered heavy-analytics fragments (streamgraph,
+    /// dawn chorus, phenology, co-occurrence, time-series). Shared so a
+    /// background pre-warmer and the request handlers populate the same store.
+    analytics_cache: Arc<AnalyticsCache>,
 }
 
 /// Unwrap the `Arc<AppStateInner>`, aborting if shared (called during setup only).
@@ -136,6 +142,7 @@ impl AppState {
                 config_path: None,
                 metrics: metrics::new_shared(),
                 detection_daemon_running: Arc::new(AtomicBool::new(false)),
+                analytics_cache: Arc::new(AnalyticsCache::default()),
             }),
         })
     }
@@ -216,6 +223,7 @@ impl AppState {
                 config_path: None,
                 metrics: metrics::new_shared(),
                 detection_daemon_running: Arc::new(AtomicBool::new(false)),
+                analytics_cache: Arc::new(AnalyticsCache::default()),
             }),
         })
     }
@@ -244,6 +252,7 @@ impl AppState {
                 config_path: None,
                 metrics: metrics::new_shared(),
                 detection_daemon_running: Arc::new(AtomicBool::new(false)),
+                analytics_cache: Arc::new(AnalyticsCache::default()),
             }),
         }
     }
@@ -441,6 +450,12 @@ impl AppState {
     #[must_use]
     pub fn metrics(&self) -> SharedMetrics {
         Arc::clone(&self.inner.metrics)
+    }
+
+    /// The shared short-TTL cache for heavy-analytics fragments.
+    #[must_use]
+    pub fn analytics_cache(&self) -> &AnalyticsCache {
+        &self.inner.analytics_cache
     }
 
     /// Get the log broadcaster for SSE admin log streaming.

@@ -436,6 +436,20 @@ pub const MIGRATIONS: &[Migration] = &[
         );
         CREATE INDEX IF NOT EXISTS weather_at ON weather (at DESC);",
     },
+    Migration {
+        version: 17,
+        description: "Add (Date, Com_Name) composite index for per-species range analytics",
+        // The heaviest analytics queries scan a date range and aggregate by
+        // species: species_sparklines (streamgraph / phenology / diversity),
+        // the co-occurrence self-joins on distinct (Date, Com_Name), and the
+        // phenology year scan. A leading-Date composite covers the range filter
+        // and the species grouping in one index, so these become index-range
+        // scans instead of full-table scans — the biggest single win for
+        // page-to-page navigation on a Raspberry Pi. The existing single-column
+        // idx_detections_date stays for pure date lookups.
+        up_sql: "CREATE INDEX IF NOT EXISTS idx_detections_date_species
+                     ON detections(Date, Com_Name);",
+    },
 ];
 
 /// Ensure the `schema_version` tracking table exists.

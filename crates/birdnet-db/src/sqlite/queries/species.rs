@@ -165,6 +165,51 @@ pub fn species_hourly_activity(
     Ok(rows)
 }
 
+/// Hourly activity (0–23 buckets) for several species in a single grouped scan.
+///
+/// Replaces N per-species [`species_hourly_activity`] calls: the dawn-chorus
+/// polar needs the top handful of species and previously ran one full table
+/// scan per species (an N+1). Returns a map from common name to its 24-hour
+/// histogram; a species with no detections is simply absent from the map.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn species_hourly_activity_batch(
+    conn: &Connection,
+    com_names: &[String],
+) -> Result<std::collections::HashMap<String, [i64; 24]>, DbError> {
+    let mut out: std::collections::HashMap<String, [i64; 24]> = std::collections::HashMap::new();
+    if com_names.is_empty() {
+        return Ok(out);
+    }
+    // One bind placeholder per species for the `IN (…)` list.
+    let placeholders = vec!["?"; com_names.len()].join(",");
+    let sql = format!(
+        "SELECT Com_Name, CAST(SUBSTR(Time, 1, 2) AS INTEGER) AS hour, COUNT(*) AS cnt
+         FROM detections
+         WHERE Com_Name IN ({placeholders})
+         GROUP BY Com_Name, hour"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(com_names.iter()), |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)?,
+        ))
+    })?;
+    for row in rows {
+        let (name, hour, cnt) = row?;
+        if let Ok(idx) = usize::try_from(hour)
+            && idx < 24
+        {
+            out.entry(name).or_insert_with(|| [0_i64; 24])[idx] = cnt;
+        }
+    }
+    Ok(out)
+}
+
 /// Query recent detections for a specific species by common name.
 ///
 /// Alias for `crate::sqlite::queries::detections::detections_by_species`

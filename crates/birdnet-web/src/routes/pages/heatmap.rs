@@ -19,11 +19,16 @@ use axum::routing::get;
 use serde::Deserialize;
 
 use birdnet_db::sqlite::{
-    HeatmapCell, hourly_totals, species_hourly_activity, species_sparklines, top_species,
+    HeatmapCell, hourly_totals, species_hourly_activity_batch, species_sparklines, top_species,
     weekly_heatmap,
 };
 
+use crate::analytics_cache::cached_fragment;
 use crate::state::AppState;
+
+/// Fallback body served (uncached) when an analytics fragment query errors, so a
+/// transient failure never pins an error message in the cache for the TTL.
+const FRAGMENT_ERR: &str = r#"<p class="bnb-meta">Analytics temporarily unavailable.</p>"#;
 
 /// Mount heatmap routes.
 pub fn router() -> Router<AppState> {
@@ -125,140 +130,136 @@ document.getElementById('range-controls').addEventListener('click', function(e) 
 // GET /pages/heatmap-grid — SVG heatmap partial
 // ---------------------------------------------------------------------------
 
+/// Compute the hour × day-of-week heatmap SVG, or `None` on a query error.
+fn compute_heatmap_grid(state: &AppState, days: u32) -> Option<String> {
+    state
+        .with_db(|conn| weekly_heatmap(conn, days))
+        .ok()
+        .map(|cells| render_heatmap_svg(&cells))
+}
+
 async fn heatmap_grid_partial(
     State(state): State<AppState>,
     Query(query): Query<HeatmapQuery>,
 ) -> impl axum::response::IntoResponse {
     let days = query.days.unwrap_or(7).min(365);
-    let result =
-        tokio::task::spawn_blocking(move || state.with_db(|conn| weekly_heatmap(conn, days))).await;
-
-    match result {
-        Ok(Ok(cells)) => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/html")],
-            render_heatmap_svg(&cells),
-        ),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading heatmap</p>".to_string(),
-        ),
-    }
+    let html = cached_fragment(
+        &state,
+        format!("heatmap-grid:{days}"),
+        FRAGMENT_ERR,
+        move |s| compute_heatmap_grid(s, days),
+    )
+    .await;
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
 // ---------------------------------------------------------------------------
 // GET /pages/hourly-totals — bar chart partial
 // ---------------------------------------------------------------------------
 
+/// Compute the by-hour bar chart, or `None` on a query error.
+fn compute_hourly_totals(state: &AppState, days: u32) -> Option<String> {
+    state
+        .with_db(|conn| hourly_totals(conn, days))
+        .ok()
+        .map(|totals| render_hourly_bars(&totals))
+}
+
 async fn hourly_totals_partial(
     State(state): State<AppState>,
     Query(query): Query<HeatmapQuery>,
 ) -> impl axum::response::IntoResponse {
     let days = query.days.unwrap_or(7).min(365);
-    let result =
-        tokio::task::spawn_blocking(move || state.with_db(|conn| hourly_totals(conn, days))).await;
-
-    match result {
-        Ok(Ok(totals)) => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/html")],
-            render_hourly_bars(&totals),
-        ),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading hourly totals</p>".to_string(),
-        ),
-    }
+    let html = cached_fragment(
+        &state,
+        format!("hourly-totals:{days}"),
+        FRAGMENT_ERR,
+        move |s| compute_hourly_totals(s, days),
+    )
+    .await;
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
 // ---------------------------------------------------------------------------
 // GET /pages/activity-streamgraph — per-species stacked activity
 // ---------------------------------------------------------------------------
 
+/// Compute the per-species activity streamgraph (top 8), or `None` on error.
+fn compute_streamgraph(state: &AppState, days: u32) -> Option<String> {
+    let map = state.with_db(|conn| species_sparklines(conn, days)).ok()?;
+    let mut series: Vec<(String, Vec<i64>)> = map.into_iter().collect();
+    // Most active species first → stable, readable stacking order.
+    series.sort_by(|a, b| {
+        b.1.iter()
+            .sum::<i64>()
+            .cmp(&a.1.iter().sum::<i64>())
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    series.truncate(8);
+    Some(super::viz::streamgraph(&series))
+}
+
 async fn streamgraph_partial(
     State(state): State<AppState>,
     Query(query): Query<HeatmapQuery>,
 ) -> impl axum::response::IntoResponse {
     let days = query.days.unwrap_or(7).clamp(2, 365);
-    let result =
-        tokio::task::spawn_blocking(move || state.with_db(|conn| species_sparklines(conn, days)))
-            .await;
-
-    match result {
-        Ok(Ok(map)) => {
-            let mut series: Vec<(String, Vec<i64>)> = map.into_iter().collect();
-            // Most active species first → stable, readable stacking order.
-            series.sort_by(|a, b| {
-                b.1.iter()
-                    .sum::<i64>()
-                    .cmp(&a.1.iter().sum::<i64>())
-                    .then_with(|| a.0.cmp(&b.0))
-            });
-            series.truncate(8);
-            (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, "text/html")],
-                super::viz::streamgraph(&series),
-            )
-        }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading streamgraph</p>".to_string(),
-        ),
-    }
+    let html = cached_fragment(
+        &state,
+        format!("streamgraph:{days}"),
+        FRAGMENT_ERR,
+        move |s| compute_streamgraph(s, days),
+    )
+    .await;
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
 // ---------------------------------------------------------------------------
 // GET /pages/dawn-chorus — circadian polar of the top species
 // ---------------------------------------------------------------------------
 
+/// Compute the dawn-chorus circadian polar for the top 5 species.
+///
+/// Uses one batched hourly-activity query rather than a scan per species (the
+/// previous N+1). Always returns `Some`: an empty yard renders an empty polar,
+/// not an error.
 #[allow(clippy::cast_precision_loss)]
-async fn dawn_chorus_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {
-    let series = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
-            let top = top_species(conn, 5).unwrap_or_default();
-            top.iter()
-                .map(|s| {
-                    let mut arr = [0.0_f64; 24];
-                    if let Ok(hours) = species_hourly_activity(conn, &s.com_name) {
-                        for hc in hours {
-                            if let Ok(h) = hc.hour.parse::<usize>()
-                                && h < 24
-                            {
-                                arr[h] = hc.count as f64;
-                            }
-                        }
+fn compute_dawn_chorus(state: &AppState) -> Option<String> {
+    let series = state.with_db(|conn| {
+        let top = top_species(conn, 5).unwrap_or_default();
+        let names: Vec<String> = top.iter().map(|s| s.com_name.clone()).collect();
+        let hourly = species_hourly_activity_batch(conn, &names).unwrap_or_default();
+        top.into_iter()
+            .map(|s| {
+                let mut arr = [0.0_f64; 24];
+                if let Some(counts) = hourly.get(&s.com_name) {
+                    for (i, &c) in counts.iter().enumerate() {
+                        arr[i] = c as f64;
                     }
-                    (s.com_name.clone(), arr)
-                })
-                .collect::<Vec<_>>()
-        })
-    })
-    .await;
-
-    let Ok(series) = series else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading dawn chorus</p>".to_string(),
-        );
-    };
+                }
+                (s.com_name, arr)
+            })
+            .collect::<Vec<_>>()
+    });
     // Current hour-of-day (UTC) for the "now" hand on the polar.
-    #[allow(clippy::cast_precision_loss)]
     let now_h = {
         let secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
         (secs % 86_400) as f64 / 3600.0
     };
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "text/html")],
-        super::viz::circadian_polar(&series, now_h),
+    Some(super::viz::circadian_polar(&series, now_h))
+}
+
+async fn dawn_chorus_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {
+    let html = cached_fragment(
+        &state,
+        "dawn-chorus".to_string(),
+        FRAGMENT_ERR,
+        compute_dawn_chorus,
     )
+    .await;
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
 // ---------------------------------------------------------------------------
@@ -266,42 +267,66 @@ async fn dawn_chorus_partial(State(state): State<AppState>) -> impl axum::respon
 // (the dedicated /migration page owns the canonical /pages/migration-ridgeline)
 // ---------------------------------------------------------------------------
 
+/// Compute the seasonal-phenology ridgeline (top 7 species, weekly buckets over
+/// the year), or `None` on a query error. This is the heaviest single analytics
+/// query (a full year of per-species daily counts), so caching it matters most.
+fn compute_seasonal_phenology(state: &AppState) -> Option<String> {
+    // One dense query for the year, then bucket each species into ~52 weeks.
+    let map = state.with_db(|conn| species_sparklines(conn, 364)).ok()?;
+    let mut ranked: Vec<(String, Vec<i64>)> = map.into_iter().collect();
+    ranked.sort_by(|a, b| {
+        b.1.iter()
+            .sum::<i64>()
+            .cmp(&a.1.iter().sum::<i64>())
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    ranked.truncate(7);
+    let series: Vec<(String, Vec<i64>)> = ranked
+        .into_iter()
+        .map(|(name, daily)| {
+            let weekly: Vec<i64> = daily.chunks(7).map(|c| c.iter().sum()).collect();
+            (name, weekly)
+        })
+        .collect();
+    Some(super::viz::ridgeline(&series))
+}
+
 async fn migration_ridgeline_partial(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
-    // One dense query for the year, then bucket each species into ~52 weeks.
-    let result =
-        tokio::task::spawn_blocking(move || state.with_db(|conn| species_sparklines(conn, 364)))
-            .await;
+    let html = cached_fragment(
+        &state,
+        "seasonal-phenology".to_string(),
+        FRAGMENT_ERR,
+        compute_seasonal_phenology,
+    )
+    .await;
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+}
 
-    match result {
-        Ok(Ok(map)) => {
-            let mut ranked: Vec<(String, Vec<i64>)> = map.into_iter().collect();
-            ranked.sort_by(|a, b| {
-                b.1.iter()
-                    .sum::<i64>()
-                    .cmp(&a.1.iter().sum::<i64>())
-                    .then_with(|| a.0.cmp(&b.0))
-            });
-            ranked.truncate(7);
-            let series: Vec<(String, Vec<i64>)> = ranked
-                .into_iter()
-                .map(|(name, daily)| {
-                    let weekly: Vec<i64> = daily.chunks(7).map(|c| c.iter().sum()).collect();
-                    (name, weekly)
-                })
-                .collect();
-            (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, "text/html")],
-                super::viz::ridgeline(&series),
-            )
-        }
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/html")],
-            "<p>Error loading ridgeline</p>".to_string(),
-        ),
+// ---------------------------------------------------------------------------
+// Pre-warm
+// ---------------------------------------------------------------------------
+
+/// Pre-compute and cache this page's default-range fragments so the first visit
+/// (and each background refresh) is instant. Runs the same `compute_*`
+/// functions the handlers use, under the keys they read.
+pub fn prewarm(state: &AppState) {
+    let cache = state.analytics_cache();
+    if let Some(h) = compute_streamgraph(state, 7) {
+        cache.put("streamgraph:7".to_string(), h);
+    }
+    if let Some(h) = compute_heatmap_grid(state, 7) {
+        cache.put("heatmap-grid:7".to_string(), h);
+    }
+    if let Some(h) = compute_hourly_totals(state, 7) {
+        cache.put("hourly-totals:7".to_string(), h);
+    }
+    if let Some(h) = compute_dawn_chorus(state) {
+        cache.put("dawn-chorus".to_string(), h);
+    }
+    if let Some(h) = compute_seasonal_phenology(state) {
+        cache.put("seasonal-phenology".to_string(), h);
     }
 }
 

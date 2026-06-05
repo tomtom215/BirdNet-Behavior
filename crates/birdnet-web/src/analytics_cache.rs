@@ -21,22 +21,28 @@ use std::time::{Duration, Instant};
 
 /// Default freshness window for cached analytics fragments.
 ///
-/// Aggregate analytics shift slowly relative to the live feed, so a minute of
-/// staleness is imperceptible while turning a multi-second query into an instant
-/// map lookup for the duration.
-pub const DEFAULT_TTL: Duration = Duration::from_secs(60);
+/// The cached surfaces are multi-day / yearly aggregates (streamgraph, hour ×
+/// day grid, phenology, co-occurrence) and load once per page visit rather than
+/// polling, so several minutes of staleness is imperceptible. A longer window
+/// also lets the background pre-warmer keep them hot by running the heavy
+/// queries only every few minutes — gentle on a Raspberry Pi — instead of
+/// continuously. Periodically-polled live surfaces (the dashboard feed and stat
+/// tiles) are deliberately not routed through this cache.
+pub const DEFAULT_TTL: Duration = Duration::from_secs(300);
 
 /// Hard cap on distinct cached keys so an adversarial spread of query
 /// parameters (e.g. `?days=`) cannot grow the map without bound.
 const MAX_ENTRIES: usize = 256;
 
 /// One cached fragment plus the instant it was stored.
+#[derive(Debug)]
 struct Entry {
     value: String,
     stored: Instant,
 }
 
 /// In-memory time-to-live cache keyed by an opaque fragment key.
+#[derive(Debug)]
 pub struct AnalyticsCache {
     entries: Mutex<HashMap<String, Entry>>,
     ttl: Duration,
@@ -148,6 +154,41 @@ impl AnalyticsCache {
 impl Default for AnalyticsCache {
     fn default() -> Self {
         Self::new(DEFAULT_TTL)
+    }
+}
+
+/// Serve a heavy-analytics fragment from cache, computing it on the blocking
+/// pool on a miss.
+///
+/// `compute` runs only on a miss and returns `Some(html)` to cache and serve a
+/// successful render, or `None` to fall through to `fallback` *without* caching
+/// (e.g. on a query error — we never want to pin an error fragment for the TTL).
+/// This is the single integration point the analytics partials and the
+/// background pre-warmer share, so both populate the same store under the same
+/// keys.
+pub async fn cached_fragment<F>(
+    state: &crate::state::AppState,
+    key: String,
+    fallback: &'static str,
+    compute: F,
+) -> String
+where
+    F: FnOnce(&crate::state::AppState) -> Option<String> + Send + 'static,
+{
+    if let Some(hit) = state.analytics_cache().get(&key) {
+        return hit;
+    }
+    let state_for_blocking = state.clone();
+    let computed = tokio::task::spawn_blocking(move || compute(&state_for_blocking))
+        .await
+        .ok()
+        .flatten();
+    match computed {
+        Some(html) => {
+            state.analytics_cache().put(key, html.clone());
+            html
+        }
+        None => fallback.to_string(),
     }
 }
 
