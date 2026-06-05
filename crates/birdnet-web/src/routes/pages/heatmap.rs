@@ -224,7 +224,7 @@ async fn streamgraph_partial(
 /// previous N+1). Always returns `Some`: an empty yard renders an empty polar,
 /// not an error.
 #[allow(clippy::cast_precision_loss)]
-fn compute_dawn_chorus(state: &AppState) -> Option<String> {
+fn compute_dawn_chorus(state: &AppState) -> String {
     let series = state.with_db(|conn| {
         let top = top_species(conn, 5).unwrap_or_default();
         let names: Vec<String> = top.iter().map(|s| s.com_name.clone()).collect();
@@ -248,7 +248,7 @@ fn compute_dawn_chorus(state: &AppState) -> Option<String> {
             .map_or(0, |d| d.as_secs());
         (secs % 86_400) as f64 / 3600.0
     };
-    Some(super::viz::circadian_polar(&series, now_h))
+    super::viz::circadian_polar(&series, now_h)
 }
 
 async fn dawn_chorus_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {
@@ -256,7 +256,7 @@ async fn dawn_chorus_partial(State(state): State<AppState>) -> impl axum::respon
         &state,
         "dawn-chorus".to_string(),
         FRAGMENT_ERR,
-        compute_dawn_chorus,
+        |s| Some(compute_dawn_chorus(s)),
     )
     .await;
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
@@ -267,9 +267,11 @@ async fn dawn_chorus_partial(State(state): State<AppState>) -> impl axum::respon
 // (the dedicated /migration page owns the canonical /pages/migration-ridgeline)
 // ---------------------------------------------------------------------------
 
-/// Compute the seasonal-phenology ridgeline (top 7 species, weekly buckets over
-/// the year), or `None` on a query error. This is the heaviest single analytics
-/// query (a full year of per-species daily counts), so caching it matters most.
+/// Compute the seasonal-phenology ridgeline, or `None` on a query error.
+///
+/// Top 7 species, weekly buckets over the year. This is the heaviest single
+/// analytics query (a full year of per-species daily counts), so caching it
+/// matters most.
 fn compute_seasonal_phenology(state: &AppState) -> Option<String> {
     // One dense query for the year, then bucket each species into ~52 weeks.
     let map = state.with_db(|conn| species_sparklines(conn, 364)).ok()?;
@@ -308,9 +310,10 @@ async fn migration_ridgeline_partial(
 // Pre-warm
 // ---------------------------------------------------------------------------
 
-/// Pre-compute and cache this page's default-range fragments so the first visit
-/// (and each background refresh) is instant. Runs the same `compute_*`
-/// functions the handlers use, under the keys they read.
+/// Pre-compute and cache this page's default-range fragments.
+///
+/// Runs the same `compute_*` functions the handlers use, under the keys they
+/// read, so the first visit (and each background refresh) is instant.
 pub fn prewarm(state: &AppState) {
     let cache = state.analytics_cache();
     if let Some(h) = compute_streamgraph(state, 7) {
@@ -322,9 +325,7 @@ pub fn prewarm(state: &AppState) {
     if let Some(h) = compute_hourly_totals(state, 7) {
         cache.put("hourly-totals:7".to_string(), h);
     }
-    if let Some(h) = compute_dawn_chorus(state) {
-        cache.put("dawn-chorus".to_string(), h);
-    }
+    cache.put("dawn-chorus".to_string(), compute_dawn_chorus(state));
     if let Some(h) = compute_seasonal_phenology(state) {
         cache.put("seasonal-phenology".to_string(), h);
     }

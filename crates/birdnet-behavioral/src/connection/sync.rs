@@ -93,9 +93,10 @@ impl AnalyticsDb {
         Ok(count)
     }
 
-    /// Bulk-append already-read `SQLite` rows into the `DuckDB` `detections`
-    /// table via the appender. Shared by the incremental and full sync paths;
-    /// callers refresh the timestamp view and emit their own log line.
+    /// Bulk-append already-read `SQLite` rows into the `DuckDB` `detections` table.
+    ///
+    /// Shared by the incremental and full sync paths; callers refresh the
+    /// timestamp view and emit their own log line.
     fn append_rows(&self, rows: &[SyncRow]) -> Result<(), AnalyticsError> {
         if rows.is_empty() {
             return Ok(());

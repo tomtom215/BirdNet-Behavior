@@ -18,12 +18,13 @@ use std::path::Path;
 /// Default configuration file path.
 pub const DEFAULT_CONFIG_PATH: &str = "/etc/birdnet/birdnet.conf";
 
-/// Default minimum-confidence threshold for recording a detection, matching
-/// BirdNET-Pi's `CONFIDENCE` default. Single source of truth shared by the
-/// detection daemon (the value it enforces when no `CONFIDENCE` is configured)
-/// and the admin settings form (the value it displays), so the two can never
-/// drift apart — a drift that previously let the daemon record at 0.25 while
-/// the UI advertised 0.70.
+/// Default minimum-confidence threshold for recording a detection.
+///
+/// Matches BirdNET-Pi's `CONFIDENCE` default and is the single source of truth
+/// shared by the detection daemon (the value it enforces when no `CONFIDENCE`
+/// is configured) and the admin settings form (the value it displays), so the
+/// two can never drift apart — a drift that previously let the daemon record at
+/// 0.25 while the UI advertised 0.70.
 pub const DEFAULT_CONFIDENCE_THRESHOLD: f32 = 0.7;
 
 /// Parsed BirdNET-Pi configuration.

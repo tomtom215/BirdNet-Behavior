@@ -82,16 +82,18 @@ impl AnalyticsCache {
         }
     }
 
-    /// Store `value` under `key`, replacing any existing entry. When the cache
-    /// is at capacity and the key is new, one entry is evicted first —
-    /// preferring an already-expired entry, otherwise the oldest.
+    /// Store `value` under `key`, replacing any existing entry.
+    ///
+    /// When the cache is at capacity and the key is new, one entry is evicted
+    /// first — preferring an already-expired entry, otherwise the oldest.
     pub fn put(&self, key: String, value: String) {
         let now = Instant::now();
         let mut map = self.lock();
-        if map.len() >= MAX_ENTRIES && !map.contains_key(&key) {
-            if let Some(victim) = Self::eviction_candidate(&map, now, self.ttl) {
-                map.remove(&victim);
-            }
+        if map.len() >= MAX_ENTRIES
+            && !map.contains_key(&key)
+            && let Some(victim) = Self::eviction_candidate(&map, now, self.ttl)
+        {
+            map.remove(&victim);
         }
         map.insert(key, Entry { value, stored: now });
     }
@@ -185,13 +187,13 @@ where
         .await
         .ok()
         .flatten();
-    match computed {
-        Some(html) => {
+    computed.map_or_else(
+        || fallback.to_string(),
+        |html| {
             state.analytics_cache().put(key, html.clone());
             html
-        }
-        None => fallback.to_string(),
-    }
+        },
+    )
 }
 
 #[cfg(test)]
