@@ -55,7 +55,7 @@ impl AnalyticsDb {
 
     /// Rebuild the `DuckDB` detections copy from `SQLite` in full.
     ///
-    /// Unlike [`sync_from_sqlite`], which only pulls rows newer than the latest
+    /// Unlike [`Self::sync_from_sqlite`], which only pulls rows newer than the latest
     /// detection already in `DuckDB`, this truncates the OLAP copy and
     /// re-appends every `SQLite` row. A bulk historical import (the BirdNET-Pi
     /// migration) writes *back-dated* detections that the incremental cutoff
