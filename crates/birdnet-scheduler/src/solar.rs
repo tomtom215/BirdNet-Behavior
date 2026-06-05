@@ -76,7 +76,11 @@ impl SolarDay {
         month: u32,
         day: u32,
     ) -> Result<Self, SchedulerError> {
-        if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        // Validate the day against the actual month length (leap-aware) rather
+        // than a blanket 1..=31, so impossible dates like Feb 31 / Apr 31 are
+        // rejected instead of silently producing a bogus day-of-year (and thus
+        // wrong sunrise/sunset).
+        if !(1..=12).contains(&month) || day < 1 || day > days_in_month(year, month) {
             return Err(SchedulerError::InvalidDate { year, month, day });
         }
 
@@ -91,13 +95,20 @@ impl SolarDay {
             clippy::cast_possible_wrap,
             clippy::cast_lossless
         )]
+        // Normalize the minute-of-day into [0, 1440) before the cast. For
+        // longitudes well away from Greenwich the raw UTC sunrise/sunset minute
+        // is legitimately negative (event falls on the previous UTC day, e.g.
+        // ~-240 at lon +150°) or > 1440 (next UTC day). A bare `as u32`
+        // saturates a negative to 0 (midnight) — silently breaking the
+        // night-inhibit window across much of the Asia-Pacific and the
+        // Americas. `rem_euclid` wraps it to the correct UTC time-of-day.
         Ok(Self {
             location,
             day_of_year: doy,
-            sunrise_utc_min: rise.map(|h| (h * 60.0) as u32),
-            sunset_utc_min: set.map(|h| (h * 60.0) as u32),
-            civil_dawn_utc_min: dawn.map(|h| (h * 60.0) as u32),
-            civil_dusk_utc_min: dusk.map(|h| (h * 60.0) as u32),
+            sunrise_utc_min: rise.map(|h| (h * 60.0).rem_euclid(1440.0) as u32),
+            sunset_utc_min: set.map(|h| (h * 60.0).rem_euclid(1440.0) as u32),
+            civil_dawn_utc_min: dawn.map(|h| (h * 60.0).rem_euclid(1440.0) as u32),
+            civil_dusk_utc_min: dusk.map(|h| (h * 60.0).rem_euclid(1440.0) as u32),
         })
     }
 
@@ -217,6 +228,18 @@ fn day_of_year(year: u32, month: u32, day: u32) -> u32 {
 
 const fn is_leap_year(year: u32) -> bool {
     (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
+}
+
+/// Number of days in a (1-based) month, accounting for leap years. Returns 0
+/// for an out-of-range month (callers guard `month` separately).
+const fn days_in_month(year: u32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
+    }
 }
 
 // ---------------------------------------------------------------------------

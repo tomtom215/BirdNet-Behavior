@@ -103,8 +103,17 @@ impl RecordingFile {
         // First 3 parts are the date
         let date = format!("{}-{}-{}", parts[0], parts[1], parts[2]);
 
-        // Validate date format (basic check)
-        if parts[0].len() != 4 || parts[1].len() != 2 || parts[2].len() != 2 {
+        // Validate date format: the three segments must be 4/2/2 ASCII digits.
+        // Checking lengths alone let a bogus name like `abcd-XY-ZW-birdnet-…`
+        // through, and its non-date string then flowed into the extraction
+        // output path (`By_Date/<date>/…`) and DB rows.
+        if parts[0].len() != 4
+            || parts[1].len() != 2
+            || parts[2].len() != 2
+            || !parts[0].bytes().all(|b| b.is_ascii_digit())
+            || !parts[1].bytes().all(|b| b.is_ascii_digit())
+            || !parts[2].bytes().all(|b| b.is_ascii_digit())
+        {
             return None;
         }
 

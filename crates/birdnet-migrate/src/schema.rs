@@ -80,12 +80,15 @@ pub fn open_source_readonly(path: &Path) -> Result<Connection, MigrateError> {
         return Err(MigrateError::SourceNotFound(path.display().to_string()));
     }
 
-    let uri = format!("file:{}?mode=ro", path.display());
+    // Open the raw path with the READ_ONLY flag rather than building a
+    // `file:…?mode=ro` URI. The path is operator-supplied (the admin migration
+    // form), and with `SQLITE_OPEN_URI` set, a path containing `?` is parsed as
+    // URI parameters that can override `mode=ro` (or select a writable VFS),
+    // defeating the "source is never modified" guarantee. Without the URI flag
+    // the `?` is just part of the filename, so READ_ONLY is authoritative.
     Connection::open_with_flags(
-        &uri,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
-            | rusqlite::OpenFlags::SQLITE_OPEN_URI
-            | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .map_err(MigrateError::SourceOpen)
 }
