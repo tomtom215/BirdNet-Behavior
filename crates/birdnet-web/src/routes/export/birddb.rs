@@ -123,6 +123,7 @@ mod tests {
             overlap: None,
             file_name: Some("test.wav".into()),
             correlation_id: None,
+            source: None,
         };
         let out = detections_to_birddb(&[row]);
         let line = out.lines().next().unwrap();

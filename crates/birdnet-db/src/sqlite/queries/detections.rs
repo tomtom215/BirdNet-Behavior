@@ -18,8 +18,8 @@ pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Resu
     // this write path working unchanged.
     conn.execute(
         "INSERT INTO detections \
-         (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, chunk_offset_secs, correlation_id) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+         (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, chunk_offset_secs, correlation_id, Source) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
         params![
             record.date,
             record.time,
@@ -35,6 +35,7 @@ pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Resu
             record.file_name,
             record.chunk_offset_secs,
             record.correlation_id,
+            record.source,
         ],
     )?;
     Ok(())
@@ -614,6 +615,7 @@ mod tests {
             file_name: "test.wav",
             chunk_offset_secs: Some(0.0),
             correlation_id: None,
+            source: None,
         };
         insert_detection(&conn, &record).unwrap();
         assert_eq!(detection_count(&conn).unwrap(), 1);
@@ -683,6 +685,49 @@ mod tests {
         );
         assert_eq!(rows[0].com_name, "Robin"); // 0.95
         assert_eq!(rows[1].com_name, "Blackbird"); // 0.80
+    }
+
+    #[test]
+    fn source_column_tags_streams_and_leaves_historical_null() {
+        // Stage 1 contract: a new detection is tagged with its stream/source
+        // label; a row written without a source (historical / imported) stays
+        // NULL and reads back as None — non-destructive.
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_or_create(tmp.path()).unwrap();
+        let tagged = DetectionRecord {
+            date: "2026-05-19",
+            time: "06:00:00",
+            sci_name: "Pica pica",
+            com_name: "Eurasian Magpie",
+            confidence: 0.9,
+            lat: None,
+            lon: None,
+            cutoff: None,
+            week: None,
+            sensitivity: None,
+            overlap: None,
+            file_name: "2026-05-19-birdnet-cam1-06:00:00.wav",
+            chunk_offset_secs: Some(0.0),
+            correlation_id: None,
+            source: Some("cam1"),
+        };
+        // A second row at a different second with no source = the historical
+        // shape (e.g. an imported BirdNET-Pi row).
+        let untagged = DetectionRecord {
+            time: "06:00:01",
+            source: None,
+            ..tagged.clone()
+        };
+        insert_detection(&conn, &tagged).unwrap();
+        insert_detection(&conn, &untagged).unwrap();
+
+        let by_time: std::collections::HashMap<String, Option<String>> = recent_detections(&conn, 10)
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.time, r.source))
+            .collect();
+        assert_eq!(by_time["06:00:00"].as_deref(), Some("cam1"));
+        assert_eq!(by_time["06:00:01"], None, "untagged row must read back NULL");
     }
 
     #[test]
@@ -1014,6 +1059,7 @@ mod tests {
             file_name: "test.wav",
             chunk_offset_secs: Some(0.0),
             correlation_id: None,
+            source: None,
         };
 
         insert_detection(&conn, &record).unwrap();
@@ -1064,6 +1110,7 @@ mod tests {
             file_name: "magpie.wav",
             chunk_offset_secs: Some(0.0),
             correlation_id: None,
+            source: None,
         };
         insert_detection(&conn, &base).unwrap();
         let chunk2 = DetectionRecord {
@@ -1111,11 +1158,13 @@ mod tests {
             file_name: "magpie.wav",
             chunk_offset_secs: Some(0.0),
             correlation_id: Some("e-20260519-abc123"),
+            source: Some("local"),
         };
         insert_detection(&conn, &record).unwrap();
         let rows = recent_detections(&conn, 10).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].correlation_id.as_deref(), Some("e-20260519-abc123"));
+        assert_eq!(rows[0].source.as_deref(), Some("local"));
     }
 
     #[test]
@@ -1297,6 +1346,7 @@ mod tests {
                 file_name: if cid == Some("e-A") { "a.wav" } else { "b.wav" },
                 chunk_offset_secs: Some(offset),
                 correlation_id: cid,
+                source: None,
             };
             insert_detection(&conn, &r).unwrap();
         }

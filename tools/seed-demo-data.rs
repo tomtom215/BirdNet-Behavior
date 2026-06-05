@@ -220,6 +220,7 @@ fn run(args: &Args) -> Result<usize, String> {
             file_name: &file_name,
             chunk_offset_secs: Some(0.0),
             correlation_id: Some(&correlation_id),
+            source: Some("local"),
         };
         // Each row carries a unique correlation_id and a unique file_name,
         // so the schema's UNIQUE key never trips. Failures here are real.

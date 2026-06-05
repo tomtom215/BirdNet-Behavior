@@ -448,6 +448,20 @@ pub const MIGRATIONS: &[Migration] = &[
         up_sql: "CREATE INDEX IF NOT EXISTS idx_detections_date_species
                      ON detections(Date, Com_Name);",
     },
+    Migration {
+        version: 18,
+        description: "Add Source column to tag detections by audio stream",
+        // Multi-stream stations run several RTSP mics/cameras at once; the same
+        // bird heard by two streams is recorded as two detections (the unique
+        // key includes File_Name, which carries the stream id). To make that
+        // attributable — and to enable an optional, opt-in cross-stream collapse
+        // later — every new detection is tagged with its source label: the RTSP
+        // stream id (e.g. `cam1`) or `local` for the on-board mic. Nullable, so
+        // historical / imported BirdNET-Pi rows (unknown source) stay NULL and
+        // nothing is rewritten. Indexed for per-source filtering and grouping.
+        up_sql: "ALTER TABLE detections ADD COLUMN Source TEXT;
+                 CREATE INDEX IF NOT EXISTS idx_detections_source ON detections(Source);",
+    },
 ];
 
 /// Ensure the `schema_version` tracking table exists.

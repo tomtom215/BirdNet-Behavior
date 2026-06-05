@@ -112,6 +112,11 @@ pub(super) fn event_processor(
         // which SQLite silently stored as TEXT and every subsequent
         // typed read returned "Invalid column type Text at index N".
         let file_str = event.source_file.to_string_lossy();
+        // Per-detection source/stream label parsed from the filename: the RTSP
+        // stream id (e.g. `cam1`) or `local` for the on-board mic. Tags the row
+        // (so multi-stream detections are attributable) and feeds the per-source
+        // liveness gauge below.
+        let source_label = derive_source_label(&event.source_file);
         let record = birdnet_db::sqlite::DetectionRecord {
             date: &detection.date,
             time: &detection.time,
@@ -141,6 +146,7 @@ pub(super) fn event_processor(
             } else {
                 Some(correlation_id)
             },
+            source: Some(&source_label),
         };
 
         let metrics = state.metrics();
@@ -149,8 +155,7 @@ pub(super) fn event_processor(
         // accordingly. We parse the source label from the filename
         // because the source supervisor doesn't currently feed liveness
         // updates upstream; the filename's RTSP prefix is the only
-        // per-event tag the daemon sees.
-        let source_label = derive_source_label(&event.source_file);
+        // per-event tag the daemon sees (derived once above for the record).
         metrics.set_source_up(&source_label, true);
 
         let db_start = std::time::Instant::now();

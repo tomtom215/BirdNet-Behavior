@@ -47,6 +47,14 @@ pub struct DetectionRecord<'a> {
     /// can grep the daemon log for this exact string to see every
     /// decode/infer/notify line that produced this row.
     pub correlation_id: Option<&'a str>,
+    /// Audio source/stream label this detection came from — an RTSP stream id
+    /// (e.g. `cam1`) or `local` for the on-board microphone.
+    ///
+    /// `None` for rows that pre-date migration 18 (historical / imported
+    /// BirdNET-Pi data, where the source is unknown). Tagging every detection is
+    /// non-destructive — it lets multi-stream stations attribute detections to a
+    /// source and (later, opt-in) collapse cross-stream duplicates.
+    pub source: Option<&'a str>,
 }
 
 /// A detection row read from the database.
@@ -85,6 +93,10 @@ pub struct DetectionRow {
     /// decode/infer/notify lines that produced this detection.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub correlation_id: Option<String>,
+    /// Audio source/stream label (RTSP stream id like `cam1`, or `local`).
+    /// `None` for rows that pre-date migration 18.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 /// Species with detection count and average confidence.
@@ -151,6 +163,7 @@ pub(super) fn map_detection_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Det
         overlap: row.get(10)?,
         file_name: row.get(11)?,
         correlation_id: row.get(12)?,
+        source: row.get(13)?,
     })
 }
 
@@ -182,13 +195,14 @@ pub(super) const DETECTION_COL_NAMES: &[&str] = &[
     "Overlap",
     "File_Name",
     "correlation_id",
+    "Source",
 ];
 
 /// Columns selected in all full-row detection queries.
 ///
 /// Must equal `DETECTION_COL_NAMES.join(", ")` — the
 /// `detection_cols_matches_names` test pins the invariant.
-pub(super) const DETECTION_COLS: &str = "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id";
+pub(super) const DETECTION_COLS: &str = "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id, Source";
 
 #[cfg(test)]
 mod drift_gate_tests {
@@ -273,6 +287,7 @@ mod drift_gate_tests {
             file_name: "/tmp/x.wav",
             chunk_offset_secs: Some(3.0),
             correlation_id: Some("abc123"),
+            source: Some("cam1"),
         };
         crate::sqlite::queries::detections::insert_detection(&conn, &record).unwrap();
 
@@ -295,5 +310,6 @@ mod drift_gate_tests {
         assert_eq!(row.overlap, Some(0.0));
         assert_eq!(row.file_name.as_deref(), Some("/tmp/x.wav"));
         assert_eq!(row.correlation_id.as_deref(), Some("abc123"));
+        assert_eq!(row.source.as_deref(), Some("cam1"));
     }
 }

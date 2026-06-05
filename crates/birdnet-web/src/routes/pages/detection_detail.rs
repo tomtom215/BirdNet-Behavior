@@ -85,7 +85,7 @@ fn find_detection(
 
     if com_name.is_empty() {
         conn.query_row(
-            "SELECT Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id
+            "SELECT Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id, Source
              FROM detections WHERE Date = ?1 AND Time = ?2 LIMIT 1",
             params![date, time],
             |row| Ok(DetectionRow {
@@ -102,11 +102,12 @@ fn find_detection(
                 overlap: row.get(10)?,
                 file_name: row.get(11)?,
                 correlation_id: row.get(12)?,
+                source: row.get(13)?,
             }),
         ).ok()
     } else {
         conn.query_row(
-            "SELECT Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id
+            "SELECT Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id, Source
              FROM detections WHERE Date = ?1 AND Time = ?2 AND Com_Name = ?3 LIMIT 1",
             params![date, time, com_name],
             |row| Ok(DetectionRow {
@@ -123,6 +124,7 @@ fn find_detection(
                 overlap: row.get(10)?,
                 file_name: row.get(11)?,
                 correlation_id: row.get(12)?,
+                source: row.get(13)?,
             }),
         ).ok()
     }
@@ -335,6 +337,7 @@ mod tests {
             overlap: None,
             file_name: None,
             correlation_id: id.map(str::to_owned),
+            source: None,
         }
     }
 

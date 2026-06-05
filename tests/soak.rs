@@ -103,6 +103,7 @@ async fn soak_insertions_stay_bounded() {
             file_name: &file_name,
             chunk_offset_secs: Some(i as f64),
             correlation_id: None,
+            source: None,
         };
         state
             .with_db(|conn| insert_detection(conn, &record))
@@ -181,6 +182,7 @@ fn insert_n(conn: &rusqlite::Connection, base: usize, count: usize) {
             #[allow(clippy::cast_precision_loss)]
             chunk_offset_secs: Some(i as f64),
             correlation_id: None,
+            source: None,
         };
         insert_detection(conn, &record).expect("insert failed");
     }
