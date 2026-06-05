@@ -79,7 +79,7 @@ instants within `DEDUP_WINDOW_SECS`); keep the row, set a nullable `dup_of`
 dup_of IS NULL` when enabled. `DEDUP_WINDOW_SECS` defaults to `0` (off).
 
 This is **last** on purpose: it is the only option that can hide a real
-detection if the operator mis-judges their topology, and the one a non-technical
+detection if the operator misjudges their topology, and the one a non-technical
 user can least reason about. Ship it only if (1) and (2) prove insufficient, and
 only with the design pass's UX.
 
