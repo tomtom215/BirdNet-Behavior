@@ -104,7 +104,10 @@ mod tests {
         // the daemon enforces when `SENSITIVITY` is unset.
         let mut out = String::new();
         render(&mut out, &HashMap::new());
-        let expected = format!(r#"value="{:.2}""#, birdnet_core::config::DEFAULT_SENSITIVITY);
+        let expected = format!(
+            r#"value="{:.2}""#,
+            birdnet_core::config::DEFAULT_SENSITIVITY
+        );
         assert!(
             out.contains(&expected),
             "sensitivity field should default to the shared constant ({expected})"
