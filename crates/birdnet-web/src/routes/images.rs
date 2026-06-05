@@ -105,7 +105,17 @@ async fn species_image_file(
     // Check custom image directory first (BirdNET-Pi: CUSTOM_IMAGE).
     if let Some(custom_dir) = state.custom_image_dir() {
         let key = scientific_name.to_lowercase().replace(' ', "_");
+        // Reject path separators / traversal in the URL-decoded species segment
+        // so a request like `/api/v2/species/image/..%2f..%2fetc%2fpasswd/file`
+        // can't escape the custom image directory. An unsafe key simply falls
+        // through to the Wikipedia cache path below (which strips `/` in its own
+        // key derivation). `replace(' ', "_")` only handles spaces, not `/`.
+        let key_is_safe =
+            !key.contains('/') && !key.contains('\\') && !key.contains("..") && !key.contains('\0');
         for ext in &["jpg", "jpeg", "png", "webp"] {
+            if !key_is_safe {
+                break;
+            }
             let candidate = custom_dir.join(format!("{key}.{ext}"));
             if let Ok(bytes) = std::fs::read(&candidate) {
                 let content_type = match *ext {

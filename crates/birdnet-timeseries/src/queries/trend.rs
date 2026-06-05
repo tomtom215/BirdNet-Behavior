@@ -14,11 +14,15 @@ use super::QueryPlan;
 pub struct MovingAverage {
     /// Total window width in days (must be odd for a symmetric centre; default: 7).
     pub window_days: u32,
-    /// Date range start (`DuckDB` expression or ISO-8601 literal).
+    /// Date range start, interpolated **raw** into the SQL so it may be a
+    /// `DuckDB` expression (e.g. `CURRENT_DATE - INTERVAL 90 DAYS`). Because it
+    /// is not quoted/escaped, callers MUST only pass trusted input or a value
+    /// already validated and quoted at the trust boundary — never a raw HTTP
+    /// parameter. (The web layer validates to `YYYY-MM-DD` and quotes it.)
     pub from_date: Option<String>,
-    /// Date range end.
+    /// Date range end. Same raw-interpolation contract as `from_date`.
     pub to_date: Option<String>,
-    /// Optional species filter.
+    /// Optional species filter (single-quote-escaped before interpolation).
     pub species: Option<String>,
 }
 

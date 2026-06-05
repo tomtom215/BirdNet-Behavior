@@ -646,11 +646,11 @@ fn render_audit_page(
   <form method="get" action="/admin/audit" class="bnb-card pad audit-form">
     <label class="audit-field">
       <span class="bnb-meta">From</span>
-      <input type="date" name="from" value="{from}" required>
+      <input type="date" name="from" value="{from_esc}" required>
     </label>
     <label class="audit-field">
       <span class="bnb-meta">To</span>
-      <input type="date" name="to" value="{to}" required>
+      <input type="date" name="to" value="{to_esc}" required>
     </label>
     <label class="audit-field grow">
       <span class="bnb-meta">Action contains</span>
@@ -670,6 +670,8 @@ fn render_audit_page(
     {truncated_note}
   </section>
 </div>"#,
+        from_esc = escape_html(from),
+        to_esc = escape_html(to),
         action_esc = escape_html(action_filter),
         count = count,
         pluralised = if count == 1 { "entry" } else { "entries" },
