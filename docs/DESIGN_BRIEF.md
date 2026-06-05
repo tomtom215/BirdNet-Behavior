@@ -98,10 +98,14 @@ users**, with deep analytics underneath for enthusiasts.
    screens (especially the wide SVG analytics, admin forms, and tables) need
    true small-screen layouts.
 5. **New: per-source / multi-stream UI.** Multiple RTSP mics/cameras are
-   supported and detections will soon carry a **`Source`** label (`cam1`,
-   `cam2`, `local`). Design source **filtering**, **per-source badges /
-   legends**, and an optional **"collapse duplicate cross-stream detections"**
-   affordance for setups where mics overlap acoustically.
+   supported and every detection now carries a first-class **`Source`** label
+   (`cam1`, `cam2`, `local`). Design source **filtering**, **per-source badges /
+   legends**, a **corroboration** display (*"also heard by cam2"* — multiple mics
+   confirming a detection), and — as an advanced, off-by-default option — a
+   **duplicate-collapse** affordance for explicitly co-located mics. The full,
+   corroboration-first design rationale is in
+   [`MULTISTREAM_DEDUP.md`](MULTISTREAM_DEDUP.md); design these as one coherent
+   surface.
 6. **Admin & onboarding UX.** The settings area is form-dense; make it a guided,
    reassuring experience for non-technical owners (audio source setup, location,
    notifications, backups). Polish the first-run wizard.
