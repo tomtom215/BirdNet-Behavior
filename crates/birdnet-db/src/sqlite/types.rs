@@ -99,6 +99,22 @@ pub struct DetectionRow {
     pub source: Option<String>,
 }
 
+/// A concurrent detection of the same species from a *different* audio source.
+///
+/// Powers the multi-stream "also heard by" corroboration display: when several
+/// streams hear the same bird at nearly the same time, that agreement is a
+/// stronger signal the detection is real. Read-only and non-destructive — it
+/// never merges or hides rows.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ConcurrentDetection {
+    /// Source/stream label that also heard this species (e.g. `cam2`).
+    pub source: String,
+    /// Time of that detection (HH:MM:SS).
+    pub time: String,
+    /// Confidence of that detection.
+    pub confidence: f64,
+}
+
 /// Species with detection count and average confidence.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SpeciesCount {

@@ -41,6 +41,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Multi-stream source attribution.** Every detection is now tagged with a
+  first-class `Source` (the RTSP stream id, e.g. `cam1`, or `local` for the
+  on-board mic; migration 18, indexed). Non-destructive — historical / imported
+  rows stay `NULL` and nothing is rewritten. The detection-detail page uses it
+  for **"also heard by"** corroboration: when other audio sources detected the
+  same species at nearly the same time, they're listed as confirmation the
+  detection is real (a read-only view; it never merges or hides rows). Single-mic
+  stations see no change. Groundwork and the corroboration-first design for
+  optional cross-stream collapse are in `docs/MULTISTREAM_DEDUP.md`.
 - **A pre-warmed query cache for the heavy analytics.** A short-TTL in-memory
   cache now backs the heaviest fragments on the Heatmap, Migration/phenology,
   Co-occurrence, and Time-series (DuckDB) pages, and a background task pre-warms

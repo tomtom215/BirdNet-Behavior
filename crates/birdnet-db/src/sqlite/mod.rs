@@ -34,7 +34,8 @@ pub use queries::{
     ImageBlacklist, ModelVsReviewRow, QualitySummary, QuarantineFilter, QuarantineReason,
     QuarantineRecord, QuarantineRow, QuarantineStats, ReviewVerdictDay, SpeciesThreshold,
     add_image_blacklist, all_detections, approve_quarantine, best_detections_for_date,
-    blacklisted_urls_for_species, companion_species, confidence_distribution, confidence_trend,
+    blacklisted_urls_for_species, companion_species, concurrent_detections_from_other_sources,
+    confidence_distribution, confidence_trend,
     count_quarantine, daily_counts, delete_detection, delete_quarantine, delete_species_threshold,
     detection_count, detection_count_for_date, detection_count_for_species_date, detection_dates,
     detection_quality_by_hour, detections_by_date, detections_by_species, distinct_detection_dates,
@@ -53,5 +54,6 @@ pub use queries::{
     weekly_new_species, weekly_top_species,
 };
 pub use types::{
-    DailyCount, DetectionRecord, DetectionRow, HourlyCount, SpeciesCount, SpeciesSummary,
+    ConcurrentDetection, DailyCount, DetectionRecord, DetectionRow, HourlyCount, SpeciesCount,
+    SpeciesSummary,
 };

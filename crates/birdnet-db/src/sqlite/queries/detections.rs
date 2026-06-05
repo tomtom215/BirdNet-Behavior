@@ -3,7 +3,9 @@
 use rusqlite::{Connection, params};
 
 use crate::sqlite::connection::DbError;
-use crate::sqlite::types::{DETECTION_COLS, DetectionRecord, DetectionRow, map_detection_row};
+use crate::sqlite::types::{
+    ConcurrentDetection, DETECTION_COLS, DetectionRecord, DetectionRow, map_detection_row,
+};
 
 /// Insert a detection record into the database.
 ///
@@ -136,6 +138,50 @@ pub fn best_detections_for_date(
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
         .query_map(params![date, limit], map_detection_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Detections of the same species from **other** audio sources within
+/// `window_secs` of the given detection's instant.
+///
+/// Powers the multi-stream "also heard by" corroboration display — purely
+/// read-only, never collapses or hides anything. Only rows with a non-NULL
+/// `Source` different from `exclude_source` are returned, ordered by closeness
+/// in time. A ±1-day `Date` bound keeps the scan tight (and correct across a
+/// midnight-straddling window) so a very common species stays cheap.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn concurrent_detections_from_other_sources(
+    conn: &Connection,
+    date: &str,
+    time: &str,
+    sci_name: &str,
+    exclude_source: &str,
+    window_secs: f64,
+    limit: u32,
+) -> Result<Vec<ConcurrentDetection>, DbError> {
+    let sql = "SELECT Source, Time, Confidence FROM detections \
+               WHERE Sci_Name = ?1 \
+                 AND Source IS NOT NULL AND Source <> ?2 \
+                 AND Date >= date(?3, '-1 day') AND Date <= date(?3, '+1 day') \
+                 AND ABS((julianday(Date || ' ' || Time) - julianday(?3 || ' ' || ?4)) * 86400.0) <= ?5 \
+               ORDER BY ABS(julianday(Date || ' ' || Time) - julianday(?3 || ' ' || ?4)) ASC, Source \
+               LIMIT ?6";
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt
+        .query_map(
+            params![sci_name, exclude_source, date, time, window_secs, limit],
+            |row| {
+                Ok(ConcurrentDetection {
+                    source: row.get(0)?,
+                    time: row.get(1)?,
+                    confidence: row.get(2)?,
+                })
+            },
+        )?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -732,6 +778,52 @@ mod tests {
             by_time["06:00:01"], None,
             "untagged row must read back NULL"
         );
+    }
+
+    #[test]
+    fn concurrent_detections_finds_other_sources_within_window() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_or_create(tmp.path()).unwrap();
+        let insert = |time: &str, sci: &str, src: Option<&str>, conf: f64| {
+            let r = DetectionRecord {
+                date: "2026-05-19",
+                time,
+                sci_name: sci,
+                com_name: "X",
+                confidence: conf,
+                lat: None,
+                lon: None,
+                cutoff: None,
+                week: None,
+                sensitivity: None,
+                overlap: None,
+                file_name: "f.wav",
+                chunk_offset_secs: Some(0.0),
+                correlation_id: None,
+                source: src,
+            };
+            insert_detection(&conn, &r).unwrap();
+        };
+        // "This" detection on cam1, plus: a concurrent cam2 (within window),
+        // a far-off cam3 (outside window), a same-source cam1 (excluded), and a
+        // different species on cam2 (excluded).
+        insert("06:00:00", "Pica pica", Some("cam1"), 0.90);
+        insert("06:00:05", "Pica pica", Some("cam2"), 0.85);
+        insert("06:02:00", "Pica pica", Some("cam3"), 0.80);
+        insert("06:00:03", "Pica pica", Some("cam1"), 0.70);
+        insert("06:00:04", "Erithacus rubecula", Some("cam2"), 0.95);
+
+        let hits = concurrent_detections_from_other_sources(
+            &conn, "2026-05-19", "06:00:00", "Pica pica", "cam1", 30.0, 8,
+        )
+        .unwrap();
+        assert_eq!(
+            hits.len(),
+            1,
+            "only cam2 qualifies (same species, within 30 s, other source)"
+        );
+        assert_eq!(hits[0].source, "cam2");
+        assert_eq!(hits[0].time, "06:00:05");
     }
 
     #[test]
