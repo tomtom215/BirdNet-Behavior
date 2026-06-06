@@ -730,7 +730,18 @@ fn process_existing_files(
         ) {
             Ok(events) => {
                 for event in events {
-                    let _ = event_tx.send(event);
+                    // Surface a closed receiver instead of swallowing it: with
+                    // the prior `let _ =` a consumer that dropped mid-backlog
+                    // left this loop spinning through the rest of the watch
+                    // directory pointlessly (each `send` errored, was ignored,
+                    // and we processed the next file anyway). The main runtime
+                    // loop treats a closed receiver as fatal — match that here.
+                    if event_tx.send(event).is_err() {
+                        tracing::debug!(
+                            "existing-file backlog stopping: event receiver closed"
+                        );
+                        return;
+                    }
                 }
                 count += 1;
             }

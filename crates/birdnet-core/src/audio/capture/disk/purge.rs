@@ -75,6 +75,19 @@ pub(super) fn purge_oldest_files(
 
     if removed > 0 {
         tracing::info!(count = removed, "purged oldest audio files");
+    } else if !all_files.is_empty() {
+        // We had files to purge but couldn't remove any — typically every
+        // oldest-bucket file is protected (exclude_paths / locked_file_names),
+        // or remove_file failed for all of them (permission errors). Without
+        // this signal `check_and_purge` would warn "disk full" on every
+        // interval indefinitely with no clue why. Matches BirdNET-Pi's
+        // disk_check.sh secondary-check escalation pattern.
+        tracing::warn!(
+            candidates = all_files.len(),
+            "disk purge made no progress — all candidate files are protected \
+             (exclude_paths / locked_file_names) or could not be removed; \
+             recording may keep filling the disk"
+        );
     }
 
     removed
@@ -185,6 +198,38 @@ mod tests {
         // Locked files must still exist.
         for name in &locked {
             assert!(species_dir.join(name).exists(), "{name} should be locked");
+        }
+    }
+
+    #[test]
+    fn purge_returns_zero_when_all_candidates_are_protected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let species_dir = dir.path().join("By_Date/2026-03-14/Test_Bird");
+        std::fs::create_dir_all(&species_dir).expect("create dirs");
+
+        // Create 3 files (10%=1 candidate, +1 minimum=1 to_remove), all locked.
+        let mut names = Vec::new();
+        for i in 0..3_u32 {
+            let name = format!("clip_{i:02}.wav");
+            let wav_path = species_dir.join(&name);
+            std::fs::write(&wav_path, create_minimal_wav_header()).expect("write wav");
+            let mtime = filetime::FileTime::from_unix_time(1_000_000 + i64::from(i), 0);
+            filetime::set_file_mtime(&wav_path, mtime).expect("set mtime");
+            names.push(name);
+        }
+
+        let removed = purge_oldest_files(dir.path(), &[], &names);
+        assert_eq!(
+            removed, 0,
+            "all candidates are locked; nothing should be removed"
+        );
+        // Every locked file still present (the loop iterated past them all
+        // looking for unprotected files, but found none).
+        for name in &names {
+            assert!(
+                species_dir.join(name).exists(),
+                "{name} should still exist"
+            );
         }
     }
 

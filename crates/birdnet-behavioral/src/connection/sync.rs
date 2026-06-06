@@ -38,6 +38,20 @@ impl AnalyticsDb {
             None
         };
 
+        // Make the cutoff second whole rather than skipping it. A single second
+        // can hold many detections (multiple chunks of one recording, or
+        // simultaneous hits from different audio sources), so a strict
+        // `> cutoff` read permanently dropped any SQLite row that *tied* the
+        // latest synced second but wasn't yet in DuckDB. Delete that second from
+        // DuckDB and let `read_sqlite_detections` re-read it (with `>=`) from
+        // SQLite — the source of truth — so it's rebuilt exactly, no duplicates.
+        if let Some(ref ts) = cutoff {
+            self.conn.execute(
+                "DELETE FROM detections WHERE (Date || ' ' || Time) = ?",
+                params![ts],
+            )?;
+        }
+
         let rows = read_sqlite_detections(sqlite_conn, cutoff.as_deref())
             .map_err(|e| AnalyticsError::InvalidData(format!("SQLite read error: {e}")))?;
 
@@ -221,9 +235,12 @@ fn read_sqlite_detections(
             conn.prepare(&sql)?.query_map([], map_row)?.collect()
         },
         |ts| {
+            // `>=` (not `>`): the caller deletes the cutoff second from DuckDB
+            // first, then re-reads it whole from SQLite here, so rows that tie
+            // the cutoff second aren't permanently skipped (see sync_from_sqlite).
             let sql = format!(
                 "SELECT {COLS} FROM detections \
-                 WHERE (Date || ' ' || Time) > ? ORDER BY Date, Time"
+                 WHERE (Date || ' ' || Time) >= ? ORDER BY Date, Time"
             );
             conn.prepare(&sql)?.query_map([ts], map_row)?.collect()
         },
@@ -304,8 +321,63 @@ mod tests {
              INSERT INTO detections VALUES ('2026-03-12','06:30:00','Turdus merula','Blackbird',0.87,NULL,NULL,NULL,NULL,NULL,NULL,NULL);
              INSERT INTO detections VALUES ('2026-03-12','07:00:00','Parus major','Great Tit',0.75,NULL,NULL,NULL,NULL,NULL,NULL,NULL);",
         ).unwrap();
-        assert_eq!(db.sync_from_sqlite(&sc).unwrap(), 1);
+        // Sync deletes the cutoff second (`06:30:00`) from DuckDB and re-reads
+        // it from SQLite along with the new `07:00:00` row, so the return count
+        // is 2 (one boundary re-read + one strictly new). End state still 2.
+        assert_eq!(db.sync_from_sqlite(&sc).unwrap(), 2);
         assert_eq!(db.detection_count().unwrap(), 2);
+    }
+
+    #[test]
+    fn sync_from_sqlite_includes_same_second_ties() {
+        // Regression: a single second can hold many detections (multiple chunks
+        // of one recording, or simultaneous hits from different audio sources).
+        // The old strict `> cutoff` read permanently dropped any SQLite row that
+        // tied the latest already-synced second — the analytics copy then
+        // under-counted forever (recoverable only by a full resync).
+        //
+        // The fix deletes the cutoff second from DuckDB and re-reads it with
+        // `>=` from SQLite (the source of truth), so the boundary is rebuilt
+        // exactly and incremental sync is lossless across ties.
+        let (db, _tmp) = make_db();
+
+        // DuckDB already holds *one* of two same-second detections.
+        db.insert_detection(
+            "2026-03-12",
+            "06:30:00",
+            "Turdus merula",
+            "Blackbird",
+            0.87,
+            "t.wav",
+        )
+        .unwrap();
+
+        // SQLite holds both same-second detections plus a later row.
+        let sqlite_dir = TempDir::new().unwrap();
+        let sc = rusqlite::Connection::open(sqlite_dir.path().join("b.db")).unwrap();
+        sc.execute_batch(
+            "CREATE TABLE detections (Date TEXT, Time TEXT, Sci_Name TEXT, Com_Name TEXT,
+             Confidence REAL, Lat REAL, Lon REAL, Cutoff REAL, Week INTEGER,
+             Sens REAL, Overlap REAL, File_Name TEXT);
+             INSERT INTO detections VALUES ('2026-03-12','06:30:00','Turdus merula','Blackbird',0.87,NULL,NULL,NULL,NULL,NULL,NULL,NULL);
+             INSERT INTO detections VALUES ('2026-03-12','06:30:00','Parus major','Great Tit',0.91,NULL,NULL,NULL,NULL,NULL,NULL,NULL);
+             INSERT INTO detections VALUES ('2026-03-12','07:00:00','Erithacus rubecula','Robin',0.83,NULL,NULL,NULL,NULL,NULL,NULL,NULL);",
+        ).unwrap();
+
+        // Sync must rebuild the boundary second (so the tied row appears) plus
+        // the later row, and must NOT duplicate the already-present Blackbird.
+        db.sync_from_sqlite(&sc).unwrap();
+        assert_eq!(
+            db.detection_count().unwrap(),
+            3,
+            "all three SQLite rows should be in DuckDB; the same-second tie at \
+             06:30 must not be dropped, and the already-present row must not be \
+             duplicated"
+        );
+
+        // Idempotent: running sync again is a no-op (no duplicates).
+        db.sync_from_sqlite(&sc).unwrap();
+        assert_eq!(db.detection_count().unwrap(), 3);
     }
 
     #[test]
@@ -342,9 +414,12 @@ mod tests {
              INSERT INTO detections VALUES ('2026-06-05','10:00:00','Parus major','Great Tit',0.90,NULL,NULL,NULL,NULL,NULL,NULL,NULL);",
         ).unwrap();
 
-        // Incremental sync skips the 2023 row (older than the 2026 cutoff) and
-        // the 2026 row (equal to, not after, the cutoff): nothing new.
-        assert_eq!(db.sync_from_sqlite(&sc).unwrap(), 0);
+        // Incremental sync skips the back-dated 2023 row (older than the 2026
+        // cutoff). The cutoff second is deleted from DuckDB and re-read from
+        // SQLite, which still yields one row (the same 2026-06-05 10:00:00
+        // detection rebuilt exactly) — so the return count is 1, not 0. The
+        // back-dated history remains invisible until `full_resync_from_sqlite`.
+        assert_eq!(db.sync_from_sqlite(&sc).unwrap(), 1);
 
         // Full resync rebuilds from scratch and includes the back-dated history.
         assert_eq!(db.full_resync_from_sqlite(&sc).unwrap(), 2);
