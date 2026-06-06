@@ -185,13 +185,26 @@ async fn prune_old_backups(backup_dir: &Path, keep: usize) -> std::io::Result<()
 }
 
 fn prune_old_backups_blocking(backup_dir: &Path, keep: usize) -> std::io::Result<()> {
+    // Match the actual backup filename shape `{db_name}.backup.{unix_secs}`
+    // (`backup_database` in `birdnet-db::resilience`). The previous
+    // `extension == "db"/"sqlite"/"bak"` filter matched **nothing** for real
+    // backups — their extension is the timestamp (`1733400000`), so this whole
+    // pruner was silent dead code and the only retention came from the inline
+    // prune inside `backup_database` (capped at `MAX_BACKUP_FILES`).
+    //
+    // The substring filter is deliberately broader than the inline prune
+    // (which keys on the current `{db_name}.backup.` prefix). That lets this
+    // pass catch stale backup files left over from a prior `db_name` — e.g.
+    // an operator who renamed `birds.db` to `BirdDB.db` — which the
+    // db-name-specific inline pruner can't see. `BACKUP_RETENTION` is the
+    // *process-wide* outer bound; per-db retention is enforced inline.
     let mut entries: Vec<(PathBuf, std::time::SystemTime)> = std::fs::read_dir(backup_dir)?
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
         .filter(|e| {
-            e.path()
-                .extension()
-                .is_some_and(|ext| ext == "db" || ext == "sqlite" || ext == "bak")
+            e.file_name()
+                .to_str()
+                .is_some_and(|n| n.contains(".backup."))
         })
         .filter_map(|e| {
             e.metadata()
@@ -237,9 +250,16 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let now = std::time::SystemTime::now();
         let day = Duration::from_secs(24 * 60 * 60);
-        // 5 backups, mtimes 0..5 days ago
+        // 5 backups, mtimes 0..5 days ago. Use the real backup filename shape
+        // `{db_name}.backup.{unix_secs}` that `resilience::backup_database`
+        // writes — the prior test used `birds-{i}.db`, which never appears in
+        // production and silently passed even when the prune filter was wrong.
         for i in 0..5 {
-            touch(tmp.path(), &format!("birds-{i}.db"), now - day * i);
+            touch(
+                tmp.path(),
+                &format!("birds.db.backup.{}", 1_700_000_000 + i),
+                now - day * u32::try_from(i).unwrap(),
+            );
         }
         prune_old_backups_blocking(tmp.path(), 3).unwrap();
         let remaining: Vec<_> = std::fs::read_dir(tmp.path())
@@ -249,8 +269,8 @@ mod tests {
             .collect();
         assert_eq!(remaining.len(), 3);
         // Oldest two (indices 3 and 4) should be gone.
-        assert!(!remaining.contains(&"birds-3.db".to_string()));
-        assert!(!remaining.contains(&"birds-4.db".to_string()));
+        assert!(!remaining.contains(&"birds.db.backup.1700000003".to_string()));
+        assert!(!remaining.contains(&"birds.db.backup.1700000004".to_string()));
     }
 
     #[test]
@@ -258,7 +278,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let now = std::time::SystemTime::now();
         for i in 0..2 {
-            touch(tmp.path(), &format!("birds-{i}.db"), now);
+            touch(
+                tmp.path(),
+                &format!("birds.db.backup.{}", 1_700_000_000 + i),
+                now,
+            );
         }
         prune_old_backups_blocking(tmp.path(), 10).unwrap();
         let remaining: Vec<_> = std::fs::read_dir(tmp.path()).unwrap().collect();
@@ -266,12 +290,16 @@ mod tests {
     }
 
     #[test]
-    fn prune_ignores_non_database_files() {
+    fn prune_ignores_non_backup_files() {
         let tmp = tempfile::tempdir().unwrap();
         let now = std::time::SystemTime::now();
+        // Non-backup files (the live DB, WAL/SHM sidecars, unrelated dotfiles)
+        // must never be pruned, regardless of how many backup files we keep.
         touch(tmp.path(), "notes.txt", now);
-        touch(tmp.path(), "a.db", now);
-        touch(tmp.path(), "b.db", now);
+        touch(tmp.path(), "birds.db", now); // live DB
+        touch(tmp.path(), "birds.db-wal", now); // WAL sidecar
+        touch(tmp.path(), "birds.db.backup.1700000001", now);
+        touch(tmp.path(), "birds.db.backup.1700000002", now);
         prune_old_backups_blocking(tmp.path(), 1).unwrap();
         let remaining: Vec<String> = std::fs::read_dir(tmp.path())
             .unwrap()
@@ -279,16 +307,36 @@ mod tests {
             .map(|e| e.file_name().into_string().unwrap())
             .collect();
         assert!(remaining.contains(&"notes.txt".to_string()));
-        // Exactly one .db file should remain.
+        assert!(remaining.contains(&"birds.db".to_string()));
+        assert!(remaining.contains(&"birds.db-wal".to_string()));
+        // Exactly one `.backup.` file should remain.
         assert_eq!(
-            remaining
-                .iter()
-                .filter(|n| std::path::Path::new(n)
-                    .extension()
-                    .is_some_and(|e| e.eq_ignore_ascii_case("db")))
-                .count(),
+            remaining.iter().filter(|n| n.contains(".backup.")).count(),
             1
         );
+    }
+
+    #[test]
+    fn prune_catches_stale_backups_from_other_db_names() {
+        // Operator renamed `birds.db` → `BirdDB.db`. The inline prune inside
+        // `backup_database` is keyed on the *current* `db_name` prefix and
+        // can't see the old backups; this maintenance pruner is the safety
+        // net that bounds the directory regardless of historical names.
+        let tmp = tempfile::tempdir().unwrap();
+        let now = std::time::SystemTime::now();
+        let day = Duration::from_secs(24 * 60 * 60);
+        touch(tmp.path(), "BirdDB.db.backup.1700000000", now - day * 5);
+        touch(tmp.path(), "birds.db.backup.1700000001", now - day * 4);
+        touch(tmp.path(), "birds.db.backup.1700000002", now - day * 3);
+        prune_old_backups_blocking(tmp.path(), 2).unwrap();
+        let remaining: Vec<String> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().into_string().unwrap())
+            .collect();
+        // Oldest (the BirdDB one) must be gone; the 2 newest survive.
+        assert_eq!(remaining.iter().filter(|n| n.contains(".backup.")).count(), 2);
+        assert!(!remaining.contains(&"BirdDB.db.backup.1700000000".to_string()));
     }
 
     #[test]

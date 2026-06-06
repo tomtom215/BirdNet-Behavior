@@ -515,6 +515,24 @@ pub fn migrate(conn: &Connection) -> Result<u32, MigrationError> {
     let current = current_version(conn)?;
     let mut applied = 0;
 
+    // Newer-DB-than-binary detection: if the DB carries a schema version this
+    // binary doesn't know about, we are running an older binary against a newer
+    // schema — typically because the operator downgraded. Migrations are
+    // additive, so older code usually still works against newer columns/tables,
+    // but it's a real failure mode that produces baffling runtime errors. Warn
+    // loudly rather than error so a recovery downgrade remains possible.
+    if let Some(max_known) = MIGRATIONS.iter().map(|m| m.version).max()
+        && current > max_known
+    {
+        tracing::warn!(
+            db_version = current,
+            binary_max_version = max_known,
+            "database schema is newer than this binary knows about — likely a downgrade. \
+             The application may misbehave against unrecognised columns or tables; \
+             upgrade to a binary that supports schema version {current} if available."
+        );
+    }
+
     for migration in MIGRATIONS {
         if migration.version <= current {
             continue;
@@ -594,6 +612,27 @@ mod tests {
         let second = migrate(&conn).unwrap();
         assert!(first > 0);
         assert_eq!(second, 0);
+    }
+
+    #[test]
+    fn migrate_succeeds_against_newer_db_version() {
+        // Simulate a downgrade: a binary that knows up to schema vN runs
+        // against a DB written by a newer binary at vN+5. `migrate` should
+        // log a warning but still return 0 (no migrations to apply) — older
+        // additive schemas usually still work for the older binary.
+        let conn = memory_db();
+        migrate(&conn).unwrap();
+        let known_max = MIGRATIONS.iter().map(|m| m.version).max().unwrap();
+        // Force the version forward as if a newer binary had written it.
+        conn.execute(
+            "INSERT INTO schema_version (version, description) VALUES (?1, 'future')",
+            rusqlite::params![known_max + 5],
+        )
+        .unwrap();
+
+        let applied = migrate(&conn).expect("downgrade must not error");
+        assert_eq!(applied, 0, "no migrations should apply on a newer DB");
+        assert_eq!(current_version(&conn).unwrap(), known_max + 5);
     }
 
     #[test]

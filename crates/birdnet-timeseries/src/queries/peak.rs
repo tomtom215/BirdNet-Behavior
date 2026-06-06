@@ -15,9 +15,15 @@ pub struct PeakWindows {
     pub window_minutes: u32,
     /// Hop size in minutes (default: 5).
     pub hop_minutes: u32,
-    /// Range start as a `DuckDB` timestamp expression.
+    /// Range start as a `DuckDB` timestamp expression, interpolated **raw**
+    /// into the SQL so it can be a `CURRENT_TIMESTAMP - INTERVAL …` form.
+    /// Because it is not quoted/escaped, callers MUST only pass trusted input
+    /// or a value already validated and quoted at the trust boundary — never
+    /// a raw HTTP parameter. Use [`Self::last_n_days`] when the input comes
+    /// from untrusted sources.
     pub range_start: String,
-    /// Range end as a `DuckDB` timestamp expression.
+    /// Range end as a `DuckDB` timestamp expression. Same raw-interpolation
+    /// contract as [`Self::range_start`].
     pub range_end: String,
     /// Maximum windows to return (default: 10).
     pub limit: u32,

@@ -116,8 +116,20 @@ pub fn list_tables(conn: &Connection) -> Result<Vec<String>, MigrateError> {
 ///
 /// # Errors
 ///
-/// Returns `MigrateError::SourceOpen` on query failure.
+/// Returns `MigrateError::SourceOpen` on query failure, or `MigrateError::CsvParse`
+/// when `table` is not a valid SQL identifier.
 pub fn column_names(conn: &Connection, table: &str) -> Result<Vec<String>, MigrateError> {
+    // SQLite's `PRAGMA` accepts only identifier arguments — no bind parameters
+    // — so `table` is unavoidably interpolated. Callers today pass the literal
+    // "detections", but this function is `pub`, and `list_tables` returns names
+    // straight from `sqlite_master` (attacker-influenced if the operator points
+    // the migration at a hostile DB). Validate against a strict identifier
+    // grammar so a malicious table name can't smuggle in arbitrary SQL.
+    if !is_valid_identifier(table) {
+        return Err(MigrateError::CsvParse(format!(
+            "invalid table identifier: {table:?}"
+        )));
+    }
     let sql = format!("PRAGMA table_info({table})");
     let mut stmt = conn.prepare(&sql).map_err(MigrateError::SourceOpen)?;
 
@@ -143,13 +155,35 @@ pub fn has_required_columns(actual_cols: &[String], required_cols: &[&str]) -> b
 ///
 /// # Errors
 ///
-/// Returns `MigrateError::SourceOpen` on query failure.
+/// Returns `MigrateError::SourceOpen` on query failure, or `MigrateError::CsvParse`
+/// when `table` is not a valid SQL identifier.
 pub fn row_count(conn: &Connection, table: &str) -> Result<u64, MigrateError> {
+    if !is_valid_identifier(table) {
+        return Err(MigrateError::CsvParse(format!(
+            "invalid table identifier: {table:?}"
+        )));
+    }
     let sql = format!("SELECT COUNT(*) FROM {table}");
     let count: i64 = conn
         .query_row(&sql, [], |row| row.get(0))
         .map_err(MigrateError::SourceOpen)?;
     Ok(u64::try_from(count.max(0)).unwrap_or(0))
+}
+
+/// Return `true` if `s` is a valid SQL identifier (first char `[A-Za-z_]`,
+/// rest `[A-Za-z0-9_]`). Used by helpers that must interpolate a table name
+/// into a query (`PRAGMA table_info`, `SELECT FROM`) — bind params don't work
+/// for identifiers — to keep them safe in the face of attacker-influenced
+/// table names (e.g. names returned by `list_tables` against a hostile DB).
+fn is_valid_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// Detect the schema of the database at `path`.
@@ -198,6 +232,36 @@ pub fn detect_schema(path: &Path) -> Result<DetectedSchema, MigrateError> {
 mod tests {
     use super::*;
     use tempfile::NamedTempFile;
+
+    #[test]
+    fn identifier_validation_accepts_normal_names() {
+        assert!(is_valid_identifier("detections"));
+        assert!(is_valid_identifier("Detections"));
+        assert!(is_valid_identifier("_private"));
+        assert!(is_valid_identifier("name_42"));
+    }
+
+    #[test]
+    fn identifier_validation_rejects_injection_attempts() {
+        assert!(!is_valid_identifier(""));
+        assert!(!is_valid_identifier("1abc")); // starts with digit
+        assert!(!is_valid_identifier("a; DROP TABLE x;"));
+        assert!(!is_valid_identifier("a\"b"));
+        assert!(!is_valid_identifier("a b"));
+        assert!(!is_valid_identifier("'OR 1=1--"));
+        assert!(!is_valid_identifier("a)"));
+    }
+
+    #[test]
+    fn column_names_rejects_invalid_identifier() {
+        let tmp = NamedTempFile::new().unwrap();
+        let conn = Connection::open(tmp.path()).unwrap();
+        let err = column_names(&conn, "a; DROP TABLE x").expect_err("must reject");
+        assert!(
+            matches!(err, MigrateError::CsvParse(_)),
+            "expected CsvParse, got {err:?}"
+        );
+    }
 
     fn make_birdnet_pi_db() -> (NamedTempFile, Connection) {
         let tmp = NamedTempFile::new().unwrap();
