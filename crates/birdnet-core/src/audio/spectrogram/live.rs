@@ -95,13 +95,29 @@ pub fn process_file(
         }
     }
 
-    // Optionally normalize to [0, 1].
+    // Optionally normalize to [0, 1]. Compute the range over finite values only
+    // and clamp the result: a single non-finite sample (a `+Inf` from an
+    // overflowing power on a corrupt/edge frame) would otherwise wipe the whole
+    // frame to Inf/NaN, which then fails JSON serialization and drops the frame.
     if config.normalize {
-        let min_val = data.iter().copied().fold(f32::INFINITY, f32::min);
-        let max_val = data.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let min_val = data
+            .iter()
+            .copied()
+            .filter(|v| v.is_finite())
+            .fold(f32::INFINITY, f32::min);
+        let max_val = data
+            .iter()
+            .copied()
+            .filter(|v| v.is_finite())
+            .fold(f32::NEG_INFINITY, f32::max);
         let range = (max_val - min_val).max(1e-6);
         for v in &mut data {
-            *v = (*v - min_val) / range;
+            let normalized = (*v - min_val) / range;
+            *v = if normalized.is_finite() {
+                normalized.clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
         }
     }
 

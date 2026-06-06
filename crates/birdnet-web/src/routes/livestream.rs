@@ -8,20 +8,37 @@
 //! | `GET /stream` | Raw MP3 audio stream via HTTP chunked transfer |
 //! | `GET /api/v2/languages` | List available i18n languages |
 
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router, routing::get};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::sync::{Arc, LazyLock};
+use tokio::sync::Semaphore;
 use tokio_stream::StreamExt;
+use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::io::ReaderStream;
 
 use crate::state::AppState;
 
 /// Sample rate used for the live audio stream output (Hz).
 const STREAM_SAMPLE_RATE: u32 = 44_100;
+
+/// Maximum number of concurrent live `/stream` connections.
+///
+/// Each connection spawns its own `ffmpeg` capturing + MP3-encoding the source,
+/// so an unbounded count is a trivial unauthenticated resource-exhaustion vector
+/// on a Raspberry Pi (`kill_on_drop` cleans up on disconnect but doesn't bound
+/// the peak). BirdNET-Pi sidesteps this with a single shared Icecast stream; we
+/// allow a handful of independent streams (different devices / pitch shifts) and
+/// return 503 beyond that.
+const MAX_CONCURRENT_STREAMS: usize = 4;
+
+/// Process-global permit pool bounding concurrent live streams.
+static STREAM_SLOTS: LazyLock<Arc<Semaphore>> =
+    LazyLock::new(|| Arc::new(Semaphore::new(MAX_CONCURRENT_STREAMS)));
 
 /// Query parameters for the live audio stream.
 #[derive(Debug, Deserialize)]
@@ -175,6 +192,17 @@ async fn livestream(State(state): State<AppState>, Query(params): Query<StreamPa
         },
     );
 
+    // Bound concurrent streams before spawning ffmpeg (after source resolution,
+    // so a 404/503 never consumes a slot). The owned permit is moved into the
+    // forwarding task below and released when the client disconnects.
+    let Ok(stream_permit) = STREAM_SLOTS.clone().try_acquire_owned() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "too many concurrent live streams",
+        )
+            .into_response();
+    };
+
     // Build the audio filter chain: optional freq shift + format conversion.
     let audio_filter = freq_shift_filter(STREAM_SAMPLE_RATE, params.freq_shift_hz);
 
@@ -239,14 +267,24 @@ async fn livestream(State(state): State<AppState>, Query(params): Query<StreamPa
         "starting live audio stream"
     );
 
-    let stream = ReaderStream::new(stdout).map(|result| {
-        result.map_err(|e| {
-            tracing::debug!(error = %e, "livestream read error");
-            std::io::Error::other(e)
-        })
+    // Forward ffmpeg's stdout to the response body through a task that owns the
+    // ffmpeg child and the concurrency permit, so both are dropped — ffmpeg
+    // killed via kill_on_drop, the stream slot freed — exactly when the client
+    // disconnects (the receiver drops and `send` fails). Holding the child here
+    // also keeps it from being killed the instant this handler returns.
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(16);
+    tokio::spawn(async move {
+        let _permit = stream_permit;
+        let _child = child;
+        let mut reader = ReaderStream::new(stdout);
+        while let Some(chunk) = reader.next().await {
+            if tx.send(chunk.map_err(std::io::Error::other)).await.is_err() {
+                break; // client disconnected
+            }
+        }
     });
 
-    let body = Body::from_stream(stream);
+    let body = Body::from_stream(ReceiverStream::new(rx));
 
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("audio/mpeg"));
