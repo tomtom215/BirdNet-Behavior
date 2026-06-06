@@ -303,11 +303,31 @@ impl HaDiscovery {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Minimal JSON string escaping (double-quotes and backslashes only).
-///
-/// This is sufficient for the controlled strings used in discovery payloads.
+/// Minimal JSON string escaping covering the characters that would otherwise
+/// produce invalid JSON when interpolated into a `"..."` literal: backslash,
+/// double-quote, and the C0 control characters (`\n`, `\r`, `\t`, and any
+/// other `<= 0x1F`). Operator-supplied strings (`station_name`, `device_id`)
+/// can legitimately contain whitespace control chars and would silently break
+/// Home Assistant discovery without this.
 fn esc_json(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{0008}' => out.push_str("\\b"),
+            '\u{000C}' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => {
+                use std::fmt::Write as _;
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -320,6 +340,25 @@ mod tests {
 
     fn discovery() -> HaDiscovery {
         HaDiscovery::new(MqttConfig::default(), HaDiscoveryConfig::default())
+    }
+
+    #[test]
+    fn esc_json_escapes_backslash_and_quote() {
+        assert_eq!(esc_json(r#"a"b\c"#), r#"a\"b\\c"#);
+    }
+
+    #[test]
+    fn esc_json_escapes_control_characters() {
+        // Operator-supplied station_name / device_id may contain whitespace
+        // controls; without escaping, the discovery payload would be invalid
+        // JSON and silently break Home Assistant integration.
+        assert_eq!(esc_json("a\nb\rc\td"), r"a\nb\rc\td");
+        assert_eq!(esc_json("\u{0008}\u{000C}"), r"\b\f");
+        // Other control chars use \u escapes.
+        assert_eq!(esc_json("\u{0001}"), "\\u0001");
+        assert_eq!(esc_json("\u{001F}"), "\\u001f");
+        // Printable ASCII and Unicode pass through.
+        assert_eq!(esc_json("hello 🐦"), "hello 🐦");
     }
 
     #[test]

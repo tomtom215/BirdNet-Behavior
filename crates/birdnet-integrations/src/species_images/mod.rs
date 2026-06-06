@@ -42,6 +42,44 @@ use std::fmt;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
+/// Maximum number of bytes accepted for a single image download.
+///
+/// `bytes()` reads the whole response body with no cap, so a poisoned or
+/// runaway upstream (or a Wikipedia thumbnail URL someone replaced with a huge
+/// asset) could OOM the Pi. A few MB is more than enough for any thumbnail —
+/// `Special:FilePath` thumbnails are typically under 200 KB.
+const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024; // 8 MiB
+
+/// Download a response body with a hard byte cap so a poisoned image URL can't
+/// exhaust memory. Honours `Content-Length` up front when present and bounds
+/// the streamed read regardless (the header can lie). Uses `Response::chunk`
+/// to avoid pulling `futures_util` for a Stream wrapper.
+pub(super) async fn read_capped_image_bytes(
+    mut resp: reqwest::Response,
+) -> Result<Vec<u8>, ImageError> {
+    if let Some(len) = resp.content_length()
+        && len > MAX_IMAGE_BYTES as u64
+    {
+        return Err(ImageError::Http(format!(
+            "image download exceeds {MAX_IMAGE_BYTES}-byte cap (Content-Length: {len})"
+        )));
+    }
+    let mut buf = Vec::with_capacity(64 * 1024);
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|e| ImageError::Http(e.to_string()))?
+    {
+        if buf.len().saturating_add(chunk.len()) > MAX_IMAGE_BYTES {
+            return Err(ImageError::Http(format!(
+                "image download exceeds {MAX_IMAGE_BYTES}-byte cap"
+            )));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
+}
+
 /// User-Agent for image-byte downloads. Wikimedia rejects requests without a
 /// descriptive User-Agent (returning a short policy notice instead of the
 /// image — see <https://phabricator.wikimedia.org/T400119>), so the download
@@ -156,10 +194,7 @@ impl ImageCache {
                     "image download for '{scientific_name}' did not return an image"
                 )));
             }
-            let bytes = resp
-                .bytes()
-                .await
-                .map_err(|e| ImageError::Http(e.to_string()))?;
+            let bytes = read_capped_image_bytes(resp).await?;
             let path = self.disk.store(&key, &bytes)?;
             img.cached_path = Some(path);
         }

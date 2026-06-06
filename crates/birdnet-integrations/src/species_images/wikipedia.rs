@@ -156,11 +156,7 @@ impl WikipediaClient {
             }
             match self.http.get(url).send().await {
                 Ok(resp) if resp.status().is_success() => {
-                    return resp
-                        .bytes()
-                        .await
-                        .map(|b| b.to_vec())
-                        .map_err(|e| ImageError::Http(e.to_string()));
+                    return super::read_capped_image_bytes(resp).await;
                 }
                 Ok(resp) => last_error = ImageError::Http(format!("HTTP {}", resp.status())),
                 Err(e) => last_error = ImageError::Http(e.to_string()),

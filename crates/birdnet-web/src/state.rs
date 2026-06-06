@@ -340,38 +340,43 @@ impl AppState {
 
     /// Execute a closure with a reference to the `SQLite` database connection.
     ///
-    /// # Panics
-    ///
-    /// Panics if the mutex is poisoned.
+    /// Recovers from a poisoned mutex via [`std::sync::PoisonError::into_inner`]
+    /// rather than panicking: a panic inside the closure only borrows the
+    /// `Connection` (it can't tear it), so the connection is still usable. The
+    /// previous `.expect()` turned one bad query (e.g. a panic in any handler
+    /// or background task that took this lock) into a permanent server brick,
+    /// since every later `with_db` would panic too. This matches the
+    /// recover-and-continue policy used elsewhere in the workspace (see
+    /// `birdnet-integrations::species_images::cache`).
     pub fn with_db<F, T>(&self, f: F) -> T
     where
         F: FnOnce(&Connection) -> T,
     {
-        let conn = self.inner.db.lock().expect("database mutex poisoned");
+        let conn = self
+            .inner
+            .db
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         f(&conn)
     }
 
     /// Execute a closure with a reference to the `DuckDB` analytics database.
     ///
-    /// # Panics
-    ///
-    /// Panics if the mutex is poisoned.
+    /// Recovers from a poisoned mutex; see [`Self::with_db`] for rationale.
     #[cfg(feature = "analytics")]
     pub fn with_analytics<F, T>(&self, f: F) -> Option<T>
     where
         F: FnOnce(&AnalyticsDb) -> T,
     {
         self.inner.analytics_db.as_ref().map(|db| {
-            let db = db.lock().expect("analytics mutex poisoned");
+            let db = db.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             f(&db)
         })
     }
 
     /// Execute a closure with a `TimeSeriesDb` executor backed by the DuckDB connection.
     ///
-    /// # Panics
-    ///
-    /// Panics if the mutex is poisoned.
+    /// Recovers from a poisoned mutex; see [`Self::with_db`] for rationale.
     #[cfg(feature = "analytics")]
     pub fn with_timeseries<F, T>(
         &self,
@@ -383,7 +388,7 @@ impl AppState {
         ) -> Result<T, birdnet_timeseries::TimeSeriesError>,
     {
         self.inner.analytics_db.as_ref().map(|db| {
-            let db = db.lock().expect("analytics mutex poisoned");
+            let db = db.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             birdnet_timeseries::executor::TimeSeriesDb::new(db.conn()).and_then(f)
         })
     }
