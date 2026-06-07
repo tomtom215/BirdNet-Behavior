@@ -70,6 +70,39 @@ struct PatternsQuery {
     hour_end: Option<u32>,
 }
 
+// -- Parameter clamps --
+// These endpoints are public (the LAN dashboard is unauthenticated by design),
+// so a single client request must not be able to force an oversized result set
+// or sequence on a small Pi. The ceilings sit far above any legitimate dashboard
+// use — a station has at most a few hundred distinct species and a bounded
+// session history.
+
+/// Upper bound on `?limit=` for `/analytics/sessions`.
+#[cfg(feature = "analytics")]
+const MAX_SESSIONS_LIMIT: u32 = 10_000;
+
+/// Upper bound on `?limit=` for `/analytics/next-species`.
+#[cfg(feature = "analytics")]
+const MAX_NEXT_SPECIES_LIMIT: u32 = 1_000;
+
+/// Upper bound on the number of species in a `?species=a,b,c` sequence (funnel /
+/// patterns), capping the `Vec` built from an attacker-influenced query string
+/// before it reaches the analytics query builder.
+#[cfg(feature = "analytics")]
+const MAX_SPECIES_SEQUENCE: usize = 64;
+
+/// Parse a comma-separated `?species=` list into a trimmed sequence, capping the
+/// element count at [`MAX_SPECIES_SEQUENCE`]. `None` falls back to `default`.
+#[cfg(feature = "analytics")]
+fn parse_species_sequence(raw: Option<String>, default: Vec<String>) -> Vec<String> {
+    raw.map_or(default, |s| {
+        s.split(',')
+            .take(MAX_SPECIES_SEQUENCE)
+            .map(|part| part.trim().to_string())
+            .collect()
+    })
+}
+
 // -- Handler implementations --
 
 #[cfg(feature = "analytics")]
@@ -84,7 +117,7 @@ async fn sessions(
     let params = birdnet_behavioral::types::SessionizeParams {
         species: query.species,
         gap_minutes: query.gap.unwrap_or(30),
-        limit: query.limit.unwrap_or(100),
+        limit: query.limit.unwrap_or(100).min(MAX_SESSIONS_LIMIT),
     };
 
     let result = tokio::task::spawn_blocking(move || {
@@ -191,10 +224,7 @@ async fn funnel(
     }
 
     let default = birdnet_behavioral::types::FunnelParams::default();
-    let species_sequence = query
-        .species
-        .map(|s| s.split(',').map(|part| part.trim().to_string()).collect())
-        .unwrap_or(default.species_sequence);
+    let species_sequence = parse_species_sequence(query.species, default.species_sequence);
 
     let params = birdnet_behavioral::types::FunnelParams {
         species_sequence,
@@ -253,10 +283,7 @@ async fn patterns(
     }
 
     let default = birdnet_behavioral::types::PatternParams::default();
-    let species_sequence = query
-        .species
-        .map(|s| s.split(',').map(|part| part.trim().to_string()).collect())
-        .unwrap_or(default.species_sequence);
+    let species_sequence = parse_species_sequence(query.species, default.species_sequence);
 
     let params = birdnet_behavioral::types::PatternParams {
         species_sequence,
@@ -336,7 +363,7 @@ async fn next_species(
     };
 
     let window = query.window.unwrap_or(60);
-    let limit = query.limit.unwrap_or(10);
+    let limit = query.limit.unwrap_or(10).min(MAX_NEXT_SPECIES_LIMIT);
 
     let result = tokio::task::spawn_blocking(move || {
         state
@@ -429,4 +456,37 @@ fn extension_error(function: &str, error: &str) -> (StatusCode, Json<Value>) {
             "error": error,
         })),
     )
+}
+
+#[cfg(all(test, feature = "analytics"))]
+mod tests {
+    use super::{MAX_SPECIES_SEQUENCE, parse_species_sequence};
+
+    #[test]
+    fn parse_species_sequence_uses_default_when_absent() {
+        let def = vec!["Robin".to_string(), "Wren".to_string()];
+        assert_eq!(parse_species_sequence(None, def.clone()), def);
+    }
+
+    #[test]
+    fn parse_species_sequence_splits_and_trims() {
+        assert_eq!(
+            parse_species_sequence(Some(" Robin , Blackbird ,Wren".to_string()), vec![]),
+            vec![
+                "Robin".to_string(),
+                "Blackbird".to_string(),
+                "Wren".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_species_sequence_caps_element_count() {
+        // A pathological `?species=sp,sp,sp,…` (5000 entries) is capped so a
+        // single public request can't push an oversized sequence into the
+        // analytics query builder.
+        let raw = vec!["sp"; 5000].join(",");
+        let parsed = parse_species_sequence(Some(raw), vec![]);
+        assert_eq!(parsed.len(), MAX_SPECIES_SEQUENCE);
+    }
 }
