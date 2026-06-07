@@ -1,9 +1,9 @@
 //! Detection CRUD queries, split by concern.
 //!
-//! - [`read`] — counts, listings, pagination, today's feed, corroboration.
-//! - [`write`] — insert, delete, relabel.
-//! - [`search`] — free-text search-term parsing (pure, no database).
-//! - [`locks`] — lock/unlock a clip against the disk purge.
+//! - `read` — counts, listings, pagination, today's feed, corroboration.
+//! - `write` — insert, delete, relabel.
+//! - `search` — free-text search-term parsing (pure, no database).
+//! - `locks` — lock/unlock a clip against the disk purge.
 //!
 //! Every query is re-exported here so callers keep using the flat
 //! `queries::detections::<fn>` path.

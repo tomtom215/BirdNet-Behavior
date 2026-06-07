@@ -12,8 +12,8 @@
 //! This module owns the shared types and the public surface; the work is split
 //! into two submodules:
 //!
-//! - [`process`] — per-file decode → pipeline → inference → filtering.
-//! - [`run`] — the directory-watch loop that drives settled clips through it.
+//! - `process` — per-file decode → pipeline → inference → filtering.
+//! - `run` — the directory-watch loop that drives settled clips through it.
 
 use std::fmt;
 use std::path::PathBuf;

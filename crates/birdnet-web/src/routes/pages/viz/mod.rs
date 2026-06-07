@@ -3,10 +3,10 @@
 //! Pure functions, styled by the design tokens in `static/css/app.css`, grouped
 //! by visual family:
 //!
-//! - [`matrix`] — the co-occurrence intensity grid.
-//! - [`timeline`] — Cartesian time-series charts (streamgraph, accumulation
+//! - `matrix` — the co-occurrence intensity grid.
+//! - `timeline` — Cartesian time-series charts (streamgraph, accumulation
 //!   curve, migration ridgeline, the 24-hour day strip).
-//! - [`radial`] — polar charts (the dawn-chorus circadian plot, the acoustic
+//! - `radial` — polar charts (the dawn-chorus circadian plot, the acoustic
 //!   co-occurrence chord diagram) and the geometry helpers they share.
 //!
 //! Colours come from `super::atoms::species_color` so a species keeps the same
