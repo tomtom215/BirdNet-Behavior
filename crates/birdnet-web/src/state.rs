@@ -419,9 +419,7 @@ impl AppState {
     /// timestamps. Returns `None` when analytics is not enabled, otherwise the
     /// number of rows loaded (or the rebuild error).
     ///
-    /// # Panics
-    ///
-    /// Panics if either mutex is poisoned.
+    /// Recovers from a poisoned mutex; see [`Self::with_db`] for rationale.
     #[cfg(feature = "analytics")]
     pub fn resync_analytics_full(
         &self,
@@ -429,9 +427,16 @@ impl AppState {
         let analytics = self.inner.analytics_db.as_ref()?;
         // Lock the SQLite connection first, then analytics — the only ordering
         // used elsewhere is sequential (the processor writes SQLite then DuckDB
-        // without nesting), so this cannot deadlock.
-        let conn = self.inner.db.lock().expect("database mutex poisoned");
-        let adb = analytics.lock().expect("analytics mutex poisoned");
+        // without nesting), so this cannot deadlock. Recover from poison rather
+        // than crash the process, matching `with_db` / `with_timeseries`.
+        let conn = self
+            .inner
+            .db
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let adb = analytics
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Some(adb.full_resync_from_sqlite(&conn))
     }
 
