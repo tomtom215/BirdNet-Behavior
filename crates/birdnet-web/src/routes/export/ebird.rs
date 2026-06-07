@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::fmt::Write;
 
-use super::escape_csv;
+use super::{MAX_EXPORT_ROWS, escape_csv, export_too_large};
 use crate::routes::is_valid_date;
 use crate::state::AppState;
 
@@ -51,13 +51,16 @@ pub(super) async fn export_ebird(
         state.with_db(|conn| {
             let from = date.as_deref();
             let to = date.as_deref();
-            birdnet_db::sqlite::all_detections(conn, from, to)
+            birdnet_db::sqlite::all_detections(conn, from, to, MAX_EXPORT_ROWS)
         })
     })
     .await;
 
     match result {
-        Ok(Ok(detections)) => {
+        Ok(Ok((detections, truncated))) => {
+            if truncated {
+                return export_too_large();
+            }
             let csv = detections_to_ebird_csv(&detections, lat, lon, &location);
             let filename = date_for_filename.as_deref().unwrap_or("all");
             (

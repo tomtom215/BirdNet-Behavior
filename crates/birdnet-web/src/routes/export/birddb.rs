@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::fmt::Write;
 
+use super::{MAX_EXPORT_ROWS, export_too_large, sanitize_birddb_field};
 use crate::routes::is_valid_date;
 use crate::state::AppState;
 
@@ -41,13 +42,16 @@ pub(super) async fn export_birddb(
 
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
-            birdnet_db::sqlite::all_detections(conn, from.as_deref(), to.as_deref())
+            birdnet_db::sqlite::all_detections(conn, from.as_deref(), to.as_deref(), MAX_EXPORT_ROWS)
         })
     })
     .await;
 
     match result {
-        Ok(Ok(detections)) => {
+        Ok(Ok((detections, truncated))) => {
+            if truncated {
+                return export_too_large();
+            }
             let birddb = detections_to_birddb(&detections);
             (
                 StatusCode::OK,
@@ -82,13 +86,17 @@ fn detections_to_birddb(rows: &[birdnet_db::sqlite::DetectionRow]) -> String {
     let mut out = String::with_capacity(rows.len() * 100);
 
     for row in rows {
+        // Sanitize the free-text fields: the format is unquoted and
+        // semicolon-delimited, so an embedded `;` or newline would corrupt the
+        // record structure (or inject a fake detection line). date/time come
+        // from the validated detection schema and the numerics are typed.
         let _ = writeln!(
             out,
             "{};{};{};{};{:.4};{};{};{};{};{};{};{}",
             row.date,
             row.time,
-            row.sci_name,
-            row.com_name,
+            sanitize_birddb_field(&row.sci_name),
+            sanitize_birddb_field(&row.com_name),
             row.confidence,
             row.lat.map_or(String::new(), |v| v.to_string()),
             row.lon.map_or(String::new(), |v| v.to_string()),
@@ -96,7 +104,7 @@ fn detections_to_birddb(rows: &[birdnet_db::sqlite::DetectionRow]) -> String {
             row.week.map_or(String::new(), |v| v.to_string()),
             row.sens.map_or(String::new(), |v| v.to_string()),
             row.overlap.map_or(String::new(), |v| v.to_string()),
-            row.file_name.as_deref().unwrap_or(""),
+            sanitize_birddb_field(row.file_name.as_deref().unwrap_or("")),
         );
     }
 

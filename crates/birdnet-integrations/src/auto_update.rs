@@ -103,9 +103,18 @@ pub struct UpdateInfo {
 // ---------------------------------------------------------------------------
 
 /// Parse a version tag like `"v0.1.0"` or `"0.1.0"` into `(major, minor, patch)`.
+///
+/// Strips a leading `v`, then any semver build metadata (`+…`) and pre-release
+/// suffix (`-…`): neither affects the numeric `(major, minor, patch)` precedence
+/// we compare on. `releases/latest` only ever returns a full (non-prerelease)
+/// release, so a pre-release tag is not expected here — but tolerating the
+/// suffixes keeps a tag like `v1.2.3+ci` (or a future `v1.2.3-rc1`) from failing
+/// to parse and being silently treated as "no update available".
 fn parse_version(tag: &str) -> Result<(u64, u64, u64), UpdateError> {
     let stripped = tag.strip_prefix('v').unwrap_or(tag);
-    let parts: Vec<&str> = stripped.split('.').collect();
+    // Take the numeric core before any `-prerelease` / `+build` suffix.
+    let core = stripped.split(['-', '+']).next().unwrap_or(stripped);
+    let parts: Vec<&str> = core.split('.').collect();
     if parts.len() != 3 {
         return Err(UpdateError::Parse(format!(
             "expected 3 version components, got {}: {tag}",
@@ -215,7 +224,21 @@ pub fn check_for_update(current_version: &str) -> Result<UpdateInfo, UpdateError
         tracing::debug!("no SHA256SUMS entry found for the update asset; will rely on smoke test");
     }
 
-    let update_available = is_newer(current_version, tag).unwrap_or(false);
+    let update_available = match is_newer(current_version, tag) {
+        Ok(newer) => newer,
+        Err(e) => {
+            // Surface a malformed version rather than silently reporting
+            // "up to date" — a tag typo would otherwise hide every future
+            // update (including security fixes) with no diagnostic.
+            tracing::warn!(
+                error = %e,
+                current = %current_version,
+                latest = %tag,
+                "could not compare versions for update check; treating as up-to-date"
+            );
+            false
+        }
+    };
 
     Ok(UpdateInfo {
         current_version: current_version.to_string(),
@@ -682,6 +705,25 @@ mod tests {
     fn parse_version_invalid() {
         assert!(parse_version("1.2").is_err());
         assert!(parse_version("abc").is_err());
+    }
+
+    #[test]
+    fn parse_version_tolerates_semver_suffixes() {
+        // Build metadata and pre-release suffixes don't affect the numeric
+        // precedence and must not make the parser fail (which would silently
+        // suppress the update).
+        assert_eq!(parse_version("v1.2.3+ci.5").unwrap(), (1, 2, 3));
+        assert_eq!(parse_version("1.2.3-rc1").unwrap(), (1, 2, 3));
+        assert_eq!(parse_version("v1.2.3-rc.2+build.7").unwrap(), (1, 2, 3));
+    }
+
+    #[test]
+    fn is_newer_handles_suffixed_tags() {
+        // A `+build`/`-rc` tag compares on its numeric core. (In practice
+        // `releases/latest` only returns full releases, but the comparison
+        // must not error out.)
+        assert!(is_newer("1.2.2", "v1.2.3+ci").unwrap());
+        assert!(!is_newer("1.2.3", "v1.2.3+ci").unwrap());
     }
 
     #[test]

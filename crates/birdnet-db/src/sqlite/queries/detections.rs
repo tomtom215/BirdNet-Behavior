@@ -218,39 +218,41 @@ pub fn all_detections(
     conn: &Connection,
     from: Option<&str>,
     to: Option<&str>,
-) -> Result<Vec<DetectionRow>, DbError> {
-    let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match (from, to) {
+    max_rows: u32,
+) -> Result<(Vec<DetectionRow>, bool), DbError> {
+    // Bound peak memory: the (public, unauthenticated) export endpoints load
+    // the whole result set into a `Vec` and build the entire CSV string from
+    // it, so an unfiltered export on a long-running station (millions of rows)
+    // would OOM a small Pi. Fetch one row past `max_rows` to detect truncation
+    // without a separate COUNT; callers surface an error and ask the user to
+    // narrow the date range. `max_rows + 1` is a typed integer interpolated
+    // into `LIMIT` — no injection surface.
+    let fetch = u64::from(max_rows).saturating_add(1);
+    let (where_sql, param_values): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match (from, to) {
         (Some(f), Some(t)) => (
-            format!(
-                "SELECT {DETECTION_COLS} FROM detections WHERE Date >= ?1 AND Date <= ?2 ORDER BY Date DESC, Time DESC"
-            ),
+            "WHERE Date >= ?1 AND Date <= ?2",
             vec![Box::new(f.to_string()), Box::new(t.to_string())],
         ),
-        (Some(f), None) => (
-            format!(
-                "SELECT {DETECTION_COLS} FROM detections WHERE Date >= ?1 ORDER BY Date DESC, Time DESC"
-            ),
-            vec![Box::new(f.to_string())],
-        ),
-        (None, Some(t)) => (
-            format!(
-                "SELECT {DETECTION_COLS} FROM detections WHERE Date <= ?1 ORDER BY Date DESC, Time DESC"
-            ),
-            vec![Box::new(t.to_string())],
-        ),
-        (None, None) => (
-            format!("SELECT {DETECTION_COLS} FROM detections ORDER BY Date DESC, Time DESC"),
-            vec![],
-        ),
+        (Some(f), None) => ("WHERE Date >= ?1", vec![Box::new(f.to_string())]),
+        (None, Some(t)) => ("WHERE Date <= ?1", vec![Box::new(t.to_string())]),
+        (None, None) => ("", vec![]),
     };
+    let sql = format!(
+        "SELECT {DETECTION_COLS} FROM detections {where_sql} \
+         ORDER BY Date DESC, Time DESC LIMIT {fetch}"
+    );
 
     let params_ref: Vec<&dyn rusqlite::types::ToSql> =
         param_values.iter().map(AsRef::as_ref).collect();
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt
+    let mut rows = stmt
         .query_map(params_ref.as_slice(), map_detection_row)?
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(rows)
+    let truncated = u64::try_from(rows.len()).unwrap_or(u64::MAX) > u64::from(max_rows);
+    if truncated {
+        rows.truncate(max_rows as usize);
+    }
+    Ok((rows, truncated))
 }
 
 /// Query recent detections for a specific species by common name.
@@ -855,29 +857,43 @@ mod tests {
     #[test]
     fn all_detections_no_filter() {
         let (_tmp, conn) = temp_db_with_data();
-        let rows = all_detections(&conn, None, None).unwrap();
+        let (rows, truncated) = all_detections(&conn, None, None, 10_000).unwrap();
         assert_eq!(rows.len(), 4);
+        assert!(!truncated);
     }
 
     #[test]
     fn all_detections_date_range() {
         let (_tmp, conn) = temp_db_with_data();
-        let rows = all_detections(&conn, Some("2026-03-11"), Some("2026-03-11")).unwrap();
+        let (rows, _) = all_detections(&conn, Some("2026-03-11"), Some("2026-03-11"), 10_000).unwrap();
         assert_eq!(rows.len(), 3);
     }
 
     #[test]
     fn all_detections_from_only() {
         let (_tmp, conn) = temp_db_with_data();
-        let rows = all_detections(&conn, Some("2026-03-11"), None).unwrap();
+        let (rows, _) = all_detections(&conn, Some("2026-03-11"), None, 10_000).unwrap();
         assert_eq!(rows.len(), 3);
     }
 
     #[test]
     fn all_detections_to_only() {
         let (_tmp, conn) = temp_db_with_data();
-        let rows = all_detections(&conn, None, Some("2026-03-10")).unwrap();
+        let (rows, _) = all_detections(&conn, None, Some("2026-03-10"), 10_000).unwrap();
         assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn all_detections_truncates_at_max_rows() {
+        let (_tmp, conn) = temp_db_with_data();
+        // 4 rows exist; cap at 2 → truncated, exactly 2 returned.
+        let (rows, truncated) = all_detections(&conn, None, None, 2).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(truncated);
+        // Cap exactly at the row count → not truncated.
+        let (rows, truncated) = all_detections(&conn, None, None, 4).unwrap();
+        assert_eq!(rows.len(), 4);
+        assert!(!truncated);
     }
 
     #[test]
