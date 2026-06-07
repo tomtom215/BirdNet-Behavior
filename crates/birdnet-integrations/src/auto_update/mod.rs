@@ -10,6 +10,10 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod version;
+
+use version::{is_newer, validate_release_url};
+
 /// GitHub API endpoint for the latest release.
 const RELEASES_URL: &str =
     "https://api.github.com/repos/tomtom215/BirdNet-Behavior/releases/latest";
@@ -99,39 +103,6 @@ pub struct UpdateInfo {
 }
 
 // ---------------------------------------------------------------------------
-// Version comparison
-// ---------------------------------------------------------------------------
-
-/// Parse a version tag like `"v0.1.0"` or `"0.1.0"` into `(major, minor, patch)`.
-fn parse_version(tag: &str) -> Result<(u64, u64, u64), UpdateError> {
-    let stripped = tag.strip_prefix('v').unwrap_or(tag);
-    let parts: Vec<&str> = stripped.split('.').collect();
-    if parts.len() != 3 {
-        return Err(UpdateError::Parse(format!(
-            "expected 3 version components, got {}: {tag}",
-            parts.len()
-        )));
-    }
-    let major = parts[0]
-        .parse::<u64>()
-        .map_err(|e| UpdateError::Parse(format!("bad major version: {e}")))?;
-    let minor = parts[1]
-        .parse::<u64>()
-        .map_err(|e| UpdateError::Parse(format!("bad minor version: {e}")))?;
-    let patch = parts[2]
-        .parse::<u64>()
-        .map_err(|e| UpdateError::Parse(format!("bad patch version: {e}")))?;
-    Ok((major, minor, patch))
-}
-
-/// Returns `true` if `latest` is strictly newer than `current`.
-fn is_newer(current: &str, latest: &str) -> Result<bool, UpdateError> {
-    let c = parse_version(current)?;
-    let l = parse_version(latest)?;
-    Ok(l > c)
-}
-
-// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -191,7 +162,21 @@ pub fn check_for_update(current_version: &str) -> Result<UpdateInfo, UpdateError
         tracing::debug!("no SHA256SUMS entry found for the update asset; will rely on smoke test");
     }
 
-    let update_available = is_newer(current_version, tag).unwrap_or(false);
+    let update_available = match is_newer(current_version, tag) {
+        Ok(newer) => newer,
+        Err(e) => {
+            // Surface a malformed version rather than silently reporting
+            // "up to date" — a tag typo would otherwise hide every future
+            // update (including security fixes) with no diagnostic.
+            tracing::warn!(
+                error = %e,
+                current = %current_version,
+                latest = %tag,
+                "could not compare versions for update check; treating as up-to-date"
+            );
+            false
+        }
+    };
 
     Ok(UpdateInfo {
         current_version: current_version.to_string(),
@@ -238,6 +223,14 @@ pub fn apply_update(
     current_binary: &Path,
     expected_sha256: Option<&str>,
 ) -> Result<(), UpdateError> {
+    // Defense-in-depth: the downloaded bytes are written next to the running
+    // binary and (after checksum + smoke test) installed as the executable, so
+    // refuse any asset URL that isn't HTTPS on a GitHub release host before
+    // fetching a single byte. The release flow only ever passes
+    // github.com / *.githubusercontent.com URLs; this rejects a tampered API
+    // response or a future caller that supplies an arbitrary URL.
+    validate_release_url(asset_url)?;
+
     let parent = current_binary.parent().unwrap_or_else(|| Path::new("."));
 
     let file_name = current_binary
@@ -497,6 +490,10 @@ fn fetch_expected_sha256(
     sums_url: &str,
     filename: &str,
 ) -> Option<String> {
+    // Pin the checksum source to a GitHub host too: a checksum fetched from an
+    // attacker-controlled URL could be made to match a malicious binary. (The
+    // binary download is independently pinned in `apply_update`.)
+    validate_release_url(sums_url).ok()?;
     let resp = client.get(sums_url).send().ok()?;
     if !resp.status().is_success() {
         return None;
@@ -613,35 +610,6 @@ fn smoke_test_binary(path: &Path) -> Result<(), UpdateError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parse_version_with_prefix() {
-        assert_eq!(parse_version("v1.2.3").unwrap(), (1, 2, 3));
-    }
-
-    #[test]
-    fn parse_version_without_prefix() {
-        assert_eq!(parse_version("0.10.5").unwrap(), (0, 10, 5));
-    }
-
-    #[test]
-    fn parse_version_invalid() {
-        assert!(parse_version("1.2").is_err());
-        assert!(parse_version("abc").is_err());
-    }
-
-    #[test]
-    fn is_newer_true() {
-        assert!(is_newer("0.1.0", "v0.2.0").unwrap());
-        assert!(is_newer("v1.0.0", "v1.0.1").unwrap());
-        assert!(is_newer("0.9.9", "1.0.0").unwrap());
-    }
-
-    #[test]
-    fn is_newer_false() {
-        assert!(!is_newer("0.2.0", "0.1.0").unwrap());
-        assert!(!is_newer("1.0.0", "1.0.0").unwrap());
-    }
 
     #[test]
     fn is_tarball_url_recognises_tar_gz() {

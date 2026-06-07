@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::fmt::Write;
 
-use super::escape_csv;
+use super::{MAX_EXPORT_ROWS, escape_csv, export_too_large};
 use crate::routes::is_valid_date;
 use crate::state::AppState;
 
@@ -43,13 +43,21 @@ pub(super) async fn export_detections(
 
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
-            birdnet_db::sqlite::all_detections(conn, from.as_deref(), to.as_deref())
+            birdnet_db::sqlite::all_detections(
+                conn,
+                from.as_deref(),
+                to.as_deref(),
+                MAX_EXPORT_ROWS,
+            )
         })
     })
     .await;
 
     match result {
-        Ok(Ok(detections)) => {
+        Ok(Ok((detections, truncated))) => {
+            if truncated {
+                return export_too_large();
+            }
             if format == "json" {
                 let total = detections.len();
                 (

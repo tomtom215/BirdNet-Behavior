@@ -308,6 +308,49 @@ pub(crate) const fn days_to_date(days_since_epoch: u64) -> (u32, u32, u32) {
     (y, m, d)
 }
 
+/// Convert a `YYYY-MM-DD` date to days since the Unix epoch (rata die) — the
+/// inverse of [`days_to_date`]. Shared by the weekly-report, history and
+/// year-in-review pages.
+///
+/// Reads the year/month/day with char-boundary-safe [`str::get`] rather than
+/// `date[a..b]` indexing: a date that is long enough to clear the length check
+/// but carries a multibyte UTF-8 byte at a slice boundary (a corrupt or
+/// imported row) would make a byte-index slice panic, and with `panic = "abort"`
+/// that crashes the whole process. Unparseable parts fall back to the
+/// epoch-date defaults (1970-01-01), so a malformed date degrades to `0`
+/// instead of taking the station down.
+pub(crate) fn date_to_epoch_days(date: &str) -> u64 {
+    if date.len() < 10 {
+        return 0;
+    }
+    let part = |range: std::ops::Range<usize>, default: u64| {
+        date.get(range)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(default)
+    };
+    let y = part(0..4, 1970);
+    let m = part(5..7, 1);
+    let d = part(8..10, 1);
+
+    // Contract: Gregorian dates from the Unix epoch onward. A pre-1970 or
+    // out-of-range date (e.g. "0000-..." or "...-00") returns 0 rather than
+    // reaching the rata-die arithmetic below, whose `y - 1` / `d - 1` /
+    // `… - 719_468` would underflow — wrapping to garbage in release and
+    // panicking in a debug/test build. Real dates (the only callers) are
+    // unaffected; only out-of-range input collapses to the epoch sentinel.
+    if y < 1970 || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return 0;
+    }
+
+    // Rata Die day number.
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
 /// Count detections for today's date in `SQLite`.
 pub(crate) fn today_count(conn: &rusqlite::Connection) -> i64 {
     let today = today_date_string();
@@ -354,6 +397,53 @@ mod tests {
     fn days_to_date_known() {
         // 2026-03-12 = 20524 days since epoch
         assert_eq!(days_to_date(20524), (2026, 3, 12));
+    }
+
+    #[test]
+    fn date_to_epoch_days_round_trips_days_to_date() {
+        assert_eq!(date_to_epoch_days("1970-01-01"), 0);
+        assert_eq!(date_to_epoch_days("2026-03-12"), 20524);
+        // Inverse of days_to_date over a span of dates.
+        for days in [0_u64, 1, 365, 20_000, 20_524, 50_000] {
+            let (y, m, d) = days_to_date(days);
+            assert_eq!(date_to_epoch_days(&format!("{y}-{m:02}-{d:02}")), days);
+        }
+    }
+
+    #[test]
+    fn date_to_epoch_days_tolerates_malformed_input() {
+        // Too short → 0 (no panic).
+        assert_eq!(date_to_epoch_days("2026"), 0);
+        assert_eq!(date_to_epoch_days(""), 0);
+        // A 10-byte string whose bytes don't parse falls back to the epoch.
+        assert_eq!(date_to_epoch_days("not-a-date!"), 0);
+    }
+
+    #[test]
+    fn date_to_epoch_days_clamps_out_of_range_without_underflow() {
+        // Regression: these would underflow the rata-die `y - 1` / `d - 1` /
+        // `… - 719_468` — panicking in a debug build and wrapping to a garbage
+        // value in release. They must now collapse to the epoch sentinel.
+        assert_eq!(date_to_epoch_days("0000-01-01"), 0); // y - 1 underflow
+        assert_eq!(date_to_epoch_days("2026-00-15"), 0); // month 0
+        assert_eq!(date_to_epoch_days("2026-13-15"), 0); // month 13
+        assert_eq!(date_to_epoch_days("2026-03-00"), 0); // day 0 (d - 1 underflow)
+        assert_eq!(date_to_epoch_days("1969-12-31"), 0); // pre-epoch
+    }
+
+    #[test]
+    fn date_to_epoch_days_does_not_panic_on_multibyte_date() {
+        // Regression: `date[5..7]` / `date[8..10]` byte-slicing panics when a
+        // multibyte UTF-8 char straddles a slice boundary. With `panic =
+        // "abort"` that would crash the process from one corrupt/imported row.
+        // "2026-1é-9" is 10 bytes (é is 2) with the boundary mid-char.
+        let multibyte = "2026-1\u{e9}-9";
+        assert_eq!(multibyte.len(), 10);
+        // Must return a value, not panic. The exact number is unimportant; the
+        // month part fails to parse and falls back, so it stays finite.
+        let _ = date_to_epoch_days(multibyte);
+        // A trailing multibyte char at the very end also must not panic.
+        let _ = date_to_epoch_days("2026-03-1\u{e9}");
     }
 
     #[test]

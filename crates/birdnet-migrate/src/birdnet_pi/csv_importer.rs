@@ -27,6 +27,15 @@ use crate::traits::{MigrationSummary, Migrator};
 /// Minimum number of fields required per data line.
 const MIN_FIELDS: usize = 5; // Date, Time, Sci_Name, Com_Name, Confidence
 
+/// Maximum bytes accepted for a single CSV/TSV line.
+///
+/// `BufRead::lines()` buffers each line into a `String` with no cap, so a
+/// hostile or corrupt input with a single multi-GB line (no `\n`) would OOM the
+/// Pi — and the importer is reachable from an admin upload. 1 MiB is far above
+/// any realistic BirdNET-Pi line (the longest fixture lines are < 200 B), so
+/// this trips only on malformed input.
+const MAX_LINE_BYTES: usize = 1024 * 1024;
+
 /// Batch size for transactions.
 const BATCH_SIZE: usize = 500;
 
@@ -84,12 +93,17 @@ impl Migrator for CsvImporter {
             error: None,
         });
 
-        // Re-open for actual import.
+        // Re-open for actual import. Read lines manually with a per-line byte
+        // cap (`read_until` + length check) instead of `BufRead::lines()`, which
+        // would buffer a hostile multi-GB single line into memory and OOM the
+        // station before we ever see it.
         let file2 = std::fs::File::open(source_path).map_err(MigrateError::Io)?;
-        let reader2 = BufReader::new(file2);
-        let mut lines2 = reader2.lines();
+        let mut reader2 = BufReader::new(file2);
         // Skip header.
-        let _ = lines2.next();
+        {
+            let mut hdr = Vec::new();
+            let _ = read_capped_line(&mut reader2, &mut hdr)?;
+        }
 
         // Open (or create) destination database and run schema migrations.
         let dest_conn = birdnet_db::sqlite::open_or_create(dest_path).map_err(|e| {
@@ -115,14 +129,28 @@ impl Migrator for CsvImporter {
         let mut skipped = 0u64;
         let mut batch: Vec<CsvRow> = Vec::with_capacity(BATCH_SIZE);
 
-        for line_result in lines2 {
-            let line = line_result.map_err(MigrateError::Io)?;
-            let line = line.trim_end_matches('\r').to_string();
+        let mut buf: Vec<u8> = Vec::with_capacity(512);
+        loop {
+            buf.clear();
+            let n = read_capped_line(&mut reader2, &mut buf)?;
+            if n == 0 {
+                break; // EOF
+            }
+            // Drop the trailing `\n` (and any `\r` from CRLF) before parsing.
+            while matches!(buf.last(), Some(b'\n' | b'\r')) {
+                buf.pop();
+            }
+            // CSV/TSV is text — reject non-UTF-8 rather than silently mangling.
+            let Ok(line) = std::str::from_utf8(&buf) else {
+                tracing::warn!("skipping non-UTF-8 CSV line");
+                skipped += 1;
+                continue;
+            };
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
 
-            match parse_line(&line, delim) {
+            match parse_line(line, delim) {
                 Ok(row) => {
                     batch.push(row);
                     if batch.len() >= BATCH_SIZE {
@@ -260,11 +288,60 @@ fn flush_batch(conn: &Connection, batch: &[CsvRow]) -> Result<(u64, u64), Migrat
 /// Count non-empty lines in a file (including header).
 fn count_lines(path: &Path) -> Result<usize, MigrateError> {
     let file = std::fs::File::open(path).map_err(MigrateError::Io)?;
-    let reader = BufReader::new(file);
-    Ok(reader
-        .lines()
-        .filter(|l| l.as_ref().is_ok_and(|s| !s.trim().is_empty()))
-        .count())
+    let mut reader = BufReader::new(file);
+    let mut buf: Vec<u8> = Vec::with_capacity(512);
+    let mut count = 0;
+    loop {
+        buf.clear();
+        let n = read_capped_line(&mut reader, &mut buf)?;
+        if n == 0 {
+            break;
+        }
+        // Trim trailing newline + whitespace before the empty check.
+        while matches!(buf.last(), Some(b'\n' | b'\r' | b' ' | b'\t')) {
+            buf.pop();
+        }
+        if !buf.is_empty() {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+/// Read one line into `out`, capped at `MAX_LINE_BYTES` bytes (including the
+/// trailing newline). Returns the number of bytes read (0 at EOF). A line
+/// exceeding the cap returns `MigrateError::CsvParse` rather than swallowing
+/// arbitrary memory.
+fn read_capped_line<R: BufRead>(reader: &mut R, out: &mut Vec<u8>) -> Result<usize, MigrateError> {
+    let mut total = 0;
+    loop {
+        let available = match reader.fill_buf() {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(MigrateError::Io(e)),
+        };
+        if available.is_empty() {
+            return Ok(total);
+        }
+        // Search for the line terminator. `read_until` would do the same, but
+        // we need the byte budget check between buffer refills.
+        let (chunk, done) = available
+            .iter()
+            .position(|&b| b == b'\n')
+            .map_or((available, false), |i| (&available[..=i], true));
+        if total.saturating_add(chunk.len()) > MAX_LINE_BYTES {
+            return Err(MigrateError::CsvParse(format!(
+                "line exceeds {MAX_LINE_BYTES}-byte cap (truncated/corrupt input?)"
+            )));
+        }
+        out.extend_from_slice(chunk);
+        let consumed = chunk.len();
+        reader.consume(consumed);
+        total += consumed;
+        if done {
+            return Ok(total);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -281,6 +358,53 @@ mod tests {
         let mut f = NamedTempFile::new().unwrap();
         f.write_all(content.as_bytes()).unwrap();
         f
+    }
+
+    #[test]
+    fn read_capped_line_reads_normal_line_with_newline() {
+        use std::io::Cursor;
+        let mut reader = Cursor::new(b"hello\nworld\n".as_slice());
+        let mut buf = Vec::new();
+        let n = read_capped_line(&mut reader, &mut buf).unwrap();
+        assert_eq!(n, 6, "should consume 'hello\\n'");
+        assert_eq!(&buf, b"hello\n");
+    }
+
+    #[test]
+    fn read_capped_line_returns_zero_at_eof() {
+        use std::io::Cursor;
+        let mut reader = Cursor::new(b"".as_slice());
+        let mut buf = Vec::new();
+        let n = read_capped_line(&mut reader, &mut buf).unwrap();
+        assert_eq!(n, 0);
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn read_capped_line_rejects_oversize_line() {
+        // A pathological single line larger than the cap (no newline) must be
+        // rejected with `CsvParse`, not buffered into memory. We send slightly
+        // more than `MAX_LINE_BYTES` and assert the error variant.
+        use std::io::Cursor;
+        let hostile: Vec<u8> = vec![b'a'; MAX_LINE_BYTES + 64];
+        let mut reader = Cursor::new(hostile);
+        let mut buf = Vec::new();
+        let err = read_capped_line(&mut reader, &mut buf).expect_err("should reject oversize line");
+        assert!(
+            matches!(err, MigrateError::CsvParse(_)),
+            "expected CsvParse, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn read_capped_line_handles_no_trailing_newline() {
+        // Last line of file with no `\n` should still be returned.
+        use std::io::Cursor;
+        let mut reader = Cursor::new(b"final".as_slice());
+        let mut buf = Vec::new();
+        let n = read_capped_line(&mut reader, &mut buf).unwrap();
+        assert_eq!(n, 5);
+        assert_eq!(&buf, b"final");
     }
 
     #[test]

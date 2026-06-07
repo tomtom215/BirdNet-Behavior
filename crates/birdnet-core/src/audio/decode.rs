@@ -51,13 +51,45 @@ impl From<std::io::Error> for DecodeError {
     }
 }
 
+/// Maximum mono samples decoded by [`decode_file_capped`] for the on-demand
+/// spectrogram views.
+///
+/// The spectrogram is a *visual* downsampled to a fixed frame count, so showing
+/// the leading portion of an unusually long recording is harmless — but
+/// decoding the whole thing into an `f32` buffer is not. The public
+/// `/api/v2/spectrogram` endpoint decodes on demand, so without a cap a long
+/// station recording (or a misconfigured multi-minute segment) could allocate
+/// hundreds of MB per request and, under the render concurrency limit, OOM a
+/// small Pi. 28.8 M samples is 10 minutes at 48 kHz — far longer than any
+/// normal recording — bounding the buffer to ~115 MB.
+pub const SPECTROGRAM_DECODE_SAMPLE_CAP: usize = 10 * 60 * 48_000;
+
 /// Decode an audio file to mono f32 samples.
 ///
 /// # Errors
 ///
 /// Returns `DecodeError` if the file cannot be read, decoded, or contains no audio.
-#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 pub fn decode_file(path: &Path) -> Result<AudioData, DecodeError> {
+    decode_file_inner(path, None)
+}
+
+/// Decode an audio file to mono f32 samples, stopping after at most
+/// `max_samples` mono samples have been collected.
+///
+/// For the on-demand spectrogram views, where a visual of the leading portion
+/// of an over-long recording is acceptable but decoding the whole file into an
+/// unbounded buffer on a small Pi is not (see [`SPECTROGRAM_DECODE_SAMPLE_CAP`]).
+/// The detection pipeline uses the uncapped [`decode_file`] so no audio is lost.
+///
+/// # Errors
+///
+/// Returns `DecodeError` if the file cannot be read, decoded, or contains no audio.
+pub fn decode_file_capped(path: &Path, max_samples: usize) -> Result<AudioData, DecodeError> {
+    decode_file_inner(path, Some(max_samples))
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn decode_file_inner(path: &Path, max_samples: Option<usize>) -> Result<AudioData, DecodeError> {
     use symphonia::core::audio::GenericAudioBufferRef;
     use symphonia::core::codecs::audio::AudioDecoderOptions;
     use symphonia::core::errors::Error as SymphoniaError;
@@ -144,6 +176,23 @@ pub fn decode_file(path: &Path) -> Result<AudioData, DecodeError> {
             }
             samples.push(sum / num_channels as f32);
         }
+
+        // Stop once the optional sample cap is reached. The spectrogram views
+        // pass a cap so a pathologically long recording can't allocate an
+        // unbounded buffer on a Pi; the detection path passes `None` and keeps
+        // every sample. Peak overshoot is one packet's worth of frames before
+        // the truncate, which symphonia bounds per packet.
+        if let Some(cap) = max_samples
+            && samples.len() >= cap
+        {
+            samples.truncate(cap);
+            tracing::warn!(
+                path = %path.display(),
+                cap,
+                "audio decode reached the sample cap; using the leading portion only"
+            );
+            break;
+        }
     }
 
     Ok(AudioData {
@@ -161,5 +210,36 @@ mod tests {
     fn decode_nonexistent_file_returns_error() {
         let result = decode_file(&PathBuf::from("/nonexistent/file.wav"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn decode_file_capped_bounds_sample_count() {
+        use hound::{SampleFormat, WavSpec, WavWriter};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("long.wav");
+        let spec = WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: 16,
+            sample_format: SampleFormat::Int,
+        };
+        let mut writer = WavWriter::create(&path, spec).unwrap();
+        for _ in 0..10_000 {
+            writer.write_sample(0_i16).unwrap();
+        }
+        writer.finalize().unwrap();
+
+        // Uncapped: every sample is decoded.
+        assert_eq!(decode_file(&path).unwrap().samples.len(), 10_000);
+        // Capped: decoding stops at exactly the cap.
+        assert_eq!(
+            decode_file_capped(&path, 1_000).unwrap().samples.len(),
+            1_000
+        );
+        // A cap above the clip length is a no-op (no truncation, no panic).
+        assert_eq!(
+            decode_file_capped(&path, 50_000).unwrap().samples.len(),
+            10_000
+        );
     }
 }

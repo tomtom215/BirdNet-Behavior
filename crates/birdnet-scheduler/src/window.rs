@@ -137,22 +137,29 @@ impl RecordingWindow {
                 pre_sunrise_min,
                 post_sunset_min,
             } => {
-                #[allow(
-                    clippy::cast_precision_loss,
-                    clippy::cast_possible_truncation,
-                    clippy::cast_sign_loss,
-                    clippy::cast_possible_wrap,
-                    clippy::cast_lossless
-                )]
-                let start = (sunrise_min as i32 - pre_sunrise_min).max(0) as u32;
-                #[allow(
-                    clippy::cast_precision_loss,
-                    clippy::cast_possible_truncation,
-                    clippy::cast_sign_loss,
-                    clippy::cast_possible_wrap,
-                    clippy::cast_lossless
-                )]
-                let end = ((sunset_min as i32) + post_sunset_min).min(1439) as u32;
+                // Compute in i64 so a negative offset can't wrap via `as u32`.
+                // The prior cast `(... .min(1439)) as u32` on a negative value
+                // produced a huge wrapped u32, which silently sailed past the
+                // `start >= end` order check.
+                let start_i = (i64::from(sunrise_min) - i64::from(pre_sunrise_min)).clamp(0, 1439);
+                let end_i = (i64::from(sunset_min) + i64::from(post_sunset_min)).clamp(0, 1439);
+                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                let start = start_i as u32;
+                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                let end = end_i as u32;
+                // Degrade gracefully on an inverted/empty window instead of
+                // erroring out. A large `pre_sunrise_min` paired with a
+                // negative `post_sunset_min` can compute `start >= end`; the
+                // operator-friendly behaviour is to keep recording (24/7)
+                // rather than silently disable it, so the station still
+                // captures audio with the surprising config rather than going
+                // dark with an obscure scheduler error. (`birdnet-scheduler`
+                // is a pure-logic crate with no tracing dependency; the
+                // observable signal is the resolved `WindowKind::AllDay`,
+                // which callers can log if useful.)
+                if start >= end {
+                    return Ok(Self::all_day());
+                }
                 Self::fixed(start, end)
             }
             _ => Ok(self.clone()),
@@ -222,5 +229,29 @@ mod tests {
         assert!(resolved.is_allowed(900));
         assert!(!resolved.is_allowed(1230));
         assert!(!resolved.is_allowed(329));
+    }
+
+    #[test]
+    fn solar_resolve_inverted_window_falls_back_to_all_day() {
+        // start = (600-0).clamp(0,1439) = 600
+        // end   = (700-200).clamp(0,1439) = 500
+        // start >= end → all_day fallback.
+        let w = RecordingWindow::solar(0, -200);
+        let resolved = w.resolve_solar(600, 700).expect("must not error");
+        assert!(resolved.is_allowed(0));
+        assert!(resolved.is_allowed(720));
+        assert!(resolved.is_allowed(1439));
+    }
+
+    #[test]
+    fn solar_resolve_negative_end_does_not_wrap_around() {
+        // Regression: the old `(sunset_min as i32 + post_sunset_min).min(1439)
+        // as u32` would wrap a negative i32 into a huge u32, which then sailed
+        // past the order check. Now the clamp runs in i64 first, so a hugely
+        // negative offset clamps to 0 — start >= end → all_day fallback.
+        let w = RecordingWindow::solar(0, -10_000);
+        let resolved = w.resolve_solar(600, 700).expect("must not error");
+        // With end clamped to 0 and start = 600, fallback to all_day kicks in.
+        assert!(resolved.is_allowed(720));
     }
 }

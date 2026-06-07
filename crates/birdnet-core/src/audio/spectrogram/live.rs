@@ -14,7 +14,7 @@ use notify::{EventKind, RecursiveMode, Watcher};
 
 use super::{MelConfig, mel_spectrogram};
 use crate::audio::capture::is_audio_file;
-use crate::audio::decode::decode_file;
+use crate::audio::decode::{SPECTROGRAM_DECODE_SAMPLE_CAP, decode_file_capped};
 
 /// Configuration for the live spectrogram daemon.
 #[derive(Debug, Clone)]
@@ -73,7 +73,10 @@ pub fn process_file(
     path: &Path,
     config: &LiveSpectrogramConfig,
 ) -> Result<SpectrogramFrame, String> {
-    let audio = decode_file(path).map_err(|e| format!("decode: {e}"))?;
+    // Visual only — bound the decode so an over-long recording can't allocate
+    // an unbounded buffer (the leading portion is enough for the live view).
+    let audio = decode_file_capped(path, SPECTROGRAM_DECODE_SAMPLE_CAP)
+        .map_err(|e| format!("decode: {e}"))?;
 
     if audio.samples.is_empty() {
         return Err("empty audio".into());
@@ -95,13 +98,29 @@ pub fn process_file(
         }
     }
 
-    // Optionally normalize to [0, 1].
+    // Optionally normalize to [0, 1]. Compute the range over finite values only
+    // and clamp the result: a single non-finite sample (a `+Inf` from an
+    // overflowing power on a corrupt/edge frame) would otherwise wipe the whole
+    // frame to Inf/NaN, which then fails JSON serialization and drops the frame.
     if config.normalize {
-        let min_val = data.iter().copied().fold(f32::INFINITY, f32::min);
-        let max_val = data.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let min_val = data
+            .iter()
+            .copied()
+            .filter(|v| v.is_finite())
+            .fold(f32::INFINITY, f32::min);
+        let max_val = data
+            .iter()
+            .copied()
+            .filter(|v| v.is_finite())
+            .fold(f32::NEG_INFINITY, f32::max);
         let range = (max_val - min_val).max(1e-6);
         for v in &mut data {
-            *v = (*v - min_val) / range;
+            let normalized = (*v - min_val) / range;
+            *v = if normalized.is_finite() {
+                normalized.clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
         }
     }
 

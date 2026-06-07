@@ -115,8 +115,21 @@ fn build_info_chunk(tags: &[(&[u8; 4], &str)]) -> Vec<u8> {
         if value.is_empty() {
             continue;
         }
+        // Truncate to <= 255 bytes on a UTF-8 char boundary so a multi-byte
+        // character (a localized or CJK common name) is never split mid-sequence,
+        // which would write invalid UTF-8 into the RIFF INFO tag. A raw
+        // `bytes().take(255)` could cut through a character.
+        let truncated = if value.len() > 255 {
+            let mut end = 255;
+            while !value.is_char_boundary(end) {
+                end -= 1;
+            }
+            &value[..end]
+        } else {
+            value
+        };
         // null-terminated, padded to even length
-        let mut data: Vec<u8> = value.bytes().take(255).collect();
+        let mut data: Vec<u8> = truncated.bytes().collect();
         data.push(0); // null terminator
         if !data.len().is_multiple_of(2) {
             data.push(0); // padding byte
@@ -125,7 +138,7 @@ fn build_info_chunk(tags: &[(&[u8; 4], &str)]) -> Vec<u8> {
         sub.extend_from_slice(id);
         // The chunk size field stores the actual content size (including null terminator)
         // padding byte is written but not counted in the size field
-        let content_len = value.len().min(255) + 1; // value + null
+        let content_len = truncated.len() + 1; // value + null
         sub.extend_from_slice(&u32::try_from(content_len).unwrap_or(0).to_le_bytes());
         // value bytes + null
         sub.extend_from_slice(&data[..content_len]);

@@ -413,6 +413,13 @@ impl Client {
                     let status = resp.status();
                     let text = resp.text().await.unwrap_or_default();
                     last_error = AppriseError::Server(format!("{status}: {text}"));
+                    // A 4xx (other than 429) is a deterministic client error —
+                    // a malformed Apprise URL/payload won't succeed on retry, so
+                    // fail fast rather than burning the backoff budget.
+                    if status.is_client_error() && status != reqwest::StatusCode::TOO_MANY_REQUESTS
+                    {
+                        return Err(last_error);
+                    }
                 }
                 Err(e) => {
                     last_error = AppriseError::Http(e.to_string());

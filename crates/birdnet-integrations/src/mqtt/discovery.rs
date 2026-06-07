@@ -180,24 +180,7 @@ impl HaDiscovery {
     fn publish_station_status(&self) -> Result<(), MqttError> {
         let unique_id = format!("{}_status", self.ha.device_id);
         let state_topic = self.mqtt.status_topic();
-
-        // HA binary_sensor: payload_on = "online", payload_off = "offline".
-        let payload = format!(
-            r#"{{
-  "name": "{station} Status",
-  "unique_id": "{uid}",
-  "state_topic": "{st}",
-  "payload_on": "online",
-  "payload_off": "offline",
-  "device_class": "connectivity",
-  "icon": "mdi:radio-tower",
-  "device": {device}
-}}"#,
-            station = esc_json(&self.ha.station_name),
-            uid = esc_json(&unique_id),
-            st = esc_json(&state_topic),
-            device = self.device_block(),
-        );
+        let payload = self.status_payload(&unique_id, &state_topic);
         let topic = self.config_topic("binary_sensor", &unique_id);
         publish(&self.mqtt, &topic, payload.as_bytes())
     }
@@ -261,6 +244,30 @@ impl HaDiscovery {
         )
     }
 
+    /// Build the station online/offline binary-sensor discovery payload.
+    ///
+    /// Split out from [`Self::publish_station_status`] so the JSON construction
+    /// is unit-testable without a live broker (HA `binary_sensor`: `payload_on`
+    /// = "online", `payload_off` = "offline").
+    fn status_payload(&self, unique_id: &str, state_topic: &str) -> String {
+        format!(
+            r#"{{
+  "name": "{station} Status",
+  "unique_id": "{uid}",
+  "state_topic": "{st}",
+  "payload_on": "online",
+  "payload_off": "offline",
+  "device_class": "connectivity",
+  "icon": "mdi:radio-tower",
+  "device": {device}
+}}"#,
+            station = esc_json(&self.ha.station_name),
+            uid = esc_json(unique_id),
+            st = esc_json(state_topic),
+            device = self.device_block(),
+        )
+    }
+
     /// Build the HA device info block (shared by all entities).
     fn device_block(&self) -> String {
         format!(
@@ -303,11 +310,31 @@ impl HaDiscovery {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Minimal JSON string escaping (double-quotes and backslashes only).
-///
-/// This is sufficient for the controlled strings used in discovery payloads.
+/// Minimal JSON string escaping covering the characters that would otherwise
+/// produce invalid JSON when interpolated into a `"..."` literal: backslash,
+/// double-quote, and the C0 control characters (`\n`, `\r`, `\t`, and any
+/// other `<= 0x1F`). Operator-supplied strings (`station_name`, `device_id`)
+/// can legitimately contain whitespace control chars and would silently break
+/// Home Assistant discovery without this.
 fn esc_json(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{0008}' => out.push_str("\\b"),
+            '\u{000C}' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => {
+                use std::fmt::Write as _;
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -320,6 +347,25 @@ mod tests {
 
     fn discovery() -> HaDiscovery {
         HaDiscovery::new(MqttConfig::default(), HaDiscoveryConfig::default())
+    }
+
+    #[test]
+    fn esc_json_escapes_backslash_and_quote() {
+        assert_eq!(esc_json(r#"a"b\c"#), r#"a\"b\\c"#);
+    }
+
+    #[test]
+    fn esc_json_escapes_control_characters() {
+        // Operator-supplied station_name / device_id may contain whitespace
+        // controls; without escaping, the discovery payload would be invalid
+        // JSON and silently break Home Assistant integration.
+        assert_eq!(esc_json("a\nb\rc\td"), r"a\nb\rc\td");
+        assert_eq!(esc_json("\u{0008}\u{000C}"), r"\b\f");
+        // Other control chars use \u escapes.
+        assert_eq!(esc_json("\u{0001}"), "\\u0001");
+        assert_eq!(esc_json("\u{001F}"), "\\u001f");
+        // Printable ASCII and Unicode pass through.
+        assert_eq!(esc_json("hello 🐦"), "hello 🐦");
     }
 
     #[test]
@@ -368,6 +414,47 @@ mod tests {
         };
         let d = HaDiscovery::new(MqttConfig::default(), ha);
         assert!(d.device_block().contains("My Garden"));
+    }
+
+    #[test]
+    fn payloads_stay_valid_json_with_hostile_station_name() {
+        // An operator (or a value mirrored from an upstream source) could set a
+        // station name containing JSON metacharacters. Every hand-rolled
+        // payload must still parse as JSON, and the name must round-trip rather
+        // than break out of its string literal. This guards the format!
+        // templates against a future field being interpolated without esc_json.
+        let hostile = "Garden \"quote\" \\slash\\\nnewline\u{1}ctrl";
+        let ha = HaDiscoveryConfig {
+            station_name: hostile.to_string(),
+            ..HaDiscoveryConfig::default()
+        };
+        let d = HaDiscovery::new(MqttConfig::default(), ha);
+
+        // device_block is itself a complete JSON object.
+        let device: serde_json::Value =
+            serde_json::from_str(&d.device_block()).expect("device_block must be valid JSON");
+        assert_eq!(device["name"], hostile);
+
+        // The sensor payload embeds the device block.
+        let sensor = d.sensor_payload(
+            "uid_x",
+            "Last Detected Bird",
+            "birdnet/detection/#",
+            "{{ value_json.common_name }}",
+            Some("mdi:bird"),
+            Some("%"),
+        );
+        let sensor: serde_json::Value =
+            serde_json::from_str(&sensor).expect("sensor_payload must be valid JSON");
+        assert_eq!(sensor["device"]["name"], hostile);
+        assert_eq!(sensor["name"], "Last Detected Bird");
+
+        // The status payload carries the name twice (entity name + device).
+        let status = d.status_payload("uid_status", "birdnet/status");
+        let status: serde_json::Value =
+            serde_json::from_str(&status).expect("status_payload must be valid JSON");
+        assert_eq!(status["device"]["name"], hostile);
+        assert_eq!(status["name"], format!("{hostile} Status"));
     }
 
     #[test]

@@ -38,13 +38,27 @@ impl AnalyticsDb {
             None
         };
 
+        // Make the cutoff second whole rather than skipping it. A single second
+        // can hold many detections (multiple chunks of one recording, or
+        // simultaneous hits from different audio sources), so a strict
+        // `> cutoff` read permanently dropped any SQLite row that *tied* the
+        // latest synced second but wasn't yet in DuckDB. Delete that second from
+        // DuckDB and let `read_sqlite_detections` re-read it (with `>=`) from
+        // SQLite — the source of truth — so it's rebuilt exactly, no duplicates.
+        if let Some(ref ts) = cutoff {
+            self.conn.execute(
+                "DELETE FROM detections WHERE (Date || ' ' || Time) = ?",
+                params![ts],
+            )?;
+        }
+
         let rows = read_sqlite_detections(sqlite_conn, cutoff.as_deref())
             .map_err(|e| AnalyticsError::InvalidData(format!("SQLite read error: {e}")))?;
 
         let count = u64::try_from(rows.len()).unwrap_or(0);
 
         if count > 0 {
-            self.append_rows(&rows)?;
+            self.append_rows_to("detections", &rows)?;
             self.conn
                 .execute_batch(queries::CREATE_DETECTIONS_TS_VIEW)?;
             tracing::info!(rows = count, "synced detections from SQLite to DuckDB");
@@ -79,8 +93,40 @@ impl AnalyticsDb {
         // Truncate first: a full rebuild must not be filtered by the incremental
         // cutoff (which would drop back-dated imports) and must not duplicate
         // rows already present from the startup sync.
-        self.conn.execute_batch("DELETE FROM detections;")?;
-        self.append_rows(&rows)?;
+        //
+        // Build the new copy in a staging table and swap it in atomically,
+        // rather than `DELETE`-then-append in place. A failed append (or a crash
+        // mid-rebuild) previously left the live OLAP copy *empty* — recoverable
+        // only by re-running, and silently under-reporting until then. The
+        // appender writes to the staging table outside any transaction (avoiding
+        // DuckDB's appender/transaction interaction); the swap is plain
+        // transactional SQL with an explicit rollback so a failure leaves both
+        // the live table and the connection usable.
+        self.conn.execute_batch(
+            "CREATE OR REPLACE TABLE detections_staging AS SELECT * FROM detections WHERE false;",
+        )?;
+        self.append_rows_to("detections_staging", &rows)?;
+
+        self.conn.execute_batch("BEGIN TRANSACTION;")?;
+        let swap = self.conn.execute_batch(
+            "DELETE FROM detections;
+             INSERT INTO detections SELECT * FROM detections_staging;",
+        );
+        match swap {
+            Ok(()) => self.conn.execute_batch("COMMIT;")?,
+            Err(e) => {
+                // Roll the swap back and drop the staging table so the live copy
+                // and the connection are left in a clean, usable state.
+                let _ = self.conn.execute_batch("ROLLBACK;");
+                let _ = self
+                    .conn
+                    .execute_batch("DROP TABLE IF EXISTS detections_staging;");
+                return Err(AnalyticsError::from(e));
+            }
+        }
+        self.conn
+            .execute_batch("DROP TABLE IF EXISTS detections_staging;")?;
+
         // Refresh the view unconditionally so it exists even after a rebuild
         // that loaded zero rows.
         self.conn
@@ -93,15 +139,18 @@ impl AnalyticsDb {
         Ok(count)
     }
 
-    /// Bulk-append already-read `SQLite` rows into the `DuckDB` `detections` table.
+    /// Bulk-append already-read `SQLite` rows into the named `DuckDB` table via
+    /// the appender. `table` is an internal, hard-coded identifier (`detections`
+    /// for the incremental path, `detections_staging` for the atomic full
+    /// rebuild) — never untrusted input.
     ///
     /// Shared by the incremental and full sync paths; callers refresh the
     /// timestamp view and emit their own log line.
-    fn append_rows(&self, rows: &[SyncRow]) -> Result<(), AnalyticsError> {
+    fn append_rows_to(&self, table: &str, rows: &[SyncRow]) -> Result<(), AnalyticsError> {
         if rows.is_empty() {
             return Ok(());
         }
-        let mut appender = self.conn.appender("detections")?;
+        let mut appender = self.conn.appender(table)?;
         for row in rows {
             appender.append_row(params![
                 row.date,
@@ -221,9 +270,12 @@ fn read_sqlite_detections(
             conn.prepare(&sql)?.query_map([], map_row)?.collect()
         },
         |ts| {
+            // `>=` (not `>`): the caller deletes the cutoff second from DuckDB
+            // first, then re-reads it whole from SQLite here, so rows that tie
+            // the cutoff second aren't permanently skipped (see sync_from_sqlite).
             let sql = format!(
                 "SELECT {COLS} FROM detections \
-                 WHERE (Date || ' ' || Time) > ? ORDER BY Date, Time"
+                 WHERE (Date || ' ' || Time) >= ? ORDER BY Date, Time"
             );
             conn.prepare(&sql)?.query_map([ts], map_row)?.collect()
         },
@@ -304,8 +356,63 @@ mod tests {
              INSERT INTO detections VALUES ('2026-03-12','06:30:00','Turdus merula','Blackbird',0.87,NULL,NULL,NULL,NULL,NULL,NULL,NULL);
              INSERT INTO detections VALUES ('2026-03-12','07:00:00','Parus major','Great Tit',0.75,NULL,NULL,NULL,NULL,NULL,NULL,NULL);",
         ).unwrap();
-        assert_eq!(db.sync_from_sqlite(&sc).unwrap(), 1);
+        // Sync deletes the cutoff second (`06:30:00`) from DuckDB and re-reads
+        // it from SQLite along with the new `07:00:00` row, so the return count
+        // is 2 (one boundary re-read + one strictly new). End state still 2.
+        assert_eq!(db.sync_from_sqlite(&sc).unwrap(), 2);
         assert_eq!(db.detection_count().unwrap(), 2);
+    }
+
+    #[test]
+    fn sync_from_sqlite_includes_same_second_ties() {
+        // Regression: a single second can hold many detections (multiple chunks
+        // of one recording, or simultaneous hits from different audio sources).
+        // The old strict `> cutoff` read permanently dropped any SQLite row that
+        // tied the latest already-synced second — the analytics copy then
+        // under-counted forever (recoverable only by a full resync).
+        //
+        // The fix deletes the cutoff second from DuckDB and re-reads it with
+        // `>=` from SQLite (the source of truth), so the boundary is rebuilt
+        // exactly and incremental sync is lossless across ties.
+        let (db, _tmp) = make_db();
+
+        // DuckDB already holds *one* of two same-second detections.
+        db.insert_detection(
+            "2026-03-12",
+            "06:30:00",
+            "Turdus merula",
+            "Blackbird",
+            0.87,
+            "t.wav",
+        )
+        .unwrap();
+
+        // SQLite holds both same-second detections plus a later row.
+        let sqlite_dir = TempDir::new().unwrap();
+        let sc = rusqlite::Connection::open(sqlite_dir.path().join("b.db")).unwrap();
+        sc.execute_batch(
+            "CREATE TABLE detections (Date TEXT, Time TEXT, Sci_Name TEXT, Com_Name TEXT,
+             Confidence REAL, Lat REAL, Lon REAL, Cutoff REAL, Week INTEGER,
+             Sens REAL, Overlap REAL, File_Name TEXT);
+             INSERT INTO detections VALUES ('2026-03-12','06:30:00','Turdus merula','Blackbird',0.87,NULL,NULL,NULL,NULL,NULL,NULL,NULL);
+             INSERT INTO detections VALUES ('2026-03-12','06:30:00','Parus major','Great Tit',0.91,NULL,NULL,NULL,NULL,NULL,NULL,NULL);
+             INSERT INTO detections VALUES ('2026-03-12','07:00:00','Erithacus rubecula','Robin',0.83,NULL,NULL,NULL,NULL,NULL,NULL,NULL);",
+        ).unwrap();
+
+        // Sync must rebuild the boundary second (so the tied row appears) plus
+        // the later row, and must NOT duplicate the already-present Blackbird.
+        db.sync_from_sqlite(&sc).unwrap();
+        assert_eq!(
+            db.detection_count().unwrap(),
+            3,
+            "all three SQLite rows should be in DuckDB; the same-second tie at \
+             06:30 must not be dropped, and the already-present row must not be \
+             duplicated"
+        );
+
+        // Idempotent: running sync again is a no-op (no duplicates).
+        db.sync_from_sqlite(&sc).unwrap();
+        assert_eq!(db.detection_count().unwrap(), 3);
     }
 
     #[test]
@@ -342,9 +449,12 @@ mod tests {
              INSERT INTO detections VALUES ('2026-06-05','10:00:00','Parus major','Great Tit',0.90,NULL,NULL,NULL,NULL,NULL,NULL,NULL);",
         ).unwrap();
 
-        // Incremental sync skips the 2023 row (older than the 2026 cutoff) and
-        // the 2026 row (equal to, not after, the cutoff): nothing new.
-        assert_eq!(db.sync_from_sqlite(&sc).unwrap(), 0);
+        // Incremental sync skips the back-dated 2023 row (older than the 2026
+        // cutoff). The cutoff second is deleted from DuckDB and re-read from
+        // SQLite, which still yields one row (the same 2026-06-05 10:00:00
+        // detection rebuilt exactly) — so the return count is 1, not 0. The
+        // back-dated history remains invisible until `full_resync_from_sqlite`.
+        assert_eq!(db.sync_from_sqlite(&sc).unwrap(), 1);
 
         // Full resync rebuilds from scratch and includes the back-dated history.
         assert_eq!(db.full_resync_from_sqlite(&sc).unwrap(), 2);
@@ -391,5 +501,48 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM detections_ts", [], |r| r.get(0))
             .unwrap();
         assert_eq!(view_rows, 0);
+    }
+
+    #[test]
+    fn full_resync_is_atomic_and_repeatable() {
+        // The atomic rebuild builds into `detections_staging` and swaps it in.
+        // Verify the staging table doesn't leak after a successful rebuild and
+        // that running the rebuild repeatedly is idempotent (no duplicates, no
+        // residual staging table from a prior run).
+        let (db, _tmp) = make_db();
+        let sqlite_dir = TempDir::new().unwrap();
+        let sc = rusqlite::Connection::open(sqlite_dir.path().join("b.db")).unwrap();
+        sc.execute_batch(
+            "CREATE TABLE detections (Date TEXT, Time TEXT, Sci_Name TEXT, Com_Name TEXT,
+             Confidence REAL, Lat REAL, Lon REAL, Cutoff REAL, Week INTEGER,
+             Sens REAL, Overlap REAL, File_Name TEXT);
+             INSERT INTO detections VALUES ('2026-06-05','10:00:00','Parus major','Great Tit',0.9,NULL,NULL,NULL,NULL,NULL,NULL,NULL);
+             INSERT INTO detections VALUES ('2026-06-05','10:00:01','Turdus merula','Blackbird',0.8,NULL,NULL,NULL,NULL,NULL,NULL,NULL);",
+        ).unwrap();
+
+        // Helper: does a table exist in this DuckDB?
+        let staging_exists = |db: &AnalyticsDb| -> bool {
+            db.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM information_schema.tables \
+                     WHERE table_name = 'detections_staging'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap()
+                > 0
+        };
+
+        assert_eq!(db.full_resync_from_sqlite(&sc).unwrap(), 2);
+        assert_eq!(db.detection_count().unwrap(), 2);
+        assert!(
+            !staging_exists(&db),
+            "staging table must be dropped after swap"
+        );
+
+        // Repeat: still 2 rows (not 4), staging still gone.
+        assert_eq!(db.full_resync_from_sqlite(&sc).unwrap(), 2);
+        assert_eq!(db.detection_count().unwrap(), 2);
+        assert!(!staging_exists(&db));
     }
 }

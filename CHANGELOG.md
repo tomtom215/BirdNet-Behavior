@@ -7,6 +7,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-06-07
+
+A pre-release hardening pass: process-crash fixes, memory/DoS bounds for small
+Raspberry Pis, data-integrity fixes, and several web-security fixes — plus an
+internal module-structure cleanup. No user-facing feature changes; everything
+here makes an existing install more robust against malformed input, hostile
+station metadata, over-long recordings, and abrupt shutdown.
+
+### Security
+
+- **Neutralised CSV formula injection in data exports (CWE-1236).** A species or
+  comment beginning with `=`, `+`, `-`, or `@` is no longer written verbatim into
+  exported CSVs, where a spreadsheet would evaluate it as a formula. Such fields
+  are now prefixed so they import as literal text, and the record-separator /
+  control characters that can splice extra rows are stripped.
+- **Pinned auto-update downloads to GitHub release hosts over HTTPS.** The
+  self-updater now refuses any release-asset URL that is not an `https://` GitHub
+  host, so a tampered release feed cannot redirect the download to an arbitrary
+  origin.
+- **Escaped Home Assistant MQTT discovery payloads.** Discovery messages are now
+  emitted as properly encoded JSON, so a station name containing quotes, braces,
+  or control characters can no longer break out of the payload or inject fields.
+- **Stopped leaking internal error detail to the admin UI.** Recording-save and
+  related failures now surface a generic message to the browser and log the
+  detail server-side, instead of echoing internal paths and error strings into
+  the page.
+- **Bounded request-driven work on the web surface.** On-demand spectrogram
+  rendering and the live stream are now concurrency-limited, deterministic `4xx`
+  client errors are no longer retried, and spectrogram parameters are sanitised —
+  closing several avenues for a single client to pin CPU or memory on a small Pi.
+
+### Fixed
+
+- **`stop`, `restart`, and upgrades no longer stall ~10 s on every shutdown.**
+  The live dashboard holds a WebSocket open (the listen page a second one, and
+  the admin Live Logs page an SSE stream). On `SIGTERM`, axum's graceful drain
+  waited for those to close on their own, so with any tab open it always hit the
+  `SHUTDOWN_GRACE` cap and force-exited with `shutdown grace elapsed with
+  connection(s) still open`. The server now signals those handlers to close the
+  moment shutdown begins, so the drain finishes in milliseconds and shutdown is
+  clean and quiet. The 10 s cap stays only as a backstop for a client that
+  ignores the close.
+- **Several panics that would abort the whole process are gone.** Because release
+  builds compile with `panic = "abort"`, any unhandled panic in a request handler
+  or background task takes the entire daemon down. This pass fixes a class of
+  them: date parsing that sliced multibyte UTF-8 rows on a byte boundary, webhook
+  URLs truncated mid-character in the rules table, and a `date_to_epoch_days`
+  underflow on pre-epoch dates (now clamped to the epoch). Malformed or unusual
+  data is handled instead of crashing.
+- **Poisoned locks no longer wedge analytics and image fetches.** If a thread
+  panicked while holding certain mutexes (the full-analytics resync, the
+  Wikipedia image cache), every later caller would panic on the poisoned lock in
+  turn. Those paths now recover the guard and continue.
+- **The DuckDB analytics copy can no longer be wiped by a failed rebuild.** The
+  full resync is now atomic: it builds the new OLAP copy and swaps it in only on
+  success, so an error partway through leaves the previous analytics intact
+  instead of emptying them.
+- **Settings writes are atomic.** A configuration save now lands as a single
+  transaction, so a crash or concurrent reader can't observe a half-written
+  settings row, and the surrounding DB resilience paths were hardened.
+- **Long recordings can't exhaust memory.** On-demand spectrogram decoding is now
+  capped at ten minutes of audio (≈115 MB), so an unusually long station
+  recording — or a misconfigured multi-minute segment — renders its leading
+  portion instead of allocating an unbounded buffer and risking an OOM on a Pi.
+  The detection pipeline still decodes every sample.
+- **Audio seeking works in the recordings player.** The recording endpoint now
+  honours HTTP `Range` requests, so scrubbing within a clip seeks in the browser
+  instead of re-fetching from the start.
+- **Assorted correctness and robustness edge cases** surfaced by the pre-release
+  audit — input validation on several admin forms, daemon and purge edge cases,
+  scheduler and identifier handling, and live-frame broadcast sizing.
+
+### Changed
+
+- **Internal module-structure cleanup (no behaviour change).** Several oversized
+  files were split into focused submodules behind unchanged public paths: the
+  1319-line `capture.rs` supervisor, the detection daemon (into process and
+  run-loop submodules), `detections.rs` (by query concern), `viz.rs` (chart
+  renderers by visual family), `accounts.rs` (by store), and the version logic
+  in `auto_update`. The whole tree is now `cargo fmt`-clean.
+
 ## [0.7.1] - 2026-06-05
 
 ### Fixed

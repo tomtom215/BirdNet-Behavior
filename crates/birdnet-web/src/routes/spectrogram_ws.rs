@@ -15,7 +15,7 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use serde::Serialize;
 use std::sync::Arc;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 
 use crate::state::AppState;
 
@@ -83,10 +83,15 @@ pub fn router() -> Router<AppState> {
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
     let broadcast = state.spectrogram_broadcast();
-    ws.on_upgrade(move |socket| handle_ws_connection(socket, broadcast))
+    let shutdown = state.subscribe_shutdown();
+    ws.on_upgrade(move |socket| handle_ws_connection(socket, broadcast, shutdown))
 }
 
-async fn handle_ws_connection(mut socket: WebSocket, broadcast: SpectrogramBroadcast) {
+async fn handle_ws_connection(
+    mut socket: WebSocket,
+    broadcast: SpectrogramBroadcast,
+    mut shutdown: watch::Receiver<bool>,
+) {
     tracing::info!(
         clients = broadcast.client_count() + 1,
         "spectrogram WebSocket client connected"
@@ -109,8 +114,25 @@ async fn handle_ws_connection(mut socket: WebSocket, broadcast: SpectrogramBroad
         return;
     }
 
+    // If the server is already shutting down (this connection upgraded during
+    // the drain window), close at once instead of starting to stream.
+    let already_shutting_down = *shutdown.borrow_and_update();
+    if already_shutting_down {
+        let _ = socket.send(Message::Close(None)).await;
+        return;
+    }
+
     loop {
         tokio::select! {
+            // Latch flipped (or the sender dropped) — the server is shutting
+            // down. Close so axum's graceful drain can finish instead of
+            // waiting out the grace backstop. `changed()` (not `wait_for`)
+            // yields no borrow guard across the await below, so this future
+            // stays `Send` as `WebSocketUpgrade::on_upgrade` requires.
+            _ = shutdown.changed() => {
+                let _ = socket.send(Message::Close(None)).await;
+                break;
+            }
             result = rx.recv() => {
                 match result {
                     Ok(json) => {

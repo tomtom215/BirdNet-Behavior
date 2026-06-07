@@ -39,15 +39,23 @@ fn backup_dir(state: &AppState) -> std::path::PathBuf {
         .join("backups")
 }
 
-/// Validate that a filename is safe (no path traversal, `.db` extension).
+/// Validate that a filename is safe (no path traversal, `.db` extension, and
+/// composed only of an ASCII allowlist that carries no HTTP-header-significant
+/// bytes — so the name can be interpolated into a `Content-Disposition` header
+/// without worrying about `"`, CR/LF, or control characters).
 fn is_safe_backup_name(name: &str) -> bool {
-    !name.contains('/')
-        && !name.contains('\\')
-        && !name.contains("..")
-        && std::path::Path::new(name)
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("db"))
+    if name.is_empty() || name.len() > 255 || name.contains("..") {
+        return false;
+    }
+    let ext_ok = std::path::Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("db"));
+    if !ext_ok {
+        return false;
+    }
+    name.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
 /// Basic HTML escape for untrusted strings rendered into HTML.

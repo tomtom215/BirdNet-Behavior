@@ -18,8 +18,44 @@ use crate::{capture, daemon, helpers, integrations, maintenance, sd_notify, week
 /// and doctor short-circuits are handled before this is reached. Takes
 /// ownership of the parsed `cli` and the loaded `config` (already resolved by
 /// `main`).
-#[allow(clippy::too_many_lines)]
+/// Run the detection daemon and web server until a shutdown signal arrives.
+///
+/// Called from `main` only for [`crate::Action::RunServer`]; the maintenance
+/// and doctor short-circuits are handled before this is reached. Takes
+/// ownership of the parsed `cli` and the loaded `config` (already resolved by
+/// `main`).
 pub async fn run(
+    cli: Cli,
+    config: Option<birdnet_core::config::Config>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Race the startup phases against an early SIGTERM/SIGINT. Without this,
+    // a `systemctl restart` mid-startup — e.g. during a cold DuckDB build,
+    // SQLite migration, or initial DuckDB sync — would be SIGKILLed at
+    // systemd's `TimeoutStartSec` instead of exiting cleanly. The biased
+    // select prefers the signal so a signal that arrives at the same tick as
+    // a startup result wins, ensuring we always honour the shutdown intent.
+    //
+    // Once the listener binds and `serve` enters its inner `tokio::select!`
+    // (which installs its own `with_graceful_shutdown`), this outer arm is
+    // never reached: `serve()` returns normally. The signal arm only fires
+    // for the early window where the startup work has not yet handed off.
+    tokio::select! {
+        biased;
+        () = shutdown_signal() => {
+            tracing::info!("shutdown signal received during startup; exiting cleanly");
+            sd_notify::stopping();
+            Ok(())
+        }
+        result = serve(cli, config) => result,
+    }
+}
+
+/// Server orchestration body — runs from config validation through the axum
+/// serve loop. Returns when the server stops. Wrapped by [`run`] so an early
+/// SIGTERM during startup cancels this future and exits cleanly instead of
+/// waiting out systemd's `TimeoutStartSec` and being `SIGKILL`-ed.
+#[allow(clippy::too_many_lines)]
+async fn serve(
     cli: Cli,
     config: Option<birdnet_core::config::Config>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -283,6 +319,9 @@ pub async fn run(
         });
     }
 
+    // Keep a handle to the state so the graceful-shutdown hook can wake live
+    // WebSocket/SSE handlers (`begin_shutdown`); `build_router` moves `state`.
+    let shutdown_state = state.clone();
     let app = birdnet_web::server::build_router(state);
 
     // Publish Home Assistant MQTT auto-discovery if configured.
@@ -345,19 +384,25 @@ pub async fn run(
 
     // Use `into_make_service_with_connect_info` so the per-IP rate limiter
     // can read the client socket address from request extensions.
-    let serve = axum::serve(
+    let axum_serve = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal());
+    .with_graceful_shutdown(async move {
+        shutdown_signal().await;
+        // Wake live WebSocket/SSE handlers (dashboard, spectrogram, admin logs)
+        // so they close their sockets and axum's drain finishes in
+        // milliseconds, instead of every restart waiting out SHUTDOWN_GRACE.
+        shutdown_state.begin_shutdown();
+    });
 
-    // Cap the graceful drain. `with_graceful_shutdown` waits for every in-flight
-    // connection to close, but a live WebSocket / event-stream client (the
-    // dashboard keeps one open) never closes on its own — so the process would
-    // hang until systemd SIGKILLs it at TimeoutStopSec. After the signal, give
-    // connections SHUTDOWN_GRACE to finish, then stop waiting and exit.
+    // Backstop the graceful drain. The hook above signals live WebSocket /
+    // event-stream clients (the dashboard keeps one open) to close, so the
+    // drain normally completes at once. SHUTDOWN_GRACE only fires if a
+    // connection ignores the signal — without it a stuck client would hang the
+    // process until systemd SIGKILLs it at TimeoutStopSec.
     tokio::select! {
-        res = serve => res?,
+        res = axum_serve => res?,
         () = shutdown_grace_backstop() => {
             tracing::warn!(
                 grace_secs = SHUTDOWN_GRACE.as_secs(),

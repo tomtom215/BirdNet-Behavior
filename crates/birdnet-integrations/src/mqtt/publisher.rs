@@ -23,7 +23,7 @@
 //! MQTT 3.1.1 specification: <http://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html>
 
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 use super::types::{ConnAckError, MqttConfig, MqttError};
@@ -47,8 +47,18 @@ pub fn publish(config: &MqttConfig, topic: &str, payload: &[u8]) -> Result<(), M
     let addr = format!("{}:{}", config.host, config.port);
 
     let timeout = Duration::from_millis(config.timeout_ms);
-    let mut stream =
-        TcpStream::connect(&addr).map_err(|e| MqttError::Connection(format!("{addr}: {e}")))?;
+    // Bound the TCP connect so a broker host that black-holes SYNs can't hang
+    // the publish for the OS default (often > 60 s) — `publish_detection` runs
+    // per detection on the blocking pool, which a stuck connect would exhaust.
+    // `TcpStream::connect` ignores `timeout`; `connect_timeout` needs a resolved
+    // `SocketAddr`, so resolve first (DNS) and take the first address.
+    let sock_addr = addr
+        .to_socket_addrs()
+        .map_err(|e| MqttError::Connection(format!("{addr}: {e}")))?
+        .next()
+        .ok_or_else(|| MqttError::Connection(format!("{addr}: no addresses resolved")))?;
+    let mut stream = TcpStream::connect_timeout(&sock_addr, timeout)
+        .map_err(|e| MqttError::Connection(format!("{addr}: {e}")))?;
 
     stream
         .set_read_timeout(Some(timeout))

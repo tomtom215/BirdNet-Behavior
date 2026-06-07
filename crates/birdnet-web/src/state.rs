@@ -13,6 +13,7 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
+use tokio::sync::watch;
 
 use crate::metrics::{self, SharedMetrics};
 use crate::routes::admin::logs::LogBroadcaster;
@@ -20,7 +21,23 @@ use crate::routes::spectrogram_ws::SpectrogramBroadcast;
 use crate::routes::websocket::DetectionBroadcast;
 
 /// Default WebSocket broadcast channel capacity.
+///
+/// Sized for the detection stream, whose events are small JSON objects (a
+/// species, confidence and timestamps — a few hundred bytes), so a 256-deep
+/// backlog for a briefly-lagging client is only tens of KB.
 const DEFAULT_BROADCAST_CAPACITY: usize = 256;
+
+/// Broadcast capacity for the live spectrogram stream.
+///
+/// Each frame carries the full mel matrix (up to 128 × 256 floats), so a frame
+/// serialises to a few hundred KB — three orders of magnitude larger than a
+/// detection event. At the detection capacity (256) a single lagging client
+/// could pin ~75 MB of frames in the ring; on a 2–4 GB Pi that is a real
+/// back-pressure hazard. A live view only needs the most recent frames (new
+/// recordings arrive seconds apart, and a client further behind than this
+/// should jump to the latest — the receivers already drop on `Lagged`), so a
+/// shallow ring is both correct and bounds worst-case retention to a few MB.
+const SPECTROGRAM_BROADCAST_CAPACITY: usize = 16;
 
 /// Shared application state.
 #[derive(Debug, Clone)]
@@ -48,6 +65,12 @@ struct AppStateInner {
     log_broadcaster: LogBroadcaster,
     /// Broadcast channel for live spectrogram WebSocket streaming.
     spectrogram_broadcast: SpectrogramBroadcast,
+    /// Shutdown latch. Flips from `false` to `true` once, when the server
+    /// begins graceful shutdown. Long-lived streaming handlers (detection and
+    /// spectrogram WebSocket streams, the admin log SSE stream) watch this and
+    /// close promptly so axum's connection drain finishes, instead of holding
+    /// the socket open until the `SHUTDOWN_GRACE` backstop force-exits.
+    shutdown: watch::Sender<bool>,
     /// Localization manager for species common names.
     i18n: Option<RwLock<I18nManager>>,
     /// Custom site name for branding.
@@ -134,7 +157,8 @@ impl AppState {
                 image_cache: None,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 log_broadcaster: LogBroadcaster::new(),
-                spectrogram_broadcast: SpectrogramBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
+                spectrogram_broadcast: SpectrogramBroadcast::new(SPECTROGRAM_BROADCAST_CAPACITY),
+                shutdown: watch::channel(false).0,
                 i18n: None,
                 site_name: None,
                 info_site: "ebird".to_string(),
@@ -215,7 +239,8 @@ impl AppState {
                 image_cache: None,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 log_broadcaster: LogBroadcaster::new(),
-                spectrogram_broadcast: SpectrogramBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
+                spectrogram_broadcast: SpectrogramBroadcast::new(SPECTROGRAM_BROADCAST_CAPACITY),
+                shutdown: watch::channel(false).0,
                 i18n: None,
                 site_name: None,
                 info_site: "ebird".to_string(),
@@ -244,7 +269,8 @@ impl AppState {
                 image_cache: None,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 log_broadcaster: LogBroadcaster::new(),
-                spectrogram_broadcast: SpectrogramBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
+                spectrogram_broadcast: SpectrogramBroadcast::new(SPECTROGRAM_BROADCAST_CAPACITY),
+                shutdown: watch::channel(false).0,
                 i18n: None,
                 site_name: None,
                 info_site: "ebird".to_string(),
@@ -330,38 +356,43 @@ impl AppState {
 
     /// Execute a closure with a reference to the `SQLite` database connection.
     ///
-    /// # Panics
-    ///
-    /// Panics if the mutex is poisoned.
+    /// Recovers from a poisoned mutex via [`std::sync::PoisonError::into_inner`]
+    /// rather than panicking: a panic inside the closure only borrows the
+    /// `Connection` (it can't tear it), so the connection is still usable. The
+    /// previous `.expect()` turned one bad query (e.g. a panic in any handler
+    /// or background task that took this lock) into a permanent server brick,
+    /// since every later `with_db` would panic too. This matches the
+    /// recover-and-continue policy used elsewhere in the workspace (see
+    /// `birdnet-integrations::species_images::cache`).
     pub fn with_db<F, T>(&self, f: F) -> T
     where
         F: FnOnce(&Connection) -> T,
     {
-        let conn = self.inner.db.lock().expect("database mutex poisoned");
+        let conn = self
+            .inner
+            .db
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         f(&conn)
     }
 
     /// Execute a closure with a reference to the `DuckDB` analytics database.
     ///
-    /// # Panics
-    ///
-    /// Panics if the mutex is poisoned.
+    /// Recovers from a poisoned mutex; see [`Self::with_db`] for rationale.
     #[cfg(feature = "analytics")]
     pub fn with_analytics<F, T>(&self, f: F) -> Option<T>
     where
         F: FnOnce(&AnalyticsDb) -> T,
     {
         self.inner.analytics_db.as_ref().map(|db| {
-            let db = db.lock().expect("analytics mutex poisoned");
+            let db = db.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             f(&db)
         })
     }
 
     /// Execute a closure with a `TimeSeriesDb` executor backed by the DuckDB connection.
     ///
-    /// # Panics
-    ///
-    /// Panics if the mutex is poisoned.
+    /// Recovers from a poisoned mutex; see [`Self::with_db`] for rationale.
     #[cfg(feature = "analytics")]
     pub fn with_timeseries<F, T>(
         &self,
@@ -373,7 +404,7 @@ impl AppState {
         ) -> Result<T, birdnet_timeseries::TimeSeriesError>,
     {
         self.inner.analytics_db.as_ref().map(|db| {
-            let db = db.lock().expect("analytics mutex poisoned");
+            let db = db.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             birdnet_timeseries::executor::TimeSeriesDb::new(db.conn()).and_then(f)
         })
     }
@@ -388,9 +419,7 @@ impl AppState {
     /// timestamps. Returns `None` when analytics is not enabled, otherwise the
     /// number of rows loaded (or the rebuild error).
     ///
-    /// # Panics
-    ///
-    /// Panics if either mutex is poisoned.
+    /// Recovers from a poisoned mutex; see [`Self::with_db`] for rationale.
     #[cfg(feature = "analytics")]
     pub fn resync_analytics_full(
         &self,
@@ -398,9 +427,16 @@ impl AppState {
         let analytics = self.inner.analytics_db.as_ref()?;
         // Lock the SQLite connection first, then analytics — the only ordering
         // used elsewhere is sequential (the processor writes SQLite then DuckDB
-        // without nesting), so this cannot deadlock.
-        let conn = self.inner.db.lock().expect("database mutex poisoned");
-        let adb = analytics.lock().expect("analytics mutex poisoned");
+        // without nesting), so this cannot deadlock. Recover from poison rather
+        // than crash the process, matching `with_db` / `with_timeseries`.
+        let conn = self
+            .inner
+            .db
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let adb = analytics
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Some(adb.full_resync_from_sqlite(&conn))
     }
 
@@ -468,6 +504,27 @@ impl AppState {
         self.inner.spectrogram_broadcast.clone()
     }
 
+    /// Subscribe to the shutdown latch.
+    ///
+    /// The returned receiver's value flips to `true` exactly once, when the
+    /// server begins graceful shutdown. Long-lived streaming handlers select on
+    /// this so they stop and let axum's connection drain finish, instead of
+    /// holding the socket open until the `SHUTDOWN_GRACE` backstop force-exits.
+    #[must_use]
+    pub fn subscribe_shutdown(&self) -> watch::Receiver<bool> {
+        self.inner.shutdown.subscribe()
+    }
+
+    /// Signal every live connection to close. Called once when shutdown begins.
+    ///
+    /// Uses `send_replace` so the latch is set even when no receiver is
+    /// currently subscribed: a connection still mid-upgrade when the signal
+    /// arrives subscribes afterwards and observes the latched value, so it
+    /// closes promptly rather than wedging the drain.
+    pub fn begin_shutdown(&self) {
+        self.inner.shutdown.send_replace(true);
+    }
+
     /// Execute a closure with a reference to the i18n manager.
     ///
     /// # Panics
@@ -513,5 +570,46 @@ impl AppState {
     #[must_use]
     pub fn detection_daemon_running(&self) -> bool {
         self.inner.detection_daemon_running.load(Ordering::Relaxed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_state() -> AppState {
+        AppState::from_connection(
+            Connection::open_in_memory().expect("open in-memory sqlite"),
+            PathBuf::from("test.db"),
+        )
+    }
+
+    #[tokio::test]
+    async fn shutdown_latch_starts_closed_then_latches_open() {
+        let state = test_state();
+        let mut rx = state.subscribe_shutdown();
+        assert!(!*rx.borrow(), "latch should start closed");
+
+        state.begin_shutdown();
+
+        // Value is already `true`, so `wait_for` resolves immediately — this is
+        // exactly what the streaming handlers observe to close on shutdown.
+        // Copy the bool out so the borrow guard isn't held past this line.
+        let opened = *rx.wait_for(|&v| v).await.expect("sender stays alive");
+        assert!(opened, "latch should be open after begin_shutdown");
+    }
+
+    #[tokio::test]
+    async fn subscribe_after_shutdown_observes_latched_value() {
+        let state = test_state();
+        // No subscribers yet — `send_replace` must still set the latch so a
+        // connection that subscribes during the drain window closes promptly.
+        state.begin_shutdown();
+
+        let mut rx = state.subscribe_shutdown();
+        assert!(
+            *rx.borrow_and_update(),
+            "late subscriber must observe the latched shutdown value"
+        );
     }
 }

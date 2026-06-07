@@ -381,6 +381,21 @@ fn rules_body() -> String {
     .to_owned()
 }
 
+/// Shorten a webhook URL for the rules-table badge to at most 30 characters,
+/// appending an ellipsis when truncated.
+///
+/// Truncates by *characters*, not bytes: an operator's webhook URL can contain
+/// multibyte UTF-8 (an IRI or a Unicode path), and a `&url[..30]` byte-slice
+/// would panic if one straddled byte 30 — which, with `panic = "abort"` in the
+/// release profile, crashes the whole process when the admin page renders.
+fn truncate_url_display(url: &str) -> String {
+    if url.chars().count() > 30 {
+        format!("{}…", url.chars().take(30).collect::<String>())
+    } else {
+        url.to_string()
+    }
+}
+
 fn render_rules_table(rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
     if rules.is_empty() {
         return r#"<p class="tbl-empty">
@@ -431,11 +446,7 @@ fn render_rules_table(rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
 
         let action_badge = match &rule.action {
             AlertAction::Webhook { url, method, .. } => {
-                let url_short = if url.len() > 30 {
-                    format!("{}…", &url[..30])
-                } else {
-                    url.clone()
-                };
+                let url_short = truncate_url_display(url);
                 format!(
                     r#"<span class="badge badge-blue">{method}</span> <span class="url-frag">{}</span>"#,
                     escape_html(&url_short)
@@ -486,4 +497,41 @@ fn render_rules_table(rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
 
     html.push_str("</tbody></table>");
     html
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_url_display_short_url_unchanged() {
+        assert_eq!(
+            truncate_url_display("https://example.com/hook"),
+            "https://example.com/hook"
+        );
+    }
+
+    #[test]
+    fn truncate_url_display_long_url_ellipsized() {
+        let url = "https://example.com/very/long/webhook/path/that/exceeds";
+        let out = truncate_url_display(url);
+        assert_eq!(out.chars().filter(|&c| c != '…').count(), 30);
+        assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn truncate_url_display_does_not_panic_on_multibyte_boundary() {
+        // Regression: byte-slicing `&url[..30]` panics when a multibyte char
+        // straddles byte 30; with `panic = "abort"` that crashes the process.
+        // 29 ASCII bytes then a 2-byte 'é' put the char across byte 30.
+        let url = format!("{}\u{e9}tail", "a".repeat(29));
+        assert!(
+            !url.is_char_boundary(30),
+            "test setup: byte 30 must split the multibyte char"
+        );
+        let out = truncate_url_display(&url);
+        // No panic; 30 characters kept plus the ellipsis.
+        assert!(out.ends_with('…'));
+        assert_eq!(out.chars().filter(|&c| c != '…').count(), 30);
+    }
 }

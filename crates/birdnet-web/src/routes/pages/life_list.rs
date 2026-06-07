@@ -38,8 +38,11 @@ async fn life_accumulation_partial(
             let mut monthly: std::collections::BTreeMap<String, u32> =
                 std::collections::BTreeMap::new();
             for date in first_seen.values() {
-                if date.len() >= 7 {
-                    *monthly.entry(date[..7].to_string()).or_default() += 1;
+                // `get(..7)` rather than `date[..7]`: a multibyte char straddling
+                // byte 7 would make the slice panic, and `panic = "abort"` turns
+                // that into a process crash. The `YYYY-MM` prefix is the key.
+                if let Some(month) = date.get(..7) {
+                    *monthly.entry(month.to_string()).or_default() += 1;
                 }
             }
             monthly
@@ -235,8 +238,10 @@ async fn life_timeline_partial(State(state): State<AppState>) -> impl axum::resp
             let mut monthly: std::collections::BTreeMap<String, u32> =
                 std::collections::BTreeMap::new();
             for date in first_seen.values() {
-                if date.len() >= 7 {
-                    let month = &date[..7]; // YYYY-MM
+                // `get(..7)` not `date[..7]`: a multibyte char at byte 7 would
+                // panic the slice, and `panic = "abort"` crashes the process.
+                if let Some(month) = date.get(..7) {
+                    // YYYY-MM prefix.
                     *monthly.entry(month.to_string()).or_default() += 1;
                 }
             }

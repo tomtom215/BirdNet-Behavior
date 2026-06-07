@@ -14,10 +14,19 @@ fn escape(s: &str) -> String {
 }
 
 /// Build the email subject line.
+///
+/// Strips CR/LF from `common_name` so a hostile or corrupt label can't
+/// inject extra email headers via the Subject line (defense-in-depth;
+/// `lettre` also guards header injection at the builder layer).
 pub fn subject(detection: &DetectionEmail) -> String {
+    let safe_common: String = detection
+        .common_name
+        .chars()
+        .filter(|c| !matches!(c, '\r' | '\n'))
+        .collect();
     format!(
         "🐦 Bird detected: {} ({:.0}% confidence)",
-        detection.common_name,
+        safe_common,
         detection.confidence * 100.0,
     )
 }
@@ -84,9 +93,15 @@ pub fn html_body(detection: &DetectionEmail) -> String {
         .detection_url
         .as_deref()
         .map(|u| {
+            // Escape the URL for the HTML attribute context. Every other
+            // interpolated field above is escaped; the URL was the lone
+            // hold-out. Today `detection_url` is app-generated, but escaping
+            // here makes the template robust to any future caller and matches
+            // the discipline used throughout.
+            let u_esc = escape(u);
             format!(
                 r#"<tr><td colspan="2" style="padding:12px 0 0;">
-                  <a href="{u}" style="display:inline-block;padding:8px 20px;
+                  <a href="{u_esc}" style="display:inline-block;padding:8px 20px;
                      background:#0ea5e9;color:#fff;border-radius:6px;
                      text-decoration:none;font-weight:600;font-size:14px;">
                     View Detection →
@@ -206,6 +221,33 @@ mod tests {
         let html = html_body(&d);
         assert!(!html.contains("<script>"));
         assert!(html.contains("&lt;script&gt;"));
+    }
+
+    #[test]
+    fn html_body_escapes_url_attribute() {
+        // Regression: the `href` was previously interpolated without escaping,
+        // so a URL containing `"` would close the attribute. App-generated
+        // today but the template should be robust regardless.
+        let mut d = sample();
+        d.detection_url = Some(r#"https://example.com/x"><script>alert(1)</script>"#.into());
+        let html = html_body(&d);
+        // The `"` must be escaped — no raw `"` followed by `<script>` may
+        // appear in the rendered HTML.
+        assert!(!html.contains(r#""><script>"#));
+        assert!(html.contains("&quot;"));
+    }
+
+    #[test]
+    fn subject_strips_header_injection_bytes() {
+        // Defense-in-depth: a species label containing CR/LF must not be able
+        // to inject extra email headers via the Subject line. The text after
+        // the line breaks can remain (it just becomes part of the subject);
+        // what matters is that the structural separators are gone.
+        let mut d = sample();
+        d.common_name = "Eurasian Robin\r\nBcc: attacker@evil.com".into();
+        let s = subject(&d);
+        assert!(!s.contains('\r'), "CR not stripped from subject: {s:?}");
+        assert!(!s.contains('\n'), "LF not stripped from subject: {s:?}");
     }
 
     #[test]

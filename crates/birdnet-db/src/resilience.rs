@@ -57,6 +57,36 @@ impl From<std::io::Error> for ResilienceError {
     }
 }
 
+/// Busy-timeout (ms) applied to every maintenance connection in this module.
+///
+/// Matches the per-connection `PRAGMA busy_timeout=5000` set by
+/// `sqlite::open_or_create`. Without it the maintenance helpers open with a 0 ms
+/// busy handler and return `SQLITE_BUSY` on the first contended lock, so a
+/// scheduled VACUUM on a busy station would frequently no-op for a week even
+/// though the lock would have been free in milliseconds.
+const MAINTENANCE_BUSY_TIMEOUT_MS: u32 = 5_000;
+
+/// Open a writer connection with the standard busy-timeout applied. Internal
+/// helper that the maintenance entry points (`enforce_wal_mode`,
+/// `vacuum_database`, `checkpoint_wal`, the backup paths) use so they all
+/// honour the same wait-on-contention policy as the live writer.
+fn open_with_busy_timeout(path: &Path) -> Result<Connection, ResilienceError> {
+    let conn = Connection::open(path)?;
+    conn.busy_timeout(std::time::Duration::from_millis(u64::from(
+        MAINTENANCE_BUSY_TIMEOUT_MS,
+    )))?;
+    Ok(conn)
+}
+
+/// Open a read-only connection with the standard busy-timeout applied.
+fn open_readonly_with_busy_timeout(path: &Path) -> Result<Connection, ResilienceError> {
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    conn.busy_timeout(std::time::Duration::from_millis(u64::from(
+        MAINTENANCE_BUSY_TIMEOUT_MS,
+    )))?;
+    Ok(conn)
+}
+
 /// Enforce WAL journal mode on a database file.
 ///
 /// WAL (Write-Ahead Logging) provides crash resilience: incomplete
@@ -66,10 +96,24 @@ impl From<std::io::Error> for ResilienceError {
 ///
 /// Returns `ResilienceError` if the database cannot be opened or WAL cannot be set.
 pub fn enforce_wal_mode(db_path: &Path) -> Result<(), ResilienceError> {
-    let conn = Connection::open(db_path)?;
+    let conn = open_with_busy_timeout(db_path)?;
+    // `PRAGMA journal_mode=WAL` returns the *resulting* mode and silently stays
+    // in the previous mode (e.g. `delete`) on filesystems that can't back WAL's
+    // shared-memory index — some network mounts and container overlay/tmpfs
+    // combos. The whole crash-recovery design assumes WAL, so verify it took.
+    // Warn rather than error: a degraded journal mode is still usable, and
+    // failing here would block startup on those filesystems.
+    let mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
+    if !mode.eq_ignore_ascii_case("wal") {
+        tracing::warn!(
+            journal_mode = %mode,
+            path = %db_path.display(),
+            "could not enable WAL journal mode (filesystem may not support it); \
+             crash resilience is reduced — incomplete writes may not roll back cleanly"
+        );
+    }
     conn.execute_batch(
-        "PRAGMA journal_mode=WAL;
-         PRAGMA synchronous=NORMAL;
+        "PRAGMA synchronous=NORMAL;
          PRAGMA wal_autocheckpoint=1000;",
     )?;
     Ok(())
@@ -88,7 +132,7 @@ pub fn enforce_wal_mode(db_path: &Path) -> Result<(), ResilienceError> {
 /// Returns `ResilienceError` if the database cannot be opened or `VACUUM`
 /// fails.
 pub fn vacuum_database(db_path: &Path) -> Result<(), ResilienceError> {
-    let conn = Connection::open(db_path)?;
+    let conn = open_with_busy_timeout(db_path)?;
     conn.execute_batch("VACUUM;")?;
     Ok(())
 }
@@ -102,7 +146,7 @@ pub fn vacuum_database(db_path: &Path) -> Result<(), ResilienceError> {
 /// Returns `ResilienceError` if the database cannot be opened or the
 /// checkpoint fails.
 pub fn checkpoint_wal(db_path: &Path) -> Result<(), ResilienceError> {
-    let conn = Connection::open(db_path)?;
+    let conn = open_with_busy_timeout(db_path)?;
     conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
     Ok(())
 }
@@ -115,7 +159,7 @@ pub fn checkpoint_wal(db_path: &Path) -> Result<(), ResilienceError> {
 ///
 /// Returns `ResilienceError` on check failure.
 pub fn check_integrity(db_path: &Path) -> Result<bool, ResilienceError> {
-    let conn = Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let conn = open_readonly_with_busy_timeout(db_path)?;
     let result: String = conn.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
     Ok(result == "ok")
 }
@@ -126,7 +170,7 @@ pub fn check_integrity(db_path: &Path) -> Result<bool, ResilienceError> {
 ///
 /// Returns `ResilienceError` on check failure.
 pub fn full_integrity_check(db_path: &Path) -> Result<bool, ResilienceError> {
-    let conn = Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let conn = open_readonly_with_busy_timeout(db_path)?;
     let result: String = conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
     Ok(result == "ok")
 }
@@ -142,6 +186,24 @@ pub fn full_integrity_check(db_path: &Path) -> Result<bool, ResilienceError> {
 pub fn backup_database(db_path: &Path, backup_dir: &Path) -> Result<PathBuf, ResilienceError> {
     std::fs::create_dir_all(backup_dir)?;
 
+    // Refuse to snapshot a corrupt source — the rolling backup ring (capped at
+    // `MAX_BACKUP_FILES`) would otherwise overwrite the last good backup with
+    // a copy of the damaged DB, eventually leaving zero recoverable backups
+    // for `check_and_recover` to restore from. A failed quick_check is rare on
+    // a healthy station, so this is cheap defense-in-depth.
+    if !check_integrity(db_path)? {
+        return Err(ResilienceError::Sqlite(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error {
+                code: rusqlite::ffi::ErrorCode::DatabaseCorrupt,
+                extended_code: 0,
+            },
+            Some(format!(
+                "refusing to back up corrupt source database at {}",
+                db_path.display()
+            )),
+        )));
+    }
+
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -153,8 +215,8 @@ pub fn backup_database(db_path: &Path, backup_dir: &Path) -> Result<PathBuf, Res
         .unwrap_or("birds.db");
     let backup_path = backup_dir.join(format!("{db_name}.backup.{timestamp}"));
 
-    let source = Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    let mut dest = Connection::open(&backup_path)?;
+    let source = open_readonly_with_busy_timeout(db_path)?;
+    let mut dest = open_with_busy_timeout(&backup_path)?;
 
     let backup = rusqlite::backup::Backup::new(&source, &mut dest)?;
     backup
@@ -230,9 +292,16 @@ pub fn restore_from_backup(backup_path: &Path, db_path: &Path) -> Result<(), Res
     // Remove corrupt destination if it exists (cannot open corrupt files with SQLite)
     if db_path.exists() {
         std::fs::remove_file(db_path)?;
-        // Also remove WAL/SHM journal files if present
-        let wal_path = db_path.with_extension("db-wal");
-        let shm_path = db_path.with_extension("db-shm");
+        // Also remove WAL/SHM journal files if present. Use `with_suffix` (raw
+        // append) rather than `with_extension`: the WAL/SHM sidecars are
+        // `<db_path>-wal` / `-shm`, and `with_extension("db-wal")` only produces
+        // that for a path literally ending in `.db`. For any other name (e.g.
+        // `/data/station` or `my.archive.db`) it would target the wrong file and
+        // leave the real sidecars attached to the freshly restored DB, risking
+        // re-corruption — the same bug `quarantine_corrupt_database` already
+        // avoids with `with_suffix`.
+        let wal_path = with_suffix(db_path, "-wal");
+        let shm_path = with_suffix(db_path, "-shm");
         if let Err(e) = std::fs::remove_file(&wal_path)
             && e.kind() != std::io::ErrorKind::NotFound
         {
@@ -245,9 +314,8 @@ pub fn restore_from_backup(backup_path: &Path, db_path: &Path) -> Result<(), Res
         }
     }
 
-    let source =
-        Connection::open_with_flags(backup_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    let mut dest = Connection::open(db_path)?;
+    let source = open_readonly_with_busy_timeout(backup_path)?;
+    let mut dest = open_with_busy_timeout(db_path)?;
 
     let backup = rusqlite::backup::Backup::new(&source, &mut dest)?;
     backup

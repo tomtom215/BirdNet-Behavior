@@ -60,6 +60,19 @@ pub fn router() -> Router<AppState> {
 // Handlers (analytics feature enabled)
 // ---------------------------------------------------------------------------
 
+/// Reject a client-supplied date that is not a strict `YYYY-MM-DD` literal.
+///
+/// The time-series query builders interpolate `from`/`to`/`date` into DuckDB
+/// SQL, so an unvalidated value is a SQL-injection vector. A string that passes
+/// `is_valid_date` is `\d{4}-\d{2}-\d{2}` and contains no SQL metacharacters.
+#[cfg(feature = "analytics")]
+fn bad_date(field: &str) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "error": format!("invalid '{field}' date; expected YYYY-MM-DD") })),
+    )
+}
+
 #[cfg(feature = "analytics")]
 async fn hourly(
     State(state): State<AppState>,
@@ -141,12 +154,27 @@ async fn trend(
     if !state.has_analytics() {
         return ts_unavailable("moving average trend");
     }
+    // `from`/`to` are interpolated into DuckDB SQL by the `MovingAverage` query
+    // builder as a *raw* expression (so the server default can be `CURRENT_DATE`
+    // arithmetic). Validate any client-supplied value to a strict `YYYY-MM-DD`
+    // and pass it as a single-quoted literal. This both blocks SQL injection and
+    // fixes a latent correctness bug: an unquoted `2026-01-01` is parsed by
+    // DuckDB as integer arithmetic (`= 2024`), not a date. `None` falls back to
+    // the server-controlled 90-day window expression.
+    let from_date = match q.from {
+        Some(f) if super::is_valid_date(&f) => Some(format!("'{f}'")),
+        Some(_) => return bad_date("from"),
+        None => Some("CURRENT_DATE - INTERVAL 90 DAYS".into()),
+    };
+    let to_date = match q.to {
+        Some(t) if super::is_valid_date(&t) => Some(format!("'{t}'")),
+        Some(_) => return bad_date("to"),
+        None => None,
+    };
     let params = birdnet_timeseries::types::params::TrendParams {
         window_days: q.window.unwrap_or(7),
-        from_date: q
-            .from
-            .or_else(|| Some("CURRENT_DATE - INTERVAL 90 DAYS".into())),
-        to_date: q.to,
+        from_date,
+        to_date,
         species: q.species,
     };
     let result =
@@ -217,6 +245,16 @@ async fn accumulation(
     if !state.has_analytics() {
         return ts_unavailable("accumulation curve");
     }
+    if let Some(ref f) = q.from
+        && !super::is_valid_date(f)
+    {
+        return bad_date("from");
+    }
+    if let Some(ref t) = q.to
+        && !super::is_valid_date(t)
+    {
+        return bad_date("to");
+    }
     let from = q.from;
     let to = q.to;
     let result = tokio::task::spawn_blocking(move || {
@@ -254,6 +292,11 @@ async fn sessions(
     if !state.has_analytics() {
         return ts_unavailable("activity sessions");
     }
+    if let Some(ref d) = q.date
+        && !super::is_valid_date(d)
+    {
+        return bad_date("date");
+    }
     let params = birdnet_timeseries::types::params::SessionParams {
         gap_minutes: q.gap.unwrap_or(30),
         date_filter: q.date,
@@ -278,6 +321,11 @@ async fn gaps(
     let threshold = q.threshold.unwrap_or(30);
     let lookback = q.days.unwrap_or(7);
 
+    if let Some(ref d) = q.date
+        && !super::is_valid_date(d)
+    {
+        return bad_date("date");
+    }
     if let Some(date) = q.date {
         let result = tokio::task::spawn_blocking(move || {
             state.with_timeseries(|ts| ts.intraday_gaps(&date, threshold))

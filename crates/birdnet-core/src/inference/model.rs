@@ -80,6 +80,11 @@ pub struct BirdNetModel {
     /// sigmoid+sensitivity to reach probabilities. Set once at load time
     /// from the input shape.
     is_probability_output: bool,
+    /// Latches once the first label-count/output-dimension mismatch has been
+    /// logged, so a mispaired model+labels file warns a single time instead of
+    /// on every 3-second inference. `&mut self` in `predict`, so a plain bool
+    /// suffices (no atomics).
+    warned_label_count_mismatch: bool,
 }
 
 impl fmt::Debug for BirdNetModel {
@@ -186,6 +191,7 @@ impl BirdNetModel {
             config,
             input_shape,
             is_probability_output,
+            warned_label_count_mismatch: false,
         })
     }
 
@@ -213,7 +219,22 @@ impl BirdNetModel {
             config,
             input_shape,
             is_probability_output,
+            warned_label_count_mismatch: false,
         })
+    }
+
+    /// Whether to emit the one-shot model/label count-mismatch warning.
+    ///
+    /// Factored out of `predict` so the warn-once guard is unit-testable: it
+    /// returns `true` exactly once — on the first call where the model's output
+    /// dimension disagrees with the loaded label count. `already_warned` is the
+    /// latch the caller sets after emitting the warning.
+    const fn should_warn_label_count_mismatch(
+        model_output_count: usize,
+        label_count: usize,
+        already_warned: bool,
+    ) -> bool {
+        model_output_count != label_count && !already_warned
     }
 
     /// Run inference on raw audio samples.
@@ -255,6 +276,7 @@ impl BirdNetModel {
         let (_shape, flat_logits) = outputs[output_idx]
             .try_extract_tensor::<f32>()
             .map_err(|e| InferenceError::Runtime(format!("cannot extract logits: {e}")))?;
+        let model_output_count = flat_logits.len();
 
         // Output-to-confidence mapping depends on the model family:
         //
@@ -299,6 +321,26 @@ impl BirdNetModel {
                     file_name_extr: None,
                 });
             }
+        }
+
+        // A model whose output dimension does not match the label count means
+        // the model and labels file are almost certainly not a matched pair:
+        // species are assigned positionally, so the surplus is dropped and the
+        // rest may be mislabeled. Warn once (not every 3 s) rather than fail —
+        // a running station keeps detecting — but make the misconfig visible.
+        if Self::should_warn_label_count_mismatch(
+            model_output_count,
+            self.labels.len(),
+            self.warned_label_count_mismatch,
+        ) {
+            self.warned_label_count_mismatch = true;
+            tracing::warn!(
+                model_outputs = model_output_count,
+                labels = self.labels.len(),
+                "model output dimension does not match the loaded label count; species are \
+                 mapped positionally and may be wrong or truncated — verify the model and \
+                 labels file are a matched pair"
+            );
         }
 
         // Sort by confidence descending
@@ -787,6 +829,26 @@ mod tests {
         let s = format!("{m:?}");
         assert!(s.contains("BirdNetModel"));
         assert!(s.contains("labels_count"));
+    }
+
+    #[test]
+    fn warns_once_only_on_label_count_mismatch() {
+        // Matched counts never warn.
+        assert!(!BirdNetModel::should_warn_label_count_mismatch(
+            6522, 6522, false
+        ));
+        // A mismatch on the first encounter warns...
+        assert!(BirdNetModel::should_warn_label_count_mismatch(
+            6522, 100, false
+        ));
+        // ...but not once the latch is already set (warn-once).
+        assert!(!BirdNetModel::should_warn_label_count_mismatch(
+            6522, 100, true
+        ));
+        // A matched count with the latch set still never warns.
+        assert!(!BirdNetModel::should_warn_label_count_mismatch(
+            6522, 6522, true
+        ));
     }
 
     #[test]

@@ -33,7 +33,10 @@ impl Detection {
     /// Confidence as integer percentage (0-100).
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn confidence_pct(&self) -> u32 {
-        (self.confidence * 100.0).round() as u32
+        // Clamp to [0, 1] before the cast so the result is always a sane 0-100:
+        // confidence is bounded upstream, but a stray out-of-range value would
+        // otherwise exceed 100, and this pins the invariant at the boundary.
+        (self.confidence.clamp(0.0, 1.0) * 100.0).round() as u32
     }
 
     /// Common name with spaces replaced by underscores (for filenames).
@@ -103,8 +106,17 @@ impl RecordingFile {
         // First 3 parts are the date
         let date = format!("{}-{}-{}", parts[0], parts[1], parts[2]);
 
-        // Validate date format (basic check)
-        if parts[0].len() != 4 || parts[1].len() != 2 || parts[2].len() != 2 {
+        // Validate date format: the three segments must be 4/2/2 ASCII digits.
+        // Checking lengths alone let a bogus name like `abcd-XY-ZW-birdnet-…`
+        // through, and its non-date string then flowed into the extraction
+        // output path (`By_Date/<date>/…`) and DB rows.
+        if parts[0].len() != 4
+            || parts[1].len() != 2
+            || parts[2].len() != 2
+            || !parts[0].bytes().all(|b| b.is_ascii_digit())
+            || !parts[1].bytes().all(|b| b.is_ascii_digit())
+            || !parts[2].bytes().all(|b| b.is_ascii_digit())
+        {
             return None;
         }
 

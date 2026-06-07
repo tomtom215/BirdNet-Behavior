@@ -45,7 +45,7 @@ struct FeedQuery {
 
 async fn rare_rss(State(state): State<AppState>, Query(q): Query<FeedQuery>) -> Response {
     let limit = q.limit.unwrap_or(50).clamp(1, 500);
-    let base = q.base.unwrap_or_else(default_base_url);
+    let base = resolve_base(q.base);
 
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
@@ -85,7 +85,7 @@ async fn rare_rss(State(state): State<AppState>, Query(q): Query<FeedQuery>) -> 
 
 async fn today_rss(State(state): State<AppState>, Query(q): Query<FeedQuery>) -> Response {
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
-    let base = q.base.unwrap_or_else(default_base_url);
+    let base = resolve_base(q.base);
 
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
@@ -140,7 +140,7 @@ fn rss_response(body: String) -> Response {
 
 async fn rare_ics(State(state): State<AppState>, Query(q): Query<FeedQuery>) -> Response {
     let limit = q.limit.unwrap_or(200).clamp(1, 1000);
-    let base = q.base.unwrap_or_else(default_base_url);
+    let base = resolve_base(q.base);
 
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
@@ -312,6 +312,38 @@ fn default_base_url() -> String {
     std::env::var("BNB_BASE_URL").unwrap_or_else(|_| "http://localhost:8502".to_string())
 }
 
+/// Resolve the feed base URL, validating any client-supplied `?base=` override.
+///
+/// `base` is interpolated into RSS/Atom XML elements and attributes and into
+/// iCal lines; an unvalidated value (containing `"`, `<`, `>`, `&`, or CR/LF)
+/// is a feed/XML-injection vector. Accept only an `http(s)://` origin built from
+/// URL-unreserved characters — which excludes every XML/iCal metacharacter — and
+/// otherwise fall back to the server default.
+fn resolve_base(base: Option<String>) -> String {
+    match base {
+        Some(b) if is_safe_base_url(&b) => b,
+        _ => default_base_url(),
+    }
+}
+
+/// Whether `b` is an `http(s)://host[:port][/path]` made only of URL-unreserved
+/// characters (so it carries no XML/iCal-significant bytes).
+fn is_safe_base_url(b: &str) -> bool {
+    if b.is_empty() || b.len() > 256 {
+        return false;
+    }
+    let Some(rest) = b
+        .strip_prefix("https://")
+        .or_else(|| b.strip_prefix("http://"))
+    else {
+        return false;
+    };
+    !rest.is_empty()
+        && rest
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '~' | ':' | '/'))
+}
+
 fn escape_xml(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -337,6 +369,15 @@ fn rfc822(date: &str, time: &str) -> String {
     let y: i32 = parts[0].parse().unwrap_or(1970);
     let m: u32 = parts[1].parse().unwrap_or(1);
     let d: u32 = parts[2].parse().unwrap_or(1);
+    // Guard the month index: `month_name[m - 1]` panics on month 0 (subtraction
+    // underflow) or > 12 (out of bounds). `Date` strings are not always
+    // calendar-valid — rows imported from a BirdNET-Pi database aren't
+    // validated — and this runs in the public, unauthenticated RSS/iCal feeds,
+    // where with `panic = "abort"` a single bad row would crash the whole
+    // process. Degrade to a plain string instead.
+    if !(1..=12).contains(&m) {
+        return format!("{date} {time}");
+    }
     let dow = day_of_week(y, m, d);
     let month_name = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",

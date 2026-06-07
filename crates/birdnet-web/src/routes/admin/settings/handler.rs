@@ -92,16 +92,25 @@ pub async fn save_settings(
             ))
         }
         Err(e) => {
+            // Log the detail server-side; show the client a generic message.
+            // The previous code interpolated the raw `SettingsError` Display
+            // straight into the response HTML and toast, which both leaked
+            // internal (DB/schema) detail and was an unescaped reflection of
+            // error text — matching the `log_internal` policy used elsewhere
+            // closes both.
             tracing::error!(error = %e, "failed to save settings");
-            let body = Html(format!(
+            let body = Html(
                 r#"<div class="alert alert-error" id="settings-feedback"
                         hx-swap-oob="true">
-                    Failed to save settings: {e}
+                    Failed to save settings — check the server logs for details.
                 </div>"#
-            ));
+                    .to_string(),
+            );
             Ok(toast::with(
                 body,
-                Toast::error(format!("Failed to save settings: {e}")),
+                Toast::error(
+                    "Failed to save settings — check the server logs for details.".to_string(),
+                ),
             ))
         }
     }

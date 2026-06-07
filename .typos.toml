@@ -31,6 +31,9 @@ extend-ignore-identifiers-re = [
     "ISO[0-9]+",
     # German/French/etc. species name fragments.
     "ue|oe|ae",
+    # "PNGs" (plural of PNG) is split into "PN"+"Gs" and "PN" is read as a
+    # typo for "ON". Ignore the whole token, not "PN" (which is a real typo).
+    "PNGs",
 ]
 
 # Literal text spans to ignore (matched anywhere, not just identifiers).
