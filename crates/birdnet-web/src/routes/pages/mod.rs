@@ -332,6 +332,16 @@ pub(crate) fn date_to_epoch_days(date: &str) -> u64 {
     let m = part(5..7, 1);
     let d = part(8..10, 1);
 
+    // Contract: Gregorian dates from the Unix epoch onward. A pre-1970 or
+    // out-of-range date (e.g. "0000-..." or "...-00") returns 0 rather than
+    // reaching the rata-die arithmetic below, whose `y - 1` / `d - 1` /
+    // `… - 719_468` would underflow — wrapping to garbage in release and
+    // panicking in a debug/test build. Real dates (the only callers) are
+    // unaffected; only out-of-range input collapses to the epoch sentinel.
+    if y < 1970 || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return 0;
+    }
+
     // Rata Die day number.
     let y = if m <= 2 { y - 1 } else { y };
     let era = y / 400;
@@ -407,6 +417,18 @@ mod tests {
         assert_eq!(date_to_epoch_days(""), 0);
         // A 10-byte string whose bytes don't parse falls back to the epoch.
         assert_eq!(date_to_epoch_days("not-a-date!"), 0);
+    }
+
+    #[test]
+    fn date_to_epoch_days_clamps_out_of_range_without_underflow() {
+        // Regression: these would underflow the rata-die `y - 1` / `d - 1` /
+        // `… - 719_468` — panicking in a debug build and wrapping to a garbage
+        // value in release. They must now collapse to the epoch sentinel.
+        assert_eq!(date_to_epoch_days("0000-01-01"), 0); // y - 1 underflow
+        assert_eq!(date_to_epoch_days("2026-00-15"), 0); // month 0
+        assert_eq!(date_to_epoch_days("2026-13-15"), 0); // month 13
+        assert_eq!(date_to_epoch_days("2026-03-00"), 0); // day 0 (d - 1 underflow)
+        assert_eq!(date_to_epoch_days("1969-12-31"), 0); // pre-epoch
     }
 
     #[test]
