@@ -16,6 +16,7 @@ use axum::{Json, Router, routing::get};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tokio::fs::File;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::io::ReaderStream;
 
 use crate::state::AppState;
@@ -31,12 +32,23 @@ pub fn router() -> Router<AppState> {
 // GET /api/v2/recordings/{filename}
 // ---------------------------------------------------------------------------
 
-/// Serve a single audio recording file.
+/// Serve a single audio recording file, honouring HTTP `Range` requests.
 ///
 /// Security: filename components are validated — only basename characters
 /// allowed (no `..` or path separators) so callers cannot escape the
 /// recording directory.
-async fn serve_recording(State(state): State<AppState>, Path(filename): Path<String>) -> Response {
+///
+/// Range support matters: the `<audio>` player seeks by sending
+/// `Range: bytes=…`, and Safari in particular refuses to play/seek a media
+/// element unless the server answers with `206 Partial Content`. The previous
+/// handler advertised `Accept-Ranges: bytes` but ignored the header and always
+/// returned the whole file with `200`, so every seek re-downloaded from byte 0
+/// (and Safari playback could break).
+async fn serve_recording(
+    State(state): State<AppState>,
+    Path(filename): Path<String>,
+    headers: HeaderMap,
+) -> Response {
     if !is_safe_filename(&filename) {
         return (StatusCode::BAD_REQUEST, "invalid filename").into_response();
     }
@@ -57,22 +69,121 @@ async fn serve_recording(State(state): State<AppState>, Path(filename): Path<Str
     let Ok(file) = File::open(&canonical).await else {
         return (StatusCode::NOT_FOUND, "recording not found").into_response();
     };
-
+    let Ok(meta) = file.metadata().await else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "cannot stat recording").into_response();
+    };
+    let total = meta.len();
     let content_type = content_type_for(&filename);
-    let stream = ReaderStream::new(file);
-    let body = Body::from_stream(stream);
 
+    let range = headers
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .map_or(ParsedRange::None, |r| parse_range(r, total));
+
+    match range {
+        ParsedRange::Unsatisfiable => (
+            StatusCode::RANGE_NOT_SATISFIABLE,
+            [(header::CONTENT_RANGE, format!("bytes */{total}"))],
+            "requested range not satisfiable",
+        )
+            .into_response(),
+        ParsedRange::Satisfiable { start, end } => {
+            let len = end - start + 1;
+            let mut file = file;
+            if file.seek(std::io::SeekFrom::Start(start)).await.is_err() {
+                return (StatusCode::INTERNAL_SERVER_ERROR, "seek failed").into_response();
+            }
+            let body = Body::from_stream(ReaderStream::new(file.take(len)));
+            let mut h = base_recording_headers(content_type);
+            h.insert(header::CONTENT_LENGTH, HeaderValue::from(len));
+            if let Ok(cr) = HeaderValue::from_str(&format!("bytes {start}-{end}/{total}")) {
+                h.insert(header::CONTENT_RANGE, cr);
+            }
+            (StatusCode::PARTIAL_CONTENT, h, body).into_response()
+        }
+        // No (or syntactically-ignored) Range header → full 200.
+        ParsedRange::None => {
+            let body = Body::from_stream(ReaderStream::new(file));
+            let mut h = base_recording_headers(content_type);
+            h.insert(header::CONTENT_LENGTH, HeaderValue::from(total));
+            (StatusCode::OK, h, body).into_response()
+        }
+    }
+}
+
+/// Common response headers for both the full and partial recording responses.
+fn base_recording_headers(content_type: &'static str) -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
-    // Allow browsers to range-request (seek in audio player)
     headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
-    // Prevent caching of potentially large files
     headers.insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("public, max-age=86400"),
     );
+    headers
+}
 
-    (StatusCode::OK, headers, body).into_response()
+/// Outcome of parsing a `Range` request header against a known content length.
+#[derive(Debug, PartialEq, Eq)]
+enum ParsedRange {
+    /// No usable range — serve the whole file with `200`. Covers a missing
+    /// header and (per RFC 7233) a syntactically-invalid one, which must be
+    /// ignored rather than rejected.
+    None,
+    /// A single satisfiable byte range, inclusive on both ends.
+    Satisfiable { start: u64, end: u64 },
+    /// A syntactically-valid but unsatisfiable range → `416`.
+    Unsatisfiable,
+}
+
+/// Parse a single-range `Range: bytes=…` header against `total` bytes.
+///
+/// Supports `bytes=N-M`, `bytes=N-` (to end) and `bytes=-N` (last N). Only the
+/// first range of a multi-range request is honoured (audio players send one);
+/// anything else is treated as "no range" so the whole file is served.
+fn parse_range(value: &str, total: u64) -> ParsedRange {
+    let Some(spec) = value.trim().strip_prefix("bytes=") else {
+        return ParsedRange::None; // unsupported unit → ignore
+    };
+    // Honour only the first range if several are listed.
+    let first = spec.split(',').next().unwrap_or("").trim();
+    let Some((start_s, end_s)) = first.split_once('-') else {
+        return ParsedRange::None;
+    };
+
+    if total == 0 {
+        return ParsedRange::Unsatisfiable;
+    }
+    let last = total - 1;
+
+    let (start, end) = if start_s.is_empty() {
+        // Suffix range `bytes=-N`: the final N bytes.
+        let Ok(n) = end_s.parse::<u64>() else {
+            return ParsedRange::None;
+        };
+        if n == 0 {
+            return ParsedRange::Unsatisfiable; // `bytes=-0` requests nothing
+        }
+        (total.saturating_sub(n), last)
+    } else {
+        let Ok(start) = start_s.parse::<u64>() else {
+            return ParsedRange::None;
+        };
+        let end = if end_s.is_empty() {
+            last
+        } else {
+            match end_s.parse::<u64>() {
+                Ok(e) => e.min(last), // clamp an over-long end to EOF
+                Err(_) => return ParsedRange::None,
+            }
+        };
+        (start, end)
+    };
+
+    if start > last || start > end {
+        return ParsedRange::Unsatisfiable;
+    }
+    ParsedRange::Satisfiable { start, end }
 }
 
 // ---------------------------------------------------------------------------
@@ -227,6 +338,81 @@ fn is_audio_extension(filename: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_range_full_open_ended() {
+        // `bytes=0-` → whole file as one satisfiable range.
+        assert_eq!(
+            parse_range("bytes=0-", 1000),
+            ParsedRange::Satisfiable { start: 0, end: 999 }
+        );
+    }
+
+    #[test]
+    fn parse_range_explicit_window() {
+        assert_eq!(
+            parse_range("bytes=100-199", 1000),
+            ParsedRange::Satisfiable {
+                start: 100,
+                end: 199
+            }
+        );
+    }
+
+    #[test]
+    fn parse_range_clamps_overlong_end_to_eof() {
+        // A player commonly asks for `bytes=500-` or an end past EOF; clamp it.
+        assert_eq!(
+            parse_range("bytes=500-99999", 1000),
+            ParsedRange::Satisfiable {
+                start: 500,
+                end: 999
+            }
+        );
+    }
+
+    #[test]
+    fn parse_range_suffix_last_n_bytes() {
+        assert_eq!(
+            parse_range("bytes=-200", 1000),
+            ParsedRange::Satisfiable {
+                start: 800,
+                end: 999
+            }
+        );
+        // Suffix larger than the file → whole file.
+        assert_eq!(
+            parse_range("bytes=-5000", 1000),
+            ParsedRange::Satisfiable { start: 0, end: 999 }
+        );
+    }
+
+    #[test]
+    fn parse_range_unsatisfiable_start_past_eof() {
+        assert_eq!(parse_range("bytes=1000-1100", 1000), ParsedRange::Unsatisfiable);
+        assert_eq!(parse_range("bytes=2000-", 1000), ParsedRange::Unsatisfiable);
+        // Empty file: any range is unsatisfiable.
+        assert_eq!(parse_range("bytes=0-0", 0), ParsedRange::Unsatisfiable);
+        // `bytes=-0` requests zero bytes → unsatisfiable.
+        assert_eq!(parse_range("bytes=-0", 1000), ParsedRange::Unsatisfiable);
+    }
+
+    #[test]
+    fn parse_range_invalid_is_ignored() {
+        // Unsupported unit / garbage → treat as no range (serve full 200).
+        assert_eq!(parse_range("items=0-10", 1000), ParsedRange::None);
+        assert_eq!(parse_range("bytes=abc-def", 1000), ParsedRange::None);
+        assert_eq!(parse_range("bytes=", 1000), ParsedRange::None);
+        assert_eq!(parse_range("nonsense", 1000), ParsedRange::None);
+    }
+
+    #[test]
+    fn parse_range_takes_first_of_multiple() {
+        assert_eq!(
+            parse_range("bytes=0-99,200-299", 1000),
+            ParsedRange::Satisfiable { start: 0, end: 99 }
+        );
+    }
 
     #[test]
     fn safe_filename_valid() {
