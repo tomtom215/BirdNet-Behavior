@@ -320,7 +320,7 @@ fn rebuild_analytics_after_import(state: &AppState, progress: &ProgressHandle) {
 /// No-op when the `analytics` feature is disabled: there is no `DuckDB` copy to
 /// rebuild, and `run_migration` has already marked the import complete.
 #[cfg(not(feature = "analytics"))]
-fn rebuild_analytics_after_import(_state: &AppState, _progress: &ProgressHandle) {}
+const fn rebuild_analytics_after_import(_state: &AppState, _progress: &ProgressHandle) {}
 
 // ---------------------------------------------------------------------------
 // GET /admin/migrate/progress

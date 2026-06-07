@@ -21,7 +21,23 @@ use crate::routes::spectrogram_ws::SpectrogramBroadcast;
 use crate::routes::websocket::DetectionBroadcast;
 
 /// Default WebSocket broadcast channel capacity.
+///
+/// Sized for the detection stream, whose events are small JSON objects (a
+/// species, confidence and timestamps — a few hundred bytes), so a 256-deep
+/// backlog for a briefly-lagging client is only tens of KB.
 const DEFAULT_BROADCAST_CAPACITY: usize = 256;
+
+/// Broadcast capacity for the live spectrogram stream.
+///
+/// Each frame carries the full mel matrix (up to 128 × 256 floats), so a frame
+/// serialises to a few hundred KB — three orders of magnitude larger than a
+/// detection event. At the detection capacity (256) a single lagging client
+/// could pin ~75 MB of frames in the ring; on a 2–4 GB Pi that is a real
+/// back-pressure hazard. A live view only needs the most recent frames (new
+/// recordings arrive seconds apart, and a client further behind than this
+/// should jump to the latest — the receivers already drop on `Lagged`), so a
+/// shallow ring is both correct and bounds worst-case retention to a few MB.
+const SPECTROGRAM_BROADCAST_CAPACITY: usize = 16;
 
 /// Shared application state.
 #[derive(Debug, Clone)]
@@ -141,7 +157,7 @@ impl AppState {
                 image_cache: None,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 log_broadcaster: LogBroadcaster::new(),
-                spectrogram_broadcast: SpectrogramBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
+                spectrogram_broadcast: SpectrogramBroadcast::new(SPECTROGRAM_BROADCAST_CAPACITY),
                 shutdown: watch::channel(false).0,
                 i18n: None,
                 site_name: None,
@@ -223,7 +239,7 @@ impl AppState {
                 image_cache: None,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 log_broadcaster: LogBroadcaster::new(),
-                spectrogram_broadcast: SpectrogramBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
+                spectrogram_broadcast: SpectrogramBroadcast::new(SPECTROGRAM_BROADCAST_CAPACITY),
                 shutdown: watch::channel(false).0,
                 i18n: None,
                 site_name: None,
@@ -253,7 +269,7 @@ impl AppState {
                 image_cache: None,
                 detection_broadcast: DetectionBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
                 log_broadcaster: LogBroadcaster::new(),
-                spectrogram_broadcast: SpectrogramBroadcast::new(DEFAULT_BROADCAST_CAPACITY),
+                spectrogram_broadcast: SpectrogramBroadcast::new(SPECTROGRAM_BROADCAST_CAPACITY),
                 shutdown: watch::channel(false).0,
                 i18n: None,
                 site_name: None,

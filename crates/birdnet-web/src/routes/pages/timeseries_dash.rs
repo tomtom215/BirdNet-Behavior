@@ -473,4 +473,4 @@ pub fn prewarm(state: &AppState) {
 
 /// No-op pre-warm when analytics is not compiled in.
 #[cfg(not(feature = "analytics"))]
-pub fn prewarm(_state: &AppState) {}
+pub const fn prewarm(_state: &AppState) {}
