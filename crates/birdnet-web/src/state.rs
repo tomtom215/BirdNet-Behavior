@@ -527,15 +527,21 @@ impl AppState {
 
     /// Execute a closure with a reference to the i18n manager.
     ///
-    /// # Panics
-    ///
-    /// Panics if the mutex is poisoned.
+    /// Recovers from a poisoned `RwLock` (reading through the inner value)
+    /// instead of panicking: release builds are `panic = "abort"`, so a
+    /// propagated poison here would take down the whole daemon. In practice the
+    /// i18n lock is only ever write-locked once at construction, before it is
+    /// shared, so it cannot actually poison — this just keeps the policy
+    /// consistent with every other lock in the crate, which all recover via
+    /// `PoisonError::into_inner`.
     pub fn with_i18n_ref<F, T>(&self, f: F) -> Option<T>
     where
         F: FnOnce(&I18nManager) -> T,
     {
         self.inner.i18n.as_ref().map(|lock| {
-            let mgr = lock.read().expect("i18n rwlock poisoned");
+            let mgr = lock
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             f(&mgr)
         })
     }

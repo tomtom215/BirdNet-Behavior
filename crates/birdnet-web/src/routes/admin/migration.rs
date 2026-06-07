@@ -214,12 +214,21 @@ async fn upload_and_run_handler(
             error: None,
         });
         match birdnet_migrate::birdnet_pi::run_migration(&tmp_path, &dest_path, false, &progress) {
-            Ok(summary) => tracing::info!(
-                file = %file_name,
-                imported = summary.imported_rows,
-                skipped = summary.skipped_rows,
-                "upload migration completed"
-            ),
+            Ok(summary) => {
+                tracing::info!(
+                    file = %file_name,
+                    imported = summary.imported_rows,
+                    skipped = summary.skipped_rows,
+                    "upload migration completed"
+                );
+                // Same rebuild the server-path `run_handler` does: the import
+                // wrote back-dated history straight to SQLite, so the DuckDB
+                // analytics copy must be rebuilt or the incremental startup sync
+                // skips every imported row as "older than the latest already
+                // synced" — uploaded history would silently never reach the
+                // behavioural / time-series analytics.
+                rebuild_analytics_after_import(&state, &progress);
+            }
             Err(e) => {
                 tracing::error!(error = %e, "upload migration failed");
                 progress.fail(e.to_string());

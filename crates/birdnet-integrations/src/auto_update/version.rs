@@ -52,8 +52,21 @@ pub(super) fn validate_release_url(url: &str) -> Result<(), UpdateError> {
     let rest = url
         .strip_prefix("https://")
         .ok_or_else(|| UpdateError::Network(format!("refusing non-HTTPS update URL: {url}")))?;
-    // Host is everything up to the first `/`, `:` (port), `?`, or `#`.
-    let host = rest.split(['/', ':', '?', '#']).next().unwrap_or("");
+    // Authority is everything up to the first `/`, `?`, or `#`. Note: we must
+    // NOT split on `:` here — a port lives inside the authority, and splitting
+    // on `:` is exactly what let `https://github.com:x@evil.com/…` read as host
+    // `github.com` (the `:x@evil.com` userinfo+host was discarded) while reqwest
+    // actually connected to `evil.com`.
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    // Drop any `userinfo@` prefix: per the WHATWG URL rules reqwest/`url`
+    // follow, the real host is the part after the LAST `@`. So
+    // `github.com:x@evil.com` → `evil.com`, while a benign `user@github.com`
+    // → `github.com` (still trusted, since that is where the bytes come from).
+    let host_port = authority.rsplit('@').next().unwrap_or(authority);
+    // Strip an optional `:port`, leaving the bare host. (An IPv6 literal would
+    // split at the wrong colon here, but GitHub never serves assets from one, so
+    // it would fail the suffix check below and be rejected anyway — fail-safe.)
+    let host = host_port.split(':').next().unwrap_or(host_port);
     let trusted = host == "github.com"
         || host.ends_with(".github.com")
         || host.ends_with(".githubusercontent.com");
@@ -86,6 +99,28 @@ mod tests {
         assert!(validate_release_url("https://github.com.evil.com/a").is_err());
         assert!(validate_release_url("https://notgithub.com/a").is_err());
         assert!(validate_release_url("ftp://github.com/a").is_err());
+    }
+
+    #[test]
+    fn validate_release_url_rejects_userinfo_host_spoof() {
+        // Regression: the host extractor used to split on `:`, so the userinfo
+        // in `https://github.com:x@evil.com/…` was read as host "github.com"
+        // and trusted — while reqwest connected to the real host, evil.com.
+        // The real host is after the last `@`, so these must all be rejected.
+        assert!(validate_release_url("https://github.com:x@evil.com/payload.tgz").is_err());
+        assert!(validate_release_url("https://github.com@evil.com/payload.tgz").is_err());
+        assert!(validate_release_url("https://objects.githubusercontent.com@evil.com/a").is_err());
+        assert!(validate_release_url("https://a@github.com:tok@evil.com/a").is_err());
+    }
+
+    #[test]
+    fn validate_release_url_accepts_port_and_benign_userinfo() {
+        // An explicit port is part of the authority and must still validate.
+        assert!(validate_release_url("https://github.com:443/o/r/a.tgz").is_ok());
+        // Benign userinfo whose real host is github.com is where the bytes come
+        // from, so it is correctly trusted (GitHub never emits these, but the
+        // host extraction must resolve to github.com, not reject spuriously).
+        assert!(validate_release_url("https://user@github.com/o/r/a.tgz").is_ok());
     }
 
     #[test]

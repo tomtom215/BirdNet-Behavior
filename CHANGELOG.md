@@ -37,6 +37,15 @@ station metadata, over-long recordings, and abrupt shutdown.
   rendering and the live stream are now concurrency-limited, deterministic `4xx`
   client errors are no longer retried, and spectrogram parameters are sanitised —
   closing several avenues for a single client to pin CPU or memory on a small Pi.
+- **Closed an auto-update host-pin bypass via URL userinfo.** The release-asset
+  host check parsed the authority by splitting on `:`, so a URL like
+  `https://github.com:x@evil.com/…` read as the trusted host `github.com` while
+  the download would actually go to `evil.com`. The host is now taken from the
+  segment after the last `@` (userinfo stripped), closing the spoof for both the
+  binary download and the `SHA256SUMS` fetch.
+- **Clamped the public analytics query parameters.** The unauthenticated
+  `/analytics` endpoints now cap the `limit` and the `?species=` sequence length,
+  so a single request can't force an oversized result set or sequence on a Pi.
 
 ### Fixed
 
@@ -78,6 +87,16 @@ station metadata, over-long recordings, and abrupt shutdown.
 - **Assorted correctness and robustness edge cases** surfaced by the pre-release
   audit — input validation on several admin forms, daemon and purge edge cases,
   scheduler and identifier handling, and live-frame broadcast sizing.
+- **Uploaded BirdNET-Pi databases now rebuild the analytics copy too.** The 0.7.1
+  fix that refreshes the DuckDB analytics after an import only covered the
+  server-path import; the browser upload path imported history into SQLite but
+  skipped the rebuild, so uploaded back-dated history silently never reached the
+  behavioural / time-series analytics. The upload path now rebuilds it like the
+  server path.
+- **The i18n lock recovers from poison instead of aborting the daemon.** It was
+  the lone lock in the web layer that propagated a poisoned lock via `expect()`;
+  under `panic = "abort"` that would take the daemon down. It now recovers the
+  guard like every other lock in the crate.
 
 ### Changed
 
