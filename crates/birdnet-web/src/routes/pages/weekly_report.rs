@@ -11,7 +11,7 @@ use axum::response::{Html, IntoResponse};
 use axum::{Router, routing::get};
 use serde::Deserialize;
 
-use super::{days_to_date, escape_html, render_page_for_request};
+use super::{date_to_epoch_days, days_to_date, escape_html, render_page_for_request};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -364,24 +364,6 @@ fn add_days(date: &str, delta: i64) -> String {
     format!("{y}-{m:02}-{d:02}")
 }
 
-/// Convert YYYY-MM-DD to days since Unix epoch.
-fn date_to_epoch_days(date: &str) -> u64 {
-    if date.len() < 10 {
-        return 0;
-    }
-    let y: u64 = date[0..4].parse().unwrap_or(1970);
-    let m: u64 = date[5..7].parse().unwrap_or(1);
-    let d: u64 = date[8..10].parse().unwrap_or(1);
-
-    // Rata Die day number
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = y / 400;
-    let yoe = y - era * 400;
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
-}
-
 /// Current Monday's date (start of ISO week) as YYYY-MM-DD.
 fn current_week_monday() -> String {
     let today = today_string();
@@ -422,15 +404,6 @@ const WEEKLY_SHELL_HTML: &str = r#"<div class="page-content wk-content">
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn date_to_epoch_days_known() {
-        // 1970-01-01 = day 0
-        assert_eq!(date_to_epoch_days("1970-01-01"), 0);
-        // 2026-03-14
-        let days = date_to_epoch_days("2026-03-14");
-        assert!(days > 20_000, "expected >20000 days, got {days}");
-    }
 
     #[test]
     fn add_days_forward() {

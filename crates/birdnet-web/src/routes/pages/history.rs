@@ -183,23 +183,13 @@ fn render_date_list(dates: &[String]) -> String {
 
 /// Add `delta` days to a YYYY-MM-DD date string.
 fn add_days(date: &str, delta: i64) -> String {
-    use super::days_to_date;
+    use super::{date_to_epoch_days, days_to_date};
 
+    // A malformed date has no sensible neighbour — leave the nav link inert by
+    // echoing it back rather than snapping to an epoch date.
     if date.len() < 10 {
         return date.to_string();
     }
-
-    let y: u64 = date[0..4].parse().unwrap_or(1970);
-    let m: u64 = date[5..7].parse().unwrap_or(1);
-    let d: u64 = date[8..10].parse().unwrap_or(1);
-
-    // Rata Die → epoch days conversion
-    let y2 = if m <= 2 { y - 1 } else { y };
-    let era = y2 / 400;
-    let yoe = y2 - era * 400;
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let epoch_days = era * 146_097 + doe - 719_468;
 
     #[allow(
         clippy::cast_possible_truncation,
@@ -208,7 +198,7 @@ fn add_days(date: &str, delta: i64) -> String {
         clippy::cast_possible_wrap,
         clippy::cast_lossless
     )]
-    let new_days = (epoch_days as i64 + delta).max(0) as u64;
+    let new_days = (date_to_epoch_days(date) as i64 + delta).max(0) as u64;
     let (ny, nm, nd) = days_to_date(new_days);
     format!("{ny}-{nm:02}-{nd:02}")
 }

@@ -13,8 +13,8 @@ use axum::{Router, routing::get};
 
 use super::atoms::avatar;
 use super::{
-    days_to_date, escape_html, group_thousands, render_page_for_request, simple_url_encode,
-    today_date_string,
+    date_to_epoch_days, days_to_date, escape_html, group_thousands, render_page_for_request,
+    simple_url_encode, today_date_string,
 };
 use crate::state::AppState;
 
@@ -303,22 +303,6 @@ fn milestone(html: &mut String, label: &str, value: &str, sub: &str) {
         label = escape_html(label),
         sub = escape_html(sub),
     );
-}
-
-/// Convert YYYY-MM-DD to days since the Unix epoch (rata die).
-fn date_to_epoch_days(date: &str) -> u64 {
-    if date.len() < 10 {
-        return 0;
-    }
-    let y: u64 = date[0..4].parse().unwrap_or(1970);
-    let m: u64 = date[5..7].parse().unwrap_or(1);
-    let d: u64 = date[8..10].parse().unwrap_or(1);
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = y / 400;
-    let yoe = y - era * 400;
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
 }
 
 #[cfg(test)]
