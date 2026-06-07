@@ -325,10 +325,10 @@ fn read_capped_line<R: BufRead>(reader: &mut R, out: &mut Vec<u8>) -> Result<usi
         }
         // Search for the line terminator. `read_until` would do the same, but
         // we need the byte budget check between buffer refills.
-        let (chunk, done) = available.iter().position(|&b| b == b'\n').map_or(
-            (available, false),
-            |i| (&available[..=i], true),
-        );
+        let (chunk, done) = available
+            .iter()
+            .position(|&b| b == b'\n')
+            .map_or((available, false), |i| (&available[..=i], true));
         if total.saturating_add(chunk.len()) > MAX_LINE_BYTES {
             return Err(MigrateError::CsvParse(format!(
                 "line exceeds {MAX_LINE_BYTES}-byte cap (truncated/corrupt input?)"

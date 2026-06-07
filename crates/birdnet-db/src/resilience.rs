@@ -192,18 +192,16 @@ pub fn backup_database(db_path: &Path, backup_dir: &Path) -> Result<PathBuf, Res
     // for `check_and_recover` to restore from. A failed quick_check is rare on
     // a healthy station, so this is cheap defense-in-depth.
     if !check_integrity(db_path)? {
-        return Err(ResilienceError::Sqlite(
-            rusqlite::Error::SqliteFailure(
-                rusqlite::ffi::Error {
-                    code: rusqlite::ffi::ErrorCode::DatabaseCorrupt,
-                    extended_code: 0,
-                },
-                Some(format!(
-                    "refusing to back up corrupt source database at {}",
-                    db_path.display()
-                )),
-            ),
-        ));
+        return Err(ResilienceError::Sqlite(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error {
+                code: rusqlite::ffi::ErrorCode::DatabaseCorrupt,
+                extended_code: 0,
+            },
+            Some(format!(
+                "refusing to back up corrupt source database at {}",
+                db_path.display()
+            )),
+        )));
     }
 
     let timestamp = std::time::SystemTime::now()

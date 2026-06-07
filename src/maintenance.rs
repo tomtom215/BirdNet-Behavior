@@ -335,7 +335,10 @@ mod tests {
             .map(|e| e.file_name().into_string().unwrap())
             .collect();
         // Oldest (the BirdDB one) must be gone; the 2 newest survive.
-        assert_eq!(remaining.iter().filter(|n| n.contains(".backup.")).count(), 2);
+        assert_eq!(
+            remaining.iter().filter(|n| n.contains(".backup.")).count(),
+            2
+        );
         assert!(!remaining.contains(&"BirdDB.db.backup.1700000000".to_string()));
     }
 

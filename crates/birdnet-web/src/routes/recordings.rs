@@ -389,7 +389,10 @@ mod tests {
 
     #[test]
     fn parse_range_unsatisfiable_start_past_eof() {
-        assert_eq!(parse_range("bytes=1000-1100", 1000), ParsedRange::Unsatisfiable);
+        assert_eq!(
+            parse_range("bytes=1000-1100", 1000),
+            ParsedRange::Unsatisfiable
+        );
         assert_eq!(parse_range("bytes=2000-", 1000), ParsedRange::Unsatisfiable);
         // Empty file: any range is unsatisfiable.
         assert_eq!(parse_range("bytes=0-0", 0), ParsedRange::Unsatisfiable);

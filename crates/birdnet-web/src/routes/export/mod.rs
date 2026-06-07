@@ -142,12 +142,18 @@ mod tests {
 
     #[test]
     fn sanitize_birddb_field_strips_structure_breakers() {
-        assert_eq!(sanitize_birddb_field("Eurasian Blackbird"), "Eurasian Blackbird");
+        assert_eq!(
+            sanitize_birddb_field("Eurasian Blackbird"),
+            "Eurasian Blackbird"
+        );
         assert_eq!(sanitize_birddb_field("Foo;Bar"), "Foo Bar");
         assert_eq!(
             sanitize_birddb_field("inject\n2026-01-01;00:00:00;Fake"),
             "inject 2026-01-01 00:00:00 Fake"
         );
-        assert_eq!(sanitize_birddb_field("carriage\r\nreturn"), "carriage  return");
+        assert_eq!(
+            sanitize_birddb_field("carriage\r\nreturn"),
+            "carriage  return"
+        );
     }
 }

@@ -535,7 +535,10 @@ mod tests {
 
         assert_eq!(db.full_resync_from_sqlite(&sc).unwrap(), 2);
         assert_eq!(db.detection_count().unwrap(), 2);
-        assert!(!staging_exists(&db), "staging table must be dropped after swap");
+        assert!(
+            !staging_exists(&db),
+            "staging table must be dropped after swap"
+        );
 
         // Repeat: still 2 rows (not 4), staging still gone.
         assert_eq!(db.full_resync_from_sqlite(&sc).unwrap(), 2);

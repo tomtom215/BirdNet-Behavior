@@ -141,10 +141,8 @@ impl RecordingWindow {
                 // The prior cast `(... .min(1439)) as u32` on a negative value
                 // produced a huge wrapped u32, which silently sailed past the
                 // `start >= end` order check.
-                let start_i = (i64::from(sunrise_min) - i64::from(pre_sunrise_min))
-                    .clamp(0, 1439);
-                let end_i = (i64::from(sunset_min) + i64::from(post_sunset_min))
-                    .clamp(0, 1439);
+                let start_i = (i64::from(sunrise_min) - i64::from(pre_sunrise_min)).clamp(0, 1439);
+                let end_i = (i64::from(sunset_min) + i64::from(post_sunset_min)).clamp(0, 1439);
                 #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
                 let start = start_i as u32;
                 #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]

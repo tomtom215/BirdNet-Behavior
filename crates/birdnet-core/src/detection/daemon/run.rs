@@ -386,9 +386,7 @@ fn process_existing_files(
                     // and we processed the next file anyway). The main runtime
                     // loop treats a closed receiver as fatal — match that here.
                     if event_tx.send(event).is_err() {
-                        tracing::debug!(
-                            "existing-file backlog stopping: event receiver closed"
-                        );
+                        tracing::debug!("existing-file backlog stopping: event receiver closed");
                         return;
                     }
                 }

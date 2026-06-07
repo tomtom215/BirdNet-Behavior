@@ -4,9 +4,7 @@
 use rusqlite::{Connection, params};
 
 use crate::sqlite::connection::DbError;
-use crate::sqlite::types::{
-    ConcurrentDetection, DETECTION_COLS, DetectionRow, map_detection_row,
-};
+use crate::sqlite::types::{ConcurrentDetection, DETECTION_COLS, DetectionRow, map_detection_row};
 
 use super::search::{SearchTerm, parse_search_term};
 
@@ -547,7 +545,8 @@ mod tests {
     #[test]
     fn all_detections_date_range() {
         let (_tmp, conn) = temp_db_with_data();
-        let (rows, _) = all_detections(&conn, Some("2026-03-11"), Some("2026-03-11"), 10_000).unwrap();
+        let (rows, _) =
+            all_detections(&conn, Some("2026-03-11"), Some("2026-03-11"), 10_000).unwrap();
         assert_eq!(rows.len(), 3);
     }
 

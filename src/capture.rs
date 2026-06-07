@@ -18,9 +18,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 
-use birdnet_core::audio::capture::{
-    AudioFormat, CaptureError, CaptureManager, RecordingConfig,
-};
+use birdnet_core::audio::capture::{AudioFormat, CaptureError, CaptureManager, RecordingConfig};
 use birdnet_scheduler::ScheduleConfig;
 use birdnet_web::metrics::SharedMetrics;
 

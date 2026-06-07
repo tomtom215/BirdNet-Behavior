@@ -226,10 +226,7 @@ mod tests {
         // Every locked file still present (the loop iterated past them all
         // looking for unprotected files, but found none).
         for name in &names {
-            assert!(
-                species_dir.join(name).exists(),
-                "{name} should still exist"
-            );
+            assert!(species_dir.join(name).exists(), "{name} should still exist");
         }
     }
 

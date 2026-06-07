@@ -232,7 +232,10 @@ mod tests {
         // Uncapped: every sample is decoded.
         assert_eq!(decode_file(&path).unwrap().samples.len(), 10_000);
         // Capped: decoding stops at exactly the cap.
-        assert_eq!(decode_file_capped(&path, 1_000).unwrap().samples.len(), 1_000);
+        assert_eq!(
+            decode_file_capped(&path, 1_000).unwrap().samples.len(),
+            1_000
+        );
         // A cap above the clip length is a no-op (no truncation, no panic).
         assert_eq!(
             decode_file_capped(&path, 50_000).unwrap().samples.len(),
