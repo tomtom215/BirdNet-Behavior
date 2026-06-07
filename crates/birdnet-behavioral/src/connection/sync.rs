@@ -58,7 +58,7 @@ impl AnalyticsDb {
         let count = u64::try_from(rows.len()).unwrap_or(0);
 
         if count > 0 {
-            self.append_rows(&rows)?;
+            self.append_rows_to("detections", &rows)?;
             self.conn
                 .execute_batch(queries::CREATE_DETECTIONS_TS_VIEW)?;
             tracing::info!(rows = count, "synced detections from SQLite to DuckDB");
@@ -93,8 +93,40 @@ impl AnalyticsDb {
         // Truncate first: a full rebuild must not be filtered by the incremental
         // cutoff (which would drop back-dated imports) and must not duplicate
         // rows already present from the startup sync.
-        self.conn.execute_batch("DELETE FROM detections;")?;
-        self.append_rows(&rows)?;
+        //
+        // Build the new copy in a staging table and swap it in atomically,
+        // rather than `DELETE`-then-append in place. A failed append (or a crash
+        // mid-rebuild) previously left the live OLAP copy *empty* — recoverable
+        // only by re-running, and silently under-reporting until then. The
+        // appender writes to the staging table outside any transaction (avoiding
+        // DuckDB's appender/transaction interaction); the swap is plain
+        // transactional SQL with an explicit rollback so a failure leaves both
+        // the live table and the connection usable.
+        self.conn.execute_batch(
+            "CREATE OR REPLACE TABLE detections_staging AS SELECT * FROM detections WHERE false;",
+        )?;
+        self.append_rows_to("detections_staging", &rows)?;
+
+        self.conn.execute_batch("BEGIN TRANSACTION;")?;
+        let swap = self.conn.execute_batch(
+            "DELETE FROM detections;
+             INSERT INTO detections SELECT * FROM detections_staging;",
+        );
+        match swap {
+            Ok(()) => self.conn.execute_batch("COMMIT;")?,
+            Err(e) => {
+                // Roll the swap back and drop the staging table so the live copy
+                // and the connection are left in a clean, usable state.
+                let _ = self.conn.execute_batch("ROLLBACK;");
+                let _ = self
+                    .conn
+                    .execute_batch("DROP TABLE IF EXISTS detections_staging;");
+                return Err(AnalyticsError::from(e));
+            }
+        }
+        self.conn
+            .execute_batch("DROP TABLE IF EXISTS detections_staging;")?;
+
         // Refresh the view unconditionally so it exists even after a rebuild
         // that loaded zero rows.
         self.conn
@@ -107,15 +139,18 @@ impl AnalyticsDb {
         Ok(count)
     }
 
-    /// Bulk-append already-read `SQLite` rows into the `DuckDB` `detections` table.
+    /// Bulk-append already-read `SQLite` rows into the named `DuckDB` table via
+    /// the appender. `table` is an internal, hard-coded identifier (`detections`
+    /// for the incremental path, `detections_staging` for the atomic full
+    /// rebuild) — never untrusted input.
     ///
     /// Shared by the incremental and full sync paths; callers refresh the
     /// timestamp view and emit their own log line.
-    fn append_rows(&self, rows: &[SyncRow]) -> Result<(), AnalyticsError> {
+    fn append_rows_to(&self, table: &str, rows: &[SyncRow]) -> Result<(), AnalyticsError> {
         if rows.is_empty() {
             return Ok(());
         }
-        let mut appender = self.conn.appender("detections")?;
+        let mut appender = self.conn.appender(table)?;
         for row in rows {
             appender.append_row(params![
                 row.date,
@@ -466,5 +501,45 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM detections_ts", [], |r| r.get(0))
             .unwrap();
         assert_eq!(view_rows, 0);
+    }
+
+    #[test]
+    fn full_resync_is_atomic_and_repeatable() {
+        // The atomic rebuild builds into `detections_staging` and swaps it in.
+        // Verify the staging table doesn't leak after a successful rebuild and
+        // that running the rebuild repeatedly is idempotent (no duplicates, no
+        // residual staging table from a prior run).
+        let (db, _tmp) = make_db();
+        let sqlite_dir = TempDir::new().unwrap();
+        let sc = rusqlite::Connection::open(sqlite_dir.path().join("b.db")).unwrap();
+        sc.execute_batch(
+            "CREATE TABLE detections (Date TEXT, Time TEXT, Sci_Name TEXT, Com_Name TEXT,
+             Confidence REAL, Lat REAL, Lon REAL, Cutoff REAL, Week INTEGER,
+             Sens REAL, Overlap REAL, File_Name TEXT);
+             INSERT INTO detections VALUES ('2026-06-05','10:00:00','Parus major','Great Tit',0.9,NULL,NULL,NULL,NULL,NULL,NULL,NULL);
+             INSERT INTO detections VALUES ('2026-06-05','10:00:01','Turdus merula','Blackbird',0.8,NULL,NULL,NULL,NULL,NULL,NULL,NULL);",
+        ).unwrap();
+
+        // Helper: does a table exist in this DuckDB?
+        let staging_exists = |db: &AnalyticsDb| -> bool {
+            db.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM information_schema.tables \
+                     WHERE table_name = 'detections_staging'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap()
+                > 0
+        };
+
+        assert_eq!(db.full_resync_from_sqlite(&sc).unwrap(), 2);
+        assert_eq!(db.detection_count().unwrap(), 2);
+        assert!(!staging_exists(&db), "staging table must be dropped after swap");
+
+        // Repeat: still 2 rows (not 4), staging still gone.
+        assert_eq!(db.full_resync_from_sqlite(&sc).unwrap(), 2);
+        assert_eq!(db.detection_count().unwrap(), 2);
+        assert!(!staging_exists(&db));
     }
 }
