@@ -223,6 +223,20 @@ impl BirdNetModel {
         })
     }
 
+    /// Whether to emit the one-shot model/label count-mismatch warning.
+    ///
+    /// Factored out of `predict` so the warn-once guard is unit-testable: it
+    /// returns `true` exactly once — on the first call where the model's output
+    /// dimension disagrees with the loaded label count. `already_warned` is the
+    /// latch the caller sets after emitting the warning.
+    const fn should_warn_label_count_mismatch(
+        model_output_count: usize,
+        label_count: usize,
+        already_warned: bool,
+    ) -> bool {
+        model_output_count != label_count && !already_warned
+    }
+
     /// Run inference on raw audio samples.
     ///
     /// The `audio` slice should be mono f32 samples at the model's expected
@@ -314,7 +328,11 @@ impl BirdNetModel {
         // species are assigned positionally, so the surplus is dropped and the
         // rest may be mislabeled. Warn once (not every 3 s) rather than fail —
         // a running station keeps detecting — but make the misconfig visible.
-        if model_output_count != self.labels.len() && !self.warned_label_count_mismatch {
+        if Self::should_warn_label_count_mismatch(
+            model_output_count,
+            self.labels.len(),
+            self.warned_label_count_mismatch,
+        ) {
             self.warned_label_count_mismatch = true;
             tracing::warn!(
                 model_outputs = model_output_count,
@@ -811,6 +829,26 @@ mod tests {
         let s = format!("{m:?}");
         assert!(s.contains("BirdNetModel"));
         assert!(s.contains("labels_count"));
+    }
+
+    #[test]
+    fn warns_once_only_on_label_count_mismatch() {
+        // Matched counts never warn.
+        assert!(!BirdNetModel::should_warn_label_count_mismatch(
+            6522, 6522, false
+        ));
+        // A mismatch on the first encounter warns...
+        assert!(BirdNetModel::should_warn_label_count_mismatch(
+            6522, 100, false
+        ));
+        // ...but not once the latch is already set (warn-once).
+        assert!(!BirdNetModel::should_warn_label_count_mismatch(
+            6522, 100, true
+        ));
+        // A matched count with the latch set still never warns.
+        assert!(!BirdNetModel::should_warn_label_count_mismatch(
+            6522, 6522, true
+        ));
     }
 
     #[test]
