@@ -205,8 +205,7 @@ impl Client {
                     // bad station token or malformed payload won't succeed on
                     // retry, so fail fast instead of burning the backoff budget
                     // (and adding load at fleet scale). Retry only 429 and 5xx.
-                    if status.is_client_error()
-                        && status != reqwest::StatusCode::TOO_MANY_REQUESTS
+                    if status.is_client_error() && status != reqwest::StatusCode::TOO_MANY_REQUESTS
                     {
                         return Err(last_error);
                     }
