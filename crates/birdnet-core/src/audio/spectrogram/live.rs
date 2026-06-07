@@ -14,7 +14,7 @@ use notify::{EventKind, RecursiveMode, Watcher};
 
 use super::{MelConfig, mel_spectrogram};
 use crate::audio::capture::is_audio_file;
-use crate::audio::decode::decode_file;
+use crate::audio::decode::{SPECTROGRAM_DECODE_SAMPLE_CAP, decode_file_capped};
 
 /// Configuration for the live spectrogram daemon.
 #[derive(Debug, Clone)]
@@ -73,7 +73,10 @@ pub fn process_file(
     path: &Path,
     config: &LiveSpectrogramConfig,
 ) -> Result<SpectrogramFrame, String> {
-    let audio = decode_file(path).map_err(|e| format!("decode: {e}"))?;
+    // Visual only — bound the decode so an over-long recording can't allocate
+    // an unbounded buffer (the leading portion is enough for the live view).
+    let audio = decode_file_capped(path, SPECTROGRAM_DECODE_SAMPLE_CAP)
+        .map_err(|e| format!("decode: {e}"))?;
 
     if audio.samples.is_empty() {
         return Err("empty audio".into());

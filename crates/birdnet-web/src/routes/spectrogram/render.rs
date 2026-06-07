@@ -27,11 +27,14 @@ pub fn generate_spectrogram_png_with_label(
     path: &std::path::Path,
     label: Option<&SpectrogramLabel>,
 ) -> Result<Vec<u8>, String> {
-    use birdnet_core::audio::decode::decode_file;
+    use birdnet_core::audio::decode::{SPECTROGRAM_DECODE_SAMPLE_CAP, decode_file_capped};
     use birdnet_core::audio::spectrogram::{MelConfig, mel_spectrogram};
 
-    // Decode audio file to samples.
-    let audio = decode_file(path).map_err(|e| format!("decode error: {e}"))?;
+    // Decode audio to samples. The spectrogram is a visual, so an over-long
+    // recording is decoded only up to the cap (the endpoint is public and
+    // decodes on demand — an unbounded buffer would OOM a Pi).
+    let audio = decode_file_capped(path, SPECTROGRAM_DECODE_SAMPLE_CAP)
+        .map_err(|e| format!("decode error: {e}"))?;
 
     if audio.samples.is_empty() {
         return Err("empty audio file".to_string());
