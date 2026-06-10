@@ -119,8 +119,12 @@ impl Histogram {
 /// can format without holding any locks.
 #[derive(Debug, Clone)]
 pub struct HistogramSnapshot {
+    /// `(upper_bound_secs, cumulative_count)` pairs, one per bucket in
+    /// [`LATENCY_BUCKETS_SECS`] order. The implicit `+Inf` bucket equals `count`.
     pub buckets: Vec<(f64, u64)>,
+    /// Sum of all observed values in seconds.
     pub sum_secs: f64,
+    /// Total number of observations recorded.
     pub count: u64,
 }
 
@@ -142,6 +146,7 @@ impl Default for MetricsRegistry {
 }
 
 impl MetricsRegistry {
+    /// Create a new, zeroed-out registry.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -259,10 +264,15 @@ impl MetricsRegistry {
 /// Plain snapshot of every metric, returned to the renderer.
 #[derive(Debug, Clone)]
 pub struct MetricsSnapshot {
+    /// Per-`(species, chunk_offset_secs)` detection counts.
     pub detections: Vec<((String, i64), u64)>,
+    /// Snapshot of the per-chunk BirdNET inference latency histogram.
     pub inference: HistogramSnapshot,
+    /// Snapshot of the SQLite detection-row write latency histogram.
     pub db_write: HistogramSnapshot,
+    /// Per-source `audio_source_up` gauge values (0 = down, 1 = up).
     pub source_up: Vec<(String, u64)>,
+    /// Total `WATCHDOG=1` pings sent to systemd since process start.
     pub watchdog_pings: u64,
 }
 

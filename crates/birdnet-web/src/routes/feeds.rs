@@ -24,6 +24,7 @@ use serde::Deserialize;
 use crate::routes::pages::simple_url_encode;
 use crate::state::AppState;
 
+/// Mount the RSS and iCal feed routes.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/feeds/rare.rss", get(rare_rss))

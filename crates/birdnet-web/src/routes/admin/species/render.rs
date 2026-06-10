@@ -4,6 +4,7 @@ use std::fmt::Write as _;
 
 use crate::routes::pages::escape_html;
 
+/// Render the full species list management admin page (shell + content).
 pub fn render_species_page(exclude: &[String], include: &[String]) -> String {
     crate::routes::admin::admin_shell(
         "Species lists",
@@ -53,6 +54,7 @@ fn species_lists_body(exclude: &[String], include: &[String]) -> String {
     )
 }
 
+/// Render the HTMX partial fragment containing both the exclusion and allow-list cards.
 pub fn render_species_partial(exclude: &[String], include: &[String]) -> String {
     let mut out = String::with_capacity(4096);
     render_list_card(

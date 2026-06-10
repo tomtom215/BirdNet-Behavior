@@ -37,6 +37,7 @@ use crate::state::AppState;
 const ACCOUNTS_TEMPLATE: &str = include_str!("../../../templates/admin_accounts.html");
 const AUDIT_PREVIEW_LIMIT: usize = 6;
 
+/// Mount the accounts and sessions admin routes.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/admin/accounts", get(accounts_page))

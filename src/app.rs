@@ -28,26 +28,40 @@ pub async fn run(
     cli: Cli,
     config: Option<birdnet_core::config::Config>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Race the startup phases against an early SIGTERM/SIGINT. Without this,
-    // a `systemctl restart` mid-startup — e.g. during a cold DuckDB build,
-    // SQLite migration, or initial DuckDB sync — would be SIGKILLed at
+    // Race ONLY the startup phases against an early SIGTERM/SIGINT. Without
+    // this, a `systemctl restart` mid-startup — e.g. during a cold DuckDB
+    // build, SQLite migration, or initial DuckDB sync — would be SIGKILLed at
     // systemd's `TimeoutStartSec` instead of exiting cleanly. The biased
     // select prefers the signal so a signal that arrives at the same tick as
     // a startup result wins, ensuring we always honour the shutdown intent.
     //
-    // Once the listener binds and `serve` enters its inner `tokio::select!`
-    // (which installs its own `with_graceful_shutdown`), this outer arm is
-    // never reached: `serve()` returns normally. The signal arm only fires
-    // for the early window where the startup work has not yet handed off.
+    // The race MUST end once `serve` hands off (the `started` arm below):
+    // from that point the serve loop's `with_graceful_shutdown` owns signal
+    // handling — it wakes live WebSocket/SSE clients, drains connections,
+    // and stops the detection daemon so the runtime can wind down. Keeping
+    // the outer listener racing past handoff made the biased arm win every
+    // post-startup SIGTERM, cancel that choreography, and leave the runtime
+    // blocked forever on the detection loop's still-running blocking thread
+    // (observed live: "exiting cleanly" logged, process alive minutes later,
+    // leaving systemd to SIGKILL at TimeoutStopSec).
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+    let mut serve_fut = std::pin::pin!(serve(cli, config, started_tx));
+
     tokio::select! {
         biased;
         () = shutdown_signal() => {
             tracing::info!("shutdown signal received during startup; exiting cleanly");
             sd_notify::stopping();
-            Ok(())
+            return Ok(());
         }
-        result = serve(cli, config) => result,
+        result = &mut serve_fut => return result,
+        _ = started_rx => {}
     }
+
+    // Startup is complete and the inner graceful-shutdown hook is already
+    // polled (it registered its signal listeners before `serve` first
+    // suspended after binding), so no signal can fall between the arms.
+    serve_fut.await
 }
 
 /// Server orchestration body — runs from config validation through the axum
@@ -58,6 +72,7 @@ pub async fn run(
 async fn serve(
     cli: Cli,
     config: Option<birdnet_core::config::Config>,
+    started: tokio::sync::oneshot::Sender<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Fail fast on a misconfigured station: validate the loaded config and
     // refuse to start if any setting is outright invalid (e.g. a latitude
@@ -373,6 +388,12 @@ async fn serve(
     // begin pinging the watchdog. If we are not running under systemd these
     // are no-ops.
     sd_notify::ready();
+    // Hand shutdown ownership to the graceful-shutdown hook installed below:
+    // `run` stops racing its startup-phase signal listener. There is no gap —
+    // between here and the serve loop's first suspension there are no awaits,
+    // so the hook's signal listeners are registered before this function can
+    // yield. A receiver dropped early (run already returning) is fine.
+    let _ = started.send(());
     // Gate the watchdog on detection-loop progress: if the pipeline hangs, the
     // heartbeat stops advancing, the pinger withholds WATCHDOG=1, and systemd
     // restarts us instead of leaving a frozen daemon running. In web-only mode

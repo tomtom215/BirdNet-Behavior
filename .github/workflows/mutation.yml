@@ -233,7 +233,7 @@ jobs:
           - { label: "src/capture/supervisor.rs [2/3]", slug: src-capture-supervisor.rs-2, shard: "1/3", file: "src/capture/supervisor.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
           - { label: "src/capture/supervisor.rs [3/3]", slug: src-capture-supervisor.rs-3, shard: "2/3", file: "src/capture/supervisor.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -254,7 +254,7 @@ jobs:
           echo "Disk after:"; df -h /
 
       - name: Cache Cargo
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             ~/.cargo/registry/index/
@@ -267,7 +267,7 @@ jobs:
             ${{ runner.os }}-mutants-
 
       - name: Install cargo-mutants
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@fd2f5e3d644b484055ebf4268f474c565f148f25 # v2.81.9
         with:
           tool: cargo-mutants
 
@@ -323,7 +323,7 @@ jobs:
 
       - name: Upload mutants report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: mutants-report-${{ matrix.slug }}
           path: mutants.out
@@ -370,7 +370,7 @@ jobs:
         # shard's counts still land in the job's Step Summary (above) and its
         # artifact, and its pass/fail shows as its own check.
         if: github.event_name == 'pull_request' && always() && ! matrix.shard
-        uses: marocchino/sticky-pull-request-comment@v3
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
         with:
           header: mutants-${{ matrix.slug }}
           message: |

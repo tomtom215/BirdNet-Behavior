@@ -13,8 +13,8 @@ const API_BASE: &str = "https://app.birdweather.com/api/v1";
 /// Default request timeout.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Maximum retry attempts for failed requests.
-const MAX_RETRIES: u32 = 3;
+/// Total request attempts (initial + retries) before a POST is abandoned.
+const MAX_ATTEMPTS: u32 = 3;
 
 /// `BirdWeather` client errors.
 #[derive(Debug)]
@@ -115,7 +115,7 @@ impl Client {
 
     /// Post a detection to `BirdWeather`.
     ///
-    /// Retries up to `MAX_RETRIES` times with exponential backoff.
+    /// Makes up to `MAX_ATTEMPTS` attempts (initial + retries) with exponential backoff.
     ///
     /// # Errors
     ///
@@ -176,7 +176,7 @@ impl Client {
     ) -> Result<ApiResponse, BirdWeatherError> {
         let mut last_error = BirdWeatherError::Http("no attempts made".into());
 
-        for attempt in 0..MAX_RETRIES {
+        for attempt in 0..MAX_ATTEMPTS {
             if attempt > 0 {
                 // Jittered, capped exponential backoff so concurrent retries —
                 // and many stations hitting the same endpoint — don't

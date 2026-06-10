@@ -2,6 +2,11 @@
 <p align="center">Real-time acoustic bird classification with behavioral analytics — written in Rust, runs on a Raspberry Pi.</p>
 
 <p align="center">
+  <a href="https://github.com/tomtom215/BirdNet-Behavior/actions/workflows/ci.yml"><img src="https://github.com/tomtom215/BirdNet-Behavior/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/tomtom215/BirdNet-Behavior/actions/workflows/coverage.yml"><img src="https://github.com/tomtom215/BirdNet-Behavior/actions/workflows/coverage.yml/badge.svg" alt="Coverage"></a>
+  <a href="https://github.com/tomtom215/BirdNet-Behavior/actions/workflows/supply-chain.yml"><img src="https://github.com/tomtom215/BirdNet-Behavior/actions/workflows/supply-chain.yml/badge.svg" alt="Supply chain"></a>
+</p>
+<p align="center">
   <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/"><img src="https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg" alt="License"></a>
   <img src="https://img.shields.io/badge/Rust-1.95%2B-orange" alt="MSRV">
   <img src="https://img.shields.io/badge/edition-2024-orange" alt="Edition 2024">

@@ -10,6 +10,10 @@ members = [
     "crates/birdnet-scheduler",
 ]
 resolver = "2"
+# The fuzz harnesses build on nightly with their own profile; keeping them
+# out of the workspace keeps every normal gate (build/test/clippy/mutants)
+# independent of fuzz-only dependencies. See fuzz/README.md.
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.7.2"
@@ -143,8 +147,12 @@ multiple_crate_versions = "allow"
 duration_suboptimal_units = "allow"
 
 [workspace.lints.rust]
-unsafe_code = "deny"
+# `forbid`, not `deny`: deny can be overridden by a stray `#[allow]`; forbid
+# cannot. The codebase has zero unsafe blocks and the README badge promises
+# "unsafe forbidden", so make the compiler hold us to it.
+unsafe_code = "forbid"
 missing_debug_implementations = "warn"
+missing_docs = "warn"
 
 [profile.release]
 opt-level = 3

@@ -99,7 +99,9 @@ pub struct RecordingConfig {
 /// Output audio format.
 #[derive(Debug, Clone, Copy)]
 pub enum AudioFormat {
+    /// Uncompressed PCM WAV (`.wav`).
     Wav,
+    /// Losslessly compressed FLAC (`.flac`).
     Flac,
 }
 

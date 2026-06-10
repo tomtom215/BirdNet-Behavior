@@ -234,7 +234,27 @@ fn render_page_inner(
 /// Friendly `404` page rendered in the full app layout. Wired as the router
 /// fallback so a mistyped URL gets the branded shell and a way back, rather
 /// than an empty body.
-pub(crate) async fn not_found(headers: axum::http::HeaderMap) -> impl axum::response::IntoResponse {
+///
+/// Unmatched paths under `/api/` get a machine-readable JSON 404 instead:
+/// API consumers are scripts and dashboards, and feeding them a full HTML
+/// page hides the actual failure (and bloats every typo'd poll).
+pub(crate) async fn not_found(
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    if uri.path().starts_with("/api/") {
+        return (
+            axum::http::StatusCode::NOT_FOUND,
+            axum::Json(serde_json::json!({
+                "error": "not found",
+                "path": uri.path(),
+            })),
+        )
+            .into_response();
+    }
+
     let body = render_page_for_request(
         "Page not found",
         r#"<section class="bnb-card pm-404-card">
@@ -246,7 +266,7 @@ pub(crate) async fn not_found(headers: axum::http::HeaderMap) -> impl axum::resp
         "",
         &headers,
     );
-    (axum::http::StatusCode::NOT_FOUND, body)
+    (axum::http::StatusCode::NOT_FOUND, body).into_response()
 }
 
 // ---------------------------------------------------------------------------

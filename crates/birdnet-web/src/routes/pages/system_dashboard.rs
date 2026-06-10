@@ -19,6 +19,7 @@ use axum::{Router, routing::get};
 use super::{escape_html, render_page_for_request};
 use crate::state::AppState;
 
+/// Mount the system health dashboard and all HTMX partial routes.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/system", get(system_page))

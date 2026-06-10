@@ -16,6 +16,7 @@ use axum::routing::get;
 use super::admin_shell;
 use crate::state::AppState;
 
+/// Mount the backup and recovery admin route.
 pub fn router() -> Router<AppState> {
     Router::new().route("/admin/backups", get(backups_page))
 }

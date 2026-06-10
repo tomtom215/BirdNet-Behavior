@@ -45,7 +45,9 @@ use crate::state::AppState;
 /// [`RequestUser`] axum extractor below.
 #[derive(Debug, Clone)]
 pub struct RequestUser {
+    /// Authenticated user record loaded from the `users` table.
     pub user: User,
+    /// Session token bound to this request (matches the `sessions.id` row).
     pub session_id: String,
 }
 

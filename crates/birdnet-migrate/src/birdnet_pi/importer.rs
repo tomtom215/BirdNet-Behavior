@@ -139,6 +139,47 @@ fn import_batched(
     Ok((imported, skipped))
 }
 
+/// Read a float column from a BirdNET-Pi row, tolerating dirty data.
+///
+/// SQLite columns are dynamically typed and upstream BirdNET-Pi wrote
+/// whatever Python had on hand, so real-world databases carry TEXT values
+/// (usually `""`, sometimes a stringified number) in REAL columns — the
+/// same "empty-string poisoning" our own schema migration 11 had to clean
+/// up. A strict `row.get::<_, Option<f64>>` aborts the whole import with
+/// `InvalidColumnType` on the first such cell; this reader degrades the
+/// single cell to `None` (or parses it when it is a stringified number)
+/// so one dirty value cannot torpedo a multi-year migration.
+fn lenient_f64(row: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<Option<f64>> {
+    use rusqlite::types::ValueRef;
+    Ok(match row.get_ref(idx)? {
+        ValueRef::Real(f) => Some(f),
+        // Coordinates/settings stored as whole numbers; exact for any
+        // plausible magnitude (precision only degrades beyond 2^53).
+        #[allow(clippy::cast_precision_loss)]
+        ValueRef::Integer(i) => Some(i as f64),
+        ValueRef::Text(t) => std::str::from_utf8(t)
+            .ok()
+            .and_then(|s| s.trim().parse().ok()),
+        ValueRef::Null | ValueRef::Blob(_) => None,
+    })
+}
+
+/// Read an integer column from a BirdNET-Pi row, tolerating dirty data.
+/// Same rationale as [`lenient_f64`].
+fn lenient_i64(row: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<Option<i64>> {
+    use rusqlite::types::ValueRef;
+    Ok(match row.get_ref(idx)? {
+        ValueRef::Integer(i) => Some(i),
+        // A week number stored as REAL (e.g. 23.0) truncates exactly.
+        #[allow(clippy::cast_possible_truncation)]
+        ValueRef::Real(f) if f.is_finite() => Some(f as i64),
+        ValueRef::Text(t) => std::str::from_utf8(t)
+            .ok()
+            .and_then(|s| s.trim().parse().ok()),
+        ValueRef::Real(_) | ValueRef::Null | ValueRef::Blob(_) => None,
+    })
+}
+
 /// Fetch a page of rows from the source.
 fn fetch_batch(
     conn: &Connection,
@@ -167,13 +208,13 @@ fn fetch_batch(
                     time: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                     sci_name: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
                     com_name: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
-                    confidence: row.get::<_, Option<f64>>(4)?.unwrap_or(0.0).clamp(0.0, 1.0),
-                    lat: row.get(5)?,
-                    lon: row.get(6)?,
-                    cutoff: row.get(7)?,
-                    week: row.get(8)?,
-                    sens: row.get(9)?,
-                    overlap: row.get(10)?,
+                    confidence: lenient_f64(row, 4)?.unwrap_or(0.0).clamp(0.0, 1.0),
+                    lat: lenient_f64(row, 5)?,
+                    lon: lenient_f64(row, 6)?,
+                    cutoff: lenient_f64(row, 7)?,
+                    week: lenient_i64(row, 8)?,
+                    sens: lenient_f64(row, 9)?,
+                    overlap: lenient_f64(row, 10)?,
                     file_name: row.get(11)?,
                 })
             },
@@ -299,5 +340,65 @@ mod tests {
         let summary = importer.migrate(src.path(), dst.path(), &handle).unwrap();
         assert_eq!(summary.source_rows, 0);
         assert_eq!(summary.imported_rows, 0);
+    }
+
+    /// Real-world BirdNET-Pi databases carry TEXT garbage in numeric columns
+    /// (SQLite is dynamically typed; upstream wrote `""` and stringified
+    /// numbers into REAL columns). One dirty cell must degrade to NULL, not
+    /// abort the whole import with `InvalidColumnType`.
+    #[test]
+    fn import_tolerates_text_poisoned_numeric_columns() {
+        let src = make_source(2);
+        {
+            let conn = Connection::open(src.path()).unwrap();
+            conn.execute(
+                "INSERT INTO detections
+                   (Date, Time, Sci_Name, Com_Name, Confidence,
+                    Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name)
+                 VALUES
+                    ('2026-02-01','07:00:00','Pica pica','Eurasian Magpie',
+                     '0.85', '', ' -0.12 ', NULL, 'garbage', 23.0, '', 'dirty.wav')",
+                [],
+            )
+            .unwrap();
+        }
+        let dst = NamedTempFile::new().unwrap();
+        let handle = ProgressHandle::new();
+        let importer = BirdNetPiImporter;
+
+        let summary = importer.migrate(src.path(), dst.path(), &handle).unwrap();
+        assert_eq!(summary.source_rows, 3);
+        assert_eq!(summary.imported_rows, 3);
+
+        let conn = Connection::open(dst.path()).unwrap();
+        let (confidence, lat, lon, week, sens): (
+            f64,
+            Option<f64>,
+            Option<f64>,
+            Option<i64>,
+            Option<f64>,
+        ) = conn
+            .query_row(
+                "SELECT Confidence, Lat, Lon, Week, Sens
+                 FROM detections WHERE File_Name = 'dirty.wav'",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .unwrap();
+        // Stringified numbers parse; empty/garbage strings become NULL; a
+        // whole-number REAL week truncates exactly.
+        assert!((confidence - 0.85).abs() < f64::EPSILON);
+        assert_eq!(lat, None);
+        assert_eq!(lon, Some(-0.12));
+        assert_eq!(week, None);
+        assert_eq!(sens, Some(23.0));
     }
 }

@@ -33,6 +33,7 @@ use crate::state::AppState;
 
 const LOGIN_TEMPLATE: &str = include_str!("../../templates/login.html");
 
+/// Mount the sign-in and sign-out routes.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/login", get(login_page).post(login_submit))

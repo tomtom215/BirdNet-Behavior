@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Post-startup `SIGTERM` no longer hangs the process.** The startup-phase
+  signal race in `app::run` kept racing the serve loop after startup; its
+  biased arm won every later `SIGTERM`, cancelled the graceful-shutdown
+  choreography (waking live connections, stopping the detection daemon), and
+  left the runtime blocked forever on the detection loop's blocking thread —
+  so every `systemctl stop`/`restart` with a loaded model waited out
+  `TimeoutStopSec` and was `SIGKILL`-ed. The race now ends at an explicit
+  startup handoff; verified live: clean stop in ~2 s with the pipeline hot.
+- `--doctor` now validates the model and labels of a config-file install: it
+  read the `MODEL` / `LABELS` keys while the daemon and installer use
+  `MODEL_PATH` / `LABELS_PATH`, so every standard install reported
+  `SKIP: no --model configured` and the model file was never checked.
+- The documented image-cache opt-out (`--image-cache-dir ""`, empty
+  `BIRDNET_IMAGE_CACHE_DIR`) actually parses now — clap's stock `PathBuf`
+  parser rejects empty values, making the air-gapped opt-out unreachable
+  from the CLI/env (the config-file key was unaffected).
+- BirdNET-Pi migration no longer aborts on dirty source data: TEXT values in
+  numeric columns (empty strings, stringified numbers — the upstream
+  "empty-string poisoning") degrade to NULL or parse, instead of failing the
+  whole import with `InvalidColumnType`.
+- Unmatched paths under `/api/` return a machine-readable JSON 404 instead
+  of the branded HTML page, so scripts and dashboards see the real failure.
+
+### Changed
+
+- `unsafe_code` lint raised from `deny` to `forbid` workspace-wide (what the
+  README badge always claimed); `missing_docs` is now enforced and the ~250
+  previously undocumented public items carry real rustdoc.
+- Retry constants unified across `apprise` / `birdweather` / `wikipedia` to
+  `MAX_ATTEMPTS` (total attempts) with exclusive ranges — the previous mix of
+  inclusive/exclusive `MAX_RETRIES` loops made two of the three doc comments
+  wrong. No behavioral change.
+
+### Security
+
+- Auto-update HTTP reads are bounded (release metadata 8 MiB, `SHA256SUMS`
+  64 KiB, release asset 512 MiB) with `Content-Length` pre-checks, so a
+  compromised or misbehaving endpoint cannot stream an unbounded body into
+  memory on a small-RAM Pi.
+- Every GitHub Actions step is now pinned to a full commit SHA (previously a
+  mix of tags and three mutable `@main`/`@master` refs), and `ci.yml` gained
+  the least-privilege `permissions: contents: read` block the other
+  workflows already had.
+
+### Added
+
+- `cargo-fuzz` harnesses (`fuzz/`) for the untrusted-input parsers: symphonia
+  audio decode (WAV/FLAC/MP3 demux of watch-directory files) and the
+  species-label parsers, with a seeding recipe in `fuzz/README.md`.
+- `CITATION.cff` (with the BirdNET reference), `GOVERNANCE.md`,
+  `.gitattributes` (LF normalization + binary markers), and live CI /
+  coverage / supply-chain badges in the README.
+
 ## [0.7.2] - 2026-06-07
 
 A pre-release hardening pass: process-crash fixes, memory/DoS bounds for small

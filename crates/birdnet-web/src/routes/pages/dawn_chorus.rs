@@ -27,6 +27,7 @@ use super::{escape_html, render_page_for_request};
 
 const PAGE_HTML: &str = include_str!("../../../templates/dawn_chorus.html");
 
+/// Mount the Dawn Chorus page and its HTMX partial routes.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/analytics/dawn-chorus", get(page))

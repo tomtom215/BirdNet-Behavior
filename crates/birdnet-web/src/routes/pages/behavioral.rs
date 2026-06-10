@@ -14,6 +14,7 @@ use axum::{Router, routing::get};
 use super::{ANALYTICS_PAGE_HTML, escape_html};
 use crate::state::AppState;
 
+/// Mount the behavioral analytics page and HTMX partial routes.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/analytics", get(analytics_page))

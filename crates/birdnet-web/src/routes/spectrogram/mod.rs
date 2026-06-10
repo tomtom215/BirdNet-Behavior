@@ -40,6 +40,7 @@ use tokio::sync::Semaphore;
 use crate::state::AppState;
 use render::{SpectrogramLabel, generate_spectrogram_png_with_label};
 
+/// Mount the spectrogram generation and serving route.
 pub fn router() -> Router<AppState> {
     Router::new().route("/spectrogram/{filename}", get(serve_spectrogram))
 }

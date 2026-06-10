@@ -18,10 +18,12 @@ use super::atoms::conf_bar;
 use super::{escape_html, simple_url_encode};
 use crate::state::AppState;
 
+/// Mount the detection detail route.
 pub fn router() -> Router<AppState> {
     Router::new().route("/detections/detail", get(detection_detail_page))
 }
 
+/// Query parameters for the detection detail page.
 #[derive(Debug, Deserialize)]
 pub struct DetectionDetailQuery {
     /// Date (YYYY-MM-DD).

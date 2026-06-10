@@ -241,7 +241,9 @@ fn encode_token(session_id: &str, expires_ms: u64) -> String {
 /// verifies and the expiry is in the future.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedToken {
+    /// Opaque session identifier extracted from the verified cookie payload.
     pub session_id: String,
+    /// Absolute expiry as milliseconds since the Unix epoch.
     pub expires_ms: u64,
 }
 

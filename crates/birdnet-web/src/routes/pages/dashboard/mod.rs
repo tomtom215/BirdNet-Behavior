@@ -22,6 +22,7 @@ use axum::{Router, routing::get};
 use super::DASHBOARD_HTML;
 use crate::state::AppState;
 
+/// Mount the dashboard page, kiosk mode, and all HTMX partial routes.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(dashboard_page))

@@ -20,8 +20,8 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Default cooldown between notifications for the same species (5 minutes).
 const DEFAULT_COOLDOWN_SECS: u64 = 300;
 
-/// Maximum retry attempts for failed requests.
-const MAX_RETRIES: u32 = 2;
+/// Total request attempts (initial + retries) before a send is abandoned.
+const MAX_ATTEMPTS: u32 = 3;
 
 /// Apprise client errors.
 #[derive(Debug)]
@@ -391,7 +391,7 @@ impl Client {
     ) -> Result<(), AppriseError> {
         let mut last_error = AppriseError::Http("no attempts made".into());
 
-        for attempt in 0..=MAX_RETRIES {
+        for attempt in 0..MAX_ATTEMPTS {
             if attempt > 0 {
                 // Jittered, capped exponential backoff so concurrent retries —
                 // and many stations hitting the same endpoint — don't

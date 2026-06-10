@@ -17,6 +17,7 @@ use crate::routes::pages::{escape_html, today_count, today_date_string};
 use crate::state::AppState;
 use crate::system_info::sample as sample_system;
 
+/// Mount the admin overview dashboard routes.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/admin/overview", get(overview_page))

@@ -553,3 +553,63 @@ async fn all_redesigned_pages_render_ok() {
         "/live should redirect to /listen"
     );
 }
+
+/// Unmatched paths under `/api/` must 404 with JSON, not the branded HTML
+/// page — API consumers are scripts, and an HTML body hides the failure.
+#[tokio::test]
+async fn unknown_api_path_returns_json_404() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/definitely-not-a-route")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        content_type.starts_with("application/json"),
+        "API 404 should be JSON, got content-type: {content_type}"
+    );
+
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "not found");
+    assert_eq!(json["path"], "/api/v2/definitely-not-a-route");
+}
+
+/// Unmatched page URLs keep the friendly branded HTML 404.
+#[tokio::test]
+async fn unknown_page_path_returns_html_404() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/definitely-not-a-page")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+    assert!(html.contains("<!DOCTYPE html>"));
+    assert!(html.contains("That page flew off"));
+}

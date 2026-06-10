@@ -30,6 +30,7 @@ use crate::state::AppState;
 const QUEUE_LIMIT: u32 = 40;
 const RECENT_LIMIT: u32 = 25;
 
+/// Mount the detection-reviews page and its HTMX action routes.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/detection-reviews", get(detection_reviews_page))
@@ -54,9 +55,13 @@ pub fn router() -> Router<AppState> {
 /// Form for recording a verdict.
 #[derive(Debug, Deserialize)]
 pub struct ReviewForm {
+    /// Detection date in `YYYY-MM-DD` form.
     pub date: String,
+    /// Detection time in `HH:MM:SS` form.
     pub time: String,
+    /// Scientific name used with `date`/`time` to identify the detection row.
     pub sci_name: String,
+    /// Common name stored alongside the verdict for display purposes.
     pub com_name: String,
     /// `confirmed` or `rejected`; anything else is rejected as bad input.
     pub status: String,
@@ -65,8 +70,11 @@ pub struct ReviewForm {
 /// Form for undoing a verdict.
 #[derive(Debug, Deserialize)]
 pub struct ClearForm {
+    /// Detection date in `YYYY-MM-DD` form.
     pub date: String,
+    /// Detection time in `HH:MM:SS` form.
     pub time: String,
+    /// Scientific name used with `date`/`time` to locate the verdict to clear.
     pub sci_name: String,
 }
 

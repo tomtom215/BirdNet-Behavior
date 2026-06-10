@@ -39,8 +39,11 @@ pub fn router() -> Router<AppState> {
 /// Form data for adding a URL to the blacklist.
 #[derive(Debug, Deserialize)]
 pub struct BlacklistForm {
+    /// Scientific name of the species whose image should be blocked.
     pub sci_name: String,
+    /// Full image URL to block.
     pub url: String,
+    /// Optional free-text reason explaining why the image is blocked.
     pub reason: Option<String>,
 }
 

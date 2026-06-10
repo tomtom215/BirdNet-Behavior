@@ -93,7 +93,12 @@ impl MelSpectrogram {
 #[derive(Debug)]
 pub enum SpectrogramError {
     /// Input audio is too short for the configured FFT size.
-    InputTooShort { samples: usize, n_fft: usize },
+    InputTooShort {
+        /// Actual number of samples provided.
+        samples: usize,
+        /// Minimum number of samples required (equals the FFT window size).
+        n_fft: usize,
+    },
     /// Invalid configuration parameters.
     InvalidConfig(String),
     /// FFT computation failed.

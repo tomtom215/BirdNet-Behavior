@@ -10,7 +10,14 @@ pub enum SchedulerError {
     /// Longitude is outside `[-180, 180]`.
     InvalidLongitude(f64),
     /// Date components (year/month/day) are invalid.
-    InvalidDate { year: u32, month: u32, day: u32 },
+    InvalidDate {
+        /// Calendar year (e.g. `2026`).
+        year: u32,
+        /// Calendar month, expected `1..=12`.
+        month: u32,
+        /// Day of month, expected `1..=31` and valid for the month.
+        day: u32,
+    },
     /// The sun does not rise or set at this location on this date (polar day/night).
     PolarCondition,
     /// A time window is malformed (e.g. start >= end).

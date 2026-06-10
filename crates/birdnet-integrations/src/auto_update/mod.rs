@@ -24,6 +24,54 @@ const USER_AGENT: &str = "BirdNet-Behavior-Updater";
 /// Request timeout.
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// Upper bound on the release-metadata JSON read from the GitHub API.
+/// Real responses are a few hundred KB at most; the cap only exists so a
+/// compromised or misbehaving endpoint cannot stream an arbitrarily large
+/// body into memory on a small-RAM Pi.
+const MAX_METADATA_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Upper bound on a `SHA256SUMS` fetch. The real file is a few hundred
+/// bytes (one line per release asset).
+const MAX_SUMS_BYTES: u64 = 64 * 1024;
+
+/// Upper bound on the downloaded release asset. The binary is ~75 MB and
+/// the tarball under 100 MB; the asset is held fully in memory so its hash
+/// can be verified *before* anything touches disk, which is exactly why a
+/// runaway body must be cut off.
+const MAX_ASSET_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Read an HTTP response body into memory, refusing to buffer more than
+/// `cap` bytes. `declared_len` (the `Content-Length`, when present) fails
+/// honest oversized transfers before a single byte is read; the `take`
+/// guard stops chunked/lying bodies at the cap.
+fn read_body_capped(
+    body: impl std::io::Read,
+    declared_len: Option<u64>,
+    cap: u64,
+) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+
+    if let Some(len) = declared_len
+        && len > cap
+    {
+        return Err(format!(
+            "response body of {len} bytes exceeds the {cap}-byte limit"
+        ));
+    }
+
+    let mut buf = Vec::new();
+    // Read one byte past the cap so "exactly cap" and "over cap" are
+    // distinguishable without trusting Content-Length.
+    body.take(cap.saturating_add(1))
+        .read_to_end(&mut buf)
+        .map_err(|e| format!("failed to read response body: {e}"))?;
+
+    if buf.len() as u64 > cap {
+        return Err(format!("response body exceeds the {cap}-byte limit"));
+    }
+    Ok(buf)
+}
+
 // ---------------------------------------------------------------------------
 // Error type
 // ---------------------------------------------------------------------------
@@ -136,8 +184,10 @@ pub fn check_for_update(current_version: &str) -> Result<UpdateInfo, UpdateError
         )));
     }
 
-    let body: serde_json::Value = resp
-        .json()
+    let declared_len = resp.content_length();
+    let raw =
+        read_body_capped(resp, declared_len, MAX_METADATA_BYTES).map_err(UpdateError::Network)?;
+    let body: serde_json::Value = serde_json::from_slice(&raw)
         .map_err(|e| UpdateError::Parse(format!("invalid JSON response: {e}")))?;
 
     let tag = body["tag_name"]
@@ -262,9 +312,9 @@ pub fn apply_update(
         )));
     }
 
-    let bytes = resp
-        .bytes()
-        .map_err(|e| UpdateError::Network(format!("failed to read response body: {e}")))?;
+    let declared_len = resp.content_length();
+    let bytes =
+        read_body_capped(resp, declared_len, MAX_ASSET_BYTES).map_err(UpdateError::Network)?;
 
     // 2. Verify integrity *before* writing anything to disk, so a corrupt or
     //    tampered download never lands next to the running binary.
@@ -498,7 +548,9 @@ fn fetch_expected_sha256(
     if !resp.status().is_success() {
         return None;
     }
-    let text = resp.text().ok()?;
+    let declared_len = resp.content_length();
+    let raw = read_body_capped(resp, declared_len, MAX_SUMS_BYTES).ok()?;
+    let text = String::from_utf8(raw).ok()?;
     parse_sha256sums(&text, filename)
 }
 
@@ -610,6 +662,27 @@ fn smoke_test_binary(path: &Path) -> Result<(), UpdateError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_body_capped_accepts_body_at_cap() {
+        let data = vec![7_u8; 16];
+        let out = read_body_capped(std::io::Cursor::new(data.clone()), Some(16), 16).unwrap();
+        assert_eq!(out, data);
+    }
+
+    #[test]
+    fn read_body_capped_rejects_declared_oversize_before_reading() {
+        let err = read_body_capped(std::io::Cursor::new(vec![0_u8; 4]), Some(17), 16).unwrap_err();
+        assert!(err.contains("exceeds"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn read_body_capped_rejects_undeclared_oversize_stream() {
+        // No Content-Length header: the take() guard must stop a chunked or
+        // lying body at the cap instead of buffering it all.
+        let err = read_body_capped(std::io::Cursor::new(vec![0_u8; 17]), None, 16).unwrap_err();
+        assert!(err.contains("exceeds"), "unexpected error: {err}");
+    }
 
     #[test]
     fn is_tarball_url_recognises_tar_gz() {

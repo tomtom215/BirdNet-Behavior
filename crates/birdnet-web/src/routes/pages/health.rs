@@ -6,6 +6,7 @@ use axum::{Router, routing::get};
 
 use crate::state::AppState;
 
+/// Mount the health badge, disk status, and analytics status HTMX partial routes.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/pages/health-badge", get(health_badge_partial))

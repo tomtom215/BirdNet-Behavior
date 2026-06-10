@@ -1,0 +1,21 @@
+# Normalize line endings: LF in the repository and working tree on every
+# platform, so diffs, golden files, and shell scripts behave identically on
+# Linux/macOS/Windows checkouts. (rustfmt.toml already enforces
+# `newline_style = "Unix"` for Rust sources; this extends the guarantee to
+# every other text file.)
+* text=auto eol=lf
+
+# Shell scripts must stay LF — CRLF breaks the shebang on the Pi.
+*.sh text eol=lf
+
+# Binary assets: never diff, never normalize.
+*.wav binary
+*.flac binary
+*.mp3 binary
+*.onnx binary
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary

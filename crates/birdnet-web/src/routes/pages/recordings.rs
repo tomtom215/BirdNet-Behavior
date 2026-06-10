@@ -16,6 +16,7 @@ use super::atoms::avatar;
 use super::{RECORDINGS_PAGE_HTML, escape_html, simple_url_encode};
 use crate::state::AppState;
 
+/// Mount the Recording Browser page and its HTMX partial routes.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/recordings", get(recordings_page))

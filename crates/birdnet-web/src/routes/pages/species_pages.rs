@@ -17,6 +17,7 @@ pub(super) struct SpeciesQuery {
     pub name: Option<String>,
 }
 
+/// Mount the species list, species detail, and HTMX partial routes.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/species", get(species_page))

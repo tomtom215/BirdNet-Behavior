@@ -31,6 +31,7 @@ use crate::state::AppState;
 #[cfg(feature = "analytics")]
 const TS_FALLBACK: &str = r#"<p class="tsd-muted">Analytics temporarily unavailable.</p>"#;
 
+/// Mount the time-series analytics dashboard and all HTMX partial routes.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/timeseries", get(timeseries_page))
