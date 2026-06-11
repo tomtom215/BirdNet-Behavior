@@ -20,9 +20,9 @@ The full list lives in `.env.example` and `birdnet-behavior --help`. Each row sh
 | Env var | CLI flag | `birdnet.conf` key | Default |
 |---|---|---|---|
 | `BIRDNET_LATITUDE` / `BIRDNET_LONGITUDE` | `--latitude` / `--longitude` | `LATITUDE` / `LONGITUDE` | — |
-| `BIRDNET_ALSA_DEVICE` | `--alsa-device` | `ALSA_CARD` | — |
+| `BIRDNET_ALSA_DEVICE` / `BIRDNET_ALSA_DEVICES` | `--alsa-device` / `--alsa-devices` | `ALSA_CARD` / `ALSA_CARDS` | — |
 | `BIRDNET_PIPEWIRE_DEVICE` | `--pipewire-device` | — | — |
-| `BIRDNET_RTSP_URL` / `BIRDNET_RTSP_URLS` | `--rtsp-url` / `--rtsp-urls` | `RTSP_URL` | — |
+| `BIRDNET_RTSP_URL` / `BIRDNET_RTSP_URLS` | `--rtsp-url` / `--rtsp-urls` | `RTSP_URL` / `RTSP_URLS` | — |
 | `BIRDNET_LISTEN` | `--listen` | — | `0.0.0.0:8502` |
 | `BIRDNET_RECORDING_SCHEDULE` | `--recording-schedule` | — | `all-day` |
 | `BIRDNET_SEGMENT_DURATION` | `--segment-duration` | `RECORDING_LENGTH` | `15` |
@@ -32,7 +32,9 @@ The full list lives in `.env.example` and `birdnet-behavior --help`. Each row sh
 | `BIRDNET_QUALITY_FILTER` | `--quality-filter` | — | disabled |
 | `BIRDNET_APPRISE_URL` | `--apprise-url` | `APPRISE_URL` | — |
 | `BIRDNET_NOTIFY_CONFIDENCE` | `--notify-confidence` | — | `0.8` |
+| `BIRDNET_DEADMAN_HOURS` | `--deadman-hours` | `DEADMAN_HOURS` | `24` (`0` = off) |
 | `BIRDNET_BIRDWEATHER_TOKEN` | `--birdweather-token` | `BIRDWEATHER_TOKEN` | — |
+| `BIRDNET_BIRDWEATHER_URL` | — | `BIRDWEATHER_URL` | public BirdWeather |
 | `BIRDNET_MQTT_HOST` | `--mqtt-host` | `MQTT_HOST` | — |
 | `BIRDNET_MQTT_HA_DISCOVERY` | `--mqtt-ha-discovery` | — | disabled |
 | `BIRDNET_MAX_FILES_PER_SPECIES` | `--max-files-per-species` | `MAX_FILES_SPECIES` | `0` |

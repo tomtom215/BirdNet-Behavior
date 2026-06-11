@@ -85,18 +85,29 @@ choices. SSD-on-USB is dramatically better if your power budget allows it.
 
 ## 4. Networking
 
-The daemon assumes the network may be down or expensive. Verified
-behaviours:
+The daemon assumes the network may be down or expensive, and **no network
+failure can slow or block the detection pipeline** — every integration is
+dispatched off the detection path. Verified behaviours:
 
-- **BirdWeather uploads** — buffered locally; retried with exponential
-  backoff. No bandwidth wasted on a dead link.
-- **Apprise notifications** — best-effort; non-delivery is logged but
-  never blocks detection.
+- **BirdWeather uploads** — store-and-forward. A post that fails after its
+  in-flight retries is parked in the local database (`outbound_queue`) and
+  replayed **oldest-first** when the network returns: batches of 25 with
+  200 ms spacing so a returning uplink isn't slammed, per-entry backoff
+  1 min → 1 h, bounded to 5 000 entries / 48 attempts so a months-long
+  outage can't fill the disk. Nothing is lost to a flaky link; see §9 for
+  the queue-depth gauge and the self-hosted-ingest override.
+- **Apprise notifications** — best-effort, dispatched off the detection
+  path; non-delivery is logged but never blocks detection. Not queued by
+  design — a look-now alert replayed hours later is noise.
+- **MQTT publisher** — fire-and-forget per detection, opening a fresh
+  bounded-timeout connection; dispatched off the detection path so an
+  offline broker never stalls detection. Not queued by design (live
+  telemetry).
 - **Wikipedia image cache** — populated lazily; works fine with no
   network at all.
 - **Auto-update check** — daily, non-blocking; failure logged at
-  `debug`.
-- **MQTT publisher** — auto-reconnects with backoff.
+  `debug`. The check reads bounded response bodies (it cannot be made to
+  exhaust memory by a hostile or misbehaving endpoint).
 - **Heartbeat URL** — fire-and-forget; no retry, by design (the
   monitoring side is the one that should care if it didn't arrive).
 

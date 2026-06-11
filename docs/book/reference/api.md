@@ -15,10 +15,11 @@ curl http://localhost:8502/api/v2/health
 ```json
 {
   "status": "healthy",
-  "version": "0.6.0",
+  "version": "0.7.2",
   "database": "ok",
   "analytics": true,
-  "detection_daemon": "running"
+  "detection_daemon": "running",
+  "detection_silence_secs": 142
 }
 ```
 
@@ -27,6 +28,12 @@ integrity check failed), so monitoring can alert on the status code alone.
 `detection_daemon` is `"running"` or `"stopped"` — `"stopped"` means web-only
 mode or an unconfigured model/labels/watch-dir, i.e. the UI is up but nothing is
 being analysed. `analytics` reports whether the DuckDB engine is active.
+`detection_silence_secs` is the end-to-end freshness signal: seconds since the
+most recent stored detection (the deadman watchdog's measurement), or `null`
+before the first measurement / on a station that has never detected anything.
+A value that climbs past your expected quiet period means the chain from
+microphone to database has stopped producing rows even if every component
+looks healthy.
 
 | Endpoint | Purpose |
 |---|---|
@@ -102,6 +109,17 @@ const ws = new WebSocket("ws://localhost:8502/api/v2/ws/detections");
 ws.onmessage = (e) => console.log(JSON.parse(e.data));
 ```
 
+## Errors
+
+An unmatched path under `/api/` returns a machine-readable JSON `404` (not the
+HTML "page not found" the browser UI serves), so a script that mistypes a route
+or hits a removed endpoint sees the failure instead of silently parsing a web
+page:
+
+```json
+{ "error": "not found", "path": "/api/v2/nope" }
+```
+
 ## Export
 
-CSV/JSON export of the full detection history is available from the [Backups](../admin/backups.md#import--export) page (and a BirdNET-Pi-compatible CSV for tooling that expects that format).
+CSV/JSON/eBird export of the full detection history is available from the [Backups](../admin/backups.md#import--export) page (and a BirdNET-Pi-compatible CSV for tooling that expects that format).

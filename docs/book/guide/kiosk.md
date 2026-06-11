@@ -6,6 +6,8 @@
 
 It strips away the navigation chrome and shows the numbers that read from across the room — today's count, the all-time total, species, and a stream of the most recent detections — refreshing on its own so it never goes stale.
 
+To leave kiosk mode, click the dimmed **Exit** link in the top-right corner, or press **Esc** — either returns you to the full dashboard. (The link stays faint so it never competes with the display, and brightens on hover.)
+
 ## Tips for a dedicated display
 
 - Point a full-screen browser at `http://<your-pi>:8502/kiosk`.

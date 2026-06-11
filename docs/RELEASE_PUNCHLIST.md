@@ -52,7 +52,7 @@ fails: `bash scripts/setup-onnxruntime.sh` (pass a target triple, e.g.
 `aarch64-unknown-linux-gnu`, when cross-compiling for a Pi). The hook only fires in the remote
 (web) environment and is non-fatal.
 
-**Conventions:** see `CLAUDE.md` — `unsafe` is denied workspace-wide (so no `std::env::set_var`
+**Conventions:** see `CLAUDE.md` — `unsafe` is forbidden workspace-wide (so no `std::env::set_var`
 in tests), no `anyhow`/`thiserror` in library crates, library crates are sync (tokio owned by
 the binary/`birdnet-web`), clippy pedantic+nursery on.
 

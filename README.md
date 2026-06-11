@@ -148,7 +148,7 @@ sudo ./uninstall.sh --purge      # remove everything, including data + model
 
 ## Features
 
-**Everything BirdNET-Pi does** — real-time detection from a USB mic or RTSP stream, the BirdNET+ V3.0 model, a SQLite detection database, per-species pages, Apprise notifications (Telegram, Slack, Discord, and dozens more), BirdWeather uploads, email alerts, CSV/JSON export, web-based admin, database backup/restore, and HTTP basic auth.
+**Everything BirdNET-Pi does** — real-time detection from a USB mic or RTSP stream, the BirdNET+ V3.0 model, a SQLite detection database, per-species pages, Apprise notifications (Telegram, Slack, Discord, and dozens more), BirdWeather uploads, email alerts, CSV/JSON/eBird export, web-based admin, database backup/restore, and HTTP basic auth — **plus** the multi-source capture (USB + PipeWire + many RTSP at once), per-stream supervision, and offline-resilient uploads covered in [Built for the field](#built-for-the-field--and-for-research) below.
 
 **New in BirdNet-Behavior:**
 
@@ -164,17 +164,32 @@ sudo ./uninstall.sh --purge      # remove everything, including data + model
 
 ---
 
+## Built for the field — and for research
+
+A station is only useful if it keeps running when nobody is watching, and the data is only useful if you can trust it. Both the casual hobbyist who checks the dashboard over coffee and the researcher whose dataset underpins a conservation case get the same guarantees:
+
+- **Multi-source capture, supervised independently.** Run one or more USB/ALSA mics, a PipeWire source, and any number of RTSP streams *at once*. Each source has its own subprocess, its own recordings, and its own health gauge; a camera that reboots or a mic that's unplugged is restarted with capped exponential backoff (2 s → 60 s, then forever) **without disturbing the others or pausing detection**. A source that stays alive but goes *silent* — a wedged RTSP session, a mic hung after a USB re-enumeration — is detected by watching its segment output and restarted too, the failure mode a liveness check alone can't see.
+- **No data lost to a flaky uplink.** BirdWeather uploads that fail during an outage are parked in the local database and replayed **in order** when the network returns — bounded so a months-long outage can't fill the disk. The detection pipeline never blocks on the network: a dead broker or an offline link slows nothing down, and the local database is always ground truth.
+- **It tells you when it's unhappy.** A detection **deadman** measures how long since the last detection end-to-end (the one signal that proves the whole audio → inference → database chain is alive — every component can look healthy while a clogged mic foam records silence) and, past a configurable threshold, logs loudly and sends a single notification, with a recovery notice when birds return. Exposed as the `birdnet_detection_silence_seconds` Prometheus gauge, on `/api/v2/health`, and as a plain-English "Last Detection" row on the System page.
+- **Data sovereignty for sensitive species.** Point uploads at a **self-hosted ingest** (`BIRDWEATHER_URL`) instead of the public community map — for rare or endangered species where a public observation map is a poaching risk — and the offline queue and ordered replay come with it.
+- **Survives power loss and a wrong clock.** WAL journalling, scheduled integrity checks, rolling backups, and corruption-quarantine-then-recover at boot keep the database intact across yanked power. With no RTC, capture *fails open* until NTP syncs so a bogus boot-time clock never silences the station. systemd watchdog supervision restarts a hung process and gives up cleanly (never a restart loop) on a permanently broken one.
+
+📖 The complete playbook — hardware, power, storage, monitoring, recovery — is the [**Field Deployment Runbook**](docs/FIELD_DEPLOYMENT.md).
+
+---
+
 ## Engineering
 
 The project is built to be read as well as run:
 
 - **Language** — Rust 2024, **MSRV 1.95**, enforced by a dedicated CI job so a newer-toolchain feature can't slip in unnoticed.
-- **Safety** — `unsafe` code is **denied** across the entire workspace (`unsafe_code = "deny"`).
+- **Safety** — `unsafe` code is **forbidden** across the entire workspace (`unsafe_code = "forbid"` — not merely denied, so a stray `#[allow]` can't reintroduce it). Public API is documented under `missing_docs`.
 - **Lints** — Clippy `pedantic` + `nursery` + `cargo`, and CI fails on any warning (`-D warnings`). `rustfmt` is checked, not just suggested.
 - **Errors** — library crates use hand-rolled error types; no `anyhow`/`thiserror` reaching for a `Box<dyn Error>`.
-- **Runtime discipline** — the compute and storage crates (`birdnet-core`, `birdnet-db`) are deliberately *synchronous* and own no async runtime. The application layer owns the single Tokio runtime and pushes blocking work — inference, SQLite, DuckDB, file I/O — onto `spawn_blocking`. The detection loop hands finished detections to the async layer over a **bounded** channel, so a slow consumer applies backpressure instead of leaking memory.
-- **Tests** — a workspace suite spanning unit, integration, property-based (`proptest`), and a soak test that drives tens of thousands of inserts through the real path and asserts bounded memory, file-descriptor, and database growth.
-- **Supply chain** — every release publishes cross-compiled binaries (aarch64 + x86_64) carrying a signed **SLSA build-provenance** attestation and a **CycloneDX 1.5 SBOM**; the model is fetched from a single origin, sha256-verified, and the install runs fully offline afterward.
+- **Runtime discipline** — the compute and storage crates (`birdnet-core`, `birdnet-db`) are deliberately *synchronous* and own no async runtime. The application layer owns the single Tokio runtime and pushes blocking work — inference, SQLite, DuckDB, file I/O — onto `spawn_blocking`. The detection loop hands finished detections to the async layer over a **bounded** channel, and every network integration is dispatched *off* that path, so a slow consumer or a dead uplink applies backpressure or queues instead of stalling detection or leaking memory.
+- **Tests** — 1,690+ across the workspace: unit, integration, property-based (`proptest`), a soak test asserting bounded memory / file-descriptor / database growth, end-to-end tests that boot the **real compiled binary** as a subprocess (clean startup *and* shutdown, store-and-forward replay against a stub upload server), and `cargo-fuzz` harnesses for the untrusted-input parsers (audio decode, label parsing). Test policy bans fixed-sleep synchronization — readiness is signalled or polled.
+- **Supply chain** — every GitHub Actions step is pinned to a full commit SHA; `cargo-deny` gates advisories, licenses, and sources. Every release publishes cross-compiled binaries (aarch64 + x86_64) carrying a signed **SLSA build-provenance** attestation and a **CycloneDX 1.5 SBOM**; the model is fetched from a single origin, sha256-verified, and the install runs fully offline afterward.
+- **Provenance** — `CITATION.cff` for academic citation, `GOVERNANCE.md` for the decision model, and a `CHANGELOG.md` kept in Keep-a-Changelog form.
 
 ---
 

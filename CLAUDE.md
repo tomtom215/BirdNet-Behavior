@@ -77,7 +77,8 @@ cross build --release --target aarch64-unknown-linux-gnu
 - **No async in the compute/storage library crates** (e.g. `birdnet-core`, `birdnet-db`) - they are synchronous. `birdnet-integrations` is the deliberate exception: an async *client* library for network I/O that constructs no runtime of its own
 - **The tokio runtime is owned by application code** (`birdnet-web`, main binary) - library crates never start their own runtime
 - **Blocking ops via `tokio::task::spawn_blocking`** for DB, file I/O, inference
-- **`unsafe` is denied** workspace-wide
+- **`unsafe` is forbidden** workspace-wide (`unsafe_code = "forbid"`)
+- **`missing_docs` enforced** workspace-wide
 - **Clippy pedantic + nursery** enabled
 
 ### Key Dependencies
