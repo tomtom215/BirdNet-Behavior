@@ -113,6 +113,13 @@ base64 = "0.22"
 # The basic-auth path stays compatible (it reads CADDY_PWD in plaintext)
 # until the wire flips; the seed admin row's hash is rotated by a one-shot
 # bootstrap on first start.
+#
+# `password-hash` MUST stay in lock-step with `argon2`: argon2 0.5.x
+# implements password-hash 0.5's PasswordHasher/PasswordVerifier traits,
+# and our accounts code passes password-hash types straight into Argon2.
+# Bumping password-hash alone (dependabot #148 proposed 0.6.1) fails to
+# compile — two distinct PasswordHasher traits. Take both together once
+# argon2 0.6 is released.
 argon2 = "0.5"
 password-hash = { version = "0.5", features = ["getrandom"] }
 
@@ -199,7 +206,11 @@ analytics = ["birdnet-behavioral/analytics", "birdnet-timeseries/analytics", "bi
 #
 # Default features keep us off webp / curl-based image downloads (mdbook
 # does not need any of that for a static-HTML build of a docs-only book).
-mdbook = { version = "0.4", default-features = false }
+# mdbook 0.5 split the project into facade crates; the *library* now lives
+# in `mdbook-driver` (the `mdbook` crate is the CLI binary only). Default
+# features kept off as before — a static-HTML docs build needs no watcher /
+# serve extras.
+mdbook-driver = { version = "0.5", default-features = false }
 
 [dependencies]
 birdnet-core.workspace = true

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Dependencies
+
+- `mdbook` 0.4.52 → **`mdbook-driver` 0.5.3** (folds dependabot #151): mdbook
+  0.5 split the project into facade crates and made the `mdbook` crate
+  binary-only, so the docs build now consumes the library through
+  `mdbook-driver`. The book config dropped the options 0.5 removed
+  (`copy-fonts`, `multilingual`), `build.rs` now surfaces the *underlying*
+  load error instead of a silent "could not load" (that silence briefly
+  masked exactly this migration), and the rendered manual was verified
+  page-for-page. New transitive `font-awesome-as-a-crate` carries
+  `CC-BY-4.0 AND MIT` for the icon *assets* (attribution-only, not
+  copyleft) — allowed via a crate-scoped `deny.toml` exception rather than
+  a global allow.
+- `rusqlite` 0.40.0 → 0.40.1 (folds dependabot #147).
+- `codecov/codecov-action` v6 → v7.0.0, SHA-pinned (folds dependabot #150).
+- `password-hash` 0.5 → 0.6 (dependabot #148) is **deliberately not
+  taken**: argon2 0.5.x implements password-hash *0.5*'s hasher traits and
+  our accounts code passes those types straight into `Argon2` — the bump
+  alone does not compile (verified). A manifest comment now documents the
+  lock-step requirement; take both together when argon2 0.6 ships.
+
 ### Added
 
 - **Self-hosted ingest endpoint for uploads** (`BIRDWEATHER_URL` config key /

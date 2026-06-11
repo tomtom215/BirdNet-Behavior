@@ -1019,6 +1019,29 @@ mod tests {
         assert_eq!(sup.sources[0].source.start_calls, 3);
     }
 
+    /// The probe boundary is exclusive: a newest segment EXACTLY
+    /// `stall_after` old is already stale — "no fresh segment for
+    /// `stall_after`" includes the boundary — so the source is reset on
+    /// that tick. Pins `age < stall_after` against the `<=` mutation,
+    /// which would count boundary-age output as fresh and skip the reset.
+    #[test]
+    fn stall_probe_boundary_age_is_stale() {
+        let m = metrics();
+        let stall_after = Duration::from_secs(60);
+        let mut src = FakeSource::dead();
+        src.output_age = Some(stall_after); // exactly at the boundary
+        let mut sup = Supervisor::new(vec![(src, "RTSP_1".to_owned(), None, stall_after)]);
+        let t0 = Instant::now();
+
+        sup.tick(t0, true, Some(400), &m); // start issued; stall clock armed
+        sup.tick(t0 + stall_after, true, Some(401), &m);
+        assert_eq!(
+            sup.sources[0].source.stop_calls,
+            1,
+            "boundary-age output must not count as fresh"
+        );
+    }
+
     /// Fresh segments keep arriving → never stalled, however much wall time
     /// passes between ticks.
     #[test]

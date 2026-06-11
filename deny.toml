@@ -62,6 +62,16 @@ allow = [
 # is not published to crates.io).
 [licenses.private]
 ignore = true
+
+# Per-crate exceptions — scoped to one crate each, never a global allow.
+[[licenses.exceptions]]
+# Font Awesome Free: the icon/font ASSETS are CC-BY-4.0 (attribution-only —
+# not copyleft, no ShareAlike), the code is MIT. Pulled in by mdbook-html
+# 0.5 to render the bundled operator manual; attribution ships inside the
+# rendered book (mdbook's standard font credits). Scoped here so CC-BY-4.0
+# stays disallowed for code crates generally.
+name = "font-awesome-as-a-crate"
+allow = ["CC-BY-4.0", "MIT"]
 # Crates whose advertised license metadata is wrong or absent get pinned
 # overrides here, with the actual upstream license repository link.
 [[licenses.clarify]]
