@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### CI
+
+- **Mutation testing is now incremental on PRs and ~4× cheaper per mutant.**
+  Three layers, each measured: a `mutants` build profile (no debug info —
+  per-mutant cost 132 s → 36 s, baseline 90 s + 91 s → 16 s + 21 s on the
+  binary-crate shards); unit-test-only target selection per package
+  (`--lib` / `--bins`), so the mutant loop no longer rebuilds eight
+  DuckDB-linking integration-test executables nor boots real binaries; and
+  `--in-diff` scoping on pull requests, so only mutants on changed lines
+  run (a test-only one-line diff finishes in 0.2 s, "No mutants to
+  filter") while the weekly cron, pushes to main, and manual dispatch
+  still run every shard's full set. Config lives in `.cargo/mutants.toml`
+  so local `cargo mutants` runs share the same economics.
+
 ### Dependencies
 
 - `mdbook` 0.4.52 → **`mdbook-driver` 0.5.3** (folds dependabot #151): mdbook

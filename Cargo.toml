@@ -172,6 +172,16 @@ strip = true
 opt-level = 0
 debug = true
 
+# Profile used by cargo-mutants (selected in .cargo/mutants.toml). Mutation
+# testing relinks the binary and test executables once per mutant; debug info
+# is never read in that loop and dominates the link + I/O cost (measured in
+# CI: ~1.6 min/mutant for binary-crate files with the dev profile). Keeping
+# everything else inherited from dev preserves identical test semantics.
+[profile.mutants]
+inherits = "dev"
+debug = "none"
+strip = "debuginfo"
+
 # Binary crate
 [package]
 name = "birdnet-behavior"

@@ -165,20 +165,26 @@ jobs:
             max_missed: 0
           # ── Binary-crate shards (the birdnet-behavior binary) ───────────────
           # These mutate the binary's own modules, so every mutant relinks the
-          # binary against the statically-bundled DuckDB — ~1.6 min/mutant on top
-          # of a one-time baseline build (measured locally + on CI). One job per
-          # file ran the heavier files past the wall: schedule.rs has 107 mutants
-          # and src/daemon/ 63 (cargo-mutants v27), so they were `cancelled`
-          # mid-run — and since the summary step is `always()`, the PR comment
-          # showed a *partial* "0 missed" that had not actually finished. So the
-          # large files are split across several jobs with cargo-mutants' native
-          # `--shard k/n` (deterministic under --no-shuffle): the shards
-          # partition the file's mutants with no overlap or gaps, each enforces
-          # 0-missed on its own slice (the file is clean iff every shard is), and
-          # they run in parallel — so the critical path is one baseline build
-          # plus ~13 mutants, not the whole file. Counts are sized to ~13
-          # mutants/shard. The library shards above need no split: they reuse a
-          # warm target/ with no per-mutant DuckDB relink and finish in minutes.
+          # binary against the statically-bundled DuckDB. Three economics layers
+          # keep that affordable (each measured on a warm target/):
+          #   1. `--shard k/n` (deterministic under --no-shuffle): shards
+          #      partition the mutant list with no overlap or gaps, each
+          #      enforcing 0-missed on its slice, running in parallel.
+          #   2. The `mutants` build profile (no debug info) + unit-test-only
+          #      target selection (`-- --bins`): per-mutant cost dropped from
+          #      ~132 s (full dev-profile build + whole suite incl. the
+          #      binary-booting e2e tests) to ~36 s, and the baseline from
+          #      90 s + 91 s to 16 s + 21 s — the integration executables are
+          #      no longer rebuilt or run at all in the mutant loop.
+          #   3. `--in-diff` on PRs: only mutants on changed lines are tested,
+          #      so a one-line change tests ~1 mutant per touched shard and
+          #      untouched shards finish in seconds ("No mutants to filter").
+          #      Whole-file coverage is still enforced by the weekly cron,
+          #      pushes to main, and manual dispatch, which skip the diff.
+          # NOTE: the first run after the profile change pays a one-time cold
+          # build of the deps under the new profile per cache key; subsequent
+          # runs reuse it. Counts are sized to ~13 mutants/shard. The library
+          # shards above need no split: no per-mutant DuckDB relink.
 
           # src/capture/schedule.rs — 107 mutants. Schedule parsing + the
           # hand-rolled UTC clock: `utc_now`'s date arithmetic was extracted into
@@ -234,6 +240,22 @@ jobs:
           - { label: "src/capture/supervisor.rs [3/3]", slug: src-capture-supervisor.rs-3, shard: "2/3", file: "src/capture/supervisor.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          # Full history so the PR jobs can compute the merge-base diff that
+          # scopes mutation to changed lines (`--in-diff` below). The repo is
+          # a few MB; a full clone is cheaper than a flaky shallow merge-base.
+          fetch-depth: 0
+
+      - name: Compute PR diff (incremental mutation scope)
+        # On pull requests, mutate ONLY the lines this PR touches: a one-line
+        # change in a 107-mutant file should test ~1 mutant, not 107. The
+        # weekly cron, pushes to main, and manual dispatch skip this step and
+        # run every shard's full mutant set, so whole-file coverage stays
+        # enforced on a cadence while PR feedback stays fast.
+        if: github.event_name == 'pull_request'
+        run: |
+          git diff "origin/${{ github.base_ref }}"...HEAD > pr.diff
+          echo "diff spans $(grep -c '^+++' pr.diff) file(s)"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -281,9 +303,9 @@ jobs:
 
       - name: Run mutation testing on ${{ matrix.file }}
         # `--file` restricts mutation to one source file at a time so each
-        # matrix job's report stays focused. The default timeout (180 s)
-        # is plenty for these focused suites; we set 120 s to surface a
-        # genuinely-stuck mutant rather than waiting the full default.
+        # matrix job's report stays focused. Test timeout, the debug-info-less
+        # `mutants` build profile, and the unit-test-only scoping all live in
+        # .cargo/mutants.toml so local `cargo mutants` runs share them.
         #
         # cargo-mutants exits 2 when any mutant survives — we don't want
         # that to fail the step, because the per-file threshold check
@@ -305,15 +327,36 @@ jobs:
           if [ -n "${{ matrix.shard }}" ]; then
             shard_args=(--shard "${{ matrix.shard }}")
           fi
+          # PRs additionally scope to the merge-base diff (see the step
+          # above): each shard then tests only its slice of the mutants on
+          # CHANGED lines. Build profile (`mutants`, no debug info) and the
+          # unit-test-only scoping live in .cargo/mutants.toml so local runs
+          # get identical economics.
+          diff_args=()
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            diff_args=(--in-diff pr.diff)
+          fi
+          # Unit-test-only target selection, per package kind: the root
+          # binary package has no lib target (`--lib` hard-errors there),
+          # and `--bins` on a lib-only crate would select nothing. See
+          # .cargo/mutants.toml for why integration tests are excluded
+          # from the mutant loop.
+          pkg="${{ matrix.package || 'birdnet-core' }}"
+          if [ "$pkg" = "birdnet-behavior" ]; then
+            test_target=(--bins)
+          else
+            test_target=(--lib)
+          fi
           cargo mutants \
             --workspace \
-            --package "${{ matrix.package || 'birdnet-core' }}" \
+            --package "$pkg" \
             --file "${{ matrix.file }}" \
             --in-place \
-            --timeout 120 \
             --no-shuffle \
             "${shard_args[@]}" \
-            --json
+            "${diff_args[@]}" \
+            --json \
+            -- "${test_target[@]}"
           status=$?
           if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
             echo "::error::cargo-mutants exited with status $status (not the survived-mutants exit code 2)"
