@@ -7,7 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Silent-stall detection for capture sources.** The supervisor now watches
+  each source's newest recording segment: a subprocess that stays alive but
+  stops delivering audio (a wedged RTSP session, a USB mic hung after a
+  re-enumeration) is detected after several missed segments and restarted
+  through the same backoff path as a crash — closing the field failure where
+  `is_running` reports healthy but a camera has gone quiet. Fails open while
+  the clock is unsynced (segment mtimes aren't trustworthy pre-NTP).
+
 ### Fixed
+
+- **MQTT publishing no longer runs inline on the detection thread.** It was the
+  one network integration (of five) dispatched synchronously in the
+  single-threaded event processor, so an offline broker blocked every
+  detection for the connect timeout and serialized detection handling behind a
+  dead network path. It now fires off the detection path like BirdWeather /
+  Apprise / email / heartbeat already did — a multi-day broker outage slows
+  detection by nothing.
+- System-health disk usage now reports `df`'s `used / (used + available)`
+  rather than `used / total`, so a host with reserved blocks or a container
+  quota no longer shows a contradictory "11% used · critically low".
 
 - **Post-startup `SIGTERM` no longer hangs the process.** The startup-phase
   signal race in `app::run` kept racing the serve loop after startup; its
@@ -31,6 +52,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whole import with `InvalidColumnType`.
 - Unmatched paths under `/api/` return a machine-readable JSON 404 instead
   of the branded HTML page, so scripts and dashboards see the real failure.
+
+### Changed (UI)
+
+- The time-series dashboard's 13-row API-endpoints table is collapsed into a
+  disclosure ("API endpoints · for scripts & integrations") so the page reads
+  as a field tool, not an API manual.
+- Kiosk mode gained an escape hatch — a dimmed corner "Exit" link and the
+  ESC key both return to the dashboard (it was a dead end with no way back).
+- The recordings species list uses the shared illustrated empty-state
+  component instead of a bare `<p>No species detected yet.</p>`.
 
 ### Changed
 

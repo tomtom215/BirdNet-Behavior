@@ -210,6 +210,47 @@ While the system clock looks unsynced (no RTC yet at boot, NTP not ready) the
 quiet window is **not** enforced — capture fails open exactly as the schedule
 does, so a bogus boot-time date can never silence a source.
 
+### Multi-source resilience (USB + several RTSP at once)
+
+You can run one or more local microphones (USB/ALSA or PipeWire) **and** any
+number of RTSP streams simultaneously — set them up in **Admin → Audio**, or
+seed them from the config file with `ALSA_CARDS` (`;`-separated) and
+`RTSP_URLS` (`,`-separated). Each source is captured by its own subprocess and
+recordings carry a per-source tag (`local`/`MIC_n` and `RTSP_n`, or the source
+row's id), so detections, recordings, and the
+`birdnet_audio_source_up{source=…}` gauge stay distinct per source.
+
+Every source is **supervised independently** — the central property for an
+unattended field station with flaky cameras:
+
+- **One source failing never disturbs the others.** A dead subprocess (camera
+  rebooted, USB mic unplugged, network blip) is restarted with **capped
+  exponential backoff** (2 s → 4 s → … → 60 s, then every 60 s **forever** — a
+  source down for an hour is still recording when it comes back on hour two).
+  The other sources keep recording and the detection pipeline keeps running
+  throughout.
+- **Silent stalls are caught, not just crashes.** An RTSP camera (or a USB mic
+  wedged after a re-enumeration) whose process stays *alive* but stops
+  delivering audio is detected by watching each source's newest segment: no
+  fresh segment for several segment-durations (floor 2 min) and the source is
+  restarted, exactly like a crash. Stall detection fails open while the clock
+  is unsynced (segment mtimes aren't trustworthy before NTP).
+- **A network outage never blocks detection.** BirdWeather, Apprise, MQTT,
+  email, and heartbeat are all dispatched off the detection path, so a dead
+  broker or an offline uplink for days slows none of them down — detections
+  keep landing in the local database and you reconcile from there.
+
+Verify per-source isolation on real hardware before sealing the unit:
+
+```bash
+journalctl -u birdnet-behavior -f
+# Unplug ONE RTSP camera (or one USB mic). Expect, for that source only:
+#   "audio source DOWN … still trying to restart"  and the
+#   birdnet_audio_source_up{source=<id>} gauge for THAT id drops to 0,
+# while every other source's gauge stays 1 and detections keep flowing.
+# Plug it back in: "audio source up" and the gauge returns to 1 on its own.
+```
+
 ## 8. Database and backup policy
 
 The daemon runs a scheduled maintenance task in the background (no

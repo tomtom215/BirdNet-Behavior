@@ -13,7 +13,7 @@ use axum::{Router, response::Html, routing::get};
 use serde::Deserialize;
 
 use super::atoms::avatar;
-use super::{RECORDINGS_PAGE_HTML, escape_html, simple_url_encode};
+use super::{RECORDINGS_PAGE_HTML, empty_states, escape_html, simple_url_encode};
 use crate::state::AppState;
 
 /// Mount the Recording Browser page and its HTMX partial routes.
@@ -59,7 +59,7 @@ async fn species_list_partial(State(state): State<AppState>) -> impl IntoRespons
                 return (
                     StatusCode::OK,
                     [(header::CONTENT_TYPE, "text/html")],
-                    r#"<p class="rec-muted">No species detected yet.</p>"#.to_string(),
+                    empty_states::no_species(),
                 );
             }
             let mut html = String::with_capacity(2048);

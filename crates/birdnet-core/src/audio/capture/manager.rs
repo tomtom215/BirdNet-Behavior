@@ -7,8 +7,10 @@
 //! [`CaptureManager::is_running`] and drives [`CaptureManager::start`] /
 //! [`CaptureManager::stop`] accordingly.
 
+use std::time::Duration;
+
 use super::process::{CaptureProcess, is_tool_available, required_tool, spawn_capture};
-use super::types::{CaptureError, RecordingConfig};
+use super::types::{CaptureError, CaptureSource, RecordingConfig, filename_matches_stream};
 
 /// Manages the lifecycle of an audio capture process.
 ///
@@ -76,6 +78,52 @@ impl CaptureManager {
     pub const fn config(&self) -> &RecordingConfig {
         &self.config
     }
+
+    /// Age of the newest segment file this source has written into its
+    /// output directory, or `None` when no matching file is visible.
+    ///
+    /// The silent-stall signal for the capture supervisor: a subprocess that
+    /// is alive but delivering no audio (wedged RTSP session, hung
+    /// `arecord` after a USB re-enumeration) writes no new segments, which
+    /// `is_running` alone can never reveal. Errors (missing directory,
+    /// unreadable entries) degrade to `None` — the supervisor treats that as
+    /// "no evidence", never as proof of a stall.
+    ///
+    /// A modification time in the future (clock stepped backwards after the
+    /// file was written) clamps to age zero, which reads as "fresh" — the
+    /// fail-open choice, consistent with how the schedule treats clock skew.
+    pub fn latest_output_age(&self) -> Option<Duration> {
+        let stream_id: Option<&str> = match &self.config.source {
+            CaptureSource::Rtsp { stream_id, .. } => Some(stream_id),
+            CaptureSource::Microphone { stream_id, .. }
+            | CaptureSource::PipeWire { stream_id, .. } => stream_id.as_deref(),
+        };
+        let ext = self.config.format.extension();
+
+        let entries = std::fs::read_dir(&self.config.output_dir).ok()?;
+        let mut newest: Option<std::time::SystemTime> = None;
+        for entry in entries.flatten() {
+            if !entry.file_type().is_ok_and(|t| t.is_file()) {
+                continue;
+            }
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if !filename_matches_stream(name, stream_id, ext) {
+                continue;
+            }
+            let Ok(modified) = entry.metadata().and_then(|m| m.modified()) else {
+                continue;
+            };
+            newest = Some(newest.map_or(modified, |n| n.max(modified)));
+        }
+        newest.map(|m| {
+            std::time::SystemTime::now()
+                .duration_since(m)
+                .unwrap_or(Duration::ZERO)
+        })
+    }
 }
 
 impl Drop for CaptureManager {
@@ -139,5 +187,58 @@ mod tests {
         };
         let mut mgr = CaptureManager::new(config);
         assert!(mgr.start().is_err());
+    }
+
+    /// The output-age probe must see only THIS source's segments: the newest
+    /// matching file wins, other streams' files and non-recordings are
+    /// invisible, and an empty/missing directory yields `None`.
+    #[test]
+    fn latest_output_age_scopes_to_own_stream() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = RecordingConfig {
+            source: CaptureSource::Rtsp {
+                url: "rtsp://example.com/stream".into(),
+                stream_id: "RTSP_1".into(),
+                transport: RtspTransport::Auto,
+            },
+            output_dir: dir.path().to_path_buf(),
+            segment_duration_secs: 15,
+            format: AudioFormat::Wav,
+            gain_db: 0.0,
+        };
+        let mgr = CaptureManager::new(config);
+
+        // Empty directory: no evidence either way.
+        assert_eq!(mgr.latest_output_age(), None);
+
+        // Another stream's segment and a stray file are invisible to RTSP_1.
+        std::fs::write(
+            dir.path().join("2026-06-10-birdnet-RTSP_2-07:00:00.wav"),
+            b"x",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("notes.txt"), b"x").unwrap();
+        assert_eq!(mgr.latest_output_age(), None);
+
+        // Its own segment is found, and the age is the file's freshness.
+        std::fs::write(
+            dir.path().join("2026-06-10-birdnet-RTSP_1-07:00:15.wav"),
+            b"x",
+        )
+        .unwrap();
+        let age = mgr.latest_output_age().expect("own segment visible");
+        assert!(
+            age < Duration::from_secs(30),
+            "fresh file reads as fresh: {age:?}"
+        );
+    }
+
+    /// A missing output directory degrades to `None`, never an error/panic.
+    #[test]
+    fn latest_output_age_tolerates_missing_dir() {
+        let mut config = microphone_config();
+        config.output_dir = PathBuf::from("/nonexistent/birdnet-stall-probe");
+        let mgr = CaptureManager::new(config);
+        assert_eq!(mgr.latest_output_age(), None);
     }
 }
