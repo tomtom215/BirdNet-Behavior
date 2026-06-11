@@ -278,15 +278,25 @@ jobs:
       - name: Cache Cargo
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
+          # Cache ONLY the `mutants` profile tree — the sole build dir this
+          # job populates since the profile/scoping overhaul. The previous
+          # `target/` cache carried the legacy dev-profile artifacts (full
+          # debug info + every DuckDB-linking integration-test executable
+          # the old per-mutant loop built) and had grown past what a runner
+          # can even EXTRACT: the "Cache Cargo" restore step itself died on
+          # ENOSPC before mutation testing ran. The `-v2-` key generation
+          # orphans those oversized caches (GitHub evicts them); the first
+          # run per shard pays a one-time cold dependency build, after which
+          # the no-debuginfo cache stays a fraction of the old size.
           path: |
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-mutants-${{ matrix.label }}-${{ hashFiles('**/Cargo.lock') }}
+            target/mutants/
+          key: ${{ runner.os }}-mutants-v2-${{ matrix.label }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-mutants-${{ matrix.label }}-
-            ${{ runner.os }}-mutants-
+            ${{ runner.os }}-mutants-v2-${{ matrix.label }}-
+            ${{ runner.os }}-mutants-v2-
 
       - name: Install cargo-mutants
         uses: taiki-e/install-action@fd2f5e3d644b484055ebf4268f474c565f148f25 # v2.81.9
