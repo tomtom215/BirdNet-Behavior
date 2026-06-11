@@ -48,6 +48,10 @@ impl std::error::Error for BirdWeatherError {}
 pub struct Client {
     /// Station token (from `BirdWeather` settings).
     station_token: String,
+    /// API base (no trailing slash). [`API_BASE`] in production; overridden
+    /// via [`Client::with_base_url`] for self-hosted ingests and the
+    /// store-and-forward end-to-end test's stub server.
+    base_url: String,
     /// HTTP client.
     http: reqwest::Client,
     /// Station latitude.
@@ -115,10 +119,35 @@ impl Client {
 
         Ok(Self {
             station_token: station_token.to_string(),
+            base_url: API_BASE.to_owned(),
             http,
             lat,
             lon,
         })
+    }
+
+    /// Redirect this client at a different API base.
+    ///
+    /// Two audiences: researchers running a **self-hosted ingest** (rare /
+    /// endangered-species programmes that must keep observation data under
+    /// their own governance rather than a public community map), and the
+    /// end-to-end test suite, which points the real binary's drainer at a
+    /// local stub to prove the replay -> deliver -> dequeue loop. A
+    /// trailing slash is tolerated; an empty override keeps the default so
+    /// a blank env var cannot produce `"/stations/..."` relative URLs.
+    #[must_use]
+    pub fn with_base_url(mut self, base_url: &str) -> Self {
+        let trimmed = base_url.trim().trim_end_matches('/');
+        if !trimmed.is_empty() {
+            trimmed.clone_into(&mut self.base_url);
+        }
+        self
+    }
+
+    /// The API base requests are sent to (no trailing slash).
+    #[must_use]
+    pub fn base_url(&self) -> &str {
+        &self.base_url
     }
 
     /// Post a detection to `BirdWeather`.
@@ -132,7 +161,10 @@ impl Client {
         &self,
         detection: &DetectionPost,
     ) -> Result<ApiResponse, BirdWeatherError> {
-        let url = format!("{}/stations/{}/detections", API_BASE, self.station_token);
+        let url = format!(
+            "{}/stations/{}/detections",
+            self.base_url, self.station_token
+        );
 
         let body = serde_json::json!({
             "timestamp": detection.timestamp,
@@ -155,7 +187,10 @@ impl Client {
         &self,
         soundscape: &SoundscapePost,
     ) -> Result<ApiResponse, BirdWeatherError> {
-        let url = format!("{}/stations/{}/soundscapes", API_BASE, self.station_token);
+        let url = format!(
+            "{}/stations/{}/soundscapes",
+            self.base_url, self.station_token
+        );
 
         let body = serde_json::json!({
             "timestamp": soundscape.timestamp,
@@ -243,5 +278,27 @@ mod tests {
         let client = Client::new("test-token", 42.36, -71.06).unwrap();
         assert_eq!(client.coordinates(), (42.36, -71.06));
         assert_eq!(client.token(), "test-token");
+    }
+
+    #[test]
+    fn base_url_defaults_to_public_api() {
+        let client = Client::new("t", 0.0, 0.0).unwrap();
+        assert_eq!(client.base_url(), API_BASE);
+    }
+
+    #[test]
+    fn with_base_url_overrides_and_normalises() {
+        let client = Client::new("t", 0.0, 0.0)
+            .unwrap()
+            .with_base_url("http://127.0.0.1:9000/api/v1/");
+        // Trailing slash trimmed so the joined URL has exactly one separator.
+        assert_eq!(client.base_url(), "http://127.0.0.1:9000/api/v1");
+    }
+
+    #[test]
+    fn with_base_url_ignores_blank_override() {
+        // A blank env var must keep the default, never produce relative URLs.
+        let client = Client::new("t", 0.0, 0.0).unwrap().with_base_url("   ");
+        assert_eq!(client.base_url(), API_BASE);
     }
 }

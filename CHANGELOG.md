@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Self-hosted ingest endpoint for uploads** (`BIRDWEATHER_URL` config key /
+  `BIRDNET_BIRDWEATHER_URL` env). Research programmes tracking sensitive
+  species can route the entire upload pipeline — including the offline queue
+  and ordered replay — at their own endpoint implementing the `BirdWeather`
+  station API shape, keeping observation locations under their own
+  governance. Only the host changes; the `/stations/<token>/...` path shape
+  is preserved, and the active endpoint is logged at startup.
+- **End-to-end delivery proof for the store-and-forward queue**
+  (`tests/store_forward_e2e.rs`): boots the real compiled binary against a
+  local stub `BirdWeather` server with a pre-seeded backlog and asserts the
+  drainer replays it oldest-first, in the real camelCase wire format, to the
+  station-token path, and leaves the queue empty — closing the one branch of
+  the replay loop (deliver → 200 → dequeue) that the outage-side live test
+  could not reach.
+
 - **Store-and-forward `BirdWeather` uploads** (`outbound_queue`, migration
   19). Posts that fail after their in-flight retries are parked in the local
   database and replayed automatically when the uplink returns — oldest

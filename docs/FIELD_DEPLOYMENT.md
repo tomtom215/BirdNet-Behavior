@@ -304,7 +304,8 @@ Once the unit is sealed and shipped, the loop is:
    gauge gives finer control.
 5. **Store-and-forward uploads** — `BirdWeather` posts that fail while
    the uplink is down are parked in the local database and replayed
-   automatically when connectivity returns (oldest first, capped
+   automatically when connectivity returns (oldest first — the upstream
+   record's sequence matches what happened in the field — in capped
    batches, exponential backoff up to 1 h, bounded queue). Watch
    `birdnet_outbound_queue_depth{kind="birdweather"}` — a depth that
    only grows means the uplink (or token) has been broken for a while.
@@ -313,6 +314,23 @@ Once the unit is sealed and shipped, the loop is:
    they are live telemetry and look-now alerts, and replaying them
    hours later is worse than dropping them — the local database is
    always the ground truth.
+
+   **Self-hosted ingest (sensitive species).** Research programmes that
+   must keep observation locations under their own governance — rare or
+   endangered species where a public community map is a poaching risk —
+   can redirect the same upload pipeline (including the offline queue
+   and ordered replay) at their own endpoint that implements the
+   `BirdWeather` station API shape:
+
+   ```ini
+   # /etc/birdnet/birdnet.conf
+   BIRDWEATHER_URL=https://ingest.example.org/api/v1
+   ```
+
+   (Env equivalent: `BIRDNET_BIRDWEATHER_URL`; only the host changes —
+   the `/stations/<token>/detections` path shape is preserved.) The
+   active endpoint is logged at startup so a misdirected station is
+   visible in the first journal lines.
 6. **`birdnet-behavior --doctor-json`** — for monitoring scripts that
    speak JSON (Home Assistant command sensor, Nagios, Zabbix). Same
    exit codes as the human-readable mode.
