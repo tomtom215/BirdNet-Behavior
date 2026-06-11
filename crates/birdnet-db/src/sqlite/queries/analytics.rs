@@ -336,10 +336,15 @@ pub fn low_confidence_species(
 /// `queries::detection_reviews`).
 #[derive(Debug, Clone)]
 pub struct ReviewVerdictDay {
+    /// Date of this bucket in `YYYY-MM-DD` form.
     pub day: String,
+    /// Total detections on this day.
     pub total: i64,
+    /// Detections with a `confirmed` verdict.
     pub confirmed: i64,
+    /// Detections with a `rejected` verdict.
     pub rejected: i64,
+    /// Detections that have not yet received a reviewer verdict.
     pub unreviewed: i64,
 }
 
@@ -399,10 +404,16 @@ pub fn review_verdict_trend(
 /// operator does (the top of the list in the rendered panel).
 #[derive(Debug, Clone)]
 pub struct ModelVsReviewRow {
+    /// Common name of the species.
     pub com_name: String,
+    /// Scientific name of the species.
     pub sci_name: String,
+    /// Total number of detections for this species.
     pub total: i64,
+    /// Mean BirdNET confidence score across all detections (0.0–1.0).
     pub model_avg: f64,
+    /// Fraction of reviewed detections that humans confirmed
+    /// (`confirmed / (confirmed + rejected)`). `0.0` when no verdicts exist.
     pub human_avg: f64,
 }
 

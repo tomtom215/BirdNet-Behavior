@@ -1,0 +1,49 @@
+# Citation metadata (Citation File Format 1.2.0) so GitHub renders a
+# "Cite this repository" button and downstream research can reference the
+# software precisely. Bump `version` and `date-released` in lockstep with
+# the release checklist in RELEASING.md.
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "BirdNet-Behavior"
+abstract: >-
+  Real-time acoustic bird classification with DuckDB behavioral analytics.
+  A ground-up Rust rewrite of BirdNET-Pi that runs the BirdNET+ neural
+  network on a Raspberry Pi or x86_64 Linux host as a single self-contained
+  binary, with sessionization, retention, funnel, and sequence analytics
+  over detected bird activity. BirdNET is developed by the K. Lisa Yang
+  Center for Conservation Bioacoustics at the Cornell Lab of Ornithology
+  and Chemnitz University of Technology.
+authors:
+  - alias: tomtom215
+    family-names: "F."
+    given-names: Tom
+repository-code: "https://github.com/tomtom215/BirdNet-Behavior"
+url: "https://tomtom215.github.io/BirdNet-Behavior/"
+license: CC-BY-NC-SA-4.0
+version: 0.7.2
+date-released: "2026-06-07"
+keywords:
+  - birdnet
+  - bioacoustics
+  - bird-classification
+  - acoustic-monitoring
+  - duckdb
+  - raspberry-pi
+  - rust
+references:
+  - type: article
+    title: "BirdNET: A deep learning solution for avian diversity monitoring"
+    authors:
+      - family-names: Kahl
+        given-names: Stefan
+      - family-names: Wood
+        given-names: "Connor M."
+      - family-names: Eibl
+        given-names: Maximilian
+      - family-names: Klinck
+        given-names: Holger
+    journal: "Ecological Informatics"
+    volume: 61
+    year: 2021
+    doi: 10.1016/j.ecoinf.2021.101236

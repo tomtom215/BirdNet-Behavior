@@ -49,12 +49,19 @@ impl From<rusqlite::Error> for SettingsError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SettingsCategory {
+    /// Audio capture settings (device, sample rate, channels, etc.).
     Audio,
+    /// Station location and recording-window schedule.
     Location,
+    /// BirdNET model parameters (confidence threshold, sensitivity, overlap).
     Detection,
+    /// Notification integrations (Apprise, BirdWeather, email, weekly report).
     Notifications,
+    /// Species exclusion and allow-lists.
     Species,
+    /// System housekeeping (storage retention, image cache, site name).
     System,
+    /// Catch-all for settings that do not fit a more specific category.
     General,
 }
 

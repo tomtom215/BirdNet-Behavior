@@ -30,9 +30,16 @@ const KIOSK_HTML: &str = r#"<!DOCTYPE html>
   .detection .name { font-weight:500; font-size:clamp(16px,1.6vw,22px); }
   .detection .sci { font-style:italic; color:var(--fg-3); font-size:13px; font-family:var(--font-mono); }
   .detection .time { color:var(--fg-3); font-size:13px; margin-left:auto; white-space:nowrap; font-family:var(--font-mono); }
+  /* Quiet escape hatch: a wall display is a dead end without one. Dimmed so
+     it never competes with the display content; brightens on hover/focus
+     for the operator standing at the screen. ESC works too (script below). */
+  .kiosk-exit { position:fixed; top:14px; right:18px; color:var(--fg-3); opacity:0.35;
+                font-size:13px; text-decoration:none; transition:opacity .2s; }
+  .kiosk-exit:hover, .kiosk-exit:focus-visible { opacity:1; }
 </style>
 </head>
 <body>
+<a class="kiosk-exit" href="/" aria-label="Exit kiosk mode">Exit&nbsp;✕</a>
 <div class="kiosk-head">
   <svg width="32" height="32" viewBox="0 0 24 24" aria-hidden="true">
     <circle cx="12" cy="12" r="11" fill="none" stroke="currentColor" stroke-width="0.8" class="ki-fg"></circle>
@@ -51,6 +58,12 @@ const KIOSK_HTML: &str = r#"<!DOCTYPE html>
   <p class="ki-loading">Loading…</p>
 </div>
 <script src="/static/htmx.min.js"></script>
+<script>
+  // ESC leaves kiosk mode — the keyboard counterpart of the corner link.
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') { window.location.href = '/'; }
+  });
+</script>
 </body>
 </html>"#;
 

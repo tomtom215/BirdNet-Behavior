@@ -54,7 +54,12 @@ pub enum ConfigError {
     /// Required key missing.
     MissingKey(String),
     /// Value cannot be parsed as expected type.
-    InvalidValue { key: String, message: String },
+    InvalidValue {
+        /// Configuration key whose value was invalid.
+        key: String,
+        /// Human-readable description of why the value was rejected.
+        message: String,
+    },
 }
 
 impl fmt::Display for ConfigError {

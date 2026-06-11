@@ -22,6 +22,7 @@ use axum::{Router, routing::get};
 
 use crate::state::AppState;
 
+/// Mount the species list management admin routes.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/admin/species", get(handler::species_page))

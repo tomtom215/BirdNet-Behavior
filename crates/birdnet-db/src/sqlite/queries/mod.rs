@@ -27,8 +27,8 @@ pub use detections::{
     delete_detection, detection_count, detection_count_for_date, detection_count_for_species_date,
     detection_dates, detections_by_date, detections_by_species, insert_detection,
     is_detection_locked, lock_detection, locked_file_names, recent_detections,
-    recent_detections_page, relabel_detection, species_for_date, todays_detection_count,
-    todays_detections, unlock_detection,
+    recent_detections_page, relabel_detection, seconds_since_last_detection, species_for_date,
+    todays_detection_count, todays_detections, unlock_detection,
 };
 pub use heatmap::{hourly_totals, species_daily_heatmap, weekly_heatmap};
 pub use images::{

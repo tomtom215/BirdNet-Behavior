@@ -21,6 +21,7 @@ use birdnet_db::settings::get as get_setting;
 use crate::routes::pages::toast::{self, Toast};
 use crate::state::AppState;
 
+/// Mount the notification channel test routes.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/admin/notifications/test", get(test_page).post(test_all))

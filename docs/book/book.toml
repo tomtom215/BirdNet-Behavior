@@ -14,7 +14,6 @@ description = "Field guide, admin reference, and troubleshooting for BirdNet-Beh
 authors = ["BirdNet-Behavior contributors"]
 language = "en"
 src = "."
-multilingual = false
 
 [build]
 # Where build.rs expects the rendered HTML to land. Matches the
@@ -28,7 +27,6 @@ preferred-dark-theme = "navy"
 git-repository-url = "https://github.com/tomtom215/BirdNet-Behavior"
 edit-url-template = "https://github.com/tomtom215/BirdNet-Behavior/edit/main/docs/book/{path}"
 mathjax-support = false
-copy-fonts = true
 no-section-label = false
 # `index = false` would prevent index.html generation; we keep it so that
 # `/help/` (without an explicit topic) lands on the introduction.

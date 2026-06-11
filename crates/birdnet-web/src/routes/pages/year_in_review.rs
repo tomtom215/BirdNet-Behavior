@@ -18,6 +18,7 @@ use super::{
 };
 use crate::state::AppState;
 
+/// Mount the Year in Review page route.
 pub fn router() -> Router<AppState> {
     Router::new().route("/year-in-review", get(year_in_review_page))
 }

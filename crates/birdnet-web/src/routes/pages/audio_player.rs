@@ -25,6 +25,7 @@ struct PlayerQuery {
     date: Option<String>,
 }
 
+/// Mount the custom audio player route.
 pub fn router() -> Router<AppState> {
     Router::new().route("/player/{filename}", get(player_page))
 }

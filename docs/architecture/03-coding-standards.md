@@ -44,11 +44,12 @@ must_use_candidate = "allow"
 multiple_crate_versions = "allow"
 
 [workspace.lints.rust]
-unsafe_code = "deny"
+unsafe_code = "forbid"
 missing_debug_implementations = "warn"
+missing_docs = "warn"
 ```
 
-**`unsafe` is denied workspace-wide.** No exceptions. This is a field-deployed
+**`unsafe` is forbidden workspace-wide** (`forbid`, not `deny`, so a stray `#[allow]` can't reintroduce it). No exceptions. This is a field-deployed
 system that must run unattended for months.
 
 ## Error Handling

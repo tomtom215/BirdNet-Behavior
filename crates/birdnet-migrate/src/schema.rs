@@ -25,7 +25,10 @@ pub enum DetectedSchema {
         row_count: u64,
     },
     /// Identical schema to BirdNet-Behavior (already migrated or same format).
-    BirdNetBehavior { row_count: u64 },
+    BirdNetBehavior {
+        /// Estimated number of detection rows in the source database.
+        row_count: u64,
+    },
 }
 
 impl DetectedSchema {

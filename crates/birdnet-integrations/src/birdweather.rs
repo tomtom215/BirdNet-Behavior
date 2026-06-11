@@ -13,8 +13,12 @@ const API_BASE: &str = "https://app.birdweather.com/api/v1";
 /// Default request timeout.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Maximum retry attempts for failed requests.
-const MAX_RETRIES: u32 = 3;
+/// Total request attempts (initial + retries) before a POST is abandoned.
+const MAX_ATTEMPTS: u32 = 3;
+
+/// Tag under which failed uploads are parked in the binary's
+/// store-and-forward queue (`outbound_queue` table) for later replay.
+pub const QUEUE_KIND: &str = "birdweather";
 
 /// `BirdWeather` client errors.
 #[derive(Debug)]
@@ -44,6 +48,10 @@ impl std::error::Error for BirdWeatherError {}
 pub struct Client {
     /// Station token (from `BirdWeather` settings).
     station_token: String,
+    /// API base (no trailing slash). [`API_BASE`] in production; overridden
+    /// via [`Client::with_base_url`] for self-hosted ingests and the
+    /// store-and-forward end-to-end test's stub server.
+    base_url: String,
     /// HTTP client.
     http: reqwest::Client,
     /// Station latitude.
@@ -53,7 +61,11 @@ pub struct Client {
 }
 
 /// A detection to post to `BirdWeather`.
-#[derive(Debug, Clone, Serialize)]
+///
+/// `Deserialize` is required by the store-and-forward queue: a post that
+/// fails during a network outage is parked as JSON in the local database
+/// and replayed verbatim by the drainer once the uplink returns.
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct DetectionPost {
     /// ISO 8601 timestamp.
     pub timestamp: String,
@@ -107,15 +119,40 @@ impl Client {
 
         Ok(Self {
             station_token: station_token.to_string(),
+            base_url: API_BASE.to_owned(),
             http,
             lat,
             lon,
         })
     }
 
+    /// Redirect this client at a different API base.
+    ///
+    /// Two audiences: researchers running a **self-hosted ingest** (rare /
+    /// endangered-species programmes that must keep observation data under
+    /// their own governance rather than a public community map), and the
+    /// end-to-end test suite, which points the real binary's drainer at a
+    /// local stub to prove the replay -> deliver -> dequeue loop. A
+    /// trailing slash is tolerated; an empty override keeps the default so
+    /// a blank env var cannot produce `"/stations/..."` relative URLs.
+    #[must_use]
+    pub fn with_base_url(mut self, base_url: &str) -> Self {
+        let trimmed = base_url.trim().trim_end_matches('/');
+        if !trimmed.is_empty() {
+            trimmed.clone_into(&mut self.base_url);
+        }
+        self
+    }
+
+    /// The API base requests are sent to (no trailing slash).
+    #[must_use]
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
     /// Post a detection to `BirdWeather`.
     ///
-    /// Retries up to `MAX_RETRIES` times with exponential backoff.
+    /// Makes up to `MAX_ATTEMPTS` attempts (initial + retries) with exponential backoff.
     ///
     /// # Errors
     ///
@@ -124,7 +161,10 @@ impl Client {
         &self,
         detection: &DetectionPost,
     ) -> Result<ApiResponse, BirdWeatherError> {
-        let url = format!("{}/stations/{}/detections", API_BASE, self.station_token);
+        let url = format!(
+            "{}/stations/{}/detections",
+            self.base_url, self.station_token
+        );
 
         let body = serde_json::json!({
             "timestamp": detection.timestamp,
@@ -147,7 +187,10 @@ impl Client {
         &self,
         soundscape: &SoundscapePost,
     ) -> Result<ApiResponse, BirdWeatherError> {
-        let url = format!("{}/stations/{}/soundscapes", API_BASE, self.station_token);
+        let url = format!(
+            "{}/stations/{}/soundscapes",
+            self.base_url, self.station_token
+        );
 
         let body = serde_json::json!({
             "timestamp": soundscape.timestamp,
@@ -176,7 +219,7 @@ impl Client {
     ) -> Result<ApiResponse, BirdWeatherError> {
         let mut last_error = BirdWeatherError::Http("no attempts made".into());
 
-        for attempt in 0..MAX_RETRIES {
+        for attempt in 0..MAX_ATTEMPTS {
             if attempt > 0 {
                 // Jittered, capped exponential backoff so concurrent retries —
                 // and many stations hitting the same endpoint — don't
@@ -235,5 +278,27 @@ mod tests {
         let client = Client::new("test-token", 42.36, -71.06).unwrap();
         assert_eq!(client.coordinates(), (42.36, -71.06));
         assert_eq!(client.token(), "test-token");
+    }
+
+    #[test]
+    fn base_url_defaults_to_public_api() {
+        let client = Client::new("t", 0.0, 0.0).unwrap();
+        assert_eq!(client.base_url(), API_BASE);
+    }
+
+    #[test]
+    fn with_base_url_overrides_and_normalises() {
+        let client = Client::new("t", 0.0, 0.0)
+            .unwrap()
+            .with_base_url("http://127.0.0.1:9000/api/v1/");
+        // Trailing slash trimmed so the joined URL has exactly one separator.
+        assert_eq!(client.base_url(), "http://127.0.0.1:9000/api/v1");
+    }
+
+    #[test]
+    fn with_base_url_ignores_blank_override() {
+        // A blank env var must keep the default, never produce relative URLs.
+        let client = Client::new("t", 0.0, 0.0).unwrap().with_base_url("   ");
+        assert_eq!(client.base_url(), API_BASE);
     }
 }

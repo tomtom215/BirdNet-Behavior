@@ -20,6 +20,7 @@ use birdnet_db::settings::{self, SettingsCategory};
 
 use crate::state::AppState;
 
+/// Mount the first-run onboarding wizard routes.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/onboarding", get(onboarding_page))

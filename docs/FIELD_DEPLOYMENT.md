@@ -85,18 +85,29 @@ choices. SSD-on-USB is dramatically better if your power budget allows it.
 
 ## 4. Networking
 
-The daemon assumes the network may be down or expensive. Verified
-behaviours:
+The daemon assumes the network may be down or expensive, and **no network
+failure can slow or block the detection pipeline** — every integration is
+dispatched off the detection path. Verified behaviours:
 
-- **BirdWeather uploads** — buffered locally; retried with exponential
-  backoff. No bandwidth wasted on a dead link.
-- **Apprise notifications** — best-effort; non-delivery is logged but
-  never blocks detection.
+- **BirdWeather uploads** — store-and-forward. A post that fails after its
+  in-flight retries is parked in the local database (`outbound_queue`) and
+  replayed **oldest-first** when the network returns: batches of 25 with
+  200 ms spacing so a returning uplink isn't slammed, per-entry backoff
+  1 min → 1 h, bounded to 5 000 entries / 48 attempts so a months-long
+  outage can't fill the disk. Nothing is lost to a flaky link; see §9 for
+  the queue-depth gauge and the self-hosted-ingest override.
+- **Apprise notifications** — best-effort, dispatched off the detection
+  path; non-delivery is logged but never blocks detection. Not queued by
+  design — a look-now alert replayed hours later is noise.
+- **MQTT publisher** — fire-and-forget per detection, opening a fresh
+  bounded-timeout connection; dispatched off the detection path so an
+  offline broker never stalls detection. Not queued by design (live
+  telemetry).
 - **Wikipedia image cache** — populated lazily; works fine with no
   network at all.
 - **Auto-update check** — daily, non-blocking; failure logged at
-  `debug`.
-- **MQTT publisher** — auto-reconnects with backoff.
+  `debug`. The check reads bounded response bodies (it cannot be made to
+  exhaust memory by a hostile or misbehaving endpoint).
 - **Heartbeat URL** — fire-and-forget; no retry, by design (the
   monitoring side is the one that should care if it didn't arrive).
 
@@ -210,6 +221,47 @@ While the system clock looks unsynced (no RTC yet at boot, NTP not ready) the
 quiet window is **not** enforced — capture fails open exactly as the schedule
 does, so a bogus boot-time date can never silence a source.
 
+### Multi-source resilience (USB + several RTSP at once)
+
+You can run one or more local microphones (USB/ALSA or PipeWire) **and** any
+number of RTSP streams simultaneously — set them up in **Admin → Audio**, or
+seed them from the config file with `ALSA_CARDS` (`;`-separated) and
+`RTSP_URLS` (`,`-separated). Each source is captured by its own subprocess and
+recordings carry a per-source tag (`local`/`MIC_n` and `RTSP_n`, or the source
+row's id), so detections, recordings, and the
+`birdnet_audio_source_up{source=…}` gauge stay distinct per source.
+
+Every source is **supervised independently** — the central property for an
+unattended field station with flaky cameras:
+
+- **One source failing never disturbs the others.** A dead subprocess (camera
+  rebooted, USB mic unplugged, network blip) is restarted with **capped
+  exponential backoff** (2 s → 4 s → … → 60 s, then every 60 s **forever** — a
+  source down for an hour is still recording when it comes back on hour two).
+  The other sources keep recording and the detection pipeline keeps running
+  throughout.
+- **Silent stalls are caught, not just crashes.** An RTSP camera (or a USB mic
+  wedged after a re-enumeration) whose process stays *alive* but stops
+  delivering audio is detected by watching each source's newest segment: no
+  fresh segment for several segment-durations (floor 2 min) and the source is
+  restarted, exactly like a crash. Stall detection fails open while the clock
+  is unsynced (segment mtimes aren't trustworthy before NTP).
+- **A network outage never blocks detection.** BirdWeather, Apprise, MQTT,
+  email, and heartbeat are all dispatched off the detection path, so a dead
+  broker or an offline uplink for days slows none of them down — detections
+  keep landing in the local database and you reconcile from there.
+
+Verify per-source isolation on real hardware before sealing the unit:
+
+```bash
+journalctl -u birdnet-behavior -f
+# Unplug ONE RTSP camera (or one USB mic). Expect, for that source only:
+#   "audio source DOWN … still trying to restart"  and the
+#   birdnet_audio_source_up{source=<id>} gauge for THAT id drops to 0,
+# while every other source's gauge stays 1 and detections keep flowing.
+# Plug it back in: "audio source up" and the gauge returns to 1 on its own.
+```
+
 ## 8. Database and backup policy
 
 The daemon runs a scheduled maintenance task in the background (no
@@ -248,11 +300,52 @@ Once the unit is sealed and shipped, the loop is:
 3. **`/api/v2/metrics`** — Prometheus text format. Scrape with
    Prometheus, Grafana Agent, or VictoriaMetrics. Key series:
    `birdnet_uptime_seconds`, `birdnet_detections_total`,
-   `birdnet_process_resident_memory_bytes`, `birdnet_species_total`.
-4. **`birdnet-behavior --doctor-json`** — for monitoring scripts that
+   `birdnet_process_resident_memory_bytes`, `birdnet_species_total`,
+   and the two field-health gauges below.
+4. **Detection deadman** — the end-to-end "is it actually detecting?"
+   check that no per-component gauge can answer. The station measures
+   how long ago the last detection landed and exports it as
+   `birdnet_detection_silence_seconds` (also `detection_silence_secs`
+   on `/api/v2/health`, and the "Last Detection" row on `/system`).
+   After `DEADMAN_HOURS` of silence (default 24; `0` disables; also
+   `--deadman-hours` / `BIRDNET_DEADMAN_HOURS`) it logs a loud warning
+   and — when Apprise is configured — pushes **one** alert per quiet
+   episode, with a recovery notice when detections resume. Stations in
+   sparse habitats should raise the threshold; a Grafana alert on the
+   gauge gives finer control.
+5. **Store-and-forward uploads** — `BirdWeather` posts that fail while
+   the uplink is down are parked in the local database and replayed
+   automatically when connectivity returns (oldest first — the upstream
+   record's sequence matches what happened in the field — in capped
+   batches, exponential backoff up to 1 h, bounded queue). Watch
+   `birdnet_outbound_queue_depth{kind="birdweather"}` — a depth that
+   only grows means the uplink (or token) has been broken for a while.
+   The `/system` page shows a "Queued Uploads" row whenever the queue
+   is non-empty. MQTT and Apprise/email are deliberately NOT queued:
+   they are live telemetry and look-now alerts, and replaying them
+   hours later is worse than dropping them — the local database is
+   always the ground truth.
+
+   **Self-hosted ingest (sensitive species).** Research programmes that
+   must keep observation locations under their own governance — rare or
+   endangered species where a public community map is a poaching risk —
+   can redirect the same upload pipeline (including the offline queue
+   and ordered replay) at their own endpoint that implements the
+   `BirdWeather` station API shape:
+
+   ```ini
+   # /etc/birdnet/birdnet.conf
+   BIRDWEATHER_URL=https://ingest.example.org/api/v1
+   ```
+
+   (Env equivalent: `BIRDNET_BIRDWEATHER_URL`; only the host changes —
+   the `/stations/<token>/detections` path shape is preserved.) The
+   active endpoint is logged at startup so a misdirected station is
+   visible in the first journal lines.
+6. **`birdnet-behavior --doctor-json`** — for monitoring scripts that
    speak JSON (Home Assistant command sensor, Nagios, Zabbix). Same
    exit codes as the human-readable mode.
-5. **SSH tunnel via Tailscale / ZeroTier / Cloudflare Tunnel** —
+7. **SSH tunnel via Tailscale / ZeroTier / Cloudflare Tunnel** —
    gives you the web UI from anywhere without exposing a port to the
    open internet. Recommended over plain port-forward.
 

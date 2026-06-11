@@ -99,7 +99,9 @@ pub struct RecordingConfig {
 /// Output audio format.
 #[derive(Debug, Clone, Copy)]
 pub enum AudioFormat {
+    /// Uncompressed PCM WAV (`.wav`).
     Wav,
+    /// Losslessly compressed FLAC (`.flac`).
     Flac,
 }
 
@@ -159,6 +161,31 @@ pub(crate) fn recording_filename(rtsp_id: Option<&str>, format: AudioFormat) -> 
     )
 }
 
+/// Whether a watch-directory filename was written by the capture stream
+/// identified by `stream_id` (`None` = the id-less single local mic).
+///
+/// The inverse of [`recording_filename`] — kept beside it so the writer
+/// pattern and the matcher cannot drift apart. Used by the supervisor's
+/// silent-stall probe to find the newest segment belonging to one source in
+/// a directory shared by several.
+pub(crate) fn filename_matches_stream(name: &str, stream_id: Option<&str>, ext: &str) -> bool {
+    let Some(stem) = name.strip_suffix(ext).and_then(|s| s.strip_suffix('.')) else {
+        return false;
+    };
+    stream_id.map_or_else(
+        // "…-birdnet-HH:MM:SS": what follows the marker must be a bare time,
+        // otherwise this is some other stream's id-carrying file.
+        || {
+            stem.rfind("-birdnet-").is_some_and(|idx| {
+                let rest = &stem.as_bytes()[idx + "-birdnet-".len()..];
+                rest.len() == 8 && rest[2] == b':' && rest[5] == b':'
+            })
+        },
+        // "…-birdnet-{id}-HH:MM:SS"
+        |id| stem.contains(&format!("-birdnet-{id}-")),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,5 +229,53 @@ mod tests {
         assert_eq!(RtspTransport::Udp.ffmpeg_arg(), "udp");
         // The default is Auto.
         assert_eq!(RtspTransport::default(), RtspTransport::Auto);
+    }
+
+    #[test]
+    fn filename_matcher_identifies_idless_local_mic() {
+        // The id-less single-mic file matches only the `None` stream.
+        let name = "2026-06-10-birdnet-07:15:00.wav";
+        assert!(filename_matches_stream(name, None, "wav"));
+        assert!(!filename_matches_stream(name, Some("RTSP_1"), "wav"));
+        // Wrong extension never matches.
+        assert!(!filename_matches_stream(name, None, "flac"));
+    }
+
+    #[test]
+    fn filename_matcher_identifies_stream_ids() {
+        let cam1 = "2026-06-10-birdnet-RTSP_1-07:15:00.wav";
+        assert!(filename_matches_stream(cam1, Some("RTSP_1"), "wav"));
+        // An id'd file must NOT match the id-less stream nor a sibling id.
+        assert!(!filename_matches_stream(cam1, None, "wav"));
+        assert!(!filename_matches_stream(cam1, Some("RTSP_2"), "wav"));
+        // DB-row ids (admin-UI sources) work the same way.
+        let row = "2026-06-10-birdnet-back-garden-cam-07:15:00.wav";
+        assert!(filename_matches_stream(row, Some("back-garden-cam"), "wav"));
+        assert!(!filename_matches_stream(row, None, "wav"));
+    }
+
+    #[test]
+    fn filename_matcher_round_trips_with_recording_filename() {
+        // Substitute a concrete timestamp into the strftime pattern and the
+        // matcher must accept exactly its own stream.
+        let pattern = recording_filename(Some("MIC_2"), AudioFormat::Wav);
+        let concrete = pattern
+            .replace("%Y-%m-%d", "2026-06-10")
+            .replace("%H:%M:%S", "12:34:56");
+        assert!(filename_matches_stream(&concrete, Some("MIC_2"), "wav"));
+        assert!(!filename_matches_stream(&concrete, None, "wav"));
+
+        let idless = recording_filename(None, AudioFormat::Wav)
+            .replace("%Y-%m-%d", "2026-06-10")
+            .replace("%H:%M:%S", "12:34:56");
+        assert!(filename_matches_stream(&idless, None, "wav"));
+        assert!(!filename_matches_stream(&idless, Some("MIC_2"), "wav"));
+    }
+
+    #[test]
+    fn filename_matcher_rejects_non_recordings() {
+        assert!(!filename_matches_stream("notes.txt", None, "wav"));
+        assert!(!filename_matches_stream(".wav", None, "wav"));
+        assert!(!filename_matches_stream("2026-06-10.wav", None, "wav"));
     }
 }

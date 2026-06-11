@@ -13,8 +13,10 @@ use std::fmt;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
+/// Errors from the weather store.
 #[derive(Debug)]
 pub enum WeatherError {
+    /// SQLite error (IO, locking, constraint).
     Sqlite(rusqlite::Error),
 }
 
@@ -43,18 +45,25 @@ impl From<rusqlite::Error> for WeatherError {
 /// One hourly weather observation.
 #[derive(Debug, Clone)]
 pub struct WeatherRow {
-    /// ISO-8601 UTC, e.g. `2026-05-28T14:00:00Z`.
+    /// ISO-8601 UTC timestamp, e.g. `2026-05-28T14:00:00Z`.
     pub at: String,
+    /// Dry-bulb air temperature in °C.
     pub temp_c: Option<f32>,
+    /// Precipitation accumulated during this hour in mm.
     pub precip_mm: Option<f32>,
+    /// Mean wind speed during this hour in knots.
     pub wind_kt: Option<f32>,
+    /// Wind direction in degrees clockwise from true north (0–359).
     pub wind_dir_deg: Option<i32>,
+    /// Atmospheric pressure at mean sea level in hPa.
     pub pressure_hpa: Option<f32>,
+    /// Cloud cover as a percentage (0–100).
     pub cloud_pct: Option<i32>,
-    /// WMO weather code, used for the legend icon.
+    /// WMO weather interpretation code, used for the legend icon.
     pub code: Option<i32>,
 }
 
+/// CRUD operations on the `weather` table.
 pub trait WeatherStore {
     /// Upsert one row by `at` (replaces existing).
     ///

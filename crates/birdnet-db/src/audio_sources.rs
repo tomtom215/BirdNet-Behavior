@@ -76,12 +76,16 @@ impl From<rusqlite::Error> for AudioSourceError {
 /// 'rtsp'.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceKind {
+    /// USB microphone captured via the ALSA `plughw:` / `hw:` device path.
     UsbAlsa,
+    /// Microphone exposed through PipeWire (Raspberry Pi OS Bookworm default).
     PipeWire,
+    /// Remote audio stream delivered over RTSP.
     Rtsp,
 }
 
 impl SourceKind {
+    /// Returns the canonical SQL-on-disk string for this variant.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -113,13 +117,18 @@ impl fmt::Display for SourceKind {
 /// Channel layout. 'mono' / 'left' / 'right' / 'stereo'.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Channels {
+    /// Single-channel capture (downmix or hardware mono).
     Mono,
+    /// Use only the left channel of a stereo input.
     Left,
+    /// Use only the right channel of a stereo input.
     Right,
+    /// Preserve both channels; inference runs on the stereo mix.
     Stereo,
 }
 
 impl Channels {
+    /// Returns the canonical SQL-on-disk string for this variant.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -155,12 +164,16 @@ impl fmt::Display for Channels {
 /// RTSP transport preference. 'auto' / 'tcp' / 'udp'.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RtspTransport {
+    /// Let the capture daemon negotiate the best available transport.
     Auto,
+    /// Force RTSP over TCP (reliable, higher latency).
     Tcp,
+    /// Force RTSP over UDP (lower latency, packet-loss risk on Wi-Fi).
     Udp,
 }
 
 impl RtspTransport {
+    /// Returns the canonical SQL-on-disk string for this variant.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -201,9 +214,13 @@ impl fmt::Display for RtspTransport {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct PipelineFlags {
+    /// Apply a high-pass filter to reduce low-frequency rumble before inference. Default `true`.
     pub high_pass: bool,
+    /// Remove DC offset from the captured signal. Default `true`.
     pub dc_removal: bool,
+    /// Enable automatic gain control to normalise recording levels. Default `false`.
     pub agc: bool,
+    /// Send periodic RTSP OPTIONS keepalive requests to prevent stream timeout. Default `true`.
     pub rtsp_keepalive: bool,
 }
 
@@ -221,36 +238,61 @@ impl Default for PipelineFlags {
 /// One row from the `audio_sources` table.
 #[derive(Debug, Clone)]
 pub struct AudioSource {
+    /// Stable identifier for this source (alphanumeric, `-`, `_`, `.`; max 64 chars).
     pub id: String,
+    /// Physical or protocol kind of this source.
     pub kind: SourceKind,
+    /// Device path or URL that identifies the hardware or stream (e.g. `plughw:1,0`
+    /// or `rtsp://camera.local/audio`).
     pub device_id: String,
+    /// Optional human-readable label shown in the admin UI (e.g. `Backyard feeder`).
     pub label: Option<String>,
+    /// Capture sample rate in Hz (e.g. `48000`).
     pub sample_rate: u32,
+    /// Channel layout to use from the captured signal.
     pub channels: Channels,
+    /// Sample bit depth (e.g. `16`, `24`).
     pub bit_depth: u8,
+    /// Pre-amplification gain in dB applied before inference. `0.0` means unity gain.
     pub gain_db: f32,
+    /// Preferred RTSP transport; ignored for non-RTSP sources.
     pub rtsp_transport: RtspTransport,
     /// `(start, end)` quiet schedule in HH:MM form, when set.
     pub schedule_quiet: Option<(String, String)>,
+    /// Audio pipeline feature flags for this source.
     pub pipeline: PipelineFlags,
+    /// ISO-8601 timestamp at which this source was soft-deleted, if any.
     pub disabled_at: Option<String>,
+    /// ISO-8601 timestamp when this row was first inserted.
     pub created_at: String,
+    /// ISO-8601 timestamp of the most recent update to this row.
     pub updated_at: String,
 }
 
 /// Input for [`AudioSourceStore::insert`].
 #[derive(Debug, Clone)]
 pub struct NewAudioSource {
+    /// Stable identifier chosen by the caller; see [`AudioSource::id`] for constraints.
     pub id: String,
+    /// Physical or protocol kind of this source.
     pub kind: SourceKind,
+    /// Device path or URL; see [`AudioSource::device_id`].
     pub device_id: String,
+    /// Optional human-readable label for the admin UI.
     pub label: Option<String>,
+    /// Capture sample rate in Hz.
     pub sample_rate: u32,
+    /// Channel layout.
     pub channels: Channels,
+    /// Sample bit depth.
     pub bit_depth: u8,
+    /// Pre-amplification gain in dB (`0.0` = unity).
     pub gain_db: f32,
+    /// Preferred RTSP transport; ignored for non-RTSP sources.
     pub rtsp_transport: RtspTransport,
+    /// Optional `(start, end)` quiet-hours window in `HH:MM` form.
     pub schedule_quiet: Option<(String, String)>,
+    /// Audio pipeline feature flags.
     pub pipeline: PipelineFlags,
 }
 
@@ -280,14 +322,23 @@ impl NewAudioSource {
 /// column unchanged.
 #[derive(Debug, Clone, Default)]
 pub struct AudioSourcePatch {
+    /// New label; `Some(None)` clears the existing label.
     pub label: Option<Option<String>>,
+    /// Replacement device path or URL.
     pub device_id: Option<String>,
+    /// Replacement sample rate in Hz.
     pub sample_rate: Option<u32>,
+    /// Replacement channel layout.
     pub channels: Option<Channels>,
+    /// Replacement sample bit depth.
     pub bit_depth: Option<u8>,
+    /// Replacement gain in dB.
     pub gain_db: Option<f32>,
+    /// Replacement RTSP transport preference.
     pub rtsp_transport: Option<RtspTransport>,
+    /// Replacement quiet schedule; `Some(None)` clears the existing schedule.
     pub schedule_quiet: Option<Option<(String, String)>>,
+    /// Replacement pipeline flags (all four are replaced atomically).
     pub pipeline: Option<PipelineFlags>,
 }
 

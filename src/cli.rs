@@ -1,6 +1,8 @@
 //! CLI argument definitions for BirdNet-Behavior.
 
 use clap::Parser;
+// Brings `.map` into scope for the custom `image_cache_dir` value parser.
+use clap::builder::TypedValueParser as _;
 use std::path::PathBuf;
 
 /// BirdNet-Behavior bird detection and analytics system.
@@ -108,6 +110,18 @@ pub struct Cli {
     #[arg(long, default_value = "0.8", env = "BIRDNET_NOTIFY_CONFIDENCE")]
     pub notify_confidence: f32,
 
+    /// Hours of zero detections before the deadman watchdog raises an alert.
+    ///
+    /// The end-to-end "is the station actually detecting?" check: when no
+    /// detection has been recorded for this many hours, a loud warning is
+    /// logged and (if Apprise is configured) a notification is sent — once
+    /// per quiet episode, with a recovery notice when detections resume.
+    /// `0` disables alerting; the freshness gauge
+    /// (`birdnet_detection_silence_seconds`) is exported regardless.
+    /// Defaults to 24; config-file key: `DEADMAN_HOURS`.
+    #[arg(long, env = "BIRDNET_DEADMAN_HOURS")]
+    pub deadman_hours: Option<u32>,
+
     /// `BirdWeather` station token for uploading detections.
     #[arg(long, env = "BIRDNET_BIRDWEATHER_TOKEN")]
     pub birdweather_token: Option<String>,
@@ -126,7 +140,17 @@ pub struct Cli {
     /// stock install shows species photos out of the box. Pass an empty value
     /// (`--image-cache-dir ""`) to disable image caching entirely — no
     /// Wikipedia fetches, e.g. for air-gapped deployments.
-    #[arg(long, env = "BIRDNET_IMAGE_CACHE_DIR")]
+    //
+    // The explicit OsString→PathBuf parser is load-bearing: clap's stock
+    // PathBuf parser rejects empty values, which made the documented
+    // empty-string opt-out (and `BIRDNET_IMAGE_CACHE_DIR=`) unreachable —
+    // `init_image_cache` treats an empty path as "disable" and could never
+    // see one from the CLI/env.
+    #[arg(
+        long,
+        env = "BIRDNET_IMAGE_CACHE_DIR",
+        value_parser = clap::builder::OsStringValueParser::new().map(PathBuf::from)
+    )]
     pub image_cache_dir: Option<PathBuf>,
 
     /// ALSA device for microphone capture (e.g., `plughw:1,0`).
@@ -386,4 +410,33 @@ pub struct Cli {
     /// Only used when --quality-filter is set.
     #[arg(long, default_value = "3.0", env = "BIRDNET_QUALITY_MIN_SNR")]
     pub quality_min_snr_db: f32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    /// The documented air-gapped opt-out: an explicitly empty
+    /// `--image-cache-dir` must parse (clap's stock `PathBuf` parser
+    /// rejects empty values, which silently broke this) and arrive as the
+    /// empty path that `init_image_cache` interprets as "disabled".
+    #[test]
+    fn empty_image_cache_dir_parses_as_opt_out() {
+        let cli = Cli::parse_from(["birdnet-behavior", "--image-cache-dir", ""]);
+        assert_eq!(cli.image_cache_dir, Some(std::path::PathBuf::new()));
+
+        let cli = Cli::parse_from(["birdnet-behavior", "--image-cache-dir="]);
+        assert_eq!(cli.image_cache_dir, Some(std::path::PathBuf::new()));
+    }
+
+    /// A non-empty value still parses as a normal path.
+    #[test]
+    fn non_empty_image_cache_dir_parses_as_path() {
+        let cli = Cli::parse_from(["birdnet-behavior", "--image-cache-dir", "/var/cache/img"]);
+        assert_eq!(
+            cli.image_cache_dir,
+            Some(std::path::PathBuf::from("/var/cache/img"))
+        );
+    }
 }

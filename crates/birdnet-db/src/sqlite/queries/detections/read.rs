@@ -66,6 +66,40 @@ pub fn detections_by_date(conn: &Connection, date: &str) -> Result<Vec<Detection
     Ok(rows)
 }
 
+/// Seconds elapsed since the most recent stored detection, or `None` when
+/// the station has never detected anything.
+///
+/// The end-to-end freshness signal for the detection-deadman watchdog: it
+/// proves the whole audio -> capture -> inference -> insert chain produced a
+/// row recently, which no per-component gauge can. Detection `Date`/`Time`
+/// are naive local-time strings (they come from capture filenames stamped
+/// with the system timezone), so the elapsed math runs inside SQLite
+/// against `'now','localtime'` — the same clock lens — rather than against
+/// a Rust UTC timestamp that would skew by the TZ offset.
+///
+/// Clamped at zero: a detection apparently in the future (clock stepped
+/// back after NTP sync) reads as "fresh", the fail-open choice.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn seconds_since_last_detection(conn: &Connection) -> Result<Option<u64>, DbError> {
+    use rusqlite::OptionalExtension as _;
+    let secs: Option<f64> = conn
+        .query_row(
+            "SELECT (julianday('now','localtime') - julianday(Date || ' ' || Time)) * 86400.0
+             FROM detections ORDER BY Date DESC, Time DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?
+        // A malformed Date/Time (julianday -> NULL) folds to None too: no
+        // verdict is better than a bogus one.
+        .flatten();
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    Ok(secs.map(|s| if s.is_finite() { s.max(0.0) as u64 } else { 0 }))
+}
+
 /// Query the most recent detections up to `limit`.
 ///
 /// # Errors
@@ -395,6 +429,48 @@ mod tests {
     use crate::sqlite::queries::detections::insert_detection;
     use crate::sqlite::queries::detections::test_support::temp_db_with_data;
     use crate::sqlite::types::DetectionRecord;
+
+    /// The deadman freshness signal: a detection stamped two hours ago (in
+    /// SQLite's own localtime lens, so no TZ skew) reads as ~7200 s of
+    /// silence; an empty table reads as `None`, never zero.
+    #[test]
+    fn seconds_since_last_detection_measures_local_silence() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_or_create(&dir.path().join("t.db")).unwrap();
+        assert_eq!(seconds_since_last_detection(&conn).unwrap(), None);
+
+        let (date, time): (String, String) = conn
+            .query_row(
+                "SELECT date('now','localtime','-2 hours'), time('now','localtime','-2 hours')",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let record = DetectionRecord {
+            date: &date,
+            time: &time,
+            sci_name: "Pica pica",
+            com_name: "Eurasian Magpie",
+            confidence: 0.9,
+            lat: None,
+            lon: None,
+            cutoff: None,
+            week: None,
+            sensitivity: None,
+            overlap: None,
+            file_name: "t.wav",
+            chunk_offset_secs: Some(0.0),
+            correlation_id: None,
+            source: None,
+        };
+        insert_detection(&conn, &record).unwrap();
+
+        let secs = seconds_since_last_detection(&conn).unwrap().unwrap();
+        assert!(
+            (7_100..=7_300).contains(&secs),
+            "two hours of silence measured, got {secs}s"
+        );
+    }
 
     #[test]
     fn detections_by_date_ordered() {

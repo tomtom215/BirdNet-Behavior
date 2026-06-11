@@ -15,6 +15,7 @@ use super::charts::render_hourly_chart;
 use super::{escape_html, render_page_for_request, today_date_string};
 use crate::state::AppState;
 
+/// Mount the detection history page and its HTMX partial routes.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/history", get(history_page))

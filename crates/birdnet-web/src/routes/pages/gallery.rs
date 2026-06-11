@@ -17,6 +17,7 @@ use super::atoms::{species_code, species_color};
 use super::{escape_html, render_page_for_request, simple_url_encode};
 use crate::state::AppState;
 
+/// Mount the species photo gallery and its HTMX grid partial route.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/gallery", get(gallery_page))

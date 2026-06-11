@@ -7,6 +7,165 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### CI
+
+- **Mutation testing is now incremental on PRs and ~4× cheaper per mutant.**
+  Three layers, each measured: a `mutants` build profile (no debug info —
+  per-mutant cost 132 s → 36 s, baseline 90 s + 91 s → 16 s + 21 s on the
+  binary-crate shards); unit-test-only target selection per package
+  (`--lib` / `--bins`), so the mutant loop no longer rebuilds eight
+  DuckDB-linking integration-test executables nor boots real binaries; and
+  `--in-diff` scoping on pull requests, so only mutants on changed lines
+  run (a test-only one-line diff finishes in 0.2 s, "No mutants to
+  filter") while the weekly cron, pushes to main, and manual dispatch
+  still run every shard's full set. Config lives in `.cargo/mutants.toml`
+  so local `cargo mutants` runs share the same economics.
+
+### Dependencies
+
+- `mdbook` 0.4.52 → **`mdbook-driver` 0.5.3** (folds dependabot #151): mdbook
+  0.5 split the project into facade crates and made the `mdbook` crate
+  binary-only, so the docs build now consumes the library through
+  `mdbook-driver`. The book config dropped the options 0.5 removed
+  (`copy-fonts`, `multilingual`), `build.rs` now surfaces the *underlying*
+  load error instead of a silent "could not load" (that silence briefly
+  masked exactly this migration), and the rendered manual was verified
+  page-for-page. New transitive `font-awesome-as-a-crate` carries
+  `CC-BY-4.0 AND MIT` for the icon *assets* (attribution-only, not
+  copyleft) — allowed via a crate-scoped `deny.toml` exception rather than
+  a global allow.
+- `rusqlite` 0.40.0 → 0.40.1 (folds dependabot #147).
+- `codecov/codecov-action` v6 → v7.0.0, SHA-pinned (folds dependabot #150).
+- `password-hash` 0.5 → 0.6 (dependabot #148) is **deliberately not
+  taken**: argon2 0.5.x implements password-hash *0.5*'s hasher traits and
+  our accounts code passes those types straight into `Argon2` — the bump
+  alone does not compile (verified). A manifest comment now documents the
+  lock-step requirement; take both together when argon2 0.6 ships.
+
+### Added
+
+- **Self-hosted ingest endpoint for uploads** (`BIRDWEATHER_URL` config key /
+  `BIRDNET_BIRDWEATHER_URL` env). Research programmes tracking sensitive
+  species can route the entire upload pipeline — including the offline queue
+  and ordered replay — at their own endpoint implementing the `BirdWeather`
+  station API shape, keeping observation locations under their own
+  governance. Only the host changes; the `/stations/<token>/...` path shape
+  is preserved, and the active endpoint is logged at startup.
+- **End-to-end delivery proof for the store-and-forward queue**
+  (`tests/store_forward_e2e.rs`): boots the real compiled binary against a
+  local stub `BirdWeather` server with a pre-seeded backlog and asserts the
+  drainer replays it oldest-first, in the real camelCase wire format, to the
+  station-token path, and leaves the queue empty — closing the one branch of
+  the replay loop (deliver → 200 → dequeue) that the outage-side live test
+  could not reach.
+
+- **Store-and-forward `BirdWeather` uploads** (`outbound_queue`, migration
+  19). Posts that fail after their in-flight retries are parked in the local
+  database and replayed automatically when the uplink returns — oldest
+  first, capped batches with spacing, exponential backoff to a 1 h ceiling,
+  bounded to 5 000 entries and 48 attempts so a weeks-long outage can never
+  grow the database without limit. The field runbook had promised
+  "buffered locally; retried with exponential backoff" all along; the code
+  now keeps that promise. MQTT and Apprise/email deliberately stay
+  fire-and-forget (live telemetry / look-now alerts — replaying them hours
+  later is worse than dropping them). Exposed as the
+  `birdnet_outbound_queue_depth{kind}` gauge and a "Queued Uploads" row on
+  the `/system` page whenever non-empty.
+- **Detection deadman watchdog.** The end-to-end "is the station actually
+  detecting?" check: every component gauge can be green while a clogged
+  mic foam or a model/labels mismatch silences the station. The daemon now
+  measures seconds-since-last-detection (in SQLite's own localtime lens, so
+  no TZ skew), exports it as `birdnet_detection_silence_seconds`, surfaces
+  it on `/api/v2/health` (`detection_silence_secs`) and as the `/system`
+  page's "Last Detection" row, and after a configurable quiet threshold
+  (`--deadman-hours` / `BIRDNET_DEADMAN_HOURS` / `DEADMAN_HOURS`, default
+  24 h, `0` disables) logs a loud warning and sends one Apprise alert per
+  quiet episode with a recovery notice when detections resume.
+
+- **Silent-stall detection for capture sources.** The supervisor now watches
+  each source's newest recording segment: a subprocess that stays alive but
+  stops delivering audio (a wedged RTSP session, a USB mic hung after a
+  re-enumeration) is detected after several missed segments and restarted
+  through the same backoff path as a crash — closing the field failure where
+  `is_running` reports healthy but a camera has gone quiet. Fails open while
+  the clock is unsynced (segment mtimes aren't trustworthy pre-NTP).
+
+### Fixed
+
+- **MQTT publishing no longer runs inline on the detection thread.** It was the
+  one network integration (of five) dispatched synchronously in the
+  single-threaded event processor, so an offline broker blocked every
+  detection for the connect timeout and serialized detection handling behind a
+  dead network path. It now fires off the detection path like BirdWeather /
+  Apprise / email / heartbeat already did — a multi-day broker outage slows
+  detection by nothing.
+- System-health disk usage now reports `df`'s `used / (used + available)`
+  rather than `used / total`, so a host with reserved blocks or a container
+  quota no longer shows a contradictory "11% used · critically low".
+
+- **Post-startup `SIGTERM` no longer hangs the process.** The startup-phase
+  signal race in `app::run` kept racing the serve loop after startup; its
+  biased arm won every later `SIGTERM`, cancelled the graceful-shutdown
+  choreography (waking live connections, stopping the detection daemon), and
+  left the runtime blocked forever on the detection loop's blocking thread —
+  so every `systemctl stop`/`restart` with a loaded model waited out
+  `TimeoutStopSec` and was `SIGKILL`-ed. The race now ends at an explicit
+  startup handoff; verified live: clean stop in ~2 s with the pipeline hot.
+- `--doctor` now validates the model and labels of a config-file install: it
+  read the `MODEL` / `LABELS` keys while the daemon and installer use
+  `MODEL_PATH` / `LABELS_PATH`, so every standard install reported
+  `SKIP: no --model configured` and the model file was never checked.
+- The documented image-cache opt-out (`--image-cache-dir ""`, empty
+  `BIRDNET_IMAGE_CACHE_DIR`) actually parses now — clap's stock `PathBuf`
+  parser rejects empty values, making the air-gapped opt-out unreachable
+  from the CLI/env (the config-file key was unaffected).
+- BirdNET-Pi migration no longer aborts on dirty source data: TEXT values in
+  numeric columns (empty strings, stringified numbers — the upstream
+  "empty-string poisoning") degrade to NULL or parse, instead of failing the
+  whole import with `InvalidColumnType`.
+- Unmatched paths under `/api/` return a machine-readable JSON 404 instead
+  of the branded HTML page, so scripts and dashboards see the real failure.
+
+### Changed (UI)
+
+- The time-series dashboard's 13-row API-endpoints table is collapsed into a
+  disclosure ("API endpoints · for scripts & integrations") so the page reads
+  as a field tool, not an API manual.
+- Kiosk mode gained an escape hatch — a dimmed corner "Exit" link and the
+  ESC key both return to the dashboard (it was a dead end with no way back).
+- The recordings species list uses the shared illustrated empty-state
+  component instead of a bare `<p>No species detected yet.</p>`.
+
+### Changed
+
+- `unsafe_code` lint raised from `deny` to `forbid` workspace-wide (what the
+  README badge always claimed); `missing_docs` is now enforced and the ~250
+  previously undocumented public items carry real rustdoc.
+- Retry constants unified across `apprise` / `birdweather` / `wikipedia` to
+  `MAX_ATTEMPTS` (total attempts) with exclusive ranges — the previous mix of
+  inclusive/exclusive `MAX_RETRIES` loops made two of the three doc comments
+  wrong. No behavioral change.
+
+### Security
+
+- Auto-update HTTP reads are bounded (release metadata 8 MiB, `SHA256SUMS`
+  64 KiB, release asset 512 MiB) with `Content-Length` pre-checks, so a
+  compromised or misbehaving endpoint cannot stream an unbounded body into
+  memory on a small-RAM Pi.
+- Every GitHub Actions step is now pinned to a full commit SHA (previously a
+  mix of tags and three mutable `@main`/`@master` refs), and `ci.yml` gained
+  the least-privilege `permissions: contents: read` block the other
+  workflows already had.
+
+### Added
+
+- `cargo-fuzz` harnesses (`fuzz/`) for the untrusted-input parsers: symphonia
+  audio decode (WAV/FLAC/MP3 demux of watch-directory files) and the
+  species-label parsers, with a seeding recipe in `fuzz/README.md`.
+- `CITATION.cff` (with the BirdNET reference), `GOVERNANCE.md`,
+  `.gitattributes` (LF normalization + binary markers), and live CI /
+  coverage / supply-chain badges in the README.
+
 ## [0.7.2] - 2026-06-07
 
 A pre-release hardening pass: process-crash fixes, memory/DoS bounds for small

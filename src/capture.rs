@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use birdnet_core::audio::capture::{AudioFormat, CaptureError, CaptureManager, RecordingConfig};
 use birdnet_scheduler::ScheduleConfig;
@@ -51,6 +52,22 @@ impl Source for CaptureManager {
     fn stop(&mut self) {
         Self::stop(self);
     }
+
+    fn latest_output_age(&mut self) -> Option<Duration> {
+        Self::latest_output_age(self)
+    }
+}
+
+/// Silent-stall threshold for a source writing `segment_secs`-long segments.
+///
+/// Several consecutive segments must be overdue before the supervisor calls
+/// a running process stalled — one slow write or a settling hiccup must not
+/// bounce a healthy source — with a floor so short segments (3 s minimum)
+/// don't make the verdict hair-triggered.
+fn stall_threshold(segment_secs: u32) -> Duration {
+    const STALL_SEGMENTS: u64 = 4;
+    const STALL_FLOOR: Duration = Duration::from_secs(120);
+    Duration::from_secs(u64::from(segment_secs).saturating_mul(STALL_SEGMENTS)).max(STALL_FLOOR)
 }
 
 /// Handle that keeps audio capture alive. Dropping it signals the supervisor
@@ -168,7 +185,13 @@ pub fn start_capture_manager(
     let schedule_config = schedule::parse_schedule_config(cli, config);
     log_schedule(cli, &schedule_config);
 
-    let supervised: Vec<(CaptureManager, String, Option<supervisor::QuietWindow>)> = sources
+    let stall_after = stall_threshold(cli.segment_duration);
+    let supervised: Vec<(
+        CaptureManager,
+        String,
+        Option<supervisor::QuietWindow>,
+        Duration,
+    )> = sources
         .into_iter()
         .map(|resolved| {
             let ResolvedSource {
@@ -190,7 +213,12 @@ pub fn start_capture_manager(
                 format: AudioFormat::Wav,
                 gain_db,
             };
-            (CaptureManager::new(recording_config), label, quiet)
+            (
+                CaptureManager::new(recording_config),
+                label,
+                quiet,
+                stall_after,
+            )
         })
         .collect();
 

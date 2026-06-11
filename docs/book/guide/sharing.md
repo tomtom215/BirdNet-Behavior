@@ -13,6 +13,8 @@ It shows:
 - the species (common + scientific name), confidence, and exact timestamp;
 - the **3-second clip**, rendered as both a spectrogram image and an inline audio player, when a recording is on disk for that detection;
 - the **correlation id** the detection daemon stamped on every log line, DB write and notification for the source file — copy it and `grep` your logs to pull the exact decode→infer→notify slice that produced the row;
+- the **audio source** that heard it (the stream label — e.g. `cam1` or `local` — recorded on every detection since the multi-stream update);
+- an **"also heard by"** corroboration card on a multi-source station: when another stream detected the same species at nearly the same moment, it is shown here. Independent agreement across microphones is a stronger signal that a detection is real — useful when the identification matters, such as a rare-species record. The card is read-only and never merges or hides rows;
 - a **Share clip** button;
 - a **Review this detection** widget — confirm or reject the identification in place (see [Reviewing Detections](./reviews.md)).
 

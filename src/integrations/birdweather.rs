@@ -24,9 +24,36 @@ pub fn create_birdweather_client(
         .or_else(|| config?.get_parsed::<f64>("LONGITUDE").ok())
         .unwrap_or(0.0);
 
+    // Optional API-base override: `BIRDNET_BIRDWEATHER_URL` env, then the
+    // `BIRDWEATHER_URL` config key. For research programmes that route
+    // observations to a self-hosted ingest (sensitive-species data kept
+    // under the programme's own governance) and for the end-to-end test
+    // suite. Logged whenever active so a misdirected station is visible in
+    // the first journal lines, not after a season of silent uploads.
+    let base_override = std::env::var("BIRDNET_BIRDWEATHER_URL")
+        .ok()
+        .filter(|u| !u.trim().is_empty())
+        .or_else(|| {
+            config?
+                .get("BIRDWEATHER_URL")
+                .map(str::trim)
+                .filter(|u| !u.is_empty())
+                .map(String::from)
+        });
+
     match birdnet_integrations::birdweather::Client::new(&token, lat, lon) {
         Ok(client) => {
-            tracing::info!(lat, lon, "BirdWeather uploads enabled");
+            let client = if let Some(url) = base_override {
+                let client = client.with_base_url(&url);
+                tracing::info!(
+                    endpoint = %client.base_url(),
+                    "BirdWeather uploads enabled (custom endpoint)"
+                );
+                client
+            } else {
+                tracing::info!(lat, lon, "BirdWeather uploads enabled");
+                client
+            };
             Some(client)
         }
         Err(e) => {

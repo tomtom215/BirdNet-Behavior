@@ -1,0 +1,40 @@
+# Fuzz harnesses for the untrusted-input parsers (run manually; see README.md
+# in this directory). Deliberately NOT a workspace member: cargo-fuzz needs
+# nightly and its own profile settings, and the harness must never affect the
+# main build graph (the root Cargo.toml lists it under `workspace.exclude`).
+[package]
+name = "birdnet-behavior-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tempfile = "3"
+
+[dependencies.birdnet-core]
+path = "../crates/birdnet-core"
+
+# Opting out of the parent workspace keeps `cargo build --workspace` and the
+# lint/test/mutation gates untouched by fuzz-only dependencies.
+[workspace]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "decode_audio"
+path = "fuzz_targets/decode_audio.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_labels"
+path = "fuzz_targets/parse_labels.rs"
+test = false
+doc = false
+bench = false

@@ -17,16 +17,20 @@ use crate::state::AppState;
 // Page handlers
 // ---------------------------------------------------------------------------
 
+/// Render the species list management admin page.
 pub async fn species_page(State(state): State<AppState>) -> Html<String> {
     let (exclude, include) = load_lists(&state);
     Html(render_species_page(&exclude, &include))
 }
 
+/// Return the HTMX partial fragment containing the current species lists.
 pub async fn species_partial(State(state): State<AppState>) -> Html<String> {
     let (exclude, include) = load_lists(&state);
     Html(render_species_partial(&exclude, &include))
 }
 
+/// Render the species filter-test page, which shows every known species and
+/// whether the current exclude/include lists would suppress or pass each one.
 pub async fn filter_test_page(State(state): State<AppState>) -> Html<String> {
     let (exclude, include) = load_lists(&state);
     let species =
@@ -43,8 +47,10 @@ pub async fn filter_test_page(State(state): State<AppState>) -> Html<String> {
 // Mutation handlers
 // ---------------------------------------------------------------------------
 
+/// Form carrying a single species name for list-mutation endpoints.
 #[derive(Debug, Deserialize)]
 pub struct SpeciesNameForm {
+    /// Common name of the species to add or remove.
     pub name: String,
 }
 
@@ -108,6 +114,7 @@ pub async fn remove_include(
 // Threshold handlers
 // ---------------------------------------------------------------------------
 
+/// Return the HTMX partial fragment listing all current per-species confidence thresholds.
 pub async fn thresholds_partial(State(state): State<AppState>) -> Html<String> {
     let thresholds =
         state.with_db(|conn| birdnet_db::sqlite::get_species_thresholds(conn).unwrap_or_default());
@@ -123,7 +130,10 @@ pub async fn thresholds_partial(State(state): State<AppState>) -> Html<String> {
 /// with a 422.
 #[derive(Debug, Deserialize)]
 pub struct ThresholdForm {
+    /// Scientific name of the species whose threshold is being set.
     pub sci_name: String,
+    /// Confidence threshold as a decimal string (e.g. `"0.75"`); accepts either `.` or `,`
+    /// as the decimal separator.
     pub threshold: String,
 }
 
@@ -151,8 +161,10 @@ pub async fn set_threshold(
     Ok(Html(render_thresholds_partial(&thresholds)))
 }
 
+/// Form carrying the species whose per-species threshold should be removed.
 #[derive(Debug, Deserialize)]
 pub struct ThresholdDeleteForm {
+    /// Scientific name of the species whose threshold entry is to be deleted.
     pub sci_name: String,
 }
 

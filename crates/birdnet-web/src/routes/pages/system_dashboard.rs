@@ -19,6 +19,7 @@ use axum::{Router, routing::get};
 use super::{escape_html, render_page_for_request};
 use crate::state::AppState;
 
+/// Mount the system health dashboard and all HTMX partial routes.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/system", get(system_page))
@@ -233,17 +234,39 @@ async fn sys_database_partial(State(state): State<AppState>) -> impl axum::respo
             let species = birdnet_db::sqlite::species_count(conn).unwrap_or(0);
             let dates = birdnet_db::sqlite::distinct_detection_dates(conn).unwrap_or_default();
             let integrity = birdnet_db::sqlite::quick_check(conn).unwrap_or(false);
-            (total, species, dates.len(), integrity)
+            let silence = birdnet_db::sqlite::seconds_since_last_detection(conn)
+                .ok()
+                .flatten();
+            let queued = birdnet_db::outbound_queue::depth(
+                conn,
+                birdnet_integrations::birdweather::QUEUE_KIND,
+            )
+            .unwrap_or(0);
+            (total, species, dates.len(), integrity, silence, queued)
         })
     })
     .await;
 
     match result {
-        Ok((total, species, days, integrity)) => {
+        Ok((total, species, days, integrity, silence, queued)) => {
             let status_badge = if integrity {
                 r#"<span class="sys-ok">OK</span>"#
             } else {
                 r#"<span class="sys-bad">CORRUPT</span>"#
+            };
+            // The non-technical answer to "is it working right now?": how
+            // long ago the last detection landed, end to end.
+            let last_seen =
+                silence.map_or_else(|| "no detections yet".to_owned(), format_silence_duration);
+            // Only worth a row when uploads are actually backed up — a
+            // permanent "0" line is noise on a healthy station.
+            let queued_row = if queued > 0 {
+                format!(
+                    "<tr><td class=\"sys-th\">Queued Uploads</td>\
+                     <td>{queued} BirdWeather upload(s) awaiting network</td></tr>"
+                )
+            } else {
+                String::new()
             };
             let html = format!(
                 "<table class=\"sys-table\">\
@@ -253,6 +276,8 @@ async fn sys_database_partial(State(state): State<AppState>) -> impl axum::respo
                  <td>{species}</td></tr>\
                  <tr><td class=\"sys-th\">Days with Data</td>\
                  <td>{days}</td></tr>\
+                 <tr><td class=\"sys-th\">Last Detection</td>\
+                 <td>{last_seen}</td></tr>{queued_row}\
                  <tr><td class=\"sys-th\">Integrity Check</td>\
                  <td>{status_badge}</td></tr>\
                  </table>",
@@ -264,6 +289,17 @@ async fn sys_database_partial(State(state): State<AppState>) -> impl axum::respo
             [(header::CONTENT_TYPE, "text/html")],
             "<p>Error loading database info</p>".to_string(),
         ),
+    }
+}
+
+/// Human duration for the "Last Detection" row: seconds-level freshness is
+/// noise, so round to the unit an operator thinks in.
+fn format_silence_duration(secs: u64) -> String {
+    match secs {
+        0..=119 => "just now".to_owned(),
+        120..=7_199 => format!("{} min ago", secs / 60),
+        7_200..=172_799 => format!("{} h ago", secs / 3_600),
+        _ => format!("{} days ago", secs / 86_400),
     }
 }
 

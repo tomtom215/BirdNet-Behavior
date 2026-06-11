@@ -15,6 +15,7 @@ use super::atoms::{avatar, conf_bar};
 use super::{TODAY_PAGE_HTML, escape_html, simple_url_encode, today_date_string};
 use crate::state::AppState;
 
+/// Mount the Today page and its HTMX partial routes.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/today", get(today_page))
@@ -44,26 +45,37 @@ pub struct TodayParams {
 /// Form data for deleting a detection.
 #[derive(Debug, Deserialize)]
 pub struct DeleteForm {
+    /// Detection date in `YYYY-MM-DD` form.
     pub date: String,
+    /// Detection time in `HH:MM:SS` form.
     pub time: String,
+    /// Scientific name that uniquely identifies the detection row alongside date/time.
     pub sci_name: String,
 }
 
 /// Form data for locking/unlocking a detection.
 #[derive(Debug, Deserialize)]
 pub struct LockForm {
+    /// Detection date in `YYYY-MM-DD` form.
     pub date: String,
+    /// Detection time in `HH:MM:SS` form.
     pub time: String,
+    /// Scientific name that uniquely identifies the detection row alongside date/time.
     pub sci_name: String,
 }
 
 /// Form data for re-labeling a detection.
 #[derive(Debug, Deserialize)]
 pub struct RelabelForm {
+    /// Detection date in `YYYY-MM-DD` form.
     pub date: String,
+    /// Detection time in `HH:MM:SS` form.
     pub time: String,
+    /// Current scientific name used to locate the detection row.
     pub old_sci_name: String,
+    /// Replacement scientific name to write into the row.
     pub new_sci_name: String,
+    /// Replacement common name corresponding to `new_sci_name`.
     pub new_com_name: String,
 }
 

@@ -68,3 +68,18 @@ docs/.book-build/
 # `ServeDir` at `/help/*` reads from this directory; every cargo build
 # re-renders into it, so it's a build artifact, never a checked-in tree.
 docs/book/_generated/html/
+
+# Fuzzing build/run output (fuzz/ is workspace-excluded; see fuzz/README.md).
+# Curated seeds under fuzz/corpus/*/seed-* ARE committed.
+fuzz/target/
+fuzz/artifacts/
+fuzz/Cargo.lock
+fuzz/corpus/**
+!fuzz/corpus/*/
+!fuzz/corpus/*/seed-*
+
+# Node tooling for the Playwright visual-QA script (scripts/visual_qa.mjs).
+# Installed on demand; never committed.
+node_modules/
+package.json
+package-lock.json

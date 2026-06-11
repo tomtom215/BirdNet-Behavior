@@ -44,6 +44,7 @@ const FIELD_SEP: char = '\u{1f}'; // ASCII unit separator — never appears in o
 
 type HmacSha256 = Hmac<Sha256>;
 
+/// Mount the public share-link routes (full page, audio redirect, spectrogram redirect).
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/r/{token}", get(share_page))

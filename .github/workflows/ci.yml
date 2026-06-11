@@ -12,6 +12,11 @@ on:
     # `concurrency.cancel-in-progress` keeps superseded runs from piling up.
     branches: ["master", "main", "claude/**"]
 
+# Least-privilege token: every job in this workflow only reads the checkout.
+# Matches the explicit permissions blocks in the other workflows.
+permissions:
+  contents: read
+
 # Cancel superseded runs on the same ref so a fast follow-up push does not
 # wait behind (or race) the previous one. Matches coverage.yml / supply-chain.yml.
 concurrency:
@@ -29,7 +34,7 @@ jobs:
     name: Format (rustfmt)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain (stable + rustfmt)
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -42,7 +47,7 @@ jobs:
     name: Clippy (pedantic + nursery)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain (stable + clippy)
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -73,7 +78,7 @@ jobs:
     name: Tests (x86_64)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Free up runner disk space
         # The all-features step compiles the workspace a 4th time (bundled
         # DuckDB + analytics) atop the earlier lib/bins, integration-test, and
@@ -143,7 +148,7 @@ jobs:
     name: Rustdoc (no broken links)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Install native build dependencies
@@ -164,7 +169,7 @@ jobs:
     name: Build (debug, all features)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Install native build dependencies
@@ -195,7 +200,7 @@ jobs:
     name: MSRV (Rust 1.95)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install MSRV toolchain
         uses: dtolnay/rust-toolchain@1.95
       - name: Install native build dependencies
@@ -225,7 +230,7 @@ jobs:
       CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
       AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain (stable + aarch64 target)
         uses: dtolnay/rust-toolchain@stable
         with:

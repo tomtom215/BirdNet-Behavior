@@ -367,10 +367,41 @@ pub(super) fn event_processor(
                 lon: bw.coordinates().1,
             };
             let client = bw.clone();
+            let queue_state = state.clone();
             rt_handle.spawn(async move {
-                if let Err(e) = client.post_detection(&post).await {
-                    tracing::warn!(error = %e, species = %post.common_name, "BirdWeather post failed");
-                }
+                let Err(e) = client.post_detection(&post).await else {
+                    return;
+                };
+                // Park the payload for the store-and-forward drainer instead
+                // of dropping it: BirdWeather is an append-only record that
+                // accepts late posts, so an upload lost to a Wi-Fi/LTE outage
+                // is real data loss with no second chance otherwise.
+                tracing::warn!(
+                    error = %e,
+                    species = %post.common_name,
+                    "BirdWeather post failed; queueing for replay"
+                );
+                let payload = match serde_json::to_string(&post) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::error!(error = %e, "BirdWeather payload unserialisable; dropped");
+                        return;
+                    }
+                };
+                let _ = tokio::task::spawn_blocking(move || {
+                    let now = crate::integrations::unix_now_secs();
+                    queue_state.with_db(|conn| {
+                        if let Err(e) = birdnet_db::outbound_queue::enqueue(
+                            conn,
+                            birdnet_integrations::birdweather::QUEUE_KIND,
+                            &payload,
+                            now,
+                        ) {
+                            tracing::warn!(error = %e, "failed to queue BirdWeather payload");
+                        }
+                    });
+                })
+                .await;
             });
         }
 
@@ -405,7 +436,15 @@ pub(super) fn event_processor(
             });
         }
 
-        // MQTT publish (blocking I/O, handled in spawn_blocking thread).
+        // MQTT publish. Fire-and-forget on the blocking pool — the same
+        // discipline as the BirdWeather/Apprise/email/heartbeat dispatches
+        // above. `publish_detection` opens a fresh TCP connection bounded by
+        // `connect_timeout`, but several seconds × every detection is still
+        // far too long to run inline: this `event_processor` is a SINGLE
+        // blocking thread draining the detection-event channel, so a blocking
+        // publish to an offline broker would serialize detection handling
+        // behind a dead network path and back the channel up. Spawning it
+        // detaches that latency from the detection pipeline entirely.
         if let Some(ref mqtt_client) = mqtt {
             let payload = birdnet_integrations::mqtt::DetectionPayload {
                 timestamp: format!("{}T{}", detection.date, detection.time),
@@ -424,13 +463,16 @@ pub(super) fn event_processor(
                     }),
             };
             let client = Arc::clone(mqtt_client);
-            if let Err(e) = client.publish_detection(&payload) {
-                tracing::debug!(
-                    error = %e,
-                    species = %detection.common_name,
-                    "MQTT publish failed (broker may be offline)"
-                );
-            }
+            let species = detection.common_name.clone();
+            rt_handle.spawn_blocking(move || {
+                if let Err(e) = client.publish_detection(&payload) {
+                    tracing::debug!(
+                        error = %e,
+                        species = %species,
+                        "MQTT publish failed (broker may be offline)"
+                    );
+                }
+            });
         }
 
         tracing::debug!(

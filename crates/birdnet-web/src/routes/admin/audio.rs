@@ -42,6 +42,7 @@ use crate::state::AppState;
 const PAGE_TPL: &str = include_str!("../../../templates/admin_audio_sources.html");
 const ROW_TPL: &str = include_str!("../../../templates/_partial_audio_source_row.html");
 
+/// Mount the audio sources CRUD admin routes.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/admin/audio", get(page))

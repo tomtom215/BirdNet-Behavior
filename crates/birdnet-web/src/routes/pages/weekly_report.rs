@@ -14,6 +14,7 @@ use serde::Deserialize;
 use super::{date_to_epoch_days, days_to_date, escape_html, render_page_for_request};
 use crate::state::AppState;
 
+/// Mount the weekly report page and its HTMX content partial route.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/weekly", get(weekly_page))

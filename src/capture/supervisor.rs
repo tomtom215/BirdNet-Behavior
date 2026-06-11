@@ -76,6 +76,14 @@ pub(super) trait Source {
 
     /// Stop the subprocess.
     fn stop(&mut self);
+
+    /// Age of the newest recording segment this source has written, or
+    /// `None` when none is visible (never produced, or all purged).
+    ///
+    /// Drives silent-stall detection: an RTSP camera (or wedged `arecord`)
+    /// whose process is alive but which has stopped delivering audio writes
+    /// no new segments, and `is_running` alone can never notice that.
+    fn latest_output_age(&mut self) -> Option<Duration>;
 }
 
 /// Gauge label for a capture source.
@@ -182,6 +190,11 @@ struct SupervisedSource<S: Source> {
     /// Per-source quiet window, if the operator configured one. `None` means
     /// "no quiet window" — this source follows only the global schedule gate.
     quiet: Option<QuietWindow>,
+    /// A running process that has written no segment for this long is
+    /// declared silently stalled and restarted. Sized by the caller from the
+    /// segment duration (several segments must be overdue before we act).
+    /// `Duration::MAX` disables stall detection.
+    stall_after: Duration,
     /// Consecutive (re)start attempts that have not yet produced a process
     /// observed alive on a later tick. Drives the backoff delay; reset to
     /// `0` the moment the process is seen running.
@@ -194,18 +207,34 @@ struct SupervisedSource<S: Source> {
     down_since: Option<Instant>,
     /// Last instant a "still down" warning was emitted, to rate-limit it.
     last_down_warn: Option<Instant>,
+    /// When the most recent (re)start attempt was issued. The from-birth
+    /// stall reference: a source that NEVER writes a segment after starting
+    /// has no output mtime to age-check, but is just as stalled.
+    started_at: Option<Instant>,
+    /// Monotonic watermark of "fresh output was observed at this instant".
+    /// Folded from `latest_output_age` probes so a segment that is consumed
+    /// or purged between ticks cannot retroactively un-prove liveness.
+    last_fresh_output: Option<Instant>,
 }
 
 impl<S: Source> SupervisedSource<S> {
-    const fn new(source: S, label: String, quiet: Option<QuietWindow>) -> Self {
+    const fn new(
+        source: S,
+        label: String,
+        quiet: Option<QuietWindow>,
+        stall_after: Duration,
+    ) -> Self {
         Self {
             source,
             label,
             quiet,
+            stall_after,
             attempts_since_healthy: 0,
             next_attempt_at: None,
             down_since: None,
             last_down_warn: None,
+            started_at: None,
+            last_fresh_output: None,
         }
     }
 
@@ -229,6 +258,34 @@ impl<S: Source> SupervisedSource<S> {
         self.next_attempt_at = None;
         self.down_since = None;
         self.last_down_warn = None;
+    }
+
+    /// Whether the running process counts as silently stalled: alive, the
+    /// schedule wants it recording, but no fresh segment for `stall_after`.
+    ///
+    /// Fails open (never stalled) when:
+    /// * the wall clock is untrusted (`clock_trusted == false`) — segment
+    ///   mtimes are wall-clock stamps, so ages computed before NTP sync are
+    ///   meaningless and could condemn a healthy source;
+    /// * there is no reference point at all (the supervisor has not started
+    ///   this process and has never seen output — nothing to age against).
+    fn stalled(&mut self, now: Instant, clock_trusted: bool) -> bool {
+        if !clock_trusted {
+            return false;
+        }
+        let probe_fresh = self
+            .source
+            .latest_output_age()
+            .is_some_and(|age| age < self.stall_after);
+        if probe_fresh {
+            self.last_fresh_output = Some(now);
+            return false;
+        }
+        let reference = match (self.last_fresh_output, self.started_at) {
+            (Some(output), Some(started)) => Some(output.max(started)),
+            (output, started) => output.or(started),
+        };
+        reference.is_some_and(|r| now.saturating_duration_since(r) >= self.stall_after)
     }
 
     /// Emit (and rate-limit) the loud "source still down" warning.
@@ -277,18 +334,31 @@ impl<S: Source> SupervisedSource<S> {
             return;
         }
 
-        // Desired ON and healthy: clear fault state, gauge 1.
+        // Desired ON and the process is alive — but only count it healthy if
+        // it is actually producing output. A silently stalled process (RTSP
+        // session wedged, `arecord` hung on a vanished USB device) is stopped
+        // here and falls through to the shared down/backoff/restart path, so
+        // stall recovery degrades gracefully per source exactly like death.
         if self.source.is_running() {
-            if let Some(since) = self.down_since {
-                tracing::info!(
+            if self.stalled(now, now_min.is_some()) {
+                tracing::warn!(
                     source = %self.label,
-                    downtime_secs = now.saturating_duration_since(since).as_secs(),
-                    "audio source up"
+                    no_output_for_secs = self.stall_after.as_secs(),
+                    "audio source STALLED — process alive but writing no segments; restarting it"
                 );
+                self.source.stop();
+            } else {
+                if let Some(since) = self.down_since {
+                    tracing::info!(
+                        source = %self.label,
+                        downtime_secs = now.saturating_duration_since(since).as_secs(),
+                        "audio source up"
+                    );
+                }
+                self.clear_fault();
+                metrics.set_source_up(&self.label, true);
+                return;
             }
-            self.clear_fault();
-            metrics.set_source_up(&self.label, true);
-            return;
         }
 
         // Desired ON but not running: it died, never started, or must
@@ -313,6 +383,10 @@ impl<S: Source> SupervisedSource<S> {
         self.attempts_since_healthy = self.attempts_since_healthy.saturating_add(1);
         let delay = backoff_delay(self.attempts_since_healthy);
         self.next_attempt_at = Some(now + delay);
+        // The stall clock measures from the newest of {fresh output, this
+        // attempt}: a process that starts and then never writes a segment is
+        // stalled `stall_after` from HERE, not from a stale output watermark.
+        self.started_at = Some(now);
         match self.source.start() {
             Ok(()) => tracing::info!(
                 source = %self.label,
@@ -338,12 +412,16 @@ pub(super) struct Supervisor<S: Source> {
 }
 
 impl<S: Source> Supervisor<S> {
-    /// Build a supervisor over `(source, gauge_label, quiet_window)` triples.
-    pub(super) fn new(sources: Vec<(S, String, Option<QuietWindow>)>) -> Self {
+    /// Build a supervisor over `(source, gauge_label, quiet_window,
+    /// stall_after)` tuples. `stall_after` is the per-source silent-stall
+    /// threshold (`Duration::MAX` disables stall detection).
+    pub(super) fn new(sources: Vec<(S, String, Option<QuietWindow>, Duration)>) -> Self {
         Self {
             sources: sources
                 .into_iter()
-                .map(|(source, label, quiet)| SupervisedSource::new(source, label, quiet))
+                .map(|(source, label, quiet, stall_after)| {
+                    SupervisedSource::new(source, label, quiet, stall_after)
+                })
                 .collect(),
         }
     }
@@ -384,6 +462,8 @@ mod tests {
         fail_starts: u32,
         start_calls: u32,
         stop_calls: u32,
+        /// What `latest_output_age` reports; tests steer stall detection.
+        output_age: Option<Duration>,
     }
 
     impl FakeSource {
@@ -393,6 +473,7 @@ mod tests {
                 fail_starts: 0,
                 start_calls: 0,
                 stop_calls: 0,
+                output_age: None,
             }
         }
 
@@ -402,6 +483,7 @@ mod tests {
                 fail_starts: 0,
                 start_calls: 0,
                 stop_calls: 0,
+                output_age: None,
             }
         }
 
@@ -412,6 +494,7 @@ mod tests {
                 fail_starts: u32::MAX,
                 start_calls: 0,
                 stop_calls: 0,
+                output_age: None,
             }
         }
     }
@@ -435,6 +518,10 @@ mod tests {
             self.stop_calls += 1;
             self.running = false;
         }
+
+        fn latest_output_age(&mut self) -> Option<Duration> {
+            self.output_age
+        }
     }
 
     fn metrics() -> SharedMetrics {
@@ -450,12 +537,17 @@ mod tests {
     }
 
     fn one(source: FakeSource) -> Supervisor<FakeSource> {
-        Supervisor::new(vec![(source, "local".to_owned(), None)])
+        Supervisor::new(vec![(source, "local".to_owned(), None, Duration::MAX)])
     }
 
     /// A supervisor over one source that carries a quiet window.
     fn one_with_quiet(source: FakeSource, quiet: QuietWindow) -> Supervisor<FakeSource> {
-        Supervisor::new(vec![(source, "local".to_owned(), Some(quiet))])
+        Supervisor::new(vec![(
+            source,
+            "local".to_owned(),
+            Some(quiet),
+            Duration::MAX,
+        )])
     }
 
     // ---- source_gauge_label ------------------------------------------------
@@ -712,6 +804,7 @@ mod tests {
             fail_starts: 2,
             start_calls: 0,
             stop_calls: 0,
+            output_age: None,
         };
         let mut sup = one(src);
         let t0 = Instant::now();
@@ -736,8 +829,13 @@ mod tests {
     fn sources_are_supervised_independently() {
         let m = metrics();
         let mut sup = Supervisor::new(vec![
-            (FakeSource::healthy(), "local".to_owned(), None),
-            (FakeSource::dead(), "RTSP_1".to_owned(), None),
+            (
+                FakeSource::healthy(),
+                "local".to_owned(),
+                None,
+                Duration::MAX,
+            ),
+            (FakeSource::dead(), "RTSP_1".to_owned(), None, Duration::MAX),
         ]);
         sup.tick(Instant::now(), true, None, &m);
         // Healthy one untouched, dead one restarted.
@@ -812,7 +910,8 @@ mod tests {
 
     #[test]
     fn in_quiet_requires_both_a_window_and_a_trusted_clock() {
-        let inside = SupervisedSource::new(FakeSource::healthy(), "s".to_owned(), None);
+        let inside =
+            SupervisedSource::new(FakeSource::healthy(), "s".to_owned(), None, Duration::MAX);
         // No window configured → never quiet, regardless of the clock.
         assert!(!inside.in_quiet(Some(400)));
 
@@ -820,6 +919,7 @@ mod tests {
             FakeSource::healthy(),
             "s".to_owned(),
             Some(QuietWindow::new(360, 720)),
+            Duration::MAX,
         );
         // Window set + clock untrusted (None) → not enforced (fail open).
         assert!(!win.in_quiet(None));
@@ -861,6 +961,169 @@ mod tests {
         sup.tick(Instant::now(), true, None, &m);
         assert_eq!(sup.sources[0].source.stop_calls, 0);
         assert!(sup.sources[0].source.running);
+        assert_eq!(gauge(&m, "local"), Some(1));
+    }
+
+    // ---- silent-stall detection --------------------------------------------
+
+    /// A process that is alive but writes no segments must be stopped and
+    /// fall into the normal restart path (the field failure `is_running`
+    /// can never see: wedged RTSP session, hung `arecord`).
+    #[test]
+    fn stalled_source_is_stopped_and_restarted() {
+        let m = metrics();
+        let stall_after = Duration::from_secs(60);
+        let mut sup = Supervisor::new(vec![(
+            FakeSource::dead(),
+            "RTSP_1".to_owned(),
+            None,
+            stall_after,
+        )]);
+        let t0 = Instant::now();
+
+        // Tick 1: dead → restart issued (arms the from-birth stall clock).
+        sup.tick(t0, true, Some(400), &m);
+        assert_eq!(sup.sources[0].source.start_calls, 1);
+        assert!(sup.sources[0].source.running);
+
+        // Healthy-looking but mute: no output ever appears. Before the stall
+        // threshold the source is left alone…
+        sup.tick(t0 + Duration::from_secs(30), true, Some(400), &m);
+        assert_eq!(sup.sources[0].source.stop_calls, 0);
+        assert_eq!(gauge(&m, "RTSP_1"), Some(1));
+
+        // …at the threshold it is declared stalled: stopped, marked down,
+        // and (the backoff window having long expired) restarted in the same
+        // tick. Repeat stalls therefore cost one respawn per `stall_after`,
+        // never a hot loop.
+        sup.tick(t0 + stall_after, true, Some(401), &m);
+        assert_eq!(sup.sources[0].source.stop_calls, 1, "stall resets process");
+        assert_eq!(sup.sources[0].source.start_calls, 2, "immediate respawn");
+        assert_eq!(gauge(&m, "RTSP_1"), Some(0), "down until output reappears");
+
+        // The respawn re-arms the from-birth stall clock: within the new
+        // window the source counts healthy again (gauge recovers)…
+        sup.tick(
+            t0 + stall_after + Duration::from_secs(2),
+            true,
+            Some(401),
+            &m,
+        );
+        assert_eq!(gauge(&m, "RTSP_1"), Some(1));
+        assert_eq!(sup.sources[0].source.stop_calls, 1);
+
+        // …and a still-mute process is reset again exactly one stall window
+        // after the respawn.
+        sup.tick(t0 + stall_after * 2, true, Some(402), &m);
+        assert_eq!(sup.sources[0].source.stop_calls, 2);
+        assert_eq!(sup.sources[0].source.start_calls, 3);
+    }
+
+    /// The probe boundary is exclusive: a newest segment EXACTLY
+    /// `stall_after` old is already stale — "no fresh segment for
+    /// `stall_after`" includes the boundary — so the source is reset on
+    /// that tick. Pins `age < stall_after` against the `<=` mutation,
+    /// which would count boundary-age output as fresh and skip the reset.
+    #[test]
+    fn stall_probe_boundary_age_is_stale() {
+        let m = metrics();
+        let stall_after = Duration::from_secs(60);
+        let mut src = FakeSource::dead();
+        src.output_age = Some(stall_after); // exactly at the boundary
+        let mut sup = Supervisor::new(vec![(src, "RTSP_1".to_owned(), None, stall_after)]);
+        let t0 = Instant::now();
+
+        sup.tick(t0, true, Some(400), &m); // start issued; stall clock armed
+        sup.tick(t0 + stall_after, true, Some(401), &m);
+        assert_eq!(
+            sup.sources[0].source.stop_calls, 1,
+            "boundary-age output must not count as fresh"
+        );
+    }
+
+    /// Fresh segments keep arriving → never stalled, however much wall time
+    /// passes between ticks.
+    #[test]
+    fn fresh_output_prevents_stall() {
+        let m = metrics();
+        let stall_after = Duration::from_secs(60);
+        let mut src = FakeSource::dead();
+        src.output_age = Some(Duration::from_secs(5));
+        let mut sup = Supervisor::new(vec![(src, "local".to_owned(), None, stall_after)]);
+        let t0 = Instant::now();
+
+        sup.tick(t0, true, Some(400), &m);
+        for minutes in 1..=10_u64 {
+            sup.tick(t0 + Duration::from_secs(minutes * 60), true, Some(400), &m);
+        }
+        assert_eq!(sup.sources[0].source.stop_calls, 0, "never stall-stopped");
+        assert_eq!(gauge(&m, "local"), Some(1));
+    }
+
+    /// THE multi-stream guarantee: one stream silently stalling is recovered
+    /// in isolation — the other streams are not touched, their gauges stay
+    /// up, and processing continues.
+    #[test]
+    fn stalled_stream_does_not_disturb_healthy_streams() {
+        let m = metrics();
+        let stall_after = Duration::from_secs(60);
+        let mut mute = FakeSource::dead(); // produces no output after start
+        mute.output_age = None;
+        let mut chatty = FakeSource::healthy();
+        chatty.output_age = Some(Duration::from_secs(3));
+        let mut sup = Supervisor::new(vec![
+            (mute, "RTSP_1".to_owned(), None, stall_after),
+            (chatty, "RTSP_2".to_owned(), None, stall_after),
+        ]);
+        let t0 = Instant::now();
+
+        sup.tick(t0, true, Some(400), &m); // RTSP_1 started; RTSP_2 healthy
+        sup.tick(t0 + stall_after, true, Some(401), &m); // RTSP_1 stalls
+
+        assert_eq!(sup.sources[0].source.stop_calls, 1, "stalled stream reset");
+        assert_eq!(
+            sup.sources[1].source.stop_calls, 0,
+            "healthy stream untouched by its neighbour's stall"
+        );
+        assert_eq!(sup.sources[1].source.start_calls, 0);
+        assert_eq!(gauge(&m, "RTSP_2"), Some(1));
+        assert_eq!(gauge(&m, "RTSP_1"), Some(0));
+    }
+
+    /// Stall detection fails open while the wall clock is untrusted: mtime
+    /// ages are meaningless before NTP sync, so a mute-looking source is
+    /// left recording rather than restart-looped.
+    #[test]
+    fn stall_detection_fails_open_when_clock_untrusted() {
+        let m = metrics();
+        let stall_after = Duration::from_secs(60);
+        let mut sup = Supervisor::new(vec![(
+            FakeSource::dead(),
+            "local".to_owned(),
+            None,
+            stall_after,
+        )]);
+        let t0 = Instant::now();
+
+        sup.tick(t0, true, None, &m); // started; clock untrusted
+        sup.tick(t0 + stall_after * 3, true, None, &m);
+        assert_eq!(
+            sup.sources[0].source.stop_calls, 0,
+            "no stall verdict without a trusted clock"
+        );
+        assert_eq!(gauge(&m, "local"), Some(1));
+    }
+
+    /// `Duration::MAX` disables stall detection entirely (the configuration
+    /// used by sources whose cadence the caller cannot bound).
+    #[test]
+    fn stall_detection_disabled_with_max_threshold() {
+        let m = metrics();
+        let mut sup = one(FakeSource::dead());
+        let t0 = Instant::now();
+        sup.tick(t0, true, Some(400), &m);
+        sup.tick(t0 + Duration::from_secs(86_400), true, Some(400), &m);
+        assert_eq!(sup.sources[0].source.stop_calls, 0);
         assert_eq!(gauge(&m, "local"), Some(1));
     }
 

@@ -112,7 +112,12 @@ impl Default for QualityThresholds {
 #[derive(Debug)]
 pub enum QualityError {
     /// Audio chunk is too short for reliable analysis.
-    TooShort { len: usize, required: usize },
+    TooShort {
+        /// Actual number of samples in the chunk.
+        len: usize,
+        /// Minimum number of samples required.
+        required: usize,
+    },
     /// Sample rate is not supported.
     UnsupportedSampleRate(u32),
 }

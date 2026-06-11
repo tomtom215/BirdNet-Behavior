@@ -29,12 +29,19 @@ pub struct DiskUsage {
 
 impl DiskUsage {
     /// Percentage of disk used (0.0 -- 100.0).
+    ///
+    /// Computed as `used / (used + available)` — the same definition `df`'s
+    /// `Use%` column reports — NOT `used / total`. The two diverge whenever
+    /// part of the device is invisible to this user (ext4 root-reserved
+    /// blocks, container quotas): there `used / total` understates fullness
+    /// and contradicts the "running low" wording shown beside it.
     #[allow(clippy::cast_precision_loss)]
     pub fn used_percent(&self) -> f64 {
-        if self.total_bytes == 0 {
+        let reachable = self.used_bytes.saturating_add(self.available_bytes);
+        if reachable == 0 {
             return 0.0;
         }
-        self.used_bytes as f64 / self.total_bytes as f64 * 100.0
+        self.used_bytes as f64 / reachable as f64 * 100.0
     }
 
     /// Whether the disk is critically low (< 5 % available).
@@ -172,6 +179,31 @@ mod tests {
         assert!((u.used_percent() - 75.0).abs() < 0.01);
         assert!(!u.is_critical());
         assert!(!u.is_low());
+    }
+
+    /// When reserved blocks / quotas hide space (`used + avail < total`),
+    /// the percentage must follow `df`'s definition — used over what this
+    /// user can reach — or the UI shows "11% used" beside "critically low".
+    #[test]
+    fn disk_usage_percent_with_reserved_space() {
+        let u = DiskUsage {
+            total_bytes: 252_000_000,
+            used_bytes: 28_000_000,
+            available_bytes: 7_000_000, // quota: most of "total" is unreachable
+        };
+        assert!((u.used_percent() - 80.0).abs() < 0.01);
+        assert!(u.is_critical(), "7/252 available is critical");
+    }
+
+    /// Degenerate zero-sized readings must not divide by zero.
+    #[test]
+    fn disk_usage_percent_zero_is_zero() {
+        let u = DiskUsage {
+            total_bytes: 0,
+            used_bytes: 0,
+            available_bytes: 0,
+        };
+        assert!((u.used_percent() - 0.0).abs() < f64::EPSILON);
     }
 
     #[test]

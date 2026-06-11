@@ -119,8 +119,12 @@ impl Histogram {
 /// can format without holding any locks.
 #[derive(Debug, Clone)]
 pub struct HistogramSnapshot {
+    /// `(upper_bound_secs, cumulative_count)` pairs, one per bucket in
+    /// [`LATENCY_BUCKETS_SECS`] order. The implicit `+Inf` bucket equals `count`.
     pub buckets: Vec<(f64, u64)>,
+    /// Sum of all observed values in seconds.
     pub sum_secs: f64,
+    /// Total number of observations recorded.
     pub count: u64,
 }
 
@@ -133,6 +137,10 @@ pub struct MetricsRegistry {
     db_write_duration: Histogram,
     audio_source_up: RwLock<HashMap<String, AtomicU64>>,
     watchdog_pings_total: AtomicU64,
+    outbound_queue_depth: RwLock<HashMap<String, AtomicU64>>,
+    /// Seconds since the most recent stored detection, refreshed by the
+    /// deadman task. `u64::MAX` = not yet measured / no detections ever.
+    detection_silence_secs: AtomicU64,
 }
 
 impl Default for MetricsRegistry {
@@ -142,6 +150,7 @@ impl Default for MetricsRegistry {
 }
 
 impl MetricsRegistry {
+    /// Create a new, zeroed-out registry.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -150,6 +159,8 @@ impl MetricsRegistry {
             db_write_duration: Histogram::new(),
             audio_source_up: RwLock::new(HashMap::new()),
             watchdog_pings_total: AtomicU64::new(0),
+            outbound_queue_depth: RwLock::new(HashMap::new()),
+            detection_silence_secs: AtomicU64::new(u64::MAX),
         }
     }
 
@@ -222,6 +233,38 @@ impl MetricsRegistry {
             .and_then(|map| map.get(source).map(|g| g.load(Ordering::Relaxed) == 1))
     }
 
+    /// Set the `outbound_queue_depth{kind}` gauge (store-and-forward backlog).
+    pub fn set_outbound_queue_depth(&self, kind: &str, depth: u64) {
+        if let Ok(map) = self.outbound_queue_depth.read()
+            && let Some(g) = map.get(kind)
+        {
+            g.store(depth, Ordering::Relaxed);
+            return;
+        }
+        if let Ok(mut map) = self.outbound_queue_depth.write() {
+            map.entry(kind.to_owned())
+                .or_insert_with(|| AtomicU64::new(0))
+                .store(depth, Ordering::Relaxed);
+        }
+    }
+
+    /// Record seconds elapsed since the most recent stored detection
+    /// (deadman freshness signal). Pass `None` when the station has no
+    /// detections yet — renders as "unknown" rather than an alarming zero.
+    pub fn set_detection_silence_secs(&self, secs: Option<u64>) {
+        self.detection_silence_secs
+            .store(secs.unwrap_or(u64::MAX), Ordering::Relaxed);
+    }
+
+    /// Seconds since the most recent detection, when known.
+    #[must_use]
+    pub fn detection_silence_secs(&self) -> Option<u64> {
+        match self.detection_silence_secs.load(Ordering::Relaxed) {
+            u64::MAX => None,
+            v => Some(v),
+        }
+    }
+
     /// Bump the watchdog ping counter.
     pub fn inc_watchdog_pings(&self) {
         self.watchdog_pings_total.fetch_add(1, Ordering::Relaxed);
@@ -246,11 +289,21 @@ impl MetricsRegistry {
                     .collect()
             },
         );
+        let outbound_queue = self.outbound_queue_depth.read().map_or_else(
+            |_| Vec::new(),
+            |m| {
+                m.iter()
+                    .map(|(k, v)| (k.clone(), v.load(Ordering::Relaxed)))
+                    .collect()
+            },
+        );
         MetricsSnapshot {
             detections,
             inference: self.inference_duration.snapshot(),
             db_write: self.db_write_duration.snapshot(),
             source_up,
+            outbound_queue,
+            detection_silence_secs: self.detection_silence_secs(),
             watchdog_pings: self.watchdog_pings_total.load(Ordering::Relaxed),
         }
     }
@@ -259,11 +312,20 @@ impl MetricsRegistry {
 /// Plain snapshot of every metric, returned to the renderer.
 #[derive(Debug, Clone)]
 pub struct MetricsSnapshot {
+    /// Per-`(species, chunk_offset_secs)` detection counts.
     pub detections: Vec<((String, i64), u64)>,
+    /// Snapshot of the per-chunk BirdNET inference latency histogram.
     pub inference: HistogramSnapshot,
+    /// Snapshot of the SQLite detection-row write latency histogram.
     pub db_write: HistogramSnapshot,
+    /// Per-source `audio_source_up` gauge values (0 = down, 1 = up).
     pub source_up: Vec<(String, u64)>,
+    /// Total `WATCHDOG=1` pings sent to systemd since process start.
     pub watchdog_pings: u64,
+    /// Store-and-forward backlog per channel kind.
+    pub outbound_queue: Vec<(String, u64)>,
+    /// Seconds since the most recent stored detection (`None` = unknown).
+    pub detection_silence_secs: Option<u64>,
 }
 
 /// Render the runtime metrics as Prometheus text 0.0.4.
@@ -316,6 +378,28 @@ pub fn render_runtime_metrics(snap: &MetricsSnapshot) -> String {
             escape_label(source),
             up
         );
+    }
+
+    out.push_str("# HELP birdnet_outbound_queue_depth Store-and-forward payloads parked for replay after upload failures, by channel.\n");
+    out.push_str("# TYPE birdnet_outbound_queue_depth gauge\n");
+    let mut queued = snap.outbound_queue.clone();
+    queued.sort_by(|a, b| a.0.cmp(&b.0));
+    for (kind, depth) in &queued {
+        let _ = writeln!(
+            out,
+            "birdnet_outbound_queue_depth{{kind=\"{}\"}} {}",
+            escape_label(kind),
+            depth
+        );
+    }
+
+    // Emitted only once measured: an absent series reads as "unknown" in
+    // Prometheus, which is the truth before the deadman task's first pass
+    // (and on a station that has never detected anything).
+    if let Some(secs) = snap.detection_silence_secs {
+        out.push_str("# HELP birdnet_detection_silence_seconds Seconds since the most recent stored detection (end-to-end audio\u{2192}detection freshness).\n");
+        out.push_str("# TYPE birdnet_detection_silence_seconds gauge\n");
+        let _ = writeln!(out, "birdnet_detection_silence_seconds {secs}");
     }
 
     out.push_str("# HELP birdnet_watchdog_pings_total Total successful WATCHDOG=1 notifications sent to systemd since process start.\n");

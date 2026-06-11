@@ -16,7 +16,7 @@ bird activity analytics.
 - Single binary deployment — no pip, no virtualenv, no apt dependencies
 - Pure Rust wherever practical; minimal external surface
 - Zero C dependencies in the audio pipeline
-- `unsafe` denied workspace-wide
+- `unsafe` forbidden workspace-wide (`unsafe_code = "forbid"`)
 - 20–50 MB RSS on a Raspberry Pi 4
 
 ## Architecture Documents

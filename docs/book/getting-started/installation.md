@@ -67,7 +67,7 @@ The dashboard binds to all interfaces (`0.0.0.0:8502`) so it is reachable across
 ```bash
 # Install a specific version (defaults to latest). The `-s --` passes the
 # argument through to the installer.
-curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash -s -- --version 0.6.0
+curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | sudo bash -s -- --version 0.7.2
 ```
 
 > **Don't run the installer with `sudo bash <(curl ...)`.** Process substitution
@@ -78,7 +78,7 @@ curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/ins
 >
 > ```bash
 > curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh -o install.sh
-> sudo bash install.sh --version 0.6.0
+> sudo bash install.sh --version 0.7.2
 > ```
 
 ### Update, repair, reinstall, uninstall

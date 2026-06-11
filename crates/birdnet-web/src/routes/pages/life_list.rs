@@ -19,6 +19,7 @@ use serde::Deserialize;
 use super::{escape_html, render_page_for_request, simple_url_encode};
 use crate::state::AppState;
 
+/// Mount the Life List page and its HTMX partial routes.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/life-list", get(life_list_page))

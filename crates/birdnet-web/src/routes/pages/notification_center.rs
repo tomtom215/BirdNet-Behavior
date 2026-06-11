@@ -17,6 +17,7 @@ use serde::Deserialize;
 use super::{escape_html, render_page_for_request};
 use crate::state::AppState;
 
+/// Mount the notification center page and its HTMX partial routes.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/notifications", get(notification_page))

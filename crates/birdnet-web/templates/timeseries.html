@@ -260,9 +260,16 @@
 })();
 </script>
 
-<!-- API reference card -->
+<!-- API reference card — developer material, so it ships collapsed: the
+     dashboard reads as a field tool, not an API manual, and the table stays
+     one click away for script writers. -->
 <div class="card">
-    <h2>API Endpoints</h2>
+    <details class="tsh-api-details">
+        <summary>
+            <h2 class="tsh-api-summary-h2">API endpoints
+                <span class="tsh-badge">for scripts &amp; integrations</span>
+            </h2>
+        </summary>
     <table class="tsh-api-table">
         <thead><tr><th>Endpoint</th><th>Description</th><th>Parameters</th></tr></thead>
         <tbody>
@@ -281,4 +288,5 @@
         <tr><td><code>/api/v2/timeseries/status</code></td><td>Feature availability status</td><td>—</td></tr>
         </tbody>
     </table>
+    </details>
 </div>

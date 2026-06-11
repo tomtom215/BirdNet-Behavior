@@ -51,12 +51,17 @@ fn main() {
         return;
     }
 
-    let Ok(book) = mdbook::MDBook::load(&book_root) else {
-        println!(
-            "cargo:warning=could not load mdBook at {} — skipping docs build",
-            book_root.display()
-        );
-        return;
+    let book = match mdbook_driver::MDBook::load(&book_root) {
+        Ok(book) => book,
+        Err(e) => {
+            // Print the underlying error: a silent skip here once masked a
+            // book.toml option that an mdbook major release had removed.
+            println!(
+                "cargo:warning=could not load mdBook at {}: {e} — skipping docs build",
+                book_root.display()
+            );
+            return;
+        }
     };
 
     if let Err(e) = book.build() {

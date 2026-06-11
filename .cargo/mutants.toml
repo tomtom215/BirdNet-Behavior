@@ -1,0 +1,28 @@
+# cargo-mutants configuration — read by CI (.github/workflows/mutation.yml)
+# and by local `cargo mutants` runs alike, so both get the same economics.
+
+# Build with the debug-info-less profile: mutation testing relinks the
+# binary/test executables once per mutant, debug info is never consumed in
+# that loop, and it dominates link + disk cost (the binary statically links
+# bundled DuckDB + ONNX Runtime).
+profile = "mutants"
+
+# Unit-test-only scoping is applied PER PACKAGE by the CI workflow (and
+# should be passed locally too): `-- --lib` for library crates, `-- --bins`
+# for the root binary package. It cannot live here because the selector is
+# not package-portable — the root package has no lib target and `cargo test
+# --lib` hard-errors there (verified), while `--bins` on a lib-only crate
+# would select nothing and trivially "pass". Every mutant in the scoped
+# matrix files is killable by in-crate unit tests — enforced policy, not
+# hope: the weekly FULL run uses the same scoping, so a mutant only an
+# integration test could catch shows up as MISSED there and the fix is a
+# unit-level test (the PR #49 "refactor until observable" pattern). What
+# the scoping buys: without it, every mutant also rebuilds eight
+# integration-test executables (each statically linking DuckDB) and then
+# boots real binaries in boot_smoke / store_forward_e2e / soak — none of
+# which kill mutants the unit tests don't already kill, at many times the
+# cost.
+
+# Catch genuinely wedged mutants without waiting out long defaults; these
+# suites baseline in seconds, so 120 s is already generous headroom.
+minimum_test_timeout = 120

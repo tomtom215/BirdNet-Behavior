@@ -91,7 +91,11 @@ impl From<rusqlite::Error> for AccountsError {
 /// settings, audio sources, alert rules, migrations, or system controls).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
+    /// Full mutation rights across the `/admin/*` panel.
     Admin,
+    /// Read-only access: can view overview, quality, notifications, system status, and the
+    /// audit log, but cannot reach settings, audio sources, alert rules, migrations, or
+    /// system controls.
     Viewer,
 }
 
@@ -126,16 +130,22 @@ impl fmt::Display for Role {
 /// One row from the `users` table.
 #[derive(Debug, Clone)]
 pub struct User {
+    /// Auto-incremented primary key.
     pub id: i64,
+    /// Login username; must be unique within the station.
     pub username: String,
     /// Argon2id hash of the password. Populated by O-15-followup when the
     /// auth wire is flipped onto the cookie path — until then the seed
     /// row writes an empty string and the basic-auth middleware keeps
     /// reading `CADDY_PWD` from the environment.
     pub pwd_argon2: String,
+    /// Role controlling which admin panel sections this user may access.
     pub role: Role,
+    /// Optional display name shown in the admin UI alongside the username.
     pub label: Option<String>,
+    /// ISO-8601 timestamp when this account was created.
     pub created_at: String,
+    /// ISO-8601 timestamp when the account was disabled, if applicable.
     pub disabled_at: Option<String>,
 }
 
@@ -146,23 +156,36 @@ pub struct User {
 /// a user, device label, and last-seen time.
 #[derive(Debug, Clone)]
 pub struct Session {
+    /// Opaque session token stored in the `bnb-session` cookie.
     pub id: String,
+    /// Foreign key into the `users` table.
     pub user_id: i64,
+    /// ISO-8601 timestamp when the session was created.
     pub issued_at: String,
+    /// ISO-8601 timestamp of the most recent authenticated request.
     pub last_seen: String,
+    /// ISO-8601 timestamp after which the session is considered expired.
     pub expires_at: String,
+    /// `User-Agent` header from the browser that created the session, if available.
     pub user_agent: Option<String>,
+    /// SHA-256 hash of the client IP address (privacy-safe for display/logs).
     pub ip_hash: Option<String>,
 }
 
 /// One row from the `audit_log` table.
 #[derive(Debug, Clone)]
 pub struct AuditEntry {
+    /// Auto-incremented primary key.
     pub id: i64,
+    /// ISO-8601 timestamp of the audited event.
     pub at: String,
+    /// User who performed the action; `None` for system-initiated events.
     pub user_id: Option<i64>,
+    /// Short verb describing the action (e.g. `create_user`, `revoke_session`).
     pub action: String,
+    /// Identifier of the affected entity (e.g. username, session id).
     pub target: Option<String>,
+    /// JSON blob with additional context (diff, before/after values, etc.).
     pub metadata: Option<String>,
 }
 

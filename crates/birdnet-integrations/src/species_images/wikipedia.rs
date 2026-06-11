@@ -18,8 +18,8 @@ use super::types::{ImageError, SpeciesImage};
 /// Default request timeout for Wikipedia API.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Maximum retry attempts for failed requests.
-const MAX_RETRIES: u32 = 2;
+/// Total request attempts (initial + retries) before a fetch is abandoned.
+const MAX_ATTEMPTS: u32 = 2;
 
 /// Default thumbnail width in pixels.
 pub const DEFAULT_THUMB_WIDTH: u32 = 300;
@@ -78,7 +78,7 @@ impl WikipediaClient {
         );
 
         let mut last_error = ImageError::Http("no attempts made".into());
-        for attempt in 0..MAX_RETRIES {
+        for attempt in 0..MAX_ATTEMPTS {
             if attempt > 0 {
                 tokio::time::sleep(Duration::from_secs(2_u64.pow(attempt))).await;
             }
@@ -150,7 +150,7 @@ impl WikipediaClient {
     /// Returns `ImageError::Http` on network failures or non-success HTTP responses.
     pub async fn download_bytes(&self, url: &str) -> Result<Vec<u8>, ImageError> {
         let mut last_error = ImageError::Http("no attempts made".into());
-        for attempt in 0..MAX_RETRIES {
+        for attempt in 0..MAX_ATTEMPTS {
             if attempt > 0 {
                 tokio::time::sleep(Duration::from_secs(2_u64.pow(attempt))).await;
             }

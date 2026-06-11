@@ -21,6 +21,7 @@ use super::admin_shell;
 use crate::routes::pages::escape_html;
 use crate::state::AppState;
 
+/// Mount the configuration diagnostics route.
 pub fn router() -> Router<AppState> {
     Router::new().route("/admin/doctor", get(doctor_page))
 }

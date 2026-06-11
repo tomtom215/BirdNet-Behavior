@@ -2943,6 +2943,14 @@ a.spp-inherit    { color: inherit; }
 .tsh-card-lede   { color: var(--text-muted); font-size: 0.8rem; margin-bottom: 0.75rem; }
 .tsh-polar-center { display: flex; justify-content: center; }
 .tsh-api-table   { font-size: 0.85rem; }
+/* Collapsed-by-default API reference: developer material stays one click
+   away without turning the dashboard into an API manual. */
+.tsh-api-details summary { cursor: pointer; list-style: none; }
+.tsh-api-details summary::-webkit-details-marker { display: none; }
+.tsh-api-details summary::after { content: "▸"; margin-left: 0.5rem; color: var(--fg-3); }
+.tsh-api-details[open] summary::after { content: "▾"; }
+.tsh-api-details[open] summary { margin-bottom: 0.75rem; }
+.tsh-api-summary-h2 { display: inline; }
 
 /* ══ O-25 sweep — standalone admin & system pages ══════════════════════════
    Faithful extraction of the static inline styles in the changelog / heatmap /

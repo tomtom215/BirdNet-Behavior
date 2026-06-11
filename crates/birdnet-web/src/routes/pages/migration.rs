@@ -36,6 +36,7 @@ const RIDGELINE_EMPTY: &str =
 /// Empty-state body served (uncached) when the diversity strip has no data.
 const DIVERSITY_EMPTY: &str = r#"<p class="bnb-meta">No data for diversity bars yet.</p>"#;
 
+/// Mount the migration (phenology) page and its HTMX partial routes.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/migration", get(migration_page))

@@ -8,10 +8,14 @@ use super::Check;
 use crate::cli::Cli;
 
 pub(super) fn check_model(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
+    // MODEL_PATH / LABELS_PATH are the keys the daemon resolves
+    // (`daemon::config::resolve_required_paths`) and the installer writes.
+    // The doctor must read the same keys, or a standard config-file install
+    // reports SKIP and the model file is never actually validated.
     let model_path = cli
         .model
         .clone()
-        .or_else(|| config?.get("MODEL").map(PathBuf::from));
+        .or_else(|| config?.get("MODEL_PATH").map(PathBuf::from));
     let mut out = Vec::new();
 
     if let Some(p) = model_path {
@@ -46,14 +50,14 @@ pub(super) fn check_model(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
     } else {
         out.push(Check::skip(
             "ONNX model file",
-            "no --model / MODEL configured (will use the bundled default at startup)",
+            "no --model / MODEL_PATH configured (will use the bundled default at startup)",
         ));
     }
 
     let labels_path = cli
         .labels
         .clone()
-        .or_else(|| config?.get("LABELS").map(PathBuf::from));
+        .or_else(|| config?.get("LABELS_PATH").map(PathBuf::from));
     if let Some(p) = labels_path {
         if p.exists() {
             out.push(Check::pass(
@@ -87,6 +91,39 @@ mod tests {
         let checks = check_model(&cli(), None);
         assert_eq!(checks.len(), 1);
         assert_eq!(checks[0].status, Status::Skip);
+    }
+
+    /// A config-file-driven install (the standard systemd setup) must have
+    /// its model and labels validated through the same `MODEL_PATH` /
+    /// `LABELS_PATH` keys the daemon resolves — not skipped.
+    #[test]
+    fn resolves_paths_from_config_file_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = dir.path().join("model.onnx");
+        std::fs::write(&model, vec![0u8; 1_000_001]).unwrap();
+        let labels = dir.path().join("labels.csv");
+        std::fs::write(&labels, "Pica pica_Eurasian Magpie").unwrap();
+
+        let cfg = birdnet_core::config::Config::parse(&format!(
+            "MODEL_PATH={}\nLABELS_PATH={}",
+            model.display(),
+            labels.display()
+        ))
+        .unwrap();
+
+        let checks = check_model(&cli(), Some(&cfg));
+        assert!(
+            checks
+                .iter()
+                .any(|c| c.name.contains("ONNX model") && c.status == Status::Pass),
+            "model check should PASS via MODEL_PATH, got: {checks:?}"
+        );
+        assert!(
+            checks
+                .iter()
+                .any(|c| c.name.contains("Labels") && c.status == Status::Pass),
+            "labels check should PASS via LABELS_PATH, got: {checks:?}"
+        );
     }
 
     #[test]

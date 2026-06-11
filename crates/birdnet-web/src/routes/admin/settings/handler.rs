@@ -123,9 +123,13 @@ pub async fn save_settings(
 /// Response body for the detect-location endpoint.
 #[derive(Debug, Serialize)]
 pub struct LocationResult {
+    /// Latitude in decimal degrees.
     pub lat: f64,
+    /// Longitude in decimal degrees.
     pub lon: f64,
+    /// Nearest city name returned by ip-api.com; empty when unavailable.
     pub city: String,
+    /// Country name returned by ip-api.com; empty when unavailable.
     pub country: String,
     /// IANA timezone name (e.g. `"America/New_York"`) reported by ip-api.com.
     /// Empty when the service omits it. Surfaced so first-run onboarding can
