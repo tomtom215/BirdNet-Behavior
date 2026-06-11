@@ -1036,8 +1036,7 @@ mod tests {
         sup.tick(t0, true, Some(400), &m); // start issued; stall clock armed
         sup.tick(t0 + stall_after, true, Some(401), &m);
         assert_eq!(
-            sup.sources[0].source.stop_calls,
-            1,
+            sup.sources[0].source.stop_calls, 1,
             "boundary-age output must not count as fresh"
         );
     }
