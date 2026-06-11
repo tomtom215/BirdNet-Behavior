@@ -16,6 +16,10 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Total request attempts (initial + retries) before a POST is abandoned.
 const MAX_ATTEMPTS: u32 = 3;
 
+/// Tag under which failed uploads are parked in the binary's
+/// store-and-forward queue (`outbound_queue` table) for later replay.
+pub const QUEUE_KIND: &str = "birdweather";
+
 /// `BirdWeather` client errors.
 #[derive(Debug)]
 pub enum BirdWeatherError {
@@ -53,7 +57,11 @@ pub struct Client {
 }
 
 /// A detection to post to `BirdWeather`.
-#[derive(Debug, Clone, Serialize)]
+///
+/// `Deserialize` is required by the store-and-forward queue: a post that
+/// fails during a network outage is parked as JSON in the local database
+/// and replayed verbatim by the drainer once the uplink returns.
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct DetectionPost {
     /// ISO 8601 timestamp.
     pub timestamp: String,

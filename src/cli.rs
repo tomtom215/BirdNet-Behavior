@@ -110,6 +110,18 @@ pub struct Cli {
     #[arg(long, default_value = "0.8", env = "BIRDNET_NOTIFY_CONFIDENCE")]
     pub notify_confidence: f32,
 
+    /// Hours of zero detections before the deadman watchdog raises an alert.
+    ///
+    /// The end-to-end "is the station actually detecting?" check: when no
+    /// detection has been recorded for this many hours, a loud warning is
+    /// logged and (if Apprise is configured) a notification is sent — once
+    /// per quiet episode, with a recovery notice when detections resume.
+    /// `0` disables alerting; the freshness gauge
+    /// (`birdnet_detection_silence_seconds`) is exported regardless.
+    /// Defaults to 24; config-file key: `DEADMAN_HOURS`.
+    #[arg(long, env = "BIRDNET_DEADMAN_HOURS")]
+    pub deadman_hours: Option<u32>,
+
     /// `BirdWeather` station token for uploading detections.
     #[arg(long, env = "BIRDNET_BIRDWEATHER_TOKEN")]
     pub birdweather_token: Option<String>,

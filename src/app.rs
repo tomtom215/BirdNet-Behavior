@@ -235,6 +235,27 @@ async fn serve(
         );
     }
 
+    // Store-and-forward drainer: replays BirdWeather uploads parked by the
+    // detection path during network outages (outbound_queue, migration 19).
+    // Spawned whenever uploads are configured at all — the queue may hold a
+    // backlog from before this boot.
+    if let Some(ref bw) = birdweather_client {
+        integrations::spawn_birdweather_drainer(state.clone(), bw.clone());
+    }
+
+    // Detection deadman: end-to-end "is the station actually detecting?"
+    // freshness gauge + once-per-episode alert. Resolution: CLI/env, then
+    // the DEADMAN_HOURS config key, then the 24 h default; 0 disables the
+    // alert but keeps the gauge. Skipped in web-only mode, where a quiet
+    // database is expected, not a fault.
+    if !cli.web_only {
+        let deadman_hours = cli
+            .deadman_hours
+            .or_else(|| config.as_ref()?.get_parsed::<u32>("DEADMAN_HOURS").ok())
+            .unwrap_or(integrations::DEFAULT_DEADMAN_HOURS);
+        integrations::spawn_detection_deadman(state.clone(), apprise_client.clone(), deadman_hours);
+    }
+
     // Start background subsystems.
     let _disk_manager_thread = helpers::start_disk_manager(&cli, config.as_ref(), &state);
     let _live_spectrogram_thread = helpers::start_live_spectrogram(&cli, config.as_ref(), &state);

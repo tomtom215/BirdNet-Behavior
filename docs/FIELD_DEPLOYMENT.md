@@ -289,11 +289,34 @@ Once the unit is sealed and shipped, the loop is:
 3. **`/api/v2/metrics`** — Prometheus text format. Scrape with
    Prometheus, Grafana Agent, or VictoriaMetrics. Key series:
    `birdnet_uptime_seconds`, `birdnet_detections_total`,
-   `birdnet_process_resident_memory_bytes`, `birdnet_species_total`.
-4. **`birdnet-behavior --doctor-json`** — for monitoring scripts that
+   `birdnet_process_resident_memory_bytes`, `birdnet_species_total`,
+   and the two field-health gauges below.
+4. **Detection deadman** — the end-to-end "is it actually detecting?"
+   check that no per-component gauge can answer. The station measures
+   how long ago the last detection landed and exports it as
+   `birdnet_detection_silence_seconds` (also `detection_silence_secs`
+   on `/api/v2/health`, and the "Last Detection" row on `/system`).
+   After `DEADMAN_HOURS` of silence (default 24; `0` disables; also
+   `--deadman-hours` / `BIRDNET_DEADMAN_HOURS`) it logs a loud warning
+   and — when Apprise is configured — pushes **one** alert per quiet
+   episode, with a recovery notice when detections resume. Stations in
+   sparse habitats should raise the threshold; a Grafana alert on the
+   gauge gives finer control.
+5. **Store-and-forward uploads** — `BirdWeather` posts that fail while
+   the uplink is down are parked in the local database and replayed
+   automatically when connectivity returns (oldest first, capped
+   batches, exponential backoff up to 1 h, bounded queue). Watch
+   `birdnet_outbound_queue_depth{kind="birdweather"}` — a depth that
+   only grows means the uplink (or token) has been broken for a while.
+   The `/system` page shows a "Queued Uploads" row whenever the queue
+   is non-empty. MQTT and Apprise/email are deliberately NOT queued:
+   they are live telemetry and look-now alerts, and replaying them
+   hours later is worse than dropping them — the local database is
+   always the ground truth.
+6. **`birdnet-behavior --doctor-json`** — for monitoring scripts that
    speak JSON (Home Assistant command sensor, Nagios, Zabbix). Same
    exit codes as the human-readable mode.
-5. **SSH tunnel via Tailscale / ZeroTier / Cloudflare Tunnel** —
+7. **SSH tunnel via Tailscale / ZeroTier / Cloudflare Tunnel** —
    gives you the web UI from anywhere without exposing a port to the
    open internet. Recommended over plain port-forward.
 

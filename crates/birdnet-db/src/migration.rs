@@ -462,6 +462,35 @@ pub const MIGRATIONS: &[Migration] = &[
         up_sql: "ALTER TABLE detections ADD COLUMN Source TEXT;
                  CREATE INDEX IF NOT EXISTS idx_detections_source ON detections(Source);",
     },
+    Migration {
+        version: 19,
+        description: "Create outbound_queue for store-and-forward BirdWeather uploads",
+        // A field station on flaky Wi-Fi/LTE loses every BirdWeather upload
+        // that fails after its in-flight retries — real data loss, since the
+        // community-science record is append-only and accepts late posts (the
+        // payload carries its own timestamp). Failed uploads are parked here
+        // and replayed by a background drainer once the network returns.
+        //
+        // Deliberately generic (`kind` column) so future channels can opt in,
+        // but MQTT and Apprise/email stay fire-and-forget BY DESIGN: they are
+        // live telemetry / look-now alerts, and replaying them hours later is
+        // worse than dropping them. The local database remains ground truth.
+        //
+        // `next_attempt_at` is unix seconds (monotonic enough for a queue and
+        // cheap to index); `attempts` counts replay attempts by the drainer,
+        // not the original in-flight retries.
+        up_sql: "CREATE TABLE IF NOT EXISTS outbound_queue (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind            TEXT NOT NULL,
+            payload         TEXT NOT NULL,
+            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            attempts        INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at INTEGER NOT NULL DEFAULT 0,
+            last_error      TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_outbound_queue_due
+            ON outbound_queue (kind, next_attempt_at);",
+    },
 ];
 
 /// Ensure the `schema_version` tracking table exists.

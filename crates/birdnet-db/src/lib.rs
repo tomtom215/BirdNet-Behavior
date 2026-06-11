@@ -9,6 +9,7 @@ pub mod alert_rules;
 pub mod audio_sources;
 pub mod migration;
 pub mod notifications;
+pub mod outbound_queue;
 pub mod resilience;
 pub mod settings;
 pub mod sqlite;

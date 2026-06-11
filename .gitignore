@@ -81,3 +81,5 @@ fuzz/corpus/**
 # Node tooling for the Playwright visual-QA script (scripts/visual_qa.mjs).
 # Installed on demand; never committed.
 node_modules/
+package.json
+package-lock.json

@@ -38,6 +38,12 @@ async fn health(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
         StatusCode::SERVICE_UNAVAILABLE
     };
 
+    // End-to-end freshness, fed by the deadman task (None until its first
+    // pass, or on a station with no detections yet). Surfaced here so remote
+    // monitors get "is it actually detecting" from the same probe they
+    // already poll — the gap every per-component gauge leaves open.
+    let detection_silence_secs = state.metrics().detection_silence_secs();
+
     (
         status,
         Json(json!({
@@ -46,6 +52,7 @@ async fn health(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
             "database": if db_ok { "ok" } else { "error" },
             "analytics": state.has_analytics(),
             "detection_daemon": if state.detection_daemon_running() { "running" } else { "stopped" },
+            "detection_silence_secs": detection_silence_secs,
         })),
     )
 }

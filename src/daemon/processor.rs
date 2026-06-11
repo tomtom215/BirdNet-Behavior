@@ -367,10 +367,41 @@ pub(super) fn event_processor(
                 lon: bw.coordinates().1,
             };
             let client = bw.clone();
+            let queue_state = state.clone();
             rt_handle.spawn(async move {
-                if let Err(e) = client.post_detection(&post).await {
-                    tracing::warn!(error = %e, species = %post.common_name, "BirdWeather post failed");
-                }
+                let Err(e) = client.post_detection(&post).await else {
+                    return;
+                };
+                // Park the payload for the store-and-forward drainer instead
+                // of dropping it: BirdWeather is an append-only record that
+                // accepts late posts, so an upload lost to a Wi-Fi/LTE outage
+                // is real data loss with no second chance otherwise.
+                tracing::warn!(
+                    error = %e,
+                    species = %post.common_name,
+                    "BirdWeather post failed; queueing for replay"
+                );
+                let payload = match serde_json::to_string(&post) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::error!(error = %e, "BirdWeather payload unserialisable; dropped");
+                        return;
+                    }
+                };
+                let _ = tokio::task::spawn_blocking(move || {
+                    let now = crate::integrations::unix_now_secs();
+                    queue_state.with_db(|conn| {
+                        if let Err(e) = birdnet_db::outbound_queue::enqueue(
+                            conn,
+                            birdnet_integrations::birdweather::QUEUE_KIND,
+                            &payload,
+                            now,
+                        ) {
+                            tracing::warn!(error = %e, "failed to queue BirdWeather payload");
+                        }
+                    });
+                })
+                .await;
             });
         }
 

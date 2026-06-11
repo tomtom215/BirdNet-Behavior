@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Store-and-forward `BirdWeather` uploads** (`outbound_queue`, migration
+  19). Posts that fail after their in-flight retries are parked in the local
+  database and replayed automatically when the uplink returns — oldest
+  first, capped batches with spacing, exponential backoff to a 1 h ceiling,
+  bounded to 5 000 entries and 48 attempts so a weeks-long outage can never
+  grow the database without limit. The field runbook had promised
+  "buffered locally; retried with exponential backoff" all along; the code
+  now keeps that promise. MQTT and Apprise/email deliberately stay
+  fire-and-forget (live telemetry / look-now alerts — replaying them hours
+  later is worse than dropping them). Exposed as the
+  `birdnet_outbound_queue_depth{kind}` gauge and a "Queued Uploads" row on
+  the `/system` page whenever non-empty.
+- **Detection deadman watchdog.** The end-to-end "is the station actually
+  detecting?" check: every component gauge can be green while a clogged
+  mic foam or a model/labels mismatch silences the station. The daemon now
+  measures seconds-since-last-detection (in SQLite's own localtime lens, so
+  no TZ skew), exports it as `birdnet_detection_silence_seconds`, surfaces
+  it on `/api/v2/health` (`detection_silence_secs`) and as the `/system`
+  page's "Last Detection" row, and after a configurable quiet threshold
+  (`--deadman-hours` / `BIRDNET_DEADMAN_HOURS` / `DEADMAN_HOURS`, default
+  24 h, `0` disables) logs a loud warning and sends one Apprise alert per
+  quiet episode with a recovery notice when detections resume.
+
 - **Silent-stall detection for capture sources.** The supervisor now watches
   each source's newest recording segment: a subprocess that stays alive but
   stops delivering audio (a wedged RTSP session, a USB mic hung after a
