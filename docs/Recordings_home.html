@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Recordings · BirdNet-Behavior (let me hear them · hi-fi against real app.css)</title>
+<script>(function(){var t=localStorage.getItem('theme');if(t!=='light'&&t!=='dark')t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';document.documentElement.setAttribute('data-theme',t);})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter+Tight:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="_assets/app.css">
+<style>
+main#main-content { max-width: 1160px; margin: 0 auto; padding: var(--pad-3) 24px 64px; }
+.rc-tabs { display: flex; gap: 2px; overflow-x: auto; border-bottom: 0.5px solid var(--border); margin: 18px 0 20px; }
+.rc-tab { border: 0; background: transparent; padding: 9px 15px 11px; border-bottom: 2px solid transparent; white-space: nowrap; cursor: pointer; font-family: var(--font-ui); text-align: left; color: var(--fg-3); flex: none; }
+.rc-tab .l { font-size: 13.5px; font-weight: 500; display: block; }
+.rc-tab .q { font-size: 10.5px; color: var(--fg-4); display: block; margin-top: 1px; }
+.rc-tab:hover { color: var(--fg-2); } .rc-tab.active { color: var(--fg); border-bottom-color: var(--moss); } .rc-tab.active .q { color: var(--fg-3); }
+.rc-lede { font-size: 14px; color: var(--fg-2); max-width: 76ch; margin: 0 0 16px; line-height: 1.55; }
+.rc-lede b { color: var(--fg); font-weight: 600; }
+.rc-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.rc-chips { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.rc-chip { font-size: 12px; padding: 5px 11px; border-radius: 999px; border: 0.5px solid var(--border); background: var(--surface); color: var(--fg-2); cursor: pointer; }
+.rc-chip.active { background: var(--fg); color: var(--bg); border-color: transparent; font-weight: 500; }
+.rc-sel-btn { margin-left: auto; font-size: 12px; }
+.rc-search { position: relative; }
+.rc-search input { background: var(--surface); border: 0.5px solid var(--border-2); border-radius: var(--r-sm); padding: 7px 10px 7px 30px; font: inherit; font-size: 13px; color: var(--fg); width: 190px; }
+.rc-search .ico { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); color: var(--fg-3); }
+
+/* clip rows */
+.rc-row { display: grid; grid-template-columns: 22px 70px 124px 1fr 80px 56px 72px; align-items: center; gap: 14px; padding: 11px 12px; border-radius: 10px; border: 0.5px solid transparent; }
+.rc-row + .rc-row { border-top: 0.5px solid var(--hairline); border-radius: 0; }
+.rc-row.playing { background: color-mix(in oklch, var(--moss) 6%, var(--surface)); border: 0.5px solid color-mix(in oklch, var(--moss) 28%, var(--border)); border-radius: 10px; }
+.rc-check { width: 17px; height: 17px; border-radius: 5px; border: 1.5px solid var(--border-2); cursor: pointer; }
+.rc-check.on { background: var(--moss); border-color: var(--moss); }
+.rc-time { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); }
+.rc-time .d { color: var(--fg-4); font-size: 10px; }
+.rc-spec { display: block; border-radius: 4px; }
+.rc-who { min-width: 0; display: flex; align-items: center; gap: 10px; }
+.rc-who .nm { font-size: 13.5px; font-weight: 500; } .rc-who .sc { font-family: var(--font-mono); font-size: 10px; color: var(--fg-3); }
+.rc-conf { display: flex; align-items: center; gap: 7px; }
+.rc-dur { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); text-align: right; }
+.rc-acts { display: inline-flex; gap: 2px; opacity: 0; transition: opacity .12s; }
+.rc-row:hover .rc-acts, .rc-row:focus-within .rc-acts { opacity: 1; }
+.rc-acts button { width: 26px; height: 26px; border-radius: 6px; border: 0; background: transparent; color: var(--fg-3); font-size: 12px; cursor: pointer; }
+.rc-acts button:hover { background: var(--surface-2); color: var(--fg); }
+.rc-play { width: 32px; height: 32px; border-radius: 999px; border: 0.5px solid var(--border-2); background: var(--surface); color: var(--fg-2); font-size: 11px; cursor: pointer; display: grid; place-items: center; }
+.rc-play:hover { border-color: var(--moss); color: var(--moss-ink); }
+.sp-thumb { width: 30px; height: 30px; border-radius: 7px; flex: none; display: grid; place-items: center; overflow: hidden; background: linear-gradient(135deg, color-mix(in oklch, var(--sp) 78%, transparent), color-mix(in oklch, var(--sp) 38%, var(--surface-2))); }
+.sp-thumb b { font-family: var(--font-mono); font-size: 8px; font-weight: 600; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.45); }
+
+/* selection bar */
+.rc-selbar { display: none; align-items: center; gap: 12px; padding: 11px 16px; border-radius: var(--r-md); background: var(--fg); color: var(--bg); margin-bottom: 14px; }
+.rc-selbar.show { display: flex; }
+.rc-selbar .n { font-weight: 600; }
+.rc-selbar .sp { margin-left: auto; display: flex; gap: 8px; }
+.rc-selbar button { border: 0.5px solid color-mix(in oklch, var(--bg) 40%, transparent); background: transparent; color: var(--bg); border-radius: var(--r-sm); padding: 5px 11px; font-size: 12px; cursor: pointer; }
+
+/* now-playing dock */
+.rc-dock { position: sticky; bottom: 14px; margin-top: 16px; display: flex; align-items: center; gap: 14px; padding: 12px 16px; border-radius: var(--r-lg); background: var(--surface); border: 0.5px solid var(--border-2); box-shadow: var(--shadow-lg); }
+.rc-dock .scrub { flex: 1; height: 5px; border-radius: 3px; background: var(--surface-2); position: relative; }
+.rc-dock .scrub i { position: absolute; left: 0; top: 0; bottom: 0; width: 38%; background: var(--moss); border-radius: 3px; }
+.rc-dock .scrub i::after { content: ""; position: absolute; right: -4px; top: -3px; width: 11px; height: 11px; border-radius: 999px; background: var(--moss); }
+
+/* live view */
+.rc-live { background: linear-gradient(180deg, var(--surface), var(--surface-2)); border: 0.5px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow-md); overflow: hidden; }
+.rc-live-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 18px; }
+.rc-live canvas { width: 100%; height: 200px; display: block; }
+.rc-live-foot { display: flex; align-items: center; gap: 14px; padding: 12px 18px; flex-wrap: wrap; }
+.rc-live-foot .mono { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); }
+.rc-src select { font-family: var(--font-ui); font-size: 12.5px; color: var(--fg); background: var(--surface); border: 0.5px solid var(--border-2); border-radius: var(--r-sm); padding: 5px 9px; }
+.rc-trickle { margin-top: 18px; }
+.rc-trk-row { display: grid; grid-template-columns: 62px 30px 1fr auto; align-items: center; gap: 12px; padding: 9px 4px; border-top: 0.5px solid var(--hairline); }
+.rc-trk-row:first-child { border-top: 0; }
+.rc-trk-row.fresh { animation: rc-rise .4s ease; }
+@keyframes rc-rise { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce){ .rc-trk-row.fresh { animation: none; } }
+.rc-trk-row .t { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); }
+
+#rc-headplayer { flex: 1; min-width: 300px; max-width: 400px; }
+.page-head > div:first-child { max-width: 540px; min-width: 0; }
+.rc-floatdock { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%) translateY(150%); width: min(700px, 92vw); z-index: 50; display: flex; align-items: center; gap: 14px; padding: 11px 16px; border-radius: var(--r-lg); background: var(--surface); border: 0.5px solid var(--border-2); box-shadow: var(--shadow-lg); transition: transform .28s cubic-bezier(.2,.7,.2,1); }
+.rc-floatdock.show { transform: translateX(-50%) translateY(0); }
+@media (prefers-reduced-motion: reduce){ .rc-floatdock { transition: none; } }
+.rc-hp { background: var(--surface); border: 0.5px solid var(--border-2); border-radius: var(--r-lg); box-shadow: var(--shadow-md); padding: 14px 16px; }
+.rc-hp-eb { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-3); margin-bottom: 8px; }
+.rc-hp-row { display: flex; align-items: center; gap: 10px; }
+.rc-hp-scrub { height: 5px; border-radius: 3px; background: var(--surface-2); position: relative; margin-top: 12px; }
+.rc-hp-scrub i { position: absolute; left: 0; top: 0; bottom: 0; width: 32%; background: var(--moss); border-radius: 3px; }
+.rc-hp-scrub i::after { content:""; position:absolute; right:-4px; top:-3px; width:11px; height:11px; border-radius:999px; background:var(--moss); }
+.x-notes { max-width: 1160px; margin: 36px auto 0; padding: 0 24px 90px; }
+.x-notes-card { background: var(--surface-2); border: 0.5px solid var(--border); border-radius: var(--r-lg); padding: 24px 28px; }
+.x-notes h2 { font-family: var(--font-display); font-size: 26px; font-weight: 400; margin: 0 0 4px; }
+.x-notes p { font-size: 13px; color: var(--fg-2); margin: 8px 0 0; max-width: 88ch; }
+.x-notes .mono { font-family: var(--font-mono); font-size: 0.92em; }
+@media (max-width: 720px){ .rc-row { grid-template-columns: 70px 1fr 34px; } .rc-row .rc-check, .rc-row .rc-spec-cell, .rc-row .rc-conf, .rc-row .rc-dur { display: none; } }
+</style>
+</head>
+<body>
+<a href="#main-content" class="skip-link">Skip to content</a>
+
+<header class="topnav" role="navigation" aria-label="Main navigation">
+  <a href="#" class="topnav-brand" aria-label="BirdNet-Behavior home">
+    <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="11" fill="none" stroke="currentColor" stroke-width="0.8" class="lay-logo"></circle>
+      <g stroke="currentColor" stroke-width="1.4" stroke-linecap="round" class="lay-logo">
+        <line x1="6" y1="12" x2="6" y2="12"></line><line x1="9" y1="9.5" x2="9" y2="14.5"></line>
+        <line x1="12" y1="6" x2="12" y2="18"></line><line x1="15" y1="8" x2="15" y2="16"></line>
+        <line x1="18" y1="10.5" x2="18" y2="13.5"></line>
+      </g>
+    </svg>
+    <span class="name">BirdNet</span><span class="sub">Behavior</span>
+  </a>
+  <span class="bnb-vrule lay-vrule"></span>
+  <nav class="topnav-links" aria-label="Sections">
+    <a class="topnav-link" href="Today_home.html">Today</a>
+    <a class="topnav-link" href="Species_home.html">Species</a>
+    <a class="topnav-link" href="Patterns_home.html">Patterns</a>
+    <a class="topnav-link active" href="#">Recordings</a>
+    <a class="topnav-link" href="Reports_home.html">Reports</a>
+    <a class="topnav-link" href="Station_home.html">Station</a>
+  </nav>
+  <div class="topnav-right">
+    <form action="#" method="get" class="nav-search" role="search"><input type="search" name="q" placeholder="Search species…" aria-label="Search species"></form>
+    <div class="status lay-iflex"><span class="bnb-pill"><span class="bnb-dot"></span> healthy</span></div>
+    <button class="icon-btn" type="button" title="Help &amp; methodology" aria-label="Help">?</button>
+    <button class="icon-btn" id="theme-toggle" title="Toggle light/dark theme" aria-label="Toggle theme"><span id="theme-icon" aria-hidden="true">☽</span></button>
+  </div>
+</header>
+
+<main id="main-content" role="main">
+  <div class="page-head" data-screen-label="Recordings head">
+    <div>
+      <div class="bnb-eyebrow"><span>Recordings</span></div>
+      <h1 class="display" style="font-size:46px;line-height:1.04;margin-top:6px">Listen in</h1>
+      <p class="bnb-meta" style="margin-top:8px;font-size:13px">Hear what your station caught — browse the clips, or open the live stream and listen along in real time.</p>
+    </div>
+  </div>
+  <div class="rc-tabs" role="tablist" id="rc-tabs"></div>
+  <div id="rc-body" data-screen-label="Recordings body"></div>
+</main>
+
+<section class="x-notes">
+  <div class="x-notes-card">
+    <h2>Hear it, the moment or after</h2>
+    <p>Production splits audio across <span class="mono">/recordings</span> (the clip browser) and <span class="mono">/listen</span> (live per-source audio + spectrogram). Here they're one <b>Recordings</b> home: <b>Clips</b> (browse, play, lock &amp; bulk-review captured detections, each with its spectrogram) and <b>Live</b> (the real-time scrolling sonogram with a source picker and a live detection trickle).</p>
+    <p><b>Grounded in real source:</b> clips mirror <span class="mono">recordings.rs</span> (HTTP-Range streaming so scrubbing seeks without a full re-download, lock-from-purge, the shared illustrated empty state), and Live mirrors <span class="mono">listen.rs</span> / the spectrogram WebSocket producer. The live panel is <b>honest</b> — a flat baseline when no audio is arriving, never a fake waveform.</p>
+  </div>
+</section>
+
+<script>
+function applyDataStyle(root){(root||document).querySelectorAll('[data-style]').forEach(el=>{el.style.cssText+=';'+el.getAttribute('data-style');});}
+function speciesColor(name){let h=0xcbf29ce484222325n;for(const b of new TextEncoder().encode(name)){h^=BigInt(b);h=(h*0x100000001b3n)&0xFFFFFFFFFFFFFFFFn;}return `oklch(62% 0.13 ${Number(h%360n)})`;}
+function rng(seed){let s=(Number(seed)>>>0)*9301+49297;return()=>{s=(s*9301+49297)%233280;return s/233280;};}
+function thumb(name,code){return `<span class="sp-thumb" data-style="--sp:${speciesColor(name)}" title="${name} — photo from Wikipedia"><b>${code}</b></span>`;}
+function confBar(v){v=Math.min(1,Math.max(0,v));const cls=v>0.90?"high":v>0.75?"mid":"";return `<span class="bnb-conf ${cls}"><span class="track"><span class="fill" data-style="width:${Math.round(v*100)}%"></span></span><span class="val">${v.toFixed(2)}</span></span>`;}
+function specThumb(seed,w,h){w=w||120;h=h||34;const r=rng(seed);let s=`<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" class="rc-spec" aria-hidden="true"><rect width="${w}" height="${h}" rx="4" fill="oklch(15% 0.02 200)"/>`;for(let x=0;x<w;x+=3){const env=Math.exp(-Math.pow((x-w/2)/(w*0.3),2));for(let y=0;y<h;y+=3){const band=Math.exp(-Math.pow((y-h*0.45)/(h*0.32),2));const v=r()*0.22+env*band*(0.55+r()*0.5);if(v>0.34){const L=(24+v*58).toFixed(0),C=(0.03+v*0.18).toFixed(3),H=(195-v*120).toFixed(0);s+=`<rect x="${x}" y="${y}" width="3" height="3" fill="oklch(${L}% ${C} ${H})"/>`;}}}return s+`</svg>`;}
+
+const CLIPS=[
+ {code:"MAWA",n:"Magnolia Warbler",sc:"Setophaga magnolia",t:"09:41",d:"today",conf:0.96,dur:"3.0s",rare:true,first:true},
+ {code:"NOCA",n:"Northern Cardinal",sc:"Cardinalis cardinalis",t:"09:38",d:"today",conf:0.94,dur:"2.4s"},
+ {code:"RBGR",n:"Rose-breasted Grosbeak",sc:"Pheucticus ludovicianus",t:"06:41",d:"today",conf:0.91,dur:"3.2s",rare:true,locked:true},
+ {code:"CARW",n:"Carolina Wren",sc:"Thryothorus ludovicianus",t:"09:36",d:"today",conf:0.88,dur:"2.1s"},
+ {code:"BLJA",n:"Blue Jay",sc:"Cyanocitta cristata",t:"09:31",d:"today",conf:0.82,dur:"1.8s"},
+ {code:"AMRO",n:"American Robin",sc:"Turdus migratorius",t:"09:24",d:"today",conf:0.91,dur:"4.0s"},
+ {code:"BADO",n:"Barred Owl",sc:"Strix varia",t:"02:14",d:"today",conf:0.78,dur:"5.0s",rare:true},
+ {code:"SOSP",n:"Song Sparrow",sc:"Melospiza melodia",t:"19:22",d:"yesterday",conf:0.84,dur:"2.6s"},
+ {code:"WOTH",n:"Wood Thrush",sc:"Hylocichla mustelina",t:"06:04",d:"yesterday",conf:0.9,dur:"3.4s"},
+ {code:"TUTI",n:"Tufted Titmouse",sc:"Baeolophus bicolor",t:"08:03",d:"yesterday",conf:0.86,dur:"1.9s"},
+];
+const FILTERS=[["all","All clips"],["best","Best"],["rare","Rare"],["locked","Locked"]];
+const TABS=[{id:'clips',l:'Clips',q:'browse & play'},{id:'live',l:'Live',q:'listen right now'}];
+let TAB='clips', FILTER='all', SELMODE=false, SEL=new Set(), PLAYING=0;
+
+function clipsFiltered(){let l=[...CLIPS];if(FILTER==='best')l=l.filter(c=>c.conf>=0.9);else if(FILTER==='rare')l=l.filter(c=>c.rare);else if(FILTER==='locked')l=l.filter(c=>c.locked);return l;}
+
+function tabClips(){
+  const list=clipsFiltered();
+  const rows=list.map((c,i)=>{const badge=c.first?'<span class="bnb-pill moss" style="font-size:9.5px;padding:1px 6px">first ever</span>':c.rare?'<span class="bnb-pill rare" style="font-size:9.5px;padding:1px 6px">rare</span>':'';const lock=c.locked?'<span title="Locked — never auto-purged" style="color:var(--moss-ink)">🔒</span>':'';return `<div class="rc-row ${i===PLAYING?'playing':''}" data-clip="${i}">
+    <span class="rc-check ${SEL.has(i)?'on':''}" data-check="${i}" role="checkbox" aria-checked="${SEL.has(i)}" style="${SELMODE?'':'visibility:hidden'}"></span>
+    <span class="rc-time">${c.t}<div class="d">${c.d}</div></span>
+    <span class="rc-spec-cell">${specThumb(c.code.charCodeAt(0)+i*7)}</span>
+    <div class="rc-who">${thumb(c.n,c.code)}<div style="min-width:0"><div class="nm">${c.n} ${badge} ${lock}</div><div class="sc">${c.sc}</div></div></div>
+    <span class="rc-conf">${confBar(c.conf)}</span>
+    <span class="rc-dur">${c.dur}</span>
+    <span style="display:inline-flex;gap:5px;justify-content:flex-end"><button class="rc-play" data-play="${i}" title="Play clip" aria-label="Play">▶</button><button class="rc-play" data-dl="${i}" title="Download clip" aria-label="Download" style="font-size:13px">↓</button></span>
+  </div>`;}).join('');
+  const playing=CLIPS[PLAYING];
+  return `<p class="rc-lede"><b>Every detection your station saved a clip for.</b> Play it, see its spectrogram, lock the keepers from auto-purge, or select a batch to review.</p>
+  <div class="rc-controls">
+    <div class="rc-chips">${FILTERS.map(([id,l])=>`<button class="rc-chip ${FILTER===id?'active':''}" data-filter="${id}">${l}</button>`).join('')}</div>
+    <span class="rc-search"><span class="ico">⌕</span><input type="search" placeholder="Find a species…"></span>
+    <button class="bnb-btn ghost rc-sel-btn" id="rc-selmode">${SELMODE?'Done':'Select'}</button>
+  </div>
+  <div class="rc-selbar ${SELMODE&&SEL.size?'show':''}" id="rc-selbar"><span class="n">${SEL.size} selected</span><span class="sp"><button>🔒 Lock</button><button>⬇ Download</button><button>✕ Delete</button></span></div>
+  <div class="bnb-card pad" style="padding:6px 10px">${rows||'<div style="text-align:center;padding:36px;color:var(--fg-3)">No clips match.</div>'}</div>`;
+}
+
+/* ── honest live sonogram (ported from the dashboard producer) ── */
+let sigRaf=null;
+function startSig(live){
+  if(sigRaf){cancelAnimationFrame(sigRaf);sigRaf=null;}
+  const cnv=document.getElementById('rc-canvas'); if(!cnv||!cnv.getContext) return;
+  const ctx=cnv.getContext('2d'); let W=0,H=200;
+  function resize(){W=cnv.width=cnv.clientWidth;cnv.height=H;} resize(); window.addEventListener('resize',resize,{once:true});
+  const dark=()=>document.documentElement.getAttribute('data-theme')==='dark';
+  function drawIdle(){ctx.clearRect(0,0,W,H);ctx.strokeStyle=dark()?'oklch(60% 0.02 150 / .35)':'oklch(55% 0.02 150 / .28)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(0,H/2);ctx.lineTo(W,H/2);ctx.stroke();}
+  function hash2(a,b){const x=Math.sin(a*12.9898+b*4.1414)*43758.5453;return x-Math.floor(x);}
+  const BIRDS=[{f:0.62,bw:0.06,amp:0.95,rate:0.9,ph:0},{f:0.40,bw:0.05,amp:0.85,rate:1.7,ph:2.1},{f:0.78,bw:0.045,amp:0.72,rate:1.3,ph:4}];
+  function specColor(v){v=Math.max(0,Math.min(1,v));const L=(16+v*74).toFixed(0),C=(0.02+v*0.19).toFixed(3),H=(205-v*120).toFixed(0);return`oklch(${L}% ${C} ${H})`;}
+  function frame(p){const cols=Math.max(80,Math.floor(W/4)),rows=46,cw=W/cols,rh=H/rows;for(let c=0;c<cols;c++){const x=c*cw,tau=(c/cols)*7-p;for(let r=0;r<rows;r++){const band=r/rows;let v=0.07+0.05*hash2(c,r*7+Math.floor(p*6));for(const b of BIRDS){const gate=Math.exp(-Math.pow(Math.sin((tau-b.ph)*b.rate),2)/0.014);const fenv=Math.exp(-Math.pow((band-b.f)/b.bw,2));const st=0.55+0.45*Math.sin(tau*46+b.f*12);v+=b.amp*gate*fenv*st;}ctx.fillStyle=specColor(Math.min(1,v));ctx.fillRect(x|0,(H-(r+1)*rh)|0,Math.ceil(cw)+1,Math.ceil(rh)+1);}}}
+  if(!live){drawIdle();return;}
+  if(window.matchMedia('(prefers-reduced-motion: reduce)').matches){frame(2);return;}
+  let p=0;(function loop(){frame(p);p+=0.05;sigRaf=requestAnimationFrame(loop);})();
+}
+function tabLive(){
+  const trk=[{code:"NOCA",n:"Northern Cardinal",t:"just now",conf:0.93},{code:"CARW",n:"Carolina Wren",t:"08 s ago",conf:0.87},{code:"BLJA",n:"Blue Jay",t:"31 s ago",conf:0.8}];
+  const rows=trk.map((c,i)=>`<div class="rc-trk-row ${i===0?'fresh':''}"><span class="t">${c.t}</span>${thumb(c.n,c.code)}<span style="font-size:13.5px;font-weight:500">${c.n}</span>${confBar(c.conf)}</div>`).join('');
+  return `<p class="rc-lede"><b>Listen along with your station, live.</b> Pick a source and watch the spectrogram scroll as audio comes in — detections appear in the trickle below the moment they're classified.</p>
+  <div class="rc-live">
+    <div class="rc-live-head"><span class="bnb-eyebrow">Live spectrogram · streaming</span><span class="bnb-pill moss"><span class="bnb-dot live"></span> live</span></div>
+    <canvas id="rc-canvas"></canvas>
+    <div class="rc-live-foot">
+      <span class="rc-src"><span class="bnb-meta" style="margin-right:6px">source</span><select aria-label="Audio source"><option>Backyard mic</option><option>Front-yard RTSP</option><option>Pond RTSP</option></select></span>
+      <span class="mono">48 kHz · mono</span><span class="mono">SNR 14 dB</span><span class="mono">inference 48 ms</span>
+      <a class="bnb-btn" href="#" style="margin-left:auto;font-size:12px">▶ Listen (audio)</a>
+    </div>
+  </div>
+  <div class="rc-trickle"><div class="section-header"><div><div class="bnb-eyebrow">As it happens</div><h3>Live detections</h3></div><a class="action" href="Today_home.html">Full feed →</a></div><div style="margin-top:4px">${rows}</div></div>`;
+}
+
+const RENDER={clips:tabClips,live:tabLive};
+function syncHeadPlayer(){
+  const ph=document.querySelector('.page-head'); if(!ph) return;
+  ph.style.display='flex'; ph.style.alignItems='flex-end'; ph.style.justifyContent='space-between'; ph.style.gap='24px'; ph.style.flexWrap='nowrap';
+  let slot=document.getElementById('rc-headplayer');
+  if(TAB!=='clips'){ if(slot) slot.remove(); const fd=document.getElementById('rc-floatdock'); if(fd) fd.classList.remove('show'); if(window.__rcObs) window.__rcObs.disconnect(); return; }
+  if(!slot){ slot=document.createElement('div'); slot.id='rc-headplayer'; ph.appendChild(slot); }
+  const c=CLIPS[PLAYING];
+  slot.innerHTML=`<div class="rc-hp"><div class="rc-hp-eb">Now playing</div><div class="rc-hp-row"><button class="rc-play" style="background:var(--fg);color:var(--bg);border:0">▶</button>${thumb(c.n,c.code)}<div style="min-width:0;flex:1"><div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.n}</div><div class="bnb-meta mono">${c.t} · ${c.d} · ${c.conf.toFixed(2)}</div></div><button class="rc-play" title="Download" aria-label="Download" style="font-size:13px">⬇</button></div><div class="rc-hp-scrub"><i></i></div><div class="bnb-meta mono" style="text-align:right;margin-top:5px">0:01 / ${c.dur.replace('s','')}</div></div>`;
+  applyDataStyle(slot);
+  let dock=document.getElementById('rc-floatdock');
+  if(!dock){ dock=document.createElement('div'); dock.id='rc-floatdock'; document.body.appendChild(dock); }
+  dock.className='rc-floatdock'+(dock.classList.contains('show')?' show':'');
+  dock.innerHTML=`<button class="rc-play" style="background:var(--fg);color:var(--bg);border:0">▶</button>${thumb(c.n,c.code)}<div style="min-width:0;flex:1.2"><div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.n}</div><div class="bnb-meta mono">${c.t} · ${c.d} · ${c.conf.toFixed(2)}</div></div><div class="rc-hp-scrub" style="flex:1.6;margin:0 4px"><i></i></div><span class="bnb-meta mono" style="white-space:nowrap">0:01 / ${c.dur.replace('s','')}</span><button class="rc-play" title="Download" aria-label="Download" style="font-size:13px">⬇</button>`;
+  applyDataStyle(dock);
+  if(window.__rcObs) window.__rcObs.disconnect();
+  window.__rcObs=new IntersectionObserver((es)=>{ dock.classList.toggle('show', !es[0].isIntersecting); }, {threshold:0});
+  window.__rcObs.observe(slot);
+}
+function renderTabs(){document.getElementById('rc-tabs').innerHTML=TABS.map(t=>`<button class="rc-tab ${t.id===TAB?'active':''}" data-tab="${t.id}" role="tab"><span class="l">${t.l}</span><span class="q">${t.q}</span></button>`).join('');}
+function render(){
+  renderTabs();
+  const body=document.getElementById('rc-body');
+  body.innerHTML=RENDER[TAB]();
+  applyDataStyle(body);
+  syncHeadPlayer();
+  document.querySelectorAll('#rc-tabs .rc-tab').forEach(b=>b.addEventListener('click',()=>{TAB=b.dataset.tab;render();window.scrollTo({top:0,behavior:'instant'});}));
+  if(TAB==='live'){ startSig(true); }
+  else if(sigRaf){ cancelAnimationFrame(sigRaf); sigRaf=null; }
+  body.querySelectorAll('.rc-chip').forEach(b=>b.addEventListener('click',()=>{FILTER=b.dataset.filter;render();}));
+  const sm=document.getElementById('rc-selmode'); if(sm) sm.addEventListener('click',()=>{SELMODE=!SELMODE;if(!SELMODE)SEL.clear();render();});
+  body.querySelectorAll('[data-check]').forEach(el=>el.addEventListener('click',(e)=>{e.stopPropagation();const i=+el.dataset.check;SEL.has(i)?SEL.delete(i):SEL.add(i);render();}));
+  body.querySelectorAll('[data-play]').forEach(el=>el.addEventListener('click',(e)=>{e.stopPropagation();PLAYING=+el.dataset.play;render();}));
+  body.querySelectorAll('[data-clip]').forEach(el=>el.addEventListener('click',()=>{ if(SELMODE){const i=+el.dataset.clip;SEL.has(i)?SEL.delete(i):SEL.add(i);render();} else {PLAYING=+el.dataset.clip;render();} }));
+}
+(function themeToggle(){const btn=document.getElementById('theme-toggle'),icon=document.getElementById('theme-icon');const cur=()=>document.documentElement.getAttribute('data-theme')==='dark'?'dark':'light';function apply(t){document.documentElement.setAttribute('data-theme',t);icon.textContent=t==='dark'?'☀':'☽';if(TAB==='live')startSig(true);}apply(cur());btn.addEventListener('click',()=>{const n=cur()==='dark'?'light':'dark';localStorage.setItem('theme',n);apply(n);});})();
+render();
+</script>
+</body>
+</html>

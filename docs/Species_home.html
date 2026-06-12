@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Species · BirdNet-Behavior (who you've heard · hi-fi against real app.css)</title>
+<script>(function(){var t=localStorage.getItem('theme');if(t!=='light'&&t!=='dark')t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';document.documentElement.setAttribute('data-theme',t);})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter+Tight:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="_assets/app.css">
+<style>
+/* New-only: the Species view switcher + photo/life-list/detail layouts.
+   List rows, avatars, sparklines, conf bars, accumulation curve, bnb-photo all real. */
+main#main-content { max-width: 1180px; margin: 0 auto; padding: var(--pad-3) 24px 64px; }
+.sp-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 16px 0 18px; }
+.sp-seg { display: inline-flex; background: var(--surface-2); border: 0.5px solid var(--border); border-radius: var(--r-sm); padding: 2px; gap: 2px; }
+.sp-seg button { border: 0; background: transparent; padding: 6px 13px; border-radius: 4px; font-size: 12.5px; color: var(--fg-2); font-family: var(--font-ui); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.sp-seg button.active { background: var(--surface); color: var(--fg); font-weight: 500; box-shadow: var(--shadow-sm); }
+.sp-chips { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.sp-chip { font-size: 12px; padding: 5px 11px; border-radius: 999px; border: 0.5px solid var(--border); background: var(--surface); color: var(--fg-2); cursor: pointer; }
+.sp-chip.active { background: var(--fg); color: var(--bg); border-color: transparent; font-weight: 500; }
+.sp-search { margin-left: auto; position: relative; }
+.sp-search input { background: var(--surface); border: 0.5px solid var(--border-2); border-radius: var(--r-sm); padding: 7px 10px 7px 30px; font: inherit; font-size: 13px; color: var(--fg); width: 200px; }
+.sp-search .ico { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); color: var(--fg-3); }
+.sp-count { margin: 2px 0 18px; font-size: 14px; color: var(--fg-3); display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.sp-count b { font-family: var(--font-display); font-size: 38px; line-height: 1; color: var(--fg); font-weight: 400; letter-spacing: -0.01em; }
+
+/* list */
+.sp-table { width: 100%; border-collapse: collapse; }
+.sp-table th { text-align: left; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-3); font-weight: 500; padding: 8px 10px; border-bottom: 0.5px solid var(--border); }
+.sp-table td { padding: 9px 10px; border-bottom: 0.5px solid var(--hairline); vertical-align: middle; }
+.sp-table tr { cursor: pointer; }
+.sp-table tbody tr:hover { background: var(--surface-2); }
+.sp-rank { font-family: var(--font-mono); font-size: 11px; color: var(--fg-4); width: 30px; }
+.sp-cell { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.sp-nm { font-weight: 500; font-size: 13.5px; }
+.sp-nm .badge { font-size: 9.5px; padding: 1px 6px; margin-left: 6px; }
+.sp-sci { font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-3); font-style: italic; }
+.sp-num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+/* photos grid */
+.sp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px,1fr)); gap: 16px; }
+.sp-photo-card { cursor: pointer; }
+.sp-photo { aspect-ratio: 4/3; border-radius: var(--r-md) var(--r-md) 0 0; }
+.sp-photo-card .bnb-card { border-radius: var(--r-md); overflow: hidden; padding: 0; }
+.sp-photo-meta { padding: 11px 13px; }
+.sp-photo-meta .nm { font-size: 13.5px; font-weight: 500; }
+.sp-photo-meta .sub { font-size: 11px; color: var(--fg-3); margin-top: 2px; font-family: var(--font-mono); }
+
+/* life list */
+.sp-life-head { display: grid; grid-template-columns: 1.4fr 1fr; gap: var(--pad-4); align-items: center; margin-bottom: 22px; }
+@media (max-width:880px){ .sp-life-head { grid-template-columns: 1fr; } }
+.sp-life-stat { display: flex; gap: 28px; }
+.sp-life-stat .v { font-family: var(--font-display); font-size: 48px; line-height: 1; }
+.sp-life-stat .v.moss { color: var(--moss-ink); }
+.sp-life-stat .l { font-size: 12px; color: var(--fg-3); margin-top: 4px; }
+.sp-firsts { display: flex; flex-direction: column; }
+.sp-first-row { display: flex; align-items: center; gap: 11px; padding: 9px 0; border-top: 0.5px solid var(--hairline); }
+.sp-first-row:first-child { border-top: 0; }
+.sp-first-row .when { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); }
+
+/* detail */
+.sd-back { display: inline-flex; align-items: center; gap: 6px; color: var(--fg-3); text-decoration: none; font-size: 12px; }
+.sd-back:hover { color: var(--fg); }
+.sd-hero { display: grid; grid-template-columns: 1.4fr 1fr; gap: var(--pad-4); align-items: end; margin: 10px 0 22px; }
+@media (max-width:880px){ .sd-hero { grid-template-columns: 1fr; } }
+.sd-h1 { font-size: 56px; line-height: 1.02; letter-spacing: -0.025em; margin-top: 8px; }
+.sd-sci { color: var(--fg-3); font-style: italic; font-size: 14px; margin-top: 6px; font-family: var(--font-mono); }
+.sd-actions { display: flex; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
+.sd-media { padding: 0; overflow: hidden; }
+.sd-media .bnb-photo { aspect-ratio: 16/10; }
+.sd-media-foot { padding: 12px 14px; display: flex; align-items: center; gap: 10px; }
+.sd-stat-row { display: grid; grid-template-columns: repeat(4,1fr); gap: 0; border: 0.5px solid var(--border); border-radius: var(--r-lg); overflow: hidden; background: var(--surface); box-shadow: var(--shadow-sm); margin-bottom: 18px; }
+@media (max-width:640px){ .sd-stat-row { grid-template-columns: 1fr 1fr; } }
+.sd-stat { padding: 15px 18px; border-right: 0.5px solid var(--hairline); }
+.sd-stat .l { font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-3); font-weight: 500; }
+.sd-stat .v { font-family: var(--font-display); font-size: 28px; line-height: 1; margin-top: 8px; }
+.sd-grid2 { display: grid; grid-template-columns: 1.5fr 1fr; gap: 18px; align-items: start; }
+@media (max-width:880px){ .sd-grid2 { grid-template-columns: 1fr; } }
+.sd-comp-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 0.5px solid var(--hairline); font-size: 13px; }
+.sd-comp-row:first-child { border-top: 0; }
+.sd-comp-row .pct { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); }
+.sd-viz { display: flex; justify-content: center; padding: 6px 0; }
+
+.sp-thumb { width: 30px; height: 30px; border-radius: 7px; flex: none; position: relative; overflow: hidden; display: grid; place-items: center; background: linear-gradient(135deg, color-mix(in oklch, var(--sp) 78%, transparent), color-mix(in oklch, var(--sp) 38%, var(--surface-2))); }
+.sp-thumb b { font-family: var(--font-mono); font-size: 8px; font-weight: 600; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.45); letter-spacing: .02em; }
+.sp-thumb.lg { width: 38px; height: 38px; border-radius: 9px; } .sp-thumb.lg b { font-size: 9.5px; }
+.x-notes { max-width: 1180px; margin: 36px auto 0; padding: 0 24px 90px; }
+.x-notes-card { background: var(--surface-2); border: 0.5px solid var(--border); border-radius: var(--r-lg); padding: 24px 28px; }
+.x-notes h2 { font-family: var(--font-display); font-size: 26px; font-weight: 400; margin: 0 0 4px; }
+.x-notes p { font-size: 13px; color: var(--fg-2); margin: 8px 0 0; max-width: 88ch; }
+.x-notes .mono { font-family: var(--font-mono); font-size: 0.92em; }
+</style>
+</head>
+<body>
+<a href="#main-content" class="skip-link">Skip to content</a>
+
+<header class="topnav" role="navigation" aria-label="Main navigation">
+  <a href="#" class="topnav-brand" aria-label="BirdNet-Behavior home">
+    <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="11" fill="none" stroke="currentColor" stroke-width="0.8" class="lay-logo"></circle>
+      <g stroke="currentColor" stroke-width="1.4" stroke-linecap="round" class="lay-logo">
+        <line x1="6" y1="12" x2="6" y2="12"></line><line x1="9" y1="9.5" x2="9" y2="14.5"></line>
+        <line x1="12" y1="6" x2="12" y2="18"></line><line x1="15" y1="8" x2="15" y2="16"></line>
+        <line x1="18" y1="10.5" x2="18" y2="13.5"></line>
+      </g>
+    </svg>
+    <span class="name">BirdNet</span><span class="sub">Behavior</span>
+  </a>
+  <span class="bnb-vrule lay-vrule"></span>
+  <nav class="topnav-links" aria-label="Sections">
+    <a class="topnav-link" href="Today_home.html">Today</a>
+    <a class="topnav-link active" href="#">Species</a>
+    <a class="topnav-link" href="Patterns_home.html">Patterns</a>
+    <a class="topnav-link" href="#">Recordings</a>
+    <a class="topnav-link" href="#">Reports</a>
+    <a class="topnav-link" href="Station_home.html">Station</a>
+  </nav>
+  <div class="topnav-right">
+    <form action="#" method="get" class="nav-search" role="search"><input type="search" name="q" placeholder="Search species…" aria-label="Search species"></form>
+    <div class="status lay-iflex"><span class="bnb-pill"><span class="bnb-dot"></span> healthy</span></div>
+    <button class="icon-btn" type="button" title="Help &amp; methodology" aria-label="Help">?</button>
+    <button class="icon-btn" id="theme-toggle" title="Toggle light/dark theme" aria-label="Toggle theme"><span id="theme-icon" aria-hidden="true">☽</span></button>
+  </div>
+</header>
+
+<main id="main-content" role="main">
+  <div class="page-head" id="sp-head" data-screen-label="Species head">
+    <div>
+      <div class="bnb-eyebrow"><span>Species</span></div>
+      <h1 class="display" style="font-size:46px;line-height:1.04;margin-top:6px">Who you've heard</h1>
+      <p class="bnb-meta" style="margin-top:8px;font-size:13px">Every bird your station has identified — browse the list, the photos, or your growing life list.</p>
+    </div>
+  </div>
+  <div id="sp-body" data-screen-label="Species body"></div>
+</main>
+
+<section class="x-notes">
+  <div class="x-notes-card">
+    <h2>One home, three ways to look</h2>
+    <p>Production splits this across three top-level destinations — <span class="mono">/species</span> (list), <span class="mono">/gallery</span> (photos) and <span class="mono">/life-list</span> (growth curve). They answer the same question, so here they're one <b>Species</b> home with a view switcher: <b>List</b> (counts &amp; trends), <b>Photos</b> (the gallery), <b>Life list</b> (every species ever, with the accumulation curve — the single most emotionally resonant chart for a hobbyist). Tap any bird for its detail page.</p>
+    <p><b>Grounded in real source:</b> the list rows mirror <span class="mono">species_list_partial</span> (rank · avatar · 14-day sparkline · count · confidence), the detail page mirrors <span class="mono">species_detail.html</span> (residency pills, cross-links to heatmap/co-occurrence, circadian, trend, companions), the life-list curve is <span class="mono">viz::accumulation_curve</span>, and photos use the <span class="mono">bnb-photo</span> drop-slot. All against the real <span class="mono">app.css</span>.</p>
+  </div>
+</section>
+
+<script>
+function applyDataStyle(root){(root||document).querySelectorAll('[data-style]').forEach(el=>{el.style.cssText+=';'+el.getAttribute('data-style');});}
+function speciesColor(name){let h=0xcbf29ce484222325n;for(const b of new TextEncoder().encode(name)){h^=BigInt(b);h=(h*0x100000001b3n)&0xFFFFFFFFFFFFFFFFn;}return `oklch(62% 0.13 ${Number(h%360n)})`;}
+function rng(seed){let s=(Number(seed)>>>0)*9301+49297;return()=>{s=(s*9301+49297)%233280;return s/233280;};}
+function avatar(sp,size){const cls=size==='lg'?'sp-thumb lg':'sp-thumb';return `<span class="${cls}" data-style="--sp:${speciesColor(sp.n)}" title="${sp.n} — photo from Wikipedia"><b>${sp.c}</b></span>`;}
+function sparkline(data,w,h,col){if(!data.length)return"";const max=Math.max(1,...data),n=data.length,step=n>1?w/(n-1):w;let p="";data.forEach((v,i)=>{const x=i*step,y=(v/max)*-(h-2)+h-1;p+=`${i?'L':'M'}${x.toFixed(1)},${y.toFixed(1)}`;});const lx=(n-1)*step,area=`${p} L${lx.toFixed(1)},${h} L0,${h} Z`;const c=col||'var(--moss)';return `<svg class="bnb-spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true"><path class="area" d="${area}" fill="${c}" fill-opacity="0.10"/><path class="line" d="${p}" stroke="${c}" fill="none" stroke-width="1.4"/></svg>`;}
+function confBar(v){v=Math.min(1,Math.max(0,v));const cls=v>0.90?"high":v>0.75?"mid":"";return `<span class="bnb-conf ${cls}"><span class="track"><span class="fill" data-style="width:${Math.round(v*100)}%"></span></span><span class="val">${v.toFixed(2)}</span></span>`;}
+function spark(sp,w,h){const r=rng(sp.c.charCodeAt(0)+sp.c.charCodeAt(1));return sparkline(Array.from({length:14},()=>1+Math.floor(r()*9)),w,h,speciesColor(sp.n));}
+
+const SP=[
+ {n:"Northern Cardinal",c:"NOCA",sci:"Cardinalis cardinalis",ct:3142,conf:0.94,first:"2019-03-02",tag:"resident"},
+ {n:"American Robin",c:"AMRO",sci:"Turdus migratorius",ct:2088,conf:0.91,first:"2019-03-05",tag:"resident"},
+ {n:"Carolina Wren",c:"CARW",sci:"Thryothorus ludovicianus",ct:1411,conf:0.88,first:"2019-03-02",tag:"resident"},
+ {n:"Blue Jay",c:"BLJA",sci:"Cyanocitta cristata",ct:962,conf:0.86,first:"2019-03-04",tag:"resident"},
+ {n:"Tufted Titmouse",c:"TUTI",sci:"Baeolophus bicolor",ct:741,conf:0.85,first:"2019-03-03",tag:"resident"},
+ {n:"Song Sparrow",c:"SOSP",sci:"Melospiza melodia",ct:603,conf:0.79,first:"2019-03-11",tag:"resident"},
+ {n:"Mourning Dove",c:"MODO",sci:"Zenaida macroura",ct:588,conf:0.83,first:"2019-03-02",tag:"resident"},
+ {n:"American Goldfinch",c:"AMGO",sci:"Spinus tristis",ct:512,conf:0.88,first:"2019-04-01",tag:"resident"},
+ {n:"Downy Woodpecker",c:"DOWO",sci:"Dryobates pubescens",ct:430,conf:0.81,first:"2019-03-07",tag:"resident"},
+ {n:"Gray Catbird",c:"GRCA",sci:"Dumetella carolinensis",ct:388,conf:0.84,first:"2019-05-04",tag:"migrant"},
+ {n:"Common Yellowthroat",c:"COYE",sci:"Geothlypis trichas",ct:241,conf:0.82,first:"2020-05-09",tag:"migrant"},
+ {n:"Wood Thrush",c:"WOTH",sci:"Hylocichla mustelina",ct:196,conf:0.86,first:"2019-05-12",tag:"migrant"},
+ {n:"Rose-breasted Grosbeak",c:"RBGR",sci:"Pheucticus ludovicianus",ct:142,conf:0.91,first:"2021-05-06",tag:"migrant",rare:true},
+ {n:"Magnolia Warbler",c:"MAWA",sci:"Setophaga magnolia",ct:97,conf:0.96,first:"2026-06-11",tag:"migrant",rare:true},
+ {n:"Baltimore Oriole",c:"BAOR",sci:"Icterus galbula",ct:88,conf:0.9,first:"2022-05-02",tag:"migrant"},
+ {n:"Scarlet Tanager",c:"SCTA",sci:"Piranga olivacea",ct:54,conf:0.89,first:"2023-05-14",tag:"migrant",rare:true},
+ {n:"Barred Owl",c:"BADO",sci:"Strix varia",ct:41,conf:0.78,first:"2026-06-11",tag:"resident",rare:true},
+ {n:"Veery",c:"VEER",sci:"Catharus fuscescens",ct:28,conf:0.83,first:"2024-05-19",tag:"migrant",rare:true},
+];
+const FILTERS=[["all","All"],["week","This week"],["rare","Rare"],["migrant","Migratory"]];
+let VIEW='list', FILTER='all', DETAIL=null;
+
+function filtered(){
+  let list=[...SP];
+  if(FILTER==='rare') list=list.filter(s=>s.rare);
+  else if(FILTER==='migrant') list=list.filter(s=>s.tag==='migrant');
+  else if(FILTER==='week') list=list.slice(0,9);
+  return list.sort((a,b)=>b.ct-a.ct);
+}
+const badge=(sp)=> sp.rare?`<span class="bnb-pill rare badge">rare</span>`: sp.tag==='migrant'?`<span class="bnb-pill dawn badge">migrant</span>`:'';
+
+function controls(){
+  return `<div class="sp-controls">
+    <div class="sp-seg" role="tablist" aria-label="View">
+      <button data-view="list" class="${VIEW==='list'?'active':''}">▤ List</button>
+      <button data-view="photos" class="${VIEW==='photos'?'active':''}">▦ Photos</button>
+      <button data-view="lifelist" class="${VIEW==='lifelist'?'active':''}">✦ Life list</button>
+    </div>
+    <div class="sp-chips">${FILTERS.map(([id,l])=>`<button class="sp-chip ${FILTER===id?'active':''}" data-filter="${id}">${l}</button>`).join('')}</div>
+    <span class="sp-search"><span class="ico">⌕</span><input type="search" placeholder="Find a species…"></span>
+  </div>`;
+}
+
+function viewList(){
+  const list=filtered();
+  const rows=list.map((sp,i)=>`<tr data-sp="${sp.c}"><td class="sp-rank">${i+1}</td><td><div class="sp-cell">${avatar(sp,"")}<div style="min-width:0"><div class="sp-nm">${sp.n}${badge(sp)}</div><div class="sp-sci">${sp.sci}</div></div></div></td><td>${spark(sp,84,22)}</td><td class="sp-num">${sp.ct.toLocaleString()}</td><td>${confBar(sp.conf)}</td></tr>`).join('');
+  return controls()+`<div class="sp-count"><b>${list.length}</b> species${FILTER!=='all'?' · '+FILTERS.find(f=>f[0]===FILTER)[1].toLowerCase():''} · ${SP.reduce((a,s)=>a+s.ct,0).toLocaleString()} detections all-time</div>
+  <div class="bnb-card pad"><table class="sp-table"><thead><tr><th class="sp-rank">#</th><th>Species</th><th>14-day</th><th>Detections</th><th>Avg confidence</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+function viewPhotos(){
+  const list=filtered();
+  const cards=list.map(sp=>`<div class="sp-photo-card" data-sp="${sp.c}"><div class="bnb-card"><div class="bnb-photo sp-photo" data-caption="${sp.c} · drop a photo"></div><div class="sp-photo-meta"><div class="nm">${sp.n}${badge(sp)}</div><div class="sub">${sp.ct.toLocaleString()} detections</div></div></div></div>`).join('');
+  return controls()+`<div class="sp-count"><b>${list.length}</b> species · drag a photo onto any card to fill it</div><div class="sp-grid">${cards}</div>`;
+}
+function accumulation(points){
+  const w=720,h=200,padL=6,padB=22,padT=12,plotH=h-padB-padT,n=points.length,max=Math.max(1,points[n-1][1]),step=(w-padL)/(n-1),xAt=i=>padL+i*step,yAt=v=>padT+plotH-(v/max)*plotH;
+  let line='';points.forEach(([,v],i)=>line+=`${i?'L':'M'}${xAt(i).toFixed(1)},${yAt(v).toFixed(1)} `);
+  const area=`${line}L${xAt(n-1).toFixed(1)},${(padT+plotH).toFixed(1)} L${xAt(0).toFixed(1)},${(padT+plotH).toFixed(1)} Z`;
+  let s=`<svg width="100%" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="Species accumulation over time" class="viz-svg-block">`;
+  s+=`<line x1="${padL}" y1="${(padT+plotH).toFixed(1)}" x2="${w}" y2="${(padT+plotH).toFixed(1)}" stroke="var(--hairline)" stroke-width="0.5"/>`;
+  s+=`<path d="${area}" fill="var(--moss)" fill-opacity="0.12"/><path d="${line}" fill="none" stroke="var(--moss)" stroke-width="1.6"/>`;
+  const lx=xAt(n-1),ly=yAt(points[n-1][1]);
+  s+=`<circle cx="${lx.toFixed(1)}" cy="${ly.toFixed(1)}" r="2.6" fill="var(--moss)"/><text class="mono" x="${(lx-4).toFixed(1)}" y="${Math.max(ly-6,padT+8).toFixed(1)}" text-anchor="end" font-size="11" fill="var(--moss-ink)">${points[n-1][1]} species</text>`;
+  const stride=Math.max(1,Math.floor(n/6));
+  points.forEach(([lbl],i)=>{if(i%stride===0||i===n-1)s+=`<text class="mono" x="${xAt(i).toFixed(1)}" y="${h-6}" text-anchor="middle" font-size="8" fill="var(--fg-4)">${lbl}</text>`;});
+  return s+`</svg>`;
+}
+function viewLife(){
+  // cumulative species discovered, by year
+  const N=89,k=2.9,d=1-Math.exp(-k); const pts=[]; for(let i=0;i<N;i++){ const t=i/(N-1); const cum=Math.round(8+115*(1-Math.exp(-k*t))/d); pts.push(["'"+(19+Math.floor(i/12)),cum]); }
+  const recent=[...SP].sort((a,b)=>b.first.localeCompare(a.first)).slice(0,6);
+  const firsts=recent.map(sp=>`<div class="sp-first-row" data-sp="${sp.c}" style="cursor:pointer">${avatar(sp,"")}<div><div class="sp-nm" style="font-size:13px">${sp.n}${sp.rare?'<span class="bnb-pill rare badge">rare</span>':''}</div><div class="sp-sci">${sp.sci}</div></div><span class="when">${sp.first}</span></div>`).join('');
+  return controls()+`<div class="sp-life-head">
+    <div>
+      <div class="sp-life-stat">
+        <div><div class="v moss">123</div><div class="l">species all-time</div></div>
+        <div><div class="v">47</div><div class="l">this year</div></div>
+        <div><div class="v">8</div><div class="l">new this year</div></div>
+      </div>
+      <p class="bnb-meta" style="margin-top:14px;max-width:46ch;font-size:13px">Every species your station has ever heard. The curve climbs fast at first, then each new bird gets rarer — and more exciting.</p>
+    </div>
+    <div class="bnb-card pad"><div class="bnb-eyebrow" style="margin-bottom:8px">Your growing list · 2019 → today</div><div class="sd-viz">${accumulation(pts)}</div></div>
+  </div>
+  <div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Most recent</div><h3>New to the list</h3></div><a class="action" href="#">All 123 →</a></div><div class="sp-firsts" style="margin-top:6px">${firsts}</div></div>`;
+}
+
+function hourly(sp){
+  const r=rng(sp.c.charCodeAt(0)*3);const peak=sp.tag==='migrant'?5.5:6.2;
+  const arr=Array.from({length:24},(_,h)=>{const p=Math.exp(-Math.pow((h-peak)/2,2));const d=0.35*Math.exp(-Math.pow((h-18)/2.4,2));return (p+d+r()*0.06)*40;});
+  const max=Math.max(...arr),bw=24,chH=110,W=24*bw+24,H=chH+18;
+  let s=`<svg width="100%" height="auto" viewBox="0 0 ${W} ${H}" class="hm-svg-block" role="img" aria-label="When ${sp.n} is most active"><rect width="${W}" height="${H}" fill="var(--surface)" rx="8"/>`;
+  arr.forEach((c,h)=>{const bh=Math.round(c/max*chH),x=12+h*bw,y=chH-bh,col=((h>=5&&h<=8)||(h>=18&&h<=21))?'var(--dawn)':'var(--moss)';s+=`<rect x="${x}" y="${y}" width="${bw-2}" height="${bh}" rx="2" fill="${col}"/><text x="${x+bw/2}" y="${chH+14}" text-anchor="middle" font-size="8" fill="var(--fg-4)" class="mono">${h%6===0?String(h).padStart(2,'0'):''}</text>`;});
+  return s+`</svg>`;
+}
+function viewDetail(code){
+  const sp=SP.find(s=>s.c===code); if(!sp) return viewList();
+  const comp=[...SP].filter(s=>s.c!==code).slice(0,5).map((s,i)=>`<div class="sd-comp-row">${avatar(s,"")}<span style="font-weight:500;font-size:13px">${s.n}</span><span class="pct">${72-i*9}%</span></div>`).join('');
+  const recent=["06:18 · 0.96","05:51 · 0.92","Yesterday 06:04 · 0.94","Yesterday 19:22 · 0.81"].map(t=>`<div class="sd-comp-row"><span class="bnb-meta mono">${t.split(' · ')[1]}</span><span style="font-size:13px">${t.split(' · ')[0]}</span><a class="pct" href="#" style="color:var(--moss-ink)">play ▶</a></div>`).join('');
+  const resid = sp.tag==='migrant'?'<span class="bnb-pill dawn">Migrant</span>':'<span class="bnb-pill moss">Resident</span>';
+  return `<a class="sd-back" id="sp-back" href="#">← All species</a>
+  <section class="sd-hero">
+    <div>
+      <h1 class="display sd-h1">${sp.n}</h1>
+      <p class="sd-sci">${sp.sci}</p>
+      <div class="pill-row" style="margin-top:14px">${resid}${sp.rare?'<span class="bnb-pill rare">Rare here</span>':''}<span class="bnb-pill">First seen ${sp.first}</span><span class="bnb-pill mono">best ${sp.conf.toFixed(2)}</span></div>
+      <div class="sd-actions"><a class="bnb-btn primary" href="Today_home.html">View in today's log →</a><a class="bnb-btn" href="Patterns_home.html">Open in heatmap</a><a class="bnb-btn" href="Patterns_home.html">Who it sings with</a></div>
+    </div>
+    <aside class="bnb-card sd-media"><div class="bnb-photo" data-caption="best detection · ${sp.first} · ${sp.conf.toFixed(2)}"></div><div class="sd-media-foot">${avatar(sp,"")}<audio controls preload="none" style="height:30px;flex:1"><source src="#" type="audio/wav"></audio></div></aside>
+  </section>
+  <div class="sd-stat-row">
+    <div class="sd-stat"><div class="l">Detections</div><div class="v">${sp.ct.toLocaleString()}</div></div>
+    <div class="sd-stat"><div class="l">First seen</div><div class="v" style="font-size:20px">${sp.first}</div></div>
+    <div class="sd-stat"><div class="l">Best confidence</div><div class="v">${sp.conf.toFixed(2)}</div></div>
+    <div class="sd-stat"><div class="l">Rank</div><div class="v">#${[...SP].sort((a,b)=>b.ct-a.ct).findIndex(s=>s.c===code)+1}</div></div>
+  </div>
+  <div class="sd-grid2">
+    <div>
+      <div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Circadian</div><h3>When it's most active</h3></div><span class="bnb-meta">all dates · by hour</span></div><div class="sd-viz">${hourly(sp)}</div></div>
+      <div class="bnb-card pad" style="margin-top:18px"><div class="section-header"><div><div class="bnb-eyebrow">Trend</div><h3>Detections, last 14 days</h3></div></div><div class="sd-viz">${sparkline(Array.from({length:14},(_,i)=>{const r=rng(sp.c.charCodeAt(0)+i);return 2+Math.floor(r()*10);}),700,90,speciesColor(sp.n))}</div></div>
+    </div>
+    <div>
+      <div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Companions</div><h3>Sings with</h3></div><a class="action" href="Patterns_home.html">Matrix →</a></div><p class="bnb-meta" style="margin:4px 0 8px">Heard within 5 minutes of this bird, last 60 days.</p>${comp}</div>
+      <div class="bnb-card pad" style="margin-top:18px"><div class="section-header"><div><div class="bnb-eyebrow">Recent</div><h3>Latest detections</h3></div><a class="action" href="Today_home.html">See all →</a></div><div style="margin-top:4px">${recent}</div></div>
+    </div>
+  </div>`;
+}
+
+function render(){
+  const head=document.getElementById('sp-head');
+  head.style.display = DETAIL?'none':'';
+  const body=document.getElementById('sp-body');
+  body.innerHTML = DETAIL?viewDetail(DETAIL) : VIEW==='photos'?viewPhotos() : VIEW==='lifelist'?viewLife() : viewList();
+  applyDataStyle(body);
+  body.querySelectorAll('.sp-seg button').forEach(b=>b.addEventListener('click',()=>{VIEW=b.dataset.view;render();}));
+  body.querySelectorAll('.sp-chip').forEach(b=>b.addEventListener('click',()=>{FILTER=b.dataset.filter;render();}));
+  body.querySelectorAll('[data-sp]').forEach(el=>el.addEventListener('click',()=>{DETAIL=el.dataset.sp;render();window.scrollTo({top:0,behavior:'instant'});}));
+  const back=document.getElementById('sp-back'); if(back) back.addEventListener('click',(e)=>{e.preventDefault();DETAIL=null;render();});
+}
+(function themeToggle(){const btn=document.getElementById('theme-toggle'),icon=document.getElementById('theme-icon');const cur=()=>document.documentElement.getAttribute('data-theme')==='dark'?'dark':'light';function apply(t){document.documentElement.setAttribute('data-theme',t);icon.textContent=t==='dark'?'☀':'☽';}apply(cur());btn.addEventListener('click',()=>{const n=cur()==='dark'?'light':'dark';localStorage.setItem('theme',n);apply(n);});})();
+render();
+</script>
+</body>
+</html>

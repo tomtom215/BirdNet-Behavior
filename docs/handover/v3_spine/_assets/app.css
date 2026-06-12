@@ -1,0 +1,3435 @@
+/* ============================================================================
+   BirdNet-Behavior — design system
+   Ported from the original design-prototype token sheet.
+
+   Warm-neutral foundation, two OKLCH accents (moss = alive, dawn = time-of-day),
+   one alert hue (rare). Light + dark surfaces share accent hues; dark bumps
+   chroma so accents glow against the cool observatory base.
+
+   All fonts are self-hosted in /static/fonts (latin + latin-ext) and embedded
+   in the binary — no CDN dependency, so the UI renders fully offline on a Pi.
+   Noto Sans is the self-hosted fallback for Latin-script label packs; non-Latin
+   scripts use the client's installed system fonts named in --font-ui.
+   Theme is driven by the `data-theme` attribute on <html> (set pre-paint).
+============================================================================ */
+
+/* ── Fonts ────────────────────────────────────────────────────────────── */
+/* Inter Tight — UI */
+@font-face { font-family:"Inter Tight"; font-style:normal; font-weight:400; font-display:swap;
+  src:url(/static/fonts/inter-tight-latin-400-normal.woff2) format("woff2");
+  unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family:"Inter Tight"; font-style:normal; font-weight:400; font-display:swap;
+  src:url(/static/fonts/inter-tight-latin-ext-400-normal.woff2) format("woff2");
+  unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
+@font-face { font-family:"Inter Tight"; font-style:normal; font-weight:500; font-display:swap;
+  src:url(/static/fonts/inter-tight-latin-500-normal.woff2) format("woff2");
+  unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family:"Inter Tight"; font-style:normal; font-weight:500; font-display:swap;
+  src:url(/static/fonts/inter-tight-latin-ext-500-normal.woff2) format("woff2");
+  unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
+@font-face { font-family:"Inter Tight"; font-style:normal; font-weight:600; font-display:swap;
+  src:url(/static/fonts/inter-tight-latin-600-normal.woff2) format("woff2");
+  unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family:"Inter Tight"; font-style:normal; font-weight:600; font-display:swap;
+  src:url(/static/fonts/inter-tight-latin-ext-600-normal.woff2) format("woff2");
+  unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
+
+/* Instrument Serif — display */
+@font-face { font-family:"Instrument Serif"; font-style:normal; font-weight:400; font-display:swap;
+  src:url(/static/fonts/instrument-serif-latin-400-normal.woff2) format("woff2");
+  unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family:"Instrument Serif"; font-style:normal; font-weight:400; font-display:swap;
+  src:url(/static/fonts/instrument-serif-latin-ext-400-normal.woff2) format("woff2");
+  unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
+@font-face { font-family:"Instrument Serif"; font-style:italic; font-weight:400; font-display:swap;
+  src:url(/static/fonts/instrument-serif-latin-400-italic.woff2) format("woff2");
+  unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family:"Instrument Serif"; font-style:italic; font-weight:400; font-display:swap;
+  src:url(/static/fonts/instrument-serif-latin-ext-400-italic.woff2) format("woff2");
+  unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
+
+/* JetBrains Mono — mono */
+@font-face { font-family:"JetBrains Mono"; font-style:normal; font-weight:400; font-display:swap;
+  src:url(/static/fonts/jetbrains-mono-latin-400-normal.woff2) format("woff2");
+  unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family:"JetBrains Mono"; font-style:normal; font-weight:400; font-display:swap;
+  src:url(/static/fonts/jetbrains-mono-latin-ext-400-normal.woff2) format("woff2");
+  unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
+@font-face { font-family:"JetBrains Mono"; font-style:normal; font-weight:500; font-display:swap;
+  src:url(/static/fonts/jetbrains-mono-latin-500-normal.woff2) format("woff2");
+  unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family:"JetBrains Mono"; font-style:normal; font-weight:500; font-display:swap;
+  src:url(/static/fonts/jetbrains-mono-latin-ext-500-normal.woff2) format("woff2");
+  unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
+
+/* Noto Sans — self-hosted Latin/latin-ext fallback for the BirdNET language
+   label packs. Non-Latin scripts (CJK, Devanagari, …) fall through to the
+   client's installed system fonts named in --font-ui (no CDN dependency). */
+@font-face { font-family:"Noto Sans"; font-style:normal; font-weight:400; font-display:swap;
+  src:url(/static/fonts/noto-sans-latin-400-normal.woff2) format("woff2");
+  unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family:"Noto Sans"; font-style:normal; font-weight:400; font-display:swap;
+  src:url(/static/fonts/noto-sans-latin-ext-400-normal.woff2) format("woff2");
+  unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
+@font-face { font-family:"Noto Sans"; font-style:normal; font-weight:500; font-display:swap;
+  src:url(/static/fonts/noto-sans-latin-500-normal.woff2) format("woff2");
+  unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family:"Noto Sans"; font-style:normal; font-weight:500; font-display:swap;
+  src:url(/static/fonts/noto-sans-latin-ext-500-normal.woff2) format("woff2");
+  unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
+@font-face { font-family:"Noto Sans"; font-style:normal; font-weight:600; font-display:swap;
+  src:url(/static/fonts/noto-sans-latin-600-normal.woff2) format("woff2");
+  unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family:"Noto Sans"; font-style:normal; font-weight:600; font-display:swap;
+  src:url(/static/fonts/noto-sans-latin-ext-600-normal.woff2) format("woff2");
+  unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
+
+/* ── Tokens · light (default) ─────────────────────────────────────────── */
+:root,
+:root[data-theme="light"] {
+  --bg:          oklch(98.5% 0.004 80);
+  --bg-2:        oklch(96.5% 0.005 80);
+  --surface:     oklch(100% 0 0);
+  --surface-2:   oklch(97.5% 0.004 80);
+  --border:      oklch(90% 0.006 80);
+  --border-2:    oklch(82% 0.008 80);
+  --hairline:    oklch(94% 0.005 80);
+
+  --fg:          oklch(22% 0.008 70);
+  --fg-2:        oklch(40% 0.008 70);
+  --fg-3:        oklch(55% 0.008 70);
+  --fg-4:        oklch(70% 0.008 70);
+
+  --moss:        oklch(55% 0.09 150);
+  --moss-soft:   oklch(92% 0.04 150);
+  --moss-ink:    oklch(35% 0.09 150);
+
+  --dawn:        oklch(68% 0.12 60);
+  --dawn-soft:   oklch(94% 0.05 65);
+  --dawn-ink:    oklch(42% 0.12 55);
+
+  --rare:        oklch(58% 0.16 28);
+  --rare-soft:   oklch(94% 0.05 28);
+
+  --paper:       oklch(96% 0.012 75);
+  --night:       oklch(28% 0.04 270);
+
+  --shadow-sm:   0 1px 2px oklch(0% 0 0 / .04), 0 0 0 0.5px oklch(0% 0 0 / .04);
+  --shadow-md:   0 4px 14px oklch(0% 0 0 / .06), 0 0 0 0.5px oklch(0% 0 0 / .04);
+  --shadow-lg:   0 18px 40px oklch(0% 0 0 / .08), 0 0 0 0.5px oklch(0% 0 0 / .05);
+
+  --r-xs: 4px; --r-sm: 6px; --r-md: 10px; --r-lg: 14px; --r-xl: 20px;
+
+  --density: 1;
+  --pad-1: calc(8px  * var(--density));
+  --pad-2: calc(12px * var(--density));
+  --pad-3: calc(18px * var(--density));
+  --pad-4: calc(28px * var(--density));
+
+  --font-display: "Instrument Serif", "Source Serif 4", Georgia, "Noto Serif CJK SC", "Noto Serif CJK JP", serif;
+  --font-ui:      "Inter Tight", "Noto Sans", "Noto Sans CJK SC", "Noto Sans CJK JP", "Noto Sans CJK KR", "Noto Sans Devanagari", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono:    "JetBrains Mono", "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* Legacy aliases — keep pre-redesign partials/screens visually consistent */
+  --bg-card:      var(--surface);
+  --bg-hover:     var(--surface-2);
+  --text:         var(--fg);
+  --text-muted:   var(--fg-3);
+  --accent:       var(--moss);
+  --accent-dim:   var(--moss-ink);
+  --accent-rgb:   60, 120, 80;
+  --success:      var(--moss);
+  --warning:      var(--dawn-ink);
+  --danger:       var(--rare);
+  --radius:       var(--r-md);
+  --input-bg:     var(--surface);
+  --conf-high-bg: var(--moss-soft);
+  --conf-mid-bg:  var(--dawn-soft);
+  --conf-low-bg:  var(--rare-soft);
+}
+
+/* ── Tokens · dark ────────────────────────────────────────────────────── */
+:root[data-theme="dark"] {
+  --bg:          oklch(12% 0.008 250);
+  --bg-2:        oklch(15% 0.008 250);
+  --surface:     oklch(18% 0.010 250);
+  --surface-2:   oklch(22% 0.010 250);
+  --border:      oklch(28% 0.014 250);
+  --border-2:    oklch(40% 0.018 250);
+  --hairline:    oklch(24% 0.012 250);
+
+  --fg:          oklch(97% 0.004 240);
+  --fg-2:        oklch(80% 0.008 240);
+  --fg-3:        oklch(60% 0.010 240);
+  --fg-4:        oklch(42% 0.012 240);
+
+  --moss:        oklch(78% 0.18 150);
+  --moss-soft:   oklch(26% 0.10 150);
+  --moss-ink:    oklch(90% 0.16 150);
+
+  --dawn:        oklch(82% 0.18 65);
+  --dawn-soft:   oklch(28% 0.10 60);
+  --dawn-ink:    oklch(92% 0.16 60);
+
+  --rare:        oklch(74% 0.20 25);
+  --rare-soft:   oklch(28% 0.12 25);
+
+  --paper:       oklch(18% 0.010 250);
+  --night:       oklch(8% 0.020 250);
+
+  --shadow-sm:   0 1px 2px oklch(0% 0 0 / .50), 0 0 0 0.5px oklch(100% 0 0 / .04);
+  --shadow-md:   0 8px 24px oklch(0% 0 0 / .55), 0 0 0 0.5px oklch(100% 0 0 / .06);
+  --shadow-lg:   0 24px 60px oklch(0% 0 0 / .65), 0 0 0 0.5px oklch(100% 0 0 / .07);
+
+  --warning:     var(--dawn);
+  --accent-rgb:  120, 200, 150;
+}
+
+/* Dark-mode richness */
+:root[data-theme="dark"] .bnb-card {
+  background: linear-gradient(180deg, oklch(20% 0.010 250) 0%, oklch(17% 0.010 250) 100%);
+  border-color: oklch(28% 0.014 250);
+  position: relative;
+}
+:root[data-theme="dark"] .bnb-card::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  background: linear-gradient(180deg, oklch(100% 0 0 / .04) 0%, transparent 30%, transparent 100%);
+}
+:root[data-theme="dark"] svg [data-species-fill],
+:root[data-theme="dark"] .streamgraph-band,
+:root[data-theme="dark"] .ridge-band,
+:root[data-theme="dark"] .mosaic-bar { filter: saturate(1.25) brightness(1.30); }
+:root[data-theme="dark"] .chord-ribbon { filter: saturate(1.20) brightness(1.20); }
+:root[data-theme="dark"] .display { text-shadow: 0 0 28px oklch(60% 0.04 240 / .10); }
+
+/* ── Base ─────────────────────────────────────────────────────────────── */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  font-family: var(--font-ui);
+  font-feature-settings: "ss01", "cv11";
+  background: var(--bg);
+  color: var(--fg);
+  letter-spacing: -0.005em;
+  font-size: 14px;
+  line-height: 1.5;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--moss-ink); text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4 { margin: 0; font-weight: 500; letter-spacing: -0.015em; }
+p { margin: 0; }
+button { font: inherit; color: inherit; }
+img { max-width: 100%; }
+
+.display { font-family: var(--font-display); letter-spacing: -0.01em; font-weight: 400; line-height: 1.05; }
+.mono    { font-family: var(--font-mono); font-feature-settings: "ss02"; font-variant-numeric: tabular-nums; }
+.tabular { font-variant-numeric: tabular-nums; }
+em       { font-style: italic; }
+
+/* ── Atoms ────────────────────────────────────────────────────────────── */
+.bnb-card {
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm);
+}
+.bnb-card.flush { border-radius: 0; border-left: 0; border-right: 0; box-shadow: none; }
+.bnb-card.pad   { padding: var(--pad-3); }
+.bnb-divider { height: 1px; background: var(--hairline); border: 0; margin: 0; }
+.bnb-vrule   { width: 1px; background: var(--hairline); align-self: stretch; }
+
+.bnb-eyebrow {
+  font-size: 10.5px; letter-spacing: 0.10em; text-transform: uppercase;
+  color: var(--fg-3); font-weight: 500;
+}
+.bnb-meta { font-size: 11.5px; color: var(--fg-3); }
+
+.bnb-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 500; line-height: 1.5;
+  background: var(--surface-2); color: var(--fg-2);
+  border: 0.5px solid var(--border);
+}
+.bnb-pill.moss { background: var(--moss-soft); color: var(--moss-ink); border-color: transparent; }
+.bnb-pill.dawn { background: var(--dawn-soft); color: var(--dawn-ink); border-color: transparent; }
+.bnb-pill.rare { background: var(--rare-soft); color: var(--rare);     border-color: transparent; }
+a.bnb-pill:hover { text-decoration: none; background: var(--bg-2); }
+
+.bnb-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--fg-3); display: inline-block; flex: 0 0 auto; }
+.bnb-dot.live { background: var(--moss); animation: bnb-pulse 1.6s ease-out infinite; }
+.bnb-dot.dawn { background: var(--dawn); }
+.bnb-dot.rare { background: var(--rare); }
+@keyframes bnb-pulse {
+  0%   { box-shadow: 0 0 0 0 oklch(55% 0.09 150 / .6); }
+  70%  { box-shadow: 0 0 0 7px oklch(55% 0.09 150 / 0); }
+  100% { box-shadow: 0 0 0 0 oklch(55% 0.09 150 / 0); }
+}
+@keyframes bnb-rise { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+.bnb-rise { animation: bnb-rise 320ms cubic-bezier(.2,.7,.2,1); }
+
+.bnb-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 6px 12px; border-radius: var(--r-sm);
+  background: var(--surface); border: 0.5px solid var(--border-2);
+  color: var(--fg); font-size: 12.5px; font-weight: 500;
+  box-shadow: var(--shadow-sm); cursor: pointer; text-decoration: none;
+  transition: background .12s ease, border-color .12s ease;
+}
+.bnb-btn:hover { background: var(--surface-2); text-decoration: none; }
+.bnb-btn.primary { background: var(--fg); color: var(--bg); border-color: transparent; }
+.bnb-btn.primary:hover { background: var(--fg-2); }
+.bnb-btn.ghost { background: transparent; border-color: transparent; box-shadow: none; color: var(--fg-2); }
+.bnb-btn.ghost:hover { background: var(--surface-2); }
+.bnb-btn.moss { background: var(--moss); color: oklch(100% 0 0); border-color: transparent; }
+.bnb-btn.danger { color: var(--rare); border-color: color-mix(in oklch, var(--rare) 40%, var(--border)); }
+
+.bnb-photo {
+  background: repeating-linear-gradient(45deg, var(--surface-2) 0 8px, var(--bg-2) 8px 16px);
+  position: relative; overflow: hidden;
+}
+
+.bnb-dotgrid { background-image: radial-gradient(circle at center, var(--border) 0.7px, transparent 0.8px); background-size: 18px 18px; }
+
+/* Sparkline */
+.bnb-spark .line { stroke: var(--moss); stroke-width: 1.4; fill: none; }
+.bnb-spark .area { fill: var(--moss); opacity: 0.10; }
+.bnb-spark .pt   { fill: var(--moss); }
+
+/* Time-of-day heat ramp (dawn hue) */
+.bnb-heat-0 { background: var(--surface-2); }
+.bnb-heat-1 { background: color-mix(in oklch, var(--dawn) 14%, var(--surface-2)); }
+.bnb-heat-2 { background: color-mix(in oklch, var(--dawn) 30%, var(--surface-2)); }
+.bnb-heat-3 { background: color-mix(in oklch, var(--dawn) 50%, var(--surface-2)); }
+.bnb-heat-4 { background: color-mix(in oklch, var(--dawn) 72%, var(--surface-2)); }
+.bnb-heat-5 { background: var(--dawn); }
+
+/* Species avatar (4-letter code chip in species colour, set inline via --sp) */
+.bnb-avatar {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 50%;
+  font-family: var(--font-mono); font-size: 9.5px; font-weight: 600; letter-spacing: .5px;
+  background: color-mix(in oklch, var(--sp, var(--moss)) 22%, var(--surface));
+  color: var(--sp, var(--moss-ink)); flex: 0 0 auto;
+}
+.bnb-avatar.sm { width: 24px; height: 24px; font-size: 9px; }
+.bnb-avatar.lg { width: 36px; height: 36px; font-size: 11px; }
+
+/* Confidence bar */
+.bnb-conf { display: inline-flex; align-items: center; gap: 6px; }
+.bnb-conf .track { width: 56px; height: 4px; border-radius: 2px; background: var(--bg-2); overflow: hidden; display: inline-block; }
+.bnb-conf .fill  { display: block; height: 100%; background: var(--fg-3); }
+.bnb-conf.high .fill { background: var(--moss); }
+.bnb-conf.mid  .fill { background: var(--dawn); }
+.bnb-conf .val { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); }
+
+/* ── Shell: top nav ───────────────────────────────────────────────────── */
+.topnav {
+  position: sticky; top: 0; z-index: 50;
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 10px 22px;
+  background: color-mix(in oklch, var(--bg) 86%, transparent);
+  backdrop-filter: saturate(1.4) blur(8px);
+  border-bottom: 0.5px solid var(--hairline);
+}
+.topnav-brand { display: flex; align-items: center; gap: 8px; text-decoration: none; }
+.topnav-brand:hover { text-decoration: none; }
+.topnav-brand .name { font-weight: 600; letter-spacing: -0.01em; font-size: 14px; color: var(--fg); }
+.topnav-brand .sub  { color: var(--fg-3); font-size: 14px; }
+.topnav-links { display: flex; gap: 2px; flex-wrap: wrap; align-items: center; }
+.topnav-link {
+  padding: 4px 10px; border-radius: 6px; text-decoration: none;
+  font-size: 13px; color: var(--fg-3); font-weight: 400; white-space: nowrap;
+}
+.topnav-link:hover { text-decoration: none; color: var(--fg); background: var(--surface-2); }
+.topnav-link.active { color: var(--fg); background: var(--surface-2); font-weight: 500; }
+.topnav-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+.topnav-right .bnb-meta.mono { white-space: nowrap; }
+.icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: var(--r-sm);
+  border: 0.5px solid var(--border); background: var(--surface); color: var(--fg-2);
+  cursor: pointer; font-size: 14px; line-height: 1;
+}
+.icon-btn:hover { background: var(--surface-2); color: var(--fg); }
+.nav-search input {
+  padding: 5px 10px; border: 0.5px solid var(--border); border-radius: var(--r-sm);
+  background: var(--surface); color: var(--fg); font-size: 12.5px; width: 150px;
+  transition: width .2s ease, border-color .2s ease; font-family: var(--font-ui);
+}
+.nav-search input:focus { width: 210px; outline: none; border-color: var(--moss); }
+
+/* ── Layout ───────────────────────────────────────────────────────────── */
+main {
+  max-width: 1440px; margin: 0 auto;
+  padding: var(--pad-4) var(--pad-4) 64px;
+  display: flex; flex-direction: column; gap: var(--pad-3);
+}
+.page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.hero { display: grid; grid-template-columns: 1.25fr 1fr; gap: var(--pad-4); align-items: center; }
+.hero h1 { font-family: var(--font-display); font-size: 60px; line-height: 1.02; letter-spacing: -0.025em; text-wrap: balance; }
+.hero h1 em { color: var(--moss-ink); }
+.hero-lead { margin-top: 14px; color: var(--fg-2); font-size: 15px; max-width: 540px; line-height: 1.55; }
+.pill-row { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+
+.section-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.section-header h3 { font-family: var(--font-display); font-size: 22px; }
+.section-header .action { font-size: 11.5px; color: var(--fg-3); }
+
+/* Stat blocks */
+.stat { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.stat .label { font-size: 10.5px; letter-spacing: 0.10em; text-transform: uppercase; color: var(--fg-3); font-weight: 500; }
+.stat .value { font-family: var(--font-display); font-variant-numeric: tabular-nums; font-size: 28px; line-height: 1; color: var(--fg); }
+.stat.lg .value { font-size: 40px; }
+.stat.sm .value { font-size: 20px; }
+.stat .sub { font-family: var(--font-mono); font-size: 11.5px; color: var(--fg-3); }
+
+/* 4-up stat row with hairline dividers */
+.stat-row {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 0;
+  border: 0.5px solid var(--border); border-radius: var(--r-lg);
+  overflow: hidden; background: var(--surface); box-shadow: var(--shadow-sm);
+}
+.stat-tile { padding: var(--pad-3); border-right: 0.5px solid var(--hairline); display: flex; flex-direction: column; gap: 12px; min-height: 150px; }
+.stat-tile:last-child { border-right: 0; }
+.stat-tile .value { font-family: var(--font-display); font-variant-numeric: tabular-nums; font-size: 44px; line-height: .95; letter-spacing: -0.02em; }
+.stat-tile .chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.stat-tile .chip { font-family: var(--font-mono); font-size: 10px; padding: 2px 6px; border-radius: 3px; font-weight: 500; background: var(--surface-2); color: var(--fg-2); }
+
+/* Feed rows (dashboard live feed) */
+.feed { display: flex; flex-direction: column; gap: 6px; }
+.feed-row {
+  display: grid; grid-template-columns: 64px 36px 1fr 130px 92px auto;
+  align-items: center; gap: 12px; padding: 10px; border-radius: 8px;
+  border: 0.5px solid transparent; transition: background .6s, border-color .6s;
+}
+.feed-row .ago { font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-3); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.feed-row .who .name { font-weight: 500; font-size: 14px; }
+.feed-row .who .sci  { font-family: var(--font-mono); font-size: 11.5px; color: var(--fg-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.feed-row.fresh { background: color-mix(in oklch, var(--moss) 6%, var(--surface)); border-color: color-mix(in oklch, var(--moss) 30%, var(--border)); }
+
+/* Mini bar waveform (deterministic envelope rendered server-side) */
+.waveform { display: inline-flex; align-items: center; gap: 1.5px; height: 22px; }
+.waveform span { width: 2px; border-radius: 1px; background: color-mix(in oklch, var(--moss) 60%, var(--fg-4)); }
+
+/* Activity heatmap (compact) */
+.miniheat-row { display: flex; gap: 6px; align-items: center; margin-top: 3px; }
+.miniheat-row .day { font-family: var(--font-mono); font-size: 10px; color: var(--fg-3); width: 28px; }
+.miniheat-cells { flex: 1; display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; }
+.miniheat-cells > div { aspect-ratio: 1; border-radius: 2px; }
+
+/* Generic list rows */
+.list-row { display: grid; align-items: center; gap: 10px; padding: 8px 0; border-top: 0.5px solid var(--hairline); }
+.list-row:first-child { border-top: 0; }
+
+/* ── Legacy class bridges (pre-redesign screens/partials) ─────────────── */
+.card {
+  background: var(--surface); border: 0.5px solid var(--border);
+  border-radius: var(--r-lg); padding: var(--pad-3); margin-bottom: var(--pad-3);
+  box-shadow: var(--shadow-sm);
+}
+.card h2 {
+  font-size: 11px; font-weight: 500; color: var(--fg-3);
+  text-transform: uppercase; letter-spacing: 0.10em; margin-bottom: 14px;
+  display: flex; align-items: center; gap: 6px;
+}
+.grid-2 { display: grid; grid-template-columns: 1.35fr 1fr; gap: var(--pad-3); }
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--pad-2); margin-bottom: var(--pad-3); }
+.stat-card {
+  background: var(--surface); border: 0.5px solid var(--border);
+  border-radius: var(--r-lg); padding: var(--pad-3); box-shadow: var(--shadow-sm);
+}
+.stat-card .value { font-family: var(--font-display); font-variant-numeric: tabular-nums; font-size: 34px; line-height: 1; color: var(--fg); }
+.stat-card .label { font-size: 10.5px; letter-spacing: 0.10em; text-transform: uppercase; color: var(--fg-3); margin-top: 8px; font-weight: 500; }
+
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 8px 12px; text-align: left; border-bottom: 0.5px solid var(--hairline); }
+th { font-size: 10.5px; font-weight: 500; color: var(--fg-3); text-transform: uppercase; letter-spacing: 0.08em; }
+td { font-size: 13px; }
+tbody tr:hover { background: var(--surface-2); }
+
+.conf { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.conf.high { background: var(--moss-soft); color: var(--moss-ink); }
+.conf.mid  { background: var(--dawn-soft); color: var(--dawn-ink); }
+.conf.low  { background: var(--rare-soft); color: var(--rare); }
+
+.live-dot { display: inline-block; width: 7px; height: 7px; background: var(--moss); border-radius: 50%; margin-right: 4px; animation: bnb-pulse 1.6s ease-out infinite; }
+
+.species-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 0.5px solid var(--hairline); gap: 10px; }
+.species-item:last-child { border-bottom: none; }
+.species-name { font-weight: 500; }
+.species-count { font-family: var(--font-mono); background: var(--surface-2); padding: 2px 9px; border-radius: 999px; font-size: 12px; color: var(--fg-2); }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 6px 12px; border: 0.5px solid var(--border-2); border-radius: var(--r-sm);
+  background: var(--surface); color: var(--fg); font-size: 12.5px; font-weight: 500;
+  box-shadow: var(--shadow-sm); cursor: pointer; transition: background .12s;
+}
+.btn:hover { background: var(--surface-2); text-decoration: none; }
+.btn-primary { background: var(--moss); color: oklch(100% 0 0); border-color: transparent; }
+.btn-primary:hover { background: var(--moss-ink); }
+.btn.active { background: var(--fg); color: var(--bg); border-color: transparent; }
+
+/* Segmented control (period / range pickers) */
+.seg { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+
+input[type="text"], input[type="search"], input[type="date"], input[type="number"], input[type="password"], select, textarea {
+  padding: 6px 10px; border: 0.5px solid var(--border-2); border-radius: var(--r-sm);
+  background: var(--surface); color: var(--fg); font-size: 13px; font-family: var(--font-ui);
+}
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--moss); box-shadow: 0 0 0 2px color-mix(in oklch, var(--moss) 25%, transparent); }
+
+.badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 500; }
+.badge-success { background: var(--moss-soft); color: var(--moss-ink); }
+.badge-warning { background: var(--dawn-soft); color: var(--dawn-ink); }
+.badge-danger  { background: var(--rare-soft); color: var(--rare); }
+
+.progress { height: 6px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+.progress-bar { height: 100%; border-radius: 3px; background: var(--moss); transition: width .3s; }
+
+.empty-state { text-align: center; padding: 48px 24px; color: var(--fg-3); }
+.empty-state svg { width: 48px; height: 48px; margin-bottom: 12px; opacity: .5; }
+
+/* Inline data-bar + linkable species name + tag (co-occurrence, companions) */
+.bar { height: 8px; background: var(--moss); border-radius: 4px; min-width: 4px; }
+.species-link { color: var(--moss-ink); font-weight: 500; }
+.tag { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 500; background: var(--moss-soft); color: var(--moss-ink); }
+
+/* Legacy status dot */
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--fg-3); margin-right: 5px; vertical-align: middle; }
+.dot.ok { background: var(--moss); }
+.dot.warn { background: var(--dawn); }
+.dot.err { background: var(--rare); }
+
+/* ── Footer ───────────────────────────────────────────────────────────── */
+footer {
+  text-align: center; padding: 28px 22px; color: var(--fg-3); font-size: 12px;
+  border-top: 0.5px solid var(--hairline); margin-top: 12px;
+}
+footer a { color: var(--fg-3); }
+footer a:hover { color: var(--moss-ink); }
+
+/* ── HTMX ─────────────────────────────────────────────────────────────── */
+.htmx-indicator { display: none; opacity: 0; transition: opacity .3s; }
+.htmx-request .htmx-indicator, .htmx-request.htmx-indicator { display: inline-block; opacity: 1; }
+.htmx-swapping { opacity: .5; transition: opacity .15s; }
+.htmx-settling { opacity: 1; transition: opacity .25s; }
+
+/* ── Accessibility ────────────────────────────────────────────────────── */
+:focus-visible { outline: 2px solid var(--moss); outline-offset: 2px; border-radius: 2px; }
+.skip-link {
+  position: absolute; top: -48px; left: 8px; z-index: 100;
+  background: var(--moss); color: oklch(100% 0 0); padding: 8px 14px; border-radius: var(--r-sm);
+  transition: top .2s;
+}
+.skip-link:focus { top: 8px; }
+
+/* Visually-hidden but screen-reader-available (labels for icon-only controls,
+   chart descriptions, etc.). */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
+/* Live detection-stream indicator, driven by live-detections.js. Hidden until
+   the client opens the socket; dimmed while reconnecting. */
+#live-status[data-state="reconnecting"] { opacity: .6; }
+#live-status[data-state="live"] .bnb-dot { background: var(--moss); }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--fg-4); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+  .bnb-dot.live, .live-dot { animation: none; }
+}
+
+/* ── Responsive ───────────────────────────────────────────────────────── */
+@media (max-width: 980px) {
+  .hero { grid-template-columns: 1fr; }
+  .hero h1 { font-size: 46px; }
+  .stat-row { grid-template-columns: repeat(2, 1fr); }
+  .stat-tile:nth-child(2) { border-right: 0; }
+  .stat-tile { border-bottom: 0.5px solid var(--hairline); }
+  .grid-2 { grid-template-columns: 1fr; }
+}
+@media (max-width: 720px) {
+  main { padding: var(--pad-3) var(--pad-3) 56px; }
+  .feed-row { grid-template-columns: 52px 30px 1fr auto; }
+  .feed-row .waveform, .feed-row .bnb-conf { display: none; }
+  .topnav { padding: 8px 14px; }
+  .topnav-right .bnb-meta.mono { display: none; }
+  table { display: block; overflow-x: auto; }
+}
+@media (max-width: 520px) {
+  .stat-row { grid-template-columns: 1fr 1fr; }
+  .hero h1 { font-size: 38px; }
+}
+
+/* ── BNB:CSS-APPEND:O-03_display_prefs ── */
+/* Append to crates/birdnet-web/static/css/app.css
+   — wires the two new preference keys read by the display-prefs card.
+   No changes to existing rules; purely additive. */
+
+/* ── Motion override (in addition to OS prefers-reduced-motion) ──── */
+:root[data-motion="reduced"] *,
+:root[data-motion="reduced"] *::before,
+:root[data-motion="reduced"] *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+}
+:root[data-motion="reduced"] .bnb-dot.live,
+:root[data-motion="reduced"] .live-dot { animation: none; }
+
+/* ── High-contrast override (in addition to OS prefers-contrast) ─── */
+:root[data-contrast="high"] {
+  /* Darken borders, intensify ink. Light theme. */
+  --border:   oklch(72% 0.010 80);
+  --border-2: oklch(58% 0.012 80);
+  --hairline: oklch(82% 0.010 80);
+  --fg-3:     oklch(40% 0.010 70);
+  --fg-4:     oklch(55% 0.012 70);
+}
+:root[data-contrast="high"][data-theme="dark"] {
+  /* Dark theme high-contrast — brighter text/borders. */
+  --border:   oklch(46% 0.018 250);
+  --border-2: oklch(58% 0.022 250);
+  --hairline: oklch(40% 0.016 250);
+  --fg-3:     oklch(78% 0.012 240);
+  --fg-4:     oklch(62% 0.014 240);
+}
+
+/* High-contrast: thicken the half-pixel hairlines that look great at standard
+   contrast but disappear when the user explicitly asks for sharper edges. */
+:root[data-contrast="high"] .bnb-card,
+:root[data-contrast="high"] .stat-row,
+:root[data-contrast="high"] .stat-card,
+:root[data-contrast="high"] .card,
+:root[data-contrast="high"] .bnb-btn {
+  border-width: 1px;
+}
+
+/* ── /BNB:CSS-APPEND:O-03_display_prefs ── */
+
+/* ── Responsive overflow hardening ──────────────────────────────────────
+   All rules are scoped to <=1080px so the desktop layout is unchanged.
+   CSS grid/flex children default to min-width:auto and refuse to shrink
+   below their content's intrinsic width, which pushed wide cards, charts
+   and tables past the viewport at laptop/tablet/phone widths. Let the
+   columns shrink, stack the two-column layouts a little earlier, and let
+   wide tables and charts scroll inside their card instead of the page. */
+.grid-2 > *,
+.hero > *,
+.stat-tile { min-width: 0; }
+
+/* Wide chart SVGs (e.g. the activity heatmap, which grows with the date
+   range) scale down to their card instead of overflowing. SVGs that already
+   fit are unaffected, so the desktop layout is unchanged. */
+.bnb-card svg,
+.card svg { max-width: 100%; height: auto; }
+
+@media (max-width: 1080px) {
+  .grid-2 { grid-template-columns: 1fr; }
+}
+@media (max-width: 980px) {
+  /* Wide data tables scroll within their container rather than the page. */
+  table { display: block; overflow-x: auto; white-space: nowrap; }
+}
+@media (max-width: 720px) {
+  /* On phones, a card holding a wide fixed-size chart scrolls sideways
+     instead of forcing a horizontal scrollbar on the whole document. */
+  .bnb-card { overflow-x: auto; }
+}
+@media (max-width: 520px) {
+  /* Phone fallback: any element whose inline style sets an explicit
+     multi-column grid (history's 200px+1fr layout, the audio device rows,
+     the onboarding step grids, etc.) collapses to a single column so it
+     can't push past a 390px viewport. Class-based grids (.grid-2) are
+     already handled above; this catches the inline ones the global rules
+     can't select. */
+  [style*="grid-template-columns"] { grid-template-columns: 1fr !important; }
+}
+/* Append to crates/birdnet-web/static/css/app.css — purely additive.
+   Skeleton shimmer used by pages::skeletons helpers (O-16). */
+
+/* ── Skeleton shimmer ─────────────────────────────────────────────── */
+.bnb-skel {
+  display: block;
+  background:
+    linear-gradient(
+      90deg,
+      var(--surface-2) 0%,
+      color-mix(in oklch, var(--hairline) 65%, var(--surface-2)) 40%,
+      color-mix(in oklch, var(--hairline) 65%, var(--surface-2)) 60%,
+      var(--surface-2) 100%
+    );
+  background-size: 200% 100%;
+  border-radius: var(--r-sm);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .bnb-skel { animation: bnb-skel-shimmer 1.4s cubic-bezier(.4, 0, .2, 1) infinite; }
+}
+:root[data-motion="reduced"] .bnb-skel { animation: none; }
+
+@keyframes bnb-skel-shimmer {
+  0%   { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+/* Convenience modifiers — height presets matching the shapes the helpers emit. */
+.bnb-skel.line   { height: 12px; border-radius: 3px; }
+.bnb-skel.line.lg { height: 20px; }
+.bnb-skel.line.xl { height: 32px; }
+.bnb-skel.pill   { height: 18px; width: 80px; border-radius: 999px; }
+.bnb-skel.dot    { width: 6px; height: 6px; border-radius: 999px; }
+.bnb-skel.avatar { width: 28px; height: 28px; border-radius: 999px; flex: 0 0 auto; }
+.bnb-skel.avatar.lg { width: 36px; height: 36px; }
+.bnb-skel.tile   { height: 110px; border-radius: var(--r-md); }
+.bnb-skel.box    { border-radius: var(--r-md); }
+
+/* Composite layouts the helpers use — kept in CSS so server-side helpers stay tiny. */
+.bnb-skel-feed-row {
+  display: grid;
+  grid-template-columns: 64px 36px 1fr 130px 92px auto;
+  gap: 12px; align-items: center; padding: 10px;
+}
+.bnb-skel-stat-row {
+  display: grid; grid-template-columns: repeat(var(--n, 4), 1fr); gap: 0;
+  border: 0.5px solid var(--border); border-radius: var(--r-lg); overflow: hidden;
+  background: var(--surface); box-shadow: var(--shadow-sm);
+}
+.bnb-skel-stat-row > div {
+  padding: var(--pad-3); border-right: 0.5px solid var(--hairline);
+  display: flex; flex-direction: column; gap: 12px; min-height: 150px;
+}
+.bnb-skel-stat-row > div:last-child { border-right: 0; }
+
+.bnb-skel-bars {
+  display: grid; grid-template-columns: repeat(var(--n, 24), 1fr);
+  gap: 2px; align-items: end; height: 80px;
+}
+.bnb-skel-bars > span {
+  display: block; background: var(--surface-2);
+  border-radius: 2px 2px 0 0;
+  /* FOUC default: skeleton bar heights ride data-style (computed/varied),
+     applied via CSSOM after parse; this keeps them from collapsing to 0 in
+     the sub-frame before the applier runs. The data-style height overrides. */
+  height: 45%;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .bnb-skel-bars > span { animation: bnb-skel-shimmer 1.4s cubic-bezier(.4,0,.2,1) infinite; background-size:200% 100%; }
+}
+
+.bnb-skel-list { display: flex; flex-direction: column; }
+.bnb-skel-list-row {
+  display: grid; grid-template-columns: 28px 1fr 56px;
+  gap: 12px; align-items: center; padding: 10px 0;
+  border-top: 0.5px solid var(--hairline);
+}
+.bnb-skel-list-row:first-child { border-top: 0; }
+/* Append to crates/birdnet-web/static/css/app.css — purely additive.
+   Themed confirmation modal (O-17). Uses the native <dialog> element. */
+
+/* ── Modal · <dialog>-based ───────────────────────────────────────── */
+.bnb-modal {
+  /* Reset native dialog chrome. */
+  border: 0; padding: 0;
+  background: transparent;
+  color: var(--fg);
+  max-width: min(92vw, 460px);
+  width: 100%;
+  margin: auto; /* centred when opened via showModal() */
+}
+.bnb-modal::backdrop {
+  background: color-mix(in oklch, oklch(0% 0 0) 38%, transparent);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
+.bnb-modal__form {
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 0;
+  display: flex; flex-direction: column;
+  font-family: var(--font-ui);
+}
+.bnb-modal__head { padding: 22px 22px 12px; }
+.bnb-modal__body { padding: 4px 22px 18px; }
+.bnb-modal__foot {
+  padding: 14px 18px;
+  border-top: 0.5px solid var(--hairline);
+  background: var(--bg-2);
+  border-radius: 0 0 var(--r-lg) var(--r-lg);
+  display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+}
+
+/* Danger / warn theming on the dialog frame */
+.bnb-modal[data-style="danger"] .bnb-modal__form {
+  border-color: color-mix(in oklch, var(--rare) 40%, var(--border));
+  box-shadow: var(--shadow-lg), 0 0 0 4px color-mix(in oklch, var(--rare) 8%, transparent);
+}
+.bnb-modal[data-style="warn"] .bnb-modal__form {
+  border-color: color-mix(in oklch, var(--dawn) 50%, var(--border));
+}
+
+/* Show/hide animation when supported */
+@media (prefers-reduced-motion: no-preference) {
+  .bnb-modal[open] .bnb-modal__form {
+    animation: bnb-modal-rise 200ms cubic-bezier(.2,.7,.2,1);
+  }
+  .bnb-modal[open]::backdrop {
+    animation: bnb-modal-fade 200ms ease-out;
+  }
+}
+@keyframes bnb-modal-rise {
+  from { opacity: 0; transform: translateY(8px) scale(.985); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes bnb-modal-fade { from { opacity: 0; } to { opacity: 1; } }
+
+/* Extra button colour used only by the modal's "warn" style */
+.bnb-btn.dawn {
+  background: var(--dawn);
+  color: oklch(20% 0.04 60);
+  border-color: transparent;
+}
+.bnb-btn.dawn:hover { background: var(--dawn-ink); color: oklch(100% 0 0); }
+/* Append to crates/birdnet-web/static/css/app.css — purely additive.
+   Toast / snackbar region (O-18). */
+
+/* ── Toast region (global live region, top-right) ─────────────────── */
+#bnb-toasts {
+  position: fixed;
+  top: calc(56px + 12px); /* clear the sticky topnav (~56px) + gap */
+  right: 18px;
+  z-index: 60; /* above sticky topnav (z=50), below modal (<dialog> auto z) */
+  display: flex; flex-direction: column; gap: 8px;
+  pointer-events: none; /* let clicks through gaps; toasts re-enable themselves */
+  max-width: min(96vw, 360px);
+}
+
+.bnb-toast {
+  pointer-events: auto;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 14px;
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-md);
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--fg);
+  transition: opacity .2s ease, transform .2s cubic-bezier(.2,.7,.2,1);
+}
+.bnb-toast[data-leaving="1"] {
+  opacity: 0;
+  transform: translateX(8px);
+}
+
+.bnb-toast__dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 999px;
+  background: var(--fg-3);
+  margin-top: 6px;
+  flex: 0 0 auto;
+}
+.bnb-toast[data-kind="success"] .bnb-toast__dot { background: var(--moss); }
+.bnb-toast[data-kind="warn"]    .bnb-toast__dot { background: var(--dawn); }
+.bnb-toast[data-kind="error"]   .bnb-toast__dot { background: var(--rare); }
+.bnb-toast[data-kind="info"]    .bnb-toast__dot { background: var(--fg-3); }
+
+.bnb-toast__body {
+  min-width: 0;
+  word-wrap: break-word;
+}
+.bnb-toast__body strong { font-weight: 600; }
+.bnb-toast__body a {
+  color: var(--moss-ink);
+  text-decoration: none;
+  border-bottom: 0.5px solid color-mix(in oklch, var(--moss-ink) 30%, transparent);
+}
+.bnb-toast__body a:hover { border-bottom-color: var(--moss-ink); }
+
+.bnb-toast__close {
+  background: transparent;
+  border: 0;
+  color: var(--fg-3);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: var(--r-xs);
+  margin-top: -2px;
+}
+.bnb-toast__close:hover { color: var(--fg); background: var(--surface-2); }
+
+/* Tinted backgrounds — subtle, never fights with the page */
+.bnb-toast[data-kind="success"] {
+  background: color-mix(in oklch, var(--moss-soft) 60%, var(--surface));
+  border-color: color-mix(in oklch, var(--moss) 30%, var(--border));
+}
+.bnb-toast[data-kind="warn"] {
+  background: color-mix(in oklch, var(--dawn-soft) 55%, var(--surface));
+  border-color: color-mix(in oklch, var(--dawn) 35%, var(--border));
+}
+.bnb-toast[data-kind="error"] {
+  background: color-mix(in oklch, var(--rare-soft) 55%, var(--surface));
+  border-color: color-mix(in oklch, var(--rare) 35%, var(--border));
+  color: var(--fg);
+}
+
+/* Optional action link inside a toast (e.g. "Restart now") */
+.bnb-toast__action {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--moss-ink);
+  text-decoration: none;
+  border-bottom: 0.5px solid color-mix(in oklch, var(--moss-ink) 30%, transparent);
+}
+.bnb-toast__action:hover { border-bottom-color: var(--moss-ink); }
+/* Append to crates/birdnet-web/static/css/app.css — purely additive.
+   Layout utility classes that replace the recurring inline `style="…"`
+   shapes in the admin Rust handlers (O-25). Layout-only — no colour or
+   typography choices live here; the design system still owns those.
+*/
+
+/* ── Flex primitives ─────────────────────────────────────────────── */
+.bnb-row              { display: flex; align-items: center; gap: var(--pad-2); }
+.bnb-row.between      { justify-content: space-between; }
+.bnb-row.tight        { gap: 8px; }
+.bnb-row.wide         { gap: var(--pad-3); }
+.bnb-row.wrap         { flex-wrap: wrap; }
+.bnb-row.start        { align-items: flex-start; }
+.bnb-row.end          { align-items: flex-end; }
+
+.bnb-col              { display: flex; flex-direction: column; gap: var(--pad-2); }
+.bnb-col.tight        { gap: 8px; }
+.bnb-col.wide         { gap: var(--pad-3); }
+
+.bnb-stack            { display: grid; gap: var(--pad-2); }
+.bnb-stack.tight      { gap: 8px; }
+
+.bnb-spread {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: var(--pad-2);
+}
+
+.bnb-fill             { flex: 1; min-width: 0; }
+.bnb-shrink-0         { flex: 0 0 auto; }
+.bnb-ml-auto          { margin-left: auto; }
+.bnb-mt-auto          { margin-top: auto; }
+
+/* ── Grid templates (named shapes seen ≥4× in the codebase) ───────── */
+.bnb-grid-2           { display: grid; grid-template-columns: 1fr 1fr;           gap: var(--pad-3); }
+.bnb-grid-3           { display: grid; grid-template-columns: repeat(3, 1fr);    gap: var(--pad-3); }
+.bnb-grid-4           { display: grid; grid-template-columns: repeat(4, 1fr);    gap: var(--pad-3); }
+.bnb-grid-1-2         { display: grid; grid-template-columns: 1fr 2fr;           gap: var(--pad-3); }
+.bnb-grid-2-1         { display: grid; grid-template-columns: 2fr 1fr;           gap: var(--pad-3); }
+
+/* Sidebar / main / rail — used by audio, settings, system pages. */
+.bnb-grid-side {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr) 280px;
+  gap: var(--pad-3);
+  align-items: start;
+}
+.bnb-grid-side.wide { grid-template-columns: 240px minmax(0, 1fr) 320px; }
+.bnb-grid-side.no-rail { grid-template-columns: 200px minmax(0, 1fr); }
+@media (max-width: 980px) {
+  .bnb-grid-2, .bnb-grid-3, .bnb-grid-4,
+  .bnb-grid-1-2, .bnb-grid-2-1,
+  .bnb-grid-side, .bnb-grid-side.wide, .bnb-grid-side.no-rail
+  { grid-template-columns: 1fr; }
+}
+
+.bnb-side { position: sticky; top: 16px; align-self: start; }
+
+/* ── Form rows (settings render modules) ──────────────────────────── */
+.bnb-form-row {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 14px;
+  align-items: center;
+  padding: 12px 0;
+  border-top: 0.5px solid var(--hairline);
+}
+.bnb-form-row:first-child { border-top: 0; }
+.bnb-form-row.stacked { grid-template-columns: 1fr; gap: 6px; }
+.bnb-form-row > label { font-size: 13px; color: var(--fg-2); }
+.bnb-form-row > label .hint {
+  display: block; color: var(--fg-3); font-size: 11.5px; margin-top: 2px;
+}
+.bnb-form-row > .control { min-width: 0; }
+.bnb-form-row > .hint     { grid-column: 2; color: var(--fg-3); font-size: 11.5px; margin-top: -8px; }
+
+@media (max-width: 540px) {
+  .bnb-form-row { grid-template-columns: 1fr; }
+  .bnb-form-row > .hint { grid-column: 1; }
+}
+
+/* Range slider polish (was inline `accent-color` everywhere) */
+.bnb-range { width: 100%; accent-color: var(--moss); }
+
+/* Compact control widths for short numeric inputs / selects (O-25 sweep) */
+.bnb-w-num    { max-width: 120px; }
+.bnb-w-num-xs { max-width: 80px; }
+.bnb-w-select { max-width: 180px; }
+
+/* Inline key/value (settings preview, kpi sub-text) */
+.bnb-kv {
+  display: inline-flex; gap: 6px; align-items: baseline;
+  font-size: 12.5px;
+}
+.bnb-kv .k {
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.bnb-kv .v {
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Aside: settings sub-nav (sidebar links) ──────────────────────── */
+.bnb-settings-nav {
+  display: flex; flex-direction: column; gap: 2px;
+}
+.bnb-settings-nav a {
+  display: block;
+  padding: 7px 10px;
+  border-radius: 8px;
+  text-decoration: none;
+  font-size: 13px;
+  color: var(--fg-2);
+}
+.bnb-settings-nav a:hover { background: var(--surface-2); color: var(--fg); }
+.bnb-settings-nav a.active {
+  background: var(--moss-soft);
+  color: var(--moss-ink);
+  font-weight: 500;
+}
+
+/* ── Drop zone (backup-recovery upload, etc.) ─────────────────────── */
+.bnb-dropzone {
+  border: 0.5px dashed var(--border-2);
+  border-radius: var(--r-lg);
+  padding: var(--pad-4);
+  display: grid;
+  place-items: center;
+  text-align: center;
+  background:
+    repeating-linear-gradient(45deg,
+      var(--surface-2) 0 8px, var(--bg-2) 8px 16px);
+  color: var(--fg-3);
+  font-size: 13px;
+}
+.bnb-dropzone.dragover {
+  border-style: solid;
+  border-color: var(--moss);
+  background: color-mix(in oklch, var(--moss) 8%, var(--surface));
+  color: var(--moss-ink);
+}
+.bnb-dropzone .display {
+  font-size: 22px; color: var(--fg);
+}
+.bnb-dropzone .bnb-meta { margin-top: 4px; }
+
+/* ── Danger zone card (backup-recovery) ───────────────────────────── */
+.bnb-danger-zone {
+  border: 0.5px solid color-mix(in oklch, var(--rare) 40%, var(--border));
+  border-radius: var(--r-lg);
+  padding: var(--pad-3);
+  background: color-mix(in oklch, var(--rare) 4%, var(--surface));
+}
+.bnb-danger-zone .bnb-eyebrow { color: var(--rare); }
+.bnb-danger-zone > h3 { color: var(--fg); }
+.bnb-danger-zone .bnb-divider { background: color-mix(in oklch, var(--rare) 18%, var(--hairline)); }
+
+/* ── Logs / mono code block (admin logs viewer, birdnet.conf preview) ── */
+.bnb-logblock {
+  background: var(--bg-2);
+  border: 0.5px solid var(--hairline);
+  border-radius: var(--r-md);
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-2);
+  overflow: auto;
+  max-height: 360px;
+}
+.bnb-logblock .info { color: var(--fg-2); }
+.bnb-logblock .warn { color: var(--dawn-ink); }
+.bnb-logblock .err  { color: var(--rare); }
+/* Append to crates/birdnet-web/static/css/app.css — purely additive.
+   IA fix (O-26): More dropdown in topnav, real footer. */
+
+/* ── More button in the topnav ────────────────────────────────────── */
+.bnb-more {
+  display: inline-flex; align-items: center;
+}
+.bnb-more__btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px;
+  border-radius: var(--r-sm);
+  border: 0.5px solid transparent;
+  background: transparent;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.bnb-more__btn:hover {
+  color: var(--fg);
+  background: var(--surface-2);
+}
+.bnb-more__btn[aria-expanded="true"],
+.bnb-more__btn.is-open {
+  background: var(--surface-2);
+  color: var(--fg);
+  border-color: var(--border);
+}
+.bnb-more__glyph {
+  font-family: var(--font-mono); font-size: 13px; line-height: 1;
+  color: var(--fg-3);
+}
+.bnb-more__btn:hover .bnb-more__glyph { color: var(--fg-2); }
+.bnb-more__arrow { font-size: 9px; color: var(--fg-4); }
+@media (max-width: 720px) {
+  /* On phones the bottom tabbar's own "More" slot already covers this;
+     hide the topnav variant to avoid two openers. */
+  .bnb-more { display: none; }
+}
+
+/* ── More dropdown / sheet ────────────────────────────────────────── */
+.bnb-more-menu {
+  border: 0; padding: 0;
+  background: transparent;
+  color: var(--fg);
+  /* Desktop default: anchored beneath the trigger via CSS vars set by JS. */
+  margin: 0;
+  position: fixed;
+  top: var(--bnb-more-y, 56px);
+  left: auto;
+  right: auto;
+  /* Right-align under the button. JS sets --bnb-more-x to the right edge. */
+  inset-inline-end: max(0px, calc(100vw - var(--bnb-more-x, 100vw)));
+  width: min(94vw, 520px);
+}
+.bnb-more-menu::backdrop {
+  background: color-mix(in oklch, oklch(0% 0 0) 22%, transparent);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+.bnb-more-menu__form {
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  display: flex; flex-direction: column;
+  max-height: min(70vh, 640px);
+}
+.bnb-more-menu__head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 0.5px solid var(--hairline);
+}
+.bnb-more-menu__body {
+  padding: 6px 4px;
+  overflow-y: auto;
+}
+
+.bnb-more-group { padding: 6px 8px 10px; }
+.bnb-more-group + .bnb-more-group {
+  border-top: 0.5px solid var(--hairline);
+  margin-top: 4px;
+}
+.bnb-more-group h3.bnb-eyebrow {
+  margin: 6px 8px 4px;
+}
+.bnb-more-group ul {
+  list-style: none; margin: 0; padding: 0;
+}
+.bnb-more-row {
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  gap: 8px 12px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  text-decoration: none;
+  color: var(--fg);
+  font-size: 13.5px;
+  background: transparent;
+  border: 0;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.bnb-more-row:hover {
+  background: color-mix(in oklch, var(--moss) 7%, var(--surface));
+}
+.bnb-more-row.active {
+  background: color-mix(in oklch, var(--moss) 10%, var(--surface));
+  color: var(--moss-ink);
+}
+.bnb-more-row .glyph {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--fg-3);
+  text-align: center;
+}
+.bnb-more-row.active .glyph { color: var(--moss-ink); }
+.bnb-more-row .label { font-weight: 500; }
+.bnb-more-row .sub {
+  grid-column: 2;
+  font-size: 11px;
+  color: var(--fg-3);
+  margin-top: 2px;
+}
+.bnb-more-row .sub.mono { font-family: var(--font-mono); letter-spacing: 0.02em; }
+
+/* On phone widths the menu becomes a bottom sheet — same vocabulary as
+   the mobile More sheet from O-24, kept here so this opportunity ships
+   stand-alone even before O-24 lands. */
+@media (max-width: 720px) {
+  .bnb-more-menu {
+    top: auto; bottom: 0;
+    inset-inline-end: 0;
+    margin: 0;
+    width: 100vw;
+  }
+  .bnb-more-menu__form {
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    max-height: 78vh;
+  }
+}
+
+/* ── New footer (real footer, no destination flex-wrap) ───────────── */
+.bnb-footer {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px 22px;
+  align-items: center;
+  padding: 18px 22px 22px;
+  border-top: 0.5px solid var(--hairline);
+  color: var(--fg-3);
+  font-size: 12px;
+  margin-top: var(--pad-4);
+  background: color-mix(in oklch, var(--bg) 85%, transparent);
+}
+.bnb-footer__brand {
+  display: inline-flex; align-items: center; gap: 8px;
+  color: var(--fg-3);
+}
+.bnb-footer__mark { color: var(--fg-3); flex: 0 0 auto; }
+.bnb-footer__word { font-size: 12.5px; }
+.bnb-footer__word b { color: var(--fg-2); font-weight: 600; }
+.bnb-footer__word span { color: var(--fg-3); margin-left: 2px; }
+.bnb-footer__sep { color: var(--fg-4); }
+.bnb-footer__version { font-size: 11px; color: var(--fg-3); }
+.bnb-footer__uptime {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--fg-3);
+}
+/* Hide the uptime span if the server didn't substitute a value. */
+.bnb-footer__uptime[data-empty-hide="{{uptime_short}}"],
+.bnb-footer__uptime[data-empty-hide=""]               { display: none; }
+
+.bnb-footer__meta {
+  display: inline-flex; align-items: center; gap: 8px 12px;
+  justify-self: center;
+  flex-wrap: wrap;
+}
+.bnb-footer__meta a {
+  color: var(--fg-3);
+  text-decoration: none;
+  border-bottom: 0.5px solid transparent;
+  padding-bottom: 1px;
+  transition: color .12s, border-color .12s;
+}
+.bnb-footer__meta a:hover {
+  color: var(--moss-ink);
+  border-bottom-color: color-mix(in oklch, var(--moss-ink) 35%, transparent);
+}
+
+.bnb-footer__rights {
+  font-size: 10.5px;
+  color: var(--fg-4);
+  letter-spacing: 0.02em;
+  justify-self: end;
+  white-space: nowrap;
+}
+
+/* Stack on phones. */
+@media (max-width: 720px) {
+  .bnb-footer {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    text-align: center;
+  }
+  .bnb-footer__brand,
+  .bnb-footer__meta,
+  .bnb-footer__rights {
+    justify-self: center;
+  }
+}
+/* Append to crates/birdnet-web/static/css/app.css — purely additive.
+   Login page (O-14). Card-local layout; everything else is design-system. */
+
+/* ── Card chrome ──────────────────────────────────────────────────── */
+.login-card {
+  width: 100%;
+  max-width: 400px;
+  padding: 36px 32px 28px !important; /* override default .bnb-card.pad */
+  position: relative;
+}
+
+.login-card__head {
+  display: flex; flex-direction: column; gap: 6px;
+  margin-bottom: 22px;
+}
+.login-card__brand {
+  display: inline-flex; align-items: center; gap: 10px;
+  margin-bottom: 14px;
+  color: var(--fg);
+}
+
+/* ── Alert (inline error) ─────────────────────────────────────────── */
+.login-alert {
+  display: none;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  background: var(--rare-soft);
+  border: 0.5px solid color-mix(in oklch, var(--rare) 35%, transparent);
+  color: var(--rare);
+  font-size: 12.5px;
+  margin-bottom: 16px;
+}
+.login-alert.is-visible { display: flex; }
+.login-alert__dot {
+  width: 6px; height: 6px; border-radius: 999px;
+  background: var(--rare);
+  margin-top: 6px; flex: 0 0 auto;
+}
+.login-alert__body {
+  color: var(--rare);
+  font-weight: 500;
+}
+
+/* ── Form layout ──────────────────────────────────────────────────── */
+.login-form { display: flex; flex-direction: column; gap: 14px; }
+.login-field { display: flex; flex-direction: column; gap: 6px; }
+.login-field input[type="text"],
+.login-field input[type="password"] {
+  font-size: 14px;
+  padding: 11px 12px;
+  border-radius: var(--r-md);
+  background: var(--bg-2);
+}
+.login-field input:focus {
+  background: var(--surface);
+}
+.login-field__withtoggle { position: relative; display: flex; align-items: center; }
+.login-field__withtoggle input { padding-right: 60px; flex: 1; }
+
+.login-toggle {
+  position: absolute; right: 6px; top: 50%;
+  transform: translateY(-50%);
+  background: transparent;
+  border: 0;
+  padding: 6px 8px;
+  color: var(--fg-3);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  border-radius: var(--r-sm);
+}
+.login-toggle:hover { color: var(--fg); background: var(--surface-2); }
+
+/* ── Remember-me checkbox (replacing the native chrome) ───────────── */
+.login-remember {
+  display: flex; align-items: center; gap: 9px;
+  padding: 4px 2px 2px;
+  font-size: 13px;
+  color: var(--fg-2);
+  cursor: pointer;
+  user-select: none;
+}
+.login-remember input {
+  appearance: none;
+  width: 15px; height: 15px;
+  border-radius: 4px;
+  border: 0.5px solid var(--border-2);
+  background: var(--bg-2);
+  display: grid; place-items: center;
+  cursor: pointer;
+  transition: background .12s, border-color .12s;
+  flex: 0 0 auto;
+}
+.login-remember input:hover { border-color: var(--fg-3); }
+.login-remember input:checked {
+  background: var(--moss);
+  border-color: var(--moss);
+}
+.login-remember input:checked::after {
+  content: "";
+  width: 8px; height: 5px;
+  border-left: 1.5px solid var(--bg);
+  border-bottom: 1.5px solid var(--bg);
+  transform: rotate(-45deg) translate(0, -1px);
+}
+
+/* ── Submit ──────────────────────────────────────────────────────── */
+.login-submit {
+  margin-top: 6px;
+  width: 100%;
+  padding: 12px 16px;
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.login-submit:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* ── Card footer ─────────────────────────────────────────────────── */
+.login-card__foot {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 0.5px solid var(--hairline);
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 12px;
+  color: var(--fg-3);
+}
+
+/* ── Phone ────────────────────────────────────────────────────────── */
+@media (max-width: 480px) {
+  .login-card { padding: 28px 22px 22px !important; border-radius: var(--r-md); }
+  .login-card__head .display { font-size: 32px; }
+}
+/* Append to crates/birdnet-web/static/css/app.css — purely additive.
+   Accounts & sessions page (O-15). */
+
+/* ── Session rows ─────────────────────────────────────────────────── */
+.account-sessions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.account-sessions li {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 12px 14px;
+  align-items: center;
+  padding: 12px 4px;
+  border-top: 0.5px solid var(--hairline);
+}
+.account-sessions li:first-child { border-top: 0; }
+.account-sessions li .session-mark {
+  width: 10px; height: 10px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.account-sessions li[data-current="true"] .session-mark {
+  background: var(--moss);
+  border-color: transparent;
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--moss) 22%, transparent);
+}
+
+.account-sessions .session-label {
+  font-weight: 500; font-size: 13.5px;
+}
+.account-sessions .session-meta {
+  font-family: var(--font-mono); font-size: 11px; color: var(--fg-3);
+}
+.account-sessions .session-id {
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-4);
+  letter-spacing: 0.04em;
+}
+
+/* ── User rows ────────────────────────────────────────────────────── */
+.account-users { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.account-users li {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 12px 14px;
+  align-items: center;
+  padding: 12px 4px;
+  border-top: 0.5px solid var(--hairline);
+}
+.account-users li:first-child { border-top: 0; }
+
+.account-users .user-pill {
+  font-family: var(--font-mono); font-size: 10px;
+  letter-spacing: 0.05em;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--fg-2);
+  border: 0.5px solid var(--border);
+}
+.account-users .user-pill.admin { background: var(--moss-soft); color: var(--moss-ink); border-color: transparent; }
+.account-users .user-pill.viewer { background: var(--dawn-soft); color: var(--dawn-ink); border-color: transparent; }
+
+.account-users .user-name { font-weight: 500; font-size: 14px; }
+.account-users .user-sub  { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); }
+
+/* ── Audit rows ───────────────────────────────────────────────────── */
+.account-audit { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.account-audit li {
+  display: grid;
+  grid-template-columns: 92px 1fr auto;
+  gap: 12px 14px;
+  align-items: baseline;
+  padding: 10px 4px;
+  border-top: 0.5px solid var(--hairline);
+  font-size: 13px;
+}
+.account-audit li:first-child { border-top: 0; }
+.account-audit .audit-who {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--fg-2);
+  letter-spacing: 0.02em;
+}
+.account-audit .audit-action {
+  color: var(--fg);
+}
+.account-audit .audit-action .target {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--fg-3);
+  margin-top: 2px;
+}
+.account-audit .audit-when {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-4);
+  white-space: nowrap;
+}
+
+/* Phone */
+@media (max-width: 540px) {
+  .account-sessions li,
+  .account-users li,
+  .account-audit li {
+    grid-template-columns: 1fr;
+  }
+  .account-sessions li > :nth-child(3),
+  .account-sessions li > :nth-child(4),
+  .account-users li > :nth-child(3),
+  .account-users li > :nth-child(4) {
+    justify-self: end;
+  }
+}
+/* Append to crates/birdnet-web/static/css/app.css — purely additive.
+   Audio Sources page (O-13). Replaces the inline-style grid in the old
+   admin/audio.rs body. Reusable across the audio-sources page and any future
+   per-row partial. */
+
+/* ── Audio-source row ─────────────────────────────────────────────── */
+.audio-sources {
+  list-style: none;
+  margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 10px;
+}
+
+.audio-source {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 16px 18px;
+  align-items: center;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm);
+  transition: border-color .12s ease;
+}
+.audio-source:hover { border-color: var(--border-2); }
+
+.audio-source__kind { display: inline-flex; min-width: 96px; }
+
+.audio-kind-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10.5px; letter-spacing: 0.04em;
+  background: var(--surface-2);
+  color: var(--fg-2);
+  border: 0.5px solid var(--border);
+}
+.audio-kind-badge.usb {
+  background: color-mix(in oklch, var(--moss) 12%, var(--surface-2));
+  color: var(--moss-ink); border-color: transparent;
+}
+.audio-kind-badge.pipe {
+  background: color-mix(in oklch, var(--dawn) 10%, var(--surface-2));
+  color: var(--dawn-ink); border-color: transparent;
+}
+.audio-kind-badge.rtsp { background: var(--surface-2); color: var(--fg-2); }
+.audio-kind-glyph {
+  width: 6px; height: 6px; border-radius: 1px;
+  background: currentColor; opacity: .85;
+}
+.audio-kind-badge.rtsp .audio-kind-glyph { border-radius: 999px; }
+
+.audio-source__id { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.audio-source__label {
+  font-size: 14.5px; font-weight: 500; color: var(--fg);
+  letter-spacing: -0.01em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.audio-source__label.untitled { color: var(--fg-3); font-style: italic; font-weight: 400; }
+.audio-source__device {
+  font-size: 12px; color: var(--fg-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.audio-source__detail {
+  font-size: 10.5px; color: var(--fg-4); letter-spacing: 0.02em;
+  margin-top: 2px;
+}
+
+.audio-source__right {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
+  min-width: 152px;
+}
+.audio-source__actions { display: inline-flex; align-items: center; gap: 2px; }
+.audio-source__sep {
+  width: 0.5px; height: 14px; background: var(--hairline); margin: 0 2px;
+}
+
+/* Status pills — drive both .bnb-pill and the .bnb-dot inside it */
+.bnb-pill.live    { background: var(--moss-soft); color: var(--moss-ink); border-color: transparent; }
+.bnb-pill.live    .bnb-dot { background: var(--moss); }
+.bnb-pill.starting { background: var(--dawn-soft); color: var(--dawn-ink); border-color: transparent; }
+.bnb-pill.starting .bnb-dot {
+  background: var(--dawn);
+  animation: bnb-blink 1.2s ease-in-out infinite;
+}
+.bnb-pill.paused  { background: var(--surface-2); color: var(--fg-3); }
+.bnb-pill.paused  .bnb-dot { background: var(--fg-4); }
+.bnb-pill.down    { background: var(--rare-soft); color: var(--rare); border-color: transparent; }
+.bnb-pill.down    .bnb-dot { background: var(--rare); }
+@keyframes bnb-blink { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+:root[data-motion="reduced"] .bnb-pill.starting .bnb-dot { animation: none; }
+
+/* ── Add-source inline form ───────────────────────────────────────── */
+details.bnb-add-form {
+  margin-top: 14px;
+  border: 0.5px dashed var(--border-2);
+  border-radius: var(--r-lg);
+  background: var(--bg-2);
+  overflow: hidden;
+}
+details.bnb-add-form[open] {
+  border-style: solid;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+details.bnb-add-form > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 14px 18px;
+  display: flex; align-items: center; gap: 10px;
+  font-size: 13px;
+  color: var(--fg-2);
+  font-weight: 500;
+}
+details.bnb-add-form > summary::-webkit-details-marker { display: none; }
+details.bnb-add-form > summary:hover { color: var(--fg); }
+
+.bnb-add-form__plus {
+  width: 18px; height: 18px;
+  display: inline-grid; place-items: center;
+  border-radius: 999px;
+  background: var(--moss-soft);
+  color: var(--moss-ink);
+  font-weight: 600; font-size: 13px; line-height: 1;
+  transition: transform .15s ease;
+}
+details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
+.bnb-add-form__hint {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--fg-4);
+  letter-spacing: 0.04em;
+}
+
+.bnb-add-form__body {
+  padding: 6px 18px 18px;
+  border-top: 0.5px solid var(--hairline);
+}
+.bnb-add-form__body h4 {
+  font-family: var(--font-ui);
+  font-size: 11px; font-weight: 500;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--fg-3);
+  margin: 14px 0 10px;
+}
+
+.bnb-field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.bnb-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.bnb-field.wide { grid-column: 1 / -1; }
+.bnb-field code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 5px;
+  background: var(--surface-2);
+  border: 0.5px solid var(--hairline);
+  border-radius: var(--r-xs);
+  color: var(--fg-2);
+}
+
+.bnb-form-actions {
+  display: flex; align-items: center; justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px; padding-top: 16px;
+  border-top: 0.5px solid var(--hairline);
+}
+
+/* ── Source-type chip picker ──────────────────────────────────────── */
+.bnb-type-picker { display: inline-flex; gap: 6px; flex-wrap: wrap; position: relative; }
+.bnb-type-picker input { position: absolute; opacity: 0; pointer-events: none; }
+.bnb-type-picker label {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 7px 12px;
+  border-radius: var(--r-sm);
+  border: 0.5px solid var(--border);
+  background: var(--bg-2);
+  color: var(--fg-2);
+  font-size: 12.5px; font-weight: 500;
+  cursor: pointer;
+  transition: border-color .12s, background .12s, color .12s;
+}
+.bnb-type-picker label:hover { border-color: var(--fg-3); color: var(--fg); }
+.bnb-type-picker label.is-checked {
+  border-color: var(--moss);
+  background: color-mix(in oklch, var(--moss) 12%, var(--surface));
+  color: var(--fg);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--moss) 22%, transparent);
+}
+.bnb-type-dot {
+  width: 7px; height: 7px; border-radius: 2px; background: var(--fg-3);
+  flex: 0 0 auto;
+}
+.bnb-type-picker label[data-kind="usb"]  .bnb-type-dot { background: var(--moss); }
+.bnb-type-picker label[data-kind="pipe"] .bnb-type-dot { background: var(--dawn); }
+.bnb-type-picker label[data-kind="rtsp"] .bnb-type-dot { background: var(--fg-2); border-radius: 999px; }
+
+/* ── Phone ────────────────────────────────────────────────────────── */
+@media (max-width: 720px) {
+  .audio-source {
+    grid-template-columns: 1fr;
+    gap: 12px; padding: 14px 14px;
+  }
+  .audio-source__kind { min-width: 0; }
+  .audio-source__right {
+    flex-direction: row; align-items: center; justify-content: space-between;
+    min-width: 0; width: 100%;
+  }
+  .bnb-field-grid { grid-template-columns: 1fr; }
+}
+/* Append to crates/birdnet-web/static/css/app.css — purely additive.
+   Command palette (O-19). Uses native <dialog> like O-17 but with a
+   different chrome (no header, results-driven). */
+
+/* ── Command palette dialog ───────────────────────────────────────── */
+.bnb-cmdk {
+  border: 0; padding: 0;
+  background: transparent;
+  color: var(--fg);
+  max-width: min(94vw, 560px);
+  width: 100%;
+  margin: 12vh auto auto; /* top-aligned, like a real command bar */
+}
+.bnb-cmdk::backdrop {
+  background: color-mix(in oklch, oklch(0% 0 0) 32%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.bnb-cmdk__shell {
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  display: flex; flex-direction: column;
+  max-height: 70vh;
+}
+
+.bnb-cmdk__inputwrap {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 10px; align-items: center;
+  padding: 12px 14px;
+  border-bottom: 0.5px solid var(--hairline);
+}
+.bnb-cmdk__icon { color: var(--fg-3); font-size: 18px; line-height: 1; }
+.bnb-cmdk__inputwrap input {
+  border: 0; background: transparent; outline: 0;
+  font: inherit; font-size: 15px; color: var(--fg);
+  padding: 6px 0;
+}
+.bnb-cmdk__inputwrap input:focus { box-shadow: none; }
+.bnb-cmdk__chip {
+  font-size: 10.5px;
+  padding: 3px 7px;
+  border-radius: var(--r-xs);
+  background: var(--surface-2);
+  color: var(--fg-3);
+  border: 0.5px solid var(--border);
+}
+.bnb-cmdk__loading {
+  color: var(--moss-ink);
+  font-size: 16px;
+  line-height: 1;
+  font-family: var(--font-mono);
+}
+
+.bnb-cmdk__results {
+  list-style: none;
+  margin: 0; padding: 6px 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.bnb-cmdk__group {
+  font-size: 10px;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  font-weight: 500;
+  color: var(--fg-4);
+  padding: 12px 16px 4px;
+  position: sticky; top: 0;
+  background: linear-gradient(180deg, var(--surface) 80%, transparent);
+}
+.bnb-cmdk__results li[data-href] {
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 16px;
+  cursor: pointer;
+}
+.bnb-cmdk__results li[data-href]:hover,
+.bnb-cmdk__results li[data-href].is-active {
+  background: color-mix(in oklch, var(--moss) 8%, var(--surface));
+}
+.bnb-cmdk__results li[data-href] .glyph {
+  font-family: var(--font-mono);
+  color: var(--fg-3);
+  font-size: 11px;
+  text-align: center;
+}
+.bnb-cmdk__results li[data-href] .label {
+  font-size: 13.5px;
+  color: var(--fg);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.bnb-cmdk__results li[data-href] .label em {
+  color: var(--moss-ink);
+  font-style: normal;
+  font-weight: 600;
+}
+.bnb-cmdk__results li[data-href] .sub {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--fg-3);
+  white-space: nowrap;
+}
+.bnb-cmdk__results .bnb-cmdk__empty {
+  padding: 28px 16px;
+  text-align: center;
+  color: var(--fg-3);
+  font-size: 13px;
+}
+
+.bnb-cmdk__foot {
+  display: flex; gap: 18px; justify-content: flex-start;
+  padding: 8px 14px;
+  border-top: 0.5px solid var(--hairline);
+  background: var(--bg-2);
+  font-size: 10.5px;
+  color: var(--fg-3);
+}
+.bnb-cmdk__foot kbd {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  margin-right: 3px;
+}
+
+@media (max-width: 540px) {
+  .bnb-cmdk { margin: 6vh auto; }
+  .bnb-cmdk__shell { max-height: 80vh; }
+  .bnb-cmdk__chip { display: none; }
+}
+/* Append to crates/birdnet-web/static/css/app.css — purely additive.
+   Help / methodology surface (O-20). */
+
+/* ── Inline help link (used in section headers) ───────────────────── */
+.bnb-help-link {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 9px;
+  font-size: 11.5px;
+  color: var(--fg-3);
+  text-decoration: none;
+  border-radius: 999px;
+  background: transparent;
+  border: 0.5px solid transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11.5px;
+  transition: color .12s, background .12s, border-color .12s;
+}
+.bnb-help-link:hover {
+  color: var(--moss-ink);
+  background: color-mix(in oklch, var(--moss) 7%, var(--surface));
+  border-color: color-mix(in oklch, var(--moss) 20%, transparent);
+  text-decoration: none;
+}
+.bnb-help-link__glyph {
+  display: inline-grid; place-items: center;
+  width: 14px; height: 14px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  font-size: 9px; font-weight: 600;
+}
+.bnb-help-link:hover .bnb-help-link__glyph {
+  background: var(--moss-soft); color: var(--moss-ink);
+}
+.bnb-help-link__arrow {
+  font-size: 10px; color: var(--fg-4);
+  transition: transform .12s, color .12s;
+}
+.bnb-help-link:hover .bnb-help-link__arrow {
+  color: var(--moss-ink);
+  transform: translateX(1px);
+}
+
+/* ── Right-side drawer (in-context docs) ──────────────────────────── */
+.bnb-help-drawer {
+  border: 0; padding: 0;
+  background: transparent;
+  color: var(--fg);
+  margin: 0 0 0 auto;          /* right-aligned */
+  height: 100vh;
+  width: min(94vw, 540px);
+  max-width: 540px;
+}
+.bnb-help-drawer::backdrop {
+  background: color-mix(in oklch, oklch(0% 0 0) 32%, transparent);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
+.bnb-help-drawer__head {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 18px;
+  background: var(--surface);
+  border-bottom: 0.5px solid var(--hairline);
+}
+.bnb-help-drawer__head .bnb-eyebrow { white-space: nowrap; }
+
+.bnb-help-drawer__body {
+  background: var(--surface);
+  height: calc(100vh - 56px);
+  overflow-y: auto;
+  padding: 22px 24px 64px;
+  font-size: 14.5px; line-height: 1.6;
+  color: var(--fg-2);
+}
+/* mdBook content typography — keep close to the rest of the app */
+.bnb-help-drawer__body h2 {
+  font-family: var(--font-display);
+  font-size: 22px; letter-spacing: -0.01em; font-weight: 400;
+  color: var(--fg);
+  margin: 28px 0 8px;
+}
+.bnb-help-drawer__body h3 { font-size: 15px; font-weight: 500; color: var(--fg); margin: 22px 0 6px; }
+.bnb-help-drawer__body p { margin: 8px 0; }
+.bnb-help-drawer__body a { color: var(--moss-ink); text-decoration: none; border-bottom: 0.5px solid color-mix(in oklch, var(--moss-ink) 30%, transparent); }
+.bnb-help-drawer__body a:hover { border-bottom-color: var(--moss-ink); }
+.bnb-help-drawer__body code {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  padding: 1px 5px;
+  background: var(--surface-2);
+  border: 0.5px solid var(--hairline);
+  border-radius: var(--r-xs);
+  color: var(--fg-2);
+}
+.bnb-help-drawer__body pre {
+  background: var(--surface-2);
+  border: 0.5px solid var(--hairline);
+  border-radius: var(--r-md);
+  padding: 12px 14px;
+  font-size: 12.5px;
+  overflow-x: auto;
+}
+.bnb-help-drawer__body pre code { background: transparent; border: 0; padding: 0; }
+.bnb-help-drawer__body ul, .bnb-help-drawer__body ol { padding-left: 20px; }
+.bnb-help-drawer__body li { margin: 4px 0; }
+.bnb-help-drawer__body blockquote {
+  border-left: 2px solid var(--moss);
+  padding: 4px 14px;
+  margin: 12px 0;
+  color: var(--fg-3);
+  background: color-mix(in oklch, var(--moss) 4%, var(--surface));
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+}
+.bnb-help-drawer__body img {
+  max-width: 100%; height: auto;
+  border-radius: var(--r-md);
+  border: 0.5px solid var(--hairline);
+}
+
+/* Slide-in animation */
+@media (prefers-reduced-motion: no-preference) {
+  .bnb-help-drawer[open] {
+    animation: bnb-help-drawer-slide 220ms cubic-bezier(.2,.7,.2,1);
+  }
+}
+@keyframes bnb-help-drawer-slide {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+
+/* Mobile: drawer becomes a bottom sheet. */
+@media (max-width: 720px) {
+  .bnb-help-drawer { margin: auto 0 0 0; width: 100vw; max-width: 100vw; height: 78vh; }
+  .bnb-help-drawer[open] { animation: bnb-help-drawer-sheet 220ms cubic-bezier(.2,.7,.2,1); }
+}
+@keyframes bnb-help-drawer-sheet {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+/* Append to crates/birdnet-web/static/css/app.css — purely additive.
+   Post-upgrade banner (O-21). */
+
+/* ── Update banner ────────────────────────────────────────────────── */
+.bnb-banner {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 14px;
+  align-items: center;
+  padding: 10px 16px;
+  background: color-mix(in oklch, var(--moss) 8%, var(--surface));
+  border: 0.5px solid color-mix(in oklch, var(--moss) 26%, var(--border));
+  border-radius: var(--r-md);
+  margin: 0 0 var(--pad-3);
+  font-size: 13px;
+  transition: opacity .2s ease, transform .2s ease;
+}
+.bnb-banner[data-leaving="1"] {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+.bnb-banner__copy {
+  min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.bnb-banner__copy strong { font-weight: 600; color: var(--fg); margin-right: 6px; }
+.bnb-banner__copy span   { color: var(--fg-2); }
+
+.bnb-banner__close {
+  background: transparent;
+  border: 0;
+  color: var(--fg-3);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: var(--r-xs);
+}
+.bnb-banner__close:hover { color: var(--fg); background: color-mix(in oklch, var(--moss) 4%, var(--surface)); }
+
+/* ── Changelog page typography ────────────────────────────────────── */
+.changelog-release { border-top: 0.5px solid var(--hairline); padding-top: 4px; }
+.changelog-release:first-child { border-top: 0; }
+.changelog-release ul { padding-left: 22px; margin: 4px 0 14px; }
+.changelog-release li { margin: 4px 0; font-size: 14px; color: var(--fg-2); line-height: 1.55; }
+.changelog-release h2 a:hover { color: var(--moss-ink); }
+
+/* Anchor-link affordance: subtle # on hover */
+.changelog-release h2 a::after {
+  content: " #";
+  color: var(--fg-4);
+  font-size: 14px;
+  opacity: 0;
+  transition: opacity .12s;
+}
+.changelog-release h2 a:hover::after { opacity: 1; }
+
+/* Mobile: stack the banner */
+@media (max-width: 720px) {
+  .bnb-banner {
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas:
+      "pill  copy  close"
+      "btn   btn   btn";
+  }
+  .bnb-banner > .bnb-pill { grid-area: pill; }
+  .bnb-banner__copy { grid-area: copy; }
+  .bnb-banner__close { grid-area: close; }
+  .bnb-banner > .bnb-btn { grid-area: btn; justify-self: stretch; }
+}
+/* Append to crates/birdnet-web/static/css/app.css — purely additive.
+   Quality dashboard model-trust additions (O-22). */
+
+/* ── Review-verdict trend (stacked daily bars) ────────────────────── */
+.bnb-verdict-trend {
+  display: grid;
+  grid-template-columns: repeat(30, 1fr);
+  gap: 2px;
+  align-items: end;
+  height: 110px;
+}
+.bnb-verdict-trend > .col {
+  display: flex; flex-direction: column-reverse;
+  height: 100%;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+.bnb-verdict-trend > .col > span { display: block; flex: 0 0 auto; }
+.bnb-verdict-trend > .col > .approved   { background: var(--moss); }
+.bnb-verdict-trend > .col > .relabeled  { background: var(--dawn); }
+.bnb-verdict-trend > .col > .rejected   { background: var(--rare); }
+.bnb-verdict-trend > .col > .unreviewed { background: color-mix(in oklch, var(--fg-4) 28%, var(--surface-2)); }
+
+.bnb-verdict-legend {
+  display: flex; gap: 14px; flex-wrap: wrap;
+  font-size: 11px; color: var(--fg-3); margin-top: 8px;
+}
+.bnb-verdict-legend span {
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.bnb-verdict-legend i {
+  display: inline-block; width: 10px; height: 6px; border-radius: 2px;
+}
+.bnb-verdict-legend i.approved  { background: var(--moss); }
+.bnb-verdict-legend i.relabeled { background: var(--dawn); }
+.bnb-verdict-legend i.rejected  { background: var(--rare); }
+.bnb-verdict-legend i.unreviewed { background: color-mix(in oklch, var(--fg-4) 28%, var(--surface-2)); }
+
+/* ── Model vs. human confidence rows ──────────────────────────────── */
+.bnb-mvr {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 14px;
+  align-items: center;
+}
+.bnb-mvr-row {
+  display: grid;
+  grid-template-columns: 1fr 1.6fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 0;
+  border-top: 0.5px solid var(--hairline);
+}
+.bnb-mvr-row:first-child { border-top: 0; }
+.bnb-mvr-name { font-size: 13.5px; }
+.bnb-mvr-name em { color: var(--fg-3); font-style: italic; font-weight: 400; font-size: 11px; display: block; }
+
+/* Pair of bars side by side (model on top, human on bottom). */
+.bnb-mvr-bars {
+  display: grid; grid-template-rows: 1fr 1fr;
+  gap: 3px;
+  min-width: 0;
+}
+.bnb-mvr-bar {
+  height: 8px; border-radius: 4px;
+  background: var(--surface-2);
+  position: relative;
+}
+.bnb-mvr-bar > .fill {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  border-radius: 4px;
+}
+.bnb-mvr-bar.model > .fill { background: var(--moss); }
+.bnb-mvr-bar.human > .fill { background: var(--moss-ink); }
+
+.bnb-mvr-bar > .label {
+  position: absolute; right: 0; top: -2px;
+  font-family: var(--font-mono); font-size: 10.5px;
+  color: var(--fg-3);
+  transform: translateY(-100%);
+}
+
+.bnb-mvr-gap {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--rare);
+  white-space: nowrap;
+}
+.bnb-mvr-gap.small { color: var(--fg-3); }
+/* Append to crates/birdnet-web/static/css/app.css — purely additive.
+   Signal-context overlays (O-23). */
+
+/* ── Signal badges (text-glyph chips on the day-strip header) ─────── */
+.bnb-signal {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11.5px;
+  color: var(--fg-3);
+  font-variant-numeric: tabular-nums;
+}
+.bnb-signal__glyph {
+  display: inline-grid; place-items: center;
+  width: 18px; height: 18px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 11px;
+  color: var(--fg-2);
+}
+.bnb-signal__label { letter-spacing: 0.02em; }
+
+/* Moon glyphs use the night/dawn tokens. */
+.bnb-signal--moon[data-phase="full-moon"] .bnb-signal__glyph,
+.bnb-signal--moon[data-phase="full"]      .bnb-signal__glyph {
+  background: color-mix(in oklch, var(--dawn) 28%, var(--surface-2));
+  color: var(--dawn-ink);
+}
+.bnb-signal--moon[data-phase="new-moon"] .bnb-signal__glyph,
+.bnb-signal--moon[data-phase="new"]      .bnb-signal__glyph {
+  background: var(--night);
+  color: var(--bg);
+}
+
+/* ── Weather band (SVG group children) ───────────────────────────── */
+.bnb-signal--weather .bnb-signal__bg {
+  fill: var(--surface-2);
+  opacity: 0.45;
+}
+.bnb-signal--weather .bnb-signal__placeholder {
+  fill: var(--surface-2);
+  opacity: 0.25;
+}
+.bnb-signal--weather .bnb-signal__temp {
+  fill: none;
+  stroke: color-mix(in oklch, var(--dawn) 60%, var(--moss));
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+.bnb-signal--weather .bnb-signal__precip {
+  stroke: var(--dawn);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  opacity: 0.75;
+}
+
+/* ── SPL band ─────────────────────────────────────────────────────── */
+.bnb-signal--spl .bnb-signal__spl {
+  fill: none;
+  stroke: color-mix(in oklch, var(--fg-3) 80%, var(--moss));
+  stroke-width: 1.2;
+  stroke-linecap: round;
+}
+.bnb-signal--spl .bnb-signal__quiet {
+  stroke: var(--fg-4);
+  stroke-width: 0.5;
+  stroke-dasharray: 2 3;
+  opacity: 0.6;
+}
+.bnb-signal--spl[data-state="empty"] {
+  opacity: 0.45;
+}
+
+/* Overlay strip wrapper — sits just below the host chart. */
+.bnb-overlay-strip {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 6px 10px;
+  margin-top: 6px;
+  border-top: 0.5px solid var(--hairline);
+  background: color-mix(in oklch, var(--surface) 80%, transparent);
+  border-radius: 0 0 var(--r-md) var(--r-md);
+}
+.bnb-overlay-strip .bnb-signal { font-size: 11px; }
+.bnb-overlay-strip svg { display: block; }
+/* Append to crates/birdnet-web/static/css/app.css — purely additive.
+   Mobile bottom tab bar + "More" sheet (O-24). */
+
+/* ── Bottom tab bar (phone-only) ─────────────────────────────────── */
+.bnb-tabbar {
+  display: none; /* desktop default */
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 55;
+  background: color-mix(in oklch, var(--bg) 88%, transparent);
+  backdrop-filter: saturate(1.4) blur(14px);
+  -webkit-backdrop-filter: saturate(1.4) blur(14px);
+  border-top: 0.5px solid var(--border);
+  padding: 4px 4px max(4px, env(safe-area-inset-bottom));
+}
+.bnb-tabbar__slot {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px 4px;
+  border-radius: var(--r-sm);
+  text-decoration: none;
+  color: var(--fg-3);
+  font: inherit;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  min-height: 56px;
+  min-width: 44px;
+}
+.bnb-tabbar__slot .glyph {
+  font-family: var(--font-mono);
+  font-size: 18px;
+  line-height: 1;
+}
+.bnb-tabbar__slot .label {
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.bnb-tabbar__slot:hover { color: var(--fg); }
+.bnb-tabbar__slot.active {
+  color: var(--moss-ink);
+  background: color-mix(in oklch, var(--moss) 10%, transparent);
+}
+
+/* Make room for the bar so content doesn't hide beneath it. */
+.bnb-tabbar ~ main,
+body:has(.bnb-tabbar) main { padding-bottom: 84px; }
+
+/* Visible only on coarse-pointer narrow viewports. */
+@media (max-width: 720px) and (pointer: coarse) {
+  .bnb-tabbar {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 2px;
+  }
+  /* Hide the topnav links list; brand + theme toggle stay so the user can
+     identify the station and flip dark/light from the top. */
+  .topnav-links { display: none; }
+  .topnav-right .nav-search { display: none; }
+}
+
+/* ── Bottom-sheet "More" dialog ──────────────────────────────────── */
+.bnb-sheet {
+  border: 0; padding: 0;
+  background: transparent;
+  color: var(--fg);
+  width: 100vw; max-width: 100vw;
+  margin: auto 0 0 0; /* anchored to the bottom */
+  height: 78vh; max-height: 78vh;
+}
+.bnb-sheet::backdrop {
+  background: color-mix(in oklch, oklch(0% 0 0) 32%, transparent);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+.bnb-sheet__form {
+  background: var(--surface);
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+  height: 100%;
+  overflow: hidden;
+  display: flex; flex-direction: column;
+}
+.bnb-sheet__head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 0.5px solid var(--hairline);
+}
+.bnb-sheet__list {
+  list-style: none; margin: 0; padding: 6px 0;
+  overflow-y: auto;
+}
+.bnb-sheet__row {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 18px;
+  text-decoration: none;
+  color: var(--fg);
+  font-size: 15px;
+  border-top: 0.5px solid var(--hairline);
+}
+.bnb-sheet__row:first-child { border-top: 0; }
+.bnb-sheet__row .glyph {
+  font-family: var(--font-mono); font-size: 15px; color: var(--fg-3); text-align: center;
+}
+.bnb-sheet__row:hover { background: var(--surface-2); }
+.bnb-sheet__row.active { background: color-mix(in oklch, var(--moss) 10%, var(--surface)); color: var(--moss-ink); }
+.bnb-sheet__row.active .glyph { color: var(--moss-ink); }
+/* Group sub-headings inside the mobile sheet (manifest-generated), so it reads
+   as grouped sections instead of one flat wall. */
+.bnb-sheet__group {
+  list-style: none;
+  padding: 16px 18px 4px;
+  font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--fg-4); font-weight: 600;
+}
+
+/* Breadcrumb trail — generated from the nav manifest for secondary pages
+   (top-level tabs and the dashboard show none). */
+.bnb-crumbs {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin: 0 0 16px; font-size: 12.5px; color: var(--fg-3);
+}
+.bnb-crumbs a { color: var(--fg-3); text-decoration: none; }
+.bnb-crumbs a:hover { color: var(--moss-ink); }
+.bnb-crumbs .sep { color: var(--fg-4); }
+.bnb-crumbs .cur { color: var(--fg); font-weight: 500; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .bnb-sheet[open] { animation: bnb-sheet-rise 240ms cubic-bezier(.2,.7,.2,1); }
+}
+@keyframes bnb-sheet-rise {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+
+/* ── Larger tap targets on coarse pointers ───────────────────────── */
+@media (pointer: coarse) {
+  .feed-row { min-height: 52px; padding: 12px 10px; }
+  .species-item { padding: 12px 0; min-height: 52px; }
+  .list-row { padding: 12px 0; min-height: 48px; }
+  .miniheat-cells > div { min-height: 16px; min-width: 16px; }
+  .bnb-btn { min-height: 40px; padding: 8px 14px; }
+}
+
+/* ── Update-available toast (paired with sw.js) ──────────────────── */
+.bnb-toast--update {
+  cursor: pointer;
+}
+.bnb-toast--update .bnb-toast__action {
+  font-weight: 600;
+}
+
+/* ── Backups & recovery page (O-25 harmonisation) ─────────────────────
+   Faithful, value-preserving extraction of the inline `style="…"` shapes
+   that backup_recovery.rs used to build with `format!()`. Layout-only;
+   the only styles that stay inline are the continuous storage-bar widths. */
+.bkr-stats        { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px; }
+.bkr-stat-value   { font-size: 30px; }
+.bkr-stat-label   { margin-top: 6px; }
+.bkr-split        { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.bkr-main         { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 24px; align-items: start; }
+.bkr-h1           { font-size: 34px; margin: 6px 0 4px; }
+.bkr-lede         { margin-bottom: 20px; }
+.bkr-mt           { margin-top: 16px; }
+
+/* Upload / restore drop target (page-specific dashed box) */
+.bkr-drop         { border: 1.5px dashed var(--border-2); border-radius: var(--r-lg); padding: 28px; text-align: center; margin-top: 8px; }
+.bkr-drop-icon    { font-size: 24px; }
+.bkr-drop-title   { font-weight: 500; margin-top: 6px; }
+.bkr-note-mt      { margin-top: 10px; }
+
+/* Export rows */
+.bkr-export-row   { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; border-top: 0.5px solid var(--hairline); }
+.bkr-row-title    { font-weight: 500; font-size: 13px; }
+
+/* Storage-breakdown tile + its usage bar */
+.bkr-tile-value   { font-size: 24px; margin: 4px 0 8px; }
+.bkr-bar          { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+.bkr-bar-fill     { display: block; height: 100%; border-radius: 3px; }
+.bkr-bar-fill.moss { background: var(--moss); }
+.bkr-bar-fill.dawn { background: var(--dawn); }
+.bkr-storage-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 8px; }
+
+/* Snapshot rows */
+.bkr-snap-row     { display: grid; grid-template-columns: auto 1fr auto auto; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 8px; border-top: 0.5px solid var(--hairline); }
+.bkr-snap-row.today { background: var(--moss-soft); }
+.bkr-dot.auto     { background: var(--moss); }
+.bkr-dot.manual   { background: var(--dawn); }
+.bkr-snap-when    { font-weight: 500; font-size: 13px; }
+.bkr-btn-sm       { font-size: 12px; }
+
+/* Retention controls */
+.bkr-retention    { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 8px; }
+.bkr-mt-xs        { margin-top: 4px; }
+.bkr-change       { color: var(--moss-ink); cursor: pointer; }
+
+/* Operations log (mono block) */
+.bkr-log          { font-size: 12px; background: var(--surface-2); border-radius: 8px; padding: 12px; line-height: 1.7; overflow-x: auto; }
+.bkr-log .ts      { color: var(--fg-4); }
+.bkr-log .info    { color: var(--moss-ink); }
+.bkr-log .warn    { color: var(--dawn-ink); }
+.bkr-log .err     { color: var(--rare); }
+
+/* Danger zone (page-local; mirrors the inline values it replaces) */
+.bkr-danger       { border-color: var(--rare); }
+.bkr-danger .bnb-eyebrow { color: var(--rare); }
+.bkr-danger-row   { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 11px 0; border-top: 0.5px solid color-mix(in oklch, var(--rare) 25%, transparent); }
+.bkr-mb-xs        { margin-bottom: 4px; }
+
+/* Right rail */
+.bkr-rail         { display: flex; flex-direction: column; gap: 16px; position: sticky; top: 16px; }
+.bkr-dest-list    { display: flex; flex-direction: column; gap: 10px; }
+.bkr-dest-row     { display: flex; justify-content: space-between; align-items: center; }
+.bkr-dest-row span:first-child { font-size: 13px; }
+.bkr-mb-10        { margin-bottom: 10px; }
+.bkr-update-row   { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.bkr-update-ver   { font-size: 18px; }
+.bkr-w-full       { width: 100%; }
+.bkr-rail-note    { margin: 6px 0 10px; }
+
+/* Phone: collapse every multi-column shape to a single column. The page's
+   grids used to be inline `style="…"` and so were caught by the global
+   `[style*="grid-template-columns"]` reset; now they are classes, they carry
+   their own breakpoint. */
+@media (max-width: 520px) {
+  .bkr-stats,
+  .bkr-split,
+  .bkr-main,
+  .bkr-storage-grid,
+  .bkr-retention { grid-template-columns: 1fr; }
+}
+
+/* ── Configuration diagnostics page (/admin/doctor) — O-25 harmonisation ──
+   Faithful extraction of the inline shapes doctor.rs used to build. */
+.doc-card     { max-width: 820px; margin: 8px auto; padding: 24px 28px; }
+.doc-head     { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin: 0 0 6px; }
+.doc-head h1  { margin: 0; font-size: 22px; }
+.doc-path     { opacity: 0.7; margin: 0 0 16px; }
+.doc-path.tight { margin: 0; }
+.doc-count    { margin: 0 0 4px; }
+.doc-subhead  { font-size: 16px; margin: 18px 0 8px; }
+.doc-hr       { border: none; border-top: 1px solid var(--border-2); margin: 20px 0; }
+.doc-note     { opacity: 0.8; font-size: 14px; }
+.doc-finding  { border-left: 3px solid var(--border-2); padding: 8px 14px; margin: 8px 0; border-radius: var(--r-sm); }
+.doc-finding-key { font-weight: 600; }
+.doc-finding-msg { margin: 2px 0; }
+
+/* ── Data quality dashboard (/admin/quality) — O-25 harmonisation ─────────
+   Static/enumerable shapes only. The chart bars keep their inline
+   height/width (computed per data point — the documented dynamic exception). */
+.q-head        { align-items: flex-start; }
+.q-h1          { font-size: 48px; line-height: 1.05; letter-spacing: -0.02em; text-wrap: balance; }
+.q-lede        { margin-top: 6px; max-width: 580px; }
+.q-section     { margin-top: var(--pad-3); }
+.q-meta-mb     { margin-bottom: 12px; }
+.q-empty       { color: var(--fg-4); }
+.q-empty.ok    { color: var(--moss); }
+.q-stat-value.moss-ink { color: var(--moss-ink); }
+.q-stat-value.moss     { color: var(--moss); }
+.q-stat-value.dawn     { color: var(--dawn); }
+.q-stat-value.sm       { font-size: 1rem; }
+.q-stat-value.sm.muted { color: var(--fg-4); }
+.q-trend-legend { display: flex; justify-content: space-between; font-size: .75rem; color: var(--fg-4); margin-top: .25rem; }
+.q-hour-axis    { display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; font-size: .65rem; color: var(--fg-4); margin-top: .25rem; }
+.q-hour-axis span { grid-column: span 6; text-align: left; }
+.q-link        { color: var(--moss-ink); }
+.q-num         { text-align: right; }
+.q-sci         { color: var(--fg-3); font-style: italic; }
+.q-conf-pct    { font-size: .8rem; color: var(--fg-3); }
+.q-mvr-list    { list-style: none; padding: 0; margin: 0; }
+.q-mvr-link    { color: inherit; text-decoration: none; }
+
+/* ── Accounts & audit-log pages (/admin/accounts, /admin/audit) — O-25 ────
+   Faithful extraction of the inline shapes accounts.rs used to build. */
+.acct-h1        { font-size: 32px; }
+.acct-error     { border-color: var(--rare); color: var(--rare); }
+.acct-reset     { display: inline-flex; gap: 8px; align-items: center; }
+.acct-reset input { min-width: 170px; font-size: 13px; }
+.acct-actions   { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+/* Audit-log filter form */
+.audit-form     { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
+.audit-field    { display: flex; flex-direction: column; gap: 4px; }
+.audit-field.grow { flex: 1; min-width: 180px; }
+.audit-action-input { font-family: var(--font-mono); font-size: 13px; }
+.audit-btn-h    { height: 36px; }
+.audit-btn-h.lh { line-height: 36px; }
+.audit-section  { margin-top: 18px; }
+.audit-count    { margin-bottom: 6px; }
+.audit-list     { list-style: none; padding: 0; margin: 0; }
+.audit-note     { margin-top: 14px; }
+.audit-row      { padding: 10px 0; border-top: 0.5px solid var(--hairline); display: grid; grid-template-columns: 170px 120px 1fr; gap: 12px; align-items: start; }
+.audit-meta-row { margin-top: 4px; font-size: 11px; color: var(--fg-3); overflow-x: auto; }
+@media (max-width: 520px) {
+  .audit-row { grid-template-columns: 1fr; }
+}
+/* Accounts page template (admin_accounts.html) */
+.acct-page-head   { align-items: flex-start; }
+.acct-page-h1     { font-size: 48px; line-height: 1.05; letter-spacing: -0.02em; text-wrap: balance; }
+.acct-page-lede   { margin-top: 6px; max-width: 560px; }
+.acct-session-foot { margin-top: 12px; padding-top: 12px; border-top: 0.5px solid var(--hairline); }
+.acct-section-gap { margin-top: var(--pad-3); }
+.acct-add-form    { margin-top: 14px; }
+
+/* ── Year in Review (/year-in-review) — O-25 harmonisation ────────────────
+   Faithful extraction. Page-specific scoped classes carry the exact inline
+   values (note: the inline grid was 1.3fr 1fr, distinct from the global
+   .grid-2 = 1.35fr 1fr — so this keeps its own value rather than reusing it).
+   The week-tape colour and leaderboard bar width stay inline (computed). */
+.yir-eyebrow   { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.yir-h1        { font-size: 64px; line-height: 1.05; margin-top: 6px; }
+.yir-h1 em     { font-style: italic; color: var(--moss-ink); }
+.yir-lede      { margin-top: 8px; max-width: 560px; }
+.yir-tiles     { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--pad-3); margin-bottom: var(--pad-3); }
+.yir-tape      { display: flex; gap: 3px; align-items: stretch; margin-top: 6px; }
+.yir-tape-cell { flex: 1; height: 38px; border-radius: 3px; }
+.yir-months    { display: flex; gap: 3px; margin-top: 4px; }
+.yir-month     { flex: 1; text-align: center; font-size: 8px; }
+.yir-cols      { display: grid; grid-template-columns: 1.3fr 1fr; gap: var(--pad-3); margin-top: var(--pad-3); }
+.yir-row       { display: grid; grid-template-columns: 18px 28px 1fr auto; align-items: center; gap: 10px; padding: 7px 0; border-top: 0.5px solid var(--hairline); }
+.yir-row.first { border-top: 0; }
+.yir-row-main  { min-width: 0; }
+.yir-row-name  { font-weight: 500; color: inherit; font-size: 13px; }
+.yir-row-bar   { height: 5px; border-radius: 3px; background: var(--surface-2); margin-top: 4px; overflow: hidden; }
+.yir-row-bar > span { display: block; height: 100%; background: var(--moss); }
+.yir-row-count { font-size: 13px; color: var(--fg-2); }
+.yir-tile-value { font-size: 40px; line-height: 1; }
+.yir-tile-label { margin-top: 8px; }
+.yir-tile-sub  { margin-top: 2px; }
+.yir-ms        { padding: 10px 0; border-top: 0.5px solid var(--hairline); }
+.yir-ms-value  { font-size: 20px; margin-top: 3px; }
+.yir-close     { margin-top: var(--pad-3); text-align: center; }
+.yir-close-line { font-size: 30px; margin: 8px auto; max-width: 680px; line-height: 1.25; }
+.yir-close-line .accent { color: var(--moss-ink); }
+/* Match the original behaviour exactly: every one of these was an inline grid,
+   so on phones the global `[style*="grid-template-columns"]` reset collapsed it
+   to one column. Replicating that keeps the refactor pixel-faithful (the
+   leaderboard row's cramped phone stack included — fixing that is a separate,
+   deliberate change, not a side effect of this sweep). */
+@media (max-width: 520px) {
+  .yir-tiles, .yir-cols, .yir-row { grid-template-columns: 1fr; }
+}
+
+/* ── Weekly report (/weekly) — O-25 harmonisation ─────────────────────────
+   Faithful extraction. Preserves the page's legacy design tokens
+   (--bg-card / --radius / --text-muted / --accent / --success / --warning)
+   exactly — restyling to the modern palette is a separate decision. The SVG
+   chart and the top-species bar widths stay inline (computed). */
+.wk-content    { max-width: 900px; margin: 0 auto; padding: 1.5rem; }
+.wk-eyebrow    { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.wk-h2         { font-size: 32px; margin-bottom: 1rem; }
+.wk-loading    { color: var(--text-muted); text-align: center; padding: 3rem; }
+.wk-nav        { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; }
+.wk-nav-btn    { padding: 0.3rem 0.75rem; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-muted); }
+/* Disabled "Next" was a bare <span> (padding + muted colour + opacity, no
+   border/background) — keep it that way, not a bordered .wk-nav-btn. */
+.wk-nav-next-off { padding: 0.3rem 0.75rem; color: var(--text-muted); opacity: 0.4; }
+.wk-nav-center { flex: 1; text-align: center; }
+.wk-nav-title  { font-size: 1.1rem; }
+.wk-badge      { margin-left: 0.5rem; font-size: 0.8rem; background: var(--accent); color: #fff; padding: 0.1rem 0.4rem; border-radius: 4px; }
+.wk-stats      { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.wk-card       { background: var(--bg-card); padding: 1rem; border-radius: var(--radius); border: 1px solid var(--border); }
+.wk-card.center { text-align: center; }
+.wk-card.mb    { margin-bottom: 1.5rem; }
+.wk-stat-num   { font-size: 2rem; font-weight: 700; }
+.wk-stat-num.accent  { color: var(--accent); }
+.wk-stat-num.success { color: var(--success); }
+.wk-stat-num.warning { color: var(--warning); }
+.wk-stat-label { color: var(--text-muted); font-size: 0.9rem; }
+.wk-card-title { margin-bottom: 0.75rem; font-size: 1rem; }
+.wk-card-title .sub { font-size: 0.8rem; color: var(--text-muted); font-weight: 400; }
+.wk-cols       { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+.wk-muted      { color: var(--text-muted); }
+.wk-top-list   { padding-left: 1.25rem; }
+.wk-top-item   { margin-bottom: 0.5rem; }
+.wk-top-name   { font-weight: 600; }
+.wk-top-bar-row { display: flex; align-items: center; gap: 0.5rem; margin-top: 2px; }
+.wk-top-track  { flex: 1; height: 6px; background: var(--border); border-radius: 3px; }
+.wk-top-fill   { height: 6px; background: var(--accent); border-radius: 3px; }
+.wk-top-count  { font-size: 0.85rem; color: var(--text-muted); min-width: 2.5rem; text-align: right; }
+.wk-new-list   { list-style: none; padding: 0; }
+.wk-new-item   { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0; border-bottom: 1px solid var(--border); }
+.wk-new-badge  { background: var(--success); color: #fff; font-size: 0.7rem; padding: 0.1rem 0.35rem; border-radius: 3px; flex-shrink: 0; }
+.wk-new-name   { flex: 1; }
+.wk-new-date   { font-size: 0.8rem; color: var(--text-muted); }
+@media (max-width: 520px) {
+  .wk-cols { grid-template-columns: 1fr; }
+}
+
+/* ── Detection history (/history) — O-25 harmonisation ────────────────────
+   Faithful extraction; preserves the page's legacy tokens. The hourly chart
+   stays as-is (its own SVG helper). */
+.hist-content   { padding: 1.5rem; }
+.hist-h2        { font-size: 32px; margin-bottom: 1rem; }
+.hist-layout    { display: grid; grid-template-columns: 200px 1fr; gap: 1.5rem; align-items: start; }
+.hist-side      { background: var(--bg-card); border-radius: var(--radius); border: 1px solid var(--border); }
+.hist-side-head { padding: 0.75rem; border-bottom: 1px solid var(--border); font-size: 0.9rem; color: var(--text-muted); }
+.hist-loading   { color: var(--text-muted); padding: 1rem; }
+.hist-chart-loading { color: var(--text-muted); text-align: center; padding: 3rem; }
+.hist-nav       { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+.hist-nav-btn   { padding: 0.3rem 0.75rem; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-muted); }
+.hist-nav-off   { padding: 0.3rem 0.75rem; color: var(--text-muted); opacity: 0.4; }
+.hist-nav-center { flex: 1; text-align: center; }
+.hist-nav-title { font-size: 1.1rem; }
+.hist-badge     { margin-left: 0.5rem; font-size: 0.8rem; background: var(--accent); color: #fff; padding: 0.1rem 0.4rem; border-radius: 4px; }
+.hist-stats     { display: flex; gap: 1rem; margin-bottom: 1rem; }
+.hist-stat      { background: var(--bg-card); padding: 0.75rem 1.25rem; border-radius: var(--radius); border: 1px solid var(--border); }
+.hist-stat-num  { font-size: 1.5rem; font-weight: 700; }
+.hist-stat-num.accent  { color: var(--accent); }
+.hist-stat-num.success { color: var(--success); }
+.hist-stat-unit { color: var(--text-muted); margin-left: 0.5rem; font-size: 0.9rem; }
+.hist-chart-card { background: var(--bg-card); padding: 1rem; border-radius: var(--radius); border: 1px solid var(--border); }
+.hist-chart-title { margin-bottom: 0.75rem; font-size: 0.95rem; color: var(--text-muted); }
+.hist-date-list { list-style: none; padding: 0; margin: 0; max-height: 300px; overflow-y: auto; }
+.hist-date-link { display: block; padding: 0.3rem 0.75rem; color: var(--text-muted); font-size: 0.9rem; }
+.hist-empty     { color: var(--text-muted); padding: 1rem; }
+/* hist-layout was an inline grid → collapsed by the global phone reset. */
+@media (max-width: 520px) {
+  .hist-layout { grid-template-columns: 1fr; }
+}
+
+/* ── Life list (/life-list) — O-25 harmonisation ──────────────────────────
+   Faithful extraction; preserves the page's legacy tokens. SVG charts stay
+   in their helpers. */
+.ll-eyebrow    { display: flex; align-items: center; gap: 10px; }
+.ll-h1         { font-size: 34px; margin-bottom: 0.25rem; }
+.ll-lede       { color: var(--text-muted); margin-bottom: 1.5rem; }
+.ll-card-mb    { margin-bottom: 1rem; }
+.ll-card-note  { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 0.75rem; }
+.ll-loading    { color: var(--text-muted); }
+.ll-head-row   { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; }
+.ll-head-row h2 { margin-bottom: 0; }
+/* `input.`/`select.` prefix so these beat the global `input[type=…]` /
+   `select` rule (attribute/element specificity), exactly as the original
+   inline style did. */
+input.ll-search  { flex: 1; min-width: 200px; padding: 0.4rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--input-bg); color: var(--text); font-size: 0.9rem; }
+select.ll-sort   { padding: 0.4rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--input-bg); color: var(--text); font-size: 0.85rem; }
+.ll-muted      { color: var(--text-muted); }
+.ll-center     { text-align: center; }
+.ll-empty      { color: var(--text-muted); text-align: center; padding: 2rem; }
+.ll-num        { color: var(--text-muted); }
+.ll-name-link  { color: inherit; }
+.ll-first-seen { font-size: 0.85rem; color: var(--text-muted); }
+
+/* ── Recordings (/recordings) — O-25 harmonisation ────────────────────────
+   Faithful extraction; preserves legacy tokens. */
+.rec-muted     { color: var(--text-muted); }
+.rec-item      { cursor: pointer; }
+.rec-item-main { flex: 1; min-width: 0; }
+.rec-sci       { font-style: italic; display: block; }
+.rec-count-note { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 0.75rem; }
+.rec-audio     { width: 100%; height: 32px; margin-top: 0.5rem; }
+.rec-date      { color: var(--text-muted); font-size: 0.8rem; }
+.rec-row       { display: flex; gap: 1rem; align-items: flex-start; padding: 0.6rem 0; border-bottom: 1px solid var(--border); }
+.rec-row-main  { flex: 1; min-width: 0; }
+.rec-row-head  { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.rec-name-link { font-weight: 500; color: var(--text); text-decoration: none; }
+.rec-sub       { color: var(--text-muted); font-size: 0.8rem; }
+.rec-actions   { display: flex; flex-direction: column; gap: 0.25rem; flex-shrink: 0; }
+.rec-del-btn   { background: none; border: 1px solid var(--danger); color: var(--danger); padding: 0.2rem 0.5rem; border-radius: var(--radius); cursor: pointer; font-size: 0.7rem; }
+.rec-relabel-ok { color: var(--success); font-size: 0.85rem; }
+
+/* ── Dawn chorus right-rail list (/analytics/dawn-chorus) — O-25 ──────────
+   Only the non-SVG list rows are harmonised; the polar plot + hour strips are
+   computed SVG and stay inline. The avatar's `--sp:` custom property is a
+   per-species computed value and remains inline. */
+.dc-row        { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; padding: 10px 0; border-top: 0.5px solid var(--hairline); }
+.dc-row.first  { border-top: 0; }
+.dc-row-main   { min-width: 0; }
+.dc-row-head   { display: flex; align-items: center; gap: 6px; }
+.dc-row-name   { font-weight: 500; }
+.dc-strip      { margin-top: 4px; }
+.dc-offchorus  { font-size: 9.5px; }
+.dc-polar-svg  { max-width: 540px; max-height: 540px; display: block; }
+/* dc-row was an inline grid → collapsed to one column on phones by the global
+   `[style*="grid-template-columns"]` reset. Match that exactly. */
+@media (max-width: 520px) {
+  .dc-row { grid-template-columns: 1fr; }
+}
+
+/* ── Rare-bird quarantine (/quarantine) — O-25 harmonisation ──────────────
+   Faithful extraction; preserves the page's legacy tokens
+   (--primary/--warning/--success/--danger/--bg-hover/--text/--text-muted).
+   Only the audio player keeps an inline width (self-contained control). */
+.qz-head       { margin-bottom: 1.5rem; }
+.qz-title-row  { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 0.25rem; }
+.qz-h1         { font-size: 1.5rem; font-weight: 700; margin: 0; }
+.qz-lede       { color: var(--text-muted); font-size: 0.9rem; }
+.qz-lede a     { color: var(--primary); }
+.qz-loading    { color: var(--text-muted); }
+.qz-stats-flush { margin-bottom: 0; }
+.qz-stat.warn    { color: var(--warning); }
+.qz-stat.success { color: var(--success); }
+.qz-stat.danger  { color: var(--danger); }
+.qz-filter-card { margin-top: 1rem; }
+.qz-filter-row { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.75rem; }
+.qz-filter-label { color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.qz-filter-link { font-size: 0.9rem; color: var(--text-muted); }
+.qz-filter-link.active { font-weight: 700; color: var(--primary); border-bottom: 2px solid var(--primary); padding-bottom: 0.1rem; }
+.qz-list-loading { color: var(--text-muted); text-align: center; padding: 2rem; }
+.qz-name       { font-weight: 600; color: var(--text); }
+.qz-sci        { color: var(--text-muted); font-size: 0.8rem; font-style: italic; }
+.qz-sf         { color: var(--text-muted); font-size: 0.75rem; }
+.qz-reason     { color: var(--text-muted); font-size: 0.85rem; }
+.qz-datetime   { font-size: 0.85rem; }
+.qz-time       { color: var(--text-muted); }
+.qz-status     { font-size: 0.85rem; }
+.qz-status.approved   { color: var(--success); }
+.qz-status.rejected   { color: var(--danger); }
+.qz-status.pending    { color: var(--warning); }
+.qz-audio      { width: 100%; height: 28px; margin-top: 0.4rem; }
+.qz-actions    { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center; }
+.qz-btn-group  { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.qz-btn        { padding: 0.25rem 0.6rem; border-radius: var(--radius); cursor: pointer; font-size: 0.8rem; white-space: nowrap; }
+.qz-btn.approve { background: var(--success); color: #fff; border: none; }
+.qz-btn.reject  { background: none; border: 1px solid var(--warning); color: var(--warning); }
+.qz-btn.delete  { background: none; border: 1px solid var(--danger); color: var(--danger); }
+.qz-btn.share   { background: none; border: 1px solid var(--border); color: var(--text); }
+.qz-loadmore-row { text-align: center; padding: 1rem; }
+.qz-loadmore   { background: var(--bg-hover); border: 1px solid var(--border); color: var(--text); padding: 0.5rem 1.5rem; border-radius: var(--radius); cursor: pointer; font-size: 0.9rem; }
+.qz-err        { color: var(--danger); }
+.qz-pending-badge { background: var(--warning); color: #000; border-radius: 9999px; padding: 0.1rem 0.45rem; font-size: 0.7rem; font-weight: 700; margin-left: 0.25rem; }
+
+/* ── Behavioral analytics partials (/analytics) — O-25 harmonisation ───────
+   Faithful extraction of the static inline styles the behavioral.rs HTMX
+   partials built with format!/write!. Preserves the page's legacy
+   --text-muted token verbatim; the config-table key cells become a class. */
+.bh-muted        { color: var(--text-muted); }
+.bh-note         { color: var(--text-muted); font-size: 0.8rem; margin-top: 0.5rem; }
+.bh-muted-sm     { color: var(--text-muted); font-size: 0.8rem; }
+.bh-cell-note    { color: var(--text-muted); padding-top: 0.5rem; }
+.bh-after        { font-size: 0.85rem; margin-bottom: 0.75rem; }
+.bh-config-table { font-size: 0.85rem; }
+.bh-key          { font-weight: 600; }
+
+/* ── Species co-occurrence (/correlation) — O-25 harmonisation ─────────────
+   Faithful extraction. The two co-occurrence data-bars keep their computed
+   inline width:{pct}% (documented dynamic exception); the species lookup box
+   is scoped `input.` so its width beats the global input[type=…] rule. */
+.co-h1           { font-size: 34px; }
+.co-mt           { margin-top: 4px; }
+.co-meta-gap     { margin: 4px 0 12px; }
+.co-lookup-row   { display: flex; gap: .75rem; margin-bottom: 1rem; }
+input.co-species-input { width: 280px; }
+.co-err          { color: var(--rare); }
+.co-bar-row      { display: flex; align-items: center; gap: .5rem; }
+.co-bar-label    { font-size: .75rem; color: var(--fg-3); }
+.co-hint         { color: var(--fg-3); font-size: .875rem; }
+
+/* ── Time-series dashboard partials (/timeseries) — O-25 harmonisation ─────
+   Faithful extraction of the static inline styles in the timeseries_dash.rs
+   HTMX partials. The hourly-heatmap bar keeps its computed inline width:{pct}%
+   (dynamic exception). Legacy --text-muted preserved verbatim. */
+.tsd-muted       { color: var(--text-muted); }
+.tsd-key         { font-weight: 600; }
+.tsd-ok          { color: var(--success); }
+.tsd-err         { color: var(--danger); }
+
+/* ── Species list + detail (/species, /species/detail) — O-25 harmonisation ─
+   Faithful extraction. The reference-photo / spectrogram <img> dimensions and
+   the audio scrubber become classes; the eBird/AllAboutBirds and companion
+   links are scoped `a.` so their colour beats the global `a {…}` rule. The
+   spectrogram's JS onerror handler and the avatar --sp: custom property are
+   untouched. Legacy --radius/--accent/--text-muted preserved verbatim. */
+.spp-muted       { color: var(--text-muted); }
+.spp-muted-sm    { color: var(--text-muted); font-size: 0.85rem; }
+.spp-info-img    { width: 100%; border-radius: var(--radius); margin-bottom: 1rem; }
+.spp-desc        { font-size: 0.9rem; line-height: 1.5; margin-bottom: 0.75rem; }
+.spp-mt          { margin-top: 0.75rem; }
+a.spp-link       { color: var(--accent, #89b4fa); }
+.spp-mb8         { margin-bottom: 8px; }
+.spp-photo-empty { aspect-ratio: 4/3; border-radius: var(--r-md); }
+.spp-mt8         { margin-top: 8px; }
+.spp-spectrogram { width: 100%; border-radius: var(--r-md); border: 0.5px solid var(--border); display: block; }
+.spp-audio       { width: 100%; margin-top: 10px; }
+a.spp-inherit    { color: inherit; }
+
+/* ── Detection detail (/detections/detail) — O-25 harmonisation ────────────
+   Faithful extraction. The spectrogram <img> keeps its JS onerror handler and
+   the correlation-id <code> keeps its DOM id (referenced by the copy script);
+   only their static style attributes move to classes. */
+.dd-h1           { font-size: 40px; line-height: 1.05; }
+.dd-sci          { color: var(--fg-3); font-style: italic; margin-top: 4px; }
+.dd-actions      { display: flex; gap: 8px; flex-wrap: wrap; }
+.dd-mb8          { margin-bottom: 8px; }
+.dd-spectrogram  { width: 100%; border-radius: var(--r-md); border: 0.5px solid var(--border); display: block; margin-bottom: 12px; }
+.dd-audio        { width: 100%; }
+.dd-mb           { margin-bottom: 0.75rem; }
+.dd-id-row       { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.dd-id-code      { background: var(--surface-2); padding: 0.5rem 0.75rem; border-radius: var(--r-sm); font-family: var(--font-mono); color: var(--moss-ink); }
+.dd-h1-nf        { font-size: 32px; }
+.dd-mt8          { margin-top: 8px; }
+.dd-mt16         { margin-top: 16px; }
+
+/* ══ O-25 template sweep — content/data page shells ════════════════════════
+   Faithful extraction of the static inline styles in the served HTML templates
+   (today / dawn_chorus / species / analytics / timeseries). Exact original
+   values; legacy --text-muted/--accent/--pad-3 tokens preserved verbatim. The
+   grid overrides that used to be inline relied on the global
+   `[style*="grid-template-columns"]` ≤520px reset, so each carries a matching
+   single-column breakpoint. species_detail keeps its own <style> block. */
+
+/* ── Today (/today) ─────────────────────────────────────────────────────── */
+.td-head      { align-items: flex-start; }
+.td-eyebrow   { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.td-phrase    { margin-top: 8px; }
+.td-h1        { font-size: 48px; line-height: 1.05; letter-spacing: -0.02em; }
+.td-sub       { margin-top: 6px; }
+.td-searchbar { position: sticky; top: 54px; z-index: 5; }
+.td-form      { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.td-search    { flex: 1; min-width: 240px; }
+
+/* ── Dawn chorus (/analytics/dawn-chorus) — shell only; dawn_chorus.rs owns
+      the dc-row*/dc-strip/dc-polar-svg partial classes already. ──────────── */
+.dc-head       { align-items: flex-start; }
+.dc-eyebrow    { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.dc-h1         { font-size: 48px; line-height: 1.05; letter-spacing: -0.02em; text-wrap: balance; }
+.dc-h1 em      { color: var(--moss-ink); }
+.dc-lede       { margin-top: 6px; max-width: 620px; }
+.dc-pills      { margin: 0; }
+.dc-cols       { grid-template-columns: 1.05fr 0.95fr; }
+.dc-polar-card { display: flex; align-items: center; justify-content: center; min-height: 560px; }
+.dc-polar-wrap { width: 100%; display: flex; align-items: center; justify-content: center; }
+.dc-list-card  { display: flex; flex-direction: column; gap: 10px; }
+.dc-foot       { padding-top: 10px; border-top: 0.5px solid var(--hairline); }
+@media (max-width: 520px) {
+  .dc-cols { grid-template-columns: 1fr; }
+}
+
+/* ── Species list (/species) ────────────────────────────────────────────── */
+.sp-h1     { font-size: 34px; }
+.sp-lede   { margin-top: 4px; }
+.sp-search { width: 240px; }
+
+/* ── Analytics shell (/analytics) — legacy --text-muted/--pad-3 preserved. ─ */
+.an-head      { margin-bottom: var(--pad-3); }
+.an-h1        { font-size: 34px; }
+.an-lede      { margin-top: 4px; }
+.an-status    { margin: 0; min-width: 220px; }
+.an-card-lede { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem; }
+.an-loading   { color: var(--text-muted); }
+
+/* ── Time series shell (/timeseries) — legacy --text-muted/--accent preserved.
+      tsh- prefix avoids the timeseries_dash.rs tsd-* partial classes. ────── */
+.tsh-h1          { font-size: 34px; margin-bottom: 4px; }
+.tsh-lede        { color: var(--text-muted); margin-bottom: 1.5rem; font-size: 0.9rem; }
+.tsh-row         { margin-bottom: 1rem; }
+.tsh-badge       { font-size: 0.75rem; color: var(--accent); margin-left: 0.5rem; }
+.tsh-card-lede   { color: var(--text-muted); font-size: 0.8rem; margin-bottom: 0.75rem; }
+.tsh-polar-center { display: flex; justify-content: center; }
+.tsh-api-table   { font-size: 0.85rem; }
+/* Collapsed-by-default API reference: developer material stays one click
+   away without turning the dashboard into an API manual. */
+.tsh-api-details summary { cursor: pointer; list-style: none; }
+.tsh-api-details summary::-webkit-details-marker { display: none; }
+.tsh-api-details summary::after { content: "▸"; margin-left: 0.5rem; color: var(--fg-3); }
+.tsh-api-details[open] summary::after { content: "▾"; }
+.tsh-api-details[open] summary { margin-bottom: 0.75rem; }
+.tsh-api-summary-h2 { display: inline; }
+
+/* ══ O-25 sweep — standalone admin & system pages ══════════════════════════
+   Faithful extraction of the static inline styles in the changelog / heatmap /
+   notifications / system-health / migration / audio-sources / login screens.
+   Exact original values; legacy --text-muted/--accent/--success/--danger/
+   --warning/--bg-hover tokens preserved verbatim. Grid overrides that relied on
+   the global [style*="grid-template-columns"] ≤520px reset carry their own
+   breakpoint. rules.rs keeps its own page <style> block. */
+
+/* ── Changelog (/system/changelog) ──────────────────────────────────────── */
+.cl-head     { align-items: flex-start; }
+.cl-h1       { font-size: 48px; line-height: 1.05; letter-spacing: -0.02em; text-wrap: balance; }
+.cl-h1 em    { color: var(--moss-ink); }
+.cl-lede     { margin-top: 6px; max-width: 620px; }
+.cl-card     { margin-top: var(--pad-3); }
+.cl-body     { height: auto; padding: 0; }
+/* Scoped under .cl-body to beat the .bnb-help-drawer__body h2/h3/a/pre
+   element rules this page reuses — the inline styles used to win on
+   specificity, so the classes must too. */
+.cl-body .cl-pre      { white-space: pre-wrap; }
+.cl-body .cl-rel-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 24px 0 6px; }
+.cl-body .cl-rel-h2   { font-family: var(--font-display); font-size: 24px; letter-spacing: -0.01em; margin: 0; }
+.cl-body a.cl-rel-link { color: var(--fg); text-decoration: none; }
+.cl-body .cl-sec-h3   { margin: 14px 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--fg-3); font-weight: 500; }
+
+/* ── Activity heatmap (/heatmap) ────────────────────────────────────────── */
+.hm-eyebrow   { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.hm-h1        { font-size: 34px; }
+.hm-lede      { margin-top: 4px; }
+.hm-empty     { color: var(--fg-4); text-align: center; padding: 2rem; }
+.hm-scroll    { overflow-x: auto; }
+.hm-svg       { font-family: system-ui, sans-serif; }
+.hm-svg-block { font-family: system-ui, sans-serif; display: block; }
+
+/* ── Notification center (/notifications) — legacy tokens preserved. ──────── */
+.nc-eyebrow   { display: flex; align-items: center; gap: 10px; }
+.nc-h1        { font-size: 34px; margin-bottom: 1rem; }
+.nc-lede      { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem; }
+.nc-loading   { color: var(--text-muted); }
+.nc-empty     { color: var(--text-muted); text-align: center; padding: 2rem; }
+.nc-time      { font-size: 0.85rem; color: var(--text-muted); white-space: nowrap; }
+.nc-channel   { background: var(--bg-hover); padding: 0.1rem 0.5rem; border-radius: 4px; font-size: 0.8rem; }
+.nc-msg       { font-size: 0.85rem; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Scoped .stat-card .value.X to beat the .stat-card .value{color} rule
+   (the inline color used to win). */
+.stat-card .value.nc-v-sent    { color: var(--success); }
+.stat-card .value.nc-v-failed  { color: var(--danger); }
+.stat-card .value.nc-v-skipped { color: var(--warning); }
+
+/* ── System health (/system) — legacy tokens preserved; sys- avoids the
+      species_detail sd-* classes. ──────────────────────────────────────── */
+.sys-head        { margin-bottom: var(--pad-3); }
+.sys-h1          { font-size: 34px; }
+.sys-lede        { margin-top: 4px; }
+.sys-loading     { color: var(--text-muted); }
+.sys-gauge-card  { display: flex; flex-direction: column; align-items: center; }
+.sys-gauge-svg   { max-width: 100%; }
+.sys-gauge-text  { font-size: 24px; fill: var(--fg); }
+.sys-gauge-label { font-weight: 500; }
+.sys-gauge-sub   { font-size: 10.5px; }
+.sys-uptime-card { display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.sys-uptime-val  { font-size: 24px; }
+.sys-uptime-label { margin-top: 6px; }
+.sys-table       { font-size: 0.9rem; }
+.sys-th          { font-weight: 600; padding-right: 1rem; }
+.sys-ok          { color: var(--success); font-weight: 600; }
+.sys-bad         { color: var(--danger); font-weight: 600; }
+
+/* ── Sign-in page (/login) — standalone; extends the login-* family. ──────── */
+.login-logo      { color: var(--fg); }
+.login-vrule     { height: 16px; align-self: center; }
+.login-main      { display: grid; place-items: center; min-height: calc(100dvh - 56px - 64px); padding: 36px 18px; }
+.login-brand     { font-size: 15px; }
+.login-brand-sub { color: var(--fg-3); }
+.login-card__head .login-h1 { font-size: 38px; line-height: 1.05; letter-spacing: -0.012em; margin: 0; }
+.login-sub       { margin-top: 6px; }
+.login-footer    { text-align: center; padding: 14px 20px; color: var(--fg-4); font-family: var(--font-mono); font-size: 11px; border-top: 0.5px solid var(--hairline); }
+a.login-about    { color: var(--fg-3); }
+
+/* ── Migration / phenology (/migration) ─────────────────────────────────── */
+.mig-head        { align-items: flex-start; }
+.mig-eyebrow     { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.mig-h1          { font-size: 48px; line-height: 1.05; letter-spacing: -0.02em; text-wrap: balance; }
+.mig-h1 em       { color: var(--moss-ink); }
+.mig-lede        { margin-top: 6px; max-width: 620px; }
+.mig-pills       { margin: 0; }
+.mig-legend      { display: flex; gap: 14px; align-items: center; }
+.mig-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.mig-swatch      { width: 10px; height: 6px; border-radius: 2px; }
+.mig-swatch.spring { background: color-mix(in oklch, var(--moss) 60%, transparent); }
+.mig-swatch.fall   { background: color-mix(in oklch, var(--dawn) 60%, transparent); }
+.mig-ridge       { min-height: 360px; }
+.mig-divider     { margin-top: 14px; padding-top: 14px; border-top: 0.5px solid var(--hairline); }
+.mig-divider-head { display: flex; justify-content: space-between; margin-bottom: 6px; }
+.mig-diversity   { min-height: 70px; }
+.mig-cards       { grid-template-columns: 1fr 1fr 1fr; }
+.mig-card-eb.arrived { color: var(--moss-ink); }
+.mig-card-eb.peaking { color: var(--dawn-ink); }
+.mig-card-eb.missing { color: var(--rare); }
+.mig-card-val    { font-size: 20px; margin-top: 8px; }
+@media (max-width: 520px) {
+  .mig-cards { grid-template-columns: 1fr; }
+}
+
+/* ── Audio sources (/admin/audio) ───────────────────────────────────────── */
+.aas-head       { align-items: flex-start; }
+.aas-h1         { font-size: 48px; line-height: 1.05; letter-spacing: -0.02em; text-wrap: balance; }
+.aas-lede       { margin-top: 6px; max-width: 580px; }
+.aas-pills      { margin: 0; }
+.aas-count      { display: inline-flex; align-items: center; gap: 12px; }
+.aas-plus       { color: var(--moss-ink); font-weight: 600; }
+.aas-h4-mt      { margin-top: 18px; }
+.aas-section-mt { margin-top: var(--pad-3); }
+.aas-empty-h3   { font-size: 22px; margin-top: 14px; }
+.aas-empty-sub  { margin-top: 6px; }
+.aas-restart    { margin-top: var(--pad-3); display: inline-flex; align-items: center; gap: 8px; }
+
+/* ══ O-25 sweep — home (/) + today (/today) ecosystem ══════════════════════
+   Faithful extraction of the static inline styles in the dashboard/today render
+   modules + dashboard.html. Legacy --text-muted/--bg-hover/--border/--text/
+   --radius/--fg-2/--fg-4/--dawn-ink tokens preserved verbatim. Computed bar
+   widths/colours stay inline (the documented dynamic exception). */
+
+/* ── Today list cards (today.rs) ────────────────────────────────────────── */
+.tdl-empty        { color: var(--text-muted); text-align: center; padding: 2rem; }
+.tdl-more         { text-align: center; padding: 1rem; }
+.tdl-more-btn     { background: var(--bg-hover); border: 1px solid var(--border); color: var(--text); padding: 0.5rem 1.5rem; border-radius: var(--radius); cursor: pointer; font-size: 0.9rem; }
+.tdl-strip-empty  { display: flex; gap: 18px; align-items: center; justify-content: center; padding: 1rem; }
+.tdl-caption      { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+.tdl-card         { display: flex; gap: 14px; align-items: center; padding: 10px 14px; margin-bottom: 8px; }
+.tdl-card-main    { flex: 1; min-width: 0; }
+.tdl-card-head    { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+a.tdl-name        { font-weight: 500; color: inherit; font-size: 14px; }
+.tdl-card-sci     { margin-top: 2px; }
+a.tdl-time        { color: inherit; }
+.tdl-card-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.tdl-audio        { height: 30px; width: 200px; max-width: 100%; margin-top: 6px; }
+
+/* ── Today comparative phrase (today_phrase.rs) — reuses td-h1/td-sub; the
+      per-tier emphasis colour is an enumerable set. ──────────────────────── */
+.tp-c-fg-3     { color: var(--fg-3); }
+.tp-c-fg-2     { color: var(--fg-2); }
+.tp-c-fg       { color: var(--fg); }
+.tp-c-moss-ink { color: var(--moss-ink); }
+.tp-c-rare     { color: var(--rare); }
+
+/* ── Disk / health widgets (health.rs) — bar width/colour stays inline. ──── */
+.he-row  { display: flex; justify-content: space-between; align-items: baseline; }
+.he-pct  { font-size: 26px; margin: 4px 0 8px; }
+.he-dash { font-size: 22px; }
+.he-hint { color: var(--text-muted); font-size: 0.8rem; margin-top: 0.5rem; }
+
+/* ── Dashboard stat tiles (dashboard/stats.rs) ──────────────────────────── */
+.ds-spark      { margin-top: auto; }
+.ds-label-live { display: flex; align-items: center; gap: 6px; }
+.stat-tile .value.ds-last-hour { color: var(--dawn-ink); }
+
+/* ── Dashboard hero shell (dashboard.html) ──────────────────────────────── */
+.db-eyebrow     { margin-bottom: 8px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.db-signal-card { display: flex; flex-direction: column; gap: 6px; }
+.db-signal-head { display: flex; justify-content: space-between; align-items: baseline; }
+.db-live-pill   { font-size: 10px; }
+.db-pulse       { width: 100%; height: 80px; display: block; }
+.db-signal-foot { display: flex; justify-content: space-between; }
+
+/* ── Dashboard feed / top-species / species-list / most-recent partials
+      (dashboard/partials.rs). The list-row column override relied on the global
+      [style*="grid-template-columns"] ≤520px reset → own breakpoint. ──────── */
+.dp-badge       { font-size: 9.5px; }
+.dp-audio-row   { height: 30px; width: 120px; }
+a.dp-ago        { color: inherit; text-decoration: none; }
+a.dp-link       { color: inherit; }
+.dp-top-row     { grid-template-columns: auto 1fr auto 56px; }
+.dp-min0        { min-width: 0; }
+.dp-name        { font-weight: 500; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dp-ellipsis    { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dp-count       { font-size: 13px; color: var(--fg-2); }
+.dp-th-num      { width: 32px; }
+.dp-rank        { color: var(--fg-4); font-size: 11px; }
+.dp-cell        { display: flex; align-items: center; gap: 10px; }
+.dp-name-strong { font-weight: 500; }
+.dp-empty       { color: var(--text-muted); text-align: center; padding: 1.5rem 0; }
+.dp-audio       { width: 100%; margin-top: 0.6rem; height: 32px; }
+.dp-recent      { display: flex; align-items: flex-start; gap: 1rem; flex-wrap: wrap; }
+.dp-recent-main { flex: 1; min-width: 200px; }
+.dp-recent-head { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.2rem; }
+a.dp-recent-name { font-size: 1.1rem; font-weight: 700; color: var(--text); }
+.dp-recent-sci  { color: var(--text-muted); font-size: 0.85rem; font-style: italic; }
+.dp-recent-date { color: var(--text-muted); font-size: 0.8rem; margin-top: 0.2rem; }
+@media (max-width: 520px) {
+  .dp-top-row { grid-template-columns: 1fr; }
+}
+
+/* ══ O-25 sweep — detection reviews + image blacklist ══════════════════════
+   Faithful extraction of two screens that escaped earlier inventories because
+   they emit inline styles as escaped `style=\"…\"` in Rust write!/format!.
+   Legacy --fg/--fg-2/--fg-3/--primary/--danger/--moss/--bg/--hairline/
+   --text-muted/--card-bg/--border/--radius/--accent/--bg-hover preserved. */
+
+/* ── Detection reviews (/detection-reviews) + the inline review widget on
+      /detections/detail. ──────────────────────────────────────────────── */
+.dr-head       { margin-bottom: 1.25rem; }
+.dr-h1         { font-size: 32px; margin: 0.1rem 0 0.35rem; }
+.dr-lede       { color: var(--fg-2); max-width: 60ch; margin: 0; }
+a.dr-link      { color: var(--primary); }
+.dr-loading    { color: var(--fg-3); padding: 2rem; text-align: center; }
+.dr-error      { color: var(--danger); }
+.dr-counts     { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
+.dr-card-mb    { margin-bottom: 1.25rem; }
+.dr-h2         { font-size: 1.1rem; margin: 0 0 0.75rem; }
+.dr-empty      { color: var(--fg-3); margin: 0; }
+.dr-prow       { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; padding: 0.6rem 0; border-top: 0.5px solid var(--hairline); }
+.dr-row-main   { flex: 1 1 200px; min-width: 0; }
+a.dr-row-name  { font-weight: 600; color: var(--fg); }
+.dr-row-sci    { color: var(--fg-3); font-size: 0.8rem; font-style: italic; }
+.dr-row-meta   { color: var(--fg-3); font-size: 0.8rem; }
+.dr-confirm-btn { background: var(--moss); color: var(--bg); border: none; white-space: nowrap; }
+.dr-nowrap     { white-space: nowrap; }
+.dr-vrow       { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; padding: 0.5rem 0; border-top: 0.5px solid var(--hairline); }
+.dr-vrow-main  { flex: 1 1 180px; min-width: 0; font-weight: 500; }
+.dr-vrow-meta  { color: var(--fg-3); font-weight: 400; font-size: 0.8rem; }
+.dr-undo-btn   { white-space: nowrap; font-size: 0.8rem; }
+.dr-widget     { margin-top: 16px; }
+.dr-widget-form { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.dr-widget-note { margin-top: 8px; }
+
+/* ── Image blacklist (/admin/images) — standalone old-style page, no <style>
+      block, so its inline styles fold onto app.css classes. ─────────────── */
+.img-wrap       { max-width: 960px; margin: 2rem auto; padding: 0 1rem; }
+.img-h1         { font-size: 1.5rem; margin-bottom: 1rem; }
+.img-lede       { color: var(--text-muted); margin-bottom: 1.5rem; }
+.img-form       { background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; margin-bottom: 1.5rem; }
+.img-h2         { font-size: 1rem; margin-bottom: 0.75rem; }
+.img-field-row  { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+input.img-input      { flex: 1; min-width: 150px; padding: 0.4rem 0.6rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); }
+input.img-input-wide { flex: 2; min-width: 250px; padding: 0.4rem 0.6rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); }
+.img-add-btn    { padding: 0.4rem 1rem; background: var(--accent); color: #fff; border: none; border-radius: var(--radius); cursor: pointer; }
+.img-table      { width: 100%; border-collapse: collapse; background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); }
+.img-thead-row  { background: var(--bg-hover); }
+.img-th         { padding: 0.5rem; text-align: left; }
+.img-td         { padding: 0.5rem; }
+.img-td-url     { padding: 0.5rem; word-break: break-all; }
+.img-del-btn    { background: none; border: 1px solid var(--danger); color: var(--danger); padding: 0.2rem 0.5rem; border-radius: var(--radius); cursor: pointer; font-size: 0.8rem; }
+
+/* ══ O-25 sweep — admin control surface (system_controls + backup + audio +
+   mod). Faithful 1:1 extractions; appended at file end so the .aud-edit-* and
+   .am-signout-btn rules win their cascade over .audio-source__*/.bnb-btn. ══ */
+
+/* Shared system_controls fragments (service/update/data/backup.rs). */
+.ctl-ok          { color: var(--moss); }
+.ctl-ok-strong   { color: var(--moss); font-weight: 600; }
+.ctl-err         { color: var(--rare); }
+.ctl-muted       { color: var(--fg-3); }
+.ctl-muted-sm    { color: var(--fg-3); font-size: .8rem; }
+a.ctl-link       { color: var(--moss-ink); }
+.ctl-table       { width: 100%; border-collapse: collapse; font-size: .875rem; }
+.ctl-k           { color: var(--fg-4); padding: .25rem 0; }
+.ctl-v-strong    { font-weight: 600; }
+
+/* admin/backup.rs — database backups list. */
+.bk-table        { width: 100%; border-collapse: collapse; font-size: .875rem; }
+.bk-head-row     { border-bottom: 1px solid var(--border); color: var(--fg-4); text-align: left; }
+.bk-th           { padding: .5rem; }
+.bk-empty        { color: var(--fg-4); text-align: center; }
+.bk-name         { font-family: monospace; font-size: .8rem; }
+.bk-size         { color: var(--fg-3); }
+.bk-date         { color: var(--fg-4); }
+.bk-actions      { display: flex; gap: .5rem; }
+a.bk-download    { color: var(--moss-ink); font-size: .8rem; text-decoration: none; }
+.bk-delete       { background: none; border: none; color: var(--rare); cursor: pointer; font-size: .8rem; }
+
+/* admin/audio.rs — inline edit-source form (overrides .audio-source__* by order). */
+.aud-edit-form    { display: contents; }
+.aud-edit-id      { display: flex; flex-direction: column; gap: 6px; }
+.aud-edit-right   { display: inline-flex; gap: 8px; }
+input.aud-edit-label  { font-size: 14.5px; padding: 6px 8px; border-radius: 6px; border: 0.5px solid var(--border-2); background: var(--bg-2); color: var(--fg); }
+input.aud-edit-device { font-size: 12px; padding: 6px 8px; border-radius: 6px; border: 0.5px solid var(--border-2); background: var(--bg-2); color: var(--fg); }
+
+/* admin/mod.rs — admin shell nav + sign-out. */
+a.am-nav-active   { color: var(--moss-ink); font-weight: 500; }
+.am-logout-form   { margin-left: auto; display: inline; }
+.am-signout-btn   { font-size: .875rem; padding: .25rem .75rem; }
+
+/* ══ O-25 sweep — listen page + cross-cutting layout/partials ══════════════ */
+
+/* Listen (/listen). The spectrogram canvas is an animated baseline (like the
+   home hero) — verified via same-build self-diff. */
+.ls-eyebrow      { margin-bottom: 8px; }
+.ls-signal-card  { display: flex; flex-direction: column; gap: 6px; }
+.ls-signal-head  { display: flex; justify-content: space-between; align-items: baseline; }
+.ls-live-pill    { font-size: 10px; }
+.ls-pulse        { width: 100%; height: 120px; display: block; }
+.ls-signal-foot  { display: flex; justify-content: space-between; }
+.ls-audio-col    { display: flex; flex-direction: column; gap: 14px; }
+.ls-field        { display: flex; flex-direction: column; gap: 6px; }
+select.ls-select { font-family: var(--font-mono); font-size: 13px; padding: 8px 10px; background: var(--surface); color: var(--fg); border: 0.5px solid var(--border); border-radius: 6px; }
+.ls-play-row     { display: flex; gap: 10px; align-items: center; }
+.ls-play-btn     { min-width: 120px; }
+.ls-play-label   { margin-left: 6px; }
+.ls-audio-hidden { display: none; }
+.ls-trickle-card { min-height: 480px; }
+
+/* Shared layout (layout.html) — on every page. */
+.lay-logo        { color: var(--fg); }
+.lay-vrule       { height: 16px; align-self: center; }
+.lay-iflex-gap   { display: inline-flex; align-items: center; gap: 4px; }
+.lay-iflex       { display: inline-flex; align-items: center; }
+
+/* Cross-cutting partials (footer / tabbar / topnav-more / cmdk / update-banner
+   / help-drawer / confirm-modal / audio-source-row / display-prefs). */
+.ft-dot          { background: var(--moss); }
+.tb-h2           { font-size: 22px; line-height: 1.15; margin: 0; }
+.tm-h2           { font-size: 20px; line-height: 1.15; margin: 0; letter-spacing: -0.01em; }
+.ck-sr           { position: absolute; width: 1px; height: 1px; clip: rect(0 0 0 0); overflow: hidden; }
+.ub-contents     { display: contents; }
+.hd-h2           { font-size: 22px; line-height: 1.15; margin: 4px 0 0; letter-spacing: -0.01em; }
+.hd-form         { margin-left: auto; }
+.cm-h2           { font-size: 24px; line-height: 1.15; margin: 4px 0 0; letter-spacing: -0.01em; }
+.cm-body         { margin: 0; color: var(--fg-2); font-size: 14px; line-height: 1.55; }
+.asr-remove      { color: var(--rare); }
+.dpf-label       { font-weight: 500; }
+.dpf-foot        { margin-top: 14px; padding-top: 14px; border-top: 0.5px solid var(--hairline); }
+
+/* ══ O-25 sweep — last-mile page render-modules + recordings/share templates ══ */
+
+/* audio_player.rs (player page). The pause icon's display:none + the play/pause
+   toggle were converted from `.style.display=` to a `.ap-hidden` class toggle
+   (CSP-clean: no source inline style). */
+.ap-speed-label  { margin-left: 1rem; }
+.ap-download     { margin-left: auto; }
+.ap-page         { max-width: 720px; margin: 2rem auto; padding: 0 1rem; }
+.ap-nav          { margin-bottom: 1.5rem; }
+a.ap-back        { color: var(--accent, var(--moss-ink)); text-decoration: none; }
+.ap-hidden       { display: none; }
+
+/* dashboard/kiosk.rs (standalone kiosk page). */
+.ki-fg           { color: var(--fg); }
+.ki-fg3          { color: var(--fg-3); }
+.ki-loading      { text-align: center; color: var(--fg-3); }
+
+/* pages/mod.rs (sign-out fragment + 404 page). */
+.pm-signout-form { display: inline; }
+.pm-signout-btn  { font-size: .875rem; padding: .25rem .75rem; }
+.pm-404-card     { max-width: 560px; margin: 48px auto; text-align: center; padding: 40px 28px; }
+.pm-404-code     { font-size: 48px; line-height: 1; margin-bottom: 8px; }
+.pm-404-title    { margin: 0 0 10px; font-size: 20px; }
+.pm-404-text     { opacity: .8; margin: 0 0 20px; }
+
+/* empty_states.rs (6 blocks reuse .es-h / .es-sub; one a.es-link). */
+.es-h            { font-size: 22px; margin-top: 14px; }
+.es-sub          { margin-top: 6px; }
+a.es-link        { color: var(--moss-ink); }
+
+/* share.rs ("clip is gone" error page, standalone). */
+.sh-gone         { max-width: 520px; margin: 0 auto; padding: 80px 24px; text-align: center; }
+.sh-gone-title   { font-size: 48px; }
+.sh-gone-text    { margin-top: 8px; }
+
+/* Recordings page template (recordings.html) — rt- avoids recordings.rs's rec-*.
+   Tabs + view toggling are now pure class toggles (.rt-tab.active / .rt-hidden). */
+.rt-head         { margin-bottom: var(--pad-3); }
+.rt-eyebrow      { display: flex; align-items: center; gap: 10px; }
+.rt-h1           { font-size: 34px; }
+.rt-card-mb      { margin-bottom: 1rem; }
+.rt-tabs         { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+.rt-tab          { padding: 0.4rem 1rem; border-radius: var(--radius); border: 1px solid var(--border); cursor: pointer; font-size: 0.9rem; background: var(--bg-card); color: var(--text-muted); }
+.rt-tab.active   { background: var(--bg-hover); color: var(--text); }
+.rt-loading      { color: var(--text-muted); }
+.rt-hidden       { display: none; }
+
+/* Public share page (share_rare.html, standalone). The about-grid override
+   relied on the global [style*="grid-template-columns"] ≤520px reset. */
+.sr-main         { max-width: 780px; margin: 0 auto; padding: 48px 24px 64px; }
+.sr-id-strip     { display: flex; align-items: center; gap: 10px; padding-bottom: 24px; border-bottom: 0.5px solid var(--hairline); margin-bottom: 32px; }
+.sr-logo         { color: var(--fg); }
+.sr-brand        { display: flex; flex-direction: column; line-height: 1.15; }
+.sr-brand-name   { font-weight: 600; font-size: 13px; }
+.sr-brand-sub    { color: var(--fg-3); }
+.sr-handle       { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+.sr-eyebrow-mb   { margin-bottom: 8px; }
+.sr-h1           { font-size: 64px; line-height: 1.02; letter-spacing: -0.025em; text-wrap: balance; }
+.sr-sci          { color: var(--fg-3); font-style: italic; font-size: 14px; margin-top: 6px; }
+.sr-pills-mt     { margin-top: 16px; }
+.sr-mt-32        { margin-top: 32px; }
+.sr-spec-img     { width: 100%; display: block; border-radius: var(--r-md); background: var(--surface-2); }
+.sr-audio        { width: 100%; margin-top: 14px; height: 36px; }
+.sr-about-grid   { margin-top: 32px; grid-template-columns: 1fr 1fr; }
+.sr-about-p      { margin-top: 8px; font-size: 13.5px; line-height: 1.55; color: var(--fg-2); }
+.sr-cta          { margin-top: 12px; padding-left: 0; }
+.sr-share-row    { margin-top: 32px; display: flex; gap: 8px; flex-wrap: wrap; }
+.sr-footer       { margin-top: 48px; padding-top: 24px; border-top: 0.5px solid var(--hairline); color: var(--fg-3); font-size: 12px; }
+a.sr-about       { color: var(--fg-3); }
+@media (max-width: 520px) {
+  .sr-about-grid { grid-template-columns: 1fr; }
+}
+
+/* Gallery cards (gallery.rs) — hover lift replaces the old inline
+   onmouseover/onmouseout handlers. The card keeps its inline transition;
+   gallery's computed inline styles are swept later in the CSP endgame. */
+.ga-hover:hover  { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); }
+
+/* ========================================================================
+   P2-2 endgame — the static halves of the last computed inline styles.
+   Every remaining style="" attribute was either lifted into a class here
+   (static) or moved to a data-style attribute applied via CSSOM (computed),
+   so style-src can drop 'unsafe-inline'. SVG fill/stroke are presentation
+   attributes, not style="", so they are untouched.
+   ======================================================================== */
+
+/* Bespoke analytics SVG viz (viz.rs). Computed species colours ride
+   data-style="background:{species_color}" on the swatch. */
+.viz-empty        { text-align: center; padding: 1.5rem; }
+.viz-scroll       { overflow-x: auto; }
+.viz-svg-block    { display: block; }
+.viz-svg-center   { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+.viz-svg-chord    { max-width: 560px; height: auto; display: block; margin: 0 auto; }
+.viz-legend       { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
+.viz-legend.center { justify-content: center; margin-top: 8px; }
+.viz-legend-item  { display: inline-flex; align-items: center; gap: 5px; }
+.viz-swatch       { width: 9px; height: 9px; display: inline-block; border-radius: 2px; }
+.viz-swatch.round { border-radius: 50%; }
+
+/* SVG bar charts (charts.rs) — all-static; colours are SVG fill attributes. */
+.cht-empty        { color: var(--text-muted); }
+.cht-svg          { width: 100%; height: auto; display: block; }
+
+/* Gallery grid + cards (gallery.rs). The card is fragment-swapped, so the two
+   computed species colours ride data-style (applied pre-paint on afterSwap):
+   the thumb background (color-mix) and the code colour. */
+.ga-grid       { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 1rem; }
+.ga-msg        { color: var(--text-muted); text-align: center; padding: 3rem; }
+.ga-card-link  { text-decoration: none; color: inherit; }
+.ga-card       { padding: 0; overflow: hidden; transition: transform 0.15s, box-shadow 0.15s; cursor: pointer; }
+.ga-thumb      { height: 120px; overflow: hidden; position: relative; }
+.ga-thumb-bg   { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.ga-code       { font-size: 1.7rem; letter-spacing: 0.04em; }
+.ga-img        { position: relative; width: 100%; height: 100%; object-fit: cover; }
+.ga-body       { padding: 0.75rem; }
+.ga-name       { font-weight: 600; font-size: 0.9rem; margin-bottom: 0.25rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ga-row        { display: flex; justify-content: space-between; align-items: center; }
+.ga-count      { font-size: 0.8rem; color: var(--text-muted); }
+.ga-first      { font-size: 0.7rem; color: var(--text-muted); margin-top: 0.25rem; }
+.ga-h1         { font-size: 34px; margin-bottom: 0.25rem; }
+.ga-lede       { color: var(--text-muted); margin-bottom: 1.5rem; }
+.ga-controls   { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+.ga-search     { flex: 1; min-width: 200px; }
+
+/* Migration phenology page (migration.rs). SVG <text> label styles (font-size
+   + fill are CSS properties on SVG, so they live in classes); only the
+   eyebrow accent colour is computed and rides data-style. */
+.mig-svg         { display: block; }
+.mig-tick        { font-size: 11px; fill: var(--fg-3); }
+.mig-band-spring { font-size: 10px; fill: var(--moss-ink); }
+.mig-band-fall   { font-size: 10px; fill: var(--dawn-ink); }
+.mig-name        { font-size: 12px; fill: var(--fg); font-weight: 500; }
+.mig-sub         { font-size: 9.5px; fill: var(--fg-3); }
+.mig-today       { font-size: 10px; fill: var(--bg); }
+.mig-peak-val    { font-size: 28px; }
+.mig-headline    { font-size: 20px; margin-top: 8px; }
+.mig-sub-line    { margin-top: 4px; }
+
+/* Dashboard activity heatmap widget (dashboard/heatmap_widget.rs). This is an
+   HTMX fragment, so its rules must live here ('self') — a per-request-nonced
+   <style> inside a swapped fragment can't match the host page's nonce. Active
+   cell intensities are computed and ride data-style. */
+.ah        { display: grid; grid-template-columns: 9rem repeat(24, 1fr); gap: 2px; overflow-x: auto; }
+.ah-lbl    { font-size: .75rem; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: .25rem; align-self: center; }
+.ah-hr     { font-size: .6rem; color: var(--text-muted); text-align: center; padding: .1rem 0; }
+.ah-cell   { height: 20px; border-radius: 3px; transition: opacity .15s; cursor: default; }
+.ah-cell:hover { outline: 1px solid var(--accent); z-index: 1; position: relative; }
+.ah-zero   { background: var(--bg-hover); }
+.ah-empty  { color: var(--text-muted); text-align: center; padding: 1rem 0; }
+
+/* Dawn-chorus polar viz SVG labels (dawn_chorus.rs) — static font/fill. */
+.dcv-hr      { font-size: 11px; fill: var(--fg-3); }
+.dcv-ctr     { font-size: 14px; fill: var(--fg-3); }
+.dcv-ctr-sub { font-size: 11px; fill: var(--fg-2); }
+.dcv-sun     { font-size: 9.5px; fill: var(--fg-3); }
+/* Life-list monthly discovery chart svg (life_list.rs). */
+.ll-chart    { width: 100%; max-height: 180px; display: block; }
+/* Admin migration status "none in progress" fallback (admin/migration.rs). */
+.amig-empty  { color: var(--fg-4); }
