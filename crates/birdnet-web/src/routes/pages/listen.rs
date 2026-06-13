@@ -29,7 +29,7 @@
 //! fallback was retired in O-13.
 
 use axum::Router;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::response::Html;
 use axum::routing::get;
@@ -45,7 +45,18 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/listen", get(page))
 }
 
-async fn page(State(state): State<AppState>, headers: HeaderMap) -> Html<String> {
+/// `?source=` deep link (the Today signal card's picker lands here with a
+/// source already chosen).
+#[derive(serde::Deserialize)]
+struct ListenParams {
+    source: Option<String>,
+}
+
+async fn page(
+    State(state): State<AppState>,
+    Query(params): Query<ListenParams>,
+    headers: HeaderMap,
+) -> Html<String> {
     let sources = state
         .with_db(|conn| AudioSourceStore::list(conn).ok().unwrap_or_default())
         .into_iter()
@@ -54,7 +65,7 @@ async fn page(State(state): State<AppState>, headers: HeaderMap) -> Html<String>
 
     // The "— default audio source —" option maps to /stream with no
     // source_id, which resolves to the first enabled `audio_sources` row.
-    let options = render_source_options(&sources);
+    let options = render_options(&sources, params.source.as_deref());
 
     // Trickle skeleton — reuse the feed_rows shape used on the dashboard.
     let trickle_skel = super::skeletons::feed_rows(6);
@@ -68,12 +79,24 @@ async fn page(State(state): State<AppState>, headers: HeaderMap) -> Html<String>
     render_page_for_request("Listen now", &body, "listen", &headers)
 }
 
+/// The source-selector `<option>` set for any page offering per-source live
+/// audio (this page and the Today home's signal card). Filters disabled rows
+/// itself so callers can hand over the raw store listing.
+pub(super) fn source_options(sources: &[AudioSource]) -> String {
+    let enabled: Vec<AudioSource> = sources
+        .iter()
+        .filter(|s| s.disabled_at.is_none())
+        .cloned()
+        .collect();
+    render_options(&enabled, None)
+}
+
 /// Render the `<option>` set for the source selector. With at least one
 /// configured `audio_sources` row, the first option is the default-source
 /// path (empty value → first enabled row) and the rows follow, labelled by
 /// `label` (or `device_id` when no label). With no rows, a single disabled
 /// "no audio sources configured" placeholder is rendered instead.
-fn render_source_options(sources: &[AudioSource]) -> String {
+fn render_options(sources: &[AudioSource], selected: Option<&str>) -> String {
     let mut out = String::new();
     if sources.is_empty() {
         // No rows → /stream has no source to resolve (503). Show a disabled
@@ -95,8 +118,13 @@ fn render_source_options(sources: &[AudioSource]) -> String {
         let _ = std::fmt::Write::write_fmt(
             &mut out,
             format_args!(
-                r#"<option value="{id}">{glyph} {label} ({kind})</option>"#,
+                r#"<option value="{id}"{sel}>{glyph} {label} ({kind})</option>"#,
                 id = escape_html(&s.id),
+                sel = if selected == Some(s.id.as_str()) {
+                    " selected"
+                } else {
+                    ""
+                },
                 glyph = kind_glyph,
                 label = escape_html(&label_display),
                 kind = s.kind.as_str(),
@@ -109,6 +137,10 @@ fn render_source_options(sources: &[AudioSource]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn render_source_options(sources: &[AudioSource]) -> String {
+        render_options(sources, None)
+    }
     use birdnet_db::audio_sources::{Channels, PipelineFlags, RtspTransport};
 
     fn sample(id: &str, kind: SourceKind, label: Option<&str>, disabled: bool) -> AudioSource {

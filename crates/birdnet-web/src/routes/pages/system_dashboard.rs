@@ -2,7 +2,7 @@
 //!
 //! | Path                          | Purpose                                   |
 //! |-------------------------------|-------------------------------------------|
-//! | `GET /system`                 | Full system dashboard page                |
+//! | (embedded)                    | Station home, public "Health" tab        |
 //! | `GET /pages/sys-vitals`       | CPU/memory/temp vitals partial (HTMX)     |
 //! | `GET /pages/sys-disk`         | Disk usage partial (HTMX)                 |
 //! | `GET /pages/sys-database`     | Database stats partial (HTMX)             |
@@ -12,17 +12,15 @@
 use std::fmt::Write as _;
 
 use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode, header};
-use axum::response::Html;
+use axum::http::{StatusCode, header};
 use axum::{Router, routing::get};
 
-use super::{escape_html, render_page_for_request};
+use super::escape_html;
 use crate::state::AppState;
 
 /// Mount the system health dashboard and all HTMX partial routes.
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/system", get(system_page))
         .route("/pages/sys-vitals", get(sys_vitals_partial))
         .route("/pages/sys-disk", get(sys_disk_partial))
         .route("/pages/sys-database", get(sys_database_partial))
@@ -30,15 +28,12 @@ pub fn router() -> Router<AppState> {
         .route("/pages/sys-audio", get(sys_audio_partial))
 }
 
-async fn system_page(headers: HeaderMap) -> Html<String> {
-    render_page_for_request(
-        "System Health",
-        &format!("{SYSTEM_DASHBOARD_HTML}{DISPLAY_PREFS_HTML}").replace(
-            "{{help_link}}",
-            &super::help::help_link(super::help::Topic::AdminSystem),
-        ),
-        "system",
-        &headers,
+/// The system-health surface, rendered for embedding by `homes::station`
+/// (the public "Health" tab).
+pub(super) fn content() -> String {
+    format!("{SYSTEM_DASHBOARD_HTML}{DISPLAY_PREFS_HTML}").replace(
+        "{{help_link}}",
+        &super::help::help_link(super::help::Topic::AdminSystem),
     )
 }
 

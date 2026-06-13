@@ -6,19 +6,17 @@
 use std::fmt::Write as _;
 
 use axum::extract::{Query, State};
-use axum::http::HeaderMap;
-use axum::response::{Html, IntoResponse};
+use axum::response::IntoResponse;
 use axum::{Router, routing::get};
 use serde::Deserialize;
 
 use super::charts::render_hourly_chart;
-use super::{escape_html, render_page_for_request, today_date_string};
+use super::{escape_html, today_date_string};
 use crate::state::AppState;
 
 /// Mount the detection history page and its HTMX partial routes.
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/history", get(history_page))
         .route("/pages/history-chart", get(history_chart_partial))
         .route("/pages/history-dates", get(history_dates_partial))
 }
@@ -30,13 +28,13 @@ pub struct HistoryParams {
     pub date: Option<String>,
 }
 
-/// Full history page (shell with HTMX-loaded content).
-async fn history_page(headers: HeaderMap) -> Html<String> {
-    let body = HISTORY_SHELL_HTML.replace(
+/// The history surface (shell with HTMX-loaded content), rendered for
+/// embedding by `homes::reports` ("History" tab).
+pub(super) fn content() -> String {
+    HISTORY_SHELL_HTML.replace(
         "{{help_link}}",
         &super::help::help_link(super::help::Topic::Analytics),
-    );
-    render_page_for_request("Detection History", &body, "history", &headers)
+    )
 }
 
 /// HTMX partial: hourly detection chart + summary for a specific date.

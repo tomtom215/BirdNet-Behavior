@@ -1,27 +1,43 @@
-//! Today's Detections page and HTMX partials.
+//! The **Today** home (`/`) — the v3-spine merge of the old Dashboard and
+//! Today pages ("one calm page, five layers", `Today_home.html` in the
+//! handover packet).
 //!
-//! The primary daily-use page showing today's detections in a searchable,
-//! paginated list with delete support and auto-refresh.
+//! | Layer       | Surface                                                    |
+//! |-------------|------------------------------------------------------------|
+//! | glance      | comparative phrase (`/pages/today-phrase`) + honest live signal |
+//! | conditional | review nudge / outage banner (`/pages/today-nudge`)        |
+//! | the shape   | day strip with in-strip temperature (`/pages/today-daystrip`) |
+//! | heartbeat   | one unified log: live feed + full-day disclosure           |
+//! | support     | right rail: top species · best recordings · station line   |
+//!
+//! The old Dashboard's "live feed" and Today's "detection log" were the same
+//! data twice; the unified log shows the freshest rows and the full paginated
+//! day (search, category filter, lock & delete) behind one disclosure.
+//! A brand-new station (no detections ever) gets the "empty hour" treatment:
+//! a getting-ready checklist in the hero instead of the live-signal card.
 
 use std::fmt::Write as _;
 
 use axum::extract::{Form, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
-use axum::response::{Html, IntoResponse};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::{Router, routing::get};
+use birdnet_db::sqlite::TodayFilter;
 use serde::Deserialize;
 
 use super::atoms::{avatar, conf_bar};
 use super::{TODAY_PAGE_HTML, escape_html, simple_url_encode, today_date_string};
 use crate::state::AppState;
 
-/// Mount the Today page and its HTMX partial routes.
+/// Mount the Today home and its HTMX partial routes.
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/today", get(today_page))
+        .route("/", get(today_home))
         .route("/pages/today-list", get(today_partial))
         .route("/pages/today-daystrip", get(today_daystrip_partial))
         .route("/pages/today-count", get(today_count_partial))
+        .route("/pages/today-pills", get(today_pills_partial))
+        .route("/pages/today-nudge", get(today_nudge_partial))
         .route("/pages/today-delete", axum::routing::post(delete_detection))
         .route(
             "/pages/today-relabel",
@@ -31,15 +47,475 @@ pub fn router() -> Router<AppState> {
         .route("/pages/today-unlock", axum::routing::post(unlock_detection))
 }
 
+// ---------------------------------------------------------------------------
+// The home page
+// ---------------------------------------------------------------------------
+
+/// Capture-silence thresholds for the outage affordance. With a location set
+/// the strict threshold applies only in daylight (overnight silence is
+/// normal); without one we can't tell night from day, so only a long silence
+/// is flagged.
+const OUTAGE_DAYTIME_SECS: u64 = 2 * 3600;
+const OUTAGE_NO_LOCATION_SECS: u64 = 6 * 3600;
+
+async fn today_home(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    // First run: a station with no detections that hasn't completed onboarding
+    // is bounced to the setup wizard instead of an empty home.
+    if first_run_needs_onboarding(&state) {
+        return Redirect::to("/onboarding").into_response();
+    }
+
+    let state_for_query = state.clone();
+    let (total_ever, sources, disk_pct) = tokio::task::spawn_blocking(move || {
+        let (total, sources) = state_for_query.with_db(|conn| {
+            use birdnet_db::audio_sources::AudioSourceStore;
+            let total = birdnet_db::sqlite::detection_count(conn).unwrap_or(0);
+            let sources = AudioSourceStore::list(conn).unwrap_or_default();
+            (total, sources)
+        });
+        let disk_pct = disk_used_percent(&state_for_query);
+        (total, sources, disk_pct)
+    })
+    .await
+    .unwrap_or((0, Vec::new(), None));
+
+    let firstrun = total_ever == 0;
+    let enabled: Vec<_> = sources.iter().filter(|s| s.disabled_at.is_none()).collect();
+
+    let hero_aside = if firstrun {
+        firstrun_checklist(&enabled, disk_pct)
+    } else {
+        signal_card(&super::listen::source_options(&sources))
+    };
+    let rail_extra = if firstrun {
+        r#"<div class="bnb-card pad"><div class="bnb-eyebrow td-look-eb">While you wait</div><div class="x-look"><a href="/admin/audio">Add a second microphone <span class="arr">→</span></a><a href="/admin/rules">Set up rare-bird alerts <span class="arr">→</span></a><a href="/admin/migrate">Import your BirdNET-Pi history <span class="arr">→</span></a></div></div>"#
+            .to_string()
+    } else {
+        String::new()
+    };
+    let hero_phrase = if firstrun {
+        FIRSTRUN_PHRASE
+    } else {
+        r#"<h1 class="display td-h1">You're listening.</h1>
+<p class="bnb-meta td-sub">Detections roll in below.</p>"#
+    };
+
+    let body = TODAY_PAGE_HTML
+        .replace("{{firstrun}}", if firstrun { "true" } else { "false" })
+        .replace("{{today_human_date}}", &human_date())
+        .replace("{{hero_phrase}}", hero_phrase)
+        .replace("{{hero_aside}}", &hero_aside)
+        .replace("{{rail_extra}}", &rail_extra)
+        .replace("{{moon_inline}}", &moon_inline())
+        .replace("{{skel_daystrip}}", super::skeletons::day_strip())
+        .replace("{{skel_detections}}", &super::skeletons::feed_rows(8))
+        .replace(
+            "{{help_link}}",
+            &super::help::help_link(super::help::Topic::Today),
+        );
+    super::render_page_for_request("Today", &body, "today", &headers).into_response()
+}
+
+/// The hero copy a brand-new station wakes up with (the comparative-phrase
+/// partial returns the same copy until the first detection lands).
+pub(super) const FIRSTRUN_PHRASE: &str = r#"<h1 class="display td-h1">Your station is <em class="tp-c-moss-ink">waking up</em>.</h1>
+<p class="bnb-meta td-sub">Everything checks out — we're listening for the first call. It usually arrives within the hour, and this page comes alive the moment it does.</p>"#;
+
+/// The live-signal card (real spectrogram canvas + the source row).
+fn signal_card(source_options: &str) -> String {
+    format!(
+        r#"<div class="bnb-card pad db-signal-card">
+      <div class="db-signal-head">
+        <span class="bnb-eyebrow">Live signal · last 30 s</span>
+        <span class="bnb-pill db-live-pill"><span class="bnb-dot"></span> idle</span>
+      </div>
+      <canvas id="hero-pulse" height="80" class="db-pulse"></canvas>
+      <div class="db-signal-foot">
+        <span class="mono bnb-meta">input · mic</span>
+        <span class="mono bnb-meta">48 kHz</span>
+        <span class="mono bnb-meta">BirdNET V3.0</span>
+      </div>
+      <div class="x-sig-row">
+        <span class="x-sig-src"><span class="bnb-meta">source</span><select id="td-source" aria-label="Audio source to monitor">{source_options}</select></span>
+        <a class="bnb-btn ghost x-listen" href="/listen" title="Open the full live-audio page">Listen live →</a>
+      </div>
+    </div>"#
+    )
+}
+
+/// The first-run "Getting ready" checklist — every line is real data: the
+/// configured sources, the bundled model, measured disk headroom.
+fn firstrun_checklist(
+    enabled: &[&birdnet_db::audio_sources::AudioSource],
+    disk_pct: Option<f64>,
+) -> String {
+    let (mic_mark, mic_title, mic_detail, mic_value) = enabled.first().map_or_else(
+        || {
+            (
+                "wait",
+                "Waiting for a microphone".to_string(),
+                r#"add one under <a href="/admin/audio">Station → Capture</a>"#.to_string(),
+                "—".to_string(),
+            )
+        },
+        |first| {
+            let label = first
+                .label
+                .clone()
+                .unwrap_or_else(|| first.device_id.clone());
+            let more = if enabled.len() > 1 {
+                format!(" +{}", enabled.len() - 1)
+            } else {
+                String::new()
+            };
+            (
+                "done",
+                "Microphone detected".to_string(),
+                format!("{} · {}{more}", first.kind.as_str(), escape_html(&label)),
+                format!("{} kHz", first.sample_rate / 1000),
+            )
+        },
+    );
+    let mic_mark_html = if mic_mark == "done" {
+        r#"<span class="mk done">✓</span>"#
+    } else {
+        r#"<span class="mk wait"><span class="bnb-dot"></span></span>"#
+    };
+    let (disk_detail, disk_value) = disk_pct.map_or_else(
+        || ("checking…".to_string(), "—".to_string()),
+        |pct| {
+            let detail = if pct < 70.0 {
+                "plenty of space"
+            } else if pct < 90.0 {
+                "getting full"
+            } else {
+                "nearly full"
+            };
+            (detail.to_string(), format!("{pct:.0}% used"))
+        },
+    );
+    format!(
+        r#"<div class="bnb-card pad">
+      <div class="bnb-eyebrow td-check-eb">Getting ready</div>
+      <div class="x-check">
+        <div class="x-check-row">{mic_mark_html}<div class="c"><div class="t">{mic_title}</div><div class="d">{mic_detail}</div></div><span class="v">{mic_value}</span></div>
+        <div class="x-check-row"><span class="mk done">✓</span><div class="c"><div class="t">Model loaded</div><div class="d">BirdNET V3.0</div></div><span class="v">ready</span></div>
+        <div class="x-check-row"><span class="mk done">✓</span><div class="c"><div class="t">Room to record</div><div class="d">{disk_detail}</div></div><span class="v">{disk_value}</span></div>
+        <div class="x-check-row"><span class="mk wait"><span class="bnb-dot live"></span></span><div class="c"><div class="t">Listening for the first call…</div><div class="d">this can take a few minutes</div></div><span class="v">—</span></div>
+      </div>
+    </div>"#
+    )
+}
+
+/// Whether to bounce a fresh station to the onboarding wizard: no detections
+/// yet, onboarding not marked complete, **and** no location configured. Fails
+/// safe — any DB error is treated as "already set up" so a hiccup never traps
+/// the operator on `/onboarding`.
+///
+/// The location check is what stops a station the installer already configured
+/// (latitude/longitude written to the config file, then seeded into the
+/// `settings` table at startup — see `helpers::seed_db_settings_from_config`)
+/// from being re-prompted for setup it already completed during installation.
+fn first_run_needs_onboarding(state: &AppState) -> bool {
+    state.with_db(|conn| {
+        let onboarded = birdnet_db::settings::get_or(conn, "onboarding_complete", "false")
+            .map_or(true, |v| v == "true");
+        let has_detections = birdnet_db::sqlite::detection_count(conn).map_or(true, |n| n > 0);
+        let lat = birdnet_db::settings::get_or(conn, "latitude", "").unwrap_or_default();
+        let lon = birdnet_db::settings::get_or(conn, "longitude", "").unwrap_or_default();
+        let has_location = !lat.trim().is_empty() && !lon.trim().is_empty();
+        !onboarded && !has_detections && !has_location
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Shared context helpers (solar, weather, freshness)
+// ---------------------------------------------------------------------------
+
+/// Today's sunrise/sunset as fractional hours (UTC, matching the day strip's
+/// "now" axis), from the configured station location. `None` when no location
+/// is set or the sun never rises/sets at this latitude today.
+fn solar_times_today(conn: &rusqlite::Connection) -> Option<(f64, f64)> {
+    let lat: f64 = birdnet_db::settings::get_or(conn, "latitude", "")
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    let lon: f64 = birdnet_db::settings::get_or(conn, "longitude", "")
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    let location = birdnet_scheduler::Location::new(lat, lon).ok()?;
+    let date = today_date_string();
+    let year: u32 = date.get(0..4)?.parse().ok()?;
+    let month: u32 = date.get(5..7)?.parse().ok()?;
+    let day: u32 = date.get(8..10)?.parse().ok()?;
+    let solar = birdnet_scheduler::SolarDay::for_date(location, year, month, day).ok()?;
+    let sunrise = f64::from(solar.sunrise_utc_min?) / 60.0;
+    let sunset = f64::from(solar.sunset_utc_min?) / 60.0;
+    Some((sunrise, sunset))
+}
+
+/// Current hour-of-day (UTC) as a fraction — the same axis the day strip and
+/// solar times use.
+fn now_hour_utc() -> f64 {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |x| x.as_secs());
+    #[allow(clippy::cast_precision_loss)]
+    let h = (secs % 86_400) as f64 / 3600.0;
+    h
+}
+
+/// Capture-outage check: the station has detected before, the silence exceeds
+/// the threshold, and (with a location) we're inside daylight, when silence
+/// is anomalous. Returns the silence duration and the last detection's time.
+pub(super) fn capture_outage(conn: &rusqlite::Connection) -> Option<(u64, String)> {
+    let silent = birdnet_db::sqlite::seconds_since_last_detection(conn)
+        .ok()
+        .flatten()?;
+    let threshold = match solar_times_today(conn) {
+        Some((sunrise, sunset)) => {
+            let now = now_hour_utc();
+            if now < sunrise || now > sunset {
+                return None; // overnight silence is normal
+            }
+            OUTAGE_DAYTIME_SECS
+        }
+        None => OUTAGE_NO_LOCATION_SECS,
+    };
+    if silent < threshold {
+        return None;
+    }
+    let last = conn
+        .query_row(
+            "SELECT Time FROM detections ORDER BY Date DESC, Time DESC LIMIT 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()?;
+    Some((silent, last.get(0..5).unwrap_or(&last).to_string()))
+}
+
+/// Filesystem usage of the data directory as a used percentage.
+fn disk_used_percent(state: &AppState) -> Option<f64> {
+    let db_path = state.db_path().to_path_buf();
+    let dir = db_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map_or_else(
+            || std::path::PathBuf::from("."),
+            std::path::Path::to_path_buf,
+        );
+    birdnet_core::audio::capture::disk_usage(&dir)
+        .ok()
+        .map(|u| u.used_percent())
+}
+
+/// "Friday, June 13" from today's date — the hero eyebrow's human form.
+fn human_date() -> String {
+    const MONTHS: [&str; 12] = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ];
+    const DAYS: [&str; 7] = [
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+    ];
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let epoch_days = secs / 86_400;
+    let (_, m, d) = super::days_to_date(epoch_days);
+    // 1970-01-01 was a Thursday.
+    let weekday = DAYS[(epoch_days % 7) as usize];
+    let month = MONTHS[(m as usize).saturating_sub(1).min(11)];
+    format!("{weekday}, {month} {d}")
+}
+
+/// "☾ first quarter" — the day-strip header's inline moon note.
+fn moon_inline() -> String {
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0_i64, |x| i64::try_from(x.as_secs()).unwrap_or(i64::MAX));
+    let cardinal =
+        super::overlays::MoonCardinal::from_phase(super::overlays::moon_phase_at(now_secs));
+    format!("{} {}", cardinal.glyph(), cardinal.label())
+}
+
+// ---------------------------------------------------------------------------
+// Pills + nudge partials
+// ---------------------------------------------------------------------------
+
+/// HTMX partial: the hero pill row — recording state, weather, sunrise/sunset,
+/// station identity. Every pill is backed by real data and absent otherwise.
+async fn today_pills_partial(State(state): State<AppState>) -> impl IntoResponse {
+    let site_name = state.site_name().to_string();
+    let html = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| {
+            let mut out = String::with_capacity(512);
+
+            // Recording state — driven by the same freshness signal as the
+            // outage banner so the two can never disagree.
+            match capture_outage(conn) {
+                Some((_, last)) => {
+                    let _ = write!(
+                        out,
+                        r#"<span class="bnb-pill rare"><span class="bnb-dot"></span> recording stopped · last heard {last}</span>"#
+                    );
+                }
+                None => out.push_str(
+                    r#"<span class="bnb-pill moss"><span class="bnb-dot live"></span> recording</span>"#,
+                ),
+            }
+
+            // Weather: today's cached samples → current temperature + H/L.
+            let today = today_date_string();
+            let samples: Vec<birdnet_db::weather::WeatherRow> = {
+                use birdnet_db::weather::WeatherStore as _;
+                let from = format!("{today}T00:00:00Z");
+                let to = format!("{today}T23:59:59Z");
+                conn.range(&from, &to).unwrap_or_default()
+            };
+            let temps: Vec<f32> = samples.iter().filter_map(|s| s.temp_c).collect();
+            if let (Some(&now_t), Some(min), Some(max)) = (
+                temps.last(),
+                temps.iter().copied().reduce(f32::min),
+                temps.iter().copied().reduce(f32::max),
+            ) {
+                let _ = write!(
+                    out,
+                    r#"<span class="bnb-pill x-wx"><span class="mono x-wx-now">{now_t:.0}°</span><span class="mono x-wx-hl">H {max:.0}° · L {min:.0}°</span></span>"#
+                );
+            }
+
+            // Sunrise / sunset from the configured location.
+            if let Some((sunrise, sunset)) = solar_times_today(conn) {
+                let _ = write!(
+                    out,
+                    r#"<span class="bnb-pill">☀ sunrise {}</span><span class="bnb-pill">☾ sunset {}</span>"#,
+                    fmt_hour(sunrise),
+                    fmt_hour(sunset)
+                );
+            }
+
+            // Station identity: name and/or coordinates.
+            let lat = birdnet_db::settings::get_or(conn, "latitude", "").unwrap_or_default();
+            let lon = birdnet_db::settings::get_or(conn, "longitude", "").unwrap_or_default();
+            let coords = match (lat.trim().parse::<f64>(), lon.trim().parse::<f64>()) {
+                (Ok(lat), Ok(lon)) => {
+                    let ns = if lat >= 0.0 { 'N' } else { 'S' };
+                    let ew = if lon >= 0.0 { 'E' } else { 'W' };
+                    format!("{:.2}°{ns} · {:.2}°{ew}", lat.abs(), lon.abs())
+                }
+                _ => String::new(),
+            };
+            if !site_name.is_empty() || !coords.is_empty() {
+                let _ = write!(
+                    out,
+                    r#"<span class="bnb-pill">{}{}</span>"#,
+                    escape_html(&site_name),
+                    if coords.is_empty() {
+                        String::new()
+                    } else {
+                        format!(r#"<span class="mono x-coord">{coords}</span>"#)
+                    }
+                );
+            }
+            out
+        })
+    })
+    .await
+    .unwrap_or_default();
+
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+}
+
+/// HTMX partial: the conditional strip under the hero — a review nudge when
+/// rare detections await confirmation, an outage banner when capture has gone
+/// quiet, otherwise nothing at all ("absent entirely when nothing waits").
+async fn today_nudge_partial(State(state): State<AppState>) -> impl IntoResponse {
+    let html = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| {
+            let pending = birdnet_db::sqlite::quarantine_pending_count(conn).unwrap_or(0);
+            if pending > 0 {
+                let (noun, verb, obj) = if pending == 1 {
+                    ("rare sighting is", "it's", "it")
+                } else {
+                    ("rare sightings are", "they're", "them")
+                };
+                return format!(
+                    r#"<div class="x-nudge" data-screen-label="Review nudge"><span class="ico">✦</span><div class="txt"><b>{pending} {noun} waiting for your eye.</b> Confirm {verb} real to add {obj} to your records.</div><a class="bnb-btn primary" href="/quarantine">Review →</a></div>"#
+                );
+            }
+            if let Some((silent, last)) = capture_outage(conn) {
+                let dur = fmt_duration(silent);
+                return format!(
+                    r#"<div class="x-nudge" data-screen-label="Outage banner"><span class="ico">⚠</span><div class="txt"><b>No detections for {dur}.</b> The last one was at <span class="mono">{last}</span> — the microphone may be unplugged or the recorder stopped.</div><a class="bnb-btn primary" href="/station">Open Station →</a></div>"#
+                );
+            }
+            String::new()
+        })
+    })
+    .await
+    .unwrap_or_default();
+
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+}
+
+/// `6.35` hours → `"6:21"`.
+fn fmt_hour(h: f64) -> String {
+    let total_min = (h * 60.0).round();
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let (hh, mm) = ((total_min / 60.0) as u32 % 24, (total_min % 60.0) as u32);
+    format!("{hh}:{mm:02}")
+}
+
+/// `8040` seconds → `"2h 14m"` (or `"45m"` under an hour).
+fn fmt_duration(secs: u64) -> String {
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
+    if h > 0 {
+        format!("{h}h {m:02}m")
+    } else {
+        format!("{m}m")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The full-day list (search + category filter + pagination)
+// ---------------------------------------------------------------------------
+
 /// Query parameters for the today list partial.
 #[derive(Debug, Deserialize)]
 pub struct TodayParams {
     /// Search filter. Prefix with "NOT " for exclusion.
     pub search: Option<String>,
+    /// Category filter token: `all` (default) · `rare` · `first` · `high`.
+    pub filter: Option<String>,
     /// Pagination offset.
     pub offset: Option<u32>,
     /// Items per page (default 40).
     pub limit: Option<u32>,
+    /// When set, `today-count` returns the bare number (for inline slots).
+    pub bare: Option<String>,
 }
 
 /// Form data for deleting a detection.
@@ -79,21 +555,9 @@ pub struct RelabelForm {
     pub new_com_name: String,
 }
 
-/// Render the full Today page.
-async fn today_page(headers: HeaderMap) -> Html<String> {
-    // Skeleton placeholders (O-16) shown until the htmx swap targets load.
-    // O-20 help link is rendered next to the eyebrow on every analytical screen.
-    let body = TODAY_PAGE_HTML
-        .replace("{{skel_daystrip}}", super::skeletons::day_strip())
-        .replace("{{skel_today_results}}", &super::skeletons::feed_rows(8))
-        .replace(
-            "{{help_link}}",
-            &super::help::help_link(super::help::Topic::Today),
-        );
-    super::render_page_for_request("Today", &body, "today", &headers)
-}
-
-/// HTMX partial: today's detection count (for the header badge).
+/// HTMX partial: today's detection count. Returns the labelled form by
+/// default; `?bare=1` returns just the formatted number (the full-day
+/// disclosure button's inline count).
 async fn today_count_partial(
     State(state): State<AppState>,
     Query(params): Query<TodayParams>,
@@ -103,14 +567,21 @@ async fn today_count_partial(
 
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
-            birdnet_db::sqlite::todays_detection_count(conn, &today, search.as_deref())
+            birdnet_db::sqlite::todays_detection_count(
+                conn,
+                &today,
+                search.as_deref(),
+                TodayFilter::All,
+            )
         })
     })
     .await;
 
     match result {
         Ok(Ok(count)) => {
-            let label = if params.search.as_ref().is_some_and(|s| !s.trim().is_empty()) {
+            let label = if params.bare.is_some() {
+                super::group_thousands(count)
+            } else if params.search.as_ref().is_some_and(|s| !s.trim().is_empty()) {
                 format!("{count} matching detections")
             } else {
                 format!("{count} detections today")
@@ -135,6 +606,7 @@ async fn today_partial(
     let offset = params.offset.unwrap_or(0);
     let search = params.search.clone();
     let search2 = params.search.clone();
+    let filter = TodayFilter::from_token(params.filter.as_deref());
 
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
@@ -142,11 +614,16 @@ async fn today_partial(
                 conn,
                 &today,
                 search.as_deref(),
+                filter,
                 limit,
                 offset,
             )?;
-            let total =
-                birdnet_db::sqlite::todays_detection_count(conn, &today, search.as_deref())?;
+            let total = birdnet_db::sqlite::todays_detection_count(
+                conn,
+                &today,
+                search.as_deref(),
+                filter,
+            )?;
             Ok::<_, birdnet_db::sqlite::DbError>((rows, total))
         })
     })
@@ -181,12 +658,18 @@ async fn today_partial(
                     .filter(|s| !s.trim().is_empty())
                     .map(|s| format!("&search={}", simple_url_encode(s)))
                     .unwrap_or_default();
+                let filter_param = params
+                    .filter
+                    .as_ref()
+                    .filter(|f| !f.trim().is_empty() && f.as_str() != "all")
+                    .map(|f| format!("&filter={}", simple_url_encode(f)))
+                    .unwrap_or_default();
                 let remaining = total_u.saturating_sub(shown);
                 let _ = write!(
                     html,
                     "<div class=\"tdl-more\">\
-                     <button hx-get=\"/pages/today-list?offset={shown}&limit={limit}{search_param}\" \
-                     hx-target=\"#today-results\" hx-swap=\"innerHTML\" \
+                     <button hx-get=\"/pages/today-list?offset={shown}&limit={limit}{search_param}{filter_param}\" \
+                     hx-target=\"#today-full\" hx-swap=\"innerHTML\" \
                      class=\"tdl-more-btn\">\
                      Load {limit} more ({remaining} remaining)\
                      </button></div>",
@@ -203,9 +686,13 @@ async fn today_partial(
     }
 }
 
-/// HTMX partial: a 24-hour `DayStrip` timeline of today's detections — an
-/// hourly histogram with one colour-coded dot per detection (placed by time
-/// and confidence), night bands, sunrise/sunset markers and a "now" line.
+// ---------------------------------------------------------------------------
+// The day strip
+// ---------------------------------------------------------------------------
+
+/// HTMX partial: the 24-hour `DayStrip` — hourly histogram, in-strip
+/// temperature line, sunrise/sunset markers and a "now" line — plus an
+/// out-of-band update for the header's stat trio (peak · dawn · total).
 #[allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
@@ -213,37 +700,32 @@ async fn today_partial(
 )]
 async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoResponse {
     let today = today_date_string();
-    let today_for_weather = today.clone();
-    let state_for_weather = state.clone();
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::sqlite::todays_detections(conn, &today, None, 1000, 0))
+        state.with_db(|conn| {
+            let rows = birdnet_db::sqlite::todays_detections(
+                conn,
+                &today,
+                None,
+                TodayFilter::All,
+                1000,
+                0,
+            )?;
+            // O-23 weather samples for the in-strip temperature line. Reads
+            // the cached Open-Meteo rows — empty when the poll job hasn't
+            // populated them, in which case the strip simply has no line.
+            let samples: Vec<birdnet_db::weather::WeatherRow> = {
+                use birdnet_db::weather::WeatherStore as _;
+                let from = format!("{today}T00:00:00Z");
+                let to = format!("{today}T23:59:59Z");
+                conn.range(&from, &to).unwrap_or_default()
+            };
+            let solar = solar_times_today(conn);
+            Ok::<_, birdnet_db::sqlite::DbError>((rows, samples, solar))
+        })
     })
     .await;
 
-    // O-23 weather samples for today's overlay band. Reads from the
-    // `weather` table — empty when the Open-Meteo poll job hasn't
-    // populated it yet, in which case `overlays::weather_band` renders
-    // its quiet placeholder rather than failing.
-    let weather_samples = tokio::task::spawn_blocking(move || {
-        let from = format!("{today_for_weather}T00:00:00Z");
-        let to = format!("{today_for_weather}T23:59:59Z");
-        state_for_weather.with_db(|conn| {
-            use birdnet_db::weather::WeatherStore;
-            conn.range(&from, &to).unwrap_or_default()
-        })
-    })
-    .await
-    .unwrap_or_default();
-
-    // O-23 moon badge is always rendered — its computation is local
-    // and the operator deserves the signal even on a quiet day. This
-    // sits BEFORE the empty-state early return.
-    let now_secs_for_quiet = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0_i64, |x| i64::try_from(x.as_secs()).unwrap_or(i64::MAX));
-    let moon_badge_quiet = super::overlays::moon_badge(now_secs_for_quiet);
-
-    let Ok(Ok(rows)) = result else {
+    let Ok(Ok((rows, samples, solar))) = result else {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             [(header::CONTENT_TYPE, "text/html")],
@@ -255,33 +737,29 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
         return (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
-            format!(
-                r#"<div class="bnb-meta tdl-strip-empty">
-  <span>No detections yet today.</span>
-  {moon_badge_quiet}
-</div>"#
-            ),
+            // Clear the header stats out-of-band too, so a deleted last
+            // detection doesn't strand stale numbers.
+            r#"<div class="x-daystats" id="td-daystats" hx-swap-oob="true"></div><div class="bnb-meta tdl-strip-empty"><span>No detections yet today.</span></div>"#
+                .to_string(),
         );
     }
 
     let mut hourly = [0i64; 24];
-    let mut dots: Vec<(f64, String, f64)> = Vec::with_capacity(rows.len());
     for d in &rows {
-        let hf = parse_hour_fraction(&d.time);
-        let hi = hf as usize;
+        let hi = parse_hour_fraction(&d.time) as usize;
         if hi < 24 {
             hourly[hi] += 1;
         }
-        dots.push((hf, super::atoms::species_color(&d.com_name), d.confidence));
     }
 
-    // Current hour-of-day (UTC) for the "now" marker.
-    let now_h = {
-        let secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |x| x.as_secs());
-        (secs % 86_400) as f64 / 3600.0
-    };
+    let temps: Vec<(f64, f64)> = samples
+        .iter()
+        .filter_map(|row| {
+            let hour = row.at.get(11..13).and_then(|hh| hh.parse::<u8>().ok())?;
+            let temp = row.temp_c?;
+            Some((f64::from(hour) + 0.5, f64::from(temp)))
+        })
+        .collect();
 
     let total: i64 = hourly.iter().sum();
     let mut peak_hour = 0usize;
@@ -294,49 +772,15 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
     }
     let dawn: i64 = hourly[4..9].iter().sum();
 
-    // O-23 signal-context overlay: moon badge (no network, always shown)
-    // + an SVG weather band wired to the cached Open-Meteo rows. When the
-    // weather table is empty (poll job not enabled or first run), the
-    // band renders a quiet placeholder so the chrome doesn't shift.
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0_i64, |x| i64::try_from(x.as_secs()).unwrap_or(i64::MAX));
-    let moon_badge = super::overlays::moon_badge(now_secs);
-
-    let weather_band_html = {
-        let samples: Vec<super::overlays::WeatherSample> = weather_samples
-            .iter()
-            .filter_map(|row| {
-                row.at
-                    .get(11..13)
-                    .and_then(|hh| hh.parse::<u8>().ok())
-                    .map(|hour| super::overlays::WeatherSample {
-                        hour,
-                        temp_c: row.temp_c,
-                        precip_mm: row.precip_mm,
-                        wind_kt: row.wind_kt,
-                    })
-            })
-            .collect();
-        super::overlays::weather_band(&samples, 1380.0, 22.0)
-    };
-
-    let caption = format!(
-        r#"<div class="bnb-meta tdl-caption"><span class="mono">{peak_hour:02}:00 peak hour</span><span>{dawn} in the dawn chorus</span><span>{total} total today</span>{moon_badge}</div>"#
+    let stats_oob = format!(
+        r#"<div class="x-daystats" id="td-daystats" hx-swap-oob="true"><div><div class="v">{peak_hour:02}:00</div><div class="l">peak hour</div></div><div><div class="v x-dawn-v">{dawn}</div><div class="l">in dawn chorus</div></div><div><div class="v">{total_fmt}</div><div class="l">total today</div></div></div>"#,
+        total_fmt = super::group_thousands(total),
     );
-    let strip = super::viz::day_strip(&hourly, &dots, 6.0, 19.5, now_h);
-    let overlay_strip = format!(
-        r#"<div class="bnb-overlay-strip" aria-label="signal context"><span class="bnb-meta mono">weather</span><svg width="100%" height="22" viewBox="0 0 1380 22" preserveAspectRatio="none" role="presentation">{weather_band_html}</svg><span class="bnb-meta">{}</span></div>"#,
-        if weather_samples.is_empty() {
-            "no weather data"
-        } else {
-            "hourly"
-        }
-    );
+    let strip = super::viz::day_strip(&hourly, &temps, solar, now_hour_utc());
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/html")],
-        format!("{caption}{strip}{overlay_strip}"),
+        format!("{stats_oob}{strip}"),
     )
 }
 
@@ -352,7 +796,8 @@ fn parse_hour_fraction(t: &str) -> f64 {
 fn render_detection_card(html: &mut String, d: &birdnet_db::sqlite::DetectionRow) {
     let enc_name = simple_url_encode(&d.com_name);
 
-    // Audio player
+    // Fixed-size play affordance (shared clip player) — native <audio>
+    // controls render at different widths per row, so they never aligned.
     let audio = d
         .file_name
         .as_deref()
@@ -364,9 +809,8 @@ fn render_detection_card(html: &mut String, d: &birdnet_db::sqlite::DetectionRow
                 .unwrap_or_default();
             let safe = escape_html(&basename);
             format!(
-                "<audio controls preload=\"none\" class=\"tdl-audio\">\
-                 <source src=\"/api/v2/recordings/{safe}\" type=\"audio/wav\">\
-                 </audio>"
+                "<button type=\"button\" class=\"x-fplay tdl-play\" data-play-src=\"/api/v2/recordings/{safe}\" \
+                 title=\"Play clip\" aria-label=\"Play clip\">▶</button>"
             )
         })
         .unwrap_or_default();
@@ -398,11 +842,11 @@ fn render_detection_card(html: &mut String, d: &birdnet_db::sqlite::DetectionRow
          <div class=\"tdl-card-actions\">\
          <button class=\"bnb-btn ghost\" hx-post=\"/pages/today-lock\" \
          hx-vals='{{\"date\":\"{date_raw}\",\"time\":\"{time_raw}\",\"sci_name\":\"{sci_name_raw}\"}}' \
-         hx-target=\"#today-results\" hx-swap=\"innerHTML\" hx-include=\"#today-search\" \
+         hx-target=\"#today-full\" hx-swap=\"innerHTML\" hx-include=\"#search-form\" \
          title=\"Lock this detection (protect from auto-purge)\">🔒</button>\
          <button class=\"bnb-btn danger\" hx-post=\"/pages/today-delete\" \
          hx-vals='{{\"date\":\"{date_raw}\",\"time\":\"{time_raw}\",\"sci_name\":\"{sci_name_raw}\"}}' \
-         hx-target=\"#today-results\" hx-swap=\"innerHTML\" hx-include=\"#today-search\" \
+         hx-target=\"#today-full\" hx-swap=\"innerHTML\" hx-include=\"#search-form\" \
          hx-confirm=\"Delete detection of {com_name} at {time}?\" \
          data-confirm-action=\"hx-post\" \
          data-confirm-url=\"/pages/today-delete\" \
@@ -414,6 +858,10 @@ fn render_detection_card(html: &mut String, d: &birdnet_db::sqlite::DetectionRow
          </div></div>",
     );
 }
+
+/// Re-render trigger returned by the mutating endpoints: reloads the full-day
+/// list (its container) with the current search/filter still applied.
+const RELOAD_LIST: &str = "<div hx-get=\"/pages/today-list\" hx-trigger=\"load\" hx-target=\"#today-full\" hx-swap=\"innerHTML\" hx-include=\"#search-form\"></div>";
 
 /// Delete a detection and re-render the list.
 async fn delete_detection(
@@ -429,11 +877,10 @@ async fn delete_detection(
     })
     .await;
 
-    // Return an HTMX trigger to reload the today list
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/html")],
-        "<div hx-get=\"/pages/today-list\" hx-trigger=\"load\" hx-target=\"#today-results\" hx-swap=\"innerHTML\" hx-include=\"#today-search\"></div>".to_string(),
+        RELOAD_LIST.to_string(),
     )
 }
 
@@ -459,7 +906,7 @@ async fn relabel_detection(
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/html")],
-        "<div hx-get=\"/pages/today-list\" hx-trigger=\"load\" hx-target=\"#today-results\" hx-swap=\"innerHTML\" hx-include=\"#today-search\"></div>".to_string(),
+        RELOAD_LIST.to_string(),
     )
 }
 
@@ -478,7 +925,7 @@ async fn lock_detection(
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/html")],
-        "<div hx-get=\"/pages/today-list\" hx-trigger=\"load\" hx-target=\"#today-results\" hx-swap=\"innerHTML\" hx-include=\"#today-search\"></div>".to_string(),
+        RELOAD_LIST.to_string(),
     )
 }
 
@@ -497,6 +944,44 @@ async fn unlock_detection(
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/html")],
-        "<div hx-get=\"/pages/today-list\" hx-trigger=\"load\" hx-target=\"#today-results\" hx-swap=\"innerHTML\" hx-include=\"#today-search\"></div>".to_string(),
+        RELOAD_LIST.to_string(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hour_formatting() {
+        assert_eq!(fmt_hour(6.35), "6:21");
+        assert_eq!(fmt_hour(0.0), "0:00");
+        assert_eq!(fmt_hour(19.5), "19:30");
+        // Wraps past midnight rather than printing "24:xx".
+        assert_eq!(fmt_hour(24.01), "0:01");
+    }
+
+    #[test]
+    fn duration_formatting() {
+        assert_eq!(fmt_duration(8_040), "2h 14m");
+        assert_eq!(fmt_duration(2_700), "45m");
+        assert_eq!(fmt_duration(3_600), "1h 00m");
+    }
+
+    #[test]
+    fn human_date_shape() {
+        let d = human_date();
+        // "Friday, June 13" — weekday, comma, month, space, day-of-month.
+        assert!(d.contains(", "), "missing comma: {d}");
+        assert!(d.split_whitespace().count() >= 3, "too short: {d}");
+    }
+
+    #[test]
+    fn firstrun_checklist_reflects_missing_microphone() {
+        let html = firstrun_checklist(&[], Some(38.0));
+        assert!(html.contains("Waiting for a microphone"));
+        assert!(html.contains("38% used"));
+        // Honest waiting mark, not a fake checkmark.
+        assert!(html.contains("mk wait"));
+    }
 }

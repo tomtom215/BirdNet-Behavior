@@ -6,19 +6,16 @@
 use std::fmt::Write as _;
 
 use axum::extract::{Query, State};
-use axum::http::HeaderMap;
-use axum::response::{Html, IntoResponse};
+use axum::response::IntoResponse;
 use axum::{Router, routing::get};
 use serde::Deserialize;
 
-use super::{date_to_epoch_days, days_to_date, escape_html, render_page_for_request};
+use super::{date_to_epoch_days, days_to_date, escape_html};
 use crate::state::AppState;
 
 /// Mount the weekly report page and its HTMX content partial route.
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/weekly", get(weekly_page))
-        .route("/pages/weekly-content", get(weekly_partial))
+    Router::new().route("/pages/weekly-content", get(weekly_partial))
 }
 
 /// Query parameters for week navigation.
@@ -28,14 +25,14 @@ pub struct WeekParams {
     pub week: Option<String>,
 }
 
-/// Render the full weekly report page (shell only; content loaded by HTMX).
-async fn weekly_page(headers: HeaderMap) -> Html<String> {
+/// The weekly-report surface (shell only; content loaded by HTMX), rendered
+/// for embedding by `homes::reports` ("Weekly" tab).
+pub(super) fn content() -> String {
     // O-20 help link wires the eyebrow to the Reports mdBook page.
-    let body = WEEKLY_SHELL_HTML.replace(
+    WEEKLY_SHELL_HTML.replace(
         "{{help_link}}",
         &super::help::help_link(super::help::Topic::Reports),
-    );
-    render_page_for_request("Weekly Report", &body, "weekly", &headers)
+    )
 }
 
 /// HTMX partial: the weekly report content for a given week.

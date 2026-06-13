@@ -271,55 +271,71 @@ pub fn ridgeline(series: &[(String, Vec<i64>)]) -> String {
     svg
 }
 
-/// Full-width 24-hour timeline for "today": night bands behind, an hourly
-/// histogram (moss-soft), one colour-coded dot per detection placed by time
-/// (x) and confidence (y), sunrise/sunset markers and a dashed "now" line.
+/// Full-width 24-hour timeline for "today" (v3 spine, `Today_home.html`):
+/// night bands behind, an hourly histogram, an in-strip amber temperature
+/// line with a "now" reading, labelled sunrise/sunset lines and a "now"
+/// pill.
 ///
-/// `hourly` is the per-hour detection count; `dots` is `(hour 0–24, colour,
-/// confidence 0–1)`; `sunrise`/`sunset`/`now_h` are hours-of-day (0–24).
+/// The histogram (height = count) is the one clear, colour-blind-safe
+/// encoding; the pre-spine per-detection hue dots were removed — hue-only
+/// species coding fails for colour-blind users and is illegible at 2px.
+/// Species identity lives in the Top-species rail with text banding codes.
+///
+/// `hourly` is the per-hour detection count; `temps` is `(hour 0–24, °C)`
+/// samples for the temperature line (empty → no line); `solar` is
+/// `(sunrise, sunset)` hours when the station has a location; `now_h` is the
+/// current hour-of-day. All hours share one clock axis.
 #[must_use]
 pub fn day_strip(
     hourly: &[i64; 24],
-    dots: &[(f64, String, f64)],
-    sunrise: f64,
-    sunset: f64,
+    temps: &[(f64, f64)],
+    solar: Option<(f64, f64)>,
     now_h: f64,
 ) -> String {
     let max = hourly.iter().copied().max().unwrap_or(0);
-    if max == 0 && dots.is_empty() {
+    if max == 0 {
         return EMPTY.to_string();
     }
     let w = 960.0_f64;
-    let h = 132.0_f64;
-    let base = 108.0_f64; // histogram baseline / dot floor
-    let bar_ceiling = 40.0_f64; // tallest a bar may reach
+    let h = 120.0_f64;
+    let base = 96.0_f64; // histogram baseline
+    let bar_ceiling = 26.0_f64; // headroom above the tallest bar
     let hw = w / 24.0;
     let max_f = max.max(1) as f64;
     let x_of = |hour: f64| hour / 24.0 * w;
 
+    // The accessible description only promises markers that are actually
+    // drawn — without a location there are no sunrise/sunset lines.
+    let aria = if solar.is_some() {
+        "Hourly detection counts across the day, with sunrise, sunset and now markers"
+    } else {
+        "Hourly detection counts across the day, with a now marker"
+    };
     let mut svg = format!(
-        r#"<svg viewBox="0 0 {w:.0} {h:.0}" width="100%" height="auto" role="img" aria-label="Detections across the day" class="viz-svg-block">"#
+        r#"<svg viewBox="0 0 {w:.0} {h:.0}" width="100%" height="auto" role="img" aria-label="{aria}" class="viz-svg-block">"#
     );
 
-    // Night bands (midnight→sunrise, sunset→midnight).
-    let sunrise_x = x_of(sunrise);
-    let sunset_x = x_of(sunset);
-    let _ = write!(
-        svg,
-        r#"<rect x="0" y="0" width="{sunrise_x:.1}" height="{base:.1}" fill="var(--night)" fill-opacity="0.07"/><rect x="{sunset_x:.1}" y="0" width="{rw:.1}" height="{base:.1}" fill="var(--night)" fill-opacity="0.07"/>"#,
-        rw = w - sunset_x,
-    );
+    // Night bands (midnight→sunrise, sunset→midnight) — only with a location.
+    if let Some((sunrise, sunset)) = solar {
+        let sunrise_x = x_of(sunrise);
+        let sunset_x = x_of(sunset);
+        let _ = write!(
+            svg,
+            r#"<rect x="0" y="0" width="{sunrise_x:.1}" height="{base:.1}" fill="var(--night)" fill-opacity="0.09"/><rect x="{sunset_x:.1}" y="0" width="{rw:.1}" height="{base:.1}" fill="var(--night)" fill-opacity="0.09"/>"#,
+            rw = w - sunset_x,
+        );
+    }
 
     // Hourly histogram bars.
     for (hour, &c) in hourly.iter().enumerate() {
         if c > 0 {
             let bh = (c as f64 / max_f) * (base - bar_ceiling);
-            let x = hour as f64 * hw + 1.5;
+            let x = hour as f64 * hw + 3.0;
             let y = base - bh;
             let _ = write!(
                 svg,
-                r#"<rect x="{x:.1}" y="{y:.1}" width="{bw:.1}" height="{bh:.1}" rx="1.5" fill="var(--moss-soft)"/>"#,
-                bw = hw - 3.0,
+                r#"<rect x="{x:.1}" y="{y:.1}" width="{bw:.1}" height="{bh:.1}" rx="2" fill="var(--moss)" fill-opacity="0.6"/>"#,
+                bw = hw - 6.0,
             );
         }
     }
@@ -327,29 +343,69 @@ pub fn day_strip(
     // Baseline.
     let _ = write!(
         svg,
-        r#"<line x1="0" y1="{base:.1}" x2="{w:.0}" y2="{base:.1}" stroke="var(--hairline)" stroke-width="1"/>"#
+        r#"<line x1="0" y1="{base:.1}" x2="{w:.0}" y2="{base:.1}" stroke="var(--border)" stroke-width="1"/>"#
     );
 
-    // Detection dots — x by time, y by confidence (higher = nearer the top).
-    for (hr, color, conf) in dots.iter().take(800) {
-        let x = x_of(*hr);
-        let y = (base - 6.0) - conf.clamp(0.0, 1.0) * (base - 18.0);
+    // Temperature overlaid on the SAME chart — an amber line (distinct from
+    // the moss count bars) so the day's activity and weather read together.
+    if temps.len() >= 2 {
+        let t_min = temps.iter().map(|(_, t)| *t).fold(f64::INFINITY, f64::min);
+        let t_max = temps
+            .iter()
+            .map(|(_, t)| *t)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let t_range = (t_max - t_min).max(1.0);
+        let ty_top = 12.0_f64;
+        let ty_bot = base - 10.0;
+        let t_y = |v: f64| ty_top + (1.0 - (v - t_min) / t_range) * (ty_bot - ty_top);
+        let mut path = String::new();
+        for (i, (hour, temp)) in temps.iter().enumerate() {
+            let _ = write!(
+                path,
+                "{}{x:.1},{y:.1}",
+                if i == 0 { "M" } else { "L" },
+                x = x_of(*hour),
+                y = t_y(*temp)
+            );
+        }
         let _ = write!(
             svg,
-            r#"<circle data-species-fill="1" cx="{x:.1}" cy="{y:.1}" r="2.4" fill="{color}" fill-opacity="0.85"/>"#
+            r#"<path d="{path}" fill="none" stroke="var(--dawn-ink)" stroke-width="1.5" stroke-opacity="0.8" stroke-linecap="round" stroke-linejoin="round"/>"#
         );
+        // The reading nearest "now", dotted and labelled.
+        if let Some((hour, temp)) = temps
+            .iter()
+            .min_by(|a, b| (a.0 - now_h).abs().total_cmp(&(b.0 - now_h).abs()))
+        {
+            let nx = x_of(*hour);
+            let ny = t_y(*temp);
+            let _ = write!(
+                svg,
+                r#"<circle cx="{nx:.1}" cy="{ny:.1}" r="2.6" fill="var(--dawn-ink)"/><text x="{tx:.1}" y="{ty:.1}" font-size="10" fill="var(--dawn-ink)" stroke="var(--surface)" stroke-width="3.5" paint-order="stroke" stroke-linejoin="round" class="mono">{temp:.0}°</text>"#,
+                tx = nx + 7.0,
+                ty = ny - 5.0,
+            );
+        }
     }
 
-    // Sunrise / sunset markers.
-    for (hh, glyph, col) in [
-        (sunrise, "\u{2600}", "var(--dawn-ink)"),
-        (sunset, "\u{263e}", "var(--fg-3)"),
-    ] {
-        let mx = x_of(hh);
-        let _ = write!(
-            svg,
-            r#"<line x1="{mx:.1}" y1="0" x2="{mx:.1}" y2="{base:.1}" stroke="var(--border)" stroke-width="0.75" stroke-dasharray="1 3"/><text x="{mx:.1}" y="13" text-anchor="middle" font-size="13" fill="{col}">{glyph}</text>"#,
-        );
+    // Clear, labelled sunrise & sunset lines at the day/night boundary.
+    if let Some((sunrise, sunset)) = solar {
+        for (hh, glyph, label, col, anchor) in [
+            (sunrise, "\u{2600}", "sunrise", "var(--dawn-ink)", "start"),
+            (sunset, "\u{263e}", "sunset", "var(--fg-3)", "end"),
+        ] {
+            let mx = x_of(hh);
+            let tx = if anchor == "start" {
+                mx + 5.0
+            } else {
+                mx - 5.0
+            };
+            let _ = write!(
+                svg,
+                r#"<line x1="{mx:.1}" y1="0" x2="{mx:.1}" y2="{base:.1}" stroke="{col}" stroke-width="1" stroke-dasharray="2 3" stroke-opacity="0.6"/><text x="{tx:.1}" y="11" text-anchor="{anchor}" font-size="9" fill="{col}" stroke="var(--surface)" stroke-width="3" paint-order="stroke" stroke-linejoin="round" class="mono">{glyph} {label} {time}</text>"#,
+                time = fmt_clock(hh),
+            );
+        }
     }
 
     // "Now" line + pill.
@@ -369,12 +425,22 @@ pub fn day_strip(
         let _ = write!(
             svg,
             r#"<text class="mono" x="{x:.1}" y="{ty:.1}" text-anchor="middle" font-size="9" fill="var(--fg-4)">{hour:02}</text>"#,
-            ty = h - 4.0,
+            ty = h - 3.0,
         );
     }
 
     svg.push_str("</svg>");
     svg
+}
+
+/// `19.5` → `"19:30"` for the sunrise/sunset labels.
+fn fmt_clock(h: f64) -> String {
+    let total_min = (h * 60.0).round();
+    format!(
+        "{:.0}:{:02.0}",
+        (total_min / 60.0).floor() % 24.0,
+        total_min % 60.0
+    )
 }
 
 #[cfg(test)]
@@ -419,17 +485,32 @@ mod tests {
     #[test]
     fn day_strip_empty_and_basic() {
         let zero = [0i64; 24];
-        assert!(day_strip(&zero, &[], 6.0, 19.0, 12.0).contains("Not enough"));
+        assert!(day_strip(&zero, &[], Some((6.0, 19.0)), 12.0).contains("Not enough"));
         let mut hourly = [0i64; 24];
         hourly[6] = 4;
         hourly[7] = 7;
-        let dots = vec![
-            (6.5, "var(--moss)".to_string(), 0.9),
-            (7.25, "var(--dawn)".to_string(), 0.7),
-        ];
-        let svg = day_strip(&hourly, &dots, 6.0, 19.5, 13.0);
+        let temps: Vec<(f64, f64)> = (0..24).map(|h| (f64::from(h) + 0.5, 12.0)).collect();
+        let svg = day_strip(&hourly, &temps, Some((6.0, 19.5)), 13.0);
         assert!(svg.contains("<svg"));
-        assert!(svg.contains("<circle")); // detection dots
+        // The labelled solar lines carry real clock times.
+        assert!(svg.contains("sunrise 6:00"));
+        assert!(svg.contains("sunset 19:30"));
+        // Temperature line + the now-reading dot.
+        assert!(svg.contains("var(--dawn-ink)"));
+        assert!(svg.contains("<circle"));
         assert!(svg.contains("now")); // current-time pill
+        // The pre-spine per-detection hue dots are gone (a11y decision).
+        assert!(!svg.contains("data-species-fill"));
+    }
+
+    #[test]
+    fn day_strip_without_location_or_weather_still_renders() {
+        let mut hourly = [0i64; 24];
+        hourly[9] = 3;
+        let svg = day_strip(&hourly, &[], None, 10.0);
+        assert!(svg.contains("<svg"));
+        // No solar facts → no sun lines and no night bands (never fake them).
+        assert!(!svg.contains("sunrise"));
+        assert!(!svg.contains("var(--night)"));
     }
 }

@@ -1,6 +1,6 @@
 # The Dawn Chorus
 
-The dawn-chorus page (`/analytics/dawn-chorus`) shows the daily *rhythm* of your yard: which species sing when, wrapped around a 24-hour clock and anchored to the real sunrise and sunset for your location.
+The **Dawn chorus** tab of [Patterns](./patterns.md) (`/patterns?tab=dawn`) shows the daily *rhythm* of your yard: which species sing when, wrapped around a 24-hour clock and anchored to the real sunrise and sunset for your location.
 
 ![The dawn chorus page](../images/dawn-chorus.png)
 

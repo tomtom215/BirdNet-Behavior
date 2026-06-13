@@ -3,45 +3,15 @@
   Inline this block immediately before </body>.
 
   Visible only on `(max-width: 720px) and (pointer: coarse)`. Desktop users
-  with a narrow window keep the topnav. The "More" slot opens a <dialog>-
-  as-bottom-sheet listing the secondary destinations.
+  with a narrow window keep the topnav.
 
-  The bottom-bar tabs and the sheet rows are generated from the single nav
-  manifest (routes::pages::nav) and inlined via the slots below, so this surface
-  can never drift from the desktop top-nav and "More" dropdown.
+  The v3 spine's six homes all fit the bar, so there is no "More" overflow
+  slot or bottom sheet — the long tail (Review, Kiosk, Changelog, Help) is
+  reachable through contextual links and the command palette instead. The
+  slots are generated from the single nav manifest (routes::pages::nav), so
+  this surface can never drift from the desktop top-nav.
 -->
 <nav class="bnb-tabbar" role="navigation" aria-label="Primary (mobile)">
   <!-- Bottom-bar tabs are generated from the nav manifest (routes::pages::nav). -->
   {{tabbar_slots}}
-  <button type="button" class="bnb-tabbar__slot" aria-haspopup="dialog" aria-controls="bnb-more-sheet" data-open-more>
-    <span class="glyph" aria-hidden="true">⌗</span><span class="label">More</span>
-  </button>
 </nav>
-
-<dialog id="bnb-more-sheet" class="bnb-sheet" aria-labelledby="bnb-more-title">
-  <form method="dialog" class="bnb-sheet__form">
-    <header class="bnb-sheet__head">
-      <h2 id="bnb-more-title" class="display tb-h2">More</h2>
-      <button type="submit" class="bnb-btn ghost" aria-label="Close">×</button>
-    </header>
-    <ul class="bnb-sheet__list">
-      <!-- Rows are generated from the nav manifest (routes::pages::nav): the
-           top-level sections that aren't bottom-bar tabs, then every secondary
-           destination, grouped — same source as the desktop "More" dropdown. -->
-      {{sheet_rows}}
-    </ul>
-  </form>
-</dialog>
-
-<script>
-(function () {
-  "use strict";
-  // Scope to THIS opener (the tabbar one) by its aria-controls — the topnav
-  // ships another [data-open-more] button earlier in the DOM, so a bare
-  // querySelector would grab that one instead and this sheet would never open.
-  var btn = document.querySelector('[data-open-more][aria-controls="bnb-more-sheet"]');
-  var sheet = document.getElementById('bnb-more-sheet');
-  if (!btn || !sheet || typeof sheet.showModal !== 'function') return;
-  btn.addEventListener('click', function () { sheet.showModal(); });
-})();
-</script>

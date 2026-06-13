@@ -13,7 +13,7 @@ BirdNet-Behavior listens to your microphone or RTSP camera, identifies birds in 
 | Get it running in two commands | [Installation](./getting-started/installation.md) |
 | Run it in a container | [Running with Docker](./getting-started/docker.md) |
 | Understand the settings | [Configuration](./getting-started/configuration.md) |
-| Learn what each screen does | [The Dashboard](./guide/dashboard.md) |
+| Learn what each screen does | [Today](./guide/today.md) |
 | Move from BirdNET-Pi | [Migrating from BirdNET-Pi](./guides/migration.md) |
 | Fix a problem | [Troubleshooting](./guides/troubleshooting.md) |
 
@@ -34,6 +34,18 @@ BirdNet-Behavior is a ground-up Rust rewrite of [BirdNET-Pi](https://github.com/
 
 ## A modern, two-audience interface
 
+The UI is organized into **six homes** — the tabs across the top, and the
+phone bottom bar:
+
+| Home | "…" |
+|---|---|
+| **Today** | what's happening right now? |
+| **Species** | who have I heard? |
+| **Patterns** | when & where? |
+| **Recordings** | let me hear them |
+| **Reports** | the recap |
+| **Station** | manage my station |
+
 Every screen is designed to serve two people at once: the **hobbyist** who wants a delightful at-a-glance view, and the **researcher** who needs methodological rigor. Each page leads with a plain-English headline, then layers the dense numbers and charts beneath. The whole UI supports light and dark themes (with automatic OS-preference detection) and reflows cleanly from a wall-mounted kiosk down to a phone.
 
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
@@ -44,4 +56,4 @@ Every screen is designed to serve two people at once: the **hobbyist** who wants
 
 </div>
 
-Read on for [installation](./getting-started/installation.md), or jump into the [field guide](./guide/dashboard.md) for a tour of every screen.
+Read on for [installation](./getting-started/installation.md), or jump into the [field guide](./guide/today.md) for a tour of every screen.

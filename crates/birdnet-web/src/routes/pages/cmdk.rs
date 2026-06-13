@@ -151,45 +151,108 @@ fn all_pages() -> Vec<Entry> {
         synonyms: syn,
     };
     vec![
-        make("⌂", "Dashboard", "live feed", "/", &["home", "live"]),
-        make("⊙", "Today", "detection log", "/today", &["log", "now"]),
-        make("⌬", "Species", "all voices", "/species", &["birds", "list"]),
+        // The six homes of the v3 spine, in nav order. Old vocabulary stays
+        // findable as synonyms so a veteran typing "heatmap" still lands.
+        make(
+            "⌂",
+            "Today",
+            "what's happening?",
+            "/",
+            &["home", "live", "dashboard", "now", "log"],
+        ),
+        make(
+            "⌬",
+            "Species",
+            "who have I heard?",
+            "/species",
+            &["birds", "list"],
+        ),
         make(
             "▦",
-            "Heatmap",
+            "Patterns",
+            "when & where?",
+            "/patterns",
+            &["analytics", "heatmap", "activity"],
+        ),
+        make(
+            "♪",
+            "Recordings",
+            "let me hear them",
+            "/recordings",
+            &["audio", "wav", "clip", "listen"],
+        ),
+        make(
+            "¶",
+            "Reports",
+            "the recap",
+            "/reports",
+            &["weekly", "bulletin", "recap"],
+        ),
+        make(
+            "⌗",
+            "Station",
+            "manage my station",
+            "/station",
+            &["system", "admin", "pi", "cpu", "disk", "tools"],
+        ),
+        // The long tail: views inside the homes + utility pages, reachable
+        // here and through contextual links (no top-level tab).
+        make(
+            "▦",
+            "When active",
             "hour × day",
-            "/heatmap",
-            &["activity", "when"],
+            "/patterns",
+            &["heatmap", "when", "grid"],
         ),
         make(
             "◐",
             "Dawn chorus",
             "polar plot",
-            "/analytics/dawn-chorus",
+            "/patterns?tab=dawn",
             &["chorus", "polar", "circadian"],
         ),
         make(
             "∿",
             "Migration",
             "phenology",
-            "/migration",
+            "/patterns?tab=migration",
             &["arrivals", "ridgeline", "departures"],
         ),
         make(
             "☰",
-            "Correlation",
+            "Who sings together",
             "co-occurrence",
-            "/correlation",
-            &["matrix", "pairs"],
+            "/patterns?tab=together",
+            &["correlation", "matrix", "pairs"],
         ),
         make(
             "∷",
-            "Time series",
-            "trends",
-            "/timeseries",
-            &["trend", "compare"],
+            "Trends",
+            "busier or quieter?",
+            "/patterns?tab=trends",
+            &["time series", "trend", "compare"],
         ),
-        make("◷", "History", "calendar", "/history", &["browse"]),
+        make(
+            "⊕",
+            "Behavior",
+            "the deep tier",
+            "/patterns?tab=behavior",
+            &["behavioral", "sessions", "funnel", "retention", "sequence"],
+        ),
+        make(
+            "◷",
+            "History",
+            "browse past days",
+            "/reports?tab=history",
+            &["browse", "calendar"],
+        ),
+        make(
+            "⊞",
+            "Year in review",
+            "your year in song",
+            "/reports?tab=year",
+            &["year", "annual"],
+        ),
         make(
             "✦",
             "Life list",
@@ -199,32 +262,11 @@ fn all_pages() -> Vec<Entry> {
         ),
         make("◫", "Gallery", "photos", "/gallery", &["photo", "image"]),
         make(
-            "▶",
-            "Recordings",
-            "clips",
-            "/recordings",
-            &["audio", "wav", "clip"],
-        ),
-        make(
-            "⚠",
-            "Quarantine",
-            "review queue",
+            "⚑",
+            "Review",
+            "rare-bird queue",
             "/quarantine",
-            &["rare", "queue", "review"],
-        ),
-        make(
-            "¶",
-            "Weekly report",
-            "Sunday recap",
-            "/weekly",
-            &["bulletin", "sunday"],
-        ),
-        make(
-            "⊞",
-            "Year in review",
-            "annual recap",
-            "/year-in-review",
-            &["year", "annual"],
+            &["rare", "queue", "review", "quarantine", "confirm"],
         ),
         make("◉", "Kiosk", "wall display", "/kiosk", &["ambient", "wall"]),
         make(
@@ -233,15 +275,6 @@ fn all_pages() -> Vec<Entry> {
             "channels & log",
             "/notifications",
             &["alerts", "channel"],
-        ),
-        make("⚙", "System", "health", "/system", &["pi", "cpu", "disk"]),
-        make("⌗", "Admin", "settings", "/admin", &["config"]),
-        make(
-            "⊕",
-            "Analytics",
-            "behavioral",
-            "/analytics",
-            &["behavioral", "sessions", "funnel", "retention", "sequence"],
         ),
         make(
             "♪",
@@ -549,14 +582,12 @@ mod tests {
         let p = all_pages();
         let labels: Vec<_> = p.iter().map(|e| e.label.as_str()).collect();
         for must in [
-            "Dashboard",
             "Today",
             "Species",
-            "Heatmap",
-            "Migration",
-            "Life list",
-            "Quarantine",
-            "System",
+            "Patterns",
+            "Recordings",
+            "Reports",
+            "Station",
         ] {
             assert!(labels.contains(&must), "missing {must} in cmdk pages index");
         }
@@ -625,8 +656,8 @@ mod tests {
     fn cmdk_covers_every_nav_destination() {
         // Parity guard: the command palette must reach every destination in the
         // nav manifest, so a page reachable from the menus is always reachable
-        // from ⌘K too. This locks the fourth surface to the single source of
-        // truth — adding a page to `nav` without a palette entry fails here.
+        // from ⌘K too. This locks the third surface to the single source of
+        // truth — adding a home to `nav` without a palette entry fails here.
         use crate::routes::pages::nav;
         let pages = all_pages();
         let hrefs: Vec<&str> = pages.iter().map(|e| e.href.as_str()).collect();
@@ -637,12 +668,26 @@ mod tests {
                 p.path
             );
         }
-        for m in nav::MORE {
-            assert!(
-                hrefs.contains(&m.path),
-                "command palette missing destination {}",
-                m.path
-            );
+    }
+
+    #[test]
+    fn cmdk_keeps_the_long_tail_reachable() {
+        // The v3 spine removed the "More" menu; the palette is now the only
+        // global surface for the long tail. Losing one of these entries makes
+        // the page unreachable except by typing its URL.
+        let pages = all_pages();
+        let hrefs: Vec<&str> = pages.iter().map(|e| e.href.as_str()).collect();
+        for path in [
+            "/quarantine",
+            "/kiosk",
+            "/system/changelog",
+            "/help",
+            "/life-list",
+            "/gallery",
+            "/listen",
+            "/notifications",
+        ] {
+            assert!(hrefs.contains(&path), "palette lost long-tail page {path}");
         }
     }
 }

@@ -15,6 +15,10 @@ extend-exclude = [
     "tests/testdata/**",
     "target/**",
     "docs/screenshots/**",
+    # Vendored design-handover artifacts: hi-fi HTML mockups with JS ported
+    # verbatim from the Rust renderers (short identifiers like `rin`, `TWEEKS`).
+    # They're a provenance record, not source we maintain or spell-check.
+    "docs/design/handover/**",
     "LICENSE",
     "LICENSE-UPSTREAM",
     # Vendored / minified JS (htmx, etc.) — too dense for spell-check and

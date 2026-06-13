@@ -58,16 +58,15 @@
             <div class="status lay-iflex" hx-get="/pages/health-badge" hx-trigger="load, every 30s" hx-swap="innerHTML">
                 <span class="bnb-pill"><span class="bnb-dot"></span> …</span>
             </div>
-            {{topnav_more}}
             {{sign_out_link}}
+            <button class="icon-btn" type="button" title="Help &amp; methodology" aria-label="Help" data-help-drawer="/help/index.html">?</button>
             <button class="icon-btn" id="theme-toggle" title="Toggle light/dark theme" aria-label="Toggle theme">
                 <span id="theme-icon" aria-hidden="true"></span>
             </button>
         </div>
     </header>
-    <main id="main-content" role="main">
+    <main id="main-content" role="main" data-home="{{active_nav}}">
         {{update_banner}}
-        {{breadcrumb}}
         {{content}}
     </main>
     {{footer}}

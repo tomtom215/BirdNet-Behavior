@@ -27,8 +27,7 @@
 //!
 //! Call sites wired so far (the high-traffic + analytical surfaces):
 //!
-//! * Dashboard hero eyebrow (`pages::dashboard::dashboard_page`).
-//! * Today detection-log eyebrow (`templates/today.html`).
+//! * Today home hero eyebrow (`pages::today::today_home`, `templates/today.html`).
 //! * Dawn-chorus circadian eyebrow (`templates/dawn_chorus.html`).
 //! * Migration phenology eyebrow (`templates/migration.html`).
 //! * Activity heatmap top eyebrow (`pages::heatmap::HEATMAP_CONTENT`).
@@ -77,8 +76,8 @@ fn help_dir() -> PathBuf {
 /// drawer JS surfaces as the "docs unavailable" friendly message.
 ///
 /// A small middleware rewrites extensionless page URLs — the clean form
-/// `Topic::href()` and every in-app help link use, e.g. `/help/guide/dashboard`
-/// — to the `.html` file mdBook actually emits (`guide/dashboard.html`).
+/// `Topic::href()` and every in-app help link use, e.g. `/help/guide/today`
+/// — to the `.html` file mdBook actually emits (`guide/today.html`).
 /// `ServeDir` never appends `.html`, so without this every deep help link would
 /// 404. `/help/` (served as `index.html`) and asset requests (`.css`, `.png`,
 /// `.woff2`, …) pass through untouched.
@@ -134,7 +133,6 @@ async fn rewrite_extensionless_help(mut req: Request, next: Next) -> Response {
 #[allow(dead_code)]
 pub enum Topic {
     // Field guide
-    Dashboard,
     Today,
     Sharing,
     Reviews,
@@ -168,8 +166,7 @@ impl Topic {
     #[must_use]
     pub const fn href(self) -> &'static str {
         match self {
-            // Field guide
-            Self::Dashboard => "/help/guide/dashboard",
+            // Field guide. (The pre-spine `Dashboard` topic merged into Today.)
             Self::Today => "/help/guide/today",
             Self::Sharing => "/help/guide/sharing",
             Self::Reviews => "/help/guide/reviews",
@@ -264,8 +261,8 @@ mod tests {
     #[test]
     fn help_rewrite_appends_html_to_page_urls() {
         assert_eq!(
-            help_html_rewrite("/help/guide/dashboard").as_deref(),
-            Some("/help/guide/dashboard.html")
+            help_html_rewrite("/help/guide/today").as_deref(),
+            Some("/help/guide/today.html")
         );
         assert_eq!(
             help_html_rewrite("/help/admin/settings").as_deref(),
@@ -282,7 +279,7 @@ mod tests {
         // `/help/` is served as index.html by ServeDir's directory handling.
         assert_eq!(help_html_rewrite("/help/"), None);
         // Already-.html pages and static assets keep their path verbatim.
-        assert_eq!(help_html_rewrite("/help/guide/dashboard.html"), None);
+        assert_eq!(help_html_rewrite("/help/guide/today.html"), None);
         assert_eq!(help_html_rewrite("/help/css/app.css"), None);
         assert_eq!(help_html_rewrite("/help/images/dashboard.png"), None);
         assert_eq!(help_html_rewrite("/help/fonts/open-sans.woff2"), None);
@@ -294,7 +291,6 @@ mod tests {
     #[test]
     fn every_topic_has_unique_href() {
         let topics = [
-            Topic::Dashboard,
             Topic::Today,
             Topic::Sharing,
             Topic::Reviews,
@@ -328,7 +324,7 @@ mod tests {
 
     #[test]
     fn href_is_help_prefixed() {
-        for t in [Topic::Dashboard, Topic::DawnChorus, Topic::AdminAudio] {
+        for t in [Topic::Today, Topic::DawnChorus, Topic::AdminAudio] {
             assert!(t.href().starts_with("/help/"));
         }
     }

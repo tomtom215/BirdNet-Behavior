@@ -14,10 +14,14 @@ If you set your latitude/longitude and an audio source, detections start appeari
 
 ## A two-minute tour
 
-1. **Dashboard** (`/`) — the right-now view: a live detection feed, today's totals, top species, and an activity heatmap. See [The Dashboard](../guide/dashboard.md).
-2. **Today** (`/today`) — a searchable, filterable log of everything heard today, with a 24-hour timeline. See [Today & the Detection Log](../guide/today.md).
-3. **Species** (`/species`) and **Life List** (`/life-list`) — browse every species you've recorded and watch the list grow over the year. See [Species & the Life List](../guide/species.md).
-4. **Admin → Settings** (`/admin/settings`) — optional fine-tuning: confidence threshold, per-species overrides, email, quarantine rules.
+The UI has six homes — the tabs along the top (and the phone bottom bar):
+
+1. **Today** (`/`) — the home and right-now view: live signal, the day strip, and the full searchable detection log. See [Today](../guide/today.md).
+2. **Species** (`/species`) — browse every species you've recorded as a list, a photo grid or your growing life list. See [Species & the Life List](../guide/species.md).
+3. **Patterns** (`/patterns`) — the analytics: when birds are active, the dawn chorus, migration, who sings together, trends. See [Patterns](../guide/patterns.md).
+4. **Recordings** (`/recordings`) — play back captured clips and listen to live audio.
+5. **Reports** (`/reports`) — the weekly recap, year in review and history calendar. See [Reports](../guide/reports.md).
+6. **Station** (`/station`) — health at a glance, plus all settings and admin. Start with **Settings** (`/admin/settings`) for optional fine-tuning: confidence threshold, per-species overrides, email, quarantine rules.
 
 ## First-run wizard
 

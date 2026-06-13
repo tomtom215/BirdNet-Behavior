@@ -14,6 +14,7 @@ pub mod images;
 pub mod livestream;
 pub mod pages;
 pub mod recordings;
+pub mod redirects;
 pub mod share;
 pub mod species;
 pub mod spectrogram;
@@ -79,6 +80,7 @@ pub fn public_routes() -> Router<AppState> {
         .nest("/api/v2", health::router())
         .merge(livestream::stream_router())
         .merge(pages::router())
+        .merge(redirects::router())
         .merge(feeds::router())
         .merge(share::router())
         .merge(auth_pages::router())

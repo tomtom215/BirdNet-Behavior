@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BirdNet-Behavior · v3 spine · engineering handoff</title>
+<script>(function(){var t=localStorage.getItem('theme');if(t!=='light'&&t!=='dark')t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';document.documentElement.setAttribute('data-theme',t);})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter+Tight:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root,[data-theme="light"]{--bg:oklch(98.5% 0.004 80);--bg-2:oklch(96.5% 0.005 80);--surface:oklch(100% 0 0);--surface-2:oklch(97.5% 0.004 80);--border:oklch(90% 0.006 80);--border-2:oklch(82% 0.008 80);--hairline:oklch(94% 0.005 80);--fg:oklch(22% 0.008 70);--fg-2:oklch(40% 0.008 70);--fg-3:oklch(55% 0.008 70);--fg-4:oklch(70% 0.008 70);--moss:oklch(55% 0.09 150);--moss-soft:oklch(92% 0.04 150);--moss-ink:oklch(35% 0.09 150);--dawn:oklch(68% 0.12 60);--dawn-soft:oklch(94% 0.05 65);--dawn-ink:oklch(42% 0.12 55);--rare:oklch(58% 0.16 28);--rare-soft:oklch(94% 0.05 28);--shadow-sm:0 1px 2px oklch(0% 0 0/.04),0 0 0 .5px oklch(0% 0 0/.04);--r-sm:6px;--r-md:10px;--r-lg:14px;--font-display:"Instrument Serif",Georgia,serif;--font-ui:"Inter Tight",system-ui,sans-serif;--font-mono:"JetBrains Mono",ui-monospace,monospace;}
+[data-theme="dark"]{--bg:oklch(12% 0.008 250);--bg-2:oklch(15% 0.008 250);--surface:oklch(18% 0.010 250);--surface-2:oklch(22% 0.010 250);--border:oklch(28% 0.014 250);--border-2:oklch(40% 0.018 250);--hairline:oklch(24% 0.012 250);--fg:oklch(97% 0.004 240);--fg-2:oklch(80% 0.008 240);--fg-3:oklch(60% 0.010 240);--fg-4:oklch(42% 0.012 240);--moss:oklch(78% 0.18 150);--moss-soft:oklch(26% 0.10 150);--moss-ink:oklch(90% 0.16 150);--dawn:oklch(82% 0.18 65);--dawn-soft:oklch(28% 0.10 60);--dawn-ink:oklch(92% 0.16 60);--rare:oklch(74% 0.20 25);--rare-soft:oklch(28% 0.12 25);--shadow-sm:0 1px 2px oklch(0% 0 0/.5),0 0 0 .5px oklch(100% 0 0/.04);}
+*{box-sizing:border-box;}body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-ui);font-size:14px;line-height:1.55;letter-spacing:-0.005em;}
+.shell{max-width:1180px;margin:0 auto;padding:44px 22px 120px;}
+.mono{font-family:var(--font-mono);}.eyebrow{font-family:var(--font-mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--fg-3);}
+h1.t{font-family:var(--font-display);font-size:54px;line-height:1.03;letter-spacing:-0.02em;margin:8px 0 0;font-weight:400;}
+h1.t em{font-style:italic;color:var(--moss-ink);}
+.lede{color:var(--fg-2);max-width:74ch;margin:12px 0 0;font-size:15px;}
+.head{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;flex-wrap:wrap;margin-bottom:8px;}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:var(--r-sm);background:var(--surface);border:.5px solid var(--border-2);color:var(--fg);font:inherit;font-size:12.5px;font-weight:500;box-shadow:var(--shadow-sm);cursor:pointer;}
+.sec{font-family:var(--font-mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--fg-4);margin:50px 0 14px;display:flex;align-items:center;gap:10px;}
+.sec::after{content:"";flex:1;height:.5px;background:var(--hairline);}
+section.card{background:var(--surface);border:.5px solid var(--border);border-radius:var(--r-lg);box-shadow:var(--shadow-sm);overflow:hidden;margin-bottom:18px;}
+.ch{padding:16px 22px;border-bottom:.5px solid var(--hairline);background:var(--surface-2);}
+.ch h2{margin:0;font-family:var(--font-display);font-size:24px;font-weight:400;}
+.cb{padding:20px 22px;}.cb>p{margin:0 0 12px;color:var(--fg-2);max-width:84ch;}.cb>p:last-child{margin-bottom:0;}
+strong{color:var(--fg);font-weight:600;}
+code{font-family:var(--font-mono);font-size:.88em;background:var(--surface-2);border:.5px solid var(--hairline);border-radius:4px;padding:0 4px;}
+table{width:100%;border-collapse:collapse;font-size:12.5px;}
+th{text-align:left;font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-3);font-weight:500;padding:8px 10px;border-bottom:.5px solid var(--border);}
+td{padding:9px 10px;border-bottom:.5px solid var(--hairline);vertical-align:top;}
+td.m{font-family:var(--font-mono);font-size:11px;color:var(--fg-3);line-height:1.5;}
+td.m code{font-size:10.5px;white-space:nowrap;}
+tr:last-child td{border-bottom:0;}
+.homes{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;}
+@media(max-width:860px){.homes{grid-template-columns:1fr;}.head h1.t{font-size:38px;}}
+.home{border:.5px solid var(--border);border-radius:var(--r-md);overflow:hidden;background:var(--bg);display:flex;flex-direction:column;}
+.home .top{padding:14px 16px;background:var(--surface-2);border-bottom:.5px solid var(--hairline);}
+.home .g{font-size:18px;color:var(--moss-ink);}
+.home h3{margin:6px 0 2px;font-size:16px;}.home .q{font-size:11.5px;color:var(--fg-3);font-style:italic;}
+.home .bd{padding:13px 16px;flex:1;font-size:12px;color:var(--fg-2);}
+.home .bd b{color:var(--fg);}
+.home a.open{display:block;padding:11px 16px;border-top:.5px solid var(--hairline);font-family:var(--font-mono);font-size:11px;color:var(--moss-ink);text-decoration:none;}
+.home a.open:hover{background:var(--surface-2);}
+.pill{display:inline-block;font-family:var(--font-mono);font-size:10px;background:var(--surface-2);border:.5px solid var(--hairline);border-radius:4px;padding:1px 6px;color:var(--fg-3);margin:2px 3px 0 0;}
+.note{border-left:2px solid var(--moss);background:var(--moss-soft);color:var(--moss-ink);border-radius:0 var(--r-sm) var(--r-sm) 0;padding:11px 15px;font-size:12.5px;margin-top:14px;}
+.note.warn{border-left-color:var(--dawn);background:var(--dawn-soft);color:var(--dawn-ink);}
+ul.t{margin:8px 0 0;padding-left:18px;color:var(--fg-2);font-size:13px;}ul.t li{margin-bottom:6px;}
+ul.t code,ol.t code{font-size:11px;}
+ol.t{margin:8px 0 0;padding-left:20px;color:var(--fg-2);font-size:13px;}ol.t li{margin-bottom:8px;}
+.nav-before,.nav-after{display:flex;gap:5px;flex-wrap:wrap;padding:11px 13px;border-radius:var(--r-md);border:.5px solid var(--border);background:var(--surface-2);margin-top:6px;}
+.tab{font-size:12px;padding:4px 10px;border-radius:999px;background:var(--surface);border:.5px solid var(--border);white-space:nowrap;}
+.tab.more{border-style:dashed;color:var(--fg-3);}
+.tab.new{background:var(--moss-soft);color:var(--moss-ink);border-color:transparent;font-weight:500;}
+footer{margin-top:48px;font-family:var(--font-mono);font-size:10.5px;color:var(--fg-4);display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;}
+</style>
+</head>
+<body>
+<div class="shell">
+
+<header class="head" data-screen-label="Handoff header">
+  <div>
+    <div class="eyebrow">v3 spine · engineering handoff · 2026-06-12</div>
+    <h1 class="t">Build it <em>cold</em>, zero guesses.</h1>
+    <p class="lede">Six hi-fi home mockups, each rendered against the <strong>real production <code>static/css/app.css</code></strong> using the markup the Rust already emits. This page is the map: what each home <em>is</em>, which production routes/files it replaces, the nav-manifest change, the redirect table, and the build order. Every visual is a port of a real renderer — no new design language, no invented tokens.</p>
+  </div>
+  <button class="btn" id="tt" type="button">Toggle theme</button>
+</header>
+
+<div class="sec">01 · the six homes — open any mockup</div>
+<div class="homes" data-screen-label="Home index">
+  <div class="home"><div class="top"><div class="g">⌂</div><h3>Today</h3><div class="q">"what's happening?"</div></div><div class="bd">Merged Dashboard+Today. Honest live signal, comparative phrase, day-strip + weather overlay, unified log with full-day disclosure, review nudge, first-run checklist, <b>outage</b> state. <div><span class="pill">3 states</span><span class="pill">source picker</span></div></div><a class="open" href="Today_home.html">Today_home.html →</a></div>
+  <div class="home"><div class="top"><div class="g">⌬</div><h3>Species</h3><div class="q">"who have I heard?"</div></div><div class="bd">List · Photos · Life list as views (not 3 pages). Accumulation curve, Wikipedia photo-thumbs, filter chips, per-species detail focus. <div><span class="pill">view switcher</span><span class="pill">detail</span></div></div><a class="open" href="Species_home.html">Species_home.html →</a></div>
+  <div class="home"><div class="top"><div class="g">▦</div><h3>Patterns</h3><div class="q">"when &amp; where?"</div></div><div class="bd">Six analytics as plain-English tabs: heatmap · circadian polar · ridgeline · chord · trends · behavior. Lead with one picture, table behind a disclosure. <div><span class="pill">6 tabs</span><span class="pill">ported viz</span></div></div><a class="open" href="Patterns_home.html">Patterns_home.html →</a></div>
+  <div class="home"><div class="top"><div class="g">♪</div><h3>Recordings</h3><div class="q">"let me hear them"</div></div><div class="bd">Clips (browser + spectrogram thumbs + bulk review) and Live (honest scrolling sonogram). Now-playing player docks to a floating bar on scroll. <div><span class="pill">Clips/Live</span><span class="pill">scroll dock</span></div></div><a class="open" href="Recordings_home.html">Recordings_home.html →</a></div>
+  <div class="home"><div class="top"><div class="g">¶</div><h3>Reports</h3><div class="q">"the recap"</div></div><div class="bd">Weekly · Year-in-review (52-week tape) · History calendar. Editorial, <code>@media print</code>-ready (Cmd+P → PDF). <div><span class="pill">3 views</span><span class="pill">print</span></div></div><a class="open" href="Reports_home.html">Reports_home.html →</a></div>
+  <div class="home"><div class="top"><div class="g">⌗</div><h3>Station</h3><div class="q">"manage my station"</div></div><div class="bd">12 admin tabs → 6 task groups: <b>Health</b> · Capture · Alerts · Data · Settings · Access. Health-first per-source panel; lockout-safe danger zone. <div><span class="pill">6 groups</span><span class="pill">health-first</span></div></div><a class="open" href="Station_home.html">Station_home.html →</a></div>
+</div>
+<div class="note">Companion docs in this folder: <a href="../AUDIT_v3.html" class="mono" style="color:var(--moss-ink)">AUDIT_v3.html</a> (what shipped vs. the v3 backlog) and <a href="../IA_REIMAGINING.html" class="mono" style="color:var(--moss-ink)">IA_REIMAGINING.html</a> (why the 23→6 reframe).</div>
+
+<div class="sec">02 · the IA change — one edit to <code>routes/pages/nav.rs</code></div>
+<section class="card"><div class="ch"><h2>Navigation manifest: 9 primary + 14 More → 6 primary</h2></div><div class="cb">
+  <p>The whole spine is one rewrite of the two manifest tables in <code>routes/pages/nav.rs</code>. The existing architecture regenerates all six surfaces (topnav, More dropdown, mobile tab bar + sheet, breadcrumb, ⌘K) from these tables and parity-tests them — so this is a <strong>table edit, not a per-template change</strong>.</p>
+  <p class="eyebrow" style="margin:14px 0 0">NOW</p>
+  <div class="nav-before"><span class="tab">Dashboard</span><span class="tab">Today</span><span class="tab">Species</span><span class="tab">Heatmap</span><span class="tab">Migration</span><span class="tab">Analytics</span><span class="tab">Life list</span><span class="tab">Quarantine •</span><span class="tab">System</span><span class="tab more">⌗ More ▾ (14)</span></div>
+  <p class="eyebrow" style="margin:14px 0 0">PROPOSED — PRIMARY (the only top-level tabs)</p>
+  <div class="nav-after"><span class="tab new">Today</span><span class="tab new">Species</span><span class="tab new">Patterns</span><span class="tab new">Recordings</span><span class="tab new">Reports</span><span class="tab new">Station</span><span class="tab" style="margin-left:auto">⌕ Search</span><span class="tab">? Help</span></div>
+  <ul class="t">
+    <li><strong>Review</strong> (was the top-level "Quarantine" tab) becomes a contextual nudge on <b>Today</b> (badge only when pending) and a findable page reachable from there + ⌘K — kept, not removed.</li>
+    <li>The <strong>MORE</strong> table empties: every destination folds into a home (see §03) except Kiosk → Station ("Wall display"), Changelog → Station/Help. Help drawer + ⌘K stay on the right rail.</li>
+    <li>Friendly vocabulary is canonical for desktop <em>and</em> mobile (no more <code>Now</code>/<code>When</code> divergence): Heatmap→"When active", Co-occurrence→"Who sings together", System+Admin→"Station", Quarantine→"Review".</li>
+  </ul>
+</div></section>
+
+<div class="sec">03 · per-home build spec — what to touch</div>
+<section class="card"><div class="ch"><h2>Each home → the real routes, templates &amp; modules it implements</h2><span class="eyebrow" style="display:block;margin-top:4px">reuse the partials; the homes are re-composition + relabel, not rewrites</span></div><div class="cb">
+<table>
+<thead><tr><th style="width:96px">Home</th><th>Folds these production routes</th><th>Primary files to touch</th><th>Net-new (designed here)</th></tr></thead>
+<tbody>
+<tr><td><strong>Today</strong></td><td class="m"><code>/</code> dashboard.html · <code>/today</code></td><td class="m"><code>templates/dashboard.html</code> + <code>templates/today.html</code> → merge to one · <code>pages/today.rs</code> · <code>pages/dashboard/*</code> · <code>today_phrase.rs</code></td><td class="m">merged template; outage/quiet/first-run states; Review nudge; first-run checklist (data from <code>doctor</code>+health); day-strip temp overlay; source picker</td></tr>
+<tr><td><strong>Species</strong></td><td class="m"><code>/species</code> · <code>/gallery</code> · <code>/life-list</code> · <code>/species/detail</code></td><td class="m"><code>templates/species.html</code> · <code>species_pages.rs</code> · <code>gallery.rs</code> · <code>life_list.rs</code> · <code>species_detail.html</code></td><td class="m">view switcher (List/Photos/Life list) over the same data; Wikipedia thumb in list rows (<code>species_images</code> crate); "Avg confidence" header label</td></tr>
+<tr><td><strong>Patterns</strong></td><td class="m"><code>/heatmap</code> · <code>/migration</code> · <code>/correlation</code> · <code>/timeseries</code> · <code>/analytics</code> · <code>/analytics/dawn-chorus</code></td><td class="m"><code>heatmap.rs</code> · <code>migration.rs</code> · <code>correlation.rs</code> · <code>timeseries_dash.rs</code> · <code>behavioral.rs</code> · <code>viz/{radial,matrix,timeline,charts}.rs</code></td><td class="m">tab shell over existing partials; plain-English lede + one-line definitions per metric; charts-then-<code>&lt;details&gt;</code> on every analytic; analytics.html re-skin off legacy <code>.card</code></td></tr>
+<tr><td><strong>Recordings</strong></td><td class="m"><code>/recordings</code> · <code>/listen</code> · <code>/livestream</code></td><td class="m"><code>templates/recordings.html</code> · <code>recordings.rs</code> · <code>listen.rs</code> · spectrogram WS</td><td class="m">Clips/Live tabs; spectrogram thumb per clip; Select-mode bulk review (lock/download/delete); now-playing dock w/ IntersectionObserver scroll transition</td></tr>
+<tr><td><strong>Reports</strong></td><td class="m"><code>/weekly</code> · <code>/year-in-review</code> · <code>/history</code></td><td class="m"><code>weekly_report.rs</code> · <code>year_in_review.rs</code> · <code>history.rs</code> · <code>static/css/print.css</code></td><td class="m">tab shell; hero "Save as PDF" on the meta line; History calendar grid (heat by day) → day detail</td></tr>
+<tr><td><strong>Station</strong></td><td class="m"><code>/system</code> + all <code>/admin/*</code> (overview · settings · audio · species · migrate · rules · quality · notifications · accounts · backups · system · doctor)</td><td class="m"><code>system_dashboard.rs</code> · <code>admin/nav.rs</code> (regroup) · <code>admin/*</code> render modules · <code>_partial_display_prefs.html</code></td><td class="m">6 task groups over the 12 admin pages; Health = sources panel + vitals + pipeline + doctor; detection-threshold de-dup; danger-zone lockout warning; Browse file-pickers</td></tr>
+</tbody>
+</table>
+<div class="note">Every chart in the mockups is a faithful JS port of the real Rust renderer (<code>viz::circadian_polar</code>, <code>chord_diagram</code>, <code>cooccurrence_matrix</code>, <code>ridgeline</code>, <code>accumulation_curve</code>, <code>heatmap.rs::heat_color</code>, the day-strip, the honest spectrogram). Engineers keep the Rust renderers — the mock is the <em>composition &amp; copy</em> spec, not a new chart library.</div>
+</div></section>
+
+<div class="sec">04 · route redirects — never 404 a veteran's bookmark</div>
+<section class="card"><div class="ch"><h2>301 every old path to its new home</h2></div><div class="cb">
+<table>
+<thead><tr><th>Old route(s)</th><th>→ New</th></tr></thead>
+<tbody>
+<tr><td class="m"><code>/today</code></td><td class="m"><code>/</code> (Today is now the home)</td></tr>
+<tr><td class="m"><code>/gallery</code> · <code>/life-list</code></td><td class="m"><code>/species?view=photos</code> · <code>?view=lifelist</code></td></tr>
+<tr><td class="m"><code>/heatmap</code> · <code>/migration</code> · <code>/correlation</code> · <code>/timeseries</code> · <code>/analytics</code> · <code>/analytics/dawn-chorus</code></td><td class="m"><code>/patterns#when</code> · <code>#migration</code> · <code>#together</code> · <code>#trends</code> · <code>#behavior</code> · <code>#dawn</code></td></tr>
+<tr><td class="m"><code>/listen</code> · <code>/livestream</code> · <code>/live</code></td><td class="m"><code>/recordings?view=live</code></td></tr>
+<tr><td class="m"><code>/weekly</code> · <code>/year-in-review</code> · <code>/history</code></td><td class="m"><code>/reports#weekly</code> · <code>#year</code> · <code>#history</code></td></tr>
+<tr><td class="m"><code>/system</code> · <code>/admin</code> · <code>/admin/*</code></td><td class="m"><code>/station#health</code> · <code>#capture</code> · <code>#alerts</code> · <code>#data</code> · <code>#settings</code> · <code>#access</code></td></tr>
+<tr><td class="m"><code>/quarantine</code></td><td class="m"><code>/?review</code> (Today review nudge) — page still reachable for bulk triage</td></tr>
+<tr><td class="m"><code>/kiosk</code></td><td class="m">unchanged (launched from Station "Wall display")</td></tr>
+</tbody>
+</table>
+<div class="note warn">Add a one-time "Coming from BirdNET-Pi?" ribbon mapping old vocabulary → new (Best Recordings → Today · Daily Charts → Patterns · Tools → Station). Preserve Today's auto-refreshing Overview rhythm. The redesign should feel like "someone tidied the house I already live in," not a new app.</div>
+</div></section>
+
+<div class="sec">05 · build order &amp; the protect list</div>
+<section class="card"><div class="ch"><h2>Sequencing</h2></div><div class="cb">
+<ol class="t">
+<li><strong>Wave A — nav manifest.</strong> Rewrite <code>nav.rs</code> PRIMARY/MORE to the 6-home spine; add redirects; update parity tests. All six surfaces regenerate. Ships visibly with zero new pages.</li>
+<li><strong>Wave B — Today merge + Station regroup.</strong> The two structural changes: fold dashboard+today into one home; regroup <code>admin/nav.rs</code> into the 6 task groups (admin shell already proves the shared-shell pattern). Highest impact.</li>
+<li><strong>Wave C — Patterns / Reports / Recordings / Species tab shells.</strong> Each is a tabbed/view shell over existing partials — no renderer changes. Add the plain-English ledes + charts-then-disclosure.</li>
+<li><strong>Wave D — the v3 backlog</strong> (from AUDIT_v3): aria-live + chart <code>&lt;title&gt;/&lt;desc&gt;</code>, export wizard UI, first-detection celebration, WS reconnect, axe/visual-regression CI, tokens doc, OpenAPI. Plus the docs-drift fixes (web-api.md still documents removed Basic-Auth).</li>
+</ol>
+<p style="margin-top:16px" class="eyebrow">don't touch — protect these</p>
+<ul class="t">
+<li>The <strong>nav manifest + parity tests</strong> — every new screen enters through <code>nav.rs</code>, never a hand-edited template.</li>
+<li><strong>CSP discipline</strong> — no inline styles (guard test), per-request nonce, no <code>'unsafe-inline'</code>. Use <code>data-style</code> + classes, as the mocks do.</li>
+<li><strong>Server-rendered inline-SVG charts</strong> — no JS chart runtime, ever. Extend <code>viz/</code>, don't bypass it.</li>
+<li><strong>Honest liveness</strong> — flat idle baseline, never a fake waveform. The mocks keep this bar (Today signal, Recordings Live).</li>
+<li>The <strong>OKLCH token set</strong> in <code>app.css</code> — the mocks add zero new tokens; close the remaining legacy <code>.card</code> bridges, don't extend them.</li>
+</ul>
+</div></section>
+
+<footer>
+  <span>BirdNet-Behavior · v3 spine · grounded against tomtom215/BirdNet-Behavior@8aec5b4 · v0.8.0</span>
+  <span>6 home mockups · 1 nav-manifest edit · real app.css throughout</span>
+</footer>
+
+</div>
+<script>document.getElementById('tt').addEventListener('click',function(){var c=document.documentElement.getAttribute('data-theme');var n=c==='dark'?'light':'dark';document.documentElement.setAttribute('data-theme',n);localStorage.setItem('theme',n);});</script>
+</body>
+</html>

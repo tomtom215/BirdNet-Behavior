@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Reports · BirdNet-Behavior (the recap · hi-fi against real app.css)</title>
+<script>(function(){var t=localStorage.getItem('theme');if(t!=='light'&&t!=='dark')t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';document.documentElement.setAttribute('data-theme',t);})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter+Tight:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="_assets/app.css">
+<style>
+main#main-content { max-width: 1100px; margin: 0 auto; padding: var(--pad-3) 24px 64px; }
+.rp-tabs { display: flex; gap: 2px; overflow-x: auto; border-bottom: 0.5px solid var(--border); margin: 18px 0 22px; }
+.rp-tab { border: 0; background: transparent; padding: 9px 15px 11px; border-bottom: 2px solid transparent; white-space: nowrap; cursor: pointer; font-family: var(--font-ui); text-align: left; color: var(--fg-3); flex: none; }
+.rp-tab .l { font-size: 13.5px; font-weight: 500; display: block; }
+.rp-tab .q { font-size: 10.5px; color: var(--fg-4); display: block; margin-top: 1px; }
+.rp-tab:hover { color: var(--fg-2); }
+.rp-tab.active { color: var(--fg); border-bottom-color: var(--moss); }
+.rp-tab.active .q { color: var(--fg-3); }
+
+/* editorial hero */
+.rp-hero { margin-bottom: 4px; }
+.rp-hero .eyebrow { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-3); }
+.rp-hero h1 { font-family: var(--font-display); font-size: 56px; line-height: 1.02; letter-spacing: -0.02em; margin: 8px 0 0; text-wrap: balance; }
+.rp-hero h1 em { font-style: italic; color: var(--moss-ink); }
+.rp-hero .lead { font-size: 16px; color: var(--fg-2); margin: 14px 0 0; max-width: 60ch; line-height: 1.55; }
+.rp-hero .lead b { color: var(--fg); font-weight: 600; }
+.rp-meta { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 2px; }
+.rp-pdf { font-size: 12px; flex: none; }
+
+.rp-stats { display: grid; grid-template-columns: repeat(4,1fr); gap: 0; border: 0.5px solid var(--border); border-radius: var(--r-lg); overflow: hidden; background: var(--surface); box-shadow: var(--shadow-sm); margin: 26px 0; }
+@media (max-width:640px){ .rp-stats { grid-template-columns: 1fr 1fr; } }
+.rp-stat { padding: 18px 20px; border-right: 0.5px solid var(--hairline); }
+.rp-stat .v { font-family: var(--font-display); font-size: 40px; line-height: 1; letter-spacing: -0.02em; }
+.rp-stat .v.moss { color: var(--moss-ink); } .rp-stat .v.rare { color: var(--rare); }
+.rp-stat .l { font-size: 11.5px; color: var(--fg-3); margin-top: 7px; }
+.rp-stat .d { font-size: 11px; color: var(--fg-4); margin-top: 3px; font-family: var(--font-mono); }
+
+.rp-h3 { font-family: var(--font-display); font-size: 20px; font-weight: 400; margin: 28px 0 12px; }
+.rp-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+@media (max-width:820px){ .rp-2col { grid-template-columns: 1fr; } }
+.rp-viz { display: flex; justify-content: center; padding: 6px 0; }
+.rp-viz svg { width: 100%; max-width: 540px; height: auto; }
+
+/* species list rows */
+.rp-row { display: grid; grid-template-columns: 24px 32px 1fr auto; align-items: center; gap: 11px; padding: 9px 0; border-top: 0.5px solid var(--hairline); }
+.rp-row:first-child { border-top: 0; }
+.rp-row .rk { font-family: var(--font-mono); font-size: 11px; color: var(--fg-4); }
+.rp-row .nm { font-size: 13.5px; font-weight: 500; } .rp-row .sc { font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-3); }
+.rp-row .ct { font-family: var(--font-mono); font-size: 13px; color: var(--fg-2); }
+.sp-thumb { width: 30px; height: 30px; border-radius: 7px; flex: none; display: grid; place-items: center; overflow: hidden; background: linear-gradient(135deg, color-mix(in oklch, var(--sp) 78%, transparent), color-mix(in oklch, var(--sp) 38%, var(--surface-2))); }
+.sp-thumb b { font-family: var(--font-mono); font-size: 8px; font-weight: 600; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.45); }
+.rp-new { display: flex; align-items: center; gap: 11px; padding: 9px 0; border-top: 0.5px solid var(--hairline); }
+.rp-new:first-child { border-top: 0; }
+.rp-new .when { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--moss-ink); }
+
+/* year tape */
+.rp-tape { display: grid; grid-template-columns: repeat(52, 1fr); gap: 2px; }
+.rp-tape span { aspect-ratio: 1/2.4; border-radius: 2px; }
+.rp-tape-labels { display: flex; justify-content: space-between; margin-top: 6px; font-family: var(--font-mono); font-size: 9px; color: var(--fg-4); }
+.rp-milestone { display: flex; gap: 13px; padding: 13px 0; border-top: 0.5px solid var(--hairline); }
+.rp-milestone:first-child { border-top: 0; }
+.rp-milestone .ic { width: 30px; height: 30px; border-radius: 999px; flex: none; display: grid; place-items: center; background: var(--dawn-soft); color: var(--dawn-ink); font-size: 14px; }
+.rp-milestone .t { font-size: 14px; font-weight: 500; } .rp-milestone .d { font-size: 12px; color: var(--fg-3); margin-top: 2px; }
+
+/* history calendar */
+.rp-cal-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.rp-cal-head h3 { font-family: var(--font-display); font-size: 22px; font-weight: 400; }
+.rp-cal-nav { border: 0.5px solid var(--border-2); background: var(--surface); border-radius: var(--r-sm); width: 30px; height: 30px; cursor: pointer; color: var(--fg-2); }
+.rp-cal { display: grid; grid-template-columns: repeat(7,1fr); gap: 8px; }
+.rp-cal .dow { text-align: center; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-4); padding-bottom: 4px; }
+.rp-day { aspect-ratio: 1/0.92; border-radius: var(--r-sm); border: 0.5px solid var(--hairline); padding: 7px 9px; cursor: pointer; position: relative; transition: transform .1s; }
+.rp-day:hover { border-color: var(--fg-4); }
+.rp-day.empty { border: 0; background: transparent; cursor: default; }
+.rp-day .dn { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); }
+.rp-day .dc { position: absolute; left: 9px; bottom: 7px; font-family: var(--font-display); font-size: 17px; color: var(--fg); }
+.rp-day .dsp { position: absolute; right: 8px; bottom: 8px; font-family: var(--font-mono); font-size: 9px; color: var(--fg-4); }
+.rp-day.sel { border-color: var(--moss); box-shadow: 0 0 0 1px var(--moss); }
+.rp-legend { display: flex; align-items: center; gap: 5px; margin-top: 12px; justify-content: flex-end; font-size: 10.5px; color: var(--fg-4); }
+.rp-legend span { width: 13px; height: 13px; border-radius: 3px; }
+
+.x-notes { max-width: 1100px; margin: 36px auto 0; padding: 0 24px 90px; }
+.x-notes-card { background: var(--surface-2); border: 0.5px solid var(--border); border-radius: var(--r-lg); padding: 24px 28px; }
+.x-notes h2 { font-family: var(--font-display); font-size: 26px; font-weight: 400; margin: 0 0 4px; }
+.x-notes p { font-size: 13px; color: var(--fg-2); margin: 8px 0 0; max-width: 88ch; }
+.x-notes .mono { font-family: var(--font-mono); font-size: 0.92em; }
+.rp-print { font-size: 12px; color: var(--fg-3); }
+@media print { .topnav, .rp-tabs, .x-notes, #theme-toggle, .rp-print { display: none !important; } }
+</style>
+</head>
+<body>
+<a href="#main-content" class="skip-link">Skip to content</a>
+
+<header class="topnav" role="navigation" aria-label="Main navigation">
+  <a href="#" class="topnav-brand" aria-label="BirdNet-Behavior home">
+    <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="11" fill="none" stroke="currentColor" stroke-width="0.8" class="lay-logo"></circle>
+      <g stroke="currentColor" stroke-width="1.4" stroke-linecap="round" class="lay-logo">
+        <line x1="6" y1="12" x2="6" y2="12"></line><line x1="9" y1="9.5" x2="9" y2="14.5"></line>
+        <line x1="12" y1="6" x2="12" y2="18"></line><line x1="15" y1="8" x2="15" y2="16"></line>
+        <line x1="18" y1="10.5" x2="18" y2="13.5"></line>
+      </g>
+    </svg>
+    <span class="name">BirdNet</span><span class="sub">Behavior</span>
+  </a>
+  <span class="bnb-vrule lay-vrule"></span>
+  <nav class="topnav-links" aria-label="Sections">
+    <a class="topnav-link" href="Today_home.html">Today</a>
+    <a class="topnav-link" href="Species_home.html">Species</a>
+    <a class="topnav-link" href="Patterns_home.html">Patterns</a>
+    <a class="topnav-link" href="#">Recordings</a>
+    <a class="topnav-link active" href="#">Reports</a>
+    <a class="topnav-link" href="Station_home.html">Station</a>
+  </nav>
+  <div class="topnav-right">
+    <form action="#" method="get" class="nav-search" role="search"><input type="search" name="q" placeholder="Search species…" aria-label="Search species"></form>
+    <div class="status lay-iflex"><span class="bnb-pill"><span class="bnb-dot"></span> healthy</span></div>
+    <button class="icon-btn" type="button" title="Help &amp; methodology" aria-label="Help">?</button>
+    <button class="icon-btn" id="theme-toggle" title="Toggle light/dark theme" aria-label="Toggle theme"><span id="theme-icon" aria-hidden="true">☽</span></button>
+  </div>
+</header>
+
+<main id="main-content" role="main">
+  <div class="rp-tabs" role="tablist" id="rp-tabs"></div>
+  <div id="rp-body" data-screen-label="Reports body"></div>
+</main>
+
+<section class="x-notes">
+  <div class="x-notes-card">
+    <h2>The recap, in one place</h2>
+    <p>Production scatters the look-back across <span class="mono">/weekly</span>, <span class="mono">/year-in-review</span> and <span class="mono">/history</span>. Here they're one <b>Reports</b> home: <b>Weekly</b> (the Sunday recap a hobbyist looks forward to), <b>Year in review</b> (the 52-week tape, leaderboard &amp; milestones), and <b>History</b> (a calendar of past days you can open to that day's detail). Both editorial pages are <span class="mono">@media print</span>-ready — Cmd+P drops a clean PDF the day the weekly lands.</p>
+    <p><b>Grounded in real source:</b> the weekly &amp; year reports mirror <span class="mono">weekly_report.rs</span> / <span class="mono">year_in_review.rs</span> (top species, new discoveries, 7-day &amp; 52-week charts, milestones), and History mirrors <span class="mono">history.rs</span> (date browser with per-day hourly bars). Heat ramp, sparkline, hourly bars and species thumbs are the ported real renderers, against the real <span class="mono">app.css</span>.</p>
+  </div>
+</section>
+
+<script>
+function applyDataStyle(root){(root||document).querySelectorAll('[data-style]').forEach(el=>{el.style.cssText+=';'+el.getAttribute('data-style');});}
+function speciesColor(name){let h=0xcbf29ce484222325n;for(const b of new TextEncoder().encode(name)){h^=BigInt(b);h=(h*0x100000001b3n)&0xFFFFFFFFFFFFFFFFn;}return `oklch(62% 0.13 ${Number(h%360n)})`;}
+function rng(seed){let s=(Number(seed)>>>0)*9301+49297;return()=>{s=(s*9301+49297)%233280;return s/233280;};}
+function thumb(name,code){return `<span class="sp-thumb" data-style="--sp:${speciesColor(name)}" title="${name} — photo from Wikipedia"><b>${code}</b></span>`;}
+function heatColor(t){t=Math.max(0,Math.min(1,t));if(t<0.001)return'var(--surface-2)';if(t<0.6){const p=Math.round((t/0.6)*88+12);return`color-mix(in oklch, var(--dawn) ${p}%, var(--surface-2))`;}const s=Math.round((t-0.6)/0.4*100);return`color-mix(in oklch, var(--rare) ${s}%, var(--dawn))`;}
+function dayBars(arr){const max=Math.max(1,...arr),bw=22,chH=110,W=24*bw+24,H=chH+18;let s=`<svg width="100%" height="auto" viewBox="0 0 ${W} ${H}" class="hm-svg-block" role="img" aria-label="Detections by hour"><rect width="${W}" height="${H}" fill="var(--surface)" rx="8"/>`;arr.forEach((c,h)=>{const bh=Math.round(c/max*chH),x=12+h*bw,y=chH-bh,col=((h>=5&&h<=8)||(h>=18&&h<=21))?'var(--dawn)':'var(--moss)';s+=`<rect x="${x}" y="${y}" width="${bw-2}" height="${bh}" rx="2" fill="${col}"/><text x="${x+bw/2}" y="${chH+14}" text-anchor="middle" font-size="8" fill="var(--fg-4)" class="mono">${h%6===0?String(h).padStart(2,'0'):''}</text>`;});return s+`</svg>`;}
+function weekBars(days){const max=Math.max(1,...days.map(d=>d.ct)),W=560,H=150,bw=W/7,chH=110;let s=`<svg width="100%" viewBox="0 0 ${W} ${H}" class="viz-svg-block" role="img" aria-label="Detections per day this week">`;days.forEach((d,i)=>{const bh=Math.round(d.ct/max*chH),x=i*bw+8,y=chH-bh+14;s+=`<rect x="${x}" y="${y}" width="${bw-16}" height="${bh}" rx="3" fill="${d.peak?'var(--moss)':'var(--moss-soft)'}"/><text x="${x+(bw-16)/2}" y="${y-5}" text-anchor="middle" font-size="10" fill="var(--fg-3)" class="mono">${d.ct}</text><text x="${x+(bw-16)/2}" y="${H-6}" text-anchor="middle" font-size="10" fill="var(--fg-4)">${d.l}</text>`;});return s+`</svg>`;}
+
+const TOP=[["Northern Cardinal","NOCA"],["American Robin","AMRO"],["Carolina Wren","CARW"],["Song Sparrow","SOSP"],["Blue Jay","BLJA"],["Tufted Titmouse","TUTI"],["Mourning Dove","MODO"],["American Goldfinch","AMGO"]];
+const TABS=[{id:'weekly',l:'Weekly',q:'the Sunday recap'},{id:'year',l:'Year in review',q:'your year in song'},{id:'history',l:'History',q:'browse past days'}];
+let TAB='weekly', CALSEL=12;
+
+function tabWeekly(){
+  const days=[{l:'Mon',ct:402},{l:'Tue',ct:511},{l:'Wed',ct:388},{l:'Thu',ct:642,peak:true},{l:'Fri',ct:597},{l:'Sat',ct:701,peak:true},{l:'Sun',ct:534}];
+  const rows=TOP.slice(0,6).map(([n,c],i)=>{const r=rng(c.charCodeAt(0));const ct=Math.round(180-i*22+r()*30);return `<div class="rp-row"><span class="rk">${i+1}</span>${thumb(n,c)}<div><div class="nm">${n}</div></div><span class="ct">${ct}</span></div>`;}).join('');
+  const news=[["Magnolia Warbler","MAWA","Tue"],["Rose-breasted Grosbeak","RBGR","Thu"],["Barred Owl","BADO","Sat"]].map(([n,c,w])=>`<div class="rp-new">${thumb(n,c)}<div><div class="nm" style="font-size:13.5px;font-weight:500">${n} <span class="bnb-pill rare badge" style="font-size:9.5px">first ever</span></div></div><span class="when">${w}</span></div>`).join('');
+  return `<div class="rp-hero"><div class="rp-meta"><div class="eyebrow">Weekly report · week of June 8–14, 2026</div><a class="bnb-btn ghost rp-pdf" href="#" onclick="window.print();return false">⎙ Save as PDF</a></div><h1>A <em>loud</em> week.</h1><p class="lead"><b>3,775 detections</b> from <b>41 species</b> — 18% busier than the week before, lifted by Saturday's dawn chorus and three birds you'd never recorded.</p></div>
+  <div class="rp-stats"><div class="rp-stat"><div class="v moss">3,775</div><div class="l">detections</div><div class="d">↑ 18% vs last week</div></div><div class="rp-stat"><div class="v">41</div><div class="l">species</div><div class="d">+3 first-ever</div></div><div class="rp-stat"><div class="v rare">3</div><div class="l">new to your list</div><div class="d">MAWA · RBGR · BADO</div></div><div class="rp-stat"><div class="v">Sat</div><div class="l">busiest day</div><div class="d">701 detections</div></div></div>
+  <div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">This week</div><h3>Detections per day</h3></div><span class="bnb-meta mono">peak Sat · 701</span></div><div class="rp-viz">${weekBars(days)}</div></div>
+  <div class="rp-2col" style="margin-top:18px">
+    <div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">This week</div><h3>Top species</h3></div><a class="action" href="Species_home.html">All species →</a></div><div style="margin-top:4px">${rows}</div></div>
+    <div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">First-ever</div><h3>New to your station</h3></div></div><p class="bnb-meta" style="margin:4px 0 8px">Three species your station had never recorded before this week.</p>${news}</div>
+  </div>
+  <div class="rp-print" style="margin-top:18px"><span class="bnb-meta">Get next week's recap automatically — subscribe at <span class="mono">/feeds/rare.rss</span> or <span class="mono">/feeds/rare.ics</span></span></div>`;
+}
+
+function tabYear(){
+  const r=rng(7);const weeks=Array.from({length:52},(_,i)=>{const season=Math.sin((i/52-0.15)*Math.PI*2)*0.5+0.5;return Math.round((0.25+season*0.7+r()*0.15)*100);});
+  const wmax=Math.max(...weeks);
+  const tape=weeks.map(v=>`<span data-style="background:${heatColor(v/wmax)}" title="${v} detections"></span>`).join('');
+  const board=TOP.map(([n,c],i)=>{const ct=Math.round(3142-i*360+rng(c.charCodeAt(1))()*120);return `<div class="rp-row"><span class="rk">${i+1}</span>${thumb(n,c)}<div><div class="nm">${n}</div></div><span class="ct">${ct.toLocaleString()}</span></div>`;}).join('');
+  const miles=[["✦","First detection of the year","Northern Cardinal · Jan 1, 06:42"],["☼","Busiest day","May 11 · 1,204 detections"],["◐","Longest dawn chorus","June 2 · 1 h 52 m of continuous song"],["✸","Rarest find","Scarlet Tanager · May 14 · 0.89 confidence"],["∿","Biggest migration week","Week of May 5 · 14 species arrived"]].map(([g,t,d])=>`<div class="rp-milestone"><span class="ic">${g}</span><div><div class="t">${t}</div><div class="d">${d}</div></div></div>`).join('');
+  return `<div class="rp-hero"><div class="rp-meta"><div class="eyebrow">Year in review · 2026</div><a class="bnb-btn ghost rp-pdf" href="#" onclick="window.print();return false">⎙ Save as PDF</a></div><h1>Your year in <em>birdsong</em>.</h1><p class="lead"><b>71,400 detections</b> across <b>118 species</b> — and <b>8 birds</b> you heard for the very first time. Here's how the year sounded.</p></div>
+  <div class="rp-stats"><div class="rp-stat"><div class="v moss">71,400</div><div class="l">detections</div><div class="d">≈ 196 a day</div></div><div class="rp-stat"><div class="v">118</div><div class="l">species heard</div><div class="d">of 123 all-time</div></div><div class="rp-stat"><div class="v rare">8</div><div class="l">new to your list</div></div><div class="rp-stat"><div class="v">May</div><div class="l">busiest month</div><div class="d">migration peak</div></div></div>
+  <div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Every week · darker = busier</div><h3>The year, week by week</h3></div></div><div class="rp-tape" style="margin-top:8px">${tape}</div><div class="rp-tape-labels"><span>Jan</span><span>Mar</span><span>May</span><span>Jul</span><span>Sep</span><span>Nov</span></div></div>
+  <div class="rp-2col" style="margin-top:18px">
+    <div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">2026</div><h3>Most heard</h3></div><a class="action" href="Species_home.html">Full list →</a></div><div style="margin-top:4px">${board}</div></div>
+    <div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Moments</div><h3>Milestones</h3></div></div><div style="margin-top:4px">${miles}</div></div>
+  </div>`;
+}
+
+function tabHistory(){
+  // June 2026: starts Mon (1st = Monday). 30 days.
+  const startDow=1; // 0=Sun..6=Sat; June 1 2026 is Monday
+  const r=rng(99);
+  const counts=Array.from({length:30},(_,i)=>{const wk=(i%7>=5)?1.15:1;return Math.round((0.2+Math.abs(Math.sin(i*0.7))*0.8)*wk*620);});
+  const species=Array.from({length:30},(_,i)=>20+Math.floor(Math.abs(Math.sin(i*0.7))*24));
+  const cmax=Math.max(...counts);
+  const dow=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  let cells='';
+  const lead=(startDow+6)%7; // convert Sun-start to Mon-start offset
+  for(let i=0;i<lead;i++) cells+=`<div class="rp-day empty"></div>`;
+  for(let d=0;d<30;d++){ const sel=d===CALSEL; cells+=`<div class="rp-day ${sel?'sel':''}" data-day="${d}" data-style="background:${heatColor(counts[d]/cmax)}"><span class="dn">${d+1}</span><span class="dc">${counts[d]}</span><span class="dsp">${species[d]} sp</span></div>`; }
+  const selHour=Array.from({length:24},(_,h)=>{const r2=rng(CALSEL*24+h);const p=Math.exp(-Math.pow((h-6.2)/2,2));const dk=0.35*Math.exp(-Math.pow((h-18.5)/2.4,2));return (p+dk+r2()*0.05)*40;});
+  const selTop=TOP.slice(0,5).map(([n,c],i)=>`<div class="rp-row" style="grid-template-columns:24px 32px 1fr auto"><span class="rk">${i+1}</span>${thumb(n,c)}<div class="nm">${n}</div><span class="ct">${Math.round(120-i*18+rng(c.charCodeAt(0)+CALSEL)()*20)}</span></div>`).join('');
+  return `<div class="rp-hero" style="margin-bottom:16px"><div class="eyebrow">History</div><h1 style="font-size:40px">Browse past days</h1><p class="lead" style="font-size:14px">Every day your station has listened. Darker squares were busier — tap one to open it.</p></div>
+  <div class="rp-2col" style="grid-template-columns:1.3fr 1fr;align-items:start">
+    <div class="bnb-card pad">
+      <div class="rp-cal-head"><button class="rp-cal-nav" aria-label="Previous month">‹</button><h3>June 2026</h3><button class="rp-cal-nav" aria-label="Next month">›</button></div>
+      <div class="rp-cal">${dow.map(d=>`<div class="dow">${d}</div>`).join('')}${cells}</div>
+      <div class="rp-legend">less <span data-style="background:${heatColor(0.05)}"></span><span data-style="background:${heatColor(0.3)}"></span><span data-style="background:${heatColor(0.55)}"></span><span data-style="background:${heatColor(0.8)}"></span><span data-style="background:${heatColor(1)}"></span> more</div>
+    </div>
+    <div class="bnb-card pad" id="rp-daydetail">
+      <div class="section-header"><div><div class="bnb-eyebrow">June ${CALSEL+1}, 2026 · Saturday</div><h3>${counts[CALSEL].toLocaleString()} detections · ${species[CALSEL]} species</h3></div><a class="action" href="Today_home.html">Open day →</a></div>
+      <div class="rp-viz" style="margin-top:4px">${dayBars(selHour)}</div>
+      <div class="rp-h3" style="font-size:14px;margin:14px 0 4px">Top species that day</div>${selTop}
+    </div>
+  </div>`;
+}
+
+const RENDER={weekly:tabWeekly,year:tabYear,history:tabHistory};
+function renderTabs(){document.getElementById('rp-tabs').innerHTML=TABS.map(t=>`<button class="rp-tab ${t.id===TAB?'active':''}" data-tab="${t.id}" role="tab"><span class="l">${t.l}</span><span class="q">${t.q}</span></button>`).join('');}
+function render(){
+  renderTabs();
+  const body=document.getElementById('rp-body');
+  body.innerHTML=RENDER[TAB]();
+  applyDataStyle(body);
+  document.querySelectorAll('#rp-tabs .rp-tab').forEach(b=>b.addEventListener('click',()=>{TAB=b.dataset.tab;render();window.scrollTo({top:0,behavior:'instant'});}));
+  body.querySelectorAll('.rp-day[data-day]').forEach(el=>el.addEventListener('click',()=>{CALSEL=+el.dataset.day;render();}));
+}
+(function themeToggle(){const btn=document.getElementById('theme-toggle'),icon=document.getElementById('theme-icon');const cur=()=>document.documentElement.getAttribute('data-theme')==='dark'?'dark':'light';function apply(t){document.documentElement.setAttribute('data-theme',t);icon.textContent=t==='dark'?'☀':'☽';}apply(cur());btn.addEventListener('click',()=>{const n=cur()==='dark'?'light':'dark';localStorage.setItem('theme',n);apply(n);});})();
+render();
+</script>
+</body>
+</html>

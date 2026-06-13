@@ -2,37 +2,65 @@
 
 A map of every page and admin URL the dashboard serves. For the JSON/WebSocket API, see [HTTP & WebSocket API](./api.md).
 
-## Pages
+## The six homes
+
+The UI is organized into six top-level homes — the tabs across the top of every
+page (and the phone bottom bar).
+
+| URL | Home | What it gathers |
+|---|---|---|
+| `/` | **Today** | the merged "right now" view + the full searchable day (live signal, day strip, unified log, top species, best recordings, station health) |
+| `/species` | **Species** | species list · photos · life list, plus per-species detail |
+| `/patterns` | **Patterns** | when-active heatmap · dawn chorus · migration · co-occurrence · trends · behavioral analytics, one tab each |
+| `/recordings` | **Recordings** | detection clips and live audio |
+| `/reports` | **Reports** | weekly recap · year in review · history |
+| `/station` | **Station** | health (public) + the gated admin task groups |
+
+Tabs within a home are selected by a query parameter, e.g.
+`/patterns?tab=dawn`, `/reports?tab=history`, `/species?view=lifelist`.
+
+### Legacy routes (permanent redirects)
+
+Older addresses and BirdNET-Pi muscle-memory still work — each one
+`308`-redirects to its place in the new structure, so no bookmark ever 404s.
+
+| Old URL | → New |
+|---|---|
+| `/today` | `/` |
+| `/heatmap` | `/patterns` |
+| `/analytics/dawn-chorus` | `/patterns?tab=dawn` |
+| `/migration` | `/patterns?tab=migration` |
+| `/correlation` | `/patterns?tab=together` |
+| `/timeseries` | `/patterns?tab=trends` |
+| `/analytics` | `/patterns?tab=behavior` |
+| `/weekly` | `/reports` |
+| `/year-in-review` | `/reports?tab=year` |
+| `/history` | `/reports?tab=history` |
+| `/system` | `/station` |
+| `/live` | `/listen` |
+
+### Other pages
 
 | URL | Description |
 |---|---|
-| `/` | Dashboard — live detections, top species, activity heatmap |
-| `/today` | Today's detections — searchable, paginated; delete / lock / re-label |
-| `/history` | Detection history — date browser with hourly bar charts |
-| `/weekly` | Weekly report — top species, new discoveries, 7-day chart |
-| `/year-in-review` | Editorial annual recap — 52-week tape, leaderboard, milestones |
-| `/species` | Species list — search, counts, sparklines |
 | `/species/detail?name=…` | Species detail — hourly chart, trend, companions, photo |
-| `/gallery` | Species photo gallery — card grid with search and sort |
+| `/gallery` | Species photo gallery (also reachable as the Species → Photos view) |
 | `/life-list` | Life list — every species ever detected, with a growth curve |
-| `/recordings` | Recording browser with inline audio player |
-| `/heatmap` | Activity heatmap, circadian polar, seasonal phenology |
-| `/migration` | Migration & phenology — per-species ridgeline, arrivals, "still expected" |
-| `/correlation` | Co-occurrence matrix + acoustic-network chord diagram |
-| `/analytics` | Behavioral analytics (on by default) |
-| `/analytics/dawn-chorus` | Dawn-chorus polar clock with sunrise/sunset markers |
-| `/timeseries` | Time-series analytics (activity, diversity, trends, peaks) |
-| `/quarantine` | Rare-bird quarantine — review, approve, reject |
+| `/listen` | Live audio + scrolling spectrogram (per-source); `?source=<id>` preselects |
+| `/quarantine` | Rare-bird review — approve, reject (also surfaced as the Today review nudge) |
 | `/notifications` | Notification center — history and channel stats |
-| `/system` | System health + per-device display preferences (theme/density/motion/contrast) |
 | `/kiosk` | Kiosk mode — auto-refreshing display for dedicated screens |
 | `/onboarding` | First-run setup wizard |
-| `/live` | Live audio stream |
 | `/detections/detail?date=&time=&name=` | Single-detection detail — spectrogram, audio, correlation id, share |
 
 ## Admin
 
-These `/admin*` routes are the **only** password-gated part of the UI — they require HTTP Basic Auth (enforced by the binary) when `CADDY_PWD` is set; a fresh bare-metal install sets it automatically. Every page above and the JSON/WebSocket API below are open. See [Remote Access & Security](../admin/remote-access.md).
+The `/admin*` routes are the **only** password-gated part of the UI — they
+require sign-in (a session cookie) when an admin password is set; a fresh
+bare-metal install sets one automatically. The Station home's **Health** tab is
+public (it's the read-only `/system` view); the other Station task groups link
+into these gated pages. Every home above and the JSON/WebSocket API below are
+open. See [Remote Access & Security](../admin/remote-access.md).
 
 | URL | Description |
 |---|---|
