@@ -224,10 +224,12 @@ async fn htmx_health_badge_returns_healthy() {
 async fn analytics_page_returns_html() {
     let app = app();
 
+    // The behavioral-analytics surface lives on the Patterns home's
+    // "Behavior" tab since the v3 spine (the old /analytics redirects there).
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/analytics")
+                .uri("/patterns?tab=behavior")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -484,21 +486,22 @@ async fn all_redesigned_pages_render_ok() {
         "/onboarding",
         "/today",
         "/species",
-        "/heatmap",
-        "/migration",
-        "/analytics",
-        "/analytics/dawn-chorus",
-        "/correlation",
+        // The v3-spine homes, every tab.
+        "/patterns",
+        "/patterns?tab=dawn",
+        "/patterns?tab=migration",
+        "/patterns?tab=together",
+        "/patterns?tab=trends",
+        "/patterns?tab=behavior",
+        "/reports",
+        "/reports?tab=year",
+        "/reports?tab=history",
+        "/station",
         "/life-list",
         "/recordings",
         "/gallery",
-        "/timeseries",
-        "/weekly",
-        "/year-in-review",
-        "/history",
         "/notifications",
         "/quarantine",
-        "/system",
         "/kiosk",
         "/listen",
         "/pages/today-daystrip",
@@ -552,6 +555,33 @@ async fn all_redesigned_pages_render_ok() {
         Some("/listen"),
         "/live should redirect to /listen"
     );
+}
+
+/// Every pre-spine route that folded into a v3 home must permanently
+/// redirect to it through the REAL built router (middleware included) —
+/// "never 404 a veteran's bookmark". The unit test on the redirect module
+/// checks the table; this checks nothing else swallowed the routes.
+#[tokio::test]
+async fn legacy_routes_redirect_to_their_homes() {
+    for (old, new) in birdnet_web::routes::redirects::LEGACY_ROUTES {
+        let response = app()
+            .oneshot(Request::builder().uri(*old).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::PERMANENT_REDIRECT,
+            "{old} should permanently redirect"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::LOCATION)
+                .and_then(|v| v.to_str().ok()),
+            Some(*new),
+            "{old} should land on {new}"
+        );
+    }
 }
 
 /// Unmatched paths under `/api/` must 404 with JSON, not the branded HTML

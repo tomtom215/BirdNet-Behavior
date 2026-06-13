@@ -6,21 +6,18 @@
 
 use std::fmt::Write as _;
 
-use axum::extract::State;
-use axum::http::HeaderMap;
-use axum::response::Html;
-use axum::{Router, routing::get};
+use axum::Router;
 
 use super::atoms::avatar;
 use super::{
-    date_to_epoch_days, days_to_date, escape_html, group_thousands, render_page_for_request,
-    simple_url_encode, today_date_string,
+    date_to_epoch_days, days_to_date, escape_html, group_thousands, simple_url_encode,
+    today_date_string,
 };
 use crate::state::AppState;
 
 /// Mount the Year in Review page route.
 pub fn router() -> Router<AppState> {
-    Router::new().route("/year-in-review", get(year_in_review_page))
+    Router::new()
 }
 
 #[allow(
@@ -28,7 +25,10 @@ pub fn router() -> Router<AppState> {
     clippy::cast_sign_loss,
     clippy::cast_possible_truncation
 )]
-async fn year_in_review_page(State(state): State<AppState>, headers: HeaderMap) -> Html<String> {
+/// The year-in-review surface, rendered for embedding by `homes::reports`
+/// ("Year in review" tab). Fully server-computed (no HTMX shell), so this is
+/// async and touches the database.
+pub(super) async fn content(state: AppState) -> String {
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
             let total = birdnet_db::sqlite::detection_count(conn).unwrap_or(0);
@@ -44,20 +44,10 @@ async fn year_in_review_page(State(state): State<AppState>, headers: HeaderMap) 
     .await;
 
     let Ok((total, species, dates, all, first_seen, daily)) = result else {
-        return render_page_for_request(
-            "Year in Review",
-            "<p class=\"bnb-meta\">Failed to load the year in review.</p>",
-            "year_in_review",
-            &headers,
-        );
+        return "<p class=\"bnb-meta\">Failed to load the year in review.</p>".to_string();
     };
 
-    render_page_for_request(
-        "Year in Review",
-        &render_content(total, species, &dates, &all, &first_seen, &daily),
-        "year_in_review",
-        &headers,
-    )
+    render_content(total, species, &dates, &all, &first_seen, &daily)
 }
 
 const MONTHS: [&str; 12] = [

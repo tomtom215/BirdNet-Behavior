@@ -7,8 +7,7 @@
 use std::fmt::Write as _;
 
 use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode, header};
-use axum::response::Html;
+use axum::http::{StatusCode, header};
 use axum::{Router, routing::get};
 
 use super::{ANALYTICS_PAGE_HTML, escape_html};
@@ -17,7 +16,6 @@ use crate::state::AppState;
 /// Mount the behavioral analytics page and HTMX partial routes.
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/analytics", get(analytics_page))
         .route("/pages/analytics-sessions", get(analytics_sessions_partial))
         .route(
             "/pages/analytics-retention",
@@ -27,12 +25,13 @@ pub fn router() -> Router<AppState> {
         .route("/pages/analytics-config", get(analytics_config_partial))
 }
 
-async fn analytics_page(headers: HeaderMap) -> Html<String> {
-    let body = ANALYTICS_PAGE_HTML.replace(
+/// The behavioral-analytics surface, rendered for embedding by
+/// `homes::patterns` ("Behavior" tab).
+pub(super) fn content() -> String {
+    ANALYTICS_PAGE_HTML.replace(
         "{{help_link}}",
         &super::help::help_link(super::help::Topic::Analytics),
-    );
-    super::render_page_for_request("Analytics", &body, "analytics", &headers)
+    )
 }
 
 /// HTMX partial: activity sessions table.

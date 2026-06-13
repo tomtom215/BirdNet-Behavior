@@ -5,7 +5,7 @@
 //!
 //! | Path | Purpose |
 //! |------|---------|
-//! | `GET /correlation`                 | Full correlation page                    |
+//! | (embedded)                         | Patterns home, "Who sings together" tab |
 //! | `GET /pages/correlation-pairs`     | Top co-occurrence pairs (HTMX partial)   |
 //! | `GET /pages/companion-species`     | Companion species for a trigger species  |
 
@@ -13,8 +13,7 @@ use std::fmt::Write as _;
 
 use axum::Router;
 use axum::extract::{Query, State};
-use axum::http::{HeaderMap, StatusCode, header};
-use axum::response::Html;
+use axum::http::{StatusCode, header};
 use axum::routing::get;
 use serde::Deserialize;
 
@@ -31,7 +30,6 @@ const CORR_ERR: &str = r#"<p class="co-err">Co-occurrence data temporarily unava
 /// Mount correlation routes.
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/correlation", get(correlation_page))
         .route("/pages/correlation-pairs", get(correlation_pairs_partial))
         .route(
             "/pages/cooccurrence-matrix",
@@ -48,15 +46,15 @@ struct CorrelationQuery {
 }
 
 // ---------------------------------------------------------------------------
-// GET /correlation — full page
+// Page content — embedded in the Patterns home ("Who sings together" tab)
 // ---------------------------------------------------------------------------
 
-async fn correlation_page(headers: HeaderMap) -> Html<String> {
-    let body = CORRELATION_CONTENT.replace(
+/// The co-occurrence surface, rendered for embedding by `homes::patterns`.
+pub(super) fn content() -> String {
+    CORRELATION_CONTENT.replace(
         "{{help_link}}",
         &super::help::help_link(super::help::Topic::Analytics),
-    );
-    super::render_page_for_request("Species Co-occurrence", &body, "correlation", &headers)
+    )
 }
 
 const CORRELATION_CONTENT: &str = r##"<div class="page-head">

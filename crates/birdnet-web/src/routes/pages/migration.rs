@@ -17,8 +17,8 @@
 use std::fmt::Write as _;
 
 use axum::extract::{Query, State};
-use axum::http::{HeaderMap, StatusCode, header};
-use axum::response::{Html, IntoResponse};
+use axum::http::{StatusCode, header};
+use axum::response::IntoResponse;
 use axum::{Router, routing::get};
 use serde::Deserialize;
 
@@ -26,7 +26,7 @@ use crate::analytics_cache::cached_fragment;
 use crate::state::AppState;
 
 use super::atoms::{species_code, species_color};
-use super::{escape_html, render_page_for_request};
+use super::escape_html;
 
 const PAGE_HTML: &str = include_str!("../../../templates/migration.html");
 
@@ -39,18 +39,19 @@ const DIVERSITY_EMPTY: &str = r#"<p class="bnb-meta">No data for diversity bars 
 /// Mount the migration (phenology) page and its HTMX partial routes.
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/migration", get(migration_page))
         .route("/pages/migration-stats", get(stats_partial))
         .route("/pages/migration-ridgeline", get(ridgeline_partial))
         .route("/pages/migration-diversity", get(diversity_partial))
         .route("/pages/migration-card", get(card_partial))
 }
 
-async fn migration_page(headers: HeaderMap) -> Html<String> {
+/// The migration/phenology surface, rendered for embedding by
+/// `homes::patterns` ("Migration" tab).
+pub(super) fn content() -> String {
     let year = current_year();
     // Skeleton placeholders (O-16) shown until the htmx swap targets load.
     // O-20 help link drops the methodology shortcut into the eyebrow.
-    let body = PAGE_HTML
+    PAGE_HTML
         .replace("{{year}}", &year.to_string())
         .replace("{{skel_migration_stats}}", &super::skeletons::stat_row(4))
         .replace("{{skel_ridgeline}}", super::skeletons::ridgeline())
@@ -58,8 +59,7 @@ async fn migration_page(headers: HeaderMap) -> Html<String> {
         .replace(
             "{{help_link}}",
             &super::help::help_link(super::help::Topic::Phenology),
-        );
-    render_page_for_request("Migration", &body, "migration", &headers)
+        )
 }
 
 // ---------------------------------------------------------------------------

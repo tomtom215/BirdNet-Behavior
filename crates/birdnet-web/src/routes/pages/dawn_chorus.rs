@@ -16,26 +16,27 @@ use std::f64::consts::PI;
 use std::fmt::Write as _;
 
 use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode, header};
-use axum::response::{Html, IntoResponse};
+use axum::http::{StatusCode, header};
+use axum::response::IntoResponse;
 use axum::{Router, routing::get};
 
 use crate::state::AppState;
 
 use super::atoms::species_color;
-use super::{escape_html, render_page_for_request};
+use super::escape_html;
 
 const PAGE_HTML: &str = include_str!("../../../templates/dawn_chorus.html");
 
 /// Mount the Dawn Chorus page and its HTMX partial routes.
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/analytics/dawn-chorus", get(page))
         .route("/pages/dawn-polar", get(polar_partial))
         .route("/pages/dawn-list", get(list_partial))
 }
 
-async fn page(headers: HeaderMap) -> Html<String> {
+/// The dawn-chorus surface, rendered for embedding by `homes::patterns`
+/// ("Dawn chorus" tab).
+pub(super) fn content() -> String {
     // Skeleton placeholders (O-16) shown until the htmx swap targets load.
     // O-23 moon badge — pure local computation, always safe to show.
     // O-20 help link wires the eyebrow to the mdBook page.
@@ -43,15 +44,14 @@ async fn page(headers: HeaderMap) -> Html<String> {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0_i64, |x| i64::try_from(x.as_secs()).unwrap_or(i64::MAX));
     let moon_badge = super::overlays::moon_badge(now_secs);
-    let body = PAGE_HTML
+    PAGE_HTML
         .replace("{{skel_polar}}", super::skeletons::polar_plot())
         .replace("{{skel_ribbons}}", &super::skeletons::species_ribbons(6))
         .replace("{{moon_badge}}", &moon_badge)
         .replace(
             "{{help_link}}",
             &super::help::help_link(super::help::Topic::DawnChorus),
-        );
-    render_page_for_request("Dawn chorus", &body, "dawn_chorus", &headers)
+        )
 }
 
 // ---------------------------------------------------------------------------

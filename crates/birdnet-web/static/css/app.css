@@ -3433,3 +3433,53 @@ a.sr-about       { color: var(--fg-3); }
 .ll-chart    { width: 100%; max-height: 180px; display: block; }
 /* Admin migration status "none in progress" fallback (admin/migration.rs). */
 .amig-empty  { color: var(--fg-4); }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   v3 SPINE — the six-home IA (docs/design/handover/v3_spine/)
+   Additive only: zero new tokens, no overrides of pre-spine classes.
+   Values are ported verbatim from the handover mockups; identical blocks
+   that appeared per-home in the mocks (pt-/rc-/rp-/st- tabs, ledes) are
+   consolidated once here under bnb-* names.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── Home shells ──────────────────────────────────────────────────────────
+   The homes read narrower than the legacy 1440px dashboard shell. Widths
+   per mock: Today/Species/Patterns/Station 1180 · Recordings 1160 ·
+   Reports 1100. The layout carries the page's nav key on <main data-home>. */
+main[data-home="today"],
+main[data-home="species"],
+main[data-home="patterns"],
+main[data-home="station"] { max-width: 1180px; padding: var(--pad-3) 24px 64px; }
+main[data-home="recordings"] { max-width: 1160px; padding: var(--pad-3) 24px 64px; }
+main[data-home="reports"] { max-width: 1100px; padding: var(--pad-3) 24px 64px; }
+
+/* ── Sub-tabs (shared by Patterns · Recordings · Reports · Station) ──────
+   The mocks define this block four times (.pt-tab/.rc-tab/.rp-tab/.st-tab),
+   character-identical; consolidated as .bnb-subtab. Links, not buttons —
+   the tabs are server-rendered routes. */
+.bnb-subtabs {
+  display: flex; gap: 2px; overflow-x: auto;
+  border-bottom: 0.5px solid var(--border);
+  margin: 18px 0 22px;
+  scrollbar-width: thin;
+}
+.bnb-subtab {
+  border: 0; background: transparent;
+  padding: 9px 15px 11px;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap; cursor: pointer;
+  font-family: var(--font-ui); text-align: left;
+  color: var(--fg-3); flex: none;
+  text-decoration: none;
+}
+.bnb-subtab .l { font-size: 13.5px; font-weight: 500; display: block; }
+.bnb-subtab .q { font-size: 10.5px; color: var(--fg-4); display: block; margin-top: 1px; }
+.bnb-subtab:hover { color: var(--fg-2); }
+.bnb-subtab.active { color: var(--fg); border-bottom-color: var(--moss); }
+.bnb-subtab.active .q { color: var(--fg-3); }
+
+/* ── Home lede (shared) ──────────────────────────────────────────────────
+   The plain-English opening line under a home's tab row (.pt-lede/.rc-lede/
+   .st-lede in the mocks, identical). */
+.bnb-lede { font-size: 14px; color: var(--fg-2); max-width: 76ch; margin: 0 0 18px; line-height: 1.55; }
+.bnb-lede b { color: var(--fg); font-weight: 600; }

@@ -35,6 +35,7 @@ pub mod health;
 pub mod heatmap;
 pub(crate) mod help;
 pub mod history;
+pub mod homes;
 pub mod life_list;
 pub(crate) mod listen;
 pub mod livestream;
@@ -77,10 +78,7 @@ pub(crate) const CONFIRM_MODAL_HTML: &str =
 /// Toast / snackbar live region (O-18), injected into every full-page shell.
 pub(crate) const TOAST_REGION_HTML: &str =
     include_str!("../../../templates/_partial_toast_region.html");
-/// Topnav "More" overflow menu (O-26) — grouped secondary navigation.
-pub(crate) const TOPNAV_MORE_HTML: &str =
-    include_str!("../../../templates/_partial_topnav_more.html");
-/// Real footer (O-26) — site-meta only, destinations live in the topnav + More.
+/// Real footer (O-26) — site-meta only, destinations live in the topnav.
 pub(crate) const FOOTER_HTML: &str = include_str!("../../../templates/_partial_footer.html");
 /// Command palette overlay (O-19), injected into every full-page shell.
 pub(crate) const CMDK_HTML: &str = include_str!("../../../templates/_partial_cmdk.html");
@@ -137,6 +135,7 @@ pub fn router() -> Router<AppState> {
         .merge(onboarding::router())
         .merge(migration::router())
         .merge(dawn_chorus::router())
+        .merge(homes::router())
         .merge(cmdk::router())
         .merge(help::router())
         .merge(changelog::router())
@@ -188,29 +187,23 @@ fn render_page_inner(
     let uptime_short = crate::system_info::process_uptime_secs()
         .map(crate::system_info::format_uptime)
         .unwrap_or_default();
-    // Every navigation surface is generated from the single `nav` manifest, so
-    // the top-nav, the "More" dropdown, the mobile tab bar + sheet, and the
-    // breadcrumb can't drift apart (they were four hand-maintained HTML lists).
-    // Active-state is derived from the page's `active_nav` key.
+    // Both navigation surfaces (desktop top-nav, phone bottom bar) are
+    // generated from the single `nav` manifest — the v3 spine's six homes — so
+    // they can't drift apart. Active-state is derived from the page's
+    // `active_nav` key.
     let topnav_links = nav::topnav_links(active_nav);
-    let more_groups = nav::more_groups(active_nav);
     let tabbar_slots = nav::tabbar_slots(active_nav);
-    let sheet_rows = nav::sheet_rows(active_nav);
-    let breadcrumb = nav::breadcrumb(active_nav);
     // The partial *shells* (the `<dialog>`/`<nav>` chrome + their scripts) are
-    // inlined first; their `{{more_groups}}` / `{{tabbar_slots}}` / `{{sheet_rows}}`
-    // slots are filled by the manifest-generated lists in the same pass.
+    // inlined first; the tab bar's `{{tabbar_slots}}` slot is filled by the
+    // manifest-generated list in the same pass.
     let html = LAYOUT_HTML
         .replace("{{title}}", title)
+        .replace("{{active_nav}}", active_nav)
         .replace("{{content}}", content)
         .replace("{{topnav_links}}", &topnav_links)
-        .replace("{{breadcrumb}}", &breadcrumb)
-        .replace("{{topnav_more}}", TOPNAV_MORE_HTML)
         .replace("{{footer}}", FOOTER_HTML)
         .replace("{{tabbar}}", TABBAR_HTML)
-        .replace("{{more_groups}}", &more_groups)
         .replace("{{tabbar_slots}}", &tabbar_slots)
-        .replace("{{sheet_rows}}", &sheet_rows)
         .replace("{{sign_out_link}}", sign_out_link)
         .replace("{{version}}", version)
         .replace("{{uptime_short}}", &uptime_short)
@@ -496,13 +489,13 @@ mod tests {
     #[test]
     fn render_page_nav_active() {
         use axum::http::HeaderMap;
-        let html = render_page_for_request("Test", "<p>hi</p>", "dashboard", &HeaderMap::new());
+        let html = render_page_for_request("Test", "<p>hi</p>", "today", &HeaderMap::new());
         // The active section link carries the `active` modifier alongside the
         // base `topnav-link` class, and the content is substituted in.
         assert!(html.0.contains("topnav-link active"));
         assert!(html.0.contains("<p>hi</p>"));
-        // Inactive sections must not be marked active.
-        assert!(!html.0.contains("{{nav_dashboard}}"));
+        // The page's nav key reaches the shell for per-home styling.
+        assert!(html.0.contains(r#"data-home="today""#));
         // The uptime pill slot is always substituted (wired, never left literal).
         assert!(!html.0.contains("{{uptime_short}}"));
     }

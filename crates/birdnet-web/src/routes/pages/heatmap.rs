@@ -5,7 +5,7 @@
 //!
 //! | Path | Purpose |
 //! |------|---------|
-//! | `GET /heatmap`               | Full heatmap page                    |
+//! | (embedded)                   | Patterns home, "When active" tab    |
 //! | `GET /pages/heatmap-grid`    | HTMX partial — SVG heatmap grid      |
 //! | `GET /pages/hourly-totals`   | HTMX partial — bar chart by hour     |
 
@@ -13,8 +13,7 @@ use std::fmt::Write as _;
 
 use axum::Router;
 use axum::extract::{Query, State};
-use axum::http::{HeaderMap, StatusCode, header};
-use axum::response::Html;
+use axum::http::{StatusCode, header};
 use axum::routing::get;
 use serde::Deserialize;
 
@@ -33,7 +32,6 @@ const FRAGMENT_ERR: &str = r#"<p class="bnb-meta">Analytics temporarily unavaila
 /// Mount heatmap routes.
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/heatmap", get(heatmap_page))
         .route("/pages/heatmap-grid", get(heatmap_grid_partial))
         .route("/pages/hourly-totals", get(hourly_totals_partial))
         .route("/pages/activity-streamgraph", get(streamgraph_partial))
@@ -50,16 +48,16 @@ struct HeatmapQuery {
 }
 
 // ---------------------------------------------------------------------------
-// GET /heatmap — full page
+// Page content — embedded in the Patterns home ("When active" tab)
 // ---------------------------------------------------------------------------
 
-async fn heatmap_page(headers: HeaderMap) -> Html<String> {
+/// The heatmap surface, rendered for embedding by `homes::patterns`.
+pub(super) fn content() -> String {
     // O-20 help link drops a methodology shortcut next to the top eyebrow.
-    let body = HEATMAP_CONTENT.replace(
+    HEATMAP_CONTENT.replace(
         "{{help_link}}",
         &super::help::help_link(super::help::Topic::Analytics),
-    );
-    super::render_page_for_request("Activity Heatmap", &body, "heatmap", &headers)
+    )
 }
 
 const HEATMAP_CONTENT: &str = r#"<div class="page-head">

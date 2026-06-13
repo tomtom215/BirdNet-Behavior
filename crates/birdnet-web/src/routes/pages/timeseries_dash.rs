@@ -13,8 +13,7 @@
 //! `/pages/ts-peak`                 | Top busiest 15-minute windows            |
 
 use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode, header};
-use axum::response::Html;
+use axum::http::{StatusCode, header};
 use axum::{Router, routing::get};
 #[cfg(feature = "analytics")]
 use std::fmt::Write as _;
@@ -34,7 +33,6 @@ const TS_FALLBACK: &str = r#"<p class="tsd-muted">Analytics temporarily unavaila
 /// Mount the time-series analytics dashboard and all HTMX partial routes.
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/timeseries", get(timeseries_page))
         .route("/pages/ts-heatmap", get(ts_heatmap_partial))
         .route("/pages/ts-daily", get(ts_daily_partial))
         .route("/pages/ts-diversity", get(ts_diversity_partial))
@@ -43,12 +41,13 @@ pub fn router() -> Router<AppState> {
         .route("/pages/ts-peak", get(ts_peak_partial))
 }
 
-async fn timeseries_page(headers: HeaderMap) -> Html<String> {
-    let body = TIMESERIES_PAGE_HTML.replace(
+/// The time-series surface, rendered for embedding by `homes::patterns`
+/// ("Trends" tab).
+pub(super) fn content() -> String {
+    TIMESERIES_PAGE_HTML.replace(
         "{{help_link}}",
         &super::help::help_link(super::help::Topic::Analytics),
-    );
-    super::render_page_for_request("Time Series", &body, "timeseries", &headers)
+    )
 }
 
 // ---------------------------------------------------------------------------
