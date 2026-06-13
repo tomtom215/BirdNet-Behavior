@@ -596,6 +596,7 @@ dependencies = [
  "birdnet-db",
  "birdnet-integrations",
  "birdnet-migrate",
+ "birdnet-scheduler",
  "birdnet-timeseries",
  "hmac",
  "password-hash",

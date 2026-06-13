@@ -159,7 +159,7 @@ async fn htmx_detections_partial_returns_table() {
 
     assert_eq!(response.status(), StatusCode::OK);
 
-    let body = axum::body::to_bytes(response.into_body(), 8192)
+    let body = axum::body::to_bytes(response.into_body(), 65536)
         .await
         .unwrap();
     let html = String::from_utf8_lossy(&body);
@@ -191,7 +191,9 @@ async fn htmx_top_species_partial_returns_list() {
     let html = String::from_utf8_lossy(&body);
 
     assert!(html.contains("Eurasian Blackbird"));
-    assert!(html.contains("list-row"));
+    // v3 spine: the rail's top-species rows use the x-top treatment
+    // (banding code under the name) instead of the old list-row.
+    assert!(html.contains("x-top"));
     assert!(html.contains("bnb-avatar"));
 }
 
@@ -484,7 +486,6 @@ async fn all_redesigned_pages_render_ok() {
     let routes = [
         "/",
         "/onboarding",
-        "/today",
         "/species",
         // The v3-spine homes, every tab.
         "/patterns",

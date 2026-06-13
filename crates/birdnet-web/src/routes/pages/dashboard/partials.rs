@@ -87,12 +87,15 @@ fn render_feed_row(
         }
     });
 
+    // Fixed-size play affordance (shared clip player) replacing the native
+    // <audio> controls, which rendered at different widths per row so the
+    // feed never aligned (v3 spine, Today_home.html).
     let play = d
         .file_name
         .as_deref()
         .filter(|f| !f.is_empty())
         .map_or_else(
-            || r#"<span class="bnb-meta">—</span>"#.to_string(),
+            || r#"<span class="bnb-meta dp-noclip">—</span>"#.to_string(),
             |f| {
                 let basename = std::path::Path::new(f)
                     .file_name()
@@ -100,7 +103,7 @@ fn render_feed_row(
                     .unwrap_or_default();
                 let safe = escape_html(&basename);
                 format!(
-                    r#"<audio controls preload="none" class="dp-audio-row"><source src="/api/v2/recordings/{safe}" type="audio/wav"></audio>"#
+                    r#"<button type="button" class="x-fplay" data-play-src="/api/v2/recordings/{safe}" title="Play clip" aria-label="Play clip">▶</button>"#
                 )
             },
         );
@@ -152,7 +155,7 @@ pub(super) async fn best_detections_partial(
             }
             let mut html = String::new();
             for d in &best {
-                render_feed_row(&mut html, d, &first_seen, &today, false);
+                render_best_row(&mut html, d, &first_seen, &today);
             }
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
@@ -162,6 +165,49 @@ pub(super) async fn best_detections_partial(
             "<p>Error loading best recordings</p>".to_string(),
         ),
     }
+}
+
+/// One compact best-recordings row — rail-scaled (avatar · name · time ·
+/// confidence · first/rare tag · play), NOT a full feed row (v3 spine).
+fn render_best_row(
+    html: &mut String,
+    d: &birdnet_db::sqlite::DetectionRow,
+    first_seen: &std::collections::HashMap<String, String>,
+    today: &str,
+) {
+    let enc = simple_url_encode(&d.com_name);
+    let time_short = d.time.get(0..5).unwrap_or(&d.time);
+    let tag = first_seen.get(&d.sci_name).map_or("", |fs| {
+        if fs == today {
+            r#" · <span class="x-tag-first">first today</span>"#
+        } else if fs == &d.date {
+            r#" · <span class="x-tag-rare">rare</span>"#
+        } else {
+            ""
+        }
+    });
+    let play = d
+        .file_name
+        .as_deref()
+        .filter(|f| !f.is_empty())
+        .map(|f| {
+            let basename = std::path::Path::new(f)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let safe = escape_html(&basename);
+            format!(
+                r#"<button type="button" class="x-play" data-play-src="/api/v2/recordings/{safe}" title="Play clip" aria-label="Play clip">▶</button>"#
+            )
+        })
+        .unwrap_or_default();
+    let _ = write!(
+        html,
+        r#"<div class="x-best">{avatar}<div class="x-best-main"><div class="nm"><a href="/species/detail?name={enc}" class="t dp-link">{name}</a></div><div class="mt">{time_short} · {conf:.2}{tag}</div></div>{play}</div>"#,
+        avatar = avatar(&d.com_name, ""),
+        name = escape_html(&d.com_name),
+        conf = d.confidence,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -197,12 +243,14 @@ pub(super) async fn top_species_partial(
                     .get(&s.com_name)
                     .map(|data| sparkline(data, 56.0, 16.0, Some(&color)))
                     .unwrap_or_default();
+                // Banding code under the name (not the scientific name) — the
+                // rail teaches the codes the rest of the UI speaks (v3 spine).
                 let _ = write!(
                     html,
-                    r#"<div class="list-row dp-top-row">{avatar}<div class="dp-min0"><div class="dp-name"><a href="/species/detail?name={enc}" class="dp-link">{n}</a></div><div class="sci mono bnb-meta dp-ellipsis">{sci}</div></div><span class="mono tabular dp-count">{c}</span>{spark}</div>"#,
+                    r#"<a class="x-top" href="/species/detail?name={enc}">{avatar}<div class="nm"><div class="t">{n}</div><div class="sc">{code}</div></div><span class="ct">{c}</span>{spark}</a>"#,
                     avatar = avatar(&s.com_name, ""),
                     n = escape_html(&s.com_name),
-                    sci = escape_html(&s.sci_name),
+                    code = crate::routes::pages::atoms::species_code(&s.com_name),
                     c = s.count,
                 );
             }

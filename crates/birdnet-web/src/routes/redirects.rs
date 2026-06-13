@@ -22,6 +22,8 @@ use crate::state::AppState;
 /// `(old path, new home)` — the single source of truth for the legacy-route
 /// map. Tests iterate this table, so adding a row is automatically covered.
 pub const LEGACY_ROUTES: &[(&str, &str)] = &[
+    // Today home: the dashboard/today merge — Today IS the home now.
+    ("/today", "/"),
     // Patterns home: the six analytics surfaces.
     ("/heatmap", "/patterns"),
     ("/analytics/dawn-chorus", "/patterns?tab=dawn"),

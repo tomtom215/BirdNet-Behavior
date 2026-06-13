@@ -78,8 +78,13 @@ pub(super) async fn kiosk_content_partial(
         state.with_db(|conn| {
             let today = today_date_string();
             let total = birdnet_db::sqlite::detection_count(conn).unwrap_or(0);
-            let today_count =
-                birdnet_db::sqlite::todays_detection_count(conn, &today, None).unwrap_or(0);
+            let today_count = birdnet_db::sqlite::todays_detection_count(
+                conn,
+                &today,
+                None,
+                birdnet_db::sqlite::TodayFilter::All,
+            )
+            .unwrap_or(0);
             let species = birdnet_db::sqlite::species_count(conn).unwrap_or(0);
             let recent = birdnet_db::sqlite::recent_detections(conn, 15).unwrap_or_default();
             (total, today_count, species, recent)

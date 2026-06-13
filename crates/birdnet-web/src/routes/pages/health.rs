@@ -6,12 +6,72 @@ use axum::{Router, routing::get};
 
 use crate::state::AppState;
 
-/// Mount the health badge, disk status, and analytics status HTMX partial routes.
+/// Mount the health badge, disk status, station line, and analytics status
+/// HTMX partial routes.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/pages/health-badge", get(health_badge_partial))
         .route("/pages/disk-status", get(disk_status_partial))
+        .route(
+            "/pages/station-health-line",
+            get(station_health_line_partial),
+        )
         .route("/pages/analytics-status", get(analytics_status_partial))
+}
+
+/// HTMX partial: the Today rail's one-line station readout — recording
+/// state · disk · temperature. Each item is real data and omitted when the
+/// signal is unavailable; the recording state shares the outage logic of the
+/// hero pills so the two can never disagree.
+async fn station_health_line_partial(
+    State(state): State<AppState>,
+) -> impl axum::response::IntoResponse {
+    let html = tokio::task::spawn_blocking(move || {
+        let recording = state.with_db(|conn| {
+            crate::routes::pages::today::capture_outage(conn).map(|(_, last)| last)
+        });
+        let recording_pill = recording.map_or_else(
+            || {
+                r#"<span class="bnb-pill moss"><span class="bnb-dot live"></span> recording</span>"#
+                    .to_string()
+            },
+            |last| {
+                format!(
+                    r#"<span class="bnb-pill rare"><span class="bnb-dot"></span> stopped · {last}</span>"#
+                )
+            },
+        );
+
+        let mut out = format!(r#"<div class="x-health">{recording_pill}"#);
+        let db_path = state.db_path().to_path_buf();
+        let dir = db_path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map_or_else(
+                || std::path::PathBuf::from("."),
+                std::path::Path::to_path_buf,
+            );
+        if let Ok(usage) = birdnet_core::audio::capture::disk_usage(&dir) {
+            let _ = std::fmt::Write::write_fmt(
+                &mut out,
+                format_args!(
+                    r#"<span class="sep">·</span><span>disk {:.0}%</span>"#,
+                    usage.used_percent()
+                ),
+            );
+        }
+        if let Some(temp) = crate::system_info::sample().cpu_temp_celsius {
+            let _ = std::fmt::Write::write_fmt(
+                &mut out,
+                format_args!(r#"<span class="sep">·</span><span>{temp:.0}°C</span>"#),
+            );
+        }
+        out.push_str("</div>");
+        out
+    })
+    .await
+    .unwrap_or_default();
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
 async fn health_badge_partial(State(state): State<AppState>) -> impl axum::response::IntoResponse {

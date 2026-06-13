@@ -3483,3 +3483,111 @@ main[data-home="reports"] { max-width: 1100px; padding: var(--pad-3) 24px 64px; 
    .st-lede in the mocks, identical). */
 .bnb-lede { font-size: 14px; color: var(--fg-2); max-width: 76ch; margin: 0 0 18px; line-height: 1.55; }
 .bnb-lede b { color: var(--fg); font-weight: 600; }
+
+/* ── Today home (Today_home.html) ────────────────────────────────────────
+   The merged Dashboard+Today surface. Class names follow the mock's x-*
+   vocabulary; td-* helpers replace the mock's inline conveniences. */
+.td-stack { display: flex; flex-direction: column; gap: 20px; }
+
+/* Review nudge / outage banner — surfaces only when something needs an eye */
+.x-nudge { display: flex; align-items: center; gap: 14px; padding: 13px 18px; border-radius: var(--r-lg);
+  border: 0.5px solid color-mix(in oklch, var(--rare) 30%, var(--border)); background: var(--rare-soft); }
+.x-nudge .ico { width: 34px; height: 34px; border-radius: 999px; flex: none; display: grid; place-items: center;
+  background: color-mix(in oklch, var(--rare) 16%, var(--surface)); color: var(--rare); font-size: 15px; }
+.x-nudge .txt { flex: 1; min-width: 0; font-size: 13px; }
+.x-nudge .txt b { color: var(--fg); }
+
+/* Station-health one-liner + looking-back links (rail) */
+.x-health { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--fg-2); }
+.x-health .sep { color: var(--fg-4); }
+.x-look { display: flex; flex-direction: column; }
+.x-look a { display: flex; justify-content: space-between; align-items: center; padding: 9px 2px; font-size: 13px;
+  color: var(--fg); text-decoration: none; border-top: 0.5px solid var(--hairline); }
+.x-look a:first-child { border-top: 0; }
+.x-look a:hover { color: var(--moss-ink); }
+.x-look a .arr { color: var(--fg-4); }
+
+/* First-run checklist */
+.x-check { display: flex; flex-direction: column; }
+.x-check-row { display: flex; align-items: center; gap: 12px; padding: 12px 2px; border-top: 0.5px solid var(--hairline); }
+.x-check-row:first-child { border-top: 0; }
+.x-check-row .mk { width: 26px; height: 26px; border-radius: 999px; flex: none; display: grid; place-items: center; font-size: 12px; }
+.x-check-row .mk.done { background: var(--moss-soft); color: var(--moss-ink); }
+.x-check-row .mk.wait { background: var(--surface-2); border: 0.5px solid var(--border); }
+.x-check-row .c { flex: 1; } .x-check-row .c .t { font-size: 14px; font-weight: 500; } .x-check-row .c .d { font-size: 12px; color: var(--fg-3); }
+.x-check-row .v { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); }
+
+/* Unified log: expander + two-column work area */
+.x-expander { display: flex; justify-content: center; padding-top: 14px; margin-top: 8px; border-top: 0.5px solid var(--hairline); }
+.work2 { display: grid; grid-template-columns: minmax(0, 1.62fr) minmax(300px, 1fr); gap: 20px; align-items: start; }
+.work2 .rail { display: flex; flex-direction: column; gap: 20px; }
+@media (max-width: 860px) { .work2 { grid-template-columns: 1fr; } }
+
+/* Compact best-recordings rows — rail-scaled, NOT full feed rows */
+.x-best { display: grid; grid-template-columns: 28px minmax(0,1fr) auto; align-items: center; gap: 10px; padding: 9px 0; border-top: 0.5px solid var(--hairline); }
+.x-best:first-child { border-top: 0; }
+.x-best-main { min-width: 0; }
+.x-best .nm { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.x-best .nm .t { font-weight: 500; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: none; }
+.x-best .mt { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); margin-top: 1px; }
+.x-tag-first { color: var(--moss-ink); font-weight: 500; }
+.x-tag-rare { color: var(--rare); font-weight: 500; }
+.x-play { width: 30px; height: 30px; border-radius: 999px; border: 0.5px solid var(--border-2); background: var(--surface); color: var(--fg-2); font-size: 10px; cursor: pointer; flex: none; }
+.x-play:hover, .x-play.playing { border-color: var(--moss); color: var(--moss-ink); }
+
+/* Feed rows: force one-line names so every row is the SAME height (waveforms
+   & play buttons then line up; was uneven because long names wrapped) */
+#detections-table .feed-row { grid-template-columns: 50px 32px minmax(0,1fr) 88px 86px 30px; gap: 10px; }
+#detections-table .feed-row .who { min-width: 0; }
+#detections-table .feed-row .who .name { display: flex; align-items: center; gap: 7px; min-width: 0; flex-wrap: nowrap; }
+#detections-table .feed-row .who .name > a { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#detections-table .feed-row .who .name .dp-badge { flex: none; }
+/* Fixed-size play affordance replacing native <audio> (native controls render
+   at different widths per row → they never aligned) */
+.x-fplay { width: 30px; height: 30px; border-radius: 999px; border: 0.5px solid var(--border-2); background: var(--surface); color: var(--fg-2); font-size: 10px; cursor: pointer; display: grid; place-items: center; flex: none; }
+.x-fplay:hover, .x-fplay.playing { border-color: var(--moss); color: var(--moss-ink); }
+.tdl-play { margin-top: 6px; }
+.dp-noclip { text-align: center; }
+
+/* Live-signal card: source picker + listen-live link */
+.x-sig-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 0.5px solid var(--hairline); }
+.x-sig-src { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.x-sig-src select { font-family: var(--font-ui); font-size: 12.5px; color: var(--fg); background: var(--surface); border: 0.5px solid var(--border-2); border-radius: var(--r-sm); padding: 5px 8px 5px 9px; max-width: 168px; }
+.x-sig-src select:focus-visible { outline: 2px solid var(--moss); outline-offset: 1px; }
+.x-listen { flex: none; font-size: 12px; }
+.x-tempkey { color: var(--dawn-ink); font-weight: 500; }
+.x-coord { color: var(--fg-3); margin-left: 5px; }
+.x-moon { color: var(--fg-4); white-space: nowrap; }
+.x-wx { white-space: nowrap; flex: none; }
+.x-wx-now { font-weight: 600; }
+.x-wx-hl { color: var(--fg-3); }
+
+/* Top-species rows (rail) */
+.x-top { display: grid; grid-template-columns: 28px minmax(0,1fr) auto 56px; align-items: center; gap: 10px; padding: 9px 0; border-top: 0.5px solid var(--hairline); text-decoration: none; color: inherit; }
+.x-top:first-child { border-top: 0; }
+.x-top .nm { min-width: 0; }
+.x-top .nm .t { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.x-top .nm .sc { font-family: var(--font-mono); font-size: 10px; color: var(--fg-3); margin-top: 1px; }
+.x-top .ct { font-family: var(--font-mono); font-size: 13px; color: var(--fg-2); }
+
+/* Day-strip header: stats fill the right side (was empty white space) */
+.x-dayhead { align-items: flex-start; }
+.x-daymeta { margin-top: 5px; }
+.x-daystats { display: flex; gap: 22px; align-items: flex-start; flex: none; }
+.x-daystats > div { text-align: right; }
+.x-daystats .v { font-family: var(--font-display); font-size: 25px; line-height: 1; letter-spacing: -0.01em; }
+.x-daystats .v.x-dawn-v { color: var(--moss-ink); }
+.x-daystats .l { font-size: 10.5px; color: var(--fg-3); margin-top: 3px; white-space: nowrap; }
+@media (max-width: 640px){ .x-daystats { display: none; } }
+
+/* td-* helpers (replace the mock's inline-style conveniences) */
+.td-logbar { display: flex; gap: 10px; align-items: center; margin: 12px 0 8px; flex-wrap: wrap; }
+.td-search-wrap { flex: 1; min-width: 160px; }
+.td-search-wrap .td-search-input { width: 100%; }
+.td-full:not([hidden]) { margin-top: 12px; }
+.td-best { margin-top: 6px; }
+.td-rail-eb { margin-bottom: 8px; }
+.td-station-link { display: inline-block; margin-top: 10px; }
+.td-rail-hr { margin: 14px 0 12px; }
+.td-look-eb { margin-bottom: 6px; }
+.td-check-eb { margin-bottom: 8px; }

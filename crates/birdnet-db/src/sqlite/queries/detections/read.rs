@@ -275,7 +275,56 @@ pub fn detections_by_species(
     Ok(rows)
 }
 
-/// Search today's detections with optional text filter, limit, and offset.
+/// Category filter for the Today page's segmented control.
+///
+/// The definitions reuse the vocabulary the UI already ships: "first today"
+/// matches the feed-row badge (species never heard before this date), "rare"
+/// matches the `/feeds/rare.rss` definition (a confident first-ever record),
+/// and "high confidence" matches the `bnb-conf high` threshold.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TodayFilter {
+    /// No category filter.
+    #[default]
+    All,
+    /// Species first heard ever on the queried date.
+    FirstToday,
+    /// First-ever record with confidence > 0.85 (the rare-feed definition).
+    Rare,
+    /// Confidence ≥ 0.90 (the confidence bar's "high" threshold).
+    HighConfidence,
+}
+
+impl TodayFilter {
+    /// Parse the UI's filter token; unknown tokens fall back to `All`.
+    #[must_use]
+    pub fn from_token(token: Option<&str>) -> Self {
+        match token.map(str::trim) {
+            Some("first") => Self::FirstToday,
+            Some("rare") => Self::Rare,
+            Some("high") => Self::HighConfidence,
+            _ => Self::All,
+        }
+    }
+
+    /// Extra `AND …` clause for queries whose `?1` is the queried date.
+    const fn sql_clause(self) -> &'static str {
+        match self {
+            Self::All => "",
+            Self::FirstToday => {
+                " AND NOT EXISTS (SELECT 1 FROM detections d2 \
+                 WHERE d2.Com_Name = detections.Com_Name AND d2.Date < ?1)"
+            }
+            Self::Rare => {
+                " AND Confidence > 0.85 AND NOT EXISTS (SELECT 1 FROM detections d2 \
+                 WHERE d2.Com_Name = detections.Com_Name AND d2.Date < ?1)"
+            }
+            Self::HighConfidence => " AND Confidence >= 0.9",
+        }
+    }
+}
+
+/// Search today's detections with optional text filter, category filter,
+/// limit, and offset.
 ///
 /// If `search` starts with "NOT " (case-insensitive), the rest is used as an
 /// exclusion filter (species name NOT LIKE pattern). Otherwise it is an
@@ -288,9 +337,11 @@ pub fn todays_detections(
     conn: &Connection,
     date: &str,
     search: Option<&str>,
+    filter: TodayFilter,
     limit: u32,
     offset: u32,
 ) -> Result<Vec<DetectionRow>, DbError> {
+    let extra = filter.sql_clause();
     let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
         match parse_search_term(search) {
             Some(SearchTerm::Exclude(rest)) => {
@@ -298,7 +349,7 @@ pub fn todays_detections(
                 (
                     format!(
                         "SELECT {DETECTION_COLS} FROM detections \
-                         WHERE Date = ?1 AND Com_Name NOT LIKE ?2 \
+                         WHERE Date = ?1 AND Com_Name NOT LIKE ?2{extra} \
                          ORDER BY Time DESC LIMIT ?3 OFFSET ?4"
                     ),
                     vec![
@@ -314,7 +365,7 @@ pub fn todays_detections(
                 (
                     format!(
                         "SELECT {DETECTION_COLS} FROM detections \
-                         WHERE Date = ?1 AND (Com_Name LIKE ?2 OR Sci_Name LIKE ?2) \
+                         WHERE Date = ?1 AND (Com_Name LIKE ?2 OR Sci_Name LIKE ?2){extra} \
                          ORDER BY Time DESC LIMIT ?3 OFFSET ?4"
                     ),
                     vec![
@@ -328,7 +379,7 @@ pub fn todays_detections(
             None => (
                 format!(
                     "SELECT {DETECTION_COLS} FROM detections \
-                     WHERE Date = ?1 ORDER BY Time DESC LIMIT ?2 OFFSET ?3"
+                     WHERE Date = ?1{extra} ORDER BY Time DESC LIMIT ?2 OFFSET ?3"
                 ),
                 vec![
                     Box::new(date.to_string()),
@@ -347,7 +398,7 @@ pub fn todays_detections(
     Ok(rows)
 }
 
-/// Count today's detections with an optional text filter.
+/// Count today's detections with optional text and category filters.
 ///
 /// # Errors
 ///
@@ -356,27 +407,33 @@ pub fn todays_detection_count(
     conn: &Connection,
     date: &str,
     search: Option<&str>,
+    filter: TodayFilter,
 ) -> Result<i64, DbError> {
+    let extra = filter.sql_clause();
     let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
         match parse_search_term(search) {
             Some(SearchTerm::Exclude(rest)) => {
                 let pattern = format!("%{rest}%");
                 (
-                    "SELECT COUNT(*) FROM detections WHERE Date = ?1 AND Com_Name NOT LIKE ?2"
-                        .to_string(),
+                    format!(
+                        "SELECT COUNT(*) FROM detections \
+                         WHERE Date = ?1 AND Com_Name NOT LIKE ?2{extra}"
+                    ),
                     vec![Box::new(date.to_string()), Box::new(pattern)],
                 )
             }
             Some(SearchTerm::Include(term)) => {
                 let pattern = format!("%{term}%");
                 (
-                    "SELECT COUNT(*) FROM detections WHERE Date = ?1 AND (Com_Name LIKE ?2 OR Sci_Name LIKE ?2)"
-                        .to_string(),
+                    format!(
+                        "SELECT COUNT(*) FROM detections \
+                         WHERE Date = ?1 AND (Com_Name LIKE ?2 OR Sci_Name LIKE ?2){extra}"
+                    ),
                     vec![Box::new(date.to_string()), Box::new(pattern)],
                 )
             }
             None => (
-                "SELECT COUNT(*) FROM detections WHERE Date = ?1".to_string(),
+                format!("SELECT COUNT(*) FROM detections WHERE Date = ?1{extra}"),
                 vec![Box::new(date.to_string())],
             ),
         };
@@ -717,16 +774,16 @@ mod tests {
     fn todays_detections_filters_by_date_and_search() {
         let (_tmp, conn) = temp_db_with_data();
         // No search → all rows for that date.
-        let rows = todays_detections(&conn, "2026-03-11", None, 10, 0).unwrap();
+        let rows = todays_detections(&conn, "2026-03-11", None, TodayFilter::All, 10, 0).unwrap();
         assert_eq!(rows.len(), 3);
 
         // Include pattern (Com_Name LIKE).
-        let rows = todays_detections(&conn, "2026-03-11", Some("Robin"), 10, 0).unwrap();
+        let rows = todays_detections(&conn, "2026-03-11", Some("Robin"), TodayFilter::All, 10, 0).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].com_name, "European Robin");
 
         // Exclusion pattern (NOT LIKE).
-        let rows = todays_detections(&conn, "2026-03-11", Some("NOT Robin"), 10, 0).unwrap();
+        let rows = todays_detections(&conn, "2026-03-11", Some("NOT Robin"), TodayFilter::All, 10, 0).unwrap();
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().all(|r| r.com_name != "European Robin"));
     }
@@ -734,8 +791,8 @@ mod tests {
     #[test]
     fn todays_detections_pagination() {
         let (_tmp, conn) = temp_db_with_data();
-        let page1 = todays_detections(&conn, "2026-03-11", None, 2, 0).unwrap();
-        let page2 = todays_detections(&conn, "2026-03-11", None, 2, 2).unwrap();
+        let page1 = todays_detections(&conn, "2026-03-11", None, TodayFilter::All, 2, 0).unwrap();
+        let page2 = todays_detections(&conn, "2026-03-11", None, TodayFilter::All, 2, 2).unwrap();
         assert_eq!(page1.len(), 2);
         assert_eq!(page2.len(), 1);
         assert_ne!(page1[0].time, page2[0].time);
@@ -745,7 +802,7 @@ mod tests {
     fn todays_detections_whitespace_search_treated_as_none() {
         let (_tmp, conn) = temp_db_with_data();
         // A blank search term should not collapse the result set.
-        let rows = todays_detections(&conn, "2026-03-11", Some("   "), 10, 0).unwrap();
+        let rows = todays_detections(&conn, "2026-03-11", Some("   "), TodayFilter::All, 10, 0).unwrap();
         assert_eq!(rows.len(), 3);
     }
 
@@ -753,7 +810,7 @@ mod tests {
     fn todays_detections_search_matches_sci_name_too() {
         // The inclusion path matches either Com_Name or Sci_Name LIKE.
         let (_tmp, conn) = temp_db_with_data();
-        let rows = todays_detections(&conn, "2026-03-11", Some("Erithacus"), 10, 0).unwrap();
+        let rows = todays_detections(&conn, "2026-03-11", Some("Erithacus"), TodayFilter::All, 10, 0).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].sci_name, "Erithacus rubecula");
     }
@@ -762,21 +819,99 @@ mod tests {
     fn todays_detection_count_filters_match_query_path() {
         let (_tmp, conn) = temp_db_with_data();
         assert_eq!(
-            todays_detection_count(&conn, "2026-03-11", None).unwrap(),
+            todays_detection_count(&conn, "2026-03-11", None, TodayFilter::All).unwrap(),
             3
         );
         assert_eq!(
-            todays_detection_count(&conn, "2026-03-11", Some("Robin")).unwrap(),
+            todays_detection_count(&conn, "2026-03-11", Some("Robin"), TodayFilter::All).unwrap(),
             1
         );
         assert_eq!(
-            todays_detection_count(&conn, "2026-03-11", Some("NOT Robin")).unwrap(),
+            todays_detection_count(&conn, "2026-03-11", Some("NOT Robin"), TodayFilter::All).unwrap(),
             2
         );
         assert_eq!(
-            todays_detection_count(&conn, "2026-03-11", Some("   ")).unwrap(),
+            todays_detection_count(&conn, "2026-03-11", Some("   "), TodayFilter::All).unwrap(),
             3
         );
+    }
+
+    #[test]
+    fn today_filter_categories_select_the_right_rows() {
+        // Two days of data: the Wren is brand new today (high confidence →
+        // also "rare" by the feed definition); the Robin was already known
+        // yesterday; the Dunnock is new today but too uncertain for "rare".
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_or_create(&dir.path().join("t.db")).unwrap();
+        let insert = |date: &str, time: &str, sci: &str, com: &str, conf: f64| {
+            let record = DetectionRecord {
+                date,
+                time,
+                sci_name: sci,
+                com_name: com,
+                confidence: conf,
+                lat: None,
+                lon: None,
+                cutoff: None,
+                week: None,
+                sensitivity: None,
+                overlap: None,
+                file_name: "t.wav",
+                chunk_offset_secs: Some(0.0),
+                correlation_id: None,
+                source: None,
+            };
+            insert_detection(&conn, &record).unwrap();
+        };
+        insert("2026-06-10", "07:00:00", "Erithacus rubecula", "Robin", 0.95);
+        insert("2026-06-11", "06:00:00", "Erithacus rubecula", "Robin", 0.97);
+        insert(
+            "2026-06-11",
+            "06:10:00",
+            "Troglodytes aedon",
+            "House Wren",
+            0.93,
+        );
+        insert("2026-06-11", "06:20:00", "Prunella modularis", "Dunnock", 0.60);
+
+        let names = |filter: TodayFilter| -> Vec<String> {
+            todays_detections(&conn, "2026-06-11", None, filter, 10, 0)
+                .unwrap()
+                .into_iter()
+                .map(|d| d.com_name)
+                .collect()
+        };
+        assert_eq!(names(TodayFilter::All).len(), 3);
+        assert_eq!(names(TodayFilter::FirstToday), vec!["Dunnock", "House Wren"]);
+        assert_eq!(names(TodayFilter::Rare), vec!["House Wren"]);
+        assert_eq!(names(TodayFilter::HighConfidence), vec!["House Wren", "Robin"]);
+
+        // Counts agree with the listing for every category.
+        for f in [
+            TodayFilter::All,
+            TodayFilter::FirstToday,
+            TodayFilter::Rare,
+            TodayFilter::HighConfidence,
+        ] {
+            let listed = i64::try_from(names(f).len()).unwrap();
+            let counted = todays_detection_count(&conn, "2026-06-11", None, f).unwrap();
+            assert_eq!(listed, counted, "count mismatch for {f:?}");
+        }
+    }
+
+    #[test]
+    fn today_filter_token_parsing_is_total() {
+        assert_eq!(
+            TodayFilter::from_token(Some("first")),
+            TodayFilter::FirstToday
+        );
+        assert_eq!(TodayFilter::from_token(Some("rare")), TodayFilter::Rare);
+        assert_eq!(
+            TodayFilter::from_token(Some("high")),
+            TodayFilter::HighConfidence
+        );
+        assert_eq!(TodayFilter::from_token(Some("bogus")), TodayFilter::All);
+        assert_eq!(TodayFilter::from_token(None), TodayFilter::All);
     }
 
     #[test]

@@ -27,6 +27,7 @@ birdnet-behavioral.workspace = true
 birdnet-timeseries.workspace = true
 birdnet-core.workspace = true
 birdnet-db.workspace = true
+birdnet-scheduler.workspace = true
 birdnet-integrations.workspace = true
 birdnet-migrate.workspace = true
 serde.workspace = true

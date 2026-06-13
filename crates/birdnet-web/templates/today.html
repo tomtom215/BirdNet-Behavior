@@ -1,26 +1,21 @@
 <!--
-  Today · rebuilt with comparative phrasing + section structure.
-  Replaces crates/birdnet-web/templates/today.html.
+  Today · the v3-spine home at `/` — the merge of the old Dashboard and Today
+  pages (one calm page, five layers; see Today_home.html in the handover
+  packet). Dashboard's "live feed" and Today's "detection log" were the same
+  data twice; here the live feed shows the freshest rows and the full
+  paginated day sits behind one "Show the full day" disclosure.
 
-  Existing partials reused unchanged:
-    /pages/today-count   /pages/today-daystrip   /pages/today-list
-
-  Optional new partial (graceful fallback if missing):
-    /pages/today-phrase  — comparative phrase + percentile vs 30-day baseline
+  Existing partials reused:
+    /pages/today-phrase   /pages/today-daystrip   /pages/today-list
+    /pages/detections     /pages/top-species      /pages/best-detections
+  New partials (today.rs / health.rs):
+    /pages/today-pills    /pages/today-nudge      /pages/station-health-line
 -->
-<div class="page-head td-head" data-screen-label="Today" data-om-validate>
-  <div>
-    <div class="bnb-eyebrow td-eyebrow">
-      <span>Detection log · <span id="today-date" class="mono"></span></span>
-      {{help_link}}
-    </div>
+<div class="td-stack" data-screen-label="Today home" data-firstrun="{{firstrun}}">
 
-    <!--
-      Comparative headline. /pages/today-phrase returns a tiny snippet — a
-      `.display` headline (with one emphasised word) over a `.bnb-meta` line of
-      counts and the percentile vs the last 30 days. Until the partial exists,
-      the static fallback below stays visible.
-    -->
+<section class="hero" data-screen-label="Hero">
+  <div>
+    <div class="bnb-eyebrow db-eyebrow"><span>Right now · {{today_human_date}}</span>{{help_link}}</div>
     <div id="today-phrase"
          class="td-phrase"
          hx-get="/pages/today-phrase"
@@ -28,77 +23,157 @@
          hx-swap="innerHTML"
          aria-live="polite"
          aria-label="Day summary">
-      <h1 class="display td-h1">
-        You're listening.
-      </h1>
-      <p class="bnb-meta td-sub">Detections roll in below.</p>
+      {{hero_phrase}}
+    </div>
+    <div class="pill-row" id="today-pills"
+         hx-get="/pages/today-pills" hx-trigger="load, every 60s" hx-swap="innerHTML">
+      <span class="bnb-pill moss"><span class="bnb-dot live"></span> recording</span>
     </div>
   </div>
+  <aside aria-label="Live signal">
+    {{hero_aside}}
+  </aside>
+</section>
 
-  <div id="today-count" class="bnb-pill moss"
-       hx-get="/pages/today-count" hx-trigger="load, every 15s" hx-swap="innerHTML"
-       aria-live="polite" aria-label="Recording status">
-    …
-  </div>
-</div>
+<div id="today-nudge"
+     hx-get="/pages/today-nudge" hx-trigger="load, every 60s" hx-swap="innerHTML"
+     aria-live="polite"></div>
 
-<!-- Day strip — hour-by-hour activity bars, jumps the list to that hour on click -->
-<div class="bnb-card pad">
-  <div class="section-header">
+<!-- Day strip — the one picture of the day's shape; stats live in the header -->
+<div class="bnb-card pad" data-screen-label="Day strip">
+  <div class="section-header x-dayhead">
     <div>
       <div class="bnb-eyebrow">The day so far</div>
       <h3>When you heard them</h3>
+      <div class="bnb-meta x-daymeta">Bars are detections per hour · the <span class="x-tempkey">amber line</span> is temperature <span class="mono x-moon">· {{moon_inline}}</span></div>
     </div>
-    <span class="bnb-meta">Tap an hour to jump the list</span>
+    <div class="x-daystats" id="td-daystats"></div>
   </div>
   <div id="today-daystrip" hx-get="/pages/today-daystrip" hx-trigger="load, every 30s" hx-swap="innerHTML">
     {{skel_daystrip}}
   </div>
 </div>
 
-<!-- Section chunker — purely client-side; data partial groups rows by hour-band -->
-<div class="bnb-card pad td-searchbar">
-  <form id="search-form" class="td-form">
-    <input type="search" name="search" id="today-search"
-           placeholder="Search species…  (prefix NOT to exclude)"
-           class="td-search"
-           hx-get="/pages/today-list"
-           hx-trigger="input changed delay:300ms, search"
-           hx-target="#today-results"
-           hx-swap="innerHTML"
-           hx-include="[name='search']">
-
-    <div class="seg" role="tablist" aria-label="Filter">
-      <button type="button" class="btn active" data-filter="all">All</button>
-      <button type="button" class="btn" data-filter="rare">Rare</button>
-      <button type="button" class="btn" data-filter="first">First today</button>
-      <button type="button" class="btn" data-filter="high">High conf</button>
+<div class="work2">
+  <!-- One unified log: live feed + the full day behind a disclosure -->
+  <div class="bnb-card pad" data-screen-label="Unified log">
+    <div class="section-header">
+      <div>
+        <div class="bnb-eyebrow">Live feed</div>
+        <h3>Detections as they happen</h3>
+      </div>
+      <span class="bnb-pill moss"><span class="bnb-dot live"></span> Listening</span>
     </div>
+    <form id="search-form" class="td-logbar">
+      <span class="nav-search td-search-wrap">
+        <input type="search" name="search" id="today-search"
+               placeholder="Search species…  (prefix NOT to exclude)"
+               class="td-search-input"
+               hx-get="/pages/today-list"
+               hx-trigger="input changed delay:300ms, search"
+               hx-target="#today-full"
+               hx-swap="innerHTML"
+               hx-include="#search-form">
+      </span>
+      <div class="seg" role="tablist" aria-label="Filter">
+        <button type="button" class="btn active" data-filter="all">All</button>
+        <button type="button" class="btn" data-filter="rare">Rare</button>
+        <button type="button" class="btn" data-filter="first">First today</button>
+        <button type="button" class="btn" data-filter="high">High conf</button>
+      </div>
+      <span class="htmx-indicator bnb-meta">Searching…</span>
+    </form>
+    <div id="detections-table" class="feed"
+         hx-get="/pages/detections" hx-trigger="load, every 15s" hx-swap="innerHTML"
+         aria-live="polite">
+      {{skel_detections}}
+    </div>
+    <div class="x-expander">
+      <button type="button" class="bnb-btn ghost" id="log-toggle"
+              aria-expanded="false" aria-controls="today-full">
+        Show the full day (<span id="td-total"
+          hx-get="/pages/today-count?bare=1" hx-trigger="load, every 60s"
+          hx-swap="innerHTML">…</span>) — search, filter, lock &amp; delete ▾
+      </button>
+    </div>
+    <div id="today-full" class="td-full" hidden
+         hx-get="/pages/today-list"
+         hx-trigger="td-open"
+         hx-swap="innerHTML"
+         hx-include="#search-form"></div>
+  </div>
 
-    <span class="htmx-indicator bnb-meta">Searching…</span>
-  </form>
+  <!-- Right rail: support, by placement -->
+  <aside class="rail td-rail" data-screen-label="Right rail">
+    <div class="bnb-card pad">
+      <div class="section-header">
+        <div><div class="bnb-eyebrow">Today</div><h3>Top species</h3></div>
+        <a class="action" href="/species">All species →</a>
+      </div>
+      <div id="top-species" hx-get="/pages/top-species" hx-trigger="load, every 60s" hx-swap="innerHTML">
+        <p class="bnb-meta">Loading species…</p>
+      </div>
+    </div>
+    <div class="bnb-card pad">
+      <div class="section-header">
+        <div><div class="bnb-eyebrow">Today · highest confidence</div><h3>Best recordings</h3></div>
+        <a class="action" href="/recordings">Recordings →</a>
+      </div>
+      <div id="best-detections" class="td-best" hx-get="/pages/best-detections" hx-trigger="load, every 60s" hx-swap="innerHTML">
+        <p class="bnb-meta">Loading best recordings…</p>
+      </div>
+    </div>
+    <div class="bnb-card pad">
+      <div class="bnb-eyebrow td-rail-eb">Your station</div>
+      <div id="station-line" hx-get="/pages/station-health-line" hx-trigger="load, every 60s" hx-swap="innerHTML">
+        <div class="x-health"><span class="bnb-meta">…</span></div>
+      </div>
+      <a class="action td-station-link" href="/station">Station health →</a>
+      <hr class="bnb-divider td-rail-hr">
+      <div class="bnb-eyebrow td-look-eb">Looking back</div>
+      <div class="x-look">
+        <a href="/reports">This week's report <span class="arr">→</span></a>
+        <a href="/reports?tab=history">Browse past days <span class="arr">→</span></a>
+        <a href="/reports?tab=year">Your year so far <span class="arr">→</span></a>
+      </div>
+    </div>
+    {{rail_extra}}
+  </aside>
 </div>
 
-<div id="today-results"
-     hx-get="/pages/today-list"
-     hx-trigger="load, every 15s"
-     hx-swap="innerHTML"
-     hx-include="#today-search, .seg .btn.active">
-  {{skel_today_results}}
 </div>
 
 <script>
+// Unified-log behaviours: full-day disclosure, segmented filter, shared
+// clip player for the fixed ▶ buttons, source-picker navigation, and the
+// instant live-feed nudge on a websocket detection event.
 (function () {
-  // Date stamp.
-  var d = new Date();
-  var ds = d.getFullYear() + '-' +
-    String(d.getMonth() + 1).padStart(2, '0') + '-' +
-    String(d.getDate()).padStart(2, '0');
-  var el = document.getElementById('today-date');
-  if (el) el.textContent = ds;
+  "use strict";
 
-  // Segmented filter — flips .active and re-triggers the list partial.
-  var seg = document.querySelector('#search-form .seg');
+  // ── Full-day disclosure ────────────────────────────────────────────────
+  var toggle = document.getElementById('log-toggle');
+  var full = document.getElementById('today-full');
+  var opened = false;
+  function openFull() {
+    if (!full) return;
+    full.hidden = false;
+    if (toggle) toggle.setAttribute('aria-expanded', 'true');
+    if (!opened) { opened = true; htmx.trigger(full, 'td-open'); }
+  }
+  function closeFull() {
+    if (!full) return;
+    full.hidden = true;
+    if (toggle) toggle.setAttribute('aria-expanded', 'false');
+  }
+  if (toggle) toggle.addEventListener('click', function () {
+    if (full.hidden) openFull(); else closeFull();
+  });
+
+  // ── Segmented category filter ──────────────────────────────────────────
+  // Writes the active category into a hidden input (hx-include picks it up)
+  // and opens the full day — the live feed is always the unfiltered newest.
+  var form = document.getElementById('search-form');
+  var seg = form ? form.querySelector('.seg') : null;
   if (seg) {
     seg.addEventListener('click', function (e) {
       var btn = e.target.closest('button[data-filter]');
@@ -106,8 +181,6 @@
       e.preventDefault();
       seg.querySelectorAll('button').forEach(function (b) { b.classList.remove('active'); });
       btn.classList.add('active');
-      // Append filter as a hidden input on the form so hx-include picks it up.
-      var form = document.getElementById('search-form');
       var hidden = form.querySelector('input[name="filter"]');
       if (!hidden) {
         hidden = document.createElement('input');
@@ -115,9 +188,191 @@
         form.appendChild(hidden);
       }
       hidden.value = btn.dataset.filter;
-      // Kick a new request.
-      htmx.trigger(document.getElementById('today-results'), 'load');
+      openFull();
+      htmx.ajax('GET', '/pages/today-list', { source: '#search-form', target: '#today-full', swap: 'innerHTML' });
     });
   }
+  // Typing a search also opens the day (its hx-target is #today-full).
+  var search = document.getElementById('today-search');
+  if (search) search.addEventListener('input', function () {
+    if (this.value.trim() !== '') openFull();
+  });
+
+  // ── Shared clip player for [data-play-src] buttons ─────────────────────
+  var player = null;
+  var playingBtn = null;
+  function stopCurrent() {
+    if (player) { player.pause(); }
+    if (playingBtn) { playingBtn.classList.remove('playing'); playingBtn.textContent = '▶'; }
+    playingBtn = null;
+  }
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-play-src]');
+    if (!btn) return;
+    e.preventDefault();
+    if (btn === playingBtn) { stopCurrent(); return; }
+    stopCurrent();
+    if (!player) {
+      player = new Audio();
+      player.preload = 'none';
+      player.addEventListener('ended', stopCurrent);
+      player.addEventListener('error', stopCurrent);
+    }
+    player.src = btn.getAttribute('data-play-src');
+    player.play().then(function () {
+      playingBtn = btn;
+      btn.classList.add('playing');
+      btn.textContent = '⏸';
+    }).catch(stopCurrent);
+  });
+
+  // ── Source picker: live audio per source lives on the listen page ─────
+  var src = document.getElementById('td-source');
+  if (src) src.addEventListener('change', function () {
+    if (this.value) window.location.href = '/listen?source=' + encodeURIComponent(this.value);
+    else window.location.href = '/listen';
+  });
+
+  // ── Live nudges ────────────────────────────────────────────────────────
+  // A websocket detection refreshes the feed immediately (instead of waiting
+  // for the 15s poll); on a first-run page the whole layout graduates, so
+  // reload once the first call lands.
+  var stack = document.querySelector('.td-stack');
+  var firstrun = stack && stack.getAttribute('data-firstrun') === 'true';
+  document.addEventListener('birdnet:detection', function () {
+    if (firstrun) { window.location.reload(); return; }
+    var feed = document.getElementById('detections-table');
+    if (feed) htmx.trigger(feed, 'load');
+  });
+})();
+</script>
+
+<script>
+// Live spectrogram canvas, fed by `/api/v2/ws/spectrogram`. Each WS
+// message carries a flattened mel × time matrix (`data`); we paint it
+// across the canvas so the most recent capture window covers the hero
+// strip end-to-end.
+//
+// Fallback: when no spectrogram has been received for IDLE_AFTER_MS
+// (no detection daemon, --web-only, or the producer hasn't fired yet),
+// a quiet breathing baseline keeps the chrome from going blank.
+(function () {
+    var cnv = document.getElementById('hero-pulse');
+    if (!cnv || !cnv.getContext) return;
+    var ctx = cnv.getContext('2d');
+    var W = 0, H = 80;
+    var lastFrameTime = 0;
+    // Go "idle" only after a gap longer than the capture segment cadence, so a
+    // normal pause between segments doesn't flicker the indicator; a real idle
+    // (no daemon, --web-only, or capture stopped) crosses it quickly.
+    var IDLE_AFTER_MS = 30000;
+    var pill = document.querySelector('.db-live-pill');
+    var pillState = '';
+    // Reflect REAL liveness: "live" only while genuine spectrogram frames are
+    // arriving from the capture device, "idle" otherwise. Never animate a fake
+    // signal that could be mistaken for live audio.
+    function setLive(isLive) {
+        if (!pill) return;
+        var next = isLive ? 'live' : 'idle';
+        if (pillState === next) return;
+        pillState = next;
+        if (isLive) {
+            pill.classList.add('moss');
+            pill.innerHTML = '<span class="bnb-dot live"></span> live';
+            pill.title = 'Live audio from the capture device';
+        } else {
+            pill.classList.remove('moss');
+            pill.innerHTML = '<span class="bnb-dot"></span> idle';
+            pill.title = 'No audio captured recently — the signal updates as new audio is recorded';
+        }
+    }
+
+    function dark() {
+        return document.documentElement.getAttribute('data-theme') === 'dark';
+    }
+    // Heat ramp: log-shaped green → bright yellow over the moss OKLCH
+    // ramp so it matches the static spectrograms shown elsewhere.
+    function cellColor(v) {
+        v = Math.max(0, Math.min(1, v));
+        var L = (35 + v * 55).toFixed(0);
+        var C = (0.04 + v * 0.16).toFixed(3);
+        var H = (160 - v * 70).toFixed(0);
+        return 'oklch(' + L + '% ' + C + ' ' + H + ')';
+    }
+    function resize() {
+        W = cnv.width = cnv.clientWidth;
+        cnv.height = H;
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    // Honest "no signal" baseline: a flat, static line — NOT an animated
+    // waveform that could be mistaken for live audio.
+    function drawIdle() {
+        ctx.clearRect(0, 0, W, H);
+        ctx.strokeStyle = dark()
+            ? 'oklch(60% 0.02 150 / 0.35)'
+            : 'oklch(55% 0.02 150 / 0.28)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, H / 2);
+        ctx.lineTo(W, H / 2);
+        ctx.stroke();
+    }
+
+    function drawFrame(frame) {
+        // frame.data is row-major: data[m * n_frames + f] is band m at frame f.
+        var nMels = frame.n_mels, nFrames = frame.n_frames;
+        if (!nMels || !nFrames || !frame.data) return;
+        ctx.clearRect(0, 0, W, H);
+        var colW = W / nFrames;
+        var rowH = H / nMels;
+        // Paint bottom-up so low frequencies sit at the bottom (the
+        // sonogram convention).
+        for (var f = 0; f < nFrames; f++) {
+            for (var m = 0; m < nMels; m++) {
+                var v = frame.data[m * nFrames + f] || 0;
+                if (v < 0.05) continue; // skip near-silent cells
+                ctx.fillStyle = cellColor(v);
+                var x = (f * colW) | 0;
+                var y = (H - (m + 1) * rowH) | 0;
+                ctx.fillRect(x, y, Math.ceil(colW), Math.ceil(rowH));
+            }
+        }
+        lastFrameTime = Date.now();
+        setLive(true);
+    }
+
+    // Idle drawer — repaints the breathing baseline whenever no
+    // spectrogram has been received recently. Honours
+    // prefers-reduced-motion.
+    // The flat idle baseline is static, so this poll is reduced-motion-safe and
+    // runs regardless of the preference. It flips the indicator to "idle" and
+    // repaints the baseline only once a real frame gap exceeds the threshold.
+    function idleLoop() {
+        if (Date.now() - lastFrameTime > IDLE_AFTER_MS) {
+            setLive(false);
+            drawIdle();
+        }
+        setTimeout(idleLoop, 1000);
+    }
+    setLive(false);
+    drawIdle();
+    setTimeout(idleLoop, 1000);
+
+    // WebSocket consumer. Failures (no producer, --web-only, WS blocked
+    // by a reverse proxy) fall back silently to the idle baseline.
+    try {
+        var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        var ws = new WebSocket(proto + '//' + location.host + '/api/v2/ws/spectrogram');
+        ws.onmessage = function (ev) {
+            try {
+                var msg = JSON.parse(ev.data);
+                if (msg.event === 'spectrogram') drawFrame(msg);
+            } catch (_) { /* ignore non-JSON */ }
+        };
+        ws.onerror = function () { /* idle baseline keeps drawing */ };
+        ws.onclose = function () { /* could retry; idle baseline is fine */ };
+    } catch (_) { /* no WS support → idle baseline */ }
 })();
 </script>

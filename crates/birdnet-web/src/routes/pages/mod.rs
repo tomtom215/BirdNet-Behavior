@@ -65,7 +65,6 @@ use crate::state::AppState;
 
 // Embedded HTML templates (compiled into the binary).
 pub(crate) const LAYOUT_HTML: &str = include_str!("../../../templates/layout.html");
-pub(crate) const DASHBOARD_HTML: &str = include_str!("../../../templates/dashboard.html");
 pub(crate) const SPECIES_PAGE_HTML: &str = include_str!("../../../templates/species.html");
 pub(crate) const ANALYTICS_PAGE_HTML: &str = include_str!("../../../templates/analytics.html");
 pub(crate) const SPECIES_DETAIL_HTML: &str = include_str!("../../../templates/species_detail.html");
