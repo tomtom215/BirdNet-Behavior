@@ -3591,3 +3591,93 @@ main[data-home="reports"] { max-width: 1100px; padding: var(--pad-3) 24px 64px; 
 .td-rail-hr { margin: 14px 0 12px; }
 .td-look-eb { margin-bottom: 6px; }
 .td-check-eb { margin-bottom: 8px; }
+
+/* ── Recordings home (Recordings_home.html) ──────────────────────────────────
+   The Clips browser + the folded Live view. Class names follow the mock's
+   rc-* vocabulary; the sub-tabs/lede reuse the shared .bnb-subtabs/.bnb-lede.
+   The clip row drops the mock's spectrogram-thumb and duration columns (no
+   cheap honest server-side source for either — tracked under Wave D), so the
+   grid is checkbox · time · who · confidence · actions. */
+.rc-head { align-items: flex-end; gap: 24px; }
+.rc-head-main { max-width: 540px; min-width: 0; }
+.rc-h1 { font-size: 46px; line-height: 1.04; margin-top: 6px; }
+.rc-sub { margin-top: 8px; font-size: 13px; }
+.rc-hp-slot { flex: 1; min-width: 280px; max-width: 400px; }
+.rc-hp-slot[hidden] { display: none; }
+
+/* Controls: filter chips · search · Select */
+.rc-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.rc-chips { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.rc-chip { font-size: 12px; padding: 5px 11px; border-radius: 999px; border: 0.5px solid var(--border); background: var(--surface); color: var(--fg-2); cursor: pointer; text-decoration: none; }
+.rc-chip:hover { color: var(--fg); }
+.rc-chip.active { background: var(--fg); color: var(--bg); border-color: transparent; font-weight: 500; }
+.rc-sel-btn { margin-left: auto; font-size: 12px; }
+.rc-search { position: relative; display: inline-flex; align-items: center; }
+.rc-search input { background: var(--surface); border: 0.5px solid var(--border-2); border-radius: var(--r-sm); padding: 7px 10px 7px 30px; font: inherit; font-size: 13px; color: var(--fg); width: 190px; }
+.rc-search .ico { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); color: var(--fg-3); }
+
+/* Selection bar (revealed when Select mode has a selection) */
+.rc-selbar { display: none; align-items: center; gap: 12px; padding: 11px 16px; border-radius: var(--r-md); background: var(--fg); color: var(--bg); margin-bottom: 14px; }
+.rc-selbar.show { display: flex; }
+.rc-selbar .n { font-weight: 600; }
+.rc-selbar .sp { margin-left: auto; display: flex; gap: 8px; }
+.rc-selbar button { border: 0.5px solid color-mix(in oklch, var(--bg) 40%, transparent); background: transparent; color: var(--bg); border-radius: var(--r-sm); padding: 5px 11px; font-size: 12px; cursor: pointer; }
+
+/* Clip list + rows */
+.rc-list { padding: 6px 10px; }
+.rc-empty { text-align: center; padding: 40px 16px; color: var(--fg-3); font-size: 13.5px; }
+.rc-more { display: block; width: 100%; margin: 8px 0 2px; }
+.rc-row { display: grid; grid-template-columns: 22px 66px minmax(0, 1fr) 92px auto; align-items: center; gap: 14px; padding: 11px 12px; border-radius: 10px; border: 0.5px solid transparent; }
+.rc-row + .rc-row { border-top: 0.5px solid var(--hairline); border-radius: 0; }
+.rc-row.playing, .rc-row.sel { background: color-mix(in oklch, var(--moss) 6%, var(--surface)); border: 0.5px solid color-mix(in oklch, var(--moss) 28%, var(--border)); border-radius: 10px; }
+.rc-check { width: 17px; height: 17px; border-radius: 5px; border: 1.5px solid var(--border-2); cursor: pointer; visibility: hidden; }
+#rc-clips.rc-selecting .rc-check { visibility: visible; }
+.rc-row.sel .rc-check { background: var(--moss); border-color: var(--moss); }
+.rc-time { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); }
+.rc-time .d { display: block; color: var(--fg-4); font-size: 10px; }
+.rc-who { min-width: 0; display: flex; align-items: center; gap: 10px; }
+.rc-who-text { min-width: 0; display: flex; flex-direction: column; }
+.rc-who .nm { font-size: 13.5px; font-weight: 500; text-decoration: none; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rc-who .nm:hover { color: var(--moss-ink); }
+.rc-who .sc { font-family: var(--font-mono); font-size: 10px; color: var(--fg-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rc-conf { display: flex; align-items: center; justify-content: flex-end; }
+.rc-acts { display: inline-flex; align-items: center; gap: 2px; justify-content: flex-end; }
+.rc-iact { width: 28px; height: 28px; border-radius: 7px; border: 0; background: transparent; color: var(--fg-3); font-size: 12px; cursor: pointer; display: inline-grid; place-items: center; text-decoration: none; }
+.rc-iact:hover { background: var(--surface-2); color: var(--fg); }
+.rc-lock.on { color: var(--moss-ink); }
+.rc-del:hover { color: var(--rare); }
+@media (hover: hover) {
+  .rc-acts { opacity: 0; transition: opacity 0.12s; }
+  .rc-row:hover .rc-acts, .rc-row:focus-within .rc-acts { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) { .rc-acts { transition: none; } }
+
+/* Now-playing dock — a head card that floats up to a fixed bar on scroll */
+.rc-hp { background: var(--surface); border: 0.5px solid var(--border-2); border-radius: var(--r-lg); box-shadow: var(--shadow-md); padding: 14px 16px; }
+.rc-hp-row { display: flex; align-items: center; gap: 10px; }
+.rc-hp-av { display: inline-flex; flex: none; }
+.rc-hp-text { min-width: 0; flex: 1; }
+.rc-hp-name { display: block; font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rc-hp-meta { display: block; }
+.rc-hp-toggle { width: 30px; height: 30px; border-radius: 999px; border: 0; background: var(--fg); color: var(--bg); font-size: 11px; cursor: pointer; flex: none; }
+.rc-hp-dl { width: 28px; height: 28px; flex: none; }
+.rc-hp-scrub { height: 5px; border-radius: 3px; background: var(--surface-2); position: relative; margin-top: 12px; }
+.rc-hp-scrub i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--moss); border-radius: 3px; }
+.rc-hp-scrub i::after { content: ""; position: absolute; right: -4px; top: -3px; width: 11px; height: 11px; border-radius: 999px; background: var(--moss); }
+.rc-hp-time { text-align: right; margin-top: 5px; }
+.rc-floatdock { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%) translateY(160%); width: min(700px, 92vw); z-index: 50; transition: transform 0.28s cubic-bezier(0.2, 0.7, 0.2, 1); }
+.rc-floatdock.show { transform: translateX(-50%) translateY(0); }
+.rc-floatdock .rc-hp { box-shadow: var(--shadow-lg); }
+@media (prefers-reduced-motion: reduce) { .rc-floatdock { transition: none; } }
+
+/* Live view */
+.rc-live { background: linear-gradient(180deg, var(--surface), var(--surface-2)); border: 0.5px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow-md); overflow: hidden; }
+.rc-live-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 18px; }
+.rc-live canvas, #rc-spectrogram { width: 100%; height: 200px; display: block; }
+.rc-live-foot { display: flex; align-items: center; gap: 14px; padding: 12px 18px; flex-wrap: wrap; }
+.rc-live-foot .mono { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); }
+.rc-src { display: inline-flex; align-items: center; gap: 6px; }
+.rc-src select { font-family: var(--font-ui); font-size: 12.5px; color: var(--fg); background: var(--surface); border: 0.5px solid var(--border-2); border-radius: var(--r-sm); padding: 5px 9px; }
+.rc-listen-btn { margin-left: auto; font-size: 12px; }
+.rc-audio-hidden { display: none; }
+.rc-trickle { margin-top: 18px; }

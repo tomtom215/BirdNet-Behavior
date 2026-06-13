@@ -1,61 +1,277 @@
-<div class="page-head rt-head"><div><div class="bnb-eyebrow rt-eyebrow"><span>Browse</span>{{help_link}}</div><h1 class="display rt-h1">Recordings</h1></div></div>
-
-<div class="card rt-card-mb">
-    <div class="rt-tabs">
-        <button class="tab-btn rt-tab active" id="tab-by-species">
-            By Species
-        </button>
-        <button class="tab-btn rt-tab" id="tab-by-date">
-            By Date
-        </button>
-    </div>
-
-    <div id="view-species"
-         hx-get="/pages/recordings-species-list"
-         hx-trigger="load"
-         hx-swap="innerHTML">
-        <p class="rt-loading">Loading species...</p>
-    </div>
-
-    <div id="view-date" class="rt-hidden"
-         hx-get="/pages/recordings-date-list"
-         hx-trigger="revealed"
-         hx-swap="innerHTML">
-        <p class="rt-loading">Loading dates...</p>
-    </div>
-</div>
-
-<div id="recordings-detail" class="card rt-hidden">
-    <div id="recordings-detail-content">
-    </div>
-</div>
+{{content}}
 
 <script>
-function switchTab(tab) {
-    var speciesView = document.getElementById('view-species');
-    var dateView = document.getElementById('view-date');
-    var btnSpecies = document.getElementById('tab-by-species');
-    var btnDate = document.getElementById('tab-by-date');
-    if (tab === 'species') {
-        speciesView.classList.remove('rt-hidden');
-        dateView.classList.add('rt-hidden');
-        btnSpecies.classList.add('active');
-        btnDate.classList.remove('active');
-    } else {
-        speciesView.classList.add('rt-hidden');
-        dateView.classList.remove('rt-hidden');
-        btnDate.classList.add('active');
-        btnSpecies.classList.remove('active');
-        htmx.trigger(dateView, 'revealed');
-    }
-}
+// Clips view behaviours: the shared clip player + a now-playing dock that
+// rides the page-head and floats up on scroll, plus Select-mode bulk actions
+// over the existing per-item endpoints. CSP-safe: no inline handlers, computed
+// widths set straight on `element.style` (which CSP does not police), markup
+// built with classes only.
+(function () {
+  "use strict";
+  var clips = document.getElementById('rc-clips');
+  if (!clips) return;
 
-// CSP-safe wiring (no inline on* handlers): tab buttons + delegated row clicks.
-document.getElementById('tab-by-species').addEventListener('click', function () { switchTab('species'); });
-document.getElementById('tab-by-date').addEventListener('click', function () { switchTab('date'); });
-document.addEventListener('click', function (e) {
-    if (e.target.closest('.rec-item')) {
-        document.getElementById('recordings-detail').classList.remove('rt-hidden');
+  var head   = document.getElementById('rc-headplayer');
+  var floatd = null;
+  var player = null;       // the single shared HTMLAudioElement
+  var playBtn = null;      // the row ▶ button currently playing
+
+  function fmtTime(s) {
+    if (!isFinite(s)) return '0:00';
+    var m = Math.floor(s / 60), r = Math.floor(s % 60);
+    return m + ':' + (r < 10 ? '0' : '') + r;
+  }
+
+  // Build a now-playing panel (head card or float dock) from a row's button.
+  function fill(container, btn, floating) {
+    container.innerHTML =
+      '<div class="rc-hp' + (floating ? ' floating' : '') + '">' +
+        '<div class="rc-hp-row">' +
+          '<button type="button" class="rc-hp-toggle" aria-label="Pause">⏸</button>' +
+          '<span class="rc-hp-av"></span>' +
+          '<span class="rc-hp-text"><span class="rc-hp-name"></span>' +
+          '<span class="bnb-meta mono rc-hp-meta"></span></span>' +
+          '<a class="rc-iact rc-hp-dl" title="Download clip" aria-label="Download clip">↓</a>' +
+        '</div>' +
+        '<div class="rc-hp-scrub"><i></i></div>' +
+        '<div class="bnb-meta mono rc-hp-time">0:00</div>' +
+      '</div>';
+    container.querySelector('.rc-hp-name').textContent = btn.getAttribute('data-clip-name') || 'Clip';
+    container.querySelector('.rc-hp-meta').textContent = btn.getAttribute('data-clip-meta') || '';
+    var src = btn.getAttribute('data-play-src');
+    var dl = container.querySelector('.rc-hp-dl');
+    if (dl && src) { dl.setAttribute('href', src); dl.setAttribute('download', ''); }
+    var row = btn.closest('.rc-row');
+    var av = row && row.querySelector('.bnb-avatar');
+    if (av) container.querySelector('.rc-hp-av').appendChild(av.cloneNode(true));
+    container.querySelector('.rc-hp-toggle').addEventListener('click', toggle);
+  }
+
+  function refreshDocks(btn) {
+    if (head) { head.hidden = false; fill(head, btn, false); }
+    if (!floatd) {
+      floatd = document.createElement('div');
+      floatd.id = 'rc-floatdock';
+      floatd.className = 'rc-floatdock';
+      document.body.appendChild(floatd);
     }
-});
+    fill(floatd, btn, true);
+    // Float the dock once the head card scrolls out of view.
+    if (window.__rcObs) window.__rcObs.disconnect();
+    if (head && 'IntersectionObserver' in window) {
+      window.__rcObs = new IntersectionObserver(function (es) {
+        floatd.classList.toggle('show', !es[0].isIntersecting);
+      }, { threshold: 0 });
+      window.__rcObs.observe(head);
+    }
+  }
+
+  function setGlyphs(symbol) {
+    document.querySelectorAll('.rc-hp-toggle').forEach(function (b) { b.textContent = symbol; });
+    if (playBtn) { playBtn.textContent = symbol === '⏸' ? '⏸' : '▶'; }
+  }
+
+  function stop() {
+    if (player) player.pause();
+    if (playBtn) playBtn.classList.remove('playing');
+  }
+  function toggle() {
+    if (!player) return;
+    if (player.paused) { player.play().then(function () { setGlyphs('⏸'); if (playBtn) playBtn.classList.add('playing'); }).catch(function () {}); }
+    else { player.pause(); setGlyphs('▶'); if (playBtn) playBtn.classList.remove('playing'); }
+  }
+
+  function onProgress() {
+    if (!player || !player.duration) return;
+    var pct = (player.currentTime / player.duration) * 100;
+    document.querySelectorAll('.rc-hp-scrub i').forEach(function (i) { i.style.width = pct + '%'; });
+    document.querySelectorAll('.rc-hp-time').forEach(function (t) {
+      t.textContent = fmtTime(player.currentTime) + ' / ' + fmtTime(player.duration);
+    });
+  }
+  function onEnded() {
+    setGlyphs('▶');
+    if (playBtn) { playBtn.classList.remove('playing'); }
+    if (floatd) floatd.classList.remove('show');
+  }
+
+  // ── Shared player: a row ▶ starts / docks a clip ──────────────────────────
+  clips.addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-play-src]');
+    if (!btn) return;
+    e.preventDefault();
+    if (btn === playBtn && player && !player.paused) { player.pause(); setGlyphs('▶'); btn.classList.remove('playing'); return; }
+    stop();
+    if (!player) {
+      player = new Audio();
+      player.preload = 'none';
+      player.addEventListener('timeupdate', onProgress);
+      player.addEventListener('ended', onEnded);
+      player.addEventListener('error', onEnded);
+    }
+    playBtn = btn;
+    player.src = btn.getAttribute('data-play-src');
+    player.play().then(function () {
+      btn.classList.add('playing');
+      refreshDocks(btn);
+      setGlyphs('⏸');
+    }).catch(function () { onEnded(); });
+  });
+
+  // ── Select mode + bulk bar ────────────────────────────────────────────────
+  var selBtn = document.getElementById('rc-selmode');
+  var selbar = document.getElementById('rc-selbar');
+  var selecting = false;
+  function selectedRows() { return Array.prototype.slice.call(clips.querySelectorAll('.rc-row.sel')); }
+  function updateBar() {
+    var n = selectedRows().length;
+    var c = document.getElementById('rc-selcount'); if (c) c.textContent = n;
+    if (selbar) selbar.classList.toggle('show', selecting && n > 0);
+  }
+  function setSelecting(on) {
+    selecting = on;
+    clips.classList.toggle('rc-selecting', on);
+    if (selBtn) { selBtn.textContent = on ? 'Done' : 'Select'; selBtn.setAttribute('aria-pressed', on ? 'true' : 'false'); }
+    if (!on) {
+      clips.querySelectorAll('.rc-row.sel').forEach(function (r) {
+        r.classList.remove('sel');
+        var ch = r.querySelector('.rc-check'); if (ch) ch.setAttribute('aria-checked', 'false');
+      });
+    }
+    updateBar();
+  }
+  if (selBtn) selBtn.addEventListener('click', function () { setSelecting(!selecting); });
+
+  function toggleRow(row) {
+    var on = !row.classList.contains('sel');
+    row.classList.toggle('sel', on);
+    var ch = row.querySelector('.rc-check'); if (ch) ch.setAttribute('aria-checked', on ? 'true' : 'false');
+    updateBar();
+  }
+  clips.addEventListener('click', function (e) {
+    if (!selecting) return;
+    if (e.target.closest('[data-play-src], a, button:not(.rc-check)')) return;
+    var row = e.target.closest('.rc-row');
+    if (row) { e.preventDefault(); toggleRow(row); }
+  });
+  clips.addEventListener('keydown', function (e) {
+    if (!selecting || (e.key !== ' ' && e.key !== 'Enter')) return;
+    var ch = e.target.closest('.rc-check'); if (!ch) return;
+    e.preventDefault(); toggleRow(ch.closest('.rc-row'));
+  });
+
+  function keyOf(row) { return (row.getAttribute('data-key') || '').split('|'); }
+  function post(url, parts) {
+    var body = 'date=' + encodeURIComponent(parts[0]) + '&time=' + encodeURIComponent(parts[1]) +
+               '&sci_name=' + encodeURIComponent(parts[2]);
+    return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body });
+  }
+  function bulk(url) {
+    var rows = selectedRows(); if (!rows.length) return;
+    Promise.all(rows.map(function (r) { return post(url, keyOf(r)); })).then(function () { window.location.reload(); });
+  }
+  var bl = document.getElementById('rc-bulk-lock');
+  if (bl) bl.addEventListener('click', function () { bulk('/pages/recordings-lock'); });
+  var bd = document.getElementById('rc-bulk-del');
+  if (bd) bd.addEventListener('click', function () {
+    var n = selectedRows().length; if (!n) return;
+    if (window.confirm('Delete ' + n + ' selected clip' + (n === 1 ? '' : 's') + '?')) bulk('/pages/recordings-delete');
+  });
+  var bdl = document.getElementById('rc-bulk-dl');
+  if (bdl) bdl.addEventListener('click', function () {
+    selectedRows().forEach(function (r) {
+      var p = r.querySelector('[data-play-src]'); if (!p) return;
+      var a = document.createElement('a');
+      a.href = p.getAttribute('data-play-src'); a.setAttribute('download', '');
+      document.body.appendChild(a); a.click(); a.remove();
+    });
+  });
+})();
+</script>
+
+<script>
+// Live view: the honest scrolling sonogram (real spectrogram WebSocket frames,
+// a flat idle baseline otherwise — never a fake waveform), the per-source audio
+// player, and a source picker. Ported from the dashboard / listen producers.
+(function () {
+  "use strict";
+  var cnv = document.getElementById('rc-spectrogram');
+  if (!cnv || !cnv.getContext) return;
+  var ctx = cnv.getContext('2d');
+  var framesEl = document.getElementById('rc-frames');
+  var pill = document.getElementById('rc-live-status');
+  var W = 0, H = 200, lastFrame = 0, IDLE_AFTER_MS = 30000, pillState = '';
+
+  function dark() { return document.documentElement.getAttribute('data-theme') === 'dark'; }
+  function setLive(on) {
+    if (!pill) return;
+    var next = on ? 'live' : 'idle';
+    if (pillState === next) return;
+    pillState = next;
+    if (on) { pill.classList.add('moss'); pill.innerHTML = '<span class="bnb-dot live"></span> live'; }
+    else { pill.classList.remove('moss'); pill.innerHTML = '<span class="bnb-dot"></span> idle'; }
+  }
+  function cellColor(v) {
+    v = Math.max(0, Math.min(1, v));
+    return 'oklch(' + (35 + v * 55).toFixed(0) + '% ' + (0.04 + v * 0.16).toFixed(3) + ' ' + (160 - v * 70).toFixed(0) + ')';
+  }
+  function resize() { W = cnv.width = cnv.clientWidth; cnv.height = H; }
+  resize(); window.addEventListener('resize', resize);
+
+  function drawIdle() {
+    ctx.clearRect(0, 0, W, H);
+    ctx.strokeStyle = dark() ? 'oklch(60% 0.02 150 / 0.35)' : 'oklch(55% 0.02 150 / 0.28)';
+    ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke();
+  }
+  function drawFrame(frame) {
+    var nMels = frame.n_mels, nFrames = frame.n_frames;
+    if (!nMels || !nFrames || !frame.data) return;
+    ctx.clearRect(0, 0, W, H);
+    var colW = W / nFrames, rowH = H / nMels;
+    for (var f = 0; f < nFrames; f++) {
+      for (var m = 0; m < nMels; m++) {
+        var v = frame.data[m * nFrames + f] || 0;
+        if (v < 0.05) continue;
+        ctx.fillStyle = cellColor(v);
+        ctx.fillRect((f * colW) | 0, (H - (m + 1) * rowH) | 0, Math.ceil(colW), Math.ceil(rowH));
+      }
+    }
+    lastFrame = Date.now();
+    setLive(true);
+    if (framesEl) framesEl.textContent = nFrames + ' frames';
+  }
+  function idleLoop() {
+    if (Date.now() - lastFrame > IDLE_AFTER_MS) { setLive(false); drawIdle(); }
+    setTimeout(idleLoop, 1000);
+  }
+  setLive(false); drawIdle(); setTimeout(idleLoop, 1000);
+
+  try {
+    var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    var ws = new WebSocket(proto + '//' + location.host + '/api/v2/ws/spectrogram');
+    ws.onmessage = function (ev) { try { var m = JSON.parse(ev.data); if (m.event === 'spectrogram') drawFrame(m); } catch (_) {} };
+  } catch (_) {}
+
+  // ── Per-source audio playback ─────────────────────────────────────────────
+  var sel = document.getElementById('rc-source');
+  var audio = document.getElementById('rc-audio');
+  var btn = document.getElementById('rc-listen-btn');
+  var glyph = document.getElementById('rc-listen-glyph');
+  var label = document.getElementById('rc-listen-label');
+  function srcFor(v) { return (!v) ? '/stream' : '/stream?source_id=' + encodeURIComponent(v); }
+  if (sel && audio) sel.addEventListener('change', function () {
+    if (!audio.paused) { audio.src = srcFor(sel.value); audio.play().catch(function () {}); }
+  });
+  if (btn && audio) btn.addEventListener('click', function () {
+    if (audio.paused) {
+      audio.src = srcFor(sel ? sel.value : '');
+      audio.play().then(function () { if (glyph) glyph.textContent = '■'; if (label) label.textContent = 'Stop'; })
+        .catch(function () { if (label) label.textContent = 'Audio blocked — retry'; });
+    } else {
+      audio.pause(); audio.removeAttribute('src');
+      if (glyph) glyph.textContent = '▶'; if (label) label.textContent = 'Listen (audio)';
+    }
+  });
+  if (audio) audio.addEventListener('ended', function () { if (glyph) glyph.textContent = '▶'; if (label) label.textContent = 'Listen (audio)'; });
+})();
 </script>

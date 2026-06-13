@@ -38,7 +38,6 @@ pub mod history;
 pub mod homes;
 pub mod life_list;
 pub(crate) mod listen;
-pub mod livestream;
 pub mod migration;
 pub(crate) mod nav;
 pub mod notification_center;
@@ -70,7 +69,6 @@ pub(crate) const ANALYTICS_PAGE_HTML: &str = include_str!("../../../templates/an
 pub(crate) const SPECIES_DETAIL_HTML: &str = include_str!("../../../templates/species_detail.html");
 pub(crate) const TIMESERIES_PAGE_HTML: &str = include_str!("../../../templates/timeseries.html");
 pub(crate) const TODAY_PAGE_HTML: &str = include_str!("../../../templates/today.html");
-pub(crate) const RECORDINGS_PAGE_HTML: &str = include_str!("../../../templates/recordings.html");
 /// Themed confirmation modal (O-17), injected into every full-page shell.
 pub(crate) const CONFIRM_MODAL_HTML: &str =
     include_str!("../../../templates/_partial_confirm_modal.html");
@@ -121,9 +119,7 @@ pub fn router() -> Router<AppState> {
         .merge(correlation::router())
         .merge(quarantine::router())
         .merge(today::router())
-        .merge(listen::router())
         .merge(recordings::router())
-        .merge(livestream::router())
         .merge(weekly_report::router())
         .merge(history::router())
         .merge(life_list::router())

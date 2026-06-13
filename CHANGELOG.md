@@ -35,14 +35,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   server-rendered SVG renderers are unchanged.
 - The detection log gains **category filters** (Rare · First today · High
   confidence) alongside text search.
+- **Recordings rebuilt into a Clips + Live home (`/recordings`).** The old
+  by-species / by-date browser and the separate `/listen` page merge into one
+  Recordings home with a `?view=clips|live` switch. **Clips** is a flat,
+  newest-first browser of every detection that saved an audio clip, with
+  filter chips (All · Best · Rare · Locked), species search, a now-playing
+  player that docks to a floating bar on scroll, per-clip lock/download/delete,
+  and a Select mode for bulk actions. **Live** folds the live page's honest
+  scrolling sonogram (real spectrogram frames; a flat idle baseline when no
+  audio is arriving — never a fake waveform), source picker and live-detection
+  trickle. `/listen`, `/livestream` and `/live` permanently redirect to
+  `/recordings?view=live`.
 
 ### Added
 
 - Permanent (`308`) redirects from every pre-spine route to its new home
   (`/today`, `/heatmap`, `/analytics`, `/migration`, `/correlation`,
   `/timeseries`, `/analytics/dawn-chorus`, `/weekly`, `/year-in-review`,
-  `/history`, `/system`), so existing bookmarks and BirdNET-Pi muscle memory
-  never 404.
+  `/history`, `/system`, plus the live-audio paths `/listen`, `/livestream`
+  and `/live`), so existing bookmarks and BirdNET-Pi muscle memory never 404.
+- `recent_clips` / `recent_clips_count` (`birdnet-db`): a cross-date,
+  filterable, paginated query of clips that saved an audio file, behind a
+  `RecordingsFilter` (All · Best · Rare · Locked) that reuses the Today log's
+  "best"/"rare" definitions. Powers the Recordings Clips browser.
 
 ## [0.8.0] - 2026-06-11
 

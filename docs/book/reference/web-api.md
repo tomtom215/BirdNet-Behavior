@@ -12,12 +12,13 @@ page (and the phone bottom bar).
 | `/` | **Today** | the merged "right now" view + the full searchable day (live signal, day strip, unified log, top species, best recordings, station health) |
 | `/species` | **Species** | species list · photos · life list, plus per-species detail |
 | `/patterns` | **Patterns** | when-active heatmap · dawn chorus · migration · co-occurrence · trends · behavioral analytics, one tab each |
-| `/recordings` | **Recordings** | detection clips and live audio |
+| `/recordings` | **Recordings** | the Clips browser (`?view=clips`) and the live audio + spectrogram (`?view=live`) |
 | `/reports` | **Reports** | weekly recap · year in review · history |
 | `/station` | **Station** | health (public) + the gated admin task groups |
 
 Tabs within a home are selected by a query parameter, e.g.
-`/patterns?tab=dawn`, `/reports?tab=history`, `/species?view=lifelist`.
+`/patterns?tab=dawn`, `/reports?tab=history`, `/species?view=lifelist`,
+`/recordings?view=live`.
 
 ### Legacy routes (permanent redirects)
 
@@ -37,7 +38,9 @@ Older addresses and BirdNET-Pi muscle-memory still work — each one
 | `/year-in-review` | `/reports?tab=year` |
 | `/history` | `/reports?tab=history` |
 | `/system` | `/station` |
-| `/live` | `/listen` |
+| `/listen` | `/recordings?view=live` |
+| `/livestream` | `/recordings?view=live` |
+| `/live` | `/recordings?view=live` |
 
 ### Other pages
 
@@ -46,7 +49,6 @@ Older addresses and BirdNET-Pi muscle-memory still work — each one
 | `/species/detail?name=…` | Species detail — hourly chart, trend, companions, photo |
 | `/gallery` | Species photo gallery (also reachable as the Species → Photos view) |
 | `/life-list` | Life list — every species ever detected, with a growth curve |
-| `/listen` | Live audio + scrolling spectrogram (per-source); `?source=<id>` preselects |
 | `/quarantine` | Rare-bird review — approve, reject (also surfaced as the Today review nudge) |
 | `/notifications` | Notification center — history and channel stats |
 | `/kiosk` | Kiosk mode — auto-refreshing display for dedicated screens |

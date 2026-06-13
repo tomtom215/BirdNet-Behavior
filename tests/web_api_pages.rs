@@ -500,11 +500,12 @@ async fn all_redesigned_pages_render_ok() {
         "/station",
         "/life-list",
         "/recordings",
+        "/recordings?view=clips",
+        "/recordings?view=live",
         "/gallery",
         "/notifications",
         "/quarantine",
         "/kiosk",
-        "/listen",
         "/pages/today-daystrip",
         "/pages/cooccurrence-matrix",
         "/pages/acoustic-network",
@@ -536,26 +537,10 @@ async fn all_redesigned_pages_render_ok() {
         );
     }
 
-    // `/live` is a retired duplicate of the live-audio page; it now permanently
-    // redirects to the maintained `/listen` page rather than rendering, so it is
+    // The live-audio paths (`/listen`, `/livestream`, `/live`) are retired
+    // duplicates that now permanently redirect into the Recordings home's Live
+    // view; they are covered by `legacy_routes_redirect_to_their_homes` and
     // intentionally excluded from the 200 list above.
-    let response = app()
-        .oneshot(Request::builder().uri("/live").body(Body::empty()).unwrap())
-        .await
-        .unwrap();
-    assert_eq!(
-        response.status(),
-        StatusCode::PERMANENT_REDIRECT,
-        "/live should permanently redirect, not render"
-    );
-    assert_eq!(
-        response
-            .headers()
-            .get(axum::http::header::LOCATION)
-            .and_then(|v| v.to_str().ok()),
-        Some("/listen"),
-        "/live should redirect to /listen"
-    );
 }
 
 /// Every pre-spine route that folded into a v3 home must permanently

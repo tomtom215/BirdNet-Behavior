@@ -3,17 +3,40 @@
 **Recordings** (`/recordings`) is the audio home — both the saved clips and the
 live stream.
 
-## Recordings browser
+The home has two views, switched on the sub-tab row: **Clips** (browse what
+your station already caught) and **Live** (listen along in real time).
 
-The **Recordings** home (`/recordings`) lets you listen back to detection clips, browsing **by species** or **by date**.
+## Clips (`/recordings?view=clips`)
 
 ![The recordings browser](../images/recordings.png)
 
-Pick a species (each row carries its banding-code avatar and all-time count) to see its clips, then play any recording inline. Clips you've **locked** on [Today](./today.md) are protected from disk purges and surface here too.
+Clips is a flat, newest-first list of every detection that saved an audio clip.
+Each row carries the time, the species (with its banding-code avatar) and a
+confidence bar; play it with the ▶ button, **download** it, **lock** it, or
+delete it.
 
-## Live audio
+- **Filter chips** narrow the list to **All**, **Best** (high-confidence),
+  **Rare** (a confident first-ever record) or **Locked** clips, and the search
+  box finds a species by name. The chips and search are real links, so any
+  view is bookmarkable.
+- **Now playing** rides the page header while a clip plays and floats up into a
+  compact bar when you scroll past it, with a live progress scrubber.
+- **Lock** (🔒) protects a clip from the disk purge — the same lock you can set
+  from [Today](./today.md); locked clips also show under the **Locked** filter.
+- **Select** turns on checkboxes and a bulk bar so you can lock, download or
+  delete a whole batch at once.
 
-Open the live stream (`/listen`) to listen along with your station in real time — a per-source audio player and a scrolling spectrogram, with a live trickle of detections as they're classified. The spectrogram is **honest**: it scrolls only while audio is arriving and shows a flat baseline otherwise, never a fake waveform. Today's live-signal card links straight here, and you can preselect a microphone with `/listen?source=<id>`.
+## Live (`/recordings?view=live`)
+
+Open the **Live** view to listen along with your station in real time — a
+per-source audio player and a scrolling spectrogram, with a live trickle of
+detections as they're classified. The spectrogram is **honest**: it scrolls
+only while audio is arriving and shows a flat baseline otherwise, never a fake
+waveform. Today's live-signal card links straight here, and you can preselect a
+microphone with `/recordings?view=live&source=<id>`.
+
+> The pre-spine `/listen`, `/livestream` and `/live` addresses still work —
+> they permanently redirect to `/recordings?view=live`.
 
 ## Species photos
 
