@@ -121,7 +121,7 @@ base64 = "0.22"
 # compile — two distinct PasswordHasher traits. Take both together once
 # argon2 0.6 is released.
 argon2 = "0.5"
-password-hash = { version = "0.5", features = ["getrandom"] }
+password-hash = { version = "0.6", features = ["getrandom"] }
 
 # File watching
 notify = "8"
