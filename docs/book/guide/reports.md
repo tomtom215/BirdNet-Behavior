@@ -1,16 +1,16 @@
 # Reports
 
-BirdNet-Behavior turns your data into editorial recaps you'd actually want to read.
+BirdNet-Behavior turns your data into editorial recaps you'd actually want to read. **Reports** (`/reports`) gathers the look-back in one place, behind three tabs.
 
-## Weekly report
+## Weekly
 
-The **Weekly Report** (`/weekly`) is a Sunday-paper recap of the week — total detections, species count, new arrivals, a daily-activity chart and the week's leaderboard. Navigate between weeks with the prev/next controls.
+The **Weekly** tab (`/reports`) is a Sunday-paper recap of the week — total detections, species count, new arrivals, a daily-activity chart and the week's leaderboard. Navigate between weeks with the prev/next controls.
 
 ![The weekly report](../images/weekly-report.png)
 
 ## Year in Review
 
-The **Year in Review** (`/year-in-review`) is a celebratory annual recap:
+The **Year in Review** tab (`/reports?tab=year`) is a celebratory annual recap:
 
 ![The Year in Review page](../images/year-in-review.png)
 
@@ -22,6 +22,6 @@ The **Year in Review** (`/year-in-review`) is a celebratory annual recap:
 
 ## History calendar
 
-The **History** page (`/history`) is a calendar browser. Each day tile is intensity-coded by detection count; select a day to see its hourly activity and top species.
+The **History** tab (`/reports?tab=history`) is a calendar browser. Each day tile is intensity-coded by detection count; select a day to see its hourly activity and top species.
 
 ![The detection history calendar](../images/history.png)

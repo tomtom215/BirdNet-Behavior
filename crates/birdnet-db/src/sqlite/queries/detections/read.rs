@@ -778,12 +778,21 @@ mod tests {
         assert_eq!(rows.len(), 3);
 
         // Include pattern (Com_Name LIKE).
-        let rows = todays_detections(&conn, "2026-03-11", Some("Robin"), TodayFilter::All, 10, 0).unwrap();
+        let rows =
+            todays_detections(&conn, "2026-03-11", Some("Robin"), TodayFilter::All, 10, 0).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].com_name, "European Robin");
 
         // Exclusion pattern (NOT LIKE).
-        let rows = todays_detections(&conn, "2026-03-11", Some("NOT Robin"), TodayFilter::All, 10, 0).unwrap();
+        let rows = todays_detections(
+            &conn,
+            "2026-03-11",
+            Some("NOT Robin"),
+            TodayFilter::All,
+            10,
+            0,
+        )
+        .unwrap();
         assert_eq!(rows.len(), 2);
         assert!(rows.iter().all(|r| r.com_name != "European Robin"));
     }
@@ -802,7 +811,8 @@ mod tests {
     fn todays_detections_whitespace_search_treated_as_none() {
         let (_tmp, conn) = temp_db_with_data();
         // A blank search term should not collapse the result set.
-        let rows = todays_detections(&conn, "2026-03-11", Some("   "), TodayFilter::All, 10, 0).unwrap();
+        let rows =
+            todays_detections(&conn, "2026-03-11", Some("   "), TodayFilter::All, 10, 0).unwrap();
         assert_eq!(rows.len(), 3);
     }
 
@@ -810,7 +820,15 @@ mod tests {
     fn todays_detections_search_matches_sci_name_too() {
         // The inclusion path matches either Com_Name or Sci_Name LIKE.
         let (_tmp, conn) = temp_db_with_data();
-        let rows = todays_detections(&conn, "2026-03-11", Some("Erithacus"), TodayFilter::All, 10, 0).unwrap();
+        let rows = todays_detections(
+            &conn,
+            "2026-03-11",
+            Some("Erithacus"),
+            TodayFilter::All,
+            10,
+            0,
+        )
+        .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].sci_name, "Erithacus rubecula");
     }
@@ -827,7 +845,8 @@ mod tests {
             1
         );
         assert_eq!(
-            todays_detection_count(&conn, "2026-03-11", Some("NOT Robin"), TodayFilter::All).unwrap(),
+            todays_detection_count(&conn, "2026-03-11", Some("NOT Robin"), TodayFilter::All)
+                .unwrap(),
             2
         );
         assert_eq!(
@@ -863,8 +882,20 @@ mod tests {
             };
             insert_detection(&conn, &record).unwrap();
         };
-        insert("2026-06-10", "07:00:00", "Erithacus rubecula", "Robin", 0.95);
-        insert("2026-06-11", "06:00:00", "Erithacus rubecula", "Robin", 0.97);
+        insert(
+            "2026-06-10",
+            "07:00:00",
+            "Erithacus rubecula",
+            "Robin",
+            0.95,
+        );
+        insert(
+            "2026-06-11",
+            "06:00:00",
+            "Erithacus rubecula",
+            "Robin",
+            0.97,
+        );
         insert(
             "2026-06-11",
             "06:10:00",
@@ -872,7 +903,13 @@ mod tests {
             "House Wren",
             0.93,
         );
-        insert("2026-06-11", "06:20:00", "Prunella modularis", "Dunnock", 0.60);
+        insert(
+            "2026-06-11",
+            "06:20:00",
+            "Prunella modularis",
+            "Dunnock",
+            0.60,
+        );
 
         let names = |filter: TodayFilter| -> Vec<String> {
             todays_detections(&conn, "2026-06-11", None, filter, 10, 0)
@@ -882,9 +919,15 @@ mod tests {
                 .collect()
         };
         assert_eq!(names(TodayFilter::All).len(), 3);
-        assert_eq!(names(TodayFilter::FirstToday), vec!["Dunnock", "House Wren"]);
+        assert_eq!(
+            names(TodayFilter::FirstToday),
+            vec!["Dunnock", "House Wren"]
+        );
         assert_eq!(names(TodayFilter::Rare), vec!["House Wren"]);
-        assert_eq!(names(TodayFilter::HighConfidence), vec!["House Wren", "Robin"]);
+        assert_eq!(
+            names(TodayFilter::HighConfidence),
+            vec!["House Wren", "Robin"]
+        );
 
         // Counts agree with the listing for every category.
         for f in [

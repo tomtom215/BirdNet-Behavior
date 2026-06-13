@@ -12,21 +12,25 @@
 
 # Field Guide
 
-- [The Dashboard](./guide/dashboard.md)
-- [Today & the Detection Log](./guide/today.md)
-- [Detection Detail & Sharing](./guide/sharing.md)
-- [Reviewing Detections](./guide/reviews.md)
+The web UI is organized into **six homes** — the tabs across the top (and the
+phone bottom bar): **Today**, **Species**, **Patterns**, **Recordings**,
+**Reports**, and **Station**.
+
+- [Today](./guide/today.md)
 - [Species & the Life List](./guide/species.md)
-- [Behavioral Analytics](./guide/analytics.md)
-- [Migration & Phenology](./guide/phenology.md)
-- [The Dawn Chorus](./guide/dawn-chorus.md)
-- [Recordings & Gallery](./guide/recordings.md)
-- [RSS & Calendar Feeds](./guide/feeds.md)
+- [Patterns](./guide/patterns.md)
+  - [Behavioral Analytics](./guide/analytics.md)
+  - [Migration & Phenology](./guide/phenology.md)
+  - [The Dawn Chorus](./guide/dawn-chorus.md)
+- [Recordings & Live Audio](./guide/recordings.md)
 - [Reports](./guide/reports.md)
+- [Reviewing Detections](./guide/reviews.md)
+- [Detection Detail & Sharing](./guide/sharing.md)
+- [RSS & Calendar Feeds](./guide/feeds.md)
 - [Display Preferences](./guide/display-preferences.md)
 - [Kiosk Mode](./guide/kiosk.md)
 
-# Administration
+# Station (Administration)
 
 - [Settings & Detection](./admin/settings.md)
 - [Audio & Microphones](./admin/audio.md)

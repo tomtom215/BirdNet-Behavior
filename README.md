@@ -20,7 +20,7 @@
   <strong>📖 <a href="https://tomtom215.github.io/BirdNet-Behavior/">Read the documentation</a></strong>
   &nbsp;·&nbsp; <a href="https://tomtom215.github.io/BirdNet-Behavior/getting-started/installation.html">Install</a>
   &nbsp;·&nbsp; <a href="https://tomtom215.github.io/BirdNet-Behavior/getting-started/docker.html">Docker</a>
-  &nbsp;·&nbsp; <a href="https://tomtom215.github.io/BirdNet-Behavior/guide/dashboard.html">Field Guide</a>
+  &nbsp;·&nbsp; <a href="https://tomtom215.github.io/BirdNet-Behavior/guide/today.html">Field Guide</a>
   &nbsp;·&nbsp; <a href="https://tomtom215.github.io/BirdNet-Behavior/guides/troubleshooting.html">Troubleshooting</a>
 </p>
 
@@ -63,35 +63,35 @@ Every screen leads with a plain-English headline, then layers the dense numbers 
 
 <table>
   <tr>
-    <td width="50%"><a href="https://tomtom215.github.io/BirdNet-Behavior/guide/today.html"><img src="docs/book/images/today.png" alt="Today's detections with a 24-hour timeline"></a><br><sub><b>Today</b> — searchable log + 24-hour DayStrip</sub></td>
-    <td width="50%"><a href="https://tomtom215.github.io/BirdNet-Behavior/guide/analytics.html"><img src="docs/book/images/heatmap.png" alt="Activity heatmap and circadian polar"></a><br><sub><b>Analytics</b> — streamgraph, mosaic, circadian polar, ridgeline</sub></td>
+    <td width="50%"><a href="https://tomtom215.github.io/BirdNet-Behavior/guide/today.html"><img src="docs/book/images/today.png" alt="The Today home with a 24-hour timeline"></a><br><sub><b>Today</b> — live signal, day strip + unified detection log</sub></td>
+    <td width="50%"><a href="https://tomtom215.github.io/BirdNet-Behavior/guide/patterns.html"><img src="docs/book/images/heatmap.png" alt="Activity heatmap and circadian polar"></a><br><sub><b>Patterns</b> — heatmap, circadian polar, ridgeline, trends</sub></td>
   </tr>
   <tr>
-    <td><a href="https://tomtom215.github.io/BirdNet-Behavior/guide/analytics.html"><img src="docs/book/images/correlation.png" alt="Co-occurrence chord diagram"></a><br><sub><b>Co-occurrence</b> — matrix + acoustic-network chord diagram</sub></td>
+    <td><a href="https://tomtom215.github.io/BirdNet-Behavior/guide/patterns.html"><img src="docs/book/images/correlation.png" alt="Co-occurrence chord diagram"></a><br><sub><b>Co-occurrence</b> — matrix + acoustic-network chord diagram</sub></td>
     <td><a href="https://tomtom215.github.io/BirdNet-Behavior/guide/species.html"><img src="docs/book/images/life-list.png" alt="Life list with accumulation curve"></a><br><sub><b>Life List</b> — birding journal with a growth curve</sub></td>
   </tr>
   <tr>
-    <td><a href="https://tomtom215.github.io/BirdNet-Behavior/guide/reports.html"><img src="docs/book/images/year-in-review.png" alt="Year in Review"></a><br><sub><b>Year in Review</b> — editorial annual recap</sub></td>
-    <td><a href="https://tomtom215.github.io/BirdNet-Behavior/guide/recordings.html"><img src="docs/book/images/gallery.png" alt="Species photo gallery"></a><br><sub><b>Gallery</b> — species photo grid</sub></td>
+    <td><a href="https://tomtom215.github.io/BirdNet-Behavior/guide/reports.html"><img src="docs/book/images/year-in-review.png" alt="Year in Review"></a><br><sub><b>Reports</b> — weekly recap, year in review, history</sub></td>
+    <td><a href="https://tomtom215.github.io/BirdNet-Behavior/guide/species.html"><img src="docs/book/images/gallery.png" alt="Species photo gallery"></a><br><sub><b>Gallery</b> — the Species → Photos view</sub></td>
   </tr>
   <tr>
     <td><a href="https://tomtom215.github.io/BirdNet-Behavior/admin/audio.html"><img src="docs/book/images/admin-audio.png" alt="Audio settings"></a><br><sub><b>Audio setup</b> — USB + RTSP mic management</sub></td>
-    <td><a href="https://tomtom215.github.io/BirdNet-Behavior/guide/dashboard.html"><img src="docs/book/images/dashboard-dark.png" alt="Dashboard in dark mode"></a><br><sub><b>Dark mode</b> — a cool observatory theme</sub></td>
+    <td><a href="https://tomtom215.github.io/BirdNet-Behavior/guide/today.html"><img src="docs/book/images/dashboard-dark.png" alt="The Today home in dark mode"></a><br><sub><b>Dark mode</b> — a cool observatory theme</sub></td>
   </tr>
 </table>
 
 ### On the phone
 
-The same design system — iPhone 13 captures of the dashboard and today screens.
+The same design system, with all six homes on a bottom tab-bar — iPhone 13 captures.
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/book/images/mobile/dashboard.png" alt="Dashboard on iPhone 13" width="280"><br><sub><b>Dashboard</b> — bottom tab-bar, live signal, top species</sub></td>
-    <td width="50%"><img src="docs/book/images/mobile/today.png" alt="Today on iPhone 13" width="280"><br><sub><b>Today</b> — searchable log, hourly DayStrip, swipe-friendly</sub></td>
+    <td width="50%"><img src="docs/book/images/mobile/dashboard.png" alt="The Today home on iPhone 13" width="280"><br><sub><b>Today</b> — bottom tab-bar, live signal, top species</sub></td>
+    <td width="50%"><img src="docs/book/images/mobile/today.png" alt="The detection log on iPhone 13" width="280"><br><sub><b>Detection log</b> — searchable, hourly day strip, swipe-friendly</sub></td>
   </tr>
 </table>
 
-➡️ **See every screen in the [Field Guide](https://tomtom215.github.io/BirdNet-Behavior/guide/dashboard.html)** — every PNG above has a matching `docs/book/images/mobile/` capture for the same data and chrome at iPhone 13 width.
+➡️ **See every screen in the [Field Guide](https://tomtom215.github.io/BirdNet-Behavior/guide/today.html)** — every PNG above has a matching `docs/book/images/mobile/` capture for the same data and chrome at iPhone 13 width.
 
 ---
 
@@ -160,7 +160,7 @@ sudo ./uninstall.sh --purge      # remove everything, including data + model
 - **Per-device display preferences** — theme, density, motion and contrast, applied before first paint (no flash on reload).
 - **Operational polish** — rare-bird quarantine queue, audio quality pre-filtering, a built-in `--doctor` diagnostic, Prometheus metrics, kiosk mode, a live spectrogram, and a first-run onboarding wizard.
 
-➡️ Tour them all in the [Field Guide](https://tomtom215.github.io/BirdNet-Behavior/guide/dashboard.html). New environment variables for these features — `BNB_SHARE_SECRET`, `BNB_BASE_URL`, `BNB_STATION_LAT`/`BNB_STATION_LON` — are documented in [`.env.example`](.env.example) and the [configuration reference](https://tomtom215.github.io/BirdNet-Behavior/reference/configuration-reference.html).
+➡️ Tour them all in the [Field Guide](https://tomtom215.github.io/BirdNet-Behavior/guide/today.html). New environment variables for these features — `BNB_SHARE_SECRET`, `BNB_BASE_URL`, `BNB_STATION_LAT`/`BNB_STATION_LON` — are documented in [`.env.example`](.env.example) and the [configuration reference](https://tomtom215.github.io/BirdNet-Behavior/reference/configuration-reference.html).
 
 ---
 

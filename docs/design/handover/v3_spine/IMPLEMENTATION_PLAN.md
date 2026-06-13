@@ -1,5 +1,13 @@
 # v3 Spine — Implementation Plan
 
+> **Status (this PR).** Wave A (the six-home nav spine + redirects + the
+> Patterns/Reports/Station tab shells) and Wave B1 (the Dashboard+Today merge)
+> are **done, tested and documented**. Wave B2 (the full Station task-group
+> regroup) and Wave C (the Species/Recordings home rebuilds + the
+> Patterns/Reports visual reskin) are **follow-ups** — the affected pages keep
+> serving their existing, fully-functional screens under the new nav in the
+> meantime, so nothing is stranded.
+
 Source of truth: the Claude Design handover packet in this directory
 (`HANDOFF_v3.html` + six `*_home.html` hi-fi mockups), grounded against
 `tomtom215/BirdNet-Behavior@8aec5b4` (v0.8.0) — the exact base of this branch.

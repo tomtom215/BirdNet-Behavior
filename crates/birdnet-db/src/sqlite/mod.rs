@@ -33,7 +33,7 @@ pub use queries::heatmap::{HeatmapCell, HourTotal};
 pub use queries::{
     ImageBlacklist, ModelVsReviewRow, QualitySummary, QuarantineFilter, QuarantineReason,
     QuarantineRecord, QuarantineRow, QuarantineStats, ReviewVerdictDay, SpeciesThreshold,
-    add_image_blacklist, all_detections, approve_quarantine, best_detections_for_date,
+    TodayFilter, add_image_blacklist, all_detections, approve_quarantine, best_detections_for_date,
     blacklisted_urls_for_species, companion_species, concurrent_detections_from_other_sources,
     confidence_distribution, confidence_trend, count_quarantine, daily_counts, delete_detection,
     delete_quarantine, delete_species_threshold, detection_count, detection_count_for_date,
@@ -50,7 +50,7 @@ pub use queries::{
     species_count, species_daily_counts, species_daily_heatmap, species_first_seen,
     species_for_date, species_hourly_activity, species_hourly_activity_batch, species_sparklines,
     species_summary, temporal_cooccurrence, today_species_hour_heatmap, todays_detection_count,
-    TodayFilter, todays_detections, top_cooccurrence_pairs, top_species, unlock_detection,
+    todays_detections, top_cooccurrence_pairs, top_species, unlock_detection,
     weekly_detection_count, weekly_heatmap, weekly_new_species, weekly_top_species,
 };
 pub use types::{

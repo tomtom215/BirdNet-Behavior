@@ -395,7 +395,11 @@ pub fn day_strip(
             (sunset, "\u{263e}", "sunset", "var(--fg-3)", "end"),
         ] {
             let mx = x_of(hh);
-            let tx = if anchor == "start" { mx + 5.0 } else { mx - 5.0 };
+            let tx = if anchor == "start" {
+                mx + 5.0
+            } else {
+                mx - 5.0
+            };
             let _ = write!(
                 svg,
                 r#"<line x1="{mx:.1}" y1="0" x2="{mx:.1}" y2="{base:.1}" stroke="{col}" stroke-width="1" stroke-dasharray="2 3" stroke-opacity="0.6"/><text x="{tx:.1}" y="11" text-anchor="{anchor}" font-size="9" fill="{col}" stroke="var(--surface)" stroke-width="3" paint-order="stroke" stroke-linejoin="round" class="mono">{glyph} {label} {time}</text>"#,

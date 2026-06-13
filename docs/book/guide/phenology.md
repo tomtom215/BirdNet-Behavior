@@ -1,6 +1,6 @@
 # Migration & Phenology
 
-The migration page (`/migration`) turns a year of detections into a picture of *when* each species moves through your yard. It's the seasonal companion to the [dashboard](./dashboard.md)'s right-now view: instead of "what's singing this minute?", it answers "who has arrived, who's peaking, and who's overdue?"
+The **Migration** tab of [Patterns](./patterns.md) (`/patterns?tab=migration`) turns a year of detections into a picture of *when* each species moves through your yard. It's the seasonal companion to [Today](./today.md)'s right-now view: instead of "what's singing this minute?", it answers "who has arrived, who's peaking, and who's overdue?"
 
 ![The migration page](../images/migration.png)
 

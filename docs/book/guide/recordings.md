@@ -1,16 +1,26 @@
-# Recordings & Gallery
+# Recordings & Live Audio
+
+**Recordings** (`/recordings`) is the audio home — both the saved clips and the
+live stream.
 
 ## Recordings browser
 
-The **Recordings** page (`/recordings`) lets you listen back to detection clips, browsing **by species** or **by date**.
+The **Recordings** home (`/recordings`) lets you listen back to detection clips, browsing **by species** or **by date**.
 
 ![The recordings browser](../images/recordings.png)
 
-Pick a species (each row carries its banding-code avatar and all-time count) to see its clips, then play any recording inline. Clips you've **locked** on the Today page are protected from disk purges and surface here too.
+Pick a species (each row carries its banding-code avatar and all-time count) to see its clips, then play any recording inline. Clips you've **locked** on [Today](./today.md) are protected from disk purges and surface here too.
 
-## Species gallery
+## Live audio
 
-The **Gallery** (`/gallery`) is a photo-card grid of every detected species, searchable and sortable.
+Open the live stream (`/listen`) to listen along with your station in real time — a per-source audio player and a scrolling spectrogram, with a live trickle of detections as they're classified. The spectrogram is **honest**: it scrolls only while audio is arriving and shows a flat baseline otherwise, never a fake waveform. Today's live-signal card links straight here, and you can preselect a microphone with `/listen?source=<id>`.
+
+## Species photos
+
+The species **Gallery** now lives as the **Photos** view of the
+[Species](./species.md) home (`/species?view=photos`) — a photo-card grid of
+every detected species, searchable and sortable. The standalone `/gallery`
+address still works.
 
 ![The species photo gallery](../images/gallery.png)
 

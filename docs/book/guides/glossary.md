@@ -18,7 +18,7 @@ Plain-English definitions for the terms you'll meet around the dashboard.
 
 **Mel spectrogram** — the visual "fingerprint" of a sound (frequency over time) that the model actually looks at. The live spectrogram shows it in real time.
 
-**Phenology** — the timing of seasonal events. **Migration phenology** is *when* migratory species arrive and depart through the year — the ridgeline chart on the [Analytics](../guide/analytics.md) page.
+**Phenology** — the timing of seasonal events. **Migration phenology** is *when* migratory species arrive and depart through the year — the ridgeline chart on the [Migration](../guide/phenology.md) tab of Patterns.
 
 **Quarantine** — a holding queue for borderline rare-bird detections, so a human can approve or reject them before they join your life list. See the [review queue](../guide/today.md#rare-bird-review-queue).
 

@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Web UI reorganized into six homes (the "v3 spine").** The navigation
+  collapses from 9 top-level tabs + a 14-entry "More" menu into six
+  task-based homes — **Today · Species · Patterns · Recordings · Reports ·
+  Station** — generated from a single nav manifest, with one shared
+  vocabulary on desktop and the phone bottom bar (the desktop "More"
+  dropdown and the mobile "More" sheet are retired; a Help icon and the ⌘K
+  command palette cover the long tail). Every navigation surface and the
+  command palette are parity-tested against the manifest.
+- **Dashboard and Today merged into one home at `/`.** The old separate
+  "right now" dashboard and "today log" pages were the same data twice; the
+  Today home now leads with a comparative phrase ("a *busy* morning" vs your
+  30-day baseline) and an honest live signal (a flat **idle** baseline when
+  no audio is arriving — never a fake waveform), surfaces a review nudge or
+  outage banner only when one is warranted, plots the day on a rebuilt strip
+  (hourly histogram + in-strip temperature + real sunrise/sunset), and folds
+  the live feed and the full searchable/filterable day into one log behind a
+  disclosure. A brand-new station gets a "getting ready" checklist instead of
+  an empty page.
+- **Analytics, reports and system pages fold into tabbed homes.** Activity
+  heatmap, dawn chorus, migration, co-occurrence, time-series and behavioral
+  analytics are now the six tabs of **Patterns**; the weekly report, year in
+  review and history are the three tabs of **Reports**; the read-only system
+  health page is the public **Health** tab of **Station**. The underlying
+  server-rendered SVG renderers are unchanged.
+- The detection log gains **category filters** (Rare · First today · High
+  confidence) alongside text search.
+
+### Added
+
+- Permanent (`308`) redirects from every pre-spine route to its new home
+  (`/today`, `/heatmap`, `/analytics`, `/migration`, `/correlation`,
+  `/timeseries`, `/analytics/dawn-chorus`, `/weekly`, `/year-in-review`,
+  `/history`, `/system`), so existing bookmarks and BirdNET-Pi muscle memory
+  never 404.
+
 ## [0.8.0] - 2026-06-11
 
 ### CI

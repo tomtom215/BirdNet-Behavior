@@ -4,7 +4,7 @@ BirdNet-Behavior turns a stream of detections into behavior. The analytics scree
 
 ## Activity heatmap — "When the yard is alive"
 
-The **Heatmap** page (`/heatmap`) stacks several bespoke visualizations:
+The **When active** and **Dawn chorus** tabs of [Patterns](./patterns.md) (`/patterns`) stack several bespoke visualizations:
 
 ![The activity heatmap, circadian polar and migration ridgeline](../images/heatmap.png)
 
@@ -16,7 +16,7 @@ The **Heatmap** page (`/heatmap`) stacks several bespoke visualizations:
 
 ## Co-occurrence — "Who sings with whom"
 
-The **Co-occurrence** page (`/correlation`) shows which species are detected together.
+The **Who sings together** tab of [Patterns](./patterns.md) (`/patterns?tab=together`) shows which species are detected together.
 
 ![The co-occurrence matrix and acoustic-network chord diagram](../images/correlation.png)
 
