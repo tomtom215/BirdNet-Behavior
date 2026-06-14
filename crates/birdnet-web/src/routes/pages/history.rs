@@ -99,8 +99,8 @@ fn render_history(days: &[birdnet_db::sqlite::DayCount]) -> String {
         );
         return html;
     };
-    let latest_day = latest.date.as_str();
-    let latest_month = latest_day.get(0..7).unwrap_or("");
+    let sel = latest.date.as_str();
+    let month = sel.get(0..7).unwrap_or("");
 
     let _ = write!(
         html,
@@ -108,8 +108,6 @@ fn render_history(days: &[birdnet_db::sqlite::DayCount]) -> String {
   <div class="bnb-card pad" id="rp-cal-wrap" hx-get="/pages/history-calendar?month={month}&amp;sel={sel}" hx-trigger="load" hx-swap="innerHTML"><p class="bnb-meta">Loading calendar…</p></div>
   <div class="bnb-card pad" id="rp-daydetail" hx-get="/pages/history-chart?date={sel}" hx-trigger="load" hx-swap="innerHTML"><p class="bnb-meta">Loading…</p></div>
 </div>"#,
-        month = latest_month,
-        sel = latest_day,
     );
     html
 }
@@ -125,13 +123,8 @@ async fn history_calendar_partial(
     let result =
         tokio::task::spawn_blocking(move || state.with_db(birdnet_db::sqlite::detections_per_day))
             .await;
-    let days = match result {
-        Ok(Ok(d)) => d,
-        _ => {
-            return axum::response::Html(
-                "<p class='error'>Failed to load calendar.</p>".to_string(),
-            );
-        }
+    let Ok(Ok(days)) = result else {
+        return axum::response::Html("<p class='error'>Failed to load calendar.</p>".to_string());
     };
     let sel = params.sel.as_deref().filter(|s| s.len() == 10);
     axum::response::Html(render_calendar(&days, params.month.as_deref(), sel))
@@ -386,10 +379,9 @@ fn weekday_name(date: &str) -> &'static str {
 }
 
 /// Number of days in a given month (Gregorian, leap-year aware).
-fn days_in_month(year: i64, month: u32) -> u32 {
+const fn days_in_month(year: i64, month: u32) -> u32 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
         2 => {
             if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 {
                 29
@@ -397,6 +389,7 @@ fn days_in_month(year: i64, month: u32) -> u32 {
                 28
             }
         }
+        // 4, 6, 9, 11 — and any out-of-range month — fall through to 30.
         _ => 30,
     }
 }
