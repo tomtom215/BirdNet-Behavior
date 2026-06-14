@@ -249,8 +249,12 @@ async fn analytics_page_returns_html() {
     let html = String::from_utf8_lossy(&body);
 
     assert!(html.contains("Behavioral Analytics"));
-    assert!(html.contains("Activity Sessions"));
-    assert!(html.contains("Species Retention"));
+    // Behavior tab is a defined-in-place masonry since the Patterns reskin:
+    // each card carries a sentence-case eyebrow + a plain-English headline.
+    assert!(html.contains("Activity sessions"));
+    assert!(html.contains("Bursts of singing"));
+    assert!(html.contains("Species retention"));
+    assert!(html.contains("Who keeps coming back"));
 }
 
 #[tokio::test]

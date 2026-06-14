@@ -10,6 +10,7 @@ use axum::response::IntoResponse;
 use axum::{Router, routing::get};
 use serde::Deserialize;
 
+use super::atoms::avatar;
 use super::{date_to_epoch_days, days_to_date, escape_html};
 use crate::state::AppState;
 
@@ -47,31 +48,39 @@ async fn weekly_partial(
 
     let week_end = add_days(&week_start, 6);
     let prev_week = add_days(&week_start, -7);
+    let prev_week_end = add_days(&prev_week, 6);
     let next_week = add_days(&week_start, 7);
     let today = today_string();
     let is_current = week_start <= today && today <= week_end;
 
     let week_start2 = week_start.clone();
     let week_end2 = week_end.clone();
+    let prev_week_c = prev_week.clone();
+    let prev_week_end_c = prev_week_end.clone();
 
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
             let total = birdnet_db::sqlite::weekly_detection_count(conn, &week_start, &week_end)?;
-            let top = birdnet_db::sqlite::weekly_top_species(conn, &week_start, &week_end, 10)?;
+            // Large limit so the returned list length is the true weekly species
+            // count; the leaderboard still renders only the top 10.
+            let top = birdnet_db::sqlite::weekly_top_species(conn, &week_start, &week_end, 1000)?;
             let new = birdnet_db::sqlite::weekly_new_species(conn, &week_start, &week_end)?;
             let daily = birdnet_db::sqlite::range_daily_counts(conn, &week_start, &week_end)?;
-            Ok::<_, birdnet_db::sqlite::DbError>((total, top, new, daily))
+            let prev_total =
+                birdnet_db::sqlite::weekly_detection_count(conn, &prev_week_c, &prev_week_end_c)?;
+            Ok::<_, birdnet_db::sqlite::DbError>((total, top, new, daily, prev_total))
         })
     })
     .await;
 
     let html = match result {
-        Ok(Ok((total, top, new_species, daily))) => render_weekly_content(
+        Ok(Ok((total, top, new_species, daily, prev_total))) => render_weekly_content(
             &week_start2,
             &week_end2,
             &prev_week,
             &next_week,
             total,
+            prev_total,
             &top,
             &new_species,
             &daily,
@@ -87,13 +96,21 @@ async fn weekly_partial(
 // HTML rendering helpers
 // ---------------------------------------------------------------------------
 
-#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_lines,
+    clippy::too_many_arguments,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
 fn render_weekly_content(
     week_start: &str,
     week_end: &str,
     prev_week: &str,
     next_week: &str,
     total: i64,
+    prev_total: i64,
     top: &[(String, String, i64)],
     new_species: &[(String, String, String)],
     daily: &[birdnet_db::sqlite::DailyCount],
@@ -129,111 +146,129 @@ fn render_weekly_content(
 </div>"#,
     );
 
-    // Summary stats
+    // ── Editorial hero ────────────────────────────────────────────────────
     let species_count = top.len();
+    let new_count = new_species.len();
+    let delta_pct = if prev_total > 0 {
+        ((total - prev_total) as f64 / prev_total as f64 * 100.0).round() as i64
+    } else {
+        0
+    };
+    let headline = if total == 0 {
+        "A <em>silent</em> week."
+    } else if delta_pct >= 10 {
+        "A <em>loud</em> week."
+    } else if delta_pct <= -10 {
+        "A <em>quieter</em> week."
+    } else {
+        "A <em>steady</em> week."
+    };
+    let mut lead = format!("<b>{total} detections</b> from <b>{species_count} species</b>");
+    if prev_total > 0 && delta_pct != 0 {
+        let word = if delta_pct > 0 { "busier" } else { "quieter" };
+        let _ = write!(lead, " — {}% {word} than the week before", delta_pct.abs());
+    }
+    if new_count > 0 {
+        let plural = if new_count == 1 { "bird" } else { "birds" };
+        let _ = write!(lead, ", and {new_count} {plural} new to your list");
+    }
+    lead.push('.');
     let _ = write!(
         html,
-        r#"<div class="wk-stats">
-  <div class="wk-card center">
-    <div class="wk-stat-num accent">{total}</div>
-    <div class="wk-stat-label">Total Detections</div>
-  </div>
-  <div class="wk-card center">
-    <div class="wk-stat-num success">{species}</div>
-    <div class="wk-stat-label">Species Detected</div>
-  </div>
-  <div class="wk-card center">
-    <div class="wk-stat-num warning">{new}</div>
-    <div class="wk-stat-label">New Species</div>
-  </div>
-</div>"#,
-        total = total,
-        species = species_count,
-        new = new_species.len(),
+        r#"<div class="rp-hero"><div class="eyebrow">Weekly report</div><h1>{headline}</h1><p class="lead">{lead}</p></div>"#,
     );
 
-    // 7-day bar chart
+    // ── Stat band ─────────────────────────────────────────────────────────
+    let det_detail = if prev_total > 0 {
+        let arrow = if delta_pct >= 0 { "↑" } else { "↓" };
+        format!("{arrow} {}% vs last week", delta_pct.abs())
+    } else {
+        "first full week".to_string()
+    };
+    let species_detail = if new_count > 0 {
+        format!("+{new_count} first-ever")
+    } else {
+        "none new".to_string()
+    };
+    let (busy_label, busy_count) = busiest_day(week_start, daily);
     let _ = write!(
         html,
-        r#"<div class="wk-card mb">
-  <h3 class="wk-card-title">Daily Activity</h3>
-  {chart}
+        r#"<div class="rp-stats">
+  <div class="rp-stat"><div class="v moss">{total}</div><div class="l">detections</div><div class="d">{det_detail}</div></div>
+  <div class="rp-stat"><div class="v">{species_count}</div><div class="l">species</div><div class="d">{species_detail}</div></div>
+  <div class="rp-stat"><div class="v rare">{new_count}</div><div class="l">new to your list</div></div>
+  <div class="rp-stat"><div class="v">{busy_label}</div><div class="l">busiest day</div><div class="d">{busy_count} detections</div></div>
 </div>"#,
+    );
+
+    // ── Daily chart ───────────────────────────────────────────────────────
+    let _ = write!(
+        html,
+        r#"<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">This week</div><h3>Detections per day</h3></div></div><div class="rp-viz">{chart}</div></div>"#,
         chart = render_weekly_chart(week_start, daily),
     );
 
-    // Two-column layout: top species + new species
-    let _ = write!(html, r#"<div class="wk-cols">"#);
+    // ── Two columns: top species + first-ever ─────────────────────────────
+    html.push_str(r#"<div class="rp-2col">"#);
 
-    // Top 10 species
     html.push_str(
-        r#"<div class="wk-card">
-<h3 class="wk-card-title">Top Species This Week</h3>"#,
+        r#"<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">This week</div><h3>Top species</h3></div><a class="action" href="/species">All species →</a></div>"#,
     );
     if top.is_empty() {
         html.push_str(r#"<p class="wk-muted">No detections this week.</p>"#);
     } else {
-        html.push_str(r#"<ol class="wk-top-list">"#);
-        let max_count = top.first().map_or(1, |(_, _, c)| *c).max(1);
-        for (sci, com, count) in top {
-            #[allow(
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                clippy::cast_precision_loss,
-                clippy::cast_possible_wrap,
-                clippy::cast_lossless
-            )]
-            let pct = (*count as f64 / max_count as f64 * 100.0) as u32;
+        for (i, (_, com, count)) in top.iter().take(10).enumerate() {
             let _ = write!(
                 html,
-                r#"<li class="wk-top-item">
-  <a href="/species/{sci_enc}" class="wk-top-name">{com_esc}</a>
-  <div class="wk-top-bar-row">
-    <div class="wk-top-track">
-      <div class="wk-top-fill" data-style="width:{pct}%"></div>
-    </div>
-    <span class="wk-top-count">{count}</span>
-  </div>
-</li>"#,
-                sci_enc = escape_html(&super::simple_url_encode(sci)),
-                com_esc = escape_html(com),
-                pct = pct,
-                count = count,
+                r#"<div class="rp-row"><span class="rk">{rank}</span>{av}<div class="nm">{name}</div><span class="ct">{count}</span></div>"#,
+                rank = i + 1,
+                av = avatar(com, ""),
+                name = escape_html(com),
             );
         }
-        html.push_str("</ol>");
     }
     html.push_str("</div>");
 
-    // New species
     html.push_str(
-        r#"<div class="wk-card">
-<h3 class="wk-card-title">New Species This Week
-  <span class="sub">(first ever)</span>
-</h3>"#,
+        r#"<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">First-ever</div><h3>New to your station</h3></div></div>"#,
     );
     if new_species.is_empty() {
         html.push_str(r#"<p class="wk-muted">No new species this week.</p>"#);
     } else {
-        html.push_str(r#"<ul class="wk-new-list">"#);
-        for (sci, com, date) in new_species {
+        for (_, com, date) in new_species {
             let _ = write!(
                 html,
-                r#"<li class="wk-new-item">
-  <span class="wk-new-badge">NEW</span>
-  <a href="/species/{sci_enc}" class="wk-new-name">{com_esc}</a>
-  <span class="wk-new-date">{date}</span>
-</li>"#,
-                sci_enc = escape_html(&super::simple_url_encode(sci)),
-                com_esc = escape_html(com),
-                date = date,
+                r#"<div class="rp-new">{av}<div class="nm">{name} <span class="bnb-pill rare badge">first ever</span></div><span class="when">{date}</span></div>"#,
+                av = avatar(com, ""),
+                name = escape_html(com),
+                date = escape_html(date),
             );
         }
-        html.push_str("</ul>");
     }
-    html.push_str("</div></div>"); // close grid + new species card
+    html.push_str("</div></div>");
 
     html
+}
+
+/// The week's busiest weekday — `(label, count)` from its daily totals.
+fn busiest_day(week_start: &str, daily: &[birdnet_db::sqlite::DailyCount]) -> (String, i64) {
+    let dates = week_dates(week_start);
+    let day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    let mut best_idx = 0usize;
+    let mut best = -1i64;
+    for dc in daily {
+        if let Some(idx) = dates.iter().position(|d| d == &dc.date)
+            && dc.count > best
+        {
+            best = dc.count;
+            best_idx = idx;
+        }
+    }
+    if best < 0 {
+        ("—".to_string(), 0)
+    } else {
+        (day_names[best_idx].to_string(), best)
+    }
 }
 
 /// Render a 7-bar SVG chart for the week (one bar per day).

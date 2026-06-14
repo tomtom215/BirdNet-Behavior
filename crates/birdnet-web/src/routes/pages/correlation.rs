@@ -73,25 +73,22 @@ const CORRELATION_CONTENT: &str = r##"<div class="page-head">
 </div>
 
 <div class="bnb-card pad">
-  <div class="section-header"><div><div class="bnb-eyebrow">The yard's social graph</div><h3>Co-occurrence matrix</h3></div></div>
-  <div id="cooccurrence-matrix" hx-get="/pages/cooccurrence-matrix?days=30" hx-trigger="load" hx-swap="innerHTML">
-    <p class="bnb-meta">Loading…</p>
-  </div>
-</div>
-
-<div class="bnb-card pad">
   <div class="section-header"><div><div class="bnb-eyebrow">The acoustic network</div><h3>Who connects to whom</h3></div><span class="bnb-pill">ρ ≥ 0.20</span></div>
-  <p class="bnb-meta co-meta-gap">The same data as the matrix, drawn as ribbons — thicker links co-occur more often, and each species' arc length is its total connectedness in the soundscape.</p>
-  <div id="acoustic-network" hx-get="/pages/acoustic-network?days=30" hx-trigger="load" hx-swap="innerHTML">
+  <div class="pt-viz" id="acoustic-network" hx-get="/pages/acoustic-network?days=30" hx-trigger="load" hx-swap="innerHTML">
     <p class="bnb-meta">Loading…</p>
   </div>
-</div>
-
-<div class="bnb-card pad">
-  <div class="section-header"><div><div class="bnb-eyebrow">Strongest pairs</div><h3>Top co-occurring species</h3></div></div>
-  <div id="correlation-pairs" hx-get="/pages/correlation-pairs?days=30" hx-trigger="load" hx-swap="innerHTML">
-    <p class="bnb-meta">Loading…</p>
-  </div>
+  <details class="pt-disc">
+    <summary>See the numbers — the co-occurrence matrix</summary>
+    <div id="cooccurrence-matrix" hx-get="/pages/cooccurrence-matrix?days=30" hx-trigger="load" hx-swap="innerHTML">
+      <p class="bnb-meta">Loading…</p>
+    </div>
+  </details>
+  <details class="pt-disc">
+    <summary>See the numbers — strongest co-occurring pairs</summary>
+    <div id="correlation-pairs" hx-get="/pages/correlation-pairs?days=30" hx-trigger="load" hx-swap="innerHTML">
+      <p class="bnb-meta">Loading…</p>
+    </div>
+  </details>
 </div>
 
 <div class="bnb-card pad">

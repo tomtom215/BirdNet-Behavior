@@ -146,6 +146,17 @@ pub struct DailyCount {
     pub count: i64,
 }
 
+/// One calendar day's detection volume, for the Reports History heat-calendar.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DayCount {
+    /// Date string (YYYY-MM-DD).
+    pub date: String,
+    /// Total detections on this date.
+    pub count: i64,
+    /// Distinct species heard on this date.
+    pub species: i64,
+}
+
 /// Species summary with statistics.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SpeciesSummary {
