@@ -186,6 +186,81 @@ fn live_sequence_match() {
 }
 
 #[test]
+fn live_sequence_count() {
+    let Some((db, _tmp)) = loaded_db() else {
+        return;
+    };
+    seed(&db);
+    let params = types::PatternParams {
+        species_sequence: vec![
+            "European Robin".into(),
+            "Eurasian Blackbird".into(),
+            "Eurasian Wren".into(),
+        ],
+        max_gap_minutes: None,
+        hour_start: 4,
+        hour_end: 8,
+    };
+    let results = db.sequence_count(&params).unwrap();
+    eprintln!("[live] sequence_count: {results:?}");
+    let count = |d: &str| {
+        results
+            .iter()
+            .find(|m| m.date.starts_with(d))
+            .unwrap()
+            .count
+    };
+    // Same fixture as live_sequence_match, but counted: day1 and day3 each
+    // complete R->B->W exactly once; day2 has no Wren so the sequence count is 0.
+    assert_eq!(count("2024-05-01"), 1, "day1 R->B->W once");
+    assert_eq!(count("2024-05-02"), 0, "day2 missing Wren -> 0");
+    assert_eq!(count("2024-05-03"), 1, "day3 R->B->W once");
+}
+
+#[test]
+fn live_funnel_events() {
+    let Some((db, _tmp)) = loaded_db() else {
+        return;
+    };
+    seed(&db);
+    let params = types::FunnelParams {
+        species_sequence: vec![
+            "European Robin".into(),
+            "Eurasian Blackbird".into(),
+            "Eurasian Wren".into(),
+        ],
+        window_minutes: 120,
+        hour_start: 4,
+        hour_end: 8,
+    };
+    let results = db.funnel_events(&params).unwrap();
+    eprintln!("[live] funnel_events: {results:?}");
+    let steps = |d: &str| {
+        results
+            .iter()
+            .find(|f| f.date.starts_with(d))
+            .unwrap()
+            .step_times
+            .len()
+    };
+    // One timestamp per completed funnel step (cf. live_window_funnel):
+    // day1 and day3 complete all three; day2 reaches Robin->Blackbird only.
+    assert_eq!(steps("2024-05-01"), 3, "day1 full sequence -> 3 step times");
+    assert_eq!(
+        steps("2024-05-02"),
+        2,
+        "day2 Robin->Blackbird -> 2 step times"
+    );
+    assert_eq!(steps("2024-05-03"), 3, "day3 full sequence -> 3 step times");
+    // The step timestamps are real, date-stamped values.
+    let day1 = results
+        .iter()
+        .find(|f| f.date.starts_with("2024-05-01"))
+        .unwrap();
+    assert!(day1.step_times.iter().all(|t| t.contains("2024-05-01")));
+}
+
+#[test]
 fn live_next_species() {
     let Some((db, _tmp)) = loaded_db() else {
         return;

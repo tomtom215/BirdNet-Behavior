@@ -59,8 +59,10 @@ rusqlite = { version = "0.40", features = ["bundled", "backup"] }
 # the DuckDB version the published `behavioral` community extension targets —
 # DuckDB refuses to LOAD an extension built for any other version (verified:
 # even `allow_extensions_metadata_mismatch` does not bypass the LOAD-time check).
-# The community CDN serves `behavioral` v0.6.0 built for DuckDB 1.5.3, so the
-# bundled engine matches and `LOAD behavioral` succeeds.
+# The community CDN serves `behavioral` v0.8.0 built for DuckDB 1.5.3 (verified:
+# the v1.5.3 artifact reports v0.8.0 and exposes window_funnel_events /
+# sequence_count / sequence_match_events), so the bundled engine matches and
+# `LOAD behavioral` succeeds.
 #
 # When bumping, confirm the new build actually LOADs — an HTTP 200 on the
 # version path is not sufficient, because a freshly published artifact can lag

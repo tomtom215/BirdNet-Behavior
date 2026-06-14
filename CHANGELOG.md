@@ -120,6 +120,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Adopt duckdb-behavioral v0.8.0's new ClickHouse-parity functions.** The
+  community `behavioral` extension served for the bundled DuckDB (v1.5.3) is now
+  v0.8.0 (pin verified — no engine change needed), which adds `sequence_count`,
+  `window_funnel_events` and `sequence_match_events`. `birdnet-behavioral` gains
+  typed wrappers for the first two — `AnalyticsDb::sequence_count` (how *many*
+  times an ordered species sequence occurred per day, not just whether it did)
+  and `AnalyticsDb::funnel_events` (the timestamp each completed dawn-chorus step
+  fired) — with SQL builders, unit tests, and live tests verified against the
+  real extension. Exposed over the REST API as `/analytics/sequence-count` and
+  `/analytics/funnel-events`.
 - Permanent (`308`) redirects from every pre-spine route to its new home
   (`/today`, `/heatmap`, `/analytics`, `/migration`, `/correlation`,
   `/timeseries`, `/analytics/dawn-chorus`, `/weekly`, `/year-in-review`,
