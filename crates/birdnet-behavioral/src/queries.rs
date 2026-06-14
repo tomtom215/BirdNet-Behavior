@@ -13,7 +13,9 @@
 //! | `sessionize`          | window fn in a subquery, then `GROUP BY session_id`|
 //! | `retention`           | `retention(BOOLEAN, …)` -> `BOOLEAN[]` aggregate   |
 //! | `window_funnel`       | variadic `BOOLEAN` step conditions                 |
+//! | `window_funnel_events`| like `window_funnel` -> `TIMESTAMP[]` of step times |
 //! | `sequence_match`      | `sequence_match(pattern, ts, BOOLEAN, …)` -> bool  |
+//! | `sequence_count`      | like `sequence_match` -> `BIGINT` occurrence count |
 //! | `sequence_next_node`  | `(direction, mode, ts, value, BOOLEAN, …)` -> text |
 
 use std::fmt::Write as _;
@@ -57,7 +59,7 @@ FORCE INSTALL behavioral FROM community;
 LOAD behavioral;
 ";
 
-/// SQL to read the loaded behavioral extension version (e.g. `v0.6.0`).
+/// SQL to read the loaded behavioral extension version (e.g. `v0.8.0`).
 ///
 /// Filters on `loaded` so it reports the version active in the current
 /// connection, not one merely present in `DuckDB`'s shared extension cache.
@@ -181,6 +183,39 @@ pub fn funnel_sql(params: &FunnelParams) -> String {
     )
 }
 
+/// Build SQL for dawn-chorus funnel *step timings* (`window_funnel_events`,
+/// v0.8.0).
+///
+/// Same shape as [`funnel_sql`], but `window_funnel_events()` returns the
+/// `TIMESTAMP[]` of when each completed step fired rather than a step count.
+/// Each element is cast to `VARCHAR` via `list_transform` so the result is a
+/// plain string list the typed layer can read without timestamp-array decoding.
+///
+/// Callers must pass 2..=32 species; [`crate::connection`] enforces this.
+pub fn funnel_events_sql(params: &FunnelParams) -> String {
+    let conditions = species_conditions(&params.species_sequence);
+
+    format!(
+        "SELECT
+            CAST(CAST(detection_timestamp AS DATE) AS VARCHAR) AS date,
+            list_transform(
+                window_funnel_events(
+                    INTERVAL '{window} MINUTE',
+                    detection_timestamp,
+                    {conditions}
+                ),
+                x -> CAST(x AS VARCHAR)
+            ) AS step_times
+        FROM detections_ts
+        WHERE EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
+        GROUP BY CAST(detection_timestamp AS DATE)
+        ORDER BY date DESC",
+        window = params.window_minutes,
+        start = params.hour_start,
+        end = params.hour_end,
+    )
+}
+
 /// Build SQL for ordered sequence pattern matching.
 ///
 /// `sequence_match()` tests, per day, whether the configured species were
@@ -199,6 +234,34 @@ pub fn sequence_match_sql(params: &PatternParams) -> String {
             sequence_match('{pattern}', detection_timestamp,
                 {conditions}
             ) AS matched
+        FROM detections_ts
+        WHERE EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
+        GROUP BY CAST(detection_timestamp AS DATE)
+        ORDER BY date DESC",
+        start = params.hour_start,
+        end = params.hour_end,
+    )
+}
+
+/// Build SQL for ordered sequence *occurrence counts* (`sequence_count`,
+/// v0.8.0).
+///
+/// Same pattern + conditions as [`sequence_match_sql`], but `sequence_count()`
+/// returns the `BIGINT` number of non-overlapping times the ordered sequence
+/// occurred that day rather than a single boolean — so "did A→B→C happen?"
+/// becomes "how many times did A→B→C happen?".
+///
+/// Callers must pass 2..=32 species; [`crate::connection`] enforces this.
+pub fn sequence_count_sql(params: &PatternParams) -> String {
+    let pattern = ordered_pattern(params.species_sequence.len(), params.max_gap_minutes);
+    let conditions = species_conditions(&params.species_sequence);
+
+    format!(
+        "SELECT
+            CAST(CAST(detection_timestamp AS DATE) AS VARCHAR) AS date,
+            sequence_count('{pattern}', detection_timestamp,
+                {conditions}
+            ) AS match_count
         FROM detections_ts
         WHERE EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
         GROUP BY CAST(detection_timestamp AS DATE)
@@ -345,6 +408,27 @@ mod tests {
         };
         let sql = sequence_match_sql(&params);
         assert!(sql.contains("sequence_match('(?1).*(?t<=1800)(?2)'"));
+    }
+
+    #[test]
+    fn sequence_count_sql_default() {
+        let sql = sequence_count_sql(&PatternParams::default());
+        assert!(sql.contains("sequence_count('(?1).*(?2).*(?3)', detection_timestamp"));
+        assert!(sql.contains("Com_Name = 'European Robin'"));
+        assert!(sql.contains("AS match_count"));
+    }
+
+    #[test]
+    fn funnel_events_sql_default() {
+        let sql = funnel_events_sql(&FunnelParams::default());
+        assert!(sql.contains("window_funnel_events("));
+        // The TIMESTAMP[] is cast element-wise to VARCHAR for a plain list.
+        assert!(sql.contains("list_transform("));
+        assert!(sql.contains("x -> CAST(x AS VARCHAR)"));
+        assert!(sql.contains("AS step_times"));
+        assert!(sql.contains("Com_Name = 'European Robin'"));
+        // Conditions are variadic, not wrapped in an array literal.
+        assert!(!sql.contains("[Com_Name"));
     }
 
     #[test]

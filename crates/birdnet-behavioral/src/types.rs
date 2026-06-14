@@ -97,6 +97,23 @@ pub struct ChorusFunnel {
     pub matched_species: Vec<String>,
 }
 
+/// Dawn chorus funnel step timings (output of `window_funnel_events`, v0.8.0).
+///
+/// Like [`ChorusFunnel`] but reports *when* each completed step was satisfied,
+/// so the UI can show the actual progression (e.g. Robin 05:42 → Blackbird
+/// 05:51 → Wren 06:03) rather than just how many steps were reached.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChorusFunnelEvents {
+    /// Date of the dawn chorus observation.
+    pub date: String,
+    /// Timestamp each completed step fired, in funnel order (ISO 8601).
+    /// Its length equals the number of steps completed that day.
+    pub step_times: Vec<String>,
+    /// The expected species sequence; pair `species_sequence[i]` with
+    /// `step_times[i]` for the completed steps.
+    pub species_sequence: Vec<String>,
+}
+
 /// Sequence pattern match result (output of `sequence_match`).
 #[derive(Debug, Clone, Serialize)]
 pub struct PatternMatch {
@@ -104,6 +121,20 @@ pub struct PatternMatch {
     pub date: String,
     /// Whether the full pattern was matched.
     pub matched: bool,
+    /// Species involved in the pattern.
+    pub species_sequence: Vec<String>,
+}
+
+/// Sequence pattern occurrence count (output of `sequence_count`, v0.8.0).
+///
+/// Like [`PatternMatch`] but reports *how many* non-overlapping times the
+/// ordered sequence occurred that day, not merely whether it happened at all.
+#[derive(Debug, Clone, Serialize)]
+pub struct PatternCount {
+    /// Date the pattern was observed.
+    pub date: String,
+    /// Number of non-overlapping occurrences of the ordered sequence.
+    pub count: u64,
     /// Species involved in the pattern.
     pub species_sequence: Vec<String>,
 }

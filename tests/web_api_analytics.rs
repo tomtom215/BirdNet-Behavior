@@ -71,7 +71,12 @@ async fn analytics_endpoints_report_unavailable_without_duckdb() {
     let app = app();
 
     // These endpoints don't require query params and report unavailable without DuckDB
-    for endpoint in &["/api/v2/analytics/retention", "/api/v2/analytics/funnel"] {
+    for endpoint in &[
+        "/api/v2/analytics/retention",
+        "/api/v2/analytics/funnel",
+        "/api/v2/analytics/funnel-events",
+        "/api/v2/analytics/sequence-count",
+    ] {
         let response = app
             .clone()
             .oneshot(

@@ -250,7 +250,7 @@ impl AnalyticsDb {
             .ok()
     }
 
-    /// The loaded `behavioral` extension version (e.g. `v0.6.0`).
+    /// The loaded `behavioral` extension version (e.g. `v0.8.0`).
     ///
     /// Returns `None` when the extension is not loaded in this connection or its
     /// version is unavailable. Best-effort — any query error maps to `None` — so

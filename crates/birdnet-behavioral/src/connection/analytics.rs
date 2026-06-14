@@ -1,8 +1,9 @@
 //! Behavioral analytics query methods on `AnalyticsDb`.
 //!
 //! Wraps the `duckdb-behavioral` extension functions (sessionize, retention,
-//! `window_funnel`, `sequence_match`, `sequence_next_node`) with typed Rust APIs.
-//! All methods require `extension_loaded == true`.
+//! `window_funnel`, `window_funnel_events`, `sequence_match`, `sequence_count`,
+//! `sequence_next_node`) with typed Rust APIs. All methods require
+//! `extension_loaded == true`.
 
 use duckdb::types::Value;
 
@@ -151,6 +152,56 @@ impl AnalyticsDb {
         Ok(results)
     }
 
+    /// Execute a dawn-chorus funnel *step-timing* query
+    /// (`window_funnel_events`, v0.8.0).
+    ///
+    /// Like [`Self::funnel`] but returns the timestamp each completed step
+    /// fired (in funnel order), so callers can show the actual dawn
+    /// progression rather than just how many steps were reached.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AnalyticsError::InvalidData` if the species sequence is not
+    /// 2..=32 long, `AnalyticsError::ExtensionLoad` if the extension is not
+    /// loaded, or `AnalyticsError::Database` on query failure.
+    pub fn funnel_events(
+        &self,
+        params: &types::FunnelParams,
+    ) -> Result<Vec<types::ChorusFunnelEvents>, AnalyticsError> {
+        let n = params.species_sequence.len();
+        if !(2..=32).contains(&n) {
+            return Err(AnalyticsError::InvalidData(format!(
+                "window_funnel_events requires 2..=32 species, got {n}"
+            )));
+        }
+        self.require_extension()?;
+        let sql = queries::funnel_events_sql(params);
+        let sequence = params.species_sequence.clone();
+        let mut stmt = self.conn.prepare(&sql)?;
+        // window_funnel_events returns TIMESTAMP[]; the SQL casts each element
+        // to VARCHAR, so the column reads back as a list of text values.
+        let rows = stmt.query_map([], |row| {
+            let date: String = row.get(0)?;
+            let times_value: Value = row.get(1)?;
+            let step_times: Vec<String> = match times_value {
+                Value::List(list) => list
+                    .into_iter()
+                    .filter_map(|v| match v {
+                        Value::Text(s) => Some(s),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            Ok(types::ChorusFunnelEvents {
+                date,
+                step_times,
+                species_sequence: sequence.clone(),
+            })
+        })?;
+        rows.map(|r| r.map_err(AnalyticsError::from)).collect()
+    }
+
     /// Execute an ordered sequence-pattern match query.
     ///
     /// For each day, reports whether the configured species were detected in
@@ -180,6 +231,41 @@ impl AnalyticsDb {
             Ok(types::PatternMatch {
                 date: row.get(0)?,
                 matched: row.get(1)?,
+                species_sequence: sequence.clone(),
+            })
+        })?;
+        rows.map(|r| r.map_err(AnalyticsError::from)).collect()
+    }
+
+    /// Execute an ordered sequence *count* query (`sequence_count`, v0.8.0).
+    ///
+    /// Like [`Self::sequence_match`] but reports, per day, how many
+    /// non-overlapping times the ordered species sequence occurred — turning
+    /// "did A→B→C happen?" into "how often did A→B→C happen?".
+    ///
+    /// # Errors
+    ///
+    /// Returns `AnalyticsError::InvalidData` if the species sequence is not
+    /// 2..=32 long, `AnalyticsError::ExtensionLoad` if the extension is not
+    /// loaded, or `AnalyticsError::Database` on query failure.
+    pub fn sequence_count(
+        &self,
+        params: &types::PatternParams,
+    ) -> Result<Vec<types::PatternCount>, AnalyticsError> {
+        let n = params.species_sequence.len();
+        if !(2..=32).contains(&n) {
+            return Err(AnalyticsError::InvalidData(format!(
+                "sequence_count requires 2..=32 species, got {n}"
+            )));
+        }
+        self.require_extension()?;
+        let sql = queries::sequence_count_sql(params);
+        let sequence = params.species_sequence.clone();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map([], |row| {
+            Ok(types::PatternCount {
+                date: row.get(0)?,
+                count: u64::try_from(row.get::<_, i64>(1)?).unwrap_or(0),
                 species_sequence: sequence.clone(),
             })
         })?;
@@ -322,5 +408,47 @@ mod tests {
         };
         let err = db.retention(&params).unwrap_err();
         assert!(err.to_string().contains("requires 1..=31"));
+    }
+
+    #[test]
+    fn sequence_count_requires_extension() {
+        let (db, _tmp) = make_db();
+        let err = db
+            .sequence_count(&types::PatternParams::default())
+            .unwrap_err();
+        assert!(err.to_string().contains("extension not loaded"));
+    }
+
+    #[test]
+    fn sequence_count_rejects_short_sequence() {
+        let (db, _tmp) = make_db();
+        let params = types::PatternParams {
+            species_sequence: vec!["Robin".into()],
+            ..types::PatternParams::default()
+        };
+        let err = db.sequence_count(&params).unwrap_err();
+        assert!(err.to_string().contains("requires 2..=32"));
+    }
+
+    #[test]
+    fn funnel_events_requires_extension() {
+        let (db, _tmp) = make_db();
+        let params = types::FunnelParams {
+            species_sequence: vec!["Robin".into(), "Blackbird".into()],
+            ..types::FunnelParams::default()
+        };
+        let err = db.funnel_events(&params).unwrap_err();
+        assert!(err.to_string().contains("extension not loaded"));
+    }
+
+    #[test]
+    fn funnel_events_rejects_short_sequence() {
+        let (db, _tmp) = make_db();
+        let params = types::FunnelParams {
+            species_sequence: vec!["Robin".into()],
+            ..types::FunnelParams::default()
+        };
+        let err = db.funnel_events(&params).unwrap_err();
+        assert!(err.to_string().contains("requires 2..=32"));
     }
 }
