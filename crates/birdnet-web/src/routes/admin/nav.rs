@@ -25,25 +25,44 @@ pub struct AdminNav {
     pub path: &'static str,
     /// The human label shown in the nav and breadcrumb.
     pub label: &'static str,
+    /// The v3-spine Station task group this destination belongs to.
+    ///
+    /// One of Health · Capture · Alerts · Data · Settings · Access; the shell
+    /// nav renders one labelled cluster per group, matching the Station tabs.
+    pub group: &'static str,
 }
 
-/// The admin sub-navigation, in display order. Adding a page to the admin shell
-/// is a one-line edit here; the parity test then requires a matching route.
+/// The admin sub-navigation, ordered by Station task group.
+///
+/// The shell renders one labelled cluster per group. Adding a page is a
+/// one-line edit here; the parity test then requires a matching route, and the
+/// grouping test requires each group's entries to stay contiguous.
 pub const ADMIN_NAV: &[AdminNav] = &[
+    // ── Health · is it working? ──
     AdminNav {
         key: "overview",
         path: "/admin/overview",
         label: "Overview",
+        group: "Health",
     },
     AdminNav {
-        key: "settings",
-        path: "/admin/settings",
-        label: "Settings",
+        key: "system",
+        path: "/admin/system",
+        label: "System",
+        group: "Health",
     },
+    AdminNav {
+        key: "doctor",
+        path: "/admin/doctor",
+        label: "Diagnostics",
+        group: "Health",
+    },
+    // ── Capture · what am I recording? ──
     AdminNav {
         key: "audio",
         path: "/admin/audio",
         label: "Audio",
+        group: "Capture",
     },
     // Managing which species are detected/excluded is a core station function —
     // a first-class tab so a non-technical operator finds it in the menu rather
@@ -52,6 +71,27 @@ pub const ADMIN_NAV: &[AdminNav] = &[
         key: "species",
         path: "/admin/species",
         label: "Species",
+        group: "Capture",
+    },
+    // ── Alerts · tell me when… ──
+    AdminNav {
+        key: "rules",
+        path: "/admin/rules",
+        label: "Rules",
+        group: "Alerts",
+    },
+    AdminNav {
+        key: "notifications",
+        path: "/admin/notifications",
+        label: "Notifications",
+        group: "Alerts",
+    },
+    // ── Data · keep it safe / bring it in ──
+    AdminNav {
+        key: "backups",
+        path: "/admin/backups",
+        label: "Backups",
+        group: "Data",
     },
     // Migration was reachable from the standalone pages' bespoke navs but was
     // absent from the shared shell nav — folding the pages in surfaces it here.
@@ -59,49 +99,47 @@ pub const ADMIN_NAV: &[AdminNav] = &[
         key: "migrate",
         path: "/admin/migrate",
         label: "Migration",
-    },
-    AdminNav {
-        key: "rules",
-        path: "/admin/rules",
-        label: "Rules",
+        group: "Data",
     },
     AdminNav {
         key: "quality",
         path: "/admin/quality",
         label: "Quality",
+        group: "Data",
     },
+    // ── Settings · my preferences ──
     AdminNav {
-        key: "notifications",
-        path: "/admin/notifications",
-        label: "Notifications",
+        key: "settings",
+        path: "/admin/settings",
+        label: "Settings",
+        group: "Settings",
     },
+    // ── Access · who can get in ──
     AdminNav {
         key: "accounts",
         path: "/admin/accounts",
         label: "Accounts",
-    },
-    AdminNav {
-        key: "backups",
-        path: "/admin/backups",
-        label: "Backups",
-    },
-    AdminNav {
-        key: "system",
-        path: "/admin/system",
-        label: "System",
-    },
-    AdminNav {
-        key: "doctor",
-        path: "/admin/doctor",
-        label: "Diagnostics",
+        group: "Access",
     },
 ];
 
-/// Render the admin nav `<a>` links, marking the tab whose key equals `active`.
+/// The Station task groups, in display order. The shell nav renders one
+/// labelled cluster per group from [`ADMIN_NAV`]; this is the canonical order.
+pub const GROUPS: &[&str] = &["Health", "Capture", "Alerts", "Data", "Settings", "Access"];
+
+/// Render the admin nav, grouped into labelled Station task clusters.
+///
+/// The tab whose key equals `active` is marked; entries are emitted in
+/// [`ADMIN_NAV`] order with a `.am-nav-group` label whenever the group changes.
 #[must_use]
 pub fn nav_links(active: &str) -> String {
-    let mut out = String::with_capacity(512);
+    let mut out = String::with_capacity(768);
+    let mut current_group = "";
     for n in ADMIN_NAV {
+        if n.group != current_group {
+            current_group = n.group;
+            let _ = write!(out, r#"<span class="am-nav-group">{}</span>"#, n.group);
+        }
         let attr = if n.key == active {
             " class=\"am-nav-active\""
         } else {
@@ -170,6 +208,36 @@ mod tests {
         for n in ADMIN_NAV {
             assert!(keys.insert(n.key), "duplicate admin nav key: {}", n.key);
             assert!(paths.insert(n.path), "duplicate admin nav path: {}", n.path);
+        }
+    }
+
+    #[test]
+    fn admin_nav_is_grouped_into_the_station_task_groups() {
+        // Every entry belongs to one of the six canonical groups, and entries
+        // stay contiguous by group so the shell renders one cluster each.
+        let mut order: Vec<&str> = Vec::new();
+        for n in ADMIN_NAV {
+            assert!(GROUPS.contains(&n.group), "unknown group {}", n.group);
+            if order.last() != Some(&n.group) {
+                assert!(
+                    !order.contains(&n.group),
+                    "group {} is not contiguous",
+                    n.group
+                );
+                order.push(n.group);
+            }
+        }
+        // The distinct groups appear in the canonical order…
+        assert_eq!(order, GROUPS);
+        // …and the rendered nav carries each group's label exactly once.
+        let html = nav_links("overview");
+        for g in GROUPS {
+            assert_eq!(
+                html.matches(&format!(r#"<span class="am-nav-group">{g}</span>"#))
+                    .count(),
+                1,
+                "group label {g} should render exactly once"
+            );
         }
     }
 

@@ -57,6 +57,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   state-chip, 24 h uptime strip and retry/backoff line, and the gated
   Capture/Alerts/Data/Settings/Access form tabs, are the remaining Wave B2
   work.)
+- **The admin panel's nav is regrouped into the six Station task groups.**
+  `admin/nav.rs`'s twelve flat destinations are ordered into labelled
+  **Health · Capture · Alerts · Data · Settings · Access** clusters (one
+  labelled group each in the shell nav), so the gated admin area's information
+  architecture matches the Station home's six tabs. Single source of truth;
+  parity- and grouping-tested.
 
 ### Added
 

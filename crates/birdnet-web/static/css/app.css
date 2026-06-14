@@ -3231,6 +3231,11 @@ input.aud-edit-device { font-size: 12px; padding: 6px 8px; border-radius: 6px; b
 
 /* admin/mod.rs — admin shell nav + sign-out. */
 a.am-nav-active   { color: var(--moss-ink); font-weight: 500; }
+/* v3 spine: the shell nav is grouped into the six Station task clusters. The
+   label sits before each group's links; a left hairline (except the first)
+   separates clusters in the wrapping flex row. */
+.am-nav-group     { font-family: var(--font-mono); font-size: .62rem; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-4); align-self: center; padding-left: .9rem; border-left: .5px solid var(--hairline); }
+.am-nav-group:first-child { padding-left: 0; border-left: 0; }
 .am-logout-form   { margin-left: auto; display: inline; }
 .am-signout-btn   { font-size: .875rem; padding: .25rem .75rem; }
 
