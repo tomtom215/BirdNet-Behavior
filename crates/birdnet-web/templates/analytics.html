@@ -51,6 +51,19 @@
         </div>
     </div>
 
+    <!-- Dawn sequence (v0.8.0: sequence_count + window_funnel_events) -->
+    <div class="bnb-card pad">
+        <div class="bnb-eyebrow">Dawn sequence</div>
+        <h3 class="an-card-h3">The morning running order</h3>
+        <p class="bnb-meta an-card-lede">
+            The voices that open your dawn, how <b>often</b> they sing in that
+            same order — and the <b>times</b> they checked in on a recent morning.
+        </p>
+        <div hx-get="/pages/analytics-dawn-sequence" hx-trigger="load" hx-swap="innerHTML">
+            <p class="an-loading">Loading dawn sequence...</p>
+        </div>
+    </div>
+
     <!-- Engine configuration -->
     <div class="bnb-card pad">
         <div class="bnb-eyebrow">Configuration</div>

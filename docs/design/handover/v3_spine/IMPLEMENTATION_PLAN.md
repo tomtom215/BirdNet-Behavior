@@ -245,6 +245,18 @@ first-detection celebration moment, WS-reconnect polish, tokens doc,
 OpenAPI, docs truth-sweep (web-api.md Basic-Auth drift). Plus anything from
 the mocks that lacks a backend today (noted inline during implementation).
 
+**Landed (Wave D).**
+
+- **Behavior tab — the dawn "running order" card.** Surfaces v0.8.0's
+  `sequence_count` + `window_funnel_events` in the Patterns → Behavior
+  `pt-masonry`. A new `/pages/analytics-dawn-sequence` partial derives the
+  station's leading dawn voices from its own data (top dawn-window species,
+  ordered by mean time-of-day — so the card reads honestly anywhere, not just
+  for the European REST defaults), then shows how *often* they sing in that
+  order and the step timing of a recent morning. Reuses `pt-tbl` / `pt-disc` /
+  `bh-*` — zero new CSS. `sequence_match_events` remains the one unadopted
+  v0.8.0 function.
+
 > Note: the handoff references companion docs `AUDIT_v3.html` and
 > `IA_REIMAGINING.html` that were not part of the upload; the Wave D summary
 > above is reconstructed from the handoff's own §05 list.

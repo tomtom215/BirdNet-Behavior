@@ -255,6 +255,9 @@ async fn analytics_page_returns_html() {
     assert!(html.contains("Bursts of singing"));
     assert!(html.contains("Species retention"));
     assert!(html.contains("Who keeps coming back"));
+    // The v0.8.0 dawn-sequence card (sequence_count + window_funnel_events).
+    assert!(html.contains("Dawn sequence"));
+    assert!(html.contains("The morning running order"));
 }
 
 #[tokio::test]
@@ -354,6 +357,35 @@ async fn htmx_analytics_config_partial() {
 
     assert!(html.contains("Version"));
     assert!(html.contains("SQLite Database"));
+}
+
+#[tokio::test]
+async fn htmx_analytics_dawn_sequence_partial() {
+    let app = app();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/pages/analytics-dawn-sequence")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // No DuckDB in the test fixture, so the partial reports the graceful
+    // "analytics unavailable" fragment with a 200 (HTMX swaps it in place).
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    // With no DuckDB configured the partial returns the graceful unavailable
+    // fragment, which names the feature ("Dawn sequence requires DuckDB
+    // analytics…"). The populated card is screenshot-verified separately.
+    assert!(html.contains("Dawn sequence"));
 }
 
 #[tokio::test]
@@ -532,6 +564,7 @@ async fn all_redesigned_pages_render_ok() {
         "/pages/migration-diversity",
         "/pages/dawn-polar",
         "/pages/dawn-list",
+        "/pages/analytics-dawn-sequence",
         "/pages/life-accumulation",
         // The Health-detail / full-form fallback admin pages still render
         // through the admin shell; the eight folded management pages now

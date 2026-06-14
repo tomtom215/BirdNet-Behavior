@@ -130,6 +130,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fired) — with SQL builders, unit tests, and live tests verified against the
   real extension. Exposed over the REST API as `/analytics/sequence-count` and
   `/analytics/funnel-events`.
+- **The Patterns → Behavior tab surfaces the dawn "running order."** A new
+  defined-in-place card reads the station's own dawn-window data to pick the
+  morning's leading voices, then uses v0.8.0's `sequence_count` and
+  `window_funnel_events` to show how *often* they sing in that exact order and,
+  on a recent morning, the *time* each one checked in. The sequence is derived
+  from the data rather than hard-coded (the REST defaults are European), so the
+  card reads honestly at a North-American station too.
 - Permanent (`308`) redirects from every pre-spine route to its new home
   (`/today`, `/heatmap`, `/analytics`, `/migration`, `/correlation`,
   `/timeseries`, `/analytics/dawn-chorus`, `/weekly`, `/year-in-review`,
