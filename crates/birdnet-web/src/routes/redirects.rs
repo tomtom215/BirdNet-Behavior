@@ -24,6 +24,9 @@ use crate::state::AppState;
 pub const LEGACY_ROUTES: &[(&str, &str)] = &[
     // Today home: the dashboard/today merge — Today IS the home now.
     ("/today", "/"),
+    // Species home: the gallery + life-list fold into the view switcher.
+    ("/gallery", "/species?view=photos"),
+    ("/life-list", "/species?view=lifelist"),
     // Patterns home: the six analytics surfaces.
     ("/heatmap", "/patterns"),
     ("/analytics/dawn-chorus", "/patterns?tab=dawn"),

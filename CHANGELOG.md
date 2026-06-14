@@ -46,6 +46,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   audio is arriving — never a fake waveform), source picker and live-detection
   trickle. `/listen`, `/livestream` and `/live` permanently redirect to
   `/recordings?view=live`.
+- **Species rebuilt into a List + Photos + Life list home (`/species`).** The
+  three pre-spine destinations — the species list, the `/gallery` photo wall and
+  the `/life-list` journal — merge into one home with a `?view=list|photos|
+  lifelist` switcher, an "All / This week" filter and species search. **List** is
+  the ranked table (rank · avatar · 14-day sparkline · count · avg confidence);
+  **Photos** is the Wikipedia-thumbnail gallery with the gradient banding-code
+  fallback; **Life list** leads with the big counters (species all-time · active
+  days · new this year), the species-accumulation curve, and a "New to the list"
+  feed of the most recent firsts. The per-species detail page keeps its `sd-*`
+  treatment with cross-links updated to the new homes. `/gallery` and `/life-list`
+  permanently redirect to their view.
 - **Station Health is now an operator-grade surface.** The public Station
   Health tab (`/station`, the heir to `/system`) gains an overall status
   banner, a **per-source activity** panel (how many detections each audio

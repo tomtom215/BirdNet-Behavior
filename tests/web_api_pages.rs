@@ -487,6 +487,10 @@ async fn all_redesigned_pages_render_ok() {
         "/",
         "/onboarding",
         "/species",
+        // The Species home's three views (List/Photos/Life list).
+        "/species?view=photos",
+        "/species?view=lifelist",
+        "/species?view=list&filter=week",
         // The v3-spine homes, every tab.
         "/patterns",
         "/patterns?tab=dawn",
@@ -504,11 +508,9 @@ async fn all_redesigned_pages_render_ok() {
         "/station/data",
         "/station/settings",
         "/station/access",
-        "/life-list",
         "/recordings",
         "/recordings?view=clips",
         "/recordings?view=live",
-        "/gallery",
         "/notifications",
         "/quarantine",
         "/kiosk",

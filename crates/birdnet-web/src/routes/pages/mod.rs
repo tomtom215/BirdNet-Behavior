@@ -30,7 +30,6 @@ pub mod dawn_chorus;
 pub mod detection_detail;
 pub mod detection_reviews;
 pub mod empty_states;
-pub mod gallery;
 pub mod health;
 pub mod heatmap;
 pub(crate) mod help;
@@ -64,7 +63,6 @@ use crate::state::AppState;
 
 // Embedded HTML templates (compiled into the binary).
 pub(crate) const LAYOUT_HTML: &str = include_str!("../../../templates/layout.html");
-pub(crate) const SPECIES_PAGE_HTML: &str = include_str!("../../../templates/species.html");
 pub(crate) const ANALYTICS_PAGE_HTML: &str = include_str!("../../../templates/analytics.html");
 pub(crate) const SPECIES_DETAIL_HTML: &str = include_str!("../../../templates/species_detail.html");
 pub(crate) const TIMESERIES_PAGE_HTML: &str = include_str!("../../../templates/timeseries.html");
@@ -123,7 +121,6 @@ pub fn router() -> Router<AppState> {
         .merge(weekly_report::router())
         .merge(history::router())
         .merge(life_list::router())
-        .merge(gallery::router())
         .merge(notification_center::router())
         .merge(year_in_review::router())
         .merge(onboarding::router())

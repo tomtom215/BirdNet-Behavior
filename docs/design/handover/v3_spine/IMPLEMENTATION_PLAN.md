@@ -16,10 +16,12 @@
 > **301 cut** has landed too: the eight folded `/admin/*` management pages (and
 > the `/admin` landing) permanently redirect to their Station tab, while the
 > Health-detail pages (`overview`·`system`·`doctor`) and the all-in-one
-> `/admin/settings` form stay reachable as gated fallbacks. Still open: the
-> per-source live state-chip/uptime/retry once the capture supervisor exposes
-> status to the web layer; and the rest of Wave C (the Species home rebuild + the
-> Patterns/Reports visual reskin).
+> `/admin/settings` form stay reachable as gated fallbacks. The **Species** home
+> rebuild has landed too — the List/Photos/Life-list view switcher at
+> `/species?view=…` (with `/gallery`·`/life-list` redirecting in), the filter +
+> search, and the `sd-*` detail page. Still open: the per-source live
+> state-chip/uptime/retry once the capture supervisor exposes status to the web
+> layer; and the Patterns/Reports visual reskin.
 >
 > **Recordings — deliberate honest omissions (Wave D).** The mock's per-clip
 > spectrogram thumbnail and clip-duration columns have no cheap, honest
