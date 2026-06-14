@@ -29,7 +29,7 @@ Enable the quality pre-filter and nudge the confidence threshold up — see the 
 
 ## Listen to last night's owl
 
-Go to [Recordings](../guide/recordings.md), browse **by species** (or by date), pick the owl, and play the clip inline. The [History](../guide/reports.md#history-calendar) calendar is the fastest way to jump to a specific night.
+Go to [Recordings](../guide/recordings.md), filter the **Clips** list to **Rare** (or search the owl's name), pick the clip, and play it inline. The [History](../guide/reports.md#history-calendar) calendar is the fastest way to jump to a specific night.
 
 ## Add a second microphone or an RTSP camera
 

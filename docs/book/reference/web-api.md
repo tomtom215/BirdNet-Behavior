@@ -60,7 +60,8 @@ Older addresses and BirdNET-Pi muscle-memory still work — each one
 The `/admin*` routes are the **only** password-gated part of the UI — they
 require sign-in (a session cookie) when an admin password is set; a fresh
 bare-metal install sets one automatically. The Station home's **Health** tab is
-public (it's the read-only `/system` view); the other Station task groups link
+public (the operator-grade vital-signs surface that replaced the read-only
+`/system` page, which now redirects to it); the other Station task groups link
 into these gated pages. Every home above and the JSON/WebSocket API below are
 open. See [Remote Access & Security](../admin/remote-access.md).
 
