@@ -31,7 +31,6 @@ use birdnet_db::sqlite::{
     review_verdict_trend,
 };
 
-use super::admin_shell;
 use crate::routes::pages::escape_html;
 use crate::routes::pages::help::{Topic, help_link};
 use crate::routes::pages::skeletons;
@@ -49,12 +48,11 @@ pub fn router() -> Router<AppState> {
 // Handlers
 // ---------------------------------------------------------------------------
 
-async fn quality_page(State(state): State<AppState>) -> Html<String> {
-    Html(admin_shell(
-        "Data Quality",
-        "quality",
-        &quality_body(&state),
-    ))
+/// The standalone `/admin/quality` page GET folded into the Station **Data**
+/// tab; its old URL permanently redirects there. The summary/trend HTMX
+/// partials below keep their `/admin/quality/...` paths.
+async fn quality_page() -> axum::response::Redirect {
+    axum::response::Redirect::permanent("/station/data")
 }
 
 /// Load the quality metrics and render the body (no document shell).

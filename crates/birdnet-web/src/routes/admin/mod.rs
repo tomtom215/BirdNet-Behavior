@@ -194,7 +194,7 @@ pub fn router() -> Router<AppState> {
     // Species filter tester (integrated into species::router via /admin/species/test)
 }
 
-/// Redirect `/admin` to `/admin/overview`.
+/// Redirect `/admin` to the Station home (the v3-spine toolbox landing).
 async fn landing() -> axum::response::Redirect {
-    axum::response::Redirect::to("/admin/overview")
+    axum::response::Redirect::permanent("/station")
 }

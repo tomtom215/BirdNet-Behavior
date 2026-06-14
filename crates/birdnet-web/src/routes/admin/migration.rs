@@ -71,10 +71,11 @@ pub fn router() -> Router<AppState> {
         )
 }
 
-async fn migration_page(State(state): State<AppState>) -> Html<String> {
-    Html(render::migration_page(
-        &state.db_path().display().to_string(),
-    ))
+/// The standalone `/admin/migrate` page GET folded into the Station **Data**
+/// tab; its old URL permanently redirects there. The validate/run/progress
+/// endpoints below keep their `/admin/migrate/...` paths.
+async fn migration_page() -> axum::response::Redirect {
+    axum::response::Redirect::permanent("/station/data")
 }
 
 /// Render the BirdNET-Pi import body (no document shell).
@@ -365,29 +366,14 @@ mod tests {
     use super::render;
 
     #[test]
-    fn render_migration_page_has_upload_form() {
-        let html = render::migration_page("/home/pi/birds.db");
+    fn migration_body_has_upload_form() {
+        // The importer body now folds into the Station Data tab (the standalone
+        // `/admin/migrate` GET redirects there); the body still carries the
+        // upload form posting to the unchanged `/admin/migrate/upload` endpoint.
+        let html = render::migration_body("/home/pi/birds.db");
         assert!(html.contains("source_file"));
         assert!(html.contains("/admin/migrate/upload"));
         assert!(html.contains("BirdNET-Pi"));
-    }
-
-    #[test]
-    fn migration_page_renders_through_admin_shell() {
-        // Folded into the shared shell (Workstream E): the page must carry the
-        // shell's admin nav with Migration active, not a bespoke per-page nav.
-        let html = render::migration_page("/home/pi/birds.db");
-        assert!(html.contains("admin-nav"), "missing shared admin nav");
-        assert!(
-            html.contains(r#"href="/admin/migrate" class="am-nav-active""#),
-            "Migration tab should be active in the shell nav"
-        );
-        // The old standalone nav linked Dashboard/Settings/System as bare top
-        // links; those are gone now that the shell owns navigation.
-        assert!(
-            !html.contains(r#"<a href="/">Dashboard</a>"#),
-            "bespoke per-page nav should be gone"
-        );
     }
 
     #[test]

@@ -67,7 +67,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   data quality; **Settings** = per-device display prefs · station & system ·
   the kiosk launcher; **Access** = accounts & sessions · a lockout-aware danger
   zone. The real forms are reused verbatim and keep posting to their existing
-  `/admin/...` endpoints — only the page GETs move.
+  `/admin/...` endpoints — only the page GETs move. The eight folded
+  `/admin/*` management pages (`audio` · `species` · `rules` · `notifications` ·
+  `backups` · `migrate` · `quality` · `accounts`, plus the `/admin` landing) now
+  **permanently redirect** to their Station tab, so old bookmarks never 404; the
+  Health-detail pages (`overview` · `system` · `doctor`) and the all-in-one
+  `/admin/settings` form stay reachable as gated fallbacks.
 - **The admin panel's nav is regrouped into the six Station task groups.**
   `admin/nav.rs`'s twelve flat destinations are ordered into labelled
   **Health · Capture · Alerts · Data · Settings · Access** clusters (one

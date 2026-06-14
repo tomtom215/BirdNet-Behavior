@@ -315,21 +315,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn folded_pages_render_through_the_shared_shell() {
-        // Runtime verification of the Workstream E fold: GET each previously
-        // standalone page against the real router and confirm it now renders
-        // through `admin_shell` — the shared admin nav (with the right tab
-        // active), a breadcrumb, and its own page content — rather than its old
-        // bespoke document. This is the "real server renders it" check that the
-        // per-render unit tests can't give on their own.
+    async fn health_detail_pages_render_through_the_shared_shell() {
+        // The Health-cluster detail pages (Overview · System · Diagnostics) and
+        // the full-form Settings fallback stay gated admin-shell pages — they are
+        // not folded into a Station tab, so they still render the shared admin nav
+        // (right tab active), a breadcrumb, and their own content.
         for (path, marker) in [
             ("/admin/settings", "Admin Settings"),
             ("/admin/system", "System Status"),
-            ("/admin/migrate", "BirdNET-Pi Migration"),
             ("/admin/overview", "Admin Overview"),
-            ("/admin/rules", "Alert Rules"),
-            ("/admin/notifications", "Notification History"),
-            ("/admin/species", "Species List Management"),
         ] {
             let (status, body) = get_admin(path).await;
             assert!(status.is_success(), "{path} returned {status}");
@@ -346,6 +340,47 @@ mod tests {
                 body.contains(marker),
                 "{path} missing its content: {marker}"
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn folded_pages_redirect_to_their_station_tab() {
+        // The v3-spine 301 cut: the eight management pages whose content moved
+        // into the gated Station tabs permanently redirect their old `/admin/*`
+        // GET to the new home — never a 404 for a veteran's bookmark. The admin
+        // POST/partial/action endpoints keep their `/admin/...` paths (unchanged).
+        for (path, target) in [
+            ("/admin", "/station"),
+            ("/admin/audio", "/station/capture"),
+            ("/admin/species", "/station/capture"),
+            ("/admin/rules", "/station/alerts"),
+            ("/admin/notifications", "/station/alerts"),
+            ("/admin/backups", "/station/data"),
+            ("/admin/migrate", "/station/data"),
+            ("/admin/quality", "/station/data"),
+            ("/admin/accounts", "/station/access"),
+        ] {
+            let app = crate::routes::admin::router().with_state(test_state());
+            let res = app
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .body(Body::empty())
+                        .expect("build request"),
+                )
+                .await
+                .expect("router responds");
+            assert_eq!(
+                res.status(),
+                StatusCode::PERMANENT_REDIRECT,
+                "{path} should permanently redirect"
+            );
+            let loc = res
+                .headers()
+                .get(axum::http::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default();
+            assert_eq!(loc, target, "{path} should redirect to {target}");
         }
     }
 

@@ -13,11 +13,6 @@ pub fn escape_html(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-/// Render the full migration page (document shell + body).
-pub fn migration_page(dest_db_path: &str) -> String {
-    crate::routes::admin::admin_shell("Migration", "migrate", &migration_body(dest_db_path))
-}
-
 /// Render the BirdNET-Pi import body (no document shell).
 ///
 /// Shared with the Station **Data** tab
@@ -434,10 +429,10 @@ mod tests {
     }
 
     #[test]
-    fn migration_page_has_no_inline_style_attributes() {
-        // P3-3 (O-25): the static migration page carries no inline style
+    fn migration_body_has_no_inline_style_attributes() {
+        // P3-3 (O-25): the static migration body carries no inline style
         // attributes — everything folds into its own <style> block.
-        assert!(!migration_page("/data/birdnet.db").contains("style=\""));
+        assert!(!migration_body("/data/birdnet.db").contains("style=\""));
     }
 
     #[test]

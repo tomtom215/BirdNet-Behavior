@@ -61,12 +61,11 @@ pub fn router() -> Router<AppState> {
 // GET /admin/accounts
 // ───────────────────────────────────────────────────────────────────────────
 
-async fn accounts_page(State(state): State<AppState>, request_user: RequestUser) -> Html<String> {
-    Html(admin_shell(
-        "Accounts",
-        "accounts",
-        &accounts_body(&state, &request_user),
-    ))
+/// The standalone `/admin/accounts` page GET folded into the Station **Access**
+/// tab; its old URL permanently redirects there. The account/session/audit
+/// action endpoints below keep their `/admin/accounts/...` paths.
+async fn accounts_page() -> axum::response::Redirect {
+    axum::response::Redirect::permanent("/station/access")
 }
 
 /// Render the accounts / sessions / audit body (no document shell).

@@ -12,13 +12,14 @@
 > `/station/{capture,alerts,data,settings,access}` fold the `/admin/*` render
 > bodies into the `st-*` card treatment, rendered through the main shell with the
 > shared Station sub-tab row but gated inside the admin router; the real forms are
-> reused verbatim and keep posting to their existing `/admin/...` endpoints. Still
-> open: the 301 cut (flipping the folded `/admin/*` page GETs to redirect to their
-> Station tab); the per-source live state-chip/uptime/retry once the capture
-> supervisor exposes status to the web layer; and the rest of Wave C (the Species
-> home rebuild + the Patterns/Reports visual reskin). The affected pages keep
-> serving their existing, fully-functional screens under the new nav in the
-> meantime, so nothing is stranded.
+> reused verbatim and keep posting to their existing `/admin/...` endpoints. The
+> **301 cut** has landed too: the eight folded `/admin/*` management pages (and
+> the `/admin` landing) permanently redirect to their Station tab, while the
+> Health-detail pages (`overview`·`system`·`doctor`) and the all-in-one
+> `/admin/settings` form stay reachable as gated fallbacks. Still open: the
+> per-source live state-chip/uptime/retry once the capture supervisor exposes
+> status to the web layer; and the rest of Wave C (the Species home rebuild + the
+> Patterns/Reports visual reskin).
 >
 > **Recordings — deliberate honest omissions (Wave D).** The mock's per-clip
 > spectrogram thumbnail and clip-duration columns have no cheap, honest

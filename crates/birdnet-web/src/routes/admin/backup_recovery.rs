@@ -9,11 +9,8 @@
 use std::fmt::Write as _;
 
 use axum::Router;
-use axum::extract::State;
-use axum::response::Html;
 use axum::routing::get;
 
-use super::admin_shell;
 use crate::state::AppState;
 
 /// Mount the backup and recovery admin route.
@@ -21,8 +18,10 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/admin/backups", get(backups_page))
 }
 
-async fn backups_page(State(state): State<AppState>) -> Html<String> {
-    Html(admin_shell("Backups", "backups", &backups_body(&state)))
+/// The standalone `/admin/backups` page GET folded into the Station **Data**
+/// tab; its old URL permanently redirects there.
+async fn backups_page() -> axum::response::Redirect {
+    axum::response::Redirect::permanent("/station/data")
 }
 
 /// Render the backups & restore body (no document shell).

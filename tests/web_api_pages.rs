@@ -524,11 +524,13 @@ async fn all_redesigned_pages_render_ok() {
         "/pages/dawn-polar",
         "/pages/dawn-list",
         "/pages/life-accumulation",
+        // The Health-detail / full-form fallback admin pages still render
+        // through the admin shell; the eight folded management pages now
+        // redirect to their Station tab (covered by the admin-nav parity test
+        // `folded_pages_redirect_to_their_station_tab`).
         "/admin/overview",
-        "/admin/quality",
-        "/admin/rules",
-        "/admin/audio",
-        "/admin/backups",
+        "/admin/system",
+        "/admin/settings",
     ];
     for route in routes {
         let app = app();

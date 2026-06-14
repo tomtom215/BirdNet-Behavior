@@ -31,19 +31,11 @@ pub fn router() -> Router<AppState> {
 // GET /admin/notifications
 // ---------------------------------------------------------------------------
 
-#[allow(clippy::similar_names)]
-async fn notifications_page(State(state): State<AppState>) -> Html<String> {
-    let (entries, stats) = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
-            let entries = recent_notifications(conn, 100, 0).unwrap_or_default();
-            let stats = notification_stats(conn, 30).unwrap_or((0, 0, 0));
-            (entries, stats)
-        })
-    })
-    .await
-    .unwrap_or_default();
-
-    Html(render_page(&entries, stats))
+/// The standalone `/admin/notifications` page GET folded into the Station
+/// **Alerts** tab; its old URL permanently redirects there. The partial-poll
+/// and prune endpoints below keep their `/admin/notifications/...` paths.
+async fn notifications_page() -> axum::response::Redirect {
+    axum::response::Redirect::permanent("/station/alerts")
 }
 
 // ---------------------------------------------------------------------------
@@ -83,14 +75,6 @@ async fn prune_handler(State(state): State<AppState>) -> Result<Html<String>, St
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
-
-fn render_page(entries: &[NotifEntry], stats: (i64, i64, i64)) -> String {
-    crate::routes::admin::admin_shell(
-        "Notifications",
-        "notifications",
-        &notifications_body(entries, stats),
-    )
-}
 
 /// Fetch the recent notification log + 30-day stats and render the body.
 ///
@@ -311,8 +295,8 @@ mod tests {
     }
 
     #[test]
-    fn render_page_has_stats() {
-        let html = render_page(&[], (5, 2, 1));
+    fn notifications_body_has_stats() {
+        let html = notifications_body(&[], (5, 2, 1));
         assert!(html.contains(">5<"));
         assert!(html.contains(">2<"));
         assert!(html.contains(">1<"));
@@ -327,6 +311,6 @@ mod tests {
         // this file's own markup rather than a blanket zero over the whole page.)
         assert!(!render_table_rows(&[make_entry("birdweather", "sent")]).contains("style=\""));
         assert!(!render_table_rows(&[make_entry("apprise", "failed")]).contains("style=\""));
-        assert!(!render_page(&[], (0, 0, 0)).contains("<nav style"));
+        assert!(!notifications_body(&[], (0, 0, 0)).contains("<nav style"));
     }
 }

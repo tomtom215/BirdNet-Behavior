@@ -33,7 +33,6 @@ use birdnet_db::audio_sources::{
     RtspTransport, SourceKind,
 };
 
-use super::admin_shell;
 use crate::routes::pages::escape_html;
 use crate::routes::pages::toast::{self, Toast};
 use crate::state::AppState;
@@ -113,8 +112,11 @@ const fn kind_label(kind: SourceKind) -> &'static str {
 // Handlers
 // ---------------------------------------------------------------------------
 
-async fn page(State(state): State<AppState>) -> Html<String> {
-    Html(admin_shell("Audio Sources", "audio", &sources_body(&state)))
+/// The standalone `/admin/audio` page GET folded into the Station **Capture**
+/// tab; its old URL permanently redirects there. The POST/probe/partial
+/// endpoints below keep their `/admin/audio/...` paths.
+async fn page() -> axum::response::Redirect {
+    axum::response::Redirect::permanent("/station/capture")
 }
 
 /// Render the audio-sources management body (no document shell).
