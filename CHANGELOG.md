@@ -33,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   review and history are the three tabs of **Reports**; the read-only system
   health page is the public **Health** tab of **Station**. The underlying
   server-rendered SVG renderers are unchanged.
+- **Patterns tabs lead with plain-English explanations.** The When-active,
+  Who-sings-together, Trends and Behavior tabs now open with a one-paragraph,
+  jargon-free `bnb-lede` that says what the chart means before the chart appears
+  ("Darker cells mean more birds heard that hour…"), in place of the old terse
+  captions.
 - The detection log gains **category filters** (Rare · First today · High
   confidence) alongside text search.
 - **Recordings rebuilt into a Clips + Live home (`/recordings`).** The old

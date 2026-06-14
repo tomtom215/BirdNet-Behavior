@@ -64,7 +64,7 @@ const HEATMAP_CONTENT: &str = r#"<div class="page-head">
   <div>
     <div class="bnb-eyebrow hm-eyebrow"><span>Behavioral analytics</span>{{help_link}}</div>
     <h1 class="display hm-h1">When the yard is alive</h1>
-    <p class="bnb-meta hm-lede">Detection frequency by hour of day and day of week.</p>
+    <p class="bnb-lede hm-lede"><b>Darker cells mean more birds heard that hour.</b> Mornings light up first — the dawn chorus — with a smaller evening lift. Quiet on the left of each row is the middle of the night.</p>
   </div>
   <div class="seg" id="range-controls">
     <button class="btn active" data-days="7">7 days</button>
