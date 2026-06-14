@@ -1,13 +1,14 @@
-# System Health
+# Station Health
 
-The **System** page (`/system`) is the station's vital-signs monitor.
+The Station **Health** tab (`/station`) is the station's vital-signs monitor — the operator's "is it working?" screen, and the public, login-free heir to the old `/system` page (which now permanently redirects here).
 
-![The system health page](../images/system-health.png)
+![The Station Health tab](../images/system-health.png)
 
-- **Live gauges** — CPU, memory and temperature as 3/4-arc gauges (with a graceful "no sensor" state where a temperature probe isn't available), plus system uptime.
-- **Database** — total detections, unique species, days with data, a live integrity check, and a **Last Detection** row (how long ago the most recent detection landed). That row is the plain-English answer to "is it actually working right now?" — every other gauge can read healthy while the station records silence, but a fresh detection proves the whole chain from microphone to database is alive. When uploads are backed up behind a network outage, a **Queued Uploads** row appears too (and only then — a healthy station shows no noise).
-- **Version & runtime** — the build version, MSRV, and whether the analytics feature is compiled in.
-- **Disk & audio pipeline** — the database path and size (the disk-usage figure follows `df`'s "used of reachable space", so reserved blocks or a container quota don't understate it), recording directory, and clip count.
+- **Status banner** — one line that stays green while nothing needs attention, and flips to amber naming the problem when storage runs low, the database integrity check fails, no audio sources are configured, or uploads are backed up.
+- **Audio sources** — a per-source *activity* panel: how many detections each source produced today and how recently the last one landed. (It reports activity, not the capture supervisor's live stream state, which the web process can't yet see — that's a tracked follow-up.)
+- **Vitals** — CPU, memory, temperature (with a graceful "no sensor" state where a probe isn't available) and disk, each with a meter. The disk figure follows `df`'s "used of reachable space", so reserved blocks or a container quota don't understate it.
+- **Pipeline** — the **last detection** (the plain-English answer to "is it actually working right now?" — every other gauge can read healthy while the station records silence, but a fresh detection proves the whole chain from microphone to database is alive), queued uploads (shown only when a network outage backs them up), the service uptime, and total detections.
+- **Diagnostics** — a short checklist (audio sources · disk headroom · database integrity) with a link to the full configuration `doctor` checks.
 
 ## The detection deadman
 

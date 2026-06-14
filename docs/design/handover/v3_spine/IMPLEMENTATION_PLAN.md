@@ -1,12 +1,28 @@
 # v3 Spine — Implementation Plan
 
-> **Status (this PR).** Wave A (the six-home nav spine + redirects + the
-> Patterns/Reports/Station tab shells) and Wave B1 (the Dashboard+Today merge)
-> are **done, tested and documented**. Wave B2 (the full Station task-group
-> regroup) and Wave C (the Species/Recordings home rebuilds + the
-> Patterns/Reports visual reskin) are **follow-ups** — the affected pages keep
-> serving their existing, fully-functional screens under the new nav in the
-> meantime, so nothing is stranded.
+> **Status.** Done, tested and documented: Wave A (the six-home nav spine +
+> redirects + the Patterns/Reports/Station tab shells), Wave B1 (the
+> Dashboard+Today merge), the **Recordings** rebuild of Wave C (the Clips
+> browser + the folded Live view, with `/listen`·`/livestream`·`/live` →
+> `/recordings?view=live`), and the first parts of **Wave B2** — the
+> operator-grade **Station Health** surface (status banner · per-source
+> *activity* panel · vitals · pipeline · diagnostics) and the **`admin/nav.rs`
+> regroup** into the six labelled task groups (Health · Capture · Alerts · Data
+> · Settings · Access). Still open: the rest of Wave B2 (the gated
+> `/station/capture|alerts|data|settings|access` form tabs folding the `/admin/*`
+> render bodies + their 301s; the per-source live state-chip/uptime/retry once
+> the capture supervisor exposes status to the web layer), and the rest of Wave
+> C (the Species home rebuild + the Patterns/Reports visual reskin). The affected
+> pages keep serving their existing, fully-functional screens under the new nav
+> in the meantime, so nothing is stranded.
+>
+> **Recordings — deliberate honest omissions (Wave D).** The mock's per-clip
+> spectrogram thumbnail and clip-duration columns have no cheap, honest
+> server-side source today (no stored thumbnail; duration isn't persisted), so
+> the Clips grid omits both rather than render a decorative fake — tracked as
+> Wave D (a cached thumbnail at extraction time; a persisted duration). Per-row
+> "rare/first" badges are likewise deferred; the Rare filter chip already
+> surfaces those clips.
 
 Source of truth: the Claude Design handover packet in this directory
 (`HANDOFF_v3.html` + six `*_home.html` hi-fi mockups), grounded against

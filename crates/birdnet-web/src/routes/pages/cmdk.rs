@@ -280,7 +280,7 @@ fn all_pages() -> Vec<Entry> {
             "♪",
             "Live audio",
             "test your mic",
-            "/listen",
+            "/recordings?view=live",
             &["stream", "mic", "live", "listen"],
         ),
         make(
@@ -684,7 +684,7 @@ mod tests {
             "/help",
             "/life-list",
             "/gallery",
-            "/listen",
+            "/recordings?view=live",
             "/notifications",
         ] {
             assert!(hrefs.contains(&path), "palette lost long-tail page {path}");

@@ -1,13 +1,15 @@
 //! The **Station** home (`/station`) — "manage my station".
 //!
-//! Health-first (v3 spine, `Station_home.html`): the public Health tab folds
-//! the old read-only `/system` page so "is it working?" stays checkable from
-//! the field without a login, exactly as `/system` always was. The five
-//! management groups (Capture · Alerts · Data · Settings · Access) regroup
-//! the twelve flat `/admin/*` pages by task; they are gated behind the same
-//! admin auth as ever and currently link to their `/admin` homes (the Wave B2
-//! regroup re-hosts them under `/station/...`).
+//! Health-first (v3 spine, `Station_home.html`): the public Health tab is the
+//! operator-grade "is it working?" surface ([`super::super::station_health`]) —
+//! the heir to the old read-only `/system` page, still checkable from the field
+//! without a login. The five management groups (Capture · Alerts · Data ·
+//! Settings · Access) regroup the twelve flat `/admin/*` pages by task; they
+//! are gated behind the same admin auth as ever and currently link to their
+//! `/admin` homes (the rest of the Wave B2 regroup re-hosts them under
+//! `/station/...`).
 
+use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::Html;
 use axum::{Router, routing::get};
@@ -79,11 +81,11 @@ fn station_tabs() -> String {
     html
 }
 
-async fn station_page(headers: HeaderMap) -> Html<String> {
+async fn station_page(State(state): State<AppState>, headers: HeaderMap) -> Html<String> {
     let content = format!(
         "{}{}",
         station_tabs(),
-        crate::routes::pages::system_dashboard::content()
+        crate::routes::pages::station_health::content(&state).await
     );
     crate::routes::pages::render_page_for_request("Station", &content, "station", &headers)
 }

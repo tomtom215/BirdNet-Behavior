@@ -226,11 +226,11 @@
     }).catch(stopCurrent);
   });
 
-  // ── Source picker: live audio per source lives on the listen page ─────
+  // ── Source picker: live audio per source lives on Recordings → Live ───
   var src = document.getElementById('td-source');
   if (src) src.addEventListener('change', function () {
-    if (this.value) window.location.href = '/listen?source=' + encodeURIComponent(this.value);
-    else window.location.href = '/listen';
+    if (this.value) window.location.href = '/recordings?view=live&source=' + encodeURIComponent(this.value);
+    else window.location.href = '/recordings?view=live';
   });
 
   // ── Live nudges ────────────────────────────────────────────────────────

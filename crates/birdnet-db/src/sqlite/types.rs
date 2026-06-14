@@ -163,6 +163,24 @@ pub struct SpeciesSummary {
     pub last_seen: String,
 }
 
+/// Per-source detection activity for a single day.
+///
+/// Powers the Station Health per-source panel. It is an honest **activity**
+/// signal — the web process has no live handle on the capture supervisor's
+/// per-stream state (live / backing-off / stalled), so Health reports what the
+/// data actually shows: how many detections each source contributed today and
+/// how recently the last one landed.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SourceActivity {
+    /// Source/stream label (the `detections.Source` value). `None` for rows
+    /// that pre-date multi-stream tagging (migration 18) — shown as "unlabelled".
+    pub source: Option<String>,
+    /// Detections attributed to this source on the queried date.
+    pub count: i64,
+    /// The most recent detection time (HH:MM:SS) from this source that day.
+    pub last_time: Option<String>,
+}
+
 /// Helper: map a `rusqlite::Row` to `DetectionRow`.
 pub(super) fn map_detection_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DetectionRow> {
     Ok(DetectionRow {

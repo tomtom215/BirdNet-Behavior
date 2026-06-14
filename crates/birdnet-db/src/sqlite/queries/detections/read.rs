@@ -4,7 +4,9 @@
 use rusqlite::{Connection, params};
 
 use crate::sqlite::connection::DbError;
-use crate::sqlite::types::{ConcurrentDetection, DETECTION_COLS, DetectionRow, map_detection_row};
+use crate::sqlite::types::{
+    ConcurrentDetection, DETECTION_COLS, DetectionRow, SourceActivity, map_detection_row,
+};
 
 use super::search::{SearchTerm, parse_search_term};
 
@@ -442,6 +444,212 @@ pub fn todays_detection_count(
         param_values.iter().map(AsRef::as_ref).collect();
     let count: i64 = conn.query_row(&sql, params_ref.as_slice(), |row| row.get(0))?;
     Ok(count)
+}
+
+/// Category filter for the cross-date Recordings clip browser.
+///
+/// Reuses the Today log's vocabulary where it overlaps so the two surfaces
+/// agree on what the words mean: `Best` is the confidence bar's "high"
+/// threshold and `Rare` is the rare-feed definition (a confident first-ever
+/// record). `Locked` surfaces clips an operator pinned against the disk
+/// purge. Unlike [`TodayFilter`] these clauses are date-agnostic — the
+/// browser spans every day — so `Rare` keys on the row's own date through a
+/// correlated subquery instead of a bound `?1`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RecordingsFilter {
+    /// No category filter (every clip that saved an audio file).
+    #[default]
+    All,
+    /// Confidence ≥ 0.90 (the confidence bar's "high" threshold).
+    Best,
+    /// First-ever record of the species with confidence > 0.85.
+    Rare,
+    /// Clips locked against the disk purge.
+    Locked,
+}
+
+impl RecordingsFilter {
+    /// Parse the UI's filter token; unknown or missing tokens fall back to
+    /// `All`.
+    #[must_use]
+    pub fn from_token(token: Option<&str>) -> Self {
+        match token.map(str::trim) {
+            Some("best") => Self::Best,
+            Some("rare") => Self::Rare,
+            Some("locked") => Self::Locked,
+            _ => Self::All,
+        }
+    }
+
+    /// The canonical token for this filter — the inverse of [`Self::from_token`],
+    /// used to build the filter-chip links.
+    #[must_use]
+    pub const fn as_token(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Best => "best",
+            Self::Rare => "rare",
+            Self::Locked => "locked",
+        }
+    }
+
+    /// Extra `AND …` clause appended after the "has a playable clip" predicate.
+    const fn sql_clause(self) -> &'static str {
+        match self {
+            Self::All => "",
+            Self::Best => " AND Confidence >= 0.9",
+            Self::Rare => {
+                " AND Confidence > 0.85 AND NOT EXISTS (SELECT 1 FROM detections d2 \
+                 WHERE d2.Com_Name = detections.Com_Name AND d2.Date < detections.Date)"
+            }
+            Self::Locked => " AND COALESCE(is_locked, 0) = 1",
+        }
+    }
+}
+
+/// Browse recent clips — detections that saved an audio file — across every
+/// day, newest first, with an optional category filter, text search, and
+/// pagination. Powers the Recordings home's Clips view.
+///
+/// Only rows with a non-empty `File_Name` are returned, so every result is
+/// playable: the same "has a clip" rule as [`best_detections_for_date`]. The
+/// `search` term follows the shared include/`NOT `-exclude grammar.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn recent_clips(
+    conn: &Connection,
+    filter: RecordingsFilter,
+    search: Option<&str>,
+    limit: u32,
+    offset: u32,
+) -> Result<Vec<DetectionRow>, DbError> {
+    let extra = filter.sql_clause();
+    let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
+        match parse_search_term(search) {
+            Some(SearchTerm::Exclude(rest)) => {
+                let pattern = format!("%{rest}%");
+                (
+                    format!(
+                        "SELECT {DETECTION_COLS} FROM detections \
+                         WHERE File_Name IS NOT NULL AND TRIM(File_Name) <> '' \
+                         AND Com_Name NOT LIKE ?1{extra} \
+                         ORDER BY Date DESC, Time DESC LIMIT ?2 OFFSET ?3"
+                    ),
+                    vec![Box::new(pattern), Box::new(limit), Box::new(offset)],
+                )
+            }
+            Some(SearchTerm::Include(term)) => {
+                let pattern = format!("%{term}%");
+                (
+                    format!(
+                        "SELECT {DETECTION_COLS} FROM detections \
+                         WHERE File_Name IS NOT NULL AND TRIM(File_Name) <> '' \
+                         AND (Com_Name LIKE ?1 OR Sci_Name LIKE ?1){extra} \
+                         ORDER BY Date DESC, Time DESC LIMIT ?2 OFFSET ?3"
+                    ),
+                    vec![Box::new(pattern), Box::new(limit), Box::new(offset)],
+                )
+            }
+            None => (
+                format!(
+                    "SELECT {DETECTION_COLS} FROM detections \
+                     WHERE File_Name IS NOT NULL AND TRIM(File_Name) <> ''{extra} \
+                     ORDER BY Date DESC, Time DESC LIMIT ?1 OFFSET ?2"
+                ),
+                vec![Box::new(limit), Box::new(offset)],
+            ),
+        };
+
+    let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+        param_values.iter().map(AsRef::as_ref).collect();
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(params_ref.as_slice(), map_detection_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Count the clips [`recent_clips`] would return for the same filter and
+/// search (its total, ignoring limit/offset) — drives the "Show more" gate
+/// and the filter-chip badges.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn recent_clips_count(
+    conn: &Connection,
+    filter: RecordingsFilter,
+    search: Option<&str>,
+) -> Result<i64, DbError> {
+    let extra = filter.sql_clause();
+    let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
+        match parse_search_term(search) {
+            Some(SearchTerm::Exclude(rest)) => {
+                let pattern = format!("%{rest}%");
+                (
+                    format!(
+                        "SELECT COUNT(*) FROM detections \
+                         WHERE File_Name IS NOT NULL AND TRIM(File_Name) <> '' \
+                         AND Com_Name NOT LIKE ?1{extra}"
+                    ),
+                    vec![Box::new(pattern)],
+                )
+            }
+            Some(SearchTerm::Include(term)) => {
+                let pattern = format!("%{term}%");
+                (
+                    format!(
+                        "SELECT COUNT(*) FROM detections \
+                         WHERE File_Name IS NOT NULL AND TRIM(File_Name) <> '' \
+                         AND (Com_Name LIKE ?1 OR Sci_Name LIKE ?1){extra}"
+                    ),
+                    vec![Box::new(pattern)],
+                )
+            }
+            None => (
+                format!(
+                    "SELECT COUNT(*) FROM detections \
+                     WHERE File_Name IS NOT NULL AND TRIM(File_Name) <> ''{extra}"
+                ),
+                vec![],
+            ),
+        };
+
+    let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+        param_values.iter().map(AsRef::as_ref).collect();
+    let count: i64 = conn.query_row(&sql, params_ref.as_slice(), |row| row.get(0))?;
+    Ok(count)
+}
+
+/// Per-source detection activity for `date`: how many detections each audio
+/// source contributed and the most recent one's time, busiest source first.
+///
+/// Powers the Station Health per-source panel. See [`SourceActivity`] for why
+/// this is an activity signal rather than the supervisor's live stream state.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn todays_source_activity(
+    conn: &Connection,
+    date: &str,
+) -> Result<Vec<SourceActivity>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT Source, COUNT(*) AS n, MAX(Time) AS last FROM detections \
+         WHERE Date = ?1 GROUP BY Source ORDER BY n DESC, Source",
+    )?;
+    let rows = stmt
+        .query_map(params![date], |row| {
+            Ok(SourceActivity {
+                source: row.get(0)?,
+                count: row.get(1)?,
+                last_time: row.get(2)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
 }
 
 /// Get a list of distinct dates that have detections, ordered descending.
@@ -965,5 +1173,189 @@ mod tests {
         let (_tmp, conn) = temp_db_with_data();
         let beyond = recent_detections_page(&conn, 10, 100).unwrap();
         assert!(beyond.is_empty());
+    }
+
+    #[test]
+    fn recent_clips_filters_and_file_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_or_create(&dir.path().join("t.db")).unwrap();
+        let insert = |date: &str, time: &str, sci: &str, com: &str, conf: f64, file: &str| {
+            let record = DetectionRecord {
+                date,
+                time,
+                sci_name: sci,
+                com_name: com,
+                confidence: conf,
+                lat: None,
+                lon: None,
+                cutoff: None,
+                week: None,
+                sensitivity: None,
+                overlap: None,
+                file_name: file,
+                chunk_offset_secs: Some(0.0),
+                correlation_id: None,
+                source: None,
+            };
+            insert_detection(&conn, &record).unwrap();
+        };
+        // Robin known yesterday (its first-ever record, but below the rare
+        // confidence floor); Robin again today (best, not first-ever); a new
+        // House Wren today (best AND rare); a new Dunnock today (too uncertain
+        // for rare); a high-confidence Crow today with NO clip on disk.
+        insert(
+            "2026-06-10",
+            "07:00:00",
+            "Erithacus rubecula",
+            "Robin",
+            0.82,
+            "r1.wav",
+        );
+        insert(
+            "2026-06-11",
+            "06:00:00",
+            "Erithacus rubecula",
+            "Robin",
+            0.97,
+            "r2.wav",
+        );
+        insert(
+            "2026-06-11",
+            "06:10:00",
+            "Troglodytes aedon",
+            "House Wren",
+            0.93,
+            "w.wav",
+        );
+        insert(
+            "2026-06-11",
+            "06:20:00",
+            "Prunella modularis",
+            "Dunnock",
+            0.60,
+            "d.wav",
+        );
+        insert(
+            "2026-06-11",
+            "06:30:00",
+            "Corvus corone",
+            "Carrion Crow",
+            0.99,
+            "",
+        );
+        super::super::lock_detection(&conn, "2026-06-11", "06:10:00", "Troglodytes aedon").unwrap();
+
+        let names = |filter: RecordingsFilter| -> Vec<String> {
+            recent_clips(&conn, filter, None, 50, 0)
+                .unwrap()
+                .into_iter()
+                .map(|d| d.com_name)
+                .collect()
+        };
+        // The clip-less Crow is excluded from every view, newest clip first.
+        let all = names(RecordingsFilter::All);
+        assert_eq!(all, vec!["Dunnock", "House Wren", "Robin", "Robin"]);
+        assert_eq!(names(RecordingsFilter::Best), vec!["House Wren", "Robin"]);
+        assert_eq!(names(RecordingsFilter::Rare), vec!["House Wren"]);
+        assert_eq!(names(RecordingsFilter::Locked), vec!["House Wren"]);
+
+        // Search rides the shared include / NOT-exclude grammar.
+        assert_eq!(
+            recent_clips(&conn, RecordingsFilter::All, Some("Robin"), 50, 0)
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            recent_clips(&conn, RecordingsFilter::All, Some("NOT Robin"), 50, 0)
+                .unwrap()
+                .len(),
+            2
+        );
+
+        // Count agrees with the listing for every category (and the file gate).
+        for f in [
+            RecordingsFilter::All,
+            RecordingsFilter::Best,
+            RecordingsFilter::Rare,
+            RecordingsFilter::Locked,
+        ] {
+            let listed = i64::try_from(names(f).len()).unwrap();
+            assert_eq!(
+                recent_clips_count(&conn, f, None).unwrap(),
+                listed,
+                "count mismatch {f:?}"
+            );
+        }
+
+        // Pagination terminates past the end.
+        assert!(
+            recent_clips(&conn, RecordingsFilter::All, None, 10, 100)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn recordings_filter_token_round_trips() {
+        for f in [
+            RecordingsFilter::All,
+            RecordingsFilter::Best,
+            RecordingsFilter::Rare,
+            RecordingsFilter::Locked,
+        ] {
+            assert_eq!(RecordingsFilter::from_token(Some(f.as_token())), f);
+        }
+        assert_eq!(
+            RecordingsFilter::from_token(Some("bogus")),
+            RecordingsFilter::All
+        );
+        assert_eq!(RecordingsFilter::from_token(None), RecordingsFilter::All);
+    }
+
+    #[test]
+    fn todays_source_activity_groups_and_orders_by_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_or_create(&dir.path().join("t.db")).unwrap();
+        let insert = |time: &str, sci: &str, source: Option<&str>| {
+            let record = DetectionRecord {
+                date: "2026-06-13",
+                time,
+                sci_name: sci,
+                com_name: "Bird",
+                confidence: 0.9,
+                lat: None,
+                lon: None,
+                cutoff: None,
+                week: None,
+                sensitivity: None,
+                overlap: None,
+                file_name: "c.wav",
+                chunk_offset_secs: Some(0.0),
+                correlation_id: None,
+                source,
+            };
+            insert_detection(&conn, &record).unwrap();
+        };
+        insert("06:00:00", "A", Some("cam1"));
+        insert("06:30:00", "B", Some("cam1"));
+        insert("07:15:00", "C", Some("cam1"));
+        insert("08:00:00", "D", Some("local"));
+        insert("05:00:00", "E", None); // pre-tagging row → grouped under NULL
+
+        let rows = todays_source_activity(&conn, "2026-06-13").unwrap();
+        // Three groups, busiest first: cam1 (3), then local (1) and NULL (1).
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].source.as_deref(), Some("cam1"));
+        assert_eq!(rows[0].count, 3);
+        // MAX(Time) is the freshest detection for the source.
+        assert_eq!(rows[0].last_time.as_deref(), Some("07:15:00"));
+        assert!(rows.iter().any(|r| r.source.is_none() && r.count == 1));
+        // A different day sees none of it.
+        assert!(
+            todays_source_activity(&conn, "2026-06-14")
+                .unwrap()
+                .is_empty()
+        );
     }
 }

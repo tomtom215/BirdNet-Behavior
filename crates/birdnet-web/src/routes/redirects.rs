@@ -35,6 +35,12 @@ pub const LEGACY_ROUTES: &[(&str, &str)] = &[
     ("/weekly", "/reports"),
     ("/year-in-review", "/reports?tab=year"),
     ("/history", "/reports?tab=history"),
+    // Recordings home: the live-audio surfaces fold into the Live view. `/live`
+    // was a retired duplicate that used to bounce to `/listen`; it now points
+    // straight at the maintained view like the rest.
+    ("/listen", "/recordings?view=live"),
+    ("/livestream", "/recordings?view=live"),
+    ("/live", "/recordings?view=live"),
     // Station home: the public health dashboard.
     ("/system", "/station"),
 ];

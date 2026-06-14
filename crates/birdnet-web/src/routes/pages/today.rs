@@ -137,7 +137,7 @@ fn signal_card(source_options: &str) -> String {
       </div>
       <div class="x-sig-row">
         <span class="x-sig-src"><span class="bnb-meta">source</span><select id="td-source" aria-label="Audio source to monitor">{source_options}</select></span>
-        <a class="bnb-btn ghost x-listen" href="/listen" title="Open the full live-audio page">Listen live →</a>
+        <a class="bnb-btn ghost x-listen" href="/recordings?view=live" title="Open the live spectrogram & audio">Listen live →</a>
       </div>
     </div>"#
     )

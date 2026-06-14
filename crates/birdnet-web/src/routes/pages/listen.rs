@@ -1,94 +1,38 @@
-//! Listen-now page (the maintainer's standing request).
+//! Live-audio source picker `<option>` rendering.
 //!
-//! Mounts:
-//!   GET /listen   — full page (audio playback + spectrogram + trickle)
+//! The standalone `/listen` page folded into the Recordings home's **Live**
+//! view in the v3 spine (`/recordings?view=live`); `/listen`, `/livestream`
+//! and `/live` now permanently redirect there. What survives here is the bit
+//! two surfaces still share — the source-selector `<option>` set — so the
+//! Today signal card ([`super::today`]) and the Recordings Live view
+//! ([`super::recordings`]) render an identical picker from one place.
 //!
-//! Composes three already-wired surfaces:
-//!
-//! * **Audio** — `<audio src="/stream?source_id=…">`, where the page's
-//!   source selector populates the query. `/stream` resolves the id via
-//!   the `audio_sources` table (see [`crate::routes::livestream`])
-//!   so listening to a per-source mic just works without restarting
-//!   the daemon.
-//! * **Spectrogram** — the same `/api/v2/ws/spectrogram` consumer
-//!   shipped on the dashboard (#98); the in-page script is a narrowed
-//!   copy. Producer side is the global capture-pipeline watcher, so the
-//!   canvas shows whichever source is feeding the watch dir — not
-//!   strictly the listen-now selection. A per-source spectrogram
-//!   producer is the natural follow-up once the capture pipeline
-//!   iterates `audio_sources` rows (O-13).
-//! * **Trickle** — `/pages/detections` (the dashboard live feed
-//!   handler) polled every 10 s. Empty DB → `empty_states::quiet_yard()`
-//!   via the existing partial.
-//!
-//! Source-selector population: lists every non-disabled row from
-//! `audio_sources` plus a `(default)` entry that maps to `/stream` with no
-//! `source_id` (resolving to the first enabled row). On a station with no
-//! `audio_sources` rows, the selector shows a disabled "no audio sources
-//! configured" placeholder — the legacy single-string `state.audio_source()`
-//! fallback was retired in O-13.
+//! Population: every non-disabled row from `audio_sources`, preceded by a
+//! `— default audio source —` entry that maps to `/stream` with no
+//! `source_id` (resolving to the first enabled row). A station with no
+//! `audio_sources` rows gets a single disabled "no audio sources configured"
+//! placeholder instead.
 
-use axum::Router;
-use axum::extract::{Query, State};
-use axum::http::HeaderMap;
-use axum::response::Html;
-use axum::routing::get;
+use birdnet_db::audio_sources::{AudioSource, SourceKind};
 
-use birdnet_db::audio_sources::{AudioSource, AudioSourceStore, SourceKind};
+use super::escape_html;
 
-use super::{escape_html, render_page_for_request};
-use crate::state::AppState;
-
-const PAGE_HTML: &str = include_str!("../../../templates/listen.html");
-
-pub fn router() -> Router<AppState> {
-    Router::new().route("/listen", get(page))
-}
-
-/// `?source=` deep link (the Today signal card's picker lands here with a
-/// source already chosen).
-#[derive(serde::Deserialize)]
-struct ListenParams {
-    source: Option<String>,
-}
-
-async fn page(
-    State(state): State<AppState>,
-    Query(params): Query<ListenParams>,
-    headers: HeaderMap,
-) -> Html<String> {
-    let sources = state
-        .with_db(|conn| AudioSourceStore::list(conn).ok().unwrap_or_default())
-        .into_iter()
-        .filter(|s| s.disabled_at.is_none())
-        .collect::<Vec<_>>();
-
-    // The "— default audio source —" option maps to /stream with no
-    // source_id, which resolves to the first enabled `audio_sources` row.
-    let options = render_options(&sources, params.source.as_deref());
-
-    // Trickle skeleton — reuse the feed_rows shape used on the dashboard.
-    let trickle_skel = super::skeletons::feed_rows(6);
-
-    let body = PAGE_HTML
-        .replace("{{source_options}}", &options)
-        .replace("{{skel_trickle}}", &trickle_skel);
-
-    // "listen" highlights the Live-audio entry in the More menu / mobile sheet
-    // (the {{nav_listen}} slot); it is not a top-level tab.
-    render_page_for_request("Listen now", &body, "listen", &headers)
-}
-
-/// The source-selector `<option>` set for any page offering per-source live
-/// audio (this page and the Today home's signal card). Filters disabled rows
-/// itself so callers can hand over the raw store listing.
+/// The source-selector `<option>` set, with no row pre-selected. Filters
+/// disabled rows itself so callers can hand over the raw store listing.
 pub(super) fn source_options(sources: &[AudioSource]) -> String {
+    source_options_for(sources, None)
+}
+
+/// The source-selector `<option>` set with `selected` (an `audio_sources.id`)
+/// pre-selected when present — the Recordings Live `?source=` deep link lands
+/// here with a source already chosen.
+pub(super) fn source_options_for(sources: &[AudioSource], selected: Option<&str>) -> String {
     let enabled: Vec<AudioSource> = sources
         .iter()
         .filter(|s| s.disabled_at.is_none())
         .cloned()
         .collect();
-    render_options(&enabled, None)
+    render_options(&enabled, selected)
 }
 
 /// Render the `<option>` set for the source selector. With at least one
@@ -194,6 +138,28 @@ mod tests {
         assert!(html.contains("(usb-alsa)"));
         assert!(html.contains("(rtsp)"));
         assert!(html.contains("(pipewire)"));
+    }
+
+    #[test]
+    fn source_options_for_marks_the_selected_row() {
+        let sources = vec![
+            sample("src_a", SourceKind::UsbAlsa, Some("A"), false),
+            sample("src_b", SourceKind::Rtsp, Some("B"), false),
+        ];
+        let html = source_options_for(&sources, Some("src_b"));
+        assert!(html.contains(r#"value="src_b" selected"#));
+        assert!(!html.contains(r#"value="src_a" selected"#));
+    }
+
+    #[test]
+    fn source_options_for_filters_disabled_rows() {
+        let sources = vec![
+            sample("src_on", SourceKind::UsbAlsa, Some("On"), false),
+            sample("src_off", SourceKind::Rtsp, Some("Off"), true),
+        ];
+        let html = source_options_for(&sources, None);
+        assert!(html.contains(r#"value="src_on""#));
+        assert!(!html.contains(r#"value="src_off""#));
     }
 
     #[test]
