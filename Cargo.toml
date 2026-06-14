@@ -59,13 +59,16 @@ rusqlite = { version = "0.40", features = ["bundled", "backup"] }
 # the DuckDB version the published `behavioral` community extension targets —
 # DuckDB refuses to LOAD an extension built for any other version (verified:
 # even `allow_extensions_metadata_mismatch` does not bypass the LOAD-time check).
-# The community CDN serves `behavioral` v0.6.0 built for DuckDB 1.5.3, so the
-# bundled engine matches and `LOAD behavioral` succeeds.
+# The community registry serves `behavioral` v0.8.0 built for DuckDB 1.5.3
+# (verified from the extension binary footer: `v0.8.0 / v1.5.3 / linux_amd64`),
+# so the bundled engine matches and `LOAD behavioral` succeeds. v0.8.0 keeps the
+# same DuckDB 1.5.3 target as v0.6.0, so adopting it needs no engine bump here.
 #
 # When bumping, confirm the new build actually LOADs — an HTTP 200 on the
 # version path is not sufficient, because a freshly published artifact can lag
 # and still embed the previous DuckDB version in its footer until the
-# community-extensions rebuild propagates.
+# community-extensions rebuild propagates. The offline-fallback binaries under
+# `crates/birdnet-behavioral/vendor/` must target this same DuckDB version.
 duckdb = { version = "~1.10503", features = ["bundled"] }
 
 # Web

@@ -156,6 +156,96 @@ fn live_window_funnel() {
 }
 
 #[test]
+fn live_behavioral_version() {
+    let Some((db, _tmp)) = loaded_db() else {
+        return;
+    };
+    // The native behavioral_version() scalar exists only in v0.8.0+; reaching
+    // here means the new function surface is available. The project adopts and
+    // vendors v0.8.0, so the loaded build reports it.
+    let version = db
+        .behavioral_version()
+        .expect("behavioral_version() should return the loaded extension version");
+    eprintln!(
+        "[live] behavioral_version()={version:?} extension_version={:?}",
+        db.extension_version()
+    );
+    assert!(
+        version.contains("0.8"),
+        "expected behavioral v0.8.x, got {version:?}"
+    );
+}
+
+#[test]
+fn live_funnel_events() {
+    let Some((db, _tmp)) = loaded_db() else {
+        return;
+    };
+    seed(&db);
+    let params = types::FunnelParams {
+        species_sequence: vec![
+            "European Robin".into(),
+            "Eurasian Blackbird".into(),
+            "Eurasian Wren".into(),
+        ],
+        window_minutes: 120,
+        hour_start: 4,
+        hour_end: 8,
+    };
+    let funnel = db.funnel_events(&params).unwrap();
+    eprintln!("[live] funnel_events: {funnel:?}");
+    let day = |d: &str| funnel.iter().find(|f| f.date.starts_with(d)).unwrap();
+    // step_times carries one ISO timestamp per completed step, and its length
+    // equals steps_completed (mirrors live_window_funnel's counts).
+    assert_eq!(day("2024-05-01").step_times.len(), 3);
+    assert_eq!(day("2024-05-01").steps_completed, 3);
+    assert_eq!(
+        day("2024-05-02").steps_completed,
+        2,
+        "day2 Robin->Blackbird only"
+    );
+    assert_eq!(day("2024-05-03").step_times.len(), 3);
+    assert!(
+        day("2024-05-01")
+            .step_times
+            .iter()
+            .all(|t| t.contains("2024-05-01"))
+    );
+}
+
+#[test]
+fn live_sequence_analysis() {
+    let Some((db, _tmp)) = loaded_db() else {
+        return;
+    };
+    seed(&db);
+    let params = types::PatternParams {
+        species_sequence: vec![
+            "European Robin".into(),
+            "Eurasian Blackbird".into(),
+            "Eurasian Wren".into(),
+        ],
+        max_gap_minutes: None,
+        hour_start: 4,
+        hour_end: 8,
+    };
+    let rows = db.sequence_analysis(&params).unwrap();
+    eprintln!("[live] sequence_analysis: {rows:?}");
+    let day = |d: &str| rows.iter().find(|m| m.date.starts_with(d)).unwrap();
+    // Day 1 & 3 match the full R->B->W in order once each.
+    assert!(day("2024-05-01").matched);
+    assert_eq!(day("2024-05-01").occurrences, 1);
+    assert_eq!(day("2024-05-01").event_times.len(), 3);
+    assert!(day("2024-05-03").matched);
+    // Day 2 is missing its Wren: the full pattern never completes (matched =
+    // false, occurrences = 0), but sequence_match_events still returns the
+    // longest matching *prefix* — here the Robin -> Blackbird pair.
+    assert!(!day("2024-05-02").matched);
+    assert_eq!(day("2024-05-02").occurrences, 0);
+    assert_eq!(day("2024-05-02").event_times.len(), 2);
+}
+
+#[test]
 fn live_sequence_match() {
     let Some((db, _tmp)) = loaded_db() else {
         return;
@@ -241,7 +331,9 @@ fn live_raw_queries_execute() {
         queries::sessionize_sql(&types::SessionizeParams::default()),
         queries::retention_sql(&types::RetentionParams::default()),
         queries::funnel_sql(&types::FunnelParams::default()),
+        queries::funnel_events_sql(&types::FunnelParams::default()),
         queries::sequence_match_sql(&types::PatternParams::default()),
+        queries::sequence_analysis_sql(&types::PatternParams::default()),
         queries::next_species_sql("European Robin", 60, 10),
     ] {
         // execute_batch runs the SELECT to completion and surfaces any

@@ -3,8 +3,11 @@
 //!
 //! Locates the extension via, in order:
 //!   1. the `BIRDNET_BUNDLED_EXTENSION_FILE` env var (release pipeline / CI);
-//!   2. `crates/birdnet-behavioral/vendor/behavioral.duckdb_extension` (if a
-//!      maintainer commits a vendored copy).
+//!   2. `crates/birdnet-behavioral/vendor/behavioral-<platform>.duckdb_extension`
+//!      matching the build *target* (so a cross-build for the Pi embeds the
+//!      `linux_arm64` binary, never the host's `linux_amd64`);
+//!   3. `crates/birdnet-behavioral/vendor/behavioral.duckdb_extension` — the
+//!      legacy single-file fallback (kept for backward compatibility).
 //!
 //! When the binary is present and the `analytics` feature is enabled, the
 //! bytes are staged into `OUT_DIR` and embedded via `include_bytes!`. The
@@ -54,14 +57,45 @@ fn main() {
 }
 
 fn locate_extension() -> Option<PathBuf> {
+    // 1. Explicit override — the release pipeline / CI downloads the build
+    //    matching the bundled DuckDB version and points this at it.
     if let Some(path) = env::var_os("BIRDNET_BUNDLED_EXTENSION_FILE")
         .map(PathBuf::from)
         .filter(|p| p.is_file())
     {
         return Some(path);
     }
-    let vendored = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest dir set"))
-        .join("vendor")
-        .join("behavioral.duckdb_extension");
-    vendored.is_file().then_some(vendored)
+    let vendor =
+        PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest dir set")).join("vendor");
+    // 2. Platform-specific vendored copy. The embedded binary must match the
+    //    *target* platform (DuckDB verifies it at LOAD time), so a cross-build
+    //    for the Pi (aarch64) embeds `behavioral-linux_arm64.duckdb_extension`,
+    //    not the x86_64 host's copy.
+    if let Some(platform) = duckdb_target_platform() {
+        let by_platform = vendor.join(format!("behavioral-{platform}.duckdb_extension"));
+        if by_platform.is_file() {
+            return Some(by_platform);
+        }
+    }
+    // 3. Legacy single-file fallback (kept so an existing vendored copy keeps
+    //    working without renaming).
+    let legacy = vendor.join("behavioral.duckdb_extension");
+    legacy.is_file().then_some(legacy)
+}
+
+/// Map the Cargo build target to a DuckDB extension platform string
+/// (e.g. `linux_amd64`, `linux_arm64`, `osx_arm64`), matching the community
+/// registry's per-platform paths. Returns `None` for targets the registry does
+/// not name, in which case only the legacy single-file fallback applies.
+fn duckdb_target_platform() -> Option<String> {
+    let os = env::var("CARGO_CFG_TARGET_OS").ok()?;
+    let arch = env::var("CARGO_CFG_TARGET_ARCH").ok()?;
+    let platform = match (os.as_str(), arch.as_str()) {
+        ("linux", "x86_64") => "linux_amd64",
+        ("linux", "aarch64") => "linux_arm64",
+        ("macos", "x86_64") => "osx_amd64",
+        ("macos", "aarch64") => "osx_arm64",
+        _ => return None,
+    };
+    Some(platform.to_owned())
 }

@@ -20,7 +20,9 @@ pub fn router() -> Router<AppState> {
         .route("/analytics/sessions", get(sessions))
         .route("/analytics/retention", get(retention))
         .route("/analytics/funnel", get(funnel))
+        .route("/analytics/funnel-events", get(funnel_events))
         .route("/analytics/patterns", get(patterns))
+        .route("/analytics/sequence-analysis", get(sequence_analysis))
         .route("/analytics/next-species", get(next_species))
         .route("/analytics/status", get(analytics_status))
 }
@@ -274,6 +276,74 @@ async fn funnel(
 }
 
 #[cfg(feature = "analytics")]
+async fn funnel_events(
+    State(state): State<AppState>,
+    Query(query): Query<FunnelQuery>,
+) -> (StatusCode, Json<Value>) {
+    if !state.has_analytics() {
+        return unavailable("window_funnel_events");
+    }
+
+    let default = birdnet_behavioral::types::FunnelParams::default();
+    let species_sequence = parse_species_sequence(query.species, default.species_sequence);
+
+    let params = birdnet_behavioral::types::FunnelParams {
+        species_sequence,
+        window_minutes: query.window.unwrap_or(default.window_minutes),
+        hour_start: query.hour_start.unwrap_or(default.hour_start),
+        hour_end: query.hour_end.unwrap_or(default.hour_end),
+    };
+
+    let result = tokio::task::spawn_blocking(move || {
+        state
+            .with_analytics(|adb| adb.funnel_events(&params))
+            .unwrap_or_else(|| {
+                Err(
+                    birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
+                        "analytics not available".into(),
+                    ),
+                )
+            })
+    })
+    .await;
+
+    match result {
+        Ok(Ok(funnel_data)) => {
+            let total = funnel_data.len();
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "funnel_events": funnel_data,
+                    "total": total,
+                })),
+            )
+        }
+        // A bad species count is a client error, not an extension fault.
+        Ok(Err(birdnet_behavioral::connection::AnalyticsError::InvalidData(msg))) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "status": "invalid_request",
+                "function": "window_funnel_events",
+                "error": msg,
+            })),
+        ),
+        Ok(Err(e)) => extension_error("window_funnel_events", &e.to_string()),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("internal error: {e}") })),
+        ),
+    }
+}
+
+#[cfg(not(feature = "analytics"))]
+async fn funnel_events(
+    State(_state): State<AppState>,
+    Query(_query): Query<FunnelQuery>,
+) -> (StatusCode, Json<Value>) {
+    unavailable("window_funnel_events")
+}
+
+#[cfg(feature = "analytics")]
 async fn patterns(
     State(state): State<AppState>,
     Query(query): Query<PatternsQuery>,
@@ -341,6 +411,78 @@ async fn patterns(
     Query(_query): Query<PatternsQuery>,
 ) -> (StatusCode, Json<Value>) {
     unavailable("sequence_match")
+}
+
+#[cfg(feature = "analytics")]
+async fn sequence_analysis(
+    State(state): State<AppState>,
+    Query(query): Query<PatternsQuery>,
+) -> (StatusCode, Json<Value>) {
+    if !state.has_analytics() {
+        return unavailable("sequence_analysis");
+    }
+
+    let default = birdnet_behavioral::types::PatternParams::default();
+    let species_sequence = parse_species_sequence(query.species, default.species_sequence);
+
+    let params = birdnet_behavioral::types::PatternParams {
+        species_sequence,
+        max_gap_minutes: query.max_gap,
+        hour_start: query.hour_start.unwrap_or(default.hour_start),
+        hour_end: query.hour_end.unwrap_or(default.hour_end),
+    };
+
+    let result = tokio::task::spawn_blocking(move || {
+        state
+            .with_analytics(|adb| adb.sequence_analysis(&params))
+            .unwrap_or_else(|| {
+                Err(
+                    birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
+                        "analytics not available".into(),
+                    ),
+                )
+            })
+    })
+    .await;
+
+    match result {
+        Ok(Ok(rows)) => {
+            let total = rows.len();
+            let matched_days = rows.iter().filter(|m| m.matched).count();
+            let total_occurrences: u64 = rows.iter().map(|m| m.occurrences).sum();
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "sequence_analysis": rows,
+                    "total": total,
+                    "matched_days": matched_days,
+                    "total_occurrences": total_occurrences,
+                })),
+            )
+        }
+        // A bad species count is a client error, not an extension fault.
+        Ok(Err(birdnet_behavioral::connection::AnalyticsError::InvalidData(msg))) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "status": "invalid_request",
+                "function": "sequence_analysis",
+                "error": msg,
+            })),
+        ),
+        Ok(Err(e)) => extension_error("sequence_analysis", &e.to_string()),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("internal error: {e}") })),
+        ),
+    }
+}
+
+#[cfg(not(feature = "analytics"))]
+async fn sequence_analysis(
+    State(_state): State<AppState>,
+    Query(_query): Query<PatternsQuery>,
+) -> (StatusCode, Json<Value>) {
+    unavailable("sequence_analysis")
 }
 
 #[cfg(feature = "analytics")]
@@ -419,8 +561,10 @@ async fn analytics_status(State(state): State<AppState>) -> (StatusCode, Json<Va
                 "sessions": "/analytics/sessions?species=...&gap=30&limit=100",
                 "retention": "/analytics/retention?min_detections=5",
                 "funnel": "/analytics/funnel?species=Robin,Blackbird&window=120&hour_start=4&hour_end=8",
+                "funnel_events": "/analytics/funnel-events?species=Robin,Blackbird&window=120&hour_start=4&hour_end=8",
                 "next_species": "/analytics/next-species?after=European+Robin&window=60&limit=10",
                 "patterns": "/analytics/patterns?species=Robin,Blackbird,Wren&max_gap=60&hour_start=4&hour_end=8",
+                "sequence_analysis": "/analytics/sequence-analysis?species=Robin,Blackbird,Wren&max_gap=60&hour_start=4&hour_end=8",
             },
         })),
     )

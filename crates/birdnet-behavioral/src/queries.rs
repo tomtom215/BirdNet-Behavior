@@ -8,13 +8,21 @@
 //! Every builder targets the published extension's real function signatures
 //! (verified against the live extension by the tests in `connection::live`):
 //!
-//! | Function              | Shape used here                                    |
-//! |-----------------------|----------------------------------------------------|
-//! | `sessionize`          | window fn in a subquery, then `GROUP BY session_id`|
-//! | `retention`           | `retention(BOOLEAN, …)` -> `BOOLEAN[]` aggregate   |
-//! | `window_funnel`       | variadic `BOOLEAN` step conditions                 |
-//! | `sequence_match`      | `sequence_match(pattern, ts, BOOLEAN, …)` -> bool  |
-//! | `sequence_next_node`  | `(direction, mode, ts, value, BOOLEAN, …)` -> text |
+//! | Function                | Shape used here                                  |
+//! |-------------------------|--------------------------------------------------|
+//! | `sessionize`            | window fn in a subquery, then `GROUP BY session_id` |
+//! | `retention`             | `retention(BOOLEAN, …)` -> `BOOLEAN[]` aggregate |
+//! | `window_funnel`         | variadic `BOOLEAN` step conditions               |
+//! | `window_funnel_events`  | same args -> `TIMESTAMP[]` of step-completion times |
+//! | `sequence_match`        | `sequence_match(pattern, ts, BOOLEAN, …)` -> bool |
+//! | `sequence_count`        | same args -> `BIGINT` occurrence count           |
+//! | `sequence_match_events` | same args -> `TIMESTAMP[]` of matched event times |
+//! | `sequence_next_node`    | `(direction, mode, ts, value, BOOLEAN, …)` -> text |
+//!
+//! `window_funnel_events`, `sequence_count` and `sequence_match_events` are
+//! duckdb-behavioral v0.8.0 additions; a station running an older cached build
+//! surfaces an extension error for those queries rather than breaking the
+//! `window_funnel` / `sequence_match` paths above.
 
 use std::fmt::Write as _;
 
@@ -57,13 +65,20 @@ FORCE INSTALL behavioral FROM community;
 LOAD behavioral;
 ";
 
-/// SQL to read the loaded behavioral extension version (e.g. `v0.6.0`).
+/// SQL to read the loaded behavioral extension version (e.g. `v0.8.0`).
 ///
 /// Filters on `loaded` so it reports the version active in the current
 /// connection, not one merely present in `DuckDB`'s shared extension cache.
 /// Returns no rows when the extension is not loaded.
 pub const BEHAVIORAL_EXTENSION_VERSION: &str = "SELECT extension_version FROM duckdb_extensions() \
      WHERE extension_name = 'behavioral' AND loaded";
+
+/// SQL invoking the extension's native `behavioral_version()` scalar.
+///
+/// Added in v0.8.0; returns the loaded extension's version string directly, and
+/// errors when an older build without the function is loaded — so it doubles as
+/// a "v0.8.0-or-newer" probe.
+pub const BEHAVIORAL_VERSION_FN: &str = "SELECT behavioral_version()";
 
 /// Build SQL for activity sessionization.
 ///
@@ -199,6 +214,64 @@ pub fn sequence_match_sql(params: &PatternParams) -> String {
             sequence_match('{pattern}', detection_timestamp,
                 {conditions}
             ) AS matched
+        FROM detections_ts
+        WHERE EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
+        GROUP BY CAST(detection_timestamp AS DATE)
+        ORDER BY date DESC",
+        start = params.hour_start,
+        end = params.hour_end,
+    )
+}
+
+/// Build SQL for the per-step completion times of a dawn-chorus funnel.
+///
+/// `window_funnel_events()` (duckdb-behavioral v0.8.0) mirrors `window_funnel`
+/// but returns a `TIMESTAMP[]` of the moment each leading step completed instead
+/// of just the count. The array is cast to `VARCHAR[]` so the timestamps read
+/// back as ISO strings; its length is the number of steps completed.
+///
+/// Callers must pass 2..=32 species; [`crate::connection`] enforces this.
+pub fn funnel_events_sql(params: &FunnelParams) -> String {
+    let conditions = species_conditions(&params.species_sequence);
+
+    format!(
+        "SELECT
+            CAST(CAST(detection_timestamp AS DATE) AS VARCHAR) AS date,
+            CAST(window_funnel_events(
+                INTERVAL '{window} MINUTE',
+                detection_timestamp,
+                {conditions}
+            ) AS VARCHAR[]) AS step_times
+        FROM detections_ts
+        WHERE EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
+        GROUP BY CAST(detection_timestamp AS DATE)
+        ORDER BY date DESC",
+        window = params.window_minutes,
+        start = params.hour_start,
+        end = params.hour_end,
+    )
+}
+
+/// Build SQL combining ordered-sequence match, count, and matched event times.
+///
+/// One pass per day computes all three v0.8.0-parity signals over the same
+/// pattern and conditions: `sequence_match` (did the ordered pattern occur),
+/// `sequence_count` (how many non-overlapping times), and
+/// `sequence_match_events` (the timestamps of the matched events, cast to
+/// `VARCHAR[]`). Sharing one scan keeps it a single round-trip.
+///
+/// Callers must pass 2..=32 species; [`crate::connection`] enforces this.
+pub fn sequence_analysis_sql(params: &PatternParams) -> String {
+    let pattern = ordered_pattern(params.species_sequence.len(), params.max_gap_minutes);
+    let conditions = species_conditions(&params.species_sequence);
+
+    format!(
+        "SELECT
+            CAST(CAST(detection_timestamp AS DATE) AS VARCHAR) AS date,
+            sequence_match('{pattern}', detection_timestamp, {conditions}) AS matched,
+            sequence_count('{pattern}', detection_timestamp, {conditions}) AS occurrences,
+            CAST(sequence_match_events('{pattern}', detection_timestamp, {conditions})
+                AS VARCHAR[]) AS event_times
         FROM detections_ts
         WHERE EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
         GROUP BY CAST(detection_timestamp AS DATE)
@@ -345,6 +418,42 @@ mod tests {
         };
         let sql = sequence_match_sql(&params);
         assert!(sql.contains("sequence_match('(?1).*(?t<=1800)(?2)'"));
+    }
+
+    #[test]
+    fn funnel_events_sql_default() {
+        let sql = funnel_events_sql(&FunnelParams::default());
+        assert!(sql.contains("window_funnel_events("));
+        // The TIMESTAMP[] result is cast to VARCHAR[] so it reads back as ISO
+        // strings, and aliased for the row reader.
+        assert!(sql.contains("AS VARCHAR[]) AS step_times"));
+        assert!(sql.contains("Com_Name = 'European Robin'"));
+        assert!(sql.contains("BETWEEN 4 AND 8"));
+        assert!(!sql.contains("[Com_Name"));
+    }
+
+    #[test]
+    fn sequence_analysis_sql_default() {
+        let sql = sequence_analysis_sql(&PatternParams::default());
+        // All three v0.8.0 signals share the same pattern + conditions.
+        assert!(sql.contains("sequence_match('(?1).*(?2).*(?3)', detection_timestamp"));
+        assert!(sql.contains("sequence_count('(?1).*(?2).*(?3)', detection_timestamp"));
+        assert!(sql.contains("sequence_match_events('(?1).*(?2).*(?3)', detection_timestamp"));
+        assert!(sql.contains("AS matched"));
+        assert!(sql.contains("AS occurrences"));
+        assert!(sql.contains("AS VARCHAR[]) AS event_times"));
+        assert!(sql.contains("Com_Name = 'European Robin'"));
+    }
+
+    #[test]
+    fn sequence_analysis_sql_honours_gap_token() {
+        let params = PatternParams {
+            species_sequence: vec!["A".into(), "B".into()],
+            max_gap_minutes: Some(30),
+            ..PatternParams::default()
+        };
+        let sql = sequence_analysis_sql(&params);
+        assert!(sql.contains("(?1).*(?t<=1800)(?2)"));
     }
 
     #[test]

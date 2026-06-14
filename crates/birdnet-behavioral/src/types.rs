@@ -108,6 +108,45 @@ pub struct PatternMatch {
     pub species_sequence: Vec<String>,
 }
 
+/// Dawn-chorus funnel with per-step completion times (output of
+/// `window_funnel_events`, duckdb-behavioral v0.8.0).
+///
+/// Richer than [`ChorusFunnel`]: instead of just the count of completed steps,
+/// it carries the timestamp at which each leading step finished.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChorusFunnelEvents {
+    /// Date of the dawn-chorus observation.
+    pub date: String,
+    /// Number of funnel steps completed (equals `step_times.len()`).
+    pub steps_completed: u32,
+    /// Total steps in the funnel definition.
+    pub total_steps: u32,
+    /// ISO 8601 timestamp at which each completed step finished, in order.
+    pub step_times: Vec<String>,
+}
+
+/// Combined ordered-sequence analysis for a day (output of `sequence_match`,
+/// `sequence_count` and `sequence_match_events`, computed together).
+///
+/// Where [`PatternMatch`] only reports whether the ordered pattern occurred,
+/// this adds how many non-overlapping times it occurred and the timestamps of
+/// the matched events.
+#[derive(Debug, Clone, Serialize)]
+pub struct SequenceAnalysis {
+    /// Date the pattern was evaluated over.
+    pub date: String,
+    /// Whether the ordered pattern occurred at least once.
+    pub matched: bool,
+    /// Number of non-overlapping occurrences of the ordered pattern.
+    pub occurrences: u64,
+    /// ISO 8601 timestamps of the events matching the longest pattern *prefix*
+    /// found that day. Present even when `matched` is false — e.g. a day that
+    /// reached step 2 of a 3-step pattern carries those two events.
+    pub event_times: Vec<String>,
+    /// Species involved in the pattern, in order.
+    pub species_sequence: Vec<String>,
+}
+
 /// Next species prediction (output of `sequence_next_node`).
 #[derive(Debug, Clone, Serialize)]
 pub struct NextSpeciesPrediction {

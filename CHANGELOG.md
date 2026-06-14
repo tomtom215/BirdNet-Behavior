@@ -129,6 +129,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   filterable, paginated query of clips that saved an audio file, behind a
   `RecordingsFilter` (All · Best · Rare · Locked) that reuses the Today log's
   "best"/"rare" definitions. Powers the Recordings Clips browser.
+- **Adopt the `duckdb-behavioral` v0.8.0 extension.** The community extension is
+  now v0.8.0 (still targeting DuckDB 1.5.3, so the bundled-engine pin is
+  unchanged). Three new ClickHouse-parity functions are wired into the
+  `birdnet-behavioral` query layer and surfaced as JSON endpoints:
+  `window_funnel_events` (per-step completion times → `/analytics/funnel-events`),
+  `sequence_count` + `sequence_match_events` (occurrence counts and matched
+  event times → `/analytics/sequence-analysis`). A new `behavioral_version()`
+  probe reports the loaded extension version. Existing `window_funnel` /
+  `sequence_match` paths are untouched, so a station running an older cached
+  build keeps working.
+- **Offline-load guarantee for the behavioral extension.** The prebuilt v0.8.0
+  binaries for `linux_amd64` and `linux_arm64` are vendored under
+  `crates/birdnet-behavioral/vendor/`, and `build.rs` now embeds the copy
+  matching the build target. `LOAD behavioral` therefore works with no network
+  on a fresh Raspberry Pi, in CI, and in the sandbox. (The binaries are taken
+  from the DuckDB community registry; the upstream GitHub-release `linux_arm64`
+  tarball ships an x86_64 binary mislabeled as arm64 and must not be used.)
 
 ## [0.8.0] - 2026-06-11
 
