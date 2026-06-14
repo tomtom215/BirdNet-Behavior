@@ -15,9 +15,10 @@
     <h1 class="display dc-h1">
       The dawn chorus, <em>by species</em>.
     </h1>
-    <p class="bnb-meta dc-lede">
-      Each ribbon is one species's activity over the 24-hour clock, averaged across
-      the last 60 days. Ribbon thickness = call rate; position = time of day.
+    <p class="bnb-lede dc-lede">
+      <b>Who sings, and when.</b> Each ring is one species; its ribbon swells outward
+      at the hours it's most active, normalized to its own peak so a quiet wren reads
+      as clearly as a loud cardinal. Midnight is at the top; the dashed hand is now.
       Sunrise <span id="sun-rise" class="mono">—</span>,
       sunset <span id="sun-set" class="mono">—</span>.
     </p>
@@ -30,41 +31,40 @@
   </div>
 </div>
 
-<div class="grid-2 dc-cols">
+<!-- Polar plot — the one picture this tab leads with -->
+<div class="bnb-card pad dc-polar-card">
+  <div id="dawn-polar"
+       hx-get="/pages/dawn-polar"
+       hx-trigger="load"
+       hx-swap="innerHTML"
+       class="dc-polar-wrap">
+    {{skel_polar}}
+  </div>
+</div>
 
-  <!-- Polar plot -->
-  <div class="bnb-card pad dc-polar-card">
-    <div id="dawn-polar"
-         hx-get="/pages/dawn-polar"
-         hx-trigger="load"
-         hx-swap="innerHTML"
-         class="dc-polar-wrap">
-      {{skel_polar}}
+<!-- Per-species activity, tucked behind a "see the numbers" disclosure -->
+<div class="bnb-card pad dc-list-card">
+  <div class="section-header">
+    <div>
+      <div class="bnb-eyebrow">Selected species</div>
+      <h3>Activity ribbons</h3>
     </div>
+    <a class="action" href="/species">All species →</a>
   </div>
 
-  <!-- Species list -->
-  <div class="bnb-card pad dc-list-card">
-    <div class="section-header">
-      <div>
-        <div class="bnb-eyebrow">Selected species</div>
-        <h3>Activity ribbons</h3>
-      </div>
-      <a class="action" href="/species">All species →</a>
-    </div>
-
+  <details class="pt-disc">
+    <summary>See the numbers — per-species activity</summary>
     <div id="dawn-list"
          hx-get="/pages/dawn-list"
          hx-trigger="load"
          hx-swap="innerHTML">
       {{skel_ribbons}}
     </div>
-
     <div class="bnb-meta dc-foot">
       Species whose peak hour falls outside the dawn band (05:00–08:00) are marked
       <em>off-chorus</em> on their row.
     </div>
-  </div>
+  </details>
 </div>
 
 <script>

@@ -11,49 +11,55 @@
     </div>
 </div>
 
-<div class="grid-2">
-    <div>
-        <!-- Sessions Card -->
-        <div class="card">
-            <h2>Activity Sessions</h2>
-            <p class="an-card-lede">
-                Species activity grouped by time gaps. Shows when birds are actively visiting your area.
-            </p>
-            <div hx-get="/pages/analytics-sessions" hx-trigger="load" hx-swap="innerHTML">
-                <p class="an-loading">Loading sessions...</p>
-            </div>
-        </div>
-
-        <!-- Retention Card -->
-        <div class="card">
-            <h2>Species Retention</h2>
-            <p class="an-card-lede">
-                Which species return day after day? Higher retention means a species is a regular visitor.
-            </p>
-            <div hx-get="/pages/analytics-retention" hx-trigger="load" hx-swap="innerHTML">
-                <p class="an-loading">Loading retention data...</p>
-            </div>
+<!-- One masonry of defined-in-place cards: every term explained where it lands -->
+<div class="pt-masonry">
+    <!-- Sessions -->
+    <div class="bnb-card pad">
+        <div class="bnb-eyebrow">Activity sessions</div>
+        <h3 class="an-card-h3">Bursts of singing</h3>
+        <p class="bnb-meta an-card-lede">
+            A <b>session</b> is a run of detections with no gap longer than ~20 quiet
+            minutes — one "visit" of activity.
+        </p>
+        <div hx-get="/pages/analytics-sessions" hx-trigger="load" hx-swap="innerHTML">
+            <p class="an-loading">Loading sessions...</p>
         </div>
     </div>
 
-    <div>
-        <!-- Next Species Prediction -->
-        <div class="card">
-            <h2>Next Species Prediction</h2>
-            <p class="an-card-lede">
-                After detecting one species, which species tends to appear next?
-            </p>
-            <div hx-get="/pages/analytics-next" hx-trigger="load" hx-swap="innerHTML">
-                <p class="an-loading">Loading predictions...</p>
-            </div>
+    <!-- Retention -->
+    <div class="bnb-card pad">
+        <div class="bnb-eyebrow">Species retention</div>
+        <h3 class="an-card-h3">Who keeps coming back</h3>
+        <p class="bnb-meta an-card-lede">
+            Of the days a species appeared, how often it returned the <b>next</b> day.
+            High = a regular; low = a passer-through.
+        </p>
+        <div hx-get="/pages/analytics-retention" hx-trigger="load" hx-swap="innerHTML">
+            <p class="an-loading">Loading retention data...</p>
         </div>
+    </div>
 
-        <!-- System Info -->
-        <div class="card">
-            <h2>Analytics Configuration</h2>
-            <div hx-get="/pages/analytics-config" hx-trigger="load" hx-swap="innerHTML">
-                <p class="an-loading">Loading config...</p>
-            </div>
+    <!-- Next species -->
+    <div class="bnb-card pad">
+        <div class="bnb-eyebrow">What comes next</div>
+        <h3 class="an-card-h3">Follow-on species</h3>
+        <p class="bnb-meta an-card-lede">
+            After hearing one species, which tends to turn up <b>next</b> in the same session.
+        </p>
+        <div hx-get="/pages/analytics-next" hx-trigger="load" hx-swap="innerHTML">
+            <p class="an-loading">Loading predictions...</p>
+        </div>
+    </div>
+
+    <!-- Engine configuration -->
+    <div class="bnb-card pad">
+        <div class="bnb-eyebrow">Configuration</div>
+        <h3 class="an-card-h3">The analytics engine</h3>
+        <p class="bnb-meta an-card-lede">
+            Where these numbers come from, and the time windows used to compute them.
+        </p>
+        <div hx-get="/pages/analytics-config" hx-trigger="load" hx-swap="innerHTML">
+            <p class="an-loading">Loading config...</p>
         </div>
     </div>
 </div>

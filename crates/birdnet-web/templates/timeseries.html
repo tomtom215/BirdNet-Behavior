@@ -8,35 +8,10 @@
     matters more than raw detections — it means more kinds of birds are finding your patch.
 </p>
 
-<!-- Row 1: Heatmap + Peak Windows -->
+<!-- The two headline trends this tab leads with: busier? and more varied? -->
 <div class="grid-2 tsh-row">
     <div class="card">
-        <h2>Hour-of-Day Activity Heatmap
-            <span class="tsh-badge">90-day average</span>
-        </h2>
-        <div hx-get="/pages/ts-heatmap"
-             hx-trigger="load"
-             hx-swap="innerHTML">
-            <span class="htmx-indicator">Loading heatmap…</span>
-        </div>
-    </div>
-
-    <div class="card">
-        <h2>Peak 15-Minute Windows
-            <span class="tsh-badge">today</span>
-        </h2>
-        <div hx-get="/pages/ts-peak"
-             hx-trigger="load"
-             hx-swap="innerHTML">
-            <span class="htmx-indicator">Loading peak windows…</span>
-        </div>
-    </div>
-</div>
-
-<!-- Row 2: Daily Trend + Species Diversity -->
-<div class="grid-2 tsh-row">
-    <div class="card">
-        <h2>Daily Detection Trend
+        <h2>Detections per week
             <span class="tsh-badge">last 60 days · 7-day moving avg</span>
         </h2>
         <div hx-get="/pages/ts-daily"
@@ -47,7 +22,7 @@
     </div>
 
     <div class="card">
-        <h2>Species Diversity
+        <h2>Species richness
             <span class="tsh-badge">last 30 days · Shannon H′</span>
         </h2>
         <div hx-get="/pages/ts-diversity"
@@ -58,69 +33,99 @@
     </div>
 </div>
 
-<!-- Row 3: Activity Sessions + Anomaly Detection -->
-<div class="grid-2 tsh-row">
-    <div class="card">
-        <h2>Activity Sessions
-            <span class="tsh-badge">last 3 days · gap ≥ 30 min</span>
-        </h2>
-        <p class="tsh-card-lede">
-            Continuous-presence windows separated by inactivity gaps.
-        </p>
-        <div hx-get="/pages/ts-sessions"
-             hx-trigger="load"
-             hx-swap="innerHTML">
-            <span class="htmx-indicator">Loading sessions…</span>
-        </div>
-    </div>
+<!-- Everything else is the deeper dashboard, one click away -->
+<details class="pt-disc">
+  <summary>See the full analytics dashboard</summary>
 
-    <div class="card">
-        <h2>Anomaly Detection
-            <span class="tsh-badge">90 days · z &gt; 2.0</span>
-        </h2>
-        <p class="tsh-card-lede">
-            Days where detection counts deviate &gt; 2 standard deviations from the 30-day rolling mean.
-        </p>
-        <div hx-get="/pages/ts-anomalies"
-             hx-trigger="load"
-             hx-swap="innerHTML">
-            <span class="htmx-indicator">Detecting anomalies…</span>
-        </div>
-    </div>
-</div>
+  <!-- Heatmap + Peak Windows -->
+  <div class="grid-2 tsh-row">
+      <div class="card">
+          <h2>Hour-of-Day Activity Heatmap
+              <span class="tsh-badge">90-day average</span>
+          </h2>
+          <div hx-get="/pages/ts-heatmap"
+               hx-trigger="load"
+               hx-swap="innerHTML">
+              <span class="htmx-indicator">Loading heatmap…</span>
+          </div>
+      </div>
 
-<!-- Row 4: Polar Activity Clock + Species Accumulation -->
-<div class="grid-2 tsh-row">
-    <div class="card">
-        <h2>Polar Activity Clock
-            <span class="tsh-badge">90-day hourly average</span>
-        </h2>
-        <p class="tsh-card-lede">
-            Radial chart showing bird activity intensity by hour of day. Each spoke = 1 hour (0–23).
-        </p>
-        <div id="polar-clock-container" class="tsh-polar-center">
-            <svg id="polar-clock" width="320" height="320" viewBox="0 0 320 320"
-                 aria-label="Polar activity clock" role="img">
-                <text x="160" y="170" text-anchor="middle" fill="var(--text-muted)"
-                      font-size="12">Loading…</text>
-            </svg>
-        </div>
-    </div>
+      <div class="card">
+          <h2>Peak 15-Minute Windows
+              <span class="tsh-badge">today</span>
+          </h2>
+          <div hx-get="/pages/ts-peak"
+               hx-trigger="load"
+               hx-swap="innerHTML">
+              <span class="htmx-indicator">Loading peak windows…</span>
+          </div>
+      </div>
+  </div>
 
-    <div class="card">
-        <h2>Species Accumulation
-            <span class="tsh-badge">cumulative discovery</span>
-        </h2>
-        <p class="tsh-card-lede">
-            Cumulative new species discovered over time — species accumulation curve.
-        </p>
-        <div hx-get="/pages/life-accumulation"
-             hx-trigger="load"
-             hx-swap="innerHTML">
-            <span class="htmx-indicator">Loading accumulation…</span>
-        </div>
-    </div>
-</div>
+  <!-- Activity Sessions + Anomaly Detection -->
+  <div class="grid-2 tsh-row">
+      <div class="card">
+          <h2>Activity Sessions
+              <span class="tsh-badge">last 3 days · gap ≥ 30 min</span>
+          </h2>
+          <p class="tsh-card-lede">
+              Continuous-presence windows separated by inactivity gaps.
+          </p>
+          <div hx-get="/pages/ts-sessions"
+               hx-trigger="load"
+               hx-swap="innerHTML">
+              <span class="htmx-indicator">Loading sessions…</span>
+          </div>
+      </div>
+
+      <div class="card">
+          <h2>Anomaly Detection
+              <span class="tsh-badge">90 days · z &gt; 2.0</span>
+          </h2>
+          <p class="tsh-card-lede">
+              Days where detection counts deviate &gt; 2 standard deviations from the 30-day rolling mean.
+          </p>
+          <div hx-get="/pages/ts-anomalies"
+               hx-trigger="load"
+               hx-swap="innerHTML">
+              <span class="htmx-indicator">Detecting anomalies…</span>
+          </div>
+      </div>
+  </div>
+
+  <!-- Polar Activity Clock + Species Accumulation -->
+  <div class="grid-2 tsh-row">
+      <div class="card">
+          <h2>Polar Activity Clock
+              <span class="tsh-badge">90-day hourly average</span>
+          </h2>
+          <p class="tsh-card-lede">
+              Radial chart showing bird activity intensity by hour of day. Each spoke = 1 hour (0–23).
+          </p>
+          <div id="polar-clock-container" class="tsh-polar-center">
+              <svg id="polar-clock" width="320" height="320" viewBox="0 0 320 320"
+                   aria-label="Polar activity clock" role="img">
+                  <text x="160" y="170" text-anchor="middle" fill="var(--text-muted)"
+                        font-size="12">Loading…</text>
+              </svg>
+          </div>
+      </div>
+
+      <div class="card">
+          <h2>Species Accumulation
+              <span class="tsh-badge">cumulative discovery</span>
+          </h2>
+          <p class="tsh-card-lede">
+              Cumulative new species discovered over time — species accumulation curve.
+          </p>
+          <div hx-get="/pages/life-accumulation"
+               hx-trigger="load"
+               hx-swap="innerHTML">
+              <span class="htmx-indicator">Loading accumulation…</span>
+          </div>
+      </div>
+  </div>
+</details>
 
 <script>
 (function () {

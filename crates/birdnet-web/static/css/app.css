@@ -3017,6 +3017,8 @@ a.spp-inherit    { color: inherit; }
 .an-lede      { margin-top: 4px; }
 .an-status    { margin: 0; min-width: 220px; }
 .an-card-lede { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 1rem; }
+.an-card-lede b { color: var(--fg); font-weight: 600; }
+.an-card-h3   { font-size: 16px; margin-top: 2px; }
 .an-loading   { color: var(--text-muted); }
 
 /* ── Time series shell (/timeseries) — legacy --text-muted/--accent preserved.
@@ -3066,6 +3068,7 @@ a.spp-inherit    { color: inherit; }
 .hm-h1        { font-size: 34px; }
 .hm-lede      { margin-top: 4px; }
 .hm-empty     { color: var(--fg-4); text-align: center; padding: 2rem; }
+.hm-hourly-note { margin: 2px 0 12px; font-size: 12.5px; }
 .hm-scroll    { overflow-x: auto; }
 .hm-svg       { font-family: system-ui, sans-serif; }
 .hm-svg-block { font-family: system-ui, sans-serif; display: block; }
@@ -3573,6 +3576,54 @@ main[data-home="reports"] { max-width: 1100px; padding: var(--pad-3) 24px 64px; 
    .st-lede in the mocks, identical). */
 .bnb-lede { font-size: 14px; color: var(--fg-2); max-width: 76ch; margin: 0 0 18px; line-height: 1.55; }
 .bnb-lede b { color: var(--fg); font-weight: 600; }
+
+/* ── Patterns home (/patterns?tab=…) — v3 spine (Patterns_home.html) ───────
+   The analytics home's per-tab layout helpers: a centred picture (.pt-viz),
+   the migration KPI trio (.pt-kpi), the colour legend (.pt-legend), the
+   "see the numbers" disclosure (.pt-disc) that tucks tables/definitions under
+   one click, and the Behavior tab's masonry of defined-in-place cards
+   (.pt-masonry/.pt-def/.pt-bars/.pt-next). Ported verbatim from the mock
+   <style> minus the consolidated .pt-tab/.pt-lede (now .bnb-subtab/.bnb-lede)
+   and the mock-only chrome. All charts stay the existing Rust viz renderers. */
+.pt-viz { display: flex; justify-content: center; padding: 8px 0 4px; overflow-x: auto; }
+.pt-viz .viz-svg-center { width: 100%; max-width: 560px; }
+.pt-grid2 { display: grid; grid-template-columns: 1.1fr 1fr; gap: 18px; align-items: start; }
+@media (max-width: 880px) { .pt-grid2 { grid-template-columns: 1fr; } }
+.pt-kpi { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 18px; }
+@media (max-width: 720px) { .pt-kpi { grid-template-columns: 1fr; } }
+.pt-kpi .val { font-family: var(--font-display); font-size: 30px; line-height: 1; margin-top: 8px; }
+.pt-kpi .sub { font-size: 11.5px; color: var(--fg-3); margin-top: 5px; }
+.pt-legend { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; margin-top: 12px; }
+.pt-legend .it { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--fg-2); }
+.pt-legend .sw { width: 11px; height: 11px; border-radius: 3px; flex: none; }
+.pt-disc { margin-top: 16px; }
+.pt-disc > summary { cursor: pointer; font-size: 12.5px; color: var(--fg-2); list-style: none; display: inline-flex; align-items: center; gap: 7px; padding: 7px 13px; border: 0.5px solid var(--border-2); border-radius: var(--r-sm); background: var(--surface); box-shadow: var(--shadow-sm); }
+.pt-disc > summary:hover { border-color: var(--fg-4); color: var(--fg); }
+.pt-disc > summary::-webkit-details-marker { display: none; }
+.pt-disc > summary::before { content: "\25be"; font-size: 9px; color: var(--fg-3); transition: transform .15s; }
+.pt-disc[open] > summary::before { transform: rotate(180deg); }
+.pt-disc > div { margin-top: 12px; }
+.pt-def { display: grid; grid-template-columns: minmax(140px,auto) 1fr; gap: 9px 16px; font-size: 13px; margin-top: 6px; }
+.pt-def dt { font-weight: 600; }
+.pt-def dd { margin: 0; color: var(--fg-2); line-height: 1.5; }
+.pt-bars { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; }
+.pt-bar-row { position: relative; display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border-radius: 6px; overflow: hidden; font-size: 12.5px; }
+.pt-bar-fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--moss-soft); border-radius: 6px; z-index: 0; }
+.pt-bar-row .nm { position: relative; z-index: 1; font-weight: 500; }
+.pt-bar-row .pct { position: relative; z-index: 1; font-family: var(--font-mono); font-size: 11.5px; color: var(--moss-ink); font-weight: 600; }
+.pt-next { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; font-size: 13px; }
+.pt-next-row { display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr) 40px; gap: 8px; align-items: center; }
+.pt-next-row > span:not(.arr):not(.p) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pt-next-row .arr { color: var(--fg-4); }
+.pt-next-row .p { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); text-align: right; white-space: nowrap; }
+table.pt-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 6px; }
+table.pt-tbl th { text-align: left; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-3); font-weight: 500; padding: 6px 8px; border-bottom: 0.5px solid var(--border); }
+table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); font-variant-numeric: tabular-nums; }
+.pt-masonry { column-count: 2; column-gap: 18px; }
+.pt-masonry > .bnb-card { break-inside: avoid; margin: 0 0 18px; display: inline-block; width: 100%; }
+@media (max-width: 720px) { .pt-masonry { column-count: 1; } }
+.pt-disc .viz-scroll { display: flex; justify-content: center; width: 100%; }
+.pt-disc .viz-scroll svg { width: 100%; max-width: 520px; height: auto; }
 
 /* ── Today home (Today_home.html) ────────────────────────────────────────
    The merged Dashboard+Today surface. Class names follow the mock's x-*

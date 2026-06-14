@@ -19,9 +19,15 @@
 > `/admin/settings` form stay reachable as gated fallbacks. The **Species** home
 > rebuild has landed too — the List/Photos/Life-list view switcher at
 > `/species?view=…` (with `/gallery`·`/life-list` redirecting in), the filter +
-> search, and the `sd-*` detail page. Still open: the per-source live
-> state-chip/uptime/retry once the capture supervisor exposes status to the web
-> layer; and the Patterns/Reports visual reskin.
+> search, and the `sd-*` detail page. The **Patterns** reskin has landed too —
+> the full `pt-*` vocabulary is ported, every tab opens with a plain-English
+> `bnb-lede`, leads with one picture, and tucks its tables/numbers behind a
+> "see the numbers" `pt-disc` disclosure (chord→matrix, polar→ribbons,
+> trends→full-dashboard), Behavior is a defined-in-place `pt-masonry`, and the
+> When tab drops the now-duplicated dawn/phenology panels. Still open: the
+> per-source live state-chip/uptime/retry once the capture supervisor exposes
+> status to the web layer; and the **Reports** visual reskin (editorial
+> `rp-hero`/`rp-stats` on Weekly + Year, and the History heat-calendar).
 >
 > **Recordings — deliberate honest omissions (Wave D).** The mock's per-clip
 > spectrogram thumbnail and clip-duration columns have no cheap, honest

@@ -88,25 +88,11 @@ const HEATMAP_CONTENT: &str = r#"<div class="page-head">
   </div>
 </div>
 
-<div class="grid-2">
-  <div class="bnb-card pad">
-    <div class="section-header"><div><div class="bnb-eyebrow">The dawn chorus</div><h3>Circadian rhythm</h3></div></div>
-    <div id="dawn-chorus" hx-get="/pages/dawn-chorus" hx-trigger="load" hx-swap="innerHTML">
-      <p class="bnb-meta">Loading dawn chorus...</p>
-    </div>
-  </div>
-  <div class="bnb-card pad">
-    <div class="section-header"><div><div class="bnb-eyebrow">All days</div><h3>Detections by hour</h3></div></div>
-    <div id="hourly-totals" hx-get="/pages/hourly-totals?days=7" hx-trigger="load" hx-swap="innerHTML">
-      <p class="bnb-meta">Loading chart...</p>
-    </div>
-  </div>
-</div>
-
 <div class="bnb-card pad">
-  <div class="section-header"><div><div class="bnb-eyebrow">Arrivals & departures</div><h3>Seasonal phenology</h3></div></div>
-  <div id="seasonal-phenology" hx-get="/pages/seasonal-phenology" hx-trigger="load" hx-swap="innerHTML">
-    <p class="bnb-meta">Loading phenology...</p>
+  <div class="section-header"><div><div class="bnb-eyebrow">All days combined</div><h3>Detections by hour</h3></div><a class="action" href="/patterns?tab=dawn">See who sings when →</a></div>
+  <p class="bnb-meta hm-hourly-note">Totals for every hour. Dawn (5–8 am) and dusk (6–9 pm) bars are amber; the rest green.</p>
+  <div id="hourly-totals" hx-get="/pages/hourly-totals?days=7" hx-trigger="load" hx-swap="innerHTML">
+    <p class="bnb-meta">Loading chart...</p>
   </div>
 </div>
 

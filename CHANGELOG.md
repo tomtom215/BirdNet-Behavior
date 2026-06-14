@@ -33,11 +33,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   review and history are the three tabs of **Reports**; the read-only system
   health page is the public **Health** tab of **Station**. The underlying
   server-rendered SVG renderers are unchanged.
-- **Patterns tabs lead with plain-English explanations.** The When-active,
-  Who-sings-together, Trends and Behavior tabs now open with a one-paragraph,
-  jargon-free `bnb-lede` that says what the chart means before the chart appears
-  ("Darker cells mean more birds heard that hour…"), in place of the old terse
-  captions.
+- **Patterns reskinned: one picture per tab, numbers behind a disclosure.**
+  All six tabs now open with a one-paragraph, jargon-free `bnb-lede` that says
+  what the chart means before the chart appears ("Darker cells mean more birds
+  heard that hour…"; "Who sings, and when…"; "Each ridge is one species'
+  abundance across the year…"), and each leads with a single picture, tucking
+  the supporting tables and numbers behind a "see the numbers" `<details>`
+  disclosure: **Who-sings-together** leads with the co-occurrence chord and
+  hides the matrix + strongest-pairs tables; **Dawn chorus** leads with the
+  circadian polar and hides the per-species ribbons; **Behavior** becomes a
+  masonry of cards that define every term in place; **Trends** leads with the
+  two headline lines (detections per week, species richness) and folds the rest
+  of the dashboard behind a disclosure; **When-active** drops the duplicated
+  dawn/phenology panels (each is now its own tab). The underlying server-rendered
+  SVG renderers are unchanged.
 - **Reports gain a "Save as PDF" button.** Each Reports tab now carries a
   CSP-safe print affordance — a real button whose delegated, nonce'd click
   handler opens the browser's print dialog, which the existing `print.css`
