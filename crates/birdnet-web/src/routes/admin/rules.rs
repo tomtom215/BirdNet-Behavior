@@ -221,10 +221,14 @@ fn render_page(_rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
     crate::routes::admin::admin_shell("Alert Rules", "rules", &rules_body())
 }
 
-/// Page-specific body (scoped `<style>` + content). Kept separate from the
-/// shared shell so the inline-style guard checks the page's own markup; the
-/// `.container` / bare `nav` rules are dropped since the shell owns layout + nav.
-fn rules_body() -> String {
+/// Page-specific body (scoped `<style>` + content).
+///
+/// Kept separate from the shared shell so the inline-style guard checks the
+/// page's own markup; the `.container` / bare `nav` rules are dropped since the
+/// shell owns layout + nav. Shared with the Station **Alerts** tab
+/// (`crate::routes::pages::homes::station_tabs`), which renders it in the main
+/// shell — the rule list HTMX-loads from `/admin/rules/list` either way.
+pub(crate) fn rules_body() -> String {
     r##"<style>
       h1 { font-size:1.5rem; font-weight:700; color:var(--fg); margin-bottom:.25rem; }
       .subtitle { color:var(--fg-4); font-size:.875rem; margin-bottom:2rem; }

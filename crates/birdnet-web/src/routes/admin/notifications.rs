@@ -84,8 +84,32 @@ async fn prune_handler(State(state): State<AppState>) -> Result<Html<String>, St
 // Rendering
 // ---------------------------------------------------------------------------
 
-#[allow(clippy::too_many_lines)]
 fn render_page(entries: &[NotifEntry], stats: (i64, i64, i64)) -> String {
+    crate::routes::admin::admin_shell(
+        "Notifications",
+        "notifications",
+        &notifications_body(entries, stats),
+    )
+}
+
+/// Fetch the recent notification log + 30-day stats and render the body.
+///
+/// Shared with the Station **Alerts** tab
+/// (`crate::routes::pages::homes::station_tabs`), which renders the "recent
+/// alerts sent" surface in the main shell.
+#[allow(clippy::similar_names)]
+pub(crate) fn recent_body(state: &AppState) -> String {
+    let (entries, stats) = state.with_db(|conn| {
+        let entries = recent_notifications(conn, 100, 0).unwrap_or_default();
+        let stats = notification_stats(conn, 30).unwrap_or((0, 0, 0));
+        (entries, stats)
+    });
+    notifications_body(&entries, stats)
+}
+
+/// The notification-history body (scoped `<style>` + stats cards + table).
+#[allow(clippy::too_many_lines)]
+fn notifications_body(entries: &[NotifEntry], stats: (i64, i64, i64)) -> String {
     let (sent, failed, skipped) = stats;
     let rows_html = render_table_rows(entries);
     let count = entries.len();
@@ -102,7 +126,7 @@ fn render_page(entries: &[NotifEntry], stats: (i64, i64, i64)) -> String {
         swap: Some("innerHTML"),
     });
 
-    let body = format!(
+    format!(
         r#"<style>
     .card {{ background:var(--surface); border:1px solid var(--border); border-radius:0.75rem;
              padding:1.5rem; margin-bottom:1.5rem; }}
@@ -189,8 +213,7 @@ fn render_page(entries: &[NotifEntry], stats: (i64, i64, i64)) -> String {
       </table>
     </div>
   </div>"#
-    );
-    crate::routes::admin::admin_shell("Notifications", "notifications", &body)
+    )
 }
 
 fn render_table_rows(entries: &[NotifEntry]) -> String {

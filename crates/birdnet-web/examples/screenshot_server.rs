@@ -20,7 +20,8 @@
     clippy::too_many_lines,
     clippy::similar_names,
     clippy::missing_const_for_fn,
-    clippy::suboptimal_flops
+    clippy::suboptimal_flops,
+    clippy::items_after_statements
 )]
 
 use birdnet_web::server::build_router;
@@ -290,6 +291,12 @@ fn seed(conn: &Connection, today_days: i64) {
 
     let tx = conn.unchecked_transaction().expect("txn");
 
+    // Rotate detections across three audio sources so the Station Health
+    // per-source panel and the Capture audio-source list show a realistic
+    // multi-stream field deployment. Weighted toward the local mic.
+    const SOURCES: [&str; 4] = ["local", "RTSP_1", "local", "RTSP_2"];
+    let mut src_n = 0u64;
+
     for offset in 0..365i64 {
         let day = today_days - (364 - offset); // oldest first, offset 364 == today
         let (y, m, d) = civil_from_days(day);
@@ -325,16 +332,18 @@ fn seed(conn: &Connection, today_days: i64) {
                 let second = rng.range(0, 59);
                 let time = format!("{hour:02}:{minute:02}:{second:02}");
                 let conf = (sp.base_conf + (rng.unit() - 0.5) * 0.28).clamp(0.51, 0.99);
+                let source = SOURCES[(src_n % SOURCES.len() as u64) as usize];
+                src_n += 1;
                 let file = format!(
-                    "{}-{:.0}-{date}-birdnet-RTSP_1-{time}.wav",
+                    "{}-{:.0}-{date}-birdnet-{source}-{time}.wav",
                     sp.com.replace(' ', "_"),
                     conf * 100.0
                 );
                 let _ = tx.execute(
                     "INSERT OR IGNORE INTO detections
-                     (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name)
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
-                    params![date, time, sp.sci, sp.com, conf, lat, lon, 0.7, week, 1.25, 0.0, file],
+                     (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, Source)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+                    params![date, time, sp.sci, sp.com, conf, lat, lon, 0.7, week, 1.25, 0.0, file, source],
                 );
             }
         }
@@ -351,6 +360,22 @@ fn seed(conn: &Connection, today_days: i64) {
     seed_notifications(conn, today_days);
     seed_alert_rules(conn);
     seed_thresholds(conn);
+    seed_audio_sources(conn);
+}
+
+/// A few configured audio sources so the Station Capture tab's source list and
+/// the Health per-source panel show a realistic multi-stream deployment.
+fn seed_audio_sources(conn: &Connection) {
+    for (id, kind, device, label) in [
+        ("local", "usb-alsa", "hw:1,0", "Backyard mic"),
+        ("RTSP_1", "rtsp", "rtsp://cam1/audio", "Front-yard RTSP"),
+        ("RTSP_2", "rtsp", "rtsp://cam2/audio", "Pond RTSP"),
+    ] {
+        let _ = conn.execute(
+            "INSERT OR IGNORE INTO audio_sources (id, kind, device_id, label) VALUES (?1,?2,?3,?4)",
+            params![id, kind, device, label],
+        );
+    }
 }
 
 fn seed_quarantine(conn: &Connection, today_days: i64) {

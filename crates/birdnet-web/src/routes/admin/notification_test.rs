@@ -40,7 +40,17 @@ pub fn router() -> Router<AppState> {
 // ---------------------------------------------------------------------------
 
 async fn test_page(State(state): State<AppState>) -> Html<String> {
-    let (apprise_configured, bw_configured) = state.with_db(|conn| {
+    Html(render_test_page_for(&state))
+}
+
+fn render_test_page_for(state: &AppState) -> String {
+    let (apprise_ok, bw_ok) = channels_configured(state);
+    render_test_page(apprise_ok, bw_ok)
+}
+
+/// Whether the Apprise and BirdWeather channels have credentials set.
+fn channels_configured(state: &AppState) -> (bool, bool) {
+    state.with_db(|conn| {
         ensure_settings_table(conn).ok();
         let apprise = get_setting(conn, "apprise_url")
             .ok()
@@ -49,9 +59,17 @@ async fn test_page(State(state): State<AppState>) -> Html<String> {
             .ok()
             .is_some_and(|v| !v.is_empty());
         (apprise, bw)
-    });
+    })
+}
 
-    Html(render_test_page(apprise_configured, bw_configured))
+/// Render the channels Send-test body (no document shell).
+///
+/// Shared with the Station **Alerts** tab
+/// (`crate::routes::pages::homes::station_tabs`), which renders the
+/// confirm-before-you-rely-on-it test UI in the main shell.
+pub(crate) fn channels_test_body(state: &AppState) -> String {
+    let (apprise_ok, bw_ok) = channels_configured(state);
+    test_notifications_body(apprise_ok, bw_ok)
 }
 
 fn render_test_page(apprise_ok: bool, bw_ok: bool) -> String {

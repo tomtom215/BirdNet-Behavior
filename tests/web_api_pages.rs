@@ -498,6 +498,12 @@ async fn all_redesigned_pages_render_ok() {
         "/reports?tab=year",
         "/reports?tab=history",
         "/station",
+        // The gated Station management tabs (open-admin bypass in tests).
+        "/station/capture",
+        "/station/alerts",
+        "/station/data",
+        "/station/settings",
+        "/station/access",
         "/life-list",
         "/recordings",
         "/recordings?view=clips",

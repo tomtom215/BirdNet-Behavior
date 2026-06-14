@@ -47,39 +47,7 @@ pub(super) fn render_settings_page(settings: &HashMap<String, String>) -> String
 fn settings_body(settings: &HashMap<String, String>) -> String {
     let form_html = render_settings_form(settings);
     format!(
-        r#"<style>
-      .card {{ background: var(--surface); border: 1px solid var(--border); border-radius: 0.75rem;
-               padding: 1.5rem; margin-bottom: 1.5rem; }}
-      .section-title {{ font-size: 1.1rem; font-weight: 600; color: var(--moss-ink);
-                        margin-bottom: 1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }}
-      label {{ display: block; font-size: 0.85rem; color: var(--fg-3); margin-bottom: 0.25rem; }}
-      input, textarea, select {{ width: 100%; background: var(--bg); border: 1px solid var(--border);
-                                  border-radius: 0.375rem; padding: 0.5rem 0.75rem; color: var(--fg);
-                                  font-size: 0.875rem; box-sizing: border-box; margin-bottom: 1rem; }}
-      input:focus, textarea:focus {{ outline: none; border-color: var(--moss-ink); }}
-      .grid-2 {{ display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }}
-      .btn {{ padding: 0.5rem 1.5rem; border-radius: 0.375rem; border: none; cursor: pointer;
-               font-weight: 600; font-size: 0.875rem; }}
-      .btn-primary {{ background: var(--moss); color: #fff; }}
-      .btn-primary:hover {{ background: var(--moss-ink); }}
-      .alert-success {{ background: var(--moss-soft); border: 1px solid var(--moss-soft); color: var(--moss-ink);
-                         border-radius: 0.375rem; padding: 0.75rem 1rem; margin-bottom: 1rem; }}
-      .alert-error {{ background: var(--rare-soft); border: 1px solid var(--rare-soft); color: var(--rare);
-                       border-radius: 0.375rem; padding: 0.75rem 1rem; margin-bottom: 1rem; }}
-      .alert-icon {{ vertical-align: -2px; margin-right: 0.4rem; }}
-      .hint {{ font-size: 0.75rem; color: var(--fg-4); margin-top: -0.75rem; margin-bottom: 1rem; }}
-      @media (max-width: 520px) {{ .grid-2 {{ grid-template-columns: 1fr; }} }}
-      h1 {{ font-size: 1.5rem; font-weight: 700; margin-bottom: 1.5rem; color: var(--fg); }}
-      a.btn {{ text-decoration: none; }}
-      .btn.btn-sm {{ font-size: 0.8rem; padding: 0.3rem 0.8rem; }}
-      .hint a {{ color: var(--moss-ink); }}
-      .hint.flush {{ margin: -6px 0 8px; }}
-      .mt-sm {{ margin-top: 0.5rem; }}
-      .mt-md {{ margin-top: 1rem; }}
-      .save-row {{ display: flex; align-items: center; gap: 1rem; }}
-      .save-note {{ color: var(--fg-3); font-size: 0.875rem; }}
-      .save-note.dim {{ color: var(--fg-4); font-size: 0.8rem; }}
-    </style>
+        r#"{SETTINGS_FORM_CSS}
 
   <h1>
     Admin Settings
@@ -89,6 +57,100 @@ fn settings_body(settings: &HashMap<String, String>) -> String {
 
   {form_html}"#
     )
+}
+
+/// The scoped stylesheet shared by the standalone settings page and the folded
+/// settings sections on the Station tabs.
+///
+/// Defining it once keeps the folded sections pixel-identical to the standalone
+/// page and is the single home for the legacy `.card`/`.grid-2`/`.hint` form
+/// classes (a `<style>` block carries no CSP nonce burden — the inline-style
+/// guard only forbids `style="` attributes).
+pub(crate) const SETTINGS_FORM_CSS: &str = r"<style>
+      .card { background: var(--surface); border: 1px solid var(--border); border-radius: 0.75rem;
+               padding: 1.5rem; margin-bottom: 1.5rem; }
+      .section-title { font-size: 1.1rem; font-weight: 600; color: var(--moss-ink);
+                        margin-bottom: 1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+      label { display: block; font-size: 0.85rem; color: var(--fg-3); margin-bottom: 0.25rem; }
+      input, textarea, select { width: 100%; background: var(--bg); border: 1px solid var(--border);
+                                  border-radius: 0.375rem; padding: 0.5rem 0.75rem; color: var(--fg);
+                                  font-size: 0.875rem; box-sizing: border-box; margin-bottom: 1rem; }
+      input:focus, textarea:focus { outline: none; border-color: var(--moss-ink); }
+      .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+      .btn { padding: 0.5rem 1.5rem; border-radius: 0.375rem; border: none; cursor: pointer;
+               font-weight: 600; font-size: 0.875rem; }
+      .btn-primary { background: var(--moss); color: #fff; }
+      .btn-primary:hover { background: var(--moss-ink); }
+      .alert-success { background: var(--moss-soft); border: 1px solid var(--moss-soft); color: var(--moss-ink);
+                         border-radius: 0.375rem; padding: 0.75rem 1rem; margin-bottom: 1rem; }
+      .alert-error { background: var(--rare-soft); border: 1px solid var(--rare-soft); color: var(--rare);
+                       border-radius: 0.375rem; padding: 0.75rem 1rem; margin-bottom: 1rem; }
+      .alert-icon { vertical-align: -2px; margin-right: 0.4rem; }
+      .hint { font-size: 0.75rem; color: var(--fg-4); margin-top: -0.75rem; margin-bottom: 1rem; }
+      @media (max-width: 520px) { .grid-2 { grid-template-columns: 1fr; } }
+      h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 1.5rem; color: var(--fg); }
+      a.btn { text-decoration: none; }
+      .btn.btn-sm { font-size: 0.8rem; padding: 0.3rem 0.8rem; }
+      .hint a { color: var(--moss-ink); }
+      .hint.flush { margin: -6px 0 8px; }
+      .mt-sm { margin-top: 0.5rem; }
+      .mt-md { margin-top: 1rem; }
+      .save-row { display: flex; align-items: center; gap: 1rem; }
+      .save-note { color: var(--fg-3); font-size: 0.875rem; }
+      .save-note.dim { color: var(--fg-4); font-size: 0.8rem; }
+    </style>";
+
+/// One settings section, for rendering a task-scoped subset on a Station tab.
+#[derive(Clone, Copy)]
+pub(crate) enum Section {
+    /// Audio capture (ALSA / RTSP / format).
+    Audio,
+    /// Location & recording schedule.
+    Location,
+    /// Detection thresholds (the single canonical home is Capture).
+    Detection,
+    /// Apprise + BirdWeather notifications.
+    Notifications,
+    /// SMTP email alerts.
+    Email,
+    /// System, display, retention, auth.
+    System,
+}
+
+/// Render the chosen settings `sections` wrapped in one form that posts to
+/// `/admin/settings`, for a Station management tab.
+///
+/// Safe because `save_settings` diffs submitted-vs-existing and persists only
+/// changed keys (a MERGE — absent fields are skipped), so a tab can carry just
+/// its own slice of the settings without clobbering the rest. The caller is
+/// responsible for emitting [`SETTINGS_FORM_CSS`] once on the page.
+pub(crate) fn render_section_form(
+    settings: &HashMap<String, String>,
+    sections: &[Section],
+) -> String {
+    let mut out = String::with_capacity(8_192);
+    out.push_str(
+        r##"<div id="settings-feedback"></div><form hx-post="/admin/settings" hx-target="#settings-feedback" hx-swap="innerHTML" hx-indicator="#save-spinner">"##,
+    );
+    for section in sections {
+        match section {
+            Section::Audio => audio::render(&mut out, settings),
+            Section::Location => location::render(&mut out, settings),
+            Section::Detection => detection::render(&mut out, settings),
+            Section::Notifications => notifications::render(&mut out, settings),
+            Section::Email => email::render(&mut out, settings),
+            Section::System => system::render(&mut out, settings),
+        }
+    }
+    out.push_str(
+        r#"<div class="save-row">
+    <button type="submit" class="btn btn-primary">Save settings</button>
+    <span id="save-spinner" class="htmx-indicator save-note">Saving…</span>
+    <span class="save-note dim">Most settings require a restart to take effect.</span>
+  </div>
+</form>"#,
+    );
+    out
 }
 
 pub(super) fn render_settings_form(settings: &HashMap<String, String>) -> String {

@@ -4,21 +4,23 @@
 //! operator-grade "is it working?" surface ([`super::super::station_health`]) —
 //! the heir to the old read-only `/system` page, still checkable from the field
 //! without a login. The five management groups (Capture · Alerts · Data ·
-//! Settings · Access) regroup the twelve flat `/admin/*` pages by task; they
-//! are gated behind the same admin auth as ever and currently link to their
-//! `/admin` homes (the rest of the Wave B2 regroup re-hosts them under
-//! `/station/...`).
+//! Settings · Access) regroup the twelve flat `/admin/*` pages by task; they are
+//! gated behind the same admin auth as ever (their handlers live in
+//! [`super::station_tabs`], mounted inside the admin router) and are hosted at
+//! `/station/<key>` sub-routes.
+
+use std::fmt::Write as _;
 
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::Html;
 use axum::{Router, routing::get};
 
-use super::{SubTab, subtabs};
+use super::SubTab;
 use crate::state::AppState;
 
 /// The six Station task groups, in display order. Health is the only public
-/// tab; the rest link into the gated admin area.
+/// tab; the rest are gated (see [`super::station_tabs`]).
 pub const TABS: &[SubTab] = &[
     SubTab {
         key: "health",
@@ -52,39 +54,46 @@ pub const TABS: &[SubTab] = &[
     },
 ];
 
-/// Where each gated task group currently lives. Wave B2 replaces these with
-/// `/station/<key>` pages; until then the tabs deep-link into the existing
-/// admin shell so the IA is already navigable.
-const GATED_HOMES: &[(&str, &str)] = &[
-    ("capture", "/admin/audio"),
-    ("alerts", "/admin/rules"),
-    ("data", "/admin/backups"),
-    ("settings", "/admin/settings"),
-    ("access", "/admin/accounts"),
-];
-
-/// Mount `/station`.
+/// Mount `/station` (the public Health tab). The gated `/station/<key>` tabs are
+/// mounted inside the admin router (see [`super::station_tabs::router`]).
 pub fn router() -> Router<AppState> {
     Router::new().route("/station", get(station_page))
 }
 
-/// Render the Station tab row with Health active and the gated groups linking
-/// to their current admin homes.
-fn station_tabs() -> String {
-    let mut html = subtabs("/station", "tab", TABS, "health");
-    for (key, admin_path) in GATED_HOMES {
-        html = html.replace(
-            &format!("href=\"/station?tab={key}\""),
-            &format!("href=\"{admin_path}\""),
+/// Render the Station sub-tab row with `active` marked.
+///
+/// Health links the canonical bare `/station`; the five management groups link
+/// their `/station/<key>` sub-routes (real server-rendered pages, so this is a
+/// `<nav>` of links, not a JS tablist). Shared by the public Health page and the
+/// gated tab handlers so the row is identical across the home.
+pub(crate) fn station_subtabs(active: &str) -> String {
+    let mut out = String::with_capacity(1024);
+    out.push_str(r#"<nav class="bnb-subtabs" aria-label="Views" data-screen-label="Sub-tabs">"#);
+    for t in TABS {
+        let href = if t.key == "health" {
+            "/station".to_string()
+        } else {
+            format!("/station/{}", t.key)
+        };
+        let (cls, cur) = if t.key == active {
+            (" active", r#" aria-current="page""#)
+        } else {
+            ("", "")
+        };
+        let _ = write!(
+            out,
+            r#"<a class="bnb-subtab{cls}" href="{href}"{cur}><span class="l">{}</span><span class="q">{}</span></a>"#,
+            t.label, t.question
         );
     }
-    html
+    out.push_str("</nav>");
+    out
 }
 
 async fn station_page(State(state): State<AppState>, headers: HeaderMap) -> Html<String> {
     let content = format!(
         "{}{}",
-        station_tabs(),
+        station_subtabs("health"),
         crate::routes::pages::station_health::content(&state).await
     );
     crate::routes::pages::render_page_for_request("Station", &content, "station", &headers)
@@ -104,16 +113,25 @@ mod tests {
     }
 
     #[test]
-    fn gated_tabs_link_into_the_admin_area() {
-        let html = station_tabs();
-        // Health is the active, canonical tab…
-        assert!(html.contains(r#"href="/station""#));
+    fn subtabs_mark_exactly_the_active_tab_and_link_sub_routes() {
+        let html = station_subtabs("capture");
+        // Exactly one tab is active, and it carries aria-current.
         assert_eq!(html.matches("bnb-subtab active").count(), 1);
-        // …and every management group resolves to a real admin page, never a
-        // dangling /station?tab= placeholder.
-        for (_, admin_path) in GATED_HOMES {
-            assert!(html.contains(admin_path), "{admin_path} missing");
-        }
+        assert!(html.contains(r#"aria-current="page""#));
+        // Health is the canonical bare path; the gated groups are sub-routes.
+        assert!(html.contains(r#"href="/station""#));
+        assert!(html.contains(r#"href="/station/capture""#));
+        assert!(html.contains(r#"href="/station/alerts""#));
+        assert!(html.contains(r#"href="/station/data""#));
+        assert!(html.contains(r#"href="/station/settings""#));
+        assert!(html.contains(r#"href="/station/access""#));
+        // Never the legacy `?tab=` placeholder.
         assert!(!html.contains("/station?tab="));
+    }
+
+    #[test]
+    fn health_is_the_default_active_tab() {
+        let html = station_subtabs("health");
+        assert!(html.contains(r#"href="/station" aria-current="page""#));
     }
 }

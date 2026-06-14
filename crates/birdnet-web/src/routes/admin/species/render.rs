@@ -13,10 +13,13 @@ pub fn render_species_page(exclude: &[String], include: &[String]) -> String {
     )
 }
 
-/// Page-specific body (scoped `<style>` + content). Kept separate from the
-/// shared shell so the inline-style guard checks the page's own markup; the
-/// `.container` / bare `nav` rules are dropped since the shell owns layout + nav.
-fn species_lists_body(exclude: &[String], include: &[String]) -> String {
+/// Page-specific body (scoped `<style>` + content).
+///
+/// Kept separate from the shared shell so the inline-style guard checks the
+/// page's own markup; the `.container` / bare `nav` rules are dropped since the
+/// shell owns layout + nav. Shared with the Station **Capture** tab via
+/// `super::species_body`.
+pub(crate) fn species_lists_body(exclude: &[String], include: &[String]) -> String {
     format!(
         r#"<style>
       h1 {{ font-size:1.5rem; font-weight:700; margin-bottom:1.5rem; color:var(--fg); }}

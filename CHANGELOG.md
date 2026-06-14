@@ -54,9 +54,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (CPU · memory · temperature · df-correct disk meters), a pipeline row (last
   detection · queued uploads · service uptime · total detections) and a short
   diagnostics checklist, in the `st-*` treatment. (The per-source live
-  state-chip, 24 h uptime strip and retry/backoff line, and the gated
-  Capture/Alerts/Data/Settings/Access form tabs, are the remaining Wave B2
-  work.)
+  state-chip, 24 h uptime strip and retry/backoff line still need
+  capture-supervisor status the web layer can't see yet — deferred.)
+- **The Station toolbox gains five gated management tabs.**
+  `/station/{capture,alerts,data,settings,access}` fold the twelve flat
+  `/admin/*` pages into the Station home's six task groups, rendered through
+  the **main** shell with the shared Station sub-tab row but gated behind the
+  same admin auth as `/admin/*`. **Capture** = audio sources · which-birds-count
+  filter (with a safe Preview) · the single canonical detection-threshold home ·
+  recording & location; **Alerts** = rules · channels with Send-test · where
+  alerts flow · recent sends; **Data** = backups & export · BirdNET-Pi import ·
+  data quality; **Settings** = per-device display prefs · station & system ·
+  the kiosk launcher; **Access** = accounts & sessions · a lockout-aware danger
+  zone. The real forms are reused verbatim and keep posting to their existing
+  `/admin/...` endpoints — only the page GETs move.
 - **The admin panel's nav is regrouped into the six Station task groups.**
   `admin/nav.rs`'s twelve flat destinations are ordered into labelled
   **Health · Capture · Alerts · Data · Settings · Access** clusters (one

@@ -77,6 +77,14 @@ async fn migration_page(State(state): State<AppState>) -> Html<String> {
     ))
 }
 
+/// Render the BirdNET-Pi import body (no document shell).
+///
+/// Shared with the Station **Data** tab
+/// (`crate::routes::pages::homes::station_tabs`).
+pub(crate) fn migration_body(state: &AppState) -> String {
+    render::migration_body(&state.db_path().display().to_string())
+}
+
 // ---------------------------------------------------------------------------
 // POST /admin/migrate/validate  (server-side path)
 // ---------------------------------------------------------------------------

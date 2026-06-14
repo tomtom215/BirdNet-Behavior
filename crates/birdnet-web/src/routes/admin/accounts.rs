@@ -62,9 +62,23 @@ pub fn router() -> Router<AppState> {
 // ───────────────────────────────────────────────────────────────────────────
 
 async fn accounts_page(State(state): State<AppState>, request_user: RequestUser) -> Html<String> {
+    Html(admin_shell(
+        "Accounts",
+        "accounts",
+        &accounts_body(&state, &request_user),
+    ))
+}
+
+/// Render the accounts / sessions / audit body (no document shell).
+///
+/// Shared with the Station **Access** tab
+/// (`crate::routes::pages::homes::station_tabs`), which also extracts the
+/// authenticated [`RequestUser`] and renders this surface in the main shell.
+pub(crate) fn accounts_body(state: &AppState, request_user: &RequestUser) -> String {
     let current_session_id = request_user.session_id.clone();
+    let user_id = request_user.user.id;
     let body = state.with_db(|conn| -> Result<String, AccountsError> {
-        let current_user = conn.find_user(request_user.user.id)?;
+        let current_user = conn.find_user(user_id)?;
         let users = conn.list_users()?;
         let sessions = conn.list_sessions(current_user.id)?;
         let audit = conn.recent(AUDIT_PREVIEW_LIMIT)?;
@@ -76,14 +90,13 @@ async fn accounts_page(State(state): State<AppState>, request_user: RequestUser)
             &current_session_id,
         ))
     });
-    let body = match body {
+    match body {
         Ok(b) => b,
         Err(e) => {
             tracing::error!(error = %e, "accounts page render failed");
             render_error("Accounts data could not be loaded.")
         }
-    };
-    Html(admin_shell("Accounts", "accounts", &body))
+    }
 }
 
 fn render_body(

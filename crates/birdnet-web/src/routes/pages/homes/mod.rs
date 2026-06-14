@@ -22,6 +22,7 @@
 pub mod patterns;
 pub mod reports;
 pub mod station;
+pub mod station_tabs;
 
 use std::fmt::Write as _;
 

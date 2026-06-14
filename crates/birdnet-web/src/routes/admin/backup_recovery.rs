@@ -21,15 +21,19 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/admin/backups", get(backups_page))
 }
 
-#[allow(clippy::cast_precision_loss)]
 async fn backups_page(State(state): State<AppState>) -> Html<String> {
-    let db_path = state.db_path().to_path_buf();
-    let db_mb = tokio::task::spawn_blocking(move || {
-        std::fs::metadata(&db_path).map_or(0.0, |m| m.len() as f64 / 1_048_576.0)
-    })
-    .await
-    .unwrap_or(0.0);
-    Html(admin_shell("Backups", "backups", &render_body(db_mb)))
+    Html(admin_shell("Backups", "backups", &backups_body(&state)))
+}
+
+/// Render the backups & restore body (no document shell).
+///
+/// Shared with the Station **Data** tab
+/// (`crate::routes::pages::homes::station_tabs`), which renders the same
+/// backup/restore/export surface in the main shell.
+#[allow(clippy::cast_precision_loss)]
+pub(crate) fn backups_body(state: &AppState) -> String {
+    let db_mb = std::fs::metadata(state.db_path()).map_or(0.0, |m| m.len() as f64 / 1_048_576.0);
+    render_body(db_mb)
 }
 
 /// A storage-breakdown tile with a usage bar. The bar fill colour is an

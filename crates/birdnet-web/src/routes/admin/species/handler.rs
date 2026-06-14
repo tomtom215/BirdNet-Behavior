@@ -203,6 +203,16 @@ fn load_lists(state: &AppState) -> (Vec<String>, Vec<String>) {
     })
 }
 
+/// Render the species-list management body (no document shell).
+///
+/// Shared with the Station **Capture** tab
+/// (`crate::routes::pages::homes::station_tabs`), which renders the same
+/// include/exclude UI in the main shell.
+pub(crate) fn species_body(state: &AppState) -> String {
+    let (exclude, include) = load_lists(state);
+    super::render::species_lists_body(&exclude, &include)
+}
+
 fn parse_list(val: Option<&str>) -> Vec<String> {
     val.unwrap_or("")
         .split(',')
