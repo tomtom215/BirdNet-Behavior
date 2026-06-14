@@ -3004,6 +3004,13 @@ a.spp-inherit    { color: inherit; }
 .sd-comp-row .pct { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); }
 .sd-viz { display: flex; justify-content: center; padding: 6px 0; }
 
+/* ── Reports home (/reports) — v3 spine (Reports_home.html) ─────────────────
+   The "Save as PDF" affordance; the editorial heroes/stat bands and the
+   History calendar reuse the existing report renderers + print.css. */
+.rp-meta { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; flex-wrap: wrap; }
+.rp-print { font-size: 12px; color: var(--fg-3); }
+.rp-pdf { font-size: 12px; flex: none; }
+
 /* ── Analytics shell (/analytics) — legacy --text-muted/--pad-3 preserved. ─ */
 .an-head      { margin-bottom: var(--pad-3); }
 .an-h1        { font-size: 34px; }

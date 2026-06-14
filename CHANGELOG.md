@@ -38,6 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   jargon-free `bnb-lede` that says what the chart means before the chart appears
   ("Darker cells mean more birds heard that hour…"), in place of the old terse
   captions.
+- **Reports gain a "Save as PDF" button.** Each Reports tab now carries a
+  CSP-safe print affordance — a real button whose delegated, nonce'd click
+  handler opens the browser's print dialog, which the existing `print.css`
+  `@media print` rules turn into a clean, light-palette, page-broken keepsake.
 - The detection log gains **category filters** (Rare · First today · High
   confidence) alongside text search.
 - **Recordings rebuilt into a Clips + Live home (`/recordings`).** The old
