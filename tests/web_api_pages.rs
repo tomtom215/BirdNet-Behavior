@@ -106,13 +106,16 @@ async fn species_page_returns_html() {
 
     assert_eq!(response.status(), StatusCode::OK);
 
-    let body = axum::body::to_bytes(response.into_body(), 65536)
+    let body = axum::body::to_bytes(response.into_body(), 1 << 20)
         .await
         .unwrap();
     let html = String::from_utf8_lossy(&body);
 
-    assert!(html.contains("Every voice"));
-    assert!(html.contains("hx-get"));
+    // The v3-spine Species home: the page-head headline, the view switcher,
+    // and the server-rendered List table.
+    assert!(html.contains("Who you've heard"));
+    assert!(html.contains("sp-seg"));
+    assert!(html.contains("sp-table"));
 }
 
 #[tokio::test]
