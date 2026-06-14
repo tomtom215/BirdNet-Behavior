@@ -17,7 +17,7 @@
 //!
 //! The pre-spine `/listen`, `/livestream` and `/live` paths permanently
 //! redirect here (see [`crate::routes::redirects`]); the live-audio source
-//! picker still owns its `<option>` set in [`super::listen`].
+//! picker still owns its `<option>` set in the `super::listen` module.
 //!
 //! [`recent_clips`]: birdnet_db::sqlite::recent_clips
 
