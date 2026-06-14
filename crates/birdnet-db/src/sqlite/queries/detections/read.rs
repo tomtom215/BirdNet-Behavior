@@ -4,7 +4,9 @@
 use rusqlite::{Connection, params};
 
 use crate::sqlite::connection::DbError;
-use crate::sqlite::types::{ConcurrentDetection, DETECTION_COLS, DetectionRow, map_detection_row};
+use crate::sqlite::types::{
+    ConcurrentDetection, DETECTION_COLS, DetectionRow, SourceActivity, map_detection_row,
+};
 
 use super::search::{SearchTerm, parse_search_term};
 
@@ -619,6 +621,35 @@ pub fn recent_clips_count(
         param_values.iter().map(AsRef::as_ref).collect();
     let count: i64 = conn.query_row(&sql, params_ref.as_slice(), |row| row.get(0))?;
     Ok(count)
+}
+
+/// Per-source detection activity for `date`: how many detections each audio
+/// source contributed and the most recent one's time, busiest source first.
+///
+/// Powers the Station Health per-source panel. See [`SourceActivity`] for why
+/// this is an activity signal rather than the supervisor's live stream state.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn todays_source_activity(
+    conn: &Connection,
+    date: &str,
+) -> Result<Vec<SourceActivity>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT Source, COUNT(*) AS n, MAX(Time) AS last FROM detections \
+         WHERE Date = ?1 GROUP BY Source ORDER BY n DESC, Source",
+    )?;
+    let rows = stmt
+        .query_map(params![date], |row| {
+            Ok(SourceActivity {
+                source: row.get(0)?,
+                count: row.get(1)?,
+                last_time: row.get(2)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
 }
 
 /// Get a list of distinct dates that have detections, ordered descending.
@@ -1280,5 +1311,51 @@ mod tests {
             RecordingsFilter::All
         );
         assert_eq!(RecordingsFilter::from_token(None), RecordingsFilter::All);
+    }
+
+    #[test]
+    fn todays_source_activity_groups_and_orders_by_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_or_create(&dir.path().join("t.db")).unwrap();
+        let insert = |time: &str, sci: &str, source: Option<&str>| {
+            let record = DetectionRecord {
+                date: "2026-06-13",
+                time,
+                sci_name: sci,
+                com_name: "Bird",
+                confidence: 0.9,
+                lat: None,
+                lon: None,
+                cutoff: None,
+                week: None,
+                sensitivity: None,
+                overlap: None,
+                file_name: "c.wav",
+                chunk_offset_secs: Some(0.0),
+                correlation_id: None,
+                source,
+            };
+            insert_detection(&conn, &record).unwrap();
+        };
+        insert("06:00:00", "A", Some("cam1"));
+        insert("06:30:00", "B", Some("cam1"));
+        insert("07:15:00", "C", Some("cam1"));
+        insert("08:00:00", "D", Some("local"));
+        insert("05:00:00", "E", None); // pre-tagging row → grouped under NULL
+
+        let rows = todays_source_activity(&conn, "2026-06-13").unwrap();
+        // Three groups, busiest first: cam1 (3), then local (1) and NULL (1).
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].source.as_deref(), Some("cam1"));
+        assert_eq!(rows[0].count, 3);
+        // MAX(Time) is the freshest detection for the source.
+        assert_eq!(rows[0].last_time.as_deref(), Some("07:15:00"));
+        assert!(rows.iter().any(|r| r.source.is_none() && r.count == 1));
+        // A different day sees none of it.
+        assert!(
+            todays_source_activity(&conn, "2026-06-14")
+                .unwrap()
+                .is_empty()
+        );
     }
 }

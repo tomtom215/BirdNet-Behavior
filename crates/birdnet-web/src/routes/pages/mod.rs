@@ -14,7 +14,7 @@
 //! | `correlation`         | Species co-occurrence correlation page          |
 //! | `quarantine`          | Rare-bird quarantine review page and actions    |
 //! | `life_list`           | Life list / birding journal page                |
-//! | `system_dashboard`    | System health monitoring dashboard              |
+//! | `station_health`      | Station Health surface (public `/station` tab)  |
 //! | `notification_center` | Notification history and channel status          |
 
 pub mod atoms;
@@ -47,7 +47,7 @@ pub mod quarantine;
 pub mod recordings;
 pub(crate) mod skeletons;
 pub mod species_pages;
-pub mod system_dashboard;
+pub mod station_health;
 pub mod timeseries_dash;
 pub(crate) mod toast;
 pub mod today;
@@ -124,7 +124,6 @@ pub fn router() -> Router<AppState> {
         .merge(history::router())
         .merge(life_list::router())
         .merge(gallery::router())
-        .merge(system_dashboard::router())
         .merge(notification_center::router())
         .merge(year_in_review::router())
         .merge(onboarding::router())

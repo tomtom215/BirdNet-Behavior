@@ -3681,3 +3681,56 @@ main[data-home="reports"] { max-width: 1100px; padding: var(--pad-3) 24px 64px; 
 .rc-listen-btn { margin-left: auto; font-size: 12px; }
 .rc-audio-hidden { display: none; }
 .rc-trickle { margin-top: 18px; }
+
+/* ── Station home · Health surface (Station_home.html) ───────────────────────
+   The operator's "is it working?" screen. Ported from the mock's st-* block,
+   minus the parts that need live capture-supervisor state (per-source uptime
+   strip, retry/backoff line) and the gated management forms (st-toggle/st-sw),
+   which are deferred to the rest of Wave B2. */
+.st-h3 { font-family: var(--font-display); font-size: 19px; font-weight: 400; margin: 26px 0 12px; }
+
+/* overall status banner */
+.st-status { display: flex; align-items: center; gap: 14px; padding: 16px 20px; border-radius: var(--r-lg); border: 0.5px solid color-mix(in oklch, var(--moss) 24%, var(--border)); background: var(--moss-soft); margin-bottom: 18px; }
+.st-status.warn { border-color: color-mix(in oklch, var(--dawn) 34%, var(--border)); background: var(--dawn-soft); }
+.st-status .ico { width: 40px; height: 40px; border-radius: 999px; flex: none; display: grid; place-items: center; font-size: 18px; background: color-mix(in oklch, var(--moss) 16%, var(--surface)); color: var(--moss-ink); }
+.st-status.warn .ico { background: color-mix(in oklch, var(--dawn) 16%, var(--surface)); color: var(--dawn-ink); }
+.st-status .t { font-family: var(--font-display); font-size: 22px; line-height: 1.1; }
+.st-status .s { font-size: 12.5px; color: var(--fg-2); margin-top: 2px; }
+
+/* per-source activity panel */
+.st-sources { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+.st-source { padding: 16px 18px; }
+.st-source-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.st-source-name { font-size: 14px; font-weight: 600; }
+.st-source-type { font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-3); margin-top: 2px; }
+.st-source-foot { display: flex; justify-content: space-between; gap: 10px; font-size: 11.5px; color: var(--fg-3); margin-top: 14px; }
+.st-source-foot b { font-family: var(--font-mono); color: var(--fg); font-weight: 600; }
+.st-source-empty { color: var(--fg-3); font-size: 13px; }
+
+/* vitals meter row */
+.st-vitals { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; border: 0.5px solid var(--border); border-radius: var(--r-lg); overflow: hidden; background: var(--surface); box-shadow: var(--shadow-sm); }
+@media (max-width: 720px) { .st-vitals { grid-template-columns: 1fr 1fr; } }
+.st-vital { padding: 16px 18px; border-right: 0.5px solid var(--hairline); border-bottom: 0.5px solid var(--hairline); }
+.st-vital .lab { font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-3); font-weight: 500; }
+.st-vital .v { font-family: var(--font-display); font-size: 30px; line-height: 1; margin-top: 8px; }
+.st-vital .meter { height: 5px; border-radius: 3px; background: var(--surface-2); overflow: hidden; margin-top: 10px; }
+.st-meter-fill { display: block; height: 100%; border-radius: 3px; background: var(--moss); }
+.st-meter-fill.warn { background: var(--dawn); }
+.st-vital .sub { font-size: 11px; color: var(--fg-3); margin-top: 6px; font-family: var(--font-mono); }
+
+/* pipeline row */
+.st-pipe { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0; border: 0.5px solid var(--border); border-radius: var(--r-lg); overflow: hidden; }
+.st-pipe > div { padding: 14px 18px; border-right: 0.5px solid var(--hairline); }
+.st-pipe .lab { font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-3); font-weight: 500; }
+.st-pipe .v { font-size: 16px; font-weight: 500; margin-top: 5px; display: flex; align-items: center; gap: 7px; }
+.st-pipe .v .mono { font-family: var(--font-mono); }
+
+/* diagnostics checklist */
+.st-check { background: var(--surface); border: 0.5px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow-sm); overflow: hidden; }
+.st-check-row { display: flex; align-items: center; gap: 13px; padding: 13px 18px; border-top: 0.5px solid var(--hairline); }
+.st-check-row:first-child { border-top: 0; }
+.st-check-row .mk { width: 26px; height: 26px; border-radius: 999px; flex: none; display: grid; place-items: center; font-size: 12px; background: var(--moss-soft); color: var(--moss-ink); }
+.st-check-row .mk.warn { background: var(--dawn-soft); color: var(--dawn-ink); }
+.st-check-row .c { flex: 1; } .st-check-row .c .t { font-size: 14px; font-weight: 500; } .st-check-row .c .d { font-size: 12px; color: var(--fg-3); }
+.st-check-row .val { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); }
+.st-doctor-link { margin-top: 10px; }

@@ -46,6 +46,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   audio is arriving — never a fake waveform), source picker and live-detection
   trickle. `/listen`, `/livestream` and `/live` permanently redirect to
   `/recordings?view=live`.
+- **Station Health is now an operator-grade surface.** The public Station
+  Health tab (`/station`, the heir to `/system`) gains an overall status
+  banner, a **per-source activity** panel (how many detections each audio
+  source produced today and how recently — an honest activity signal, since
+  the web process has no live handle on the capture supervisor), a vitals row
+  (CPU · memory · temperature · df-correct disk meters), a pipeline row (last
+  detection · queued uploads · service uptime · total detections) and a short
+  diagnostics checklist, in the `st-*` treatment. (The per-source live
+  state-chip, 24 h uptime strip and retry/backoff line, and the gated
+  Capture/Alerts/Data/Settings/Access form tabs, are the remaining Wave B2
+  work.)
 
 ### Added
 
