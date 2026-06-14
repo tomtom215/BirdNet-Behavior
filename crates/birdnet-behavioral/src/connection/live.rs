@@ -261,6 +261,54 @@ fn live_funnel_events() {
 }
 
 #[test]
+fn live_sequence_match_events() {
+    let Some((db, _tmp)) = loaded_db() else {
+        return;
+    };
+    seed(&db);
+    let params = types::PatternParams {
+        species_sequence: vec![
+            "European Robin".into(),
+            "Eurasian Blackbird".into(),
+            "Eurasian Wren".into(),
+        ],
+        max_gap_minutes: None,
+        hour_start: 4,
+        hour_end: 8,
+    };
+    let results = db.sequence_match_events(&params).unwrap();
+    eprintln!("[live] sequence_match_events: {results:?}");
+    let steps = |d: &str| {
+        results
+            .iter()
+            .find(|f| f.date.starts_with(d))
+            .unwrap()
+            .step_times
+            .len()
+    };
+    // Unlike window_funnel_events (cf. live_funnel_events), a partial run yields
+    // no timestamps: the NFA pattern only matches when the whole ordered
+    // sequence is present, so day2 (missing Wren) is 0, not 2.
+    assert_eq!(
+        steps("2024-05-01"),
+        3,
+        "day1 full R->B->W -> 3 matched times"
+    );
+    assert_eq!(steps("2024-05-02"), 0, "day2 missing Wren -> no match -> 0");
+    assert_eq!(
+        steps("2024-05-03"),
+        3,
+        "day3 full R->B->W -> 3 matched times"
+    );
+    // The matched timestamps are real, date-stamped values.
+    let day1 = results
+        .iter()
+        .find(|f| f.date.starts_with("2024-05-01"))
+        .unwrap();
+    assert!(day1.step_times.iter().all(|t| t.contains("2024-05-01")));
+}
+
+#[test]
 fn live_next_species() {
     let Some((db, _tmp)) = loaded_db() else {
         return;
@@ -317,6 +365,7 @@ fn live_raw_queries_execute() {
         queries::retention_sql(&types::RetentionParams::default()),
         queries::funnel_sql(&types::FunnelParams::default()),
         queries::sequence_match_sql(&types::PatternParams::default()),
+        queries::sequence_match_events_sql(&types::PatternParams::default()),
         queries::next_species_sql("European Robin", 60, 10),
     ] {
         // execute_batch runs the SELECT to completion and surfaces any

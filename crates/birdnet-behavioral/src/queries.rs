@@ -271,6 +271,40 @@ pub fn sequence_count_sql(params: &PatternParams) -> String {
     )
 }
 
+/// Build SQL for ordered sequence *match-event timings* (`sequence_match_events`,
+/// v0.8.0).
+///
+/// Same pattern + conditions as [`sequence_match_sql`], but
+/// `sequence_match_events()` returns the `TIMESTAMP[]` of the events that
+/// satisfied the matched pattern (an empty list on a day with no match) — so
+/// callers can show *when* an ordered run actually happened, consistent with
+/// the occurrence count from [`sequence_count_sql`]. Each element is cast to
+/// `VARCHAR` via `list_transform`, mirroring [`funnel_events_sql`], so the
+/// result reads back as a plain string list.
+///
+/// Callers must pass 2..=32 species; [`crate::connection`] enforces this.
+pub fn sequence_match_events_sql(params: &PatternParams) -> String {
+    let pattern = ordered_pattern(params.species_sequence.len(), params.max_gap_minutes);
+    let conditions = species_conditions(&params.species_sequence);
+
+    format!(
+        "SELECT
+            CAST(CAST(detection_timestamp AS DATE) AS VARCHAR) AS date,
+            list_transform(
+                sequence_match_events('{pattern}', detection_timestamp,
+                    {conditions}
+                ),
+                x -> CAST(x AS VARCHAR)
+            ) AS step_times
+        FROM detections_ts
+        WHERE EXTRACT(HOUR FROM detection_timestamp) BETWEEN {start} AND {end}
+        GROUP BY CAST(detection_timestamp AS DATE)
+        ORDER BY date DESC",
+        start = params.hour_start,
+        end = params.hour_end,
+    )
+}
+
 /// Build SQL for next-species prediction.
 ///
 /// The timeline is split into activity sessions separated by gaps larger than
@@ -416,6 +450,30 @@ mod tests {
         assert!(sql.contains("sequence_count('(?1).*(?2).*(?3)', detection_timestamp"));
         assert!(sql.contains("Com_Name = 'European Robin'"));
         assert!(sql.contains("AS match_count"));
+    }
+
+    #[test]
+    fn sequence_match_events_sql_default() {
+        let sql = sequence_match_events_sql(&PatternParams::default());
+        assert!(sql.contains("sequence_match_events('(?1).*(?2).*(?3)', detection_timestamp"));
+        // The TIMESTAMP[] is cast element-wise to VARCHAR for a plain list.
+        assert!(sql.contains("list_transform("));
+        assert!(sql.contains("x -> CAST(x AS VARCHAR)"));
+        assert!(sql.contains("AS step_times"));
+        assert!(sql.contains("Com_Name = 'European Robin'"));
+        // Conditions are variadic, not wrapped in an array literal.
+        assert!(!sql.contains("[Com_Name"));
+    }
+
+    #[test]
+    fn sequence_match_events_sql_with_gap_inserts_time_token() {
+        let params = PatternParams {
+            species_sequence: vec!["A".into(), "B".into()],
+            max_gap_minutes: Some(30),
+            ..PatternParams::default()
+        };
+        let sql = sequence_match_events_sql(&params);
+        assert!(sql.contains("sequence_match_events('(?1).*(?t<=1800)(?2)'"));
     }
 
     #[test]

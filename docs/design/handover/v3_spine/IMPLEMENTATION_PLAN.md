@@ -248,14 +248,19 @@ the mocks that lacks a backend today (noted inline during implementation).
 **Landed (Wave D).**
 
 - **Behavior tab — the dawn "running order" card.** Surfaces v0.8.0's
-  `sequence_count` + `window_funnel_events` in the Patterns → Behavior
+  `sequence_count` + `sequence_match_events` in the Patterns → Behavior
   `pt-masonry`. A new `/pages/analytics-dawn-sequence` partial derives the
   station's leading dawn voices from its own data (top dawn-window species,
   ordered by mean time-of-day — so the card reads honestly anywhere, not just
   for the European REST defaults), then shows how *often* they sing in that
-  order and the step timing of a recent morning. Reuses `pt-tbl` / `pt-disc` /
-  `bh-*` — zero new CSS. `sequence_match_events` remains the one unadopted
-  v0.8.0 function.
+  order and the step timing of a recent morning. Both halves share the same
+  NFA-match semantics so they can't disagree. Reuses `pt-tbl` / `pt-disc` /
+  `bh-*` — zero new CSS.
+- **Completed the v0.8.0 function set.** `sequence_match_events` (the last of
+  the three new ClickHouse-parity functions) is now adopted end-to-end —
+  `queries::sequence_match_events_sql`, `types::PatternMatchEvents`,
+  `AnalyticsDb::sequence_match_events`, guard + live tests against the real
+  extension, and `/api/v2/analytics/sequence-match-events`.
 
 > Note: the handoff references companion docs `AUDIT_v3.html` and
 > `IA_REIMAGINING.html` that were not part of the upload; the Wave D summary

@@ -124,19 +124,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   community `behavioral` extension served for the bundled DuckDB (v1.5.3) is now
   v0.8.0 (pin verified — no engine change needed), which adds `sequence_count`,
   `window_funnel_events` and `sequence_match_events`. `birdnet-behavioral` gains
-  typed wrappers for the first two — `AnalyticsDb::sequence_count` (how *many*
-  times an ordered species sequence occurred per day, not just whether it did)
-  and `AnalyticsDb::funnel_events` (the timestamp each completed dawn-chorus step
-  fired) — with SQL builders, unit tests, and live tests verified against the
-  real extension. Exposed over the REST API as `/analytics/sequence-count` and
-  `/analytics/funnel-events`.
+  typed wrappers for all three — `AnalyticsDb::sequence_count` (how *many* times
+  an ordered species sequence occurred per day, not just whether it did),
+  `AnalyticsDb::funnel_events` (the timestamp each completed dawn-chorus step
+  fired) and `AnalyticsDb::sequence_match_events` (the timestamps of an ordered
+  NFA-pattern match, empty on a non-matching day) — with SQL builders, unit
+  tests, and live tests verified against the real extension. Exposed over the
+  REST API as `/analytics/{sequence-count,funnel-events,sequence-match-events}`.
 - **The Patterns → Behavior tab surfaces the dawn "running order."** A new
   defined-in-place card reads the station's own dawn-window data to pick the
   morning's leading voices, then uses v0.8.0's `sequence_count` and
-  `window_funnel_events` to show how *often* they sing in that exact order and,
-  on a recent morning, the *time* each one checked in. The sequence is derived
-  from the data rather than hard-coded (the REST defaults are European), so the
-  card reads honestly at a North-American station too.
+  `sequence_match_events` to show how *often* they sing in that exact order and,
+  on a recent morning, the *time* each one checked in. Both halves share the
+  same NFA-match semantics, so the headline count and the step timing can't
+  disagree. The sequence is derived from the data rather than hard-coded (the
+  REST defaults are European), so the card reads honestly at a North-American
+  station too.
 - Permanent (`308`) redirects from every pre-spine route to its new home
   (`/today`, `/heatmap`, `/analytics`, `/migration`, `/correlation`,
   `/timeseries`, `/analytics/dawn-chorus`, `/weekly`, `/year-in-review`,

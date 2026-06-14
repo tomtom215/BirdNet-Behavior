@@ -279,13 +279,10 @@ pub(super) async fn analytics_next_partial(
 const DAWN_HOUR_START: u32 = 4;
 #[cfg(feature = "analytics")]
 const DAWN_HOUR_END: u32 = 8;
-/// Funnel window (minutes) for the dawn step-timing query.
-#[cfg(feature = "analytics")]
-const DAWN_WINDOW_MINUTES: u32 = 120;
 
 /// HTMX partial: the dawn "running order" — how often the morning's leading
 /// voices sing in sequence (`sequence_count`, v0.8.0) plus the step timing of a
-/// recent run (`window_funnel_events`, v0.8.0).
+/// recent run (`sequence_match_events`, v0.8.0).
 ///
 /// The sequence is derived from the station's own dawn-window data rather than
 /// hard-coded, so the card is meaningful regardless of geography — the REST
@@ -300,27 +297,25 @@ pub(super) async fn analytics_dawn_sequence_partial(
     }
     let result = tokio::task::spawn_blocking(move || {
         let sequence = state.with_db(derive_dawn_sequence);
-        // window_funnel/sequence_count need 2..=32 steps; fewer than two
-        // prominent dawn voices means there's no order to read yet.
+        // sequence_count / sequence_match_events need 2..=32 steps; fewer than
+        // two prominent dawn voices means there's no order to read yet.
         if sequence.len() < 2 {
             return Ok(None);
         }
-        let count_params = birdnet_behavioral::types::PatternParams {
+        let params = birdnet_behavioral::types::PatternParams {
             species_sequence: sequence.clone(),
             max_gap_minutes: None,
             hour_start: DAWN_HOUR_START,
             hour_end: DAWN_HOUR_END,
         };
-        let funnel_params = birdnet_behavioral::types::FunnelParams {
-            species_sequence: sequence.clone(),
-            window_minutes: DAWN_WINDOW_MINUTES,
-            hour_start: DAWN_HOUR_START,
-            hour_end: DAWN_HOUR_END,
-        };
         state
             .with_analytics(|adb| {
-                let counts = adb.sequence_count(&count_params)?;
-                let events = adb.funnel_events(&funnel_params)?;
+                // Both halves use sequence_match (NFA) semantics over the same
+                // params: how *often* the ordered run happened (sequence_count),
+                // and *when* it happened on a matching day (sequence_match_events)
+                // — so the headline count and the step timing can't disagree.
+                let counts = adb.sequence_count(&params)?;
+                let events = adb.sequence_match_events(&params)?;
                 Ok((sequence, counts, events))
             })
             .unwrap_or_else(|| {
@@ -409,8 +404,8 @@ fn step_time_hhmm(ts: &str) -> &str {
 #[cfg(feature = "analytics")]
 fn best_progression(
     full_len: usize,
-    events: &[birdnet_behavioral::types::ChorusFunnelEvents],
-) -> Option<&birdnet_behavioral::types::ChorusFunnelEvents> {
+    events: &[birdnet_behavioral::types::PatternMatchEvents],
+) -> Option<&birdnet_behavioral::types::PatternMatchEvents> {
     events
         .iter()
         .find(|e| e.step_times.len() == full_len)
@@ -423,7 +418,7 @@ fn best_progression(
 fn render_dawn_sequence(
     sequence: &[String],
     counts: &[birdnet_behavioral::types::PatternCount],
-    events: &[birdnet_behavioral::types::ChorusFunnelEvents],
+    events: &[birdnet_behavioral::types::PatternMatchEvents],
 ) -> String {
     let chain = sequence
         .iter()

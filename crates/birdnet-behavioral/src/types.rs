@@ -139,6 +139,25 @@ pub struct PatternCount {
     pub species_sequence: Vec<String>,
 }
 
+/// Sequence pattern *match timings* (output of `sequence_match_events`, v0.8.0).
+///
+/// Like [`PatternMatch`] but, on a matching day, reports *when* each step of the
+/// ordered sequence fired (ISO 8601). `step_times` is empty on a day with no
+/// match, since the NFA pattern only matches when the whole sequence is present
+/// — so this pairs exactly with [`PatternCount`] for "how often, and at what
+/// times".
+#[derive(Debug, Clone, Serialize)]
+pub struct PatternMatchEvents {
+    /// Date the pattern was evaluated.
+    pub date: String,
+    /// Timestamp each matched step fired, in sequence order (ISO 8601); empty
+    /// when the day had no full match. Pair `species_sequence[i]` with
+    /// `step_times[i]`.
+    pub step_times: Vec<String>,
+    /// Species involved in the pattern.
+    pub species_sequence: Vec<String>,
+}
+
 /// Next species prediction (output of `sequence_next_node`).
 #[derive(Debug, Clone, Serialize)]
 pub struct NextSpeciesPrediction {
