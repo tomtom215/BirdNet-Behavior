@@ -57,7 +57,7 @@ async fn reports_page(
     let tab = resolve_tab(TABS, q.tab.as_deref());
     let body = match tab.key {
         "year" => crate::routes::pages::year_in_review::content(state).await,
-        "history" => crate::routes::pages::history::content(),
+        "history" => crate::routes::pages::history::content(state).await,
         // "weekly" and the unknown-key clamp.
         _ => crate::routes::pages::weekly_report::content(),
     };

@@ -24,10 +24,16 @@
 > `bnb-lede`, leads with one picture, and tucks its tables/numbers behind a
 > "see the numbers" `pt-disc` disclosure (chord→matrix, polar→ribbons,
 > trends→full-dashboard), Behavior is a defined-in-place `pt-masonry`, and the
-> When tab drops the now-duplicated dawn/phenology panels. Still open: the
+> When tab drops the now-duplicated dawn/phenology panels. The **Reports** reskin
+> has landed too — the full `rp-*` vocabulary is ported, Weekly + Year open with
+> an editorial `rp-hero` over a four-up `rp-stats` band (with the leaderboard and
+> first-ever/milestone columns), and History is a month heat-calendar
+> (`rp-cal`) keyed by a new `detections_per_day` query, with a day-detail panel
+> (hourly bars + top species) and month navigation. Still open (Wave D): the
 > per-source live state-chip/uptime/retry once the capture supervisor exposes
-> status to the web layer; and the **Reports** visual reskin (editorial
-> `rp-hero`/`rp-stats` on Weekly + Year, and the History heat-calendar).
+> status to the web layer; an honest per-day "Open day" landing for the History
+> detail panel; and the remaining Wave D backlog (a11y titles, export wizard,
+> doc screenshot refresh, OpenAPI).
 >
 > **Recordings — deliberate honest omissions (Wave D).** The mock's per-clip
 > spectrogram thumbnail and clip-duration columns have no cheap, honest

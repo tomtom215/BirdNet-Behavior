@@ -89,40 +89,48 @@ fn render_content(
 
     let mut html = String::with_capacity(8192);
 
-    // ── Hero ─────────────────────────────────────────────────────────────
+    // ── Editorial hero ────────────────────────────────────────────────────
     // O-20 — help link in the year-in-review masthead.
     let help_link = super::help::help_link(super::help::Topic::Reports);
+    let busiest_count = busiest.map_or(0, |d| d.count);
+    let new_this_year = first_seen.values().filter(|d| d.starts_with(year)).count();
+    let per_day = if active_days > 0 {
+        total / i64::try_from(active_days).unwrap_or(1).max(1)
+    } else {
+        0
+    };
+    let mut lead = format!(
+        "<b>{} detections</b> across <b>{species} species</b>",
+        group_thousands(total)
+    );
+    if new_this_year > 0 {
+        let _ = write!(
+            lead,
+            " — and <b>{new_this_year}</b> heard for the very first time"
+        );
+    }
+    lead.push('.');
     let _ = write!(
         html,
-        r#"<div class="page-head"><div>
-  <div class="bnb-eyebrow yir-eyebrow">
-    <span>Year in review · {year} · Station&nbsp;#001</span>
-    {help_link}
-  </div>
-  <h1 class="display yir-h1">A year of <em>listening</em>.</h1>
-  <p class="bnb-meta yir-lede">Everything the yard sang this year — the totals, the leaderboard, the firsts, and the days it never went quiet.</p>
-</div></div>"#,
+        r#"<div class="rp-hero">
+  <div class="eyebrow">Year in review · {year} {help_link}</div>
+  <h1>Your year in <em>birdsong</em>.</h1>
+  <p class="lead">{lead}</p>
+</div>"#,
     );
 
-    // ── Big-number tiles ─────────────────────────────────────────────────
-    let busiest_count = busiest.map_or(0, |d| d.count);
+    // ── Stat band ─────────────────────────────────────────────────────────
     let _ = write!(
         html,
-        r#"<div class="yir-tiles">
-  {t0}{t1}{t2}{t3}
+        r#"<div class="rp-stats">
+  <div class="rp-stat"><div class="v moss">{det}</div><div class="l">detections</div><div class="d">≈ {per_day} a day</div></div>
+  <div class="rp-stat"><div class="v">{species}</div><div class="l">species heard</div><div class="d">on the life list</div></div>
+  <div class="rp-stat"><div class="v rare">{new_this_year}</div><div class="l">new to your list</div></div>
+  <div class="rp-stat"><div class="v">{busy}</div><div class="l">busiest day</div><div class="d">{busy_date}</div></div>
 </div>"#,
-        t0 = tile("Detections", &group_thousands(total), "all year"),
-        t1 = tile("Species", &species.to_string(), "on the life list"),
-        t2 = tile(
-            "Days listening",
-            &active_days.to_string(),
-            "with at least one call"
-        ),
-        t3 = tile(
-            "Busiest day",
-            &group_thousands(busiest_count),
-            "detections in a day"
-        ),
+        det = group_thousands(total),
+        busy = group_thousands(busiest_count),
+        busy_date = busiest.map_or_else(|| "—".to_string(), |d| escape_html(&d.date)),
     );
 
     // ── Year tape ────────────────────────────────────────────────────────
@@ -171,26 +179,15 @@ fn render_content(
 
     // Leaderboard.
     html.push_str(
-        r#"<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Most heard</div><h3>The year's leaderboard</h3></div></div>"#,
+        r#"<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">Most heard</div><h3>The year's leaderboard</h3></div><a class="action" href="/species">Full list →</a></div>"#,
     );
     if all.is_empty() {
         html.push_str(r#"<p class="bnb-meta">No detections yet.</p>"#);
     } else {
-        let max = all.first().map_or(1, |s| s.count).max(1) as f64;
         for (i, sp) in all.iter().take(10).enumerate() {
-            let pct = (sp.count as f64 / max * 100.0).round() as i64;
             let _ = write!(
                 html,
-                r#"<div class="yir-row{first}">
-  <span class="mono bnb-meta">{rank}</span>
-  {av}
-  <div class="yir-row-main">
-    <a href="/species/detail?name={enc}" class="yir-row-name">{name}</a>
-    <div class="yir-row-bar"><span data-style="width:{pct}%"></span></div>
-  </div>
-  <span class="mono tabular yir-row-count">{count}</span>
-</div>"#,
-                first = if i == 0 { " first" } else { "" },
+                r#"<div class="rp-row"><span class="rk">{rank}</span>{av}<a class="nm" href="/species/detail?name={enc}">{name}</a><span class="ct">{count}</span></div>"#,
                 rank = i + 1,
                 av = avatar(&sp.com_name, ""),
                 enc = simple_url_encode(&sp.com_name),
@@ -228,30 +225,34 @@ fn render_content(
     );
     milestone(
         &mut html,
+        "✦",
         "First voice of the year",
-        &first_voice,
-        "the earliest day on record",
+        &format!("{first_voice} · the earliest day on record"),
     );
     if let Some((com, count)) = leader {
         milestone(
             &mut html,
+            "♪",
             "Most-heard species",
-            &escape_html(&com),
-            &format!("{} detections", group_thousands(count)),
+            &format!(
+                "{} · {} detections",
+                escape_html(&com),
+                group_thousands(count)
+            ),
         );
     }
     milestone(
         &mut html,
+        "☼",
         "Busiest day",
-        &busiest_label,
-        "the loudest the yard ever got",
+        &format!("{busiest_label} · the loudest the yard ever got"),
     );
     if let Some((com, date)) = newest {
         milestone(
             &mut html,
+            "✸",
             "Newest arrival",
-            &escape_html(&com),
-            &format!("first heard {date}"),
+            &format!("{} · first heard {date}", escape_html(&com)),
         );
     }
     html.push_str("</div></div>");
@@ -272,27 +273,14 @@ fn render_content(
     html
 }
 
-/// A big-number stat tile.
-fn tile(label: &str, value: &str, sub: &str) -> String {
-    format!(
-        r#"<div class="bnb-card pad"><div class="display yir-tile-value">{value}</div><div class="bnb-eyebrow yir-tile-label">{label}</div><div class="bnb-meta yir-tile-sub">{sub}</div></div>"#,
-        value = escape_html(value),
-        label = escape_html(label),
-        sub = escape_html(sub),
-    )
-}
-
-/// A milestone row inside the milestones card.
-fn milestone(html: &mut String, label: &str, value: &str, sub: &str) {
+/// A milestone row (glyph · title · detail) inside the milestones card.
+fn milestone(html: &mut String, glyph: &str, title: &str, detail: &str) {
     let _ = write!(
         html,
-        r#"<div class="yir-ms">
-  <div class="bnb-eyebrow">{label}</div>
-  <div class="display yir-ms-value">{value}</div>
-  <div class="bnb-meta">{sub}</div>
-</div>"#,
-        label = escape_html(label),
-        sub = escape_html(sub),
+        r#"<div class="rp-milestone"><span class="ic">{glyph}</span><div><div class="t">{title}</div><div class="d">{detail}</div></div></div>"#,
+        glyph = escape_html(glyph),
+        title = escape_html(title),
+        detail = detail,
     );
 }
 
@@ -324,7 +312,8 @@ mod tests {
             "2026-05-01".to_string(),
         );
         let html = render_content(100, 1, &["2026-05-20".to_string()], &all, &fs, &daily);
-        assert!(html.contains("A year of"));
+        assert!(html.contains("Your year in"));
+        assert!(html.contains("rp-stats"));
         assert!(html.contains("Northern Cardinal"));
         assert!(html.contains("Leaderboard") || html.contains("leaderboard"));
     }

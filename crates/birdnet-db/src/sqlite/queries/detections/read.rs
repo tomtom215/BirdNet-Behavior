@@ -5,7 +5,7 @@ use rusqlite::{Connection, params};
 
 use crate::sqlite::connection::DbError;
 use crate::sqlite::types::{
-    ConcurrentDetection, DETECTION_COLS, DetectionRow, SourceActivity, map_detection_row,
+    ConcurrentDetection, DETECTION_COLS, DayCount, DetectionRow, SourceActivity, map_detection_row,
 };
 
 use super::search::{SearchTerm, parse_search_term};
@@ -687,6 +687,31 @@ pub fn species_for_date(
     Ok(rows)
 }
 
+/// Per-day detection counts with distinct-species totals, oldest day first.
+///
+/// Powers the Reports History heat-calendar: one cell per day, coloured by
+/// `count` and annotated with how many distinct species were heard.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn detections_per_day(conn: &Connection) -> Result<Vec<DayCount>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT Date, COUNT(*) AS n, COUNT(DISTINCT Com_Name) AS sp \
+         FROM detections GROUP BY Date ORDER BY Date",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(DayCount {
+                date: row.get(0)?,
+                count: row.get(1)?,
+                species: row.get(2)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -743,6 +768,21 @@ mod tests {
         let rows = detections_by_date(&conn, "2026-03-11").unwrap();
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].time, "07:00:00");
+    }
+
+    #[test]
+    fn detections_per_day_groups_counts_and_species() {
+        // Fixture: 2026-03-10 has 1 detection (1 species); 2026-03-11 has 3
+        // detections across 2 species. Rows come back oldest-first.
+        let (_tmp, conn) = temp_db_with_data();
+        let rows = detections_per_day(&conn).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].date, "2026-03-10");
+        assert_eq!(rows[0].count, 1);
+        assert_eq!(rows[0].species, 1);
+        assert_eq!(rows[1].date, "2026-03-11");
+        assert_eq!(rows[1].count, 3);
+        assert_eq!(rows[1].species, 2);
     }
 
     #[test]

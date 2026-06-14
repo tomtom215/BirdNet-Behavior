@@ -47,6 +47,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of the dashboard behind a disclosure; **When-active** drops the duplicated
   dawn/phenology panels (each is now its own tab). The underlying server-rendered
   SVG renderers are unchanged.
+- **Reports reskinned into editorial recaps.** Weekly and Year-in-review now
+  open with an editorial `rp-hero` (a headline that reads the week/year — "A
+  *loud* week.", "Your year in *birdsong*.") over a four-up `rp-stats` band
+  (detections vs last week, species, new-to-list, busiest day), then a
+  leaderboard and the first-ever/milestone columns. **History** becomes a
+  month **heat-calendar**: each day is a cell coloured by its detection count
+  and annotated with its species tally; selecting one loads that day's hourly
+  chart and top species into a detail panel, with ‹/› month navigation. Backed
+  by a new `detections_per_day` query.
 - **Reports gain a "Save as PDF" button.** Each Reports tab now carries a
   CSP-safe print affordance — a real button whose delegated, nonce'd click
   handler opens the browser's print dialog, which the existing `print.css`
