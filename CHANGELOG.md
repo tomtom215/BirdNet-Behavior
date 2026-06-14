@@ -33,6 +33,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   review and history are the three tabs of **Reports**; the read-only system
   health page is the public **Health** tab of **Station**. The underlying
   server-rendered SVG renderers are unchanged.
+- **Patterns tabs lead with plain-English explanations.** The When-active,
+  Who-sings-together, Trends and Behavior tabs now open with a one-paragraph,
+  jargon-free `bnb-lede` that says what the chart means before the chart appears
+  ("Darker cells mean more birds heard that hour…"), in place of the old terse
+  captions.
+- **Reports gain a "Save as PDF" button.** Each Reports tab now carries a
+  CSP-safe print affordance — a real button whose delegated, nonce'd click
+  handler opens the browser's print dialog, which the existing `print.css`
+  `@media print` rules turn into a clean, light-palette, page-broken keepsake.
 - The detection log gains **category filters** (Rare · First today · High
   confidence) alongside text search.
 - **Recordings rebuilt into a Clips + Live home (`/recordings`).** The old
@@ -46,6 +55,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   audio is arriving — never a fake waveform), source picker and live-detection
   trickle. `/listen`, `/livestream` and `/live` permanently redirect to
   `/recordings?view=live`.
+- **Species rebuilt into a List + Photos + Life list home (`/species`).** The
+  three pre-spine destinations — the species list, the `/gallery` photo wall and
+  the `/life-list` journal — merge into one home with a `?view=list|photos|
+  lifelist` switcher, an "All / This week" filter and species search. **List** is
+  the ranked table (rank · avatar · 14-day sparkline · count · avg confidence);
+  **Photos** is the Wikipedia-thumbnail gallery with the gradient banding-code
+  fallback; **Life list** leads with the big counters (species all-time · active
+  days · new this year), the species-accumulation curve, and a "New to the list"
+  feed of the most recent firsts. The per-species detail page keeps its `sd-*`
+  treatment with cross-links updated to the new homes. `/gallery` and `/life-list`
+  permanently redirect to their view.
 - **Station Health is now an operator-grade surface.** The public Station
   Health tab (`/station`, the heir to `/system`) gains an overall status
   banner, a **per-source activity** panel (how many detections each audio
@@ -54,9 +74,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (CPU · memory · temperature · df-correct disk meters), a pipeline row (last
   detection · queued uploads · service uptime · total detections) and a short
   diagnostics checklist, in the `st-*` treatment. (The per-source live
-  state-chip, 24 h uptime strip and retry/backoff line, and the gated
-  Capture/Alerts/Data/Settings/Access form tabs, are the remaining Wave B2
-  work.)
+  state-chip, 24 h uptime strip and retry/backoff line still need
+  capture-supervisor status the web layer can't see yet — deferred.)
+- **The Station toolbox gains five gated management tabs.**
+  `/station/{capture,alerts,data,settings,access}` fold the twelve flat
+  `/admin/*` pages into the Station home's six task groups, rendered through
+  the **main** shell with the shared Station sub-tab row but gated behind the
+  same admin auth as `/admin/*`. **Capture** = audio sources · which-birds-count
+  filter (with a safe Preview) · the single canonical detection-threshold home ·
+  recording & location; **Alerts** = rules · channels with Send-test · where
+  alerts flow · recent sends; **Data** = backups & export · BirdNET-Pi import ·
+  data quality; **Settings** = per-device display prefs · station & system ·
+  the kiosk launcher; **Access** = accounts & sessions · a lockout-aware danger
+  zone. The real forms are reused verbatim and keep posting to their existing
+  `/admin/...` endpoints — only the page GETs move. The eight folded
+  `/admin/*` management pages (`audio` · `species` · `rules` · `notifications` ·
+  `backups` · `migrate` · `quality` · `accounts`, plus the `/admin` landing) now
+  **permanently redirect** to their Station tab, so old bookmarks never 404; the
+  Health-detail pages (`overview` · `system` · `doctor`) and the all-in-one
+  `/admin/settings` form stay reachable as gated fallbacks.
 - **The admin panel's nav is regrouped into the six Station task groups.**
   `admin/nav.rs`'s twelve flat destinations are ordered into labelled
   **Health · Capture · Alerts · Data · Settings · Access** clusters (one

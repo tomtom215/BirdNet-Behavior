@@ -62,7 +62,7 @@ const CORRELATION_CONTENT: &str = r##"<div class="page-head">
     <div class="bnb-eyebrow">Behavioral analytics</div>
     <h1 class="display co-h1">Who sings with whom</h1>
     {{help_link}}
-    <p class="bnb-meta co-mt">Which species are detected together most often.</p>
+    <p class="bnb-lede co-mt"><b>Species joined by a ribbon tend to be heard within five minutes of each other.</b> Thicker, brighter ribbons mean a stronger pairing; the arc length around the edge shows how connected each species is overall. It's correlation, not cause — they may just share the same good morning.</p>
   </div>
   <div class="seg" id="range-controls">
     <button class="btn active" data-days="30">30 days</button>

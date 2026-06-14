@@ -88,14 +88,11 @@ fn parse_optional_decimal(raw: Option<&str>, default: f64) -> f64 {
 // Handlers
 // ---------------------------------------------------------------------------
 
-async fn rules_page(State(state): State<AppState>) -> Html<String> {
-    let rules_html = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| list_rules(conn).unwrap_or_default())
-    })
-    .await
-    .unwrap_or_default();
-
-    Html(render_page(&rules_html))
+/// The standalone `/admin/rules` page GET folded into the Station **Alerts**
+/// tab; its old URL permanently redirects there. The rule create/toggle/delete
+/// endpoints (including `POST /admin/rules`) keep their `/admin/rules...` paths.
+async fn rules_page() -> axum::response::Redirect {
+    axum::response::Redirect::permanent("/station/alerts")
 }
 
 async fn rules_list_partial(State(state): State<AppState>) -> Html<String> {
@@ -216,15 +213,14 @@ async fn toggle_rule_handler(
 // HTML rendering
 // ---------------------------------------------------------------------------
 
-#[allow(clippy::too_many_lines)]
-fn render_page(_rules: &[birdnet_db::alert_rules::AlertRule]) -> String {
-    crate::routes::admin::admin_shell("Alert Rules", "rules", &rules_body())
-}
-
-/// Page-specific body (scoped `<style>` + content). Kept separate from the
-/// shared shell so the inline-style guard checks the page's own markup; the
-/// `.container` / bare `nav` rules are dropped since the shell owns layout + nav.
-fn rules_body() -> String {
+/// Page-specific body (scoped `<style>` + content).
+///
+/// Kept separate from the shared shell so the inline-style guard checks the
+/// page's own markup; the `.container` / bare `nav` rules are dropped since the
+/// shell owns layout + nav. Shared with the Station **Alerts** tab
+/// (`crate::routes::pages::homes::station_tabs`), which renders it in the main
+/// shell — the rule list HTMX-loads from `/admin/rules/list` either way.
+pub(crate) fn rules_body() -> String {
     r##"<style>
       h1 { font-size:1.5rem; font-weight:700; color:var(--fg); margin-bottom:.25rem; }
       .subtitle { color:var(--fg-4); font-size:.875rem; margin-bottom:2rem; }

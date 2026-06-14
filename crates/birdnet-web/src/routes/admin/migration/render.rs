@@ -13,10 +13,14 @@ pub fn escape_html(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-/// Render the full migration page.
+/// Render the BirdNET-Pi import body (no document shell).
+///
+/// Shared with the Station **Data** tab
+/// (`crate::routes::pages::homes::station_tabs`), which renders the importer in
+/// the main shell.
 #[allow(clippy::too_many_lines)]
-pub fn migration_page(dest_db_path: &str) -> String {
-    let body = format!(
+pub fn migration_body(dest_db_path: &str) -> String {
+    format!(
         r##"<style>
     h1 {{ font-size:1.5rem; font-weight:700; margin-bottom:0.5rem; color:var(--fg); }}
     .card {{ background:var(--surface); border:1px solid var(--border); border-radius:0.75rem;
@@ -176,8 +180,7 @@ document.getElementById('migrate-tabs').addEventListener('click', function(e) {{
   if (btn) switchTab(btn.dataset.tab);
 }});
 </script>"##
-    );
-    crate::routes::admin::admin_shell("Migration", "migrate", &body)
+    )
 }
 
 /// Render the validation result partial.
@@ -426,10 +429,10 @@ mod tests {
     }
 
     #[test]
-    fn migration_page_has_no_inline_style_attributes() {
-        // P3-3 (O-25): the static migration page carries no inline style
+    fn migration_body_has_no_inline_style_attributes() {
+        // P3-3 (O-25): the static migration body carries no inline style
         // attributes — everything folds into its own <style> block.
-        assert!(!migration_page("/data/birdnet.db").contains("style=\""));
+        assert!(!migration_body("/data/birdnet.db").contains("style=\""));
     }
 
     #[test]

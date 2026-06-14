@@ -33,7 +33,6 @@ use birdnet_db::audio_sources::{
     RtspTransport, SourceKind,
 };
 
-use super::admin_shell;
 use crate::routes::pages::escape_html;
 use crate::routes::pages::toast::{self, Toast};
 use crate::state::AppState;
@@ -113,16 +112,25 @@ const fn kind_label(kind: SourceKind) -> &'static str {
 // Handlers
 // ---------------------------------------------------------------------------
 
-async fn page(State(state): State<AppState>) -> Html<String> {
+/// The standalone `/admin/audio` page GET folded into the Station **Capture**
+/// tab; its old URL permanently redirects there. The POST/probe/partial
+/// endpoints below keep their `/admin/audio/...` paths.
+async fn page() -> axum::response::Redirect {
+    axum::response::Redirect::permanent("/station/capture")
+}
+
+/// Render the audio-sources management body (no document shell).
+///
+/// Shared between the standalone `/admin/audio` page and the Station **Capture**
+/// tab (`crate::routes::pages::homes::station_tabs`). First paint resolves each
+/// pill through the same metrics-driven path the per-row `/probe` poll uses, so
+/// the initial status matches the 8 s self-poll.
+pub(crate) fn sources_body(state: &AppState) -> String {
     let sources = state.with_db(AudioSourceStore::list).unwrap_or_else(|err| {
         tracing::error!(error = %err, "audio_sources list failed");
         Vec::new()
     });
-    // First paint resolves each pill through the same metrics-driven path
-    // the per-row `/probe` poll uses, so the initial status matches the 8 s
-    // self-poll.
-    let body = render_body(&sources, |row| daemon_status(row, &state));
-    Html(admin_shell("Audio Sources", "audio", &body))
+    render_body(&sources, |row| daemon_status(row, state))
 }
 
 #[derive(Deserialize)]

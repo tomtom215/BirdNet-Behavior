@@ -8,19 +8,19 @@ use serde::Deserialize;
 
 use birdnet_db::settings::{SettingsCategory, ensure_settings_table, get, set};
 
-use super::render::{
-    render_filter_test_page, render_species_page, render_species_partial, render_thresholds_partial,
-};
+use super::render::{render_filter_test_page, render_species_partial, render_thresholds_partial};
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
 // Page handlers
 // ---------------------------------------------------------------------------
 
-/// Render the species list management admin page.
-pub async fn species_page(State(state): State<AppState>) -> Html<String> {
-    let (exclude, include) = load_lists(&state);
-    Html(render_species_page(&exclude, &include))
+/// Redirect the standalone `/admin/species` GET into the Station **Capture** tab.
+///
+/// The page folded there; the add/remove/threshold endpoints and the Filter-test
+/// sub-page keep their `/admin/species...` paths.
+pub async fn species_page() -> axum::response::Redirect {
+    axum::response::Redirect::permanent("/station/capture")
 }
 
 /// Return the HTMX partial fragment containing the current species lists.
@@ -201,6 +201,16 @@ fn load_lists(state: &AppState) -> (Vec<String>, Vec<String>) {
         let incl = parse_list(get(conn, "species_include").ok().as_deref());
         (excl, incl)
     })
+}
+
+/// Render the species-list management body (no document shell).
+///
+/// Shared with the Station **Capture** tab
+/// (`crate::routes::pages::homes::station_tabs`), which renders the same
+/// include/exclude UI in the main shell.
+pub(crate) fn species_body(state: &AppState) -> String {
+    let (exclude, include) = load_lists(state);
+    super::render::species_lists_body(&exclude, &include)
 }
 
 fn parse_list(val: Option<&str>) -> Vec<String> {

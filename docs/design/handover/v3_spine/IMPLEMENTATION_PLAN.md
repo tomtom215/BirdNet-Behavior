@@ -8,13 +8,20 @@
 > operator-grade **Station Health** surface (status banner · per-source
 > *activity* panel · vitals · pipeline · diagnostics) and the **`admin/nav.rs`
 > regroup** into the six labelled task groups (Health · Capture · Alerts · Data
-> · Settings · Access). Still open: the rest of Wave B2 (the gated
-> `/station/capture|alerts|data|settings|access` form tabs folding the `/admin/*`
-> render bodies + their 301s; the per-source live state-chip/uptime/retry once
-> the capture supervisor exposes status to the web layer), and the rest of Wave
-> C (the Species home rebuild + the Patterns/Reports visual reskin). The affected
-> pages keep serving their existing, fully-functional screens under the new nav
-> in the meantime, so nothing is stranded.
+> · Settings · Access), and the gated **Station management tabs** —
+> `/station/{capture,alerts,data,settings,access}` fold the `/admin/*` render
+> bodies into the `st-*` card treatment, rendered through the main shell with the
+> shared Station sub-tab row but gated inside the admin router; the real forms are
+> reused verbatim and keep posting to their existing `/admin/...` endpoints. The
+> **301 cut** has landed too: the eight folded `/admin/*` management pages (and
+> the `/admin` landing) permanently redirect to their Station tab, while the
+> Health-detail pages (`overview`·`system`·`doctor`) and the all-in-one
+> `/admin/settings` form stay reachable as gated fallbacks. The **Species** home
+> rebuild has landed too — the List/Photos/Life-list view switcher at
+> `/species?view=…` (with `/gallery`·`/life-list` redirecting in), the filter +
+> search, and the `sd-*` detail page. Still open: the per-source live
+> state-chip/uptime/retry once the capture supervisor exposes status to the web
+> layer; and the Patterns/Reports visual reskin.
 >
 > **Recordings — deliberate honest omissions (Wave D).** The mock's per-clip
 > spectrogram thumbnail and clip-duration columns have no cheap, honest

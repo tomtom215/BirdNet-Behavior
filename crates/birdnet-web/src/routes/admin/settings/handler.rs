@@ -214,7 +214,7 @@ pub async fn detect_location() -> Result<Json<LocationResult>, (StatusCode, Stri
 // Private helpers
 // ---------------------------------------------------------------------------
 
-pub(super) fn load_all_settings(state: &AppState) -> HashMap<String, String> {
+pub(crate) fn load_all_settings(state: &AppState) -> HashMap<String, String> {
     state.with_db(|conn| {
         ensure_settings_table(conn).ok();
         list(conn, None)

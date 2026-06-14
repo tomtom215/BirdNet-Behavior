@@ -31,7 +31,6 @@ use birdnet_db::sqlite::{
     review_verdict_trend,
 };
 
-use super::admin_shell;
 use crate::routes::pages::escape_html;
 use crate::routes::pages::help::{Topic, help_link};
 use crate::routes::pages::skeletons;
@@ -49,16 +48,20 @@ pub fn router() -> Router<AppState> {
 // Handlers
 // ---------------------------------------------------------------------------
 
-async fn quality_page(State(state): State<AppState>) -> Html<String> {
-    let data = tokio::task::spawn_blocking(move || load_quality_data(&state))
-        .await
-        .unwrap_or_else(|_| QualityData::empty());
+/// The standalone `/admin/quality` page GET folded into the Station **Data**
+/// tab; its old URL permanently redirects there. The summary/trend HTMX
+/// partials below keep their `/admin/quality/...` paths.
+async fn quality_page() -> axum::response::Redirect {
+    axum::response::Redirect::permanent("/station/data")
+}
 
-    Html(admin_shell(
-        "Data Quality",
-        "quality",
-        &render_quality_page(&data),
-    ))
+/// Load the quality metrics and render the body (no document shell).
+///
+/// Shared with the Station **Data** tab
+/// (`crate::routes::pages::homes::station_tabs`). Call from a blocking context —
+/// `load_quality_data` runs several aggregate queries.
+pub(crate) fn quality_body(state: &AppState) -> String {
+    render_quality_page(&load_quality_data(state))
 }
 
 async fn quality_summary_partial(State(state): State<AppState>) -> Html<String> {

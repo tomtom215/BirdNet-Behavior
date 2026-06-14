@@ -185,10 +185,16 @@ pub fn router() -> Router<AppState> {
         .merge(quality::router())
         // Accounts, sessions, audit log (O-15)
         .merge(accounts::router())
+        // v3 spine: the gated Station management tabs (Capture · Alerts · Data ·
+        // Settings · Access). Mounted here so they inherit the same cookie gate
+        // as `/admin/*`, but they render through the main shell with the shared
+        // Station sub-tab row. The folded admin POST/partial endpoints above keep
+        // their `/admin/...` paths.
+        .merge(crate::routes::pages::homes::station_tabs::router())
     // Species filter tester (integrated into species::router via /admin/species/test)
 }
 
-/// Redirect `/admin` to `/admin/overview`.
+/// Redirect `/admin` to the Station home (the v3-spine toolbox landing).
 async fn landing() -> axum::response::Redirect {
-    axum::response::Redirect::to("/admin/overview")
+    axum::response::Redirect::permanent("/station")
 }

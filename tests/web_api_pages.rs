@@ -106,13 +106,16 @@ async fn species_page_returns_html() {
 
     assert_eq!(response.status(), StatusCode::OK);
 
-    let body = axum::body::to_bytes(response.into_body(), 65536)
+    let body = axum::body::to_bytes(response.into_body(), 1 << 20)
         .await
         .unwrap();
     let html = String::from_utf8_lossy(&body);
 
-    assert!(html.contains("Every voice"));
-    assert!(html.contains("hx-get"));
+    // The v3-spine Species home: the page-head headline, the view switcher,
+    // and the server-rendered List table.
+    assert!(html.contains("Who you've heard"));
+    assert!(html.contains("sp-seg"));
+    assert!(html.contains("sp-table"));
 }
 
 #[tokio::test]
@@ -487,6 +490,10 @@ async fn all_redesigned_pages_render_ok() {
         "/",
         "/onboarding",
         "/species",
+        // The Species home's three views (List/Photos/Life list).
+        "/species?view=photos",
+        "/species?view=lifelist",
+        "/species?view=list&filter=week",
         // The v3-spine homes, every tab.
         "/patterns",
         "/patterns?tab=dawn",
@@ -498,11 +505,15 @@ async fn all_redesigned_pages_render_ok() {
         "/reports?tab=year",
         "/reports?tab=history",
         "/station",
-        "/life-list",
+        // The gated Station management tabs (open-admin bypass in tests).
+        "/station/capture",
+        "/station/alerts",
+        "/station/data",
+        "/station/settings",
+        "/station/access",
         "/recordings",
         "/recordings?view=clips",
         "/recordings?view=live",
-        "/gallery",
         "/notifications",
         "/quarantine",
         "/kiosk",
@@ -518,11 +529,13 @@ async fn all_redesigned_pages_render_ok() {
         "/pages/dawn-polar",
         "/pages/dawn-list",
         "/pages/life-accumulation",
+        // The Health-detail / full-form fallback admin pages still render
+        // through the admin shell; the eight folded management pages now
+        // redirect to their Station tab (covered by the admin-nav parity test
+        // `folded_pages_redirect_to_their_station_tab`).
         "/admin/overview",
-        "/admin/quality",
-        "/admin/rules",
-        "/admin/audio",
-        "/admin/backups",
+        "/admin/system",
+        "/admin/settings",
     ];
     for route in routes {
         let app = app();
