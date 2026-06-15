@@ -92,8 +92,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (CPU · memory · temperature · df-correct disk meters), a pipeline row (last
   detection · queued uploads · service uptime · total detections) and a short
   diagnostics checklist, in the `st-*` treatment. (The per-source live
-  state-chip, 24 h uptime strip and retry/backoff line still need
-  capture-supervisor status the web layer can't see yet — deferred.)
+  state-chip, 24 h uptime strip and retry/backoff line are now wired through —
+  see the next entry.)
+- **Station Health's per-source cards go live.** The capture supervisor now
+  publishes per-source health — Connected · Stalled · Backing off · Paused,
+  plus last-audio age, restart attempts, next retry, and a rolling 48-segment
+  24 h uptime strip — into a shared handle the web layer reads, so each
+  `st-source` card shows a real status chip, the uptime strip, time since last
+  audio, today's detections, and a retry/backoff line (`↻ reconnecting ·
+  attempt 3 · next try in 12 s`); the status banner flags a down source. The
+  seam is a new `birdnet-core::audio::capture::status` type shared by the
+  binary's supervisor (writer) and `birdnet-web` (reader), so neither depends on
+  the other. With no supervisor running (web-only mode, tooling) the cards fall
+  back to the detection-activity signal — never a faked chip.
 - **The Station toolbox gains five gated management tabs.**
   `/station/{capture,alerts,data,settings,access}` fold the twelve flat
   `/admin/*` pages into the Station home's six task groups, rendered through

@@ -29,9 +29,10 @@
 > an editorial `rp-hero` over a four-up `rp-stats` band (with the leaderboard and
 > first-ever/milestone columns), and History is a month heat-calendar
 > (`rp-cal`) keyed by a new `detections_per_day` query, with a day-detail panel
-> (hourly bars + top species) and month navigation. Still open (Wave D): the
-> per-source live state-chip/uptime/retry once the capture supervisor exposes
-> status to the web layer; an honest per-day "Open day" landing for the History
+> (hourly bars + top species) and month navigation. The per-source live
+> state-chip / 24 h uptime strip / retry line has now landed too — the capture
+> supervisor publishes status to the web layer (see "Landed (Wave D)" below).
+> Still open (Wave D): an honest per-day "Open day" landing for the History
 > detail panel; and the remaining Wave D backlog (a11y titles, export wizard,
 > doc screenshot refresh, OpenAPI).
 >
@@ -261,6 +262,19 @@ the mocks that lacks a backend today (noted inline during implementation).
   `queries::sequence_match_events_sql`, `types::PatternMatchEvents`,
   `AnalyticsDb::sequence_match_events`, guard + live tests against the real
   extension, and `/api/v2/analytics/sequence-match-events`.
+- **Capture-supervisor per-source status → Station Health** (the largest Wave D
+  item). The supervisor classifies each reconcile into Connected / Stalled /
+  BackingOff / Paused, accumulates a rolling 48-segment 24 h uptime ring
+  (`src/capture/uptime.rs`), and publishes a snapshot into a shared
+  `birdnet-core::audio::capture::status::CaptureStatusHandle` once per tick. The
+  binary clones one handle into `AppState` (`with_capture_status`) and the other
+  into the supervisor thread, mirroring the metrics `Arc`. Station Health reads
+  it and renders the live `st-source` cards (state chip · 24 h uptime strip ·
+  last-audio age · detections today · retry/backoff line), with the
+  detection-activity panel as the no-supervisor fallback. New CSS: `.st-uptime`,
+  `.st-source-retry`, `.st-source.stalled` (no new tokens). The History
+  "Open day →" landing and the Recordings per-clip thumbnail/duration remain the
+  open Wave D deferrals.
 
 > Note: the handoff references companion docs `AUDIT_v3.html` and
 > `IA_REIMAGINING.html` that were not part of the upload; the Wave D summary
