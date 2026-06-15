@@ -284,6 +284,80 @@ fn species_table() -> Vec<Species> {
     ]
 }
 
+/// Build a realistic capture-status snapshot for the Station Health screenshot:
+/// a healthy local mic, a backing-off RTSP camera, and a stalled one. The
+/// shipped binary fills this from the live supervisor; here it's seeded.
+fn seed_capture_status() -> birdnet_core::audio::capture::CaptureStatusHandle {
+    use birdnet_core::audio::capture::{
+        CaptureStatus, SourceState, SourceStatus, UPTIME_SEGMENTS, UptimeSegment,
+        new_capture_status, publish_capture_status,
+    };
+
+    // A 48-segment strip from a per-index closure (the first two half-hours
+    // predate tracking → Out, like a station that booted ~23 h ago).
+    fn strip(f: impl Fn(usize) -> UptimeSegment) -> Vec<UptimeSegment> {
+        (0..UPTIME_SEGMENTS)
+            .map(|i| if i < 2 { UptimeSegment::Out } else { f(i) })
+            .collect()
+    }
+
+    let handle = new_capture_status();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let sources = vec![
+        SourceStatus {
+            label: "local".into(),
+            state: SourceState::Connected,
+            uptime_secs: Some(6 * 3600 + 12 * 60),
+            last_audio_age_secs: Some(2),
+            restart_attempts: 0,
+            next_retry_in_secs: None,
+            uptime_24h: strip(|_| UptimeSegment::Up),
+        },
+        SourceStatus {
+            label: "RTSP_1".into(),
+            state: SourceState::BackingOff,
+            uptime_secs: None,
+            last_audio_age_secs: Some(137),
+            restart_attempts: 3,
+            next_retry_in_secs: Some(12),
+            // Solid all day, then a recent outage over the last ~90 minutes.
+            uptime_24h: strip(|i| {
+                if i >= UPTIME_SEGMENTS - 3 {
+                    UptimeSegment::Down
+                } else {
+                    UptimeSegment::Up
+                }
+            }),
+        },
+        SourceStatus {
+            label: "RTSP_2".into(),
+            state: SourceState::Stalled,
+            uptime_secs: None,
+            last_audio_age_secs: Some(308),
+            restart_attempts: 1,
+            next_retry_in_secs: None,
+            // Intermittent dropouts through the day, stalled right now.
+            uptime_24h: strip(|i| {
+                if i == UPTIME_SEGMENTS - 1 || i % 11 == 5 {
+                    UptimeSegment::Down
+                } else {
+                    UptimeSegment::Up
+                }
+            }),
+        },
+    ];
+    publish_capture_status(
+        &handle,
+        CaptureStatus {
+            sources,
+            published_unix: now,
+        },
+    );
+    handle
+}
+
 fn seed(conn: &Connection, today_days: i64) {
     let species = species_table();
     let mut rng = Rng::new(0xB17D_5EED_u64.rotate_left(7) ^ 0x9E37_79B9);
@@ -570,6 +644,11 @@ async fn main() {
             state
         }
     };
+
+    // Seed live capture-supervisor health so Station Health shows the
+    // operator-grade per-source cards (this server runs no real supervisor).
+    // Labels match the seeded detection sources so "detections today" merges.
+    let state = state.with_capture_status(seed_capture_status());
 
     let app = build_router(state);
 
