@@ -50,9 +50,9 @@ Every screen is designed to serve two people at once: the **hobbyist** who wants
 
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
 
-![Dashboard — light theme](./images/dashboard.png)
+![The Today home — light theme](./images/dashboard.png)
 
-![Dashboard — dark theme](./images/dashboard-dark.png)
+![The Today home — dark theme](./images/dashboard-dark.png)
 
 </div>
 

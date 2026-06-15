@@ -1,6 +1,6 @@
 # Display Preferences
 
-BirdNet-Behavior adapts to how and where you watch it — a phone on the trail, a wall-mounted Pi touchscreen, a desktop in a bright room. The **Display Preferences** card on the [System](../admin/system.md) page (`/system`) lets each viewer tune the interface; choices are stored locally in the browser, so they're per-device and need no login.
+BirdNet-Behavior adapts to how and where you watch it — a phone on the trail, a wall-mounted Pi touchscreen, a desktop in a bright room. The **Display Preferences** card on the [Station Health](../admin/system.md) tab (`/station`) lets each viewer tune the interface; choices are stored locally in the browser, so they're per-device and need no login.
 
 ## What you can change
 

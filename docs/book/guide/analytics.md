@@ -6,7 +6,7 @@ BirdNet-Behavior turns a stream of detections into behavior. The analytics scree
 
 The **When active** and **Dawn chorus** tabs of [Patterns](./patterns.md) (`/patterns`) stack several bespoke visualizations:
 
-![The activity heatmap, circadian polar and migration ridgeline](../images/heatmap.png)
+![The Patterns → When-active tab: the activity streamgraph, the hour × day-of-week grid and detections-by-hour](../images/heatmap.png)
 
 - **Activity streamgraph** — species composition over time, drawn from a centered baseline.
 - **Activity grid** — an hour × day-of-week mosaic where each cell deepens from the neutral surface through the warm **dawn** hue and into **rare** red for the busiest cells (a theme-aware OKLCH ramp, not a generic rainbow).
