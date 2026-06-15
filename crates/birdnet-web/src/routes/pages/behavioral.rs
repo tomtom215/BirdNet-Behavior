@@ -310,10 +310,11 @@ pub(super) async fn analytics_dawn_sequence_partial(
         };
         state
             .with_analytics(|adb| {
-                // Both halves use sequence_match (NFA) semantics over the same
-                // params: how *often* the ordered run happened (sequence_count),
-                // and *when* it happened on a matching day (sequence_match_events)
-                // — so the headline count and the step timing can't disagree.
+                // Both run the same NFA pattern over the same params: how *often*
+                // the ordered run completed (sequence_count) and the per-step
+                // timestamps (sequence_match_events). Sharing the pattern means a
+                // counted full-match day always has a full set of step times to
+                // show, so the headline and the morning we surface stay aligned.
                 let counts = adb.sequence_count(&params)?;
                 let events = adb.sequence_match_events(&params)?;
                 Ok((sequence, counts, events))
@@ -397,23 +398,21 @@ fn step_time_hhmm(ts: &str) -> &str {
         .unwrap_or(ts)
 }
 
-/// Pick a representative morning to show step-by-step: the most recent day that
-/// completed the whole sequence, else the most recent partial run of two or
-/// more steps. `events` arrive date-descending, so `find` yields the most
-/// recent match.
+/// The most recent morning that completed the whole ordered sequence (a full
+/// set of step times), to show step-by-step. `events` arrive date-descending,
+/// so `find` yields the most recent. Days that reached only a partial in-order
+/// prefix aren't a full run, so they're skipped — the card only calls this when
+/// `sequence_count` already found a full match, so one always exists.
 #[cfg(feature = "analytics")]
 fn best_progression(
     full_len: usize,
     events: &[birdnet_behavioral::types::PatternMatchEvents],
 ) -> Option<&birdnet_behavioral::types::PatternMatchEvents> {
-    events
-        .iter()
-        .find(|e| e.step_times.len() == full_len)
-        .or_else(|| events.iter().find(|e| e.step_times.len() >= 2))
+    events.iter().find(|e| e.step_times.len() == full_len)
 }
 
 /// Render the dawn-sequence card body from the derived sequence, its per-day
-/// occurrence counts (`sequence_count`) and step timings (`funnel_events`).
+/// occurrence counts (`sequence_count`) and step timings (`sequence_match_events`).
 #[cfg(feature = "analytics")]
 fn render_dawn_sequence(
     sequence: &[String],

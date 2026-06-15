@@ -286,15 +286,20 @@ fn live_sequence_match_events() {
             .step_times
             .len()
     };
-    // Unlike window_funnel_events (cf. live_funnel_events), a partial run yields
-    // no timestamps: the NFA pattern only matches when the whole ordered
-    // sequence is present, so day2 (missing Wren) is 0, not 2.
+    // Verified against the real extension: sequence_match_events returns the
+    // timestamps of the longest in-order prefix reached — like
+    // window_funnel_events (cf. live_funnel_events), a partial run still yields
+    // its steps. Day2 reaches Robin->Blackbird before the missing Wren stops it.
     assert_eq!(
         steps("2024-05-01"),
         3,
         "day1 full R->B->W -> 3 matched times"
     );
-    assert_eq!(steps("2024-05-02"), 0, "day2 missing Wren -> no match -> 0");
+    assert_eq!(
+        steps("2024-05-02"),
+        2,
+        "day2 Robin->Blackbird, no Wren -> 2-step prefix"
+    );
     assert_eq!(
         steps("2024-05-03"),
         3,

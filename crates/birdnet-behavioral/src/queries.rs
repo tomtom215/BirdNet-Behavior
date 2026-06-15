@@ -276,11 +276,11 @@ pub fn sequence_count_sql(params: &PatternParams) -> String {
 ///
 /// Same pattern + conditions as [`sequence_match_sql`], but
 /// `sequence_match_events()` returns the `TIMESTAMP[]` of the events that
-/// satisfied the matched pattern (an empty list on a day with no match) — so
-/// callers can show *when* an ordered run actually happened, consistent with
-/// the occurrence count from [`sequence_count_sql`]. Each element is cast to
-/// `VARCHAR` via `list_transform`, mirroring [`funnel_events_sql`], so the
-/// result reads back as a plain string list.
+/// satisfied the pattern — the longest in-order prefix reached that day (the
+/// full set when the sequence completes, a partial otherwise), like
+/// `window_funnel_events`. Each element is cast to `VARCHAR` via
+/// `list_transform`, mirroring [`funnel_events_sql`], so the result reads back
+/// as a plain string list.
 ///
 /// Callers must pass 2..=32 species; [`crate::connection`] enforces this.
 pub fn sequence_match_events_sql(params: &PatternParams) -> String {

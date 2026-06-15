@@ -275,10 +275,11 @@ impl AnalyticsDb {
     /// Execute an ordered sequence *match-event* query
     /// (`sequence_match_events`, v0.8.0).
     ///
-    /// Like [`Self::sequence_match`] but, for each matching day, returns the
-    /// timestamps of the events that satisfied the ordered pattern (an empty
-    /// list on a non-matching day) — so callers can show *when* a run happened,
-    /// consistent with [`Self::sequence_count`]'s "how often".
+    /// Like [`Self::sequence_match`] but, per day, returns the timestamps of the
+    /// events that satisfied the ordered pattern — the longest in-order prefix
+    /// reached (the full set on a completing day, a partial otherwise) — so
+    /// callers can show *when* a run happened. A day with a full set of step
+    /// times is exactly one [`Self::sequence_count`] also counts.
     ///
     /// # Errors
     ///

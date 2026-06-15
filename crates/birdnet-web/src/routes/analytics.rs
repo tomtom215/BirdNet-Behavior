@@ -512,7 +512,13 @@ async fn sequence_match_events(
     match result {
         Ok(Ok(events)) => {
             let total = events.len();
-            let matched_days = events.iter().filter(|e| !e.step_times.is_empty()).count();
+            // A full match has one timestamp per step; shorter lists are the
+            // longest in-order prefix a day reached. Count only full matches so
+            // this aligns with sequence_count's occurrence days.
+            let matched_days = events
+                .iter()
+                .filter(|e| e.step_times.len() == e.species_sequence.len())
+                .count();
             (
                 StatusCode::OK,
                 Json(json!({

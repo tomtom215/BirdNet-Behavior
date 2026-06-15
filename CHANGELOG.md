@@ -127,10 +127,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   typed wrappers for all three — `AnalyticsDb::sequence_count` (how *many* times
   an ordered species sequence occurred per day, not just whether it did),
   `AnalyticsDb::funnel_events` (the timestamp each completed dawn-chorus step
-  fired) and `AnalyticsDb::sequence_match_events` (the timestamps of an ordered
-  NFA-pattern match, empty on a non-matching day) — with SQL builders, unit
-  tests, and live tests verified against the real extension. Exposed over the
-  REST API as `/analytics/{sequence-count,funnel-events,sequence-match-events}`.
+  fired) and `AnalyticsDb::sequence_match_events` (the per-step timestamps of an
+  ordered NFA-pattern match — the longest in-order prefix reached that day) —
+  with SQL builders, unit tests, and live tests verified against the real
+  extension. Exposed over the REST API as
+  `/analytics/{sequence-count,funnel-events,sequence-match-events}`.
 - **The Patterns → Behavior tab surfaces the dawn "running order."** A new
   defined-in-place card reads the station's own dawn-window data to pick the
   morning's leading voices, then uses v0.8.0's `sequence_count` and
