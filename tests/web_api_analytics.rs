@@ -76,6 +76,7 @@ async fn analytics_endpoints_report_unavailable_without_duckdb() {
         "/api/v2/analytics/funnel",
         "/api/v2/analytics/funnel-events",
         "/api/v2/analytics/sequence-count",
+        "/api/v2/analytics/sequence-match-events",
     ] {
         let response = app
             .clone()

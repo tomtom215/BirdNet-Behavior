@@ -23,6 +23,10 @@ pub fn router() -> Router<AppState> {
         .route("/analytics/funnel-events", get(funnel_events))
         .route("/analytics/patterns", get(patterns))
         .route("/analytics/sequence-count", get(sequence_count))
+        .route(
+            "/analytics/sequence-match-events",
+            get(sequence_match_events),
+        )
         .route("/analytics/next-species", get(next_species))
         .route("/analytics/status", get(analytics_status))
 }
@@ -471,6 +475,81 @@ async fn sequence_count(
     Query(_query): Query<PatternsQuery>,
 ) -> (StatusCode, Json<Value>) {
     unavailable("sequence_count")
+}
+
+#[cfg(feature = "analytics")]
+async fn sequence_match_events(
+    State(state): State<AppState>,
+    Query(query): Query<PatternsQuery>,
+) -> (StatusCode, Json<Value>) {
+    if !state.has_analytics() {
+        return unavailable("sequence_match_events");
+    }
+
+    let default = birdnet_behavioral::types::PatternParams::default();
+    let species_sequence = parse_species_sequence(query.species, default.species_sequence);
+
+    let params = birdnet_behavioral::types::PatternParams {
+        species_sequence,
+        max_gap_minutes: query.max_gap,
+        hour_start: query.hour_start.unwrap_or(default.hour_start),
+        hour_end: query.hour_end.unwrap_or(default.hour_end),
+    };
+
+    let result = tokio::task::spawn_blocking(move || {
+        state
+            .with_analytics(|adb| adb.sequence_match_events(&params))
+            .unwrap_or_else(|| {
+                Err(
+                    birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
+                        "analytics not available".into(),
+                    ),
+                )
+            })
+    })
+    .await;
+
+    match result {
+        Ok(Ok(events)) => {
+            let total = events.len();
+            // A full match has one timestamp per step; shorter lists are the
+            // longest in-order prefix a day reached. Count only full matches so
+            // this aligns with sequence_count's occurrence days.
+            let matched_days = events
+                .iter()
+                .filter(|e| e.step_times.len() == e.species_sequence.len())
+                .count();
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "sequence_match_events": events,
+                    "total": total,
+                    "matched_days": matched_days,
+                })),
+            )
+        }
+        Ok(Err(birdnet_behavioral::connection::AnalyticsError::InvalidData(msg))) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "status": "invalid_request",
+                "function": "sequence_match_events",
+                "error": msg,
+            })),
+        ),
+        Ok(Err(e)) => extension_error("sequence_match_events", &e.to_string()),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("internal error: {e}") })),
+        ),
+    }
+}
+
+#[cfg(not(feature = "analytics"))]
+async fn sequence_match_events(
+    State(_state): State<AppState>,
+    Query(_query): Query<PatternsQuery>,
+) -> (StatusCode, Json<Value>) {
+    unavailable("sequence_match_events")
 }
 
 #[cfg(not(feature = "analytics"))]

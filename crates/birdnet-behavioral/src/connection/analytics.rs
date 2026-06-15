@@ -272,6 +272,58 @@ impl AnalyticsDb {
         rows.map(|r| r.map_err(AnalyticsError::from)).collect()
     }
 
+    /// Execute an ordered sequence *match-event* query
+    /// (`sequence_match_events`, v0.8.0).
+    ///
+    /// Like [`Self::sequence_match`] but, per day, returns the timestamps of the
+    /// events that satisfied the ordered pattern — the longest in-order prefix
+    /// reached (the full set on a completing day, a partial otherwise) — so
+    /// callers can show *when* a run happened. A day with a full set of step
+    /// times is exactly one [`Self::sequence_count`] also counts.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AnalyticsError::InvalidData` if the species sequence is not
+    /// 2..=32 long, `AnalyticsError::ExtensionLoad` if the extension is not
+    /// loaded, or `AnalyticsError::Database` on query failure.
+    pub fn sequence_match_events(
+        &self,
+        params: &types::PatternParams,
+    ) -> Result<Vec<types::PatternMatchEvents>, AnalyticsError> {
+        let n = params.species_sequence.len();
+        if !(2..=32).contains(&n) {
+            return Err(AnalyticsError::InvalidData(format!(
+                "sequence_match_events requires 2..=32 species, got {n}"
+            )));
+        }
+        self.require_extension()?;
+        let sql = queries::sequence_match_events_sql(params);
+        let sequence = params.species_sequence.clone();
+        let mut stmt = self.conn.prepare(&sql)?;
+        // sequence_match_events returns TIMESTAMP[]; the SQL casts each element
+        // to VARCHAR, so the column reads back as a list of text values.
+        let rows = stmt.query_map([], |row| {
+            let date: String = row.get(0)?;
+            let times_value: Value = row.get(1)?;
+            let step_times: Vec<String> = match times_value {
+                Value::List(list) => list
+                    .into_iter()
+                    .filter_map(|v| match v {
+                        Value::Text(s) => Some(s),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            Ok(types::PatternMatchEvents {
+                date,
+                step_times,
+                species_sequence: sequence.clone(),
+            })
+        })?;
+        rows.map(|r| r.map_err(AnalyticsError::from)).collect()
+    }
+
     /// Execute a next-species prediction query.
     ///
     /// Finds which species are most likely to be detected after `trigger`
@@ -449,6 +501,26 @@ mod tests {
             ..types::FunnelParams::default()
         };
         let err = db.funnel_events(&params).unwrap_err();
+        assert!(err.to_string().contains("requires 2..=32"));
+    }
+
+    #[test]
+    fn sequence_match_events_requires_extension() {
+        let (db, _tmp) = make_db();
+        let err = db
+            .sequence_match_events(&types::PatternParams::default())
+            .unwrap_err();
+        assert!(err.to_string().contains("extension not loaded"));
+    }
+
+    #[test]
+    fn sequence_match_events_rejects_short_sequence() {
+        let (db, _tmp) = make_db();
+        let params = types::PatternParams {
+            species_sequence: vec!["Robin".into()],
+            ..types::PatternParams::default()
+        };
+        let err = db.sequence_match_events(&params).unwrap_err();
         assert!(err.to_string().contains("requires 2..=32"));
     }
 }

@@ -22,6 +22,10 @@ pub fn router() -> Router<AppState> {
             get(analytics_retention_partial),
         )
         .route("/pages/analytics-next", get(analytics_next_partial))
+        .route(
+            "/pages/analytics-dawn-sequence",
+            get(analytics_dawn_sequence_partial),
+        )
         .route("/pages/analytics-config", get(analytics_config_partial))
 }
 
@@ -268,6 +272,214 @@ pub(super) async fn analytics_next_partial(
     State(_): State<AppState>,
 ) -> impl axum::response::IntoResponse {
     analytics_unavailable_html("Next species predictions")
+}
+
+/// Dawn window the sequence card analyses (hours of day, inclusive).
+#[cfg(feature = "analytics")]
+const DAWN_HOUR_START: u32 = 4;
+#[cfg(feature = "analytics")]
+const DAWN_HOUR_END: u32 = 8;
+
+/// HTMX partial: the dawn "running order" — how often the morning's leading
+/// voices sing in sequence (`sequence_count`, v0.8.0) plus the step timing of a
+/// recent run (`sequence_match_events`, v0.8.0).
+///
+/// The sequence is derived from the station's own dawn-window data rather than
+/// hard-coded, so the card is meaningful regardless of geography — the REST
+/// defaults are European, but a North-American dawn opens with entirely
+/// different birds.
+#[cfg(feature = "analytics")]
+pub(super) async fn analytics_dawn_sequence_partial(
+    State(state): State<AppState>,
+) -> impl axum::response::IntoResponse {
+    if !state.has_analytics() {
+        return analytics_unavailable_html("Dawn sequence");
+    }
+    let result = tokio::task::spawn_blocking(move || {
+        let sequence = state.with_db(derive_dawn_sequence);
+        // sequence_count / sequence_match_events need 2..=32 steps; fewer than
+        // two prominent dawn voices means there's no order to read yet.
+        if sequence.len() < 2 {
+            return Ok(None);
+        }
+        let params = birdnet_behavioral::types::PatternParams {
+            species_sequence: sequence.clone(),
+            max_gap_minutes: None,
+            hour_start: DAWN_HOUR_START,
+            hour_end: DAWN_HOUR_END,
+        };
+        state
+            .with_analytics(|adb| {
+                // Both run the same NFA pattern over the same params: how *often*
+                // the ordered run completed (sequence_count) and the per-step
+                // timestamps (sequence_match_events). Sharing the pattern means a
+                // counted full-match day always has a full set of step times to
+                // show, so the headline and the morning we surface stay aligned.
+                let counts = adb.sequence_count(&params)?;
+                let events = adb.sequence_match_events(&params)?;
+                Ok((sequence, counts, events))
+            })
+            .unwrap_or_else(|| {
+                Err(
+                    birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
+                        "analytics not available".into(),
+                    ),
+                )
+            })
+            .map(Some)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(Some((sequence, counts, events)))) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            render_dawn_sequence(&sequence, &counts, &events),
+        ),
+        Ok(Ok(None)) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html")],
+            r#"<p class="bh-muted">Not enough dawn activity yet to read a running order — give the mornings a little longer.</p>"#.to_string(),
+        ),
+        Ok(Err(e)) => extension_error_html("dawn sequence", &e.to_string()),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/html")],
+            "<p>Error loading dawn sequence</p>".to_string(),
+        ),
+    }
+}
+
+#[cfg(not(feature = "analytics"))]
+pub(super) async fn analytics_dawn_sequence_partial(
+    State(_): State<AppState>,
+) -> impl axum::response::IntoResponse {
+    analytics_unavailable_html("Dawn sequence")
+}
+
+/// Derive the station's dawn "running order" from its own data: the most
+/// prominent dawn-window voices (hours 4–8), ordered by the mean time of day
+/// they sing — earliest first. Returns up to three species; fewer than two
+/// means there isn't enough dawn activity to read an order.
+#[cfg(feature = "analytics")]
+fn derive_dawn_sequence(conn: &rusqlite::Connection) -> Vec<String> {
+    // Top five dawn voices by volume, then ordered by mean time-of-day so the
+    // sequence reads as the natural progression of the morning chorus.
+    const SQL: &str = "WITH dawn AS (
+            SELECT Com_Name,
+                   COUNT(*) AS c,
+                   AVG(CAST(substr(Time, 1, 2) AS REAL) * 3600
+                       + CAST(substr(Time, 4, 2) AS REAL) * 60
+                       + CAST(substr(Time, 7, 2) AS REAL)) AS avg_secs
+            FROM detections
+            WHERE length(Time) >= 8
+              AND CAST(substr(Time, 1, 2) AS INTEGER) BETWEEN 4 AND 8
+            GROUP BY Com_Name
+            HAVING c >= 10
+        )
+        SELECT Com_Name FROM (
+            SELECT Com_Name, avg_secs FROM dawn ORDER BY c DESC LIMIT 5
+        ) ORDER BY avg_secs ASC LIMIT 3";
+    let Ok(mut stmt) = conn.prepare(SQL) else {
+        return Vec::new();
+    };
+    let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) else {
+        return Vec::new();
+    };
+    rows.filter_map(Result::ok).collect()
+}
+
+/// Trim a `DuckDB` timestamp string (`2026-04-12 05:58:23`) to `HH:MM`.
+#[cfg(feature = "analytics")]
+fn step_time_hhmm(ts: &str) -> &str {
+    ts.split([' ', 'T'])
+        .nth(1)
+        .and_then(|t| t.get(..5))
+        .unwrap_or(ts)
+}
+
+/// The most recent morning that completed the whole ordered sequence (a full
+/// set of step times), to show step-by-step. `events` arrive date-descending,
+/// so `find` yields the most recent. Days that reached only a partial in-order
+/// prefix aren't a full run, so they're skipped — the card only calls this when
+/// `sequence_count` already found a full match, so one always exists.
+#[cfg(feature = "analytics")]
+fn best_progression(
+    full_len: usize,
+    events: &[birdnet_behavioral::types::PatternMatchEvents],
+) -> Option<&birdnet_behavioral::types::PatternMatchEvents> {
+    events.iter().find(|e| e.step_times.len() == full_len)
+}
+
+/// Render the dawn-sequence card body from the derived sequence, its per-day
+/// occurrence counts (`sequence_count`) and step timings (`sequence_match_events`).
+#[cfg(feature = "analytics")]
+fn render_dawn_sequence(
+    sequence: &[String],
+    counts: &[birdnet_behavioral::types::PatternCount],
+    events: &[birdnet_behavioral::types::PatternMatchEvents],
+) -> String {
+    let chain = sequence
+        .iter()
+        .map(|s| escape_html(s))
+        .collect::<Vec<_>>()
+        .join(" \u{2192} ");
+
+    let total_occ: u64 = counts.iter().map(|c| c.count).sum();
+    let match_days = counts.iter().filter(|c| c.count > 0).count();
+    let total_days = counts.len();
+    let best = counts.iter().map(|c| c.count).max().unwrap_or(0);
+
+    let mut html =
+        format!(r#"<p class="bh-after">Your dawn tends to open <strong>{chain}</strong>.</p>"#);
+
+    if total_occ == 0 {
+        html.push_str(
+            r#"<p class="bh-muted">All heard at dawn, but not yet in that exact order on a single morning.</p>"#,
+        );
+        return html;
+    }
+
+    let _ = write!(
+        html,
+        r#"<p class="bnb-meta">In order on <strong>{match_days}</strong> of <strong>{total_days}</strong> mornings · <strong>{total_occ}</strong> runs in total · up to <strong>{best}</strong> in one morning.</p>"#
+    );
+
+    if let Some(ev) = best_progression(sequence.len(), events) {
+        let _ = write!(
+            html,
+            r#"<p class="bh-after">A recent morning — <strong>{date}</strong>:</p><table class="pt-tbl"><thead><tr><th>Voice</th><th>First heard</th></tr></thead><tbody>"#,
+            date = escape_html(&ev.date),
+        );
+        // step_times[i] pairs with species_sequence[i] for the completed steps;
+        // zip stops at the shorter, so partial runs show only what fired.
+        for (sp, t) in ev.species_sequence.iter().zip(ev.step_times.iter()) {
+            let _ = write!(
+                html,
+                "<tr><td>{sp}</td><td>{t}</td></tr>",
+                sp = escape_html(sp),
+                t = escape_html(step_time_hhmm(t)),
+            );
+        }
+        html.push_str("</tbody></table>");
+    }
+
+    // The most recent mornings, tucked under a disclosure (the Patterns
+    // "see the numbers" idiom) so the card leads with the headline.
+    html.push_str(
+        r#"<details class="pt-disc"><summary>Recent mornings</summary><div><table class="pt-tbl"><thead><tr><th>Morning</th><th>In-order runs</th></tr></thead><tbody>"#,
+    );
+    for c in counts.iter().take(7) {
+        let _ = write!(
+            html,
+            "<tr><td>{date}</td><td>{count}</td></tr>",
+            date = escape_html(&c.date),
+            count = c.count,
+        );
+    }
+    html.push_str("</tbody></table></div></details>");
+
+    html
 }
 
 async fn analytics_config_partial(
