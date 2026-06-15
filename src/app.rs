@@ -215,6 +215,13 @@ async fn serve(
     };
     let state = helpers::init_i18n(state, &cli, config.as_ref());
 
+    // The capture supervisor publishes per-source health into this shared
+    // handle; the web layer reads it for Station Health. One clone goes into
+    // the (about-to-be-shared) AppState, the original into the supervisor
+    // thread below. Must be the last builder call before the state is cloned.
+    let capture_status = birdnet_core::audio::capture::new_capture_status();
+    let state = state.with_capture_status(capture_status.clone());
+
     let broadcast = state.detection_broadcast();
 
     // Create integration clients.
@@ -259,8 +266,13 @@ async fn serve(
     // Start background subsystems.
     let _disk_manager_thread = helpers::start_disk_manager(&cli, config.as_ref(), &state);
     let _live_spectrogram_thread = helpers::start_live_spectrogram(&cli, config.as_ref(), &state);
-    let _capture_handle =
-        capture::start_capture_manager(&cli, config.as_ref(), Some(&state), state.metrics());
+    let _capture_handle = capture::start_capture_manager(
+        &cli,
+        config.as_ref(),
+        Some(&state),
+        state.metrics(),
+        capture_status,
+    );
 
     let daemon_handle = if cli.web_only {
         tracing::info!("running in web-only mode (no detection daemon)");
