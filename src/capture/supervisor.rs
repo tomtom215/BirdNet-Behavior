@@ -40,8 +40,13 @@
 
 use std::time::{Duration, Instant};
 
-use birdnet_core::audio::capture::{CaptureError, CaptureSource};
+use birdnet_core::audio::capture::{
+    CaptureError, CaptureSource, CaptureStatus, CaptureStatusHandle, SourceState, SourceStatus,
+    publish_capture_status,
+};
 use birdnet_web::metrics::SharedMetrics;
+
+use super::uptime::UptimeRing;
 
 /// First retry delay after a source is found dead.
 const BACKOFF_BASE: Duration = Duration::from_secs(2);
@@ -215,6 +220,12 @@ struct SupervisedSource<S: Source> {
     /// Folded from `latest_output_age` probes so a segment that is consumed
     /// or purged between ticks cannot retroactively un-prove liveness.
     last_fresh_output: Option<Instant>,
+    /// The lifecycle state decided on the most recent reconcile, published to
+    /// the web layer's Station Health page. Seeded to `BackingOff` ("not yet
+    /// up"); always overwritten on the first tick before any snapshot is taken.
+    last_state: SourceState,
+    /// Rolling 24-hour up/down history for the uptime strip.
+    uptime_ring: UptimeRing,
 }
 
 impl<S: Source> SupervisedSource<S> {
@@ -235,6 +246,8 @@ impl<S: Source> SupervisedSource<S> {
             last_down_warn: None,
             started_at: None,
             last_fresh_output: None,
+            last_state: SourceState::BackingOff,
+            uptime_ring: UptimeRing::new(),
         }
     }
 
@@ -318,6 +331,9 @@ impl<S: Source> SupervisedSource<S> {
         metrics: &SharedMetrics,
     ) {
         let allowed = recording_allowed && !self.in_quiet(now_min);
+        // Whether this tick caught the (alive) process silently stalled, so the
+        // shared down path below can publish `Stalled` rather than `BackingOff`.
+        let mut stalled_now = false;
 
         // Outside the schedule (or inside this source's quiet window): ensure
         // stopped, clear fault state, gauge 0.
@@ -331,6 +347,7 @@ impl<S: Source> SupervisedSource<S> {
             }
             self.clear_fault();
             metrics.set_source_up(&self.label, false);
+            self.last_state = SourceState::Paused;
             return;
         }
 
@@ -347,6 +364,7 @@ impl<S: Source> SupervisedSource<S> {
                     "audio source STALLED — process alive but writing no segments; restarting it"
                 );
                 self.source.stop();
+                stalled_now = true;
             } else {
                 if let Some(since) = self.down_since {
                     tracing::info!(
@@ -357,6 +375,7 @@ impl<S: Source> SupervisedSource<S> {
                 }
                 self.clear_fault();
                 metrics.set_source_up(&self.label, true);
+                self.last_state = SourceState::Connected;
                 return;
             }
         }
@@ -367,6 +386,13 @@ impl<S: Source> SupervisedSource<S> {
         if self.down_since.is_none() {
             self.down_since = Some(now);
         }
+        // A process caught stalled this tick reads `Stalled`; one simply not
+        // running reads `BackingOff`. Set before the backoff early-return below.
+        self.last_state = if stalled_now {
+            SourceState::Stalled
+        } else {
+            SourceState::BackingOff
+        };
 
         // Honour the backoff window before trying again.
         if self.next_attempt_at.is_some_and(|at| now < at) {
@@ -402,6 +428,35 @@ impl<S: Source> SupervisedSource<S> {
             ),
         }
         self.maybe_warn_down(now);
+    }
+
+    /// Record this tick into the 24-hour ring and build the published snapshot.
+    ///
+    /// `now` is the monotonic clock (for ages/uptime); `now_unix` is the wall
+    /// clock (for the half-hour ring buckets). Called once per tick, after
+    /// [`Self::reconcile`] has set `last_state`.
+    fn snapshot(&mut self, now: Instant, now_unix: u64) -> SourceStatus {
+        self.uptime_ring.record(now_unix, self.last_state);
+        let uptime_secs = match self.last_state {
+            SourceState::Connected => self
+                .started_at
+                .map(|s| now.saturating_duration_since(s).as_secs()),
+            _ => None,
+        };
+        SourceStatus {
+            label: self.label.clone(),
+            state: self.last_state,
+            uptime_secs,
+            last_audio_age_secs: self
+                .last_fresh_output
+                .map(|t| now.saturating_duration_since(t).as_secs()),
+            restart_attempts: self.attempts_since_healthy,
+            next_retry_in_secs: self
+                .next_attempt_at
+                .and_then(|at| at.checked_duration_since(now))
+                .map(|d| d.as_secs()),
+            uptime_24h: self.uptime_ring.segments(now_unix),
+        }
     }
 }
 
@@ -443,6 +498,29 @@ impl<S: Source> Supervisor<S> {
         for source in &mut self.sources {
             source.reconcile(now, recording_allowed, now_min, metrics);
         }
+    }
+
+    /// Publish a fresh per-source health snapshot into the shared handle the web
+    /// layer reads. Call once per tick, right after [`Self::tick`], so each
+    /// source's `last_state` reflects the reconciliation just performed.
+    pub(super) fn publish_status(
+        &mut self,
+        now: Instant,
+        now_unix: u64,
+        handle: &CaptureStatusHandle,
+    ) {
+        let sources = self
+            .sources
+            .iter_mut()
+            .map(|source| source.snapshot(now, now_unix))
+            .collect();
+        publish_capture_status(
+            handle,
+            CaptureStatus {
+                sources,
+                published_unix: now_unix,
+            },
+        );
     }
 }
 
@@ -1138,5 +1216,52 @@ mod tests {
         assert_eq!(sup.sources[0].source.stop_calls, 0);
         assert!(sup.sources[0].source.running);
         assert_eq!(gauge(&m, "local"), Some(1));
+    }
+
+    // ---- published status snapshot (the supervisor → web seam) -------------
+
+    #[test]
+    fn publish_status_writes_a_snapshot_into_the_handle() {
+        let mut sup = one(FakeSource::healthy());
+        let m = metrics();
+        let handle = birdnet_core::audio::capture::new_capture_status();
+        // Nothing has been published yet.
+        assert!(
+            birdnet_core::audio::capture::read_capture_status(&handle)
+                .sources
+                .is_empty()
+        );
+        let now = Instant::now();
+        sup.tick(now, true, None, &m);
+        sup.publish_status(now, 12_345, &handle);
+        // A `publish_status` that did nothing would leave the handle empty; it
+        // must carry the reconciled source and the publish timestamp.
+        let status = birdnet_core::audio::capture::read_capture_status(&handle);
+        assert_eq!(status.sources.len(), 1);
+        assert_eq!(status.sources[0].label, "local");
+        assert_eq!(status.sources[0].state, SourceState::Connected);
+        assert_eq!(status.published_unix, 12_345);
+    }
+
+    #[test]
+    fn snapshot_reports_uptime_only_when_connected() {
+        let mut sup = one(FakeSource::dead());
+        let m = metrics();
+        let handle = birdnet_core::audio::capture::new_capture_status();
+        let t0 = Instant::now();
+        // Tick 1: the dead source is (re)started, stamping `started_at`.
+        sup.tick(t0, true, None, &m);
+        sup.publish_status(t0, 1_000, &handle);
+        // Tick 2: now observed running and healthy → Connected, with uptime
+        // measured from the tick-1 restart.
+        let t1 = t0 + Duration::from_secs(30);
+        sup.tick(t1, true, None, &m);
+        sup.publish_status(t1, 1_030, &handle);
+        let status = birdnet_core::audio::capture::read_capture_status(&handle);
+        let src = &status.sources[0];
+        assert_eq!(src.state, SourceState::Connected);
+        // The Connected arm derives uptime from `started_at`; deleting that arm
+        // would wrongly report None for a running, healthy source.
+        assert_eq!(src.uptime_secs, Some(30));
     }
 }

@@ -3911,6 +3911,15 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); 
 .st-source-foot { display: flex; justify-content: space-between; gap: 10px; font-size: 11.5px; color: var(--fg-3); margin-top: 14px; }
 .st-source-foot b { font-family: var(--font-mono); color: var(--fg); font-weight: 600; }
 .st-source-empty { color: var(--fg-3); font-size: 13px; }
+/* live per-source health: the 24h uptime strip (48 half-hour segments) and the
+   retry/backoff line. up=moss, down=rare, out/no-data=surface-2 (no new tokens). */
+.st-uptime { display: flex; gap: 1.5px; height: 26px; align-items: stretch; margin: 14px 0 0; }
+.st-uptime span { flex: 1; border-radius: 1px; background: var(--surface-2); }
+.st-uptime span.up { background: var(--moss); }
+.st-uptime span.down { background: var(--rare); }
+.st-uptime span.out { background: var(--surface-2); }
+.st-source-retry { font-family: var(--font-mono); font-size: 11px; color: var(--dawn-ink); margin-top: 8px; }
+.st-source.stalled .st-source-retry { color: var(--rare); }
 
 /* vitals meter row */
 .st-vitals { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; border: 0.5px solid var(--border); border-radius: var(--r-lg); overflow: hidden; background: var(--surface); box-shadow: var(--shadow-sm); }

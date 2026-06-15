@@ -5,6 +5,7 @@
 
 #[cfg(feature = "analytics")]
 use birdnet_behavioral::connection::AnalyticsDb;
+use birdnet_core::audio::capture::CaptureStatusHandle;
 use birdnet_core::i18n::I18nManager;
 
 use crate::analytics_cache::AnalyticsCache;
@@ -96,6 +97,10 @@ struct AppStateInner {
     /// dawn chorus, phenology, co-occurrence, time-series). Shared so a
     /// background pre-warmer and the request handlers populate the same store.
     analytics_cache: Arc<AnalyticsCache>,
+    /// Live per-source capture health, published by the capture supervisor's
+    /// thread for the Station Health page. `None` when no supervisor is running
+    /// (web-only mode, or tooling); the page then falls back to DB activity.
+    capture_status: Option<CaptureStatusHandle>,
 }
 
 /// Unwrap the `Arc<AppStateInner>`, aborting if shared (called during setup only).
@@ -167,6 +172,7 @@ impl AppState {
                 metrics: metrics::new_shared(),
                 detection_daemon_running: Arc::new(AtomicBool::new(false)),
                 analytics_cache: Arc::new(AnalyticsCache::default()),
+                capture_status: None,
             }),
         })
     }
@@ -249,6 +255,7 @@ impl AppState {
                 metrics: metrics::new_shared(),
                 detection_daemon_running: Arc::new(AtomicBool::new(false)),
                 analytics_cache: Arc::new(AnalyticsCache::default()),
+                capture_status: None,
             }),
         })
     }
@@ -279,6 +286,7 @@ impl AppState {
                 metrics: metrics::new_shared(),
                 detection_daemon_running: Arc::new(AtomicBool::new(false)),
                 analytics_cache: Arc::new(AnalyticsCache::default()),
+                capture_status: None,
             }),
         }
     }
@@ -347,6 +355,17 @@ impl AppState {
         let inner = unwrap_inner(self.inner, "with_config_path");
         Self {
             inner: rebuild_inner(inner, |s| s.config_path = Some(path)),
+        }
+    }
+
+    /// Attach the capture supervisor's shared status handle, so the Station
+    /// Health page can show live per-source state. The binary clones one handle
+    /// into here and another into the supervisor thread.
+    #[must_use]
+    pub fn with_capture_status(self, status: CaptureStatusHandle) -> Self {
+        let inner = unwrap_inner(self.inner, "with_capture_status");
+        Self {
+            inner: rebuild_inner(inner, |s| s.capture_status = Some(status)),
         }
     }
 
@@ -486,6 +505,14 @@ impl AppState {
     #[must_use]
     pub fn metrics(&self) -> SharedMetrics {
         Arc::clone(&self.inner.metrics)
+    }
+
+    /// The capture supervisor's shared status handle, if a supervisor is
+    /// running. `None` in web-only mode and most tooling, where the Station
+    /// Health page falls back to detection-derived activity.
+    #[must_use]
+    pub fn capture_status(&self) -> Option<CaptureStatusHandle> {
+        self.inner.capture_status.clone()
     }
 
     /// The shared short-TTL cache for heavy-analytics fragments.

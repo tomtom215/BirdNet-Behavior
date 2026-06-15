@@ -12,10 +12,12 @@
 //! | `manager` | `CaptureManager` lifecycle (start/stop/liveness) |
 //! | `disk` | `DiskUsage`, `disk_usage`, `recording_stats`, `cleanup_old_recordings` |
 //! | `tmpfs` | `TmpfsConfig`, `TmpfsError`, tmpfs mount/unmount helpers |
+//! | `status` | `CaptureStatus` — the supervisor→web per-source health seam |
 
 pub mod disk;
 pub mod manager;
 pub mod process;
+pub mod status;
 pub mod tmpfs;
 pub mod types;
 
@@ -26,6 +28,10 @@ pub use disk::{
 };
 pub use manager::CaptureManager;
 pub use process::{is_tool_available, start_microphone_capture, start_rtsp_capture};
+pub use status::{
+    CaptureStatus, CaptureStatusHandle, SourceState, SourceStatus, UPTIME_SEGMENTS, UptimeSegment,
+    new_capture_status, publish_capture_status, read_capture_status,
+};
 pub use tmpfs::{
     TmpfsConfig, TmpfsError, generate_systemd_mount_unit, is_tmpfs_mounted, mount_tmpfs,
     unmount_tmpfs,

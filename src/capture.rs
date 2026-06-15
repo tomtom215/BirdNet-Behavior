@@ -19,7 +19,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use birdnet_core::audio::capture::{AudioFormat, CaptureError, CaptureManager, RecordingConfig};
+use birdnet_core::audio::capture::{
+    AudioFormat, CaptureError, CaptureManager, CaptureStatusHandle, RecordingConfig,
+};
 use birdnet_scheduler::ScheduleConfig;
 use birdnet_web::metrics::SharedMetrics;
 
@@ -29,6 +31,7 @@ mod runloop;
 mod schedule;
 mod sources;
 mod supervisor;
+mod uptime;
 
 use runloop::run_supervisor;
 use sources::{ResolvedSource, resolve_sources, resolve_sources_from_db, seed_sources_from_config};
@@ -132,6 +135,7 @@ pub fn start_capture_manager(
     config: Option<&birdnet_core::config::Config>,
     state: Option<&birdnet_web::state::AppState>,
     metrics: SharedMetrics,
+    status: CaptureStatusHandle,
 ) -> Option<CaptureHandle> {
     // O-13: seed an empty audio_sources table from CLI/config first, so the
     // table is the single source of truth for capture and the web surface.
@@ -230,7 +234,13 @@ pub fn start_capture_manager(
     let stop_signal = Arc::new(AtomicBool::new(false));
     let stop_for_thread = Arc::clone(&stop_signal);
     let thread = std::thread::spawn(move || {
-        run_supervisor(supervisor, &schedule_config, &metrics, &stop_for_thread);
+        run_supervisor(
+            supervisor,
+            &schedule_config,
+            &metrics,
+            &status,
+            &stop_for_thread,
+        );
     });
 
     Some(CaptureHandle {

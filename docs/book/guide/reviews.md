@@ -18,6 +18,8 @@ These are two different quality-control surfaces; it helps to keep them straight
 | **Verdict** | Approve / Reject / Delete | Confirm / Reject (reversible) |
 | **Use it to** | Vet uncertain rare birds before they count | Audit the ID quality of detections that already count |
 
+![The quarantine queue, where detections that failed a stricter per-species threshold wait for your approve / reject / delete verdict](../images/quarantine.png)
+
 A *rejected* review flags a likely misidentification for your own records — it
 does **not** remove the detection. Quarantine is the tool for keeping a dubious
 record out of the log entirely.

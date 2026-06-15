@@ -16,7 +16,7 @@ Click any species for its detail page (`/species/detail?name=…`): a full-bleed
 
 ## Life list
 
-The **Life List** (`/life-list`) is your birding journal — every species, once. It leads with three tallies (species, total detections, active days) and a smooth **accumulation curve** showing the list growing over the year, then a per-month "new species" chart and the full ranked table with average-confidence pills.
+The **Life List** (`/species?view=lifelist` — the old `/life-list` still redirects in) is your birding journal — every species, once. It leads with three tallies (species, total detections, active days) and a smooth **accumulation curve** showing the list growing over the year, then a per-month "new species" chart and the full ranked table with average-confidence pills.
 
 ![The life list with its accumulation curve](../images/life-list.png)
 

@@ -8,7 +8,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use birdnet_core::audio::capture::CaptureManager;
+use birdnet_core::audio::capture::{CaptureManager, CaptureStatusHandle};
 use birdnet_scheduler::{DailySchedule, ScheduleConfig};
 use birdnet_web::metrics::SharedMetrics;
 
@@ -35,6 +35,7 @@ pub(super) fn run_supervisor(
     mut supervisor: Supervisor<CaptureManager>,
     schedule_config: &ScheduleConfig,
     metrics: &SharedMetrics,
+    status: &CaptureStatusHandle,
     stop: &AtomicBool,
 ) {
     tracing::info!("capture supervisor started");
@@ -48,12 +49,16 @@ pub(super) fn run_supervisor(
             log_clock_sync_change(synced);
             clock_synced = synced;
         }
+        let now = Instant::now();
         supervisor.tick(
-            Instant::now(),
+            now,
             recording_allowed(schedule_config, secs),
             quiet_minute_of_day(secs),
             metrics,
         );
+        // Publish per-source health for the web layer's Station Health page,
+        // using the same monotonic instant the tick reconciled against.
+        supervisor.publish_status(now, secs, status);
         sleep_with_stop(SUPERVISE_TICK, stop);
     }
     tracing::info!("capture supervisor stopped");
