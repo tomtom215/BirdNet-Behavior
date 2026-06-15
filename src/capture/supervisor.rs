@@ -1217,4 +1217,51 @@ mod tests {
         assert!(sup.sources[0].source.running);
         assert_eq!(gauge(&m, "local"), Some(1));
     }
+
+    // ---- published status snapshot (the supervisor → web seam) -------------
+
+    #[test]
+    fn publish_status_writes_a_snapshot_into_the_handle() {
+        let mut sup = one(FakeSource::healthy());
+        let m = metrics();
+        let handle = birdnet_core::audio::capture::new_capture_status();
+        // Nothing has been published yet.
+        assert!(
+            birdnet_core::audio::capture::read_capture_status(&handle)
+                .sources
+                .is_empty()
+        );
+        let now = Instant::now();
+        sup.tick(now, true, None, &m);
+        sup.publish_status(now, 12_345, &handle);
+        // A `publish_status` that did nothing would leave the handle empty; it
+        // must carry the reconciled source and the publish timestamp.
+        let status = birdnet_core::audio::capture::read_capture_status(&handle);
+        assert_eq!(status.sources.len(), 1);
+        assert_eq!(status.sources[0].label, "local");
+        assert_eq!(status.sources[0].state, SourceState::Connected);
+        assert_eq!(status.published_unix, 12_345);
+    }
+
+    #[test]
+    fn snapshot_reports_uptime_only_when_connected() {
+        let mut sup = one(FakeSource::dead());
+        let m = metrics();
+        let handle = birdnet_core::audio::capture::new_capture_status();
+        let t0 = Instant::now();
+        // Tick 1: the dead source is (re)started, stamping `started_at`.
+        sup.tick(t0, true, None, &m);
+        sup.publish_status(t0, 1_000, &handle);
+        // Tick 2: now observed running and healthy → Connected, with uptime
+        // measured from the tick-1 restart.
+        let t1 = t0 + Duration::from_secs(30);
+        sup.tick(t1, true, None, &m);
+        sup.publish_status(t1, 1_030, &handle);
+        let status = birdnet_core::audio::capture::read_capture_status(&handle);
+        let src = &status.sources[0];
+        assert_eq!(src.state, SourceState::Connected);
+        // The Connected arm derives uptime from `started_at`; deleting that arm
+        // would wrongly report None for a running, healthy source.
+        assert_eq!(src.uptime_secs, Some(30));
+    }
 }
