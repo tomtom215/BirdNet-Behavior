@@ -29,12 +29,14 @@
 > an editorial `rp-hero` over a four-up `rp-stats` band (with the leaderboard and
 > first-ever/milestone columns), and History is a month heat-calendar
 > (`rp-cal`) keyed by a new `detections_per_day` query, with a day-detail panel
-> (hourly bars + top species) and month navigation. The per-source live
+> (hourly bars + top species), month navigation, and an "Open day" full-page
+> recap (`/reports/day` — hourly shape + every species + the complete read-only
+> log). The per-source live
 > state-chip / 24 h uptime strip / retry line has now landed too — the capture
 > supervisor publishes status to the web layer (see "Landed (Wave D)" below).
-> Still open (Wave D): an honest per-day "Open day" landing for the History
-> detail panel; and the remaining Wave D backlog (a11y titles, export wizard,
-> doc screenshot refresh, OpenAPI).
+> Still open (Wave D): the remaining Wave D backlog (a11y titles, export wizard,
+> doc screenshot refresh, OpenAPI). The per-day "Open day" landing has now
+> landed (see "Landed (Wave D)" below).
 >
 > **Recordings — deliberate honest omissions (Wave D).** The mock's per-clip
 > spectrogram thumbnail and clip-duration columns have no cheap, honest

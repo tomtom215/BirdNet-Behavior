@@ -54,8 +54,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   leaderboard and the first-ever/milestone columns. **History** becomes a
   month **heat-calendar**: each day is a cell coloured by its detection count
   and annotated with its species tally; selecting one loads that day's hourly
-  chart and top species into a detail panel, with ‹/› month navigation. Backed
-  by a new `detections_per_day` query.
+  chart and top species into a detail panel, with ‹/› month navigation, and an
+  **Open day →** link to a full-page recap of that day (`/reports/day`) — its
+  hourly shape, every species heard, and the complete chronological detection
+  log, read-only (managing detections stays on Today / Recordings). Backed by a
+  new `detections_per_day` query.
 - **Reports gain a "Save as PDF" button.** Each Reports tab now carries a
   CSP-safe print affordance — a real button whose delegated, nonce'd click
   handler opens the browser's print dialog, which the existing `print.css`
