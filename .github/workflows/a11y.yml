@@ -1,0 +1,104 @@
+name: A11y & Visual QA
+
+# Accessibility (axe-core) + structural visual-QA gates for the web UI, run
+# against the seeded `screenshot_server` fixture. Both gates share one build of
+# the analytics fixture (building it twice would cost ~10 min of CI for nothing),
+# so they live in a single job with two clearly-named steps.
+#
+# Path-filtered: only runs when the web crate, the QA tooling, or this workflow
+# changes — it is not a universal gate. The visual-QA step is structural
+# (overflow / console errors / broken images / stuck loaders via qa.mjs), not a
+# flaky pixel-diff, so it stays deterministic across runner images.
+
+on:
+  push:
+    branches: ["master", "main"]
+    paths:
+      - "crates/birdnet-web/**"
+      - "tools/visual-qa/**"
+      - ".github/workflows/a11y.yml"
+  pull_request:
+    branches: ["master", "main", "claude/**"]
+    paths:
+      - "crates/birdnet-web/**"
+      - "tools/visual-qa/**"
+      - ".github/workflows/a11y.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  frontend-qa:
+    name: Accessibility (axe) + visual-QA sweep
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Free up runner disk space
+        # The analytics fixture statically links bundled libduckdb; reclaim the
+        # unused SDKs so the build doesn't run the runner out of disk.
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
+          df -h /
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake g++
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: ci-a11y
+      - name: Build screenshot server (analytics fixture)
+        run: cargo build -p birdnet-web --example screenshot_server --features analytics
+      - name: Install QA tooling (Playwright + axe-core)
+        working-directory: tools/visual-qa
+        # ubuntu-24.04 runners ship Node 20+, so no setup-node action is needed.
+        run: |
+          npm install
+          npx playwright install --with-deps chromium
+      - name: Start screenshot server (127.0.0.1:8502)
+        run: |
+          set -euo pipefail
+          cargo run -p birdnet-web --example screenshot_server --features analytics \
+            > "$RUNNER_TEMP/screenshot-server.log" 2>&1 &
+          echo "SERVER_PID=$!" >> "$GITHUB_ENV"
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8502/ >/dev/null 2>&1; then
+              echo "screenshot server is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::screenshot server did not become ready in time"
+          cat "$RUNNER_TEMP/screenshot-server.log" || true
+          exit 1
+      - name: Accessibility gate (axe-core, WCAG 2.1 A/AA)
+        working-directory: tools/visual-qa
+        run: node axe.mjs
+      - name: Visual-QA sweep (overflow / console / broken images)
+        working-directory: tools/visual-qa
+        env:
+          STRICT: "1"
+          OUT: shots
+        run: node qa.mjs
+      - name: Upload screenshots + report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: visual-qa-shots
+          path: tools/visual-qa/shots/
+          if-no-files-found: ignore
+      - name: Stop screenshot server
+        if: always()
+        run: kill "${SERVER_PID:-0}" 2>/dev/null || true

@@ -20,6 +20,7 @@
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const BASE = process.env.BASE || 'http://127.0.0.1:8502';
 const OUT = process.env.OUT || 'shots';
@@ -202,6 +203,23 @@ async function main() {
     if (v.stuck?.length) parts.push(`stuck=${JSON.stringify(v.stuck)}`);
     console.log(`  ${k}: ${parts.join(' | ')}`);
   }
+
+  // STRICT mode (CI gate): any structural regression — horizontal overflow,
+  // console/page errors, >=400 responses, broken images, stuck loaders — fails
+  // the run. Local exploratory runs (no STRICT) always exit 0 as before.
+  if (process.env.STRICT && probs.length) {
+    console.error(`\nSTRICT: failing — ${probs.length} page/state(s) with issues.`);
+    process.exitCode = 1;
+  }
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+// Only auto-run when executed directly (`node qa.mjs`); when another script
+// imports { ROUTES } from this module it must not launch a capture run.
+const invokedDirectly =
+  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (invokedDirectly) {
+  main().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+}

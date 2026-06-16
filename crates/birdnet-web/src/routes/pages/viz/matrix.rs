@@ -13,7 +13,7 @@
 
 use std::fmt::Write as _;
 
-use super::EMPTY;
+use super::{EMPTY, svg_a11y};
 use crate::routes::pages::atoms::species_code;
 use crate::routes::pages::escape_html;
 
@@ -31,8 +31,12 @@ pub fn cooccurrence_matrix(labels: &[String], m: &[Vec<f64>]) -> String {
     let size_h = gutter + n as i32 * cell + 8;
 
     let mut svg = format!(
-        r#"<div class="viz-scroll"><svg width="{size_w}" height="{size_h}" viewBox="0 0 {size_w} {size_h}" role="img" aria-label="Species co-occurrence matrix">"#
+        r#"<div class="viz-scroll"><svg width="{size_w}" height="{size_h}" viewBox="0 0 {size_w} {size_h}" role="img">"#
     );
+    svg.push_str(&svg_a11y(
+        "Species co-occurrence matrix",
+        "A grid of species pairs; a darker cell means those two species were detected in the same five-minute window more often.",
+    ));
 
     // Column labels (rotated) + row labels.
     for (i, name) in labels.iter().enumerate() {
@@ -102,5 +106,10 @@ mod tests {
         assert!(svg.contains("BLJA"));
         assert!(svg.contains("NOCA"));
         assert!(svg.contains("fill-opacity"));
+        // Accessible name + description (role="img" needs an alt; the bare
+        // aria-label was replaced by the richer <title>/<desc> pair).
+        assert!(svg.contains("<title>Species co-occurrence matrix</title>"));
+        assert!(svg.contains("<desc>A grid of species pairs;"));
+        assert!(!svg.contains("aria-label"));
     }
 }
