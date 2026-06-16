@@ -34,9 +34,11 @@
 > log). The per-source live
 > state-chip / 24 h uptime strip / retry line has now landed too — the capture
 > supervisor publishes status to the web layer (see "Landed (Wave D)" below).
-> Still open (Wave D): the remaining Wave D backlog (a11y titles, export wizard,
-> doc screenshot refresh, OpenAPI). The per-day "Open day" landing has now
-> landed (see "Landed (Wave D)" below).
+> Still open (Wave D): the Recordings per-clip enrichments; and the remaining
+> backlog (export wizard, OpenAPI, behavioral-analytics visual surface, tokens
+> doc). The **a11y pass** (chart `<title>`/`<desc>` + `aria-live` live regions)
+> with its **axe + visual-QA CI gates**, and the per-day **"Open day"** landing
+> (`/reports/day`), have now landed (see "Landed (Wave D)" below).
 >
 > **Recordings — deliberate honest omissions (Wave D).** The mock's per-clip
 > spectrogram thumbnail and clip-duration columns have no cheap, honest
@@ -277,6 +279,25 @@ the mocks that lacks a backend today (noted inline during implementation).
   `.st-source-retry`, `.st-source.stalled` (no new tokens). The History
   "Open day →" landing and the Recordings per-clip thumbnail/duration remain the
   open Wave D deferrals.
+- **Accessibility pass + axe / visual-QA CI gates.** Every inline-SVG chart in
+  `viz/` (matrix · chord · circadian · streamgraph · accumulation · ridgeline ·
+  day-strip) now emits a `<title>` accessible name and a one-sentence `<desc>`
+  of what it encodes as the SVG's first children, via a shared `viz::svg_a11y`
+  helper, replacing the bare `aria-label`; the Recordings → Live trickle feed
+  becomes an `aria-live="polite"` region. A new `.github/workflows/a11y.yml`
+  boots the `screenshot_server` fixture once and runs **axe-core** (WCAG 2.1
+  A/AA, light + dark; fails on serious/critical — `tools/visual-qa/axe.mjs`,
+  reusing `qa.mjs`'s `ROUTES`) and a **structural visual-QA sweep** (`qa.mjs`
+  gains a `STRICT` exit + a main-module guard so it is importable). The gate is
+  deterministic — no flaky pixel baselines. Running it empirically surfaced and
+  fixed the structural violations: the segmented controls (Today filter ·
+  Species switcher · display-pref toggles) carried `role="tablist"`/`"radiogroup"`
+  over non-tab/non-radio children → now `role="group"` with `aria-pressed` /
+  `aria-current`; the kiosk recent-feed is now keyboard-focusable. Two rules are
+  deferred to a design-reviewed pass (documented in `axe.mjs`, `AXE_DISABLE`):
+  `color-contrast` (species identity hues rendered as text + the muted meta-text
+  hierarchy — an all-or-nothing design-token decision) and `link-in-text-block`
+  (an app-wide link-underline policy). All else at serious/critical is enforced.
 
 > Note: the handoff references companion docs `AUDIT_v3.html` and
 > `IA_REIMAGINING.html` that were not part of the upload; the Wave D summary

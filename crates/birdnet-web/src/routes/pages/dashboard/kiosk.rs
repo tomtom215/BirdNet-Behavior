@@ -102,7 +102,7 @@ pub(super) async fn kiosk_content_partial(
   <div class="stat"><div class="value">{total}</div><div class="label">Total</div></div>
   <div class="stat"><div class="value">{species_n}</div><div class="label">Species</div></div>
 </div>
-<div class="recent">"#,
+<div class="recent" tabindex="0" role="group" aria-label="Recent detections">"#,
                 today_n = group_thousands(today_n),
                 total = group_thousands(total),
             );

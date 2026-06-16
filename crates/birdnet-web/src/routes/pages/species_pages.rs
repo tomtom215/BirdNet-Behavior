@@ -113,7 +113,10 @@ const FILTERS: &[(&str, &str)] = &[("all", "All"), ("week", "This week")];
 /// The controls row: view switcher (`sp-seg`) · filter chips (`sp-chips`, List
 /// and Photos only) · search (a GET form, so every view is bookmarkable).
 fn controls(view: &str, filter: &str, search: Option<&str>) -> String {
-    let mut seg = String::from(r#"<div class="sp-seg" role="tablist" aria-label="View">"#);
+    // A labelled group of navigation links (each loads a full page), with
+    // aria-current marking the active view — not an ARIA tablist, which would
+    // require role="tab" children and JS-controlled tabpanels.
+    let mut seg = String::from(r#"<div class="sp-seg" role="group" aria-label="View">"#);
     for (key, label) in VIEWS {
         let active = if *key == view { " active" } else { "" };
         let cur = if *key == view {

@@ -131,9 +131,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   labelled group each in the shell nav), so the gated admin area's information
   architecture matches the Station home's six tabs. Single source of truth;
   parity- and grouping-tested.
+- **Accessibility: the analytics charts now name and describe themselves.**
+  Every server-rendered inline-SVG chart (`viz/`) carries a `<title>` accessible
+  name and a one-sentence, jargon-free `<desc>` of what it encodes (e.g. "A
+  24-hour clock face with midnight at the top; each species' ribbon swells at
+  the hours of day it sang most"), replacing the bare `aria-label` so a screen
+  reader announces what the picture *means*, not merely that it exists. The
+  Recordings → Live detection trickle is now an `aria-live="polite"` region so
+  new detections are announced as they arrive (the Today feed already was). The
+  segmented controls (the Today log filter, the Species view switcher, the
+  display-preference toggles) drop the incorrect `role="tablist"`/`"radiogroup"`
+  they carried over plain `<button>`/`<a>` children — they are honest button/link
+  groups, now `role="group"` (the filter conveys its active state with
+  `aria-pressed`, the view switcher with `aria-current`) — and the kiosk's
+  scrolling recent-feed is now keyboard-focusable.
 
 ### Added
 
+- **CI: an accessibility gate and a structural visual-QA sweep.** A new
+  `a11y.yml` workflow boots the seeded `screenshot_server` fixture once and runs
+  two gates against it — **axe-core** (WCAG 2.1 A/AA, light + dark themes) fails
+  the build on any serious or critical violation, and the **`qa.mjs`** sweep
+  fails on a structural regression: horizontal overflow, console/page errors,
+  responses ≥ 400, broken images or stuck loaders. Path-filtered to web/tooling
+  changes; the visual gate is deterministic (no flaky pixel baselines). The axe
+  gate enforces every serious/critical rule except two deferred (with a written
+  rationale in `axe.mjs`) to a design-reviewed pass: `color-contrast` (the v3
+  palette renders each species' identity hue as text and uses a muted meta-text
+  hierarchy — an all-or-nothing design-token decision) and `link-in-text-block`
+  (an app-wide link-underline policy).
 - **Adopt duckdb-behavioral v0.8.0's new ClickHouse-parity functions.** The
   community `behavioral` extension served for the bundled DuckDB (v1.5.3) is now
   v0.8.0 (pin verified — no engine change needed), which adds `sequence_count`,

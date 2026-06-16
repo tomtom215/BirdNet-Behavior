@@ -75,11 +75,11 @@
                hx-swap="innerHTML"
                hx-include="#search-form">
       </span>
-      <div class="seg" role="tablist" aria-label="Filter">
-        <button type="button" class="btn active" data-filter="all">All</button>
-        <button type="button" class="btn" data-filter="rare">Rare</button>
-        <button type="button" class="btn" data-filter="first">First today</button>
-        <button type="button" class="btn" data-filter="high">High conf</button>
+      <div class="seg" role="group" aria-label="Filter">
+        <button type="button" class="btn active" data-filter="all" aria-pressed="true">All</button>
+        <button type="button" class="btn" data-filter="rare" aria-pressed="false">Rare</button>
+        <button type="button" class="btn" data-filter="first" aria-pressed="false">First today</button>
+        <button type="button" class="btn" data-filter="high" aria-pressed="false">High conf</button>
       </div>
       <span class="htmx-indicator bnb-meta">Searching…</span>
     </form>
@@ -179,8 +179,9 @@
       var btn = e.target.closest('button[data-filter]');
       if (!btn) return;
       e.preventDefault();
-      seg.querySelectorAll('button').forEach(function (b) { b.classList.remove('active'); });
+      seg.querySelectorAll('button').forEach(function (b) { b.classList.remove('active'); b.setAttribute('aria-pressed', 'false'); });
       btn.classList.add('active');
+      btn.setAttribute('aria-pressed', 'true');
       var hidden = form.querySelector('input[name="filter"]');
       if (!hidden) {
         hidden = document.createElement('input');
