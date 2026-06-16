@@ -88,6 +88,12 @@ export const ROUTES = [
   ['notfound', '/this-route-does-not-exist'],
 ];
 
+// Routes that are *expected* to return 404 — negative tests for the error
+// page. Their own 404 status and the browser's "Failed to load resource …
+// 404" console log are success, not regressions, so they are filtered out
+// below (anything else on the page — overflow, other errors — still counts).
+const EXPECT_404 = new Set(['notfound']);
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function diagnose(page) {
@@ -161,14 +167,25 @@ async function main() {
           await sleep(1400);
           const diag = await diagnose(page);
           await page.screenshot({ path: path.join(OUT, `${key}.png`), fullPage: true });
+          // For an expected-404 route, drop the route's own 404 (status + the
+          // browser's 404 resource log); keep every other signal.
+          const expect404 = EXPECT_404.has(name);
+          const consoleErrsF = expect404
+            ? consoleErrs.filter((m) => !/status of 404/i.test(m))
+            : consoleErrs;
+          const badF = bad.filter(
+            (b) =>
+              !b.includes('favicon') &&
+              !(expect404 && b.startsWith('404 ') && b.includes(route)),
+          );
           report[key] = {
             route, status: resp ? resp.status() : null,
-            consoleErrs, pageErrs,
+            consoleErrs: consoleErrsF, pageErrs,
             failed: failed.filter((f) => !f.includes('favicon')),
-            bad: bad.filter((b) => !b.includes('favicon')),
+            bad: badF,
             ...diag,
           };
-          const flag = (report[key].overflowX ? 'OVERFLOW ' : '') + (consoleErrs.length ? `ERR(${consoleErrs.length}) ` : '') + (report[key].imgBroken.length ? `IMG(${report[key].imgBroken.length}) ` : '') + (report[key].stuck.length ? 'STUCK ' : '');
+          const flag = (report[key].overflowX ? 'OVERFLOW ' : '') + (report[key].consoleErrs.length ? `ERR(${report[key].consoleErrs.length}) ` : '') + (report[key].imgBroken.length ? `IMG(${report[key].imgBroken.length}) ` : '') + (report[key].stuck.length ? 'STUCK ' : '');
           process.stdout.write(`${flag ? '! ' : '. '}${key} ${flag}\n`);
           n++;
         } catch (err) {
