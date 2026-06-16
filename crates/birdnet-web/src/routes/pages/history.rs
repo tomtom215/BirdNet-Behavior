@@ -7,6 +7,7 @@
 //! | Path | Purpose |
 //! |------|---------|
 //! | (embedded)                    | Reports home, "History" tab               |
+//! | `GET /reports/day`            | Full page — one past day's recap + log     |
 //! | `GET /pages/history-calendar` | HTMX partial — the month heat-grid         |
 //! | `GET /pages/history-chart`    | HTMX partial — a day's hourly chart + tops |
 //! | `GET /pages/history-dates`    | HTMX partial — flat date list (legacy)     |
@@ -15,13 +16,14 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use axum::extract::{Query, State};
-use axum::response::IntoResponse;
+use axum::http::HeaderMap;
+use axum::response::{Html, IntoResponse};
 use axum::{Router, routing::get};
 use serde::Deserialize;
 
-use super::atoms::avatar;
+use super::atoms::{avatar, conf_bar};
 use super::charts::render_hourly_chart;
-use super::{date_to_epoch_days, escape_html, today_date_string};
+use super::{date_to_epoch_days, escape_html, simple_url_encode, today_date_string};
 use crate::state::AppState;
 
 /// Month abbreviations for the calendar header.
@@ -43,6 +45,7 @@ const MONTHS: [&str; 12] = [
 /// Mount the detection history partial routes.
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/reports/day", get(day_page))
         .route("/pages/history-chart", get(history_chart_partial))
         .route("/pages/history-dates", get(history_dates_partial))
         .route("/pages/history-calendar", get(history_calendar_partial))
@@ -289,6 +292,44 @@ async fn history_chart_partial(
     axum::response::Html(html)
 }
 
+/// Full page: the "Open day" landing — a read-only recap of one past day,
+/// reached from the History day-detail panel's "Open day →" link. Shows the
+/// day's hourly shape, the species heard, and the *complete* detection log
+/// (the inline panel only has room for the top species).
+async fn day_page(
+    State(state): State<AppState>,
+    Query(params): Query<HistoryParams>,
+    headers: HeaderMap,
+) -> Html<String> {
+    let date = params
+        .date
+        .filter(|d| d.len() == 10)
+        .unwrap_or_else(today_date_string);
+
+    let date2 = date.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| {
+            let hours = birdnet_db::sqlite::hourly_activity(conn, &date)?;
+            let total = birdnet_db::sqlite::detection_count_for_date(conn, &date)?;
+            let species = birdnet_db::sqlite::species_for_date(conn, &date)?;
+            let rows = birdnet_db::sqlite::detections_by_date(conn, &date)?;
+            Ok::<_, birdnet_db::sqlite::DbError>((hours, total, species, rows))
+        })
+    })
+    .await;
+
+    let content = match result {
+        Ok(Ok((hours, total, species, rows))) => {
+            render_day_page(&date2, total, &species, &hours, &rows)
+        }
+        _ => r#"<a class="action" href="/reports?tab=history">‹ Back to history</a>
+<div class="bnb-card pad"><p class="error">Failed to load this day.</p></div>"#
+            .to_string(),
+    };
+    let title = format!("History · {date2}");
+    super::render_page_for_request(&title, &content, "reports", &headers)
+}
+
 /// HTMX partial: a flat list of dates with detections (legacy date browser).
 async fn history_dates_partial(State(state): State<AppState>) -> impl IntoResponse {
     let result = tokio::task::spawn_blocking(move || {
@@ -316,9 +357,19 @@ fn render_chart_content(
     hours: &[birdnet_db::sqlite::HourlyCount],
 ) -> String {
     let mut html = String::new();
+    // A day with detections gets an "Open day →" link to its full-page recap
+    // (the complete log won't fit this panel); an empty day has nothing to open.
+    let open_day = if total > 0 {
+        format!(
+            r#"<a class="action" href="/reports/day?date={d}">Open day →</a>"#,
+            d = simple_url_encode(date),
+        )
+    } else {
+        String::new()
+    };
     let _ = write!(
         html,
-        r#"<div class="section-header"><div><div class="bnb-eyebrow">{date} · {weekday}</div><h3>{total} detections · {n} species</h3></div></div>"#,
+        r#"<div class="section-header"><div><div class="bnb-eyebrow">{date} · {weekday}</div><h3>{total} detections · {n} species</h3></div>{open_day}</div>"#,
         date = escape_html(date),
         weekday = weekday_name(date),
         n = species.len(),
@@ -343,6 +394,90 @@ fn render_chart_content(
         }
     }
     html
+}
+
+/// The "Open day" full-page recap: a back link, the day's hourly shape, every
+/// species heard that day, and the complete chronological detection log.
+/// Read-only — managing detections stays on Today / Recordings.
+fn render_day_page(
+    date: &str,
+    total: i64,
+    species: &[(String, String, i64)],
+    hours: &[birdnet_db::sqlite::HourlyCount],
+    rows: &[birdnet_db::sqlite::DetectionRow],
+) -> String {
+    let mut html = String::new();
+    let _ = write!(
+        html,
+        r#"<a class="action" href="/reports?tab=history">‹ Back to history</a>
+<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">{weekday}</div><h3>{date}</h3><div class="bnb-meta">{total} detections · {n} species</div></div></div>"#,
+        weekday = weekday_name(date),
+        date = escape_html(date),
+        n = species.len(),
+    );
+
+    if total == 0 {
+        html.push_str(r#"<p class="bnb-meta">No detections were recorded on this day.</p></div>"#);
+        return html;
+    }
+
+    let _ = write!(
+        html,
+        r#"<div class="rp-viz">{chart}</div></div>"#,
+        chart = render_hourly_chart(hours),
+    );
+
+    // Every species heard that day (the panel only shows the top six).
+    html.push_str(r#"<div class="bnb-card pad"><div class="rp-h3">Species heard</div>"#);
+    for (i, (com, _sci, count)) in species.iter().enumerate() {
+        let _ = write!(
+            html,
+            r#"<div class="rp-row"><span class="rk">{rank}</span>{av}<a class="nm" href="/species/detail?name={enc}">{name}</a><span class="ct">{count}</span></div>"#,
+            rank = i + 1,
+            av = avatar(com, ""),
+            enc = simple_url_encode(com),
+            name = escape_html(com),
+        );
+    }
+    html.push_str("</div>");
+
+    // The complete log for the day, newest first.
+    html.push_str(
+        r#"<div class="bnb-card pad"><div class="rp-h3">Every detection · newest first</div>"#,
+    );
+    for d in rows {
+        render_day_log_row(&mut html, d);
+    }
+    html.push_str("</div>");
+    html
+}
+
+/// One read-only row of the Open-day log: avatar · species (→ detail) ·
+/// confidence · scientific name · the time (→ that detection's detail). The
+/// `tdl-card` treatment matches the Today log; the lock/delete/play affordances
+/// are dropped — a past day is for reading, not managing.
+fn render_day_log_row(html: &mut String, d: &birdnet_db::sqlite::DetectionRow) {
+    let enc_name = simple_url_encode(&d.com_name);
+    let _ = write!(
+        html,
+        "<div class=\"bnb-card tdl-card\">\
+         {av}\
+         <div class=\"tdl-card-main\">\
+         <div class=\"tdl-card-head\">\
+         <a href=\"/species/detail?name={enc_name}\" class=\"tdl-name\">{com}</a>\
+         {conf}\
+         </div>\
+         <div class=\"bnb-meta mono tdl-card-sci\">{sci} · \
+         <a href=\"/detections/detail?date={date_enc}&time={time_enc}&name={enc_name}\" class=\"tdl-time\">{time}</a></div>\
+         </div></div>",
+        av = avatar(&d.com_name, ""),
+        conf = conf_bar(d.confidence),
+        com = escape_html(&d.com_name),
+        sci = escape_html(&d.sci_name),
+        time = escape_html(&d.time),
+        date_enc = simple_url_encode(&d.date),
+        time_enc = simple_url_encode(&d.time),
+    );
 }
 
 /// Render a compact list of dates with detections (newest first, for sidebar).
@@ -487,5 +622,85 @@ mod tests {
     fn render_date_list_empty() {
         let html = render_date_list(&[]);
         assert!(html.contains("No detection history"));
+    }
+
+    fn row(com: &str, sci: &str, time: &str, conf: f64) -> birdnet_db::sqlite::DetectionRow {
+        birdnet_db::sqlite::DetectionRow {
+            date: "2026-06-14".into(),
+            time: time.into(),
+            sci_name: sci.into(),
+            com_name: com.into(),
+            confidence: conf,
+            lat: None,
+            lon: None,
+            cutoff: None,
+            week: None,
+            sens: None,
+            overlap: None,
+            file_name: None,
+            correlation_id: None,
+            source: None,
+        }
+    }
+
+    #[test]
+    fn open_day_link_present_only_with_detections() {
+        let species = vec![("Robin".to_string(), "Erithacus".to_string(), 3_i64)];
+        let hours = vec![birdnet_db::sqlite::HourlyCount {
+            hour: "06".into(),
+            count: 3,
+        }];
+        let with = render_chart_content("2026-06-14", 3, &species, &hours);
+        assert!(with.contains("Open day"));
+        assert!(with.contains("/reports/day?date="));
+        // An empty day has nothing to open.
+        let without = render_chart_content("2026-06-14", 0, &[], &[]);
+        assert!(!without.contains("Open day"));
+    }
+
+    #[test]
+    fn render_day_page_shows_recap_and_full_log() {
+        let species = vec![
+            (
+                "European Robin".to_string(),
+                "Erithacus rubecula".to_string(),
+                5_i64,
+            ),
+            (
+                "Blue Tit".to_string(),
+                "Cyanistes caeruleus".to_string(),
+                2_i64,
+            ),
+        ];
+        let hours = vec![birdnet_db::sqlite::HourlyCount {
+            hour: "06".into(),
+            count: 5,
+        }];
+        let rows = vec![
+            row("European Robin", "Erithacus rubecula", "06:12:00", 0.88),
+            row("Blue Tit", "Cyanistes caeruleus", "05:40:00", 0.71),
+        ];
+        let html = render_day_page("2026-06-14", 7, &species, &hours, &rows);
+        // Back link + header with the day's totals.
+        assert!(html.contains(r#"href="/reports?tab=history""#));
+        assert!(html.contains("2026-06-14"));
+        assert!(html.contains("7 detections · 2 species"));
+        // Species link out to their detail pages.
+        assert!(html.contains(r#"<a class="nm" href="/species/detail?name="#));
+        // The full log uses the tdl-card treatment with per-detection detail links…
+        assert!(html.contains("tdl-card"));
+        assert!(html.contains("/detections/detail?date="));
+        assert!(html.contains("European Robin") && html.contains("Blue Tit"));
+        // …and is read-only: no lock/delete actions leak through.
+        assert!(!html.contains("today-delete"));
+        assert!(!html.contains("today-lock"));
+    }
+
+    #[test]
+    fn render_day_page_empty_day_has_no_log() {
+        let html = render_day_page("2026-06-14", 0, &[], &[], &[]);
+        assert!(html.contains("No detections were recorded"));
+        assert!(html.contains("Back to history"));
+        assert!(!html.contains("tdl-card"));
     }
 }
