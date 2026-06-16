@@ -41,11 +41,14 @@
 > (`/reports/day`), have now landed (see "Landed (Wave D)" below).
 >
 > **Recordings — deliberate honest omissions (Wave D).** The mock's per-clip
-> spectrogram thumbnail and clip-duration columns have no cheap, honest
-> server-side source today (no stored thumbnail; duration isn't persisted), so
-> the Clips grid omits both rather than render a decorative fake — tracked as
-> Wave D (a cached thumbnail at extraction time; a persisted duration). Per-row
-> "rare/first" badges are likewise deferred; the Rare filter chip already
+> **clip-duration** column now has an honest backing — migration 20 persists
+> `Duration_Secs` (the daemon reads the source file's length from its header via
+> `decode::probe_duration_secs`), and the Clips grid renders it as `M:SS`,
+> omitting it only for rows with no recorded length. The per-clip **spectrogram
+> thumbnail** still has no cheap server-side source (no stored thumbnail), so it
+> stays omitted rather than faked — tracked as Wave D (a cached thumbnail at
+> extraction time). Per-row "rare/first" badges are likewise deferred; the Rare
+> filter chip already
 > surfaces those clips.
 
 Source of truth: the Claude Design handover packet in this directory
