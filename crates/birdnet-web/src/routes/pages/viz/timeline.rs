@@ -14,7 +14,7 @@
 
 use std::fmt::Write as _;
 
-use super::EMPTY;
+use super::{EMPTY, svg_a11y};
 use crate::routes::pages::atoms::{species_code, species_color};
 use crate::routes::pages::escape_html;
 
@@ -45,8 +45,12 @@ pub fn streamgraph(series: &[(String, Vec<i64>)]) -> String {
     let val_y = |v: f64| mid - v * scale;
 
     let mut svg = format!(
-        r#"<div class="viz-scroll"><svg width="100%" viewBox="0 0 {w:.0} {h:.0}" preserveAspectRatio="none" role="img" aria-label="Activity streamgraph" class="viz-svg-block">"#
+        r#"<div class="viz-scroll"><svg width="100%" viewBox="0 0 {w:.0} {h:.0}" preserveAspectRatio="none" role="img" class="viz-svg-block">"#
     );
+    svg.push_str(&svg_a11y(
+        "Activity streamgraph",
+        "Detections per day over time as a centred stack; each coloured band is one species and its thickness is that day's count.",
+    ));
 
     // Stack bands from a centred baseline.
     for (name, counts) in series {
@@ -139,8 +143,12 @@ pub fn accumulation_curve(points: &[(String, i64)]) -> String {
     );
 
     let mut svg = format!(
-        r#"<svg width="100%" viewBox="0 0 {w:.0} {h:.0}" preserveAspectRatio="none" role="img" aria-label="Species accumulation over time" class="viz-svg-block">"#
+        r#"<svg width="100%" viewBox="0 0 {w:.0} {h:.0}" preserveAspectRatio="none" role="img" class="viz-svg-block">"#
     );
+    svg.push_str(&svg_a11y(
+        "Species accumulation over time",
+        "A rising line showing how many distinct species have been recorded as time goes on.",
+    ));
     let _ = write!(
         svg,
         r#"<line x1="{pad_l:.1}" y1="{base:.1}" x2="{w:.1}" y2="{base:.1}" stroke="var(--hairline)" stroke-width="0.5"/>"#,
@@ -212,8 +220,13 @@ pub fn ridgeline(series: &[(String, Vec<i64>)]) -> String {
     defs.push_str("</defs>");
 
     let mut svg = format!(
-        r#"<div class="viz-scroll"><svg width="{w:.0}" height="{h:.0}" viewBox="0 0 {w:.0} {h:.0}" role="img" aria-label="Migration phenology ridgeline">{defs}"#
+        r#"<div class="viz-scroll"><svg width="{w:.0}" height="{h:.0}" viewBox="0 0 {w:.0} {h:.0}" role="img">"#
     );
+    svg.push_str(&svg_a11y(
+        "Migration phenology ridgeline",
+        "One ridge per species across the year; each ridge peaks in the weeks that species was most abundant, with spring and fall migration bands behind.",
+    ));
+    svg.push_str(&defs);
 
     // Spring (~weeks 12–21) and fall (~weeks 30–43) migration bands, behind.
     let yb = h - bottom;
@@ -306,14 +319,15 @@ pub fn day_strip(
 
     // The accessible description only promises markers that are actually
     // drawn — without a location there are no sunrise/sunset lines.
-    let aria = if solar.is_some() {
+    let desc = if solar.is_some() {
         "Hourly detection counts across the day, with sunrise, sunset and now markers"
     } else {
         "Hourly detection counts across the day, with a now marker"
     };
     let mut svg = format!(
-        r#"<svg viewBox="0 0 {w:.0} {h:.0}" width="100%" height="auto" role="img" aria-label="{aria}" class="viz-svg-block">"#
+        r#"<svg viewBox="0 0 {w:.0} {h:.0}" width="100%" height="auto" role="img" class="viz-svg-block">"#
     );
+    svg.push_str(&svg_a11y("Activity across the day", desc));
 
     // Night bands (midnight→sunrise, sunset→midnight) — only with a location.
     if let Some((sunrise, sunset)) = solar {
@@ -457,6 +471,9 @@ mod tests {
         let svg = streamgraph(&series);
         assert!(svg.contains("<svg") && svg.contains("<path"));
         assert!(svg.contains("Blue Jay"));
+        assert!(svg.contains("<title>Activity streamgraph</title>"));
+        assert!(svg.contains("<desc>Detections per day"));
+        assert!(!svg.contains("aria-label"));
     }
 
     #[test]
@@ -469,6 +486,9 @@ mod tests {
         ];
         let svg = accumulation_curve(&pts);
         assert!(svg.contains("<svg") && svg.contains("12 species"));
+        assert!(svg.contains("<title>Species accumulation over time</title>"));
+        assert!(svg.contains("<desc>A rising line"));
+        assert!(!svg.contains("aria-label"));
     }
 
     #[test]
@@ -480,6 +500,12 @@ mod tests {
         ];
         let svg = ridgeline(&s);
         assert!(svg.contains("<svg") && svg.contains("BLJA"));
+        assert!(svg.contains("<title>Migration phenology ridgeline</title>"));
+        assert!(svg.contains("<desc>One ridge per species"));
+        assert!(!svg.contains("aria-label"));
+        // <title>/<desc> precede <defs> so they are the SVG's first children.
+        let svg_open = svg.find("<svg").unwrap();
+        assert!(svg[svg_open..].find("<title>") < svg[svg_open..].find("<defs>"));
     }
 
     #[test]
@@ -501,6 +527,12 @@ mod tests {
         assert!(svg.contains("now")); // current-time pill
         // The pre-spine per-detection hue dots are gone (a11y decision).
         assert!(!svg.contains("data-species-fill"));
+        // Accessible name + an honest description that names the solar markers.
+        assert!(svg.contains("<title>Activity across the day</title>"));
+        assert!(svg.contains(
+            "<desc>Hourly detection counts across the day, with sunrise, sunset and now markers</desc>"
+        ));
+        assert!(!svg.contains("aria-label"));
     }
 
     #[test]
@@ -512,5 +544,9 @@ mod tests {
         // No solar facts → no sun lines and no night bands (never fake them).
         assert!(!svg.contains("sunrise"));
         assert!(!svg.contains("var(--night)"));
+        // The honest description promises only the markers actually drawn.
+        assert!(
+            svg.contains("<desc>Hourly detection counts across the day, with a now marker</desc>")
+        );
     }
 }

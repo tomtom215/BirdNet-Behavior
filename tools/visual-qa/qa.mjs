@@ -20,6 +20,7 @@
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const BASE = process.env.BASE || 'http://127.0.0.1:8502';
 const OUT = process.env.OUT || 'shots';
@@ -86,6 +87,12 @@ export const ROUTES = [
   ['admin-migrate', '/admin/migrate'],
   ['notfound', '/this-route-does-not-exist'],
 ];
+
+// Routes that are *expected* to return 404 — negative tests for the error
+// page. Their own 404 status and the browser's "Failed to load resource …
+// 404" console log are success, not regressions, so they are filtered out
+// below (anything else on the page — overflow, other errors — still counts).
+const EXPECT_404 = new Set(['notfound']);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -160,14 +167,25 @@ async function main() {
           await sleep(1400);
           const diag = await diagnose(page);
           await page.screenshot({ path: path.join(OUT, `${key}.png`), fullPage: true });
+          // For an expected-404 route, drop the route's own 404 (status + the
+          // browser's 404 resource log); keep every other signal.
+          const expect404 = EXPECT_404.has(name);
+          const consoleErrsF = expect404
+            ? consoleErrs.filter((m) => !/status of 404/i.test(m))
+            : consoleErrs;
+          const badF = bad.filter(
+            (b) =>
+              !b.includes('favicon') &&
+              !(expect404 && b.startsWith('404 ') && b.includes(route)),
+          );
           report[key] = {
             route, status: resp ? resp.status() : null,
-            consoleErrs, pageErrs,
+            consoleErrs: consoleErrsF, pageErrs,
             failed: failed.filter((f) => !f.includes('favicon')),
-            bad: bad.filter((b) => !b.includes('favicon')),
+            bad: badF,
             ...diag,
           };
-          const flag = (report[key].overflowX ? 'OVERFLOW ' : '') + (consoleErrs.length ? `ERR(${consoleErrs.length}) ` : '') + (report[key].imgBroken.length ? `IMG(${report[key].imgBroken.length}) ` : '') + (report[key].stuck.length ? 'STUCK ' : '');
+          const flag = (report[key].overflowX ? 'OVERFLOW ' : '') + (report[key].consoleErrs.length ? `ERR(${report[key].consoleErrs.length}) ` : '') + (report[key].imgBroken.length ? `IMG(${report[key].imgBroken.length}) ` : '') + (report[key].stuck.length ? 'STUCK ' : '');
           process.stdout.write(`${flag ? '! ' : '. '}${key} ${flag}\n`);
           n++;
         } catch (err) {
@@ -202,6 +220,23 @@ async function main() {
     if (v.stuck?.length) parts.push(`stuck=${JSON.stringify(v.stuck)}`);
     console.log(`  ${k}: ${parts.join(' | ')}`);
   }
+
+  // STRICT mode (CI gate): any structural regression — horizontal overflow,
+  // console/page errors, >=400 responses, broken images, stuck loaders — fails
+  // the run. Local exploratory runs (no STRICT) always exit 0 as before.
+  if (process.env.STRICT && probs.length) {
+    console.error(`\nSTRICT: failing — ${probs.length} page/state(s) with issues.`);
+    process.exitCode = 1;
+  }
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+// Only auto-run when executed directly (`node qa.mjs`); when another script
+// imports { ROUTES } from this module it must not launch a capture run.
+const invokedDirectly =
+  process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (invokedDirectly) {
+  main().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+}

@@ -5,11 +5,14 @@
   "description": "Headless-browser screenshot pipeline for visual QA of the birdnet-web UI. Pair with `cargo run -p birdnet-web --example screenshot_server`.",
   "type": "module",
   "scripts": {
-    "setup": "npm i -D playwright && npx playwright install --with-deps chromium",
+    "setup": "npm i -D playwright @axe-core/playwright && npx playwright install --with-deps chromium",
     "capture": "node capture.mjs",
-    "probe": "node probe.mjs"
+    "probe": "node probe.mjs",
+    "axe": "node axe.mjs",
+    "qa": "node qa.mjs"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.11.3",
     "playwright": "^1.49.0"
   }
 }

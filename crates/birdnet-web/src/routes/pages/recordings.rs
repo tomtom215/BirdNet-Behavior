@@ -412,7 +412,7 @@ async fn live_view(state: &AppState, source: Option<&str>) -> String {
     <div><div class="bnb-eyebrow">As it happens</div><h3>Live detections</h3></div>
     <a class="action" href="/">Full feed →</a>
   </div>
-  <div id="rc-trickle-feed" class="feed" hx-get="/pages/detections" hx-trigger="load, every 10s" hx-swap="innerHTML">{trickle_skel}</div>
+  <div id="rc-trickle-feed" class="feed" hx-get="/pages/detections" hx-trigger="load, every 10s" hx-swap="innerHTML" aria-live="polite">{trickle_skel}</div>
 </div>"#
     )
 }

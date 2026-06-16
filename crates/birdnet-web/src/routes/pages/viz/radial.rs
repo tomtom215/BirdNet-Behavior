@@ -14,7 +14,7 @@
 
 use std::fmt::Write as _;
 
-use super::EMPTY;
+use super::{EMPTY, svg_a11y};
 use crate::routes::pages::atoms::species_color;
 use crate::routes::pages::escape_html;
 
@@ -51,8 +51,12 @@ pub fn circadian_polar(series: &[(String, [f64; 24])], now_h: f64) -> String {
     let amp = band * 0.42;
 
     let mut svg = format!(
-        r#"<svg width="{size:.0}" height="{size:.0}" viewBox="0 0 {size:.0} {size:.0}" role="img" aria-label="Dawn chorus circadian plot" class="viz-svg-center">"#
+        r#"<svg width="{size:.0}" height="{size:.0}" viewBox="0 0 {size:.0} {size:.0}" role="img" class="viz-svg-center">"#
     );
+    svg.push_str(&svg_a11y(
+        "Dawn chorus circadian plot",
+        "A 24-hour clock face with midnight at the top; each species' ribbon swells at the hours of day it sang most.",
+    ));
 
     // Night wedge (≈20:00 → 05:00, wrapping through midnight at the top).
     {
@@ -248,8 +252,12 @@ pub fn chord_diagram(labels: &[String], m: &[Vec<f64>]) -> String {
     ribbons.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
 
     let mut svg = format!(
-        r#"<svg viewBox="0 0 {size:.0} {size:.0}" width="100%" role="img" aria-label="Acoustic co-occurrence network" class="viz-svg-chord">"#
+        r#"<svg viewBox="0 0 {size:.0} {size:.0}" width="100%" role="img" class="viz-svg-chord">"#
     );
+    svg.push_str(&svg_a11y(
+        "Acoustic co-occurrence network",
+        "Species arranged on a ring; a thicker ribbon joins two species that were heard together in the same five-minute window more often.",
+    ));
 
     // Gradient defs (one per ribbon, oriented midpoint → midpoint).
     svg.push_str("<defs>");
@@ -341,6 +349,10 @@ mod tests {
         assert!(svg.contains("<svg") && svg.contains("12a") && svg.contains("6a"));
         // The dashed current-time hand renders for an in-range hour.
         assert!(svg.contains("stroke-dasharray"));
+        // Accessible name + description replace the bare aria-label.
+        assert!(svg.contains("<title>Dawn chorus circadian plot</title>"));
+        assert!(svg.contains("<desc>A 24-hour clock face"));
+        assert!(!svg.contains("aria-label"));
     }
 
     #[test]
@@ -356,5 +368,9 @@ mod tests {
         assert!(svg.contains("chord-ribbon"));
         assert!(svg.contains("co-occurrence"));
         assert!(svg.contains("Blue Jay"));
+        // Accessible name + description replace the bare aria-label.
+        assert!(svg.contains("<title>Acoustic co-occurrence network</title>"));
+        assert!(svg.contains("<desc>Species arranged on a ring;"));
+        assert!(!svg.contains("aria-label"));
     }
 }
