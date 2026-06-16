@@ -68,6 +68,7 @@ export const ROUTES = [
   ['weekly', '/weekly'],
   ['year-in-review', '/year-in-review'],
   ['history', '/history'],
+  ['reports-day', '/reports/day'],
   ['notifications', '/notifications'],
   ['quarantine', '/quarantine'],
   ['system', '/system'],
