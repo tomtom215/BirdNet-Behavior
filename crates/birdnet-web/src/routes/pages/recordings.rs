@@ -263,6 +263,14 @@ fn render_clips_block(
 }
 
 /// Render a single clip row (checkbox · time · who · confidence · actions).
+/// Format a saved clip's length for the grid — `9.2` → `"0:09"`,
+/// `75.0` → `"1:15"` (the `M:SS` an audio player would show).
+#[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+fn fmt_clip_duration(secs: f64) -> String {
+    let total = secs.round().max(0.0) as u64;
+    format!("{}:{:02}", total / 60, total % 60)
+}
+
 fn render_clip_row(html: &mut String, d: &DetectionRow, locked: &HashSet<String>) {
     let file = d.file_name.as_deref().unwrap_or_default();
     let base = base_name(file);
@@ -286,11 +294,19 @@ fn render_clip_row(html: &mut String, d: &DetectionRow, locked: &HashSet<String>
     let time_raw = escape_html(&d.time);
     let sci_raw = escape_html(&d.sci_name);
 
+    // The saved clip's length (migration 20), shown under the time. Omitted —
+    // not faked — for rows with no recorded duration (historical / imported).
+    let dur = d
+        .duration_secs
+        .filter(|s| *s > 0.0)
+        .map(|s| format!(r#"<span class="rc-dur">{}</span>"#, fmt_clip_duration(s)))
+        .unwrap_or_default();
+
     let _ = write!(
         html,
         r#"<div class="rc-row" data-key="{key}">
   <span class="rc-check" role="checkbox" aria-checked="false" tabindex="0" aria-label="Select {com_name}"></span>
-  <span class="rc-time">{time}<span class="d">{date}</span></span>
+  <span class="rc-time">{time}<span class="d">{date}</span>{dur}</span>
   <span class="rc-who">{av}<span class="rc-who-text"><a class="nm" href="/species/detail?name={enc_name}">{com_name}</a><span class="sc">{sci_name}</span></span></span>
   <span class="rc-conf">{conf}</span>
   <span class="rc-acts">
@@ -521,5 +537,49 @@ mod tests {
         assert!(filtered.contains("No clips match"));
         // A later empty page is silent (just the end of the list).
         assert!(render_clips_block(&[], &none, RecordingsFilter::All, None, 24, 100).is_empty());
+    }
+
+    fn clip_row(duration_secs: Option<f64>) -> DetectionRow {
+        DetectionRow {
+            date: "2026-06-13".into(),
+            time: "06:12:00".into(),
+            sci_name: "Turdus migratorius".into(),
+            com_name: "American Robin".into(),
+            confidence: 0.91,
+            lat: None,
+            lon: None,
+            cutoff: None,
+            week: None,
+            sens: None,
+            overlap: None,
+            file_name: Some("robin.wav".into()),
+            correlation_id: None,
+            source: None,
+            duration_secs,
+        }
+    }
+
+    #[test]
+    fn fmt_clip_duration_formats_as_m_ss() {
+        assert_eq!(fmt_clip_duration(9.2), "0:09");
+        assert_eq!(fmt_clip_duration(75.0), "1:15");
+        assert_eq!(fmt_clip_duration(0.0), "0:00");
+        assert_eq!(fmt_clip_duration(125.6), "2:06");
+    }
+
+    #[test]
+    fn clip_row_shows_duration_when_present_and_omits_when_absent() {
+        let locked = HashSet::new();
+        let mut with = String::new();
+        render_clip_row(&mut with, &clip_row(Some(9.2)), &locked);
+        assert!(with.contains(r#"<span class="rc-dur">0:09</span>"#));
+        // None → no rc-dur element (historical / imported rows aren't faked).
+        let mut without = String::new();
+        render_clip_row(&mut without, &clip_row(None), &locked);
+        assert!(!without.contains("rc-dur"));
+        // A zero/unknown length is also omitted, never rendered as "0:00".
+        let mut zero = String::new();
+        render_clip_row(&mut zero, &clip_row(Some(0.0)), &locked);
+        assert!(!zero.contains("rc-dur"));
     }
 }

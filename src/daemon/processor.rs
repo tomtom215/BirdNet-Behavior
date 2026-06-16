@@ -589,6 +589,42 @@ mod tests {
         assert_eq!(recent[0].correlation_id.as_deref(), Some("test-corr-abc"));
     }
 
+    #[tokio::test]
+    async fn event_processor_persists_clip_duration_from_source_file() {
+        // The processor probes the source file's length and persists it
+        // (migration 20) so the Recordings grid shows a real duration. A real
+        // 2-second WAV must round-trip to ~2.0 s — this also kills a mutant
+        // that drops the probe (the duration would then read back NULL).
+        let tmp = tempfile::tempdir().unwrap();
+        let wav = tmp.path().join("clip.wav");
+        {
+            use hound::{SampleFormat, WavSpec, WavWriter};
+            let spec = WavSpec {
+                channels: 1,
+                sample_rate: 48_000,
+                bits_per_sample: 16,
+                sample_format: SampleFormat::Int,
+            };
+            let mut w = WavWriter::create(&wav, spec).unwrap();
+            for _ in 0..96_000 {
+                w.write_sample(0_i16).unwrap(); // 96_000 / 48_000 = 2.0 s
+            }
+            w.finalize().unwrap();
+        }
+
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let ev = make_event("Pica pica", "Eurasian Magpie", 0.95, wav, "test-dur");
+        run_processor(&state, vec![ev], HashMap::new(), 0.25).await;
+
+        let recent = state
+            .with_db(|conn| birdnet_db::sqlite::recent_detections(conn, 1).unwrap_or_default());
+        assert_eq!(recent.len(), 1);
+        let dur = recent[0]
+            .duration_secs
+            .expect("the saved clip's duration is persisted");
+        assert!((dur - 2.0).abs() < 1e-3, "expected ~2.0 s, got {dur}");
+    }
+
     // ── event_processor: disposition + alert-rule branches ──────────────
     //
     // The accepted-event test above walks the happy path. These extend the

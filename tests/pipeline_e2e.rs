@@ -108,6 +108,7 @@ async fn detection_persists_and_surfaces_on_web_api() {
         chunk_offset_secs: Some(3.0),
         correlation_id: Some("pipeline-e2e-0001"),
         source: None,
+        duration_secs: None,
     };
     state
         .with_db(|conn| insert_detection(conn, &record))
@@ -216,6 +217,7 @@ async fn full_pipeline_audio_to_web_model_gated() {
                 chunk_offset_secs: Some(f64::from(d.start)),
                 correlation_id: None,
                 source: None,
+                duration_secs: None,
             };
             state
                 .with_db(|conn| insert_detection(conn, &record))

@@ -104,6 +104,7 @@ async fn soak_insertions_stay_bounded() {
             chunk_offset_secs: Some(i as f64),
             correlation_id: None,
             source: None,
+            duration_secs: None,
         };
         state
             .with_db(|conn| insert_detection(conn, &record))
@@ -183,6 +184,7 @@ fn insert_n(conn: &rusqlite::Connection, base: usize, count: usize) {
             chunk_offset_secs: Some(i as f64),
             correlation_id: None,
             source: None,
+            duration_secs: None,
         };
         insert_detection(conn, &record).expect("insert failed");
     }
