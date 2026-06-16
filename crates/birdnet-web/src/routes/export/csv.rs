@@ -241,6 +241,7 @@ mod tests {
             file_name: Some("test.wav".into()),
             correlation_id: None,
             source: None,
+            duration_secs: None,
         };
         let csv = detections_to_csv(&[row]);
         let lines: Vec<&str> = csv.lines().collect();

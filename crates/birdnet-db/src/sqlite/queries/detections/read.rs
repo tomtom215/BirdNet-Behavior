@@ -752,6 +752,7 @@ mod tests {
             chunk_offset_secs: Some(0.0),
             correlation_id: None,
             source: None,
+            duration_secs: None,
         };
         insert_detection(&conn, &record).unwrap();
 
@@ -864,6 +865,7 @@ mod tests {
                 chunk_offset_secs: Some(0.0),
                 correlation_id: None,
                 source: src,
+                duration_secs: None,
             };
             insert_detection(&conn, &r).unwrap();
         };
@@ -1127,6 +1129,7 @@ mod tests {
                 chunk_offset_secs: Some(0.0),
                 correlation_id: None,
                 source: None,
+                duration_secs: None,
             };
             insert_detection(&conn, &record).unwrap();
         };
@@ -1236,6 +1239,7 @@ mod tests {
                 chunk_offset_secs: Some(0.0),
                 correlation_id: None,
                 source: None,
+                duration_secs: None,
             };
             insert_detection(&conn, &record).unwrap();
         };
@@ -1374,6 +1378,7 @@ mod tests {
                 chunk_offset_secs: Some(0.0),
                 correlation_id: None,
                 source,
+                duration_secs: None,
             };
             insert_detection(&conn, &record).unwrap();
         };

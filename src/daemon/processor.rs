@@ -117,6 +117,12 @@ pub(super) fn event_processor(
         // (so multi-stream detections are attributable) and feeds the per-source
         // liveness gauge below.
         let source_label = derive_source_label(&event.source_file);
+        // The saved clip's length, read cheaply from the file header (no
+        // re-decode of the samples the pipeline already decoded). Persisted so
+        // the Recordings grid can show a real duration; `None` when the header
+        // doesn't record it, in which case the column stays NULL — never faked.
+        let source_duration_secs =
+            birdnet_core::audio::decode::probe_duration_secs(&event.source_file);
         let record = birdnet_db::sqlite::DetectionRecord {
             date: &detection.date,
             time: &detection.time,
@@ -147,6 +153,7 @@ pub(super) fn event_processor(
                 Some(correlation_id)
             },
             source: Some(&source_label),
+            duration_secs: source_duration_secs,
         };
 
         let metrics = state.metrics();

@@ -491,6 +491,19 @@ pub const MIGRATIONS: &[Migration] = &[
         CREATE INDEX IF NOT EXISTS idx_outbound_queue_due
             ON outbound_queue (kind, next_attempt_at);",
     },
+    Migration {
+        version: 20,
+        description: "Add Duration_Secs to detections for the saved clip's length",
+        // The Recordings Clips browser wants to show how long each saved clip
+        // is. The extractor already knows the extracted clip's length (its
+        // sample count ÷ sample rate); persist it so the grid renders a real
+        // duration instead of omitting the column. Nullable like
+        // `correlation_id` / `Source`: historical and BirdNET-Pi-imported rows,
+        // and the quarantine-approve path (which re-inserts without
+        // re-extracting), have no clip length to record and stay NULL — never a
+        // faked value. Not indexed: nothing filters or sorts by duration.
+        up_sql: "ALTER TABLE detections ADD COLUMN Duration_Secs REAL;",
+    },
 ];
 
 /// Ensure the `schema_version` tracking table exists.

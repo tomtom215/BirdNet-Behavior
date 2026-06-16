@@ -107,7 +107,7 @@ fn find_detection(
 
     if com_name.is_empty() {
         conn.query_row(
-            "SELECT Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id, Source
+            "SELECT Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id, Source, Duration_Secs
              FROM detections WHERE Date = ?1 AND Time = ?2 LIMIT 1",
             params![date, time],
             |row| Ok(DetectionRow {
@@ -125,11 +125,12 @@ fn find_detection(
                 file_name: row.get(11)?,
                 correlation_id: row.get(12)?,
                 source: row.get(13)?,
+                duration_secs: row.get(14)?,
             }),
         ).ok()
     } else {
         conn.query_row(
-            "SELECT Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id, Source
+            "SELECT Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id, Source, Duration_Secs
              FROM detections WHERE Date = ?1 AND Time = ?2 AND Com_Name = ?3 LIMIT 1",
             params![date, time, com_name],
             |row| Ok(DetectionRow {
@@ -147,6 +148,7 @@ fn find_detection(
                 file_name: row.get(11)?,
                 correlation_id: row.get(12)?,
                 source: row.get(13)?,
+                duration_secs: row.get(14)?,
             }),
         ).ok()
     }
@@ -419,6 +421,7 @@ mod tests {
             file_name: None,
             correlation_id: id.map(str::to_owned),
             source: None,
+            duration_secs: None,
         }
     }
 
