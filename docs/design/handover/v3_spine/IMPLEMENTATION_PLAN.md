@@ -49,19 +49,20 @@
 > today"/"rare" badges** now land too — keyed on each species' first-ever date
 > via the existing `species_first_seen` query (same signal as the Today feed),
 > reusing `bnb-pill` styling. The per-clip **spectrogram thumbnail** now lands
-> too — a pure-Rust `birdnet-core::audio::spectrogram::thumbnail` renderer
-> (existing mel pipeline → magma colormap → PNG) drives a new
-> `GET /api/v2/recordings/{file}/spectrogram.png` route that renders the preview
-> from the *same* audio the player streams, caches it under the data dir's
-> `spectrograms/`, and serves later views from disk. The grid links a
+> too — by **reusing the existing `/api/v2/spectrogram/{file}` endpoint** (the
+> same renderer, viridis colormap and byte-budgeted in-memory cache the
+> detection-detail view already uses) rather than building a second system. That
+> endpoint gains a `?thumb=1` mode that max-pools the time axis down to a small
+> fixed width (a few KB instead of a multi-thousand-pixel image; brief calls
+> survive the shrink), cached separately from the full render. The grid links a
 > lazy-loaded thumbnail only for rows whose audio is present (one per-page
 > directory scan, mirroring the locked-clip set — no per-row stat, no schema
 > change, historical clips covered); absent-audio rows show an empty aligned
-> spacer, never a broken image or a faked tile. This was chosen over the
-> originally-sketched "generate at extraction time + store" because the
-> lazy-generate-and-cache path needs no migration, no daemon/extractor change
-> (so no mutation-gate surface), and covers every existing clip — the same
-> user-visible outcome (a cached PNG served + rendered) at far lower risk. **All
+> spacer, never a broken image or a faked tile. This reuse was chosen over both
+> the originally-sketched "generate at extraction time + store" (which would have
+> needed a migration and a daemon/extractor change) and a standalone renderer
+> (which would have duplicated the endpoint and added a PNG dependency) — same
+> user-visible outcome, lowest risk, no new code paths to maintain. **All
 > Recordings honest omissions are now closed.**
 
 Source of truth: the Claude Design handover packet in this directory

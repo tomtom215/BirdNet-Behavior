@@ -360,13 +360,14 @@ fn render_clip_row(html: &mut String, d: &DetectionRow, page: &ClipsData, today:
             }
         });
 
-    // Spectrogram thumbnail — a small preview generated (and cached) from the
-    // same audio the play button streams. Linked only when the clip's audio is
-    // present (the same gate playback effectively has); absent rows get an empty
-    // aligned spacer rather than a broken image or a faked tile.
+    // Spectrogram thumbnail — the small `?thumb=1` preview from the shared
+    // `/api/v2/spectrogram/{file}` endpoint (same renderer + cache the detail
+    // view uses, so the tile matches the full image). Linked only when the
+    // clip's audio is present (the same gate playback effectively has); absent
+    // rows get an empty aligned spacer rather than a broken image or a faked tile.
     let spectro = if !base.is_empty() && page.present.contains(&base) {
         format!(
-            r#"<img class="rc-spectro" width="104" height="31" loading="lazy" decoding="async" src="/api/v2/recordings/{safe_file}/spectrogram.png" alt="Spectrogram of {com_name}">"#
+            r#"<img class="rc-spectro" width="104" height="31" loading="lazy" decoding="async" src="/api/v2/spectrogram/{safe_file}?thumb=1" alt="Spectrogram of {com_name}">"#
         )
     } else {
         r#"<span class="rc-spectro rc-spectro-empty" aria-hidden="true"></span>"#.to_string()
@@ -756,8 +757,8 @@ mod tests {
             "2026-06-13",
         );
         assert!(
-            shown.contains(r#"src="/api/v2/recordings/robin.wav/spectrogram.png""#),
-            "expected the spectrogram thumbnail src; got: {shown}"
+            shown.contains(r#"src="/api/v2/spectrogram/robin.wav?thumb=1""#),
+            "expected the shared spectrogram endpoint thumb src; got: {shown}"
         );
         assert!(shown.contains(r#"class="rc-spectro""#));
         assert!(shown.contains(r#"loading="lazy""#));
@@ -774,7 +775,7 @@ mod tests {
             "2026-06-13",
         );
         assert!(absent.contains("rc-spectro-empty"));
-        assert!(!absent.contains("spectrogram.png"));
+        assert!(!absent.contains("/api/v2/spectrogram/"));
         assert!(!absent.contains("<img"));
     }
 }

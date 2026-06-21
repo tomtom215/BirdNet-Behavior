@@ -60,6 +60,13 @@ pub fn router() -> Router<AppState> {
 /// uncached spectrograms still renders them all (just serialised past the cap).
 const MAX_CONCURRENT_RENDERS: usize = 4;
 
+/// Fixed time-axis width, in pixels, of a Recordings-grid thumbnail (`?thumb=1`).
+///
+/// Roughly 3× the ~104 px the grid renders the tile at, so it stays crisp on
+/// hi-dpi while a long clip ships ~a few KB instead of a multi-thousand-pixel
+/// full-resolution image. Frequency rows (mel bands) are kept as-is.
+const THUMB_WIDTH: u32 = 320;
+
 /// Process-global permit pool bounding concurrent spectrogram rendering.
 static RENDER_SLOTS: LazyLock<Arc<Semaphore>> =
     LazyLock::new(|| Arc::new(Semaphore::new(MAX_CONCURRENT_RENDERS)));
@@ -82,12 +89,14 @@ static SPECTROGRAM_CACHE: LazyLock<Mutex<SpectrogramCache>> =
 /// `mtime` invalidates the entry when a recording is overwritten so a stale PNG
 /// is never served. The label (species / confidence / time) is part of the key
 /// because it alters the rendered pixels — two requests for the same file with
-/// different overlays are distinct images.
+/// different overlays are distinct images. `thumb` likewise: the small grid
+/// preview and the full-size image for one file are different renders.
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct CacheKey {
     filename: String,
     mtime: Option<Duration>,
     label: Option<(String, u32, String)>,
+    thumb: bool,
 }
 
 /// Byte-budgeted, insertion-order (FIFO) cache of rendered spectrogram PNGs.
@@ -173,6 +182,10 @@ struct SpectrogramQuery {
     species: Option<String>,
     confidence: Option<u32>,
     time: Option<String>,
+    /// When set (`?thumb=1`), render a small fixed-width preview for the
+    /// Recordings grid instead of the full-resolution image. A thumbnail is
+    /// always bare (no overlay label).
+    thumb: Option<u32>,
 }
 
 async fn serve_spectrogram(
@@ -200,12 +213,20 @@ async fn serve_spectrogram(
         }
     }
 
+    // A thumbnail (the Recordings grid preview) is always bare — no overlay,
+    // small fixed width — so it ignores the label params entirely.
+    let thumb = query.thumb.is_some_and(|v| v != 0);
+
     // Build the optional overlay label, plus a matching cache-key fragment.
-    let label = query.species.map(|species| SpectrogramLabel {
-        species,
-        confidence_pct: query.confidence.unwrap_or(0),
-        time: query.time.unwrap_or_default(),
-    });
+    let label = if thumb {
+        None
+    } else {
+        query.species.map(|species| SpectrogramLabel {
+            species,
+            confidence_pct: query.confidence.unwrap_or(0),
+            time: query.time.unwrap_or_default(),
+        })
+    };
     let label_key = label
         .as_ref()
         .map(|l| (l.species.clone(), l.confidence_pct, l.time.clone()));
@@ -222,6 +243,7 @@ async fn serve_spectrogram(
         filename: filename.clone(),
         mtime,
         label: label_key,
+        thumb,
     };
 
     // Fast path: serve a previously rendered PNG without a render permit or CPU.
@@ -248,7 +270,11 @@ async fn serve_spectrogram(
     }
 
     let result = tokio::task::spawn_blocking(move || {
-        generate_spectrogram_png_with_label(&file_path, label.as_ref())
+        generate_spectrogram_png_with_label(
+            &file_path,
+            label.as_ref(),
+            thumb.then_some(THUMB_WIDTH),
+        )
     })
     .await;
 
@@ -322,6 +348,7 @@ mod tests {
             filename: name.to_string(),
             mtime: None,
             label: None,
+            thumb: false,
         }
     }
 
@@ -381,12 +408,20 @@ mod tests {
             mtime: Some(Duration::from_secs(5)),
             ..key("x.wav")
         };
+        // The grid thumbnail and the full-size image for one file are distinct
+        // renders, so they must not collide in the cache.
+        let thumb = CacheKey {
+            thumb: true,
+            ..key("x.wav")
+        };
         c.insert(base.clone(), Bytes::from_static(b"base"));
         c.insert(labeled.clone(), Bytes::from_static(b"labeled"));
         c.insert(newer.clone(), Bytes::from_static(b"newer"));
+        c.insert(thumb.clone(), Bytes::from_static(b"thumb"));
         assert_eq!(c.get(&base).unwrap(), Bytes::from_static(b"base"));
         assert_eq!(c.get(&labeled).unwrap(), Bytes::from_static(b"labeled"));
         assert_eq!(c.get(&newer).unwrap(), Bytes::from_static(b"newer"));
-        assert_eq!(c.len(), 3);
+        assert_eq!(c.get(&thumb).unwrap(), Bytes::from_static(b"thumb"));
+        assert_eq!(c.len(), 4);
     }
 }
