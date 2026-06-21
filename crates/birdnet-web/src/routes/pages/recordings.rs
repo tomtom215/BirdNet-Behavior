@@ -123,7 +123,7 @@ async fn clips_view(state: &AppState, filter: Option<&str>, search: Option<&str>
         .filter(|s| !s.is_empty())
         .map(str::to_string);
 
-    let (rows, total, locked, first_seen) = fetch_clips(state, filter, search.clone(), 0).await;
+    let data = fetch_clips(state, filter, search.clone(), 0).await;
 
     let lede = "<p class=\"bnb-lede\"><b>Every detection your station saved a clip for.</b> \
         Play it, lock the keepers so the disk purge can't reclaim them, or switch on Select to \
@@ -153,15 +153,7 @@ async fn clips_view(state: &AppState, filter: Option<&str>, search: Option<&str>
         filter_tok = filter.as_token(),
     );
 
-    let list = render_clips_block(
-        &rows,
-        &locked,
-        &first_seen,
-        filter,
-        search.as_deref(),
-        0,
-        total,
-    );
+    let list = render_clips_block(&data, filter, search.as_deref(), 0);
 
     format!(r#"{lede}{controls}<div class="bnb-card rc-list" id="rc-clips">{list}</div>"#)
 }
@@ -180,17 +172,8 @@ async fn clips_partial(
         .map(str::to_string);
     let offset = params.offset.unwrap_or(0);
 
-    let (rows, total, locked, first_seen) =
-        fetch_clips(&state, filter, search.clone(), offset).await;
-    let html = render_clips_block(
-        &rows,
-        &locked,
-        &first_seen,
-        filter,
-        search.as_deref(),
-        offset,
-        total,
-    );
+    let data = fetch_clips(&state, filter, search.clone(), offset).await;
+    let html = render_clips_block(&data, filter, search.as_deref(), offset);
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
@@ -202,19 +185,31 @@ struct ClipsPartialParams {
     offset: Option<u32>,
 }
 
-/// Run the clip query, count, and locked-file lookup on the blocking pool.
+/// One page of clip rows plus the per-page lookups the renderer needs.
+#[derive(Default)]
+struct ClipsData {
+    rows: Vec<DetectionRow>,
+    total: i64,
+    /// Basenames of clips locked against auto-purge.
+    locked: HashSet<String>,
+    /// First-ever date per scientific name (the "first today" / "rare" badge).
+    first_seen: HashMap<String, String>,
+    /// Basenames present in the recording dir — the rows whose audio still
+    /// exists, so the grid links a spectrogram thumbnail only for those (the
+    /// same gate the play button effectively has). Loaded once per page like
+    /// `locked`, so there is no per-row filesystem stat.
+    present: HashSet<String>,
+}
+
+/// Run the clip query, count, and per-page lookups on the blocking pool.
 async fn fetch_clips(
     state: &AppState,
     filter: RecordingsFilter,
     search: Option<String>,
     offset: u32,
-) -> (
-    Vec<DetectionRow>,
-    i64,
-    HashSet<String>,
-    HashMap<String, String>,
-) {
+) -> ClipsData {
     let state = state.clone();
+    let present = recording_basenames(&state.recording_dir());
     tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
             let rows = birdnet_db::sqlite::recent_clips(
@@ -235,24 +230,44 @@ async fn fetch_clips(
             // First-ever date per species → the "first today" / "rare" badge,
             // the same first-seen signal the Today feed-row uses.
             let first_seen = birdnet_db::sqlite::species_first_seen(conn).unwrap_or_default();
-            (rows, total, locked, first_seen)
+            ClipsData {
+                rows,
+                total,
+                locked,
+                first_seen,
+                present,
+            }
         })
     })
     .await
     .unwrap_or_default()
 }
 
+/// Collect the set of file basenames present in the recording directory.
+///
+/// One `read_dir` per page (the directory holds only the bounded, purge-managed
+/// set of source recordings), mirroring how the locked-file set is loaded once
+/// per page rather than stat-ing each row.
+fn recording_basenames(dir: &Path) -> HashSet<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return HashSet::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect()
+}
+
 /// Render one page of clip rows plus the "Show more" control when more remain.
 /// Shared by the first render and each HTMX page so the two never drift.
 fn render_clips_block(
-    rows: &[DetectionRow],
-    locked: &HashSet<String>,
-    first_seen: &HashMap<String, String>,
+    data: &ClipsData,
     filter: RecordingsFilter,
     search: Option<&str>,
     offset: u32,
-    total: i64,
 ) -> String {
+    let rows = &data.rows;
+    let total = data.total;
     let today = super::today_date_string();
     if rows.is_empty() {
         // An empty *first* page distinguishes "no clips yet" from "filter has
@@ -271,7 +286,7 @@ fn render_clips_block(
 
     let mut html = String::with_capacity(rows.len() * 512);
     for d in rows {
-        render_clip_row(&mut html, d, locked, first_seen, &today);
+        render_clip_row(&mut html, d, data, &today);
     }
 
     let shown = offset + u32::try_from(rows.len()).unwrap_or(0);
@@ -298,16 +313,10 @@ fn fmt_clip_duration(secs: f64) -> String {
     format!("{}:{:02}", total / 60, total % 60)
 }
 
-fn render_clip_row(
-    html: &mut String,
-    d: &DetectionRow,
-    locked: &HashSet<String>,
-    first_seen: &HashMap<String, String>,
-    today: &str,
-) {
+fn render_clip_row(html: &mut String, d: &DetectionRow, page: &ClipsData, today: &str) {
     let file = d.file_name.as_deref().unwrap_or_default();
     let base = base_name(file);
-    let is_locked = !base.is_empty() && locked.contains(&base);
+    let is_locked = !base.is_empty() && page.locked.contains(&base);
     let safe_file = escape_html(&base);
 
     let enc_name = simple_url_encode(&d.com_name);
@@ -338,21 +347,37 @@ fn render_clip_row(
     // "first today" / "rare" badge, keyed on the species' first-ever date — the
     // same first-seen signal the Today feed-row shows (the species' first record
     // is today, or this clip sits on the species' first-ever historical date).
-    let badge = first_seen.get(&d.sci_name).map_or(String::new(), |fs| {
-        if fs == today {
-            r#" <span class="bnb-pill moss rc-badge">first today</span>"#.to_string()
-        } else if fs == &d.date {
-            r#" <span class="bnb-pill rare rc-badge">rare</span>"#.to_string()
-        } else {
-            String::new()
-        }
-    });
+    let badge = page
+        .first_seen
+        .get(&d.sci_name)
+        .map_or(String::new(), |fs| {
+            if fs == today {
+                r#" <span class="bnb-pill moss rc-badge">first today</span>"#.to_string()
+            } else if fs == &d.date {
+                r#" <span class="bnb-pill rare rc-badge">rare</span>"#.to_string()
+            } else {
+                String::new()
+            }
+        });
+
+    // Spectrogram thumbnail — a small preview generated (and cached) from the
+    // same audio the play button streams. Linked only when the clip's audio is
+    // present (the same gate playback effectively has); absent rows get an empty
+    // aligned spacer rather than a broken image or a faked tile.
+    let spectro = if !base.is_empty() && page.present.contains(&base) {
+        format!(
+            r#"<img class="rc-spectro" width="104" height="31" loading="lazy" decoding="async" src="/api/v2/recordings/{safe_file}/spectrogram.png" alt="Spectrogram of {com_name}">"#
+        )
+    } else {
+        r#"<span class="rc-spectro rc-spectro-empty" aria-hidden="true"></span>"#.to_string()
+    };
 
     let _ = write!(
         html,
         r#"<div class="rc-row" data-key="{key}">
   <span class="rc-check" role="checkbox" aria-checked="false" tabindex="0" aria-label="Select {com_name}"></span>
   <span class="rc-time">{time}<span class="d">{date}</span>{dur}</span>
+  {spectro}
   <span class="rc-who">{av}<span class="rc-who-text"><a class="nm" href="/species/detail?name={enc_name}">{com_name}</a>{badge}<span class="sc">{sci_name}</span></span></span>
   <span class="rc-conf">{conf}</span>
   <span class="rc-acts">
@@ -574,39 +599,46 @@ mod tests {
         assert!(locked.contains('🔒'));
     }
 
+    /// Build a [`ClipsData`] for renderer tests with the given rows/total and
+    /// optional first-seen and present-audio sets.
+    fn data_with(
+        rows: Vec<DetectionRow>,
+        total: i64,
+        first_seen: HashMap<String, String>,
+        present: HashSet<String>,
+    ) -> ClipsData {
+        ClipsData {
+            rows,
+            total,
+            locked: HashSet::new(),
+            first_seen,
+            present,
+        }
+    }
+
     #[test]
     fn empty_first_page_messages_differ_by_context() {
-        let none = HashSet::new();
         let unfiltered = render_clips_block(
-            &[],
-            &none,
-            &HashMap::new(),
+            &data_with(vec![], 0, HashMap::new(), HashSet::new()),
             RecordingsFilter::All,
             None,
-            0,
             0,
         );
         assert!(unfiltered.contains("No saved clips yet"));
         let filtered = render_clips_block(
-            &[],
-            &none,
-            &HashMap::new(),
+            &data_with(vec![], 0, HashMap::new(), HashSet::new()),
             RecordingsFilter::Rare,
             None,
-            0,
             0,
         );
         assert!(filtered.contains("No clips match"));
         // A later empty page is silent (just the end of the list).
         assert!(
             render_clips_block(
-                &[],
-                &none,
-                &HashMap::new(),
+                &data_with(vec![], 100, HashMap::new(), HashSet::new()),
                 RecordingsFilter::All,
                 None,
                 24,
-                100
             )
             .is_empty()
         );
@@ -642,13 +674,11 @@ mod tests {
 
     #[test]
     fn clip_row_shows_duration_when_present_and_omits_when_absent() {
-        let locked = HashSet::new();
         let mut with = String::new();
         render_clip_row(
             &mut with,
             &clip_row(Some(9.2)),
-            &locked,
-            &HashMap::new(),
+            &data_with(vec![], 0, HashMap::new(), HashSet::new()),
             "2026-06-13",
         );
         assert!(with.contains(r#"<span class="rc-dur">0:09</span>"#));
@@ -657,8 +687,7 @@ mod tests {
         render_clip_row(
             &mut without,
             &clip_row(None),
-            &locked,
-            &HashMap::new(),
+            &data_with(vec![], 0, HashMap::new(), HashSet::new()),
             "2026-06-13",
         );
         assert!(!without.contains("rc-dur"));
@@ -667,8 +696,7 @@ mod tests {
         render_clip_row(
             &mut zero,
             &clip_row(Some(0.0)),
-            &locked,
-            &HashMap::new(),
+            &data_with(vec![], 0, HashMap::new(), HashSet::new()),
             "2026-06-13",
         );
         assert!(!zero.contains("rc-dur"));
@@ -676,28 +704,77 @@ mod tests {
 
     #[test]
     fn clip_row_renders_first_today_and_rare_badges() {
-        let locked = HashSet::new();
         let sci = "Turdus migratorius".to_string(); // clip_row()'s species
 
         // Species first heard *today* → "first today".
         let mut first = HashMap::new();
         first.insert(sci.clone(), "2026-06-13".to_string());
         let mut a = String::new();
-        render_clip_row(&mut a, &clip_row(Some(9.0)), &locked, &first, "2026-06-13");
+        render_clip_row(
+            &mut a,
+            &clip_row(Some(9.0)),
+            &data_with(vec![], 0, first, HashSet::new()),
+            "2026-06-13",
+        );
         assert!(a.contains(r#"<span class="bnb-pill moss rc-badge">first today</span>"#));
 
         // First-ever date == this row's (past) date → "rare".
         let mut rare = HashMap::new();
         rare.insert(sci.clone(), "2026-06-13".to_string());
         let mut b = String::new();
-        render_clip_row(&mut b, &clip_row(Some(9.0)), &locked, &rare, "2026-06-20");
+        render_clip_row(
+            &mut b,
+            &clip_row(Some(9.0)),
+            &data_with(vec![], 0, rare, HashSet::new()),
+            "2026-06-20",
+        );
         assert!(b.contains(r#"<span class="bnb-pill rare rc-badge">rare</span>"#));
 
         // First heard on an earlier date → no badge.
         let mut old = HashMap::new();
         old.insert(sci, "2025-01-01".to_string());
         let mut c = String::new();
-        render_clip_row(&mut c, &clip_row(Some(9.0)), &locked, &old, "2026-06-20");
+        render_clip_row(
+            &mut c,
+            &clip_row(Some(9.0)),
+            &data_with(vec![], 0, old, HashSet::new()),
+            "2026-06-20",
+        );
         assert!(!c.contains("rc-badge"));
+    }
+
+    #[test]
+    fn clip_row_links_spectrogram_only_when_audio_present() {
+        // Audio present in the recording dir → a lazy-loaded thumbnail <img>
+        // pointing at the per-clip spectrogram route, with alt text.
+        let present: HashSet<String> = HashSet::from(["robin.wav".to_string()]);
+        let mut shown = String::new();
+        render_clip_row(
+            &mut shown,
+            &clip_row(Some(9.0)),
+            &data_with(vec![], 0, HashMap::new(), present),
+            "2026-06-13",
+        );
+        assert!(
+            shown.contains(r#"src="/api/v2/recordings/robin.wav/spectrogram.png""#),
+            "expected the spectrogram thumbnail src; got: {shown}"
+        );
+        assert!(shown.contains(r#"class="rc-spectro""#));
+        assert!(shown.contains(r#"loading="lazy""#));
+        assert!(shown.contains(r#"alt="Spectrogram of American Robin""#));
+        assert!(!shown.contains("rc-spectro-empty"));
+
+        // Audio absent → an empty aligned spacer, never a broken <img> or a
+        // faked tile.
+        let mut absent = String::new();
+        render_clip_row(
+            &mut absent,
+            &clip_row(Some(9.0)),
+            &data_with(vec![], 0, HashMap::new(), HashSet::new()),
+            "2026-06-13",
+        );
+        assert!(absent.contains("rc-spectro-empty"));
+        assert!(!absent.contains("spectrogram.png"));
+        assert!(!absent.contains("<img"));
     }
 }

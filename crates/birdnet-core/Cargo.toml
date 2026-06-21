@@ -21,6 +21,10 @@ rubato.workspace = true
 audioadapter-buffers = "3"
 realfft = "3"
 
+# Spectrogram-thumbnail PNG encoding (pure Rust: deflate via miniz_oxide,
+# already in the tree transitively — no new C dependency).
+png = "0.17"
+
 # Audio writing (WAV extraction)
 hound.workspace = true
 

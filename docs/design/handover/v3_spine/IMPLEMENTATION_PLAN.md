@@ -34,7 +34,8 @@
 > log). The per-source live
 > state-chip / 24 h uptime strip / retry line has now landed too — the capture
 > supervisor publishes status to the web layer (see "Landed (Wave D)" below).
-> Still open (Wave D): the Recordings per-clip enrichments; and the remaining
+> The Recordings per-clip enrichments (duration, first/rare badges, and the
+> spectrogram thumbnail) have all landed. Still open (Wave D): the remaining
 > backlog (export wizard, OpenAPI, behavioral-analytics visual surface, tokens
 > doc). The **a11y pass** (chart `<title>`/`<desc>` + `aria-live` live regions)
 > with its **axe + visual-QA CI gates**, and the per-day **"Open day"** landing
@@ -47,10 +48,21 @@
 > omitting it only for rows with no recorded length. Per-row **"first
 > today"/"rare" badges** now land too — keyed on each species' first-ever date
 > via the existing `species_first_seen` query (same signal as the Today feed),
-> reusing `bnb-pill` styling. The per-clip **spectrogram thumbnail** is the only
-> remaining omission — it still has no cheap server-side source (no stored
-> thumbnail), so it stays omitted rather than faked, tracked as Wave D (a cached
-> thumbnail generated at extraction time).
+> reusing `bnb-pill` styling. The per-clip **spectrogram thumbnail** now lands
+> too — a pure-Rust `birdnet-core::audio::spectrogram::thumbnail` renderer
+> (existing mel pipeline → magma colormap → PNG) drives a new
+> `GET /api/v2/recordings/{file}/spectrogram.png` route that renders the preview
+> from the *same* audio the player streams, caches it under the data dir's
+> `spectrograms/`, and serves later views from disk. The grid links a
+> lazy-loaded thumbnail only for rows whose audio is present (one per-page
+> directory scan, mirroring the locked-clip set — no per-row stat, no schema
+> change, historical clips covered); absent-audio rows show an empty aligned
+> spacer, never a broken image or a faked tile. This was chosen over the
+> originally-sketched "generate at extraction time + store" because the
+> lazy-generate-and-cache path needs no migration, no daemon/extractor change
+> (so no mutation-gate surface), and covers every existing clip — the same
+> user-visible outcome (a cached PNG served + rendered) at far lower risk. **All
+> Recordings honest omissions are now closed.**
 
 Source of truth: the Claude Design handover packet in this directory
 (`HANDOFF_v3.html` + six `*_home.html` hi-fi mockups), grounded against

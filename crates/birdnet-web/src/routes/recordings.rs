@@ -26,6 +26,105 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/recordings", get(list_recordings))
         .route("/recordings/{filename}", get(serve_recording))
+        .route(
+            "/recordings/{filename}/spectrogram.png",
+            get(serve_spectrogram),
+        )
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/v2/recordings/{filename}/spectrogram.png
+// ---------------------------------------------------------------------------
+
+/// Generated spectrogram-thumbnail width, in pixels. ~3.3:1, scaled down by CSS
+/// in the grid; rendered larger than displayed so it stays crisp on hi-dpi.
+const THUMB_W: u32 = 320;
+/// Generated spectrogram-thumbnail height, in pixels.
+const THUMB_H: u32 = 96;
+
+/// Serve a small spectrogram thumbnail PNG for a saved clip.
+///
+/// The preview is generated from the *same* audio file [`serve_recording`]
+/// streams (so the picture matches what plays), then cached under
+/// [`AppState::spectrogram_cache_dir`] — the first view renders it, every later
+/// view (and every other clip on the page) is served straight from disk. There
+/// is no schema change and historical clips get a preview too.
+///
+/// Returns `404` when the source audio is missing or undecodable — the grid
+/// only links a thumbnail for clips whose audio is present, so this is the
+/// honest "no preview" path rather than a faked tile.
+async fn serve_spectrogram(
+    State(state): State<AppState>,
+    Path(filename): Path<String>,
+) -> Response {
+    if !is_safe_filename(&filename) {
+        return (StatusCode::BAD_REQUEST, "invalid filename").into_response();
+    }
+
+    let rec_dir = state.recording_dir();
+    let cache_dir = state.spectrogram_cache_dir();
+
+    let result = tokio::task::spawn_blocking(move || {
+        render_or_load_thumbnail(&rec_dir, &cache_dir, &filename)
+    })
+    .await;
+
+    match result {
+        Ok(Some(bytes)) => {
+            let mut h = HeaderMap::new();
+            h.insert(header::CONTENT_TYPE, HeaderValue::from_static("image/png"));
+            h.insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=86400"),
+            );
+            (StatusCode::OK, h, bytes).into_response()
+        }
+        Ok(None) => (StatusCode::NOT_FOUND, "spectrogram unavailable").into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "spectrogram task failed").into_response(),
+    }
+}
+
+/// Load a cached thumbnail or render-and-cache one from the source audio.
+///
+/// Returns `None` when the audio file is absent or cannot be decoded/rendered.
+/// Blocking (decode + FFT + PNG encode + disk I/O); call from a blocking task.
+fn render_or_load_thumbnail(
+    rec_dir: &std::path::Path,
+    cache_dir: &std::path::Path,
+    filename: &str,
+) -> Option<Vec<u8>> {
+    let cache_path = cache_dir.join(format!("{filename}.png"));
+    if let Ok(bytes) = std::fs::read(&cache_path) {
+        return Some(bytes);
+    }
+
+    let audio_path = rec_dir.join(filename);
+    // Defence in depth: confirm the resolved audio path stays inside rec_dir
+    // (is_safe_filename already forbids separators / `..`, so this is belt and
+    // braces — and it cheaply doubles as the "audio missing" check).
+    let canonical = audio_path.canonicalize().ok()?;
+    let rec_canonical = rec_dir
+        .canonicalize()
+        .unwrap_or_else(|_| rec_dir.to_path_buf());
+    if !canonical.starts_with(&rec_canonical) {
+        return None;
+    }
+
+    match birdnet_core::audio::spectrogram::thumbnail::render_file_png(&canonical, THUMB_W, THUMB_H)
+    {
+        Ok(bytes) => {
+            // Best-effort cache write — a read-only or full disk just means we
+            // re-render next time, never a failed response.
+            if std::fs::create_dir_all(cache_dir).is_ok() {
+                let _ = std::fs::write(&cache_path, &bytes);
+            }
+            Some(bytes)
+        }
+        Err(e) => {
+            tracing::debug!(file = filename, error = %e, "spectrogram thumbnail render failed");
+            None
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -523,5 +622,74 @@ mod tests {
         let names1: std::collections::HashSet<_> = page1.iter().map(|r| &r.filename).collect();
         let names2: std::collections::HashSet<_> = page2.iter().map(|r| &r.filename).collect();
         assert!(names1.is_disjoint(&names2));
+    }
+
+    /// Write a minimal valid 48 kHz / 16-bit mono PCM WAV (a 1 kHz sine) so
+    /// symphonia can decode it — enough for the spectrogram renderer.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss
+    )]
+    fn write_test_wav(path: &std::path::Path, secs: f32) {
+        let sr = 48_000u32;
+        let n = (secs * sr as f32) as u32;
+        let data_len = n * 2;
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"RIFF");
+        buf.extend_from_slice(&(36 + data_len).to_le_bytes());
+        buf.extend_from_slice(b"WAVE");
+        buf.extend_from_slice(b"fmt ");
+        buf.extend_from_slice(&16u32.to_le_bytes());
+        buf.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        buf.extend_from_slice(&1u16.to_le_bytes()); // mono
+        buf.extend_from_slice(&sr.to_le_bytes());
+        buf.extend_from_slice(&(sr * 2).to_le_bytes());
+        buf.extend_from_slice(&2u16.to_le_bytes());
+        buf.extend_from_slice(&16u16.to_le_bytes());
+        buf.extend_from_slice(b"data");
+        buf.extend_from_slice(&data_len.to_le_bytes());
+        for i in 0..n {
+            let t = i as f32 / sr as f32;
+            let s = ((t * 2.0 * std::f32::consts::PI * 1000.0).sin() * 16_384.0) as i16;
+            buf.extend_from_slice(&s.to_le_bytes());
+        }
+        std::fs::write(path, buf).unwrap();
+    }
+
+    const PNG_MAGIC: [u8; 8] = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
+
+    #[test]
+    fn thumbnail_renders_and_caches_from_real_audio() {
+        let rec = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        write_test_wav(&rec.path().join("robin.wav"), 1.0);
+
+        let bytes = render_or_load_thumbnail(rec.path(), cache.path(), "robin.wav")
+            .expect("a thumbnail should render from decodable audio");
+        assert!(bytes.starts_with(&PNG_MAGIC), "output is not a PNG");
+
+        // The cache file was written, so a second call short-circuits to disk.
+        let cached = std::fs::read(cache.path().join("robin.wav.png")).expect("cache written");
+        assert_eq!(cached, bytes, "served bytes must match the cached file");
+    }
+
+    #[test]
+    fn thumbnail_returns_none_when_audio_missing() {
+        let rec = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        assert!(render_or_load_thumbnail(rec.path(), cache.path(), "ghost.wav").is_none());
+    }
+
+    #[test]
+    fn thumbnail_cache_hit_short_circuits_without_audio() {
+        let rec = tempfile::tempdir().unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        // A cached PNG with no corresponding audio file: the cache read must
+        // win before any decode is attempted.
+        std::fs::write(cache.path().join("old.wav.png"), b"\x89PNG-cached").unwrap();
+        let bytes = render_or_load_thumbnail(rec.path(), cache.path(), "old.wav")
+            .expect("cache hit returns bytes even with the audio gone");
+        assert_eq!(bytes, b"\x89PNG-cached");
     }
 }

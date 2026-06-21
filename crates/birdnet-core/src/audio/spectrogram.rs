@@ -8,6 +8,7 @@
 
 mod compute;
 pub mod live;
+pub mod thumbnail;
 
 use std::fmt;
 

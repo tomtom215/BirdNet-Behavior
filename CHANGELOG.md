@@ -163,6 +163,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the clip sits on the species' first-ever (historical) date — reusing the
   existing `species_first_seen` query and `bnb-pill` styling (no new query, no
   new tokens). A clip with no first-ever match shows no badge.
+- **Recordings clips show a spectrogram thumbnail.** The last deferred Wave D
+  Recordings omission is now backed honestly. A new pure-Rust
+  `birdnet-core::audio::spectrogram::thumbnail` renderer turns a clip's audio
+  into a small PNG using the existing librosa-compatible mel pipeline and a
+  perceptual magma colormap; `GET /api/v2/recordings/{file}/spectrogram.png`
+  generates the preview from the *same* audio the player streams (so the picture
+  matches what plays), caches it under the data dir's `spectrograms/`, and serves
+  every later view straight from disk. The Clips grid links a lazy-loaded
+  thumbnail only for rows whose audio is present — gated by a single per-page
+  directory scan, the same way the locked-clip set is loaded — so there is no
+  per-row stat, no schema change, and historical clips get a preview too; rows
+  whose audio is gone show an empty aligned spacer rather than a broken image or
+  a faked tile. New CSS only (`.rc-spectro`); no new design tokens.
 - **CI: an accessibility gate and a structural visual-QA sweep.** A new
   `a11y.yml` workflow boots the seeded `screenshot_server` fixture once and runs
   two gates against it — **axe-core** (WCAG 2.1 A/AA, light + dark themes) fails

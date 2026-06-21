@@ -562,6 +562,10 @@ footer a:hover { color: var(--moss-ink); }
   main { padding: var(--pad-3) var(--pad-3) 56px; }
   .feed-row { grid-template-columns: 52px 30px 1fr auto; }
   .feed-row .waveform, .feed-row .bnb-conf { display: none; }
+  /* Drop the spectrogram preview column on phones so the clip row keeps its
+     original five-column fit; hiding .rc-spectro removes the cell from flow. */
+  .rc-row { grid-template-columns: 22px 66px minmax(0, 1fr) 92px auto; }
+  .rc-spectro { display: none; }
   .topnav { padding: 8px 14px; }
   .topnav-right .bnb-meta.mono { display: none; }
   table { display: block; overflow-x: auto; }
@@ -3832,8 +3836,10 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); 
 .rc-list { padding: 6px 10px; }
 .rc-empty { text-align: center; padding: 40px 16px; color: var(--fg-3); font-size: 13.5px; }
 .rc-more { display: block; width: 100%; margin: 8px 0 2px; }
-.rc-row { display: grid; grid-template-columns: 22px 66px minmax(0, 1fr) 92px auto; align-items: center; gap: 14px; padding: 11px 12px; border-radius: 10px; border: 0.5px solid transparent; }
+.rc-row { display: grid; grid-template-columns: 22px 66px 104px minmax(0, 1fr) 92px auto; align-items: center; gap: 14px; padding: 11px 12px; border-radius: 10px; border: 0.5px solid transparent; }
 .rc-row + .rc-row { border-top: 0.5px solid var(--hairline); border-radius: 0; }
+.rc-spectro { width: 104px; height: 31px; border-radius: 5px; display: block; object-fit: cover; background: var(--surface-2); border: 0.5px solid var(--hairline); }
+.rc-spectro-empty { background: transparent; border: 0.5px dashed var(--hairline); opacity: 0.5; }
 .rc-row.playing, .rc-row.sel { background: color-mix(in oklch, var(--moss) 6%, var(--surface)); border: 0.5px solid color-mix(in oklch, var(--moss) 28%, var(--border)); border-radius: 10px; }
 .rc-check { width: 17px; height: 17px; border-radius: 5px; border: 1.5px solid var(--border-2); cursor: pointer; visibility: hidden; }
 #rc-clips.rc-selecting .rc-check { visibility: visible; }

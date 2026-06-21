@@ -487,6 +487,20 @@ impl AppState {
         self.inner.recording_dir.clone()
     }
 
+    /// Directory holding generated spectrogram-thumbnail PNGs.
+    ///
+    /// A sibling of [`Self::recording_dir`] (under the data dir). Thumbnails are
+    /// generated lazily the first time a clip is viewed and cached here, so the
+    /// Recordings grid serves them straight from disk on subsequent loads. The
+    /// cache is regenerable — deleting it just re-renders previews on demand.
+    pub fn spectrogram_cache_dir(&self) -> PathBuf {
+        self.inner
+            .db_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("spectrograms")
+    }
+
     /// Get the species image cache, if configured.
     pub fn image_cache(&self) -> Option<Arc<ImageCache>> {
         self.inner.image_cache.clone()
