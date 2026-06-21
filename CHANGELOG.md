@@ -148,6 +148,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **OpenAPI 3.1 description of the public JSON API.** The full `/api/v2`
+  surface (44 read-only endpoints across detections, species, recordings,
+  analytics, time-series, export and system) is now described by a committed,
+  hand-maintained OpenAPI 3.1 document (`crates/birdnet-web/openapi.json`),
+  served live at `GET /api/v2/openapi.json` so any tool — Swagger UI, Redoc,
+  Postman, `openapi-generator` — can map the API or generate a client. The spec
+  honestly declares the API as unauthenticated (`security: []`); a committed
+  `redocly.yaml` documents why two of Redocly's opinionated default rules don't
+  apply (intentional openness, read-only endpoints) so `redocly lint` is clean.
+  A test parses the embedded document and asserts every documented path is
+  actually routed, so the spec can't drift out of sync with the server. The
+  HTTP-API reference doc is corrected alongside it (the `detections/daily` and
+  `species/activity` query parameters were mis-documented).
 - **Recordings now shows each saved clip's duration.** A deferred Wave D
   omission (the Clips grid dropped the column rather than fake it) is now
   backed honestly. **Migration 20** adds a nullable `Duration_Secs` to

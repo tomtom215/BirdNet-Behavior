@@ -1,0 +1,15 @@
+# Redocly lint config for the BirdNet-Behavior OpenAPI spec
+# (crates/birdnet-web/openapi.json). Run: `redocly lint crates/birdnet-web/openapi.json`.
+#
+# The /api/v2 surface is intentionally unauthenticated and read-only (see the
+# spec's `description`), so two of Redocly's opinionated "recommended" rules do
+# not apply here:
+#   - security-defined: there is deliberately no auth scheme; the spec declares
+#     `security: []` (no requirements) rather than inventing one.
+#   - operation-4xx-response: several read-only GETs with no input to validate
+#     have no 4xx path, so requiring one would only add fictitious responses.
+extends:
+  - recommended
+rules:
+  security-defined: off
+  operation-4xx-response: off
