@@ -160,7 +160,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A test parses the embedded document and asserts every documented path is
   actually routed, so the spec can't drift out of sync with the server. The
   HTTP-API reference doc is corrected alongside it (the `detections/daily` and
-  `species/activity` query parameters were mis-documented).
+  `species/activity` query parameters were documented incorrectly).
 - **Recordings now shows each saved clip's duration.** A deferred Wave D
   omission (the Clips grid dropped the column rather than fake it) is now
   backed honestly. **Migration 20** adds a nullable `Duration_Secs` to
