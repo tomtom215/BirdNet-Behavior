@@ -413,11 +413,14 @@ fn seed(conn: &Connection, today_days: i64) {
                     sp.com.replace(' ', "_"),
                     conf * 100.0
                 );
+                // Realistic clip lengths (~6–15 s) so the Clips grid's duration
+                // column renders varied, plausible values in the fixture.
+                let dur = 6.0 + rng.unit() * 9.0;
                 let _ = tx.execute(
                     "INSERT OR IGNORE INTO detections
-                     (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, Source)
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
-                    params![date, time, sp.sci, sp.com, conf, lat, lon, 0.7, week, 1.25, 0.0, file, source],
+                     (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, Source, Duration_Secs)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+                    params![date, time, sp.sci, sp.com, conf, lat, lon, 0.7, week, 1.25, 0.0, file, source, dur],
                 );
             }
         }

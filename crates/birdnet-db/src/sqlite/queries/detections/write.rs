@@ -18,8 +18,8 @@ pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Resu
     // this write path working unchanged.
     conn.execute(
         "INSERT INTO detections \
-         (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, chunk_offset_secs, correlation_id, Source) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+         (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, chunk_offset_secs, correlation_id, Source, Duration_Secs) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
             record.date,
             record.time,
@@ -36,6 +36,7 @@ pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Resu
             record.chunk_offset_secs,
             record.correlation_id,
             record.source,
+            record.duration_secs,
         ],
     )?;
     Ok(())
@@ -114,6 +115,7 @@ mod tests {
             chunk_offset_secs: Some(0.0),
             correlation_id: None,
             source: None,
+            duration_secs: None,
         };
         insert_detection(&conn, &record).unwrap();
         assert_eq!(detection_count(&conn).unwrap(), 1);
@@ -142,12 +144,14 @@ mod tests {
             chunk_offset_secs: Some(0.0),
             correlation_id: None,
             source: Some("cam1"),
+            duration_secs: None,
         };
         // A second row at a different second with no source = the historical
         // shape (e.g. an imported BirdNET-Pi row).
         let untagged = DetectionRecord {
             time: "06:00:01",
             source: None,
+            duration_secs: None,
             ..tagged.clone()
         };
         insert_detection(&conn, &tagged).unwrap();
@@ -242,6 +246,7 @@ mod tests {
             chunk_offset_secs: Some(0.0),
             correlation_id: None,
             source: None,
+            duration_secs: None,
         };
 
         insert_detection(&conn, &record).unwrap();
@@ -293,6 +298,7 @@ mod tests {
             chunk_offset_secs: Some(0.0),
             correlation_id: None,
             source: None,
+            duration_secs: None,
         };
         insert_detection(&conn, &base).unwrap();
         let chunk2 = DetectionRecord {
@@ -329,6 +335,7 @@ mod tests {
             chunk_offset_secs: Some(0.0),
             correlation_id: Some("e-20260519-abc123"),
             source: Some("local"),
+            duration_secs: None,
         };
         insert_detection(&conn, &record).unwrap();
         let rows = recent_detections(&conn, 10).unwrap();
@@ -378,6 +385,7 @@ mod tests {
                 chunk_offset_secs: Some(offset),
                 correlation_id: cid,
                 source: None,
+                duration_secs: None,
             };
             insert_detection(&conn, &r).unwrap();
         }
@@ -392,5 +400,44 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn duration_secs_round_trips_through_insert_and_read() {
+        // Migration 20: the saved clip's length is persisted and read back
+        // exactly, so the Recordings grid can show a real duration.
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_or_create(tmp.path()).unwrap();
+        let record = DetectionRecord {
+            date: "2026-05-19",
+            time: "09:00:00",
+            sci_name: "Pica pica",
+            com_name: "Eurasian Magpie",
+            confidence: 0.92,
+            lat: None,
+            lon: None,
+            cutoff: None,
+            week: Some(20),
+            sensitivity: None,
+            overlap: None,
+            file_name: "magpie.wav",
+            chunk_offset_secs: Some(0.0),
+            correlation_id: None,
+            source: None,
+            duration_secs: Some(15.0),
+        };
+        insert_detection(&conn, &record).unwrap();
+        let rows = recent_detections(&conn, 10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].duration_secs, Some(15.0));
+    }
+
+    #[test]
+    fn duration_secs_null_when_record_omits_it() {
+        // Historical / imported / quarantine-approve rows have no clip length
+        // to record and stay NULL — never a faked value (migration 20).
+        let (_tmp, conn) = temp_db_with_data();
+        let rows = recent_detections(&conn, 10).unwrap();
+        assert!(rows.iter().all(|r| r.duration_secs.is_none()));
     }
 }

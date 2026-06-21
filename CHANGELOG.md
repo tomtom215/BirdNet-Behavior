@@ -148,6 +148,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Recordings now shows each saved clip's duration.** A deferred Wave D
+  omission (the Clips grid dropped the column rather than fake it) is now
+  backed honestly. **Migration 20** adds a nullable `Duration_Secs` to
+  detections; the daemon reads the source recording's length from its file
+  header — cheaply, via a new `birdnet-core` `decode::probe_duration_secs`, with
+  no re-decode — and persists it. Historical, BirdNET-Pi-imported and
+  quarantine-approve rows have no length to record and stay `NULL` (the grid
+  omits the column for them, never a guess). The Clips grid renders the length
+  as `M:SS` under each row's time.
 - **CI: an accessibility gate and a structural visual-QA sweep.** A new
   `a11y.yml` workflow boots the seeded `screenshot_server` fixture once and runs
   two gates against it — **axe-core** (WCAG 2.1 A/AA, light + dark themes) fails

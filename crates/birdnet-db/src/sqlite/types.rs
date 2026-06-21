@@ -55,6 +55,12 @@ pub struct DetectionRecord<'a> {
     /// non-destructive — it lets multi-stream stations attribute detections to a
     /// source and (later, opt-in) collapse cross-stream duplicates.
     pub source: Option<&'a str>,
+    /// Length of the saved clip in seconds (its sample count ÷ sample rate).
+    ///
+    /// `None` when no clip length is known — historical / imported BirdNET-Pi
+    /// rows and the quarantine-approve path (which re-inserts without
+    /// re-extracting) write NULL. Added in migration 20.
+    pub duration_secs: Option<f64>,
 }
 
 /// A detection row read from the database.
@@ -97,6 +103,10 @@ pub struct DetectionRow {
     /// `None` for rows that pre-date migration 18.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// Length of the saved clip in seconds. `None` for rows that pre-date
+    /// migration 20 (historical / imported) or were re-inserted without a clip.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_secs: Option<f64>,
 }
 
 /// A concurrent detection of the same species from a *different* audio source.
@@ -209,6 +219,7 @@ pub(super) fn map_detection_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Det
         file_name: row.get(11)?,
         correlation_id: row.get(12)?,
         source: row.get(13)?,
+        duration_secs: row.get(14)?,
     })
 }
 
@@ -241,13 +252,14 @@ pub(super) const DETECTION_COL_NAMES: &[&str] = &[
     "File_Name",
     "correlation_id",
     "Source",
+    "Duration_Secs",
 ];
 
 /// Columns selected in all full-row detection queries.
 ///
 /// Must equal `DETECTION_COL_NAMES.join(", ")` — the
 /// `detection_cols_matches_names` test pins the invariant.
-pub(super) const DETECTION_COLS: &str = "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id, Source";
+pub(super) const DETECTION_COLS: &str = "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id, Source, Duration_Secs";
 
 #[cfg(test)]
 mod drift_gate_tests {
@@ -333,6 +345,7 @@ mod drift_gate_tests {
             chunk_offset_secs: Some(3.0),
             correlation_id: Some("abc123"),
             source: Some("cam1"),
+            duration_secs: None,
         };
         crate::sqlite::queries::detections::insert_detection(&conn, &record).unwrap();
 

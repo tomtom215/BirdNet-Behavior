@@ -221,6 +221,8 @@ fn run(args: &Args) -> Result<usize, String> {
             chunk_offset_secs: Some(0.0),
             correlation_id: Some(&correlation_id),
             source: Some("local"),
+            // Demo clips are a realistic ~9 s (a 3 s detection plus padding).
+            duration_secs: Some(9.0),
         };
         // Each row carries a unique correlation_id and a unique file_name,
         // so the schema's UNIQUE key never trips. Failures here are real.

@@ -88,6 +88,55 @@ pub fn decode_file_capped(path: &Path, max_samples: usize) -> Result<AudioData, 
     decode_file_inner(path, Some(max_samples))
 }
 
+/// Probe an audio file's duration in seconds **without decoding its samples**.
+///
+/// Reads only the container metadata — the default audio track's playable frame
+/// count and sample rate — so it is cheap: one file open and a header parse, no
+/// per-packet decode. Used by the detection daemon to persist each saved clip's
+/// length for the Recordings grid, on top of the decode the pipeline already
+/// did, rather than re-decoding the whole file just to measure it.
+///
+/// Returns `None` when the duration can't be determined honestly (unreadable
+/// file, no audio track, missing sample rate, or a container that doesn't
+/// record its frame count) — the caller then stores `NULL`, never a guess.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn probe_duration_secs(path: &Path) -> Option<f64> {
+    use symphonia::core::formats::probe::Hint;
+    use symphonia::core::formats::{FormatOptions, TrackType};
+    use symphonia::core::io::{MediaSourceStream, MediaSourceStreamOptions};
+    use symphonia::core::meta::MetadataOptions;
+
+    let file = std::fs::File::open(path).ok()?;
+    let mss = MediaSourceStream::new(Box::new(file), MediaSourceStreamOptions::default());
+
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+
+    let format = symphonia::default::get_probe()
+        .probe(
+            &hint,
+            mss,
+            FormatOptions::default(),
+            MetadataOptions::default(),
+        )
+        .ok()?;
+
+    let track = format.default_track(TrackType::Audio)?;
+    let sample_rate = track
+        .codec_params
+        .as_ref()
+        .and_then(|p| p.audio())
+        .and_then(|a| a.sample_rate)?;
+    let num_frames = track.num_frames?;
+    if sample_rate == 0 {
+        return None;
+    }
+    Some(num_frames as f64 / f64::from(sample_rate))
+}
+
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 fn decode_file_inner(path: &Path, max_samples: Option<usize>) -> Result<AudioData, DecodeError> {
     use symphonia::core::audio::GenericAudioBufferRef;
@@ -241,5 +290,38 @@ mod tests {
             decode_file_capped(&path, 50_000).unwrap().samples.len(),
             10_000
         );
+    }
+
+    #[test]
+    fn probe_duration_secs_reads_length_without_decoding() {
+        use hound::{SampleFormat, WavSpec, WavWriter};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("clip.wav");
+        let spec = WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: 16,
+            sample_format: SampleFormat::Int,
+        };
+        let mut writer = WavWriter::create(&path, spec).unwrap();
+        // 96_000 frames at 48 kHz = exactly 2.0 seconds.
+        for _ in 0..96_000 {
+            writer.write_sample(0_i16).unwrap();
+        }
+        writer.finalize().unwrap();
+
+        let secs = probe_duration_secs(&path).expect("WAV duration is known");
+        assert!((secs - 2.0).abs() < 1e-6, "expected 2.0s, got {secs}");
+    }
+
+    #[test]
+    fn probe_duration_secs_none_for_unreadable_or_non_audio() {
+        // Missing file → None (honest: never a guessed duration).
+        assert!(probe_duration_secs(&PathBuf::from("/nonexistent/clip.wav")).is_none());
+        // A file that isn't decodable audio → None, not a panic.
+        let dir = tempfile::tempdir().unwrap();
+        let junk = dir.path().join("notaudio.wav");
+        std::fs::write(&junk, b"not a real wav file").unwrap();
+        assert!(probe_duration_secs(&junk).is_none());
     }
 }
