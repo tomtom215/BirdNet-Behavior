@@ -44,12 +44,13 @@
 > **clip-duration** column now has an honest backing — migration 20 persists
 > `Duration_Secs` (the daemon reads the source file's length from its header via
 > `decode::probe_duration_secs`), and the Clips grid renders it as `M:SS`,
-> omitting it only for rows with no recorded length. The per-clip **spectrogram
-> thumbnail** still has no cheap server-side source (no stored thumbnail), so it
-> stays omitted rather than faked — tracked as Wave D (a cached thumbnail at
-> extraction time). Per-row "rare/first" badges are likewise deferred; the Rare
-> filter chip already
-> surfaces those clips.
+> omitting it only for rows with no recorded length. Per-row **"first
+> today"/"rare" badges** now land too — keyed on each species' first-ever date
+> via the existing `species_first_seen` query (same signal as the Today feed),
+> reusing `bnb-pill` styling. The per-clip **spectrogram thumbnail** is the only
+> remaining omission — it still has no cheap server-side source (no stored
+> thumbnail), so it stays omitted rather than faked, tracked as Wave D (a cached
+> thumbnail generated at extraction time).
 
 Source of truth: the Claude Design handover packet in this directory
 (`HANDOFF_v3.html` + six `*_home.html` hi-fi mockups), grounded against

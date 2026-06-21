@@ -157,6 +157,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   quarantine-approve rows have no length to record and stay `NULL` (the grid
   omits the column for them, never a guess). The Clips grid renders the length
   as `M:SS` under each row's time.
+- **Recordings clips show "first today" / "rare" badges.** Another deferred Wave
+  D omission: each clip row now carries the same first-seen badge the Today feed
+  shows — "first today" when the species' first-ever record is today, "rare"
+  when the clip sits on the species' first-ever (historical) date — reusing the
+  existing `species_first_seen` query and `bnb-pill` styling (no new query, no
+  new tokens). A clip with no first-ever match shows no badge.
 - **CI: an accessibility gate and a structural visual-QA sweep.** A new
   `a11y.yml` workflow boots the seeded `screenshot_server` fixture once and runs
   two gates against it — **axe-core** (WCAG 2.1 A/AA, light + dark themes) fails

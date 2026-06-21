@@ -3841,6 +3841,7 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); 
 .rc-time { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); }
 .rc-time .d { display: block; color: var(--fg-4); font-size: 10px; }
 .rc-dur { display: block; color: var(--fg-4); font-size: 10px; font-variant-numeric: tabular-nums; }
+.rc-badge { font-size: 9.5px; vertical-align: middle; }
 .rc-who { min-width: 0; display: flex; align-items: center; gap: 10px; }
 .rc-who-text { min-width: 0; display: flex; flex-direction: column; }
 .rc-who .nm { font-size: 13.5px; font-weight: 500; text-decoration: none; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
