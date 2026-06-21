@@ -21,7 +21,7 @@
 //!
 //! [`recent_clips`]: birdnet_db::sqlite::recent_clips
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -123,7 +123,7 @@ async fn clips_view(state: &AppState, filter: Option<&str>, search: Option<&str>
         .filter(|s| !s.is_empty())
         .map(str::to_string);
 
-    let (rows, total, locked) = fetch_clips(state, filter, search.clone(), 0).await;
+    let (rows, total, locked, first_seen) = fetch_clips(state, filter, search.clone(), 0).await;
 
     let lede = "<p class=\"bnb-lede\"><b>Every detection your station saved a clip for.</b> \
         Play it, lock the keepers so the disk purge can't reclaim them, or switch on Select to \
@@ -153,7 +153,15 @@ async fn clips_view(state: &AppState, filter: Option<&str>, search: Option<&str>
         filter_tok = filter.as_token(),
     );
 
-    let list = render_clips_block(&rows, &locked, filter, search.as_deref(), 0, total);
+    let list = render_clips_block(
+        &rows,
+        &locked,
+        &first_seen,
+        filter,
+        search.as_deref(),
+        0,
+        total,
+    );
 
     format!(r#"{lede}{controls}<div class="bnb-card rc-list" id="rc-clips">{list}</div>"#)
 }
@@ -172,8 +180,17 @@ async fn clips_partial(
         .map(str::to_string);
     let offset = params.offset.unwrap_or(0);
 
-    let (rows, total, locked) = fetch_clips(&state, filter, search.clone(), offset).await;
-    let html = render_clips_block(&rows, &locked, filter, search.as_deref(), offset, total);
+    let (rows, total, locked, first_seen) =
+        fetch_clips(&state, filter, search.clone(), offset).await;
+    let html = render_clips_block(
+        &rows,
+        &locked,
+        &first_seen,
+        filter,
+        search.as_deref(),
+        offset,
+        total,
+    );
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
@@ -191,7 +208,12 @@ async fn fetch_clips(
     filter: RecordingsFilter,
     search: Option<String>,
     offset: u32,
-) -> (Vec<DetectionRow>, i64, HashSet<String>) {
+) -> (
+    Vec<DetectionRow>,
+    i64,
+    HashSet<String>,
+    HashMap<String, String>,
+) {
     let state = state.clone();
     tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
@@ -210,7 +232,10 @@ async fn fetch_clips(
                 .iter()
                 .map(|f| base_name(f))
                 .collect::<HashSet<String>>();
-            (rows, total, locked)
+            // First-ever date per species → the "first today" / "rare" badge,
+            // the same first-seen signal the Today feed-row uses.
+            let first_seen = birdnet_db::sqlite::species_first_seen(conn).unwrap_or_default();
+            (rows, total, locked, first_seen)
         })
     })
     .await
@@ -222,11 +247,13 @@ async fn fetch_clips(
 fn render_clips_block(
     rows: &[DetectionRow],
     locked: &HashSet<String>,
+    first_seen: &HashMap<String, String>,
     filter: RecordingsFilter,
     search: Option<&str>,
     offset: u32,
     total: i64,
 ) -> String {
+    let today = super::today_date_string();
     if rows.is_empty() {
         // An empty *first* page distinguishes "no clips yet" from "filter has
         // no matches"; a later empty page just means we reached the end.
@@ -244,7 +271,7 @@ fn render_clips_block(
 
     let mut html = String::with_capacity(rows.len() * 512);
     for d in rows {
-        render_clip_row(&mut html, d, locked);
+        render_clip_row(&mut html, d, locked, first_seen, &today);
     }
 
     let shown = offset + u32::try_from(rows.len()).unwrap_or(0);
@@ -271,7 +298,13 @@ fn fmt_clip_duration(secs: f64) -> String {
     format!("{}:{:02}", total / 60, total % 60)
 }
 
-fn render_clip_row(html: &mut String, d: &DetectionRow, locked: &HashSet<String>) {
+fn render_clip_row(
+    html: &mut String,
+    d: &DetectionRow,
+    locked: &HashSet<String>,
+    first_seen: &HashMap<String, String>,
+    today: &str,
+) {
     let file = d.file_name.as_deref().unwrap_or_default();
     let base = base_name(file);
     let is_locked = !base.is_empty() && locked.contains(&base);
@@ -302,12 +335,25 @@ fn render_clip_row(html: &mut String, d: &DetectionRow, locked: &HashSet<String>
         .map(|s| format!(r#"<span class="rc-dur">{}</span>"#, fmt_clip_duration(s)))
         .unwrap_or_default();
 
+    // "first today" / "rare" badge, keyed on the species' first-ever date — the
+    // same first-seen signal the Today feed-row shows (the species' first record
+    // is today, or this clip sits on the species' first-ever historical date).
+    let badge = first_seen.get(&d.sci_name).map_or(String::new(), |fs| {
+        if fs == today {
+            r#" <span class="bnb-pill moss rc-badge">first today</span>"#.to_string()
+        } else if fs == &d.date {
+            r#" <span class="bnb-pill rare rc-badge">rare</span>"#.to_string()
+        } else {
+            String::new()
+        }
+    });
+
     let _ = write!(
         html,
         r#"<div class="rc-row" data-key="{key}">
   <span class="rc-check" role="checkbox" aria-checked="false" tabindex="0" aria-label="Select {com_name}"></span>
   <span class="rc-time">{time}<span class="d">{date}</span>{dur}</span>
-  <span class="rc-who">{av}<span class="rc-who-text"><a class="nm" href="/species/detail?name={enc_name}">{com_name}</a><span class="sc">{sci_name}</span></span></span>
+  <span class="rc-who">{av}<span class="rc-who-text"><a class="nm" href="/species/detail?name={enc_name}">{com_name}</a>{badge}<span class="sc">{sci_name}</span></span></span>
   <span class="rc-conf">{conf}</span>
   <span class="rc-acts">
     <button type="button" class="x-fplay rc-play" data-play-src="/api/v2/recordings/{safe_file}" data-clip-name="{com_name}" data-clip-meta="{meta}" title="Play clip" aria-label="Play {com_name}">▶</button>
@@ -531,12 +577,39 @@ mod tests {
     #[test]
     fn empty_first_page_messages_differ_by_context() {
         let none = HashSet::new();
-        let unfiltered = render_clips_block(&[], &none, RecordingsFilter::All, None, 0, 0);
+        let unfiltered = render_clips_block(
+            &[],
+            &none,
+            &HashMap::new(),
+            RecordingsFilter::All,
+            None,
+            0,
+            0,
+        );
         assert!(unfiltered.contains("No saved clips yet"));
-        let filtered = render_clips_block(&[], &none, RecordingsFilter::Rare, None, 0, 0);
+        let filtered = render_clips_block(
+            &[],
+            &none,
+            &HashMap::new(),
+            RecordingsFilter::Rare,
+            None,
+            0,
+            0,
+        );
         assert!(filtered.contains("No clips match"));
         // A later empty page is silent (just the end of the list).
-        assert!(render_clips_block(&[], &none, RecordingsFilter::All, None, 24, 100).is_empty());
+        assert!(
+            render_clips_block(
+                &[],
+                &none,
+                &HashMap::new(),
+                RecordingsFilter::All,
+                None,
+                24,
+                100
+            )
+            .is_empty()
+        );
     }
 
     fn clip_row(duration_secs: Option<f64>) -> DetectionRow {
@@ -571,15 +644,60 @@ mod tests {
     fn clip_row_shows_duration_when_present_and_omits_when_absent() {
         let locked = HashSet::new();
         let mut with = String::new();
-        render_clip_row(&mut with, &clip_row(Some(9.2)), &locked);
+        render_clip_row(
+            &mut with,
+            &clip_row(Some(9.2)),
+            &locked,
+            &HashMap::new(),
+            "2026-06-13",
+        );
         assert!(with.contains(r#"<span class="rc-dur">0:09</span>"#));
         // None → no rc-dur element (historical / imported rows aren't faked).
         let mut without = String::new();
-        render_clip_row(&mut without, &clip_row(None), &locked);
+        render_clip_row(
+            &mut without,
+            &clip_row(None),
+            &locked,
+            &HashMap::new(),
+            "2026-06-13",
+        );
         assert!(!without.contains("rc-dur"));
         // A zero/unknown length is also omitted, never rendered as "0:00".
         let mut zero = String::new();
-        render_clip_row(&mut zero, &clip_row(Some(0.0)), &locked);
+        render_clip_row(
+            &mut zero,
+            &clip_row(Some(0.0)),
+            &locked,
+            &HashMap::new(),
+            "2026-06-13",
+        );
         assert!(!zero.contains("rc-dur"));
+    }
+
+    #[test]
+    fn clip_row_renders_first_today_and_rare_badges() {
+        let locked = HashSet::new();
+        let sci = "Turdus migratorius".to_string(); // clip_row()'s species
+
+        // Species first heard *today* → "first today".
+        let mut first = HashMap::new();
+        first.insert(sci.clone(), "2026-06-13".to_string());
+        let mut a = String::new();
+        render_clip_row(&mut a, &clip_row(Some(9.0)), &locked, &first, "2026-06-13");
+        assert!(a.contains(r#"<span class="bnb-pill moss rc-badge">first today</span>"#));
+
+        // First-ever date == this row's (past) date → "rare".
+        let mut rare = HashMap::new();
+        rare.insert(sci.clone(), "2026-06-13".to_string());
+        let mut b = String::new();
+        render_clip_row(&mut b, &clip_row(Some(9.0)), &locked, &rare, "2026-06-20");
+        assert!(b.contains(r#"<span class="bnb-pill rare rc-badge">rare</span>"#));
+
+        // First heard on an earlier date → no badge.
+        let mut old = HashMap::new();
+        old.insert(sci, "2025-01-01".to_string());
+        let mut c = String::new();
+        render_clip_row(&mut c, &clip_row(Some(9.0)), &locked, &old, "2026-06-20");
+        assert!(!c.contains("rc-badge"));
     }
 }
