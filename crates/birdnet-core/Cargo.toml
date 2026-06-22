@@ -18,7 +18,7 @@ tracing.workspace = true
 # Audio pipeline (pure Rust, zero C deps)
 symphonia.workspace = true
 rubato.workspace = true
-audioadapter-buffers = "3"
+audioadapter-buffers = "4"
 realfft = "3"
 
 # Audio writing (WAV extraction)
