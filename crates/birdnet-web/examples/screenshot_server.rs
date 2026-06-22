@@ -592,6 +592,83 @@ fn seed_thresholds(conn: &Connection) {
     );
 }
 
+/// Write synthetic bird-call WAVs for the given clip filenames into `dir`, so
+/// the spectrogram-thumbnail route has real audio to render previews from.
+fn seed_demo_audio(dir: &std::path::Path, clips: &[String]) {
+    if std::fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    let sr = 48_000u32;
+    for (i, name) in clips.iter().enumerate() {
+        let samples = synth_call(sr, i as u32);
+        let _ = write_wav16(&dir.join(name), sr, &samples);
+    }
+    eprintln!(
+        "seeded {} demo audio clips for spectrogram previews",
+        clips.len()
+    );
+}
+
+/// Synthesize a short, structured "bird call": a few frequency-swept syllables
+/// with two harmonics, varied per index so each thumbnail looks distinct.
+fn synth_call(sr: u32, idx: u32) -> Vec<f32> {
+    let secs = 2.6f32;
+    let n = (secs * sr as f32) as usize;
+    let f0 = 1200.0 + (idx % 8) as f32 * 420.0;
+    let up = idx.is_multiple_of(2);
+    let syllables = 3 + (idx % 3); // 3..=5
+    let dt = 1.0 / sr as f32;
+    let mut out = vec![0.0f32; n];
+    let (mut p1, mut p2, mut p3) = (0.0f32, 0.0f32, 0.0f32);
+    let tau = 2.0 * std::f32::consts::PI;
+    for (i, s) in out.iter_mut().enumerate() {
+        let t = i as f32 * dt;
+        let pos = t / secs * syllables as f32;
+        let frac = pos.fract();
+        // Bell envelope within each syllable, silent in the trailing gap.
+        let env = if frac < 0.85 {
+            (std::f32::consts::PI * (frac / 0.85)).sin().powi(2)
+        } else {
+            0.0
+        };
+        let sweep = if up {
+            1.0 + 0.6 * frac
+        } else {
+            1.6 - 0.6 * frac
+        };
+        let f = f0 * sweep;
+        p1 += tau * f * dt;
+        p2 += tau * f * 2.0 * dt;
+        p3 += tau * f * 3.0 * dt;
+        *s = (p1.sin() * 0.6 + p2.sin() * 0.25 + p3.sin() * 0.12) * env * 0.5;
+    }
+    out
+}
+
+/// Minimal 16-bit mono PCM WAV writer (no extra deps).
+fn write_wav16(path: &std::path::Path, sr: u32, samples: &[f32]) -> std::io::Result<()> {
+    let data_len = (samples.len() * 2) as u32;
+    let mut buf = Vec::with_capacity(44 + data_len as usize);
+    buf.extend_from_slice(b"RIFF");
+    buf.extend_from_slice(&(36 + data_len).to_le_bytes());
+    buf.extend_from_slice(b"WAVE");
+    buf.extend_from_slice(b"fmt ");
+    buf.extend_from_slice(&16u32.to_le_bytes());
+    buf.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    buf.extend_from_slice(&1u16.to_le_bytes()); // mono
+    buf.extend_from_slice(&sr.to_le_bytes());
+    buf.extend_from_slice(&(sr * 2).to_le_bytes());
+    buf.extend_from_slice(&2u16.to_le_bytes());
+    buf.extend_from_slice(&16u16.to_le_bytes());
+    buf.extend_from_slice(b"data");
+    buf.extend_from_slice(&data_len.to_le_bytes());
+    for &s in samples {
+        let v = (s.clamp(-1.0, 1.0) * 32_767.0) as i16;
+        buf.extend_from_slice(&v.to_le_bytes());
+    }
+    std::fs::write(path, buf)
+}
+
 #[tokio::main]
 async fn main() {
     let path = std::env::temp_dir().join("bnb_screenshots.db");
@@ -612,6 +689,22 @@ async fn main() {
         .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
         .unwrap_or(0);
     eprintln!("seeded {total} detections");
+
+    // The newest clips, so we can drop real audio in place: the spectrogram
+    // thumbnail route renders previews only for clips whose audio is present,
+    // so without these the Clips grid shows only the empty-spacer state.
+    let demo_clips: Vec<String> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT File_Name FROM detections WHERE File_Name IS NOT NULL \
+                 ORDER BY Date DESC, Time DESC LIMIT 20",
+            )
+            .expect("prepare recent clips");
+        stmt.query_map([], |r| r.get::<_, String>(0))
+            .expect("query recent clips")
+            .filter_map(Result::ok)
+            .collect()
+    };
 
     // Run exactly like the shipped binary: analytics on *and active*, not
     // merely compiled in. Reopen the seeded SQLite through the analytics-aware
@@ -652,6 +745,11 @@ async fn main() {
     // operator-grade per-source cards (this server runs no real supervisor).
     // Labels match the seeded detection sources so "detections today" merges.
     let state = state.with_capture_status(seed_capture_status());
+
+    // Drop synthetic bird-call WAVs at the newest clips' paths so the
+    // Recordings grid shows real spectrogram thumbnails (the route renders from
+    // these and caches the PNGs under the data dir's `spectrograms/`).
+    seed_demo_audio(&state.recording_dir(), &demo_clips);
 
     let app = build_router(state);
 

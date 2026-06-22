@@ -15,17 +15,24 @@ pub struct SpectrogramLabel {
     pub time: String,
 }
 
-/// Generate a PNG-encoded spectrogram from a WAV file (no label).
+/// Generate a PNG-encoded spectrogram from a WAV file (no label, full size).
 #[cfg(test)]
 #[allow(dead_code)]
 pub(super) fn generate_spectrogram_png(path: &std::path::Path) -> Result<Vec<u8>, String> {
-    generate_spectrogram_png_with_label(path, None)
+    generate_spectrogram_png_with_label(path, None, None)
 }
 
 /// Generate a PNG spectrogram with an optional text overlay.
+///
+/// When `thumb_width` is `Some(w)`, the spectrogram's time axis is max-pooled
+/// down to `w` columns (preserving call structure) and any label is dropped —
+/// the Recordings grid asks for these small previews so it doesn't ship a
+/// multi-thousand-pixel image per row. `None` renders at native resolution (one
+/// column per mel frame), unchanged.
 pub fn generate_spectrogram_png_with_label(
     path: &std::path::Path,
     label: Option<&SpectrogramLabel>,
+    thumb_width: Option<u32>,
 ) -> Result<Vec<u8>, String> {
     use birdnet_core::audio::decode::{SPECTROGRAM_DECODE_SAMPLE_CAP, decode_file_capped};
     use birdnet_core::audio::spectrogram::{MelConfig, mel_spectrogram};
@@ -68,8 +75,46 @@ pub fn generate_spectrogram_png_with_label(
         .map(|m| (0..mel_db.n_frames).map(|f| mel_db.get(m, f)).collect())
         .collect();
 
+    // For a grid thumbnail, collapse the (often thousands of) time columns to a
+    // fixed width with max-pooling so transient calls survive the shrink, and
+    // drop any overlay — a tiny tile has no room for text. Full renders unchanged.
+    if let Some(w) = thumb_width {
+        let thumb = downsample_width(&spec, w as usize);
+        return encode_spectrogram_png_labeled(&thumb, None);
+    }
+
     // Encode to PNG with optional label.
     encode_spectrogram_png_labeled(&spec, label)
+}
+
+/// Max-pool a spectrogram's time axis down to `target_w` columns.
+///
+/// Each output column takes the maximum over the source columns that map to it,
+/// so a brief loud call still lights up its column instead of being averaged
+/// away. Frequency rows are untouched. A spectrogram already at or below
+/// `target_w` columns is returned unchanged (no upsampling).
+fn downsample_width(spec: &[Vec<f32>], target_w: usize) -> Vec<Vec<f32>> {
+    if target_w == 0 || spec.is_empty() {
+        return spec.to_vec();
+    }
+    let src_w = spec[0].len();
+    if src_w <= target_w {
+        return spec.to_vec();
+    }
+    spec.iter()
+        .map(|row| {
+            (0..target_w)
+                .map(|x| {
+                    let x0 = x * src_w / target_w;
+                    let x1 = ((x + 1) * src_w / target_w).max(x0 + 1).min(src_w);
+                    row[x0..x1]
+                        .iter()
+                        .copied()
+                        .fold(f32::NEG_INFINITY, f32::max)
+                })
+                .collect()
+        })
+        .collect()
 }
 
 /// Encode a 2D mel spectrogram as PNG (no label).
@@ -137,4 +182,35 @@ fn encode_spectrogram_png_labeled(
     write_png_rgba(&mut output, width, height, &pixels)
         .map_err(|e| format!("PNG encode error: {e}"))?;
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::downsample_width;
+
+    #[test]
+    fn downsample_width_max_pools_time_and_keeps_rows() {
+        // One row, 6 columns → 3 columns: each output is the max of a pair.
+        let spec = vec![vec![0.0, 9.0, 1.0, 2.0, 3.0, 8.0]];
+        let out = downsample_width(&spec, 3);
+        assert_eq!(out.len(), 1, "row count is preserved");
+        assert_eq!(out[0], vec![9.0, 2.0, 8.0], "each column is the bin max");
+    }
+
+    #[test]
+    fn downsample_width_noop_when_already_small() {
+        // At or below the target width the spectrogram is returned unchanged —
+        // a short clip is never upsampled.
+        let spec = vec![vec![1.0, 2.0], vec![3.0, 4.0]];
+        assert_eq!(downsample_width(&spec, 5), spec);
+        assert_eq!(downsample_width(&spec, 2), spec);
+    }
+
+    #[test]
+    fn downsample_width_preserves_all_rows() {
+        let spec = vec![vec![0.0; 100], vec![1.0; 100], vec![2.0; 100]];
+        let out = downsample_width(&spec, 10);
+        assert_eq!(out.len(), 3);
+        assert!(out.iter().all(|r| r.len() == 10));
+    }
 }

@@ -163,6 +163,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the clip sits on the species' first-ever (historical) date — reusing the
   existing `species_first_seen` query and `bnb-pill` styling (no new query, no
   new tokens). A clip with no first-ever match shows no badge.
+- **Recordings clips show a spectrogram thumbnail.** The last deferred Wave D
+  Recordings omission is now backed honestly — by reusing the existing
+  `/api/v2/spectrogram/{file}` endpoint (the same renderer, viridis colormap and
+  byte-budgeted cache the detection-detail view already uses) rather than a
+  second system. That endpoint gains a `?thumb=1` mode that max-pools the time
+  axis down to a small fixed width (so a multi-second clip ships a few KB instead
+  of a multi-thousand-pixel image, and brief calls still survive the shrink),
+  cached separately from the full-size render. The Clips grid links a lazy-loaded
+  thumbnail only for rows whose audio is present — gated by a single per-page
+  directory scan, the same way the locked-clip set is loaded — so there is no
+  per-row stat, no schema change, and historical clips get a preview too; rows
+  whose audio is gone show an empty aligned spacer rather than a broken image or
+  a faked tile. New CSS only (`.rc-spectro`); no new design tokens, no new
+  dependency.
 - **CI: an accessibility gate and a structural visual-QA sweep.** A new
   `a11y.yml` workflow boots the seeded `screenshot_server` fixture once and runs
   two gates against it — **axe-core** (WCAG 2.1 A/AA, light + dark themes) fails

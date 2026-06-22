@@ -34,7 +34,8 @@
 > log). The per-source live
 > state-chip / 24 h uptime strip / retry line has now landed too — the capture
 > supervisor publishes status to the web layer (see "Landed (Wave D)" below).
-> Still open (Wave D): the Recordings per-clip enrichments; and the remaining
+> The Recordings per-clip enrichments (duration, first/rare badges, and the
+> spectrogram thumbnail) have all landed. Still open (Wave D): the remaining
 > backlog (export wizard, OpenAPI, behavioral-analytics visual surface, tokens
 > doc). The **a11y pass** (chart `<title>`/`<desc>` + `aria-live` live regions)
 > with its **axe + visual-QA CI gates**, and the per-day **"Open day"** landing
@@ -47,10 +48,22 @@
 > omitting it only for rows with no recorded length. Per-row **"first
 > today"/"rare" badges** now land too — keyed on each species' first-ever date
 > via the existing `species_first_seen` query (same signal as the Today feed),
-> reusing `bnb-pill` styling. The per-clip **spectrogram thumbnail** is the only
-> remaining omission — it still has no cheap server-side source (no stored
-> thumbnail), so it stays omitted rather than faked, tracked as Wave D (a cached
-> thumbnail generated at extraction time).
+> reusing `bnb-pill` styling. The per-clip **spectrogram thumbnail** now lands
+> too — by **reusing the existing `/api/v2/spectrogram/{file}` endpoint** (the
+> same renderer, viridis colormap and byte-budgeted in-memory cache the
+> detection-detail view already uses) rather than building a second system. That
+> endpoint gains a `?thumb=1` mode that max-pools the time axis down to a small
+> fixed width (a few KB instead of a multi-thousand-pixel image; brief calls
+> survive the shrink), cached separately from the full render. The grid links a
+> lazy-loaded thumbnail only for rows whose audio is present (one per-page
+> directory scan, mirroring the locked-clip set — no per-row stat, no schema
+> change, historical clips covered); absent-audio rows show an empty aligned
+> spacer, never a broken image or a faked tile. This reuse was chosen over both
+> the originally-sketched "generate at extraction time + store" (which would have
+> needed a migration and a daemon/extractor change) and a standalone renderer
+> (which would have duplicated the endpoint and added a PNG dependency) — same
+> user-visible outcome, lowest risk, no new code paths to maintain. **All
+> Recordings honest omissions are now closed.**
 
 Source of truth: the Claude Design handover packet in this directory
 (`HANDOFF_v3.html` + six `*_home.html` hi-fi mockups), grounded against
