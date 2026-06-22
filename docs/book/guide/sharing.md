@@ -1,6 +1,6 @@
 # Detection Detail & Share Links
 
-Every detection in the app — a feed row on the [dashboard](./dashboard.md), an entry on [Today](./today.md), a point in a chart — links through to a **detail page** that shows everything known about that one moment, and lets you hand it to someone else with a single public link.
+Every detection in the app — a feed row on [Today](./today.md), a point in a chart — links through to a **detail page** that shows everything known about that one moment, and lets you hand it to someone else with a single public link.
 
 ![A detection detail page](../images/detection-detail.png)
 
