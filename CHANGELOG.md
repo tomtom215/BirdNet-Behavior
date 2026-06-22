@@ -7,6 +7,152 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-06-22
+
+### Added
+
+- **OpenAPI 3.1 description of the public JSON API.** The full `/api/v2`
+  surface (44 read-only endpoints across detections, species, recordings,
+  analytics, time-series, export and system) is now described by a committed,
+  hand-maintained OpenAPI 3.1 document (`crates/birdnet-web/openapi.json`),
+  served live at `GET /api/v2/openapi.json` so any tool — Swagger UI, Redoc,
+  Postman, `openapi-generator` — can map the API or generate a client. The spec
+  honestly declares the API as unauthenticated (`security: []`); a committed
+  `redocly.yaml` documents why two of Redocly's opinionated default rules don't
+  apply (intentional openness, read-only endpoints) so `redocly lint` is clean.
+  A test parses the embedded document and asserts every documented path is
+  actually routed, so the spec can't drift out of sync with the server. The
+  HTTP-API reference doc is corrected alongside it (the `detections/daily` and
+  `species/activity` query parameters were documented incorrectly).
+- **Recordings now shows each saved clip's duration.** A deferred Wave D
+  omission (the Clips grid dropped the column rather than fake it) is now
+  backed honestly. **Migration 20** adds a nullable `Duration_Secs` to
+  detections; the daemon reads the source recording's length from its file
+  header — cheaply, via a new `birdnet-core` `decode::probe_duration_secs`, with
+  no re-decode — and persists it. Historical, BirdNET-Pi-imported and
+  quarantine-approve rows have no length to record and stay `NULL` (the grid
+  omits the column for them, never a guess). The Clips grid renders the length
+  as `M:SS` under each row's time.
+- **Recordings clips show "first today" / "rare" badges.** Another deferred Wave
+  D omission: each clip row now carries the same first-seen badge the Today feed
+  shows — "first today" when the species' first-ever record is today, "rare"
+  when the clip sits on the species' first-ever (historical) date — reusing the
+  existing `species_first_seen` query and `bnb-pill` styling (no new query, no
+  new tokens). A clip with no first-ever match shows no badge.
+- **Recordings clips show a spectrogram thumbnail.** The last deferred Wave D
+  Recordings omission is now backed honestly — by reusing the existing
+  `/api/v2/spectrogram/{file}` endpoint (the same renderer, viridis colormap and
+  byte-budgeted cache the detection-detail view already uses) rather than a
+  second system. That endpoint gains a `?thumb=1` mode that max-pools the time
+  axis down to a small fixed width (so a multi-second clip ships a few KB instead
+  of a multi-thousand-pixel image, and brief calls still survive the shrink),
+  cached separately from the full-size render. The Clips grid links a lazy-loaded
+  thumbnail only for rows whose audio is present — gated by a single per-page
+  directory scan, the same way the locked-clip set is loaded — so there is no
+  per-row stat, no schema change, and historical clips get a preview too; rows
+  whose audio is gone show an empty aligned spacer rather than a broken image or
+  a faked tile. New CSS only (`.rc-spectro`); no new design tokens, no new
+  dependency.
+- **CI: an accessibility gate and a structural visual-QA sweep.** A new
+  `a11y.yml` workflow boots the seeded `screenshot_server` fixture once and runs
+  two gates against it — **axe-core** (WCAG 2.1 A/AA, light + dark themes) fails
+  the build on any serious or critical violation, and the **`qa.mjs`** sweep
+  fails on a structural regression: horizontal overflow, console/page errors,
+  responses ≥ 400, broken images or stuck loaders. Path-filtered to web/tooling
+  changes; the visual gate is deterministic (no flaky pixel baselines). The axe
+  gate enforces every serious/critical rule except two deferred (with a written
+  rationale in `axe.mjs`) to a design-reviewed pass: `color-contrast` (the v3
+  palette renders each species' identity hue as text and uses a muted meta-text
+  hierarchy — an all-or-nothing design-token decision) and `link-in-text-block`
+  (an app-wide link-underline policy).
+- **Adopt duckdb-behavioral v0.8.0's new ClickHouse-parity functions.** The
+  community `behavioral` extension served for the bundled DuckDB (v1.5.3) is now
+  v0.8.0 (pin verified — no engine change needed), which adds `sequence_count`,
+  `window_funnel_events` and `sequence_match_events`. `birdnet-behavioral` gains
+  typed wrappers for all three — `AnalyticsDb::sequence_count` (how *many* times
+  an ordered species sequence occurred per day, not just whether it did),
+  `AnalyticsDb::funnel_events` (the timestamp each completed dawn-chorus step
+  fired) and `AnalyticsDb::sequence_match_events` (the per-step timestamps of an
+  ordered NFA-pattern match — the longest in-order prefix reached that day) —
+  with SQL builders, unit tests, and live tests verified against the real
+  extension. Exposed over the REST API as
+  `/analytics/{sequence-count,funnel-events,sequence-match-events}`.
+- **The Patterns → Behavior tab surfaces the dawn "running order."** A new
+  defined-in-place card reads the station's own dawn-window data to pick the
+  morning's leading voices, then uses v0.8.0's `sequence_count` and
+  `sequence_match_events` to show how *often* they sing in that exact order and,
+  on a recent morning, the *time* each one checked in. Both halves share the
+  same NFA-match semantics, so the headline count and the step timing can't
+  disagree. The sequence is derived from the data rather than hard-coded (the
+  REST defaults are European), so the card reads honestly at a North-American
+  station too. The card now also **leads with a funnel picture** (a new
+  server-rendered inline-SVG `viz::sequence_funnel`) built from v0.8.0's
+  `window_funnel`: how many mornings reach each step of the running order, the
+  bars narrowing as the chorus progresses — drop-off you can read at a glance.
+  It is omitted, never drawn empty, when no morning reaches even the first step.
+- Permanent (`308`) redirects from every pre-spine route to its new home
+  (`/today`, `/heatmap`, `/analytics`, `/migration`, `/correlation`,
+  `/timeseries`, `/analytics/dawn-chorus`, `/weekly`, `/year-in-review`,
+  `/history`, `/system`, plus the live-audio paths `/listen`, `/livestream`
+  and `/live`), so existing bookmarks and BirdNET-Pi muscle memory never 404.
+- `recent_clips` / `recent_clips_count` (`birdnet-db`): a cross-date,
+  filterable, paginated query of clips that saved an audio file, behind a
+  `RecordingsFilter` (All · Best · Rare · Locked) that reuses the Today log's
+  "best"/"rare" definitions. Powers the Recordings Clips browser.
+
+- **Self-hosted ingest endpoint for uploads** (`BIRDWEATHER_URL` config key /
+  `BIRDNET_BIRDWEATHER_URL` env). Research programmes tracking sensitive
+  species can route the entire upload pipeline — including the offline queue
+  and ordered replay — at their own endpoint implementing the `BirdWeather`
+  station API shape, keeping observation locations under their own
+  governance. Only the host changes; the `/stations/<token>/...` path shape
+  is preserved, and the active endpoint is logged at startup.
+- **End-to-end delivery proof for the store-and-forward queue**
+  (`tests/store_forward_e2e.rs`): boots the real compiled binary against a
+  local stub `BirdWeather` server with a pre-seeded backlog and asserts the
+  drainer replays it oldest-first, in the real camelCase wire format, to the
+  station-token path, and leaves the queue empty — closing the one branch of
+  the replay loop (deliver → 200 → dequeue) that the outage-side live test
+  could not reach.
+
+- **Store-and-forward `BirdWeather` uploads** (`outbound_queue`, migration
+  19). Posts that fail after their in-flight retries are parked in the local
+  database and replayed automatically when the uplink returns — oldest
+  first, capped batches with spacing, exponential backoff to a 1 h ceiling,
+  bounded to 5 000 entries and 48 attempts so a weeks-long outage can never
+  grow the database without limit. The field runbook had promised
+  "buffered locally; retried with exponential backoff" all along; the code
+  now keeps that promise. MQTT and Apprise/email deliberately stay
+  fire-and-forget (live telemetry / look-now alerts — replaying them hours
+  later is worse than dropping them). Exposed as the
+  `birdnet_outbound_queue_depth{kind}` gauge and a "Queued Uploads" row on
+  the `/system` page whenever non-empty.
+- **Detection deadman watchdog.** The end-to-end "is the station actually
+  detecting?" check: every component gauge can be green while a clogged
+  mic foam or a model/labels mismatch silences the station. The daemon now
+  measures seconds-since-last-detection (in SQLite's own localtime lens, so
+  no TZ skew), exports it as `birdnet_detection_silence_seconds`, surfaces
+  it on `/api/v2/health` (`detection_silence_secs`) and as the `/system`
+  page's "Last Detection" row, and after a configurable quiet threshold
+  (`--deadman-hours` / `BIRDNET_DEADMAN_HOURS` / `DEADMAN_HOURS`, default
+  24 h, `0` disables) logs a loud warning and sends one Apprise alert per
+  quiet episode with a recovery notice when detections resume.
+
+- **Silent-stall detection for capture sources.** The supervisor now watches
+  each source's newest recording segment: a subprocess that stays alive but
+  stops delivering audio (a wedged RTSP session, a USB mic hung after a
+  re-enumeration) is detected after several missed segments and restarted
+  through the same backoff path as a crash — closing the field failure where
+  `is_running` reports healthy but a camera has gone quiet. Fails open while
+  the clock is unsynced (segment mtimes aren't trustworthy pre-NTP).
+
+- `cargo-fuzz` harnesses (`fuzz/`) for the untrusted-input parsers: symphonia
+  audio decode (WAV/FLAC/MP3 demux of watch-directory files) and the
+  species-label parsers, with a seeding recipe in `fuzz/README.md`.
+- `CITATION.cff` (with the BirdNET reference), `GOVERNANCE.md`,
+  `.gitattributes` (LF normalization + binary markers), and live CI /
+  coverage / supply-chain badges in the README.
+
 ### Changed
 
 - **Web UI reorganized into six homes (the "v3 spine").** The navigation
@@ -146,181 +292,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `aria-pressed`, the view switcher with `aria-current`) — and the kiosk's
   scrolling recent-feed is now keyboard-focusable.
 
-### Added
+- The time-series dashboard's 13-row API-endpoints table is collapsed into a
+  disclosure ("API endpoints · for scripts & integrations") so the page reads
+  as a field tool, not an API manual.
+- Kiosk mode gained an escape hatch — a dimmed corner "Exit" link and the
+  ESC key both return to the dashboard (it was a dead end with no way back).
+- The recordings species list uses the shared illustrated empty-state
+  component instead of a bare `<p>No species detected yet.</p>`.
 
-- **OpenAPI 3.1 description of the public JSON API.** The full `/api/v2`
-  surface (44 read-only endpoints across detections, species, recordings,
-  analytics, time-series, export and system) is now described by a committed,
-  hand-maintained OpenAPI 3.1 document (`crates/birdnet-web/openapi.json`),
-  served live at `GET /api/v2/openapi.json` so any tool — Swagger UI, Redoc,
-  Postman, `openapi-generator` — can map the API or generate a client. The spec
-  honestly declares the API as unauthenticated (`security: []`); a committed
-  `redocly.yaml` documents why two of Redocly's opinionated default rules don't
-  apply (intentional openness, read-only endpoints) so `redocly lint` is clean.
-  A test parses the embedded document and asserts every documented path is
-  actually routed, so the spec can't drift out of sync with the server. The
-  HTTP-API reference doc is corrected alongside it (the `detections/daily` and
-  `species/activity` query parameters were documented incorrectly).
-- **Recordings now shows each saved clip's duration.** A deferred Wave D
-  omission (the Clips grid dropped the column rather than fake it) is now
-  backed honestly. **Migration 20** adds a nullable `Duration_Secs` to
-  detections; the daemon reads the source recording's length from its file
-  header — cheaply, via a new `birdnet-core` `decode::probe_duration_secs`, with
-  no re-decode — and persists it. Historical, BirdNET-Pi-imported and
-  quarantine-approve rows have no length to record and stay `NULL` (the grid
-  omits the column for them, never a guess). The Clips grid renders the length
-  as `M:SS` under each row's time.
-- **Recordings clips show "first today" / "rare" badges.** Another deferred Wave
-  D omission: each clip row now carries the same first-seen badge the Today feed
-  shows — "first today" when the species' first-ever record is today, "rare"
-  when the clip sits on the species' first-ever (historical) date — reusing the
-  existing `species_first_seen` query and `bnb-pill` styling (no new query, no
-  new tokens). A clip with no first-ever match shows no badge.
-- **Recordings clips show a spectrogram thumbnail.** The last deferred Wave D
-  Recordings omission is now backed honestly — by reusing the existing
-  `/api/v2/spectrogram/{file}` endpoint (the same renderer, viridis colormap and
-  byte-budgeted cache the detection-detail view already uses) rather than a
-  second system. That endpoint gains a `?thumb=1` mode that max-pools the time
-  axis down to a small fixed width (so a multi-second clip ships a few KB instead
-  of a multi-thousand-pixel image, and brief calls still survive the shrink),
-  cached separately from the full-size render. The Clips grid links a lazy-loaded
-  thumbnail only for rows whose audio is present — gated by a single per-page
-  directory scan, the same way the locked-clip set is loaded — so there is no
-  per-row stat, no schema change, and historical clips get a preview too; rows
-  whose audio is gone show an empty aligned spacer rather than a broken image or
-  a faked tile. New CSS only (`.rc-spectro`); no new design tokens, no new
-  dependency.
-- **CI: an accessibility gate and a structural visual-QA sweep.** A new
-  `a11y.yml` workflow boots the seeded `screenshot_server` fixture once and runs
-  two gates against it — **axe-core** (WCAG 2.1 A/AA, light + dark themes) fails
-  the build on any serious or critical violation, and the **`qa.mjs`** sweep
-  fails on a structural regression: horizontal overflow, console/page errors,
-  responses ≥ 400, broken images or stuck loaders. Path-filtered to web/tooling
-  changes; the visual gate is deterministic (no flaky pixel baselines). The axe
-  gate enforces every serious/critical rule except two deferred (with a written
-  rationale in `axe.mjs`) to a design-reviewed pass: `color-contrast` (the v3
-  palette renders each species' identity hue as text and uses a muted meta-text
-  hierarchy — an all-or-nothing design-token decision) and `link-in-text-block`
-  (an app-wide link-underline policy).
-- **Adopt duckdb-behavioral v0.8.0's new ClickHouse-parity functions.** The
-  community `behavioral` extension served for the bundled DuckDB (v1.5.3) is now
-  v0.8.0 (pin verified — no engine change needed), which adds `sequence_count`,
-  `window_funnel_events` and `sequence_match_events`. `birdnet-behavioral` gains
-  typed wrappers for all three — `AnalyticsDb::sequence_count` (how *many* times
-  an ordered species sequence occurred per day, not just whether it did),
-  `AnalyticsDb::funnel_events` (the timestamp each completed dawn-chorus step
-  fired) and `AnalyticsDb::sequence_match_events` (the per-step timestamps of an
-  ordered NFA-pattern match — the longest in-order prefix reached that day) —
-  with SQL builders, unit tests, and live tests verified against the real
-  extension. Exposed over the REST API as
-  `/analytics/{sequence-count,funnel-events,sequence-match-events}`.
-- **The Patterns → Behavior tab surfaces the dawn "running order."** A new
-  defined-in-place card reads the station's own dawn-window data to pick the
-  morning's leading voices, then uses v0.8.0's `sequence_count` and
-  `sequence_match_events` to show how *often* they sing in that exact order and,
-  on a recent morning, the *time* each one checked in. Both halves share the
-  same NFA-match semantics, so the headline count and the step timing can't
-  disagree. The sequence is derived from the data rather than hard-coded (the
-  REST defaults are European), so the card reads honestly at a North-American
-  station too. The card now also **leads with a funnel picture** (a new
-  server-rendered inline-SVG `viz::sequence_funnel`) built from v0.8.0's
-  `window_funnel`: how many mornings reach each step of the running order, the
-  bars narrowing as the chorus progresses — drop-off you can read at a glance.
-  It is omitted, never drawn empty, when no morning reaches even the first step.
-- Permanent (`308`) redirects from every pre-spine route to its new home
-  (`/today`, `/heatmap`, `/analytics`, `/migration`, `/correlation`,
-  `/timeseries`, `/analytics/dawn-chorus`, `/weekly`, `/year-in-review`,
-  `/history`, `/system`, plus the live-audio paths `/listen`, `/livestream`
-  and `/live`), so existing bookmarks and BirdNET-Pi muscle memory never 404.
-- `recent_clips` / `recent_clips_count` (`birdnet-db`): a cross-date,
-  filterable, paginated query of clips that saved an audio file, behind a
-  `RecordingsFilter` (All · Best · Rare · Locked) that reuses the Today log's
-  "best"/"rare" definitions. Powers the Recordings Clips browser.
-
-## [0.8.0] - 2026-06-11
-
-### CI
-
-- **Mutation testing is now incremental on PRs and ~4× cheaper per mutant.**
-  Three layers, each measured: a `mutants` build profile (no debug info —
-  per-mutant cost 132 s → 36 s, baseline 90 s + 91 s → 16 s + 21 s on the
-  binary-crate shards); unit-test-only target selection per package
-  (`--lib` / `--bins`), so the mutant loop no longer rebuilds eight
-  DuckDB-linking integration-test executables nor boots real binaries; and
-  `--in-diff` scoping on pull requests, so only mutants on changed lines
-  run (a test-only one-line diff finishes in 0.2 s, "No mutants to
-  filter") while the weekly cron, pushes to main, and manual dispatch
-  still run every shard's full set. Config lives in `.cargo/mutants.toml`
-  so local `cargo mutants` runs share the same economics.
-
-### Dependencies
-
-- `mdbook` 0.4.52 → **`mdbook-driver` 0.5.3** (folds dependabot #151): mdbook
-  0.5 split the project into facade crates and made the `mdbook` crate
-  binary-only, so the docs build now consumes the library through
-  `mdbook-driver`. The book config dropped the options 0.5 removed
-  (`copy-fonts`, `multilingual`), `build.rs` now surfaces the *underlying*
-  load error instead of a silent "could not load" (that silence briefly
-  masked exactly this migration), and the rendered manual was verified
-  page-for-page. New transitive `font-awesome-as-a-crate` carries
-  `CC-BY-4.0 AND MIT` for the icon *assets* (attribution-only, not
-  copyleft) — allowed via a crate-scoped `deny.toml` exception rather than
-  a global allow.
-- `rusqlite` 0.40.0 → 0.40.1 (folds dependabot #147).
-- `codecov/codecov-action` v6 → v7.0.0, SHA-pinned (folds dependabot #150).
-- `password-hash` 0.5 → 0.6 (dependabot #148) is **deliberately not
-  taken**: argon2 0.5.x implements password-hash *0.5*'s hasher traits and
-  our accounts code passes those types straight into `Argon2` — the bump
-  alone does not compile (verified). A manifest comment now documents the
-  lock-step requirement; take both together when argon2 0.6 ships.
-
-### Added
-
-- **Self-hosted ingest endpoint for uploads** (`BIRDWEATHER_URL` config key /
-  `BIRDNET_BIRDWEATHER_URL` env). Research programmes tracking sensitive
-  species can route the entire upload pipeline — including the offline queue
-  and ordered replay — at their own endpoint implementing the `BirdWeather`
-  station API shape, keeping observation locations under their own
-  governance. Only the host changes; the `/stations/<token>/...` path shape
-  is preserved, and the active endpoint is logged at startup.
-- **End-to-end delivery proof for the store-and-forward queue**
-  (`tests/store_forward_e2e.rs`): boots the real compiled binary against a
-  local stub `BirdWeather` server with a pre-seeded backlog and asserts the
-  drainer replays it oldest-first, in the real camelCase wire format, to the
-  station-token path, and leaves the queue empty — closing the one branch of
-  the replay loop (deliver → 200 → dequeue) that the outage-side live test
-  could not reach.
-
-- **Store-and-forward `BirdWeather` uploads** (`outbound_queue`, migration
-  19). Posts that fail after their in-flight retries are parked in the local
-  database and replayed automatically when the uplink returns — oldest
-  first, capped batches with spacing, exponential backoff to a 1 h ceiling,
-  bounded to 5 000 entries and 48 attempts so a weeks-long outage can never
-  grow the database without limit. The field runbook had promised
-  "buffered locally; retried with exponential backoff" all along; the code
-  now keeps that promise. MQTT and Apprise/email deliberately stay
-  fire-and-forget (live telemetry / look-now alerts — replaying them hours
-  later is worse than dropping them). Exposed as the
-  `birdnet_outbound_queue_depth{kind}` gauge and a "Queued Uploads" row on
-  the `/system` page whenever non-empty.
-- **Detection deadman watchdog.** The end-to-end "is the station actually
-  detecting?" check: every component gauge can be green while a clogged
-  mic foam or a model/labels mismatch silences the station. The daemon now
-  measures seconds-since-last-detection (in SQLite's own localtime lens, so
-  no TZ skew), exports it as `birdnet_detection_silence_seconds`, surfaces
-  it on `/api/v2/health` (`detection_silence_secs`) and as the `/system`
-  page's "Last Detection" row, and after a configurable quiet threshold
-  (`--deadman-hours` / `BIRDNET_DEADMAN_HOURS` / `DEADMAN_HOURS`, default
-  24 h, `0` disables) logs a loud warning and sends one Apprise alert per
-  quiet episode with a recovery notice when detections resume.
-
-- **Silent-stall detection for capture sources.** The supervisor now watches
-  each source's newest recording segment: a subprocess that stays alive but
-  stops delivering audio (a wedged RTSP session, a USB mic hung after a
-  re-enumeration) is detected after several missed segments and restarted
-  through the same backoff path as a crash — closing the field failure where
-  `is_running` reports healthy but a camera has gone quiet. Fails open while
-  the clock is unsynced (segment mtimes aren't trustworthy pre-NTP).
+- `unsafe_code` lint raised from `deny` to `forbid` workspace-wide (what the
+  README badge always claimed); `missing_docs` is now enforced and the ~250
+  previously undocumented public items carry real rustdoc.
+- Retry constants unified across `apprise` / `birdweather` / `wikipedia` to
+  `MAX_ATTEMPTS` (total attempts) with exclusive ranges — the previous mix of
+  inclusive/exclusive `MAX_RETRIES` loops made two of the three doc comments
+  wrong. No behavioral change.
 
 ### Fixed
 
@@ -358,26 +344,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unmatched paths under `/api/` return a machine-readable JSON 404 instead
   of the branded HTML page, so scripts and dashboards see the real failure.
 
-### Changed (UI)
-
-- The time-series dashboard's 13-row API-endpoints table is collapsed into a
-  disclosure ("API endpoints · for scripts & integrations") so the page reads
-  as a field tool, not an API manual.
-- Kiosk mode gained an escape hatch — a dimmed corner "Exit" link and the
-  ESC key both return to the dashboard (it was a dead end with no way back).
-- The recordings species list uses the shared illustrated empty-state
-  component instead of a bare `<p>No species detected yet.</p>`.
-
-### Changed
-
-- `unsafe_code` lint raised from `deny` to `forbid` workspace-wide (what the
-  README badge always claimed); `missing_docs` is now enforced and the ~250
-  previously undocumented public items carry real rustdoc.
-- Retry constants unified across `apprise` / `birdweather` / `wikipedia` to
-  `MAX_ATTEMPTS` (total attempts) with exclusive ranges — the previous mix of
-  inclusive/exclusive `MAX_RETRIES` loops made two of the three doc comments
-  wrong. No behavioral change.
-
 ### Security
 
 - Auto-update HTTP reads are bounded (release metadata 8 MiB, `SHA256SUMS`
@@ -389,14 +355,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the least-privilege `permissions: contents: read` block the other
   workflows already had.
 
-### Added
+### CI
 
-- `cargo-fuzz` harnesses (`fuzz/`) for the untrusted-input parsers: symphonia
-  audio decode (WAV/FLAC/MP3 demux of watch-directory files) and the
-  species-label parsers, with a seeding recipe in `fuzz/README.md`.
-- `CITATION.cff` (with the BirdNET reference), `GOVERNANCE.md`,
-  `.gitattributes` (LF normalization + binary markers), and live CI /
-  coverage / supply-chain badges in the README.
+- **Mutation testing is now incremental on PRs and ~4× cheaper per mutant.**
+  Three layers, each measured: a `mutants` build profile (no debug info —
+  per-mutant cost 132 s → 36 s, baseline 90 s + 91 s → 16 s + 21 s on the
+  binary-crate shards); unit-test-only target selection per package
+  (`--lib` / `--bins`), so the mutant loop no longer rebuilds eight
+  DuckDB-linking integration-test executables nor boots real binaries; and
+  `--in-diff` scoping on pull requests, so only mutants on changed lines
+  run (a test-only one-line diff finishes in 0.2 s, "No mutants to
+  filter") while the weekly cron, pushes to main, and manual dispatch
+  still run every shard's full set. Config lives in `.cargo/mutants.toml`
+  so local `cargo mutants` runs share the same economics.
+
+### Dependencies
+
+- `mdbook` 0.4.52 → **`mdbook-driver` 0.5.3** (folds dependabot #151): mdbook
+  0.5 split the project into facade crates and made the `mdbook` crate
+  binary-only, so the docs build now consumes the library through
+  `mdbook-driver`. The book config dropped the options 0.5 removed
+  (`copy-fonts`, `multilingual`), `build.rs` now surfaces the *underlying*
+  load error instead of a silent "could not load" (that silence briefly
+  masked exactly this migration), and the rendered manual was verified
+  page-for-page. New transitive `font-awesome-as-a-crate` carries
+  `CC-BY-4.0 AND MIT` for the icon *assets* (attribution-only, not
+  copyleft) — allowed via a crate-scoped `deny.toml` exception rather than
+  a global allow.
+- `rusqlite` 0.40.0 → 0.40.1 (folds dependabot #147).
+- `codecov/codecov-action` v6 → v7.0.0, SHA-pinned (folds dependabot #150).
+- `password-hash` 0.5 → 0.6 (dependabot #148) is **deliberately not
+  taken**: argon2 0.5.x implements password-hash *0.5*'s hasher traits and
+  our accounts code passes those types straight into `Argon2` — the bump
+  alone does not compile (verified). A manifest comment now documents the
+  lock-step requirement; take both together when argon2 0.6 ships.
 
 ## [0.7.2] - 2026-06-07
 
@@ -1975,7 +1967,8 @@ x86_64 Linux.
 - systemd installer script with ALSA microphone auto-detection and
   automatic BirdNET+ model download from Zenodo.
 
-[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.7.2...v0.9.0
 [0.7.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.2...v0.5.3

@@ -35,9 +35,11 @@
 > state-chip / 24 h uptime strip / retry line has now landed too — the capture
 > supervisor publishes status to the web layer (see "Landed (Wave D)" below).
 > The Recordings per-clip enrichments (duration, first/rare badges, and the
-> spectrogram thumbnail) have all landed. Still open (Wave D): the remaining
-> backlog (export wizard, OpenAPI, behavioral-analytics visual surface, tokens
-> doc). The **a11y pass** (chart `<title>`/`<desc>` + `aria-live` live regions)
+> spectrogram thumbnail) have all landed, as have the **OpenAPI 3.1 spec**, the
+> **behavioral-analytics visual surface** (the dawn running-order funnel), and
+> the **design-tokens reference doc**. Still open (Wave D): the export wizard UI,
+> the first-detection celebration moment, and WS-reconnect polish. The **a11y
+> pass** (chart `<title>`/`<desc>` + `aria-live` live regions)
 > with its **axe + visual-QA CI gates**, and the per-day **"Open day"** landing
 > (`/reports/day`), have now landed (see "Landed (Wave D)" below).
 >
