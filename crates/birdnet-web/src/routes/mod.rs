@@ -12,6 +12,7 @@ pub mod feeds;
 pub mod health;
 pub mod images;
 pub mod livestream;
+pub mod openapi;
 pub mod pages;
 pub mod recordings;
 pub mod redirects;
@@ -70,6 +71,7 @@ pub fn public_routes() -> Router<AppState> {
         .nest("/api/v2", analytics::router())
         .nest("/api/v2", timeseries::router())
         .nest("/api/v2", system::router())
+        .nest("/api/v2", openapi::router())
         .nest("/api/v2", export::router())
         .nest("/api/v2", websocket::router())
         .nest("/api/v2", images::router())

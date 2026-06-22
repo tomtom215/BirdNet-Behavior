@@ -65,3 +65,5 @@ aas = "aas"           # CSS class prefix for the admin_audio_sources templates
 thr = "thr"           # CSS class prefix for the species threshold table
 woth = "woth"         # four-letter banding code for Wood Thrush (Hylocichla mustelina)
 iif = "iif"           # token split from "IIFE" (immediately-invoked function expression)
+redoc = "redoc"       # Redoc — the OpenAPI documentation renderer
+redocly = "redocly"   # Redocly — the OpenAPI linter / CLI (see redocly.yaml)

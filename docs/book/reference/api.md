@@ -6,6 +6,8 @@ Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It
 
 > **Auth:** the built-in HTTP Basic Auth gates only the `/admin*` UI routes. Every `/api/v2/*` endpoint, the WebSocket stream, and the health check are open to anyone who can reach the port — restrict them at the network layer (VPN / proxy allow-list) if that matters.
 
+> **OpenAPI:** a complete, machine-readable **OpenAPI 3.1** description of this API is served at [`GET /api/v2/openapi.json`](http://localhost:8502/api/v2/openapi.json) (and committed at [`crates/birdnet-web/openapi.json`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/crates/birdnet-web/openapi.json)). Load it into Swagger UI, Redoc, Postman, or `openapi-generator` to explore the endpoints and generate clients.
+
 ## Health & metrics
 
 ```bash
@@ -65,9 +67,9 @@ curl 'http://localhost:8502/api/v2/detections/recent?limit=2'
 
 | Endpoint | Common query params |
 |---|---|
-| `GET /api/v2/detections` | `limit`, `offset` — paginated list |
+| `GET /api/v2/detections` | `date`, `species`, `limit`, `offset` — paginated list |
 | `GET /api/v2/detections/recent` | `limit` — most recent first |
-| `GET /api/v2/detections/daily` | `date` — detections for one day |
+| `GET /api/v2/detections/daily` | `days` — per-day counts over the last N days |
 
 ## Species
 
@@ -76,7 +78,7 @@ curl 'http://localhost:8502/api/v2/detections/recent?limit=2'
 | `GET /api/v2/species/top` | `limit` | Most-detected species with counts |
 | `GET /api/v2/species/search` | `q`, `limit` | Search by name |
 | `GET /api/v2/species/detail` | `name` | Per-species stats |
-| `GET /api/v2/species/activity` | `name` | Hourly activity for a species |
+| `GET /api/v2/species/activity` | `date` | Hourly activity (all species) on a given day |
 | `GET /api/v2/species/image/{scientific_name}` | — | Cached Wikipedia image (redirect/bytes) |
 | `GET /api/v2/recordings/{filename}` | — | Stream a recorded clip (WAV) |
 

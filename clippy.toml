@@ -26,6 +26,7 @@ doc-valid-idents = [
     "ONNX", "WAV", "FLAC", "MP3", "OGG", "PCM", "RTSP", "ALSA",
     "PulseAudio", "PipeWire", "ffmpeg", "arecord", "Zenodo",
     "HTMX", "HTTP", "HTTPS", "REST", "WebSocket", "JSON", "TLS", "mTLS",
+    "OpenAPI", "Swagger", "Redoc", "Redocly", "Postman",
     "MQTT", "IoT", "HomeAssistant", "Mosquitto", "NodeRED",
     "Linux", "macOS", "Raspberry", "Pi", "ARM", "aarch64", "x86_64",
     "Avahi", "mDNS", "ZRAM",

@@ -264,11 +264,21 @@ to the new routes. Commit per wave; push per milestone.
 
 From the handoff §05: axe + visual-regression CI, export wizard UI,
 first-detection celebration moment, WS-reconnect polish, tokens doc,
-OpenAPI, docs truth-sweep (web-api.md Basic-Auth drift). Plus anything from
+docs truth-sweep (web-api.md Basic-Auth drift). Plus anything from
 the mocks that lacks a backend today (noted inline during implementation).
 
 **Landed (Wave D).**
 
+- **OpenAPI 3.1 spec for the public JSON API.** A committed, hand-maintained
+  `crates/birdnet-web/openapi.json` documents all 44 read-only `/api/v2`
+  endpoints (params + response schemas), served live at `/api/v2/openapi.json`
+  for Swagger UI / Redoc / Postman / `openapi-generator`. It declares the API
+  honestly as unauthenticated (`security: []`); a `redocly.yaml` documents why
+  two opinionated default lint rules don't apply (so `redocly lint` is clean). A
+  test parses the embedded document and asserts every documented path is routed,
+  so the spec can't silently drift from the server. The HTTP-API reference doc
+  was corrected at the same time (`detections/daily` takes `days` not `date`;
+  `species/activity` takes `date` not `name`).
 - **Behavior tab — the dawn "running order" card.** Surfaces v0.8.0's
   `sequence_count` + `sequence_match_events` in the Patterns → Behavior
   `pt-masonry`. A new `/pages/analytics-dawn-sequence` partial derives the
