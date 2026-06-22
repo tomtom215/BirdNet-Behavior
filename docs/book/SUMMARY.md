@@ -54,6 +54,7 @@ phone bottom bar): **Today**, **Species**, **Patterns**, **Recordings**,
 - [Full Configuration Reference](./reference/configuration-reference.md)
 - [Web UI & URLs](./reference/web-api.md)
 - [HTTP & WebSocket API](./reference/api.md)
+- [Design Tokens](./reference/design-tokens.md)
 - [Integrations Reference](./reference/integrations.md)
 - [Architecture](./reference/architecture.md)
 
