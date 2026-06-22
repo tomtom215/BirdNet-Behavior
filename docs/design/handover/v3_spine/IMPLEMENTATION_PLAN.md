@@ -287,7 +287,14 @@ the mocks that lacks a backend today (noted inline during implementation).
   for the European REST defaults), then shows how *often* they sing in that
   order and the step timing of a recent morning. Both halves share the same
   NFA-match semantics so they can't disagree. Reuses `pt-tbl` / `pt-disc` /
-  `bh-*` — zero new CSS.
+  `bh-*` — zero new CSS. The card now also **leads with a funnel picture** — a
+  new `viz::sequence_funnel` inline-SVG built from v0.8.0's `window_funnel`
+  (`AnalyticsDb::funnel`): how many mornings reach each step of the running
+  order, the bars narrowing as the chorus progresses. Labels sit on the card
+  surface (not over the coloured bars) so contrast is unaffected; the chart
+  carries a `viz::svg_a11y` title/desc and is omitted (never drawn empty) when
+  no morning reaches the first step. This closes the deferred
+  "behavioral-analytics visual surface" backlog item.
 - **Completed the v0.8.0 function set.** `sequence_match_events` (the last of
   the three new ClickHouse-parity functions) is now adopted end-to-end —
   `queries::sequence_match_events_sql`, `types::PatternMatchEvents`,

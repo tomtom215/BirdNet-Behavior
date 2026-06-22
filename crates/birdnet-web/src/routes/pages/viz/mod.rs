@@ -12,10 +12,17 @@
 //! Colours come from `super::atoms::species_color` so a species keeps the same
 //! hue across every screen.
 
+// The funnel is the one viz used only by the analytics-gated dawn card, so it
+// is gated to match — keeping the slim `--no-default-features` build free of an
+// unused renderer.
+#[cfg(feature = "analytics")]
+pub(crate) mod funnel;
 pub(crate) mod matrix;
 pub(crate) mod radial;
 pub(crate) mod timeline;
 
+#[cfg(feature = "analytics")]
+pub(crate) use funnel::sequence_funnel;
 pub(crate) use matrix::cooccurrence_matrix;
 pub(crate) use radial::{chord_diagram, circadian_polar};
 pub(crate) use timeline::{accumulation_curve, day_strip, ridgeline, streamgraph};

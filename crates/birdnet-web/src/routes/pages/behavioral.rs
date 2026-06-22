@@ -279,6 +279,10 @@ pub(super) async fn analytics_next_partial(
 const DAWN_HOUR_START: u32 = 4;
 #[cfg(feature = "analytics")]
 const DAWN_HOUR_END: u32 = 8;
+/// Funnel window (minutes) — a morning's run may span the whole dawn window, so
+/// the `window_funnel` window covers hours 4–8.
+#[cfg(feature = "analytics")]
+const DAWN_FUNNEL_WINDOW_MINUTES: u32 = 240;
 
 /// HTMX partial: the dawn "running order" — how often the morning's leading
 /// voices sing in sequence (`sequence_count`, v0.8.0) plus the step timing of a
@@ -308,6 +312,12 @@ pub(super) async fn analytics_dawn_sequence_partial(
             hour_start: DAWN_HOUR_START,
             hour_end: DAWN_HOUR_END,
         };
+        let funnel_params = birdnet_behavioral::types::FunnelParams {
+            species_sequence: sequence.clone(),
+            window_minutes: DAWN_FUNNEL_WINDOW_MINUTES,
+            hour_start: DAWN_HOUR_START,
+            hour_end: DAWN_HOUR_END,
+        };
         state
             .with_analytics(|adb| {
                 // Both run the same NFA pattern over the same params: how *often*
@@ -317,7 +327,10 @@ pub(super) async fn analytics_dawn_sequence_partial(
                 // show, so the headline and the morning we surface stay aligned.
                 let counts = adb.sequence_count(&params)?;
                 let events = adb.sequence_match_events(&params)?;
-                Ok((sequence, counts, events))
+                // window_funnel over the same sequence: how far each morning got
+                // down the chain, aggregated into the funnel picture.
+                let funnel = adb.funnel(&funnel_params)?;
+                Ok((sequence, counts, events, funnel))
             })
             .unwrap_or_else(|| {
                 Err(
@@ -331,10 +344,10 @@ pub(super) async fn analytics_dawn_sequence_partial(
     .await;
 
     match result {
-        Ok(Ok(Some((sequence, counts, events)))) => (
+        Ok(Ok(Some((sequence, counts, events, funnel)))) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/html")],
-            render_dawn_sequence(&sequence, &counts, &events),
+            render_dawn_sequence(&sequence, &counts, &events, &funnel),
         ),
         Ok(Ok(None)) => (
             StatusCode::OK,
@@ -411,6 +424,22 @@ fn best_progression(
     events.iter().find(|e| e.step_times.len() == full_len)
 }
 
+/// Per-step "mornings that reached this step" counts from the per-day funnel
+/// results: step `k` (1-based) is the number of days whose `steps_completed`
+/// reached at least `k`. The result is non-increasing — the funnel shape.
+#[cfg(feature = "analytics")]
+fn funnel_step_counts(
+    funnel: &[birdnet_behavioral::types::ChorusFunnel],
+    total_steps: usize,
+) -> Vec<u64> {
+    let total = u32::try_from(total_steps).unwrap_or(u32::MAX);
+    (1..=total)
+        .map(|k| {
+            u64::try_from(funnel.iter().filter(|f| f.steps_completed >= k).count()).unwrap_or(0)
+        })
+        .collect()
+}
+
 /// Render the dawn-sequence card body from the derived sequence, its per-day
 /// occurrence counts (`sequence_count`) and step timings (`sequence_match_events`).
 #[cfg(feature = "analytics")]
@@ -418,6 +447,7 @@ fn render_dawn_sequence(
     sequence: &[String],
     counts: &[birdnet_behavioral::types::PatternCount],
     events: &[birdnet_behavioral::types::PatternMatchEvents],
+    funnel: &[birdnet_behavioral::types::ChorusFunnel],
 ) -> String {
     let chain = sequence
         .iter()
@@ -432,6 +462,16 @@ fn render_dawn_sequence(
 
     let mut html =
         format!(r#"<p class="bh-after">Your dawn tends to open <strong>{chain}</strong>.</p>"#);
+
+    // Lead with the picture (the Patterns idiom): the funnel of how many
+    // mornings reach each step of the run. Omitted — never an empty chart — when
+    // nothing reached even the first step.
+    let step_counts = funnel_step_counts(funnel, sequence.len());
+    if step_counts.first().is_some_and(|c| *c > 0) {
+        let steps: Vec<(String, u64)> = sequence.iter().cloned().zip(step_counts).collect();
+        html.push_str(r#"<p class="bnb-meta">Mornings reaching each step:</p>"#);
+        html.push_str(&super::viz::sequence_funnel(&steps));
+    }
 
     if total_occ == 0 {
         html.push_str(
@@ -582,4 +622,37 @@ fn find_rate(rates: &[birdnet_behavioral::types::RetentionRate], days: u32) -> S
         .iter()
         .find(|r| r.days == days)
         .map_or_else(|| "—".to_string(), |r| format!("{:.0}%", r.rate * 100.0))
+}
+
+#[cfg(all(test, feature = "analytics"))]
+mod tests {
+    use super::funnel_step_counts;
+    use birdnet_behavioral::types::ChorusFunnel;
+
+    fn cf(steps_completed: u32) -> ChorusFunnel {
+        ChorusFunnel {
+            date: "2026-06-21".into(),
+            steps_completed,
+            total_steps: 3,
+            matched_species: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn step_counts_are_non_increasing() {
+        // Three mornings reached step >=1, two reached >=2, one reached >=3.
+        let funnel = vec![cf(3), cf(2), cf(1)];
+        assert_eq!(funnel_step_counts(&funnel, 3), vec![3, 2, 1]);
+    }
+
+    #[test]
+    fn none_reaching_first_step_is_all_zero() {
+        let funnel = vec![cf(0), cf(0)];
+        assert_eq!(funnel_step_counts(&funnel, 3), vec![0, 0, 0]);
+    }
+
+    #[test]
+    fn zero_total_steps_is_empty() {
+        assert_eq!(funnel_step_counts(&[], 0), Vec::<u64>::new());
+    }
 }

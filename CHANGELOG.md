@@ -222,7 +222,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same NFA-match semantics, so the headline count and the step timing can't
   disagree. The sequence is derived from the data rather than hard-coded (the
   REST defaults are European), so the card reads honestly at a North-American
-  station too.
+  station too. The card now also **leads with a funnel picture** (a new
+  server-rendered inline-SVG `viz::sequence_funnel`) built from v0.8.0's
+  `window_funnel`: how many mornings reach each step of the running order, the
+  bars narrowing as the chorus progresses — drop-off you can read at a glance.
+  It is omitted, never drawn empty, when no morning reaches even the first step.
 - Permanent (`308`) redirects from every pre-spine route to its new home
   (`/today`, `/heatmap`, `/analytics`, `/migration`, `/correlation`,
   `/timeseries`, `/analytics/dawn-chorus`, `/weekly`, `/year-in-review`,
