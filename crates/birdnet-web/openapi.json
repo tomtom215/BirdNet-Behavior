@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "BirdNet-Behavior HTTP API",
-    "version": "0.8.0",
+    "version": "0.9.0",
     "summary": "Read-only JSON API for a BirdNet-Behavior acoustic monitoring station.",
     "description": "Everything the dashboard shows is backed by this versioned API under `/api/v2`. All documented endpoints are read-only `GET`s.\n\n**Authentication.** The built-in HTTP Basic Auth gates only the `/admin*` UI routes. Every `/api/v2/*` endpoint, the WebSocket stream and the health check are intentionally open to anyone who can reach the port — restrict them at the network layer (VPN / reverse-proxy allow-list) if that matters. This is by design, not a bug.\n\n**Not described here.** A live detection WebSocket stream at `ws://<host>/api/v2/ws/detections`, the live audio stream at `/stream`, RSS/iCal feeds under `/feeds/*`, and per-detection public share pages under `/r/{token}` are part of the surface but are not GET-JSON endpoints; see the project docs.\n\n**Analytics.** The `/analytics/*` and `/timeseries/*` families are powered by the bundled DuckDB engine, which is on by default. When it is disabled (or not compiled in), those endpoints answer `200` with a body of `{\"status\":\"unavailable\",...}` rather than failing.\n\n**Base URL.** A `GET` to the API root (`/api/v2`, no trailing slash) returns the API name, version and status.",
     "license": {
