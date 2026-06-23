@@ -64,6 +64,15 @@ print_summary() {
     if systemctl is-active --quiet birdnet-behavior.service 2>/dev/null; then
         echo -e "${GREEN}Your dashboard is live${RESET} — open a web browser to:  ${BOLD}http://${web_host}:${web_port}${RESET}"
         [ "${web_host}" != "localhost" ] && echo "  (reachable from any device on your network)"
+        # Live, but a station with no audio source won't detect anything yet.
+        # Point the operator at the in-dashboard setup wizard (and the config
+        # fallback) so it's clear why no birds are showing up.
+        if ! config_has_audio_source; then
+            echo
+            echo "  No audio source yet, so no birds will be detected. Open the dashboard"
+            echo "  to pick a microphone in the setup wizard — or set ALSA_CARD / RTSP_URL"
+            echo "  in ${CONFIG_FILE} and:  sudo systemctl restart birdnet-behavior"
+        fi
     else
         echo -e "${BOLD}Next steps:${RESET}"
         echo "  1. Set an audio source (edit as root):  sudo nano ${CONFIG_FILE}"

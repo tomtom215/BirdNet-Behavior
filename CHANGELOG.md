@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A fresh bare-metal install now starts the dashboard immediately, even with
+  no audio source.** Previously `install.sh` only ran `systemctl start` when an
+  ALSA/RTSP source was already in the config, so an operator who clicked through
+  the setup wizard with no microphone auto-detected was left with a service that
+  "did not come up" — yet the unit is *enabled*, so the next reboot started it
+  anyway, which was both confusing and inconsistent. The installer now starts the
+  service unconditionally on a fresh install (the systemd doctor preflight treats
+  "no audio source" as a warning, not a failure), so the web dashboard — and its
+  first-run onboarding wizard, where the microphone and location are chosen — is
+  reachable the moment the installer finishes. This matches the Docker quickstart,
+  which already brought the dashboard up regardless of audio. The post-install
+  summary now clearly notes when no audio source is set yet and points to the
+  in-dashboard setup wizard.
+
 ## [0.9.0] - 2026-06-22
 
 ### Added
