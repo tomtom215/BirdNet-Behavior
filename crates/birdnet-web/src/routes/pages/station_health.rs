@@ -37,6 +37,10 @@ struct Vital {
 }
 
 /// Everything the Health surface needs, gathered in one blocking pass.
+// A private, render-only snapshot whose flags are independent health signals
+// (disk + scratch low/critical, integrity); grouping them into enums would not
+// make the render any clearer. Matches the convention already used in src/cli.rs.
+#[allow(clippy::struct_excessive_bools)]
 struct Snapshot {
     vitals: Vec<Vital>,
     /// Configured audio sources (count only — the panel keys on activity).
