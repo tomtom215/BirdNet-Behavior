@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Station Health "Vitals" now report real CPU and memory.** The hardened
+  systemd unit set `ProcSubset=pid`, which hides the system-wide `/proc` files
+  (`/proc/stat`, `/proc/cpuinfo`, `/proc/meminfo`) that the `sysinfo` crate reads
+  — so the dashboard showed an impossible **0 CPU cores / 0% CPU** and **0 B / 0 B
+  memory**, while temperature (read from `/sys/class/thermal`) and disk (via
+  `statvfs`) still worked. The unit no longer restricts `/proc` (a comment marks
+  why it must stay at the default), while `ProtectProc=invisible` still hides
+  other users' processes. Apply to an existing install with
+  `sudo bash install.sh repair`, which rewrites and reloads the unit.
 - **A fresh bare-metal install now starts the dashboard immediately, even with
   no audio source.** Previously `install.sh` only ran `systemctl start` when an
   ALSA/RTSP source was already in the config, so an operator who clicked through
