@@ -4,53 +4,47 @@ use axum::response::Html;
 
 /// Restart the birdnet-behavior service.
 ///
-/// Strategy (in order of preference):
-/// 1. If running as a systemd service (`INVOCATION_ID` set), attempt `systemctl restart`
-/// 2. Otherwise, send SIGTERM to self (systemd with `Restart=on-failure` will restart it)
+/// The unit runs as a non-root, sandboxed `Type=notify` service with
+/// `Restart=always`. The robust, privilege-free way for it to restart itself is
+/// to exit on SIGTERM and let systemd start a fresh instance — so that is what
+/// we do. We deliberately do NOT shell out to `systemctl restart`: a non-root
+/// service is polkit-denied (the call fails silently), and restarting our own
+/// unit from inside its cgroup races the `KillMode=mixed` teardown that kills
+/// the `systemctl` child mid-job. When not running under systemd there is
+/// nothing to bring us back, so we say so rather than kill the process and leave
+/// the operator staring at a dead server behind a misleading "restart sent".
+#[allow(clippy::unused_async)] // async required by axum's Handler trait
 pub(super) async fn service_restart() -> Html<String> {
-    let result = tokio::task::spawn_blocking(|| {
-        let under_systemd = std::env::var("INVOCATION_ID").is_ok()
-            || std::env::var("JOURNAL_STREAM").is_ok();
+    let under_systemd =
+        std::env::var("INVOCATION_ID").is_ok() || std::env::var("JOURNAL_STREAM").is_ok();
 
-        if under_systemd {
-            let status = std::process::Command::new("systemctl")
-                .args(["restart", "birdnet-behavior"])
-                .status();
-            match status {
-                Ok(s) if s.success() => {
-                    return Ok::<String, String>(
-                        "Service restart initiated via systemctl.".to_string(),
-                    )
-                }
-                Ok(s) => {
-                    tracing::warn!(status = %s, "systemctl restart returned non-zero, falling back to SIGTERM");
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "systemctl not available, falling back to SIGTERM");
-                }
-            }
-        }
-
-        let pid = std::process::id().to_string();
-        tracing::info!(%pid, "sending SIGTERM to self for graceful restart");
-        let pid_clone = pid;
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            let _ = std::process::Command::new("kill")
-                .args(["-TERM", &pid_clone])
-                .status();
-        });
-        Ok("Restart signal sent. Service will restart momentarily.".to_string())
-    })
-    .await;
-
-    match result {
-        Ok(Ok(msg)) => Html(format!(
-            r#"<p class="ctl-ok">{msg} Reconnect in a few seconds.</p>"#
-        )),
-        Ok(Err(e)) => Html(format!(r#"<p class="ctl-err">Restart failed: {e}</p>"#)),
-        Err(e) => Html(format!(r#"<p class="ctl-err">Internal error: {e}</p>"#)),
+    if !under_systemd {
+        return Html(
+            "<p class=\"ctl-warn\">Not running under systemd, so the service can't restart itself \
+from here. Restart it from a shell: <code>sudo systemctl restart birdnet-behavior</code> \
+(or stop and re-run the binary).</p>"
+                .to_string(),
+        );
     }
+
+    // Respond first, then signal: send SIGTERM from a detached thread after a
+    // short delay so this HTTP response reaches the browser before the process
+    // exits. The graceful-shutdown path then runs and `Restart=always` starts a
+    // fresh instance. `kill` of our own PID needs no privilege (same uid), so it
+    // works even with every capability dropped.
+    let pid = std::process::id().to_string();
+    tracing::info!(%pid, "admin UI requested restart; SIGTERM self, systemd Restart=always brings us back");
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let _ = std::process::Command::new("kill")
+            .args(["-TERM", &pid])
+            .status();
+    });
+
+    Html(
+        "<p class=\"ctl-ok\">Restarting now — the dashboard will reconnect in a few seconds.</p>"
+            .to_string(),
+    )
 }
 
 /// Return HTML with current process status (PID, uptime, memory, version).

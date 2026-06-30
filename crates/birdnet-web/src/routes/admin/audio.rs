@@ -158,6 +158,21 @@ async fn create(State(state): State<AppState>, Form(form): Form<CreateForm>) -> 
         Err(_) => return validation_response("Unknown source kind."),
     };
 
+    // Fool-proofing: refuse to add the same physical source twice. The DB only
+    // enforces uniqueness on the synthetic `id` (freshly generated here), so
+    // without this an operator who can't tell the save registered just clicks
+    // "Save" again and silently ends up with the same mic/stream listed twice.
+    let already_configured = state
+        .with_db(AudioSourceStore::list)
+        .unwrap_or_default()
+        .iter()
+        .any(|s| s.kind.as_str() == kind.as_str() && s.device_id == device_id);
+    if already_configured {
+        return validation_response(&format!(
+            "“{device_id}” is already configured — see the list below."
+        ));
+    }
+
     let mut new = NewAudioSource::defaults(synth_id(kind), kind, device_id);
     new.label = form.label.and_then(|s| {
         let trimmed = s.trim().to_string();

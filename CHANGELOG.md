@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The dashboard "what's new" banner no longer reads "New in vUnreleased."**
+  The banner showed the topmost changelog entry, which is the in-progress
+  `## [Unreleased]` section, so it rendered a meaningless version to everyone.
+  It now shows the latest *released* version (skipping `Unreleased`), or no
+  banner at all when there is no release yet.
+- **The admin "Restart" button now actually restarts the service.** It shelled
+  out to `systemctl restart`, which a non-root, sandboxed service can't do
+  (polkit-denied) and which races its own `KillMode=mixed` cgroup teardown. It
+  now signals itself (SIGTERM) and lets the unit's `Restart=always` bring it
+  back — responding to the browser first so the page can show the status. When
+  the binary isn't running under systemd it now says so plainly instead of
+  killing itself and reporting a false "restart sent."
+- **Adding the same microphone or RTSP stream twice is now prevented.** The
+  audio-source form only de-duplicated on a synthetic id (always freshly
+  generated), so the same physical device could be added over and over. It now
+  rejects a source whose kind + device id already exists, with a clear message
+  pointing to the existing entry.
 - **Station Health "Vitals" now report real CPU and memory.** The hardened
   systemd unit set `ProcSubset=pid`, which hides the system-wide `/proc` files
   (`/proc/stat`, `/proc/cpuinfo`, `/proc/meminfo`) that the `sysinfo` crate reads

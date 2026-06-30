@@ -60,7 +60,15 @@ async fn page(headers: HeaderMap) -> Html<String> {
 
 async fn latest_partial() -> Html<String> {
     let releases = parse_changelog(CHANGELOG_MD);
-    let Some(latest) = releases.first() else {
+    // Show the latest *released* version — never the in-progress "[Unreleased]"
+    // section at the top of the changelog. Using `releases.first()` rendered
+    // the banner as "New in vUnreleased." whenever the changelog had pending
+    // notes (which it almost always does). Skip any "Unreleased" entry and fall
+    // back to no banner when there is no released version yet.
+    let Some(latest) = releases
+        .iter()
+        .find(|r| !r.version.eq_ignore_ascii_case("Unreleased"))
+    else {
         return Html(String::new());
     };
     // Returns the banner subject + body — short summary plus link.
