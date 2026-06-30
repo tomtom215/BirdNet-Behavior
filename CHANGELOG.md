@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Audio sources admin page no longer strands you or contradicts itself.**
+  Several rough edges are fixed together: the RTSP "Network streams" section was
+  *hidden* whenever no stream existed yet, so once you had a microphone the "Add
+  stream" form was unreachable — both sections are now always shown. The
+  per-section counts ("N mics" / "N streams") update the instant a source is
+  added or removed (they used to go stale), the separate empty-state card that
+  contradicted a freshly-added row is gone, and the edit form's **Cancel** button
+  — which fetched the status pill and swapped nothing, leaving the form stuck
+  open — now restores the row.
 - **The dashboard "what's new" banner no longer reads "New in vUnreleased."**
   The banner showed the topmost changelog entry, which is the in-progress
   `## [Unreleased]` section, so it rendered a meaningless version to everyone.

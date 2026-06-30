@@ -48,7 +48,7 @@ pub fn router() -> Router<AppState> {
         .route("/admin/audio/sources", post(create))
         .route(
             "/admin/audio/sources/{id}",
-            axum::routing::delete(remove).patch(update),
+            get(row).delete(remove).patch(update),
         )
         .route("/admin/audio/sources/{id}/edit", get(edit_form))
         .route("/admin/audio/sources/{id}/probe", get(probe))
@@ -197,6 +197,9 @@ async fn create(State(state): State<AppState>, Form(form): Form<CreateForm>) -> 
     match result {
         Ok(row) => {
             let mut body = render_row(&row, daemon_status(&row, &state));
+            // Refresh the section totals so adding the first (or Nth) source
+            // visibly updates the "N mics / N streams" header, not just the list.
+            body.push_str(&count_oobs(&state));
             body.push_str(
                 &Toast::success(format!(
                     "Added {}.",
@@ -221,11 +224,17 @@ async fn create(State(state): State<AppState>, Form(form): Form<CreateForm>) -> 
 async fn remove(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     let result = state.with_db(|conn| conn.soft_delete(&id));
     match result {
-        Ok(()) => toast::oob_only(
-            Toast::success("Source removed.")
-                .with_action("/admin/system/restart", "Restart to apply"),
-        )
-        .into_response(),
+        Ok(()) => {
+            // The row's hx-swap removes it from the list; refresh both count
+            // chips via OOB so the header totals drop in step.
+            let mut body = count_oobs(&state);
+            body.push_str(
+                &Toast::success("Source removed.")
+                    .with_action("/admin/system/restart", "Restart to apply")
+                    .render_oob(),
+            );
+            Html(body).into_response()
+        }
         Err(AudioSourceError::NotFound(_)) => {
             toast::oob_only(Toast::warn("Source already removed.")).into_response()
         }
@@ -313,6 +322,21 @@ async fn probe(State(state): State<AppState>, Path(id): Path<String>) -> Respons
     Html(render_status_pill(&row.id, status)).into_response()
 }
 
+/// Return the read-only row for one source. Used by the edit form's **Cancel**
+/// button to restore the row view. (The previous Cancel fetched `/probe` with
+/// `hx-swap="none"`, which fetched the status pill but swapped nothing, leaving
+/// the edit form stuck open — Cancel appeared to do nothing.)
+async fn row(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    match state.with_db(|conn| conn.get(&id)) {
+        Ok(Some(src)) => Html(render_row(&src, daemon_status(&src, &state))).into_response(),
+        Ok(None) => not_found_row(&id),
+        Err(e) => {
+            tracing::error!(error = %e, "audio source get failed");
+            internal_response("Could not load that source.")
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Daemon-side probe — reads metrics::source_up(row.id), the per-source
 // liveness the capture supervisor publishes.
@@ -341,6 +365,37 @@ fn daemon_status(row: &AudioSource, state: &AppState) -> Status {
 // Render
 // ---------------------------------------------------------------------------
 
+/// "0 mics" / "1 mic" / "3 streams" — the count-chip text for a section header,
+/// shared by the initial render and the out-of-band refresh after an add/remove.
+fn count_text(n: usize, singular: &str, plural: &str) -> String {
+    format!("{n} {}", if n == 1 { singular } else { plural })
+}
+
+/// One section count chip as an out-of-band swap, so an add/remove can refresh
+/// "N mics" / "N streams" in place without re-rendering (and re-wiring) the
+/// whole panel. The `id` matches the chip in `admin_audio_sources.html`.
+fn oob_count(span_id: &str, n: usize, singular: &str, plural: &str) -> String {
+    format!(
+        r#"<span id="{span_id}" class="bnb-meta mono" hx-swap-oob="true">{}</span>"#,
+        escape_html(&count_text(n, singular, plural))
+    )
+}
+
+/// Both count chips recomputed from the live source list — appended to the
+/// add/remove responses so the header totals stay truthful the instant a source
+/// is added or removed.
+fn count_oobs(state: &AppState) -> String {
+    let sources = state.with_db(AudioSourceStore::list).unwrap_or_default();
+    let (local, rtsp): (Vec<&AudioSource>, Vec<&AudioSource>) = sources
+        .iter()
+        .partition(|s| !matches!(s.kind, SourceKind::Rtsp));
+    format!(
+        "{}{}",
+        oob_count("aas-count-local", local.len(), "mic", "mics"),
+        oob_count("aas-count-rtsp", rtsp.len(), "stream", "streams"),
+    )
+}
+
 fn render_body(sources: &[AudioSource], status_for: impl Fn(&AudioSource) -> Status) -> String {
     let (local, rtsp): (Vec<&AudioSource>, Vec<&AudioSource>) = sources
         .iter()
@@ -355,41 +410,21 @@ fn render_body(sources: &[AudioSource], status_for: impl Fn(&AudioSource) -> Sta
         rows_rtsp.push_str(&render_row(s, status_for(s)));
     }
 
-    let count_local = format!(
-        "{} {}",
-        local.len(),
-        if local.len() == 1 { "mic" } else { "mics" }
-    );
-    let count_rtsp = format!(
-        "{} {}",
-        rtsp.len(),
-        if rtsp.len() == 1 { "stream" } else { "streams" }
-    );
-
-    let empty_both = local.is_empty() && rtsp.is_empty();
-
+    // Both sections are always rendered (never hidden): hiding a section when
+    // its kind was empty stranded operators who had a mic but no stream — the
+    // "Add stream" form lived inside the hidden RTSP section, so it was
+    // unreachable. The counts below are refreshed in place via `count_oobs`.
     PAGE_TPL
         .replace("{{rows_local}}", &rows_local)
         .replace("{{rows_rtsp}}", &rows_rtsp)
-        .replace("{{count_local}}", &escape_html(&count_local))
-        .replace("{{count_rtsp}}", &escape_html(&count_rtsp))
         .replace(
-            "{{hidden_local}}",
-            if local.is_empty() && !empty_both {
-                "hidden"
-            } else {
-                ""
-            },
+            "{{count_local}}",
+            &escape_html(&count_text(local.len(), "mic", "mics")),
         )
         .replace(
-            "{{hidden_rtsp}}",
-            if rtsp.is_empty() && !empty_both {
-                "hidden"
-            } else {
-                ""
-            },
+            "{{count_rtsp}}",
+            &escape_html(&count_text(rtsp.len(), "stream", "streams")),
         )
-        .replace("{{hidden_empty}}", if empty_both { "" } else { "hidden" })
         .replace("{{pending_changes}}", "")
 }
 
@@ -453,9 +488,9 @@ fn render_edit_form(row: &AudioSource) -> String {
     <div class="audio-source__right aud-edit-right">
       <button type="submit" class="bnb-btn moss">Save</button>
       <button type="button" class="bnb-btn ghost"
-              hx-get="/admin/audio/sources/{id}/probe"
+              hx-get="/admin/audio/sources/{id}"
               hx-target="closest li"
-              hx-swap="none">Cancel</button>
+              hx-swap="outerHTML">Cancel</button>
     </div>
   </form>
 </li>"#,
@@ -559,11 +594,18 @@ mod tests {
     }
 
     #[test]
-    fn render_body_empty_shows_empty_state() {
+    fn render_body_empty_shows_both_add_sections() {
         let html = render_body(&[], |_| Status::Down);
-        assert!(html.contains("No audio sources yet"));
-        // Both group cards are hidden, empty state is not.
-        assert!(html.contains("hidden"));
+        // Both add-affordances are always present, even from a blank slate, so an
+        // operator can add either a mic or a stream (the old layout hid the RTSP
+        // section until one existed, stranding anyone who had only a mic).
+        assert!(html.contains("Add a microphone"));
+        assert!(html.contains("Add an RTSP stream"));
+        // Zeroed counts, and no separate (contradictory) empty-state card.
+        assert!(html.contains("0 mics"));
+        assert!(html.contains("0 streams"));
+        assert!(!html.contains("No audio sources yet"));
+        assert!(!html.contains("{{"));
     }
 
     #[test]
@@ -576,9 +618,56 @@ mod tests {
         assert!(!html.contains("{{"));
         assert!(html.contains("hw:1,0"));
         assert!(html.contains("rtsp://x/y"));
-        // Both visible — neither group is hidden.
-        // Empty state IS hidden though.
-        assert!(html.contains(r#"<section class="bnb-card pad" hidden>"#));
+        // Both sections always render; the counts reflect one of each.
+        assert!(html.contains("1 mic"));
+        assert!(html.contains("1 stream"));
+    }
+
+    #[test]
+    fn count_oobs_reports_per_kind_totals() {
+        let (_d, state) = fixture();
+        insert_one(&state, "src_u", SourceKind::UsbAlsa, "hw:1,0");
+        insert_one(&state, "src_u2", SourceKind::UsbAlsa, "hw:2,0");
+        insert_one(&state, "src_r", SourceKind::Rtsp, "rtsp://x/y");
+        let oob = count_oobs(&state);
+        assert!(oob.contains(r#"id="aas-count-local""#));
+        assert!(oob.contains(r#"id="aas-count-rtsp""#));
+        assert!(oob.contains(r#"hx-swap-oob="true""#));
+        assert!(oob.contains("2 mics"));
+        assert!(oob.contains("1 stream"));
+    }
+
+    #[tokio::test]
+    async fn create_rejects_duplicate_device() {
+        let (_d, state) = fixture();
+        let form = || CreateForm {
+            scope: String::new(),
+            kind: "usb-alsa".to_string(),
+            device_id: "plughw:1,0".to_string(),
+            label: None,
+            sample_rate: None,
+            rtsp_transport: None,
+        };
+        let first = create(State(state.clone()), Form(form())).await;
+        assert_eq!(first.status(), StatusCode::OK, "first add succeeds");
+        let second = create(State(state.clone()), Form(form())).await;
+        assert_eq!(
+            second.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "the same device cannot be added twice"
+        );
+        let count = state.with_db(AudioSourceStore::list).unwrap().len();
+        assert_eq!(count, 1, "only one row persisted");
+    }
+
+    #[tokio::test]
+    async fn row_endpoint_returns_row_or_not_found() {
+        let (_d, state) = fixture();
+        insert_one(&state, "src_u", SourceKind::UsbAlsa, "hw:1,0");
+        let found = row(State(state.clone()), Path("src_u".to_string())).await;
+        assert_eq!(found.status(), StatusCode::OK);
+        let missing = row(State(state.clone()), Path("nope".to_string())).await;
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
     }
 
     #[test]
