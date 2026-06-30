@@ -7,8 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Station Health shows RAM `/tmp` (scratch) headroom.** The service streams
+  live audio segments through `/tmp`, which on a Pi is a small, RAM-backed tmpfs
+  separate from the data disk — and the existing "Disk" tile only watches the
+  data partition, so a filling `/tmp` (which silently breaks the capture pipeline
+  and even `apt`) was invisible on the dashboard. A new "Scratch" vital tile
+  shows its usage, and the attention banner flags it when it runs low. Shown only
+  when `/tmp` is a distinct filesystem from the data disk, so it never duplicates
+  the Disk tile on systems where `/tmp` lives on the data partition.
+
 ### Fixed
 
+- **Adding two different audio sources within the same second no longer fails.**
+  The synthetic source id was `src_<kind>_<seconds>`, so two sources added in the
+  same second collided and the second add returned a baffling "Retry — a new id
+  will be generated" toast. The id now carries a process-local sequence and is
+  always unique.
 - **The Audio sources admin page no longer strands you or contradicts itself.**
   Several rough edges are fixed together: the RTSP "Network streams" section was
   *hidden* whenever no stream existed yet, so once you had a microphone the "Add

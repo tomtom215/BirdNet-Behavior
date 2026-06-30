@@ -528,7 +528,14 @@ fn meta_for(s: &AudioSource) -> String {
 }
 
 fn synth_id(kind: SourceKind) -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+    // A process-local sequence guarantees uniqueness even for two sources added
+    // within the same second. The old `src_<kind>_<secs>` form collided then, and
+    // the collision surfaced to the operator as a baffling "Retry — a new id will
+    // be generated" toast on a perfectly valid second add. The timestamp stays
+    // for human readability; the counter is what actually guarantees uniqueness.
+    static SEQ: AtomicU64 = AtomicU64::new(0);
     let prefix = match kind {
         SourceKind::UsbAlsa => "usb",
         SourceKind::PipeWire => "pw",
@@ -537,7 +544,8 @@ fn synth_id(kind: SourceKind) -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
-    format!("src_{prefix}_{secs}")
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("src_{prefix}_{secs}_{seq}")
 }
 
 // ---------------------------------------------------------------------------
