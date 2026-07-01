@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Station Health shows RAM `/tmp` (scratch) headroom.** The service streams
+  live audio segments through `/tmp`, which on a Pi is a small, RAM-backed tmpfs
+  separate from the data disk — and the existing "Disk" tile only watches the
+  data partition, so a filling `/tmp` (which silently breaks the capture pipeline
+  and even `apt`) was invisible on the dashboard. A new "Scratch" vital tile
+  shows its usage, and the attention banner flags it when it runs low. Shown only
+  when `/tmp` is a distinct filesystem from the data disk, so it never duplicates
+  the Disk tile on systems where `/tmp` lives on the data partition.
+
+### Fixed
+
+- **Adding two different audio sources within the same second no longer fails.**
+  The synthetic source id was `src_<kind>_<seconds>`, so two sources added in the
+  same second collided and the second add returned a baffling "Retry — a new id
+  will be generated" toast. The id now carries a process-local sequence and is
+  always unique.
+- **The Audio sources admin page no longer strands you or contradicts itself.**
+  Several rough edges are fixed together: the RTSP "Network streams" section was
+  *hidden* whenever no stream existed yet, so once you had a microphone the "Add
+  stream" form was unreachable — both sections are now always shown. The
+  per-section counts ("N mics" / "N streams") update the instant a source is
+  added or removed (they used to go stale), the separate empty-state card that
+  contradicted a freshly-added row is gone, and the edit form's **Cancel** button
+  — which fetched the status pill and swapped nothing, leaving the form stuck
+  open — now restores the row.
+- **The dashboard "what's new" banner no longer reads "New in vUnreleased."**
+  The banner showed the topmost changelog entry, which is the in-progress
+  `## [Unreleased]` section, so it rendered a meaningless version to everyone.
+  It now shows the latest *released* version (skipping `Unreleased`), or no
+  banner at all when there is no release yet.
+- **The admin "Restart" button now actually restarts the service.** It shelled
+  out to `systemctl restart`, which a non-root, sandboxed service can't do
+  (polkit-denied) and which races its own `KillMode=mixed` cgroup teardown. It
+  now signals itself (SIGTERM) and lets the unit's `Restart=always` bring it
+  back — responding to the browser first so the page can show the status. When
+  the binary isn't running under systemd it now says so plainly instead of
+  killing itself and reporting a false "restart sent."
+- **Adding the same microphone or RTSP stream twice is now prevented.** The
+  audio-source form only de-duplicated on a synthetic id (always freshly
+  generated), so the same physical device could be added over and over. It now
+  rejects a source whose kind + device id already exists, with a clear message
+  pointing to the existing entry.
+- **Station Health "Vitals" now report real CPU and memory.** The hardened
+  systemd unit set `ProcSubset=pid`, which hides the system-wide `/proc` files
+  (`/proc/stat`, `/proc/cpuinfo`, `/proc/meminfo`) that the `sysinfo` crate reads
+  — so the dashboard showed an impossible **0 CPU cores / 0% CPU** and **0 B / 0 B
+  memory**, while temperature (read from `/sys/class/thermal`) and disk (via
+  `statvfs`) still worked. The unit no longer restricts `/proc` (a comment marks
+  why it must stay at the default), while `ProtectProc=invisible` still hides
+  other users' processes. Apply to an existing install with
+  `sudo bash install.sh repair`, which rewrites and reloads the unit.
+- **A fresh bare-metal install now starts the dashboard immediately, even with
+  no audio source.** Previously `install.sh` only ran `systemctl start` when an
+  ALSA/RTSP source was already in the config, so an operator who clicked through
+  the setup wizard with no microphone auto-detected was left with a service that
+  "did not come up" — yet the unit is *enabled*, so the next reboot started it
+  anyway, which was both confusing and inconsistent. The installer now starts the
+  service unconditionally on a fresh install (the systemd doctor preflight treats
+  "no audio source" as a warning, not a failure), so the web dashboard — and its
+  first-run onboarding wizard, where the microphone and location are chosen — is
+  reachable the moment the installer finishes. This matches the Docker quickstart,
+  which already brought the dashboard up regardless of audio. The post-install
+  summary now clearly notes when no audio source is set yet and points to the
+  in-dashboard setup wizard.
+
 ## [0.9.0] - 2026-06-22
 
 ### Added

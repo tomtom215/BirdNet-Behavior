@@ -37,6 +37,10 @@ struct Vital {
 }
 
 /// Everything the Health surface needs, gathered in one blocking pass.
+// A private, render-only snapshot whose flags are independent health signals
+// (disk + scratch low/critical, integrity); grouping them into enums would not
+// make the render any clearer. Matches the convention already used in src/cli.rs.
+#[allow(clippy::struct_excessive_bools)]
 struct Snapshot {
     vitals: Vec<Vital>,
     /// Configured audio sources (count only — the panel keys on activity).
@@ -51,6 +55,11 @@ struct Snapshot {
     integrity_ok: bool,
     disk_low: bool,
     disk_critical: bool,
+    /// `/tmp` (scratch / stream-buffer) pressure, tracked separately from the
+    /// data disk because it is usually a small, RAM-backed tmpfs that the data
+    /// "Disk" tile does not cover.
+    scratch_low: bool,
+    scratch_critical: bool,
     service_uptime: Option<u64>,
 }
 
@@ -70,6 +79,18 @@ async fn gather(state: &AppState) -> Snapshot {
             std::path::Path::to_path_buf,
         );
         let disk = birdnet_core::audio::capture::disk_usage(&data_dir).ok();
+
+        // Scratch space: the service writes its live audio stream segments and
+        // temp files under /tmp, which on a Pi (and any tmpfs /tmp) is a small,
+        // RAM-backed filesystem separate from the data disk. The "Disk" tile
+        // watches the data partition, so a filling /tmp was invisible here — yet
+        // a full /tmp breaks the capture pipeline (and even `apt`). Track it
+        // separately, but only when it is genuinely a different filesystem than
+        // the data disk; when /tmp lives on the data partition the Disk tile
+        // already covers it and a second identical tile would just be noise.
+        let scratch = birdnet_core::audio::capture::disk_usage(&std::env::temp_dir())
+            .ok()
+            .filter(|s| disk.as_ref().is_none_or(|d| d.total_bytes != s.total_bytes));
 
         let (sources_configured, activity, last_detection, queued, total, integrity) = state
             .with_db(|conn| {
@@ -97,7 +118,7 @@ async fn gather(state: &AppState) -> Snapshot {
             .map(|handle| read_capture_status(&handle).sources)
             .unwrap_or_default();
 
-        let vitals = build_vitals(&sys, disk.as_ref());
+        let vitals = build_vitals(&sys, disk.as_ref(), scratch.as_ref());
         Snapshot {
             vitals,
             sources_configured,
@@ -111,6 +132,12 @@ async fn gather(state: &AppState) -> Snapshot {
                 .as_ref()
                 .is_some_and(birdnet_core::audio::capture::DiskUsage::is_low),
             disk_critical: disk
+                .as_ref()
+                .is_some_and(birdnet_core::audio::capture::DiskUsage::is_critical),
+            scratch_low: scratch
+                .as_ref()
+                .is_some_and(birdnet_core::audio::capture::DiskUsage::is_low),
+            scratch_critical: scratch
                 .as_ref()
                 .is_some_and(birdnet_core::audio::capture::DiskUsage::is_critical),
             service_uptime: system_info::process_uptime_secs(),
@@ -128,6 +155,8 @@ async fn gather(state: &AppState) -> Snapshot {
         integrity_ok: true,
         disk_low: false,
         disk_critical: false,
+        scratch_low: false,
+        scratch_critical: false,
         service_uptime: None,
     })
 }
@@ -140,6 +169,7 @@ async fn gather(state: &AppState) -> Snapshot {
 fn build_vitals(
     sys: &system_info::SystemSnapshot,
     disk: Option<&birdnet_core::audio::capture::DiskUsage>,
+    scratch: Option<&birdnet_core::audio::capture::DiskUsage>,
 ) -> Vec<Vital> {
     let cpu = sys.cpu_usage_pct as f64;
     let mem = sys.memory_usage_pct as f64;
@@ -201,6 +231,24 @@ fn build_vitals(
             }
         },
     ));
+    // Scratch (RAM-backed /tmp), only when distinct from the data disk. Surfaced
+    // so a filling tmpfs — which silently breaks capture and system updates — is
+    // visible on the same screen as the data Disk, not just discoverable via
+    // `df` on the box.
+    if let Some(d) = scratch {
+        let pct = d.used_percent();
+        vitals.push(Vital {
+            label: "Scratch",
+            value: format!("{pct:.0}%"),
+            pct: Some(pct),
+            sub: format!(
+                "{} free of {} (RAM)",
+                format_bytes(d.available_bytes),
+                format_bytes(d.total_bytes)
+            ),
+            warn: d.is_low(),
+        });
+    }
     vitals
 }
 
@@ -228,6 +276,11 @@ fn status_banner(s: &Snapshot) -> String {
         issues.push("storage is critically low");
     } else if s.disk_low {
         issues.push("storage is running low");
+    }
+    if s.scratch_critical {
+        issues.push("scratch space (RAM /tmp) is critically low");
+    } else if s.scratch_low {
+        issues.push("scratch space (RAM /tmp) is running low");
     }
     if !s.integrity_ok {
         issues.push("the database integrity check failed");
@@ -548,6 +601,8 @@ mod tests {
             integrity_ok: integrity,
             disk_low,
             disk_critical: false,
+            scratch_low: false,
+            scratch_critical: false,
             service_uptime: Some(3_600),
         }
     }
@@ -583,6 +638,20 @@ mod tests {
         assert!(status_banner(&snap(false, true, 2, 3)).contains("waiting for the network"));
         // Any problem flips the banner to the warn variant.
         assert!(status_banner(&snap(true, true, 2, 0)).contains("st-status warn"));
+    }
+
+    #[test]
+    fn banner_flags_low_scratch_independently_of_the_data_disk() {
+        // A healthy data disk but a nearly-full RAM /tmp (the failure mode that
+        // silently broke `apt`) must still raise the banner — the data Disk tile
+        // alone would have read "healthy" and hidden it.
+        let mut s = snap(false, true, 2, 0);
+        s.scratch_critical = true;
+        let banner = status_banner(&s);
+        // `capitalize_first` upper-cases the leading word of the issue list, so
+        // assert on the distinctive mid-string text rather than the first word.
+        assert!(banner.contains("RAM /tmp"));
+        assert!(banner.contains("st-status warn"));
     }
 
     #[test]

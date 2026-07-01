@@ -21,14 +21,14 @@
   <!-- ═══════════════════════════════════════════════════════════
        Local microphones
        ═══════════════════════════════════════════════════════════ -->
-  <section class="bnb-card pad" {{hidden_local}}>
+  <section class="bnb-card pad">
     <div class="section-header">
       <div>
         <div class="bnb-eyebrow">Local microphones</div>
         <h3>USB · ALSA · PipeWire</h3>
       </div>
       <div class="aas-count">
-        <span class="bnb-meta mono">{{count_local}}</span>
+        <span class="bnb-meta mono" id="aas-count-local">{{count_local}}</span>
         <button class="bnb-btn"
                 type="button"
                 id="add-local-open">
@@ -101,14 +101,14 @@
   <!-- ═══════════════════════════════════════════════════════════
        Network streams (RTSP)
        ═══════════════════════════════════════════════════════════ -->
-  <section class="bnb-card pad aas-section-mt" {{hidden_rtsp}}>
+  <section class="bnb-card pad aas-section-mt">
     <div class="section-header">
       <div>
         <div class="bnb-eyebrow">Network streams</div>
         <h3>RTSP cameras</h3>
       </div>
       <div class="aas-count">
-        <span class="bnb-meta mono">{{count_rtsp}}</span>
+        <span class="bnb-meta mono" id="aas-count-rtsp">{{count_rtsp}}</span>
         <button class="bnb-btn"
                 type="button"
                 id="add-rtsp-open">
@@ -170,25 +170,10 @@
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════
-       Empty state (both groups empty)
+       (No separate empty-state card: both sections above are always shown,
+        each with its own count and Add button, so the page never contradicts
+        itself right after the first source is added.)
        ═══════════════════════════════════════════════════════════ -->
-  <section class="bnb-card pad" {{hidden_empty}}>
-    <div class="empty-state">
-      <svg width="120" height="80" viewBox="0 0 120 80" aria-hidden="true">
-        <g stroke="var(--hairline)" stroke-width="0.7" fill="none">
-          <rect x="14" y="22" width="92" height="36" rx="6"/>
-          <line x1="14" y1="40" x2="106" y2="40"/>
-        </g>
-        <circle cx="34" cy="40" r="6" fill="var(--surface-2)" stroke="var(--hairline)"/>
-        <circle cx="60" cy="40" r="6" fill="var(--surface-2)" stroke="var(--hairline)"/>
-        <circle cx="86" cy="40" r="6" fill="var(--surface-2)" stroke="var(--hairline)"/>
-      </svg>
-      <h3 class="display aas-empty-h3">No audio sources yet.</h3>
-      <p class="bnb-meta aas-empty-sub">
-        Add a microphone or an RTSP stream to start listening.
-      </p>
-    </div>
-  </section>
 
   <!-- Restart-required note -->
   <p class="bnb-meta mono aas-restart">

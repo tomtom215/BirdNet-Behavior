@@ -142,7 +142,13 @@ ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
 ProtectProc=invisible
-ProcSubset=pid
+# Deliberately NOT ProcSubset=pid. The Station Health "Vitals" read the
+# system-wide /proc files — /proc/stat and /proc/cpuinfo (CPU %, core count)
+# and /proc/meminfo (memory), via the sysinfo crate, plus /proc/uptime.
+# ProcSubset=pid hides exactly those non-process files, which made the
+# dashboard report 0 CPU cores and 0 B memory while temperature/disk (read
+# from /sys and statvfs) still worked. Leave /proc at the default (all);
+# ProtectProc=invisible above still hides other users' processes.
 # Block-listed kernel surfaces; we don't need them.
 RestrictSUIDSGID=yes
 RestrictRealtime=yes
