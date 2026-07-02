@@ -12,6 +12,25 @@ warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*" >&2; }
 error()   { echo -e "${RED}[ERROR]${RESET} $*" >&2; }
 fatal()   { error "$*"; exit 1; }
 
+# A deliberately LOUD, boxed warning for opt-in bypass flags (BIRDNET_SKIP_*).
+# Like the helpers above it writes to stderr — stdout stays reserved for a
+# function's captured return value — but it draws an ASCII `!!' box so it stands
+# out from the routine stream of [WARN] lines and, crucially, survives the
+# non-TTY case where the colour codes are stripped to empty strings
+# (10-config.sh): in an automated/piped install a lone [WARN] is easy to miss,
+# and these bypasses fail later with a cryptic downstream error. Each argument
+# is rendered as one line inside the box.
+loud_warn() {
+    local line
+    {
+        echo -e "${BOLD}${RED}!! ========================================================= !!${RESET}"
+        for line in "$@"; do
+            echo -e "${BOLD}${RED}!!${RESET} ${YELLOW}${line}${RESET}"
+        done
+        echo -e "${BOLD}${RED}!! ========================================================= !!${RESET}"
+    } >&2
+}
+
 # Interactive prompt helpers. They read from /dev/tty (not stdin) so they work
 # under the recommended `curl ... | sudo bash`, where stdin is the script text;
 # output goes to /dev/tty for the same reason. Gated by INTERACTIVE (set in main).

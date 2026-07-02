@@ -100,8 +100,10 @@ download_model() {
     # unit, and web UI all come up.
     if [ "${BIRDNET_SKIP_MODEL:-0}" = "1" ]; then
         install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${MODEL_DIR}"
-        warn "BIRDNET_SKIP_MODEL=1 — skipping the model download."
-        warn "  Place ${MODEL_FILE} and ${LABELS_FILE} in ${MODEL_DIR}, then restart the service."
+        loud_warn "BIRDNET_SKIP_MODEL=1 — the ML model was NOT downloaded." \
+                  "The service will start but will detect NOTHING until you stage it:" \
+                  "  place ${MODEL_FILE} and ${LABELS_FILE} in ${MODEL_DIR}," \
+                  "  then restart the service."
         return
     fi
 
