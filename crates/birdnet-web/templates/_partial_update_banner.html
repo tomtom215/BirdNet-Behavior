@@ -51,24 +51,78 @@
   var stored = parseSemver(seen);
   if (!cur || !stored || cmp(stored, cur) >= 0) return;
 
-  // Fetch the latest release block and mount it.
-  fetch('/system/changelog/latest', { credentials: 'same-origin' })
-    .then(function (res) { return res.ok ? res.text() : ''; })
-    .then(function (html) {
-      if (!html) return;
-      var wrap = document.createElement('div');
-      wrap.innerHTML = html.trim();
-      var banner = wrap.firstElementChild;
-      if (!banner) return;
-      mount.parentNode.insertBefore(banner, mount);
+  // Insert a banner before the mount and wire its dismiss button. Dismissal
+  // records the current version so the banner doesn't reappear on the next page.
+  function mountBanner(banner) {
+    mount.parentNode.insertBefore(banner, mount);
+    var dismiss = banner.querySelector('[data-banner-dismiss]');
+    if (dismiss) dismiss.addEventListener('click', function () {
+      try { localStorage.setItem('bnb-last-seen-version', current); } catch (e) {}
+      banner.setAttribute('data-leaving', '1');
+      window.setTimeout(function () { banner.remove(); }, 200);
+    });
+  }
 
-      var dismiss = banner.querySelector('[data-banner-dismiss]');
-      if (dismiss) dismiss.addEventListener('click', function () {
-        try { localStorage.setItem('bnb-last-seen-version', current); } catch (e) {}
-        banner.setAttribute('data-leaving', '1');
-        window.setTimeout(function () { banner.remove(); }, 200);
+  // Shown when the release-notes fetch fails (server restarting after the
+  // upgrade, offline, a 5xx, or an older build without the endpoint). We already
+  // know an upgrade happened, so instead of vanishing silently we still
+  // acknowledge it and link to the full changelog. Built with
+  // createElement/textContent to stay CSP-clean; reuses the .bnb-banner styles.
+  function fallbackBanner() {
+    var banner = document.createElement('div');
+    banner.className = 'bnb-banner';
+    banner.setAttribute('data-version', current);
+
+    var pill = document.createElement('span');
+    pill.className = 'bnb-pill moss';
+    pill.setAttribute('aria-hidden', 'true');
+    pill.textContent = 'v' + current;
+
+    var copy = document.createElement('div');
+    copy.className = 'bnb-banner__copy';
+    var strong = document.createElement('strong');
+    strong.textContent = 'Updated to v' + current + '.';
+    var span = document.createElement('span');
+    span.textContent = 'Release notes couldn’t be loaded right now.';
+    copy.appendChild(strong);
+    copy.appendChild(span);
+
+    var link = document.createElement('a');
+    link.className = 'bnb-btn ghost';
+    link.href = '/system/changelog';
+    link.textContent = 'See all changes →';
+
+    var close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'bnb-banner__close';
+    close.setAttribute('data-banner-dismiss', '');
+    close.setAttribute('aria-label', 'Dismiss');
+    close.textContent = '×';
+
+    banner.appendChild(pill);
+    banner.appendChild(copy);
+    banner.appendChild(link);
+    banner.appendChild(close);
+    mountBanner(banner);
+  }
+
+  // Fetch the latest release block and mount it; on any failure fall back to a
+  // minimal "updated" banner instead of silently skipping. Distinguish an
+  // intentional empty body (server has no released version to announce — leave
+  // the page quiet) from a genuine failure (non-OK, offline, or malformed).
+  fetch('/system/changelog/latest', { credentials: 'same-origin' })
+    .then(function (res) {
+      if (!res.ok) { fallbackBanner(); return; }
+      return res.text().then(function (html) {
+        html = html.trim();
+        if (!html) return; // server intentionally returned no banner
+        var wrap = document.createElement('div');
+        wrap.innerHTML = html;
+        var banner = wrap.firstElementChild;
+        if (!banner) { fallbackBanner(); return; }
+        mountBanner(banner);
       });
     })
-    .catch(function () { /* offline / missing endpoint — silently skip */ });
+    .catch(function () { fallbackBanner(); });
 })();
 </script>
