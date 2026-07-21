@@ -222,6 +222,10 @@ async fn serve(
     let capture_status = birdnet_core::audio::capture::new_capture_status();
     let state = state.with_capture_status(capture_status.clone());
 
+    // Captured before `state` is moved into the web server below; used by the
+    // per-species recording-cap maintenance task.
+    let recordings_dir_for_maintenance = state.recording_dir();
+
     let broadcast = state.detection_broadcast();
 
     // Create integration clients.
@@ -411,9 +415,25 @@ async fn serve(
         }
     });
 
-    // Periodic database maintenance (VACUUM, integrity check, backup rotation).
-    // No-op when the DB does not exist yet.
-    maintenance::spawn_database_maintenance(db_path.clone(), backup_dir.clone());
+    // Periodic database maintenance (VACUUM, integrity check, backup rotation),
+    // plus the per-species recording cap (MAX_FILES_SPECIES): keep the newest N
+    // extracted clips per species on disk, pruned on the daily tick. CLI flag
+    // wins over the config key; 0 (default) = unlimited. No-op when the DB does
+    // not exist yet.
+    let species_cap = if cli.max_files_per_species > 0 {
+        cli.max_files_per_species
+    } else {
+        config
+            .as_ref()
+            .and_then(|c| c.get_parsed::<u32>("MAX_FILES_SPECIES").ok())
+            .unwrap_or(0)
+    };
+    maintenance::spawn_database_maintenance(
+        db_path.clone(),
+        backup_dir.clone(),
+        recordings_dir_for_maintenance,
+        species_cap,
+    );
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
