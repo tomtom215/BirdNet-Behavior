@@ -97,15 +97,13 @@ impl Extractor {
 
         let clip_samples = &audio.samples[start_sample..stop_sample];
 
-        // 4. Build output path: output_dir/By_Date/YYYY-MM-DD/Common_Name_Safe/
-        let output_dir = self
-            .config
-            .output_dir
-            .join("By_Date")
-            .join(&detection.date)
-            .join(detection.common_name_safe());
-
-        std::fs::create_dir_all(&output_dir)?;
+        // 4. Write the clip FLAT in the output dir (the persistent recordings
+        //    dir the web serves from). The filename already encodes species,
+        //    confidence, date and time, so it is self-describing without a
+        //    By_Date/<species>/ subtree — and the web serve/list path keys on
+        //    the bare filename, so clips must be flat here to be playable.
+        let output_dir = &self.config.output_dir;
+        std::fs::create_dir_all(output_dir)?;
 
         // 5. Build filename with target format extension.
         let ext = self.config.target_format.extension();

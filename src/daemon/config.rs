@@ -93,32 +93,24 @@ pub(super) fn build_species_filter_config(sf_thresh: f32) -> SpeciesFilterConfig
     }
 }
 
-/// Derive the audio-clip extraction output directory from a watch dir.
-///
-/// Per BirdNET-Pi convention: extracted clips land in a sibling
-/// `Extracted/` directory next to the recordings watch dir. If the
-/// watch dir has no parent (e.g. `/` or a relative bare filename), we
-/// fall back to the well-known `BirdSongs/Extracted` path so the
-/// extractor always has *somewhere* to write.
-#[must_use]
-pub(super) fn extraction_output_dir(watch_dir: &Path) -> PathBuf {
-    watch_dir.parent().map_or_else(
-        || PathBuf::from("BirdSongs/Extracted"),
-        |p| p.join("Extracted"),
-    )
-}
-
 /// Build the [`ExtractionConfig`] for the detection-clip extractor.
+///
+/// `recordings_dir` is the persistent directory the web server serves
+/// recordings from (`AppState::recording_dir`). Extracted clips are written
+/// there directly and FLAT, so they survive restarts and are found by the
+/// Recordings page, playback, and backups. (Bug B: clips previously landed in a
+/// sibling `Extracted/By_Date/…` next to the transient tmpfs watch dir — wiped
+/// on every restart under `PrivateTmp`, and never where the app reads.)
 ///
 /// `recording_length` is the CLI's `--segment-duration` (an integer
 /// seconds value) cast to `f32`; the cast cannot lose precision in the
 /// practical range (1–3600 s).
 #[must_use]
-pub(super) fn build_extraction_config(cli: &Cli, watch_dir: &Path) -> ExtractionConfig {
+pub(super) fn build_extraction_config(cli: &Cli, recordings_dir: &Path) -> ExtractionConfig {
     ExtractionConfig {
         target_format: AudioFormat::parse(&cli.audio_format),
         audio_format: cli.audio_format.clone(),
-        output_dir: extraction_output_dir(watch_dir),
+        output_dir: recordings_dir.to_path_buf(),
         recording_length: f32::from(u16::try_from(cli.segment_duration).unwrap_or(u16::MAX)),
         freq_shift_hz: cli.freq_shift_hz,
         ..ExtractionConfig::default()
@@ -290,72 +282,33 @@ mod tests {
         assert_eq!(cfg.exclude_list, default.exclude_list);
     }
 
-    // ── extraction_output_dir ───────────────────────────────────────────
-
-    #[test]
-    fn extraction_output_dir_uses_parent_when_present() {
-        // /var/lib/birdnet/recs has parent /var/lib/birdnet, so the
-        // output dir is /var/lib/birdnet/Extracted.
-        let p = extraction_output_dir(Path::new("/var/lib/birdnet/recs"));
-        assert_eq!(p, PathBuf::from("/var/lib/birdnet/Extracted"));
-    }
-
-    #[test]
-    fn extraction_output_dir_falls_back_when_no_parent() {
-        // A relative bare path has parent = Some("") which still joins;
-        // a root path's parent is None and falls back to the well-known
-        // default.
-        let p = extraction_output_dir(Path::new("/"));
-        assert_eq!(p, PathBuf::from("BirdSongs/Extracted"));
-    }
-
-    // ── Bug B repro (hardware-free) ─────────────────────────────────────────
+    // ── Bug B fix: extraction target == web recording dir (hardware-free) ───
     //
-    // On a DEFAULT systemd install, extracted detection clips are written to the
-    // transient RAM tmpfs, NOT to the persistent recordings dir the web UI and
-    // backups read. This test uses the real production path logic to prove it
-    // without any hardware or audio device.
-    //
-    // Installer defaults (installer/lib/{10-config,30-platform,65-service}.sh):
-    //   systemd ExecStart:  --watch-dir /tmp/birdnet-stream   (transient tmpfs,
-    //                       wiped on every restart under PrivateTmp=yes)
-    //   config:             DB_PATH  = <DATA_DIR>/birds.db      (persistent disk)
-    //                       RECS_DIR = <DATA_DIR>/recordings    (persistent disk)
-    // birdnet-web `state.rs` derives recording_dir = db_path.parent()/recordings,
-    // which equals RECS_DIR — so the ONLY divergence is the extractor's target.
+    // On a default systemd install, extracted detection clips used to be written
+    // to /tmp/Extracted (a transient tmpfs wiped on every restart under
+    // PrivateTmp) while the web reads recordings from <DATA_DIR>/recordings on
+    // the persistent disk — so clips never persisted and playback 404'd. The fix
+    // passes AppState::recording_dir (the exact dir the web serves) straight to
+    // the extractor, so the two can never diverge. Proven here with no hardware.
     #[test]
-    fn bug_b_extracted_clips_land_on_tmpfs_not_where_web_reads() {
+    fn bug_b_extraction_target_matches_web_recording_dir() {
         let data_dir = Path::new("/home/pi/BirdNet-Behavior");
-        let watch_dir = Path::new("/tmp/birdnet-stream"); // systemd --watch-dir
         let db_path = data_dir.join("birds.db"); // config DB_PATH
-
-        // Where the daemon writes extracted clips today (real production fn).
-        let extraction_dir = extraction_output_dir(watch_dir);
-        // Where birdnet-web reads them (state.rs: db_path.parent()/recordings).
+        // birdnet-web state.rs derives recording_dir = db_path.parent()/recordings;
+        // the daemon passes that same PathBuf (AppState::recording_dir) here.
         let web_recording_dir = db_path.parent().unwrap().join("recordings");
 
-        // Clips are written onto the RAM tmpfs — wiped on every restart.
-        assert_eq!(extraction_dir, Path::new("/tmp/Extracted"));
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        let cfg = build_extraction_config(&cli, &web_recording_dir);
+
+        assert_eq!(
+            cfg.output_dir, web_recording_dir,
+            "extraction writes exactly where the web serves recordings from"
+        );
         assert!(
-            extraction_dir.starts_with("/tmp"),
-            "extracted clips sit on the transient tmpfs"
+            !cfg.output_dir.starts_with("/tmp"),
+            "clips persist on the data disk, not the transient tmpfs"
         );
-        // The web UI + backups read the persistent disk, which nothing populates.
-        assert!(
-            !web_recording_dir.starts_with("/tmp"),
-            "the recordings dir the app reads is on the persistent disk"
-        );
-        assert_ne!(
-            extraction_dir, web_recording_dir,
-            "BUG B (location): extraction target diverges from the web recordings \
-             dir, so clips vanish on restart and never appear where the app looks"
-        );
-        // NOTE: there is also a *structure* mismatch (layer 2): the extractor
-        // nests clips under `Extracted/By_Date/<date>/<species>/`, while the web
-        // serve route (`/api/v2/recordings/{name}`, is_safe_filename rejects `/`)
-        // resolves `recording_dir.join(basename)` FLAT — so even once the
-        // location is repointed, playback needs the serve/list path reconciled.
-        // Both layers are addressed by the Bug B fix.
     }
 
     // ── build_extraction_config ─────────────────────────────────────────
@@ -371,10 +324,12 @@ mod tests {
             "--freq-shift-hz",
             "1500",
         ]);
-        let cfg = build_extraction_config(&cli, Path::new("/var/lib/birdnet/recs"));
+        let cfg = build_extraction_config(&cli, Path::new("/var/lib/birdnet/recordings"));
         assert_eq!(cfg.audio_format, "flac");
         assert_eq!(cfg.target_format, AudioFormat::Flac);
-        assert_eq!(cfg.output_dir, PathBuf::from("/var/lib/birdnet/Extracted"));
+        // output_dir is the recordings dir passed in, verbatim (clips land there
+        // flat) — no longer a derived sibling `Extracted/`.
+        assert_eq!(cfg.output_dir, PathBuf::from("/var/lib/birdnet/recordings"));
         assert!((cfg.recording_length - 20.0).abs() < f32::EPSILON);
         assert_eq!(cfg.freq_shift_hz, 1500);
         // Default still applies to extraction_length:
@@ -385,14 +340,17 @@ mod tests {
     #[test]
     fn build_extraction_config_defaults() {
         let cli = Cli::parse_from(["birdnet-behavior"]);
-        let cfg = build_extraction_config(&cli, Path::new("/tmp/StreamData"));
+        let cfg = build_extraction_config(&cli, Path::new("/home/pi/BirdNet-Behavior/recordings"));
         // Default audio format is wav.
         assert_eq!(cfg.audio_format, "wav");
         assert_eq!(cfg.target_format, AudioFormat::Wav);
         // Default segment_duration is 15.
         assert!((cfg.recording_length - 15.0).abs() < f32::EPSILON);
         assert_eq!(cfg.freq_shift_hz, 0);
-        assert_eq!(cfg.output_dir, PathBuf::from("/tmp/Extracted"));
+        assert_eq!(
+            cfg.output_dir,
+            PathBuf::from("/home/pi/BirdNet-Behavior/recordings")
+        );
     }
 
     // ── resolve_required_paths ──────────────────────────────────────────

@@ -238,9 +238,17 @@ mod tests {
 
         let output_path = result.expect("already checked");
         assert!(output_path.exists());
+        // Clips are written FLAT, directly in output_dir (no By_Date/ subtree),
+        // so the web serve/list path (which keys on the bare filename) finds them.
+        assert_eq!(
+            output_path.parent(),
+            Some(dir.path()),
+            "clip must be flat in output_dir, not nested"
+        );
+        // The filename is self-describing (species + date encoded).
         assert!(output_path.to_string_lossy().contains("Great_Tit"));
-        assert!(output_path.to_string_lossy().contains("By_Date"));
         assert!(output_path.to_string_lossy().contains("2026-03-14"));
+        assert!(!output_path.to_string_lossy().contains("By_Date"));
     }
 
     #[test]
