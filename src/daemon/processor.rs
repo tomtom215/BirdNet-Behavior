@@ -111,18 +111,47 @@ pub(super) fn event_processor(
         // INTEGER). Previously the daemon passed empty strings here,
         // which SQLite silently stored as TEXT and every subsequent
         // typed read returned "Invalid column type Text at index N".
-        let file_str = event.source_file.to_string_lossy();
-        // Per-detection source/stream label parsed from the filename: the RTSP
-        // stream id (e.g. `cam1`) or `local` for the on-board mic. Tags the row
-        // (so multi-stream detections are attributable) and feeds the per-source
-        // liveness gauge below.
+        // Per-detection source/stream label parsed from the source filename: the
+        // RTSP stream id (e.g. `cam1`) or `local` for the on-board mic. Tags the
+        // row (so multi-stream detections are attributable) and feeds the
+        // per-source liveness gauge below.
         let source_label = derive_source_label(&event.source_file);
-        // The saved clip's length, read cheaply from the file header (no
-        // re-decode of the samples the pipeline already decoded). Persisted so
-        // the Recordings grid can show a real duration; `None` when the header
-        // doesn't record it, in which case the column stays NULL — never faked.
-        let source_duration_secs =
-            birdnet_core::audio::decode::probe_duration_secs(&event.source_file);
+
+        // Extract the clip FIRST, so the DB row can reference the SAVED CLIP's
+        // filename — the flat name the web serves recordings by (`File_Name`) —
+        // rather than the transient source segment, which lives on the RAM tmpfs
+        // and is drained after processing. On failure, fall back to the source
+        // name so the detection is still recorded (just without a playable clip).
+        let extracted = extractor.extract_detection(&event.source_file, detection);
+        match &extracted {
+            Ok(path) => tracing::debug!(
+                species = %detection.common_name,
+                path = %path.display(),
+                "audio clip extracted"
+            ),
+            Err(e) => tracing::warn!(
+                error = %e,
+                species = %detection.common_name,
+                "audio clip extraction failed"
+            ),
+        }
+        // `File_Name` is the clip's base name (what `/api/v2/recordings/{name}`
+        // serves), and the persisted duration is the clip's — not the ~15 s
+        // source segment's. Read cheaply from the file header; `None` leaves the
+        // column NULL (never faked).
+        let (file_str, source_duration_secs) = match &extracted {
+            Ok(clip_path) => (
+                clip_path.file_name().map_or_else(
+                    || event.source_file.to_string_lossy().into_owned(),
+                    |n| n.to_string_lossy().into_owned(),
+                ),
+                birdnet_core::audio::decode::probe_duration_secs(clip_path),
+            ),
+            Err(_) => (
+                event.source_file.to_string_lossy().into_owned(),
+                birdnet_core::audio::decode::probe_duration_secs(&event.source_file),
+            ),
+        };
         let record = birdnet_db::sqlite::DetectionRecord {
             date: &detection.date,
             time: &detection.time,
@@ -182,19 +211,8 @@ pub(super) fn event_processor(
         // so the dashboard can flag rising p95s before they catch the eye.
         metrics.observe_inference_seconds(latency_ms_to_seconds(event.latency_ms));
 
-        // Extract audio clip to disk.
-        match extractor.extract_detection(&event.source_file, detection) {
-            Ok(path) => tracing::debug!(
-                species = %detection.common_name,
-                path = %path.display(),
-                "audio clip extracted"
-            ),
-            Err(e) => tracing::warn!(
-                error = %e,
-                species = %detection.common_name,
-                "audio clip extraction failed"
-            ),
-        }
+        // (The clip was extracted above, before the insert, so File_Name records
+        // the saved clip rather than the transient source segment.)
 
         // Also insert into DuckDB analytics (if enabled).
         #[cfg(feature = "analytics")]
@@ -590,11 +608,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn event_processor_persists_clip_duration_from_source_file() {
-        // The processor probes the source file's length and persists it
-        // (migration 20) so the Recordings grid shows a real duration. A real
-        // 2-second WAV must round-trip to ~2.0 s — this also kills a mutant
-        // that drops the probe (the duration would then read back NULL).
+    async fn event_processor_persists_saved_clip_duration() {
+        // The processor probes the SAVED CLIP's length and persists it
+        // (migration 20) so the Recordings grid shows a real duration. Here the
+        // 2-second source clamps the extracted clip to ~2.0 s, so it must
+        // round-trip to ~2.0 s — this also kills a mutant that drops the probe
+        // (the duration would then read back NULL).
         let tmp = tempfile::tempdir().unwrap();
         let wav = tmp.path().join("clip.wav");
         {
