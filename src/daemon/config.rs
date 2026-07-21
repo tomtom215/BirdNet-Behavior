@@ -309,6 +309,55 @@ mod tests {
         assert_eq!(p, PathBuf::from("BirdSongs/Extracted"));
     }
 
+    // ── Bug B repro (hardware-free) ─────────────────────────────────────────
+    //
+    // On a DEFAULT systemd install, extracted detection clips are written to the
+    // transient RAM tmpfs, NOT to the persistent recordings dir the web UI and
+    // backups read. This test uses the real production path logic to prove it
+    // without any hardware or audio device.
+    //
+    // Installer defaults (installer/lib/{10-config,30-platform,65-service}.sh):
+    //   systemd ExecStart:  --watch-dir /tmp/birdnet-stream   (transient tmpfs,
+    //                       wiped on every restart under PrivateTmp=yes)
+    //   config:             DB_PATH  = <DATA_DIR>/birds.db      (persistent disk)
+    //                       RECS_DIR = <DATA_DIR>/recordings    (persistent disk)
+    // birdnet-web `state.rs` derives recording_dir = db_path.parent()/recordings,
+    // which equals RECS_DIR — so the ONLY divergence is the extractor's target.
+    #[test]
+    fn bug_b_extracted_clips_land_on_tmpfs_not_where_web_reads() {
+        let data_dir = Path::new("/home/pi/BirdNet-Behavior");
+        let watch_dir = Path::new("/tmp/birdnet-stream"); // systemd --watch-dir
+        let db_path = data_dir.join("birds.db"); // config DB_PATH
+
+        // Where the daemon writes extracted clips today (real production fn).
+        let extraction_dir = extraction_output_dir(watch_dir);
+        // Where birdnet-web reads them (state.rs: db_path.parent()/recordings).
+        let web_recording_dir = db_path.parent().unwrap().join("recordings");
+
+        // Clips are written onto the RAM tmpfs — wiped on every restart.
+        assert_eq!(extraction_dir, Path::new("/tmp/Extracted"));
+        assert!(
+            extraction_dir.starts_with("/tmp"),
+            "extracted clips sit on the transient tmpfs"
+        );
+        // The web UI + backups read the persistent disk, which nothing populates.
+        assert!(
+            !web_recording_dir.starts_with("/tmp"),
+            "the recordings dir the app reads is on the persistent disk"
+        );
+        assert_ne!(
+            extraction_dir, web_recording_dir,
+            "BUG B (location): extraction target diverges from the web recordings \
+             dir, so clips vanish on restart and never appear where the app looks"
+        );
+        // NOTE: there is also a *structure* mismatch (layer 2): the extractor
+        // nests clips under `Extracted/By_Date/<date>/<species>/`, while the web
+        // serve route (`/api/v2/recordings/{name}`, is_safe_filename rejects `/`)
+        // resolves `recording_dir.join(basename)` FLAT — so even once the
+        // location is repointed, playback needs the serve/list path reconciled.
+        // Both layers are addressed by the Bug B fix.
+    }
+
     // ── build_extraction_config ─────────────────────────────────────────
 
     #[test]
