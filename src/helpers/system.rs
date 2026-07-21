@@ -5,6 +5,18 @@ use std::path::PathBuf;
 
 use crate::cli::Cli;
 
+/// Default retention for raw capture segments in the transient stream dir, in
+/// seconds. Segments are deleted this long after capture — far longer than the
+/// detection pipeline needs to read and extract them — so the RAM-backed stream
+/// dir (`--watch-dir`, typically `/tmp/birdnet-stream`) self-drains instead of
+/// filling to 100 %. Override with `STREAM_RETENTION_SECS` in the config.
+const DEFAULT_STREAM_RETENTION_SECS: u64 = 600;
+
+/// Default hard ceiling on the transient stream dir, in mebibytes — a backstop
+/// for many-stream / backed-up runs; oldest segments drop first. Override with
+/// `STREAM_MAX_MB` in the config.
+const DEFAULT_STREAM_MAX_MB: u64 = 512;
+
 /// Start the disk manager as a background thread.
 pub fn start_disk_manager(
     cli: &Cli,
@@ -13,10 +25,13 @@ pub fn start_disk_manager(
 ) -> Option<std::thread::JoinHandle<()>> {
     use birdnet_core::audio::capture::{DiskManager, DiskManagerConfig, FullDiskAction};
 
-    let monitored_dir = cli
-        .watch_dir
-        .clone()
-        .or_else(|| config?.get("RECS_DIR").map(PathBuf::from))?;
+    // `--watch-dir` is the transient raw-capture stream dir (typically a
+    // RAM-backed tmpfs) and MUST be drained; the RECS_DIR fallback is a
+    // persistent recordings dir whose files must never be age/size-purged.
+    let (monitored_dir, is_transient_stream) = match cli.watch_dir.clone() {
+        Some(watch) => (watch, true),
+        None => (config?.get("RECS_DIR").map(PathBuf::from)?, false),
+    };
 
     let max_files_per_species = if cli.max_files_per_species > 0 {
         cli.max_files_per_species
@@ -30,6 +45,20 @@ pub fn start_disk_manager(
         .and_then(|c| c.get_parsed::<u8>("DISK_PURGE_THRESHOLD").ok())
         .unwrap_or(95);
 
+    // Transient stream-segment draining is enabled only for the watch dir, so a
+    // persistent recordings dir is never age/size-purged.
+    let (stream_retention_secs, stream_max_bytes) = if is_transient_stream {
+        let retention = config
+            .and_then(|c| c.get_parsed::<u64>("STREAM_RETENTION_SECS").ok())
+            .unwrap_or(DEFAULT_STREAM_RETENTION_SECS);
+        let max_mb = config
+            .and_then(|c| c.get_parsed::<u64>("STREAM_MAX_MB").ok())
+            .unwrap_or(DEFAULT_STREAM_MAX_MB);
+        (retention, max_mb.saturating_mul(1024 * 1024))
+    } else {
+        (0, 0)
+    };
+
     let locked_file_names =
         state.with_db(|conn| birdnet_db::sqlite::locked_file_names(conn).unwrap_or_default());
 
@@ -41,12 +70,16 @@ pub fn start_disk_manager(
         check_interval_secs: 60,
         exclude_paths: cli.disk_exclude.clone(),
         locked_file_names,
+        stream_retention_secs,
+        stream_max_bytes,
     };
 
     tracing::info!(
         dir = %monitored_dir.display(),
         max_files_per_species,
         purge_threshold,
+        stream_retention_secs,
+        stream_max_bytes,
         excluded_paths = cli.disk_exclude.len(),
         "disk manager configured"
     );

@@ -910,6 +910,13 @@ setup_tmpfs_streaming() {
         success "/tmp is already tmpfs — ${STREAM_DIR} is RAM-backed"
     elif has_systemd; then
         local MOUNT_UNIT="/etc/systemd/system/tmp-birdnet\\x2dstream.mount"
+        # 256M leaves headroom over the daemon's rolling raw-segment buffer
+        # (STREAM_RETENTION_SECS, ~57 MB/source by default) so a manual, non-
+        # systemd run on a non-tmpfs /tmp doesn't hit spurious write failures.
+        # tmpfs `size=` is a ceiling, not a reservation — RAM is used only for
+        # bytes actually written, which the daemon keeps drained. (Under the
+        # systemd service PrivateTmp=yes gives its own /tmp, so this host mount
+        # applies to manual runs only.)
         cat > "${MOUNT_UNIT}" <<MEOF
 [Unit]
 Description=tmpfs for BirdNet-Behavior audio streaming
@@ -919,7 +926,7 @@ Before=birdnet-behavior.service
 What=tmpfs
 Where=${STREAM_DIR}
 Type=tmpfs
-Options=size=64M,mode=0750,uid=$(id -u "${SERVICE_USER}"),gid=$(id -g "${SERVICE_USER}")
+Options=size=256M,mode=0750,uid=$(id -u "${SERVICE_USER}"),gid=$(id -g "${SERVICE_USER}")
 
 [Install]
 WantedBy=multi-user.target
@@ -1006,6 +1013,11 @@ ${lon_line}
 # --- Disk management ---
 # MAX_FILES_SPECIES=0      # 0 = keep all recordings per species; set e.g. 100 to cap
 # DISK_PURGE_THRESHOLD=95
+# Raw capture segments land in the RAM-backed stream dir (--watch-dir, default
+# /tmp/birdnet-stream) and are drained once the detector has processed them, so
+# the tmpfs cannot fill. Tune the rolling buffer if needed:
+# STREAM_RETENTION_SECS=600  # delete processed raw segments older than this (0 = off)
+# STREAM_MAX_MB=512          # hard cap on the stream dir; oldest segments drop first (0 = off)
 
 # --- Notifications (Apprise) ---
 # APPRISE_URL=http://localhost:8000
