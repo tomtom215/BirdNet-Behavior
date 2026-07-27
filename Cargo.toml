@@ -68,7 +68,7 @@ rusqlite = { version = "0.40", features = ["bundled", "backup"] }
 # version path is not sufficient, because a freshly published artifact can lag
 # and still embed the previous DuckDB version in its footer until the
 # community-extensions rebuild propagates.
-duckdb = { version = "~1.10503", features = ["bundled"] }
+duckdb = { version = "~1.10505", features = ["bundled"] }
 
 # Web
 axum = { version = "0.8.9", features = ["ws", "form"] }
