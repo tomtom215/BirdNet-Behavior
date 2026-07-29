@@ -220,7 +220,7 @@ mod tests {
     #[test]
     fn today_weekday_returns_valid_day() {
         let (date, wd) = today_weekday();
-        assert!(date.len() == 10); // "YYYY-MM-DD"
+        assert_eq!(date.len(), 10); // "YYYY-MM-DD"
         assert!(wd <= 6);
     }
 
