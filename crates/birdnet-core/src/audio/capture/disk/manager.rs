@@ -8,7 +8,10 @@ use crate::audio::capture::process::is_audio_file;
 use crate::audio::capture::types::CaptureError;
 
 use super::disk_usage;
-use super::purge::{cleanup_empty_dirs, is_protected, purge_oldest_files};
+use super::purge::{
+    cleanup_empty_dirs, is_protected, purge_flat_older_than, purge_flat_over_size,
+    purge_oldest_files, purge_oldest_flat_files,
+};
 
 /// What to do when the disk reaches the purge threshold.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +39,17 @@ pub struct DiskManagerConfig {
     pub exclude_paths: Vec<PathBuf>,
     /// File names to protect from purge (locked recordings from DB).
     pub locked_file_names: Vec<String>,
+    /// Retention for *flat* raw-capture segments in `monitored_dir`, in seconds
+    /// (0 = disabled). When set, segments older than this are drained every
+    /// cycle so the RAM-backed stream dir self-empties. Only ever set by the
+    /// caller for the *transient* watch/stream dir — never a persistent
+    /// recordings dir, whose files must not be deleted by age.
+    pub stream_retention_secs: u64,
+    /// Hard ceiling on the total bytes of *flat* raw-capture segments in
+    /// `monitored_dir` (0 = disabled). Oldest segments are dropped first when
+    /// exceeded. Like [`Self::stream_retention_secs`], only set for the transient
+    /// stream dir.
+    pub stream_max_bytes: u64,
 }
 
 impl Default for DiskManagerConfig {
@@ -48,6 +62,8 @@ impl Default for DiskManagerConfig {
             check_interval_secs: 60,
             exclude_paths: Vec::new(),
             locked_file_names: Vec::new(),
+            stream_retention_secs: 0,
+            stream_max_bytes: 0,
         }
     }
 }
@@ -105,7 +121,18 @@ impl DiskManager {
                 "disk full: stopping recording (full_disk_action=Keep)".into(),
             )),
             FullDiskAction::Purge => {
-                let removed = purge_oldest_files(
+                let mut removed = purge_oldest_files(
+                    &self.config.monitored_dir,
+                    &self.config.exclude_paths,
+                    &self.config.locked_file_names,
+                );
+                // The raw capture segments sit FLAT in the watch/stream dir (no
+                // `By_Date/` subtree), so `purge_oldest_files` above reclaims
+                // none of them. Purge the oldest flat segments too — without
+                // this the disk-full safety net frees nothing on the RAM-backed
+                // stream dir and the tmpfs runs to 100 % (breaking capture and
+                // even `apt` on a Pi).
+                removed += purge_oldest_flat_files(
                     &self.config.monitored_dir,
                     &self.config.exclude_paths,
                     &self.config.locked_file_names,
@@ -114,6 +141,42 @@ impl DiskManager {
                 Ok(removed)
             }
         }
+    }
+
+    /// Drain the transient raw-capture segments from the stream dir.
+    ///
+    /// The watch/stream dir accumulates continuous raw audio segments that the
+    /// detection pipeline reads but never deletes; left unbounded they fill the
+    /// RAM-backed tmpfs to 100 %. This keeps the dir bounded two ways, each a
+    /// no-op unless configured — so it only ever acts on the *transient* stream
+    /// dir (the caller leaves both zero for a persistent recordings dir):
+    ///
+    ///   - **age**: drop segments older than `stream_retention_secs` (steady-state
+    ///     drain; the window is far longer than the pipeline's processing latency,
+    ///     so an unprocessed segment is never removed);
+    ///   - **size**: drop the oldest segments until the dir is under
+    ///     `stream_max_bytes` (a hard ceiling for high-ingest / backed-up runs).
+    ///
+    /// Returns the number of files removed.
+    pub fn cleanup_stream_segments(&self) -> u32 {
+        let mut removed = 0_u32;
+        if self.config.stream_retention_secs > 0 {
+            removed += purge_flat_older_than(
+                &self.config.monitored_dir,
+                Duration::from_secs(self.config.stream_retention_secs),
+                &self.config.exclude_paths,
+                &self.config.locked_file_names,
+            );
+        }
+        if self.config.stream_max_bytes > 0 {
+            removed += purge_flat_over_size(
+                &self.config.monitored_dir,
+                self.config.stream_max_bytes,
+                &self.config.exclude_paths,
+                &self.config.locked_file_names,
+            );
+        }
+        removed
     }
 
     /// Enforce per-species file count limits.
@@ -257,6 +320,10 @@ impl DiskManager {
                 }
             }
 
+            // Proactively drain the transient stream segments first, so
+            // steady-state usage stays low regardless of the disk-full backstop.
+            self.cleanup_stream_segments();
+
             if let Err(e) = self.check_and_purge() {
                 tracing::error!(error = %e, "disk manager check_and_purge failed");
             }
@@ -279,6 +346,47 @@ mod tests {
         assert_eq!(config.full_disk_action, FullDiskAction::Purge);
         assert_eq!(config.max_files_per_species, 0);
         assert_eq!(config.check_interval_secs, 60);
+        // Stream cleanup is opt-in (0 = disabled) so it never touches a
+        // persistent recordings dir unless the caller enables it for the
+        // transient stream dir.
+        assert_eq!(config.stream_retention_secs, 0);
+        assert_eq!(config.stream_max_bytes, 0);
+    }
+
+    #[test]
+    fn cleanup_stream_segments_is_noop_when_disabled() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("2026-06-10-birdnet-00:00:00.wav"), b"x").expect("write");
+        let manager = DiskManager::new(DiskManagerConfig {
+            monitored_dir: dir.path().to_path_buf(),
+            ..DiskManagerConfig::default() // both stream limits 0
+        });
+        assert_eq!(manager.cleanup_stream_segments(), 0);
+        assert!(
+            dir.path().join("2026-06-10-birdnet-00:00:00.wav").exists(),
+            "disabled cleanup must not delete anything"
+        );
+    }
+
+    #[test]
+    fn cleanup_stream_segments_drains_aged_flat_segments() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Two ancient segments (1970) and one fresh (now).
+        for name in ["old_a.wav", "old_b.wav"] {
+            let p = dir.path().join(name);
+            std::fs::write(&p, vec![0_u8; 128]).expect("write");
+            filetime::set_file_mtime(&p, filetime::FileTime::from_unix_time(1_000_000, 0))
+                .expect("mtime");
+        }
+        std::fs::write(dir.path().join("fresh.wav"), vec![0_u8; 128]).expect("write");
+
+        let manager = DiskManager::new(DiskManagerConfig {
+            monitored_dir: dir.path().to_path_buf(),
+            stream_retention_secs: 3600,
+            ..DiskManagerConfig::default()
+        });
+        assert_eq!(manager.cleanup_stream_segments(), 2);
+        assert!(dir.path().join("fresh.wav").exists(), "recent segment kept");
     }
 
     #[test]

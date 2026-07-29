@@ -84,12 +84,25 @@ prompt_station_settings() {
     fi
     if [ -z "${ALSA_CARD_VALUE}" ]; then
         local audio_in
-        audio_in="$(ask "  Audio source — ALSA device (e.g. plughw:1,0) or rtsp:// URL (Enter to skip)" "")"
-        case "${audio_in}" in
-            '')                   : ;;
-            rtsp://* | rtsps://*) RTSP_URL_VALUE="${audio_in}" ;;
-            *)                    ALSA_CARD_VALUE="${audio_in}" ;;
-        esac
+        while :; do
+            audio_in="$(ask "  Audio source — ALSA device (e.g. plughw:1,0) or rtsp:// URL (Enter to skip)" "")"
+            case "${audio_in}" in
+                '')
+                    break ;;
+                rtsp://?* | rtsps://?*)
+                    RTSP_URL_VALUE="${audio_in}"; break ;;
+                *://*)
+                    # URL-like input whose scheme isn't rtsp(s):// is almost
+                    # certainly a typo (e.g. http://…). Reject and re-prompt
+                    # rather than silently storing it as an ALSA device string
+                    # (which the capture path could never open). ALSA devices
+                    # (plughw:1,0, hw:0, default) contain no '://', so this only
+                    # catches mistyped stream URLs.
+                    warn "  A stream URL must start with rtsp:// or rtsps:// — got '${audio_in}'. Try again." ;;
+                *)
+                    ALSA_CARD_VALUE="${audio_in}"; break ;;
+            esac
+        done
     fi
     if [ -n "${ALSA_CARD_VALUE}" ]; then
         success "Audio source: ALSA ${ALSA_CARD_VALUE}"

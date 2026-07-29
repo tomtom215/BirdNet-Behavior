@@ -122,7 +122,10 @@ detect_glibc_version() {
 
 check_glibc() {
     if [ "${BIRDNET_SKIP_GLIBC_CHECK:-0}" = "1" ]; then
-        warn "Skipping glibc check (BIRDNET_SKIP_GLIBC_CHECK=1)."
+        loud_warn "BIRDNET_SKIP_GLIBC_CHECK=1 — glibc compatibility check BYPASSED." \
+                  "If this system's glibc is older than ${REQUIRED_GLIBC}, the daemon will" \
+                  "crash at startup with a 'GLIBC_${REQUIRED_GLIBC} not found' error." \
+                  "Unset BIRDNET_SKIP_GLIBC_CHECK to re-enable the check."
         return 0
     fi
 

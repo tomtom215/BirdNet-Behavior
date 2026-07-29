@@ -106,6 +106,31 @@ fn test_notifications_body(apprise_ok: bool, bw_ok: bool) -> String {
     };
     let bw_btn = if bw_ok { "btn-primary" } else { "btn-disabled" };
 
+    // WEB-3: a disabled test button is a dead end unless we say *why*. Give each
+    // button a tooltip AND spell the reason out in the visible hint, because a
+    // native `disabled` button suppresses pointer events in most browsers, so
+    // its `title` won't fire on hover — the hint is the reliable reason surface.
+    let apprise_title = if apprise_ok {
+        "Send a test notification through Apprise"
+    } else {
+        "Disabled — set the Apprise URL in Settings first"
+    };
+    let bw_title = if bw_ok {
+        "Ping the BirdWeather API to verify your token"
+    } else {
+        "Disabled — set the BirdWeather token in Settings first"
+    };
+    let apprise_hint = if apprise_ok {
+        "Configured — send a test to confirm delivery."
+    } else {
+        r#"Disabled until you set the Apprise URL in <a href="/admin/settings">Settings</a>."#
+    };
+    let bw_hint = if bw_ok {
+        "Configured — ping to confirm your token."
+    } else {
+        r#"Disabled until you set the BirdWeather token in <a href="/admin/settings">Settings</a>."#
+    };
+
     let mut html = String::with_capacity(4096);
     html.push_str(r"<style>
       .card { background:var(--surface); border:1px solid var(--border); border-radius:0.75rem; padding:1.5rem; margin-bottom:1.5rem; }
@@ -130,10 +155,10 @@ fn test_notifications_body(apprise_ok: bool, bw_ok: bool) -> String {
         r##"  <div class="card">
     <div class="section-title">Apprise Push Notifications</div>
     <p class="hint">{apprise_icon} Status: {apprise_status}<br>
-      Configure the Apprise URL in <a href="/admin/settings">Settings</a>.
+      {apprise_hint}
     </p>
     <form hx-post="/admin/notifications/test/apprise" hx-target="#apprise-result" hx-swap="innerHTML">
-      <button type="submit" class="btn {apprise_btn}" {apprise_disabled}>Send Test Apprise Notification</button>
+      <button type="submit" class="btn {apprise_btn}" title="{apprise_title}" {apprise_disabled}>Send Test Apprise Notification</button>
     </form>
     <div id="apprise-result"></div>
   </div>
@@ -147,10 +172,10 @@ fn test_notifications_body(apprise_ok: bool, bw_ok: bool) -> String {
         r##"  <div class="card">
     <div class="section-title">BirdWeather Station Ping</div>
     <p class="hint">{bw_icon} Status: {bw_status}<br>
-      Configure the BirdWeather token in <a href="/admin/settings">Settings</a>.
+      {bw_hint}
     </p>
     <form hx-post="/admin/notifications/test/birdweather" hx-target="#birdweather-result" hx-swap="innerHTML">
-      <button type="submit" class="btn {bw_btn}" {bw_disabled}>Ping BirdWeather API</button>
+      <button type="submit" class="btn {bw_btn}" title="{bw_title}" {bw_disabled}>Ping BirdWeather API</button>
     </form>
     <div id="birdweather-result"></div>
   </div>
@@ -374,5 +399,32 @@ mod tests {
         assert!(!test_notifications_body(false, false).contains("style=\""));
         assert!(!result_html(true, "ok").contains("style=\""));
         assert!(!result_html(false, "err").contains("style=\""));
+    }
+
+    #[test]
+    fn disabled_buttons_explain_why() {
+        // WEB-3: an unconfigured channel's test button is disabled; the page must
+        // say *why* — both as a tooltip on the button and as visible hint copy,
+        // pointing at the exact Settings field to fill in. (Check the `disabled>`
+        // attribute, not the bare word "disabled" — the `.btn-disabled` CSS class
+        // is always present in the page's <style> block.)
+        let body = test_notifications_body(false, false);
+        assert!(body.contains("disabled>")); // buttons carry the disabled attribute
+        // Tooltips name the reason.
+        assert!(body.contains("title=\"Disabled — set the Apprise URL in Settings first\""));
+        assert!(body.contains("title=\"Disabled — set the BirdWeather token in Settings first\""));
+        // Visible hint copy names the reason (reliable even where disabled
+        // buttons suppress hover tooltips).
+        assert!(body.contains("Disabled until you set the Apprise URL"));
+        assert!(body.contains("Disabled until you set the BirdWeather token"));
+    }
+
+    #[test]
+    fn enabled_buttons_are_not_disabled_and_have_action_tooltips() {
+        let body = test_notifications_body(true, true);
+        // No channel button carries the disabled attribute when both are configured.
+        assert!(!body.contains("disabled>"));
+        assert!(body.contains("title=\"Send a test notification through Apprise\""));
+        assert!(body.contains("title=\"Ping the BirdWeather API to verify your token\""));
     }
 }

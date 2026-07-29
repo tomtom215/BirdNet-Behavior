@@ -156,7 +156,13 @@ pub fn start_detection_daemon(
     let thresholds_for_processor = daemon_config.species_thresholds.clone();
     let global_confidence = confidence;
 
-    let extractor = Extractor::new(build_extraction_config(cli, &daemon_config.watch_dir));
+    // Extract clips into the SAME dir the web serves recordings from
+    // (AppState::recording_dir) — one source of truth — so clips persist on the
+    // data disk and are found by the Recordings page and playback. They used to
+    // land in watch_dir.parent()/Extracted (the transient tmpfs), which vanished
+    // on every restart and never matched where the app reads (Bug B).
+    let recordings_dir = state.recording_dir();
+    let extractor = Extractor::new(build_extraction_config(cli, &recordings_dir));
 
     match birdnet_core::detection::daemon::run_daemon(&daemon_config, event_tx) {
         Ok(handle) => {

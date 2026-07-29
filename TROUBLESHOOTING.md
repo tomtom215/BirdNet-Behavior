@@ -194,8 +194,8 @@ startup log warns `duckdb-behavioral extension not loaded`.
 
 Cause: the `duckdb-behavioral` community extension is compiled against a
 **specific DuckDB version** and DuckDB refuses to load an extension built for a
-different version (e.g. an extension built for DuckDB `v1.5.1` cannot load into a
-binary that bundles `v1.5.3`). The mismatch can appear after the bundled DuckDB
+different version (e.g. an extension built for DuckDB `v1.5.3` cannot load into a
+binary that bundles `v1.5.5`). The mismatch can appear after the bundled DuckDB
 is bumped.
 
 This is **non-fatal** — the rest of the app is unaffected, and the

@@ -185,6 +185,25 @@ warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*" >&2; }
 error()   { echo -e "${RED}[ERROR]${RESET} $*" >&2; }
 fatal()   { error "$*"; exit 1; }
 
+# A deliberately LOUD, boxed warning for opt-in bypass flags (BIRDNET_SKIP_*).
+# Like the helpers above it writes to stderr — stdout stays reserved for a
+# function's captured return value — but it draws an ASCII `!!' box so it stands
+# out from the routine stream of [WARN] lines and, crucially, survives the
+# non-TTY case where the colour codes are stripped to empty strings
+# (10-config.sh): in an automated/piped install a lone [WARN] is easy to miss,
+# and these bypasses fail later with a cryptic downstream error. Each argument
+# is rendered as one line inside the box.
+loud_warn() {
+    local line
+    {
+        echo -e "${BOLD}${RED}!! ========================================================= !!${RESET}"
+        for line in "$@"; do
+            echo -e "${BOLD}${RED}!!${RESET} ${YELLOW}${line}${RESET}"
+        done
+        echo -e "${BOLD}${RED}!! ========================================================= !!${RESET}"
+    } >&2
+}
+
 # Interactive prompt helpers. They read from /dev/tty (not stdin) so they work
 # under the recommended `curl ... | sudo bash`, where stdin is the script text;
 # output goes to /dev/tty for the same reason. Gated by INTERACTIVE (set in main).
@@ -341,7 +360,10 @@ detect_glibc_version() {
 
 check_glibc() {
     if [ "${BIRDNET_SKIP_GLIBC_CHECK:-0}" = "1" ]; then
-        warn "Skipping glibc check (BIRDNET_SKIP_GLIBC_CHECK=1)."
+        loud_warn "BIRDNET_SKIP_GLIBC_CHECK=1 — glibc compatibility check BYPASSED." \
+                  "If this system's glibc is older than ${REQUIRED_GLIBC}, the daemon will" \
+                  "crash at startup with a 'GLIBC_${REQUIRED_GLIBC} not found' error." \
+                  "Unset BIRDNET_SKIP_GLIBC_CHECK to re-enable the check."
         return 0
     fi
 
@@ -812,8 +834,10 @@ download_model() {
     # unit, and web UI all come up.
     if [ "${BIRDNET_SKIP_MODEL:-0}" = "1" ]; then
         install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${MODEL_DIR}"
-        warn "BIRDNET_SKIP_MODEL=1 — skipping the model download."
-        warn "  Place ${MODEL_FILE} and ${LABELS_FILE} in ${MODEL_DIR}, then restart the service."
+        loud_warn "BIRDNET_SKIP_MODEL=1 — the ML model was NOT downloaded." \
+                  "The service will start but will detect NOTHING until you stage it:" \
+                  "  place ${MODEL_FILE} and ${LABELS_FILE} in ${MODEL_DIR}," \
+                  "  then restart the service."
         return
     fi
 
@@ -886,6 +910,13 @@ setup_tmpfs_streaming() {
         success "/tmp is already tmpfs — ${STREAM_DIR} is RAM-backed"
     elif has_systemd; then
         local MOUNT_UNIT="/etc/systemd/system/tmp-birdnet\\x2dstream.mount"
+        # 256M leaves headroom over the daemon's rolling raw-segment buffer
+        # (STREAM_RETENTION_SECS, ~57 MB/source by default) so a manual, non-
+        # systemd run on a non-tmpfs /tmp doesn't hit spurious write failures.
+        # tmpfs `size=` is a ceiling, not a reservation — RAM is used only for
+        # bytes actually written, which the daemon keeps drained. (Under the
+        # systemd service PrivateTmp=yes gives its own /tmp, so this host mount
+        # applies to manual runs only.)
         cat > "${MOUNT_UNIT}" <<MEOF
 [Unit]
 Description=tmpfs for BirdNet-Behavior audio streaming
@@ -895,7 +926,7 @@ Before=birdnet-behavior.service
 What=tmpfs
 Where=${STREAM_DIR}
 Type=tmpfs
-Options=size=64M,mode=0750,uid=$(id -u "${SERVICE_USER}"),gid=$(id -g "${SERVICE_USER}")
+Options=size=256M,mode=0750,uid=$(id -u "${SERVICE_USER}"),gid=$(id -g "${SERVICE_USER}")
 
 [Install]
 WantedBy=multi-user.target
@@ -982,6 +1013,11 @@ ${lon_line}
 # --- Disk management ---
 # MAX_FILES_SPECIES=0      # 0 = keep all recordings per species; set e.g. 100 to cap
 # DISK_PURGE_THRESHOLD=95
+# Raw capture segments land in the RAM-backed stream dir (--watch-dir, default
+# /tmp/birdnet-stream) and are drained once the detector has processed them, so
+# the tmpfs cannot fill. Tune the rolling buffer if needed:
+# STREAM_RETENTION_SECS=600  # delete processed raw segments older than this (0 = off)
+# STREAM_MAX_MB=512          # hard cap on the stream dir; oldest segments drop first (0 = off)
 
 # --- Notifications (Apprise) ---
 # APPRISE_URL=http://localhost:8000
@@ -1306,12 +1342,25 @@ prompt_station_settings() {
     fi
     if [ -z "${ALSA_CARD_VALUE}" ]; then
         local audio_in
-        audio_in="$(ask "  Audio source — ALSA device (e.g. plughw:1,0) or rtsp:// URL (Enter to skip)" "")"
-        case "${audio_in}" in
-            '')                   : ;;
-            rtsp://* | rtsps://*) RTSP_URL_VALUE="${audio_in}" ;;
-            *)                    ALSA_CARD_VALUE="${audio_in}" ;;
-        esac
+        while :; do
+            audio_in="$(ask "  Audio source — ALSA device (e.g. plughw:1,0) or rtsp:// URL (Enter to skip)" "")"
+            case "${audio_in}" in
+                '')
+                    break ;;
+                rtsp://?* | rtsps://?*)
+                    RTSP_URL_VALUE="${audio_in}"; break ;;
+                *://*)
+                    # URL-like input whose scheme isn't rtsp(s):// is almost
+                    # certainly a typo (e.g. http://…). Reject and re-prompt
+                    # rather than silently storing it as an ALSA device string
+                    # (which the capture path could never open). ALSA devices
+                    # (plughw:1,0, hw:0, default) contain no '://', so this only
+                    # catches mistyped stream URLs.
+                    warn "  A stream URL must start with rtsp:// or rtsps:// — got '${audio_in}'. Try again." ;;
+                *)
+                    ALSA_CARD_VALUE="${audio_in}"; break ;;
+            esac
+        done
     fi
     if [ -n "${ALSA_CARD_VALUE}" ]; then
         success "Audio source: ALSA ${ALSA_CARD_VALUE}"

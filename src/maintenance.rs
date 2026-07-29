@@ -42,16 +42,33 @@ const STARTUP_GRACE: Duration = Duration::from_secs(5 * 60);
 
 /// Kick off the maintenance task. Returns immediately; the loop runs in
 /// the background until the process exits.
-pub fn spawn_database_maintenance(db_path: PathBuf, backup_dir: PathBuf) {
+///
+/// `recordings_dir` + `species_cap` drive the per-species recording cap
+/// (`MAX_FILES_SPECIES`): on the daily tick, keep only the newest `species_cap`
+/// extracted clips per species and prune the older ones off disk.
+/// `species_cap == 0` disables the cap (keep everything).
+pub fn spawn_database_maintenance(
+    db_path: PathBuf,
+    backup_dir: PathBuf,
+    recordings_dir: PathBuf,
+    species_cap: u32,
+) {
     tokio::spawn(async move {
-        run_loop(db_path, backup_dir).await;
+        run_loop(db_path, backup_dir, recordings_dir, species_cap).await;
     });
 }
 
-async fn run_loop(db_path: PathBuf, backup_dir: PathBuf) {
+async fn run_loop(
+    db_path: PathBuf,
+    backup_dir: PathBuf,
+    recordings_dir: PathBuf,
+    species_cap: u32,
+) {
     tracing::info!(
         db_path = %db_path.display(),
         backup_dir = %backup_dir.display(),
+        recordings_dir = %recordings_dir.display(),
+        species_cap,
         integrity_check_every_hours = INTEGRITY_CHECK_INTERVAL.as_secs() / 3600,
         vacuum_every_days = VACUUM_INTERVAL.as_secs() / 86400,
         backup_retention = BACKUP_RETENTION,
@@ -70,6 +87,7 @@ async fn run_loop(db_path: PathBuf, backup_dir: PathBuf) {
             () = async { integrity_ticker.tick().await; } => {
                 run_integrity_check(&db_path).await;
                 run_session_prune(&db_path).await;
+                run_recording_species_cap(&db_path, &recordings_dir, species_cap).await;
             }
             () = async { vacuum_ticker.tick().await; } => {
                 run_backup_and_vacuum(&db_path, &backup_dir).await;
@@ -121,6 +139,73 @@ async fn run_session_prune(db_path: &Path) {
         ),
         Ok(Err(e)) => tracing::warn!(error = %e, "scheduled session prune failed"),
         Err(e) => tracing::warn!(error = %e, "scheduled session prune task panicked"),
+    }
+}
+
+/// Enforce the per-species recording cap (`MAX_FILES_SPECIES`): keep only the
+/// newest `cap` extracted clips per species and delete the older ones off disk.
+///
+/// DB-driven on purpose — the flat clip filename is not reliably
+/// species-parseable (common names can contain hyphens, e.g.
+/// `Black-capped_Chickadee`), so the database (the authority on species↔clip)
+/// decides what to prune. DB rows are left intact: the detection is preserved
+/// for stats and counts, only its audio file is removed. Best-effort and fully
+/// logged; `cap == 0` means unlimited (no-op). The web serves clips flat by
+/// base name, so the same base name is what we delete from `recordings_dir`.
+async fn run_recording_species_cap(db_path: &Path, recordings_dir: &Path, cap: u32) {
+    if cap == 0 || !db_path.exists() {
+        return;
+    }
+    let db_path = db_path.to_path_buf();
+    let recordings_dir = recordings_dir.to_path_buf();
+    let result = tokio::task::spawn_blocking(move || -> Result<usize, String> {
+        let conn = birdnet_db::sqlite::open_or_create(&db_path).map_err(|e| e.to_string())?;
+        // For each species, number clips newest-first; anything beyond the cap
+        // (rn > cap) is an older clip to prune. rowid breaks same-second ties
+        // deterministically.
+        let mut stmt = conn
+            .prepare(
+                "SELECT File_Name FROM (
+                     SELECT File_Name,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY Com_Name
+                                ORDER BY Date DESC, Time DESC, rowid DESC
+                            ) AS rn
+                     FROM detections
+                     WHERE File_Name IS NOT NULL AND File_Name <> ''
+                 ) WHERE rn > ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let over: Vec<String> = stmt
+            .query_map([cap], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .filter_map(Result::ok)
+            .collect();
+        drop(stmt);
+
+        let mut removed = 0_usize;
+        for file_name in over {
+            let Some(base) = Path::new(&file_name).file_name() else {
+                continue;
+            };
+            if std::fs::remove_file(recordings_dir.join(base)).is_ok() {
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    })
+    .await;
+    match result {
+        Ok(Ok(0)) => tracing::debug!("species cap: nothing over the limit"),
+        Ok(Ok(n)) => {
+            tracing::info!(
+                removed = n,
+                cap,
+                "species cap: pruned oldest clips per species"
+            );
+        }
+        Ok(Err(e)) => tracing::warn!(error = %e, "species cap prune failed"),
+        Err(e) => tracing::warn!(error = %e, "species cap prune task panicked"),
     }
 }
 
@@ -402,5 +487,74 @@ mod tests {
             .unwrap();
         assert_eq!(total, 1, "the expired session row must be pruned");
         assert_eq!(live, 1, "the live session row must survive");
+    }
+
+    /// Insert a detection with a clip file and create the file on disk.
+    fn seed_clip(conn: &rusqlite::Connection, dir: &Path, com: &str, date: &str, file: &str) {
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+             VALUES (?1, '06:00:00', 'Sci name', ?2, 0.9, ?3)",
+            rusqlite::params![date, com, file],
+        )
+        .unwrap();
+        std::fs::write(dir.join(file), b"x").unwrap();
+    }
+
+    #[tokio::test]
+    async fn species_cap_prunes_oldest_clips_per_species() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        let recs = tmp.path().join("recordings");
+        std::fs::create_dir_all(&recs).unwrap();
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+            // Four clips for one species (chronological), plus one clip for a
+            // second species that must be untouched (its count is under the cap).
+            seed_clip(&conn, &recs, "European Robin", "2026-01-01", "robin-1.wav");
+            seed_clip(&conn, &recs, "European Robin", "2026-01-02", "robin-2.wav");
+            seed_clip(&conn, &recs, "European Robin", "2026-01-03", "robin-3.wav");
+            seed_clip(&conn, &recs, "European Robin", "2026-01-04", "robin-4.wav");
+            seed_clip(&conn, &recs, "Great Tit", "2026-01-01", "tit-1.wav");
+        }
+
+        // Cap at 2 → keep the 2 newest robins, prune the 2 oldest; tit untouched.
+        run_recording_species_cap(&db, &recs, 2).await;
+
+        assert!(!recs.join("robin-1.wav").exists(), "oldest robin pruned");
+        assert!(
+            !recs.join("robin-2.wav").exists(),
+            "2nd-oldest robin pruned"
+        );
+        assert!(recs.join("robin-3.wav").exists(), "newer robin kept");
+        assert!(recs.join("robin-4.wav").exists(), "newest robin kept");
+        assert!(
+            recs.join("tit-1.wav").exists(),
+            "under-cap species untouched"
+        );
+
+        // DB rows are preserved (only the audio is pruned).
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 5, "detection rows are kept for stats; only files pruned");
+    }
+
+    #[tokio::test]
+    async fn species_cap_zero_is_unlimited_noop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        let recs = tmp.path().join("recordings");
+        std::fs::create_dir_all(&recs).unwrap();
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+            seed_clip(&conn, &recs, "European Robin", "2026-01-01", "keep-1.wav");
+            seed_clip(&conn, &recs, "European Robin", "2026-01-02", "keep-2.wav");
+        }
+        run_recording_species_cap(&db, &recs, 0).await; // unlimited
+        assert!(recs.join("keep-1.wav").exists());
+        assert!(recs.join("keep-2.wav").exists());
     }
 }

@@ -69,6 +69,11 @@ ${lon_line}
 # --- Disk management ---
 # MAX_FILES_SPECIES=0      # 0 = keep all recordings per species; set e.g. 100 to cap
 # DISK_PURGE_THRESHOLD=95
+# Raw capture segments land in the RAM-backed stream dir (--watch-dir, default
+# /tmp/birdnet-stream) and are drained once the detector has processed them, so
+# the tmpfs cannot fill. Tune the rolling buffer if needed:
+# STREAM_RETENTION_SECS=600  # delete processed raw segments older than this (0 = off)
+# STREAM_MAX_MB=512          # hard cap on the stream dir; oldest segments drop first (0 = off)
 
 # --- Notifications (Apprise) ---
 # APPRISE_URL=http://localhost:8000
