@@ -18,8 +18,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when `/tmp` is a distinct filesystem from the data disk, so it never duplicates
   the Disk tile on systems where `/tmp` lives on the data partition.
 
+- **Per-species recording cap (`MAX_FILES_SPECIES`) now actually works.** The
+  old filesystem sweep walked a `By_Date/<species>/` subtree that the flat,
+  RAM-backed capture directory never has, so the cap silently did nothing on a
+  real install. It is now enforced from the database — the authority on which
+  clip belongs to which species, since common names can contain hyphens
+  (`Black-capped_Chickadee`) and are not reliably parseable from filenames — on
+  the daily maintenance tick: the newest N clips per species are kept and older
+  ones are deleted from disk. Detection rows are preserved (stats and counts are
+  unaffected; only the audio file is removed). `0`, the default, means unlimited.
+
 ### Fixed
 
+- **A full `/tmp` no longer breaks the station (and `apt`).** Raw capture
+  segments are written continuously into the RAM-backed stream directory, but
+  nothing ever deleted them once the detector had processed them: the disk
+  manager's safety net only purged a `By_Date/` subtree, which that flat
+  directory never has, so it ran every minute and reclaimed nothing. A station
+  could fill a ~2 GiB tmpfs within hours, breaking the capture pipeline and even
+  `apt`, while the dashboard's Disk tile — watching the *data* partition — still
+  read healthy. The disk manager now drains the stream directory by age and by a
+  total-size ceiling (`STREAM_RETENTION_SECS`, `STREAM_MAX_MB`), and its
+  disk-full purge now also considers those flat segments. Draining only ever
+  applies to the transient capture directory, never a persistent recordings dir.
+- **Extracted detection clips now persist, appear in Recordings, and play.**
+  Three separate faults stacked into one broken feature on a default systemd
+  install. Clips were written to a sibling `Extracted/` directory next to the
+  capture directory — i.e. onto `/tmp`, which `PrivateTmp=yes` wipes on **every
+  restart** — while the web server reads recordings from the data disk, which
+  nothing ever wrote to. They were also nested under `By_Date/<date>/<species>/`,
+  though the recordings API serves and lists by bare filename. And the database
+  recorded the *source segment's* name rather than the saved clip's, so even a
+  correctly-placed clip could not be found. Clips are now written flat into the
+  same directory the web server serves from (one source of truth, so the two
+  cannot drift apart), and the clip's own filename and duration are what get
+  stored. The filename already encodes species, confidence, date and time, so
+  nothing is lost by dropping the nested layout. Detections recorded *before*
+  this fix keep their old filename and remain unplayable.
 - **Adding two different audio sources within the same second no longer fails.**
   The synthetic source id was `src_<kind>_<seconds>`, so two sources added in the
   same second collided and the second add returned a baffling "Retry — a new id
@@ -73,6 +108,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which already brought the dashboard up regardless of audio. The post-install
   summary now clearly notes when no audio source is set yet and points to the
   in-dashboard setup wizard.
+- **A mistyped stream URL is no longer silently accepted as a sound card.** The
+  installer's audio-source prompt treated anything that wasn't an `rtsp://` URL
+  as an ALSA device name, so a typo'd scheme (`http://camera…`) was written into
+  the config as a sound-card string that could never open. Input that looks like
+  a URL but isn't `rtsp://` / `rtsps://` is now rejected with an explanation and
+  re-prompted. Plain ALSA device names (`plughw:1,0`, `default`) are unaffected.
+- **Skipping an installer safety check is now impossible to miss.**
+  `BIRDNET_SKIP_MODEL` and `BIRDNET_SKIP_GLIBC_CHECK` announced themselves with a
+  single `[WARN]` line that blended into the surrounding install output — and
+  lost its colour entirely in a piped or CI install — so the eventual failure
+  (a daemon that detects nothing; a `GLIBC_… not found` crash at startup) arrived
+  with no obvious cause. Each bypass now prints a boxed, unmissable warning that
+  survives a non-interactive install and states the consequence.
+- **A disabled notification-test button now says why it's disabled.** The Apprise
+  and BirdWeather test buttons greyed out with no explanation when the channel
+  had no credentials. Each now carries a tooltip *and* visible hint naming the
+  exact setting to fill in — the hint because browsers suppress tooltips on
+  disabled buttons.
+- **The "what's new" banner no longer vanishes silently when it can't load.**
+  After an upgrade, if the release-notes request failed — the server still
+  restarting, a 5xx, an older build without the endpoint — the banner simply
+  never appeared, indistinguishable from having no news. It now falls back to a
+  minimal "updated to vX.Y.Z" banner linking to the full changelog. A server
+  that intentionally has no release to announce still stays quiet.
+
+### Dependencies
+
+- `duckdb` 1.10503.1 → **1.10505.0** (bundled DuckDB 1.5.3 → **1.5.5**), to pick
+  up **`duckdb-behavioral` v0.9.1**. The behavioral extension is version-locked
+  to the DuckDB it was built for — DuckDB refuses to load a mismatch, and
+  `allow_extensions_metadata_mismatch` does not bypass that check — so the
+  bundled engine moves in lockstep with the published community build. Verified
+  before landing rather than assumed: the community CDN's `v1.5.5` artifacts for
+  both `linux_amd64` and `linux_arm64` report `behavioral_version v0.9.1`, and
+  both load paths succeed (online `INSTALL … FROM community` and the offline
+  embedded fallback) with every behavioral function executing. Note the `v1.5.4`
+  CDN path is *not* usable — it still serves a byte-identical copy of the old
+  v0.8.0/1.5.3 build, which is exactly why an HTTP 200 on a version path is not
+  sufficient evidence to bump.
 
 ## [0.9.0] - 2026-06-22
 
