@@ -119,7 +119,7 @@ jobs:
         shell: bash
         run: |
           set -eu
-          url="http://community-extensions.duckdb.org/v1.5.3/linux_amd64/behavioral.duckdb_extension.gz"
+          url="http://community-extensions.duckdb.org/v1.5.5/linux_amd64/behavioral.duckdb_extension.gz"
           tmp="$RUNNER_TEMP/behavioral.duckdb_extension"
           if curl -fsSL --retry 3 --retry-delay 2 --max-time 120 -o "${tmp}.gz" "$url"; then
             gunzip -f "${tmp}.gz"

@@ -54,21 +54,24 @@ tokio = { version = "1.52", features = ["full"] }
 
 # Database
 rusqlite = { version = "0.40", features = ["bundled", "backup"] }
-# `~` pins the bundled DuckDB version: the `10503` component is DuckDB 1.5.3
+# `~` pins the bundled DuckDB version: the `10505` component is DuckDB 1.5.5
 # itself (the trailing `.x` is only duckdb-rs's binding revision). It MUST match
 # the DuckDB version the published `behavioral` community extension targets —
 # DuckDB refuses to LOAD an extension built for any other version (verified:
 # even `allow_extensions_metadata_mismatch` does not bypass the LOAD-time check).
-# The community CDN serves `behavioral` v0.8.0 built for DuckDB 1.5.3 (verified:
-# the v1.5.3 artifact reports v0.8.0 and exposes window_funnel_events /
-# sequence_count / sequence_match_events), so the bundled engine matches and
-# `LOAD behavioral` succeeds.
+# The community CDN serves `behavioral` v0.9.1 built for DuckDB 1.5.5 (verified:
+# the v1.5.5 artifact footer reports behavioral_version v0.9.1 + DuckDB v1.5.5
+# for both linux_amd64 and linux_arm64, exposing sessionize / window_funnel /
+# retention / sequence_*), so the bundled engine matches and `LOAD behavioral`
+# succeeds.
 #
 # When bumping, confirm the new build actually LOADs — an HTTP 200 on the
 # version path is not sufficient, because a freshly published artifact can lag
 # and still embed the previous DuckDB version in its footer until the
-# community-extensions rebuild propagates.
-duckdb = { version = "~1.10503", features = ["bundled"] }
+# community-extensions rebuild propagates. (The `v1.5.4` path long served a
+# byte-identical copy of the old v0.8.0/1.5.3 build; DuckDB moved 1.5.3 -> 1.5.5
+# and v0.9.1 was published under v1.5.5.)
+duckdb = { version = "~1.10505", features = ["bundled"] }
 
 # Web
 axum = { version = "0.8.9", features = ["ws", "form"] }

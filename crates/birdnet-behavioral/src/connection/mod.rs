@@ -238,7 +238,7 @@ impl AnalyticsDb {
         Ok(())
     }
 
-    /// The bundled `DuckDB` engine version (e.g. `v1.5.3`).
+    /// The bundled `DuckDB` engine version (e.g. `v1.5.5`).
     ///
     /// The `behavioral` community extension is version-locked to this exact
     /// `DuckDB` version — a build for any other version will not `LOAD` — so
@@ -250,7 +250,7 @@ impl AnalyticsDb {
             .ok()
     }
 
-    /// The loaded `behavioral` extension version (e.g. `v0.8.0`).
+    /// The loaded `behavioral` extension version (e.g. `v0.9.1`).
     ///
     /// Returns `None` when the extension is not loaded in this connection or its
     /// version is unavailable. Best-effort — any query error maps to `None` — so
