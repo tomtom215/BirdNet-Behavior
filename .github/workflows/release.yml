@@ -491,7 +491,7 @@ jobs:
       # version so a transitive bug in the generator can't silently
       # poison the release artifact set.
       - name: Install cargo-cyclonedx
-        uses: taiki-e/install-action@7a79fe8c3a13344501c80d99cae481c1c9085912 # v2.81.10
+        uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2.85.4
         with:
           tool: cargo-cyclonedx@0.5.7
 
@@ -569,7 +569,7 @@ jobs:
       # The SBOM is also attested so consumers know the BOM came from the
       # same workflow run as the binaries.
       - name: Attest build provenance (SLSA)
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: |
             release/*.tar.gz
