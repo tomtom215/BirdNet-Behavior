@@ -321,7 +321,8 @@ fn render_body(f: &DataFacts) -> String {
           hx-encoding="multipart/form-data"
           hx-target="#bkr-restore-result"
           hx-swap="innerHTML">
-      <input type="file" name="backup" accept=".gz,.tgz,application/gzip" required class="bkr-file">
+      <label for="bkr-restore-file">Backup archive</label>
+      <input id="bkr-restore-file" type="file" name="backup" accept=".gz,.tgz,application/gzip" required class="bkr-file">
       <button type="submit" class="bnb-btn danger bkr-mt-xs"
               data-confirm-action="submit"
               data-confirm-title="Restore from backup"
@@ -699,6 +700,60 @@ mod tests {
         assert_eq!(pct_of(50, 100), 50);
         assert_eq!(pct_of(100, 100), 100);
         assert_eq!(pct_of(500, 100), 100, "clamped, never over 100%");
+    }
+
+    #[test]
+    fn every_form_control_has_a_label() {
+        // The axe gate rejects an unlabelled control as a critical violation,
+        // and the restore file input shipped without one — it had a class but
+        // no `<label for>`, so a screen reader announced an unnamed button on
+        // three pages in both themes. Assert the association directly so the
+        // next control added here cannot repeat it.
+        let html = render_body(&facts_with_snapshots());
+        let controls = control_tags(&html);
+        assert!(
+            !controls.is_empty(),
+            "the page should render at least one control"
+        );
+        for attrs in controls {
+            // A control with no `id` at all is the exact shape of the bug this
+            // guards, so "has an id" is part of the assertion rather than a
+            // precondition for it — checking only identified controls would
+            // have skipped the very input that failed the gate.
+            let id = attrs
+                .split("id=\"")
+                .nth(1)
+                .and_then(|rest| rest.split('"').next());
+            match id {
+                Some(id) => assert!(
+                    html.contains(&format!(r#"for="{id}""#)),
+                    "form control #{id} has no <label for=\"{id}\">"
+                ),
+                None => panic!(
+                    "form control has no id, so nothing can label it: <{}…>",
+                    &attrs[..attrs.len().min(70)]
+                ),
+            }
+        }
+    }
+
+    /// Attribute text of every labellable `<input>`/`<select>`/`<textarea>`.
+    ///
+    /// Hidden inputs are excluded: they are not exposed to assistive tech and
+    /// axe does not require a label for them.
+    fn control_tags(html: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for tag in ["<input", "<select", "<textarea"] {
+            for frag in html.split(tag).skip(1) {
+                let Some(end) = frag.find('>') else { continue };
+                let attrs = &frag[..end];
+                if attrs.contains(r#"type="hidden""#) {
+                    continue;
+                }
+                out.push(attrs.to_string());
+            }
+        }
+        out
     }
 
     #[test]
