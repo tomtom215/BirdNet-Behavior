@@ -74,9 +74,42 @@ MAX_FILES_SPECIES=100         # cap clips per species
 DISK_PURGE_THRESHOLD=85       # autopurge starts at 85 %
 ```
 
-The bundled disk manager monitors continuously; once usage exceeds
-`DISK_PURGE_THRESHOLD` it removes the oldest clips first, skipping any
-file the database has marked locked (`/admin/recordings` → "lock").
+The bundled disk manager supervises **two** directories, once a minute, with
+the retention each one needs:
+
+- the **recordings directory**, holding your extracted clips beside
+  `birds.db`. These are your data, so they are never removed by age. Only the
+  disk-full backstop touches them: once usage exceeds `DISK_PURGE_THRESHOLD`
+  it removes the oldest clips first, skipping any file the database has marked
+  locked (`/admin/recordings` → "lock"). The locked set is re-read every cycle,
+  so locking a clip takes effect immediately — no restart needed.
+- the **raw capture directory** (`--watch-dir`, typically the RAM-backed
+  `/tmp/birdnet-stream`), which the detector reads and never needs again. It is
+  drained continuously by age and by a total-size ceiling
+  (`STREAM_RETENTION_SECS`, `STREAM_MAX_MB`) so the tmpfs self-empties.
+
+Two further limits are enforced from the database on the daily maintenance
+tick, and both leave the detection rows intact — only the audio is reclaimed,
+so your counts, species lists and analytics are unaffected:
+
+- `MAX_FILES_SPECIES` — keep the newest N clips per species.
+- `CLIP_RETENTION_DAYS` — reclaim audio older than N days. **Off by default**
+  (`0` = keep forever); set it in **Settings → System** ("Keep Clip Audio") or
+  the config file if you want a rolling window.
+
+Locked clips are exempt from both. A reclaimed clip keeps its filename and
+gains the date its audio was removed, so the record of what was captured
+survives even though the file does not.
+
+All of these can be set from the web UI — you never have to edit this file to
+change them. A command-line flag or `BIRDNET_*` variable wins over the UI,
+which wins over the config file.
+
+**Maintenance runs on wall-clock time, not uptime.** The daily jobs (integrity
+check, session prune, species cap) and the weekly backup + VACUUM record their
+completion in the database, so a station that reboots often still runs them —
+an overdue job fires shortly after the next boot rather than restarting its
+timer.
 
 **Use endurance-class SD cards.** A standard A1 card will write out
 ~3000 P/E cycles per cell; WAL on a busy station can wear that out in

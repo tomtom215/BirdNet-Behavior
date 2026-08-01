@@ -23,8 +23,8 @@ pub mod types;
 
 // Re-export the public API so callers keep the same import path.
 pub use disk::{
-    DiskManager, DiskManagerConfig, DiskUsage, FullDiskAction, cleanup_old_recordings, disk_usage,
-    recording_stats,
+    DiskManager, DiskManagerConfig, DiskUsage, FullDiskAction, LockedFilesProvider,
+    cleanup_old_recordings, disk_usage, recording_stats,
 };
 pub use manager::CaptureManager;
 pub use process::{is_tool_available, start_microphone_capture, start_rtsp_capture};

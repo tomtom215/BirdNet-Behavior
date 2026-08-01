@@ -6,6 +6,7 @@ pub mod detection_reviews;
 pub mod detections;
 pub mod heatmap;
 pub mod images;
+pub mod maintenance;
 pub mod quarantine;
 pub mod species;
 
@@ -23,7 +24,7 @@ pub use detection_reviews::{
     unreviewed_recent_detections,
 };
 pub use detections::{
-    RecordingsFilter, TodayFilter, all_detections, best_detections_for_date,
+    CLIP_AVAILABLE, RecordingsFilter, TodayFilter, all_detections, best_detections_for_date,
     concurrent_detections_from_other_sources, delete_detection, detection_count,
     detection_count_for_date, detection_count_for_species_date, detection_dates,
     detections_by_date, detections_by_species, detections_per_day, insert_detection,
@@ -36,6 +37,10 @@ pub use heatmap::{hourly_totals, species_daily_heatmap, weekly_heatmap};
 pub use images::{
     ImageBlacklist, add_image_blacklist, blacklisted_urls_for_species, is_image_blacklisted,
     list_image_blacklist, remove_image_blacklist,
+};
+pub use maintenance::{
+    BACKUP_VACUUM_INTERVAL_SECS, DAILY_INTERVAL_SECS, JOB_BACKUP_VACUUM, JOB_INTEGRITY_CHECK,
+    JOB_SESSION_PRUNE, JOB_SPECIES_CAP, last_run_unix, record_run,
 };
 pub use quarantine::{
     QuarantineFilter, QuarantineReason, QuarantineRecord, QuarantineRow, QuarantineStats,

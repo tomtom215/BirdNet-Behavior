@@ -144,6 +144,80 @@ jobs:
         run: cargo test -p birdnet-behavioral --features analytics embedded_extension_loads_when_bundled -- --nocapture
 
   # ── doc ────────────────────────────────────────────────────────────────────
+  # ── inference ──────────────────────────────────────────────────────────────
+  inference:
+    name: Inference against the real model
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Free up runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/share/swift
+          df -h /
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake g++
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: ci-inference
+      # The model is ~541 MB and immutable for a given release tag, so key the
+      # cache on its checksum: it is fetched once and reused by every later run.
+      - name: Cache the BirdNET model
+        id: model-cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ runner.temp }}/birdnet-model
+          key: birdnet-model-2a0f9efba1a98e3193ad3dfcb8323116a7de88e39545f3619a7ea46e3bb7d743
+      - name: Fetch the BirdNET model and labels
+        # Best-effort, matching the behavioural-extension step in the test job:
+        # a CDN outage warns instead of failing the build. When the fetch *does*
+        # succeed the tests below assert for real — which is the whole point.
+        shell: bash
+        run: |
+          set -eu
+          dir="$RUNNER_TEMP/birdnet-model"
+          model="$dir/model.onnx"
+          labels="$dir/labels.csv"
+          sha="2a0f9efba1a98e3193ad3dfcb8323116a7de88e39545f3619a7ea46e3bb7d743"
+          mkdir -p "$dir"
+          tag="models-v3.0-preview3"
+          gh="https://github.com/${GITHUB_REPOSITORY}/releases/download/$tag"
+          zen="https://zenodo.org/api/records/18247420/files"
+          mfile="BirdNET%2B_V3.0-preview3_Global_11K_FP32.onnx"
+          lfile="BirdNET%2B_V3.0-preview3_Global_11K_Labels.csv"
+
+          if [ ! -f "$model" ]; then
+            curl -fsSL --retry 3 --retry-delay 5 --max-time 900 -o "$model" "$gh/$mfile" \
+              || curl -fsSL --retry 3 --retry-delay 5 --max-time 900 -o "$model" "$zen/$mfile/content" \
+              || { echo "::warning::could not fetch the model; inference tests will skip"; exit 0; }
+          fi
+          if [ ! -f "$labels" ]; then
+            curl -fsSL --retry 3 --retry-delay 5 --max-time 300 -o "$labels" "$gh/$lfile" \
+              || curl -fsSL --retry 3 --retry-delay 5 --max-time 300 -o "$labels" "$zen/$lfile/content" \
+              || { echo "::warning::could not fetch the labels; inference tests will skip"; exit 0; }
+          fi
+
+          # A truncated or substituted model must never be allowed to "pass" by
+          # silently skipping — a wrong checksum is a hard failure.
+          echo "$sha  $model" | sha256sum -c -
+          echo "BIRDNET_TEST_MODEL=$model"  >> "$GITHUB_ENV"
+          echo "BIRDNET_TEST_LABELS=$labels" >> "$GITHUB_ENV"
+      - name: Run the end-to-end inference tests
+        # These are the only tests that exercise the scientific core —
+        # decode → resample → chunk → ONNX inference → confidence mapping —
+        # against the real 11 K-species model. Without them the suite can be
+        # entirely green while the pipeline returns the wrong species or a
+        # silently squashed confidence, which is exactly how the
+        # sigmoid-on-probabilities bug (0.92 reported as 0.72) reached a
+        # release. They pin a confidence floor on a known Eurasian Magpie
+        # recording, so a regression in any stage fails the build.
+        run: cargo test --test inference_e2e --test pipeline_e2e -- --nocapture
+
   doc:
     name: Rustdoc (no broken links)
     runs-on: ubuntu-24.04

@@ -504,6 +504,62 @@ pub const MIGRATIONS: &[Migration] = &[
         // faked value. Not indexed: nothing filters or sorts by duration.
         up_sql: "ALTER TABLE detections ADD COLUMN Duration_Secs REAL;",
     },
+    Migration {
+        version: 21,
+        description: "Track background maintenance runs so schedules survive restarts",
+        // Scheduled maintenance (integrity check, session prune, per-species
+        // recording cap, backup + VACUUM) used to be driven by tokio intervals
+        // measured from process start. That silently disabled every job on any
+        // station restarting more often than the job's period: a settings
+        // change ("applies on restart"), an update, a power cut, or a watchdog
+        // bounce reset the clock, so a station rebooting daily never ran the
+        // weekly backup + VACUUM — not once, ever. Backups are the only input
+        // to `resilience::check_and_recover`, so that turned recoverable
+        // corruption into total data loss on exactly the unattended
+        // deployments the schedule exists to protect.
+        //
+        // Recording each job's last completion here makes the schedule
+        // wall-clock based and restart-durable: on boot the loop reads what is
+        // actually overdue and runs it. Keyed by a stable job name; the value
+        // is Unix seconds, so it is comparable across reboots and clock zones
+        // (and never a locale-formatted string).
+        //
+        // A dedicated table, not `settings`: this is internal scheduler state,
+        // not an operator-editable preference, and it must not surface in the
+        // admin settings form or be clobbered by a settings import.
+        up_sql: "CREATE TABLE IF NOT EXISTS maintenance_runs (
+            job TEXT PRIMARY KEY,
+            last_run_unix INTEGER NOT NULL
+        );",
+    },
+    Migration {
+        version: 22,
+        description: "Record when a detection's clip was reclaimed, without losing its name",
+        // Retention has to reclaim audio eventually — the per-species cap and
+        // the disk-full purge both delete clip files. The question is what
+        // happens to the row that pointed at one.
+        //
+        // Clearing `File_Name` was the obvious answer and the wrong one: the
+        // filename is *evidence*. It carries the capture timestamp and source
+        // the clip was cut from, it is how a detection is matched back to an
+        // archived copy or an offline analysis, and a researcher re-examining a
+        // season of data should still be able to see that a detection had audio
+        // and what it was called. Retention must reclaim disk, never provenance.
+        //
+        // So the name stays and this column records *when* the audio went. That
+        // is strictly more information than before — the row now distinguishes
+        // "never had a clip" (NULL name) from "had one, reclaimed on this date"
+        // — and it gives the reader queries a precise way to exclude clips that
+        // can no longer be played, so the browser stops offering a dead play
+        // button and the retention pass stops re-selecting rows it already
+        // handled.
+        //
+        // Nullable and unindexed: NULL means "audio still present", which is
+        // the overwhelming majority, and nothing filters on the timestamp
+        // itself — only on its presence, alongside `File_Name` predicates that
+        // already scan the same rows.
+        up_sql: "ALTER TABLE detections ADD COLUMN Clip_Pruned_At INTEGER;",
+    },
 ];
 
 /// Ensure the `schema_version` tracking table exists.

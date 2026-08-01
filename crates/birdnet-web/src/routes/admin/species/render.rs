@@ -136,7 +136,7 @@ pub fn render_thresholds_partial(thresholds: &[birdnet_db::sqlite::SpeciesThresh
     let mut out = String::with_capacity(2048);
     out.push_str(r#"<div class="card">
   <div class="section-title">Per-Species Confidence Thresholds</div>
-  <p class="hint">Override the global confidence threshold for specific species. Detections below the species threshold will be discarded.</p>"#);
+  <p class="hint">Override the global confidence threshold for specific species. A detection that clears the global threshold but falls short of its species threshold is <b>held for review in <a href="/quarantine">Quarantine</a></b> — not discarded — so you can confirm or reject it yourself. Changes take effect within a minute; no restart needed.</p>"#);
 
     if thresholds.is_empty() {
         out.push_str(

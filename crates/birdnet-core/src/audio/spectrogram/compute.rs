@@ -28,7 +28,22 @@ pub(super) fn compute_stft(
     let mut padded = vec![0.0_f32; padded_len];
     padded[pad..pad + samples.len()].copy_from_slice(samples);
 
-    // Reflect padding (matching librosa's default reflect mode)
+    // NOTE: this is **symmetric** padding (the edge sample is repeated:
+    // `b a | a b c d | d c`), not numpy/librosa `reflect` (`c b | a b c d | c b`),
+    // despite what this comment used to claim. The two differ only in the
+    // leading and trailing `n_fft/2` samples, so with the default 2048/512
+    // geometry they change the first two and last two frames of a chunk out of
+    // ~280 — under 1 % of frames, none of them on the shipped detection path.
+    //
+    // Deliberately NOT "corrected" here. Which mode is right depends on the
+    // librosa version the consuming model was trained against — `stft` defaulted
+    // to `reflect` before librosa 0.10 and to `constant` (zeros) from 0.10 on —
+    // so switching to `reflect` is as likely to move away from the training
+    // distribution as toward it. That question can only be settled by measuring
+    // against a real V2.4 ONNX model, which the bundled V3.0 (raw-waveform,
+    // no mel) does not exercise. Changing numerics in the scientific core on a
+    // guess is how silent accuracy regressions happen; the honest state is
+    // recorded here instead.
     for i in 0..pad.min(samples.len()) {
         padded[pad - 1 - i] = samples[i.min(samples.len() - 1)];
         let right_idx = pad + samples.len() + i;

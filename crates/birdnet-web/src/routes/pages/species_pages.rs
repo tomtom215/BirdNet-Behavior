@@ -743,21 +743,24 @@ async fn species_hero_partial(
     let state_clone = state.clone();
     let best = tokio::task::spawn_blocking(move || {
         state_clone.with_db(|conn| {
-            conn.query_row(
+            // Shares `CLIP_AVAILABLE` with every other play-button surface, so
+            // this page cannot end up offering audio the Recordings browser
+            // knows has been reclaimed.
+            let sql = format!(
                 "SELECT Date, Time, Confidence, File_Name \
                  FROM detections \
-                 WHERE Com_Name = ?1 AND File_Name IS NOT NULL AND File_Name <> '' \
+                 WHERE Com_Name = ?1 AND {clip} \
                  ORDER BY Confidence DESC LIMIT 1",
-                [&lookup_name],
-                |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, f64>(2)?,
-                        r.get::<_, String>(3)?,
-                    ))
-                },
-            )
+                clip = birdnet_db::sqlite::CLIP_AVAILABLE,
+            );
+            conn.query_row(&sql, [&lookup_name], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, f64>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            })
             .ok()
         })
     })

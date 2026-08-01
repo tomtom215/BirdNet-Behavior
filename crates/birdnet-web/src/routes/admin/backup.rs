@@ -39,23 +39,48 @@ fn backup_dir(state: &AppState) -> std::path::PathBuf {
         .join("backups")
 }
 
-/// Validate that a filename is safe (no path traversal, `.db` extension, and
-/// composed only of an ASCII allowlist that carries no HTTP-header-significant
-/// bytes — so the name can be interpolated into a `Content-Disposition` header
-/// without worrying about `"`, CR/LF, or control characters).
+/// Does this filename have the shape of a backup this application writes?
+///
+/// [`birdnet_db::resilience::backup_database`] names its snapshots
+/// `{db_name}.backup.{unix_secs}` — for the stock install, `birds.db.backup.
+/// 1733400000`. Crucially the *extension* is the timestamp, not `db`, so the
+/// obvious `ends_with(".db")` test matches **nothing** a station ever produces.
+/// That single wrong assumption made `/admin/system/backups` report "No backups
+/// found" on every station, and made download and delete reject every real file
+/// with a 400 — the operator's whole backup surface, silently inert. (The same
+/// mistake once disabled the maintenance pruner; this is the last place that
+/// held it.)
+///
+/// A plain `.db` name is still accepted so a hand-placed or restored-from-
+/// elsewhere snapshot remains downloadable.
+pub(super) fn is_backup_file_name(name: &str) -> bool {
+    if let Some((prefix, suffix)) = name.rsplit_once(".backup.") {
+        return !prefix.is_empty()
+            && !suffix.is_empty()
+            && suffix.bytes().all(|b| b.is_ascii_digit());
+    }
+    std::path::Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("db"))
+}
+
+/// Validate that a filename is safe (no path traversal, a recognised backup
+/// shape, and composed only of an ASCII allowlist that carries no
+/// HTTP-header-significant bytes — so the name can be interpolated into a
+/// `Content-Disposition` header without worrying about `"`, CR/LF, or control
+/// characters).
 fn is_safe_backup_name(name: &str) -> bool {
     if name.is_empty() || name.len() > 255 || name.contains("..") {
         return false;
     }
-    let ext_ok = std::path::Path::new(name)
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("db"));
-    if !ext_ok {
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
         return false;
     }
-    name.chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    is_backup_file_name(name)
 }
 
 /// Basic HTML escape for untrusted strings rendered into HTML.
@@ -79,7 +104,7 @@ async fn list_backups(State(state): State<AppState>) -> Html<String> {
         };
         let mut entries: Vec<BackupEntry> = rd
             .filter_map(std::result::Result::ok)
-            .filter(|e| e.file_name().to_string_lossy().ends_with(".db"))
+            .filter(|e| is_backup_file_name(&e.file_name().to_string_lossy()))
             .filter_map(|e| {
                 let name = e.file_name().to_string_lossy().to_string();
                 let meta = e.metadata().ok()?;
@@ -292,15 +317,40 @@ mod tests {
     }
 
     #[test]
+    fn safe_backup_name_accepts_the_real_backup_shape() {
+        // The regression: this is exactly what `resilience::backup_database`
+        // writes, and it was rejected with a 400 by download and delete alike.
+        assert!(is_safe_backup_name("birds.db.backup.1733400000"));
+        assert!(is_backup_file_name("birds.db.backup.1733400000"));
+        // A renamed database keeps working.
+        assert!(is_safe_backup_name("BirdDB.db.backup.1700000001"));
+    }
+
+    #[test]
+    fn backup_name_requires_a_numeric_timestamp() {
+        // Counter-test: `.backup.` alone must not open the directory up to
+        // arbitrary names.
+        assert!(!is_backup_file_name("birds.db.backup.notatimestamp"));
+        assert!(!is_backup_file_name("birds.db.backup."));
+        assert!(!is_backup_file_name(".backup.123"));
+    }
+
+    #[test]
     fn safe_backup_name_rejects_traversal() {
         assert!(!is_safe_backup_name("../etc/passwd"));
         assert!(!is_safe_backup_name("backups/../../passwd.db"));
+        // Traversal stays rejected even wearing the backup shape.
+        assert!(!is_safe_backup_name("../birds.db.backup.1733400000"));
+        assert!(!is_safe_backup_name("sub/birds.db.backup.1733400000"));
     }
 
     #[test]
     fn safe_backup_name_rejects_non_db() {
         assert!(!is_safe_backup_name("birds.txt"));
         assert!(!is_safe_backup_name("birds.db.sh"));
+        // Header-significant bytes stay rejected.
+        assert!(!is_safe_backup_name("birds.db.backup.1\r\nX-Evil: 1"));
+        assert!(!is_safe_backup_name("bir\"ds.db"));
     }
 
     #[test]
@@ -332,6 +382,33 @@ mod tests {
     fn render_backup_list_empty() {
         let html = render_backup_list(&[]);
         assert!(html.contains("No backups found"));
+    }
+
+    #[test]
+    fn a_real_backup_is_listable_downloadable_and_deletable() {
+        // Couples the writer to the reader: whatever
+        // `resilience::backup_database` actually names its file must satisfy
+        // the admin surface's filter and its safety check. If either side's
+        // naming ever drifts again, this fails instead of the operator
+        // silently seeing an empty backup list.
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+        }
+        let backups = tmp.path().join("backups");
+        let written = birdnet_db::resilience::backup_database(&db, &backups).unwrap();
+        let name = written.file_name().unwrap().to_string_lossy().into_owned();
+
+        assert!(
+            is_backup_file_name(&name),
+            "the listing filter must match what we actually write: {name}"
+        );
+        assert!(
+            is_safe_backup_name(&name),
+            "download/delete must accept what we actually write: {name}"
+        );
     }
 
     #[test]
