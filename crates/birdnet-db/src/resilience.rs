@@ -215,13 +215,32 @@ pub fn backup_database(db_path: &Path, backup_dir: &Path) -> Result<PathBuf, Res
         .unwrap_or("birds.db");
     let backup_path = backup_dir.join(format!("{db_name}.backup.{timestamp}"));
 
-    let source = open_readonly_with_busy_timeout(db_path)?;
-    let mut dest = open_with_busy_timeout(&backup_path)?;
-
-    let backup = rusqlite::backup::Backup::new(&source, &mut dest)?;
-    backup
-        .run_to_completion(100, std::time::Duration::from_millis(50), None)
-        .map_err(ResilienceError::Sqlite)?;
+    // A backup that fails part-way — most likely a full disk, which is exactly
+    // when this runs on a struggling station — used to leave its truncated file
+    // behind. That file is worthless (it cannot pass an integrity check) but it
+    // sorts newest, so it became the first thing recovery reached for, and it
+    // consumed space on the disk that was already full. Remove it on any error
+    // so the ring only ever contains complete snapshots.
+    let result = (|| -> Result<(), ResilienceError> {
+        let source = open_readonly_with_busy_timeout(db_path)?;
+        let mut dest = open_with_busy_timeout(&backup_path)?;
+        let backup = rusqlite::backup::Backup::new(&source, &mut dest)?;
+        backup
+            .run_to_completion(100, std::time::Duration::from_millis(50), None)
+            .map_err(ResilienceError::Sqlite)
+    })();
+    if let Err(e) = result {
+        if let Err(rm) = std::fs::remove_file(&backup_path)
+            && rm.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(
+                path = %backup_path.display(),
+                error = %rm,
+                "could not remove the incomplete backup"
+            );
+        }
+        return Err(e);
+    }
 
     tracing::info!(
         path = %backup_path.display(),
@@ -279,6 +298,32 @@ pub fn find_latest_backup(backup_dir: &Path, db_name: &str) -> Option<PathBuf> {
 
     backups.sort();
     backups.pop()
+}
+
+/// Every backup for `db_name`, newest first.
+///
+/// The names embed a zero-padded-by-magnitude Unix timestamp, so a lexical
+/// sort is chronological for any timestamp of the same digit count — which
+/// holds for every backup this decade — and the reverse gives newest-first.
+///
+/// # Errors
+///
+/// Never errors; an unreadable directory yields an empty list.
+#[must_use]
+pub fn backups_newest_first(backup_dir: &Path, db_name: &str) -> Vec<PathBuf> {
+    let prefix = format!("{db_name}.backup.");
+    let mut backups: Vec<PathBuf> = std::fs::read_dir(backup_dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            name.starts_with(&prefix).then(|| entry.path())
+        })
+        .collect();
+    backups.sort_unstable();
+    backups.reverse();
+    backups
 }
 
 /// Restore a database from a backup file.
@@ -420,32 +465,60 @@ pub fn check_and_recover(
         .and_then(|n| n.to_str())
         .unwrap_or("birds.db");
 
-    let Some(backup_path) = find_latest_backup(backup_dir, db_name) else {
+    // Walk the backups newest-first and restore from the first one that
+    // verifies. Trying only the newest — and giving up if it failed — threw
+    // away the entire point of keeping a ring of fourteen: one bad snapshot at
+    // the head (a write interrupted by a full disk or a power cut, or a copy
+    // taken from an already-degrading card) made the caller quarantine the
+    // database and start fresh while thirteen good backups sat beside it. That
+    // is a season of records lost to the one file that happened to be newest.
+    let candidates = backups_newest_first(backup_dir, db_name);
+    if candidates.is_empty() {
         return Err(ResilienceError::NoBackup);
-    };
-
-    // Verify backup is also healthy before restoring
-    match check_integrity(&backup_path) {
-        Ok(true) => {}
-        Ok(false) => {
-            return Err(ResilienceError::Unrecoverable(
-                "latest backup is also corrupt".into(),
-            ));
-        }
-        Err(e) => {
-            return Err(ResilienceError::Unrecoverable(format!(
-                "cannot verify backup: {e}"
-            )));
-        }
     }
 
-    restore_from_backup(&backup_path, db_path)?;
+    let mut rejected = 0_usize;
+    for backup_path in &candidates {
+        match check_integrity(backup_path) {
+            Ok(true) => {}
+            Ok(false) => {
+                tracing::warn!(
+                    path = %backup_path.display(),
+                    "backup is corrupt; trying the next oldest"
+                );
+                rejected += 1;
+                continue;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    path = %backup_path.display(),
+                    error = %e,
+                    "cannot verify backup; trying the next oldest"
+                );
+                rejected += 1;
+                continue;
+            }
+        }
 
-    Ok(RecoveryResult {
-        healthy: true,
-        action: RecoveryAction::Recovered,
-        details: format!("restored from {}", backup_path.display()),
-    })
+        restore_from_backup(backup_path, db_path)?;
+        if rejected > 0 {
+            tracing::warn!(
+                restored_from = %backup_path.display(),
+                skipped = rejected,
+                "recovered from an older backup after newer ones failed verification"
+            );
+        }
+        return Ok(RecoveryResult {
+            healthy: true,
+            action: RecoveryAction::Recovered,
+            details: format!("restored from {}", backup_path.display()),
+        });
+    }
+
+    Err(ResilienceError::Unrecoverable(format!(
+        "all {} backup(s) failed verification",
+        candidates.len()
+    )))
 }
 
 /// Result of a check-and-recover operation.
@@ -486,6 +559,102 @@ mod tests {
         drop(conn);
         let backup_dir = tempfile::tempdir().unwrap();
         (tmp, backup_dir.keep())
+    }
+
+    #[test]
+    fn recovery_falls_back_to_an_older_backup_when_the_newest_is_corrupt() {
+        // THE data-loss path this guards. Trying only the newest backup meant
+        // one bad snapshot at the head made the caller quarantine the database
+        // and start fresh — discarding a season of records while good backups
+        // sat beside it.
+        let (tmp, backup_dir) = temp_db_with_data();
+
+        // A good backup, then a newer one that is garbage.
+        let good = backup_database(tmp.path(), &backup_dir).unwrap();
+        let db_name = tmp.path().file_name().unwrap().to_string_lossy();
+        let newer = backup_dir.join(format!("{db_name}.backup.9999999999"));
+        std::fs::write(&newer, b"this is not a sqlite database").unwrap();
+        assert!(
+            backups_newest_first(&backup_dir, &db_name)[0] == newer,
+            "the corrupt one must sort newest for this test to mean anything"
+        );
+
+        // Corrupt the live database so recovery has to restore.
+        std::fs::write(tmp.path(), b"corrupted beyond repair").unwrap();
+
+        let result = check_and_recover(tmp.path(), &backup_dir).unwrap();
+        assert_eq!(result.action, RecoveryAction::Recovered);
+        assert!(
+            result
+                .details
+                .contains(&*good.file_name().unwrap().to_string_lossy()),
+            "must restore from the older good backup, got: {}",
+            result.details
+        );
+
+        // And the restored database really carries the original row.
+        let conn = open_or_create(tmp.path()).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1, "the detection history survived the recovery");
+    }
+
+    #[test]
+    fn recovery_reports_unrecoverable_only_when_every_backup_fails() {
+        // Counter-test: the fallback must not paper over a genuinely
+        // unrecoverable station by "succeeding" on junk.
+        let (tmp, backup_dir) = temp_db_with_data();
+        let db_name = tmp.path().file_name().unwrap().to_string_lossy();
+        for ts in ["1700000001", "1700000002"] {
+            std::fs::write(backup_dir.join(format!("{db_name}.backup.{ts}")), b"junk").unwrap();
+        }
+        std::fs::write(tmp.path(), b"corrupted").unwrap();
+
+        let err = check_and_recover(tmp.path(), &backup_dir).unwrap_err();
+        assert!(
+            matches!(err, ResilienceError::Unrecoverable(_)),
+            "expected Unrecoverable, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_failed_backup_leaves_no_partial_file_behind() {
+        // A truncated snapshot is worthless, sorts newest, and eats space on
+        // the disk that was already full. It must not survive the failure.
+        let (tmp, backup_dir) = temp_db_with_data();
+        let db_name = tmp.path().file_name().unwrap().to_string_lossy();
+
+        // Corrupt the source so `backup_database` refuses part-way through.
+        std::fs::write(tmp.path(), b"not a database").unwrap();
+        assert!(backup_database(tmp.path(), &backup_dir).is_err());
+
+        assert!(
+            backups_newest_first(&backup_dir, &db_name).is_empty(),
+            "a failed backup must not leave a file in the ring"
+        );
+    }
+
+    #[test]
+    fn backups_newest_first_orders_by_timestamp() {
+        let (tmp, backup_dir) = temp_db_with_data();
+        let db_name = tmp.path().file_name().unwrap().to_string_lossy();
+        for ts in ["1700000001", "1700000003", "1700000002"] {
+            std::fs::write(backup_dir.join(format!("{db_name}.backup.{ts}")), b"x").unwrap();
+        }
+        let ordered = backups_newest_first(&backup_dir, &db_name);
+        let names: Vec<String> = ordered
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                format!("{db_name}.backup.1700000003"),
+                format!("{db_name}.backup.1700000002"),
+                format!("{db_name}.backup.1700000001"),
+            ]
+        );
     }
 
     #[test]
