@@ -32,7 +32,7 @@ const DEFAULT_PURGE_THRESHOLD: u8 = 95;
 ///   * the **transient stream dir** (`--watch-dir`, typically a RAM-backed
 ///     tmpfs) holds raw capture segments the pipeline reads and never deletes.
 ///     It is drained by age and size — nothing in it is worth keeping.
-///   * the **persistent recordings dir** ([`AppState::recording_dir`]) holds
+///   * the **persistent recordings dir** ([`birdnet_web::state::AppState::recording_dir`]) holds
 ///     the extracted detection clips. Those are the operator's data, so they
 ///     are *never* age-purged; only the disk-full backstop touches them, oldest
 ///     first, skipping anything locked.

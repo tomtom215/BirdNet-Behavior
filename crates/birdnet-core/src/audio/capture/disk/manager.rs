@@ -111,8 +111,9 @@ impl std::fmt::Debug for DiskManagerConfig {
 
 /// Automatic disk manager that periodically checks usage and purges old files.
 ///
-/// `Clone` so [`Self::with_fresh_locks`] can hand each purge cycle a manager
-/// carrying that cycle's freshly-read locked-file set.
+/// `Clone` so each purge cycle can be handed a manager carrying that cycle's
+/// freshly-read locked-file set (see the private `with_fresh_locks`; not an
+/// intra-doc link because this type is public and that helper is not).
 #[derive(Debug, Clone)]
 pub struct DiskManager {
     config: DiskManagerConfig,
