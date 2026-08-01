@@ -22,8 +22,20 @@ pub enum FullDiskAction {
     Keep,
 }
 
+/// Supplies the set of file names locked against purge, re-read once per
+/// purge cycle.
+///
+/// The locked set is operator-driven and changes at runtime: `/admin/recordings`
+/// → "lock" writes `is_locked` the moment somebody hears a clip worth keeping.
+/// A `Vec` captured at process start therefore protects almost nothing — it
+/// holds whatever was locked at the last reboot, so every clip locked since
+/// then is fair game for the purge. Because `birdnet-core` must not depend on
+/// `birdnet-db`, the database query is injected as this callback rather than
+/// performed here.
+pub type LockedFilesProvider = std::sync::Arc<dyn Fn() -> Vec<String> + Send + Sync>;
+
 /// Configuration for automatic disk management.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DiskManagerConfig {
     /// Directory to monitor (e.g. `~/BirdSongs/Extracted`).
     pub monitored_dir: PathBuf,
@@ -38,7 +50,14 @@ pub struct DiskManagerConfig {
     /// Paths to exclude from purge (never deleted).
     pub exclude_paths: Vec<PathBuf>,
     /// File names to protect from purge (locked recordings from DB).
+    ///
+    /// Used as the starting set and as the fallback whenever
+    /// [`Self::locked_provider`] is `None`. Long-running callers should set a
+    /// provider instead, so runtime lock changes are honoured.
     pub locked_file_names: Vec<String>,
+    /// Optional callback re-read once per purge cycle to refresh
+    /// [`Self::locked_file_names`]. See [`LockedFilesProvider`].
+    pub locked_provider: Option<LockedFilesProvider>,
     /// Retention for *flat* raw-capture segments in `monitored_dir`, in seconds
     /// (0 = disabled). When set, segments older than this are drained every
     /// cycle so the RAM-backed stream dir self-empties. Only ever set by the
@@ -62,14 +81,39 @@ impl Default for DiskManagerConfig {
             check_interval_secs: 60,
             exclude_paths: Vec::new(),
             locked_file_names: Vec::new(),
+            locked_provider: None,
             stream_retention_secs: 0,
             stream_max_bytes: 0,
         }
     }
 }
 
+// Hand-rolled because `locked_provider` holds a closure, which cannot derive
+// `Debug`. Every other field is reproduced verbatim so the config still prints
+// usefully in traces; the provider renders as its presence, which is the part
+// an operator reading a log needs to know.
+impl std::fmt::Debug for DiskManagerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DiskManagerConfig")
+            .field("monitored_dir", &self.monitored_dir)
+            .field("purge_threshold", &self.purge_threshold)
+            .field("full_disk_action", &self.full_disk_action)
+            .field("max_files_per_species", &self.max_files_per_species)
+            .field("check_interval_secs", &self.check_interval_secs)
+            .field("exclude_paths", &self.exclude_paths)
+            .field("locked_file_names", &self.locked_file_names)
+            .field("locked_provider", &self.locked_provider.is_some())
+            .field("stream_retention_secs", &self.stream_retention_secs)
+            .field("stream_max_bytes", &self.stream_max_bytes)
+            .finish()
+    }
+}
+
 /// Automatic disk manager that periodically checks usage and purges old files.
-#[derive(Debug)]
+///
+/// `Clone` so [`Self::with_fresh_locks`] can hand each purge cycle a manager
+/// carrying that cycle's freshly-read locked-file set.
+#[derive(Debug, Clone)]
 pub struct DiskManager {
     config: DiskManagerConfig,
 }
@@ -295,6 +339,24 @@ impl DiskManager {
         Ok(total_removed)
     }
 
+    /// Return a manager for this cycle whose locked-file set is freshly read
+    /// from [`DiskManagerConfig::locked_provider`].
+    ///
+    /// Returns `self` unchanged when no provider is configured, so the static
+    /// `locked_file_names` path (and every existing test) behaves exactly as
+    /// before. Cloning the config once per cycle — a handful of paths and a
+    /// string vector, at most once a minute — costs nothing next to the
+    /// directory walk that follows, and keeps every purge entry point reading
+    /// one consistent snapshot without interior mutability.
+    fn with_fresh_locks(&self) -> std::borrow::Cow<'_, Self> {
+        let Some(provider) = self.config.locked_provider.as_ref() else {
+            return std::borrow::Cow::Borrowed(self);
+        };
+        let mut config = self.config.clone();
+        config.locked_file_names = provider();
+        std::borrow::Cow::Owned(Self::new(config))
+    }
+
     /// Run the disk manager loop (blocking).
     ///
     /// Periodically checks disk usage and enforces species limits until a
@@ -320,15 +382,19 @@ impl DiskManager {
                 }
             }
 
+            // Re-read the operator's locked clips before anything is deleted:
+            // a clip locked since the last cycle must be protected by this one.
+            let cycle = self.with_fresh_locks();
+
             // Proactively drain the transient stream segments first, so
             // steady-state usage stays low regardless of the disk-full backstop.
-            self.cleanup_stream_segments();
+            cycle.cleanup_stream_segments();
 
-            if let Err(e) = self.check_and_purge() {
+            if let Err(e) = cycle.check_and_purge() {
                 tracing::error!(error = %e, "disk manager check_and_purge failed");
             }
 
-            if let Err(e) = self.enforce_species_limits() {
+            if let Err(e) = cycle.enforce_species_limits() {
                 tracing::error!(error = %e, "disk manager enforce_species_limits failed");
             }
         }
@@ -351,6 +417,86 @@ mod tests {
         // transient stream dir.
         assert_eq!(config.stream_retention_secs, 0);
         assert_eq!(config.stream_max_bytes, 0);
+    }
+
+    #[test]
+    fn fresh_locks_are_read_from_the_provider_each_cycle() {
+        // The regression: the locked set used to be a Vec captured at process
+        // start, so a clip locked from /admin/recordings after boot was not
+        // protected. Drive the provider twice and prove the second cycle sees
+        // the newly-locked name.
+        use std::sync::{Arc, Mutex};
+
+        let locked: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let provider_view = Arc::clone(&locked);
+        let manager = DiskManager::new(DiskManagerConfig {
+            locked_provider: Some(std::sync::Arc::new(move || {
+                provider_view.lock().unwrap().clone()
+            })),
+            ..DiskManagerConfig::default()
+        });
+
+        assert!(
+            manager
+                .with_fresh_locks()
+                .config()
+                .locked_file_names
+                .is_empty(),
+            "nothing is locked yet"
+        );
+
+        // Operator locks a clip while the station is running.
+        locked.lock().unwrap().push("keep-me.wav".to_string());
+
+        assert_eq!(
+            manager.with_fresh_locks().config().locked_file_names,
+            vec!["keep-me.wav".to_string()],
+            "a clip locked after startup must be visible to the very next cycle"
+        );
+    }
+
+    #[test]
+    fn without_a_provider_the_static_locked_list_is_kept() {
+        // Counter-test: callers that pass a plain Vec (and every existing
+        // test) must behave exactly as before — no provider, no surprise
+        // clearing of the list.
+        let manager = DiskManager::new(DiskManagerConfig {
+            locked_file_names: vec!["static.wav".to_string()],
+            ..DiskManagerConfig::default()
+        });
+        assert_eq!(
+            manager.with_fresh_locks().config().locked_file_names,
+            vec!["static.wav".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_locked_segment_survives_the_stream_drain() {
+        // End-to-end proof that the refreshed set actually protects a file:
+        // an ancient segment that would otherwise be drained by age is kept
+        // because the provider reports it as locked.
+        let dir = tempfile::tempdir().expect("tempdir");
+        for name in ["locked.wav", "unlocked.wav"] {
+            let p = dir.path().join(name);
+            std::fs::write(&p, vec![0_u8; 128]).expect("write");
+            filetime::set_file_mtime(&p, filetime::FileTime::from_unix_time(1_000_000, 0))
+                .expect("mtime");
+        }
+        let manager = DiskManager::new(DiskManagerConfig {
+            monitored_dir: dir.path().to_path_buf(),
+            stream_retention_secs: 60,
+            locked_provider: Some(std::sync::Arc::new(|| vec!["locked.wav".to_string()])),
+            ..DiskManagerConfig::default()
+        });
+
+        let removed = manager.with_fresh_locks().cleanup_stream_segments();
+
+        assert_eq!(removed, 1, "only the unlocked segment is drained");
+        assert!(
+            dir.path().join("locked.wav").exists(),
+            "a locked clip must survive the drain"
+        );
+        assert!(!dir.path().join("unlocked.wav").exists());
     }
 
     #[test]

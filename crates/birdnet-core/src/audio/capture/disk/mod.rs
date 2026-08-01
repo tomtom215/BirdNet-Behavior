@@ -14,7 +14,7 @@ use super::process::is_audio_file;
 use super::types::CaptureError;
 
 // Re-export public API from sub-modules.
-pub use manager::{DiskManager, DiskManagerConfig, FullDiskAction};
+pub use manager::{DiskManager, DiskManagerConfig, FullDiskAction, LockedFilesProvider};
 
 /// Disk space information for a filesystem.
 #[derive(Debug, Clone, Copy)]
