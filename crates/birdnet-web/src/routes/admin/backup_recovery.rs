@@ -260,8 +260,11 @@ fn render_body(f: &DataFacts) -> String {
         },
     );
 
+    // A job with no recorded run is due immediately (see `crate::maintenance`),
+    // so on a fresh station the first automatic backup is minutes away, not a
+    // week — say that rather than the bare "hasn't happened".
     let next_sub = f.scheduled_last_run_unix.map_or_else(
-        || "scheduled backup has not run yet".to_string(),
+        || "first automatic backup due shortly".to_string(),
         |last| {
             format!(
                 "scheduled backup {}",
