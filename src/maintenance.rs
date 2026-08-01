@@ -321,12 +321,14 @@ async fn run_session_prune(db_path: &Path) {
 ///     `docs/FIELD_DEPLOYMENT.md` documents it as such. The disk purge honoured
 ///     it; this cap did not, so a cap silently deleted the very recordings a
 ///     researcher had marked to keep.
-///   * **`File_Name` is cleared once the file is gone.** Leaving the name
-///     behind left the clips browser offering a play button for a file that no
-///     longer exists (the whole codebase treats NULL/empty `File_Name` as "no
-///     clip"), and made this query re-select every already-pruned row forever —
-///     growing without bound, re-attempting thousands of deletes a day on a
-///     station with a year of history.
+///   * **The row is stamped, never stripped.** `Clip_Pruned_At` records when
+///     the audio was reclaimed and `File_Name` is kept, so a detection still
+///     shows that it had a clip and what it was called — provenance an analysis
+///     may need long after the disk space was recovered. The stamp is what
+///     stops the clips browser offering a play button for a file that no longer
+///     exists, and what stops this query re-selecting every already-pruned row
+///     forever (which would grow without bound, re-attempting thousands of
+///     deletes a day on a station with a year of history).
 async fn run_recording_species_cap(db_path: &Path, recordings_dir: &Path, cap: u32) {
     if cap == 0 || !db_path.exists() {
         return;
@@ -353,6 +355,7 @@ async fn run_recording_species_cap(db_path: &Path, recordings_dir: &Path, cap: u
                             ) AS rn
                      FROM detections
                      WHERE File_Name IS NOT NULL AND TRIM(File_Name) <> ''
+                       AND Clip_Pruned_At IS NULL
                  )
                  SELECT DISTINCT File_Name FROM ranked
                  WHERE rn > ?1 AND locked = 0
@@ -374,9 +377,9 @@ async fn run_recording_species_cap(db_path: &Path, recordings_dir: &Path, cap: u
                 continue;
             };
             // `NotFound` counts as pruned-and-done: the audio is gone either
-            // way, so clear the name and stop re-selecting the row. Any other
-            // error (a permissions problem, a read-only mount) keeps the name
-            // so the next pass retries instead of orphaning a live file.
+            // way, so stamp the row and stop re-selecting it. Any other error
+            // (a permissions problem, a read-only mount) leaves the row alone
+            // so the next pass retries instead of marking a live clip gone.
             match std::fs::remove_file(recordings_dir.join(base)) {
                 Ok(()) => removed += 1,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -384,19 +387,26 @@ async fn run_recording_species_cap(db_path: &Path, recordings_dir: &Path, cap: u
                     tracing::warn!(
                         file = %file_name,
                         error = %e,
-                        "species cap could not remove clip; keeping the database reference"
+                        "species cap could not remove clip; leaving the detection untouched"
                     );
                     continue;
                 }
             }
+            // Record *when* the audio went, and keep `File_Name`. Retention
+            // reclaims disk, never provenance: the filename carries the capture
+            // timestamp and source the clip was cut from, and is how a
+            // detection is matched back to an archived copy. Analyses months
+            // later can still see that this detection had audio and what it was
+            // called; only the play button goes away.
             if let Err(e) = conn.execute(
-                "UPDATE detections SET File_Name = NULL WHERE File_Name = ?1",
-                rusqlite::params![file_name],
+                "UPDATE detections SET Clip_Pruned_At = ?2 \
+                 WHERE File_Name = ?1 AND Clip_Pruned_At IS NULL",
+                rusqlite::params![file_name, now_unix()],
             ) {
                 tracing::warn!(
                     file = %file_name,
                     error = %e,
-                    "clip pruned but its database reference could not be cleared"
+                    "clip pruned but the detection could not be stamped"
                 );
             }
         }
@@ -971,10 +981,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn species_cap_clears_the_file_reference_it_pruned() {
-        // Leaving the name behind left the clips browser offering a play
-        // button for a file that no longer exists, and made this query
-        // re-select every already-pruned row forever.
+    async fn species_cap_stamps_the_pruned_clip_without_losing_its_name() {
+        // Retention reclaims disk, never provenance. The filename carries the
+        // capture timestamp and source the clip was cut from and is how a
+        // detection is matched back to an archived copy, so it must survive —
+        // while the stamp is what stops the browser offering a dead play button
+        // and stops this query re-selecting the row forever.
         let tmp = tempfile::tempdir().unwrap();
         let db = tmp.path().join("birds.db");
         let recs = tmp.path().join("recordings");
@@ -989,26 +1001,73 @@ mod tests {
         run_recording_species_cap(&db, &recs, 1).await;
 
         let conn = rusqlite::Connection::open(&db).unwrap();
-        let dangling: i64 = conn
+        let (name_kept, stamped): (String, Option<i64>) = conn
             .query_row(
-                "SELECT COUNT(*) FROM detections WHERE File_Name = 'gone.wav'",
+                "SELECT File_Name, Clip_Pruned_At FROM detections WHERE Date = '2026-01-01'",
                 [],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-        assert_eq!(dangling, 0, "the pruned clip's name must be cleared");
+        assert_eq!(
+            name_kept, "gone.wav",
+            "the pruned clip's name is provenance and must survive"
+        );
+        assert!(
+            stamped.is_some_and(|t| t > 0),
+            "the row must record when the audio was reclaimed"
+        );
+
         let rows: i64 = conn
             .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
             .unwrap();
         assert_eq!(rows, 2, "the detection itself is preserved for stats");
-        let kept: i64 = conn
+
+        // The surviving clip is untouched and still playable.
+        let live: Option<i64> = conn
             .query_row(
-                "SELECT COUNT(*) FROM detections WHERE File_Name = 'kept.wav'",
+                "SELECT Clip_Pruned_At FROM detections WHERE File_Name = 'kept.wav'",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(kept, 1, "the surviving clip keeps its reference");
+        assert!(live.is_none(), "the surviving clip is not marked pruned");
+    }
+
+    #[tokio::test]
+    async fn a_pruned_clip_disappears_from_the_clips_browser_but_not_from_the_data() {
+        // The two halves of the contract, asserted against the real reader
+        // queries rather than a hand-written predicate: no play button, but the
+        // detection still counts.
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        let recs = tmp.path().join("recordings");
+        std::fs::create_dir_all(&recs).unwrap();
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+            seed_clip(&conn, &recs, "European Robin", "2026-01-01", "gone.wav");
+            seed_clip(&conn, &recs, "European Robin", "2026-01-02", "kept.wav");
+        }
+
+        run_recording_species_cap(&db, &recs, 1).await;
+
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        let clips = birdnet_db::sqlite::recent_clips(
+            &conn,
+            birdnet_db::sqlite::RecordingsFilter::All,
+            None,
+            50,
+            0,
+        )
+        .unwrap();
+        assert_eq!(clips.len(), 1, "only the playable clip is browsable");
+        assert_eq!(clips[0].file_name.as_deref(), Some("kept.wav"));
+
+        // ...but every counting/trending surface still sees both detections.
+        assert_eq!(birdnet_db::sqlite::detection_count(&conn).unwrap(), 2);
+        let per_day = birdnet_db::sqlite::detections_per_day(&conn).unwrap();
+        let total: i64 = per_day.iter().map(|d| d.count).sum();
+        assert_eq!(total, 2, "trend data must not lose the pruned detection");
     }
 
     #[tokio::test]
@@ -1037,7 +1096,7 @@ mod tests {
         let after_first: i64 = rusqlite::Connection::open(&db)
             .unwrap()
             .query_row(
-                "SELECT COUNT(*) FROM detections WHERE File_Name IS NOT NULL",
+                "SELECT COUNT(*) FROM detections WHERE Clip_Pruned_At IS NULL",
                 [],
                 |r| r.get(0),
             )
@@ -1049,7 +1108,7 @@ mod tests {
         let after_second: i64 = rusqlite::Connection::open(&db)
             .unwrap()
             .query_row(
-                "SELECT COUNT(*) FROM detections WHERE File_Name IS NOT NULL",
+                "SELECT COUNT(*) FROM detections WHERE Clip_Pruned_At IS NULL",
                 [],
                 |r| r.get(0),
             )

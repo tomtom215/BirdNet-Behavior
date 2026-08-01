@@ -18,7 +18,7 @@ mod test_support;
 
 pub use locks::{is_detection_locked, lock_detection, locked_file_names, unlock_detection};
 pub use read::{
-    RecordingsFilter, TodayFilter, all_detections, best_detections_for_date,
+    CLIP_AVAILABLE, RecordingsFilter, TodayFilter, all_detections, best_detections_for_date,
     concurrent_detections_from_other_sources, detection_count, detection_count_for_date,
     detection_count_for_species_date, detection_dates, detections_by_date, detections_by_species,
     detections_per_day, recent_clips, recent_clips_count, recent_detections,

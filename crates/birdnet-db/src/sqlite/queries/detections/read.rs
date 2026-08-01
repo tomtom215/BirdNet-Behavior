@@ -10,6 +10,28 @@ use crate::sqlite::types::{
 
 use super::search::{SearchTerm, parse_search_term};
 
+/// SQL predicate for "this detection has audio you can actually play".
+///
+/// One definition, because every surface that offers a play button has to agree
+/// with every other one and with the retention pass that removes the audio. It
+/// was previously spelled out at eight call sites, which is exactly the shape
+/// of thing that drifts.
+///
+/// Two conditions, and they mean different things:
+///
+///   * no `File_Name` — the detection never had a clip (a BirdNET-Pi import, a
+///     quarantine approval re-inserted without re-extraction, a station with
+///     extraction disabled);
+///   * `Clip_Pruned_At` set — it had one, and retention reclaimed the file. The
+///     name is deliberately kept (see migration 22): the row still records that
+///     audio existed and what it was called, which is provenance an analysis
+///     may need long after the disk space was recovered.
+///
+/// Either way there is nothing to play, so both are excluded here — while
+/// everything that counts, groups or charts detections still sees every row.
+pub const CLIP_AVAILABLE: &str =
+    "File_Name IS NOT NULL AND TRIM(File_Name) <> '' AND Clip_Pruned_At IS NULL";
+
 /// Get the total number of detections.
 ///
 /// # Errors
@@ -133,7 +155,7 @@ pub fn best_detections_for_date(
 ) -> Result<Vec<DetectionRow>, DbError> {
     let sql = format!(
         "SELECT {DETECTION_COLS} FROM detections \
-         WHERE Date = ?1 AND File_Name IS NOT NULL AND TRIM(File_Name) <> '' \
+         WHERE Date = ?1 AND {CLIP_AVAILABLE} \
          ORDER BY Confidence DESC, Time DESC LIMIT ?2"
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -533,7 +555,7 @@ pub fn recent_clips(
                 (
                     format!(
                         "SELECT {DETECTION_COLS} FROM detections \
-                         WHERE File_Name IS NOT NULL AND TRIM(File_Name) <> '' \
+                         WHERE {CLIP_AVAILABLE} \
                          AND Com_Name NOT LIKE ?1{extra} \
                          ORDER BY Date DESC, Time DESC LIMIT ?2 OFFSET ?3"
                     ),
@@ -545,7 +567,7 @@ pub fn recent_clips(
                 (
                     format!(
                         "SELECT {DETECTION_COLS} FROM detections \
-                         WHERE File_Name IS NOT NULL AND TRIM(File_Name) <> '' \
+                         WHERE {CLIP_AVAILABLE} \
                          AND (Com_Name LIKE ?1 OR Sci_Name LIKE ?1){extra} \
                          ORDER BY Date DESC, Time DESC LIMIT ?2 OFFSET ?3"
                     ),
@@ -555,7 +577,7 @@ pub fn recent_clips(
             None => (
                 format!(
                     "SELECT {DETECTION_COLS} FROM detections \
-                     WHERE File_Name IS NOT NULL AND TRIM(File_Name) <> ''{extra} \
+                     WHERE {CLIP_AVAILABLE}{extra} \
                      ORDER BY Date DESC, Time DESC LIMIT ?1 OFFSET ?2"
                 ),
                 vec![Box::new(limit), Box::new(offset)],
@@ -591,7 +613,7 @@ pub fn recent_clips_count(
                 (
                     format!(
                         "SELECT COUNT(*) FROM detections \
-                         WHERE File_Name IS NOT NULL AND TRIM(File_Name) <> '' \
+                         WHERE {CLIP_AVAILABLE} \
                          AND Com_Name NOT LIKE ?1{extra}"
                     ),
                     vec![Box::new(pattern)],
@@ -602,7 +624,7 @@ pub fn recent_clips_count(
                 (
                     format!(
                         "SELECT COUNT(*) FROM detections \
-                         WHERE File_Name IS NOT NULL AND TRIM(File_Name) <> '' \
+                         WHERE {CLIP_AVAILABLE} \
                          AND (Com_Name LIKE ?1 OR Sci_Name LIKE ?1){extra}"
                     ),
                     vec![Box::new(pattern)],
@@ -611,7 +633,7 @@ pub fn recent_clips_count(
             None => (
                 format!(
                     "SELECT COUNT(*) FROM detections \
-                     WHERE File_Name IS NOT NULL AND TRIM(File_Name) <> ''{extra}"
+                     WHERE {CLIP_AVAILABLE}{extra}"
                 ),
                 vec![],
             ),

@@ -532,6 +532,34 @@ pub const MIGRATIONS: &[Migration] = &[
             last_run_unix INTEGER NOT NULL
         );",
     },
+    Migration {
+        version: 22,
+        description: "Record when a detection's clip was reclaimed, without losing its name",
+        // Retention has to reclaim audio eventually — the per-species cap and
+        // the disk-full purge both delete clip files. The question is what
+        // happens to the row that pointed at one.
+        //
+        // Clearing `File_Name` was the obvious answer and the wrong one: the
+        // filename is *evidence*. It carries the capture timestamp and source
+        // the clip was cut from, it is how a detection is matched back to an
+        // archived copy or an offline analysis, and a researcher re-examining a
+        // season of data should still be able to see that a detection had audio
+        // and what it was called. Retention must reclaim disk, never provenance.
+        //
+        // So the name stays and this column records *when* the audio went. That
+        // is strictly more information than before — the row now distinguishes
+        // "never had a clip" (NULL name) from "had one, reclaimed on this date"
+        // — and it gives the reader queries a precise way to exclude clips that
+        // can no longer be played, so the browser stops offering a dead play
+        // button and the retention pass stops re-selecting rows it already
+        // handled.
+        //
+        // Nullable and unindexed: NULL means "audio still present", which is
+        // the overwhelming majority, and nothing filters on the timestamp
+        // itself — only on its presence, alongside `File_Name` predicates that
+        // already scan the same rows.
+        up_sql: "ALTER TABLE detections ADD COLUMN Clip_Pruned_At INTEGER;",
+    },
 ];
 
 /// Ensure the `schema_version` tracking table exists.
