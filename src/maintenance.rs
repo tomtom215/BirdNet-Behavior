@@ -22,15 +22,38 @@
 //!
 //! All blocking work (file I/O, SQLite, integrity checks) runs inside
 //! `spawn_blocking` so the tokio runtime stays responsive.
+//!
+//! ## Why the schedule is persisted, not uptime-relative
+//!
+//! Each job's due-ness is computed from a **wall-clock timestamp recorded in
+//! the database** (`maintenance_runs`, migration 21), not from a tokio
+//! interval measured since process start. Uptime-relative timers silently
+//! disable themselves on any station that restarts more often than the job's
+//! period — and unattended stations restart constantly: a settings change
+//! ("applies on restart"), an update, a power cut, a systemd watchdog bounce.
+//! A station rebooting daily would never once reach a weekly timer, so the
+//! weekly backup + VACUUM simply never ran. Because
+//! `resilience::check_and_recover` can only restore from a backup, that turned
+//! recoverable corruption into total data loss on exactly the deployments the
+//! schedule exists to protect.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use birdnet_db::sqlite::{
+    BACKUP_VACUUM_INTERVAL_SECS, DAILY_INTERVAL_SECS, JOB_BACKUP_VACUUM, JOB_INTEGRITY_CHECK,
+    JOB_SESSION_PRUNE, JOB_SPECIES_CAP,
+};
+
 /// Daily integrity-check cadence.
-const INTEGRITY_CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+///
+/// Defined in `birdnet-db` beside the job keys so the admin page that reports
+/// "next backup due" reads the same number this loop schedules against.
+const INTEGRITY_CHECK_INTERVAL: Duration = Duration::from_secs(DAILY_INTERVAL_SECS.unsigned_abs());
 
 /// Weekly VACUUM cadence.
-const VACUUM_INTERVAL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+const VACUUM_INTERVAL: Duration = Duration::from_secs(BACKUP_VACUUM_INTERVAL_SECS.unsigned_abs());
 
 /// How many backup files to retain in the backup directory.
 const BACKUP_RETENTION: usize = 14;
@@ -39,6 +62,14 @@ const BACKUP_RETENTION: usize = 14;
 /// piling onto the startup CPU spike (model load + WAL replay + axum
 /// initialisation).
 const STARTUP_GRACE: Duration = Duration::from_secs(5 * 60);
+
+/// How often the loop wakes to ask "is anything overdue?".
+///
+/// Decoupled from the job periods themselves: the jobs are scheduled against
+/// persisted wall-clock timestamps, so this only bounds how promptly an overdue
+/// job is noticed. Half an hour keeps the wakeups negligible on a Pi while
+/// bounding lateness to well under any job's period.
+const SCHEDULER_TICK: Duration = Duration::from_secs(30 * 60);
 
 /// Kick off the maintenance task. Returns immediately; the loop runs in
 /// the background until the process exits.
@@ -76,23 +107,153 @@ async fn run_loop(
     );
     tokio::time::sleep(STARTUP_GRACE).await;
 
-    let mut integrity_ticker = tokio::time::interval(INTEGRITY_CHECK_INTERVAL);
-    let mut vacuum_ticker = tokio::time::interval(VACUUM_INTERVAL);
-    // Skip the immediate first tick on each (we already waited STARTUP_GRACE).
-    integrity_ticker.tick().await;
-    vacuum_ticker.tick().await;
+    // In-process floor on each job's last run, used when the database write
+    // that records a completion fails (read-only filesystem, disk full — the
+    // very conditions maintenance is meant to survive). Without it a failing
+    // `record_run` would leave the job permanently overdue and re-run it every
+    // tick, turning a weekly VACUUM into a half-hourly one.
+    let mut attempted: HashMap<&'static str, i64> = HashMap::new();
 
+    let mut ticker = tokio::time::interval(SCHEDULER_TICK);
     loop {
-        tokio::select! {
-            () = async { integrity_ticker.tick().await; } => {
-                run_integrity_check(&db_path).await;
-                run_session_prune(&db_path).await;
-                run_recording_species_cap(&db_path, &recordings_dir, species_cap).await;
-            }
-            () = async { vacuum_ticker.tick().await; } => {
-                run_backup_and_vacuum(&db_path, &backup_dir).await;
-            }
+        // Fires immediately on the first pass — STARTUP_GRACE has already
+        // elapsed, and anything overdue should not wait another half hour.
+        ticker.tick().await;
+
+        if due(
+            &db_path,
+            JOB_INTEGRITY_CHECK,
+            INTEGRITY_CHECK_INTERVAL,
+            &attempted,
+        )
+        .await
+        {
+            run_integrity_check(&db_path).await;
+            mark_ran(&db_path, JOB_INTEGRITY_CHECK, &mut attempted).await;
         }
+        if due(
+            &db_path,
+            JOB_SESSION_PRUNE,
+            INTEGRITY_CHECK_INTERVAL,
+            &attempted,
+        )
+        .await
+        {
+            run_session_prune(&db_path).await;
+            mark_ran(&db_path, JOB_SESSION_PRUNE, &mut attempted).await;
+        }
+        if due(
+            &db_path,
+            JOB_SPECIES_CAP,
+            INTEGRITY_CHECK_INTERVAL,
+            &attempted,
+        )
+        .await
+        {
+            run_recording_species_cap(&db_path, &recordings_dir, species_cap).await;
+            mark_ran(&db_path, JOB_SPECIES_CAP, &mut attempted).await;
+        }
+        if due(&db_path, JOB_BACKUP_VACUUM, VACUUM_INTERVAL, &attempted).await {
+            run_backup_and_vacuum(&db_path, &backup_dir).await;
+            mark_ran(&db_path, JOB_BACKUP_VACUUM, &mut attempted).await;
+        }
+    }
+}
+
+/// Current wall-clock time as Unix seconds.
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+}
+
+/// Decide whether `job` is overdue, from the persisted last-run timestamp.
+///
+/// Returns `false` while the database does not exist yet (fresh install with
+/// no detections), and `true` when the job has never been recorded — an
+/// upgrade or fresh install should get its first integrity check and backup
+/// promptly rather than one full period later, since an upgrade is precisely
+/// when a recoverable snapshot is most valuable.
+async fn due(
+    db_path: &Path,
+    job: &'static str,
+    interval: Duration,
+    attempted: &HashMap<&'static str, i64>,
+) -> bool {
+    if !db_path.exists() {
+        return false;
+    }
+    let owned = db_path.to_path_buf();
+    let persisted = tokio::task::spawn_blocking(move || -> Result<Option<i64>, String> {
+        let conn = birdnet_db::sqlite::open_or_create(&owned).map_err(|e| e.to_string())?;
+        birdnet_db::sqlite::last_run_unix(&conn, job).map_err(|e| e.to_string())
+    })
+    .await;
+
+    let last = match persisted {
+        Ok(Ok(ts)) => ts,
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, job, "could not read maintenance schedule; using in-process fallback");
+            None
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, job, "maintenance schedule lookup panicked; using in-process fallback");
+            None
+        }
+    };
+
+    // The in-process floor only ever *delays* a job, so a database that cannot
+    // be written still gets at most one run per interval per process lifetime.
+    let last = match (last, attempted.get(job).copied()) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (some, None) | (None, some) => some,
+    };
+
+    let Some(last) = last else {
+        return true;
+    };
+
+    let now = now_unix();
+    // A Pi without an RTC boots at the epoch and jumps forward when NTP lands;
+    // a correction can also move the clock *backwards*, leaving a stored
+    // timestamp in the future. Treat that as due and re-anchor on the next
+    // completion — otherwise the job would be suppressed until real time caught
+    // up with the bogus timestamp, potentially for years.
+    if last > now {
+        tracing::warn!(
+            job,
+            last_run_unix = last,
+            now_unix = now,
+            "maintenance last-run timestamp is in the future (clock moved backwards); \
+             running now to re-anchor the schedule"
+        );
+        return true;
+    }
+    let elapsed = now.saturating_sub(last);
+    elapsed >= i64::try_from(interval.as_secs()).unwrap_or(i64::MAX)
+}
+
+/// Persist the completion time for `job`, and record it in the in-process
+/// floor so a failed write cannot cause the job to re-run every tick.
+async fn mark_ran(db_path: &Path, job: &'static str, attempted: &mut HashMap<&'static str, i64>) {
+    let now = now_unix();
+    attempted.insert(job, now);
+
+    let owned = db_path.to_path_buf();
+    let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let conn = birdnet_db::sqlite::open_or_create(&owned).map_err(|e| e.to_string())?;
+        birdnet_db::sqlite::record_run(&conn, job, now).map_err(|e| e.to_string())
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => tracing::debug!(job, "maintenance run recorded"),
+        Ok(Err(e)) => tracing::warn!(
+            error = %e,
+            job,
+            "could not record maintenance run; the schedule will restart from this boot if the \
+             process restarts before the next successful write"
+        ),
+        Err(e) => tracing::warn!(error = %e, job, "recording the maintenance run panicked"),
     }
 }
 
@@ -148,10 +309,24 @@ async fn run_session_prune(db_path: &Path) {
 /// DB-driven on purpose — the flat clip filename is not reliably
 /// species-parseable (common names can contain hyphens, e.g.
 /// `Black-capped_Chickadee`), so the database (the authority on species↔clip)
-/// decides what to prune. DB rows are left intact: the detection is preserved
-/// for stats and counts, only its audio file is removed. Best-effort and fully
-/// logged; `cap == 0` means unlimited (no-op). The web serves clips flat by
-/// base name, so the same base name is what we delete from `recordings_dir`.
+/// decides what to prune. The detection row is preserved for stats and counts;
+/// only its audio file is removed. Best-effort and fully logged; `cap == 0`
+/// means unlimited (no-op). The web serves clips flat by base name, so the same
+/// base name is what we delete from `recordings_dir`.
+///
+/// Two invariants this enforces, both of which the first cut got wrong:
+///
+///   * **Locked clips are never pruned.** `/admin/recordings` → "lock" is the
+///     operator's one guarantee that a clip survives automatic cleanup, and
+///     `docs/FIELD_DEPLOYMENT.md` documents it as such. The disk purge honoured
+///     it; this cap did not, so a cap silently deleted the very recordings a
+///     researcher had marked to keep.
+///   * **`File_Name` is cleared once the file is gone.** Leaving the name
+///     behind left the clips browser offering a play button for a file that no
+///     longer exists (the whole codebase treats NULL/empty `File_Name` as "no
+///     clip"), and made this query re-select every already-pruned row forever —
+///     growing without bound, re-attempting thousands of deletes a day on a
+///     station with a year of history.
 async fn run_recording_species_cap(db_path: &Path, recordings_dir: &Path, cap: u32) {
     if cap == 0 || !db_path.exists() {
         return;
@@ -160,20 +335,30 @@ async fn run_recording_species_cap(db_path: &Path, recordings_dir: &Path, cap: u
     let recordings_dir = recordings_dir.to_path_buf();
     let result = tokio::task::spawn_blocking(move || -> Result<usize, String> {
         let conn = birdnet_db::sqlite::open_or_create(&db_path).map_err(|e| e.to_string())?;
-        // For each species, number clips newest-first; anything beyond the cap
-        // (rn > cap) is an older clip to prune. rowid breaks same-second ties
-        // deterministically.
+        // Rank each species' clips newest-first; anything past the cap is an
+        // older clip to prune. rowid breaks same-second ties deterministically.
+        //
+        // The NOT IN guard keeps a file that is *shared* by several detections
+        // (legacy rows and BirdNET-Pi imports point several detections at one
+        // source segment) from being deleted while any detection still within
+        // the cap — or explicitly locked — depends on it.
         let mut stmt = conn
             .prepare(
-                "SELECT File_Name FROM (
+                "WITH ranked AS (
                      SELECT File_Name,
+                            COALESCE(is_locked, 0) AS locked,
                             ROW_NUMBER() OVER (
                                 PARTITION BY Com_Name
                                 ORDER BY Date DESC, Time DESC, rowid DESC
                             ) AS rn
                      FROM detections
-                     WHERE File_Name IS NOT NULL AND File_Name <> ''
-                 ) WHERE rn > ?1",
+                     WHERE File_Name IS NOT NULL AND TRIM(File_Name) <> ''
+                 )
+                 SELECT DISTINCT File_Name FROM ranked
+                 WHERE rn > ?1 AND locked = 0
+                   AND File_Name NOT IN (
+                       SELECT File_Name FROM ranked WHERE rn <= ?1 OR locked = 1
+                   )",
             )
             .map_err(|e| e.to_string())?;
         let over: Vec<String> = stmt
@@ -188,8 +373,31 @@ async fn run_recording_species_cap(db_path: &Path, recordings_dir: &Path, cap: u
             let Some(base) = Path::new(&file_name).file_name() else {
                 continue;
             };
-            if std::fs::remove_file(recordings_dir.join(base)).is_ok() {
-                removed += 1;
+            // `NotFound` counts as pruned-and-done: the audio is gone either
+            // way, so clear the name and stop re-selecting the row. Any other
+            // error (a permissions problem, a read-only mount) keeps the name
+            // so the next pass retries instead of orphaning a live file.
+            match std::fs::remove_file(recordings_dir.join(base)) {
+                Ok(()) => removed += 1,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    tracing::warn!(
+                        file = %file_name,
+                        error = %e,
+                        "species cap could not remove clip; keeping the database reference"
+                    );
+                    continue;
+                }
+            }
+            if let Err(e) = conn.execute(
+                "UPDATE detections SET File_Name = NULL WHERE File_Name = ?1",
+                rusqlite::params![file_name],
+            ) {
+                tracing::warn!(
+                    file = %file_name,
+                    error = %e,
+                    "clip pruned but its database reference could not be cleared"
+                );
             }
         }
         Ok(removed)
@@ -539,6 +747,348 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 5, "detection rows are kept for stats; only files pruned");
+    }
+
+    // ── Restart-durable scheduling (F1) ────────────────────────────────────
+
+    #[tokio::test]
+    async fn a_never_run_job_is_due_immediately() {
+        // A fresh install or an upgrade should get its first integrity check
+        // and backup promptly — an upgrade is exactly when a recoverable
+        // snapshot is most valuable.
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        rusqlite::Connection::open(&db)
+            .map(|c| birdnet_db::migration::migrate(&c).unwrap())
+            .unwrap();
+        assert!(due(&db, JOB_BACKUP_VACUUM, VACUUM_INTERVAL, &HashMap::new()).await);
+    }
+
+    #[tokio::test]
+    async fn a_job_that_just_ran_is_not_due() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+            birdnet_db::sqlite::record_run(&conn, JOB_BACKUP_VACUUM, now_unix()).unwrap();
+        }
+        assert!(!due(&db, JOB_BACKUP_VACUUM, VACUUM_INTERVAL, &HashMap::new()).await);
+    }
+
+    #[tokio::test]
+    async fn the_schedule_survives_a_restart_and_still_fires_when_overdue() {
+        // THE regression. The old loop measured its weekly interval from
+        // process start, so a station that rebooted more often than weekly —
+        // for a settings change, an update, a power cut, a watchdog bounce —
+        // never once ran the backup + VACUUM. Here the process is "new" (an
+        // empty in-process map, as after a restart) but the recorded run is
+        // eight days old, so the job must fire.
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        let eight_days_ago = now_unix() - 8 * 24 * 60 * 60;
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+            birdnet_db::sqlite::record_run(&conn, JOB_BACKUP_VACUUM, eight_days_ago).unwrap();
+        }
+        assert!(
+            due(&db, JOB_BACKUP_VACUUM, VACUUM_INTERVAL, &HashMap::new()).await,
+            "an overdue job must run after a restart, not restart its timer"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_recent_run_still_suppresses_the_job_across_a_restart() {
+        // Counter-test to the above: restart-durability must not turn into
+        // "runs on every boot". A station rebooting hourly must not VACUUM
+        // hourly.
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        let two_days_ago = now_unix() - 2 * 24 * 60 * 60;
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+            birdnet_db::sqlite::record_run(&conn, JOB_BACKUP_VACUUM, two_days_ago).unwrap();
+        }
+        assert!(
+            !due(&db, JOB_BACKUP_VACUUM, VACUUM_INTERVAL, &HashMap::new()).await,
+            "a weekly job two days old must stay suppressed no matter how often we boot"
+        );
+    }
+
+    #[tokio::test]
+    async fn mark_ran_persists_and_then_suppresses() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        rusqlite::Connection::open(&db)
+            .map(|c| birdnet_db::migration::migrate(&c).unwrap())
+            .unwrap();
+        let mut attempted = HashMap::new();
+
+        assert!(
+            due(
+                &db,
+                JOB_INTEGRITY_CHECK,
+                INTEGRITY_CHECK_INTERVAL,
+                &attempted
+            )
+            .await
+        );
+        mark_ran(&db, JOB_INTEGRITY_CHECK, &mut attempted).await;
+        assert!(
+            !due(
+                &db,
+                JOB_INTEGRITY_CHECK,
+                INTEGRITY_CHECK_INTERVAL,
+                &attempted
+            )
+            .await
+        );
+
+        // And it really landed in the database, not just the in-process map.
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        assert!(
+            birdnet_db::sqlite::last_run_unix(&conn, JOB_INTEGRITY_CHECK)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn in_process_floor_throttles_when_the_database_cannot_record() {
+        // If `record_run` cannot write (read-only mount, disk full — the very
+        // conditions maintenance exists to survive) the in-process floor must
+        // still keep a weekly job from running every half-hourly tick.
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        rusqlite::Connection::open(&db)
+            .map(|c| birdnet_db::migration::migrate(&c).unwrap())
+            .unwrap();
+        let mut attempted: HashMap<&'static str, i64> = HashMap::new();
+        attempted.insert(JOB_BACKUP_VACUUM, now_unix());
+        assert!(
+            !due(&db, JOB_BACKUP_VACUUM, VACUUM_INTERVAL, &attempted).await,
+            "the in-process floor must suppress a job whose persisted write failed"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_future_timestamp_re_anchors_instead_of_wedging() {
+        // A Pi without an RTC boots at the epoch and jumps when NTP lands; a
+        // correction can also move the clock backwards, leaving a stored
+        // timestamp in the future. Without this the job would be suppressed
+        // until real time caught up — potentially for years.
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        let far_future = now_unix() + 365 * 24 * 60 * 60;
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+            birdnet_db::sqlite::record_run(&conn, JOB_SPECIES_CAP, far_future).unwrap();
+        }
+        assert!(
+            due(
+                &db,
+                JOB_SPECIES_CAP,
+                INTEGRITY_CHECK_INTERVAL,
+                &HashMap::new()
+            )
+            .await,
+            "a future timestamp must re-anchor the schedule, not disable the job"
+        );
+    }
+
+    #[tokio::test]
+    async fn nothing_is_due_before_the_database_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("not-yet.db");
+        assert!(
+            !due(
+                &missing,
+                JOB_INTEGRITY_CHECK,
+                INTEGRITY_CHECK_INTERVAL,
+                &HashMap::new()
+            )
+            .await
+        );
+    }
+
+    // ── Species cap: locks and dangling references (F4/F5) ─────────────────
+
+    #[tokio::test]
+    async fn species_cap_never_prunes_a_locked_clip() {
+        // "lock" is the operator's one guarantee that a clip survives
+        // automatic cleanup, and docs/FIELD_DEPLOYMENT.md documents it as
+        // such. The disk purge honoured it; this cap did not.
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        let recs = tmp.path().join("recordings");
+        std::fs::create_dir_all(&recs).unwrap();
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+            seed_clip(
+                &conn,
+                &recs,
+                "European Robin",
+                "2026-01-01",
+                "robin-old.wav",
+            );
+            seed_clip(
+                &conn,
+                &recs,
+                "European Robin",
+                "2026-01-02",
+                "robin-mid.wav",
+            );
+            seed_clip(
+                &conn,
+                &recs,
+                "European Robin",
+                "2026-01-03",
+                "robin-new.wav",
+            );
+            // The operator locks the OLDEST clip — the one the cap would drop.
+            conn.execute(
+                "UPDATE detections SET is_locked = 1 WHERE File_Name = 'robin-old.wav'",
+                [],
+            )
+            .unwrap();
+        }
+
+        run_recording_species_cap(&db, &recs, 1).await;
+
+        assert!(
+            recs.join("robin-old.wav").exists(),
+            "a locked clip must survive the per-species cap"
+        );
+        assert!(recs.join("robin-new.wav").exists(), "newest clip kept");
+        assert!(
+            !recs.join("robin-mid.wav").exists(),
+            "the unlocked over-cap clip is still pruned"
+        );
+    }
+
+    #[tokio::test]
+    async fn species_cap_clears_the_file_reference_it_pruned() {
+        // Leaving the name behind left the clips browser offering a play
+        // button for a file that no longer exists, and made this query
+        // re-select every already-pruned row forever.
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        let recs = tmp.path().join("recordings");
+        std::fs::create_dir_all(&recs).unwrap();
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+            seed_clip(&conn, &recs, "European Robin", "2026-01-01", "gone.wav");
+            seed_clip(&conn, &recs, "European Robin", "2026-01-02", "kept.wav");
+        }
+
+        run_recording_species_cap(&db, &recs, 1).await;
+
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        let dangling: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM detections WHERE File_Name = 'gone.wav'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(dangling, 0, "the pruned clip's name must be cleared");
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 2, "the detection itself is preserved for stats");
+        let kept: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM detections WHERE File_Name = 'kept.wav'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kept, 1, "the surviving clip keeps its reference");
+    }
+
+    #[tokio::test]
+    async fn species_cap_is_idempotent_and_stops_re_selecting() {
+        // Second pass must find nothing left to do — the property that keeps
+        // the daily query from growing without bound over a year of history.
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        let recs = tmp.path().join("recordings");
+        std::fs::create_dir_all(&recs).unwrap();
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+            for i in 1..=4 {
+                seed_clip(
+                    &conn,
+                    &recs,
+                    "European Robin",
+                    &format!("2026-01-0{i}"),
+                    &format!("r{i}.wav"),
+                );
+            }
+        }
+
+        run_recording_species_cap(&db, &recs, 2).await;
+        let after_first: i64 = rusqlite::Connection::open(&db)
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM detections WHERE File_Name IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(after_first, 2);
+
+        // Re-running changes nothing and finds nothing to delete.
+        run_recording_species_cap(&db, &recs, 2).await;
+        let after_second: i64 = rusqlite::Connection::open(&db)
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM detections WHERE File_Name IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(after_second, 2, "the cap is idempotent");
+        assert!(recs.join("r3.wav").exists() && recs.join("r4.wav").exists());
+    }
+
+    #[tokio::test]
+    async fn species_cap_keeps_a_file_another_in_cap_detection_still_needs() {
+        // Legacy rows and BirdNET-Pi imports point several detections at one
+        // source segment. Deleting it because *one* of them is over the cap
+        // would silently break playback for the others.
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        let recs = tmp.path().join("recordings");
+        std::fs::create_dir_all(&recs).unwrap();
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+            // Robin has three clips; "shared.wav" is its oldest (over a cap of
+            // 2) but is also the Great Tit's only, in-cap, clip.
+            seed_clip(&conn, &recs, "European Robin", "2026-01-01", "shared.wav");
+            seed_clip(&conn, &recs, "European Robin", "2026-01-02", "robin-2.wav");
+            seed_clip(&conn, &recs, "European Robin", "2026-01-03", "robin-3.wav");
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+                 VALUES ('2026-01-01', '06:00:00', 'Parus major', 'Great Tit', 0.9, 'shared.wav')",
+                [],
+            )
+            .unwrap();
+        }
+
+        run_recording_species_cap(&db, &recs, 2).await;
+
+        assert!(
+            recs.join("shared.wav").exists(),
+            "a file an in-cap detection still references must not be deleted"
+        );
     }
 
     #[tokio::test]
