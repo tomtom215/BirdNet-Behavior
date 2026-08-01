@@ -428,11 +428,23 @@ async fn serve(
             .and_then(|c| c.get_parsed::<u32>("MAX_FILES_SPECIES").ok())
             .unwrap_or(0)
     };
+    // Age-based clip retention (`CLIP_RETENTION_DAYS`). Same precedence as the
+    // other disk knobs — explicit flag/env, then the DB-overlaid config, then
+    // the default — and 0 (the default) means keep audio forever.
+    let clip_retention_days = if cli.clip_retention_days > 0 {
+        cli.clip_retention_days
+    } else {
+        config
+            .as_ref()
+            .and_then(|c| c.get_parsed::<u32>("CLIP_RETENTION_DAYS").ok())
+            .unwrap_or(0)
+    };
     maintenance::spawn_database_maintenance(
         db_path.clone(),
         backup_dir.clone(),
         recordings_dir_for_maintenance,
         species_cap,
+        clip_retention_days,
     );
 
     let listener = tokio::net::TcpListener::bind(addr).await?;

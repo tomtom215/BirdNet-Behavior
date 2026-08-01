@@ -89,6 +89,11 @@ const SETTING_SPECS: &[(&str, &str, SettingsCategory)] = &[
         SettingsCategory::System,
     ),
     ("stream_max_mb", "STREAM_MAX_MB", SettingsCategory::System),
+    (
+        "clip_retention_days",
+        "CLIP_RETENTION_DAYS",
+        SettingsCategory::System,
+    ),
 ];
 
 /// Resolve the runtime config key a given admin-UI setting maps to, if any.

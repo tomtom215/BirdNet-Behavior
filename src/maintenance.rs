@@ -83,9 +83,17 @@ pub fn spawn_database_maintenance(
     backup_dir: PathBuf,
     recordings_dir: PathBuf,
     species_cap: u32,
+    clip_retention_days: u32,
 ) {
     tokio::spawn(async move {
-        run_loop(db_path, backup_dir, recordings_dir, species_cap).await;
+        run_loop(
+            db_path,
+            backup_dir,
+            recordings_dir,
+            species_cap,
+            clip_retention_days,
+        )
+        .await;
     });
 }
 
@@ -94,12 +102,14 @@ async fn run_loop(
     backup_dir: PathBuf,
     recordings_dir: PathBuf,
     species_cap: u32,
+    clip_retention_days: u32,
 ) {
     tracing::info!(
         db_path = %db_path.display(),
         backup_dir = %backup_dir.display(),
         recordings_dir = %recordings_dir.display(),
         species_cap,
+        clip_retention_days,
         integrity_check_every_hours = INTEGRITY_CHECK_INTERVAL.as_secs() / 3600,
         vacuum_every_days = VACUUM_INTERVAL.as_secs() / 86400,
         backup_retention = BACKUP_RETENTION,
@@ -151,6 +161,7 @@ async fn run_loop(
         .await
         {
             run_recording_species_cap(&db_path, &recordings_dir, species_cap).await;
+            run_clip_retention(&db_path, &recordings_dir, clip_retention_days).await;
             mark_ran(&db_path, JOB_SPECIES_CAP, &mut attempted).await;
         }
         if due(&db_path, JOB_BACKUP_VACUUM, VACUUM_INTERVAL, &attempted).await {
@@ -303,6 +314,143 @@ async fn run_session_prune(db_path: &Path) {
     }
 }
 
+/// Delete the given clip files and stamp their detections as reclaimed.
+///
+/// Shared by both retention passes so the delicate part — what counts as
+/// "gone", what is left alone to retry, and what is written back — has exactly
+/// one implementation. Returns how many files were actually removed from disk.
+fn reclaim_clips(
+    conn: &rusqlite::Connection,
+    recordings_dir: &Path,
+    files: Vec<String>,
+    pass: &str,
+) -> usize {
+    let mut removed = 0_usize;
+    for file_name in files {
+        let Some(base) = Path::new(&file_name).file_name() else {
+            continue;
+        };
+        // `NotFound` counts as pruned-and-done: the audio is gone either way,
+        // so stamp the row and stop re-selecting it. Any other error (a
+        // permissions problem, a read-only mount) leaves the row alone so the
+        // next pass retries instead of marking a live clip gone.
+        match std::fs::remove_file(recordings_dir.join(base)) {
+            Ok(()) => removed += 1,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                tracing::warn!(
+                    pass,
+                    file = %file_name,
+                    error = %e,
+                    "could not remove clip; leaving the detection untouched"
+                );
+                continue;
+            }
+        }
+        // Record *when* the audio went, and keep `File_Name`. Retention
+        // reclaims disk, never provenance: the filename carries the capture
+        // timestamp and source the clip was cut from, and is how a detection is
+        // matched back to an archived copy. Analyses months later can still see
+        // that this detection had audio and what it was called; only the play
+        // button goes away.
+        if let Err(e) = conn.execute(
+            "UPDATE detections SET Clip_Pruned_At = ?2 \
+             WHERE File_Name = ?1 AND Clip_Pruned_At IS NULL",
+            rusqlite::params![file_name, now_unix()],
+        ) {
+            tracing::warn!(
+                pass,
+                file = %file_name,
+                error = %e,
+                "clip pruned but the detection could not be stamped"
+            );
+        }
+    }
+    removed
+}
+
+/// Reclaim clip audio older than `days` days (`CLIP_RETENTION_DAYS`).
+///
+/// The age-based half of retention, alongside the per-species cap and the
+/// disk-full backstop. `days == 0` means keep audio forever, which is the
+/// default and the behaviour every existing station has today.
+///
+/// **Why a new setting key rather than the old `recording_days`.** The settings
+/// form has always shown a "Keep Recordings (days)" field, defaulted to 30,
+/// whose value nothing in the codebase ever read — `cleanup_old_recordings` was
+/// called only by its own tests. So the field was inert, and any station whose
+/// operator ever saved the settings form for an unrelated reason has `30`
+/// sitting in the database, recorded by somebody who was told it meant
+/// something and then saw no effect. Teaching the existing key to work would
+/// have silently deleted every clip older than a month on those stations at the
+/// next maintenance tick — a retroactive purge nobody asked for, triggered by an
+/// upgrade. A key no station can already hold cannot do that: age-based
+/// retention is off until an operator turns it on, deliberately, after this
+/// change.
+///
+/// Locked clips are exempt and the detection rows survive, exactly as for the
+/// per-species cap.
+async fn run_clip_retention(db_path: &Path, recordings_dir: &Path, days: u32) {
+    if days == 0 || !db_path.exists() {
+        return;
+    }
+    let db_path = db_path.to_path_buf();
+    let recordings_dir = recordings_dir.to_path_buf();
+    let result = tokio::task::spawn_blocking(move || -> Result<usize, String> {
+        let conn = birdnet_db::sqlite::open_or_create(&db_path).map_err(|e| e.to_string())?;
+        // `Date` is a naive local-date string written from the capture
+        // filename, so the cutoff is computed in the same lens ('localtime')
+        // rather than against UTC — otherwise the boundary would drift by the
+        // station's offset.
+        //
+        // As with the species cap, a file shared by several detections is only
+        // reclaimed when *every* detection referencing it is both past the
+        // cutoff and unlocked.
+        let cutoff = format!("-{days} days");
+        let mut stmt = conn
+            .prepare(
+                "WITH clips AS (
+                     SELECT File_Name,
+                            COALESCE(is_locked, 0) AS locked,
+                            Date < date('now', 'localtime', ?1) AS expired
+                     FROM detections
+                     WHERE File_Name IS NOT NULL AND TRIM(File_Name) <> ''
+                       AND Clip_Pruned_At IS NULL
+                 )
+                 SELECT DISTINCT File_Name FROM clips
+                 WHERE expired = 1 AND locked = 0
+                   AND File_Name NOT IN (
+                       SELECT File_Name FROM clips WHERE expired = 0 OR locked = 1
+                   )",
+            )
+            .map_err(|e| e.to_string())?;
+        let expired: Vec<String> = stmt
+            .query_map([&cutoff], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .filter_map(Result::ok)
+            .collect();
+        drop(stmt);
+
+        Ok(reclaim_clips(
+            &conn,
+            &recordings_dir,
+            expired,
+            "clip retention",
+        ))
+    })
+    .await;
+    match result {
+        Ok(Ok(0)) => tracing::debug!("clip retention: nothing past the cutoff"),
+        Ok(Ok(n)) => tracing::info!(
+            reclaimed = n,
+            keep_days = days,
+            "clip retention: reclaimed audio older than the cutoff (detections kept)"
+        ),
+        Ok(Err(e)) => tracing::warn!(error = %e, "clip retention failed"),
+        Err(e) => tracing::warn!(error = %e, "clip retention task panicked"),
+    }
+}
+
 /// Enforce the per-species recording cap (`MAX_FILES_SPECIES`): keep only the
 /// newest `cap` extracted clips per species and delete the older ones off disk.
 ///
@@ -371,46 +519,7 @@ async fn run_recording_species_cap(db_path: &Path, recordings_dir: &Path, cap: u
             .collect();
         drop(stmt);
 
-        let mut removed = 0_usize;
-        for file_name in over {
-            let Some(base) = Path::new(&file_name).file_name() else {
-                continue;
-            };
-            // `NotFound` counts as pruned-and-done: the audio is gone either
-            // way, so stamp the row and stop re-selecting it. Any other error
-            // (a permissions problem, a read-only mount) leaves the row alone
-            // so the next pass retries instead of marking a live clip gone.
-            match std::fs::remove_file(recordings_dir.join(base)) {
-                Ok(()) => removed += 1,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => {
-                    tracing::warn!(
-                        file = %file_name,
-                        error = %e,
-                        "species cap could not remove clip; leaving the detection untouched"
-                    );
-                    continue;
-                }
-            }
-            // Record *when* the audio went, and keep `File_Name`. Retention
-            // reclaims disk, never provenance: the filename carries the capture
-            // timestamp and source the clip was cut from, and is how a
-            // detection is matched back to an archived copy. Analyses months
-            // later can still see that this detection had audio and what it was
-            // called; only the play button goes away.
-            if let Err(e) = conn.execute(
-                "UPDATE detections SET Clip_Pruned_At = ?2 \
-                 WHERE File_Name = ?1 AND Clip_Pruned_At IS NULL",
-                rusqlite::params![file_name, now_unix()],
-            ) {
-                tracing::warn!(
-                    file = %file_name,
-                    error = %e,
-                    "clip pruned but the detection could not be stamped"
-                );
-            }
-        }
-        Ok(removed)
+        Ok(reclaim_clips(&conn, &recordings_dir, over, "species cap"))
     })
     .await;
     match result {
@@ -1148,6 +1257,163 @@ mod tests {
             recs.join("shared.wav").exists(),
             "a file an in-cap detection still references must not be deleted"
         );
+    }
+
+    // ── Age-based clip retention (CLIP_RETENTION_DAYS) ─────────────────────
+
+    /// Seed a clip dated `days_ago` relative to today, in the local-date form
+    /// the detections table actually stores.
+    fn seed_clip_days_ago(
+        conn: &rusqlite::Connection,
+        dir: &Path,
+        com: &str,
+        days_ago: i64,
+        file: &str,
+    ) {
+        let date: String = conn
+            .query_row(
+                "SELECT date('now', 'localtime', ?1)",
+                [format!("-{days_ago} days")],
+                |r| r.get(0),
+            )
+            .unwrap();
+        seed_clip(conn, dir, com, &date, file);
+    }
+
+    #[tokio::test]
+    async fn clip_retention_is_off_by_default() {
+        // The safety property. The settings form used to show an inert "Keep
+        // Recordings (days)" field defaulted to 30, so stations carry a value
+        // nobody meant. Retention must stay off until explicitly enabled.
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        let recs = tmp.path().join("recordings");
+        std::fs::create_dir_all(&recs).unwrap();
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+            seed_clip_days_ago(&conn, &recs, "European Robin", 3650, "ancient.wav");
+        }
+
+        run_clip_retention(&db, &recs, 0).await;
+
+        assert!(
+            recs.join("ancient.wav").exists(),
+            "0 days must mean keep forever — a decade-old clip survives"
+        );
+    }
+
+    #[tokio::test]
+    async fn clip_retention_reclaims_only_what_is_past_the_cutoff() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        let recs = tmp.path().join("recordings");
+        std::fs::create_dir_all(&recs).unwrap();
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+            seed_clip_days_ago(&conn, &recs, "European Robin", 40, "old.wav");
+            seed_clip_days_ago(&conn, &recs, "European Robin", 31, "just-old.wav");
+            seed_clip_days_ago(&conn, &recs, "European Robin", 5, "recent.wav");
+            seed_clip_days_ago(&conn, &recs, "Great Tit", 0, "today.wav");
+        }
+
+        run_clip_retention(&db, &recs, 30).await;
+
+        assert!(!recs.join("old.wav").exists(), "40 days old is reclaimed");
+        assert!(
+            !recs.join("just-old.wav").exists(),
+            "31 days old is past a 30-day cutoff"
+        );
+        assert!(recs.join("recent.wav").exists(), "5 days old is kept");
+        assert!(recs.join("today.wav").exists(), "today's clip is kept");
+    }
+
+    #[tokio::test]
+    async fn clip_retention_never_touches_a_locked_clip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        let recs = tmp.path().join("recordings");
+        std::fs::create_dir_all(&recs).unwrap();
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+            seed_clip_days_ago(&conn, &recs, "European Robin", 400, "keep.wav");
+            seed_clip_days_ago(&conn, &recs, "European Robin", 400, "drop.wav");
+            conn.execute(
+                "UPDATE detections SET is_locked = 1 WHERE File_Name = 'keep.wav'",
+                [],
+            )
+            .unwrap();
+        }
+
+        run_clip_retention(&db, &recs, 30).await;
+
+        assert!(
+            recs.join("keep.wav").exists(),
+            "a locked clip outlives any age cutoff"
+        );
+        assert!(!recs.join("drop.wav").exists());
+    }
+
+    #[tokio::test]
+    async fn clip_retention_keeps_the_detection_and_its_provenance() {
+        // Retention reclaims disk, never analysis data.
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        let recs = tmp.path().join("recordings");
+        std::fs::create_dir_all(&recs).unwrap();
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+            seed_clip_days_ago(&conn, &recs, "European Robin", 400, "gone.wav");
+        }
+
+        run_clip_retention(&db, &recs, 30).await;
+
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        let (name, stamped): (String, Option<i64>) = conn
+            .query_row(
+                "SELECT File_Name, Clip_Pruned_At FROM detections",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(name, "gone.wav", "the filename is provenance and survives");
+        assert!(stamped.is_some(), "the row records when the audio went");
+        assert_eq!(
+            birdnet_db::sqlite::detection_count(&conn).unwrap(),
+            1,
+            "the detection still counts toward every total and trend"
+        );
+    }
+
+    #[tokio::test]
+    async fn clip_retention_is_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        let recs = tmp.path().join("recordings");
+        std::fs::create_dir_all(&recs).unwrap();
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+            seed_clip_days_ago(&conn, &recs, "European Robin", 400, "a.wav");
+            seed_clip_days_ago(&conn, &recs, "European Robin", 2, "b.wav");
+        }
+
+        run_clip_retention(&db, &recs, 30).await;
+        run_clip_retention(&db, &recs, 30).await;
+
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        let live: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM detections WHERE Clip_Pruned_At IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(live, 1, "a second pass finds nothing new to do");
+        assert!(recs.join("b.wav").exists());
     }
 
     #[tokio::test]

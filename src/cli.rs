@@ -307,6 +307,16 @@ pub struct Cli {
     #[arg(long, env = "BIRDNET_DISK_EXCLUDE", value_delimiter = ',')]
     pub disk_exclude: Vec<std::path::PathBuf>,
 
+    /// Reclaim the audio of detections older than this many days (0 = keep
+    /// audio forever, the default).
+    ///
+    /// The age-based half of retention, alongside `--max-files-per-species` and
+    /// the disk-full purge. Locked clips are exempt, and the detection records
+    /// themselves are always kept — counts, species lists, trends and exports
+    /// are unaffected; only the audio is reclaimed.
+    #[arg(long, default_value = "0", env = "BIRDNET_CLIP_RETENTION_DAYS")]
+    pub clip_retention_days: u32,
+
     /// Disk-usage percentage at which the oldest recordings start being purged.
     ///
     /// The safety net that keeps a 24/7 station from filling its card: once the

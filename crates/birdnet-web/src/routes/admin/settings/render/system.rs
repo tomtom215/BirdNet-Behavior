@@ -6,7 +6,9 @@ use std::fmt::Write as _;
 use super::get_setting;
 
 pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
-    let days = get_setting(s, "recording_days", "30");
+    // Default 0 = keep audio forever, which is what every station does
+    // today; age-based retention is strictly opt-in.
+    let days = get_setting(s, "clip_retention_days", "0");
     let imgcache = get_setting(s, "image_cache_dir", "");
     let customimg = get_setting(s, "custom_image_dir", "");
     let maxfiles = get_setting(s, "max_files_per_species", "0");
@@ -48,10 +50,10 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     </div>
     <div class="grid-2">
       <div>
-        <label for="recording_days">Keep Recordings (days)</label>
-        <input id="recording_days" name="recording_days" type="number"
-               value="{days}" min="1" max="365">
-        <p class="hint">Audio files older than this are deleted automatically (BirdNET-Pi: PROCESSED_DAYS)</p>
+        <label for="clip_retention_days">Keep Clip Audio (days, 0 = forever)</label>
+        <input id="clip_retention_days" name="clip_retention_days" type="number"
+               value="{days}" min="0" max="3650">
+        <p class="hint">Reclaim the audio of detections older than this. <b>0 keeps everything</b>, which is the default. The detections themselves are always kept — your counts, species lists, trends and exports are unaffected; only the sound file goes. Locked clips are never reclaimed.</p>
       </div>
       <div>
         <label for="max_files_per_species">Max Files Per Species (0 = unlimited)</label>

@@ -38,6 +38,7 @@ The full list lives in `.env.example` and `birdnet-behavior --help`. Each row sh
 | `BIRDNET_MQTT_HOST` | `--mqtt-host` | `MQTT_HOST` | — |
 | `BIRDNET_MQTT_HA_DISCOVERY` | `--mqtt-ha-discovery` | — | disabled |
 | `BIRDNET_MAX_FILES_PER_SPECIES` | `--max-files-per-species` | `MAX_FILES_SPECIES` | `0` |
+| `BIRDNET_CLIP_RETENTION_DAYS` | `--clip-retention-days` | `CLIP_RETENTION_DAYS` | `0` (keep forever) |
 | `BIRDNET_DISK_PURGE_THRESHOLD` | `--disk-purge-threshold` | `DISK_PURGE_THRESHOLD` | `95` |
 | `BIRDNET_STREAM_RETENTION_SECS` | `--stream-retention-secs` | `STREAM_RETENTION_SECS` | `600` |
 | `BIRDNET_STREAM_MAX_MB` | `--stream-max-mb` | `STREAM_MAX_MB` | `512` |
@@ -71,7 +72,7 @@ These are stored in the SQLite settings table and have **no** environment variab
 | Rare-bird quarantine rules | Species | |
 | BirdWeather station details | BirdWeather | Token can also be set via env var |
 
-> **Data retention is not time-based.** There is no `recording_days` setting. The disk manager purges the oldest recordings once the disk hits `DISK_PURGE_THRESHOLD` (default 95%) and keeps at most `BIRDNET_MAX_FILES_PER_SPECIES` per species. Pin clips you want to keep with the **lock** action on any detection — locked clips are never purged by either limit.
+> **Retention is off by default.** Nothing is deleted by age unless you ask for it: set **Keep Clip Audio (days)** in the UI (`CLIP_RETENTION_DAYS`) to reclaim the audio of older detections. Independently of that, the disk manager purges the oldest recordings once the disk hits `DISK_PURGE_THRESHOLD` (default 95%) and keeps at most `BIRDNET_MAX_FILES_PER_SPECIES` per species. Pin clips you want to keep with the **lock** action on any detection — locked clips are never purged by either limit.
 >
 > All three limits, plus the temporary streaming folder's retention and size ceiling, can be set from **Settings → System** in the web UI; you never have to edit a config file to change them. A value given on the command line or as a `BIRDNET_*` variable wins over the UI, which in turn wins over the config file.
 >

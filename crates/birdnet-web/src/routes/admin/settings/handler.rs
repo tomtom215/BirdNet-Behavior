@@ -247,7 +247,7 @@ fn is_numeric_field(key: &str) -> bool {
             | "freq_shift_hz"
             | "pre_sunrise_offset"
             | "post_sunset_offset"
-            | "recording_days"
+            | "clip_retention_days"
             | "max_files_per_species"
             | "purge_threshold"
             | "stream_retention_secs"
@@ -425,8 +425,8 @@ fn build_settings_items(
     );
     // System
     push!(
-        form.recording_days,
-        "recording_days",
+        form.clip_retention_days,
+        "clip_retention_days",
         SettingsCategory::System
     );
     push!(
@@ -559,7 +559,7 @@ mod tests {
             weekly_report_schedule: None,
             species_exclude: None,
             species_include: None,
-            recording_days: None,
+            clip_retention_days: None,
             image_cache_dir: None,
             custom_image_dir: None,
             max_files_per_species: None,

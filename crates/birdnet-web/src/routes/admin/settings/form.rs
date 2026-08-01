@@ -82,7 +82,7 @@ pub struct SettingsForm {
     pub species_include: Option<String>,
     // System
     /// Number of days of recordings to retain before the oldest are purged.
-    pub recording_days: Option<String>,
+    pub clip_retention_days: Option<String>,
     /// Filesystem path where downloaded Wikipedia species images are cached.
     pub image_cache_dir: Option<String>,
     /// Filesystem path to operator-supplied custom species images (overrides Wikipedia cache).
