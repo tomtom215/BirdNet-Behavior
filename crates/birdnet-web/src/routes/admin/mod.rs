@@ -23,7 +23,7 @@
 //! | `GET  /admin/system/backups`        | List database backups |
 //! | `GET  /admin/system/backups/{name}` | Download a backup file |
 //! | `DELETE /admin/system/backups/{name}` | Delete a backup file |
-//! | `GET  /admin/species/test`            | Test/preview species filter (JSON) |
+//! | `GET  /admin/species/test`            | Preview the species filter against this station's species |
 //! | `GET  /admin/rules`                   | Alert rules management |
 //! | `POST /admin/rules`                   | Create new alert rule |
 //! | `POST /admin/rules/{id}/delete`       | Delete an alert rule |
@@ -46,7 +46,6 @@ pub mod quality;
 pub mod rules;
 pub mod settings;
 pub mod species;
-pub mod species_tester;
 pub mod system;
 pub mod system_controls;
 pub mod update;
@@ -191,7 +190,6 @@ pub fn router() -> Router<AppState> {
         // Station sub-tab row. The folded admin POST/partial endpoints above keep
         // their `/admin/...` paths.
         .merge(crate::routes::pages::homes::station_tabs::router())
-    // Species filter tester (integrated into species::router via /admin/species/test)
 }
 
 /// Redirect `/admin` to the Station home (the v3-spine toolbox landing).
