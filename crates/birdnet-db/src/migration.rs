@@ -504,6 +504,34 @@ pub const MIGRATIONS: &[Migration] = &[
         // faked value. Not indexed: nothing filters or sorts by duration.
         up_sql: "ALTER TABLE detections ADD COLUMN Duration_Secs REAL;",
     },
+    Migration {
+        version: 21,
+        description: "Track background maintenance runs so schedules survive restarts",
+        // Scheduled maintenance (integrity check, session prune, per-species
+        // recording cap, backup + VACUUM) used to be driven by tokio intervals
+        // measured from process start. That silently disabled every job on any
+        // station restarting more often than the job's period: a settings
+        // change ("applies on restart"), an update, a power cut, or a watchdog
+        // bounce reset the clock, so a station rebooting daily never ran the
+        // weekly backup + VACUUM — not once, ever. Backups are the only input
+        // to `resilience::check_and_recover`, so that turned recoverable
+        // corruption into total data loss on exactly the unattended
+        // deployments the schedule exists to protect.
+        //
+        // Recording each job's last completion here makes the schedule
+        // wall-clock based and restart-durable: on boot the loop reads what is
+        // actually overdue and runs it. Keyed by a stable job name; the value
+        // is Unix seconds, so it is comparable across reboots and clock zones
+        // (and never a locale-formatted string).
+        //
+        // A dedicated table, not `settings`: this is internal scheduler state,
+        // not an operator-editable preference, and it must not surface in the
+        // admin settings form or be clobbered by a settings import.
+        up_sql: "CREATE TABLE IF NOT EXISTS maintenance_runs (
+            job TEXT PRIMARY KEY,
+            last_run_unix INTEGER NOT NULL
+        );",
+    },
 ];
 
 /// Ensure the `schema_version` tracking table exists.

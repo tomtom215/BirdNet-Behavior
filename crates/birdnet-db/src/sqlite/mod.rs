@@ -15,6 +15,7 @@
 //! | `queries::heatmap`      | Hour × day-of-week activity heatmap                        |
 //! | `queries::correlation`  | Species co-occurrence and companion species                |
 //! | `queries::quarantine`   | Rare-bird quarantine queue CRUD and review workflow        |
+//! | `queries::maintenance`  | Restart-durable last-run times for the maintenance schedule |
 
 pub mod connection;
 pub mod queries;
@@ -30,6 +31,10 @@ pub use queries::detection_reviews::{
     unreviewed_recent_detections,
 };
 pub use queries::heatmap::{HeatmapCell, HourTotal};
+pub use queries::maintenance::{
+    BACKUP_VACUUM_INTERVAL_SECS, DAILY_INTERVAL_SECS, JOB_BACKUP_VACUUM, JOB_INTEGRITY_CHECK,
+    JOB_SESSION_PRUNE, JOB_SPECIES_CAP, last_run_unix, record_run,
+};
 pub use queries::{
     ImageBlacklist, ModelVsReviewRow, QualitySummary, QuarantineFilter, QuarantineReason,
     QuarantineRecord, QuarantineRow, QuarantineStats, RecordingsFilter, ReviewVerdictDay,
