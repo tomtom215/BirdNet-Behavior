@@ -30,6 +30,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Scheduled maintenance no longer resets on every restart.** The integrity
+  check, session prune, per-species cap and weekly backup + VACUUM were driven by
+  timers measured from process start, so any station restarting more often than a
+  job's period never ran it — and unattended stations restart constantly: a
+  settings change ("applies on restart"), an update, a power cut, a systemd
+  watchdog bounce. A station rebooting daily never once reached the weekly
+  backup. Because `check_and_recover` can only restore from a backup, that turned
+  recoverable corruption into total data loss on exactly the deployments the
+  schedule protects. Each job's completion is now recorded in the database
+  (`maintenance_runs`, migration 21) and the schedule runs on elapsed wall-clock
+  time, so an overdue job fires on the next boot. A clock correction that leaves a
+  timestamp in the future re-anchors the schedule instead of suppressing the job,
+  and a database that cannot be written still throttles to one run per interval.
+
+- **The persistent recordings directory is now disk-managed.** The bare-metal
+  installer always passes `--watch-dir`, so the disk manager attached to the
+  RAM-backed stream directory and the data disk — where extracted clips now
+  accumulate beside `birds.db` — was never watched at all, while
+  `DISK_PURGE_THRESHOLD` appeared to guard it. A 24/7 station filled its card
+  until SQLite writes began failing. Both directories are supervised now, each
+  with the retention it needs: the stream dir keeps its age and size drain, while
+  the recordings dir gets the disk-full backstop only — oldest first, never by
+  age, and never a locked clip.
+
+- **Locking a recording now protects it immediately.** The purge read the locked
+  set once at startup and ran on that snapshot for the lifetime of the process,
+  so a clip locked from `/admin/recordings` was unprotected until the next
+  restart, with nothing saying so. The set is re-read on every purge cycle. The
+  per-species cap ignored locks entirely — setting `MAX_FILES_SPECIES` deleted
+  the very recordings a researcher had marked to keep — and now excludes them,
+  along with any clip another in-cap detection still references.
+
+- **Pruned clips no longer leave a dead play button.** The per-species cap
+  deleted the audio but left `File_Name` set, so the clips browser kept offering
+  playback for a file that no longer existed, and the daily query re-selected
+  every already-pruned row forever. The reference is cleared with the file; the
+  detection row is preserved for stats.
+
+- **Backups are visible, downloadable and deletable again.** Snapshots are
+  written as `{db_name}.backup.{unix_secs}`, whose extension is the timestamp
+  rather than `db`, but the admin surface filtered for names ending in `.db`. It
+  matched nothing any station has ever produced: `/admin/system/backups` reported
+  "No backups found" on every install, and download and delete rejected every
+  real file with a 400 — indistinguishable from simply having no backups.
+
+- **The Station → Data tab reports real numbers.** It rendered a mock-up as live
+  telemetry: a fixed "Last backup: 2 h ago · auto · nightly 03:00" (there is no
+  nightly backup, and on a restart-prone station none had ever run), a
+  "Restore tested · verified bootable" line for something nothing tests, eight
+  invented snapshot rows with working-looking Restore buttons, hardcoded storage
+  figures, and an operations log quoting an S3 upload failure for an integration
+  that does not exist. Every figure is now measured from the running station, and
+  a station with no snapshots says so. `POST /admin/system/restore` — which
+  existed but had no UI anywhere, so a full backup could be downloaded and never
+  restored — is now reachable.
+
 - **A full `/tmp` no longer breaks the station (and `apt`).** Raw capture
   segments are written continuously into the RAM-backed stream directory, but
   nothing ever deleted them once the detector had processed them: the disk

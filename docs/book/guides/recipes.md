@@ -45,11 +45,11 @@ Set `BIRDNET_MQTT_HOST` and `BIRDNET_MQTT_HA_DISCOVERY=1`. The station registers
 
 ## Back up everything before an upgrade
 
-Take a manual snapshot on the [Backups](../admin/backups.md) page (auto-snapshots also run nightly), then update. Pre-upgrade snapshots are tagged so you can roll back.
+Download a **full backup** from the [Data tab](../admin/backups.md) and keep it off the station — the automatic snapshots run weekly and live on the station's own card, so they will not help you if the upgrade takes the card with it. Take one manually right before you update.
 
 ## Move my data to a new Pi
 
-Export a **full bundle** from [Backups](../admin/backups.md) on the old Pi, install on the new one, and restore the bundle (its signature is verified first). Your detections, settings, recordings and cached model come across.
+Download a **full backup** from the [Data tab](../admin/backups.md) on the old Pi, install on the new one, and restore the archive there. Your detections, settings and recordings come across. Restoring overwrites whatever is on the new station, so do it before you start collecting on it.
 
 ## Import my old BirdNET-Pi history
 

@@ -74,9 +74,31 @@ MAX_FILES_SPECIES=100         # cap clips per species
 DISK_PURGE_THRESHOLD=85       # autopurge starts at 85 %
 ```
 
-The bundled disk manager monitors continuously; once usage exceeds
-`DISK_PURGE_THRESHOLD` it removes the oldest clips first, skipping any
-file the database has marked locked (`/admin/recordings` → "lock").
+The bundled disk manager supervises **two** directories, once a minute, with
+the retention each one needs:
+
+- the **recordings directory**, holding your extracted clips beside
+  `birds.db`. These are your data, so they are never removed by age. Only the
+  disk-full backstop touches them: once usage exceeds `DISK_PURGE_THRESHOLD`
+  it removes the oldest clips first, skipping any file the database has marked
+  locked (`/admin/recordings` → "lock"). The locked set is re-read every cycle,
+  so locking a clip takes effect immediately — no restart needed.
+- the **raw capture directory** (`--watch-dir`, typically the RAM-backed
+  `/tmp/birdnet-stream`), which the detector reads and never needs again. It is
+  drained continuously by age and by a total-size ceiling
+  (`STREAM_RETENTION_SECS`, `STREAM_MAX_MB`) so the tmpfs self-empties.
+
+`MAX_FILES_SPECIES` is enforced separately, from the database, on the daily
+maintenance tick: the newest N clips per species are kept and older ones are
+deleted from disk. Locked clips are never counted against you and never
+deleted. The detection rows survive either way — only the audio is removed, so
+your counts, species lists and analytics are unaffected.
+
+**Maintenance runs on wall-clock time, not uptime.** The daily jobs (integrity
+check, session prune, species cap) and the weekly backup + VACUUM record their
+completion in the database, so a station that reboots often still runs them —
+an overdue job fires shortly after the next boot rather than restarting its
+timer.
 
 **Use endurance-class SD cards.** A standard A1 card will write out
 ~3000 P/E cycles per cell; WAL on a busy station can wear that out in
