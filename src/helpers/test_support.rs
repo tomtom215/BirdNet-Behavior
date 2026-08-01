@@ -28,3 +28,16 @@ pub(super) fn test_state() -> birdnet_web::state::AppState {
     birdnet_db::migration::migrate(&conn).unwrap();
     birdnet_web::state::AppState::from_connection(conn, std::path::PathBuf::from(":memory:"))
 }
+
+/// An `AppState` whose database path lives under `dir`, so
+/// `AppState::recording_dir` resolves inside the caller's temp directory.
+///
+/// `test_state`'s `":memory:"` path makes `recording_dir` the *relative* path
+/// `recordings`, which any code that creates that directory would materialise
+/// in the test process's working directory. Tests that exercise the recordings
+/// directory take this instead.
+pub(super) fn test_state_in(dir: &std::path::Path) -> birdnet_web::state::AppState {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    birdnet_db::migration::migrate(&conn).unwrap();
+    birdnet_web::state::AppState::from_connection(conn, dir.join("birds.db"))
+}
