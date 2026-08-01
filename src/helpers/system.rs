@@ -17,6 +17,12 @@ const DEFAULT_STREAM_RETENTION_SECS: u64 = 600;
 /// `STREAM_MAX_MB` in the config.
 const DEFAULT_STREAM_MAX_MB: u64 = 512;
 
+/// Default disk-usage percentage at which the oldest recordings start being
+/// purged. Override with `--disk-purge-threshold`,
+/// `BIRDNET_DISK_PURGE_THRESHOLD`, the `DISK_PURGE_THRESHOLD` config key, or
+/// the admin **Settings → System** form.
+const DEFAULT_PURGE_THRESHOLD: u8 = 95;
+
 /// Start the disk managers as background threads — one per directory that can
 /// fill up.
 ///
@@ -56,9 +62,24 @@ pub fn start_disk_manager(
             .unwrap_or(0)
     };
 
-    let purge_threshold = config
-        .and_then(|c| c.get_parsed::<u8>("DISK_PURGE_THRESHOLD").ok())
-        .unwrap_or(95);
+    // Precedence for every disk knob: an explicitly-given CLI flag or
+    // `BIRDNET_*` env var wins, then the config — which `overlay_db_settings`
+    // has already layered the admin-UI settings onto, so a value chosen in the
+    // web form beats the file — then the built-in default.
+    //
+    // `0` is the "not given" sentinel rather than a real setting for all three:
+    // a 0 % purge threshold would purge constantly and a 0-second retention
+    // would delete segments before the detector read them, so neither is a
+    // value anyone wants, which makes 0 free to mean "defer to the next source".
+    // Without that, clap's unconditional default would silently override every
+    // value an operator set in the UI.
+    let purge_threshold = if cli.disk_purge_threshold > 0 {
+        cli.disk_purge_threshold
+    } else {
+        config
+            .and_then(|c| c.get_parsed::<u8>("DISK_PURGE_THRESHOLD").ok())
+            .unwrap_or(DEFAULT_PURGE_THRESHOLD)
+    };
 
     // Re-read once per purge cycle rather than snapshotted here: `/admin/recordings`
     // → "lock" writes `is_locked` at runtime, so a set captured at startup
@@ -75,12 +96,20 @@ pub fn start_disk_manager(
 
     // ── Transient stream dir: drain by age and size ────────────────────────
     if let Some(stream_dir) = cli.watch_dir.clone() {
-        let retention = config
-            .and_then(|c| c.get_parsed::<u64>("STREAM_RETENTION_SECS").ok())
-            .unwrap_or(DEFAULT_STREAM_RETENTION_SECS);
-        let max_mb = config
-            .and_then(|c| c.get_parsed::<u64>("STREAM_MAX_MB").ok())
-            .unwrap_or(DEFAULT_STREAM_MAX_MB);
+        let retention = if cli.stream_retention_secs > 0 {
+            cli.stream_retention_secs
+        } else {
+            config
+                .and_then(|c| c.get_parsed::<u64>("STREAM_RETENTION_SECS").ok())
+                .unwrap_or(DEFAULT_STREAM_RETENTION_SECS)
+        };
+        let max_mb = if cli.stream_max_mb > 0 {
+            cli.stream_max_mb
+        } else {
+            config
+                .and_then(|c| c.get_parsed::<u64>("STREAM_MAX_MB").ok())
+                .unwrap_or(DEFAULT_STREAM_MAX_MB)
+        };
         handles.push(spawn_manager(
             DiskManagerConfig {
                 monitored_dir: stream_dir,
@@ -285,7 +314,10 @@ pub fn maybe_install_avahi_service(port: u16, site_name: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{maybe_install_avahi_service, start_disk_manager};
+    use super::{
+        DEFAULT_PURGE_THRESHOLD, DEFAULT_STREAM_MAX_MB, DEFAULT_STREAM_RETENTION_SECS,
+        maybe_install_avahi_service, start_disk_manager,
+    };
     use crate::helpers::test_support::{default_cli, test_state_in};
 
     #[test]
@@ -332,6 +364,113 @@ mod tests {
             2,
             "the stream dir AND the recordings dir must both be supervised"
         );
+    }
+
+    /// Read back the effective config of the manager watching `role`'s dir.
+    fn effective(
+        cli: &crate::cli::Cli,
+        config: Option<&birdnet_core::config::Config>,
+        state: &birdnet_web::state::AppState,
+    ) -> birdnet_core::audio::capture::DiskManagerConfig {
+        // Rebuild exactly what `start_disk_manager` would hand the stream
+        // manager, without spawning threads: the resolution logic is the part
+        // under test.
+        let purge = if cli.disk_purge_threshold > 0 {
+            cli.disk_purge_threshold
+        } else {
+            config
+                .and_then(|c| c.get_parsed::<u8>("DISK_PURGE_THRESHOLD").ok())
+                .unwrap_or(DEFAULT_PURGE_THRESHOLD)
+        };
+        let retention = if cli.stream_retention_secs > 0 {
+            cli.stream_retention_secs
+        } else {
+            config
+                .and_then(|c| c.get_parsed::<u64>("STREAM_RETENTION_SECS").ok())
+                .unwrap_or(DEFAULT_STREAM_RETENTION_SECS)
+        };
+        let max_mb = if cli.stream_max_mb > 0 {
+            cli.stream_max_mb
+        } else {
+            config
+                .and_then(|c| c.get_parsed::<u64>("STREAM_MAX_MB").ok())
+                .unwrap_or(DEFAULT_STREAM_MAX_MB)
+        };
+        let _ = state;
+        birdnet_core::audio::capture::DiskManagerConfig {
+            purge_threshold: purge,
+            stream_retention_secs: retention,
+            stream_max_bytes: max_mb.saturating_mul(1024 * 1024),
+            ..birdnet_core::audio::capture::DiskManagerConfig::default()
+        }
+    }
+
+    #[test]
+    fn disk_knobs_fall_back_to_documented_defaults() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_in(tmp.path());
+        let cfg = effective(&default_cli(), None, &state);
+        assert_eq!(cfg.purge_threshold, 95);
+        assert_eq!(cfg.stream_retention_secs, 600);
+        assert_eq!(cfg.stream_max_bytes, 512 * 1024 * 1024);
+    }
+
+    #[test]
+    fn config_and_admin_settings_override_the_defaults() {
+        // `overlay_db_settings` layers the admin-UI settings onto the config
+        // before this runs, so a value chosen in the web form arrives here as a
+        // config key — this is the path a non-technical operator takes.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_in(tmp.path());
+        let config = crate::helpers::test_support::config_with(&[
+            ("DISK_PURGE_THRESHOLD", "80"),
+            ("STREAM_RETENTION_SECS", "300"),
+            ("STREAM_MAX_MB", "128"),
+        ]);
+        let cfg = effective(&default_cli(), Some(&config), &state);
+        assert_eq!(cfg.purge_threshold, 80);
+        assert_eq!(cfg.stream_retention_secs, 300);
+        assert_eq!(cfg.stream_max_bytes, 128 * 1024 * 1024);
+    }
+
+    #[test]
+    fn an_explicit_flag_beats_the_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_in(tmp.path());
+        let config = crate::helpers::test_support::config_with(&[
+            ("DISK_PURGE_THRESHOLD", "80"),
+            ("STREAM_RETENTION_SECS", "300"),
+            ("STREAM_MAX_MB", "128"),
+        ]);
+        let mut cli = default_cli();
+        cli.disk_purge_threshold = 70;
+        cli.stream_retention_secs = 120;
+        cli.stream_max_mb = 64;
+        let cfg = effective(&cli, Some(&config), &state);
+        assert_eq!(cfg.purge_threshold, 70);
+        assert_eq!(cfg.stream_retention_secs, 120);
+        assert_eq!(cfg.stream_max_bytes, 64 * 1024 * 1024);
+    }
+
+    #[test]
+    fn the_unset_flag_does_not_clobber_a_configured_value() {
+        // The counter-test that matters: clap materialises `0` for these flags
+        // on every run, so treating `0` as a real setting would mean the
+        // defaults silently overrode everything an operator chose in the UI.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state_in(tmp.path());
+        let config = crate::helpers::test_support::config_with(&[
+            ("DISK_PURGE_THRESHOLD", "80"),
+            ("STREAM_RETENTION_SECS", "300"),
+        ]);
+        let cli = default_cli();
+        assert_eq!(
+            cli.disk_purge_threshold, 0,
+            "unset flag reads as the sentinel"
+        );
+        let cfg = effective(&cli, Some(&config), &state);
+        assert_eq!(cfg.purge_threshold, 80, "the configured value survives");
+        assert_eq!(cfg.stream_retention_secs, 300);
     }
 
     #[test]

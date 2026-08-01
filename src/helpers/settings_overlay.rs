@@ -83,6 +83,12 @@ const SETTING_SPECS: &[(&str, &str, SettingsCategory)] = &[
         "DISK_PURGE_THRESHOLD",
         SettingsCategory::System,
     ),
+    (
+        "stream_retention_secs",
+        "STREAM_RETENTION_SECS",
+        SettingsCategory::System,
+    ),
+    ("stream_max_mb", "STREAM_MAX_MB", SettingsCategory::System),
 ];
 
 /// Resolve the runtime config key a given admin-UI setting maps to, if any.

@@ -307,6 +307,35 @@ pub struct Cli {
     #[arg(long, env = "BIRDNET_DISK_EXCLUDE", value_delimiter = ',')]
     pub disk_exclude: Vec<std::path::PathBuf>,
 
+    /// Disk-usage percentage at which the oldest recordings start being purged.
+    ///
+    /// The safety net that keeps a 24/7 station from filling its card: once the
+    /// data disk crosses this, the oldest clips are deleted first, and locked
+    /// clips are never touched. `BirdNET-Pi` equivalent: `DISK_PURGE_THRESHOLD`.
+    ///
+    /// `0` leaves the resolution to the config file / admin settings, then the
+    /// 95 % default — the flag is only "set" when given, so it never silently
+    /// overrides a value chosen in the UI.
+    #[arg(long, default_value = "0", env = "BIRDNET_DISK_PURGE_THRESHOLD")]
+    pub disk_purge_threshold: u8,
+
+    /// Seconds a raw capture segment is kept in the transient stream directory.
+    ///
+    /// Raw segments are read by the detector and never needed again; draining
+    /// them is what keeps the RAM-backed stream dir from filling. Far longer
+    /// than the pipeline needs, so an unprocessed segment is never removed.
+    /// `0` = resolve from config / admin settings, then the 600 s default.
+    #[arg(long, default_value = "0", env = "BIRDNET_STREAM_RETENTION_SECS")]
+    pub stream_retention_secs: u64,
+
+    /// Hard ceiling in mebibytes on the transient stream directory.
+    ///
+    /// Backstop for many-stream or backed-up runs; the oldest segments drop
+    /// first. `0` = resolve from config / admin settings, then the 512 MiB
+    /// default.
+    #[arg(long, default_value = "0", env = "BIRDNET_STREAM_MAX_MB")]
+    pub stream_max_mb: u64,
+
     /// Directory containing custom species images (checked before Wikipedia cache).
     ///
     /// Files should be named `{lowercase_sci_name_with_underscores}.jpg`, e.g.

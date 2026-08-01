@@ -92,6 +92,12 @@ pub struct SettingsForm {
     /// Disk-use threshold (percentage, 0–100) at which the oldest recordings are purged
     /// regardless of age.
     pub purge_threshold: Option<String>,
+    /// Seconds a raw capture segment is kept in the transient stream directory
+    /// before being drained (0 = disable the age drain).
+    pub stream_retention_secs: Option<String>,
+    /// Hard ceiling in mebibytes on the transient stream directory
+    /// (0 = disable the size ceiling).
+    pub stream_max_mb: Option<String>,
     /// Display name shown in the web UI header and page titles.
     pub site_name: Option<String>,
     /// External species-information site to link to; `ebird` and `xeno-canto` are
