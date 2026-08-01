@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Time-based clip retention that actually works — and is off by default.**
+  The settings form has always shown a "Keep Recordings (days)" field promising
+  that older audio was deleted automatically. Nothing ever read it: the key had
+  no consumer and no bridge into the runtime config, so the setting was inert
+  while the configuration docs correctly stated retention was not time-based.
+  Age-based retention now runs on the daily maintenance tick — locked clips are
+  exempt, a file shared by several detections goes only when every one of them
+  is past the cutoff, and the detection rows survive so counts, species lists,
+  trends and exports are unaffected. It uses a **new** setting
+  (`clip_retention_days`, default `0` = keep forever) rather than the old inert
+  one on purpose: the old field defaulted to 30 in the form, so stations carry
+  a value nobody meant, and teaching that key to work would have deleted every
+  clip older than a month at the first tick after upgrading.
+
+- **Every disk-retention limit is settable from the web UI and the
+  environment.** The purge threshold and the transient stream directory's age
+  and size limits previously required hand-editing the config file — which the
+  Docker entrypoint does not even use, leaving container operators no way to
+  change them. All are now settable via `--disk-purge-threshold`,
+  `--stream-retention-secs`, `--stream-max-mb` (each with a `BIRDNET_*` env
+  var), via **Settings → System**, or via the config file, resolved in that
+  order.
+
 - **Station Health shows RAM `/tmp` (scratch) headroom.** The service streams
   live audio segments through `/tmp`, which on a Pi is a small, RAM-backed tmpfs
   separate from the data disk — and the existing "Disk" tile only watches the
@@ -54,6 +77,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the recordings dir gets the disk-full backstop only — oldest first, never by
   age, and never a locked clip.
 
+- **Per-species confidence thresholds apply without a restart.** Thresholds were
+  read once when the daemon started, so setting one in `/admin/species` did
+  nothing until the service was restarted — the row appeared, the page confirmed
+  the save, and detections kept being judged by the old value, with nothing
+  saying why. They are now re-read on a short interval. The page also claimed
+  sub-threshold detections "will be discarded"; they are held in **Quarantine**
+  for you to confirm or reject, which it now says.
+
+- **Reclaiming a clip no longer erases its filename.** Retention used to clear
+  `File_Name` when it deleted audio, losing the capture timestamp and source the
+  clip was cut from — the record of what a detection was matched to. The name is
+  kept and a new `Clip_Pruned_At` column records when the audio went, so a row
+  now distinguishes "never had a clip" from "had one, reclaimed on this date".
+  Every counting, grouping and charting query is unaffected.
+
 - **Locking a recording now protects it immediately.** The purge read the locked
   set once at startup and ran on that snapshot for the lifetime of the process,
   so a clip locked from `/admin/recordings` was unprotected until the next
@@ -62,11 +100,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the very recordings a researcher had marked to keep — and now excludes them,
   along with any clip another in-cap detection still references.
 
-- **Pruned clips no longer leave a dead play button.** The per-species cap
-  deleted the audio but left `File_Name` set, so the clips browser kept offering
+- **Pruned clips no longer leave a dead play button.** Retention deleted the
+  audio but left the row looking playable, so the clips browser kept offering
   playback for a file that no longer existed, and the daily query re-selected
-  every already-pruned row forever. The reference is cleared with the file; the
-  detection row is preserved for stats.
+  every already-pruned row forever. The `Clip_Pruned_At` stamp above resolves
+  both. The "has playable audio" test was spelled out at eight call sites and is
+  now one shared definition, so no surface can disagree with another about what
+  can be played.
 
 - **Backups are visible, downloadable and deletable again.** Snapshots are
   written as `{db_name}.backup.{unix_secs}`, whose extension is the timestamp

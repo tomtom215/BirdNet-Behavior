@@ -88,11 +88,22 @@ the retention each one needs:
   drained continuously by age and by a total-size ceiling
   (`STREAM_RETENTION_SECS`, `STREAM_MAX_MB`) so the tmpfs self-empties.
 
-`MAX_FILES_SPECIES` is enforced separately, from the database, on the daily
-maintenance tick: the newest N clips per species are kept and older ones are
-deleted from disk. Locked clips are never counted against you and never
-deleted. The detection rows survive either way — only the audio is removed, so
-your counts, species lists and analytics are unaffected.
+Two further limits are enforced from the database on the daily maintenance
+tick, and both leave the detection rows intact — only the audio is reclaimed,
+so your counts, species lists and analytics are unaffected:
+
+- `MAX_FILES_SPECIES` — keep the newest N clips per species.
+- `CLIP_RETENTION_DAYS` — reclaim audio older than N days. **Off by default**
+  (`0` = keep forever); set it in **Settings → System** ("Keep Clip Audio") or
+  the config file if you want a rolling window.
+
+Locked clips are exempt from both. A reclaimed clip keeps its filename and
+gains the date its audio was removed, so the record of what was captured
+survives even though the file does not.
+
+All of these can be set from the web UI — you never have to edit this file to
+change them. A command-line flag or `BIRDNET_*` variable wins over the UI,
+which wins over the config file.
 
 **Maintenance runs on wall-clock time, not uptime.** The daily jobs (integrity
 check, session prune, species cap) and the weekly backup + VACUUM record their
