@@ -19,6 +19,59 @@ use super::disposition::{
 use super::webhook::dispatch_webhook;
 use crate::integrations::{AppriseHandle, EmailHandle, HeartbeatHandle, MqttHandle};
 
+/// Per-species confidence thresholds, re-read from the database on a short TTL.
+///
+/// The thresholds decide whether a detection is accepted or quarantined for
+/// review, and they are operator-driven: `/admin/species` writes them at
+/// runtime. Capturing them once when the daemon starts meant a threshold set in
+/// the UI did nothing at all until the service was restarted — the row appeared
+/// in the table, the page confirmed the save, and detections kept being judged
+/// by the old value, with nothing anywhere saying why. That is the same trap
+/// the startup snapshot of locked clips set, and it bites hardest during the
+/// one workflow this feature exists for: tuning a species up or down and
+/// watching what happens next.
+///
+/// A TTL rather than a query per detection: the table is small and indexed, but
+/// a dawn-chorus burst can push hundreds of events through this loop in a
+/// minute, and none of them need a threshold fresher than this.
+struct ThresholdCache {
+    map: std::collections::HashMap<String, f64>,
+    refreshed: std::time::Instant,
+}
+
+impl ThresholdCache {
+    /// How stale a threshold may get before the next event re-reads it.
+    const TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+    fn new(initial: std::collections::HashMap<String, f64>) -> Self {
+        Self {
+            map: initial,
+            refreshed: std::time::Instant::now(),
+        }
+    }
+
+    /// The thresholds to judge the next detection by, refreshed if stale.
+    ///
+    /// A failed read keeps the previous map rather than falling back to an
+    /// empty one: losing every threshold on a transient `SQLITE_BUSY` would
+    /// silently accept the detections the operator asked to scrutinise.
+    fn current(
+        &mut self,
+        state: &birdnet_web::state::AppState,
+    ) -> &std::collections::HashMap<String, f64> {
+        if self.refreshed.elapsed() >= Self::TTL {
+            match state.with_db(birdnet_db::sqlite::get_species_threshold_map) {
+                Ok(fresh) => self.map = fresh,
+                Err(e) => {
+                    tracing::warn!(error = %e, "could not refresh per-species thresholds; keeping the previous set");
+                }
+            }
+            self.refreshed = std::time::Instant::now();
+        }
+        &self.map
+    }
+}
+
 /// Bridge detection events from the daemon to database inserts and WebSocket broadcasts.
 #[allow(
     clippy::needless_pass_by_value,
@@ -42,12 +95,14 @@ pub(super) fn event_processor(
     extractor: Extractor,
 ) {
     tracing::debug!("event processor started");
+    let mut species_thresholds = ThresholdCache::new(species_thresholds);
 
     loop {
         let Ok(event) = event_rx.recv() else {
             tracing::info!("event channel closed, stopping event processor");
             break;
         };
+        let species_thresholds = species_thresholds.current(&state);
 
         let detection = &event.detection;
         let correlation_id = event.correlation_id.as_str();
@@ -59,7 +114,7 @@ pub(super) fn event_processor(
         match decide_disposition(
             detection.confidence,
             &detection.scientific_name,
-            &species_thresholds,
+            species_thresholds,
             global_confidence,
         ) {
             DispositionDecision::Quarantine { threshold } => {
@@ -529,6 +584,71 @@ mod tests {
     //
     // Lives inside the daemon module so the private `event_processor`
     // function is directly callable.
+
+    // ── ThresholdCache ─────────────────────────────────────────────────
+
+    #[test]
+    fn threshold_cache_serves_the_initial_map_until_the_ttl_expires() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let mut cache = ThresholdCache::new(thresholds(&[("Pica pica", 0.9)]));
+
+        // A threshold written after construction is not visible yet — the
+        // cache is fresh, so this pass must not pay for a database read.
+        state.with_db(|c| {
+            birdnet_db::sqlite::set_species_threshold(c, "Turdus merula", 0.5).unwrap();
+        });
+        let now = cache.current(&state);
+        assert!(now.contains_key("Pica pica"));
+        assert!(!now.contains_key("Turdus merula"));
+    }
+
+    #[test]
+    fn threshold_cache_picks_up_a_new_threshold_once_stale() {
+        // The regression: thresholds were captured when the daemon started, so
+        // setting one in /admin/species did nothing until a restart.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let mut cache = ThresholdCache::new(HashMap::new());
+
+        state.with_db(|c| {
+            birdnet_db::sqlite::set_species_threshold(c, "Turdus merula", 0.5).unwrap();
+        });
+        // Age the cache past its TTL rather than sleeping for it.
+        cache.refreshed = std::time::Instant::now()
+            .checked_sub(ThresholdCache::TTL)
+            .expect("clock is well past the TTL");
+
+        let fresh = cache.current(&state);
+        assert_eq!(
+            fresh.get("Turdus merula"),
+            Some(&0.5),
+            "a threshold set at runtime must apply without a restart"
+        );
+    }
+
+    #[test]
+    fn threshold_cache_keeps_the_previous_map_when_a_refresh_fails() {
+        // Falling back to an empty map on a transient read failure would
+        // silently accept the detections the operator asked to scrutinise.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let mut cache = ThresholdCache::new(thresholds(&[("Pica pica", 0.9)]));
+
+        // Break the table out from under the cache, then force a refresh.
+        state.with_db(|c| {
+            c.execute("DROP TABLE species_thresholds", []).unwrap();
+        });
+        cache.refreshed = std::time::Instant::now()
+            .checked_sub(ThresholdCache::TTL)
+            .expect("clock is well past the TTL");
+
+        assert_eq!(
+            cache.current(&state).get("Pica pica"),
+            Some(&0.9),
+            "a failed refresh must not drop the thresholds already in force"
+        );
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn event_processor_inserts_row_for_accepted_event() {
