@@ -488,6 +488,25 @@ mod tests {
         assert!(!is_usable(&with_error));
     }
 
+    #[test]
+    fn is_clean_distinguishes_empty_from_populated() {
+        // The counter-direction matters as much as the positive case: a
+        // predicate that answers "clean" unconditionally would let every
+        // caller above skip reporting real findings.
+        assert!(is_clean(&[]));
+        assert!(!is_clean(&[Finding::warn("X", "m", "r")]));
+        assert!(!is_clean(&[Finding::error("X", "m", "r")]));
+    }
+
+    #[test]
+    fn severity_displays_as_a_lowercase_word() {
+        // Operators grep logs and the doctor output for these exact words,
+        // so the rendering is contract, not cosmetics — an empty or
+        // defaulted `Display` must not pass.
+        assert_eq!(Severity::Warning.to_string(), "warning");
+        assert_eq!(Severity::Error.to_string(), "error");
+    }
+
     // ── Property-based tests ──────────────────────────────────────────────
     //
     // proptest generates randomised inputs across the entire reachable space
