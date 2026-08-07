@@ -45,8 +45,12 @@ There are **0 open issues** and 7 open PRs, all Dependabot.
    set. CI's "Inference against the real model" job runs them against the sha256-pinned
    541 MB model and is green at tip.
    **Update (Slice 2 onward):** also run locally. The model was fetched, its sha256 verified
-   against the CI-pinned digest, and the whole suite re-run with it — **1921 passed, 0 failed,
-   0 runtime skips** as of Slice 3. To repeat:
+   against the digest `ci.yml:175` pins, and the whole suite re-run with it. Re-confirmed at
+   the final commit `ba84180` on a cold `target/`: **40 suites, 1929 passed, 0 failed,
+   5 ignored** (all `ignore`-marked doctests), **0 runtime skips**, exit 0. The four suites
+   that would silently skip without the model all ran real tests —
+   `inference_e2e` 2/2 (9.8 s), `pipeline_e2e` 3/3 (4.3 s), `species_filter_e2e` 10/10 (7.5 s),
+   `soak` 4/4 (19.6 s). To repeat:
    ```bash
    export BIRDNET_TEST_MODEL=/path/to/model.onnx BIRDNET_TEST_LABELS=/path/to/labels.csv
    cargo test --workspace --all-features
@@ -695,7 +699,7 @@ the install path real stations pull from. That is the maintainer's call, not thi
 - [x] `Cargo.toml`, `CHANGELOG.md` and `openapi.json` agree; tag still to be pushed by the maintainer
 - [x] The **whole release pipeline** rehearsed green at `ba84180` — validate, all five CI gates, all three build targets, SBOM + checksums + SLSA attestation (run 31224283342, 10/10)
 - [x] Full gate green locally *and* in CI: `fmt`, `clippy --all-targets --all-features -D warnings`, `test --workspace --all-features`, `doc` with `-D warnings`, `check` on MSRV 1.95
-- [x] The model-gated scientific core run against the real sha256-verified model — **1929 passed, 0 failed, 0 runtime skips** across 40 suites
+- [x] The model-gated scientific core run against the real sha256-verified model — **1929 passed, 0 failed, 0 runtime skips** across 40 suites, re-confirmed at `ba84180` on a cold `target/`
 
 **One honest caveat on the last box.** The real-model `inference` job lives in `ci.yml`, which
 fires only on pushes to `main`/`master` and on pull requests. No PR is open for this branch,
