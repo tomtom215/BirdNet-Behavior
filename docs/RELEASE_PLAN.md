@@ -594,10 +594,50 @@ offline mode`), rather than only changing what the doctor says.
 `## [0.10.0] - 2026-08-07` with a fresh empty `[Unreleased]`; link refs updated; the API
 doc's sample `/api/v2/health` response brought in line (it still advertised `0.9.0`).
 
-The release workflow's **dry run was dispatched against this branch** and its
-`Validate release tag` job passed — workspace version matches the version, and the
-`## [0.10.0]` changelog entry was found. That is the gate F-09 exists for, checked rather
-than assumed.
+**The release workflow was rehearsed end to end against this branch, not just spot-checked.**
+`workflow_dispatch` run [31224283342](https://github.com/tomtom215/BirdNet-Behavior/actions/runs/31224283342)
+on `ba84180`, **10/10 jobs green in 33 m 41 s**:
+
+| Job | | Wall clock |
+|---|---|---|
+| Validate release tag | ✅ | 5 s |
+| CI gate — fmt | ✅ | 54 s |
+| CI gate — msrv (`cargo check` on 1.95) | ✅ | 9 m 44 s |
+| CI gate — clippy (`--all-targets --all-features -D warnings`) | ✅ | 10 m 50 s |
+| CI gate — doc (`RUSTDOCFLAGS=-D warnings`) | ✅ | 11 m 9 s |
+| CI gate — test (`--workspace --all-features`) | ✅ | 12 m 6 s |
+| Build aarch64-apple-darwin | ✅ | 11 m 13 s |
+| Build x86_64-unknown-linux-gnu | ✅ | 16 m 49 s |
+| Build aarch64-unknown-linux-gnu (cross) | ✅ | 20 m 58 s |
+| Package and attest (SBOM, SHA256SUMS, SLSA provenance) | ✅ | 20 s |
+
+That covers the two things a `validate`-only check cannot: **all three release targets
+actually link** — including the aarch64 Linux cross-build that produces the Pi binary, the
+slowest job and the one most likely to break — and the packaging step that generates the
+CycloneDX SBOM, the combined checksums and the SLSA build-provenance attestation runs
+against the real artifacts.
+
+`Publish GitHub Release` is gated `if: github.event_name == 'push'` (`release.yml:593`), so
+the dry run stopped after `package`. **Nothing was published**: the newest tag in the repo
+is still `v0.9.0`.
+
+**This rehearsal caught a real defect.** The first dispatch (run
+[31221771538](https://github.com/tomtom215/BirdNet-Behavior/actions/runs/31221771538)) failed
+its `CI gate — doc` job on two broken intra-doc links — `[Cli::parse_tracked_from]`, which
+I had put behind `#[cfg(test)]` while leaving the link in a non-test doc comment, and
+`[SETTINGS_FORM_KEYS]`, not in scope at the link site. Root cause: across four slices I
+never once ran `cargo doc` locally, so `RUSTDOCFLAGS="-D warnings"` was the only thing
+looking. The exact CI command is now part of the local gate:
+
+```bash
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --all-features
+```
+
+A second push was needed after that, for the same class of reason: `crates/birdnet-web/openapi.json`
+still declared `0.9.0`, and a test asserts it tracks `CARGO_PKG_VERSION`. `RELEASING.md` now
+names both non-obvious files a version bump has to touch beyond `Cargo.toml` — the OpenAPI
+spec, and the sample `/api/v2/health` response in the API reference. Only one of the two
+fails a test; the other is caught by nothing but the checklist.
 
 **F-10 — the fix was not the one the plan proposed.** The plan said to use
 `debug = "line-tables-only"`, on the reasoning that it keeps backtraces while dropping the
@@ -652,8 +692,18 @@ the install path real stations pull from. That is the maintainer's call, not thi
 - [x] Initial analytics sync of ≥1 M detections stays under a fixed RSS bound (test-enforced)
 - [x] A corrupted analytics DB is quarantined and rebuilt on the next start
 - [x] Every default-on outbound connection is documented and individually disable-able
-- [x] `Cargo.toml` and `CHANGELOG.md` agree (release dry-run's `validate` job passed); tag still to be pushed by the maintainer
-- [ ] Full gate green: `fmt`, `clippy --all-features -D warnings`, `test --workspace --all-features`, CI including the real-model inference job
+- [x] `Cargo.toml`, `CHANGELOG.md` and `openapi.json` agree; tag still to be pushed by the maintainer
+- [x] The **whole release pipeline** rehearsed green at `ba84180` — validate, all five CI gates, all three build targets, SBOM + checksums + SLSA attestation (run 31224283342, 10/10)
+- [x] Full gate green locally *and* in CI: `fmt`, `clippy --all-targets --all-features -D warnings`, `test --workspace --all-features`, `doc` with `-D warnings`, `check` on MSRV 1.95
+- [x] The model-gated scientific core run against the real sha256-verified model — **1929 passed, 0 failed, 0 runtime skips** across 40 suites
+
+**One honest caveat on the last box.** The real-model `inference` job lives in `ci.yml`, which
+fires only on pushes to `main`/`master` and on pull requests. No PR is open for this branch,
+so that job has **never run in CI here** — `ci.yml` has zero runs on
+`claude/pre-release-audit-plan-if7qrp`. The coverage is real but it is *local*: the 541 MB
+model was fetched, its sha256 checked against the digest CI pins (`ci.yml:175`), and
+`inference_e2e`, `pipeline_e2e` and the new `species_filter_e2e` run rather than skip. Opening
+the PR will run it in CI, and that is where the box gets independently confirmed.
 
 _Keep this document current as slices land: flip the checkboxes, strike closed findings, and
 re-run the §0 evidence table before tagging._
