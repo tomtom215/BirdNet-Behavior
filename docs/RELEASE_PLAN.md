@@ -82,7 +82,7 @@ Severity: **P1** = a field station silently does the wrong thing, or goes down.
 | ~~F-07~~ | ~~Two pre/post twilight offsets in the UI, one `--twilight-offset` at runtime~~ — **fixed, Slice 1** | P3 | S |
 | ~~F-08~~ | ~~`partial_cmp().unwrap()` on floats in two web handlers~~ — **fixed, Slice 4** | P3 | XS |
 | ~~F-12~~ | ~~`panic = "abort"` + no catch-panic layer makes any handler panic a station outage~~ — **found in Slice 4; class closed, posture documented** | P2 | — |
-| F-09 | Version and release docs not rolled for `v0.10.0` | P1 (release) | S |
+| ~~F-09~~ | ~~Version and release docs not rolled for `v0.10.0`~~ — **done, Slice 5** | P1 (release) | S |
 | ~~F-10~~ | ~~Debug all-targets build needs ~21 GB of disk~~ — **fixed, Slice 5** | P3 (dev-ex) | S |
 
 ---
@@ -588,13 +588,39 @@ and confirmed in the journal that `--offline` actually suppresses both (`daily u
 disabled; this station will not contact api.github.com`, `species image downloads disabled by
 offline mode`), rather than only changing what the doctor says.
 
-### Slice 5 — Release mechanics (F-09, F-10)
+### ✅ Slice 5 — Release mechanics (F-09, F-10) — landed
 
-Version bump, changelog roll, supersede the two stale docs (this file already does the last
-part), dev-profile debuginfo change. Then the release dry-run, then the tag.
+**F-09.** `workspace.package.version` → `0.10.0`; `[Unreleased]` rolled into
+`## [0.10.0] - 2026-08-07` with a fresh empty `[Unreleased]`; link refs updated; the API
+doc's sample `/api/v2/health` response brought in line (it still advertised `0.9.0`).
 
-**Gate:** `release.yml` `workflow_dispatch` dry run must be green **before** the tag is
-pushed.
+The release workflow's **dry run was dispatched against this branch** and its
+`Validate release tag` job passed — workspace version matches the version, and the
+`## [0.10.0]` changelog entry was found. That is the gate F-09 exists for, checked rather
+than assumed.
+
+**F-10 — the fix was not the one the plan proposed.** The plan said to use
+`debug = "line-tables-only"`, on the reasoning that it keeps backtraces while dropping the
+bulk. Measured, it does nothing:
+
+| dev profile `debug` | `target/` | `birdnet-behavior` |
+|---|---|---|
+| `true` (full) | 21 GB | 1.1 GB |
+| `"line-tables-only"` | **22 GB** | 752 MB |
+| `0` (chosen) | **2.1 GB** | 244 MB |
+
+Same command each time (`cargo build --workspace --all-targets --all-features`, clean
+`target/`). Line tables do not help because the bulk is the statically-linked ONNX Runtime
+and libduckdb, not Rust line tables — a 15-minute build proved it, after which the
+first-written profile comment (which had quoted the 2.1 GB figure *as if* it were the
+line-tables number, when it came from `debug = "none"`) was wrong and had to be corrected.
+The profile now sets `debug = 0`, carries the measured table, and documents the
+per-package `CARGO_PROFILE_DEV_DEBUG=full` escape hatch for when a backtrace's file/line
+is actually needed.
+
+**Not done, deliberately: the tag.** `RELEASING.md` is explicit that creating and pushing
+the tag is the manual "go" action, and it publishes a GitHub Release, Docker images, and
+the install path real stations pull from. That is the maintainer's call, not this branch's.
 
 ### Not in scope for `v0.10.0`
 
@@ -618,8 +644,8 @@ pushed.
 - [x] Apprise + BirdWeather configured from the UI actually notify/upload; Test agrees with live
 - [x] Initial analytics sync of ≥1 M detections stays under a fixed RSS bound (test-enforced)
 - [x] A corrupted analytics DB is quarantined and rebuilt on the next start
-- [ ] Every default-on outbound connection is documented and individually disable-able
-- [ ] `Cargo.toml`, `CHANGELOG.md` and the tag agree; release dry-run green
+- [x] Every default-on outbound connection is documented and individually disable-able
+- [x] `Cargo.toml` and `CHANGELOG.md` agree (release dry-run's `validate` job passed); tag still to be pushed by the maintainer
 - [ ] Full gate green: `fmt`, `clippy --all-features -D warnings`, `test --workspace --all-features`, CI including the real-model inference job
 
 _Keep this document current as slices land: flip the checkboxes, strike closed findings, and
