@@ -38,12 +38,19 @@ A11y & Visual QA, and Mutation testing are **all green**. The scheduled Mutation
 2026-08-03 (`validate.rs` shard) was fixed by `1e9102a` and the shard is green at tip.
 There are **0 open issues** and 7 open PRs, all Dependabot.
 
-**Two things the local gate does not cover** — both are covered by CI, and both should stay
-that way:
+**Two things the local gate does not cover by default** — both are covered by CI:
 
-1. The **scientific core**. `tests/inference_e2e.rs` and `tests/pipeline_e2e.rs` skip unless
-   `BIRDNET_TEST_MODEL`/`BIRDNET_TEST_LABELS` are set. CI's "Inference against the real model"
-   job runs them against the sha256-pinned 541 MB model and is green at tip.
+1. The **scientific core**. `tests/inference_e2e.rs`, `tests/pipeline_e2e.rs` and (new)
+   `tests/species_filter_e2e.rs` skip unless `BIRDNET_TEST_MODEL`/`BIRDNET_TEST_LABELS` are
+   set. CI's "Inference against the real model" job runs them against the sha256-pinned
+   541 MB model and is green at tip.
+   **Update (Slice 2):** also run locally. The model was fetched, its sha256 verified against
+   the CI-pinned digest, and the whole suite re-run with it — **1915 passed, 0 failed, 0
+   runtime skips**. To repeat:
+   ```bash
+   export BIRDNET_TEST_MODEL=/path/to/model.onnx BIRDNET_TEST_LABELS=/path/to/labels.csv
+   cargo test --workspace --all-features
+   ```
 2. **Live behavioral-extension** verification. CI embeds the community extension and asserts
    the offline `LOAD`. Verified independently here at runtime (`behavioral v0.9.1` loaded).
 
@@ -66,7 +73,8 @@ Severity: **P1** = a field station silently does the wrong thing, or goes down.
 | ID | Finding | Sev | Effort |
 |----|---------|-----|--------|
 | ~~F-01~~ | ~~20 admin-UI settings are persisted but never reach the runtime~~ — **fixed, Slice 1** | P1 | M |
-| F-02 | Species include/exclude lists never filter detections | P1 | S–M |
+| ~~F-02~~ | ~~Species include/exclude lists never filter detections~~ — **fixed, Slice 2** | P1 | S–M |
+| ~~F-11~~ | ~~Species-frequency filter never ran on a normally-installed station~~ — **found and fixed in Slice 2** | P1 | S |
 | ~~F-03~~ | ~~Apprise + BirdWeather: UI fields inert, but the "Test" button works~~ — **fixed, Slice 1** | P1 | S |
 | F-04 | Initial DuckDB sync loads every detection into RAM — OOM at ≈2.1 M rows | P1 | M |
 | F-05 | A corrupt analytics DB disables analytics permanently and silently | P2 | S |
@@ -144,6 +152,27 @@ build the runtime config through `overlay_db_settings`, assert the resolved valu
 Red before, green after.
 
 ---
+
+### F-11 — Species-frequency filter never ran on a normally-installed station · **P1** · *found in Slice 2, fixed there*
+
+**Not in the original audit** — surfaced only by tracing the value end to end while fixing
+F-02, which is the argument for doing that rather than trusting the layer above.
+
+**Evidence.** The daemon set `latitude: cli.latitude, longitude: cli.longitude`
+(`src/daemon/mod.rs:149-150`) with **no config fallback**, while every other consumer has one
+(`capture::schedule::resolve_location`, `create_birdweather_client`). The bare-metal installer
+writes `LATITUDE`/`LONGITUDE` into `birdnet.conf`, and `/admin/settings` writes the settings
+table the overlay layers onto it — neither of which sets a CLI flag. So on a normal install
+the daemon received `None`.
+
+`process_and_infer_filtered` then did `if let (Some(lat), Some(lon)) = (lat, lon)` and skipped
+the species filter entirely, meaning the metadata model never ran and **`SF_THRESH` — a
+documented, BirdNET-Pi-parity headline feature with a slider on the Detection settings page —
+did nothing at all** unless the operator happened to pass `--latitude` explicitly.
+
+**Fixed** by `resolve_station_coords` (CLI → config, per axis) plus making only the *model*
+stage depend on having a location. Pinned by four unit tests including the half-configured
+case, where one axis alone must not resolve to a `(lat, 0.0)` location.
 
 ### F-02 — Species include/exclude lists never filter detections · **P1**
 
@@ -425,12 +454,51 @@ case — an operator explicitly passing the documented default — resolves in t
 direction (the UI value wins). Migrating it to `helpers::resolve` is tidy-up, not a fix, and
 would churn a working, mutation-tested path.
 
-### Slice 2 — Make the species filter real (F-02)
+### ✅ Slice 2 — Make the species filter real (F-02, F-11) — landed in `1ef66e5`
 
-Populate `include_list`/`exclude_list` from the `settings` table; keep the existing filter
-logic untouched. Decide restart-vs-live-reload and make the page say which.
+The plan said "populate the lists; keep the existing filter logic untouched". Populating them
+would have shipped a fix that changed nothing. Three further defects had to go first, each
+found by tracing the value rather than trusting the layer above:
 
-**Gate:** the exclude-a-species integration test; `--test web_api_species`.
+1. **Name-space mismatch.** `/admin/species` collects *common* names ("Add species common
+   name"); `SpeciesFilter` compares *scientific* names. A populated list would have matched
+   nothing an operator could enter through the UI — and every test written against scientific
+   names would have passed. Entries now match either form, case- and whitespace-insensitively.
+2. **The preview lied in the other direction.** `/admin/species/test` ran its own
+   common-name-only comparison, so once the lists worked, a scientific-name entry would have
+   shown "Pass" while the runtime blocked it. The page now calls the detection path's own
+   `matches_species`, because a page advertised as "preview the filter before it affects live
+   detections" is only truthful while it is the same code.
+3. **F-11, a new P1.** `process_and_infer_filtered` skipped the filter entirely unless *both*
+   coordinates were set, and separately the daemon read `cli.latitude`/`cli.longitude` with no
+   config fallback. So on a station configured the normal way — the installer writes
+   `LATITUDE`/`LONGITUDE` to `birdnet.conf` — the daemon got `None`, never ran the metadata
+   model, and left `SF_THRESH` inert. That is the headline species-frequency feature doing
+   nothing on most real installs. Coordinates now resolve CLI-then-config (the rule
+   `capture::schedule::resolve_location` always used), and only the *model* needs a location:
+   the operator's lists apply either way.
+
+Also delivered beyond the plan: **live reload**. The lists refresh on a 30-second TTL inside
+the daemon loop through an injected `SpeciesListsProvider`, mirroring `LockedFilesProvider`
+and the per-species threshold cache. And an include list matching no known species is ignored
+with a warning rather than intersected to nothing, so one misspelt name cannot take a station
+off the air.
+
+**Gate — green.** `fmt`; `clippy --workspace --all-targets --all-features -- -D warnings`
+(zero warnings); `cargo test --workspace --all-features` → **1915 passed, 0 failed, 0 runtime
+skips** — the model-gated suites actually ran (see §0).
+
+**Verified on a live station** running the real 11,560-species model, driving files through
+the daemon's own watcher:
+
+| step | result |
+|---|---|
+| Drop the bundled Magpie recording | **5** Eurasian Magpie + 1 Great Horned Owl |
+| `POST /admin/species/exclude/add name=Eurasian Magpie`, **no restart** | stored |
+| Drop an identical recording after the TTL | **0** Magpie; the Owl in the same file still came through |
+| Also exclude `Bubo virginianus` (scientific name), drop a third | **0** detections |
+
+The preview page agreed with the runtime at every step, for both name forms.
 
 ### Slice 3 — Bound the analytics sync, then make analytics self-heal (F-04 → F-05)
 
@@ -475,7 +543,7 @@ pushed.
 ## 3. Definition of done for `v0.10.0`
 
 - [x] No form field in `/admin/settings` is editable-but-inert; the classification test enforces it
-- [ ] Species include/exclude demonstrably suppresses a detection end to end
+- [x] Species include/exclude demonstrably suppresses a detection end to end
 - [x] Apprise + BirdWeather configured from the UI actually notify/upload; Test agrees with live
 - [ ] Initial analytics sync of ≥1 M detections stays under a fixed RSS bound (test-enforced)
 - [ ] A corrupted analytics DB is quarantined and rebuilt on the next start
