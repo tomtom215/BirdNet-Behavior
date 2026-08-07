@@ -1,5 +1,14 @@
 # Release-Readiness Assessment
 
+> **⚠️ SUPERSEDED — historical record only.** The current plan is
+> [`docs/RELEASE_PLAN.md`](./RELEASE_PLAN.md) (audited 2026-08-07 against `main`).
+> This file's branch model (`claude/gallant-feynman-bJs95`) is dead — all work merges to
+> `main`, which is CI-gated and green. Of its open gaps, **G-11** (DuckDB analytics
+> resilience) is carried forward as F-05 in the new plan, **G-12** (MQTT buffering) is
+> largely addressed by `src/integrations/store_forward.rs`, and **G-14** (glibc/Bookworm)
+> is settled as documented-and-refused by the installer. Kept for the inventory and the
+> D-1…D-5 decision record.
+
 **Purpose.** A self-contained inventory of where BirdNet-Behavior stands against the
 north-star — *"a non-technical person installs with one command and it runs 24/7/365 on a
 Pi or Linux box, analytics on by default, surviving every realistic edge case with zero
