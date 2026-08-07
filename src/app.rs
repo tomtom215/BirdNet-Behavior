@@ -203,6 +203,13 @@ async fn serve(
     // — after the DB-backed state exists, before any subsystem reads config.
     let config = helpers::overlay_db_settings(config, &state);
 
+    // Say once, at start, exactly what offline mode turned off — so the answer
+    // to "does this station phone home?" is in the journal rather than in a
+    // reading of the source.
+    if let Some(notice) = helpers::egress::offline_notice(&cli) {
+        tracing::info!("{notice}");
+    }
+
     // Initialize all optional subsystems.
     let state = helpers::init_image_cache(state, &cli, config.as_ref(), &db_path);
     // The flag has no clap default, so `Some` means the operator supplied it;
@@ -404,38 +411,47 @@ async fn serve(
     }
 
     // Spawn daily auto-update check (logs result, does not auto-apply).
-    tokio::spawn(async {
-        // Wait 60 seconds after startup before first check.
-        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-        let current_version = env!("CARGO_PKG_VERSION");
-        loop {
-            match tokio::task::spawn_blocking(move || {
-                birdnet_integrations::auto_update::check_for_update(current_version)
-            })
-            .await
-            {
-                Ok(Ok(info)) => {
-                    if info.update_available {
-                        tracing::info!(
-                            current = %info.current_version,
-                            latest = %info.latest_version,
-                            "new version available — use the admin panel to update"
-                        );
-                    } else {
-                        tracing::debug!("auto-update check: already up to date");
+    //
+    // Gated because this is the station's only outbound connection that nothing
+    // asked for: it fired 60 s after start and every 24 h thereafter with no way
+    // to stop it, which is a problem on a metered link and unanswerable during
+    // an institutional review. `--no-update-check` / `--offline` turn it off.
+    if helpers::egress::update_check_allowed(&cli) {
+        tokio::spawn(async {
+            // Wait 60 seconds after startup before first check.
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            let current_version = env!("CARGO_PKG_VERSION");
+            loop {
+                match tokio::task::spawn_blocking(move || {
+                    birdnet_integrations::auto_update::check_for_update(current_version)
+                })
+                .await
+                {
+                    Ok(Ok(info)) => {
+                        if info.update_available {
+                            tracing::info!(
+                                current = %info.current_version,
+                                latest = %info.latest_version,
+                                "new version available — use the admin panel to update"
+                            );
+                        } else {
+                            tracing::debug!("auto-update check: already up to date");
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        tracing::debug!(error = %e, "auto-update check failed (non-fatal)");
+                    }
+                    Err(e) => {
+                        tracing::debug!(error = %e, "auto-update check task panicked");
                     }
                 }
-                Ok(Err(e)) => {
-                    tracing::debug!(error = %e, "auto-update check failed (non-fatal)");
-                }
-                Err(e) => {
-                    tracing::debug!(error = %e, "auto-update check task panicked");
-                }
+                // Check once every 24 hours.
+                tokio::time::sleep(std::time::Duration::from_secs(86_400)).await;
             }
-            // Check once every 24 hours.
-            tokio::time::sleep(std::time::Duration::from_secs(86_400)).await;
-        }
-    });
+        });
+    } else {
+        tracing::info!("daily update check disabled; this station will not contact api.github.com");
+    }
 
     // Periodic database maintenance (VACUUM, integrity check, backup rotation),
     // plus the per-species recording cap (MAX_FILES_SPECIES): keep the newest N

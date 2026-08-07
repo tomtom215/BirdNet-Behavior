@@ -60,6 +60,46 @@ The full list lives in `.env.example` and `birdnet-behavior --help`. Each row sh
 > authentication (`CADDY_PWD`) and cross-origin (`BIRDNET_CORS_ALLOWED_ORIGINS`)
 > settings are covered in [Remote Access & Security](../admin/remote-access.md).
 
+## What the station connects to
+
+Two connections are made **on the station's own initiative**, with no
+configuration:
+
+| Host | Why | Turn it off with |
+|---|---|---|
+| `api.github.com` | Once 60 s after start and every 24 h after: checks whether a newer release exists and logs the answer. It never installs anything — updates are applied only from the admin panel. | `--no-update-check` / `BIRDNET_NO_UPDATE_CHECK=1` |
+| `en.wikipedia.org`, `upload.wikimedia.org` | Downloads a photo the first time a species is detected, then serves it from the local cache for ever. | `--image-cache-dir ""` |
+
+One more can happen **once, on a first run**: if the bundled
+`duckdb-behavioral` extension cannot be loaded from the local cache or the
+copy embedded in the binary, DuckDB tries the community registry
+(`extensions.duckdb.org`). Release binaries carry the extension, so this
+normally never fires.
+
+Everything else is off until you configure it, and configuring it is the
+consent: Apprise, BirdWeather, MQTT, SMTP e-mail, the heartbeat ping, and the
+weather poll (`api.open-meteo.com`, itself opt-in via `BNB_WEATHER_ENABLED=1`).
+The location button on the settings page calls `ip-api.com`, and only when you
+press it.
+
+### Offline mode
+
+```bash
+BIRDNET_OFFLINE=1        # or: --offline
+```
+
+Turns off **both** default-on connections at once — the update check and the
+image downloads — so the station makes no outbound connection you did not ask
+for. Integrations you configured explicitly keep working: offline mode is about
+unsolicited traffic, not about muting your alerts.
+
+Use it on metered or cellular links, on air-gapped deployments, and wherever
+"what does this contact?" needs a single answer. Already-cached species images
+are still served; only new downloads stop.
+
+`birdnet-behavior --doctor` reports the current posture under **Outbound
+connections**, so you can confirm it rather than infer it.
+
 ## Web-UI-only settings
 
 These are stored in the SQLite settings table and have **no** environment variable or `birdnet.conf` equivalent. Set them at `/admin/settings` — see [Settings & Detection](../admin/settings.md).

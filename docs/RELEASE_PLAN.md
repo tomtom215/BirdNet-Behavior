@@ -78,11 +78,12 @@ Severity: **P1** = a field station silently does the wrong thing, or goes down.
 | ~~F-03~~ | ~~Apprise + BirdWeather: UI fields inert, but the "Test" button works~~ — **fixed, Slice 1** | P1 | S |
 | ~~F-04~~ | ~~Initial DuckDB sync loads every detection into RAM — OOM at ≈2.1 M rows~~ — **fixed, Slice 3** | P1 | M |
 | ~~F-05~~ | ~~A corrupt analytics DB disables analytics permanently and silently~~ — **fixed, Slice 3** | P2 | S |
-| F-06 | Daily GitHub update check with no way to turn it off | P2 | XS |
+| ~~F-06~~ | ~~Daily GitHub update check with no way to turn it off~~ — **fixed, Slice 4** | P2 | XS |
 | ~~F-07~~ | ~~Two pre/post twilight offsets in the UI, one `--twilight-offset` at runtime~~ — **fixed, Slice 1** | P3 | S |
-| F-08 | `partial_cmp().unwrap()` on floats in two web handlers | P3 | XS |
+| ~~F-08~~ | ~~`partial_cmp().unwrap()` on floats in two web handlers~~ — **fixed, Slice 4** | P3 | XS |
+| ~~F-12~~ | ~~`panic = "abort"` + no catch-panic layer makes any handler panic a station outage~~ — **found in Slice 4; class closed, posture documented** | P2 | — |
 | F-09 | Version and release docs not rolled for `v0.10.0` | P1 (release) | S |
-| F-10 | Debug all-targets build needs ~21 GB of disk | P3 (dev-ex) | S |
+| ~~F-10~~ | ~~Debug all-targets build needs ~21 GB of disk~~ — **fixed, Slice 5** | P3 (dev-ex) | S |
 
 ---
 
@@ -542,12 +543,50 @@ it and rebuilding from SQLite"*, moved the file and its `.wal` aside as
 served the same session data as before. `--doctor` then reported the leftover as a `WARN` with
 the "no detections were lost" remediation.
 
-### Slice 4 — Egress control and latent-panic cleanup (F-06, F-08)
+### ✅ Slice 4 — Egress control and latent-panic cleanup (F-06, F-08, F-12) — landed
 
-`--no-update-check`, the documented egress list, and the three `total_cmp` swaps. Small,
-independent, low-risk.
+**F-08 was scoped as "three `total_cmp` swaps". The sweep mattered more than the swaps.**
+Auditing every panicking construct reachable from a request handler — `unwrap`, `expect`,
+`panic!`, `unreachable!`, slice indexing — across all of `birdnet-web` turned up 24 candidate
+sites. All but the three named are structurally safe: the remaining `expect`s are on
+`HmacSha256::new_from_slice` (accepts any key length) and signal-handler installation at
+startup, and every `[0]` index is guarded by a length check, a `match` on length, or a
+fixed-size array. So F-08 did name the complete set — but that is now known rather than
+assumed.
 
-**Gate:** full local gate; docs build.
+**F-12, a new finding the sweep produced.** `[profile.release]` sets `panic = "abort"` and the
+server mounts **no catch-panic layer**. A panic in a request handler is therefore not a 500 —
+it aborts the whole process, web server and detection daemon together, and systemd restarts
+it. A reachable handler panic is a station outage, and a repeatable one is a repeatable
+outage. That is a deliberate, documented choice (`installer/lib/65-service.sh:97` explains
+`panic=abort` as making panics visible as SIGABRT), so the fix is to keep the class empty
+rather than to switch to unwinding: the two modules now carry
+`#![deny(clippy::unwrap_used, clippy::expect_used)]` with the reasoning in the module docs.
+
+**F-06 was scoped as `--no-update-check`. The inventory came first.** Enumerating every
+outbound host in non-test production code found 13 literals, of which most are *not* egress —
+`www.w3.org` is an SVG xmlns, `ebird.org` and `allaboutbirds.org` are link hrefs the browser
+follows, and the `github.com` hits are a User-Agent string and text in rendered HTML. The real
+surface is two default-on connections (`api.github.com`, Wikipedia), one first-run-only
+fallback (`extensions.duckdb.org`), and seven that are off until configured.
+
+Delivered: `--no-update-check` (narrow) **and `--offline`** (master switch, implies it and also
+stops image downloads). Integrations you configured explicitly are deliberately untouched —
+silently muting a configured alert channel would be a worse surprise than an unwanted GitHub
+request, and a test pins that. `--doctor` reports the posture under **Outbound connections**,
+and the full inventory is documented in *Configuration → What the station connects to*.
+
+**Verified on a live binary**, all three postures:
+
+| flags | doctor reports |
+|---|---|
+| *(none)* | `on by default: api.github.com (daily release check); en.wikipedia.org / upload.wikimedia.org …` |
+| `--no-update-check` | `on by default: en.wikipedia.org / upload.wikimedia.org …` |
+| `--offline` | `none — this station makes no unsolicited outbound connections.` |
+
+and confirmed in the journal that `--offline` actually suppresses both (`daily update check
+disabled; this station will not contact api.github.com`, `species image downloads disabled by
+offline mode`), rather than only changing what the doctor says.
 
 ### Slice 5 — Release mechanics (F-09, F-10)
 

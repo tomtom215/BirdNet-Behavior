@@ -4,6 +4,7 @@
 //!
 //! - `db` — database-path resolution and the run-and-exit maintenance
 //!   commands (`--check-db`, `--backup-db`).
+//! - `egress` — which outbound connections the station may make on its own.
 //! - `resolve` — the shared precedence rule for a setting the operator can
 //!   supply from a CLI flag, the config file, or the admin settings form.
 //! - `settings_overlay` — bridge the admin-UI settings table onto the
@@ -19,6 +20,7 @@
 
 mod auth;
 mod db;
+pub mod egress;
 pub mod resolve;
 mod settings_overlay;
 mod state;

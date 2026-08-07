@@ -7,7 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-07
+
+### Added
+
+- **`--offline` / `BIRDNET_OFFLINE`, and `--no-update-check`.** A station made
+  two outbound connections nobody asked for — a release check against
+  `api.github.com` 60 seconds after start and every 24 hours after, and
+  Wikipedia species-image downloads — and the update check had no off switch at
+  all. That is awkward on a metered or cellular link and unanswerable during an
+  institutional review. `--offline` turns off both at once; `--no-update-check`
+  turns off just the release check. Integrations you configured explicitly
+  (Apprise, BirdWeather, MQTT, SMTP, heartbeat, weather) are deliberately
+  untouched, because configuring one is the consent — silently muting a
+  configured alert channel would be the worse surprise.
+
+  `--doctor` now reports the current posture under **Outbound connections**, and
+  the complete inventory — including the one first-run-only DuckDB extension
+  fetch — is documented in *Configuration → What the station connects to*.
+
 ### Fixed
+
+- **`partial_cmp(..).unwrap()` on floats in two page renderers.** The values are
+  sums of integer detection counts, so no reachable input is `NaN` and this was
+  latent rather than live. It is fixed anyway because the cost of that
+  assessment being wrong is unusually high: `[profile.release]` sets
+  `panic = "abort"` and the server mounts no catch-panic layer, so a panic in a
+  request handler is not a 500 — it takes the whole process down, web server and
+  detection daemon together. The comparisons now use `f32::total_cmp`, and both
+  modules deny `unwrap`/`expect` so the class cannot return unnoticed.
+
+  A sweep of every panicking construct reachable from a request handler
+  (`unwrap`, `expect`, `panic!`, slice indexing) found no other reachable site:
+  the remaining `expect`s are on `HmacSha256::new_from_slice`, which accepts any
+  key length, and every `[0]` index is guarded by a length check or a
+  fixed-size array.
 
 - **A station stopped being able to start at roughly 2.1 million detections.**
   The initial SQLite → DuckDB analytics sync read the *entire* detections table
@@ -2328,7 +2362,8 @@ x86_64 Linux.
 - systemd installer script with ALSA microphone auto-detection and
   automatic BirdNET+ model download from Zenodo.
 
-[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.7.2...v0.9.0
 [0.7.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.3...v0.6.0

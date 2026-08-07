@@ -171,6 +171,31 @@ pub struct Cli {
     #[arg(long)]
     pub refresh_extension: bool,
 
+    /// Make no unsolicited outbound connections.
+    ///
+    /// Turns off every network call the station would otherwise make on its
+    /// own: the daily update check against `api.github.com` and the Wikipedia
+    /// species-image downloads. Integrations you configure explicitly — Apprise,
+    /// `BirdWeather`, MQTT, SMTP, the heartbeat ping, the weather poll — are
+    /// left alone, because asking for one is a decision the operator already
+    /// made.
+    ///
+    /// For metered or cellular links, air-gapped deployments, and institutional
+    /// review, where "which hosts does this contact?" needs one answer rather
+    /// than a per-feature audit. See `docs/book/getting-started/configuration.md`
+    /// for the full egress list.
+    #[arg(long, env = "BIRDNET_OFFLINE")]
+    pub offline: bool,
+
+    /// Skip the daily check for a new release.
+    ///
+    /// The station otherwise contacts `api.github.com` 60 seconds after start
+    /// and every 24 hours after that, purely to log whether a newer version
+    /// exists. It never installs anything on its own — updates are applied only
+    /// from the admin panel. Implied by `--offline`.
+    #[arg(long, env = "BIRDNET_NO_UPDATE_CHECK")]
+    pub no_update_check: bool,
+
     /// Apprise notification server URL (e.g., `http://localhost:8000`).
     #[arg(long, env = "BIRDNET_APPRISE_URL")]
     pub apprise_url: Option<String>,
