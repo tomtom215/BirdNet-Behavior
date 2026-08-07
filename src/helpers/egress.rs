@@ -27,7 +27,7 @@ use crate::cli::Cli;
 ///
 /// Off when either `--no-update-check` or `--offline` is set.
 #[must_use]
-pub fn update_check_allowed(cli: &Cli) -> bool {
+pub const fn update_check_allowed(cli: &Cli) -> bool {
     !cli.no_update_check && !cli.offline
 }
 
@@ -37,7 +37,7 @@ pub fn update_check_allowed(cli: &Cli) -> bool {
 /// explicitly empty `--image-cache-dir` — is handled where the cache is built;
 /// this is the master switch on top of it.
 #[must_use]
-pub fn image_downloads_allowed(cli: &Cli) -> bool {
+pub const fn image_downloads_allowed(cli: &Cli) -> bool {
     !cli.offline
 }
 

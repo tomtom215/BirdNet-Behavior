@@ -60,8 +60,9 @@ enum Wiring {
 ///   UI key, tagged with `category`) so the values the operator entered during
 ///   installation actually appear in — and can be edited from — the web UI.
 ///
-/// The list must cover [`SETTINGS_FORM_KEYS`] exactly; the test at the foot of
-/// this module enforces it in both directions.
+/// The list must cover
+/// [`birdnet_web::routes::admin::settings::form::SETTINGS_FORM_KEYS`] exactly;
+/// the test at the foot of this module enforces it in both directions.
 const SETTING_SPECS: &[(&str, Wiring, SettingsCategory)] = &[
     // ── Detection tuning (consumed in `crate::daemon`) ─────────────────────
     (

@@ -607,16 +607,23 @@ bulk. Measured, it does nothing:
 |---|---|---|
 | `true` (full) | 21 GB | 1.1 GB |
 | `"line-tables-only"` | **22 GB** | 752 MB |
-| `0` (chosen) | **2.1 GB** | 244 MB |
+| `0` (chosen) | **7.5 GB** | 233 MB |
 
-Same command each time (`cargo build --workspace --all-targets --all-features`, clean
-`target/`). Line tables do not help because the bulk is the statically-linked ONNX Runtime
-and libduckdb, not Rust line tables — a 15-minute build proved it, after which the
-first-written profile comment (which had quoted the 2.1 GB figure *as if* it were the
-line-tables number, when it came from `debug = "none"`) was wrong and had to be corrected.
-The profile now sets `debug = 0`, carries the measured table, and documents the
-per-package `CARGO_PROFILE_DEV_DEBUG=full` escape hatch for when a backtrace's file/line
-is actually needed.
+Same command each time (`cargo build --workspace --all-targets --all-features`) from a clean
+`target/`. Line tables do not help because the bulk is the statically-linked ONNX Runtime and
+libduckdb, not Rust line tables.
+
+**This table was wrong twice before it was right, both times by quoting a number that was not
+what it claimed to be.** First the comment quoted 2.1 GB as the *line-tables* figure when it
+came from `debug = "none"`. Then, corrected, it still quoted 2.1 GB for `debug = 0` — but that
+number had been read off a `du` taken after a **`cargo clippy`** run, which type-checks and
+links no test binaries, so it was never comparable to a full `--all-targets` build. The real
+saving is ~2.8x (21 GB → 7.5 GB), not the order of magnitude the bad number implied. Worth
+recording because the failure mode is generic: a `du` is only a measurement of the command
+that produced it.
+
+The profile sets `debug = 0`, carries the corrected table, and documents the per-package
+`CARGO_PROFILE_DEV_DEBUG=full` escape hatch for when a backtrace's file/line is needed.
 
 **Not done, deliberately: the tag.** `RELEASING.md` is explicit that creating and pushing
 the tag is the manual "go" action, and it publishes a GitHub Release, Docker images, and

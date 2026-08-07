@@ -75,7 +75,9 @@ pub struct Cli {
     ///
     /// `#[arg(skip)]` keeps this out of the parser surface entirely: it is not a
     /// flag, takes no value, and never appears in `--help`. It is populated by
-    /// [`Cli::parse_tracked`] / [`Cli::parse_tracked_from`] after parsing.
+    /// [`Cli::parse_tracked`] after parsing (and by its test-only
+    /// `parse_tracked_from` sibling, which is why that name is not linked here —
+    /// it does not exist in a non-test build).
     #[arg(skip)]
     pub explicit: ExplicitArgs,
 

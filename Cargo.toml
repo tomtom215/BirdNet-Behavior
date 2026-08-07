@@ -182,16 +182,19 @@ opt-level = 0
 # mid-build, and `.github/workflows/ci.yml` has to delete 25–30 GB of
 # preinstalled SDKs before it can run at all.
 #
-# Measured on this workspace, same command each time:
+# Measured on this workspace, each from a clean `target/` with the same command
+# (`cargo build --workspace --all-targets --all-features`):
 #
 #   debug             target/    birdnet-behavior
 #   true (full)        21 GB      1.1 GB
 #   line-tables-only   22 GB      752 MB     ← no saving; the win is not line tables
-#   0 (this)          2.1 GB      244 MB
+#   0 (this)          7.5 GB      233 MB
 #
 # `line-tables-only` was tried first and measured, not assumed: it does not help,
 # because the bulk is the statically-linked C++ dependencies rather than Rust
-# line tables. Dropping debug info entirely is the only lever that moves it.
+# line tables. Dropping debug info entirely is the lever that moves it — about
+# 2.8x, not the order of magnitude a quick `du` after a *check*-only run
+# (`cargo clippy`, which links no test binaries) misleadingly suggests.
 #
 # The cost is file/line in panic backtraces. When you need them — chasing a panic
 # or attaching a debugger — build that session with:
