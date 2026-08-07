@@ -65,13 +65,13 @@ Severity: **P1** = a field station silently does the wrong thing, or goes down.
 
 | ID | Finding | Sev | Effort |
 |----|---------|-----|--------|
-| F-01 | 20 admin-UI settings are persisted but never reach the runtime | P1 | M |
+| ~~F-01~~ | ~~20 admin-UI settings are persisted but never reach the runtime~~ — **fixed, Slice 1** | P1 | M |
 | F-02 | Species include/exclude lists never filter detections | P1 | S–M |
-| F-03 | Apprise + BirdWeather: UI fields inert, but the "Test" button works | P1 | S |
+| ~~F-03~~ | ~~Apprise + BirdWeather: UI fields inert, but the "Test" button works~~ — **fixed, Slice 1** | P1 | S |
 | F-04 | Initial DuckDB sync loads every detection into RAM — OOM at ≈2.1 M rows | P1 | M |
 | F-05 | A corrupt analytics DB disables analytics permanently and silently | P2 | S |
 | F-06 | Daily GitHub update check with no way to turn it off | P2 | XS |
-| F-07 | Two pre/post twilight offsets in the UI, one `--twilight-offset` at runtime | P3 | S |
+| ~~F-07~~ | ~~Two pre/post twilight offsets in the UI, one `--twilight-offset` at runtime~~ — **fixed, Slice 1** | P3 | S |
 | F-08 | `partial_cmp().unwrap()` on floats in two web handlers | P3 | XS |
 | F-09 | Version and release docs not rolled for `v0.10.0` | P1 (release) | S |
 | F-10 | Debug all-targets build needs ~21 GB of disk | P3 (dev-ex) | S |
@@ -369,21 +369,61 @@ for contributors and for future sessions in this sandbox.
 Each slice is independently shippable, has its own gate, and is ordered so nothing blocks on
 work that comes later. Branch `claude/pre-release-audit-plan-if7qrp`, PRs into `main`.
 
-### Slice 1 — Stop the settings page from lying (F-01, F-03, F-07)
+### ✅ Slice 1 — Stop the settings page from lying (F-01, F-03, F-07) — landed in `1af5434`
 
-The largest operator-visible defect and the one with the most repeat history.
+1. **The guard-rail.** `SETTINGS_FORM_KEYS` is exported from `birdnet-web`, pinned to
+   `SettingsForm`'s own fields (enumerated through serde rather than hand-listed twice) and
+   to `build_settings_items`. Every key must be classified in `SETTING_SPECS` as
+   `Wiring::Bridged(config_key)` or `Wiring::OwnedBy(subsystem)`; tests fail on an
+   unclassified key, an orphaned spec, a duplicate mapping, or a returning credential key.
+2. **Exact CLI-source tracking replaced the sentinels.** `Cli::explicit` records what clap
+   saw as `CommandLine`/`EnvVariable`, and `helpers::resolve` applies one rule everywhere:
+   *explicit flag/env → admin settings → config file → default*. This also retired the
+   `(notify_confidence - 0.8).abs() > EPSILON` hack, which mis-handled an operator who
+   explicitly typed the default.
+3. **Bridged:** `segment_duration`, `freq_shift_hz`, `night_inhibit`, `rtsp_urls`,
+   `custom_image_dir`, `weekly_report_schedule`, plus `apprise_url`, `apprise_config`,
+   `birdweather_token` and every `notify_*`.
+4. **Twilight split:** `--pre-sunrise-offset` / `--post-sunset-offset`, each falling back to
+   `--twilight-offset`, so stations that set neither keep today's symmetric behaviour.
+5. **Removed rather than wired:** the Web Authentication card (see below),
+   `audio_channels` (a duplicate of the working per-source control on `/admin/audio`, which
+   is where `sources.rs:192` actually reads the channel count), and `notify_image` (no
+   consumer anywhere in the notification stack).
 
-1. Introduce the total, enforced classification over every `SettingsForm` field
-   (`Bridged` / `OwnedBySubsystem` / `NotWired`) plus the test that fails on an unclassified
-   field. **Land this first** — it is the guard-rail every later slice is checked against.
-2. Bridge `segment_duration`, `audio_channels`, `freq_shift_hz`, `night_inhibit`,
-   `rtsp_urls`, `custom_image_dir`, `weekly_report_schedule` using the
-   `src/helpers/system.rs:76` precedence helper.
-3. Move Apprise + BirdWeather onto the `email.rs` pattern, both directions (read *and* seed).
-4. Give `pre_sunrise_offset`/`post_sunset_offset` a second runtime flag and honour both.
-5. Anything left `NotWired`: delete the input or disable it with the env var named inline.
+**One finding got worse on closer reading, and is fixed here.** The Web Authentication card
+stored the typed password as a **plaintext** `settings` row, rendered it back into the page
+HTML on every later load, and changed no credential — the admin password is an Argon2id
+hash in the accounts table seeded from `CADDY_PWD` — while telling the operator that
+clearing the field would "disable HTTP Basic Auth". The card now explains where the
+credential lives, and `purge_legacy_credential_settings` deletes any row an earlier build
+left behind, on the next start.
 
-**Gate:** the A/B test from F-01 as a real test; `--test web_api_admin`; full local gate.
+**One place the plan over-specified the fix.** It proposed moving Apprise/BirdWeather onto
+the `email.rs` direct-settings-read pattern. Unnecessary: both constructors already fall
+back to `APPRISE_URL` / `BIRDWEATHER_TOKEN` in the config, and `overlay_db_settings` runs at
+`app.rs:204`, before they are built at `:236`. Bridging the key was the whole fix, so the
+lighter change was taken.
+
+**Gate — green.** `fmt`; `clippy --workspace --all-targets --all-features -- -D warnings`
+(zero warnings); `cargo test --workspace --all-features` → **1891 passed, 0 failed** (was
+1847; 44 new tests, which assert *effect* — that a value in the config reaches the
+extractor, the schedule, the Apprise client and the notification filter — not just mapping).
+
+**Verified on a live station**, repeating the probe that exposed F-01. With the same
+settings written into the table, the overlay went from applying **7** to applying **15**,
+and the journal shows `Apprise notifications enabled url=http://localhost:9999
+min_confidence=0.95` (previously no client was built at all from a UI-set URL) and
+`notification filter configured trigger=new-species` (previously always `each`). The
+rendered page no longer contains `auth_password`, `auth_username`, `audio_channels` or
+`notify_image`, still contains the working `email_smtp_pass`, and renders saved values back
+(`segment_duration=30`, `apprise_url=http://localhost:9999`, `pre_sunrise_offset=60`).
+
+**Deliberately left alone:** `daemon/config.rs`'s `resolve_f32_with_default`, the sentinel
+used by the detection knobs. Those keys are bridged and do work today, and its only wrong
+case — an operator explicitly passing the documented default — resolves in the safe
+direction (the UI value wins). Migrating it to `helpers::resolve` is tidy-up, not a fix, and
+would churn a working, mutation-tested path.
 
 ### Slice 2 — Make the species filter real (F-02)
 
@@ -434,9 +474,9 @@ pushed.
 
 ## 3. Definition of done for `v0.10.0`
 
-- [ ] No form field in `/admin/settings` is editable-but-inert; the classification test enforces it
+- [x] No form field in `/admin/settings` is editable-but-inert; the classification test enforces it
 - [ ] Species include/exclude demonstrably suppresses a detection end to end
-- [ ] Apprise + BirdWeather configured from the UI actually notify/upload; Test agrees with live
+- [x] Apprise + BirdWeather configured from the UI actually notify/upload; Test agrees with live
 - [ ] Initial analytics sync of ≥1 M detections stays under a fixed RSS bound (test-enforced)
 - [ ] A corrupted analytics DB is quarantined and rebuilt on the next start
 - [ ] Every default-on outbound connection is documented and individually disable-able
