@@ -115,6 +115,10 @@ Copy-paste this into the release PR or issue and tick it off:
 
 ```text
 [ ] workspace.package.version in Cargo.toml bumped to X.Y.Z
+[ ] crates/birdnet-web/openapi.json: info.version bumped to X.Y.Z
+    (a test asserts it tracks CARGO_PKG_VERSION, so a missed bump fails
+     the suite rather than shipping a spec that lies about its version)
+[ ] docs/book/reference/api.md: the sample /api/v2/health response
 [ ] Cargo.lock refreshed (cargo update --workspace)
 [ ] CHANGELOG.md: [Unreleased] rolled into ## [X.Y.Z] - YYYY-MM-DD
 [ ] CHANGELOG.md: fresh empty [Unreleased] section added
