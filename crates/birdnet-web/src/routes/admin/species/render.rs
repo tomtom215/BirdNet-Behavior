@@ -124,9 +124,10 @@ fn render_list_card(
         out,
         r##"</div>
   <form hx-post="/admin/species/{kind}/add" hx-target="#species-lists" hx-swap="innerHTML" class="add-row">
-    <input type="text" name="name" placeholder="Add species common name" class="grow">
+    <input type="text" name="name" placeholder="Common or scientific name" class="grow">
     <button type="submit" class="btn btn-primary">Add</button>
   </form>
+  <p class="hint">Either name form works. Changes apply within about half a minute — no restart needed.</p>
 </div>"##
     );
 }
@@ -206,19 +207,29 @@ fn filter_test_body(
     include: &[String],
     species: &[(String, String, u64)], // (sci_name, com_name, count)
 ) -> String {
-    use std::collections::HashSet;
+    use birdnet_core::inference::labels::SpeciesLabel;
+    use birdnet_core::inference::species_filter::matches_species;
 
-    let exclude_set: HashSet<&str> = exclude.iter().map(String::as_str).collect();
-    let include_set: HashSet<&str> = include.iter().map(String::as_str).collect();
-    let has_include = !include_set.is_empty();
+    // `matches_species` is the detection path's own predicate, called here on
+    // purpose: this page is offered as "preview the filter before it affects
+    // live detections", which is only true while the preview and the runtime
+    // decide with the same code. The previous local comparison matched *common
+    // names only*, so an entry typed as a scientific name showed as having no
+    // effect here — and once the lists reached the daemon, would have had one.
+    let has_include = include.iter().any(|i| !i.trim().is_empty());
 
     let mut rows = String::new();
     let mut pass_count = 0usize;
     let mut block_count = 0usize;
 
     for (sci_name, com_name, count) in species {
-        let in_exclude = exclude_set.iter().any(|e| e.eq_ignore_ascii_case(com_name));
-        let in_include = include_set.iter().any(|i| i.eq_ignore_ascii_case(com_name));
+        let label = SpeciesLabel {
+            index: 0,
+            scientific_name: sci_name.clone(),
+            common_name: com_name.clone(),
+        };
+        let in_exclude = exclude.iter().any(|e| matches_species(e, &label));
+        let in_include = include.iter().any(|i| matches_species(i, &label));
         let blocked_reason = if in_exclude {
             Some("Excluded")
         } else if has_include && !in_include {

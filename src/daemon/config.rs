@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use birdnet_core::audio::extraction::{AudioFormat, ExtractionConfig};
 use birdnet_core::detection::pipeline::PipelineConfig;
 use birdnet_core::inference::model::ModelConfig;
-use birdnet_core::inference::species_filter::SpeciesFilterConfig;
+use birdnet_core::inference::species_filter::{SpeciesFilterConfig, SpeciesLists};
 
 use crate::cli::Cli;
 use crate::helpers::resolve;
@@ -86,12 +86,50 @@ pub(super) fn build_model_config(sensitivity: f32, confidence_threshold: f32) ->
 }
 
 /// Build the [`SpeciesFilterConfig`] used by the metadata-model species filter.
+///
+/// `lists` are the operator's include/exclude entries from `/admin/species`.
+/// They used to be left at `SpeciesFilterConfig::default()` — empty — and
+/// nothing anywhere else populated them, so the two lists the page maintains,
+/// confirms every addition to, and offers a preview page for had no effect on a
+/// single detection. An excluded species kept being recorded, counted, notified
+/// on and uploaded.
 #[must_use]
-pub(super) fn build_species_filter_config(sf_thresh: f32) -> SpeciesFilterConfig {
+pub(super) fn build_species_filter_config(
+    sf_thresh: f32,
+    lists: SpeciesLists,
+) -> SpeciesFilterConfig {
     SpeciesFilterConfig {
         sf_thresh,
+        include_list: lists.include,
+        exclude_list: lists.exclude,
         ..SpeciesFilterConfig::default()
     }
+}
+
+/// Resolve the station's coordinates for the detection daemon.
+///
+/// CLI flag first, then the config — which the settings overlay has already
+/// layered `/admin/settings` onto. The daemon read `cli.latitude` alone, so a
+/// station configured the normal way (the installer writes `LATITUDE` /
+/// `LONGITUDE` into `birdnet.conf`, and the web form writes the settings table)
+/// handed the daemon `None` and never ran the metadata model at all — making
+/// `sf_thresh`, a headline species-frequency feature, silently inert on most
+/// real installs. `crate::capture::schedule::resolve_location` has always done
+/// this correctly for the recording schedule; this is the same rule.
+///
+/// Returns `(latitude, longitude)`, each `None` when unresolvable.
+#[must_use]
+pub(super) fn resolve_station_coords(
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+) -> (Option<f64>, Option<f64>) {
+    let lat = cli
+        .latitude
+        .or_else(|| config.and_then(|c| c.get_parsed::<f64>("LATITUDE").ok()));
+    let lon = cli
+        .longitude
+        .or_else(|| config.and_then(|c| c.get_parsed::<f64>("LONGITUDE").ok()));
+    (lat, lon)
 }
 
 /// Build the [`ExtractionConfig`] for the detection-clip extractor.
@@ -346,12 +384,75 @@ mod tests {
 
     #[test]
     fn build_species_filter_config_pins_sf_thresh() {
-        let cfg = build_species_filter_config(0.07);
+        let cfg = build_species_filter_config(0.07, SpeciesLists::default());
         assert!((cfg.sf_thresh - 0.07).abs() < f32::EPSILON);
         let default = SpeciesFilterConfig::default();
         assert_eq!(cfg.whitelist, default.whitelist);
         assert_eq!(cfg.include_list, default.include_list);
         assert_eq!(cfg.exclude_list, default.exclude_list);
+    }
+
+    #[test]
+    fn build_species_filter_config_carries_the_operator_lists() {
+        // The defect: this took everything but `sf_thresh` from `Default`, so
+        // the two lists `/admin/species` maintains arrived empty and no
+        // detection was ever filtered by them.
+        let lists = SpeciesLists {
+            include: vec!["Eurasian Blackbird".into()],
+            exclude: vec!["Human".into(), "Turdus merula".into()],
+        };
+        let cfg = build_species_filter_config(0.03, lists);
+        assert_eq!(cfg.include_list, vec!["Eurasian Blackbird".to_string()]);
+        assert_eq!(
+            cfg.exclude_list,
+            vec!["Human".to_string(), "Turdus merula".to_string()]
+        );
+    }
+
+    // ── resolve_station_coords ──────────────────────────────────────────
+
+    #[test]
+    fn station_coords_fall_back_to_the_config() {
+        // The bug this closes: the daemon read `cli.latitude` alone, so a
+        // station configured the normal way — the installer writes LATITUDE /
+        // LONGITUDE into birdnet.conf, and /admin/settings writes the settings
+        // table the overlay layers onto it — handed the daemon `None` and never
+        // ran the metadata model, making `sf_thresh` inert on most real
+        // installs.
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        let cfg = config_with(&[("LATITUDE", "42.3601"), ("LONGITUDE", "-71.0589")]);
+        let (lat, lon) = resolve_station_coords(&cli, Some(&cfg));
+        assert_eq!(lat, Some(42.3601));
+        assert_eq!(lon, Some(-71.0589));
+    }
+
+    #[test]
+    fn station_coords_prefer_the_cli() {
+        let mut cli = Cli::parse_from(["birdnet-behavior"]);
+        cli.latitude = Some(51.5);
+        cli.longitude = Some(-0.13);
+        let cfg = config_with(&[("LATITUDE", "42.3601"), ("LONGITUDE", "-71.0589")]);
+        let (lat, lon) = resolve_station_coords(&cli, Some(&cfg));
+        assert_eq!(lat, Some(51.5));
+        assert_eq!(lon, Some(-0.13));
+    }
+
+    #[test]
+    fn station_coords_are_none_when_nothing_is_configured() {
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        assert_eq!(resolve_station_coords(&cli, None), (None, None));
+    }
+
+    #[test]
+    fn station_coords_resolve_each_axis_independently() {
+        // A half-configured station (latitude only) must not silently produce a
+        // (lat, 0.0) location; the filter treats a missing axis as no location.
+        let mut cli = Cli::parse_from(["birdnet-behavior"]);
+        cli.latitude = Some(51.5);
+        let (lat, lon) = resolve_station_coords(&cli, None);
+        assert_eq!(lat, Some(51.5));
+        assert_eq!(lon, None);
+        assert!(lat.zip(lon).is_none(), "an incomplete pair is no location");
     }
 
     // ── Bug B fix: extraction target == web recording dir (hardware-free) ───

@@ -195,11 +195,27 @@ enum ListAction {
 }
 
 fn load_lists(state: &AppState) -> (Vec<String>, Vec<String>) {
+    let lists = configured_species_lists(state);
+    (lists.exclude, lists.include)
+}
+
+/// The operator's species include/exclude lists as stored by this page.
+///
+/// Public because the detection daemon has to apply exactly these lists, and
+/// two parsers for one stored value is how the two surfaces drift apart. The
+/// binary passes this to the daemon as a
+/// [`SpeciesListsProvider`](birdnet_core::inference::species_filter::SpeciesListsProvider)
+/// so a change here takes effect on the next processed file.
+#[must_use]
+pub fn configured_species_lists(
+    state: &AppState,
+) -> birdnet_core::inference::species_filter::SpeciesLists {
     state.with_db(|conn| {
         ensure_settings_table(conn).ok();
-        let excl = parse_list(get(conn, "species_exclude").ok().as_deref());
-        let incl = parse_list(get(conn, "species_include").ok().as_deref());
-        (excl, incl)
+        birdnet_core::inference::species_filter::SpeciesLists {
+            include: parse_list(get(conn, "species_include").ok().as_deref()),
+            exclude: parse_list(get(conn, "species_exclude").ok().as_deref()),
+        }
     })
 }
 

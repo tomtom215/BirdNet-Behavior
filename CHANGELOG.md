@@ -9,6 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The species allow/exclude lists never filtered a single detection.** The
+  daemon built its species filter from `SpeciesFilterConfig::default()` and
+  nothing in production ever populated the two lists, so a species excluded on
+  `/admin/species` kept being recorded, counted, notified on, and uploaded to
+  BirdWeather. The page maintained the list, confirmed every addition, and
+  offered a preview page describing exactly the effect that never happened.
+
+  Three separate defects had to be fixed for this to work, any one of which
+  would have left it broken:
+
+  - The lists were never read. They now come from the settings table through the
+    same function `/admin/species` uses, so the two cannot drift, and they are
+    re-read on a 30-second TTL inside the daemon loop — excluding a species is
+    something an operator does *because it is spamming them right now*, so it
+    takes effect on the next processed file rather than the next restart.
+  - The page collects **common** names while the filter worked in **scientific**
+    names, so even a populated list would have matched nothing. Entries now
+    match either name form, case- and whitespace-insensitively, and the
+    `/admin/species/test` preview calls the detection path's own predicate
+    rather than a parallel implementation that could drift from it.
+  - The filter was skipped entirely unless the station had both coordinates set.
+    Only the metadata model needs to know where the station is; the operator's
+    lists apply either way.
+
+  An include list that matches no known species is now ignored with a warning
+  rather than intersected to nothing — otherwise a single misspelt name would
+  have silenced the whole station.
+
+- **The species-frequency filter never ran on a normally-installed station.**
+  The daemon read `cli.latitude` / `cli.longitude` with no config fallback, so a
+  station configured the usual way — the installer writes `LATITUDE` and
+  `LONGITUDE` into `birdnet.conf`, and `/admin/settings` writes the settings
+  table layered on top of it — handed the daemon no coordinates and never ran
+  the metadata model at all, leaving `SF_THRESH` inert. Coordinates now resolve
+  CLI-then-config, the same rule the recording scheduler has always used.
+
 - **Twenty settings-page fields were editable, saved, and connected to
   nothing.** The bridge between the `settings` table and the runtime config was
   a hand-maintained allow-list a new form field could simply be missing from,

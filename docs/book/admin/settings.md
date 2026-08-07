@@ -40,6 +40,25 @@ Two things are deliberately configured elsewhere:
 
 Rare-bird **quarantine** rules decide which detections are held for manual review instead of being logged automatically — see the [review queue](../guide/today.md#rare-bird-review-queue). You can also maintain per-species allow/exclude lists and image overrides here.
 
+### Allow and exclude lists
+
+The two lists on `/admin/species` decide which birds the station records at all:
+
+- **Exclude** — these species are never recorded. Nothing is written to the
+  database, no notification is sent, and nothing is uploaded to BirdWeather.
+  Use it for a persistent local false positive, or for a species you would
+  rather not log.
+- **Allow** — when non-empty, *only* these species are recorded.
+
+Enter either the common name or the scientific name; both work, and case and
+surrounding spaces don't matter. Changes take effect within about half a minute
+— no restart. `/admin/species/test` previews the decision for every species your
+station has seen, using the same code the detection path runs, so what it shows
+is what will happen.
+
+An allow list whose entries match no species this model knows is ignored, and a
+warning is logged, rather than being taken literally and suppressing everything.
+
 ## Other categories
 
 The Settings sidebar also covers **Location**, **Audio** (see [Audio & Microphones](./audio.md)), **Notifications & Email** (see [Notifications & Integrations](./notifications.md)), **MQTT / Home Assistant**, and **System**.

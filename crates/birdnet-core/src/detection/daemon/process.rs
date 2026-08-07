@@ -162,12 +162,15 @@ pub fn process_and_infer_filtered(
     // Apply privacy filter
     let filtered_predictions = privacy_filter.filter_predictions(&all_predictions);
 
-    // Build the allowed species set from the species filter
-    let allowed_species = if let (Some(lat), Some(lon)) = (lat, lon) {
-        Some(species_filter.filter_species(lat, lon, week, model.labels())?)
-    } else {
-        None
-    };
+    // Build the allowed species set from the species filter.
+    //
+    // Always consulted, even with no coordinates: only the metadata model needs
+    // to know where the station is, and `filter_species` skips just that stage
+    // when `location` is `None`. The operator's include/exclude lists are an
+    // explicit instruction and still apply — gating the whole filter on
+    // coordinates, as this used to, meant a station that never set a latitude
+    // kept recording every species its operator had asked to suppress.
+    let allowed_species = species_filter.filter_species(lat.zip(lon), week, model.labels())?;
 
     // Collect events, applying species filter
     let mut events = Vec::new();
@@ -175,10 +178,7 @@ pub fn process_and_infer_filtered(
 
     for (chunk, detections) in chunks.iter().zip(filtered_predictions.iter()) {
         for detection in detections {
-            // Apply species filter if we have one
-            if let Some(ref allowed) = allowed_species
-                && !allowed.contains(&detection.scientific_name)
-            {
+            if !allowed_species.contains(&detection.scientific_name) {
                 continue;
             }
 
