@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Twenty settings-page fields were editable, saved, and connected to
+  nothing.** The bridge between the `settings` table and the runtime config was
+  a hand-maintained allow-list a new form field could simply be missing from,
+  and twenty had accumulated on the wrong side of it — while the page told the
+  operator "changes apply on next restart" for values no restart would ever
+  read. Most reached the runtime through a flag carrying a clap
+  `default_value`, so the default won unconditionally and the field could never
+  take effect.
+
+  Every key the form can persist now carries an explicit classification —
+  bridged onto the runtime config, owned by a subsystem that reads the settings
+  table itself, or removed — and a test fails if one is missing, so a field can
+  no longer ship inert. The station resolves each setting *explicit CLI flag or
+  `BIRDNET_*` variable → admin settings → config file → default*, which needed
+  `clap` to be asked which arguments the operator really supplied rather than
+  guessed at with per-flag sentinels.
+
+  Newly working from the web UI: segment duration, frequency shift, night
+  inhibit, the pre-sunrise and post-sunset offsets, multi-stream RTSP URLs, the
+  custom species-image directory, and the weekly report schedule.
+
+- **Apprise and BirdWeather could be configured in the web UI and would never
+  send.** Both clients read only the CLI flag and the config file, so a token or
+  notification URL entered on the Settings page was stored and ignored — and the
+  admin "Send test notification" button read the *saved* value, so the test
+  succeeded while live detections notified nobody. Both, along with the
+  notification trigger mode, cooldown, minimum confidence, species allow/exclude
+  lists and message templates, now reach the runtime from either surface.
+
+- **Dawn and dusk recording windows can now differ.** The scheduler has always
+  carried separate pre-sunrise and post-sunset offsets and the settings page has
+  always shown two fields, but the runtime wrote a single `--twilight-offset`
+  into both, so no surface could make them differ. Each end now resolves on its
+  own via `--pre-sunrise-offset` / `--post-sunset-offset` (or the matching
+  settings fields), falling back to `--twilight-offset` when unset — so existing
+  stations keep their current symmetric behaviour.
+
+### Removed
+
+- **The Settings page's "Web Authentication" card.** Its password field stored
+  whatever was typed as a **plaintext** row in the `settings` table, rendered it
+  back into the page HTML on every later load, and changed no credential at all
+  — the admin password is an Argon2id hash in the accounts database, seeded
+  from `CADDY_PWD`. The section also claimed that clearing the field would
+  "disable HTTP Basic Auth", which it never did. The card now explains where the
+  credential actually lives, and any plaintext row left by an earlier build is
+  deleted on the next start.
+
+- **Two settings inputs with no runtime consumer at all.** "Audio Channels"
+  duplicated a control that already works per-source on
+  `/admin/audio` (which is where the channel count is really read from), and
+  "Include Species Image" drove nothing in the notification stack. The audio
+  section now points at the page that works; the notification option is gone.
+
 ### Added
 
 - **Time-based clip retention that actually works — and is off by default.**

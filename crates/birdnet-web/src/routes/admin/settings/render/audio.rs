@@ -10,7 +10,6 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let rtsp = get_setting(s, "rtsp_url", "");
     let rtsp_urls = get_setting(s, "rtsp_urls", "");
     let seg = get_setting(s, "segment_duration", "15");
-    let channels = get_setting(s, "audio_channels", "1");
     let fmt = get_setting(s, "audio_format", "wav");
     let fmt_wav = if fmt == "wav" { " selected" } else { "" };
     let fmt_mp3 = if fmt == "mp3" { " selected" } else { "" };
@@ -45,9 +44,9 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         <p class="hint">Length of each recording chunk for analysis (BirdNET-Pi: RECORDING_LENGTH)</p>
       </div>
       <div>
-        <label for="audio_channels">Audio Channels</label>
-        <input id="audio_channels" name="audio_channels" type="number" value="{channels}" min="1" max="2" class="bnb-w-num-xs">
-        <p class="hint">1 = mono (recommended), 2 = stereo (BirdNET-Pi: CHANNELS)</p>
+        <label>Audio Channels</label>
+        <p class="hint">Set per source on <a href="/admin/audio">Audio &amp; Microphones</a> — each
+        microphone or stream carries its own channel count, sample rate and gain.</p>
       </div>
     </div>
     <div class="grid-2">

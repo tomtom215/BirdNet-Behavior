@@ -1,18 +1,41 @@
 //! Notification filter and message-template construction.
 
 use crate::cli::Cli;
+use crate::helpers::resolve;
 
-/// Create a notification filter from CLI flags.
+/// Create a notification filter from CLI flags and/or config.
+///
+/// Takes `config` — which the settings overlay has already layered the admin UI
+/// onto — so the Notifications page's trigger mode and species lists actually
+/// govern what gets sent. Reading `cli.notify_trigger` alone meant the clap
+/// default (`each`) always won and the dropdown was decorative.
 pub fn create_notification_filter(
     cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
 ) -> birdnet_integrations::notification::NotificationFilter {
     use birdnet_integrations::notification::{NotificationFilter, SpeciesFilter, TriggerMode};
 
-    let trigger = TriggerMode::parse(&cli.notify_trigger);
-    let species_filter = SpeciesFilter::new(
-        cli.notify_species_exclude.as_deref(),
-        cli.notify_species_only.as_deref(),
+    let trigger_str = resolve::setting_str(
+        cli,
+        "notify_trigger",
+        &cli.notify_trigger,
+        config,
+        "APPRISE_TRIGGER",
     );
+    let trigger = TriggerMode::parse(&trigger_str);
+
+    // These two flags have no clap default, so `Some` already means the
+    // operator supplied one; the config carries the admin-UI value otherwise.
+    let exclude = cli
+        .notify_species_exclude
+        .clone()
+        .or_else(|| config.and_then(|c| c.get("APPRISE_WATCHLIST_EXCLUDE").map(String::from)));
+    let only = cli
+        .notify_species_only
+        .clone()
+        .or_else(|| config.and_then(|c| c.get("APPRISE_WATCHLIST").map(String::from)));
+
+    let species_filter = SpeciesFilter::new(exclude.as_deref(), only.as_deref());
 
     tracing::info!(
         trigger = %trigger,
@@ -87,7 +110,7 @@ mod tests {
     fn filter_uses_each_detection_trigger_by_default() {
         use birdnet_integrations::notification::TriggerMode;
         let cli = default_cli();
-        let f = create_notification_filter(&cli);
+        let f = create_notification_filter(&cli, None);
         assert_eq!(f.trigger, TriggerMode::EachDetection);
         // No species filter → allow everything.
         assert!(f.species_filter.is_allowed("Pica pica"));
@@ -99,7 +122,7 @@ mod tests {
         use birdnet_integrations::notification::TriggerMode;
         let mut cli = default_cli();
         cli.notify_trigger = "new-species".to_owned();
-        let f = create_notification_filter(&cli);
+        let f = create_notification_filter(&cli, None);
         assert_eq!(f.trigger, TriggerMode::NewSpecies);
     }
 
@@ -108,7 +131,7 @@ mod tests {
         use birdnet_integrations::notification::TriggerMode;
         let mut cli = default_cli();
         cli.notify_trigger = "new-species-daily".to_owned();
-        let f = create_notification_filter(&cli);
+        let f = create_notification_filter(&cli, None);
         assert_eq!(f.trigger, TriggerMode::NewSpeciesDaily);
     }
 
@@ -116,17 +139,58 @@ mod tests {
     fn filter_honours_species_exclude_list() {
         let mut cli = default_cli();
         cli.notify_species_exclude = Some("Pica pica, Corvus corax".to_owned());
-        let f = create_notification_filter(&cli);
+        let f = create_notification_filter(&cli, None);
         assert!(!f.species_filter.is_allowed("Pica pica"));
         assert!(!f.species_filter.is_allowed("Corvus corax"));
         assert!(f.species_filter.is_allowed("Turdus merula"));
+    }
+
+    // ── settings reach the notification filter ─────────────────────────
+    //
+    // The Notifications page persisted every one of these and the runtime read
+    // none of them: `notify_trigger` carries a clap default so `each` always
+    // won, and the two species lists were CLI-only. A station whose operator
+    // chose "New species (this week)" in the web UI still notified on every
+    // single detection.
+
+    #[test]
+    fn trigger_from_settings_reaches_the_filter() {
+        use birdnet_integrations::notification::TriggerMode;
+        let cli = default_cli();
+        let cfg = config_with(&[("APPRISE_TRIGGER", "new-species")]);
+        let f = create_notification_filter(&cli, Some(&cfg));
+        assert_eq!(f.trigger, TriggerMode::NewSpecies);
+    }
+
+    #[test]
+    fn explicit_trigger_flag_beats_the_settings() {
+        use birdnet_integrations::notification::TriggerMode;
+        let mut cli = crate::integrations::test_support::cli_with_explicit(&["notify_trigger"]);
+        cli.notify_trigger = "new-species-daily".to_owned();
+        let cfg = config_with(&[("APPRISE_TRIGGER", "each")]);
+        let f = create_notification_filter(&cli, Some(&cfg));
+        assert_eq!(f.trigger, TriggerMode::NewSpeciesDaily);
+    }
+
+    #[test]
+    fn species_lists_from_settings_reach_the_filter() {
+        let cli = default_cli();
+        let cfg = config_with(&[("APPRISE_WATCHLIST_EXCLUDE", "Pica pica")]);
+        let f = create_notification_filter(&cli, Some(&cfg));
+        assert!(!f.species_filter.is_allowed("Pica pica"));
+        assert!(f.species_filter.is_allowed("Turdus merula"));
+
+        let cfg = config_with(&[("APPRISE_WATCHLIST", "Turdus merula")]);
+        let f = create_notification_filter(&cli, Some(&cfg));
+        assert!(f.species_filter.is_allowed("Turdus merula"));
+        assert!(!f.species_filter.is_allowed("Pica pica"));
     }
 
     #[test]
     fn filter_honours_species_only_list() {
         let mut cli = default_cli();
         cli.notify_species_only = Some("Turdus merula,Erithacus rubecula".to_owned());
-        let f = create_notification_filter(&cli);
+        let f = create_notification_filter(&cli, None);
         assert!(f.species_filter.is_allowed("Turdus merula"));
         assert!(f.species_filter.is_allowed("Erithacus rubecula"));
         assert!(!f.species_filter.is_allowed("Pica pica"));

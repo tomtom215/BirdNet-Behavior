@@ -1,6 +1,32 @@
 # Settings & Detection
 
-The admin area lives under `/admin`. The **Settings** page (`/admin/settings`) is where everything that has no environment variable or CLI flag is configured and persisted in the SQLite settings table.
+The admin area lives under `/admin`. The **Settings** page (`/admin/settings`) persists everything you change into the SQLite settings table, and the station reads it on the next restart.
+
+### How a setting is resolved
+
+Most settings can be supplied three ways — a CLI flag (or its `BIRDNET_*`
+environment variable), a line in `birdnet.conf`, and this page. When more than
+one is set, the station resolves them in this order:
+
+1. **An explicit CLI flag or `BIRDNET_*` variable** — if you passed it, it wins.
+2. **This page** — what you save here beats the config file.
+3. **`birdnet.conf`**
+4. The built-in default.
+
+So a Docker station pinned with `-e BIRDNET_SEGMENT_DURATION=30` keeps that value
+no matter what the form says, while a bare-metal station that never passes the
+flag is governed entirely by this page.
+
+### Settings not on this page
+
+Two things are deliberately configured elsewhere:
+
+- **The admin password.** It is stored as an Argon2id hash in the accounts
+  database, seeded from the `CADDY_PWD` environment variable — never as a
+  settings row. See [Remote Access & Security](./remote-access.md).
+- **Per-source audio properties** (channels, sample rate, gain, RTSP transport).
+  Each microphone or stream carries its own, on
+  [Audio & Microphones](./audio.md).
 
 ## Detection
 

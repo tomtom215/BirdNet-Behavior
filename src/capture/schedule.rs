@@ -10,6 +10,7 @@
 use birdnet_scheduler::{Location, RecordingWindow, ScheduleConfig};
 
 use crate::cli::Cli;
+use crate::helpers::resolve;
 
 /// Parse a schedule string from CLI into a `ScheduleConfig`.
 ///
@@ -22,14 +23,15 @@ pub(super) fn parse_schedule_config(
     config: Option<&birdnet_core::config::Config>,
 ) -> ScheduleConfig {
     let location = resolve_location(cli, config);
+    let (pre_sunrise_offset_min, post_sunset_offset_min) = resolve_twilight_offsets(cli, config);
 
     let schedule_str = cli.recording_schedule.trim().to_lowercase();
 
     if schedule_str == "solar" {
         return ScheduleConfig {
             location,
-            pre_sunrise_offset_min: cli.twilight_offset,
-            post_sunset_offset_min: cli.twilight_offset,
+            pre_sunrise_offset_min,
+            post_sunset_offset_min,
             night_inhibit: true,
             fixed_window: None,
         };
@@ -48,14 +50,55 @@ pub(super) fn parse_schedule_config(
         tracing::warn!(spec = %fixed_spec, "invalid fixed schedule, falling back to all-day");
     }
 
-    // "all-day" or unrecognized — but respect --night-inhibit flag.
+    // "all-day" or unrecognized — but respect the night-inhibit setting.
     ScheduleConfig {
         location,
-        pre_sunrise_offset_min: cli.twilight_offset,
-        post_sunset_offset_min: cli.twilight_offset,
-        night_inhibit: cli.night_inhibit,
+        pre_sunrise_offset_min,
+        post_sunset_offset_min,
+        night_inhibit: resolve::setting_bool(
+            cli,
+            "night_inhibit",
+            cli.night_inhibit,
+            config,
+            "NIGHT_INHIBIT",
+        ),
         fixed_window: None,
     }
+}
+
+/// Resolve the pre-sunrise and post-sunset offsets, in minutes.
+///
+/// `ScheduleConfig` has always carried the two ends separately, and the settings
+/// page has always offered two fields — but the runtime only had one
+/// `--twilight-offset` and wrote it to both, so the two could never differ no
+/// matter which surface the operator used. Each end now resolves on its own:
+///
+/// 1. its own flag (`--pre-sunrise-offset` / `--post-sunset-offset`), then
+/// 2. its own config key — which is where `/admin/settings` lands via the
+///    settings overlay — then
+/// 3. `--twilight-offset`, which keeps the existing symmetric behaviour for
+///    every station that never sets either end explicitly.
+fn resolve_twilight_offsets(
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+) -> (u32, u32) {
+    let both = resolve::setting::<u32>(
+        cli,
+        "twilight_offset",
+        cli.twilight_offset,
+        config,
+        "TWILIGHT_OFFSET",
+    );
+    // These flags have no clap default, so `Some` already means the operator
+    // supplied one — no explicit-source check needed.
+    let end = |flag: Option<u32>, config_key: &str| -> u32 {
+        flag.or_else(|| config.and_then(|c| c.get_parsed::<u32>(config_key).ok()))
+            .unwrap_or(both)
+    };
+    (
+        end(cli.pre_sunrise_offset, "PRE_SUNRISE_OFFSET"),
+        end(cli.post_sunset_offset, "POST_SUNSET_OFFSET"),
+    )
 }
 
 /// Parse `"HH:MM-HH:MM"` into a `RecordingWindow`.
@@ -156,9 +199,104 @@ mod tests {
         parse_schedule_config, resolve_location, secs_look_synced,
     };
     use crate::cli::Cli;
+    use crate::helpers::test_support::{cli_with_explicit, config_with};
     use birdnet_scheduler::traits::RecordingGate;
     use clap::Parser;
     use proptest::prelude::*;
+
+    // ── the two twilight ends resolve independently ─────────────────────
+    //
+    // `ScheduleConfig` has always had separate pre/post fields and the settings
+    // page has always shown two inputs, but the runtime wrote one
+    // `--twilight-offset` into both, so no surface could make dawn and dusk
+    // differ. These pin that they now can.
+
+    #[test]
+    fn twilight_offsets_can_differ_via_settings() {
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        let cfg = config_with(&[("PRE_SUNRISE_OFFSET", "60"), ("POST_SUNSET_OFFSET", "15")]);
+        let sched = parse_schedule_config(&cli, Some(&cfg));
+        assert_eq!(sched.pre_sunrise_offset_min, 60);
+        assert_eq!(sched.post_sunset_offset_min, 15);
+    }
+
+    #[test]
+    fn twilight_offsets_can_differ_via_flags() {
+        let cli = Cli::parse_from([
+            "birdnet-behavior",
+            "--pre-sunrise-offset",
+            "45",
+            "--post-sunset-offset",
+            "10",
+        ]);
+        let sched = parse_schedule_config(&cli, None);
+        assert_eq!(sched.pre_sunrise_offset_min, 45);
+        assert_eq!(sched.post_sunset_offset_min, 10);
+    }
+
+    #[test]
+    fn one_end_set_leaves_the_other_on_the_shared_twilight_offset() {
+        let cli = Cli::parse_from(["birdnet-behavior", "--pre-sunrise-offset", "90"]);
+        let sched = parse_schedule_config(&cli, None);
+        assert_eq!(sched.pre_sunrise_offset_min, 90);
+        // Unset end keeps the documented --twilight-offset default.
+        assert_eq!(sched.post_sunset_offset_min, 30);
+    }
+
+    #[test]
+    fn a_specific_end_flag_beats_the_settings_for_that_end_only() {
+        let cli = Cli::parse_from(["birdnet-behavior", "--pre-sunrise-offset", "5"]);
+        let cfg = config_with(&[("PRE_SUNRISE_OFFSET", "60"), ("POST_SUNSET_OFFSET", "15")]);
+        let sched = parse_schedule_config(&cli, Some(&cfg));
+        assert_eq!(sched.pre_sunrise_offset_min, 5, "flag wins for its own end");
+        assert_eq!(
+            sched.post_sunset_offset_min, 15,
+            "the untouched end still takes the settings value"
+        );
+    }
+
+    #[test]
+    fn solar_schedule_also_honours_the_split_offsets() {
+        let mut cli = Cli::parse_from(["birdnet-behavior"]);
+        cli.recording_schedule = "solar".to_owned();
+        let cfg = config_with(&[
+            ("LATITUDE", "51.5"),
+            ("LONGITUDE", "-0.13"),
+            ("PRE_SUNRISE_OFFSET", "75"),
+            ("POST_SUNSET_OFFSET", "20"),
+        ]);
+        let sched = parse_schedule_config(&cli, Some(&cfg));
+        assert_eq!(sched.pre_sunrise_offset_min, 75);
+        assert_eq!(sched.post_sunset_offset_min, 20);
+        assert!(sched.night_inhibit, "solar always inhibits at night");
+    }
+
+    // ── night inhibit reaches the schedule ──────────────────────────────
+
+    #[test]
+    fn night_inhibit_from_settings_reaches_the_schedule() {
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        let cfg = config_with(&[
+            ("LATITUDE", "51.5"),
+            ("LONGITUDE", "-0.13"),
+            ("NIGHT_INHIBIT", "true"),
+        ]);
+        assert!(parse_schedule_config(&cli, Some(&cfg)).night_inhibit);
+    }
+
+    #[test]
+    fn night_inhibit_defaults_off_without_a_setting() {
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        assert!(!parse_schedule_config(&cli, None).night_inhibit);
+    }
+
+    #[test]
+    fn explicit_night_inhibit_flag_beats_a_false_setting() {
+        let mut cli = cli_with_explicit(&["night_inhibit"]);
+        cli.night_inhibit = true;
+        let cfg = config_with(&[("NIGHT_INHIBIT", "false")]);
+        assert!(parse_schedule_config(&cli, Some(&cfg)).night_inhibit);
+    }
 
     /// A default `Cli` with the recording schedule overridden — the only
     /// field these schedule-parsing tests vary.

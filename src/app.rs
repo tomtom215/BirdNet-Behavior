@@ -181,6 +181,10 @@ async fn serve(
     // basic-auth surface stays functional throughout; this only makes
     // the cookie-auth path's user lookup line up.
     helpers::bootstrap_admin_password(&state);
+    // Upgrade path: clear plaintext credential rows a previous build's settings
+    // form could write. Must run before the seed/overlay below so the purged
+    // keys are gone before anything reads the table.
+    helpers::purge_legacy_credential_settings(&state);
 
     // Seed the admin-UI `settings` table from the installed configuration on
     // first run, so the values supplied at install time — the bare-metal
@@ -201,9 +205,20 @@ async fn serve(
 
     // Initialize all optional subsystems.
     let state = helpers::init_image_cache(state, &cli, config.as_ref(), &db_path);
-    let state = if let Some(ref dir) = cli.custom_image_dir {
+    // The flag has no clap default, so `Some` means the operator supplied it;
+    // otherwise take the config, which is where a path entered on
+    // `/admin/settings` arrives via the overlay above.
+    let custom_image_dir = cli.custom_image_dir.clone().or_else(|| {
+        config
+            .as_ref()
+            .and_then(|c| c.get("CUSTOM_IMAGE_DIR"))
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+            .map(std::path::PathBuf::from)
+    });
+    let state = if let Some(dir) = custom_image_dir {
         tracing::info!(path = %dir.display(), "custom species image directory configured");
-        state.with_custom_image_dir(dir.clone())
+        state.with_custom_image_dir(dir)
     } else {
         state
     };
@@ -234,13 +249,20 @@ async fn serve(
     let email_notifier = integrations::create_email_notifier(&state);
     let heartbeat_client = integrations::create_heartbeat_client(&cli, config.as_ref());
     let mqtt_client = integrations::create_mqtt_client(&cli, config.as_ref());
-    let notification_filter = integrations::create_notification_filter(&cli);
+    let notification_filter = integrations::create_notification_filter(&cli, config.as_ref());
     let notification_template = integrations::create_notification_template(&cli, config.as_ref());
 
     // Start weekly report scheduler (if Apprise is configured).
     if let Some(ref apprise) = apprise_client {
-        weekly_report::start_weekly_report_scheduler(
+        let schedule = helpers::resolve::setting_str(
+            &cli,
+            "weekly_report_schedule",
             &cli.weekly_report_schedule,
+            config.as_ref(),
+            "WEEKLY_REPORT_SCHEDULE",
+        );
+        weekly_report::start_weekly_report_scheduler(
+            &schedule,
             std::sync::Arc::clone(apprise),
             state.clone(),
         );

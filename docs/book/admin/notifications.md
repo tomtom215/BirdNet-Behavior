@@ -10,11 +10,19 @@ The **Notifications** page (`/notifications`) shows your channels and a log of r
 
 ## Channels
 
-- **Apprise** — one URL string unlocks 80+ services (Telegram, Slack, Discord, Pushover, ntfy, email, and more). Set `BIRDNET_APPRISE_URL`.
+- **Apprise** — one URL string unlocks 80+ services (Telegram, Slack, Discord, Pushover, ntfy, email, and more). Set it under Settings → Notifications, or with `BIRDNET_APPRISE_URL`.
 - **Email** — direct SMTP/STARTTLS with a per-species cooldown, configured under Settings → Notifications.
-- **BirdWeather** — upload detections to your BirdWeather station with `BIRDNET_BIRDWEATHER_TOKEN`.
+- **BirdWeather** — upload detections to your BirdWeather station. Set the token under Settings → Notifications, or with `BIRDNET_BIRDWEATHER_TOKEN`.
 
-Use `BIRDNET_NOTIFY_CONFIDENCE` (default `0.8`) to set the minimum confidence that triggers a notification, and the rare-bird rules to ping only on the birds you actually care about.
+Either surface works for all three: the environment variable wins if you set it,
+otherwise the value you save under Settings → Notifications is the one that
+sends. The same applies to the minimum notification confidence
+(`BIRDNET_NOTIFY_CONFIDENCE`, default `0.8`), the trigger mode, the cooldown,
+the species allow/exclude lists, and the message templates. Changes take effect
+on the next restart.
+
+The **Send test notification** button on `/admin` uses the values saved on the
+Settings page, so a successful test means live detections will notify too.
 
 ## MQTT & Home Assistant
 

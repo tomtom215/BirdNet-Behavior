@@ -162,7 +162,7 @@ pub fn start_detection_daemon(
     // land in watch_dir.parent()/Extracted (the transient tmpfs), which vanished
     // on every restart and never matched where the app reads (Bug B).
     let recordings_dir = state.recording_dir();
-    let extractor = Extractor::new(build_extraction_config(cli, &recordings_dir));
+    let extractor = Extractor::new(build_extraction_config(cli, config, &recordings_dir));
 
     match birdnet_core::detection::daemon::run_daemon(&daemon_config, event_tx) {
         Ok(handle) => {

@@ -4,6 +4,8 @@
 //!
 //! - `db` — database-path resolution and the run-and-exit maintenance
 //!   commands (`--check-db`, `--backup-db`).
+//! - `resolve` — the shared precedence rule for a setting the operator can
+//!   supply from a CLI flag, the config file, or the admin settings form.
 //! - `settings_overlay` — bridge the admin-UI settings table onto the
 //!   file-based config so saved settings actually take effect.
 //! - `state` — `AppState` construction and the optional-subsystem
@@ -17,14 +19,15 @@
 
 mod auth;
 mod db;
+pub mod resolve;
 mod settings_overlay;
 mod state;
 mod system;
 
 #[cfg(test)]
-mod test_support;
+pub mod test_support;
 
-pub use auth::bootstrap_admin_password;
+pub use auth::{bootstrap_admin_password, purge_legacy_credential_settings};
 pub use db::{db_path_from_config, run_backup, run_integrity_check};
 pub use settings_overlay::{overlay_db_settings, seed_db_settings_from_config};
 pub use state::{init_i18n, init_image_cache, init_site_name, run_refresh_extension};

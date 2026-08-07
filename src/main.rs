@@ -18,7 +18,6 @@ mod maintenance;
 mod sd_notify;
 mod weekly_report;
 
-use clap::Parser;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{EnvFilter, reload};
 
@@ -114,7 +113,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    let cli = Cli::parse();
+    // `parse_tracked`, not `parse`: it additionally records which arguments the
+    // operator really supplied, which is what lets a value set in the admin UI
+    // beat a clap `default_value` while still losing to an explicit flag.
+    let cli = Cli::parse_tracked();
 
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
