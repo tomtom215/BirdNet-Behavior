@@ -200,9 +200,27 @@ impl AppState {
             .unwrap_or_else(|| Path::new("."))
             .join("recordings");
 
-        let analytics_db = match AnalyticsDb::open(analytics_path) {
-            Ok(mut adb) => {
-                tracing::info!(path = %analytics_path.display(), "DuckDB analytics database opened");
+        // `open_or_quarantine`, not `open`: the DuckDB store is purely derived
+        // from SQLite, so a corrupt or version-incompatible file is always safe
+        // to throw away and rebuild. Treating it as merely "not available" left
+        // every analytics page silently empty on every subsequent start, with
+        // nothing but one warning line to say why — a state an unattended
+        // station never recovers from on its own.
+        let analytics_db = match AnalyticsDb::open_or_quarantine(analytics_path) {
+            Ok((mut adb, outcome)) => {
+                match &outcome {
+                    birdnet_behavioral::connection::OpenOutcome::Opened => {
+                        tracing::info!(path = %analytics_path.display(), "DuckDB analytics database opened");
+                    }
+                    birdnet_behavioral::connection::OpenOutcome::Rebuilt { quarantined } => {
+                        tracing::warn!(
+                            path = %analytics_path.display(),
+                            quarantined_to = %quarantined.display(),
+                            "DuckDB analytics database was unusable and has been rebuilt; \
+                             repopulating it from SQLite"
+                        );
+                    }
+                }
 
                 match adb.sync_from_sqlite(&conn) {
                     Ok(count) => {

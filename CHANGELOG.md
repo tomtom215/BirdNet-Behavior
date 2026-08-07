@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A station stopped being able to start at roughly 2.1 million detections.**
+  The initial SQLite → DuckDB analytics sync read the *entire* detections table
+  into memory before appending a single row, so peak memory grew with the
+  station's whole history rather than with the work in flight. Measured: **541
+  MiB at 1 M rows and 967 MiB at 2 M**, against the `MemoryMax=1G` the systemd
+  unit sets — and with `Restart=always`, crossing that ceiling produced a
+  restart loop rather than a clean failure. A multi-year BirdNET-Pi database,
+  which is exactly what the migration importer brings in, is that size on
+  arrival.
+
+  The sync now streams rows straight into the DuckDB appender in batches, so
+  peak memory tracks the batch and not the row count: syncing 400 000 rows grew
+  RSS by 53 MiB where it previously grew by 167 MiB, and 1 M rows now costs 62
+  MiB. A soak test asserts the bound and fails on the old implementation.
+
+  A failure part-way through is now also recoverable: the next sync recomputes
+  its cutoff from what DuckDB actually holds and resumes, where previously an
+  all-or-nothing append meant a station that died mid-sync started over.
+
+- **A corrupt analytics database disabled analytics permanently and silently.**
+  A DuckDB file that failed to open was logged once as "not available
+  (non-fatal)" and then ignored on every subsequent start, leaving every
+  analytics page empty until a human noticed and deleted the file by hand —
+  which an unattended field station never gets. The DuckDB store is purely
+  derived from SQLite, so it is always safe to discard: an unusable file is now
+  moved aside with a timestamped `.corrupt.<unix-seconds>` suffix (its `.wal`
+  sidecar with it) and rebuilt from SQLite on the same start. Opening is no
+  longer taken as proof of health — DuckDB can attach to a damaged file and only
+  fail once a query touches the broken block, so a probe read runs first.
+  `--doctor` and `/admin/doctor` report any quarantined file, so the recovery is
+  visible rather than buried in the journal.
+
 - **The species allow/exclude lists never filtered a single detection.** The
   daemon built its species filter from `SpeciesFilterConfig::default()` and
   nothing in production ever populated the two lists, so a species excluded on

@@ -261,3 +261,238 @@ fn soak_recovers_from_db_corruption_at_restart() {
         );
     }
 }
+
+/// The initial SQLite → DuckDB analytics sync must not scale its memory with
+/// the station's history.
+///
+/// This is the regression test for the defect that made a long-running station
+/// unable to start. `read_sqlite_detections` collected the *entire* detections
+/// table into a `Vec` before appending a single row, so peak RSS grew with the
+/// row count: measured at **541 MiB for 1 M rows and 967 MiB for 2 M** against
+/// the `MemoryMax=1G` the systemd unit sets. A station crossed the ceiling at
+/// roughly 2.1 M detections and then could not start at all — and with
+/// `Restart=always`, looped. A multi-year BirdNET-Pi database, which is exactly
+/// what the migration importer brings in, is that size on arrival.
+///
+/// The sync now streams into the appender in batches, so the bound below is a
+/// function of the batch and not of `n`. It is deliberately generous: the point
+/// is to catch a return to *linear* growth, not to pin an allocator's exact
+/// behaviour.
+///
+/// The default row count is chosen from measurement, not taste. Growth during
+/// the sync, on this repo's CI-equivalent hardware:
+///
+/// | rows | buffering (old) | streaming (new) |
+/// |---------|-----------------|-----------------|
+/// | 200 000 | 87 MiB          | 51 MiB          |
+/// | 400 000 | 162 MiB         | 56 MiB          |
+/// | 1 000 000 | ~420 MiB (extrapolated) | 62 MiB |
+///
+/// The old path is linear; the new one is flat to within the DuckDB buffer
+/// pool's own growth. 200 000 rows was *not* enough to separate them against a
+/// sensible bound — the first version of this test passed on the broken code —
+/// so the default is 400 000, where the two differ by ~3x.
+///
+/// `BIRDNET_SOAK_SYNC_N` raises the row count for a heavier local run.
+#[cfg(feature = "analytics")]
+#[test]
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+fn soak_analytics_sync_memory_is_bounded_by_batch_not_history() {
+    use birdnet_behavioral::connection::AnalyticsDb;
+
+    // Set between the two measured curves at the default row count: streaming
+    // needs ~56 MiB there and buffering needed ~162 MiB. That leaves the passing
+    // path 2x headroom for a different allocator while still failing decisively
+    // the moment growth goes linear again.
+    const MAX_GROWTH_KB: u64 = 112 * 1024;
+
+    // Process-wide RSS reading — must not race the other soak tests.
+    let _serial = soak_serial();
+
+    let n: usize = std::env::var("BIRDNET_SOAK_SYNC_N")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(400_000);
+
+    let dir = tempfile::tempdir().unwrap();
+    let sqlite_path = dir.path().join("station.db");
+    let duck_path = dir.path().join("analytics.duckdb");
+
+    // Build a station history the way a real one accumulates it: many rows,
+    // realistic string widths (the `Vec<SyncRow>` that used to be built held
+    // five `String`s per row, which is where the memory went).
+    {
+        let conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             CREATE TABLE detections (Date TEXT, Time TEXT, Sci_Name TEXT, Com_Name TEXT,
+                 Confidence REAL, Lat REAL, Lon REAL, Cutoff REAL, Week INTEGER,
+                 Sens REAL, Overlap REAL, File_Name TEXT);",
+        )
+        .unwrap();
+        conn.execute_batch("BEGIN").unwrap();
+        {
+            let mut stmt = conn
+                .prepare("INSERT INTO detections VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
+                .unwrap();
+            for i in 0..n {
+                let day = 1 + (i % 28);
+                let date = format!("2026-03-{day:02}");
+                let time = format!("{:02}:{:02}:{:02}", (i / 3600) % 24, (i / 60) % 60, i % 60);
+                let sci = format!("Genus{} species{}", i % 300, i % 300);
+                let com = format!("Common Bird Name {}", i % 300);
+                let file = format!("Common_Bird_Name_{}-{i}-{date}-birdnet-RTSP_1.wav", i % 300);
+                stmt.execute(rusqlite::params![
+                    date,
+                    time,
+                    sci,
+                    com,
+                    0.5 + (i % 50) as f64 / 100.0,
+                    42.3601_f64,
+                    -71.0589_f64,
+                    0.7_f64,
+                    i32::try_from((i % 52) + 1).unwrap_or(1),
+                    1.25_f64,
+                    0.0_f64,
+                    file,
+                ])
+                .unwrap();
+            }
+        }
+        conn.execute_batch("COMMIT").unwrap();
+    }
+
+    let sqlite_conn = rusqlite::Connection::open(&sqlite_path).expect("reopen sqlite");
+    let analytics = AnalyticsDb::open(&duck_path).expect("open duckdb");
+
+    let rss_before = vmrss_kb();
+    let synced = analytics
+        .sync_from_sqlite(&sqlite_conn)
+        .expect("initial sync must succeed");
+    let rss_after = vmrss_kb();
+
+    assert_eq!(synced as usize, n, "every row must reach DuckDB");
+    assert_eq!(
+        analytics.detection_count().expect("count") as usize,
+        n,
+        "the DuckDB copy must match SQLite exactly"
+    );
+
+    if let (Some(before), Some(after)) = (rss_before, rss_after) {
+        let grew_kb = after.saturating_sub(before);
+        // Printed unconditionally: when this test fails the actual number is
+        // the whole diagnosis, and when it passes it is the trend line a future
+        // change would be judged against.
+        eprintln!(
+            "analytics sync: {n} rows grew RSS by {} MiB ({grew_kb} KiB)",
+            grew_kb / 1024
+        );
+        assert!(
+            grew_kb < MAX_GROWTH_KB,
+            "syncing {n} rows grew RSS by {} MiB ({grew_kb} KiB) — the sync is buffering the \
+             whole history again rather than streaming it",
+            grew_kb / 1024
+        );
+    }
+}
+
+/// A corrupt analytics database must be quarantined and rebuilt at the next
+/// start, not silently disable analytics for ever.
+///
+/// The `DuckDB` store is purely derived from `SQLite`, so throwing it away is
+/// always safe — yet a failed open used to be logged once as "not available
+/// (non-fatal)" and then ignored on every subsequent start. Every analytics
+/// page stayed empty until a human noticed and deleted the file by hand, which
+/// an unattended field station never gets. This is the DuckDB counterpart of
+/// `soak_recovers_from_db_corruption_at_restart`.
+#[cfg(feature = "analytics")]
+#[test]
+fn soak_analytics_recovers_from_a_corrupt_duckdb_at_restart() {
+    use birdnet_behavioral::connection::{AnalyticsDb, OpenOutcome};
+
+    let dir = tempfile::tempdir().unwrap();
+    let sqlite_path = dir.path().join("station.db");
+    let duck_path = dir.path().join("analytics.duckdb");
+
+    // A station with some history in SQLite — the source of truth.
+    let sqlite_conn = rusqlite::Connection::open(&sqlite_path).expect("open sqlite");
+    sqlite_conn
+        .execute_batch(
+            "CREATE TABLE detections (Date TEXT, Time TEXT, Sci_Name TEXT, Com_Name TEXT,
+                 Confidence REAL, Lat REAL, Lon REAL, Cutoff REAL, Week INTEGER,
+                 Sens REAL, Overlap REAL, File_Name TEXT);",
+        )
+        .unwrap();
+    {
+        let mut stmt = sqlite_conn
+            .prepare("INSERT INTO detections VALUES (?,?,?,?,?,NULL,NULL,NULL,NULL,NULL,NULL,?)")
+            .unwrap();
+        for i in 0..250 {
+            let time = format!("{:02}:{:02}:{:02}", (i / 3600) % 24, (i / 60) % 60, i % 60);
+            stmt.execute(rusqlite::params![
+                "2026-03-15",
+                time,
+                "Turdus merula",
+                "Eurasian Blackbird",
+                0.8_f64,
+                format!("clip-{i}.wav"),
+            ])
+            .unwrap();
+        }
+    }
+
+    // 1. Normal operation: analytics opens clean and syncs.
+    {
+        let (analytics, outcome) = AnalyticsDb::open_or_quarantine(&duck_path).expect("first open");
+        assert_eq!(outcome, OpenOutcome::Opened);
+        assert_eq!(analytics.sync_from_sqlite(&sqlite_conn).unwrap(), 250);
+        assert_eq!(analytics.detection_count().unwrap(), 250);
+    }
+
+    // 2. The card develops a bad block / a DuckDB upgrade renders the file
+    //    unreadable. Either way the bytes are no longer a database.
+    std::fs::write(&duck_path, b"\x00\x01 not a duckdb file at all \xff\xfe").unwrap();
+
+    // 3. Restart: the file is moved aside and a fresh one created in its place.
+    let quarantined = {
+        let (analytics, outcome) =
+            AnalyticsDb::open_or_quarantine(&duck_path).expect("recovery must succeed");
+        let OpenOutcome::Rebuilt { quarantined } = outcome else {
+            panic!("a corrupt analytics database must be rebuilt, not opened as-is");
+        };
+        assert!(quarantined.exists(), "the bad file must be kept for triage");
+        assert_eq!(
+            analytics.detection_count().unwrap(),
+            0,
+            "the replacement starts empty"
+        );
+
+        // 4. The station's usual startup sync repopulates it from SQLite, which
+        //    is the whole reason discarding it is safe.
+        assert_eq!(analytics.sync_from_sqlite(&sqlite_conn).unwrap(), 250);
+        assert_eq!(
+            analytics.detection_count().unwrap(),
+            250,
+            "analytics must be whole again without operator action"
+        );
+        quarantined
+    };
+
+    // 5. The next start is uneventful — recovery is not a loop.
+    {
+        let (analytics, outcome) =
+            AnalyticsDb::open_or_quarantine(&duck_path).expect("subsequent open");
+        assert_eq!(outcome, OpenOutcome::Opened);
+        assert_eq!(analytics.detection_count().unwrap(), 250);
+    }
+
+    // 6. And the leftover is discoverable, so `--doctor` can report it rather
+    //    than leaving a silent file on the disk.
+    assert!(
+        quarantined
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.contains(".duckdb.corrupt.")),
+        "quarantine name must be recognisable to the doctor scan: {quarantined:?}"
+    );
+}

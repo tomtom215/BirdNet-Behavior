@@ -97,6 +97,56 @@ fn is_valid_memory_limit(v: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'%')
 }
 
+/// How [`AnalyticsDb::open_or_quarantine`] obtained its handle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpenOutcome {
+    /// The existing database opened and read cleanly.
+    Opened,
+    /// The existing database was unusable and was moved aside; this handle is
+    /// a fresh, empty one that the caller should repopulate.
+    Rebuilt {
+        /// Where the unusable file was moved to.
+        quarantined: PathBuf,
+    },
+}
+
+/// Move an unusable analytics database (and its `.wal` sidecar) aside.
+///
+/// Returns the path it was moved to. The suffix carries a Unix-seconds stamp so
+/// repeated failures accumulate rather than overwrite one another.
+fn quarantine_file(path: &Path) -> Result<PathBuf, AnalyticsError> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".corrupt.{stamp}"));
+    let quarantine = path.with_file_name(name);
+
+    std::fs::rename(path, &quarantine).map_err(|e| {
+        AnalyticsError::InvalidData(format!(
+            "analytics database at {} is unusable and could not be moved aside ({e}); \
+             analytics stay disabled until it is removed by hand",
+            path.display()
+        ))
+    })?;
+
+    // Best-effort: DuckDB's write-ahead log sits alongside as `<file>.wal`.
+    // Leaving it next to a freshly-created database would have DuckDB try to
+    // replay a log belonging to the file we just quarantined.
+    let mut wal = path.as_os_str().to_os_string();
+    wal.push(".wal");
+    let wal = PathBuf::from(wal);
+    if wal.exists() {
+        let mut to = quarantine.as_os_str().to_os_string();
+        to.push(".wal");
+        let _ = std::fs::rename(&wal, PathBuf::from(to));
+    }
+
+    Ok(quarantine)
+}
+
 /// A file-backed `DuckDB` connection for behavioral analytics.
 #[derive(Debug)]
 pub struct AnalyticsDb {
@@ -151,6 +201,74 @@ impl AnalyticsDb {
             path: path.to_path_buf(),
             extension_loaded: false,
         })
+    }
+
+    /// Open the analytics database, quarantining and rebuilding it if it is
+    /// unusable.
+    ///
+    /// The `DuckDB` store is **purely derived**: every row in it is a copy of a
+    /// `SQLite` row, so throwing it away costs nothing but the time to sync it
+    /// back. That makes "start over" always safe here, and it is the right
+    /// answer for an unattended station — previously a corrupt or
+    /// version-incompatible analytics file was logged once as "not available
+    /// (non-fatal)" and then ignored forever, leaving every analytics page
+    /// silently empty until a human noticed and deleted the file by hand.
+    ///
+    /// Opening is not enough of a check on its own: `DuckDB` can attach to a
+    /// damaged file and only fail once a query touches the broken block, so a
+    /// probe query runs before the handle is handed back.
+    ///
+    /// On failure the file — and its `.wal` sidecar — are moved aside with a
+    /// timestamped `.corrupt.<unix-seconds>` suffix and a fresh database is
+    /// created in their place. The caller's usual startup sync then repopulates
+    /// it from `SQLite`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the database is unusable *and* cannot be quarantined,
+    /// or if the freshly-created replacement also fails to open — either of
+    /// which means the analytics directory itself is not writable.
+    pub fn open_or_quarantine(path: &Path) -> Result<(Self, OpenOutcome), AnalyticsError> {
+        let probe_failure = match Self::open(path) {
+            Ok(db) => match db.probe() {
+                Ok(()) => return Ok((db, OpenOutcome::Opened)),
+                // Drop the handle before renaming the file underneath it.
+                Err(e) => {
+                    drop(db);
+                    e
+                }
+            },
+            Err(e) => e,
+        };
+
+        tracing::error!(
+            path = %path.display(),
+            error = %probe_failure,
+            "analytics database is unusable; quarantining it and rebuilding from SQLite"
+        );
+
+        let quarantined = quarantine_file(path)?;
+
+        let db = Self::open(path)?;
+        db.probe()?;
+
+        tracing::warn!(
+            quarantined_to = %quarantined.display(),
+            "analytics database rebuilt; it will repopulate from SQLite on this start. \
+             The quarantined file can be deleted once you are satisfied nothing is wrong"
+        );
+
+        Ok((db, OpenOutcome::Rebuilt { quarantined }))
+    }
+
+    /// Cheap read that touches the detections table, so a file `DuckDB` opened
+    /// lazily but cannot actually read fails here rather than on the first
+    /// analytics request.
+    fn probe(&self) -> Result<(), AnalyticsError> {
+        let _: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM detections", [], |row| row.get(0))?;
+        Ok(())
     }
 
     /// Get the database file path.
