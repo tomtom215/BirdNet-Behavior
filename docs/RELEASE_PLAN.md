@@ -44,9 +44,9 @@ There are **0 open issues** and 7 open PRs, all Dependabot.
    `tests/species_filter_e2e.rs` skip unless `BIRDNET_TEST_MODEL`/`BIRDNET_TEST_LABELS` are
    set. CI's "Inference against the real model" job runs them against the sha256-pinned
    541 MB model and is green at tip.
-   **Update (Slice 2):** also run locally. The model was fetched, its sha256 verified against
-   the CI-pinned digest, and the whole suite re-run with it — **1915 passed, 0 failed, 0
-   runtime skips**. To repeat:
+   **Update (Slice 2 onward):** also run locally. The model was fetched, its sha256 verified
+   against the CI-pinned digest, and the whole suite re-run with it — **1921 passed, 0 failed,
+   0 runtime skips** as of Slice 3. To repeat:
    ```bash
    export BIRDNET_TEST_MODEL=/path/to/model.onnx BIRDNET_TEST_LABELS=/path/to/labels.csv
    cargo test --workspace --all-features
@@ -76,8 +76,8 @@ Severity: **P1** = a field station silently does the wrong thing, or goes down.
 | ~~F-02~~ | ~~Species include/exclude lists never filter detections~~ — **fixed, Slice 2** | P1 | S–M |
 | ~~F-11~~ | ~~Species-frequency filter never ran on a normally-installed station~~ — **found and fixed in Slice 2** | P1 | S |
 | ~~F-03~~ | ~~Apprise + BirdWeather: UI fields inert, but the "Test" button works~~ — **fixed, Slice 1** | P1 | S |
-| F-04 | Initial DuckDB sync loads every detection into RAM — OOM at ≈2.1 M rows | P1 | M |
-| F-05 | A corrupt analytics DB disables analytics permanently and silently | P2 | S |
+| ~~F-04~~ | ~~Initial DuckDB sync loads every detection into RAM — OOM at ≈2.1 M rows~~ — **fixed, Slice 3** | P1 | M |
+| ~~F-05~~ | ~~A corrupt analytics DB disables analytics permanently and silently~~ — **fixed, Slice 3** | P2 | S |
 | F-06 | Daily GitHub update check with no way to turn it off | P2 | XS |
 | ~~F-07~~ | ~~Two pre/post twilight offsets in the UI, one `--twilight-offset` at runtime~~ — **fixed, Slice 1** | P3 | S |
 | F-08 | `partial_cmp().unwrap()` on floats in two web handlers | P3 | XS |
@@ -500,15 +500,47 @@ the daemon's own watcher:
 
 The preview page agreed with the runtime at every step, for both name forms.
 
-### Slice 3 — Bound the analytics sync, then make analytics self-heal (F-04 → F-05)
+### ✅ Slice 3 — Bound the analytics sync, then make analytics self-heal (F-04, F-05) — landed in `6fa90ac`
 
-Order matters: F-05's rebuild path re-runs a full sync, so batching must exist first.
+The ordering the plan called out was real: F-05's rebuild path re-runs a full sync, so
+streaming had to land first or self-healing would have introduced the OOM it exists to survive.
 
-1. Batch `read_sqlite_detections` into the appender (both sync paths).
-2. Add the ≥1 M-row RSS-bounded sync test to `tests/soak.rs`.
-3. Quarantine-and-rebuild on analytics-DB open failure + a doctor check.
+1. **Streaming sync.** Rows go straight into the DuckDB appender in batches of 10 000, so peak
+   memory tracks the batch and not the row count. `read_sqlite_detections` and `SyncRow` are
+   gone — 60 lines of buffering removed rather than tuned.
+2. **A partial failure is now recoverable.** The next sync recomputes its cutoff from what
+   DuckDB actually holds and resumes; the previous all-or-nothing append meant a station that
+   died mid-sync started over.
+3. **Quarantine and rebuild** on an unusable analytics file, with the `.wal` sidecar moved
+   alongside it, plus a **probe read** — opening is not proof of health, because DuckDB can
+   attach to a damaged file and only fail once a query touches the broken block.
+4. **A doctor check** (`Analytics (quarantined files)`) so the recovery is visible on
+   `--doctor` and `/admin/doctor` rather than buried in the journal.
 
-**Gate:** the new soak case; the corrupt-DuckDB fault-injection test; `--all-features` suite.
+**The regression test was written twice, and that is the point.** The first version asserted a
+192 MiB bound at 200 000 rows — and **passed on the broken code**, because the old path only
+needed ~87 MiB there. Measuring both implementations at three row counts gave:
+
+| rows | buffering (old) | streaming (new) |
+|---|---|---|
+| 200 000 | 87 MiB | 51 MiB |
+| 400 000 | **162 MiB** | **56 MiB** |
+| 1 000 000 | ~420 MiB (extrapolated) | 62 MiB |
+
+The default is now 400 000 with a 112 MiB bound — between the two curves where they differ by
+~3×. Confirmed by checking the old implementation back out: **fails at 167 MiB, passes at
+52 MiB on the new one.**
+
+**Gate — green.** `fmt`; `clippy --workspace --all-targets --all-features -- -D warnings`;
+`cargo test --workspace --all-features` → **1921 passed, 0 failed, 0 runtime skips** (with the
+real model).
+
+**Verified on a live station.** 500 detections synced and served; `birds.duckdb` overwritten
+with 30 bytes of garbage; the next start logged *"analytics database is unusable; quarantining
+it and rebuilding from SQLite"*, moved the file and its `.wal` aside as
+`birds.duckdb.corrupt.<stamp>`, resynced all 500 rows, loaded the behavioral extension, and
+served the same session data as before. `--doctor` then reported the leftover as a `WARN` with
+the "no detections were lost" remediation.
 
 ### Slice 4 — Egress control and latent-panic cleanup (F-06, F-08)
 
@@ -545,8 +577,8 @@ pushed.
 - [x] No form field in `/admin/settings` is editable-but-inert; the classification test enforces it
 - [x] Species include/exclude demonstrably suppresses a detection end to end
 - [x] Apprise + BirdWeather configured from the UI actually notify/upload; Test agrees with live
-- [ ] Initial analytics sync of ≥1 M detections stays under a fixed RSS bound (test-enforced)
-- [ ] A corrupted analytics DB is quarantined and rebuilt on the next start
+- [x] Initial analytics sync of ≥1 M detections stays under a fixed RSS bound (test-enforced)
+- [x] A corrupted analytics DB is quarantined and rebuilt on the next start
 - [ ] Every default-on outbound connection is documented and individually disable-able
 - [ ] `Cargo.toml`, `CHANGELOG.md` and the tag agree; release dry-run green
 - [ ] Full gate green: `fmt`, `clippy --all-features -D warnings`, `test --workspace --all-features`, CI including the real-model inference job
