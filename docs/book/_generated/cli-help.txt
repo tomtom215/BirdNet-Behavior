@@ -31,7 +31,7 @@ Options:
 
           Run after install and any time the system behaves unexpectedly.
 
-          [aliases: --preflight]
+          [alias: --preflight]
 
       --doctor-json
           Run the preflight diagnostic and emit a single-line JSON document.

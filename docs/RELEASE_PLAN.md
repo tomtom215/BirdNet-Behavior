@@ -1,803 +1,495 @@
-# Pre-Release Audit and Execution Plan
+# Pre-Release Stability Audit and Execution Plan
 
-**Status:** current. Supersedes `docs/RELEASE_PUNCHLIST.md` (audited 2026-05-29) and
-`docs/RELEASE_READINESS.md` (audited 2026-06-03) — both were written against the
-`claude/gallant-feynman-bJs95` integration branch, which no longer exists. Everything
-now merges to `main`.
+**Status:** current. Supersedes the `v0.10.0` preparation plan (same path, git
+history at `e98c8a0`), whose findings F-01…F-12 all landed and are re-verified
+green below. Also supersedes `docs/RELEASE_PUNCHLIST.md` and
+`docs/RELEASE_READINESS.md`.
 
-**Audited:** 2026-08-07, against `main` tip `070db00` (merge of PR #194), which is also
-the base of `claude/pre-release-audit-plan-if7qrp`.
+**Audited:** 2026-08-08, against `main` tip `e98c8a0` (merge of PR #195).
 
-**Target:** the next public release (`v0.10.0`) is field-deployable on an unattended
-station with no operator intervention for a full season.
+**Target:** ship `v0.10.x` as a public, field-deployable release — an unattended
+station that runs a full season with no operator on site, installed by *either*
+documented path (bare-metal installer **or** Docker).
+
+**Method note.** Every row below carries the command that produced it. Where a
+previous cycle's claim was re-checked rather than assumed, that is stated. Two
+findings in this pass (S-01, S-02) were invisible to the entire green CI matrix,
+which is the point: a green gate only proves what it actually executes.
 
 ---
 
 ## 0. What was actually run
 
-Nothing below is inferred. Every claim carries the command that produced it, on
-x86_64 Linux, 4 cores, 15 GB RAM, rustc 1.97.1.
+x86_64 Linux, 4 cores, 15 GB RAM, rustc 1.97.1, from a cold `target/`.
 
 | Gate | Command | Result |
 |---|---|---|
-| Build | `cargo build --workspace --all-targets --all-features` | **exit 0** — 9 m 51 s |
+| Build | `cargo build --workspace --all-targets --all-features` | **exit 0** — 7 m 54 s, `target/` 7.2 GB, 0 warnings |
 | Format | `cargo fmt --check --all` | **exit 0** |
-| Lint | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | **exit 0** — 6 m 12 s, zero warnings |
-| Tests | `cargo test --workspace --all-features` | **exit 0** — 39 suites, **1847 passed, 0 failed**, 5 ignored (all `ignore`-marked doctests) |
-| Installer sync gate | `installer/build.sh --check` | in sync |
-| Shell syntax | `bash -n` over `install.sh`, `quickstart.sh`, `uninstall.sh`, `installer/lib/*.sh`, `scripts/*.sh`, `docker/*.sh` | all clean |
-| Doctor | `birdnet-behavior --doctor --config <station>` | works; **correctly** detected a genuinely full root filesystem (verified against `statvfs`) |
-| Cold boot | `--web-only` on a fresh station | clean: 22 migrations applied, `DuckDB v1.5.5` + `behavioral v0.9.1` extension **loaded**, admin hash bootstrapped, disk manager started |
-| HTTP surface | 30 endpoints probed | pages 200, `/admin/*` correctly 303 to login when unauthenticated, `/api/v2/health` + `/api/v2/metrics` 200 |
-| In-app help | `/help/`, `/help/guide/today`, `/help/admin/settings` with `BNB_HELP_DIR` set | **200** — the release tarball ships `help/` (`release.yml:394`) and the unit sets `BNB_HELP_DIR` (`installer/lib/65-service.sh:70`), so this is correct in the field |
-| Behavioral analytics | all 8 `/api/v2/analytics/*` endpoints against a **1 000 000-row** station | all 200; 0.14 s–1.53 s; `next-species` correctly 400s with a usage hint on a missing param |
-| Scale probe | initial SQLite→DuckDB sync, peak RSS sampled from `/proc/<pid>/status` | **1 M rows → 541 MiB**, **2 M rows → 967 MiB** (see F-04) |
+| Lint (default) | `cargo clippy --workspace --all-targets -- -D warnings` | **exit 0** — 0 warnings |
+| Lint (all features) | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | **exit 0** — 0 warnings |
+| Tests | `cargo test --workspace --all-features` | **exit 0** — 40 suites, **1933 passed, 0 failed**, 5 ignored |
+| Tests + real model | same, with `BIRDNET_TEST_MODEL`/`_LABELS` set | **exit 0** — identical counts (see **S-04**) |
+| Model integrity | `sha256sum model.onnx` / `labels.csv` | **both match** the digests pinned in `ci.yml`, `install.sh`, `installer/lib/10-config.sh`, `docker/entrypoint.sh` |
+| Advisories | RustSec DB × `Cargo.lock` (510 packages) | **0 vulnerabilities, 0 unmaintained** |
+| Installer sync | `installer/build.sh --check` | in sync |
+| Shell syntax | `bash -n` over 30 scripts | clean |
+| Doctor | `--doctor` on a fresh station | 10 passed, 2 warnings, 0 errors |
+| HTTP surface | all 40 non-parameterised paths in `openapi.json` | **all 200 or 400** (400 = missing required param, by design) |
+| Auth, password set | `CADDY_PWD` set, probe `/admin/*` | **303 → `/login`**; unauthenticated `POST` → **401**; public dashboard still 200 |
+| Auth, no password | `CADDY_PWD` unset | open by design, documented, warned at startup — see **S-10** |
+| Actions pinning | 24 `uses:` refs | 21 SHA-pinned; 3 `dtolnay/rust-toolchain` by ref — see **S-08** |
 
-**CI on `main` at `070db00`:** CI, Coverage, Docker, Docs, Install smoke, Supply chain,
-A11y & Visual QA, and Mutation testing are **all green**. The scheduled Mutation failure of
-2026-08-03 (`validate.rs` shard) was fixed by `1e9102a` and the shard is green at tip.
-There are **0 open issues** and 7 open PRs, all Dependabot.
+**CI on `main` at `e98c8a0`:** all nine workflows green (CI, Coverage, Docker,
+Docs, Install smoke, Supply chain, A11y & Visual QA, Mutation, plus Dependabot).
+0 open issues, 7 open PRs — all Dependabot.
 
-**Two things the local gate does not cover by default** — both are covered by CI:
+**Verdict.** The engineering substrate is genuinely strong and the previous
+cycle's fixes hold under re-verification: the settings bridge is total and
+enforced (all 38 bridged config keys have real consumers — checked, not
+assumed), the production panic surface is 2 provably-unreachable `unwrap`s, the
+NTP/RTC-less-Pi handling is thorough, and session/share secrets are fail-secure.
 
-1. The **scientific core**. `tests/inference_e2e.rs`, `tests/pipeline_e2e.rs` and (new)
-   `tests/species_filter_e2e.rs` skip unless `BIRDNET_TEST_MODEL`/`BIRDNET_TEST_LABELS` are
-   set. CI's "Inference against the real model" job runs them against the sha256-pinned
-   541 MB model and is green at tip.
-   **Update (Slice 2 onward):** also run locally. The model was fetched, its sha256 verified
-   against the digest `ci.yml:175` pins, and the whole suite re-run with it. Re-confirmed at
-   the final commit `ba84180` on a cold `target/`: **40 suites, 1929 passed, 0 failed,
-   5 ignored** (all `ignore`-marked doctests), **0 runtime skips**, exit 0. The four suites
-   that would silently skip without the model all ran real tests —
-   `inference_e2e` 2/2 (9.8 s), `pipeline_e2e` 3/3 (4.3 s), `species_filter_e2e` 10/10 (7.5 s),
-   `soak` 4/4 (19.6 s). To repeat:
-   ```bash
-   export BIRDNET_TEST_MODEL=/path/to/model.onnx BIRDNET_TEST_LABELS=/path/to/labels.csv
-   cargo test --workspace --all-features
-   ```
-2. **Live behavioral-extension** verification. CI embeds the community extension and asserts
-   the offline `LOAD`. Verified independently here at runtime (`behavioral v0.9.1` loaded).
-
-**Verdict: the engineering substrate is in good shape.** Build, lint, test, mutation, supply
-chain and CI are all clean, and the resilience layer (WAL + integrity check + backup ring +
-quarantine, capped-backoff capture supervisor, disk purging, bounded queues, sd_notify
-watchdog, verified auto-update) is real and tested. What is *not* ready is a specific,
-bounded set of **field-behaviour defects** where the product tells the operator one thing and
-does another. Those are below, and they are the release blockers.
+What is **not** ready is below. Two are release blockers, and both are the same
+shape as the defects that forced the last audit: *a thing the project promises
+that it does not do*, in a path no gate executes.
 
 ---
 
 ## 1. Findings
 
-Severity: **P1** = a field station silently does the wrong thing, or goes down.
+**P1** = a field station silently does the wrong thing, or will not start.
 **P2** = degrades or misleads without data loss. **P3** = polish / latent.
-
-### Priority summary
 
 | ID | Finding | Sev | Effort |
 |----|---------|-----|--------|
-| ~~F-01~~ | ~~20 admin-UI settings are persisted but never reach the runtime~~ — **fixed, Slice 1** | P1 | M |
-| ~~F-02~~ | ~~Species include/exclude lists never filter detections~~ — **fixed, Slice 2** | P1 | S–M |
-| ~~F-11~~ | ~~Species-frequency filter never ran on a normally-installed station~~ — **found and fixed in Slice 2** | P1 | S |
-| ~~F-03~~ | ~~Apprise + BirdWeather: UI fields inert, but the "Test" button works~~ — **fixed, Slice 1** | P1 | S |
-| ~~F-04~~ | ~~Initial DuckDB sync loads every detection into RAM — OOM at ≈2.1 M rows~~ — **fixed, Slice 3** | P1 | M |
-| ~~F-05~~ | ~~A corrupt analytics DB disables analytics permanently and silently~~ — **fixed, Slice 3** | P2 | S |
-| ~~F-06~~ | ~~Daily GitHub update check with no way to turn it off~~ — **fixed, Slice 4** | P2 | XS |
-| ~~F-07~~ | ~~Two pre/post twilight offsets in the UI, one `--twilight-offset` at runtime~~ — **fixed, Slice 1** | P3 | S |
-| ~~F-08~~ | ~~`partial_cmp().unwrap()` on floats in two web handlers~~ — **fixed, Slice 4** | P3 | XS |
-| ~~F-12~~ | ~~`panic = "abort"` + no catch-panic layer makes any handler panic a station outage~~ — **found in Slice 4; class closed, posture documented** | P2 | — |
-| ~~F-09~~ | ~~Version and release docs not rolled for `v0.10.0`~~ — **done, Slice 5** | P1 (release) | S |
-| ~~F-10~~ | ~~Debug all-targets build needs ~21 GB of disk~~ — **fixed, Slice 5** | P3 (dev-ex) | S |
+| S-01 | Docker images embed a behavioral extension built for **DuckDB 1.5.3** into a **1.5.5** engine — offline analytics is broken on the Docker install path | **P1** | XS + gate |
+| S-02 | The SQLite database's parent directory is never created; the station exits 1, after `--doctor` said *"no action needed"* | **P1** | S |
+| S-03 | 150 packages of transitive lockfile drift that no Dependabot PR surfaces — including `rustls`, `hyper`, `aws-lc-rs`, `webpki-roots` | **P1 (release)** | S — **done, see §2** |
+| S-04 | The model-gated "scientific core" suites report `2 passed` whether or not they ran | P2 | S |
+| S-05 | PR #196 is red: `clap` 4.6.6 changed help rendering, staling the committed CLI-help snapshot | P2 | XS — **done** |
+| S-06 | PR #177 cannot merge alone (`audioadapter-buffers` ↔ `rubato` coupling) and is stale | P2 | M |
+| S-07 | PR #148 cannot merge at all — `argon2` has no stable 0.6 | P2 | close it |
+| S-08 | `dtolnay/rust-toolchain@master` is unpinned **in the release artifact-producing jobs** | P2 | XS |
+| S-09 | `CITATION.cff` still says `0.8.0`; no gate checks it | P3 | XS |
+| S-10 | `--doctor` never reports that `/admin` is open to the network | P3 | S |
+| S-11 | Commits landed after the `[0.10.0]` changelog roll sit in no changelog section | P3 | XS |
 
 ---
 
-### F-01 — Twenty admin-UI settings are persisted but never reach the runtime · **P1**
+### S-01 — Docker images ship an extension the engine refuses to load · **P1**
 
-**Evidence.** The settings form writes 53 keys. `SETTING_SPECS`
-(`src/helpers/settings_overlay.rs:44`) bridges only 20 of them into the runtime config.
-Cross-referencing every form key against every consumer outside the settings page itself
-leaves **20 keys with no runtime consumer at all**:
+**The single highest-impact finding in this pass, and CI is green through it.**
 
-```
-apprise_config      audio_channels      auth_username        custom_image_dir
-freq_shift_hz       night_inhibit       notify_body_template notify_confidence
-notify_cooldown     notify_image        notify_species_exclude
-notify_species_only notify_title_template notify_trigger     post_sunset_offset
-pre_sunrise_offset  rtsp_urls           segment_duration     weekly_report_schedule
-auth_password
+`Dockerfile:142` pins the community extension to DuckDB **v1.5.3**:
+
+```dockerfile
+ARG BEHAVIORAL_EXTENSION_DUCKDB_VERSION="v1.5.3"
 ```
 
-They render as ordinary editable inputs — e.g. `segment_duration`
-(`.../settings/render/audio.rs:44`), `freq_shift_hz` (`:66`), `night_inhibit`
-(`.../render/location.rs:43`), `notify_trigger` (`.../render/notifications.rs:59`) — and the
-page tells the operator *"Most settings require a restart to take effect"*
-(`.../settings/render/mod.rs:149`). For these 20, **no restart ever makes them take effect.**
-The runtime reads the corresponding CLI flag / `BIRDNET_*` env var instead
-(`cli.segment_duration` → `src/daemon/config.rs:114`; `cli.freq_shift_hz` → `:115`;
-`cli.night_inhibit` / `cli.twilight_offset` → `src/capture/schedule.rs:31-56`).
-
-**Proven at runtime.** Six keys were written straight into the `settings` table and the
-station restarted:
-
-| key set | reached the runtime? |
-|---|---|
-| `purge_threshold=80` | ✅ `disk manager configured … purge_threshold=80` |
-| `max_files_per_species=7` | ✅ `… max_files_per_species=7` |
-| `segment_duration=30` | ❌ |
-| `freq_shift_hz=2500` | ❌ |
-| `night_inhibit=true` | ❌ |
-| `notify_confidence=0.95` | ❌ |
-
-The overlay logged `count=7` — the 5 pre-seeded values plus exactly the two wired keys. The
-other four were dropped silently.
-
-**Root cause.** Two configuration namespaces (`settings` table vs config file + CLI) joined
-by a hand-maintained allow-list, with no mechanism that fails when a form field is added
-without a matching bridge entry. This is the same defect class already fixed four times
-(`clip_retention_days`, `MAX_FILES_SPECIES`, `DISK_PURGE_THRESHOLD`, per-species thresholds)
-— fixed case by case, never at the root.
-
-**Fix.**
-1. Make the mapping **total and enforced**. Turn `SETTING_SPECS` into the single source of
-   truth for *every* form field, with an explicit third state per key —
-   `Bridged(config_key)`, `OwnedBySubsystem(&'static str)` (what `email_*` already is, see
-   below), or `NotWired`. Add a test that iterates the `SettingsForm` field list and fails
-   if any field has no classification. A new form field then cannot ship inert.
-2. Bridge the ones that should work: `segment_duration`, `audio_channels`, `freq_shift_hz`,
-   `night_inhibit`, `pre_sunrise_offset`/`post_sunset_offset` (see F-07), `rtsp_urls`,
-   `custom_image_dir`, `weekly_report_schedule`. These need the CLI-vs-DB precedence helper
-   that `src/helpers/system.rs:76` already uses for `disk_purge_threshold` (explicit CLI flag
-   wins; otherwise the DB value; otherwise the config file).
-3. For anything deliberately not wired, **remove the input** or render it disabled with a
-   one-line explanation naming the env var that does work. An inert control is worse than an
-   absent one.
-
-**Verify.** Extend the A/B above into a test: write each bridged key to the `settings` table,
-build the runtime config through `overlay_db_settings`, assert the resolved value changed.
-Red before, green after.
-
----
-
-### F-11 — Species-frequency filter never ran on a normally-installed station · **P1** · *found in Slice 2, fixed there*
-
-**Not in the original audit** — surfaced only by tracing the value end to end while fixing
-F-02, which is the argument for doing that rather than trusting the layer above.
-
-**Evidence.** The daemon set `latitude: cli.latitude, longitude: cli.longitude`
-(`src/daemon/mod.rs:149-150`) with **no config fallback**, while every other consumer has one
-(`capture::schedule::resolve_location`, `create_birdweather_client`). The bare-metal installer
-writes `LATITUDE`/`LONGITUDE` into `birdnet.conf`, and `/admin/settings` writes the settings
-table the overlay layers onto it — neither of which sets a CLI flag. So on a normal install
-the daemon received `None`.
-
-`process_and_infer_filtered` then did `if let (Some(lat), Some(lon)) = (lat, lon)` and skipped
-the species filter entirely, meaning the metadata model never ran and **`SF_THRESH` — a
-documented, BirdNET-Pi-parity headline feature with a slider on the Detection settings page —
-did nothing at all** unless the operator happened to pass `--latitude` explicitly.
-
-**Fixed** by `resolve_station_coords` (CLI → config, per axis) plus making only the *model*
-stage depend on having a location. Pinned by four unit tests including the half-configured
-case, where one axis alone must not resolve to a `(lat, 0.0)` location.
-
-### F-02 — Species include/exclude lists never filter detections · **P1**
-
-**Evidence.** `build_species_filter_config` (`src/daemon/config.rs:89`) sets only
-`sf_thresh` and takes everything else from `SpeciesFilterConfig::default()`, whose
-`include_list`/`exclude_list` are `Vec::new()`
-(`crates/birdnet-core/src/inference/species_filter.rs:38-39`). It is the sole construction
-site feeding the daemon (`src/daemon/mod.rs:147`). **Nothing anywhere in production code ever
-pushes into those vectors.** The filter logic itself
-(`species_filter.rs:213-221`) is correct and unit-tested — it is simply never given any data.
-
-Meanwhile `/admin/species` offers Add/Remove for both lists
-(`.../admin/species/handler.rs:66-108`), persists them, and ships a preview page at
-`/admin/species/test` (`.../admin/species/mod.rs:29`) that the Station page links as
-*"preview the filter before it affects live detections"*.
-
-**Why this matters in the field.** An operator who excludes a species — for privacy, to
-suppress a noise class, or to stop a persistent false positive — keeps getting those
-detections, stored, counted, notified on, and uploaded to BirdWeather. The one control that
-looks like it addresses the problem does nothing, and the preview page confirms the
-operator's (wrong) belief that it took effect.
-
-Note `b9a4f84` already removed an *unmounted* simulation-backed tester for precisely this
-"loaded gun" reason. The remaining gap is the other half: the live lists are real, and the
-pipeline ignores them.
-
-**Fix.** Populate `include_list`/`exclude_list` in `build_species_filter_config` from the
-`settings` table (`species_include` / `species_exclude`, already parsed by
-`.../admin/species/handler.rs:200-201`), threading the DB handle in the same way
-`src/integrations/email.rs:20` does. Then either accept restart-to-apply and say so on the
-page, or reload on the same signal per-species thresholds now use (`67f99ef`).
-
-**Verify.** Integration test: seed an exclude entry, run a detection whose label matches
-through the production `insert_detection` path, assert no row lands and no notification
-fires. Red before, green after.
-
----
-
-### F-03 — Apprise and BirdWeather: inert UI fields, working Test button · **P1**
-
-**Evidence.** The runtime clients read **only** CLI flags and the config file:
-`create_apprise_client` (`src/integrations/apprise.rs:17` → `cli.apprise_url` or
-`APPRISE_URL`) and `create_birdweather_client` (`src/integrations/birdweather.rs:12` →
-`cli.birdweather_token` or `BIRDWEATHER_TOKEN`). Neither ever reads the `settings` table.
-
-But the settings page renders `apprise_url` (`.../render/notifications.rs:42`) and
-`birdweather_token` (`:118`) as editable inputs, and **`/admin/notification-test` reads those
-rows from the database** (`.../admin/notification_test.rs:55, 246`) — so the Test button
-sends a real notification using a value the detection pipeline will never look at.
-
-**Why this matters.** The operator pastes a Telegram/ntfy URL, clicks Test, receives the test
-message, and concludes notifications are on. No detection notification ever arrives. The same
-applies to BirdWeather: no observation is ever uploaded. Neither failure produces an error
-anywhere — the station just goes quiet. `docs/book/admin/notifications.md:13` correctly says
-to set `BIRDNET_APPRISE_URL`; the UI contradicts the docs.
-
-The seeding direction is broken too: because notification keys are excluded from
-`SETTING_SPECS`, a station configured with `BIRDNET_APPRISE_URL` shows an **empty** Apprise
-field, inviting the operator to "fix" it by typing the URL into the inert box.
-
-**Fix.** Follow the pattern `src/integrations/email.rs:11-60` already establishes — it reads
-its whole config from the `settings` table and works correctly from the UI. Make
-`create_apprise_client` and `create_birdweather_client` take `&AppState` and resolve
-`CLI flag → settings table → config file`, and seed both directions so an env-configured
-station displays its real values.
-
-**Verify.** Set `apprise_url` only in the `settings` table, restart, assert
-`create_apprise_client` returns `Some` and the notify path uses it. Add a
-`store_forward_e2e`-style assertion that a detection reaches the stub endpoint.
-
----
-
-### F-04 — Initial DuckDB sync loads every detection into RAM · **P1**
-
-**Measured, not estimated.** A station was booted against synthetic databases of known size
-with a fresh analytics DB, sampling `VmRSS` once a second:
-
-| detections | peak RSS | time to serving |
-|---|---|---|
-| 1 000 000 | **541 MiB** | ~20 s |
-| 2 000 000 | **967 MiB** | **32 s** |
-
-That is ≈115 MiB base + **≈426 MiB per million rows**. The systemd unit sets
-`MemoryMax=1G` (= 1024 MiB) with `OOMPolicy=stop` and `Restart=always`
-(`installer/lib/65-service.sh:121-128`).
-
-**→ A station crosses the memory ceiling at roughly 2.1 million detections, and then cannot
-start.** `Restart=always` turns that into a restart loop.
-
-**Root cause.** `read_sqlite_detections` (`crates/birdnet-behavioral/src/connection/sync.rs:243`)
-collects the entire result set into a `Vec<SyncRow>` before a single row is appended. When
-DuckDB is empty the cutoff is `None` (`sync.rs:22-38`), so *every* row is materialised.
-DuckDB itself is innocent — its buffer pool is correctly capped at 256 MB
-(`connection/mod.rs:74`) and the resulting file was only 40 MB. The 967 MiB is the Rust-side
-`Vec`.
-
-**When a real station hits this.**
-- First start after a **BirdNET-Pi migration** — the whole point of `birdnet-migrate`, and a
-  multi-year BirdNET-Pi database is exactly this size. `full_resync_from_sqlite`
-  (`sync.rs:85`) takes the same unbounded path.
-- First start with analytics on a station that has been recording for a year at a busy site
-  (~6 000 detections/day reaches 2.1 M in about a year).
-- Any restart after the analytics DB is deleted or rebuilt — which is what F-05's fix will
-  do, so **F-04 must land before or with F-05.**
-
-**Fix.** Stream in batches instead of materialising. Iterate the `rusqlite` rows and flush to
-the DuckDB appender every N (10 000 is ample — the appender is already the fast path), so
-peak RSS becomes O(batch), not O(rows). Apply to both `sync_from_sqlite` and
-`full_resync_from_sqlite`; the staging-table swap in the latter is unaffected.
-
-**Verify.** Extend `tests/soak.rs` with a sync-scale case: build a ≥1 M-row SQLite DB, run the
-initial sync, assert `VmRSS` stays under a fixed bound (e.g. 256 MiB) and the DuckDB row
-count matches. That test fails today at 541 MiB and passes after batching.
-
----
-
-### F-05 — A corrupt analytics DB disables analytics permanently and silently · **P2**
-
-**Evidence.** `AppState::new_with_analytics` (`crates/birdnet-web/src/state.rs:203-237`)
-treats `AnalyticsDb::open` failure as `tracing::warn!(… "not available (non-fatal)")` and
-stores `None`. There is no quarantine and no rebuild. Every subsequent start repeats the
-warning, and every analytics page stays empty until a human notices and deletes the file by
-hand — which no unattended field station has.
-
-This is the long-open **G-11** from `docs/RELEASE_READINESS.md`, and it is worth closing now
-because the DuckDB store is **purely derived** from SQLite: throwing it away is always safe.
-
-**Fix.** Mirror the SQLite path (`src/app.rs:113-147`): on open failure, move the file aside
-with a timestamped `.corrupt` suffix, recreate, and let the existing startup sync repopulate
-it. Surface a doctor check (`src/doctor/analytics.rs` already exists) reporting the
-quarantine so it is visible on `/admin/doctor` rather than only in the journal.
-
-**Verify.** Fault injection: write garbage over `birds.duckdb`, start, assert the file is
-quarantined, a fresh DB is created, the row count matches SQLite, and analytics endpoints
-return 200.
-
----
-
-### F-06 — Daily GitHub update check with no way to turn it off · **P2**
-
-**Evidence.** `src/app.rs:384-416` unconditionally spawns a task that calls
-`api.github.com` 60 s after start and every 24 h thereafter, for the life of the process.
-There is **no CLI flag, no env var, and no setting** to disable it — `grep -i update`
-over `src/cli.rs` and `.env.example` returns nothing.
-
-Failures are handled gracefully (`tracing::debug!`, non-fatal), so this is unwanted egress
-rather than a functional break. But it is the station's only *unconditional, undocumented*
-outbound connection. Wikipedia image fetching — the other default-on egress — is documented
-and opt-out-able via `--image-cache-dir ""`. Metered cellular links, air-gapped research
-deployments, and institutional review all care about this.
-
-**Fix.** Add `--no-update-check` / `BIRDNET_NO_UPDATE_CHECK=1`, honour it, and document the
-station's complete default-on egress list (GitHub update check, Wikipedia images) in
-`docs/book/getting-started/configuration.md` with the flag that disables each.
-
-**Verify.** Unit-test the flag gate; assert the task is not spawned when set.
-
----
-
-### F-07 — Two twilight offsets in the UI, one at runtime · **P3**
-
-**Evidence.** The Location page renders independent `pre_sunrise_offset`
-(`.../render/location.rs:51`) and `post_sunset_offset` (`:54`) inputs. The runtime has a
-**single** `cli.twilight_offset` applied to both ends
-(`src/capture/schedule.rs:31-32, 54-55`). Even via the CLI the two cannot differ. Rolled into
-F-01's inert set, but the fix is a modelling decision, not just wiring: either add a second
-flag and honour both, or collapse the UI to one field.
-
-**Recommendation:** honour both — asymmetric dawn/dusk windows are a normal acoustic-monitoring
-requirement, and `ScheduleConfig` already carries the two fields separately.
-
----
-
-### F-08 — `partial_cmp().unwrap()` on floats in two web handlers · **P3**
-
-`crates/birdnet-web/src/routes/pages/migration.rs:122` and `:130`, and
-`crates/birdnet-web/src/routes/pages/dawn_chorus.rs:106`. Both operate on `f32` accumulated
-from integer counts (`n as f32`), so **no reachable input is NaN today** — this is latent, not
-live. It is still an unwrap in a request handler on a `#![forbid(unsafe_code)]`,
-pedantic+nursery codebase. Swap to `f32::total_cmp`; it is a one-line change per site with no
-behaviour difference for non-NaN input.
-
----
-
-### F-09 — Version and release docs not rolled · **P1 (release-blocking)**
-
-`Cargo.toml` is still `0.9.0`, which was published 2026-06-23. Since then `main` has taken
-~30 commits and the `[Unreleased]` changelog section holds **26 entries**, many of them
-significant field fixes (retention, disk management, maintenance scheduling, per-species
-caps). CI's `validate` job refuses to release if the tag, `Cargo.toml` and `CHANGELOG.md`
-disagree (`release.yml:117-129`), so this is caught rather than shipped — but it must be done.
-
-Also stale: `docs/RELEASE_PUNCHLIST.md` and `docs/RELEASE_READINESS.md` both instruct the
-reader to open PRs against `claude/gallant-feynman-bJs95`, a branch that no longer exists,
-and both claim "no CI on this repo". Anyone picking the repo up cold is misled on the first
-page. Mark both superseded by this document (this change does so).
-
-**Do:** bump to `0.10.0` (new user-facing behaviour, pre-1.0 → minor), roll
-`[Unreleased]` into `## [0.10.0] - <date>`, add a fresh empty `[Unreleased]`, update the
-link refs at the foot, then follow `RELEASING.md`. Run the release workflow's dry-run
-(`workflow_dispatch`) before tagging.
-
----
-
-### F-10 — Debug all-targets build needs ~21 GB of disk · **P3 (developer experience)**
-
-Measured here: `cargo build --workspace --all-targets --all-features` produced a **21 GB**
-`target/` and filled a 29 GB volume, because every test binary statically links ONNX Runtime
-and libduckdb — **~1 GB each**, and there are ~20. Setting `CARGO_PROFILE_DEV_DEBUG=none`
-brought the same build to **2.1 GB** and the binary from 1.1 GB to 244 MB, with no loss for
-any gate that is not a debugger session. CI already works around this by deleting 25–30 GB of
-SDKs from the runner (`ci.yml`, "Free up runner disk space").
-
-**Fix.** Add `[profile.dev] debug = "line-tables-only"` (keeps backtraces, drops the bulk) or
-document `CARGO_PROFILE_DEV_DEBUG=none` as the standard way to run the local gate in
-`CONTRIBUTING.md` / `CLAUDE.md`. Cheap, and it removes a real "why did my machine die" moment
-for contributors and for future sessions in this sandbox.
-
----
-
-## 2. Execution plan
-
-Each slice is independently shippable, has its own gate, and is ordered so nothing blocks on
-work that comes later. Branch `claude/pre-release-audit-plan-if7qrp`, PRs into `main`.
-
-### ✅ Slice 1 — Stop the settings page from lying (F-01, F-03, F-07) — landed in `1af5434`
-
-1. **The guard-rail.** `SETTINGS_FORM_KEYS` is exported from `birdnet-web`, pinned to
-   `SettingsForm`'s own fields (enumerated through serde rather than hand-listed twice) and
-   to `build_settings_items`. Every key must be classified in `SETTING_SPECS` as
-   `Wiring::Bridged(config_key)` or `Wiring::OwnedBy(subsystem)`; tests fail on an
-   unclassified key, an orphaned spec, a duplicate mapping, or a returning credential key.
-2. **Exact CLI-source tracking replaced the sentinels.** `Cli::explicit` records what clap
-   saw as `CommandLine`/`EnvVariable`, and `helpers::resolve` applies one rule everywhere:
-   *explicit flag/env → admin settings → config file → default*. This also retired the
-   `(notify_confidence - 0.8).abs() > EPSILON` hack, which mishandled an operator who
-   explicitly typed the default.
-3. **Bridged:** `segment_duration`, `freq_shift_hz`, `night_inhibit`, `rtsp_urls`,
-   `custom_image_dir`, `weekly_report_schedule`, plus `apprise_url`, `apprise_config`,
-   `birdweather_token` and every `notify_*`.
-4. **Twilight split:** `--pre-sunrise-offset` / `--post-sunset-offset`, each falling back to
-   `--twilight-offset`, so stations that set neither keep today's symmetric behaviour.
-5. **Removed rather than wired:** the Web Authentication card (see below),
-   `audio_channels` (a duplicate of the working per-source control on `/admin/audio`, which
-   is where `sources.rs:192` actually reads the channel count), and `notify_image` (no
-   consumer anywhere in the notification stack).
-
-**One finding got worse on closer reading, and is fixed here.** The Web Authentication card
-stored the typed password as a **plaintext** `settings` row, rendered it back into the page
-HTML on every later load, and changed no credential — the admin password is an Argon2id
-hash in the accounts table seeded from `CADDY_PWD` — while telling the operator that
-clearing the field would "disable HTTP Basic Auth". The card now explains where the
-credential lives, and `purge_legacy_credential_settings` deletes any row an earlier build
-left behind, on the next start.
-
-**One place the plan over-specified the fix.** It proposed moving Apprise/BirdWeather onto
-the `email.rs` direct-settings-read pattern. Unnecessary: both constructors already fall
-back to `APPRISE_URL` / `BIRDWEATHER_TOKEN` in the config, and `overlay_db_settings` runs at
-`app.rs:204`, before they are built at `:236`. Bridging the key was the whole fix, so the
-lighter change was taken.
-
-**Gate — green.** `fmt`; `clippy --workspace --all-targets --all-features -- -D warnings`
-(zero warnings); `cargo test --workspace --all-features` → **1891 passed, 0 failed** (was
-1847; 44 new tests, which assert *effect* — that a value in the config reaches the
-extractor, the schedule, the Apprise client and the notification filter — not just mapping).
-
-**Verified on a live station**, repeating the probe that exposed F-01. With the same
-settings written into the table, the overlay went from applying **7** to applying **15**,
-and the journal shows `Apprise notifications enabled url=http://localhost:9999
-min_confidence=0.95` (previously no client was built at all from a UI-set URL) and
-`notification filter configured trigger=new-species` (previously always `each`). The
-rendered page no longer contains `auth_password`, `auth_username`, `audio_channels` or
-`notify_image`, still contains the working `email_smtp_pass`, and renders saved values back
-(`segment_duration=30`, `apprise_url=http://localhost:9999`, `pre_sunrise_offset=60`).
-
-**Deliberately left alone:** `daemon/config.rs`'s `resolve_f32_with_default`, the sentinel
-used by the detection knobs. Those keys are bridged and do work today, and its only wrong
-case — an operator explicitly passing the documented default — resolves in the safe
-direction (the UI value wins). Migrating it to `helpers::resolve` is tidy-up, not a fix, and
-would churn a working, mutation-tested path.
-
-### ✅ Slice 2 — Make the species filter real (F-02, F-11) — landed in `1ef66e5`
-
-The plan said "populate the lists; keep the existing filter logic untouched". Populating them
-would have shipped a fix that changed nothing. Three further defects had to go first, each
-found by tracing the value rather than trusting the layer above:
-
-1. **Name-space mismatch.** `/admin/species` collects *common* names ("Add species common
-   name"); `SpeciesFilter` compares *scientific* names. A populated list would have matched
-   nothing an operator could enter through the UI — and every test written against scientific
-   names would have passed. Entries now match either form, case- and whitespace-insensitively.
-2. **The preview lied in the other direction.** `/admin/species/test` ran its own
-   common-name-only comparison, so once the lists worked, a scientific-name entry would have
-   shown "Pass" while the runtime blocked it. The page now calls the detection path's own
-   `matches_species`, because a page advertised as "preview the filter before it affects live
-   detections" is only truthful while it is the same code.
-3. **F-11, a new P1.** `process_and_infer_filtered` skipped the filter entirely unless *both*
-   coordinates were set, and separately the daemon read `cli.latitude`/`cli.longitude` with no
-   config fallback. So on a station configured the normal way — the installer writes
-   `LATITUDE`/`LONGITUDE` to `birdnet.conf` — the daemon got `None`, never ran the metadata
-   model, and left `SF_THRESH` inert. That is the headline species-frequency feature doing
-   nothing on most real installs. Coordinates now resolve CLI-then-config (the rule
-   `capture::schedule::resolve_location` always used), and only the *model* needs a location:
-   the operator's lists apply either way.
-
-Also delivered beyond the plan: **live reload**. The lists refresh on a 30-second TTL inside
-the daemon loop through an injected `SpeciesListsProvider`, mirroring `LockedFilesProvider`
-and the per-species threshold cache. And an include list matching no known species is ignored
-with a warning rather than intersected to nothing, so one misspelt name cannot take a station
-off the air.
-
-**Gate — green.** `fmt`; `clippy --workspace --all-targets --all-features -- -D warnings`
-(zero warnings); `cargo test --workspace --all-features` → **1915 passed, 0 failed, 0 runtime
-skips** — the model-gated suites actually ran (see §0).
-
-**Verified on a live station** running the real 11,560-species model, driving files through
-the daemon's own watcher:
-
-| step | result |
-|---|---|
-| Drop the bundled Magpie recording | **5** Eurasian Magpie + 1 Great Horned Owl |
-| `POST /admin/species/exclude/add name=Eurasian Magpie`, **no restart** | stored |
-| Drop an identical recording after the TTL | **0** Magpie; the Owl in the same file still came through |
-| Also exclude `Bubo virginianus` (scientific name), drop a third | **0** detections |
-
-The preview page agreed with the runtime at every step, for both name forms.
-
-### ✅ Slice 3 — Bound the analytics sync, then make analytics self-heal (F-04, F-05) — landed in `6fa90ac`
-
-The ordering the plan called out was real: F-05's rebuild path re-runs a full sync, so
-streaming had to land first or self-healing would have introduced the OOM it exists to survive.
-
-1. **Streaming sync.** Rows go straight into the DuckDB appender in batches of 10 000, so peak
-   memory tracks the batch and not the row count. `read_sqlite_detections` and `SyncRow` are
-   gone — 60 lines of buffering removed rather than tuned.
-2. **A partial failure is now recoverable.** The next sync recomputes its cutoff from what
-   DuckDB actually holds and resumes; the previous all-or-nothing append meant a station that
-   died mid-sync started over.
-3. **Quarantine and rebuild** on an unusable analytics file, with the `.wal` sidecar moved
-   alongside it, plus a **probe read** — opening is not proof of health, because DuckDB can
-   attach to a damaged file and only fail once a query touches the broken block.
-4. **A doctor check** (`Analytics (quarantined files)`) so the recovery is visible on
-   `--doctor` and `/admin/doctor` rather than buried in the journal.
-
-**The regression test was written twice, and that is the point.** The first version asserted a
-192 MiB bound at 200 000 rows — and **passed on the broken code**, because the old path only
-needed ~87 MiB there. Measuring both implementations at three row counts gave:
-
-| rows | buffering (old) | streaming (new) |
-|---|---|---|
-| 200 000 | 87 MiB | 51 MiB |
-| 400 000 | **162 MiB** | **56 MiB** |
-| 1 000 000 | ~420 MiB (extrapolated) | 62 MiB |
-
-The default is now 400 000 with a 112 MiB bound — between the two curves where they differ by
-~3×. Confirmed by checking the old implementation back out: **fails at 167 MiB, passes at
-52 MiB on the new one.**
-
-**Gate — green.** `fmt`; `clippy --workspace --all-targets --all-features -- -D warnings`;
-`cargo test --workspace --all-features` → **1921 passed, 0 failed, 0 runtime skips** (with the
-real model).
-
-**Verified on a live station.** 500 detections synced and served; `birds.duckdb` overwritten
-with 30 bytes of garbage; the next start logged *"analytics database is unusable; quarantining
-it and rebuilding from SQLite"*, moved the file and its `.wal` aside as
-`birds.duckdb.corrupt.<stamp>`, resynced all 500 rows, loaded the behavioral extension, and
-served the same session data as before. `--doctor` then reported the leftover as a `WARN` with
-the "no detections were lost" remediation.
-
-### ✅ Slice 4 — Egress control and latent-panic cleanup (F-06, F-08, F-12) — landed
-
-**F-08 was scoped as "three `total_cmp` swaps". The sweep mattered more than the swaps.**
-Auditing every panicking construct reachable from a request handler — `unwrap`, `expect`,
-`panic!`, `unreachable!`, slice indexing — across all of `birdnet-web` turned up 24 candidate
-sites. All but the three named are structurally safe: the remaining `expect`s are on
-`HmacSha256::new_from_slice` (accepts any key length) and signal-handler installation at
-startup, and every `[0]` index is guarded by a length check, a `match` on length, or a
-fixed-size array. So F-08 did name the complete set — but that is now known rather than
-assumed.
-
-**F-12, a new finding the sweep produced.** `[profile.release]` sets `panic = "abort"` and the
-server mounts **no catch-panic layer**. A panic in a request handler is therefore not a 500 —
-it aborts the whole process, web server and detection daemon together, and systemd restarts
-it. A reachable handler panic is a station outage, and a repeatable one is a repeatable
-outage. That is a deliberate, documented choice (`installer/lib/65-service.sh:97` explains
-`panic=abort` as making panics visible as SIGABRT), so the fix is to keep the class empty
-rather than to switch to unwinding: the two modules now carry
-`#![deny(clippy::unwrap_used, clippy::expect_used)]` with the reasoning in the module docs.
-
-**F-06 was scoped as `--no-update-check`. The inventory came first.** Enumerating every
-outbound host in non-test production code found 13 literals, of which most are *not* egress —
-`www.w3.org` is an SVG xmlns, `ebird.org` and `allaboutbirds.org` are link hrefs the browser
-follows, and the `github.com` hits are a User-Agent string and text in rendered HTML. The real
-surface is two default-on connections (`api.github.com`, Wikipedia), one first-run-only
-fallback (`extensions.duckdb.org`), and seven that are off until configured.
-
-Delivered: `--no-update-check` (narrow) **and `--offline`** (master switch, implies it and also
-stops image downloads). Integrations you configured explicitly are deliberately untouched —
-silently muting a configured alert channel would be a worse surprise than an unwanted GitHub
-request, and a test pins that. `--doctor` reports the posture under **Outbound connections**,
-and the full inventory is documented in *Configuration → What the station connects to*.
-
-**Verified on a live binary**, all three postures:
-
-| flags | doctor reports |
-|---|---|
-| *(none)* | `on by default: api.github.com (daily release check); en.wikipedia.org / upload.wikimedia.org …` |
-| `--no-update-check` | `on by default: en.wikipedia.org / upload.wikimedia.org …` |
-| `--offline` | `none — this station makes no unsolicited outbound connections.` |
-
-and confirmed in the journal that `--offline` actually suppresses both (`daily update check
-disabled; this station will not contact api.github.com`, `species image downloads disabled by
-offline mode`), rather than only changing what the doctor says.
-
-### ✅ Slice 5 — Release mechanics (F-09, F-10) — landed
-
-**F-09.** `workspace.package.version` → `0.10.0`; `[Unreleased]` rolled into
-`## [0.10.0] - 2026-08-07` with a fresh empty `[Unreleased]`; link refs updated; the API
-doc's sample `/api/v2/health` response brought in line (it still advertised `0.9.0`).
-
-**The release workflow was rehearsed end to end against this branch, not just spot-checked.**
-`workflow_dispatch` run [31224283342](https://github.com/tomtom215/BirdNet-Behavior/actions/runs/31224283342)
-on `ba84180`, **10/10 jobs green in 33 m 41 s**:
-
-| Job | | Wall clock |
-|---|---|---|
-| Validate release tag | ✅ | 5 s |
-| CI gate — fmt | ✅ | 54 s |
-| CI gate — msrv (`cargo check` on 1.95) | ✅ | 9 m 44 s |
-| CI gate — clippy (`--all-targets --all-features -D warnings`) | ✅ | 10 m 50 s |
-| CI gate — doc (`RUSTDOCFLAGS=-D warnings`) | ✅ | 11 m 9 s |
-| CI gate — test (`--workspace --all-features`) | ✅ | 12 m 6 s |
-| Build aarch64-apple-darwin | ✅ | 11 m 13 s |
-| Build x86_64-unknown-linux-gnu | ✅ | 16 m 49 s |
-| Build aarch64-unknown-linux-gnu (cross) | ✅ | 20 m 58 s |
-| Package and attest (SBOM, SHA256SUMS, SLSA provenance) | ✅ | 20 s |
-
-That covers the two things a `validate`-only check cannot: **all three release targets
-actually link** — including the aarch64 Linux cross-build that produces the Pi binary, the
-slowest job and the one most likely to break — and the packaging step that generates the
-CycloneDX SBOM, the combined checksums and the SLSA build-provenance attestation runs
-against the real artifacts.
-
-`Publish GitHub Release` is gated `if: github.event_name == 'push'` (`release.yml:593`), so
-the dry run stopped after `package`. **Nothing was published**: the newest tag in the repo
-is still `v0.9.0`.
-
-**This rehearsal caught a real defect.** The first dispatch (run
-[31221771538](https://github.com/tomtom215/BirdNet-Behavior/actions/runs/31221771538)) failed
-its `CI gate — doc` job on two broken intra-doc links — `[Cli::parse_tracked_from]`, which
-I had put behind `#[cfg(test)]` while leaving the link in a non-test doc comment, and
-`[SETTINGS_FORM_KEYS]`, not in scope at the link site. Root cause: across four slices I
-never once ran `cargo doc` locally, so `RUSTDOCFLAGS="-D warnings"` was the only thing
-looking. The exact CI command is now part of the local gate:
-
-```bash
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --all-features
+The workspace bundles DuckDB **1.5.5** (`duckdb = "~1.10505"`, where `10505` is
+DuckDB 1.5.5). DuckDB refuses to `LOAD` an extension built for any other
+version — `Cargo.toml:55-73` documents this at length, including that
+`allow_extensions_metadata_mismatch` does not bypass the check.
+
+**Measured, not inferred.** Both artifacts were downloaded and their footers read:
+
+| URL | size | sha256 | footer declares |
+|---|---|---|---|
+| `…/v1.5.3/linux_amd64/behavioral.duckdb_extension.gz` | 405 990 | `f1f820ec…` | **behavioral v0.8.0, DuckDB v1.5.3** |
+| `…/v1.5.5/linux_amd64/behavioral.duckdb_extension.gz` | 408 382 | `4777 9675…` | **behavioral v0.9.1, DuckDB v1.5.5** |
+
+Different files. `v1.5.3` returns **HTTP 200**, so the Dockerfile's `curl`
+*succeeds* and the wrong extension is embedded — the "download failed, fall
+through to runtime INSTALL" branch never fires.
+
+**Why no gate caught it.**
+- `docker.yml:156` overrides only `BEHAVIORAL_EXTENSION_TARGET` (the arch),
+  never `BEHAVIORAL_EXTENSION_DUCKDB_VERSION`.
+- `crates/birdnet-behavioral/build.rs:57` embeds whatever bytes it is handed and
+  **validates nothing**.
+- `embedded_extension_loads_when_bundled` (`connection/mod.rs:423`) *would* catch
+  it — it asserts `load_embedded(bytes).expect(…)` — but it only ever runs in the
+  `ci.yml` test job, which fetches from the **correct** `v1.5.5` path. Nothing
+  loads the extension inside the built image.
+
+**History confirms a partial update.** `b35d4f5 "deps: bundle DuckDB 1.5.5 to
+pick up behavioral v0.9.1"` moved `ci.yml`; `release.yml:332` also uses `v1.5.5`.
+`git log -S"v1.5.5" -- Dockerfile` is **empty — the Dockerfile has never carried
+it.** Three files hardcode the version; two were updated.
+
+**Field impact.** Docker is one of two documented install paths, and the
+*recommended* one for Pi OS Bookworm (glibc 2.36), which the native binary
+refuses. Those stations either lose behavioural analytics entirely or silently
+depend on a runtime `INSTALL … FROM community` — network egress at first run,
+which is exactly the air-gap guarantee the embedding exists to provide.
+
+A manual recovery path does exist (`--refresh-extension`, `src/cli.rs:174`,
+surfaced in the empty-state hint at
+`birdnet-web/src/routes/pages/behavioral.rs:565`), but it needs an operator to
+notice that the analytics pages are empty, and network. On an unattended station
+nobody is there to notice. It is a mitigation, not the fix.
+
+**Fix (three parts — the third is what closes the class).**
+1. `Dockerfile:142` → `v1.5.5`.
+2. Make `crates/birdnet-behavioral/build.rs` parse the extension footer and
+   **fail the build** when the declared DuckDB version differs from the linked
+   engine. A wrong pin then cannot compile.
+3. Add a step to `docker.yml` that runs the built image and asserts
+   `LOAD behavioral` succeeds with networking disabled.
+
+**Verified red-before-green, here, today.** Building `birdnet-behavioral` with
+`BIRDNET_BUNDLED_EXTENSION_FILE` pointed at each artifact and running
+`embedded_extension_loads_when_bundled`:
+
+```
+v1.5.3 (what the Dockerfile pins)      → test result: FAILED
+  ExtensionLoad("load embedded: Invalid Input Error: Failed to load
+  '…/behavioral.duckdb_extension', The file was built specifically for DuckDB
+  version 'v1.5.3' and can only be loaded with that version of DuckDB.
+  (this version of DuckDB is 'v1.5.5')")
+
+v1.5.5 (what ci.yml and release.yml use) → test result: ok. 1 passed
 ```
 
-A second push was needed after that, for the same class of reason: `crates/birdnet-web/openapi.json`
-still declared `0.9.0`, and a test asserts it tracks `CARGO_PKG_VERSION`. `RELEASING.md` now
-names both non-obvious files a version bump has to touch beyond `Cargo.toml` — the OpenAPI
-spec, and the sample `/api/v2/health` response in the API reference. Only one of the two
-fails a test; the other is caught by nothing but the checklist.
-
-**F-10 — the fix was not the one the plan proposed.** The plan said to use
-`debug = "line-tables-only"`, on the reasoning that it keeps backtraces while dropping the
-bulk. Measured, it does nothing:
-
-| dev profile `debug` | `target/` | `birdnet-behavior` |
-|---|---|---|
-| `true` (full) | 21 GB | 1.1 GB |
-| `"line-tables-only"` | **22 GB** | 752 MB |
-| `0` (chosen) | **7.5 GB** | 233 MB |
-
-Same command each time (`cargo build --workspace --all-targets --all-features`) from a clean
-`target/`. Line tables do not help because the bulk is the statically-linked ONNX Runtime and
-libduckdb, not Rust line tables.
-
-**This table was wrong twice before it was right, both times by quoting a number that was not
-what it claimed to be.** First the comment quoted 2.1 GB as the *line-tables* figure when it
-came from `debug = "none"`. Then, corrected, it still quoted 2.1 GB for `debug = 0` — but that
-number had been read off a `du` taken after a **`cargo clippy`** run, which type-checks and
-links no test binaries, so it was never comparable to a full `--all-targets` build. The real
-saving is ~2.8x (21 GB → 7.5 GB), not the order of magnitude the bad number implied. Worth
-recording because the failure mode is generic: a `du` is only a measurement of the command
-that produced it.
-
-The profile sets `debug = 0`, carries the corrected table, and documents the per-package
-`CARGO_PROFILE_DEV_DEBUG=full` escape hatch for when a backtrace's file/line is needed.
-
-**Not done, deliberately: the tag.** `RELEASING.md` is explicit that creating and pushing
-the tag is the manual "go" action, and it publishes a GitHub Release, Docker images, and
-the install path real stations pull from. That is the maintainer's call, not this branch's.
-
-### ✅ Slice 6 — the two caveats that did *not* need hardware
-
-The plan carried two "not established" caveats to the end. Both turned out to be reachable
-in a container, so both were closed rather than shipped as unknowns.
-
-#### A real `0.9.0` → `0.10.0` upgrade
-
-Not a synthetic fixture: the **published `v0.9.0` x86_64 release binary**, sha256-checked
-against the digest on the release
-(`d8583c4d5bfaf8b5a97a461d6e05e56198e99ca5ffea0e018ca0c212d077732e`), booted as a station,
-configured **through its own admin UI** — including the Web Authentication card that existed
-then — and seeded with **48 401 detections** across a 120-day season. Then `0.10.0` was
-pointed at that untouched station.
-
-| | `0.9.0` | after `0.10.0` |
-|---|---|---|
-| schema version | 20 | **22** (migrations 21, 22 applied) |
-| detections | 48 401 | **48 401** — none lost |
-| settings rows | 33 | **31** |
-| plaintext `auth_*` rows | **2** | **0** |
-| admin accounts | 1 | 1 — login still works |
-| settings reaching the runtime | `count=2` | **`count=21`** |
-| DuckDB | v1.5.3 / ext v0.8.0 | **v1.5.5 / ext v0.9.1, opened in place — no quarantine** |
-
-The purge is not silent — it logs `removed plaintext credential rows written by a previous
-build's settings form … count=2`. The operator's species lists survive verbatim. All nine
-`/api/v2/analytics/*` endpoints answer 200 over the migrated history, every key page is 200,
-and `--doctor` reports 13 passed / 0 errors.
-
-The `count=2 → count=21` row is the upgrade consequence worth stating plainly: **settings
-that were inert start taking effect the moment a station upgrades**, with nobody touching the
-UI. That is the fix working, and it is also a behaviour change an operator should expect.
-
-**Rollback is safe, which matters more than it sounds.** Running `0.9.0` again against the
-schema-22 database does not fail: it warns — `database schema is newer than this binary knows
-about — likely a downgrade` — and serves data normally. An operator whose upgrade goes wrong
-can go back.
-
-#### The aarch64 binary actually executed
-
-The plan said "built and linked, never executed." It has now been executed — **the exact
-artifact the release pipeline produced** (`build-aarch64-unknown-linux-gnu` from run
-31224283342, sha256-verified), run under `qemu-aarch64-static` against an Ubuntu 24.04 arm64
-sysroot:
-
-- `--version` / `--help` run; ONNX Runtime initialises
-- `--doctor` against a real 48 k-detection station: **13 passed, 0 errors**
-- `--web-only` serves: every key page 200, and **all analytics endpoints 200 through DuckDB
-  v1.5.5 + the behavioral v0.9.1 extension running natively on aarch64**
-
-And the documented glibc floor is now checked rather than asserted: the highest symbol
-version the binary requires is **`GLIBC_2.39`**, exactly the documented minimum — which is
-precisely why Bookworm's 2.36 cannot work.
-
-**What this still is not.** qemu-user emulation on x86_64 is not a Raspberry Pi. It proves
-the binary is a valid aarch64 executable whose entire stack — dynamic linking, ONNX Runtime,
-SQLite, DuckDB, the bundled extension, axum — initialises and serves correctly. It says
-nothing about real Pi throughput, thermal behaviour, or hardware audio capture.
-
-### Still not established (and why)
-
-- **Real Raspberry Pi hardware.** Emulation is not the board. Throughput, thermals and live
-  audio capture from a real microphone remain unmeasured.
-- **Long-duration soak.** The soak tests bound memory growth; they do not run for days. "A
-  full season unattended" is the target, not a measurement.
-
-### Not in scope for `v0.10.0`
-
-- **Dependabot backlog** (#148, #176, #177, #186, #188, #190, #193). Take them *after* the
-  release, not during — `password-hash 0.6` (#148) still needs `argon2 0.6` to exist
-  (documented in `Cargo.toml`), and `ort 2.0.0-rc.13` (#193) moves the ONNX Runtime baseline,
-  which is the one dependency that decides the glibc floor.
-- **Bookworm / glibc 2.39 floor** (old G-14). The installer already refuses cleanly with
-  Docker guidance (`installer/lib/30-platform.sh:146-166`) and Pi OS Trixie is the current
-  release. Leave as documented-and-refused.
-- **MQTT store-and-forward** (old G-12). `src/integrations/store_forward.rs` plus
-  `tests/store_forward_e2e.rs` now exist; confirm coverage during Slice 4 and close the gap
-  in the docs rather than opening new work.
+That is DuckDB's own refusal, on the exact bytes the Docker build embeds. This
+finding is measured, not inferred.
 
 ---
 
-## 3. Definition of done for `v0.10.0`
+### S-02 — The database directory is never created; doctor says otherwise · **P1**
 
-- [x] No form field in `/admin/settings` is editable-but-inert; the classification test enforces it
-- [x] Species include/exclude demonstrably suppresses a detection end to end
-- [x] Apprise + BirdWeather configured from the UI actually notify/upload; Test agrees with live
-- [x] Initial analytics sync of ≥1 M detections stays under a fixed RSS bound (test-enforced)
-- [x] A corrupted analytics DB is quarantined and rebuilt on the next start
-- [x] Every default-on outbound connection is documented and individually disable-able
-- [x] `Cargo.toml`, `CHANGELOG.md` and `openapi.json` agree; tag still to be pushed by the maintainer
-- [x] The **whole release pipeline** rehearsed green at `ba84180` — validate, all five CI gates, all three build targets, SBOM + checksums + SLSA attestation (run 31224283342, 10/10)
-- [x] Full gate green locally *and* in CI: `fmt`, `clippy --all-targets --all-features -D warnings`, `test --workspace --all-features`, `doc` with `-D warnings`, `check` on MSRV 1.95
-- [x] The model-gated scientific core run against the real sha256-verified model — **1929 passed, 0 failed, 0 runtime skips** across 40 suites, re-confirmed at `ba84180` on a cold `target/`
+**Proven A/B, same command both times.**
 
-**Independently confirmed in CI.** The real-model `inference` job lives in `ci.yml`, which
-fires only on pushes to `main`/`master` and on pull requests — so until PR #195 was opened it
-had never run against this branch, and the model-gated coverage was local only. It has now
-run: **all 37 checks on #195 are green** at `ce54b61`, including `Inference against the real
-model`, `cargo-deny` (the one gate that could not be run locally — `cargo-deny` is not
-installed in this environment), `Cross-check (aarch64 / Raspberry Pi)`, `install.sh → web UI
-(offline, no-systemd container)`, `Accessibility (axe) + visual-QA sweep`, and all 21
-`cargo-mutants` shards.
+```
+A  parent directory absent → Error: "database error: sqlite error:
+                             unable to open database file: …/birds.db"   exit 1
+B  mkdir -p <parent>, rerun → GET / → 200, 23 migration/schema log lines
+```
 
-**Opening the PR found three real defects, all in gates never run locally.** Worth recording,
-because the pattern is the same each time — a gate exists, it is cheap, and it was skipped:
+`--doctor` on state A reports, and exits **0**:
 
-| Gate | What it caught | Cost of running it |
-|---|---|---|
-| `cargo doc` with `-D warnings` | Two broken intra-doc links | seconds |
-| `typos` | A short commit SHA in prose, tokenized at its first digit and read as an English word (4 hits), plus one genuine misspelling | 8 MB download, <1 s |
-| `scripts/gen-cli-help.sh` | Four new flags missing from the committed `--help` snapshot | seconds |
-| `cargo-mutants` | Three survivors on a `tracing::info!` guard | minutes |
+```
+[ WARN ] Database directory — /root/BirdNet-Behavior does not exist yet —
+         will be created on first run
+         → no action needed unless you want to pre-create it with `mkdir -p`
+```
 
-The mutation one is the most instructive. All three survivors sat on
-`if !include.is_empty() || !exclude.is_empty()` — and the function *directly above it in the
-same file*, `species_thresholds_log_count`, exists for precisely this reason and says so in
-its doc comment. The fix was to follow the idiom already there. Verified locally after
-installing `cargo-mutants`: `daemon/mod.rs` 1 caught / 1 unviable / 0 missed, and
-`daemon/config.rs` **29 mutants, 29 caught, 0 missed**.
+It is never created. `src/app.rs:109` resolves the path
+(`helpers::db_path_from_config` → `DB_PATH`, default `$HOME/BirdNet-Behavior/birds.db`)
+and `:170` opens it, with **no `create_dir_all` anywhere on the path**.
 
-One hazard that deserves a warning for anyone repeating this: `cargo mutants --in-place`
-edits the working tree, and a run killed by a timeout does **not** restore it. One such kill
-left `resolve_station_coords` returning `(Some(-1.0), Some(-1.0))` in the tree. It never
-reached a commit, but in a repo where an agent commits, an interrupted `--in-place` run is a
-live way to ship a mutant. Check `git status` after every run.
+**The asymmetry is what makes it a trap.** Every sibling directory *is*
+auto-created — recordings (`helpers/system.rs:148`), watch dir
+(`daemon/mod.rs:93`), the **DuckDB analytics** store
+(`birdnet-behavioral/connection/mod.rs:339`), capture output, tmpfs. And
+`--doctor --fix` repairs the recordings and image-cache directories
+(`doctor/fix.rs:38-44`) but not this one. The only directory whose absence is
+fatal is the only one nothing creates.
 
-_Keep this document current as slices land: flip the checkboxes, strike closed findings, and
-re-run the §0 evidence table before tagging._
+**Who hits it.** Not a stock bare-metal install — the installer pre-creates the
+directory. It hits:
+- **Docker** with a bind mount whose subdirectory does not exist;
+- anyone relocating the database off the SD card, which
+  `docs/FIELD_DEPLOYMENT.md:36` actively recommends ("SSD on USB — consumer SD
+  cards fail after ~6 months of WAL churn") and whose storage section teaches the
+  exact `RECS_DIR=/data/recordings` pattern. `RECS_DIR` is auto-created;
+  `DB_PATH` is not;
+- any manual or dev run.
+
+**Fix.** `create_dir_all(parent)` before opening the database in `src/app.rs`,
+matching the DuckDB path two modules over; surface a clear error if that fails
+(permissions). Keep doctor's message — it becomes true.
+
+**Verify.** Integration test: point `DB_PATH` at a nested non-existent path,
+start, assert the station serves and the directory exists. Red before, green after.
+
+---
+
+### S-03 — 150 packages of drift that no Dependabot PR shows · **P1 (release)**
+
+Dependabot opens PRs for **declared** dependencies. The lockfile — which is what
+actually ships in every binary — had drifted far further:
+
+```
+cargo update --dry-run   →   Locking 150 packages to latest compatible versions
+```
+
+All semver-compatible, so no manifest edit is involved. It included the
+security-relevant transitive floor of a networked field appliance:
+`rustls 0.23.40 → 0.23.43`, `aws-lc-rs 1.17.0 → 1.18.0` (carrying
+`aws-lc-sys 0.41.0 → 0.44.0`), `hyper 1.9.0 → 1.11.0`, `h2 0.4.14 → 0.4.15`,
+`webpki-roots 1.0.7 → 1.0.9`, `zerocopy 0.8.48 → 0.8.56`, `regex 1.12.3 → 1.13.1`.
+
+Three open PRs (#196, #193, #186) are strict **subsets** of this single update.
+
+> **Caveat worth recording:** `cargo update --dry-run --workspace` reports
+> "0 packages" — `--workspace` restricts the update to workspace *members*. The
+> unqualified form is the one that tells the truth. That flag cost this audit a
+> wrong answer before it gave the right one.
+
+**Status: done on this branch — see §2 for the measured result.**
+
+---
+
+### S-04 — The scientific core passes whether or not it ran · **P2**
+
+`model_env()` (`tests/inference_e2e.rs:28`) returns `None` when
+`BIRDNET_TEST_MODEL`/`_LABELS` are unset, and each test returns early. The
+harness counts that as **passed**. Proven side by side:
+
+```
+without model:  SKIP: BIRDNET_TEST_LABELS not set
+                test result: ok. 2 passed … finished in 0.00s
+with model:     Pica pica detected 3 time(s), best confidence: 93.5%
+                test result: ok. 2 passed … finished in 2.94s
+```
+
+Same summary line; 0.00 s versus 2.94 s of real ONNX inference. Four suites
+behave this way (`inference_e2e`, `pipeline_e2e`, `species_filter_e2e`, `soak`),
+which is why the workspace totals are byte-identical with and without the model —
+a reader cannot tell from `1933 passed` whether the classifier was verified at
+all. CI does set the variables, so CI is honest; every other reader is not.
+
+**Fix.** Have the suites honour `BIRDNET_REQUIRE_MODEL=1` (set it in `ci.yml`) and
+**panic** with a clear message when the model is missing under that flag, so a
+silent CI regression to "skipped" fails loudly. Locally, print the skip banner to
+the summary rather than only under `--nocapture`.
+
+---
+
+### S-05 — PR #196 is red on the CLI-help drift gate · **P2**
+
+`clap` 4.6.1 → 4.6.6 changed help rendering for a single alias:
+
+```diff
+-          [aliases: --preflight]
++          [alias: --preflight]
+```
+
+`ci.yml`'s "Build (debug, all features)" job runs `scripts/gen-cli-help.sh` and
+fails on any diff, so the PR is blocked by a docs snapshot, not a code defect.
+Reproduced exactly here after `cargo update`: one line, and regenerating the
+snapshot clears it. **Done on this branch.**
+
+---
+
+### S-06 — PR #177 cannot merge alone, and is stale · **P2**
+
+`crates/birdnet-core/src/audio/resample.rs:11-12` imports
+`audioadapter_buffers::direct::InterleavedSlice` **and** `rubato::audioadapter::Adapter`
+— the buffer type must implement the trait *rubato re-exports from its own
+`audioadapter` dependency*. The lockfile shows why that couples them:
+
+```
+rubato 3.0.0               deps: audioadapter, audioadapter-buffers, …
+audioadapter-buffers 3.0.0 deps: audioadapter, audioadapter-sample, num-traits
+audioadapter 3.0.0
+```
+
+`rubato 3` pins `audioadapter 3` directly. Moving `audioadapter-buffers` to 4/5
+brings `audioadapter` 4/5 with it, so the graph carries two versions of the crate
+that defines `Adapter` — and the `InterleavedSlice` we hand to rubato implements
+the wrong one.
+
+The PR is also stale: it proposes 4.0.0, and the registry now has **5.1.0**.
+This is the same shape as the documented `password-hash`/`argon2` coupling.
+
+**Fix.** Take `rubato 3 → 4` and `audioadapter-buffers 3 → 5` **together** as one
+change, behind the resampler's own tests; close #177 in favour of it.
+
+---
+
+### S-07 — PR #148 cannot merge · **P2 (close it)**
+
+`Cargo.toml` already documents that `password-hash` must move in lock-step with
+`argon2`. Checked against the registry index today: `argon2`'s newest published
+version is **`0.6.0-rc.8`** — there is no stable 0.6. Taking `password-hash 0.6.1`
+alone puts two distinct `PasswordHasher` traits in the graph and does not compile.
+
+**Fix.** Close #148 with that reason and add an `ignore` for `password-hash` in
+`.github/dependabot.yml` until `argon2 0.6.0` ships, so the backlog stops
+carrying a PR that can never be green.
+
+---
+
+### S-08 — the release build's toolchain action is unpinned · **P2**
+
+21 of 24 distinct `uses:` refs are SHA-pinned. Every exception is
+`dtolnay/rust-toolchain`, used 17 times across 8 workflows under three refs —
+`@stable` (13), `@1.95` (1), and `@master` (**3, all in `release.yml`**).
+
+The `@master` three sit **inside the jobs that compile the binaries that get
+SLSA-attested, cosign-signed and pulled by field stations**. A moving branch ref
+in the artifact-producing path undercuts the rest of the supply-chain story.
+
+`dependabot.yml` deliberately ignores *major* bumps of this action (the MSRV is
+governed by `rust-toolchain.toml`); that is unrelated to pinning by digest.
+
+**Fix.** Pin by SHA and keep selecting the channel via the `toolchain:` input.
+Start with `release.yml`'s three, which are the ones that sign artifacts.
+
+---
+
+### S-09 — `CITATION.cff` is three releases behind · **P3**
+
+`version: 0.8.0`, `date-released: "2026-06-11"`, while `Cargo.toml` and
+`crates/birdnet-web/openapi.json` are both `0.10.0`. The file's own comment says
+to bump it in lock-step. It was missed at 0.9.0 **and** 0.10.0 because
+`release.yml`'s `validate` job checks only `Cargo.toml` and `CHANGELOG.md`.
+
+For a scientific project this is the string GitHub's "Cite this repository"
+widget and Zenodo hand to anyone citing the software.
+
+**Fix.** Bump it, and extend `validate` to assert `CITATION.cff` `version` equals
+the tag. (`docs/book/reference/api.md` was checked and is correct at 0.10.0.)
+
+---
+
+### S-10 — doctor never mentions that `/admin` is open · **P3**
+
+Verified working as designed: with `CADDY_PWD` set, `/admin/*` → 303 `/login` and
+unauthenticated `POST` → 401; with it unset, the middleware synthesises the seed
+admin and `/admin/settings` returns **200 to anyone**
+(`auth_middleware.rs:142-152`). That default is deliberate BirdNET-Pi parity, the
+bare-metal installer auto-generates a strong password
+(`installer/lib/70-station.sh:45-50`), `.env.example:89-93` warns that Docker does
+**not**, and `app.rs:353` logs a warning when bound off-loopback without one.
+
+The gap is only that `--doctor` — the tool the docs point operators at, which
+already checks the listen address parses — has no check for it, and there is no
+`src/doctor/auth.rs`.
+
+**Fix.** Add a doctor check: non-loopback listen address + no admin password →
+warn, naming `CADDY_PWD` and the loopback alternative.
+
+---
+
+### S-11 — post-roll commits are in no changelog section · **P3**
+
+`[Unreleased]` is empty, `[0.10.0]` is dated 2026-08-07, and `ce54b61`
+(daemon log-guard mutants + refreshed CLI help) and `14a5bb8` (typos config +
+one spelling fix) landed after it. Tagging `v0.10.0` today passes `validate` and
+ships commits its own changelog entry does not describe. Minor, but it is the
+release notes.
+
+**Fix.** Fold them into the entry when the version is rolled (§3, slice 6).
+
+---
+
+## 2. Dependency posture
+
+### The seven open PRs
+
+| PR | What | Verdict |
+|----|------|---------|
+| #196 | `cargo-patch-and-minor` × 8 (lockfile only) | **superseded** by the full update; was red on S-05 |
+| #193 | `ort` rc.12 → rc.13 (lockfile only) | **superseded** — included in the update |
+| #186 | `tokio` 1.52.3 → 1.53.1 (lockfile only) | **superseded** — included in the update |
+| #188 | GitHub Actions × 10 (workflow files only) | **take** — review the SHAs, land with S-08 |
+| #176 | `tower-http` 0.6.11 → 0.7.0 (manifest) | **evaluate** — we use `cors`, `trace`, `fs` |
+| #177 | `audioadapter-buffers` 3 → 4 | **close** — see S-06, replace with the paired bump |
+| #148 | `password-hash` 0.5 → 0.6.1 | **close** — see S-07, cannot compile |
+
+### The lockfile convergence (done on this branch)
+
+`cargo update` (unqualified), then the full gate re-run from the updated lockfile:
+
+| Gate | Result |
+|---|---|
+| Lockfile delta | 404 insertions / 519 deletions; **150 packages** relocked; 501 total |
+| Advisories | RustSec × new lockfile → **0 vulnerabilities** |
+| Build `--all-targets --all-features` | **exit 0**, 0 warnings |
+| Tests `--workspace --all-features` (+ real model) | **exit 0** — 40 suites, **1933 passed, 0 failed** — identical to baseline |
+| Clippy, both feature sets, `-D warnings` | **exit 0**, 0 warnings |
+| CLI-help snapshot | one line regenerated (S-05), committed |
+| MSRV `cargo +1.95 check --workspace --all-targets --all-features` | **exit 0** — 6 m 35 s; no dependency raised the floor |
+
+### Still behind a major (no PR, or PR superseded)
+
+`audioadapter-buffers` 3 → 5.1.0 · `base64` 0.22 → 0.23.1 · `comfy-table` 7.1 →
+7.2.2 · `generic-array` 0.14.7 → 0.14.9 · `matchit` 0.8.4 → 0.8.6 ·
+`password-hash` 0.5 → 0.6.1 · `rubato` 3 → 4 · `tower-http` 0.6.11 → 0.7.0.
+
+`base64` is three call sites on the standard `Engine` API
+(`security.rs:56`, `session.rs:50`, `share.rs:33`) — low risk. `matchit` and
+`generic-array` are transitive (axum, crypto) and move when their parents do.
+
+---
+
+## 3. Execution plan
+
+Ordered so each slice is independently landable and independently verifiable.
+Slices 1–2 are the release blockers.
+
+### Slice 1 — S-01, the Docker extension (P1)
+1. `Dockerfile:142` → `v1.5.5`.
+2. `build.rs` validates the embedded extension's footer against the linked
+   DuckDB version; mismatch = build failure.
+3. `docker.yml` runs the built image with networking off and asserts
+   `LOAD behavioral`.
+- **Red-before-green:** build with the v1.5.3 artifact, watch
+  `embedded_extension_loads_when_bundled` fail; fix; watch it pass.
+
+### Slice 2 — S-02, the database directory (P1)
+1. `create_dir_all` the database parent in `src/app.rs` before open; clear error
+   on permission failure.
+2. Integration test with a nested non-existent `DB_PATH`.
+- **Red-before-green:** the A/B in S-02 becomes the test.
+
+### Slice 3 — S-03 + S-05, lockfile convergence *(done — verify in CI)*
+Already on this branch with the full gate green. On merge, close #196, #193, #186
+as superseded.
+
+### Slice 4 — the dependency backlog (S-06, S-07, S-08, #176)
+1. Close #148 (S-07) and add the `dependabot.yml` ignore.
+2. Close #177 (S-06); land `rubato 3 → 4` + `audioadapter-buffers 3 → 5` as one
+   change, gated on the resampler tests.
+3. Evaluate `tower-http 0.7` (#176) against `cors`/`trace`/`fs`; take or defer
+   with a written reason.
+4. Take #188, and pin the three `dtolnay/rust-toolchain` refs (S-08).
+5. `base64 0.23` — three call sites.
+
+### Slice 5 — gate integrity (S-04, S-10)
+1. `BIRDNET_REQUIRE_MODEL=1` in `ci.yml`; suites panic instead of skipping.
+2. Doctor check for open-admin exposure.
+
+### Slice 6 — the release itself (S-09, S-11)
+1. Fold `ce54b61`/`14a5bb8` into the changelog; roll `[Unreleased]` → `[0.10.1]`
+   (or `[0.11.0]` if slice 4 lands the resampler bump — that is a dependency
+   behaviour change, not a patch).
+2. Bump `CITATION.cff` **and** extend `release.yml`'s `validate` to check it.
+3. Re-run the release dry-run (`workflow_dispatch`), then follow `RELEASING.md`.
+   **The tag push stays the maintainer's manual "go".**
+
+---
+
+## 4. Definition of done
+
+- [ ] A Docker image, built from this tree with networking disabled, loads
+      `behavioral` v0.9.1 and answers every `/api/v2/analytics/*` endpoint
+- [ ] A wrong extension pin fails the build instead of shipping
+- [ ] A station with a non-existent `DB_PATH` parent starts, and doctor's message
+      is true
+- [ ] `cargo update` is part of the release runbook, with the advisory scan re-run
+      against the resulting lockfile
+- [ ] The Dependabot queue contains only PRs that can actually merge
+- [ ] Every `uses:` in `release.yml` is SHA-pinned
+- [ ] A missing model makes CI **fail**, not pass quietly
+- [ ] `Cargo.toml`, `CHANGELOG.md`, `openapi.json` **and** `CITATION.cff` agree,
+      with `validate` enforcing all four
+- [ ] Full gate green locally *and* in CI: fmt, clippy `-D warnings` both feature
+      sets, `test --workspace --all-features`, rustdoc, MSRV 1.95, aarch64 cross
+
+## 5. Still not established (and why)
+
+- **Real Raspberry Pi hardware.** Throughput, thermals and live capture from a
+  physical microphone remain unmeasured. qemu-user proved the aarch64 binary
+  executes and serves; it is not the board.
+- **Long-duration soak.** The soak suite bounds memory growth over minutes, not
+  days. "A full season unattended" remains the target, not a measurement.
+- **The Docker image built end to end here.** S-01's *load failure* is measured —
+  DuckDB refuses the exact bytes the Dockerfile embeds — and the pin and its
+  history are read directly from the tree. What was not done in this sandbox is
+  building the image itself and observing the failure through the container's own
+  analytics pages. Slice 1's CI step closes that last inch.
