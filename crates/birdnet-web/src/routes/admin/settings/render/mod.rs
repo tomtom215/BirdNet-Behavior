@@ -205,7 +205,6 @@ mod tests {
         // Audio
         assert!(html.contains("alsa_device"));
         assert!(html.contains("audio_format"));
-        assert!(html.contains("audio_channels"));
         assert!(html.contains("rtsp_urls"));
         // Location
         assert!(html.contains("latitude"));
@@ -230,11 +229,35 @@ mod tests {
         assert!(html.contains("custom_image_dir"));
         assert!(html.contains("site_name"));
         assert!(html.contains("info_site"));
-        assert!(html.contains("auth_username"));
-        assert!(html.contains("auth_password"));
         // Email
         assert!(html.contains("email_smtp_host"));
         assert!(html.contains("email_to"));
+    }
+
+    #[test]
+    fn settings_page_offers_no_credential_inputs() {
+        // The Web Authentication section explains where the admin password
+        // really lives; it must never again render an input for it. A password
+        // field here stored plaintext in `settings`, echoed it back into this
+        // HTML on every load, and changed no credential.
+        let html = render_settings_form(&HashMap::new());
+        assert!(
+            !html.contains("name=\"auth_password\""),
+            "settings form must not render an admin-password input"
+        );
+        assert!(
+            !html.contains("name=\"auth_username\""),
+            "settings form must not render an admin-username input"
+        );
+        // The SMTP password field stays: `email_smtp_pass` is read back out of
+        // the settings table by `create_email_notifier`, so it is a credential
+        // the form genuinely owns. The admin password never was.
+        assert!(
+            html.contains("name=\"email_smtp_pass\""),
+            "the working SMTP credential field must not be removed with the inert one"
+        );
+        // The explanation replacing them still points at the real mechanism.
+        assert!(html.contains("CADDY_PWD"));
     }
 
     #[test]

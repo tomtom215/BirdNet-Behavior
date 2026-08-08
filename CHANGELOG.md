@@ -7,6 +7,164 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-07
+
+### Added
+
+- **`--offline` / `BIRDNET_OFFLINE`, and `--no-update-check`.** A station made
+  two outbound connections nobody asked for — a release check against
+  `api.github.com` 60 seconds after start and every 24 hours after, and
+  Wikipedia species-image downloads — and the update check had no off switch at
+  all. That is awkward on a metered or cellular link and unanswerable during an
+  institutional review. `--offline` turns off both at once; `--no-update-check`
+  turns off just the release check. Integrations you configured explicitly
+  (Apprise, BirdWeather, MQTT, SMTP, heartbeat, weather) are deliberately
+  untouched, because configuring one is the consent — silently muting a
+  configured alert channel would be the worse surprise.
+
+  `--doctor` now reports the current posture under **Outbound connections**, and
+  the complete inventory — including the one first-run-only DuckDB extension
+  fetch — is documented in *Configuration → What the station connects to*.
+
+### Fixed
+
+- **`partial_cmp(..).unwrap()` on floats in two page renderers.** The values are
+  sums of integer detection counts, so no reachable input is `NaN` and this was
+  latent rather than live. It is fixed anyway because the cost of that
+  assessment being wrong is unusually high: `[profile.release]` sets
+  `panic = "abort"` and the server mounts no catch-panic layer, so a panic in a
+  request handler is not a 500 — it takes the whole process down, web server and
+  detection daemon together. The comparisons now use `f32::total_cmp`, and both
+  modules deny `unwrap`/`expect` so the class cannot return unnoticed.
+
+  A sweep of every panicking construct reachable from a request handler
+  (`unwrap`, `expect`, `panic!`, slice indexing) found no other reachable site:
+  the remaining `expect`s are on `HmacSha256::new_from_slice`, which accepts any
+  key length, and every `[0]` index is guarded by a length check or a
+  fixed-size array.
+
+- **A station stopped being able to start at roughly 2.1 million detections.**
+  The initial SQLite → DuckDB analytics sync read the *entire* detections table
+  into memory before appending a single row, so peak memory grew with the
+  station's whole history rather than with the work in flight. Measured: **541
+  MiB at 1 M rows and 967 MiB at 2 M**, against the `MemoryMax=1G` the systemd
+  unit sets — and with `Restart=always`, crossing that ceiling produced a
+  restart loop rather than a clean failure. A multi-year BirdNET-Pi database,
+  which is exactly what the migration importer brings in, is that size on
+  arrival.
+
+  The sync now streams rows straight into the DuckDB appender in batches, so
+  peak memory tracks the batch and not the row count: syncing 400 000 rows grew
+  RSS by 53 MiB where it previously grew by 167 MiB, and 1 M rows now costs 62
+  MiB. A soak test asserts the bound and fails on the old implementation.
+
+  A failure part-way through is now also recoverable: the next sync recomputes
+  its cutoff from what DuckDB actually holds and resumes, where previously an
+  all-or-nothing append meant a station that died mid-sync started over.
+
+- **A corrupt analytics database disabled analytics permanently and silently.**
+  A DuckDB file that failed to open was logged once as "not available
+  (non-fatal)" and then ignored on every subsequent start, leaving every
+  analytics page empty until a human noticed and deleted the file by hand —
+  which an unattended field station never gets. The DuckDB store is purely
+  derived from SQLite, so it is always safe to discard: an unusable file is now
+  moved aside with a timestamped `.corrupt.<unix-seconds>` suffix (its `.wal`
+  sidecar with it) and rebuilt from SQLite on the same start. Opening is no
+  longer taken as proof of health — DuckDB can attach to a damaged file and only
+  fail once a query touches the broken block, so a probe read runs first.
+  `--doctor` and `/admin/doctor` report any quarantined file, so the recovery is
+  visible rather than buried in the journal.
+
+- **The species allow/exclude lists never filtered a single detection.** The
+  daemon built its species filter from `SpeciesFilterConfig::default()` and
+  nothing in production ever populated the two lists, so a species excluded on
+  `/admin/species` kept being recorded, counted, notified on, and uploaded to
+  BirdWeather. The page maintained the list, confirmed every addition, and
+  offered a preview page describing exactly the effect that never happened.
+
+  Three separate defects had to be fixed for this to work, any one of which
+  would have left it broken:
+
+  - The lists were never read. They now come from the settings table through the
+    same function `/admin/species` uses, so the two cannot drift, and they are
+    re-read on a 30-second TTL inside the daemon loop — excluding a species is
+    something an operator does *because it is spamming them right now*, so it
+    takes effect on the next processed file rather than the next restart.
+  - The page collects **common** names while the filter worked in **scientific**
+    names, so even a populated list would have matched nothing. Entries now
+    match either name form, case- and whitespace-insensitively, and the
+    `/admin/species/test` preview calls the detection path's own predicate
+    rather than a parallel implementation that could drift from it.
+  - The filter was skipped entirely unless the station had both coordinates set.
+    Only the metadata model needs to know where the station is; the operator's
+    lists apply either way.
+
+  An include list that matches no known species is now ignored with a warning
+  rather than intersected to nothing — otherwise a single misspelt name would
+  have silenced the whole station.
+
+- **The species-frequency filter never ran on a normally-installed station.**
+  The daemon read `cli.latitude` / `cli.longitude` with no config fallback, so a
+  station configured the usual way — the installer writes `LATITUDE` and
+  `LONGITUDE` into `birdnet.conf`, and `/admin/settings` writes the settings
+  table layered on top of it — handed the daemon no coordinates and never ran
+  the metadata model at all, leaving `SF_THRESH` inert. Coordinates now resolve
+  CLI-then-config, the same rule the recording scheduler has always used.
+
+- **Twenty settings-page fields were editable, saved, and connected to
+  nothing.** The bridge between the `settings` table and the runtime config was
+  a hand-maintained allow-list a new form field could simply be missing from,
+  and twenty had accumulated on the wrong side of it — while the page told the
+  operator "changes apply on next restart" for values no restart would ever
+  read. Most reached the runtime through a flag carrying a clap
+  `default_value`, so the default won unconditionally and the field could never
+  take effect.
+
+  Every key the form can persist now carries an explicit classification —
+  bridged onto the runtime config, owned by a subsystem that reads the settings
+  table itself, or removed — and a test fails if one is missing, so a field can
+  no longer ship inert. The station resolves each setting *explicit CLI flag or
+  `BIRDNET_*` variable → admin settings → config file → default*, which needed
+  `clap` to be asked which arguments the operator really supplied rather than
+  guessed at with per-flag sentinels.
+
+  Newly working from the web UI: segment duration, frequency shift, night
+  inhibit, the pre-sunrise and post-sunset offsets, multi-stream RTSP URLs, the
+  custom species-image directory, and the weekly report schedule.
+
+- **Apprise and BirdWeather could be configured in the web UI and would never
+  send.** Both clients read only the CLI flag and the config file, so a token or
+  notification URL entered on the Settings page was stored and ignored — and the
+  admin "Send test notification" button read the *saved* value, so the test
+  succeeded while live detections notified nobody. Both, along with the
+  notification trigger mode, cooldown, minimum confidence, species allow/exclude
+  lists and message templates, now reach the runtime from either surface.
+
+- **Dawn and dusk recording windows can now differ.** The scheduler has always
+  carried separate pre-sunrise and post-sunset offsets and the settings page has
+  always shown two fields, but the runtime wrote a single `--twilight-offset`
+  into both, so no surface could make them differ. Each end now resolves on its
+  own via `--pre-sunrise-offset` / `--post-sunset-offset` (or the matching
+  settings fields), falling back to `--twilight-offset` when unset — so existing
+  stations keep their current symmetric behaviour.
+
+### Removed
+
+- **The Settings page's "Web Authentication" card.** Its password field stored
+  whatever was typed as a **plaintext** row in the `settings` table, rendered it
+  back into the page HTML on every later load, and changed no credential at all
+  — the admin password is an Argon2id hash in the accounts database, seeded
+  from `CADDY_PWD`. The section also claimed that clearing the field would
+  "disable HTTP Basic Auth", which it never did. The card now explains where the
+  credential actually lives, and any plaintext row left by an earlier build is
+  deleted on the next start.
+
+- **Two settings inputs with no runtime consumer at all.** "Audio Channels"
+  duplicated a control that already works per-source on
+  `/admin/audio` (which is where the channel count is really read from), and
+  "Include Species Image" drove nothing in the notification stack. The audio
+  section now points at the page that works; the notification option is gone.
+
 ### Added
 
 - **Time-based clip retention that actually works — and is off by default.**
@@ -2204,7 +2362,8 @@ x86_64 Linux.
 - systemd installer script with ALSA microphone auto-detection and
   automatic BirdNET+ model download from Zenodo.
 
-[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.7.2...v0.9.0
 [0.7.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.5.3...v0.6.0

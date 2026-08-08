@@ -1,5 +1,13 @@
 # Release-Readiness Punch-List
 
+> **⚠️ SUPERSEDED — historical record only.** The current plan is
+> [`docs/RELEASE_PLAN.md`](./RELEASE_PLAN.md) (audited 2026-08-07 against `main`).
+> This file was written against the `claude/gallant-feynman-bJs95` integration branch,
+> which no longer exists, and its "there is no CI on this repo" note is wrong: `main` is
+> gated by 8 workflows and is green. Every O-01…O-26 and P1–P3 item below has shipped.
+> Kept for the reasoning behind those decisions; do not take its branch model or gate
+> instructions as current.
+
 **Purpose.** A self-contained backlog of the work remaining before a clean release,
 written so it can be picked up **cold in a fresh session** — every item carries its
 evidence (`file:line`), root cause, a concrete fix plan, effort/risk, dependencies,

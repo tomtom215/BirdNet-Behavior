@@ -26,82 +26,327 @@ use birdnet_db::settings::{SettingsCategory, ensure_settings_table, list, set};
 use birdnet_web::state::AppState;
 use std::collections::{BTreeMap, HashSet};
 
-/// Bridge specs: `(admin-UI key, runtime config key, category)`. Single source
-/// of truth for both directions of the settings ↔ config bridge:
+/// How an admin-UI setting reaches the running station — or why it does not.
 ///
-/// * [`overlay_db_settings`] reads the settings table and applies each row on
-///   top of the file config (UI key → config key) so settings saved in the web
-///   UI take effect on the daemon.
+/// Every key the settings form can persist carries one of these, and
+/// `settings_form_keys_are_all_classified` fails the build's test run if one
+/// does not. That total classification is the point: the mapping used to be an
+/// allow-list that a new form field could simply be missing from, and twenty
+/// fields ended up editable, persisted, and connected to nothing — the page
+/// promising "changes apply on next restart" for values no restart would ever
+/// read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Wiring {
+    /// Overlaid onto the runtime [`Config`] under this key by
+    /// [`overlay_db_settings`], and seeded back out of it by
+    /// [`seed_db_settings_from_config`]. The consumer reads the config, so the
+    /// value takes effect on the next restart.
+    Bridged(&'static str),
+    /// Read straight out of the `settings` table by the named subsystem, which
+    /// therefore needs no config key. Recorded so the key counts as wired
+    /// without pretending it flows through the config.
+    OwnedBy(&'static str),
+}
+
+/// Bridge specs: one per key the admin settings form can persist.
+///
+/// Single source of truth for both directions of the settings ↔ config bridge:
+///
+/// * [`overlay_db_settings`] reads the settings table and applies each
+///   [`Wiring::Bridged`] row on top of the file config (UI key → config key) so
+///   settings saved in the web UI take effect on the daemon.
 /// * [`seed_db_settings_from_config`] does the inverse on first run: it copies
 ///   the installer-written file config *into* the settings table (config key →
 ///   UI key, tagged with `category`) so the values the operator entered during
 ///   installation actually appear in — and can be edited from — the web UI.
 ///
-/// Only settings with a verified runtime consumer and no external side-effect
-/// are listed; anything absent is still stored but has no effect on the daemon.
-/// Notification/integration and auth settings are deliberately excluded — they
-/// are applied (and seeded, where relevant) by their own subsystems.
-const SETTING_SPECS: &[(&str, &str, SettingsCategory)] = &[
-    // Detection tuning (consumed in `crate::daemon`).
+/// The list must cover
+/// [`birdnet_web::routes::admin::settings::form::SETTINGS_FORM_KEYS`] exactly;
+/// the test at the foot of this module enforces it in both directions.
+const SETTING_SPECS: &[(&str, Wiring, SettingsCategory)] = &[
+    // ── Detection tuning (consumed in `crate::daemon`) ─────────────────────
     (
         "confidence_threshold",
-        "CONFIDENCE",
+        Wiring::Bridged("CONFIDENCE"),
         SettingsCategory::Detection,
     ),
-    ("sensitivity", "SENSITIVITY", SettingsCategory::Detection),
-    ("overlap", "OVERLAP", SettingsCategory::Detection),
-    ("sf_thresh", "SF_THRESH", SettingsCategory::Detection),
+    (
+        "sensitivity",
+        Wiring::Bridged("SENSITIVITY"),
+        SettingsCategory::Detection,
+    ),
+    (
+        "overlap",
+        Wiring::Bridged("OVERLAP"),
+        SettingsCategory::Detection,
+    ),
+    (
+        "sf_thresh",
+        Wiring::Bridged("SF_THRESH"),
+        SettingsCategory::Detection,
+    ),
     (
         "privacy_threshold",
-        "PRIVACY_THRESHOLD",
+        Wiring::Bridged("PRIVACY_THRESHOLD"),
         SettingsCategory::Detection,
     ),
-    // Audio capture (consumed in `crate::capture`).
-    ("alsa_device", "ALSA_CARD", SettingsCategory::Audio),
-    ("alsa_devices", "ALSA_CARDS", SettingsCategory::Audio),
-    ("rtsp_url", "RTSP_URL", SettingsCategory::Audio),
-    ("audio_format", "AUDIOFMT", SettingsCategory::Audio),
-    // Station / location.
-    ("latitude", "LATITUDE", SettingsCategory::Location),
-    ("longitude", "LONGITUDE", SettingsCategory::Location),
-    ("station_name", "STATION_NAME", SettingsCategory::Location),
-    ("site_name", "SITENAME", SettingsCategory::System),
-    ("info_site", "INFO_SITE", SettingsCategory::System),
-    // System / disk management.
+    // ── Audio capture (consumed in `crate::capture`) ───────────────────────
+    (
+        "alsa_device",
+        Wiring::Bridged("ALSA_CARD"),
+        SettingsCategory::Audio,
+    ),
+    (
+        "alsa_devices",
+        Wiring::Bridged("ALSA_CARDS"),
+        SettingsCategory::Audio,
+    ),
+    (
+        "rtsp_url",
+        Wiring::Bridged("RTSP_URL"),
+        SettingsCategory::Audio,
+    ),
+    (
+        "rtsp_urls",
+        Wiring::Bridged("RTSP_URLS"),
+        SettingsCategory::Audio,
+    ),
+    (
+        "audio_format",
+        Wiring::Bridged("AUDIOFMT"),
+        SettingsCategory::Audio,
+    ),
+    (
+        "segment_duration",
+        Wiring::Bridged("SEGMENT_DURATION"),
+        SettingsCategory::Audio,
+    ),
+    (
+        "freq_shift_hz",
+        Wiring::Bridged("FREQ_SHIFT"),
+        SettingsCategory::Audio,
+    ),
+    // ── Station / location ─────────────────────────────────────────────────
+    (
+        "latitude",
+        Wiring::Bridged("LATITUDE"),
+        SettingsCategory::Location,
+    ),
+    (
+        "longitude",
+        Wiring::Bridged("LONGITUDE"),
+        SettingsCategory::Location,
+    ),
+    (
+        "station_name",
+        Wiring::Bridged("STATION_NAME"),
+        SettingsCategory::Location,
+    ),
+    (
+        "night_inhibit",
+        Wiring::Bridged("NIGHT_INHIBIT"),
+        SettingsCategory::Location,
+    ),
+    (
+        "pre_sunrise_offset",
+        Wiring::Bridged("PRE_SUNRISE_OFFSET"),
+        SettingsCategory::Location,
+    ),
+    (
+        "post_sunset_offset",
+        Wiring::Bridged("POST_SUNSET_OFFSET"),
+        SettingsCategory::Location,
+    ),
+    (
+        "site_name",
+        Wiring::Bridged("SITENAME"),
+        SettingsCategory::System,
+    ),
+    (
+        "info_site",
+        Wiring::Bridged("INFO_SITE"),
+        SettingsCategory::System,
+    ),
+    // ── Notifications / integrations ───────────────────────────────────────
+    //
+    // These reach the runtime through the same config overlay: the Apprise and
+    // BirdWeather constructors already fall back to these config keys, and
+    // `overlay_db_settings` runs before they are built, so bridging the key is
+    // all that is needed for a value typed in the UI to be the one that sends.
+    (
+        "apprise_url",
+        Wiring::Bridged("APPRISE_URL"),
+        SettingsCategory::Notifications,
+    ),
+    (
+        "apprise_config",
+        Wiring::Bridged("APPRISE_CONFIG_FILE"),
+        SettingsCategory::Notifications,
+    ),
+    (
+        "birdweather_token",
+        Wiring::Bridged("BIRDWEATHER_TOKEN"),
+        SettingsCategory::Notifications,
+    ),
+    (
+        "notify_confidence",
+        Wiring::Bridged("APPRISE_MIN_CONFIDENCE"),
+        SettingsCategory::Notifications,
+    ),
+    (
+        "notify_cooldown",
+        Wiring::Bridged("APPRISE_COOLDOWN"),
+        SettingsCategory::Notifications,
+    ),
+    (
+        "notify_trigger",
+        Wiring::Bridged("APPRISE_TRIGGER"),
+        SettingsCategory::Notifications,
+    ),
+    (
+        "notify_species_only",
+        Wiring::Bridged("APPRISE_WATCHLIST"),
+        SettingsCategory::Notifications,
+    ),
+    (
+        "notify_species_exclude",
+        Wiring::Bridged("APPRISE_WATCHLIST_EXCLUDE"),
+        SettingsCategory::Notifications,
+    ),
+    (
+        "notify_title_template",
+        Wiring::Bridged("APPRISE_TITLE_TEMPLATE"),
+        SettingsCategory::Notifications,
+    ),
+    (
+        "notify_body_template",
+        Wiring::Bridged("APPRISE_BODY_TEMPLATE"),
+        SettingsCategory::Notifications,
+    ),
+    (
+        "weekly_report_schedule",
+        Wiring::Bridged("WEEKLY_REPORT_SCHEDULE"),
+        SettingsCategory::Notifications,
+    ),
+    // ── Species filtering (consumed in `crate::daemon`) ────────────────────
+    //
+    // Read from the settings table directly rather than through the config: the
+    // lists are multi-valued and the daemon reloads them, so round-tripping
+    // them through a comma-joined config string would only lose fidelity.
+    (
+        "species_include",
+        Wiring::OwnedBy("crate::daemon::config"),
+        SettingsCategory::Species,
+    ),
+    (
+        "species_exclude",
+        Wiring::OwnedBy("crate::daemon::config"),
+        SettingsCategory::Species,
+    ),
+    // ── System / disk management ───────────────────────────────────────────
     (
         "image_cache_dir",
-        "IMAGE_CACHE_DIR",
+        Wiring::Bridged("IMAGE_CACHE_DIR"),
+        SettingsCategory::System,
+    ),
+    (
+        "custom_image_dir",
+        Wiring::Bridged("CUSTOM_IMAGE_DIR"),
         SettingsCategory::System,
     ),
     (
         "max_files_per_species",
-        "MAX_FILES_SPECIES",
+        Wiring::Bridged("MAX_FILES_SPECIES"),
         SettingsCategory::System,
     ),
     (
         "purge_threshold",
-        "DISK_PURGE_THRESHOLD",
+        Wiring::Bridged("DISK_PURGE_THRESHOLD"),
         SettingsCategory::System,
     ),
     (
         "stream_retention_secs",
-        "STREAM_RETENTION_SECS",
+        Wiring::Bridged("STREAM_RETENTION_SECS"),
         SettingsCategory::System,
     ),
-    ("stream_max_mb", "STREAM_MAX_MB", SettingsCategory::System),
+    (
+        "stream_max_mb",
+        Wiring::Bridged("STREAM_MAX_MB"),
+        SettingsCategory::System,
+    ),
     (
         "clip_retention_days",
-        "CLIP_RETENTION_DAYS",
+        Wiring::Bridged("CLIP_RETENTION_DAYS"),
         SettingsCategory::System,
+    ),
+    // ── Email alerts ───────────────────────────────────────────────────────
+    //
+    // `create_email_notifier` reads every one of these out of the settings
+    // table itself, which is why they need no config key.
+    (
+        "email_smtp_host",
+        Wiring::OwnedBy("crate::integrations::email"),
+        SettingsCategory::Notifications,
+    ),
+    (
+        "email_smtp_port",
+        Wiring::OwnedBy("crate::integrations::email"),
+        SettingsCategory::Notifications,
+    ),
+    (
+        "email_smtp_user",
+        Wiring::OwnedBy("crate::integrations::email"),
+        SettingsCategory::Notifications,
+    ),
+    (
+        "email_smtp_pass",
+        Wiring::OwnedBy("crate::integrations::email"),
+        SettingsCategory::Notifications,
+    ),
+    (
+        "email_from",
+        Wiring::OwnedBy("crate::integrations::email"),
+        SettingsCategory::Notifications,
+    ),
+    (
+        "email_to",
+        Wiring::OwnedBy("crate::integrations::email"),
+        SettingsCategory::Notifications,
+    ),
+    (
+        "email_from_name",
+        Wiring::OwnedBy("crate::integrations::email"),
+        SettingsCategory::Notifications,
+    ),
+    (
+        "email_starttls",
+        Wiring::OwnedBy("crate::integrations::email"),
+        SettingsCategory::Notifications,
+    ),
+    (
+        "email_min_confidence",
+        Wiring::OwnedBy("crate::integrations::email"),
+        SettingsCategory::Notifications,
+    ),
+    (
+        "email_cooldown_secs",
+        Wiring::OwnedBy("crate::integrations::email"),
+        SettingsCategory::Notifications,
     ),
 ];
 
 /// Resolve the runtime config key a given admin-UI setting maps to, if any.
+///
+/// `None` for a key that is wired some other way (or not a settings key at all)
+/// — only [`Wiring::Bridged`] entries flow through the config.
 fn config_key_for(setting_key: &str) -> Option<&'static str> {
     SETTING_SPECS
         .iter()
         .find(|(ui, _, _)| *ui == setting_key)
-        .map(|(_, cfg, _)| *cfg)
+        .and_then(|(_, wiring, _)| match wiring {
+            Wiring::Bridged(config_key) => Some(*config_key),
+            Wiring::OwnedBy(_) => None,
+        })
 }
 
 /// Layer the given settings rows on top of the file config as overrides.
@@ -172,10 +417,16 @@ fn settings_to_seed(
     existing: &HashSet<String>,
 ) -> Vec<(&'static str, String, SettingsCategory)> {
     let mut out = Vec::new();
-    for &(ui_key, config_key, category) in SETTING_SPECS {
+    for &(ui_key, wiring, category) in SETTING_SPECS {
         if existing.contains(ui_key) {
             continue;
         }
+        // Only bridged keys have a config key to seed *from*. A key its
+        // subsystem reads straight out of the settings table has no file-config
+        // counterpart, so there is nothing to copy across.
+        let Wiring::Bridged(config_key) = wiring else {
+            continue;
+        };
         if let Some(value) = config.get(config_key) {
             let value = value.trim();
             if !value.is_empty() {
@@ -284,6 +535,100 @@ pub fn seed_db_settings_from_config(config: Option<&Config>, cli: &Cli, state: &
 #[cfg(test)]
 mod tests {
     use super::*;
+    use birdnet_web::routes::admin::settings::form::SETTINGS_FORM_KEYS;
+    use std::collections::BTreeSet;
+
+    /// Bridge keys that are deliberately *not* settings-form fields.
+    ///
+    /// These are config/env-only inputs that still need a seed+overlay mapping
+    /// (so a Docker station configured purely through `BIRDNET_*` keeps working)
+    /// but have no editable control. Anything else in [`SETTING_SPECS`] that is
+    /// not a form key is a mistake — most likely a renamed field.
+    const NON_FORM_BRIDGE_KEYS: &[&str] = &["alsa_devices"];
+
+    #[test]
+    fn settings_form_keys_are_all_classified() {
+        // The guard-rail. Every key the admin form can persist must say how it
+        // reaches the runtime. Adding a form field without classifying it here
+        // fails, instead of silently shipping another editable control that
+        // does nothing — the defect this whole mapping exists to prevent, and
+        // which had accumulated twenty instances before it was enforced.
+        let classified: BTreeSet<&str> = SETTING_SPECS.iter().map(|(ui, _, _)| *ui).collect();
+        let unclassified: Vec<&str> = SETTINGS_FORM_KEYS
+            .iter()
+            .copied()
+            .filter(|key| !classified.contains(key))
+            .collect();
+
+        assert!(
+            unclassified.is_empty(),
+            "settings-form keys with no wiring classification: {unclassified:?}\n\
+             Add each to SETTING_SPECS as Wiring::Bridged(config key) or \
+             Wiring::OwnedBy(subsystem), or remove the form field."
+        );
+    }
+
+    #[test]
+    fn every_bridge_spec_is_a_real_form_key() {
+        // The reverse direction: a spec for a key the form no longer has is
+        // dead weight that reads as coverage. Renaming a field trips this.
+        let form: BTreeSet<&str> = SETTINGS_FORM_KEYS.iter().copied().collect();
+        let allowed: BTreeSet<&str> = NON_FORM_BRIDGE_KEYS.iter().copied().collect();
+        let orphans: Vec<&str> = SETTING_SPECS
+            .iter()
+            .map(|(ui, _, _)| *ui)
+            .filter(|key| !form.contains(key) && !allowed.contains(key))
+            .collect();
+
+        assert!(
+            orphans.is_empty(),
+            "SETTING_SPECS entries that are not settings-form keys: {orphans:?}"
+        );
+    }
+
+    #[test]
+    fn no_duplicate_bridge_specs() {
+        // A duplicated UI key makes `config_key_for` depend on list order,
+        // which would silently pick one of two mappings.
+        let unique: BTreeSet<&str> = SETTING_SPECS.iter().map(|(ui, _, _)| *ui).collect();
+        assert_eq!(unique.len(), SETTING_SPECS.len(), "duplicate UI key");
+
+        // Two UI keys writing the same config key would have them clobber each
+        // other through the overlay.
+        let config_keys: Vec<&str> = SETTING_SPECS
+            .iter()
+            .filter_map(|(_, w, _)| match w {
+                Wiring::Bridged(k) => Some(*k),
+                Wiring::OwnedBy(_) => None,
+            })
+            .collect();
+        let unique_config: BTreeSet<&str> = config_keys.iter().copied().collect();
+        assert_eq!(
+            unique_config.len(),
+            config_keys.len(),
+            "two settings keys map to the same config key"
+        );
+    }
+
+    #[test]
+    fn subsystem_owned_keys_do_not_flow_through_the_config() {
+        // `OwnedBy` means "this subsystem reads the settings table itself", so
+        // the overlay must not also invent a config key for it — that would be
+        // two sources of truth for one value.
+        assert_eq!(config_key_for("email_smtp_host"), None);
+        assert_eq!(config_key_for("species_include"), None);
+    }
+
+    #[test]
+    fn removed_credential_keys_are_not_classified() {
+        // The admin credential is an Argon2id hash in the accounts table. If
+        // these ever come back as settings keys, they come back as plaintext.
+        let classified: BTreeSet<&str> = SETTING_SPECS.iter().map(|(ui, _, _)| *ui).collect();
+        assert!(!classified.contains("auth_password"));
+        assert!(!classified.contains("auth_username"));
+        assert!(!SETTINGS_FORM_KEYS.contains(&"auth_password"));
+        assert!(!SETTINGS_FORM_KEYS.contains(&"auth_username"));
+    }
 
     #[test]
     fn maps_known_detection_keys() {
@@ -296,9 +641,42 @@ mod tests {
     #[test]
     fn unknown_key_maps_to_nothing() {
         assert_eq!(config_key_for("totally_unknown_setting"), None);
-        // Auth and notification keys are intentionally not bridged here.
+        // The removed credential fields must never map to anything.
         assert_eq!(config_key_for("auth_password"), None);
-        assert_eq!(config_key_for("apprise_url"), None);
+    }
+
+    #[test]
+    fn notification_keys_are_bridged() {
+        // These used to map to nothing, which is precisely why an Apprise URL
+        // or BirdWeather token entered in the web UI was stored and then
+        // ignored: the constructors read `APPRISE_URL` / `BIRDWEATHER_TOKEN`
+        // from the config, and nothing put the saved value there.
+        assert_eq!(config_key_for("apprise_url"), Some("APPRISE_URL"));
+        assert_eq!(
+            config_key_for("birdweather_token"),
+            Some("BIRDWEATHER_TOKEN")
+        );
+        assert_eq!(
+            config_key_for("notify_confidence"),
+            Some("APPRISE_MIN_CONFIDENCE")
+        );
+        assert_eq!(config_key_for("notify_trigger"), Some("APPRISE_TRIGGER"));
+    }
+
+    #[test]
+    fn newly_bridged_capture_keys_reach_the_config() {
+        assert_eq!(config_key_for("segment_duration"), Some("SEGMENT_DURATION"));
+        assert_eq!(config_key_for("freq_shift_hz"), Some("FREQ_SHIFT"));
+        assert_eq!(config_key_for("night_inhibit"), Some("NIGHT_INHIBIT"));
+        assert_eq!(config_key_for("rtsp_urls"), Some("RTSP_URLS"));
+        assert_eq!(
+            config_key_for("pre_sunrise_offset"),
+            Some("PRE_SUNRISE_OFFSET")
+        );
+        assert_eq!(
+            config_key_for("post_sunset_offset"),
+            Some("POST_SUNSET_OFFSET")
+        );
     }
 
     #[test]

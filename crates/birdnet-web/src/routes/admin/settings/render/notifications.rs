@@ -28,9 +28,6 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let nexcl = get_setting(s, "notify_species_exclude", "");
     let title_tmpl = get_setting(s, "notify_title_template", "");
     let body_tmpl = get_setting(s, "notify_body_template", "");
-    let img = get_setting(s, "notify_image", "true");
-    let img_yes = if img == "false" { "" } else { " selected" };
-    let img_no = if img == "false" { " selected" } else { "" };
     let weekly = get_setting(s, "weekly_report_schedule", "monday");
     let weekly_opts = render_weekly_options(weekly);
     write!(out, r#"
@@ -62,14 +59,6 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
           <option value="new-species-daily"{t_daily}>New species (each day)</option>
         </select>
         <p class="hint">When to send notifications (BirdNET-Pi: APPRISE_NOTIFY_EACH_DETECTION etc.)</p>
-      </div>
-      <div>
-        <label for="notify_image">Include Species Image</label>
-        <select id="notify_image" name="notify_image" class="bnb-w-select">
-          <option value="true"{img_yes}>Yes — attach image</option>
-          <option value="false"{img_no}>No — text only</option>
-        </select>
-        <p class="hint">Attach species photo to Telegram/Discord/etc. notifications</p>
       </div>
     </div>
     <div class="grid-2">

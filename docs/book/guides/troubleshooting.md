@@ -91,3 +91,19 @@ On the **Analytics** page, the Activity Sessions, Species Retention, and Next Sp
 The `duckdb-behavioral` community extension is compiled for a **specific DuckDB version**, and DuckDB refuses to load an extension built for a different one (an extension built for DuckDB `v1.5.3` won't load into a binary that bundles `v1.5.5`). This is **non-fatal**: everything that reads SQLite directly — Migration, the Dawn Chorus, the Heatmap, Co-occurrence, and the whole Time-series page — keeps working; only the extension-backed sessionize / retention / next-species queries are unavailable. The Analytics status badge reflects this — it reports the database is *connected* but does not claim behavioral analytics are active.
 
 To fix it, rebuild and republish the extension for the bundled DuckDB version in the [duckdb-behavioral](https://github.com/tomtom215/duckdb-behavioral) repository (or pin the `duckdb` crate to the version the published extension targets) and rebuild with `--features analytics`. Confirm the bundled version with `birdnet-behavior --doctor`. See the full [TROUBLESHOOTING.md](https://github.com/tomtom215/BirdNet-Behavior/blob/main/TROUBLESHOOTING.md) entry for details.
+
+## `--doctor` reports a quarantined analytics database
+
+The startup log shows *"analytics database is unusable; quarantining it and
+rebuilding from SQLite"*, and `--doctor` warns about a
+`…​.duckdb.corrupt.<timestamp>` file.
+
+**No detections were lost, and nothing needs doing.** The DuckDB analytics store
+holds nothing but a copy of rows that live in SQLite, so when the file cannot be
+read — a bad block on the SD card, a half-written file after a power cut, a
+DuckDB version change — the station moves it aside and rebuilds it from SQLite
+on that same start. Analytics comes back by itself.
+
+Delete the quarantined file once you are satisfied nothing else is wrong; it is
+kept only so you can look at it. If this keeps happening, the storage is the
+suspect — check `dmesg` for I/O errors and consider replacing the card.

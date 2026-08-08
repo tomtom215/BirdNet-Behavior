@@ -10,6 +10,27 @@ use duckdb::params;
 use super::{AnalyticsDb, AnalyticsError};
 use crate::queries;
 
+/// Columns copied from `SQLite` into the `DuckDB` detections table, in the
+/// order the appender expects them.
+const SYNC_COLS: &str = "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, \
+                         Cutoff, Week, Sens, Overlap, File_Name";
+
+/// How many rows are appended before the appender is flushed.
+///
+/// The sync used to read the entire `SQLite` detections table into a
+/// `Vec<SyncRow>` before appending a single row, so peak memory grew with the
+/// station's whole history rather than with the work in flight. Measured on
+/// x86_64: **1 000 000 rows → 541 MiB, 2 000 000 rows → 967 MiB** resident,
+/// against the `MemoryMax=1G` the systemd unit sets — so a station stopped
+/// being able to start at roughly 2.1 M detections, and `Restart=always` turned
+/// that into a restart loop. A multi-year BirdNET-Pi database, which is exactly
+/// what `birdnet-migrate` imports, is that size on arrival.
+///
+/// Streaming instead makes peak memory a function of this batch, not of the
+/// row count. 10 000 rows is a few MiB in the appender's buffer while still
+/// amortising the flush over a useful chunk.
+const APPEND_BATCH_ROWS: u64 = 10_000;
+
 impl AnalyticsDb {
     /// Sync detections from a `SQLite` connection into `DuckDB`.
     ///
@@ -52,13 +73,9 @@ impl AnalyticsDb {
             )?;
         }
 
-        let rows = read_sqlite_detections(sqlite_conn, cutoff.as_deref())
-            .map_err(|e| AnalyticsError::InvalidData(format!("SQLite read error: {e}")))?;
-
-        let count = u64::try_from(rows.len()).unwrap_or(0);
+        let count = self.stream_sqlite_into(sqlite_conn, "detections", cutoff.as_deref())?;
 
         if count > 0 {
-            self.append_rows_to("detections", &rows)?;
             self.conn
                 .execute_batch(queries::CREATE_DETECTIONS_TS_VIEW)?;
             tracing::info!(rows = count, "synced detections from SQLite to DuckDB");
@@ -86,10 +103,6 @@ impl AnalyticsDb {
         &self,
         sqlite_conn: &rusqlite::Connection,
     ) -> Result<u64, AnalyticsError> {
-        let rows = read_sqlite_detections(sqlite_conn, None)
-            .map_err(|e| AnalyticsError::InvalidData(format!("SQLite read error: {e}")))?;
-        let count = u64::try_from(rows.len()).unwrap_or(0);
-
         // Truncate first: a full rebuild must not be filtered by the incremental
         // cutoff (which would drop back-dated imports) and must not duplicate
         // rows already present from the startup sync.
@@ -105,7 +118,7 @@ impl AnalyticsDb {
         self.conn.execute_batch(
             "CREATE OR REPLACE TABLE detections_staging AS SELECT * FROM detections WHERE false;",
         )?;
-        self.append_rows_to("detections_staging", &rows)?;
+        let count = self.stream_sqlite_into(sqlite_conn, "detections_staging", None)?;
 
         self.conn.execute_batch("BEGIN TRANSACTION;")?;
         let swap = self.conn.execute_batch(
@@ -139,36 +152,92 @@ impl AnalyticsDb {
         Ok(count)
     }
 
-    /// Bulk-append already-read `SQLite` rows into the named `DuckDB` table via
-    /// the appender. `table` is an internal, hard-coded identifier (`detections`
-    /// for the incremental path, `detections_staging` for the atomic full
-    /// rebuild) — never untrusted input.
+    /// Stream detections from `SQLite` straight into the named `DuckDB` table,
+    /// flushing every [`APPEND_BATCH_ROWS`].
     ///
-    /// Shared by the incremental and full sync paths; callers refresh the
-    /// timestamp view and emit their own log line.
-    fn append_rows_to(&self, table: &str, rows: &[SyncRow]) -> Result<(), AnalyticsError> {
-        if rows.is_empty() {
-            return Ok(());
-        }
+    /// `table` is an internal, hard-coded identifier (`detections` for the
+    /// incremental path, `detections_staging` for the atomic full rebuild) —
+    /// never untrusted input. `after` filters to rows at or after a
+    /// `"YYYY-MM-DD HH:MM:SS"` cutoff; `None` reads the whole table.
+    ///
+    /// Rows are appended as they are read rather than collected first, so peak
+    /// memory tracks the batch rather than the station's entire history — see
+    /// [`APPEND_BATCH_ROWS`] for the numbers that made that necessary.
+    ///
+    /// A failure part-way through leaves the batches already flushed in place.
+    /// For the incremental path that is strictly better than the previous
+    /// all-or-nothing behaviour: the next sync recomputes its cutoff from what
+    /// `DuckDB` actually holds and resumes from there, so a station that dies
+    /// mid-sync makes progress instead of starting over. The full rebuild is
+    /// unaffected either way — it streams into a staging table that is only
+    /// swapped in once complete.
+    ///
+    /// Returns the number of rows appended.
+    fn stream_sqlite_into(
+        &self,
+        sqlite_conn: &rusqlite::Connection,
+        table: &str,
+        after: Option<&str>,
+    ) -> Result<u64, AnalyticsError> {
+        let read_err =
+            |e: rusqlite::Error| AnalyticsError::InvalidData(format!("SQLite read error: {e}"));
+
+        // `>=` (not `>`): the caller deletes the cutoff second from DuckDB
+        // first, then re-reads it whole from SQLite here, so rows that tie the
+        // latest synced second aren't permanently skipped (see sync_from_sqlite).
+        let sql = if after.is_some() {
+            format!(
+                "SELECT {SYNC_COLS} FROM detections \
+                 WHERE (Date || ' ' || Time) >= ? ORDER BY Date, Time"
+            )
+        } else {
+            format!("SELECT {SYNC_COLS} FROM detections ORDER BY Date, Time")
+        };
+
+        let mut stmt = sqlite_conn.prepare(&sql).map_err(read_err)?;
+        let mut rows = match after {
+            Some(ts) => stmt.query(rusqlite::params![ts]).map_err(read_err)?,
+            None => stmt.query([]).map_err(read_err)?,
+        };
+
         let mut appender = self.conn.appender(table)?;
-        for row in rows {
+        let mut total = 0_u64;
+        let mut in_batch = 0_u64;
+
+        while let Some(row) = rows.next().map_err(read_err)? {
+            // Bound to this iteration: each value is moved into the appender
+            // and dropped before the next row is read.
+            let date: String = row.get(0).map_err(read_err)?;
+            let time: String = row.get(1).map_err(read_err)?;
+            let sci_name: String = row.get(2).map_err(read_err)?;
+            let com_name: String = row.get(3).map_err(read_err)?;
+            let confidence: f64 = row.get(4).map_err(read_err)?;
+            let lat: Option<f64> = row.get(5).map_err(read_err)?;
+            let lon: Option<f64> = row.get(6).map_err(read_err)?;
+            let cutoff: Option<f64> = row.get(7).map_err(read_err)?;
+            let week: Option<i32> = row.get(8).map_err(read_err)?;
+            let sens: Option<f64> = row.get(9).map_err(read_err)?;
+            let overlap: Option<f64> = row.get(10).map_err(read_err)?;
+            let file_name: Option<String> = row.get(11).map_err(read_err)?;
+
             appender.append_row(params![
-                row.date,
-                row.time,
-                row.sci_name,
-                row.com_name,
-                row.confidence,
-                row.lat,
-                row.lon,
-                row.cutoff,
-                row.week,
-                row.sens,
-                row.overlap,
-                row.file_name,
+                date, time, sci_name, com_name, confidence, lat, lon, cutoff, week, sens, overlap,
+                file_name,
             ])?;
+
+            total += 1;
+            in_batch += 1;
+            if in_batch >= APPEND_BATCH_ROWS {
+                appender.flush()?;
+                in_batch = 0;
+            }
         }
+
+        // Always flush, even at zero rows: an unflushed appender is dropped
+        // silently, so relying on the loop's flush would lose a final partial
+        // batch.
         appender.flush()?;
-        Ok(())
+        Ok(total)
     }
 
     /// Insert a single detection record directly.
@@ -220,66 +289,6 @@ impl AnalyticsDb {
         )?;
         Ok(u64::try_from(count).unwrap_or(0))
     }
-}
-
-/// An intermediate row read from `SQLite` for syncing to `DuckDB`.
-#[derive(Debug)]
-struct SyncRow {
-    date: String,
-    time: String,
-    sci_name: String,
-    com_name: String,
-    confidence: f64,
-    lat: Option<f64>,
-    lon: Option<f64>,
-    cutoff: Option<f64>,
-    week: Option<i32>,
-    sens: Option<f64>,
-    overlap: Option<f64>,
-    file_name: Option<String>,
-}
-
-/// Read detections from `SQLite`, optionally filtering by a timestamp cutoff.
-fn read_sqlite_detections(
-    conn: &rusqlite::Connection,
-    after: Option<&str>,
-) -> Result<Vec<SyncRow>, rusqlite::Error> {
-    const COLS: &str = "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, \
-                        Cutoff, Week, Sens, Overlap, File_Name";
-
-    let map_row = |row: &rusqlite::Row<'_>| {
-        Ok(SyncRow {
-            date: row.get(0)?,
-            time: row.get(1)?,
-            sci_name: row.get(2)?,
-            com_name: row.get(3)?,
-            confidence: row.get(4)?,
-            lat: row.get(5)?,
-            lon: row.get(6)?,
-            cutoff: row.get(7)?,
-            week: row.get(8)?,
-            sens: row.get(9)?,
-            overlap: row.get(10)?,
-            file_name: row.get(11)?,
-        })
-    };
-
-    after.map_or_else(
-        || {
-            let sql = format!("SELECT {COLS} FROM detections ORDER BY Date, Time");
-            conn.prepare(&sql)?.query_map([], map_row)?.collect()
-        },
-        |ts| {
-            // `>=` (not `>`): the caller deletes the cutoff second from DuckDB
-            // first, then re-reads it whole from SQLite here, so rows that tie
-            // the cutoff second aren't permanently skipped (see sync_from_sqlite).
-            let sql = format!(
-                "SELECT {COLS} FROM detections \
-                 WHERE (Date || ' ' || Time) >= ? ORDER BY Date, Time"
-            );
-            conn.prepare(&sql)?.query_map([ts], map_row)?.collect()
-        },
-    )
 }
 
 #[cfg(test)]

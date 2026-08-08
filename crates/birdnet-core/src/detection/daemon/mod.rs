@@ -90,6 +90,13 @@ pub struct DaemonConfig {
     pub metadata_model_path: Option<PathBuf>,
     /// Species filter configuration (threshold, whitelist, include/exclude).
     pub species_filter: crate::inference::species_filter::SpeciesFilterConfig,
+    /// Optional callback re-read on a short TTL to refresh the operator's
+    /// include/exclude species lists without a restart.
+    ///
+    /// See [`crate::inference::species_filter::SpeciesListsProvider`]. When
+    /// `None`, the lists in [`Self::species_filter`] are used as given and never
+    /// change for the life of the daemon.
+    pub species_lists_provider: Option<crate::inference::species_filter::SpeciesListsProvider>,
     /// Privacy filter threshold (0.0 = disabled).
     pub privacy_threshold: f32,
     /// Station latitude (for species occurrence filtering).
@@ -185,6 +192,7 @@ mod tests {
             process_existing: false,
             metadata_model_path: None,
             species_filter: crate::inference::species_filter::SpeciesFilterConfig::default(),
+            species_lists_provider: None,
             privacy_threshold: 0.0,
             latitude: None,
             longitude: None,

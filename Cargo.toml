@@ -16,7 +16,7 @@ resolver = "2"
 exclude = ["fuzz"]
 
 [workspace.package]
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 rust-version = "1.95"
 license = "CC-BY-NC-SA-4.0"
@@ -175,7 +175,34 @@ strip = true
 
 [profile.dev]
 opt-level = 0
-debug = true
+# No debug info by default. Every binary here statically links ONNX Runtime and
+# libduckdb, and there are ~20 test binaries, so debug info dominates `target/`
+# to the point of being a real hazard: a full
+# `cargo build --workspace --all-targets --all-features` filled a 29 GB volume
+# mid-build, and `.github/workflows/ci.yml` has to delete 25–30 GB of
+# preinstalled SDKs before it can run at all.
+#
+# Measured on this workspace, each from a clean `target/` with the same command
+# (`cargo build --workspace --all-targets --all-features`):
+#
+#   debug             target/    birdnet-behavior
+#   true (full)        21 GB      1.1 GB
+#   line-tables-only   22 GB      752 MB     ← no saving; the win is not line tables
+#   0 (this)          7.5 GB      233 MB
+#
+# `line-tables-only` was tried first and measured, not assumed: it does not help,
+# because the bulk is the statically-linked C++ dependencies rather than Rust
+# line tables. Dropping debug info entirely is the lever that moves it — about
+# 2.8x, not the order of magnitude a quick `du` after a *check*-only run
+# (`cargo clippy`, which links no test binaries) misleadingly suggests.
+#
+# The cost is file/line in panic backtraces. When you need them — chasing a panic
+# or attaching a debugger — build that session with:
+#
+#   CARGO_PROFILE_DEV_DEBUG=full cargo test -p <crate> <filter>
+#
+# scoped to one package, because doing it workspace-wide brings the 21 GB back.
+debug = 0
 
 # Profile used by cargo-mutants (selected in .cargo/mutants.toml). Mutation
 # testing relinks the binary and test executables once per mutant; debug info

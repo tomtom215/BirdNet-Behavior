@@ -33,13 +33,16 @@ pub fn create_apprise_client(
     // Use the URL if present, or a placeholder for CLI-only mode.
     let url = apprise_url.unwrap_or_default();
 
-    let min_confidence = if (cli.notify_confidence - 0.8).abs() > f32::EPSILON {
-        cli.notify_confidence
-    } else {
-        config
-            .and_then(|c| c.get_parsed::<f32>("APPRISE_MIN_CONFIDENCE").ok())
-            .unwrap_or(cli.notify_confidence)
-    };
+    // Asking clap which arguments were really supplied replaces the old
+    // "does this differ from 0.8 by more than an epsilon?" test, which treated
+    // an operator who explicitly passed the default as having passed nothing.
+    let min_confidence = crate::helpers::resolve::setting::<f32>(
+        cli,
+        "notify_confidence",
+        cli.notify_confidence,
+        config,
+        "APPRISE_MIN_CONFIDENCE",
+    );
 
     let cooldown_secs = config
         .and_then(|c| c.get_parsed::<u64>("APPRISE_COOLDOWN").ok())
@@ -153,6 +156,63 @@ mod tests {
         let cli = default_cli();
         let cfg = config_with(&[("APPRISE_URL", "http://broker:8000")]);
         assert!(create_apprise_client(&cli, Some(&cfg)).is_some());
+    }
+
+    #[test]
+    fn apprise_url_typed_in_the_admin_ui_actually_builds_a_client() {
+        // The settings overlay writes the UI's `apprise_url` to `APPRISE_URL`
+        // before this runs, so this is the shape the web form produces. Before
+        // `apprise_url` was bridged the row was stored, the /admin "Test"
+        // button read it and sent successfully, and the detection path — which
+        // only ever looked at the CLI flag — built no client at all, so no
+        // detection notification was ever sent.
+        let cli = default_cli();
+        let cfg = config_with(&[("APPRISE_URL", "http://localhost:8000")]);
+        assert!(
+            create_apprise_client(&cli, Some(&cfg)).is_some(),
+            "an Apprise URL from the settings table must produce a live client"
+        );
+    }
+
+    /// Whether the built client would notify at `confidence`.
+    ///
+    /// Asserts through the behaviour the station actually depends on rather
+    /// than reaching into the client's fields.
+    fn would_notify(
+        cli: &crate::cli::Cli,
+        cfg: &birdnet_core::config::Config,
+        confidence: f32,
+    ) -> bool {
+        let handle = create_apprise_client(cli, Some(cfg)).expect("client built");
+        let mut client = handle.blocking_lock();
+        client.should_notify("Turdus merula", confidence)
+    }
+
+    #[test]
+    fn notify_confidence_from_settings_is_used_when_the_flag_is_default() {
+        let mut cli = default_cli();
+        cli.apprise_url = Some("http://localhost:8000".to_owned());
+        let cfg = config_with(&[("APPRISE_MIN_CONFIDENCE", "0.95")]);
+        assert!(
+            !would_notify(&cli, &cfg, 0.90),
+            "a 0.95 threshold from the settings page must suppress a 0.90 detection"
+        );
+        assert!(would_notify(&cli, &cfg, 0.96));
+    }
+
+    #[test]
+    fn explicit_notify_confidence_flag_beats_the_settings() {
+        // Replaces the old epsilon-vs-0.8 sentinel, which treated an operator
+        // who explicitly passed the documented default as having passed
+        // nothing — so `--notify-confidence 0.8` silently lost to the config.
+        let mut cli = crate::integrations::test_support::cli_with_explicit(&["notify_confidence"]);
+        cli.notify_confidence = 0.8;
+        cli.apprise_url = Some("http://localhost:8000".to_owned());
+        let cfg = config_with(&[("APPRISE_MIN_CONFIDENCE", "0.95")]);
+        assert!(
+            would_notify(&cli, &cfg, 0.85),
+            "an explicit --notify-confidence 0.8 must win over the settings value"
+        );
     }
 
     #[test]

@@ -1,15 +1,86 @@
 //! CLI argument definitions for BirdNet-Behavior.
 
-use clap::Parser;
+use clap::{ArgMatches, CommandFactory, FromArgMatches, Parser, parser::ValueSource};
 // Brings `.map` into scope for the custom `image_cache_dir` value parser.
 use clap::builder::TypedValueParser as _;
+use std::collections::HashSet;
 use std::path::PathBuf;
+
+/// The set of arguments the operator actually supplied, as opposed to the ones
+/// `clap` filled in from `default_value`.
+///
+/// This exists because a flag with a `default_value` is indistinguishable, after
+/// parsing, from one the operator typed: `cli.segment_duration` is `15` whether
+/// that came from `--segment-duration 15` or from nobody saying anything. That
+/// matters for every setting the admin UI can also set. The runtime resolves
+/// those in the order *explicit CLI flag / env → admin settings (already layered
+/// onto the config by `helpers::overlay_db_settings`) → config file → built-in
+/// default*, and without this the first step always wins, so a value chosen in
+/// the web form could never take effect.
+///
+/// The existing workarounds were per-flag sentinels — `disk_purge_threshold > 0`,
+/// `(notify_confidence - 0.8).abs() > f32::EPSILON` — which only work when the
+/// default happens to be an otherwise-invalid value, and silently do the wrong
+/// thing when the operator explicitly types the default. Asking `clap` which
+/// source a value came from is exact and works for every flag.
+#[derive(Debug, Default, Clone)]
+pub struct ExplicitArgs(HashSet<String>);
+
+impl ExplicitArgs {
+    /// Whether `id` was supplied on the command line or through its environment
+    /// variable (as opposed to coming from `default_value`).
+    ///
+    /// `id` is the clap argument id, which for the derive API is the field name
+    /// (`"segment_duration"`, not `"--segment-duration"`).
+    #[must_use]
+    pub fn has(&self, id: &str) -> bool {
+        self.0.contains(id)
+    }
+
+    /// Build the set from parsed [`ArgMatches`].
+    fn from_matches(matches: &ArgMatches) -> Self {
+        Self(
+            matches
+                .ids()
+                .map(clap::Id::as_str)
+                .filter(|id| {
+                    matches!(
+                        matches.value_source(id),
+                        Some(ValueSource::CommandLine | ValueSource::EnvVariable)
+                    )
+                })
+                .map(ToOwned::to_owned)
+                .collect(),
+        )
+    }
+
+    /// Construct directly from argument ids. Test-only: production code always
+    /// derives the set from real [`ArgMatches`].
+    #[cfg(test)]
+    pub(crate) fn from_ids<I, S>(ids: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self(ids.into_iter().map(Into::into).collect())
+    }
+}
 
 /// BirdNet-Behavior bird detection and analytics system.
 #[derive(Parser, Debug)]
 #[command(name = "birdnet-behavior", version, about)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct Cli {
+    /// Which arguments the operator actually supplied — see [`ExplicitArgs`].
+    ///
+    /// `#[arg(skip)]` keeps this out of the parser surface entirely: it is not a
+    /// flag, takes no value, and never appears in `--help`. It is populated by
+    /// [`Cli::parse_tracked`] after parsing (and by its test-only
+    /// `parse_tracked_from` sibling, which is why that name is not linked here —
+    /// it does not exist in a non-test build).
+    #[arg(skip)]
+    pub explicit: ExplicitArgs,
+
     /// Path to configuration file.
     #[arg(
         short,
@@ -101,6 +172,31 @@ pub struct Cli {
     /// Requires `--analytics-db` (or `ANALYTICS_DB_PATH`) and network access.
     #[arg(long)]
     pub refresh_extension: bool,
+
+    /// Make no unsolicited outbound connections.
+    ///
+    /// Turns off every network call the station would otherwise make on its
+    /// own: the daily update check against `api.github.com` and the Wikipedia
+    /// species-image downloads. Integrations you configure explicitly — Apprise,
+    /// `BirdWeather`, MQTT, SMTP, the heartbeat ping, the weather poll — are
+    /// left alone, because asking for one is a decision the operator already
+    /// made.
+    ///
+    /// For metered or cellular links, air-gapped deployments, and institutional
+    /// review, where "which hosts does this contact?" needs one answer rather
+    /// than a per-feature audit. See `docs/book/getting-started/configuration.md`
+    /// for the full egress list.
+    #[arg(long, env = "BIRDNET_OFFLINE")]
+    pub offline: bool,
+
+    /// Skip the daily check for a new release.
+    ///
+    /// The station otherwise contacts `api.github.com` 60 seconds after start
+    /// and every 24 hours after that, purely to log whether a newer version
+    /// exists. It never installs anything on its own — updates are applied only
+    /// from the admin panel. Implied by `--offline`.
+    #[arg(long, env = "BIRDNET_NO_UPDATE_CHECK")]
+    pub no_update_check: bool,
 
     /// Apprise notification server URL (e.g., `http://localhost:8000`).
     #[arg(long, env = "BIRDNET_APPRISE_URL")]
@@ -208,8 +304,29 @@ pub struct Cli {
     pub night_inhibit: bool,
 
     /// Minutes offset from sunrise/sunset for twilight recording (default: 30).
+    ///
+    /// Applies to both ends of the day. Use `--pre-sunrise-offset` /
+    /// `--post-sunset-offset` to set them independently; either one overrides
+    /// this for its own end.
     #[arg(long, default_value = "30", env = "BIRDNET_TWILIGHT_OFFSET")]
     pub twilight_offset: u32,
+
+    /// Minutes *before* sunrise at which recording starts.
+    ///
+    /// Overrides `--twilight-offset` for the morning end only. Dawn and dusk
+    /// activity are rarely symmetric — the dawn chorus starts well before first
+    /// light while evening song tails off quickly — so a station usually wants a
+    /// longer pre-sunrise window than post-sunset one. Unset falls back to
+    /// `--twilight-offset`.
+    #[arg(long, env = "BIRDNET_PRE_SUNRISE_OFFSET")]
+    pub pre_sunrise_offset: Option<u32>,
+
+    /// Minutes *after* sunset at which recording stops.
+    ///
+    /// Overrides `--twilight-offset` for the evening end only. Unset falls back
+    /// to `--twilight-offset`.
+    #[arg(long, env = "BIRDNET_POST_SUNSET_OFFSET")]
+    pub post_sunset_offset: Option<u32>,
 
     /// Heartbeat URL to ping after each analysis cycle (e.g., uptime monitoring).
     #[arg(long, env = "BIRDNET_HEARTBEAT_URL")]
@@ -451,10 +568,94 @@ pub struct Cli {
     pub quality_min_snr_db: f32,
 }
 
+impl Cli {
+    /// Parse from the process arguments, recording which of them the operator
+    /// actually supplied.
+    ///
+    /// Equivalent to [`clap::Parser::parse`] except that [`Cli::explicit`] is
+    /// populated. Prefer this everywhere in production: a `Cli` parsed the plain
+    /// way carries an empty `explicit` set, which reads as "the operator gave no
+    /// flags" and hands every contested setting to the admin UI.
+    #[must_use]
+    pub fn parse_tracked() -> Self {
+        Self::from_matches(&Self::command().get_matches())
+    }
+
+    /// Same as [`Cli::parse_tracked`], but from an explicit argument iterator.
+    ///
+    /// Test-only: production parses the real process arguments through
+    /// [`Cli::parse_tracked`]. Kept so the explicit-source behaviour can be
+    /// exercised against a synthesised argv rather than only asserted.
+    #[cfg(test)]
+    pub fn parse_tracked_from<I, T>(args: I) -> Self
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<std::ffi::OsString> + Clone,
+    {
+        Self::from_matches(&Self::command().get_matches_from(args))
+    }
+
+    /// Build a `Cli` from already-parsed matches, attaching the explicit-source
+    /// set.
+    ///
+    /// `from_arg_matches` only fails on a mismatch between the derive and the
+    /// command it just produced, which cannot happen for a single generated
+    /// type; `exit` renders clap's own diagnostic in the unreachable case rather
+    /// than panicking with a less useful one.
+    fn from_matches(matches: &ArgMatches) -> Self {
+        let explicit = ExplicitArgs::from_matches(matches);
+        let mut cli = Self::from_arg_matches(matches).unwrap_or_else(|e| e.exit());
+        cli.explicit = explicit;
+        cli
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn explicit_set_distinguishes_supplied_flags_from_defaults() {
+        // `--segment-duration` carries a `default_value`, so the parsed value is
+        // 15 either way. Only the explicit set can tell the two apart — which is
+        // what lets an admin-UI value win over a default but not over a flag the
+        // operator really typed.
+        let given = Cli::parse_tracked_from(["birdnet-behavior", "--segment-duration", "15"]);
+        assert_eq!(given.segment_duration, 15);
+        assert!(given.explicit.has("segment_duration"));
+
+        let defaulted = Cli::parse_tracked_from(["birdnet-behavior"]);
+        assert_eq!(defaulted.segment_duration, 15);
+        assert!(!defaulted.explicit.has("segment_duration"));
+    }
+
+    #[test]
+    fn explicit_set_covers_flags_without_defaults() {
+        let cli = Cli::parse_tracked_from(["birdnet-behavior", "--apprise-url", "http://x:8000"]);
+        assert!(cli.explicit.has("apprise_url"));
+        assert!(!cli.explicit.has("birdweather_token"));
+    }
+
+    #[test]
+    fn explicit_set_records_boolean_flags_only_when_passed() {
+        let off = Cli::parse_tracked_from(["birdnet-behavior"]);
+        assert!(!off.explicit.has("night_inhibit"));
+
+        let on = Cli::parse_tracked_from(["birdnet-behavior", "--night-inhibit"]);
+        assert!(on.night_inhibit);
+        assert!(on.explicit.has("night_inhibit"));
+    }
+
+    #[test]
+    fn plain_parse_leaves_the_explicit_set_empty() {
+        // `#[arg(skip)]` means the field defaults rather than being parsed, so a
+        // `Cli` built the plain way claims nothing was supplied. Pinned because
+        // production code must use `parse_tracked` to get correct precedence.
+        let cli = Cli::parse_from(["birdnet-behavior", "--segment-duration", "30"]);
+        assert_eq!(cli.segment_duration, 30);
+        assert!(!cli.explicit.has("segment_duration"));
+    }
 
     /// The documented air-gapped opt-out: an explicitly empty
     /// `--image-cache-dir` must parse (clap's stock `PathBuf` parser

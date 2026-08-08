@@ -2,11 +2,89 @@
 
 use serde::Deserialize;
 
+/// Every settings key the admin form can persist.
+///
+/// This is the contract between the web UI and the binary that has to make
+/// those keys *do* something. The binary classifies each one (bridged onto the
+/// runtime config, owned by a subsystem that reads the settings table directly,
+/// or deliberately not wired) and a test there fails if any key here is
+/// unclassified — so a field cannot be added to this form and silently ship as
+/// an editable control that does nothing, which is exactly how twenty of them
+/// came to be inert.
+///
+/// Kept in sync with [`SettingsForm`] and with `build_settings_items` by tests
+/// in this module: one asserts the list matches the struct's fields exactly, the
+/// other that saving a fully-populated form emits exactly these keys.
+pub const SETTINGS_FORM_KEYS: &[&str] = &[
+    // Audio
+    "alsa_device",
+    "rtsp_url",
+    "rtsp_urls",
+    "segment_duration",
+    "audio_format",
+    "freq_shift_hz",
+    // Location
+    "latitude",
+    "longitude",
+    "station_name",
+    "night_inhibit",
+    "pre_sunrise_offset",
+    "post_sunset_offset",
+    // Detection
+    "confidence_threshold",
+    "sensitivity",
+    "overlap",
+    "sf_thresh",
+    "privacy_threshold",
+    // Notifications
+    "apprise_url",
+    "apprise_config",
+    "birdweather_token",
+    "notify_confidence",
+    "notify_cooldown",
+    "notify_trigger",
+    "notify_species_only",
+    "notify_species_exclude",
+    "notify_title_template",
+    "notify_body_template",
+    "weekly_report_schedule",
+    // Species
+    "species_exclude",
+    "species_include",
+    // System
+    "clip_retention_days",
+    "image_cache_dir",
+    "custom_image_dir",
+    "max_files_per_species",
+    "purge_threshold",
+    "stream_retention_secs",
+    "stream_max_mb",
+    "site_name",
+    "info_site",
+    // Email
+    "email_smtp_host",
+    "email_smtp_port",
+    "email_smtp_user",
+    "email_smtp_pass",
+    "email_from",
+    "email_to",
+    "email_from_name",
+    "email_starttls",
+    "email_min_confidence",
+    "email_cooldown_secs",
+];
+
 /// Flat form payload from the admin settings POST.
 ///
 /// Every field is `Option` because HTMX partial-save may only submit
 /// a single tab's fields.
+///
+/// `Serialize` is test-only on purpose: it exists so a test can enumerate the
+/// struct's own field names and pin them against [`SETTINGS_FORM_KEYS`], and
+/// gating it keeps a payload carrying `email_smtp_pass` from being serialisable
+/// anywhere in production.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(serde::Serialize, Default))]
 pub struct SettingsForm {
     // Audio
     /// ALSA device string (e.g. `plughw:1,0`) used when the source type is USB microphone.
@@ -17,8 +95,6 @@ pub struct SettingsForm {
     pub rtsp_urls: Option<String>,
     /// Duration of each audio segment sent to BirdNET inference, in seconds.
     pub segment_duration: Option<String>,
-    /// Channel selection: `mono`, `left`, `right`, or `stereo`.
-    pub audio_channels: Option<String>,
     /// Audio sample format (e.g. `S16_LE`, `S24_LE`).
     pub audio_format: Option<String>,
     /// Frequency shift applied before inference, in Hz. Use `0` to disable.
@@ -70,8 +146,6 @@ pub struct SettingsForm {
     pub notify_title_template: Option<String>,
     /// Handlebars template string for the notification body.
     pub notify_body_template: Option<String>,
-    /// Controls whether species images are attached to notifications (`true`/`false`).
-    pub notify_image: Option<String>,
     /// Cron expression for the weekly summary report email (e.g. `0 8 * * MON`).
     pub weekly_report_schedule: Option<String>,
     // Species
@@ -110,11 +184,14 @@ pub struct SettingsForm {
     pub pre_sunrise_offset: Option<String>,
     /// Minutes after civil sunset at which recording stops (positive = later).
     pub post_sunset_offset: Option<String>,
-    // Auth
-    /// Admin username for the web UI login (used by the O-15 accounts wire).
-    pub auth_username: Option<String>,
-    /// Admin password (stored as Argon2id hash; plain-text only during initial set).
-    pub auth_password: Option<String>,
+    // Auth is deliberately absent. The admin credential lives as an Argon2id
+    // hash in the accounts table, seeded from `CADDY_PWD` by
+    // `helpers::auth::bootstrap_admin_password`; nothing reads an
+    // `auth_username` / `auth_password` settings row. The form used to carry
+    // both, which meant a password typed there was stored in `settings` as
+    // plaintext, echoed back into the page HTML on every later load, and
+    // changed no credential at all — while the section promised that clearing
+    // it would "disable HTTP Basic Auth".
     // Email
     /// SMTP relay hostname (e.g. `smtp.gmail.com`).
     pub email_smtp_host: Option<String>,
@@ -136,4 +213,36 @@ pub struct SettingsForm {
     pub email_min_confidence: Option<String>,
     /// Per-species email cooldown in seconds. Suppresses repeat emails within this window.
     pub email_cooldown_secs: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SETTINGS_FORM_KEYS, SettingsForm};
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn form_keys_match_the_struct_fields_exactly() {
+        // Enumerated from the struct itself rather than hand-listed twice, so
+        // adding a field without adding it here fails rather than silently
+        // producing another control nothing consumes.
+        let value = serde_json::to_value(SettingsForm::default()).expect("form serialises");
+        let fields: BTreeSet<&str> = value
+            .as_object()
+            .expect("form serialises to an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let declared: BTreeSet<&str> = SETTINGS_FORM_KEYS.iter().copied().collect();
+
+        assert_eq!(
+            fields, declared,
+            "SETTINGS_FORM_KEYS must list exactly the fields of SettingsForm"
+        );
+    }
+
+    #[test]
+    fn form_keys_are_unique() {
+        let declared: BTreeSet<&str> = SETTINGS_FORM_KEYS.iter().copied().collect();
+        assert_eq!(declared.len(), SETTINGS_FORM_KEYS.len());
+    }
 }

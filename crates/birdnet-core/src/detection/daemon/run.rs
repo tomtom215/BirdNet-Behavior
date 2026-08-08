@@ -29,6 +29,15 @@ use super::{DaemonConfig, DaemonError, DaemonHandle, DetectionEvent, new_event_c
 /// negligible next to a multi-second recording.
 const FILE_SETTLE: Duration = Duration::from_secs(2);
 
+/// How stale the operator's species include/exclude lists may get before the
+/// next file re-reads them.
+///
+/// Matches the per-species threshold cache in the application's event
+/// processor: both are small, indexed reads standing between an operator
+/// changing something on `/admin/species` and seeing it take effect, and
+/// neither is worth a query per detection during a dawn-chorus burst.
+const SPECIES_LISTS_TTL: Duration = Duration::from_secs(30);
+
 /// Debounces filesystem events so each captured file is decoded once, and only
 /// after it has finished being written.
 ///
@@ -188,6 +197,9 @@ pub fn run_daemon(
 
     let lat = config.latitude;
     let lon = config.longitude;
+    // Cloned out of the borrowed `config` so the 'static loop thread below can
+    // own it (an `Arc` clone, not a deep copy).
+    let species_lists_provider = config.species_lists_provider.clone();
 
     // Create stop channel
     let (stop_tx, stop_rx) = mpsc::channel();
@@ -243,6 +255,12 @@ pub fn run_daemon(
         // "unexpected end of file" and reprocesses the same growing file).
         let mut pending = PendingFiles::new();
 
+        // Track when the operator's species lists were last re-read, so a
+        // change on /admin/species applies to the next file rather than the
+        // next restart. Checked per file rather than per loop tick: the tick is
+        // a 500 ms poll and the lists live in a database.
+        let mut lists_refreshed = Instant::now();
+
         loop {
             // Heartbeat: record that the loop is still cycling so a watchdog
             // can tell a hung pipeline from an idle one.
@@ -279,6 +297,19 @@ pub fn run_daemon(
             }) {
                 // Keep the watchdog fed if a single sweep processes several files.
                 heartbeat_loop.fetch_add(1, Ordering::Relaxed);
+
+                // Refresh the operator's species lists if they have gone stale.
+                // A failed or absent provider leaves the previous lists in
+                // place rather than clearing them: dropping an exclude list on
+                // a transient database error would start recording exactly the
+                // species the operator asked to suppress.
+                if let Some(ref provider) = species_lists_provider
+                    && lists_refreshed.elapsed() >= SPECIES_LISTS_TTL
+                {
+                    let lists = provider.get();
+                    species_filter.set_lists(lists.include, lists.exclude);
+                    lists_refreshed = Instant::now();
+                }
 
                 // Stamp a correlation ID on every event we publish for this
                 // file so the operator can trace one file through the entire
@@ -526,6 +557,7 @@ mod tests {
             process_existing: false,
             metadata_model_path: None,
             species_filter: crate::inference::species_filter::SpeciesFilterConfig::default(),
+            species_lists_provider: None,
             privacy_threshold: 0.0,
             latitude: None,
             longitude: None,

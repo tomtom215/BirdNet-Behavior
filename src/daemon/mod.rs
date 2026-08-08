@@ -26,7 +26,7 @@ use crate::integrations::{AppriseHandle, EmailHandle, HeartbeatHandle, MqttHandl
 use config::{
     build_extraction_config, build_model_config, build_pipeline_config,
     build_species_filter_config, resolve_f32_with_default, resolve_required_paths,
-    species_thresholds_log_count,
+    resolve_station_coords, species_lists_log_counts, species_thresholds_log_count,
 };
 use processor::event_processor;
 
@@ -136,6 +136,25 @@ pub fn start_detection_daemon(
         tracing::info!(count, "loaded per-species confidence thresholds");
     }
 
+    // The operator's include/exclude lists, read through the same function the
+    // /admin/species page uses so the two cannot drift.
+    let species_lists =
+        birdnet_web::routes::admin::species::handler::configured_species_lists(&state);
+    if let Some((include, exclude)) = species_lists_log_counts(&species_lists) {
+        tracing::info!(include, exclude, "loaded operator species filter lists");
+    }
+
+    // Re-read on a TTL inside the daemon loop so excluding a species takes
+    // effect on the next processed file rather than the next restart.
+    let species_lists_provider = {
+        let state = state.clone();
+        birdnet_core::inference::species_filter::SpeciesListsProvider::new(move || {
+            birdnet_web::routes::admin::species::handler::configured_species_lists(&state)
+        })
+    };
+
+    let (latitude, longitude) = resolve_station_coords(cli, config);
+
     let daemon_config = birdnet_core::detection::daemon::DaemonConfig {
         watch_dir: watch_dir.clone(),
         model_path,
@@ -144,10 +163,11 @@ pub fn start_detection_daemon(
         model: build_model_config(sensitivity, confidence),
         process_existing: cli.process_existing,
         metadata_model_path,
-        species_filter: build_species_filter_config(sf_thresh),
+        species_filter: build_species_filter_config(sf_thresh, species_lists),
+        species_lists_provider: Some(species_lists_provider),
         privacy_threshold,
-        latitude: cli.latitude,
-        longitude: cli.longitude,
+        latitude,
+        longitude,
         species_thresholds,
     };
 
@@ -162,7 +182,7 @@ pub fn start_detection_daemon(
     // land in watch_dir.parent()/Extracted (the transient tmpfs), which vanished
     // on every restart and never matched where the app reads (Bug B).
     let recordings_dir = state.recording_dir();
-    let extractor = Extractor::new(build_extraction_config(cli, &recordings_dir));
+    let extractor = Extractor::new(build_extraction_config(cli, config, &recordings_dir));
 
     match birdnet_core::detection::daemon::run_daemon(&daemon_config, event_tx) {
         Ok(handle) => {

@@ -131,6 +131,34 @@ pub(super) fn check_optional_tools(cli: &Cli, config: Option<&Config>) -> Vec<Ch
     out
 }
 
+/// Report what the station will contact on its own initiative.
+///
+/// Answers "does this phone home?" from the diagnostic rather than from a
+/// reading of the source. Only counts connections the station makes *by itself*
+/// — an operator who configured Apprise or BirdWeather already knows about
+/// those, and listing them here would bury the two that are on by default.
+pub(super) fn check_egress(cli: &Cli) -> Vec<Check> {
+    const NAME: &str = "Outbound connections";
+
+    let mut on: Vec<&str> = Vec::new();
+    if crate::helpers::egress::update_check_allowed(cli) {
+        on.push("api.github.com (daily release check)");
+    }
+    if crate::helpers::egress::image_downloads_allowed(cli) {
+        on.push("en.wikipedia.org / upload.wikimedia.org (species images, on demand)");
+    }
+
+    vec![if on.is_empty() {
+        Check::pass(
+            NAME,
+            "none — this station makes no unsolicited outbound connections. \
+             Integrations you configured explicitly are unaffected.",
+        )
+    } else {
+        Check::pass(NAME, format!("on by default: {}", on.join("; ")))
+    }]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,5 +219,36 @@ mod tests {
         cli.rtsp_url = Some("rtsp://camera.invalid:554/stream".into());
         let checks = check_optional_tools(&cli, None);
         assert!(checks.iter().any(|c| c.name.contains("Capture backend")));
+    }
+
+    #[test]
+    fn egress_check_lists_the_two_default_on_connections() {
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        let checks = check_egress(&cli);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].status, Status::Pass);
+        assert!(checks[0].message.contains("api.github.com"));
+        assert!(checks[0].message.contains("wikipedia.org"));
+    }
+
+    #[test]
+    fn egress_check_reports_silence_in_offline_mode() {
+        let cli = Cli::parse_from(["birdnet-behavior", "--offline"]);
+        let checks = check_egress(&cli);
+        assert_eq!(checks[0].status, Status::Pass);
+        assert!(
+            checks[0].message.contains("none"),
+            "offline mode must report no unsolicited egress: {}",
+            checks[0].message
+        );
+        assert!(!checks[0].message.contains("api.github.com"));
+    }
+
+    #[test]
+    fn egress_check_narrows_when_only_the_update_check_is_off() {
+        let cli = Cli::parse_from(["birdnet-behavior", "--no-update-check"]);
+        let checks = check_egress(&cli);
+        assert!(!checks[0].message.contains("api.github.com"));
+        assert!(checks[0].message.contains("wikipedia.org"));
     }
 }

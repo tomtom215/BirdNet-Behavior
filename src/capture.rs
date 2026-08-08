@@ -189,7 +189,18 @@ pub fn start_capture_manager(
     let schedule_config = schedule::parse_schedule_config(cli, config);
     log_schedule(cli, &schedule_config);
 
-    let stall_after = stall_threshold(cli.segment_duration);
+    // Resolved, not read straight off the CLI: `--segment-duration` carries a
+    // clap default, so the raw field always wins and the settings-page field
+    // could never take effect. The stall threshold is derived from the same
+    // value so the supervisor's patience tracks the real segment length.
+    let segment_duration = crate::helpers::resolve::setting::<u32>(
+        cli,
+        "segment_duration",
+        cli.segment_duration,
+        config,
+        "SEGMENT_DURATION",
+    );
+    let stall_after = stall_threshold(segment_duration);
     let supervised: Vec<(
         CaptureManager,
         String,
@@ -213,7 +224,7 @@ pub fn start_capture_manager(
             let recording_config = RecordingConfig {
                 source,
                 output_dir: output_dir.clone(),
-                segment_duration_secs: cli.segment_duration,
+                segment_duration_secs: segment_duration,
                 format: AudioFormat::Wav,
                 gain_db,
             };

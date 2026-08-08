@@ -7,7 +7,24 @@
 //!
 //! Sunrise/sunset are taken from the configured station lat/lon if available;
 //! falls back to a conservative 05:30 / 20:00.
+//!
+//! # No panicking operations in this module
+//!
+//! `[profile.release]` sets `panic = "abort"` and the server mounts no
+//! catch-panic layer, so a panic in a request handler does not produce a 500 —
+//! it takes the whole process down, web server and detection daemon together,
+//! and systemd restarts it. A reachable handler panic is therefore a station
+//! outage, not a failed request.
+//!
+//! This module sorted and compared `f32` with `partial_cmp(..).unwrap()`. The
+//! values are sums of integer detection counts, so no reachable input is `NaN`
+//! today and it was latent rather than live — but the cost of that assessment
+//! being wrong later is the whole station, so the comparisons use
+//! [`f32::total_cmp`], which is total by construction. `unwrap`/`expect` are
+//! denied here so the class cannot return unnoticed; a genuinely infallible
+//! call may re-allow the lint locally with a comment saying why.
 
+#![deny(clippy::unwrap_used, clippy::expect_used)]
 // Adapted SVG-rendering module: int<->float coordinate casts, short math
 // identifiers, and long polar-path builders are intrinsic to this code.
 #![allow(clippy::pedantic, clippy::nursery)]
@@ -103,7 +120,7 @@ fn collect_chorus(
             let peak_hour = hours
                 .iter()
                 .enumerate()
-                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                .max_by(|a, b| a.1.total_cmp(b.1))
                 .map(|(i, _)| i)
                 .unwrap_or(0) as u8;
             let total = *totals.get(&name).unwrap_or(&0);

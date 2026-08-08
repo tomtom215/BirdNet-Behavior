@@ -26,8 +26,6 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         ""
     };
     let is_none = if isite == "none" { " selected" } else { "" };
-    let auth_user = get_setting(s, "auth_username", "");
-    let auth_pass = get_setting(s, "auth_password", "");
     write!(out,
         r#"
   <div class="card">
@@ -99,21 +97,17 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
   </div>
   <div class="card">
     <div class="section-title">Web Authentication</div>
-    <p class="hint">Leave blank to disable HTTP Basic Auth (allow open access).</p>
-    <div class="grid-2">
-      <div>
-        <label for="auth_username">Username</label>
-        <input id="auth_username" name="auth_username" value="{auth_user}" placeholder="birdnet"
-               autocomplete="username">
-        <p class="hint">Web UI login username (BirdNET-Pi: CADDY_USER)</p>
-      </div>
-      <div>
-        <label for="auth_password">Password</label>
-        <input id="auth_password" name="auth_password" type="password" value="{auth_pass}"
-               placeholder="leave blank to keep current" autocomplete="new-password">
-        <p class="hint">Web UI login password (BirdNET-Pi: CADDY_PWD)</p>
-      </div>
-    </div>
+    <p class="hint">
+      The admin password is not stored in this table &mdash; it lives as an Argon2id
+      hash in the accounts database, seeded from the <code>CADDY_PWD</code> environment
+      variable. Set or rotate it there and restart; the station picks the new value up
+      on the next start. Until <code>CADDY_PWD</code> is set, <code>/admin</code> is
+      open to anyone who can reach this station.
+    </p>
+    <p class="hint">
+      See <a href="/help/admin/remote-access">Remote Access &amp; Security</a> for the
+      full setup, including putting the station behind a reverse proxy.
+    </p>
   </div>"#
     ).unwrap_or_default();
 }

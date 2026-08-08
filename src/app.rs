@@ -181,6 +181,10 @@ async fn serve(
     // basic-auth surface stays functional throughout; this only makes
     // the cookie-auth path's user lookup line up.
     helpers::bootstrap_admin_password(&state);
+    // Upgrade path: clear plaintext credential rows a previous build's settings
+    // form could write. Must run before the seed/overlay below so the purged
+    // keys are gone before anything reads the table.
+    helpers::purge_legacy_credential_settings(&state);
 
     // Seed the admin-UI `settings` table from the installed configuration on
     // first run, so the values supplied at install time — the bare-metal
@@ -199,11 +203,29 @@ async fn serve(
     // — after the DB-backed state exists, before any subsystem reads config.
     let config = helpers::overlay_db_settings(config, &state);
 
+    // Say once, at start, exactly what offline mode turned off — so the answer
+    // to "does this station phone home?" is in the journal rather than in a
+    // reading of the source.
+    if let Some(notice) = helpers::egress::offline_notice(&cli) {
+        tracing::info!("{notice}");
+    }
+
     // Initialize all optional subsystems.
     let state = helpers::init_image_cache(state, &cli, config.as_ref(), &db_path);
-    let state = if let Some(ref dir) = cli.custom_image_dir {
+    // The flag has no clap default, so `Some` means the operator supplied it;
+    // otherwise take the config, which is where a path entered on
+    // `/admin/settings` arrives via the overlay above.
+    let custom_image_dir = cli.custom_image_dir.clone().or_else(|| {
+        config
+            .as_ref()
+            .and_then(|c| c.get("CUSTOM_IMAGE_DIR"))
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+            .map(std::path::PathBuf::from)
+    });
+    let state = if let Some(dir) = custom_image_dir {
         tracing::info!(path = %dir.display(), "custom species image directory configured");
-        state.with_custom_image_dir(dir.clone())
+        state.with_custom_image_dir(dir)
     } else {
         state
     };
@@ -234,13 +256,20 @@ async fn serve(
     let email_notifier = integrations::create_email_notifier(&state);
     let heartbeat_client = integrations::create_heartbeat_client(&cli, config.as_ref());
     let mqtt_client = integrations::create_mqtt_client(&cli, config.as_ref());
-    let notification_filter = integrations::create_notification_filter(&cli);
+    let notification_filter = integrations::create_notification_filter(&cli, config.as_ref());
     let notification_template = integrations::create_notification_template(&cli, config.as_ref());
 
     // Start weekly report scheduler (if Apprise is configured).
     if let Some(ref apprise) = apprise_client {
-        weekly_report::start_weekly_report_scheduler(
+        let schedule = helpers::resolve::setting_str(
+            &cli,
+            "weekly_report_schedule",
             &cli.weekly_report_schedule,
+            config.as_ref(),
+            "WEEKLY_REPORT_SCHEDULE",
+        );
+        weekly_report::start_weekly_report_scheduler(
+            &schedule,
             std::sync::Arc::clone(apprise),
             state.clone(),
         );
@@ -382,38 +411,47 @@ async fn serve(
     }
 
     // Spawn daily auto-update check (logs result, does not auto-apply).
-    tokio::spawn(async {
-        // Wait 60 seconds after startup before first check.
-        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-        let current_version = env!("CARGO_PKG_VERSION");
-        loop {
-            match tokio::task::spawn_blocking(move || {
-                birdnet_integrations::auto_update::check_for_update(current_version)
-            })
-            .await
-            {
-                Ok(Ok(info)) => {
-                    if info.update_available {
-                        tracing::info!(
-                            current = %info.current_version,
-                            latest = %info.latest_version,
-                            "new version available — use the admin panel to update"
-                        );
-                    } else {
-                        tracing::debug!("auto-update check: already up to date");
+    //
+    // Gated because this is the station's only outbound connection that nothing
+    // asked for: it fired 60 s after start and every 24 h thereafter with no way
+    // to stop it, which is a problem on a metered link and unanswerable during
+    // an institutional review. `--no-update-check` / `--offline` turn it off.
+    if helpers::egress::update_check_allowed(&cli) {
+        tokio::spawn(async {
+            // Wait 60 seconds after startup before first check.
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            let current_version = env!("CARGO_PKG_VERSION");
+            loop {
+                match tokio::task::spawn_blocking(move || {
+                    birdnet_integrations::auto_update::check_for_update(current_version)
+                })
+                .await
+                {
+                    Ok(Ok(info)) => {
+                        if info.update_available {
+                            tracing::info!(
+                                current = %info.current_version,
+                                latest = %info.latest_version,
+                                "new version available — use the admin panel to update"
+                            );
+                        } else {
+                            tracing::debug!("auto-update check: already up to date");
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        tracing::debug!(error = %e, "auto-update check failed (non-fatal)");
+                    }
+                    Err(e) => {
+                        tracing::debug!(error = %e, "auto-update check task panicked");
                     }
                 }
-                Ok(Err(e)) => {
-                    tracing::debug!(error = %e, "auto-update check failed (non-fatal)");
-                }
-                Err(e) => {
-                    tracing::debug!(error = %e, "auto-update check task panicked");
-                }
+                // Check once every 24 hours.
+                tokio::time::sleep(std::time::Duration::from_secs(86_400)).await;
             }
-            // Check once every 24 hours.
-            tokio::time::sleep(std::time::Duration::from_secs(86_400)).await;
-        }
-    });
+        });
+    } else {
+        tracing::info!("daily update check disabled; this station will not contact api.github.com");
+    }
 
     // Periodic database maintenance (VACUUM, integrity check, backup rotation),
     // plus the per-species recording cap (MAX_FILES_SPECIES): keep the newest N

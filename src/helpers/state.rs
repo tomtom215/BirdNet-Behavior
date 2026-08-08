@@ -63,6 +63,17 @@ pub fn init_image_cache(
     config: Option<&birdnet_core::config::Config>,
     db_path: &std::path::Path,
 ) -> birdnet_web::state::AppState {
+    // Offline mode is the master switch: no species-image downloads at all.
+    // Checked before the per-feature opt-out so an operator who set `--offline`
+    // does not also have to know about `--image-cache-dir ""`.
+    if !super::egress::image_downloads_allowed(cli) {
+        tracing::info!(
+            "species image downloads disabled by offline mode; \
+             already-cached images are still served"
+        );
+        return state;
+    }
+
     // CLI wins over config; an explicitly empty value is an opt-out.
     let configured = cli
         .image_cache_dir

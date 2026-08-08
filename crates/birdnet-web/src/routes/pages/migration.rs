@@ -9,7 +9,24 @@
 //!
 //! All renders are pure SVG strings — no client JS needed beyond htmx.
 //! Designed to use only the existing `detections` table; no schema migration.
+//!
+//! # No panicking operations in this module
+//!
+//! `[profile.release]` sets `panic = "abort"` and the server mounts no
+//! catch-panic layer, so a panic in a request handler does not produce a 500 —
+//! it takes the whole process down, web server and detection daemon together,
+//! and systemd restarts it. A reachable handler panic is therefore a station
+//! outage, not a failed request.
+//!
+//! This module sorted and compared `f32` with `partial_cmp(..).unwrap()`. The
+//! values are sums of integer detection counts, so no reachable input is `NaN`
+//! today and it was latent rather than live — but the cost of that assessment
+//! being wrong later is the whole station, so the comparisons use
+//! [`f32::total_cmp`], which is total by construction. `unwrap`/`expect` are
+//! denied here so the class cannot return unnoticed; a genuinely infallible
+//! call may re-allow the lint locally with a comment saying why.
 
+#![deny(clippy::unwrap_used, clippy::expect_used)]
 // Adapted SVG-rendering module: int<->float coordinate casts, short math
 // identifiers, and long path-builder functions are intrinsic to this code.
 #![allow(clippy::pedantic, clippy::nursery)]
@@ -119,7 +136,7 @@ fn collect_ridges(
             if sorted.len() < 4 || peak < 5.0 {
                 return None;
             }
-            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            sorted.sort_by(f32::total_cmp);
             let median = sorted[sorted.len() / 2];
             if peak / median.max(1.0) < 3.0 {
                 return None;
@@ -127,7 +144,7 @@ fn collect_ridges(
             let peak_week = weekly
                 .iter()
                 .enumerate()
-                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                .max_by(|a, b| a.1.total_cmp(b.1))
                 .map(|(i, _)| i)
                 .unwrap_or(0) as u8;
             // Normalize.

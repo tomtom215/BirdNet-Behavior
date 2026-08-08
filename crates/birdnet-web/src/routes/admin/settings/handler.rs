@@ -307,11 +307,6 @@ fn build_settings_items(
         "segment_duration",
         SettingsCategory::Audio
     );
-    push!(
-        form.audio_channels,
-        "audio_channels",
-        SettingsCategory::Audio
-    );
     push!(form.audio_format, "audio_format", SettingsCategory::Audio);
     push!(form.freq_shift_hz, "freq_shift_hz", SettingsCategory::Audio);
     // Location
@@ -403,11 +398,6 @@ fn build_settings_items(
         SettingsCategory::Notifications
     );
     push!(
-        form.notify_image,
-        "notify_image",
-        SettingsCategory::Notifications
-    );
-    push!(
         form.weekly_report_schedule,
         "weekly_report_schedule",
         SettingsCategory::Notifications
@@ -461,17 +451,8 @@ fn build_settings_items(
     );
     push!(form.site_name, "site_name", SettingsCategory::System);
     push!(form.info_site, "info_site", SettingsCategory::System);
-    // Auth
-    push!(
-        form.auth_username,
-        "auth_username",
-        SettingsCategory::System
-    );
-    push!(
-        form.auth_password,
-        "auth_password",
-        SettingsCategory::System
-    );
+    // Auth: no rows. See the note on `SettingsForm` — the admin credential is
+    // an Argon2id hash in the accounts table, not a settings value.
     // Email
     push!(
         form.email_smtp_host,
@@ -534,7 +515,6 @@ mod tests {
             rtsp_url: None,
             rtsp_urls: None,
             segment_duration: None,
-            audio_channels: None,
             audio_format: None,
             freq_shift_hz: None,
             latitude: None,
@@ -555,7 +535,6 @@ mod tests {
             notify_species_exclude: None,
             notify_title_template: None,
             notify_body_template: None,
-            notify_image: None,
             weekly_report_schedule: None,
             species_exclude: None,
             species_include: None,
@@ -571,8 +550,6 @@ mod tests {
             night_inhibit: None,
             pre_sunrise_offset: None,
             post_sunset_offset: None,
-            auth_username: None,
-            auth_password: None,
             email_smtp_host: None,
             email_smtp_port: None,
             email_smtp_user: None,
@@ -710,6 +687,36 @@ mod tests {
             .find(|(k, _, _)| *k == "latitude")
             .expect("clearing should be persisted");
         assert_eq!(lat.1, "");
+    }
+
+    #[test]
+    fn every_declared_key_is_actually_persisted() {
+        // The other half of the contract `SETTINGS_FORM_KEYS` carries: the list
+        // is what the binary classifies and enforces, so a key that is declared
+        // but never reaches `set_many` would be classified as wired while still
+        // doing nothing. Submitting a form with every field populated must emit
+        // exactly the declared set — no more, no fewer.
+        use super::super::form::SETTINGS_FORM_KEYS;
+        use std::collections::BTreeSet;
+
+        // Build the form the way a browser does, so the fields exercised are the
+        // ones serde actually binds.
+        let submitted: std::collections::HashMap<&str, &str> =
+            SETTINGS_FORM_KEYS.iter().map(|k| (*k, "1")).collect();
+        let form: SettingsForm =
+            serde_json::from_value(serde_json::to_value(&submitted).expect("payload serialises"))
+                .expect("a payload of every declared key deserialises into the form");
+
+        let emitted: BTreeSet<&str> = build_settings_items(&form, &HashMap::new())
+            .into_iter()
+            .map(|(k, _, _)| k)
+            .collect();
+        let declared: BTreeSet<&str> = SETTINGS_FORM_KEYS.iter().copied().collect();
+
+        assert_eq!(
+            emitted, declared,
+            "build_settings_items must persist exactly the declared form keys"
+        );
     }
 
     #[test]

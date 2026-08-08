@@ -10,9 +10,10 @@ use std::path::{Path, PathBuf};
 use birdnet_core::audio::extraction::{AudioFormat, ExtractionConfig};
 use birdnet_core::detection::pipeline::PipelineConfig;
 use birdnet_core::inference::model::ModelConfig;
-use birdnet_core::inference::species_filter::SpeciesFilterConfig;
+use birdnet_core::inference::species_filter::{SpeciesFilterConfig, SpeciesLists};
 
 use crate::cli::Cli;
+use crate::helpers::resolve;
 
 /// CLI-default vs. config-file precedence resolver for `f32` flags.
 ///
@@ -85,12 +86,50 @@ pub(super) fn build_model_config(sensitivity: f32, confidence_threshold: f32) ->
 }
 
 /// Build the [`SpeciesFilterConfig`] used by the metadata-model species filter.
+///
+/// `lists` are the operator's include/exclude entries from `/admin/species`.
+/// They used to be left at `SpeciesFilterConfig::default()` — empty — and
+/// nothing anywhere else populated them, so the two lists the page maintains,
+/// confirms every addition to, and offers a preview page for had no effect on a
+/// single detection. An excluded species kept being recorded, counted, notified
+/// on and uploaded.
 #[must_use]
-pub(super) fn build_species_filter_config(sf_thresh: f32) -> SpeciesFilterConfig {
+pub(super) fn build_species_filter_config(
+    sf_thresh: f32,
+    lists: SpeciesLists,
+) -> SpeciesFilterConfig {
     SpeciesFilterConfig {
         sf_thresh,
+        include_list: lists.include,
+        exclude_list: lists.exclude,
         ..SpeciesFilterConfig::default()
     }
+}
+
+/// Resolve the station's coordinates for the detection daemon.
+///
+/// CLI flag first, then the config — which the settings overlay has already
+/// layered `/admin/settings` onto. The daemon read `cli.latitude` alone, so a
+/// station configured the normal way (the installer writes `LATITUDE` /
+/// `LONGITUDE` into `birdnet.conf`, and the web form writes the settings table)
+/// handed the daemon `None` and never ran the metadata model at all — making
+/// `sf_thresh`, a headline species-frequency feature, silently inert on most
+/// real installs. `crate::capture::schedule::resolve_location` has always done
+/// this correctly for the recording schedule; this is the same rule.
+///
+/// Returns `(latitude, longitude)`, each `None` when unresolvable.
+#[must_use]
+pub(super) fn resolve_station_coords(
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+) -> (Option<f64>, Option<f64>) {
+    let lat = cli
+        .latitude
+        .or_else(|| config.and_then(|c| c.get_parsed::<f64>("LATITUDE").ok()));
+    let lon = cli
+        .longitude
+        .or_else(|| config.and_then(|c| c.get_parsed::<f64>("LONGITUDE").ok()));
+    (lat, lon)
 }
 
 /// Build the [`ExtractionConfig`] for the detection-clip extractor.
@@ -102,17 +141,42 @@ pub(super) fn build_species_filter_config(sf_thresh: f32) -> SpeciesFilterConfig
 /// sibling `Extracted/By_Date/…` next to the transient tmpfs watch dir — wiped
 /// on every restart under `PrivateTmp`, and never where the app reads.)
 ///
-/// `recording_length` is the CLI's `--segment-duration` (an integer
-/// seconds value) cast to `f32`; the cast cannot lose precision in the
-/// practical range (1–3600 s).
+/// `recording_length` is the resolved segment duration (an integer seconds
+/// value) cast to `f32`; the cast cannot lose precision in the practical range
+/// (1–3600 s).
+///
+/// `segment_duration` and `freq_shift_hz` are resolved rather than read
+/// straight off the `Cli`, so the values an operator sets on `/admin/settings`
+/// reach the extractor. Both flags carry a clap `default_value`, so reading
+/// `cli.*` directly meant the default always won and the settings-page fields
+/// were editable but inert.
 #[must_use]
-pub(super) fn build_extraction_config(cli: &Cli, recordings_dir: &Path) -> ExtractionConfig {
+pub(super) fn build_extraction_config(
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+    recordings_dir: &Path,
+) -> ExtractionConfig {
+    let segment_duration = resolve::setting::<u32>(
+        cli,
+        "segment_duration",
+        cli.segment_duration,
+        config,
+        "SEGMENT_DURATION",
+    );
+    let freq_shift_hz = resolve::setting::<i32>(
+        cli,
+        "freq_shift_hz",
+        cli.freq_shift_hz,
+        config,
+        "FREQ_SHIFT",
+    );
+
     ExtractionConfig {
         target_format: AudioFormat::parse(&cli.audio_format),
         audio_format: cli.audio_format.clone(),
         output_dir: recordings_dir.to_path_buf(),
-        recording_length: f32::from(u16::try_from(cli.segment_duration).unwrap_or(u16::MAX)),
-        freq_shift_hz: cli.freq_shift_hz,
+        recording_length: f32::from(u16::try_from(segment_duration).unwrap_or(u16::MAX)),
+        freq_shift_hz,
         ..ExtractionConfig::default()
     }
 }
@@ -162,11 +226,77 @@ pub(super) fn species_thresholds_log_count(thresholds: &HashMap<String, f64>) ->
     }
 }
 
+/// "Should we log the operator's species lists, and how long are they?"
+///
+/// Returns `Some((include_len, exclude_len))` when *either* list has an entry;
+/// `None` when the operator has configured neither. Same reason as
+/// [`species_thresholds_log_count`] one function up, and the same shape: the
+/// inline `if !include.is_empty() || !exclude.is_empty()` guard left three
+/// cargo-mutants survivors — the `||`, and each of the two `!` — because its
+/// only observable effect is a log line the suite doesn't capture.
+///
+/// A one-list station is the case that matters: it is both the common
+/// configuration and the one the `||`→`&&` mutant silently breaks.
+#[must_use]
+pub(super) const fn species_lists_log_counts(lists: &SpeciesLists) -> Option<(usize, usize)> {
+    if lists.include.is_empty() && lists.exclude.is_empty() {
+        None
+    } else {
+        Some((lists.include.len(), lists.exclude.len()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::daemon::test_support::thresholds;
+    use crate::helpers::test_support::{cli_with_explicit, config_with};
     use clap::Parser;
+
+    // ── settings reach the extractor ────────────────────────────────────
+    //
+    // These pin *effect*, not just mapping: an operator sets the value on
+    // `/admin/settings`, the overlay lands it in the config, and the extractor
+    // must be built with it. Both flags carry a clap `default_value`, so
+    // reading `cli.*` straight — which is what the code did — meant the field
+    // was editable, persisted, and silently ignored.
+
+    #[test]
+    fn segment_duration_from_settings_reaches_the_extractor() {
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        let cfg = config_with(&[("SEGMENT_DURATION", "30")]);
+        let extraction = build_extraction_config(&cli, Some(&cfg), Path::new("/tmp/recs"));
+        assert!(
+            (extraction.recording_length - 30.0).abs() < f32::EPSILON,
+            "settings-page segment duration must reach the extractor, got {}",
+            extraction.recording_length
+        );
+    }
+
+    #[test]
+    fn explicit_segment_duration_flag_beats_the_settings() {
+        let mut cli = cli_with_explicit(&["segment_duration"]);
+        cli.segment_duration = 20;
+        let cfg = config_with(&[("SEGMENT_DURATION", "30")]);
+        let extraction = build_extraction_config(&cli, Some(&cfg), Path::new("/tmp/recs"));
+        assert!((extraction.recording_length - 20.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn freq_shift_from_settings_reaches_the_extractor() {
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        let cfg = config_with(&[("FREQ_SHIFT", "2500")]);
+        let extraction = build_extraction_config(&cli, Some(&cfg), Path::new("/tmp/recs"));
+        assert_eq!(extraction.freq_shift_hz, 2500);
+    }
+
+    #[test]
+    fn without_a_config_the_cli_defaults_still_apply() {
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        let extraction = build_extraction_config(&cli, None, Path::new("/tmp/recs"));
+        assert!((extraction.recording_length - 15.0).abs() < f32::EPSILON);
+        assert_eq!(extraction.freq_shift_hz, 0);
+    }
 
     // ── resolve_f32_with_default ────────────────────────────────────────
     //
@@ -274,12 +404,75 @@ mod tests {
 
     #[test]
     fn build_species_filter_config_pins_sf_thresh() {
-        let cfg = build_species_filter_config(0.07);
+        let cfg = build_species_filter_config(0.07, SpeciesLists::default());
         assert!((cfg.sf_thresh - 0.07).abs() < f32::EPSILON);
         let default = SpeciesFilterConfig::default();
         assert_eq!(cfg.whitelist, default.whitelist);
         assert_eq!(cfg.include_list, default.include_list);
         assert_eq!(cfg.exclude_list, default.exclude_list);
+    }
+
+    #[test]
+    fn build_species_filter_config_carries_the_operator_lists() {
+        // The defect: this took everything but `sf_thresh` from `Default`, so
+        // the two lists `/admin/species` maintains arrived empty and no
+        // detection was ever filtered by them.
+        let lists = SpeciesLists {
+            include: vec!["Eurasian Blackbird".into()],
+            exclude: vec!["Human".into(), "Turdus merula".into()],
+        };
+        let cfg = build_species_filter_config(0.03, lists);
+        assert_eq!(cfg.include_list, vec!["Eurasian Blackbird".to_string()]);
+        assert_eq!(
+            cfg.exclude_list,
+            vec!["Human".to_string(), "Turdus merula".to_string()]
+        );
+    }
+
+    // ── resolve_station_coords ──────────────────────────────────────────
+
+    #[test]
+    fn station_coords_fall_back_to_the_config() {
+        // The bug this closes: the daemon read `cli.latitude` alone, so a
+        // station configured the normal way — the installer writes LATITUDE /
+        // LONGITUDE into birdnet.conf, and /admin/settings writes the settings
+        // table the overlay layers onto it — handed the daemon `None` and never
+        // ran the metadata model, making `sf_thresh` inert on most real
+        // installs.
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        let cfg = config_with(&[("LATITUDE", "42.3601"), ("LONGITUDE", "-71.0589")]);
+        let (lat, lon) = resolve_station_coords(&cli, Some(&cfg));
+        assert_eq!(lat, Some(42.3601));
+        assert_eq!(lon, Some(-71.0589));
+    }
+
+    #[test]
+    fn station_coords_prefer_the_cli() {
+        let mut cli = Cli::parse_from(["birdnet-behavior"]);
+        cli.latitude = Some(51.5);
+        cli.longitude = Some(-0.13);
+        let cfg = config_with(&[("LATITUDE", "42.3601"), ("LONGITUDE", "-71.0589")]);
+        let (lat, lon) = resolve_station_coords(&cli, Some(&cfg));
+        assert_eq!(lat, Some(51.5));
+        assert_eq!(lon, Some(-0.13));
+    }
+
+    #[test]
+    fn station_coords_are_none_when_nothing_is_configured() {
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        assert_eq!(resolve_station_coords(&cli, None), (None, None));
+    }
+
+    #[test]
+    fn station_coords_resolve_each_axis_independently() {
+        // A half-configured station (latitude only) must not silently produce a
+        // (lat, 0.0) location; the filter treats a missing axis as no location.
+        let mut cli = Cli::parse_from(["birdnet-behavior"]);
+        cli.latitude = Some(51.5);
+        let (lat, lon) = resolve_station_coords(&cli, None);
+        assert_eq!(lat, Some(51.5));
+        assert_eq!(lon, None);
+        assert!(lat.zip(lon).is_none(), "an incomplete pair is no location");
     }
 
     // ── Bug B fix: extraction target == web recording dir (hardware-free) ───
@@ -299,7 +492,7 @@ mod tests {
         let web_recording_dir = db_path.parent().unwrap().join("recordings");
 
         let cli = Cli::parse_from(["birdnet-behavior"]);
-        let cfg = build_extraction_config(&cli, &web_recording_dir);
+        let cfg = build_extraction_config(&cli, None, &web_recording_dir);
 
         assert_eq!(
             cfg.output_dir, web_recording_dir,
@@ -324,7 +517,7 @@ mod tests {
             "--freq-shift-hz",
             "1500",
         ]);
-        let cfg = build_extraction_config(&cli, Path::new("/var/lib/birdnet/recordings"));
+        let cfg = build_extraction_config(&cli, None, Path::new("/var/lib/birdnet/recordings"));
         assert_eq!(cfg.audio_format, "flac");
         assert_eq!(cfg.target_format, AudioFormat::Flac);
         // output_dir is the recordings dir passed in, verbatim (clips land there
@@ -340,7 +533,11 @@ mod tests {
     #[test]
     fn build_extraction_config_defaults() {
         let cli = Cli::parse_from(["birdnet-behavior"]);
-        let cfg = build_extraction_config(&cli, Path::new("/home/pi/BirdNet-Behavior/recordings"));
+        let cfg = build_extraction_config(
+            &cli,
+            None,
+            Path::new("/home/pi/BirdNet-Behavior/recordings"),
+        );
         // Default audio format is wav.
         assert_eq!(cfg.audio_format, "wav");
         assert_eq!(cfg.target_format, AudioFormat::Wav);
@@ -428,5 +625,47 @@ mod tests {
     fn species_thresholds_log_count_some_for_nonempty() {
         let m = thresholds(&[("Pica pica", 0.8), ("Corvus corax", 0.85)]);
         assert_eq!(species_thresholds_log_count(&m), Some(2));
+    }
+
+    // ── species_lists_log_counts ────────────────────────────────────────
+    //
+    // Four cases, because the guard this replaces had three distinct
+    // mutants. The two single-list cases are what kill the `||`→`&&`
+    // survivor; the empty case kills both `delete !` survivors.
+
+    fn lists(include: &[&str], exclude: &[&str]) -> SpeciesLists {
+        SpeciesLists {
+            include: include.iter().map(|s| (*s).to_owned()).collect(),
+            exclude: exclude.iter().map(|s| (*s).to_owned()).collect(),
+        }
+    }
+
+    #[test]
+    fn species_lists_log_counts_none_when_the_operator_configured_neither() {
+        assert_eq!(species_lists_log_counts(&lists(&[], &[])), None);
+    }
+
+    #[test]
+    fn species_lists_log_counts_some_for_an_include_only_station() {
+        assert_eq!(
+            species_lists_log_counts(&lists(&["Pica pica"], &[])),
+            Some((1, 0))
+        );
+    }
+
+    #[test]
+    fn species_lists_log_counts_some_for_an_exclude_only_station() {
+        assert_eq!(
+            species_lists_log_counts(&lists(&[], &["Corvus corax"])),
+            Some((0, 1))
+        );
+    }
+
+    #[test]
+    fn species_lists_log_counts_reports_both_lengths() {
+        assert_eq!(
+            species_lists_log_counts(&lists(&["Pica pica", "Turdus merula"], &["Corvus corax"])),
+            Some((2, 1))
+        );
     }
 }

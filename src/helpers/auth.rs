@@ -69,6 +69,46 @@ pub fn bootstrap_admin_password(state: &AppState) {
     }
 }
 
+/// Settings rows an earlier build's "Web Authentication" form could write.
+///
+/// Neither was ever read by anything: the admin credential lives as an Argon2id
+/// hash in the accounts table, seeded from `CADDY_PWD`. The form nevertheless
+/// stored whatever was typed as a **plaintext** `settings` row and rendered it
+/// back into the page HTML on every later load. The inputs are gone, but a
+/// station upgraded from a build that had them still carries the row.
+const LEGACY_CREDENTIAL_SETTINGS: &[&str] = &["auth_password", "auth_username"];
+
+/// Delete any plaintext credential rows left behind by an earlier build.
+///
+/// Idempotent, and a no-op on a station that never used the removed form. Runs
+/// alongside the password bootstrap so an upgrade clears the stored plaintext
+/// without the operator having to know it was ever there. Returns the number of
+/// rows removed.
+pub fn purge_legacy_credential_settings(state: &AppState) -> usize {
+    use birdnet_db::settings::{delete, ensure_settings_table};
+
+    let removed = state.with_db(|conn| {
+        // A brand-new database may not have the table yet; that just means
+        // there is nothing to purge.
+        if ensure_settings_table(conn).is_err() {
+            return 0;
+        }
+        LEGACY_CREDENTIAL_SETTINGS
+            .iter()
+            .filter(|key| delete(conn, key).unwrap_or(false))
+            .count()
+    });
+
+    if removed > 0 {
+        tracing::warn!(
+            count = removed,
+            "removed plaintext credential rows written by a previous build's settings form; \
+             the admin password is set through CADDY_PWD and was never read from these"
+        );
+    }
+    removed
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BootstrapOutcome {
     /// Stored hash was empty or `PLAINTEXT-PLACEHOLDER:` — set the real one.
@@ -99,6 +139,34 @@ mod tests {
             .with_db(|conn| conn.find_user_by_name("admin"))
             .expect("admin row")
             .pwd_argon2
+    }
+
+    #[test]
+    fn purges_plaintext_credential_rows_left_by_the_old_form() {
+        use birdnet_db::settings::{SettingsCategory, ensure_settings_table, get, set};
+
+        let (_d, state) = fixture();
+        state.with_db(|conn| {
+            ensure_settings_table(conn).unwrap();
+            set(conn, "auth_password", "hunter2", SettingsCategory::System).unwrap();
+            set(conn, "auth_username", "birdnet", SettingsCategory::System).unwrap();
+            // An unrelated row must survive the purge.
+            set(conn, "site_name", "Backyard", SettingsCategory::System).unwrap();
+        });
+
+        assert_eq!(purge_legacy_credential_settings(&state), 2);
+        state.with_db(|conn| {
+            assert!(get(conn, "auth_password").is_err(), "plaintext row remains");
+            assert!(get(conn, "auth_username").is_err());
+            assert_eq!(get(conn, "site_name").unwrap(), "Backyard");
+        });
+    }
+
+    #[test]
+    fn purge_is_idempotent_and_silent_on_a_clean_station() {
+        let (_d, state) = fixture();
+        assert_eq!(purge_legacy_credential_settings(&state), 0);
+        assert_eq!(purge_legacy_credential_settings(&state), 0);
     }
 
     #[test]
