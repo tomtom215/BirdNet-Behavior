@@ -203,11 +203,47 @@ station-local analytics that read SQLite directly (Migration, the Dawn Chorus,
 the Heatmap, Co-occurrence, and the Time-series page) keep working. Only the
 extension-backed sessionize / retention / next-species queries are unavailable.
 
+**Diagnose it in one command:**
+
+```bash
+birdnet-behavior --verify-extension
+```
+
+This opens a throwaway DuckDB database, loads the extension the way the station
+does, and prints the engine version, the extension version, and what the
+build-time embedded copy targets. It exits 0 when the extension loads and
+non-zero when it does not, so it is also usable from a monitoring script.
+
+Note `--doctor` will *not* answer this question: it deliberately never opens
+DuckDB (a preflight open during `ExecStartPre` could contend with the running
+service), so it reports whether analytics is *configured*, not whether the
+extension actually loads.
+
+To check the **offline** guarantee specifically — the one that matters on an
+air-gapped or metered station — run it with networking disabled:
+
+```bash
+# Bare metal: run it in a network namespace with no interfaces.
+unshare -rn birdnet-behavior --verify-extension
+
+# Docker: the same check against the image you are running.
+docker run --rm --network none \
+    --entrypoint /usr/local/bin/birdnet-behavior \
+    ghcr.io/tomtom215/birdnet-behavior:latest --verify-extension
+```
+
+With no network neither the extension cache nor the community registry can
+satisfy the load, so a pass proves the *embedded* copy loaded. A station that
+passes with network and fails without it has a packaging defect: the embedded
+extension targets the wrong DuckDB version and the registry has been silently
+covering for it.
+
 Fix: rebuild and republish the extension for the bundled DuckDB version in the
 [duckdb-behavioral](https://github.com/tomtom215/duckdb-behavioral) repository,
 or pin the `duckdb` crate to the version the published extension targets, then
-rebuild with `--features analytics`. Check the bundled version with
-`birdnet-behavior --doctor` (or the log line above) and match it.
+rebuild with `--features analytics`. As an immediate workaround on a station
+with network, `birdnet-behavior --refresh-extension` force-installs the correct
+build from the community registry.
 
 ---
 

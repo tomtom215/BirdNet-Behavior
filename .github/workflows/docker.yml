@@ -165,6 +165,44 @@ jobs:
           outputs: |
             type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=${{ env.PUSH }}
 
+      # ── Offline-load gate for the embedded behavioral extension ───────────
+      #
+      # The image above pushes by digest only, so nothing is loaded into the
+      # local daemon. Re-run the same build with `load: true`: every layer is a
+      # cache hit from the step above, so this costs seconds and produces a
+      # local tag we can actually run.
+      #
+      # This exists because the Dockerfile embedded an extension built for
+      # DuckDB v1.5.3 into a v1.5.5 engine from the day it was written until
+      # 2026-08-08. Every workflow stayed green: nothing ever loaded the
+      # extension inside the built image, and a container *with* network masks
+      # the defect completely by installing from the community registry.
+      - name: Load the image locally for verification
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/${{ matrix.platform.arch }}
+          build-args: |
+            BUILD_FEATURES=analytics
+            BEHAVIORAL_EXTENSION_TARGET=linux_${{ matrix.platform.arch }}
+          cache-from: type=gha,scope=${{ matrix.platform.arch }}
+          load: true
+          tags: birdnet-behavior:verify
+
+      - name: Prove the behavioral extension loads with no network
+        # `--network none` is the whole point: with no network the cached and
+        # community-registry stages of the loader cannot succeed, so a pass
+        # means the *embedded* copy loaded — the air-gapped guarantee.
+        #
+        # `--entrypoint` bypasses entrypoint.sh (model download, directory
+        # setup) so this step can only fail for the reason it is testing.
+        run: |
+          set -euo pipefail
+          docker run --rm --network none \
+            --entrypoint /usr/local/bin/birdnet-behavior \
+            birdnet-behavior:verify --verify-extension
+
       - name: Export digest
         if: env.PUSH == 'true'
         run: |

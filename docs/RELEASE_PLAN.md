@@ -63,8 +63,8 @@ that it does not do*, in a path no gate executes.
 
 | ID | Finding | Sev | Effort |
 |----|---------|-----|--------|
-| S-01 | Docker images embed a behavioral extension built for **DuckDB 1.5.3** into a **1.5.5** engine — offline analytics is broken on the Docker install path | **P1** | XS + gate |
-| S-02 | The SQLite database's parent directory is never created; the station exits 1, after `--doctor` said *"no action needed"* | **P1** | S |
+| ~~S-01~~ | ~~Docker images embed a behavioral extension built for **DuckDB 1.5.3** into a **1.5.5** engine~~ — **fixed, Slice 1** | **P1** | XS + gate |
+| ~~S-02~~ | ~~The SQLite database's parent directory is never created; the station exits 1, after `--doctor` said *"no action needed"*~~ — **fixed, Slice 2** | **P1** | S |
 | S-03 | 150 packages of transitive lockfile drift that no Dependabot PR surfaces — including `rustls`, `hyper`, `aws-lc-rs`, `webpki-roots` | **P1 (release)** | S — **done, see §2** |
 | S-04 | The model-gated "scientific core" suites report `2 passed` whether or not they ran | P2 | S |
 | S-05 | PR #196 is red: `clap` 4.6.6 changed help rendering, staling the committed CLI-help snapshot | P2 | XS — **done** |
@@ -422,20 +422,74 @@ release notes.
 Ordered so each slice is independently landable and independently verifiable.
 Slices 1–2 are the release blockers.
 
-### Slice 1 — S-01, the Docker extension (P1)
-1. `Dockerfile:142` → `v1.5.5`.
-2. `build.rs` validates the embedded extension's footer against the linked
-   DuckDB version; mismatch = build failure.
-3. `docker.yml` runs the built image with networking off and asserts
-   `LOAD behavioral`.
-- **Red-before-green:** build with the v1.5.3 artifact, watch
-  `embedded_extension_loads_when_bundled` fail; fix; watch it pass.
+### ✅ Slice 1 — S-01, the Docker extension (P1) · **landed**
 
-### Slice 2 — S-02, the database directory (P1)
-1. `create_dir_all` the database parent in `src/app.rs` before open; clear error
-   on permission failure.
-2. Integration test with a nested non-existent `DB_PATH`.
-- **Red-before-green:** the A/B in S-02 becomes the test.
+1. **`Dockerfile:142` → `v1.5.5`**, with the history of the drift written next to
+   it so the next reader knows why the line matters.
+2. **`crates/birdnet-behavioral/build.rs` now parses the extension's metadata
+   footer** and refuses to embed anything it cannot identify. The layout was
+   *measured* from the published v1.5.3 and v1.5.5 artifacts, not taken from
+   documentation: 8 NUL-padded 32-byte fields, extension version at `[128:160]`,
+   DuckDB version at `[160:192]`, platform at `[192:224]`, footer format at
+   `[224:256]`. It emits what the bytes target as generated constants, and logs
+   `embedding behavioral v0.9.1 for DuckDB v1.5.5 (linux_amd64)` so the build log
+   states the fact rather than implying it.
+
+   *Why not a build-time version comparison?* Because it cannot be done: probing
+   the build script's environment shows cargo exposes **no** `DEP_DUCKDB_*` to it
+   (`libduckdb-sys` declares `links = "duckdb"` but emits no version key, and
+   `DEP_*` reaches only direct dependents). So build.rs enforces what it can
+   prove, and the cross-check lives where both facts exist — at run time.
+3. **`AnalyticsDb::embedded_extension_mismatch()`** compares the embedded target
+   against the linked engine. `load_extension()` logs an **error** on mismatch
+   *before* attempting any stage, so a networked station that masks the defect by
+   installing from the community registry still reports it.
+4. **New `--verify-extension`** — opens a throwaway DuckDB, loads the extension
+   the way the station does, reports engine/extension/embedded versions, exits
+   0/1. Run with no network it proves the *offline* guarantee specifically.
+   `--doctor` cannot answer this: it deliberately never opens DuckDB.
+5. **`docker.yml`** loads the built image (cache hit) and runs
+   `docker run --network none … --verify-extension`.
+6. **Three new tests**, including `embedded_extension_targets_the_linked_engine`
+   — the invariant nothing asserted.
+
+**Measured, red-before-green:**
+
+| | v1.5.3 embedded (what shipped) | v1.5.5 embedded |
+|---|---|---|
+| `embedded_extension_loads_when_bundled` | **FAILED** | ok |
+| `embedded_extension_targets_the_linked_engine` | **FAILED** — *"targets DuckDB v1.5.3 but this binary links DuckDB v1.5.5"* | ok |
+| `--verify-extension`, network **up** | **exit 1** | exit 0 |
+| `--verify-extension`, `unshare -rn` (no network) | **exit 1** | **exit 0**, *"loaded behavioral extension from embedded bundle, bytes=408382"* |
+
+The "network up → exit 1" row is the one that matters: the old code silently
+succeeded there via the registry, which is exactly how this survived.
+
+build.rs rejection paths were exercised too — a gzipped download (the realistic
+mistake, since the CDN serves `.gz`), a truncated file, and random bytes each
+fail the build with a message naming the cause.
+
+### ✅ Slice 2 — S-02, the database directory (P1) · **landed**
+
+1. **`helpers::ensure_db_dir`** creates the database's parent before anything
+   touches the path, called from `src/app.rs` right after `db_path` resolves.
+   A failure it cannot fix (read-only mount, ENOTDIR, permissions) returns an
+   error naming the directory, the OS cause, and the remediation — it is not
+   swallowed.
+2. **Six new tests**: five unit tests (nested creation, multi-level, idempotence,
+   bare relative filename, and the unfixable case — rooted at a regular file so
+   it fails as ENOTDIR for *any* user, including root, where a permissions test
+   would not fail at all), plus an integration test in `tests/boot_smoke.rs` that
+   boots the real binary against a four-level-deep non-existent `DB_PATH`.
+
+**Measured, red-before-green:** with `ensure_db_dir` temporarily neutered, the
+new boot test fails with *"server exited during startup with exit status: 1"* —
+the original defect exactly — and passes with it restored. The station now boots
+against `…/mnt/ssd/birdnet/data/birds.db` with all four levels absent, serving
+`GET / → 200` and logging `created database directory`.
+
+`--doctor`'s message is deliberately unchanged: *"will be created on first run —
+no action needed"* is now **true**.
 
 ### Slice 3 — S-03 + S-05, lockfile convergence *(done — verify in CI)*
 Already on this branch with the full gate green. On merge, close #196, #193, #186
@@ -466,10 +520,13 @@ as superseded.
 
 ## 4. Definition of done
 
-- [ ] A Docker image, built from this tree with networking disabled, loads
-      `behavioral` v0.9.1 and answers every `/api/v2/analytics/*` endpoint
-- [ ] A wrong extension pin fails the build instead of shipping
-- [ ] A station with a non-existent `DB_PATH` parent starts, and doctor's message
+- [x] The extension load is **proven** offline rather than inferred:
+      `--verify-extension` under `unshare -rn` exits 0 from the embedded copy,
+      and `docker.yml` runs the same check with `--network none` on every image
+- [x] A wrong extension pin cannot ship silently: unidentifiable bytes fail the
+      build, and a version mismatch fails a test *and* logs an error at runtime
+      even when a network install masks it
+- [x] A station with a non-existent `DB_PATH` parent starts, and doctor's message
       is true
 - [ ] `cargo update` is part of the release runbook, with the advisory scan re-run
       against the resulting lockfile
@@ -488,8 +545,15 @@ as superseded.
   executes and serves; it is not the board.
 - **Long-duration soak.** The soak suite bounds memory growth over minutes, not
   days. "A full season unattended" remains the target, not a measurement.
-- **The Docker image built end to end here.** S-01's *load failure* is measured —
-  DuckDB refuses the exact bytes the Dockerfile embeds — and the pin and its
-  history are read directly from the tree. What was not done in this sandbox is
-  building the image itself and observing the failure through the container's own
-  analytics pages. Slice 1's CI step closes that last inch.
+- **The Docker image built end to end here.** S-01 is measured at every level
+  that does not need a container: DuckDB refuses the exact bytes the Dockerfile
+  embedded, `--verify-extension` fails with the network both up and down, and the
+  offline load succeeds once the pin is corrected. What was **not** done in this
+  sandbox is building the image itself — so the `docker.yml` step added in
+  Slice 1 is the thing to watch on the first run after merge. If it goes red, the
+  image build differs from the local build in some way this audit did not see.
+- **`--verify-extension` under systemd.** The documented offline recipes are
+  `unshare -rn` (verified here) and `docker run --network none` (what CI runs).
+  A `systemd-run -p PrivateNetwork=yes` form would suit a Pi station better, but
+  this container is not systemd-booted, so it is deliberately not documented —
+  an unverified command in a troubleshooting guide is worse than none.

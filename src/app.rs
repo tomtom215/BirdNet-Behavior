@@ -107,6 +107,12 @@ async fn serve(
 
     // Startup database resilience check.
     let db_path = helpers::db_path_from_config(config.as_ref());
+    // SQLite will not create a missing parent directory — it fails the open
+    // with a bare "unable to open database file" — so do it here, before
+    // anything touches the path. Matches what every other directory the
+    // station owns already does, and makes `--doctor`'s "will be created on
+    // first run" true rather than aspirational.
+    helpers::ensure_db_dir(&db_path)?;
     let backup_dir = db_path
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))

@@ -139,7 +139,24 @@ COPY . .
 # pin in Cargo.toml). If the download fails — restricted CI / offline build —
 # the variable stays unset and the build.rs falls through to the runtime
 # LOAD / INSTALL FROM community path.
-ARG BEHAVIORAL_EXTENSION_DUCKDB_VERSION="v1.5.3"
+# MUST equal the DuckDB version libduckdb-sys bundles — the `duckdb = "~1.10505"`
+# pin in the root Cargo.toml, where `10505` encodes DuckDB 1.5.5. A DuckDB
+# extension is version-locked: the engine refuses to LOAD a build targeting any
+# other version, and `allow_extensions_metadata_mismatch` does not bypass it.
+#
+# This was `v1.5.3` from the day it was written until 2026-08-08, while the
+# engine moved to 1.5.5 in b35d4f5. `ci.yml` and `release.yml` were updated;
+# this was not. The v1.5.3 URL still returns 200, so the download *succeeded*
+# and the wrong bytes were embedded silently — the fallback branch below never
+# fired. Symptom: offline `LOAD behavioral` failed on exactly the air-gapped
+# stations the embedding exists to serve, while networked ones masked it by
+# installing from the community registry instead.
+#
+# Two gates now stand behind this line, so it cannot rot again silently:
+# `crates/birdnet-behavioral/build.rs` refuses to embed bytes whose footer it
+# cannot parse and records what they target, and `docker.yml` boots the built
+# image with networking disabled and asserts the extension loads.
+ARG BEHAVIORAL_EXTENSION_DUCKDB_VERSION="v1.5.5"
 ARG BEHAVIORAL_EXTENSION_TARGET="linux_amd64"
 RUN set -eu; \
     url="http://community-extensions.duckdb.org/${BEHAVIORAL_EXTENSION_DUCKDB_VERSION}/${BEHAVIORAL_EXTENSION_TARGET}/behavioral.duckdb_extension.gz"; \

@@ -44,6 +44,8 @@ enum Action {
     BackupDb,
     /// `--refresh-extension`: reinstall the behavioral `DuckDB` extension and exit.
     RefreshExtension,
+    /// `--verify-extension`: prove the behavioral `DuckDB` extension loads, and exit.
+    VerifyExtension,
     /// `--doctor` / `--doctor-json`: print diagnostics and exit with a
     /// status-derived code. Carries the chosen render format.
     Doctor(doctor::Format),
@@ -65,6 +67,8 @@ const fn dispatch_subcommand(cli: &Cli) -> Action {
         Action::BackupDb
     } else if cli.refresh_extension {
         Action::RefreshExtension
+    } else if cli.verify_extension {
+        Action::VerifyExtension
     } else if cli.doctor || cli.doctor_json || cli.fix {
         // `--doctor-json` wins the format choice when both are passed so a
         // monitoring script that sets both still gets machine-readable output.
@@ -144,6 +148,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Action::CheckDb => return run_integrity_check(config.as_ref()),
         Action::BackupDb => return run_backup(config.as_ref()),
         Action::RefreshExtension => return helpers::run_refresh_extension(&cli, config.as_ref()),
+        Action::VerifyExtension => return helpers::run_verify_extension(&cli, config.as_ref()),
         Action::Doctor(format) => {
             let code = doctor::run_with_format(&cli, config.as_ref(), format);
             std::process::exit(code);
