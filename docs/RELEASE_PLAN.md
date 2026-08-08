@@ -413,7 +413,7 @@ work that comes later. Branch `claude/pre-release-audit-plan-if7qrp`, PRs into `
 2. **Exact CLI-source tracking replaced the sentinels.** `Cli::explicit` records what clap
    saw as `CommandLine`/`EnvVariable`, and `helpers::resolve` applies one rule everywhere:
    *explicit flag/env → admin settings → config file → default*. This also retired the
-   `(notify_confidence - 0.8).abs() > EPSILON` hack, which mis-handled an operator who
+   `(notify_confidence - 0.8).abs() > EPSILON` hack, which mishandled an operator who
    explicitly typed the default.
 3. **Bridged:** `segment_duration`, `freq_shift_hz`, `night_inhibit`, `rtsp_urls`,
    `custom_image_dir`, `weekly_report_schedule`, plus `apprise_url`, `apprise_config`,

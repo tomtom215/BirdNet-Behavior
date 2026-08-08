@@ -44,6 +44,12 @@ extend-ignore-identifiers-re = [
 extend-ignore-re = [
     # CSS @font-face unicode-range hex, e.g. "U+0100-02BA" — codepoints, not prose.
     'U\+[0-9A-Fa-f]{4,6}(-[0-9A-Fa-f]{4,6})?',
+    # Backticked git SHAs, e.g. `ba84180`. typos splits an identifier at the
+    # first digit, so a SHA beginning with hex letters is read as a word —
+    # `ba84180` becomes "ba", flagged as a typo for "by"/"be". Docs that cite
+    # a commit are normal here (CHANGELOG, RELEASING, the release plan), so
+    # match the shape rather than allow-listing each SHA as it appears.
+    '`[0-9a-f]{7,40}`',
 ]
 
 [default.extend-words]
