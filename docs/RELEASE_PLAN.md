@@ -701,13 +701,37 @@ the install path real stations pull from. That is the maintainer's call, not thi
 - [x] Full gate green locally *and* in CI: `fmt`, `clippy --all-targets --all-features -D warnings`, `test --workspace --all-features`, `doc` with `-D warnings`, `check` on MSRV 1.95
 - [x] The model-gated scientific core run against the real sha256-verified model — **1929 passed, 0 failed, 0 runtime skips** across 40 suites, re-confirmed at `ba84180` on a cold `target/`
 
-**One honest caveat on the last box.** The real-model `inference` job lives in `ci.yml`, which
-fires only on pushes to `main`/`master` and on pull requests. No PR is open for this branch,
-so that job has **never run in CI here** — `ci.yml` has zero runs on
-`claude/pre-release-audit-plan-if7qrp`. The coverage is real but it is *local*: the 541 MB
-model was fetched, its sha256 checked against the digest CI pins (`ci.yml:175`), and
-`inference_e2e`, `pipeline_e2e` and the new `species_filter_e2e` run rather than skip. Opening
-the PR will run it in CI, and that is where the box gets independently confirmed.
+**Independently confirmed in CI.** The real-model `inference` job lives in `ci.yml`, which
+fires only on pushes to `main`/`master` and on pull requests — so until PR #195 was opened it
+had never run against this branch, and the model-gated coverage was local only. It has now
+run: **all 37 checks on #195 are green** at `ce54b61`, including `Inference against the real
+model`, `cargo-deny` (the one gate that could not be run locally — `cargo-deny` is not
+installed in this environment), `Cross-check (aarch64 / Raspberry Pi)`, `install.sh → web UI
+(offline, no-systemd container)`, `Accessibility (axe) + visual-QA sweep`, and all 21
+`cargo-mutants` shards.
+
+**Opening the PR found three real defects, all in gates never run locally.** Worth recording,
+because the pattern is the same each time — a gate exists, it is cheap, and it was skipped:
+
+| Gate | What it caught | Cost of running it |
+|---|---|---|
+| `cargo doc` with `-D warnings` | Two broken intra-doc links | seconds |
+| `typos` | A short commit SHA in prose, tokenized at its first digit and read as an English word (4 hits), plus one genuine misspelling | 8 MB download, <1 s |
+| `scripts/gen-cli-help.sh` | Four new flags missing from the committed `--help` snapshot | seconds |
+| `cargo-mutants` | Three survivors on a `tracing::info!` guard | minutes |
+
+The mutation one is the most instructive. All three survivors sat on
+`if !include.is_empty() || !exclude.is_empty()` — and the function *directly above it in the
+same file*, `species_thresholds_log_count`, exists for precisely this reason and says so in
+its doc comment. The fix was to follow the idiom already there. Verified locally after
+installing `cargo-mutants`: `daemon/mod.rs` 1 caught / 1 unviable / 0 missed, and
+`daemon/config.rs` **29 mutants, 29 caught, 0 missed**.
+
+One hazard that deserves a warning for anyone repeating this: `cargo mutants --in-place`
+edits the working tree, and a run killed by a timeout does **not** restore it. One such kill
+left `resolve_station_coords` returning `(Some(-1.0), Some(-1.0))` in the tree. It never
+reached a commit, but in a repo where an agent commits, an interrupted `--in-place` run is a
+live way to ship a mutant. Check `git status` after every run.
 
 _Keep this document current as slices land: flip the checkboxes, strike closed findings, and
 re-run the §0 evidence table before tagging._
