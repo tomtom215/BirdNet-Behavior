@@ -673,6 +673,72 @@ The profile sets `debug = 0`, carries the corrected table, and documents the per
 the tag is the manual "go" action, and it publishes a GitHub Release, Docker images, and
 the install path real stations pull from. That is the maintainer's call, not this branch's.
 
+### ✅ Slice 6 — the two caveats that did *not* need hardware
+
+The plan carried two "not established" caveats to the end. Both turned out to be reachable
+in a container, so both were closed rather than shipped as unknowns.
+
+#### A real `0.9.0` → `0.10.0` upgrade
+
+Not a synthetic fixture: the **published `v0.9.0` x86_64 release binary**, sha256-checked
+against the digest on the release
+(`d8583c4d5bfaf8b5a97a461d6e05e56198e99ca5ffea0e018ca0c212d077732e`), booted as a station,
+configured **through its own admin UI** — including the Web Authentication card that existed
+then — and seeded with **48 401 detections** across a 120-day season. Then `0.10.0` was
+pointed at that untouched station.
+
+| | `0.9.0` | after `0.10.0` |
+|---|---|---|
+| schema version | 20 | **22** (migrations 21, 22 applied) |
+| detections | 48 401 | **48 401** — none lost |
+| settings rows | 33 | **31** |
+| plaintext `auth_*` rows | **2** | **0** |
+| admin accounts | 1 | 1 — login still works |
+| settings reaching the runtime | `count=2` | **`count=21`** |
+| DuckDB | v1.5.3 / ext v0.8.0 | **v1.5.5 / ext v0.9.1, opened in place — no quarantine** |
+
+The purge is not silent — it logs `removed plaintext credential rows written by a previous
+build's settings form … count=2`. The operator's species lists survive verbatim. All nine
+`/api/v2/analytics/*` endpoints answer 200 over the migrated history, every key page is 200,
+and `--doctor` reports 13 passed / 0 errors.
+
+The `count=2 → count=21` row is the upgrade consequence worth stating plainly: **settings
+that were inert start taking effect the moment a station upgrades**, with nobody touching the
+UI. That is the fix working, and it is also a behaviour change an operator should expect.
+
+**Rollback is safe, which matters more than it sounds.** Running `0.9.0` again against the
+schema-22 database does not fail: it warns — `database schema is newer than this binary knows
+about — likely a downgrade` — and serves data normally. An operator whose upgrade goes wrong
+can go back.
+
+#### The aarch64 binary actually executed
+
+The plan said "built and linked, never executed." It has now been executed — **the exact
+artifact the release pipeline produced** (`build-aarch64-unknown-linux-gnu` from run
+31224283342, sha256-verified), run under `qemu-aarch64-static` against an Ubuntu 24.04 arm64
+sysroot:
+
+- `--version` / `--help` run; ONNX Runtime initialises
+- `--doctor` against a real 48 k-detection station: **13 passed, 0 errors**
+- `--web-only` serves: every key page 200, and **all analytics endpoints 200 through DuckDB
+  v1.5.5 + the behavioral v0.9.1 extension running natively on aarch64**
+
+And the documented glibc floor is now checked rather than asserted: the highest symbol
+version the binary requires is **`GLIBC_2.39`**, exactly the documented minimum — which is
+precisely why Bookworm's 2.36 cannot work.
+
+**What this still is not.** qemu-user emulation on x86_64 is not a Raspberry Pi. It proves
+the binary is a valid aarch64 executable whose entire stack — dynamic linking, ONNX Runtime,
+SQLite, DuckDB, the bundled extension, axum — initialises and serves correctly. It says
+nothing about real Pi throughput, thermal behaviour, or hardware audio capture.
+
+### Still not established (and why)
+
+- **Real Raspberry Pi hardware.** Emulation is not the board. Throughput, thermals and live
+  audio capture from a real microphone remain unmeasured.
+- **Long-duration soak.** The soak tests bound memory growth; they do not run for days. "A
+  full season unattended" is the target, not a measurement.
+
 ### Not in scope for `v0.10.0`
 
 - **Dependabot backlog** (#148, #176, #177, #186, #188, #190, #193). Take them *after* the
