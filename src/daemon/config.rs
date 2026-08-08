@@ -226,6 +226,26 @@ pub(super) fn species_thresholds_log_count(thresholds: &HashMap<String, f64>) ->
     }
 }
 
+/// "Should we log the operator's species lists, and how long are they?"
+///
+/// Returns `Some((include_len, exclude_len))` when *either* list has an entry;
+/// `None` when the operator has configured neither. Same reason as
+/// [`species_thresholds_log_count`] one function up, and the same shape: the
+/// inline `if !include.is_empty() || !exclude.is_empty()` guard left three
+/// cargo-mutants survivors — the `||`, and each of the two `!` — because its
+/// only observable effect is a log line the suite doesn't capture.
+///
+/// A one-list station is the case that matters: it is both the common
+/// configuration and the one the `||`→`&&` mutant silently breaks.
+#[must_use]
+pub(super) const fn species_lists_log_counts(lists: &SpeciesLists) -> Option<(usize, usize)> {
+    if lists.include.is_empty() && lists.exclude.is_empty() {
+        None
+    } else {
+        Some((lists.include.len(), lists.exclude.len()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -605,5 +625,47 @@ mod tests {
     fn species_thresholds_log_count_some_for_nonempty() {
         let m = thresholds(&[("Pica pica", 0.8), ("Corvus corax", 0.85)]);
         assert_eq!(species_thresholds_log_count(&m), Some(2));
+    }
+
+    // ── species_lists_log_counts ────────────────────────────────────────
+    //
+    // Four cases, because the guard this replaces had three distinct
+    // mutants. The two single-list cases are what kill the `||`→`&&`
+    // survivor; the empty case kills both `delete !` survivors.
+
+    fn lists(include: &[&str], exclude: &[&str]) -> SpeciesLists {
+        SpeciesLists {
+            include: include.iter().map(|s| (*s).to_owned()).collect(),
+            exclude: exclude.iter().map(|s| (*s).to_owned()).collect(),
+        }
+    }
+
+    #[test]
+    fn species_lists_log_counts_none_when_the_operator_configured_neither() {
+        assert_eq!(species_lists_log_counts(&lists(&[], &[])), None);
+    }
+
+    #[test]
+    fn species_lists_log_counts_some_for_an_include_only_station() {
+        assert_eq!(
+            species_lists_log_counts(&lists(&["Pica pica"], &[])),
+            Some((1, 0))
+        );
+    }
+
+    #[test]
+    fn species_lists_log_counts_some_for_an_exclude_only_station() {
+        assert_eq!(
+            species_lists_log_counts(&lists(&[], &["Corvus corax"])),
+            Some((0, 1))
+        );
+    }
+
+    #[test]
+    fn species_lists_log_counts_reports_both_lengths() {
+        assert_eq!(
+            species_lists_log_counts(&lists(&["Pica pica", "Turdus merula"], &["Corvus corax"])),
+            Some((2, 1))
+        );
     }
 }

@@ -26,7 +26,7 @@ use crate::integrations::{AppriseHandle, EmailHandle, HeartbeatHandle, MqttHandl
 use config::{
     build_extraction_config, build_model_config, build_pipeline_config,
     build_species_filter_config, resolve_f32_with_default, resolve_required_paths,
-    resolve_station_coords, species_thresholds_log_count,
+    resolve_station_coords, species_lists_log_counts, species_thresholds_log_count,
 };
 use processor::event_processor;
 
@@ -140,12 +140,8 @@ pub fn start_detection_daemon(
     // /admin/species page uses so the two cannot drift.
     let species_lists =
         birdnet_web::routes::admin::species::handler::configured_species_lists(&state);
-    if !species_lists.include.is_empty() || !species_lists.exclude.is_empty() {
-        tracing::info!(
-            include = species_lists.include.len(),
-            exclude = species_lists.exclude.len(),
-            "loaded operator species filter lists"
-        );
+    if let Some((include, exclude)) = species_lists_log_counts(&species_lists) {
+        tracing::info!(include, exclude, "loaded operator species filter lists");
     }
 
     // Re-read on a TTL inside the daemon loop so excluding a species takes
