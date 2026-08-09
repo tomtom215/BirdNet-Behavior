@@ -99,9 +99,23 @@ version — `Cargo.toml:55-73` documents this at length, including that
 | `…/v1.5.3/linux_amd64/behavioral.duckdb_extension.gz` | 405 990 | `f1f820ec…` | **behavioral v0.8.0, DuckDB v1.5.3** |
 | `…/v1.5.5/linux_amd64/behavioral.duckdb_extension.gz` | 408 382 | `4777 9675…` | **behavioral v0.9.1, DuckDB v1.5.5** |
 
-Different files. `v1.5.3` returns **HTTP 200**, so the Dockerfile's `curl`
-*succeeds* and the wrong extension is embedded — the "download failed, fall
-through to runtime INSTALL" branch never fires.
+Different files, and `v1.5.3` returns **HTTP 200** — so the pin was genuinely
+wrong and pointed at a real, unloadable artifact.
+
+> **Correction, from the first CI run of the gate this slice added.** The
+> original write-up went on to say the fetch *"succeeds and the wrong extension
+> is embedded"*. That inference was **wrong**, and the gate proved it: the arm64
+> image reported `embedded_extension="<none embedded>"`. `curl` is installed
+> only in the **runtime** stage; the **builder** stage has `cmake, g++,
+> imagemagick, libasound2-dev, pkg-config, pngquant` and no `curl`. The fetch
+> therefore exits 127, takes the silent best-effort `else` branch, and **no
+> Docker image has ever embedded the extension, on any architecture** — the
+> wrong pin never even got as far as being downloaded.
+>
+> Both facts are real (wrong pin *and* absent `curl`), and both are fixed. The
+> lesson is the one this document keeps re-learning: the caveat in §5 said the
+> image had not been built end to end, and that was exactly the gap where the
+> mechanism turned out to differ from the reasoning.
 
 **Why no gate caught it.**
 - `docker.yml:156` overrides only `BEHAVIORAL_EXTENSION_TARGET` (the arch),

@@ -360,7 +360,7 @@ jobs:
             *) plat="" ;;
           esac
           if [ -n "$plat" ]; then
-            url="http://community-extensions.duckdb.org/${ddb_ver}/${plat}/behavioral.duckdb_extension.gz"
+            url="https://community-extensions.duckdb.org/${ddb_ver}/${plat}/behavioral.duckdb_extension.gz"
             tmp="$RUNNER_TEMP/behavioral.duckdb_extension"
             if curl -fsSL --max-time 60 -o "${tmp}.gz" "$url"; then
               gunzip -f "${tmp}.gz"

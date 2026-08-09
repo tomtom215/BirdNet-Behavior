@@ -16,8 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the workspace bundles DuckDB 1.5.5. When the engine was bumped (`b35d4f5`)
   `ci.yml` and `release.yml` were updated and the `Dockerfile` was not — and
   because the `v1.5.3` URL still returns HTTP 200, the download *succeeded* and
-  the wrong bytes were embedded silently; the "fetch failed, fall back to a
-  runtime install" branch never fired.
+  the fetch pointed at a real but unloadable artifact.
+
+  The first run of the new CI gate then showed the failure was worse than the
+  pin: `curl` is installed only in the *runtime* stage, so in the **builder**
+  stage the fetch exits 127 and silently takes the fallback branch. **No Docker
+  image has ever embedded the extension, on any architecture** — the wrong pin
+  never got as far as being downloaded. Both are fixed: the pin is corrected and
+  the builder stage installs `curl` + `ca-certificates`. The extension is also
+  now fetched over HTTPS rather than plain HTTP, since it is embedded into a
+  binary that is subsequently SLSA-attested and cosign-signed (verified
+  byte-identical to the HTTP response).
 
   DuckDB refuses a version-mismatched extension outright: *"The file was built
   specifically for DuckDB version 'v1.5.3' and can only be loaded with that
