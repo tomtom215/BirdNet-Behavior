@@ -734,14 +734,27 @@ phase_web() {
     fi
   fi
 
-  # An open /admin on a non-loopback bind is the S-10 finding — doctor should say so.
-  local admin_code
+  # An open /admin on a non-loopback bind is the S-10 finding. Measuring the
+  # HTTP behaviour alone is not enough: it has to be reconciled against what the
+  # config says and what doctor claims, because the interesting failure is the
+  # three disagreeing rather than any one of them being unset.
+  local admin_code pwd_in_config=0 doctor_verdict
   admin_code="$(curl -so /dev/null -w '%{http_code}' --max-time 10 "${BASE}/admin/settings" 2>/dev/null)"
-  if [ "$admin_code" = "200" ]; then
-    record WARN web.adminopen "/admin/settings answered 200 with no authentication" \
-      "Expected when no admin password is set. Doctor should be warning about this too."
-  else
+  sudo grep -qE '^[[:space:]]*CADDY_PWD[[:space:]]*=[[:space:]]*[^[:space:]#]' "$CONFIG_FILE" 2>/dev/null \
+    && pwd_in_config=1
+  doctor_verdict="$(grep -i 'admin authentication' "${OUT}/doctor.txt" 2>/dev/null | head -1)"
+
+  if [ "$admin_code" != "200" ]; then
     record PASS web.adminauth "/admin/settings is gated (${admin_code})"
+  elif [ "$pwd_in_config" = "1" ]; then
+    # The installer generated a password and wrote it to the config, the panel
+    # serves anyway, and doctor read the same config and called it protected.
+    record FAIL web.adminopen \
+      "CADDY_PWD IS set in ${CONFIG_FILE}, yet /admin/settings serves 200 unauthenticated" \
+      "doctor said: ${doctor_verdict:-<no admin line>} — the config password is not reaching the auth path"
+  else
+    record WARN web.adminopen "/admin/settings answered 200 and no CADDY_PWD is set in the config" \
+      "Open by design without a password; doctor should be warning about it too."
   fi
 }
 
@@ -775,10 +788,17 @@ phase_watchdog() {
   if [ $restarted -eq 1 ]; then
     STOPPED_PID=""            # the old process is gone; nothing to resume
     record PASS watchdog.restart "systemd killed the hung process and restarted it (pid ${pid} → $(daemon_pid))"
-    if journalctl -u "$SERVICE" --since '-4 min' --no-pager 2>/dev/null | grep -qi 'watchdog'; then
-      record PASS watchdog.journal "journal records the watchdog timeout"
+    # systemd's own wording varies by version ("Watchdog timeout (limit 2min)!",
+    # "watchdog: ...", or just the SIGABRT it sends), and the unit may have been
+    # cycling for longer than the SIGSTOP wait, so search a wider window and a
+    # wider vocabulary before concluding the restart had another cause.
+    if journalctl -u "$SERVICE" --since '-10 min' --no-pager 2>/dev/null \
+        | grep -qiE 'watchdog|timeout \(limit|SIGABRT|Killing process'; then
+      record PASS watchdog.journal "journal records the watchdog timeout / forced kill" \
+        "$(journalctl -u "$SERVICE" --since '-10 min' --no-pager | grep -iE 'watchdog|timeout \(limit|SIGABRT|Killing process' | tail -2 | tr '\n' ' ')"
     else
-      record WARN watchdog.journal "no 'watchdog' line in the journal — restart may have another cause"
+      record WARN watchdog.journal "no watchdog/kill wording in the journal — restart may have another cause" \
+        "The restart itself is proven by the PID change; only the attribution is unconfirmed."
     fi
   else
     sudo kill -CONT "$pid" 2>/dev/null
@@ -803,6 +823,19 @@ phase_unplug() {
   if [ "$ASSUME_YES" = "1" ]; then
     record SKIP unplug.all "--yes given; this phase needs someone at the board"; return 0
   fi
+
+  # If the gauge is not 1 to begin with, "dropped to 0" proves nothing — it was
+  # already 0. Asserting a transition without checking the starting state is the
+  # same trap as a model-gated test that reports `ok` whether or not it ran, so
+  # refuse to claim the pass (and do not make the operator unplug for nothing).
+  local pre; pre="$(source_up_value)"
+  if [ "$pre" != "1" ]; then
+    record SKIP unplug.all \
+      "source gauge is already ${pre:-<absent>} before the unplug — no up→down transition to observe" \
+      "Fix capture first, then re-run: ./hardware-test.sh --phase unplug"
+    return 0
+  fi
+  record PASS unplug.precondition "source gauge is 1 before the unplug — a real transition can be observed"
 
   say ""
   say "${C_YEL}    ACTION REQUIRED: physically unplug the USB microphone now.${C_OFF}"
