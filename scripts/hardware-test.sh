@@ -41,7 +41,7 @@ readonly METRICS_URL="${BASE}/api/v2/metrics"
 
 # Phase list, in execution order.
 readonly PHASES=(
-  env install verify capture detect perf web
+  env install verify capture detect pipeline perf web
   watchdog unplug netloss diskfull dbcorrupt duckdb reboot report
 )
 # Phases that deliberately break the station.
@@ -661,6 +661,117 @@ phase_detect() {
   else
     record WARN detect.metric "birdnet_inference_duration_seconds_count is ${infcount:-absent}"
   fi
+}
+
+phase_pipeline() {
+  head1 pipeline "Where captured audio is lost between microphone and model"
+  discover_paths
+
+  # A station that records continuously but classifies 6% of it looks perfectly
+  # healthy: the watch dir is drained by *age*, so unread segments vanish with
+  # no metric, no log line and no gap in the detection record. This phase
+  # accounts for every segment between capture and inference and names the
+  # stage that drops them.
+  #
+  # Everything it reads is already at the default log level — `run.rs` logs
+  # "begin processing file" at INFO per file and "failed to process file" at
+  # WARN — so no drop-in and no restart is needed, and the station stays in
+  # exactly the configuration being judged.
+
+  if ! svc_active; then
+    record SKIP pipeline.all "service is not active"; return 0
+  fi
+
+  # Segment length straight off the live capture command, not assumed.
+  local seg_secs argv
+  argv="$(pgrep -a arecord 2>/dev/null | head -1)"
+  [ -z "$argv" ] && argv="$(pgrep -a ffmpeg 2>/dev/null | head -1)"
+  seg_secs="$(sed -n 's/.*--max-file-time \([0-9]*\).*/\1/p' <<<"$argv")"
+  [ -z "$seg_secs" ] && seg_secs="$(sed -n 's/.*-segment_time \([0-9]*\).*/\1/p' <<<"$argv")"
+  if [ -z "$seg_secs" ] || [ "$seg_secs" -le 0 ] 2>/dev/null; then
+    record SKIP pipeline.all "no capture subprocess with a readable segment length" \
+      "Run --phase capture first; this phase measures a running station."
+    return 0
+  fi
+  record INFO pipeline.segment "capture writes ${seg_secs}s segments (read from the live command line)"
+
+  local mins="${BIRDNET_PIPELINE_MINUTES:-10}"
+  local t0 inf_c0
+  t0="$(date +%s)"
+  inf_c0="$(metric_value birdnet_inference_duration_seconds_count)"; inf_c0="${inf_c0:-0}"
+
+  info "accounting for every segment over ${mins} minutes…"
+  sleep $(( mins * 60 ))
+
+  local inf_c1 elapsed
+  inf_c1="$(metric_value birdnet_inference_duration_seconds_count)"; inf_c1="${inf_c1:-0}"
+  elapsed=$(( $(date +%s) - t0 ))
+
+  journalctl -u "$SERVICE" --since "@${t0}" --no-pager > "${OUT}/pipeline-journal.log" 2>&1 || true
+  local began failed
+  began="$(grep -c 'begin processing file' "${OUT}/pipeline-journal.log" 2>/dev/null || echo 0)"
+  failed="$(grep -c 'failed to process file' "${OUT}/pipeline-journal.log" 2>/dev/null || echo 0)"
+
+  local expected chunks
+  expected=$(( elapsed / seg_secs ))
+  chunks=$(( ${inf_c1%.*} - ${inf_c0%.*} ))
+
+  record INFO pipeline.counts \
+    "segments written ~${expected} · files the daemon opened ${began} · decode failures ${failed} · chunks inferred ${chunks}"
+
+  # ── Stage 1: did every recorded segment reach the daemon at all? ──────────
+  local pickup
+  pickup="$(awk "BEGIN { printf \"%.1f\", (${began} / ${expected}) * 100 }" 2>/dev/null)"
+  if [ "$expected" -le 0 ]; then
+    record SKIP pipeline.pickup "window too short to expect a segment"
+  elif awk "BEGIN { exit !(${pickup} < 90) }"; then
+    record FAIL pipeline.pickup \
+      "the daemon opened only ${began} of ~${expected} segments (${pickup}%)" \
+      "Segments are reaching disk but not the pipeline. Suspects: the notify watcher missing creation events, or the loop being blocked in inference while the FILE_SETTLE debounce (2 s) expires unnoticed. The unopened segments are deleted by the age drain, unread."
+  else
+    record PASS pipeline.pickup "the daemon opened ${began} of ~${expected} segments (${pickup}%)"
+  fi
+
+  # ── Stage 2: did the files it opened decode? ─────────────────────────────
+  if [ "$failed" -gt 0 ]; then
+    record FAIL pipeline.decode "${failed} file(s) failed to process" \
+      "$(grep 'failed to process file' "${OUT}/pipeline-journal.log" | tail -2 | tr '\n' ' ')"
+  elif [ "$began" -gt 0 ]; then
+    record PASS pipeline.decode "every opened file decoded without error"
+  fi
+
+  # ── Stage 3: did each opened file yield the chunks it contains? ──────────
+  # A segment of S seconds yields floor(S / chunk_secs) chunks. Chunk length is
+  # model-dependent, so bound it: 4.5 s (V3.0 dynamic) is the fewest chunks per
+  # segment, 3 s (fixed / V2.4) the most. Landing below the 4.5 s expectation
+  # means chunks are being dropped inside the file, not just files being missed.
+  if [ "$began" -gt 0 ]; then
+    local per_file min_expected
+    per_file="$(awk "BEGIN { printf \"%.2f\", ${chunks} / ${began} }")"
+    min_expected="$(awk "BEGIN { printf \"%d\", int(${seg_secs} / 4.5) }")"
+    record INFO pipeline.chunking "${per_file} chunks inferred per opened file (a ${seg_secs}s segment holds ${min_expected}–$(( seg_secs / 3 )))"
+    if awk "BEGIN { exit !(${per_file} < ${min_expected} * 0.8) }"; then
+      record WARN pipeline.chunking \
+        "each opened file yielded ${per_file} chunks, below the ${min_expected} a ${seg_secs}s segment contains" \
+        "Audio is being dropped *within* files as well as between them."
+    else
+      record PASS pipeline.chunking "opened files yield the chunks they contain (${per_file} per file)"
+    fi
+  fi
+
+  # ── Verdict: end-to-end coverage, the number that matters ────────────────
+  local covered
+  covered="$(awk "BEGIN { printf \"%.1f\", (${chunks} * 4.5) / ${elapsed} * 100 }")"
+  if awk "BEGIN { exit !(${covered} < 50) }"; then
+    record FAIL pipeline.coverage \
+      "at most ${covered}% of captured audio reached the model over ${mins} min" \
+      "Computed with the most generous chunk length (4.5 s); the true figure is this or lower. The remainder aged out of ${STREAM_DIR} unclassified, silently."
+  elif awk "BEGIN { exit !(${covered} < 90) }"; then
+    record WARN pipeline.coverage "at most ${covered}% of captured audio reached the model"
+  else
+    record PASS pipeline.coverage "${covered}% of captured audio reached the model"
+  fi
+  state_set PIPELINE_COVERAGE_PCT "$covered"
 }
 
 phase_perf() {
