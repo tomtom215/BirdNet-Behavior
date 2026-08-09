@@ -1043,7 +1043,14 @@ phase_dbcorrupt() {
 
   # Take our own copy first. The station has its own backups; this is the
   # harness's guarantee that a failed test cannot cost the operator data.
-  local safety="${OUT}/birds.db.safety"
+  #
+  # Record the original ownership before touching anything: the service runs as
+  # an unprivileged user, so restoring a root-owned copy would leave the station
+  # unable to open its own database — a harness-inflicted outage masquerading as
+  # a product failure.
+  local safety="${OUT}/birds.db.safety" db_owner
+  db_owner="$(stat -c '%U:%G' "$DB_PATH" 2>/dev/null)"
+  record INFO dbcorrupt.owner "database is owned by ${db_owner:-unknown}; restores will preserve that"
   sudo systemctl stop "$SERVICE"
   sudo cp "$DB_PATH" "$safety" && sudo chown "$(id -u):$(id -g)" "$safety"
   record INFO dbcorrupt.safety "safety copy at ${safety} ($(du -h "$safety" | cut -f1))"
@@ -1084,6 +1091,21 @@ phase_dbcorrupt() {
   else
     record FAIL dbcorrupt.recover "station did not serve within 180s of restarting on a corrupt DB"
     snapshot_journal dbcorrupt-fail
+
+    # Distinguish "the recovery ran and failed" from "the recovery never ran".
+    # The unit gates startup on `--doctor ... || [ $? -le 1 ]`, and a corrupt
+    # database makes doctor exit 2 — so ExecStartPre fails and the daemon that
+    # owns check_and_recover() is never executed. Naming that is the whole value
+    # of running this on a real systemd station instead of in a unit test.
+    local result execpre
+    result="$(systemctl show -p Result --value "$SERVICE" 2>/dev/null)"
+    execpre="$(journalctl -u "$SERVICE" --since '-5 min' --no-pager 2>/dev/null \
+      | grep -iE 'control process exited|ExecStartPre|start-pre' | tail -1)"
+    if [ "$result" = "exit-code" ] || [ -n "$execpre" ]; then
+      record FAIL dbcorrupt.gate \
+        "startup was blocked by the ExecStartPre doctor gate — the recovery path never ran" \
+        "Result=${result}; ${execpre:-no ExecStartPre line}. A corrupt DB makes --doctor exit 2, so systemd refuses to start the daemon, so check_and_recover() cannot execute. Restart=always then retries until StartLimitBurst parks the unit in 'failed'."
+    fi
   fi
 
   if journalctl -u "$SERVICE" --since '-5 min' --no-pager 2>/dev/null \
@@ -1103,8 +1125,17 @@ phase_dbcorrupt() {
     record FAIL dbcorrupt.healthy "database is still unhealthy — restoring the harness safety copy"
     sudo systemctl stop "$SERVICE"
     sudo cp "$safety" "$DB_PATH"
+    # Restore the original ownership. `cp` as root would otherwise leave the
+    # file root-owned and the unprivileged service could not open it.
+    [ -n "$db_owner" ] && sudo chown "$db_owner" "$DB_PATH"
+    sudo rm -f "${DB_PATH}-wal" "${DB_PATH}-shm"
     sudo systemctl start "$SERVICE"
-    record INFO dbcorrupt.restored "safety copy restored to ${DB_PATH}"
+    if wait_for 120 curl -sf --max-time 5 "${BASE}/api/v2/health"; then
+      record PASS dbcorrupt.restored "safety copy restored (owner ${db_owner:-unchanged}) and the station is serving again"
+    else
+      record FAIL dbcorrupt.restored "station still will not start after restoring the safety copy" \
+        "$(systemctl status "$SERVICE" --no-pager -n 5 2>&1 | tail -4 | tr '\n' ' ')"
+    fi
   fi
 
   snapshot_journal dbcorrupt
@@ -1128,6 +1159,28 @@ phase_duckdb() {
   else
     record FAIL duckdb.recover "station did not come up within 180s on a corrupt analytics store"
     snapshot_journal duckdb-fail
+
+    # The analytics store is derived from SQLite, so refusing to start over it is
+    # strictly worse than discarding it. Prove that is the actual blocker by
+    # removing the file and restarting — and leave the station working either
+    # way, rather than handing the operator a dead box.
+    local execpre
+    execpre="$(journalctl -u "$SERVICE" --since '-5 min' --no-pager 2>/dev/null \
+      | grep -iE 'control process exited|ExecStartPre|start-pre' | tail -1)"
+    [ -n "$execpre" ] && record FAIL duckdb.gate \
+      "the ExecStartPre doctor gate blocked startup over a *regenerable* store" "${execpre}"
+
+    sudo systemctl stop "$SERVICE"
+    sudo rm -f "$ANALYTICS_DB"
+    sudo systemctl start "$SERVICE"
+    if wait_for 180 curl -sf --max-time 5 "${BASE}/api/v2/health"; then
+      record FAIL duckdb.rebuild_manual \
+        "station starts once the corrupt analytics store is DELETED, but not while it exists" \
+        "The file is regenerable from SQLite, so the product should discard and rebuild it itself instead of requiring an operator on site."
+    else
+      record FAIL duckdb.rebuild_manual "station will not start even with ${ANALYTICS_DB} removed" \
+        "$(systemctl status "$SERVICE" --no-pager -n 5 2>&1 | tail -4 | tr '\n' ' ')"
+    fi
   fi
 
   # Analytics pages must actually work again, not just fail quietly.
