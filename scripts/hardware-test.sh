@@ -675,21 +675,33 @@ phase_perf() {
 
   record INFO perf.start "temp ${t_start} °C · RSS $(( ${rss_start:-0} / 1024 )) MiB · ${inf_c0%.*} inferences so far"
 
+  # Backlog in the watch directory is the *direct* answer to "can this board keep
+  # up?" — it needs no assumption about chunk length or model variant. Capture
+  # writes segments at a fixed rate; if the detector drains them at least as
+  # fast, the count stays flat. A monotonically growing queue is the station
+  # falling behind, in the only units that matter.
+  local backlog_start; backlog_start="$(in_service_ns find "$STREAM_DIR" -type f 2>/dev/null | wc -l)"
+  backlog_start="${backlog_start:-0}"
+
   local mins="${BIRDNET_PERF_MINUTES:-10}"
   info "sampling for ${mins} minutes of live capture…"
   local samples="${OUT}/perf-samples.csv"
-  echo "elapsed_s,temp_c,rss_kb,inference_count,load1" > "$samples"
+  echo "elapsed_s,temp_c,rss_kb,inference_count,load1,stream_backlog" > "$samples"
 
-  local deadline=$(( SECONDS + mins * 60 )) peak_temp=0
+  local deadline=$(( SECONDS + mins * 60 )) peak_temp=0 backlog_peak="$backlog_start"
   while [ $SECONDS -lt $deadline ]; do
-    local t r c l
+    local t r c l b
     t="$(soc_temp_c)"; r="$(daemon_rss_kb)"
     c="$(metric_value birdnet_inference_duration_seconds_count)"
     l="$(awk '{print $1}' /proc/loadavg)"
-    echo "${SECONDS},${t},${r:-},${c%.*},${l}" >> "$samples"
+    b="$(in_service_ns find "$STREAM_DIR" -type f 2>/dev/null | wc -l)"; b="${b:-0}"
+    echo "${SECONDS},${t},${r:-},${c%.*},${l},${b}" >> "$samples"
     awk "BEGIN { exit !(${t:-0} > ${peak_temp}) }" && peak_temp="$t"
+    [ "$b" -gt "$backlog_peak" ] && backlog_peak="$b"
     sleep 30
   done
+  local backlog_end; backlog_end="$(in_service_ns find "$STREAM_DIR" -type f 2>/dev/null | wc -l)"
+  backlog_end="${backlog_end:-0}"
 
   local t_end rss_end inf_c1 inf_s1
   t_end="$(soc_temp_c)"; rss_end="$(daemon_rss_kb)"
@@ -702,17 +714,34 @@ phase_perf() {
   ds="$(awk "BEGIN { printf \"%.4f\", ${inf_s1} - ${inf_s0} }")"
   if [ "$dc" -gt 0 ]; then
     mean="$(awk "BEGIN { printf \"%.1f\", (${ds} / ${dc}) * 1000 }")"
-    record PASS perf.latency "mean inference latency ${mean} ms over ${dc} chunks" \
-      "A 3 s chunk must classify in well under 3 s for the station to keep up in real time."
-    if awk "BEGIN { exit !(${mean} > 3000) }"; then
-      record FAIL perf.realtime "mean latency ${mean} ms exceeds the 3000 ms chunk duration — the board cannot keep up"
-    else
-      record PASS perf.realtime "inference is faster than real time (${mean} ms per 3000 ms chunk)"
+    # A mean over a handful of samples is not a throughput figure, and the
+    # denominator is not fixed either: BirdNET+ V3.0 dynamic takes 144 000
+    # samples at 32 kHz — a 4.5 s chunk — while the fixed variant takes 3 s. So
+    # report the latency as a measurement and let the backlog below decide
+    # whether the board keeps up.
+    record INFO perf.latency "mean inference latency ${mean} ms over ${dc} chunks (${mins} min window)" \
+      "Chunk length depends on the model variant: 4.5 s for V3.0 dynamic, 3 s for V3.0 fixed / V2.4."
+    if [ "$dc" -lt 30 ]; then
+      record WARN perf.latency_sample "only ${dc} inferences in ${mins} minutes — too few for a stable mean" \
+        "Re-run with BIRDNET_PERF_MINUTES=30 for a figure worth quoting. A low count with a growing backlog points at scheduling, not compute."
     fi
     state_set MEAN_LATENCY_MS "$mean"
   else
     record WARN perf.latency "no inferences completed during the ${mins}-minute window" \
       "Quiet site, or the confidence gate filtered everything before the histogram."
+  fi
+
+  # The real-time verdict, measured directly rather than inferred from a mean.
+  local backlog_delta=$(( backlog_end - backlog_start ))
+  record INFO perf.backlog "watch-dir segments ${backlog_start} → ${backlog_end} (peak ${backlog_peak})"
+  if [ "$backlog_delta" -gt 3 ]; then
+    record FAIL perf.realtime \
+      "capture is outrunning detection — the watch-dir queue grew by ${backlog_delta} segments in ${mins} min" \
+      "Segments accumulate until STREAM_RETENTION_SECS/STREAM_MAX_MB drop them, so audio is being discarded unanalysed."
+  elif [ "$backlog_delta" -lt -3 ]; then
+    record PASS perf.realtime "detection is draining a backlog (queue fell by $(( -backlog_delta )) segments) — the board is ahead of capture"
+  else
+    record PASS perf.realtime "queue is stable (${backlog_start} → ${backlog_end}) — detection keeps pace with capture"
   fi
 
   # Thermals. The Pi 4 begins soft-throttling at 80 °C, hard at 85 °C.
