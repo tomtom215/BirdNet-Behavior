@@ -22,29 +22,64 @@ pub(super) fn check_disk_space(cli: &Cli, config: Option<&Config>) -> Vec<Check>
                 "could not query filesystem usage",
             )]
         },
-        |bytes| {
-            let gib = bytes / (1024 * 1024 * 1024);
-            if gib >= 5 {
-                vec![Check::pass(
-                    "Disk space",
-                    format!("{gib} GiB free on the volume containing {}", dir.display()),
-                )]
-            } else if gib >= 1 {
-                vec![Check::warn(
-                    "Disk space",
-                    format!("only {gib} GiB free on {}", dir.display()),
-                    "recordings will accumulate quickly; \
-                     consider --max-files-per-species or external storage",
-                )]
-            } else {
-                vec![Check::fail(
-                    "Disk space",
-                    format!("less than 1 GiB free on {}", dir.display()),
-                    "free up space immediately — the disk manager may not be able to keep up",
-                )]
-            }
-        },
+        |bytes| vec![grade_free_space(bytes, &dir)],
     )
+}
+
+/// Grade free space into a check.
+///
+/// Split from [`check_disk_space`] so every branch is unit-testable: the caller
+/// shells out to `df` against the real host, whose free space decides the
+/// verdict, so the existing test could only assert structure — which is exactly
+/// how a hard error sat on the low-space branch unnoticed.
+fn grade_free_space(bytes: u64, dir: &Path) -> Check {
+    let gib = bytes / (1024 * 1024 * 1024);
+    if gib >= 5 {
+        Check::pass(
+            "Disk space",
+            format!("{gib} GiB free on the volume containing {}", dir.display()),
+        )
+    } else if gib >= 1 {
+        Check::warn(
+            "Disk space",
+            format!("only {gib} GiB free on {}", dir.display()),
+            "recordings will accumulate quickly; \
+             consider --max-files-per-species or external storage",
+        )
+    } else {
+        // A WARNING, not an error — for the same reason as the database
+        // integrity check next door. The unit gates startup on
+        //   ExecStartPre=... --doctor ... || [ $? -le 1 ]
+        // so failing here (exit 2) stops systemd from starting the daemon, and
+        // the daemon is what runs `start_disk_manager`: the purge that reclaims
+        // space at DISK_PURGE_THRESHOLD lives *inside* the process this would
+        // refuse to start.
+        //
+        // That inverts the design. A full disk is the most predictable failure
+        // mode of a 24/7 recorder — every station reaches it eventually — and
+        // it is precisely the one the purge exists to absorb. Blocking startup
+        // means the reclaim never runs, `Restart=always` spends
+        // StartLimitBurst in under a minute, and the unit parks in `failed`: a
+        // station killed permanently by the condition it was built to survive
+        // unattended.
+        //
+        // It is also mistimed. The purge triggers on a *percentage* (95% by
+        // default), so on a small card it fires well below 1 GiB free — this
+        // check would refuse startup before the mechanism that fixes it had
+        // even been reached.
+        //
+        // Exit 2 means "errors that will prevent operation". A nearly full disk
+        // degrades operation and then self-corrects; it does not prevent it.
+        Check::warn(
+            "Disk space",
+            format!(
+                "less than 1 GiB free on {} — the disk manager will purge oldest recordings at the configured threshold",
+                dir.display()
+            ),
+            "if this persists the purge is not keeping up: lower MAX_FILES_SPECIES, \
+             lower DISK_PURGE_THRESHOLD, or move RECS_DIR to larger storage",
+        )
+    }
 }
 
 /// Best-effort free-bytes query that shells out to `df` so we don't have to
@@ -73,7 +108,73 @@ fn parse_df_available_kib(df_output: &str) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{check_disk_space, parse_df_available_kib};
+    use super::{check_disk_space, grade_free_space, parse_df_available_kib};
+    use crate::doctor::Status;
+    use std::path::Path;
+
+    const GIB: u64 = 1024 * 1024 * 1024;
+
+    /// The regression: a nearly full disk must warn, never fail.
+    ///
+    /// The unit gates startup on `--doctor ... || [ $? -le 1 ]`, so an error
+    /// here stops systemd from starting the daemon — and `start_disk_manager`,
+    /// the purge that reclaims the space, runs *inside* that daemon. Reported
+    /// as an error, the diagnostic blocks its own remedy and the unit then
+    /// parks in `failed` via `StartLimitBurst`.
+    #[test]
+    fn a_nearly_full_disk_warns_so_the_purge_can_run() {
+        let check = grade_free_space(GIB / 2, Path::new("/data"));
+        assert_ne!(
+            check.status,
+            Status::Pass,
+            "low space must still be reported: {}",
+            check.message
+        );
+        assert_eq!(
+            check.status,
+            Status::Warn,
+            "must be a warning (exit 1) so ExecStartPre lets the daemon start and purge, \
+             not an error (exit 2) which blocks it: {}",
+            check.message
+        );
+    }
+
+    #[test]
+    fn free_space_grades_across_the_thresholds() {
+        assert_eq!(
+            grade_free_space(9 * GIB, Path::new("/")).status,
+            Status::Pass
+        );
+        assert_eq!(
+            grade_free_space(5 * GIB, Path::new("/")).status,
+            Status::Pass
+        );
+        // 1–5 GiB is the pre-existing "accumulating quickly" warning.
+        assert_eq!(
+            grade_free_space(3 * GIB, Path::new("/")).status,
+            Status::Warn
+        );
+        assert_eq!(grade_free_space(GIB, Path::new("/")).status, Status::Warn);
+        // Below 1 GiB, and at genuinely zero.
+        assert_eq!(grade_free_space(0, Path::new("/")).status, Status::Warn);
+    }
+
+    #[test]
+    fn the_low_space_warning_names_the_mechanism_that_recovers_it() {
+        let check = grade_free_space(0, Path::new("/data"));
+        assert!(
+            check.message.contains("purge"),
+            "an operator reading this should learn the station recovers on its own: {}",
+            check.message
+        );
+        assert!(
+            check
+                .remediation
+                .as_deref()
+                .is_some_and(|r| r.contains("DISK_PURGE_THRESHOLD") || r.contains("MAX_FILES")),
+            "remediation should name the knobs that fix a purge that cannot keep up"
+        );
+    }
 
     #[test]
     fn check_disk_space_returns_one_named_check() {

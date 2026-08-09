@@ -63,6 +63,32 @@ real USB microphone, or both.
   and a corrupt database does not prevent operation. Covered by a regression test
   that corrupts a real database and asserts the check warns rather than fails.
 
+- **A nearly full disk bricked the station the same way.** Found by sweeping the
+  remaining `--doctor` checks for the class above rather than by a separate test
+  run. Less than 1 GiB free was an *error*, so `ExecStartPre` refused to start
+  the daemon — and `start_disk_manager`, the purge that reclaims space at
+  `DISK_PURGE_THRESHOLD`, runs inside that daemon. The reclaim therefore never
+  ran, `StartLimitBurst` was spent in under a minute, and the unit parked in
+  `failed`.
+
+  This one is worse than the database case because it is certain rather than
+  unlucky: a full disk is the most predictable end state of a 24/7 recorder, and
+  the purge exists precisely to absorb it. It was also mistimed — the purge
+  triggers on a *percentage*, so on a small card it fires well below 1 GiB free,
+  and the check refused startup before the mechanism that fixes it had been
+  reached. Now a warning, with the message naming the purge so an operator knows
+  the station recovers on its own.
+
+  The grading logic was extracted into a pure `grade_free_space` so every branch
+  is testable. The previous test shelled out to `df` against the host and could
+  only assert structure, never the verdict — which is exactly how a hard error
+  sat on the low-space branch through six releases.
+
+  Both remaining `Check::fail` sites were reviewed and left alone: a
+  non-writable recordings directory and a missing `ffmpeg` for a configured RTSP
+  source genuinely prevent operation and do not self-heal. A missing audio
+  device was already a warning, correctly — the capture supervisor retries it.
+
 ### Changed
 
 - **Capture-subprocess failures are now logged at `warn` instead of `debug`.**
