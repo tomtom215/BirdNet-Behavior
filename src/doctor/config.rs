@@ -74,6 +74,67 @@ pub(super) fn check_listen_address(cli: &Cli) -> Check {
     }
 }
 
+/// Whether `/admin` is reachable from the network with no password.
+///
+/// Split from [`check_admin_exposure`] so the decision is unit-testable:
+/// resolving `CADDY_PWD` reads the process environment, and `std::env::set_var`
+/// is `unsafe` in edition 2024 while this crate forbids `unsafe_code`.
+fn admin_exposure(listen: &str, password_configured: bool) -> Check {
+    const NAME: &str = "Admin authentication";
+
+    // An unparseable address is already a FAIL from `check_listen_address`;
+    // don't editorialise about exposure we cannot determine.
+    let Ok(addr) = listen.parse::<std::net::SocketAddr>() else {
+        return Check::skip(
+            NAME,
+            "listen address is not parseable — see the check above",
+        );
+    };
+
+    if password_configured {
+        return Check::pass(NAME, format!("admin password is set ({addr})"));
+    }
+    if addr.ip().is_loopback() {
+        return Check::pass(
+            NAME,
+            format!(
+                "no admin password, but {addr} is loopback-only — /admin is not reachable from the network"
+            ),
+        );
+    }
+    Check::warn(
+        NAME,
+        format!(
+            "{addr} is reachable from the network and NO admin password is set — anyone who can \
+             reach it can change settings, trigger backups and update the software"
+        ),
+        "set CADDY_PWD in the config (the bare-metal installer generates one; Docker does not), \
+         or bind --listen to 127.0.0.1 and reach the panel over an SSH tunnel",
+    )
+}
+
+/// Report whether the admin panel is exposed without authentication.
+///
+/// The station already logs this at startup (`src/app.rs`), but `--doctor` is
+/// the tool the docs point operators at and it said nothing — it checked only
+/// that the listen address *parses*. It is the one security-relevant property
+/// of a default install: `--listen` defaults to `0.0.0.0:8502`, and with no
+/// admin password the cookie middleware synthesises the seed admin and serves
+/// `/admin` to anyone (verified: `/admin/settings` returns 200 unauthenticated).
+///
+/// Resolution deliberately mirrors `app.rs` exactly — config `CADDY_PWD`, then
+/// the environment — so the two can never disagree. Like the runtime warning,
+/// it therefore tracks the env/config knob: a password set only through the
+/// accounts UI also protects the panel but is not visible here, which the
+/// remediation text accounts for by naming `CADDY_PWD`.
+pub(super) fn check_admin_exposure(cli: &Cli, config: Option<&Config>) -> Check {
+    let password_configured = config
+        .and_then(|c| c.get("CADDY_PWD").map(str::to_owned))
+        .or_else(|| std::env::var("CADDY_PWD").ok())
+        .is_some_and(|pwd| !pwd.is_empty());
+    admin_exposure(&cli.listen, password_configured)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,6 +143,51 @@ mod tests {
 
     fn cli() -> Cli {
         Cli::parse_from(["birdnet-behavior"])
+    }
+
+    // ── admin exposure ─────────────────────────────────────────────────
+
+    #[test]
+    fn admin_exposure_warns_on_open_network_bind() {
+        // The default install: 0.0.0.0 and no password.
+        let check = admin_exposure("0.0.0.0:8502", false);
+        assert_eq!(check.status, Status::Warn);
+        assert!(
+            check.message.contains("NO admin password"),
+            "detail should name the problem: {}",
+            check.message
+        );
+        assert!(
+            check
+                .remediation
+                .as_deref()
+                .is_some_and(|r| r.contains("CADDY_PWD")),
+            "remediation should name the knob that fixes it"
+        );
+    }
+
+    #[test]
+    fn admin_exposure_passes_when_a_password_is_set() {
+        assert_eq!(admin_exposure("0.0.0.0:8502", true).status, Status::Pass);
+    }
+
+    #[test]
+    fn admin_exposure_passes_on_loopback_without_a_password() {
+        // Not exposed: unreachable from the network, so no password is fine.
+        for addr in ["127.0.0.1:8502", "[::1]:8502"] {
+            assert_eq!(
+                admin_exposure(addr, false).status,
+                Status::Pass,
+                "{addr} is loopback and should not warn"
+            );
+        }
+    }
+
+    #[test]
+    fn admin_exposure_skips_when_the_address_is_unparseable() {
+        // check_listen_address already FAILs on this; two errors for one cause
+        // is noise.
+        assert_eq!(admin_exposure("not-an-address", false).status, Status::Skip);
     }
 
     fn config_from(entries: &[(&str, &str)]) -> Config {

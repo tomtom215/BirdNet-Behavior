@@ -218,6 +218,94 @@ pub fn run_refresh_extension(
     Ok(())
 }
 
+/// Verify the behavioral `DuckDB` extension loads, and exit (`--verify-extension`).
+///
+/// Opens a throwaway database in the system temp directory — never the
+/// station's analytics store, so this is safe to run against a live install —
+/// and loads the extension through the normal fallback chain.
+///
+/// Run with networking disabled to prove the *offline* guarantee: with no
+/// network the cached and community-registry stages cannot succeed, so success
+/// means the build-time embedded copy loaded. That is the property `docker.yml`
+/// asserts on every image, and the one that was silently false for every Docker
+/// image built before 2026-08-08 (the `Dockerfile` embedded an extension built
+/// for DuckDB v1.5.3 into a v1.5.5 engine).
+///
+/// # Errors
+///
+/// Returns an error if the temporary database cannot be opened or the extension
+/// cannot be loaded, so the process exits non-zero.
+#[cfg(feature = "analytics")]
+pub fn run_verify_extension(
+    _cli: &Cli,
+    _config: Option<&birdnet_core::config::Config>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use birdnet_behavioral::connection::AnalyticsDb;
+
+    let dir = std::env::temp_dir().join("birdnet-verify-extension");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+    let path = dir.join("verify.duckdb");
+    // A stale file from a previous run would still work, but starting clean
+    // keeps the check honest about what a fresh station sees.
+    let _ = std::fs::remove_file(&path);
+
+    let mut adb = AnalyticsDb::open(&path).map_err(|e| format!("DuckDB error: {e}"))?;
+    let engine = adb
+        .duckdb_version()
+        .unwrap_or_else(|| "unknown".to_string());
+
+    // Reported whether or not the load succeeds: when a networked station masks
+    // a bad embed by installing from the registry, this is the line that shows
+    // the packaging is still wrong.
+    tracing::info!(
+        engine = %engine,
+        embedded_extension = AnalyticsDb::embedded_extension_version().unwrap_or("<none embedded>"),
+        embedded_for_duckdb =
+            AnalyticsDb::embedded_extension_duckdb_version().unwrap_or("<none embedded>"),
+        embedded_platform = AnalyticsDb::embedded_extension_platform().unwrap_or("<none embedded>"),
+        "behavioral extension: build-time embedding"
+    );
+
+    if let Some(mismatch) = adb.embedded_extension_mismatch() {
+        return Err(format!(
+            "the embedded behavioral extension targets DuckDB {} but this binary links DuckDB {}; \
+             it can never load. Rebuild with the extension published for {} \
+             (community-extensions.duckdb.org/{}/<platform>/).",
+            mismatch.embedded_for, mismatch.engine, mismatch.engine, mismatch.engine
+        )
+        .into());
+    }
+
+    adb.load_extension()
+        .map_err(|e| format!("behavioral extension did not load: {e}"))?;
+
+    tracing::info!(
+        duckdb = %engine,
+        extension = adb.extension_version().as_deref().unwrap_or("unknown"),
+        path = %path.display(),
+        "behavioral extension loaded"
+    );
+    let _ = std::fs::remove_file(&path);
+    Ok(())
+}
+
+/// Without the `analytics` feature there is no `DuckDB` extension to verify.
+///
+/// # Errors
+///
+/// Always returns an error explaining that the `analytics` feature is required.
+#[cfg(not(feature = "analytics"))]
+pub fn run_verify_extension(
+    _cli: &Cli,
+    _config: Option<&birdnet_core::config::Config>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    Err(
+        "--verify-extension requires the `analytics` feature; rebuild with `--features analytics`"
+            .into(),
+    )
+}
+
 /// Without the `analytics` feature there is no `DuckDB` extension to refresh.
 ///
 /// # Errors

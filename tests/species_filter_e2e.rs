@@ -19,6 +19,8 @@
 //!    twice, and asserts the Magpie is detected without an exclude list and
 //!    absent with one.
 
+mod common;
+
 use std::path::Path;
 
 use birdnet_core::inference::labels::LabelSet;
@@ -219,20 +221,13 @@ fn no_lists_configured_leaves_every_species_allowed() {
 fn load_model() -> Option<birdnet_core::inference::model::BirdNetModel> {
     use birdnet_core::inference::model::{BirdNetModel, ModelConfig};
 
-    let model_path = std::env::var("BIRDNET_TEST_MODEL").ok()?;
-    let labels_path = std::env::var("BIRDNET_TEST_LABELS").ok()?;
-    let model_path = Path::new(&model_path);
-    let labels_path = Path::new(&labels_path);
-    if !model_path.exists() || !labels_path.exists() {
-        eprintln!("SKIP: BIRDNET_TEST_MODEL / BIRDNET_TEST_LABELS point at missing files");
-        return None;
-    }
-    let labels = LabelSet::load(labels_path).expect("failed to load labels");
+    let (model_path, labels_path) = common::model_paths()?;
+    let labels = LabelSet::load(&labels_path).expect("failed to load labels");
     let config = ModelConfig {
         confidence_threshold: 0.1,
         ..ModelConfig::default()
     };
-    Some(BirdNetModel::load(model_path, labels, config).expect("failed to load model"))
+    Some(BirdNetModel::load(&model_path, labels, config).expect("failed to load model"))
 }
 
 /// A pipeline config matching the loaded model, the way `run_daemon` builds one.

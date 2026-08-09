@@ -155,6 +155,20 @@ pub struct AnalyticsDb {
     extension_loaded: bool,
 }
 
+/// A build-time embedded extension that targets the wrong `DuckDB` engine.
+///
+/// Produced by [`AnalyticsDb::embedded_extension_mismatch`]. Both versions are
+/// carried so the report names what was embedded *and* what it had to match,
+/// which is the difference between an actionable packaging error and "analytics
+/// is empty again".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtensionMismatch {
+    /// `DuckDB` version the embedded extension was built for, e.g. `v1.5.3`.
+    pub embedded_for: &'static str,
+    /// `DuckDB` version actually linked into this binary, e.g. `v1.5.5`.
+    pub engine: String,
+}
+
 impl AnalyticsDb {
     /// Open or create a file-based `DuckDB` database.
     ///
@@ -303,6 +317,23 @@ impl AnalyticsDb {
     ///
     /// Returns an error only when all three stages fail.
     pub fn load_extension(&mut self) -> Result<(), AnalyticsError> {
+        // Report a build-time/engine version mismatch *before* trying anything,
+        // so it is visible even when stage 2 masks it. A station with network
+        // will happily INSTALL the correct build from the community registry
+        // and look healthy, while the embedded copy it would need offline is
+        // unusable — which is precisely how the v1.5.3-into-v1.5.5 defect
+        // survived a fully green CI matrix.
+        if let Some(mismatch) = self.embedded_extension_mismatch() {
+            tracing::error!(
+                embedded_for = mismatch.embedded_for,
+                engine = %mismatch.engine,
+                "the behavioral extension embedded at build time targets a different DuckDB \
+                 version than the engine linked into this binary; it can never load. Offline \
+                 stations will have no behavioural analytics. This is a packaging defect — \
+                 rebuild with the extension published for the engine version"
+            );
+        }
+
         // 1) Try the locally-cached LOAD (offline-safe).
         if self
             .conn
@@ -354,6 +385,46 @@ impl AnalyticsDb {
             "loaded behavioral extension from embedded bundle"
         );
         Ok(())
+    }
+
+    /// A build-time embedded extension that can never load into this engine.
+    ///
+    /// `Some` only when an extension was embedded (see `build.rs`) **and** the
+    /// `DuckDB` version it declares differs from the engine actually linked in.
+    /// `None` when nothing is embedded, when the versions agree, or when the
+    /// engine version cannot be read.
+    ///
+    /// A `DuckDB` extension is version-locked — the engine refuses to `LOAD` a
+    /// build targeting any other version, and `allow_extensions_metadata_mismatch`
+    /// does not bypass that check — so a mismatch here is fatal to the offline
+    /// load path and nothing else can rescue it at run time.
+    pub fn embedded_extension_mismatch(&self) -> Option<ExtensionMismatch> {
+        let embedded_for = EMBEDDED_EXTENSION_DUCKDB_VERSION?;
+        let engine = self.duckdb_version()?;
+        (engine != embedded_for).then_some(ExtensionMismatch {
+            embedded_for,
+            engine,
+        })
+    }
+
+    /// The `DuckDB` version the build-time embedded extension targets.
+    ///
+    /// `None` when no extension was embedded. Read out of the extension's own
+    /// metadata footer by `build.rs`, not configured anywhere.
+    pub const fn embedded_extension_duckdb_version() -> Option<&'static str> {
+        EMBEDDED_EXTENSION_DUCKDB_VERSION
+    }
+
+    /// The version of the build-time embedded `behavioral` extension itself
+    /// (e.g. `v0.9.1`). `None` when no extension was embedded.
+    pub const fn embedded_extension_version() -> Option<&'static str> {
+        EMBEDDED_EXTENSION_VERSION
+    }
+
+    /// The platform the build-time embedded extension targets (e.g.
+    /// `linux_amd64`). `None` when no extension was embedded.
+    pub const fn embedded_extension_platform() -> Option<&'static str> {
+        EMBEDDED_EXTENSION_PLATFORM
     }
 
     /// The bundled `DuckDB` engine version (e.g. `v1.5.5`).
@@ -437,6 +508,71 @@ mod tests {
         assert!(
             db.extension_version().is_some(),
             "extension_version should report a version after the embedded load"
+        );
+    }
+
+    #[test]
+    fn embedded_extension_targets_the_linked_engine() {
+        // The invariant nothing used to assert. A DuckDB extension is
+        // version-locked, so an embedded copy built for a different engine can
+        // never load — but on a station with network the community-registry
+        // INSTALL masks that completely, and everything looks healthy right up
+        // until the box is deployed somewhere without network.
+        //
+        // That is exactly how `Dockerfile` shipped a v1.5.3 extension inside a
+        // v1.5.5 binary through a fully green CI matrix.
+        let Some(embedded_for) = AnalyticsDb::embedded_extension_duckdb_version() else {
+            eprintln!("skipped — build did not embed an extension binary");
+            return;
+        };
+        let (db, _tmp) = make_db();
+        let engine = db
+            .duckdb_version()
+            .expect("version() should be readable from a freshly opened database");
+
+        assert_eq!(
+            embedded_for, engine,
+            "embedded behavioral extension targets DuckDB {embedded_for} but this binary links \
+             DuckDB {engine}; it can never LOAD. Point the build at the extension published for \
+             {engine} (community-extensions.duckdb.org/{engine}/<platform>/)."
+        );
+        assert_eq!(db.embedded_extension_mismatch(), None);
+    }
+
+    #[test]
+    fn embedded_extension_metadata_is_all_or_nothing() {
+        // build.rs writes the bytes and the three metadata constants from the
+        // same parse, so a half-populated set means the generator drifted.
+        let present = [
+            EMBEDDED_EXTENSION.is_some(),
+            AnalyticsDb::embedded_extension_duckdb_version().is_some(),
+            AnalyticsDb::embedded_extension_version().is_some(),
+            AnalyticsDb::embedded_extension_platform().is_some(),
+        ];
+        assert!(
+            present.iter().all(|p| *p) || present.iter().all(|p| !*p),
+            "embedded-extension constants disagree about whether an extension was embedded: \
+             {present:?}"
+        );
+    }
+
+    #[test]
+    fn embedded_extension_metadata_is_well_formed() {
+        let Some(ddb) = AnalyticsDb::embedded_extension_duckdb_version() else {
+            eprintln!("skipped — build did not embed an extension binary");
+            return;
+        };
+        // Parsed out of the extension's own footer, so these shapes are the
+        // upstream contract, not our formatting choice.
+        assert!(
+            ddb.starts_with('v'),
+            "DuckDB version from the footer should look like `v1.5.5`, got {ddb:?}"
+        );
+        let platform = AnalyticsDb::embedded_extension_platform()
+            .expect("platform is written alongside the DuckDB version");
+        assert!(
+            !platform.is_empty(),
+            "platform field should be populated, got {platform:?}"
         );
     }
 

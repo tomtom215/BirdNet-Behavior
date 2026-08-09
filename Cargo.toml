@@ -16,7 +16,7 @@ resolver = "2"
 exclude = ["fuzz"]
 
 [workspace.package]
-version = "0.10.0"
+version = "0.11.0"
 edition = "2024"
 rust-version = "1.95"
 license = "CC-BY-NC-SA-4.0"
@@ -76,7 +76,7 @@ duckdb = { version = "~1.10505", features = ["bundled"] }
 # Web
 axum = { version = "0.8.9", features = ["ws", "form"] }
 tower = "0.5.3"
-tower-http = { version = "0.6.11", features = ["cors", "trace", "fs"] }
+tower-http = { version = "0.7.0", features = ["cors", "trace", "fs"] }
 
 # HTTP client
 reqwest = { version = "0.13.4", features = ["blocking", "json"] }
@@ -100,7 +100,7 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 
 # Audio
 symphonia = { version = "0.6.0", features = ["wav", "flac", "mp3"] }
-rubato = "3.0.0"
+rubato = "4.0.0"
 hound = "3.5"
 
 # ML Inference (ONNX Runtime via ort — supports all ONNX opsets)
@@ -112,7 +112,7 @@ ndarray = "0.17"
 # Cryptography — HMAC-SHA256 signing for public share-link tokens (O-07)
 hmac = "0.13"
 sha2 = "0.11"
-base64 = "0.22"
+base64 = "0.23"
 
 # Password hashing — argon2id for the O-14 / O-15 cookie auth wire flip.
 # The basic-auth path stays compatible (it reads CADDY_PWD in plaintext)

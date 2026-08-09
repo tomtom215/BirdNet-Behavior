@@ -57,20 +57,9 @@ fn http_status_line(port: u16, path: &str) -> Option<String> {
     text.lines().next().map(str::to_owned)
 }
 
-#[test]
-fn web_only_boots_and_serves_root() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let db_path = dir.path().join("birds.db");
-    let config_path = dir.path().join("birdnet.conf");
-    std::fs::write(
-        &config_path,
-        format!(
-            "SITENAME=Smoke Test\nLATITUDE=51.48\nLONGITUDE=-0.13\nDB_PATH={}\n",
-            db_path.display()
-        ),
-    )
-    .expect("write config");
-
+/// Boot the real binary in `--web-only` against `config_path` and block until
+/// it serves, or panic with what it did instead.
+fn boot_and_expect_serving(config_path: &std::path::Path) {
     let port = free_port();
     let child = Command::new(BIN)
         .args([
@@ -98,7 +87,7 @@ fn web_only_boots_and_serves_root() {
             panic!("server exited during startup with {status}");
         }
         if let Some(line) = http_status_line(port, "/") {
-            last = line.clone();
+            last.clone_from(&line);
             // A fresh database has no detections and isn't onboarded, so `/`
             // 303-redirects to the first-run wizard. Either a direct 200 or that
             // redirect proves the server booted and reached the database.
@@ -118,4 +107,58 @@ fn web_only_boots_and_serves_root() {
         );
         std::thread::sleep(Duration::from_millis(300));
     }
+}
+
+#[test]
+fn web_only_boots_and_serves_root() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("birds.db");
+    let config_path = dir.path().join("birdnet.conf");
+    std::fs::write(
+        &config_path,
+        format!(
+            "SITENAME=Smoke Test\nLATITUDE=51.48\nLONGITUDE=-0.13\nDB_PATH={}\n",
+            db_path.display()
+        ),
+    )
+    .expect("write config");
+
+    boot_and_expect_serving(&config_path);
+}
+
+#[test]
+fn web_only_boots_when_the_database_directory_does_not_exist() {
+    // SQLite will not create a missing parent directory; it fails the open with
+    // a bare "unable to open database file". The station used to exit 1 there,
+    // *after* `--doctor` had reported "will be created on first run — no action
+    // needed" and exited 0.
+    //
+    // The realistic trigger is the storage move docs/FIELD_DEPLOYMENT.md
+    // recommends — consumer SD cards fail after ~6 months of WAL churn — so the
+    // path here is several levels deep, exactly like `/mnt/ssd/birdnet/data`.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("mnt/ssd/birdnet/data/birds.db");
+    let parent = db_path.parent().expect("db path has a parent");
+    assert!(
+        !parent.exists(),
+        "precondition: the database directory must not exist yet"
+    );
+
+    let config_path = dir.path().join("birdnet.conf");
+    std::fs::write(
+        &config_path,
+        format!(
+            "SITENAME=Relocated\nLATITUDE=51.48\nLONGITUDE=-0.13\nDB_PATH={}\n",
+            db_path.display()
+        ),
+    )
+    .expect("write config");
+
+    boot_and_expect_serving(&config_path);
+
+    assert!(
+        db_path.is_file(),
+        "the database should have been created at {}",
+        db_path.display()
+    );
 }

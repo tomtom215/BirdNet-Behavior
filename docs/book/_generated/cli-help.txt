@@ -31,7 +31,7 @@ Options:
 
           Run after install and any time the system behaves unexpectedly.
 
-          [aliases: --preflight]
+          [alias: --preflight]
 
       --doctor-json
           Run the preflight diagnostic and emit a single-line JSON document.
@@ -72,6 +72,13 @@ Options:
           Reinstall the behavioral `DuckDB` extension and exit.
 
           Force-downloads the latest `behavioral` build for the bundled `DuckDB` version from the community registry, loads it to verify, then exits. Requires `--analytics-db` (or `ANALYTICS_DB_PATH`) and network access.
+
+      --verify-extension
+          Verify the behavioral `DuckDB` extension actually loads, and exit.
+
+          Opens a throwaway `DuckDB` database, loads the extension through the normal three-stage fallback, and reports the engine version, the extension version, and what the build-time embedded copy targets. Exits 0 when the extension loads and non-zero when it does not.
+
+          Unlike `--refresh-extension` this needs no network and writes nothing you care about, so it is the check to run on a station whose analytics pages are empty. Run it with networking disabled to prove the *offline* guarantee specifically: with no network neither the extension cache nor the community registry can satisfy the load, so only the embedded copy can.
 
       --offline
           Make no unsolicited outbound connections.

@@ -173,6 +173,22 @@ pub struct Cli {
     #[arg(long)]
     pub refresh_extension: bool,
 
+    /// Verify the behavioral `DuckDB` extension actually loads, and exit.
+    ///
+    /// Opens a throwaway `DuckDB` database, loads the extension through the
+    /// normal three-stage fallback, and reports the engine version, the
+    /// extension version, and what the build-time embedded copy targets.
+    /// Exits 0 when the extension loads and non-zero when it does not.
+    ///
+    /// Unlike `--refresh-extension` this needs no network and writes nothing
+    /// you care about, so it is the check to run on a station whose analytics
+    /// pages are empty. Run it with networking disabled to prove the *offline*
+    /// guarantee specifically: with no network neither the extension cache nor
+    /// the community registry can satisfy the load, so only the embedded copy
+    /// can.
+    #[arg(long)]
+    pub verify_extension: bool,
+
     /// Make no unsolicited outbound connections.
     ///
     /// Turns off every network call the station would otherwise make on its

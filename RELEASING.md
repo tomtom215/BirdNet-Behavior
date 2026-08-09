@@ -8,8 +8,18 @@ and later.
 ## TL;DR — what a maintainer does
 
 ```bash
+# 0. Refresh the lockfile and re-check advisories against the result.
+#    Dependabot only proposes bumps for *declared* dependencies; the lockfile
+#    is what actually ships, and it drifts silently. (Measured once: 150
+#    packages behind, including rustls, hyper, aws-lc-rs and webpki-roots.)
+#    NOTE: plain `cargo update`, NOT `cargo update --workspace` — the latter
+#    restricts the update to workspace members and reports "0 packages".
+cargo update
+cargo deny check advisories        # or: cargo audit
+cargo test --workspace --all-features
 # 1. Bump the version + roll the changelog (on a branch, via PR).
 #    Cargo.toml workspace.package.version = X.Y.Z
+#    CITATION.cff:  version + date-released   (release validate enforces this)
 #    CHANGELOG.md: [Unreleased] -> ## [X.Y.Z] - YYYY-MM-DD  (+ fresh [Unreleased])
 # 2. Get CI green on main.
 # 3. (Optional but recommended) Rehearse via the dry run — see below.

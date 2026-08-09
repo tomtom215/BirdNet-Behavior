@@ -1,6 +1,53 @@
 //! Database-path resolution and the run-and-exit maintenance commands.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Create the directory that will hold the operational `SQLite` database.
+///
+/// `SQLite` will not create a missing parent directory — it fails the open with
+/// `unable to open database file`, which says nothing about what is wrong — so
+/// a station whose `DB_PATH` points somewhere that does not exist yet simply
+/// refuses to start.
+///
+/// Every sibling directory is already created on demand: the recordings
+/// directory ([`crate::helpers::system`]), the watch directory
+/// ([`crate::daemon`]), the capture output and tmpfs mounts, and the `DuckDB`
+/// analytics store two modules over in `birdnet-behavioral`. This one was the
+/// exception, and it is the only one whose absence is fatal — while
+/// `--doctor` reported *"will be created on first run → no action needed"* and
+/// exited 0.
+///
+/// The realistic trigger is not a fresh install (the installer pre-creates the
+/// directory) but the move `docs/FIELD_DEPLOYMENT.md` actively recommends:
+/// relocating storage off the SD card, which fails after ~6 months of WAL
+/// churn. `RECS_DIR=/data/recordings` works because it is auto-created;
+/// `DB_PATH=/data/birdnet/birds.db` did not.
+///
+/// # Errors
+///
+/// Returns a message naming the directory and the underlying cause when it
+/// cannot be created — a read-only mount or a permissions problem, which are
+/// genuinely the operator's to fix and must not be silently swallowed.
+pub fn ensure_db_dir(db_path: &Path) -> Result<(), String> {
+    // A bare relative filename (`birds.db`) has an empty parent, which is the
+    // current directory and therefore already exists. Nothing to do.
+    let Some(parent) = db_path.parent().filter(|p| !p.as_os_str().is_empty()) else {
+        return Ok(());
+    };
+    if parent.is_dir() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(parent).map_err(|e| {
+        format!(
+            "could not create the database directory {}: {e}. Create it and make it writable by \
+             the user running birdnet-behavior (`sudo mkdir -p {0} && sudo chown $USER {0}`), or \
+             point DB_PATH somewhere writable.",
+            parent.display()
+        )
+    })?;
+    tracing::info!(path = %parent.display(), "created database directory");
+    Ok(())
+}
 
 /// Resolve the database path from config, falling back to a default location.
 pub fn db_path_from_config(config: Option<&birdnet_core::config::Config>) -> PathBuf {
@@ -49,9 +96,75 @@ pub fn run_backup(
 
 #[cfg(test)]
 mod tests {
-    use super::db_path_from_config;
+    use super::{db_path_from_config, ensure_db_dir};
     use crate::helpers::test_support::config_with;
     use std::path::PathBuf;
+
+    // ── ensure_db_dir ──────────────────────────────────────────────────
+
+    #[test]
+    fn creates_a_missing_database_directory() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let db = tmp.path().join("birdnet/birds.db");
+        assert!(!db.parent().unwrap().exists());
+
+        ensure_db_dir(&db).expect("should create the directory");
+        assert!(db.parent().unwrap().is_dir());
+    }
+
+    #[test]
+    fn creates_every_missing_level() {
+        // The storage relocation docs/FIELD_DEPLOYMENT.md recommends lands
+        // several levels deep on a fresh mount.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let db = tmp.path().join("mnt/ssd/birdnet/data/birds.db");
+
+        ensure_db_dir(&db).expect("should create every level");
+        assert!(db.parent().unwrap().is_dir());
+    }
+
+    #[test]
+    fn is_idempotent_when_the_directory_already_exists() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let db = tmp.path().join("birds.db");
+
+        ensure_db_dir(&db).expect("first call");
+        ensure_db_dir(&db).expect("second call must not fail");
+        assert!(tmp.path().is_dir());
+    }
+
+    #[test]
+    fn accepts_a_bare_relative_filename() {
+        // `DB_PATH=birds.db` has an empty parent, which is the current
+        // directory — already there, nothing to create, and definitely not a
+        // reason to fail startup.
+        ensure_db_dir(&PathBuf::from("birds.db")).expect("bare filename is fine");
+    }
+
+    #[test]
+    fn reports_an_actionable_error_when_the_directory_cannot_be_created() {
+        // Rooting the path at a regular file makes create_dir_all fail with
+        // ENOTDIR for any user, including root — where a permissions test
+        // would not fail at all.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let file = tmp.path().join("not-a-directory");
+        std::fs::write(&file, b"x").expect("write file");
+
+        let err = ensure_db_dir(&file.join("nested/birds.db"))
+            .expect_err("creating a directory under a file must fail");
+        assert!(
+            err.contains("could not create the database directory"),
+            "error should name what failed: {err}"
+        );
+        assert!(
+            err.contains("nested"),
+            "error should name the directory: {err}"
+        );
+        assert!(
+            err.contains("DB_PATH"),
+            "error should tell the operator which knob to change: {err}"
+        );
+    }
 
     #[test]
     fn db_path_uses_config_value_when_present() {
