@@ -709,15 +709,19 @@ phase_pipeline() {
 
   journalctl -u "$SERVICE" --since "@${t0}" --no-pager > "${OUT}/pipeline-journal.log" 2>&1 || true
   local began failed
-  began="$(grep -c 'begin processing file' "${OUT}/pipeline-journal.log" 2>/dev/null || echo 0)"
-  failed="$(grep -c 'failed to process file' "${OUT}/pipeline-journal.log" 2>/dev/null || echo 0)"
+  # `grep -c` already prints 0 when nothing matches; it just exits 1 doing so.
+  # An `|| echo 0` here appended a *second* line and every later integer test
+  # failed with "0\n0: integer expression expected".
+  began="$(grep -c 'begin processing file' "${OUT}/pipeline-journal.log" 2>/dev/null)"
+  failed="$(grep -c 'failed to process file' "${OUT}/pipeline-journal.log" 2>/dev/null)"
+  began="${began:-0}"; failed="${failed:-0}"
 
   local expected chunks
   expected=$(( elapsed / seg_secs ))
   chunks=$(( ${inf_c1%.*} - ${inf_c0%.*} ))
 
   record INFO pipeline.counts \
-    "segments written ~${expected} · files the daemon opened ${began} · decode failures ${failed} · chunks inferred ${chunks}"
+    "segments written ~${expected} · files the daemon opened ${began} · decode failures ${failed} · detections stored ${chunks}"
 
   # ── Stage 1: did every recorded segment reach the daemon at all? ──────────
   local pickup
@@ -740,38 +744,18 @@ phase_pipeline() {
     record PASS pipeline.decode "every opened file decoded without error"
   fi
 
-  # ── Stage 3: did each opened file yield the chunks it contains? ──────────
-  # A segment of S seconds yields floor(S / chunk_secs) chunks. Chunk length is
-  # model-dependent, so bound it: 4.5 s (V3.0 dynamic) is the fewest chunks per
-  # segment, 3 s (fixed / V2.4) the most. Landing below the 4.5 s expectation
-  # means chunks are being dropped inside the file, not just files being missed.
-  if [ "$began" -gt 0 ]; then
-    local per_file min_expected
-    per_file="$(awk "BEGIN { printf \"%.2f\", ${chunks} / ${began} }")"
-    min_expected="$(awk "BEGIN { printf \"%d\", int(${seg_secs} / 4.5) }")"
-    record INFO pipeline.chunking "${per_file} chunks inferred per opened file (a ${seg_secs}s segment holds ${min_expected}–$(( seg_secs / 3 )))"
-    if awk "BEGIN { exit !(${per_file} < ${min_expected} * 0.8) }"; then
-      record WARN pipeline.chunking \
-        "each opened file yielded ${per_file} chunks, below the ${min_expected} a ${seg_secs}s segment contains" \
-        "Audio is being dropped *within* files as well as between them."
-    else
-      record PASS pipeline.chunking "opened files yield the chunks they contain (${per_file} per file)"
-    fi
-  fi
-
-  # ── Verdict: end-to-end coverage, the number that matters ────────────────
-  local covered
-  covered="$(awk "BEGIN { printf \"%.1f\", (${chunks} * 4.5) / ${elapsed} * 100 }")"
-  if awk "BEGIN { exit !(${covered} < 50) }"; then
-    record FAIL pipeline.coverage \
-      "at most ${covered}% of captured audio reached the model over ${mins} min" \
-      "Computed with the most generous chunk length (4.5 s); the true figure is this or lower. The remainder aged out of ${STREAM_DIR} unclassified, silently."
-  elif awk "BEGIN { exit !(${covered} < 90) }"; then
-    record WARN pipeline.coverage "at most ${covered}% of captured audio reached the model"
-  else
-    record PASS pipeline.coverage "${covered}% of captured audio reached the model"
-  fi
-  state_set PIPELINE_COVERAGE_PCT "$covered"
+  # ── What the station actually detected over the window ──────────────────
+  #
+  # Deliberately NOT a verdict. `birdnet_inference_duration_seconds` is observed
+  # in `daemon/processor.rs` inside the `DispositionDecision::Accept` arm, after
+  # `insert_detection` — i.e. once per **stored detection**, not once per audio
+  # chunk fed to the model. Its HELP text says "per-chunk", which is what misled
+  # an earlier version of this phase into reporting a quiet room as 94% audio
+  # loss. There is no exported per-chunk counter, so coverage cannot be computed
+  # from the metrics endpoint at all; pickup above is the honest proxy.
+  record INFO pipeline.detections \
+    "${chunks} detection(s) stored during the window" \
+    "Depends on how many birds called, not on pipeline health — zero is normal indoors or in a quiet hour."
 }
 
 phase_perf() {
@@ -830,11 +814,11 @@ phase_perf() {
     # samples at 32 kHz — a 4.5 s chunk — while the fixed variant takes 3 s. So
     # report the latency as a measurement and let the backlog below decide
     # whether the board keeps up.
-    record INFO perf.latency "mean inference latency ${mean} ms over ${dc} chunks (${mins} min window)" \
-      "Chunk length depends on the model variant: 4.5 s for V3.0 dynamic, 3 s for V3.0 fixed / V2.4."
+    record INFO perf.latency "mean decode-to-prediction latency ${mean} ms over ${dc} stored detection(s)" \
+      "Observed once per *stored detection*, not per chunk — so the count tracks bird activity, not throughput."
     if [ "$dc" -lt 30 ]; then
-      record WARN perf.latency_sample "only ${dc} inferences in ${mins} minutes — too few for a stable mean" \
-        "Re-run with BIRDNET_PERF_MINUTES=30 for a figure worth quoting. A low count with a growing backlog points at scheduling, not compute."
+      record WARN perf.latency_sample "only ${dc} detection(s) in ${mins} minutes — too few for a stable mean" \
+        "A quiet site produces few detections however fast the board is. Use --phase pipeline to judge whether the station keeps up."
     fi
     state_set MEAN_LATENCY_MS "$mean"
   else
@@ -853,30 +837,13 @@ phase_perf() {
     "watch-dir holds ${backlog_start} → ${backlog_end} segments (peak ${backlog_peak})" \
     "Retention-bounded, not a queue: STREAM_RETENTION_SECS ÷ segment length. Informational only."
 
-  # The verdict that does hold: what fraction of captured audio reached the
-  # model. Capture runs continuously, so `mins` minutes of wall clock is `mins`
-  # minutes of audio; the pipeline analysed `dc` chunks. Anything the model
-  # never saw was dropped by the age drain, silently.
-  #
-  # chunk length is model-dependent (4.5 s for V3.0 dynamic, 3 s for fixed /
-  # V2.4), so compute with the larger — the most generous reading. If coverage
-  # is short even at 4.5 s it is shorter in reality, and the conclusion holds
-  # without needing to know which variant is loaded.
-  if [ "$dc" -gt 0 ]; then
-    local covered
-    covered="$(awk "BEGIN { printf \"%.1f\", (${dc} * 4.5) / (${mins} * 60) * 100 }")"
-    record INFO perf.coverage "at most ${covered}% of captured audio reached the model (${dc} chunks × ≤4.5 s over ${mins} min)"
-    if awk "BEGIN { exit !(${covered} < 50) }"; then
-      record FAIL perf.realtime \
-        "only ${covered}% of captured audio was analysed — the rest aged out of the watch dir unclassified" \
-        "Segments are drained by age regardless of whether the pipeline read them, so the loss is silent: no metric, no log, no gap in the detection record."
-    elif awk "BEGIN { exit !(${covered} < 90) }"; then
-      record WARN perf.realtime "only ${covered}% of captured audio was analysed"
-    else
-      record PASS perf.realtime "${covered}% of captured audio reached the model — the board keeps pace"
-    fi
-    state_set AUDIO_COVERAGE_PCT "$covered"
-  fi
+  # No real-time verdict here, deliberately. The only counter this phase can
+  # reach is per stored detection, and the watch-dir count above is bounded by
+  # the age drain — neither can tell a board that keeps up from one that does
+  # not. `--phase pipeline` answers it properly, by counting the files the
+  # daemon actually opened against the segments capture wrote.
+  record INFO perf.realtime "throughput is not judged here — run --phase pipeline for the keep-up verdict"
+
 
   # Thermals. The Pi 4 begins soft-throttling at 80 °C, hard at 85 °C.
   record INFO perf.temp "temperature ${t_start:-?} → ${t_end:-?} °C (peak ${peak_temp} °C)"

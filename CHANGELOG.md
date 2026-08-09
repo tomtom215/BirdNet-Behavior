@@ -91,6 +91,16 @@ real USB microphone, or both.
 
 ### Changed
 
+- **`birdnet_inference_duration_seconds` no longer claims to be per-chunk.** It
+  is observed in `daemon/processor.rs` inside the `DispositionDecision::Accept`
+  arm, immediately after `insert_detection` — i.e. **once per stored detection**,
+  not once per audio chunk fed to the model. Its `HELP` text said "Per-chunk
+  inference latency", which invites exactly the wrong inference: dividing the
+  count by elapsed time reads a quiet hour as catastrophic audio loss. The
+  exposition text and the surrounding docs now say what it measures, and note
+  that no per-chunk counter is exported, so analysed-audio coverage cannot be
+  derived from the metrics endpoint.
+
 - **Capture-subprocess failures are now logged at `warn` instead of `debug`.**
   `arecord`/`ffmpeg` stderr — the only place the reason a source will not start
   is ever written down — went through `drain_capture_stderr` at `debug!`, and the

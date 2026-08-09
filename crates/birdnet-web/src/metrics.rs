@@ -37,7 +37,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Fixed exponential histogram buckets (seconds).
 ///
-/// Chosen to bracket the observed per-chunk inference latency on a Pi 5
+/// Chosen to bracket the observed decode-to-prediction latency on a Pi 5
 /// (~300 ms) and the DB write latency on a stressed SQLite (~30 ms)
 /// without splitting the distribution finely outside those bands.
 /// `+Inf` is implicit (sum/count).
@@ -314,7 +314,12 @@ impl MetricsRegistry {
 pub struct MetricsSnapshot {
     /// Per-`(species, chunk_offset_secs)` detection counts.
     pub detections: Vec<((String, i64), u64)>,
-    /// Snapshot of the per-chunk BirdNET inference latency histogram.
+    /// Snapshot of the BirdNET decode-to-prediction latency histogram.
+    ///
+    /// Observed once per **stored detection** (`daemon::processor`, in the
+    /// `Accept` arm after `insert_detection`) — not once per analysed audio
+    /// chunk. Its count therefore tracks bird activity, not throughput, and it
+    /// cannot be used to derive what fraction of captured audio was analysed.
     pub inference: HistogramSnapshot,
     /// Snapshot of the SQLite detection-row write latency histogram.
     pub db_write: HistogramSnapshot,
@@ -351,7 +356,7 @@ pub fn render_runtime_metrics(snap: &MetricsSnapshot) -> String {
         );
     }
 
-    out.push_str("# HELP birdnet_inference_duration_seconds Per-chunk inference latency (decode-to-prediction) in seconds.\n");
+    out.push_str("# HELP birdnet_inference_duration_seconds Decode-to-prediction latency in seconds, observed once per stored detection (not per analysed audio chunk).\n");
     out.push_str("# TYPE birdnet_inference_duration_seconds histogram\n");
     render_histogram(
         &mut out,
