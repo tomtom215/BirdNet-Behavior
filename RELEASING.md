@@ -20,6 +20,7 @@ cargo test --workspace --all-features
 # 1. Bump the version + roll the changelog (on a branch, via PR).
 #    Cargo.toml workspace.package.version = X.Y.Z
 #    CITATION.cff:  version + date-released   (release validate enforces this)
+#    crates/birdnet-web/openapi.json: info.version  (release validate enforces this)
 #    CHANGELOG.md: [Unreleased] -> ## [X.Y.Z] - YYYY-MM-DD  (+ fresh [Unreleased])
 # 2. Get CI green on main.
 # 3. (Optional but recommended) Rehearse via the dry run — see below.
@@ -125,7 +126,7 @@ Copy-paste this into the release PR or issue and tick it off:
 
 ```text
 [ ] workspace.package.version in Cargo.toml bumped to X.Y.Z
-[ ] crates/birdnet-web/openapi.json: info.version bumped to X.Y.Z
+[ ] crates/birdnet-web/openapi.json: info.version bumped to X.Y.Z  (gated by release validate)
     (a test asserts it tracks CARGO_PKG_VERSION, so a missed bump fails
      the suite rather than shipping a spec that lies about its version)
 [ ] docs/book/reference/api.md: the sample /api/v2/health response
