@@ -1044,10 +1044,11 @@ phase_dbcorrupt() {
   # Take our own copy first. The station has its own backups; this is the
   # harness's guarantee that a failed test cannot cost the operator data.
   #
-  # Record the original ownership before touching anything: the service runs as
-  # an unprivileged user, so restoring a root-owned copy would leave the station
-  # unable to open its own database — a harness-inflicted outage masquerading as
-  # a product failure.
+  # Record the original ownership before touching anything. `cp` onto an
+  # existing file writes through the inode and keeps its owner, so the restore
+  # below is already safe today — this is belt-and-braces for the case where the
+  # database has been removed entirely and `cp` would create it root-owned,
+  # which the unprivileged `User=` could then not open.
   local safety="${OUT}/birds.db.safety" db_owner
   db_owner="$(stat -c '%U:%G' "$DB_PATH" 2>/dev/null)"
   record INFO dbcorrupt.owner "database is owned by ${db_owner:-unknown}; restores will preserve that"
@@ -1104,7 +1105,19 @@ phase_dbcorrupt() {
     if [ "$result" = "exit-code" ] || [ -n "$execpre" ]; then
       record FAIL dbcorrupt.gate \
         "startup was blocked by the ExecStartPre doctor gate — the recovery path never ran" \
-        "Result=${result}; ${execpre:-no ExecStartPre line}. A corrupt DB makes --doctor exit 2, so systemd refuses to start the daemon, so check_and_recover() cannot execute. Restart=always then retries until StartLimitBurst parks the unit in 'failed'."
+        "Result=${result}; ${execpre:-no ExecStartPre line}. A corrupt DB makes --doctor exit 2, so systemd refuses to start the daemon, so check_and_recover() cannot execute."
+    fi
+
+    # RestartSec=10 against StartLimitBurst=5 means the five permitted restarts
+    # are spent in under a minute, after which systemd parks the unit and
+    # refuses every later `systemctl start` — including the one that would have
+    # worked once the cause was fixed. Naming it matters: an unattended station
+    # stays dead until someone runs `reset-failed` on site.
+    if systemctl is-failed --quiet "$SERVICE" 2>/dev/null \
+       || journalctl -u "$SERVICE" --since '-6 min' --no-pager 2>/dev/null | grep -qi 'start request repeated too quickly'; then
+      record FAIL dbcorrupt.startlimit \
+        "the unit burned StartLimitBurst=5 and is parked in 'failed'" \
+        "Even after the database is repaired, systemd refuses to start it until 'systemctl reset-failed' is run by hand."
     fi
   fi
 
@@ -1124,6 +1137,7 @@ phase_dbcorrupt() {
   else
     record FAIL dbcorrupt.healthy "database is still unhealthy — restoring the harness safety copy"
     sudo systemctl stop "$SERVICE"
+    sudo systemctl reset-failed "$SERVICE" 2>/dev/null
     sudo cp "$safety" "$DB_PATH"
     # Restore the original ownership. `cp` as root would otherwise leave the
     # file root-owned and the unprivileged service could not open it.
@@ -1171,6 +1185,7 @@ phase_duckdb() {
       "the ExecStartPre doctor gate blocked startup over a *regenerable* store" "${execpre}"
 
     sudo systemctl stop "$SERVICE"
+    sudo systemctl reset-failed "$SERVICE" 2>/dev/null
     sudo rm -f "$ANALYTICS_DB"
     sudo systemctl start "$SERVICE"
     if wait_for 180 curl -sf --max-time 5 "${BASE}/api/v2/health"; then
@@ -1192,10 +1207,12 @@ phase_duckdb() {
     *)   record WARN duckdb.analytics "analytics endpoint returned ${code} after the rebuild" ;;
   esac
 
-  if journalctl -u "$SERVICE" --since '-5 min' --no-pager 2>/dev/null | grep -qiE 'rebuild|recreat|analytics'; then
-    record PASS duckdb.journal "journal shows the analytics store being rebuilt"
+  if journalctl -u "$SERVICE" --since '-5 min' --no-pager 2>/dev/null \
+      | grep -qiE 'rebuild(ing)? (the )?analytics|analytics .*(rebuilt|recreated|quarantin)|discarding .*analytics'; then
+    record PASS duckdb.journal "journal shows the analytics store actually being rebuilt"
   else
-    record WARN duckdb.journal "no rebuild wording in the journal"
+    record WARN duckdb.journal "no analytics-rebuild wording in the journal" \
+      "Matching a bare 'analytics' would pass on any ordinary log line, so this asks for the rebuild itself"
   fi
 
   snapshot_journal duckdb
