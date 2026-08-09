@@ -7,6 +7,130 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-08-09
+
+### Fixed
+
+- **Docker images embedded a behavioral extension the engine could never
+  load.** `Dockerfile` pinned the DuckDB community extension to `v1.5.3` while
+  the workspace bundles DuckDB 1.5.5. When the engine was bumped (`b35d4f5`)
+  `ci.yml` and `release.yml` were updated and the `Dockerfile` was not — and
+  because the `v1.5.3` URL still returns HTTP 200, the download *succeeded* and
+  the wrong bytes were embedded silently; the "fetch failed, fall back to a
+  runtime install" branch never fired.
+
+  DuckDB refuses a version-mismatched extension outright: *"The file was built
+  specifically for DuckDB version 'v1.5.3' and can only be loaded with that
+  version of DuckDB. (this version of DuckDB is 'v1.5.5')"*. The reason nine
+  green workflows never noticed is that the loader tries the extension cache,
+  then a community-registry install, and only then the embedded copy — so a
+  container *with* network installs the correct build and looks perfectly
+  healthy. Only air-gapped and metered stations, exactly the deployments the
+  embedding exists to serve, ever saw it, and they saw it as empty analytics
+  pages.
+
+  Fixed at four levels so the class cannot return quietly: the pin is corrected;
+  `build.rs` now parses the extension's metadata footer and refuses to embed
+  bytes it cannot identify, recording what they target; a mismatch between the
+  embedded copy and the linked engine fails a test *and* is logged as an error
+  at startup even when a network install masks it; and `docker.yml` boots the
+  built image with networking disabled and asserts the extension loads.
+
+- **A station whose database directory did not exist refused to start.** SQLite
+  will not create a missing parent, so the process exited 1 on a bare *"unable
+  to open database file"* — after `--doctor` had reported *"will be created on
+  first run — no action needed"* and exited 0. Every sibling directory is
+  already created on demand, including the DuckDB analytics store; this was the
+  only exception, and the only one whose absence is fatal.
+
+  It did not affect a stock install (the installer pre-creates the directory).
+  It affected the storage move `docs/FIELD_DEPLOYMENT.md` recommends — consumer
+  SD cards fail after ~6 months of WAL churn — where `RECS_DIR` works because it
+  is auto-created and `DB_PATH` did not. The directory is now created before the
+  database is opened, and a failure that cannot be fixed automatically (a
+  read-only mount, wrong ownership) reports the directory, the cause and the
+  remedy instead of a bare SQLite error.
+
+### Added
+
+- **`--verify-extension`.** Opens a throwaway DuckDB database, loads the
+  behavioral extension the way the station does, and reports the engine version,
+  the extension version and what the build-time embedded copy targets. Exits 0
+  when it loads and non-zero when it does not, so it is usable from a monitoring
+  script. Run with networking disabled it proves the *offline* guarantee
+  specifically: with no network neither the cache nor the community registry can
+  satisfy the load, so only the embedded copy can.
+
+  `--doctor` cannot answer this question — it deliberately never opens DuckDB —
+  and `TROUBLESHOOTING.md` said to use it, which is corrected.
+
+- **`--doctor` now reports whether `/admin` is exposed without a password.**
+  `--listen` defaults to `0.0.0.0:8502`, and with no admin password the cookie
+  middleware serves `/admin` to anyone on the network. The station logged this
+  at startup, but the diagnostic the docs point operators at checked only that
+  the listen address *parsed*. It now warns when the bind is non-loopback and no
+  password is set, and passes when either is untrue. Resolution mirrors the
+  runtime exactly so the two cannot disagree.
+
+### Changed
+
+- **Dependencies converged.** The lockfile had drifted 150 packages behind, none
+  of it visible as a Dependabot PR — Dependabot proposes bumps for *declared*
+  dependencies, while the lockfile is what ships. The refresh includes the
+  transitive security floor of a networked appliance: `rustls`, `aws-lc-rs`
+  (with `aws-lc-sys`), `hyper`, `h2`, `webpki-roots`, `zerocopy` and `regex`.
+
+- **`rubato` 3 → 4 and `audioadapter-buffers` 3 → 4, taken together.** They are a
+  version-locked pair: rubato 4 requires `audioadapter ^4.0`, so bumping either
+  alone puts two versions of the crate that defines `Adapter` in the graph and
+  the resampler's buffer type then implements the wrong one. `process()` moved
+  its `input_offset` and channel mask into an `Indexing` struct; our call used
+  the defaults, so the migration is behaviour-preserving — verified against the
+  real 11 000-species model, which returns bit-identical confidences
+  (93.0 / 92.7 / 93.5 % on the reference Eurasian Magpie recording).
+
+- `tower-http` 0.6 → 0.7 and `base64` 0.22 → 0.23, both drop-in.
+
+- **GitHub Actions refreshed, and the toolchain action pinned where it signs.**
+  Every third-party action SHA was verified to resolve to the tag it claims
+  before being taken. `dtolnay/rust-toolchain@master` in the three release jobs
+  that build attested, signed artifacts is now SHA-pinned — safe because each
+  passes an explicit `toolchain:` input, so the pin cannot change which Rust is
+  installed.
+
+  Dependabot's proposed `dtolnay/rust-toolchain@1.95` → `@1.100` was **not**
+  taken: for that action the ref *is* the MSRV declaration, and 1.95 → 1.100 is
+  a *minor* bump, so the existing `semver-major` ignore never fired. It is now
+  ignored at every update type, and a new CI job fails if the MSRV job's ref and
+  `Cargo.toml`'s `rust-version` ever disagree.
+
+- **The model-gated tests can no longer pass by doing nothing.** Rust counts a
+  test that returns early as passed, so the suites that exercise the scientific
+  core reported the same `ok` line whether they ran real inference or skipped —
+  only the elapsed time differed (2.94 s versus 0.00 s). CI now sets
+  `BIRDNET_REQUIRE_MODEL=1` in the same step that fetches and checksum-verifies
+  the model, which turns a skip into a hard failure; a CDN outage leaves it
+  unset, so an upstream problem still degrades to a visible skip rather than
+  failing an unrelated build.
+
+  This also fixed a suite that had never run in CI at all: `species_filter_e2e`
+  — the regression tests for the species include/exclude fix, where an excluded
+  species must never become a stored detection — was absent from the only job
+  that exports the model path, so its 10 tests skipped in every run while
+  reporting `10 passed`.
+
+- **`CITATION.cff` is now enforced at release time.** It had been stuck at 0.8.0
+  through two releases because `validate` checked only `Cargo.toml` and
+  `CHANGELOG.md`, while the file's own comment asked maintainers to bump it in
+  lock-step. It is the version GitHub's "Cite this repository" widget and Zenodo
+  hand to anyone citing this software.
+
+- Documentation-only follow-ups that landed after the 0.10.0 entry was written
+  and belonged in no section: three surviving mutants killed in the
+  species-list log guard with a refreshed CLI help snapshot (`ce54b61`), and a
+  typos-config fix for backticked git SHAs plus one genuine misspelling
+  (`14a5bb8`).
+
 ## [0.10.0] - 2026-08-07
 
 ### Added
@@ -2362,7 +2486,8 @@ x86_64 Linux.
 - systemd installer script with ALSA microphone auto-detection and
   automatic BirdNET+ model download from Zenodo.
 
-[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.7.2...v0.9.0
 [0.7.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.6.0...v0.7.0

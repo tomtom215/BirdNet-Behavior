@@ -207,6 +207,12 @@ jobs:
           echo "$sha  $model" | sha256sum -c -
           echo "BIRDNET_TEST_MODEL=$model"  >> "$GITHUB_ENV"
           echo "BIRDNET_TEST_LABELS=$labels" >> "$GITHUB_ENV"
+          # Only set once the model is present AND checksum-verified. From here
+          # a model-gated test that skips is a hard failure instead of a silent
+          # `ok` — see tests/common/mod.rs. Deliberately inside the success
+          # path: a CDN outage leaves it unset, so an upstream problem degrades
+          # to a visible skip rather than failing an unrelated build.
+          echo "BIRDNET_REQUIRE_MODEL=1" >> "$GITHUB_ENV"
       - name: Run the end-to-end inference tests
         # These are the only tests that exercise the scientific core —
         # decode → resample → chunk → ONNX inference → confidence mapping —
@@ -216,7 +222,15 @@ jobs:
         # sigmoid-on-probabilities bug (0.92 reported as 0.72) reached a
         # release. They pin a confidence floor on a known Eurasian Magpie
         # recording, so a regression in any stage fails the build.
-        run: cargo test --test inference_e2e --test pipeline_e2e -- --nocapture
+        #
+        # `species_filter_e2e` is in this list because it was missing from it:
+        # `BIRDNET_TEST_MODEL` is exported by this job alone, so those 10 tests
+        # — the regression suite for the species include/exclude fix, where an
+        # excluded species must never become a stored detection — skipped in
+        # every CI run while reporting `10 passed`.
+        run: |
+          cargo test --test inference_e2e --test pipeline_e2e --test species_filter_e2e \
+            -- --nocapture
 
   doc:
     name: Rustdoc (no broken links)
@@ -275,6 +289,41 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      # The MSRV is stated in three places that must agree: this job's
+      # toolchain ref, `workspace.package.rust-version` in Cargo.toml, and
+      # rust-toolchain.toml. For `dtolnay/rust-toolchain` the *ref is the
+      # configuration* — bumping it silently changes which Rust this job
+      # tests, so the job can keep passing while no longer testing the version
+      # we promise.
+      #
+      # That is not hypothetical: Dependabot PR #188 proposed `@1.95` ->
+      # `@1.100`, and the `semver-major` ignore in dependabot.yml did not fire
+      # because 1.95 -> 1.100 is a *minor* bump. This check is what actually
+      # stops it — an ignore rule can be out-classified, a failing job cannot.
+      - name: MSRV ref matches Cargo.toml rust-version
+        shell: bash
+        run: |
+          set -euo pipefail
+          declared=$(
+            awk '/^\[workspace\.package\]/{f=1; next} /^\[/{f=0}
+                 f && /^rust-version = /{gsub(/[" ]/, "", $3); print $3; exit}' Cargo.toml
+          )
+          # The ref this job actually installs, read back out of this file so
+          # the two can never be edited apart.
+          ref=$(
+            awk '/^  msrv:/{f=1} f && /dtolnay\/rust-toolchain@/{
+                   sub(/.*dtolnay\/rust-toolchain@/, ""); sub(/[[:space:]].*/, ""); print; exit }' \
+              .github/workflows/ci.yml
+          )
+          echo "Cargo.toml rust-version : ${declared}"
+          echo "MSRV job toolchain ref  : ${ref}"
+          if [[ "$declared" != "$ref" ]]; then
+            echo "::error file=.github/workflows/ci.yml::MSRV job installs Rust '${ref}' but Cargo.toml declares rust-version '${declared}'. They must match, or this job is not testing the MSRV we promise."
+            exit 1
+          fi
+          echo "::notice::MSRV is consistently ${declared}"
+
       - name: Install MSRV toolchain
         uses: dtolnay/rust-toolchain@1.95
       - name: Install native build dependencies

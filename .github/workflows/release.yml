@@ -137,6 +137,30 @@ jobs:
           fi
           echo "::notice::Workspace version matches tag: $TAG_VER"
 
+      - name: Verify CITATION.cff matches tag
+        # CITATION.cff is what GitHub's "Cite this repository" widget and Zenodo
+        # hand to anyone citing this software, so a stale version misattributes
+        # published work. It has its own comment telling maintainers to bump it
+        # in lock-step — and it was missed at BOTH 0.9.0 and 0.10.0, sitting at
+        # 0.8.0, because `validate` checked only Cargo.toml and CHANGELOG.md.
+        # An instruction in a comment is not a gate; this is.
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG_VER="${{ steps.meta.outputs.version }}"
+          CFF_VER=$(awk '/^version:[[:space:]]/{gsub(/^version:[[:space:]]*|["\r]/, ""); print; exit}' CITATION.cff)
+
+          echo "::group::Citation metadata"
+          printf 'CITATION.cff version: %s\n' "$CFF_VER"
+          printf 'Tag version:          %s\n' "$TAG_VER"
+          echo "::endgroup::"
+
+          if [[ "$CFF_VER" != "$TAG_VER" ]]; then
+            echo "::error file=CITATION.cff::CITATION.cff version ($CFF_VER) does not match tag ($TAG_VER). Bump 'version' and 'date-released' before tagging."
+            exit 1
+          fi
+          echo "::notice::CITATION.cff matches tag: $TAG_VER"
+
       - name: Verify CHANGELOG.md entry exists
         shell: bash
         run: |
@@ -205,7 +229,7 @@ jobs:
           df -h /
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master @ 2026-08-08
         with:
           toolchain: ${{ matrix.toolchain }}
           components: ${{ matrix.components || '' }}
@@ -281,7 +305,7 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master @ 2026-08-08
         with:
           toolchain: stable
           targets: ${{ matrix.target }}
@@ -460,7 +484,7 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master @ 2026-08-08
         with:
           toolchain: stable
 
@@ -491,7 +515,7 @@ jobs:
       # version so a transitive bug in the generator can't silently
       # poison the release artifact set.
       - name: Install cargo-cyclonedx
-        uses: taiki-e/install-action@7a79fe8c3a13344501c80d99cae481c1c9085912 # v2.81.10
+        uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2.85.4
         with:
           tool: cargo-cyclonedx@0.5.7
 
@@ -569,7 +593,7 @@ jobs:
       # The SBOM is also attested so consumers know the BOM came from the
       # same workflow run as the binaries.
       - name: Attest build provenance (SLSA)
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: |
             release/*.tar.gz

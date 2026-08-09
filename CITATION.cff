@@ -21,8 +21,8 @@ authors:
 repository-code: "https://github.com/tomtom215/BirdNet-Behavior"
 url: "https://tomtom215.github.io/BirdNet-Behavior/"
 license: CC-BY-NC-SA-4.0
-version: 0.8.0
-date-released: "2026-06-11"
+version: 0.11.0
+date-released: "2026-08-09"
 keywords:
   - birdnet
   - bioacoustics

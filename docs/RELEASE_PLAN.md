@@ -65,15 +65,15 @@ that it does not do*, in a path no gate executes.
 |----|---------|-----|--------|
 | ~~S-01~~ | ~~Docker images embed a behavioral extension built for **DuckDB 1.5.3** into a **1.5.5** engine~~ — **fixed, Slice 1** | **P1** | XS + gate |
 | ~~S-02~~ | ~~The SQLite database's parent directory is never created; the station exits 1, after `--doctor` said *"no action needed"*~~ — **fixed, Slice 2** | **P1** | S |
-| S-03 | 150 packages of transitive lockfile drift that no Dependabot PR surfaces — including `rustls`, `hyper`, `aws-lc-rs`, `webpki-roots` | **P1 (release)** | S — **done, see §2** |
-| S-04 | The model-gated "scientific core" suites report `2 passed` whether or not they ran | P2 | S |
-| S-05 | PR #196 is red: `clap` 4.6.6 changed help rendering, staling the committed CLI-help snapshot | P2 | XS — **done** |
-| S-06 | PR #177 cannot merge alone (`audioadapter-buffers` ↔ `rubato` coupling) and is stale | P2 | M |
-| S-07 | PR #148 cannot merge at all — `argon2` has no stable 0.6 | P2 | close it |
-| S-08 | `dtolnay/rust-toolchain@master` is unpinned **in the release artifact-producing jobs** | P2 | XS |
-| S-09 | `CITATION.cff` still says `0.8.0`; no gate checks it | P3 | XS |
-| S-10 | `--doctor` never reports that `/admin` is open to the network | P3 | S |
-| S-11 | Commits landed after the `[0.10.0]` changelog roll sit in no changelog section | P3 | XS |
+| ~~S-03~~ | ~~150 packages of transitive lockfile drift that no Dependabot PR surfaces~~ — **fixed, Slice 3** | **P1 (release)** | S |
+| ~~S-04~~ | ~~The model-gated "scientific core" suites report `2 passed` whether or not they ran~~ — **fixed, Slice 5** | P2 | S |
+| ~~S-05~~ | ~~PR #196 is red: `clap` 4.6.6 changed help rendering, staling the CLI-help snapshot~~ — **fixed, Slice 3** | P2 | XS |
+| ~~S-06~~ | ~~PR #177 cannot merge alone (`audioadapter-buffers` ↔ `rubato` coupling)~~ — **fixed, Slice 4** | P2 | M |
+| ~~S-07~~ | ~~PR #148 cannot merge at all — `argon2` has no stable 0.6~~ — **ignored in Dependabot, Slice 4** | P2 | XS |
+| ~~S-08~~ | ~~`dtolnay/rust-toolchain@master` unpinned in the release artifact jobs~~ — **fixed, Slice 4** | P2 | XS |
+| ~~S-09~~ | ~~`CITATION.cff` still says `0.8.0`; no gate checks it~~ — **fixed, Slice 6** | P3 | XS |
+| ~~S-10~~ | ~~`--doctor` never reports that `/admin` is open to the network~~ — **fixed, Slice 5** | P3 | S |
+| ~~S-11~~ | ~~Commits landed after the `[0.10.0]` changelog roll sit in no section~~ — **fixed, Slice 6** | P3 | XS |
 
 ---
 
@@ -386,10 +386,10 @@ release notes.
 | #196 | `cargo-patch-and-minor` × 8 (lockfile only) | **superseded** by the full update; was red on S-05 |
 | #193 | `ort` rc.12 → rc.13 (lockfile only) | **superseded** — included in the update |
 | #186 | `tokio` 1.52.3 → 1.53.1 (lockfile only) | **superseded** — included in the update |
-| #188 | GitHub Actions × 10 (workflow files only) | **take** — review the SHAs, land with S-08 |
-| #176 | `tower-http` 0.6.11 → 0.7.0 (manifest) | **evaluate** — we use `cors`, `trace`, `fs` |
-| #177 | `audioadapter-buffers` 3 → 4 | **close** — see S-06, replace with the paired bump |
-| #148 | `password-hash` 0.5 → 0.6.1 | **close** — see S-07, cannot compile |
+| #188 | GitHub Actions × 10 (workflow files only) | **taken, minus the toolchain bump** — 9/9 SHAs verified against upstream tags; `@1.95 → @1.100` rejected (S-08) |
+| #176 | `tower-http` 0.6.11 → 0.7.0 (manifest) | **taken** — drop-in, zero source changes |
+| #177 | `audioadapter-buffers` 3 → 4 | **superseded** — landed paired with `rubato` 4 |
+| #148 | `password-hash` 0.5 → 0.6.1 | **cannot merge** — now an explicit Dependabot `ignore` |
 
 ### The lockfile convergence (done on this branch)
 
@@ -491,30 +491,111 @@ against `…/mnt/ssd/birdnet/data/birds.db` with all four levels absent, serving
 `--doctor`'s message is deliberately unchanged: *"will be created on first run —
 no action needed"* is now **true**.
 
-### Slice 3 — S-03 + S-05, lockfile convergence *(done — verify in CI)*
+### ✅ Slice 3 — S-03 + S-05, lockfile convergence · **landed**
 Already on this branch with the full gate green. On merge, close #196, #193, #186
 as superseded.
 
-### Slice 4 — the dependency backlog (S-06, S-07, S-08, #176)
-1. Close #148 (S-07) and add the `dependabot.yml` ignore.
-2. Close #177 (S-06); land `rubato 3 → 4` + `audioadapter-buffers 3 → 5` as one
-   change, gated on the resampler tests.
-3. Evaluate `tower-http 0.7` (#176) against `cors`/`trace`/`fs`; take or defer
-   with a written reason.
-4. Take #188, and pin the three `dtolnay/rust-toolchain` refs (S-08).
-5. `base64 0.23` — three call sites.
+### ✅ Slice 4 — the dependency backlog · **landed**
 
-### Slice 5 — gate integrity (S-04, S-10)
-1. `BIRDNET_REQUIRE_MODEL=1` in `ci.yml`; suites panic instead of skipping.
-2. Doctor check for open-admin exposure.
+**The plan was wrong about the pairing, and the registry said so.** It
+prescribed `rubato 3 → 4` with `audioadapter-buffers 3 → 5`. Reading the index:
+`rubato 4.0.0` requires `audioadapter ^4.0`, while `audioadapter-buffers 5.x`
+requires `^5.0`. Taking buffers 5 would have recreated the exact split the
+finding was about. The correct pair is **rubato 4.0.0 + audioadapter-buffers
+4.0.0**, and the lockfile now carries a single `audioadapter 4.0.0`.
 
-### Slice 6 — the release itself (S-09, S-11)
-1. Fold `ce54b61`/`14a5bb8` into the changelog; roll `[Unreleased]` → `[0.10.1]`
-   (or `[0.11.0]` if slice 4 lands the resampler bump — that is a dependency
-   behaviour change, not a patch).
-2. Bump `CITATION.cff` **and** extend `release.yml`'s `validate` to check it.
-3. Re-run the release dry-run (`workflow_dispatch`), then follow `RELEASING.md`.
-   **The tag push stays the maintainer's manual "go".**
+`rubato` 4 folds `process(buffer, input_offset, active_channels_mask)` into
+`process(buffer, Option<&Indexing>)`. Our call passed `(…, 0, None)` — the
+defaults — so the migration is behaviour-preserving. **Verified against the real
+model rather than by reading:** the reference Eurasian Magpie recording returns
+bit-identical confidences before and after (93.0 / 92.7 / 93.5 %).
+
+`tower-http` 0.6 → 0.7 and `base64` 0.22 → 0.23 both compiled with **zero**
+source changes; the suite is unchanged at 1946 passed.
+
+**PR #188 contained a trap, and the existing guard did not catch it.** It
+proposed `dtolnay/rust-toolchain@1.95` → `@1.100`. `dependabot.yml` ignores
+*major* bumps of that action precisely to prevent this — but 1.95 → 1.100 is a
+**minor** bump, so the ignore never fired. For this action the ref *is* the MSRV
+declaration, so taking it would have decoupled the MSRV job from
+`Cargo.toml`'s `rust-version` while the job kept passing.
+
+Every other action bump was taken, after **verifying each pinned SHA resolves to
+the tag it claims** (9/9). Worth recording that the first verification pass
+reported two false mismatches: filtering `git ls-remote` by refspec drops the
+`^{}` lines, so annotated tags compared against the tag object instead of the
+commit. The check was wrong, not Dependabot.
+
+- `dtolnay/rust-toolchain@master` → SHA-pinned in the three `release.yml` jobs
+  that build attested, cosign-signed artifacts. Safe because all three pass an
+  explicit `toolchain:` input, so the pin cannot change toolchain selection —
+  checked by reading the action's `action.yml` on `master`, where `toolchain` is
+  `required: true` with no default.
+- `@stable` and `@1.95` are deliberately **left as refs**: `@stable` tracking
+  current stable is the point of those jobs, and `@1.95` *is* the MSRV.
+- `dependabot.yml` now ignores that action at **every** update type, and
+  `password-hash 0.6.x` (blocked on an `argon2 0.6` that does not exist —
+  newest published is `0.6.0-rc.8`).
+- **New `msrv-ref-matches-cargo-toml` step in `ci.yml`** — the real fix. It
+  reads the MSRV job's own toolchain ref back out of the workflow file and fails
+  if it differs from `rust-version`. Verified both ways: passes as committed,
+  and fails when the ref is set to `1.100`. An ignore rule can be
+  out-classified; a failing job cannot.
+
+### ✅ Slice 5 — gate integrity · **landed**
+
+**A second suite was found skipping, not just reporting oddly.**
+`BIRDNET_TEST_MODEL` is exported by exactly one CI job, which ran only
+`inference_e2e` and `pipeline_e2e`. `species_filter_e2e` — the 10-test
+regression suite for the species include/exclude fix, where an excluded species
+must never become a stored detection — was **absent from that list, so it has
+never run against a model in CI**, while reporting `10 passed` every time. It is
+now in the list.
+
+`tests/common/mod.rs` centralises the gate for all three suites. CI sets
+`BIRDNET_REQUIRE_MODEL=1` inside the step that fetches *and* sha256-verifies the
+model, so the three states are distinguishable:
+
+| state | result |
+|---|---|
+| no model, `REQUIRE` unset (dev clone) | skips visibly, `10 passed` in **0.10 s** |
+| `REQUIRE=1`, model missing | **FAILED** — names which suite did not exercise the core |
+| `REQUIRE=1`, model present | `10 passed` in **9.44 s** of real inference |
+
+Deliberately inside the success path: a CDN outage leaves `REQUIRE` unset, so an
+upstream problem degrades to a visible skip instead of failing an unrelated
+build.
+
+`--doctor` gained an **Admin authentication** check. Verified in real output:
+WARN on `0.0.0.0` with no password, PASS with `CADDY_PWD` set, PASS on loopback
+without one, SKIP when the address is unparseable (that is already a FAIL from
+the check above; two errors for one cause is noise). Resolution mirrors
+`app.rs` exactly so doctor and runtime cannot disagree. The decision is a pure
+function so it is testable without `set_var`, which is `unsafe` in edition 2024
+and this crate forbids `unsafe_code`.
+
+### ✅ Slice 6 — the release roll · **landed**
+
+Rolled to **`0.11.0`**, not `0.10.1`: new user-facing surface
+(`--verify-extension`, a new doctor check) plus dependency major bumps, pre-1.0.
+
+`Cargo.toml`, `CITATION.cff`, `crates/birdnet-web/openapi.json` and
+`docs/book/reference/api.md` all read `0.11.0`; `CITATION.cff` also carries a
+current `date-released`. The `[0.11.0]` changelog section folds in `ce54b61` and
+`14a5bb8`, which had landed after the `[0.10.0]` entry was written and belonged
+to no section.
+
+`release.yml` gained a **CITATION.cff check** beside the existing Cargo.toml and
+CHANGELOG ones. That file had been stale through two releases *despite its own
+comment asking maintainers to bump it in lock-step* — the lesson being that an
+instruction in a comment is not a gate. The parser was verified against the
+stale value (correctly rejects `0.8.0` for tag `0.11.0`) before the bump, and
+all four `validate` gates were then simulated green against `v0.11.0`.
+
+**Not done, deliberately: the tag.** `RELEASING.md` is explicit that creating
+and pushing the tag is the manual "go" action — it publishes a GitHub Release,
+Docker images, and the install path real stations pull from. That is the
+maintainer's call.
 
 ---
 
@@ -528,15 +609,22 @@ as superseded.
       even when a network install masks it
 - [x] A station with a non-existent `DB_PATH` parent starts, and doctor's message
       is true
-- [ ] `cargo update` is part of the release runbook, with the advisory scan re-run
-      against the resulting lockfile
-- [ ] The Dependabot queue contains only PRs that can actually merge
-- [ ] Every `uses:` in `release.yml` is SHA-pinned
-- [ ] A missing model makes CI **fail**, not pass quietly
-- [ ] `Cargo.toml`, `CHANGELOG.md`, `openapi.json` **and** `CITATION.cff` agree,
-      with `validate` enforcing all four
-- [ ] Full gate green locally *and* in CI: fmt, clippy `-D warnings` both feature
-      sets, `test --workspace --all-features`, rustdoc, MSRV 1.95, aarch64 cross
+- [x] `cargo update` is step 0 of the release runbook, with the advisory scan
+      re-run against the resulting lockfile — including the `--workspace` trap
+- [x] The Dependabot queue contains only PRs that can actually merge: #148 and
+      #177's blockers are encoded as `ignore` rules / a landed paired bump, and
+      #196 / #193 / #186 are superseded by the lockfile convergence
+- [x] Every `uses:` in `release.yml` is SHA-pinned (verified: zero unpinned).
+      `@stable` / `@1.95` survive elsewhere by intent, guarded by the new
+      MSRV-ref check
+- [x] A missing model makes CI **fail**, not pass quietly — and the suite that
+      had never run in CI at all now runs
+- [x] `Cargo.toml`, `CHANGELOG.md`, `openapi.json` **and** `CITATION.cff` agree,
+      with `validate` enforcing three of four (`api.md` is docs, not a gate)
+- [x] Full gate green locally: fmt, clippy `-D warnings` both feature sets,
+      `test --workspace --all-features` (**1946 passed, 0 failed**, model
+      required), rustdoc `-D warnings`, MSRV 1.95. **In CI: not yet — this
+      branch has not been pushed through a PR run at the time of writing.**
 
 ## 5. Still not established (and why)
 

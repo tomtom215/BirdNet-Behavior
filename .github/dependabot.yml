@@ -23,6 +23,21 @@ updates:
       prefix: "deps"
       include: "scope"
     labels: ["dependencies", "rust"]
+    ignore:
+      # `password-hash` must move in lock-step with `argon2`: argon2 0.5.x
+      # implements password-hash 0.5's PasswordHasher/PasswordVerifier traits,
+      # and our accounts code passes password-hash types straight into Argon2.
+      # Taking password-hash 0.6 alone puts two distinct PasswordHasher traits
+      # in the graph and does not compile.
+      #
+      # Checked against the registry index on 2026-08-08: argon2's newest
+      # published version is `0.6.0-rc.8` — there is no stable 0.6, so the
+      # pairing cannot be taken yet at all. PR #148 proposed exactly this and
+      # sat open for two months because it can never be green.
+      #
+      # Remove this entry when argon2 0.6.0 ships, and take both together.
+      - dependency-name: "password-hash"
+        versions: ["0.6.x"]
     groups:
       cargo-patch-and-minor:
         update-types: ["patch", "minor"]
@@ -54,13 +69,25 @@ updates:
       include: "scope"
     labels: ["dependencies", "ci"]
     ignore:
-      # dtolnay/rust-toolchain is pinned by intent: the `@stable` / `@1.95`
-      # refs select the toolchain, and the MSRV (1.95) is governed by
-      # rust-toolchain.toml + Cargo.toml `rust-version`, not by bumping the
-      # action. A prior major bump proposed an unreleased Rust 1.100 and would
-      # have broken the MSRV job — never auto-bump this action across majors.
+      # dtolnay/rust-toolchain must never be auto-bumped, at ANY update type.
+      #
+      # For this action the ref *is* configuration, not a version: `@stable`
+      # selects current stable and `@1.95` selects the MSRV, which is governed
+      # by rust-toolchain.toml + Cargo.toml `rust-version`. Bumping the ref
+      # silently changes which Rust the MSRV job tests, decoupling it from the
+      # `rust-version` we actually promise.
+      #
+      # This used to ignore `semver-major` only. That did not work: PR #188
+      # proposed `@1.95` -> `@1.100`, which dependabot classifies as a *minor*
+      # bump (1.95 -> 1.100), so the ignore never fired. It would have pointed
+      # the MSRV job at a Rust that does not exist (current stable is 1.97).
+      # The `msrv-ref-matches-cargo-toml` job in ci.yml is the belt to this
+      # braces: it fails if the ref and `rust-version` ever disagree.
+      #
+      # The `@master` uses in release.yml are SHA-pinned instead — safe there
+      # because every one of them passes an explicit `toolchain:` input, so the
+      # pin cannot change toolchain selection.
       - dependency-name: "dtolnay/rust-toolchain"
-        update-types: ["version-update:semver-major"]
     groups:
       actions:
         update-types: ["patch", "minor"]

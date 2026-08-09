@@ -14,6 +14,8 @@
 //!   `BIRDNET_TEST_LABELS=/tmp/birdnet_labels.csv \`
 //!   `cargo test --test inference_e2e -- --nocapture`
 
+mod common;
+
 use std::path::Path;
 
 use birdnet_core::audio::decode;
@@ -25,22 +27,9 @@ const PICA_PICA_WAV: &str = "tests/testdata/Pica_pica_30s.wav";
 
 /// Load model + labels from env vars; return None to skip if not set.
 fn load_model() -> Option<BirdNetModel> {
-    let model_path = std::env::var("BIRDNET_TEST_MODEL").ok()?;
-    let labels_path = std::env::var("BIRDNET_TEST_LABELS").ok()?;
+    let (model_path, labels_path) = common::model_paths()?;
 
-    let model_path = Path::new(&model_path);
-    let labels_path = Path::new(&labels_path);
-
-    if !model_path.exists() {
-        eprintln!("SKIP: model not found at {}", model_path.display());
-        return None;
-    }
-    if !labels_path.exists() {
-        eprintln!("SKIP: labels not found at {}", labels_path.display());
-        return None;
-    }
-
-    let labels = LabelSet::load(labels_path).expect("failed to load labels");
+    let labels = LabelSet::load(&labels_path).expect("failed to load labels");
     eprintln!("Labels loaded: {} species", labels.len());
 
     let config = ModelConfig {
@@ -48,7 +37,7 @@ fn load_model() -> Option<BirdNetModel> {
         ..ModelConfig::default()
     };
 
-    let model = BirdNetModel::load(model_path, labels, config).expect("failed to load model");
+    let model = BirdNetModel::load(&model_path, labels, config).expect("failed to load model");
     eprintln!(
         "Model loaded: input_shape={:?}, sample_rate={}Hz, raw_audio={}",
         model.input_shape(),

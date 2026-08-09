@@ -3,8 +3,15 @@
 //! Resamples audio to the target sample rate required by the ML model.
 //! `BirdNET` models typically expect 48kHz; Perch expects 32kHz.
 //!
-//! Uses rubato 1.0's `Async` polynomial resampler for high-quality
-//! sample rate conversion with the `audioadapter` buffer system.
+//! Uses rubato's `Async` polynomial resampler for high-quality sample rate
+//! conversion with the `audioadapter` buffer system.
+//!
+//! `rubato` and `audioadapter-buffers` are a version-locked pair: rubato 4
+//! requires `audioadapter ^4.0`, so `audioadapter-buffers` must stay on 4.x
+//! until rubato takes 5. Bumping either alone puts two versions of the crate
+//! that defines `Adapter` in the graph, and the `InterleavedSlice` below then
+//! implements the wrong one. Dependabot proposes them separately (#177), so
+//! they have to be taken together by hand.
 
 use std::fmt;
 
@@ -79,7 +86,7 @@ pub fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Result<Vec<f32
         let adapter = InterleavedSlice::new(chunk, 1, input_frames_needed)
             .map_err(|e| ResampleError::Process(e.to_string()))?;
         let result = resampler
-            .process(&adapter, 0, None)
+            .process(&adapter, None)
             .map_err(|e: rubato::ResampleError| ResampleError::Process(e.to_string()))?;
         let frames = result.frames();
         for i in 0..frames {
@@ -98,7 +105,7 @@ pub fn resample(samples: &[f32], from_rate: u32, to_rate: u32) -> Result<Vec<f32
         let adapter = InterleavedSlice::new(&last_chunk[..], 1, input_frames_needed)
             .map_err(|e| ResampleError::Process(e.to_string()))?;
         let result = resampler
-            .process(&adapter, 0, None)
+            .process(&adapter, None)
             .map_err(|e: rubato::ResampleError| ResampleError::Process(e.to_string()))?;
         let output_frames = (remaining as f64 * ratio) as usize;
         let available = result.frames();
