@@ -5,7 +5,22 @@
 //! Runs once per process start, immediately after `AppState` is built
 //! (i.e. after migrations have created the row). Behaviour:
 //!
-//! * `CADDY_PWD` unset → no-op. The basic-auth path was already letting
+//! `CADDY_PWD` is resolved from the **loaded config first, then the
+//! environment** — the same order `crate::doctor::config::check_admin_exposure`
+//! uses, so the diagnostic and the thing it diagnoses cannot disagree.
+//!
+//! That ordering is not cosmetic. The bare-metal installer generates an admin
+//! password on a fresh non-loopback install and writes it to
+//! `/etc/birdnet/birdnet.conf`; the unit it installs sets no `EnvironmentFile`,
+//! so nothing ever put `CADDY_PWD` in the environment. Reading only the
+//! environment therefore skipped the bootstrap on every such station: the seed
+//! admin kept its legacy hash, `auth_middleware::admin_password_configured`
+//! returned false, and `/admin` was served to anyone on the network — while
+//! `--doctor`, reading the config, reported the panel protected. Measured on a
+//! Raspberry Pi 4: `CADDY_PWD` present in the config, `/admin/settings` 200
+//! unauthenticated, doctor exit 0.
+//!
+//! * `CADDY_PWD` unset in both → no-op. The basic-auth path was already letting
 //!   everyone through; the cookie path inherits that contract via its
 //!   "no admin password configured → bypass" branch in
 //!   `crate::auth_middleware`.
@@ -21,20 +36,40 @@
 //! continues — the basic-auth fallback (still wired in #89's surface)
 //! keeps the station reachable.
 
+use birdnet_core::config::Config;
 use birdnet_db::accounts::{self, AccountsError, UserStore};
 use birdnet_web::state::AppState;
 
+/// Resolve the configured admin password: file config first, then the
+/// environment. An empty value at either level counts as unset, so a blank
+/// `CADDY_PWD=` line in the config cannot mask a real environment value.
+///
+/// `doctor::config::check_admin_exposure` calls **this same function** rather
+/// than reimplementing the precedence. The previous arrangement was two copies
+/// of the rule plus a comment asserting they matched; they did not, and the
+/// station shipped an open `/admin` that its own diagnostic called protected.
+/// Sharing the resolver makes "these cannot disagree" true by construction.
+///
+/// Takes the environment value as a parameter so the precedence is testable
+/// without mutating the process environment, which is `unsafe` in edition 2024
+/// while this crate forbids `unsafe_code`.
+pub fn resolve_admin_password(config: Option<&Config>, env: Option<String>) -> Option<String> {
+    config
+        .and_then(|c| c.get("CADDY_PWD"))
+        .map(str::to_owned)
+        .filter(|pwd| !pwd.is_empty())
+        .or_else(|| env.filter(|pwd| !pwd.is_empty()))
+}
+
 /// Run the one-shot admin-row password bootstrap. Idempotent across
 /// restarts.
-pub fn bootstrap_admin_password(state: &AppState) {
-    let Ok(env_pwd) = std::env::var("CADDY_PWD") else {
-        tracing::debug!("CADDY_PWD unset; admin password bootstrap skipped");
+pub fn bootstrap_admin_password(state: &AppState, config: Option<&Config>) {
+    let Some(env_pwd) = resolve_admin_password(config, std::env::var("CADDY_PWD").ok()) else {
+        tracing::debug!(
+            "CADDY_PWD unset or empty in both config and environment; bootstrap skipped"
+        );
         return;
     };
-    if env_pwd.is_empty() {
-        tracing::debug!("CADDY_PWD empty; admin password bootstrap skipped");
-        return;
-    }
 
     let outcome = state.with_db(|conn| -> Result<BootstrapOutcome, AccountsError> {
         let admin = conn.find_user_by_name("admin")?;
@@ -139,6 +174,62 @@ mod tests {
             .with_db(|conn| conn.find_user_by_name("admin"))
             .expect("admin row")
             .pwd_argon2
+    }
+
+    fn config_with(key: &str, value: &str) -> Config {
+        let mut c = Config::empty();
+        c.set(key, value);
+        c
+    }
+
+    /// The regression this fix exists for: the bare-metal installer writes
+    /// `CADDY_PWD` to the config and the unit sets no `EnvironmentFile`, so an
+    /// environment-only read skipped the bootstrap and left `/admin` open while
+    /// `--doctor` (which reads the config) called it protected.
+    #[test]
+    fn config_password_is_used_when_the_environment_is_empty() {
+        let cfg = config_with("CADDY_PWD", "from-the-config-file");
+        assert_eq!(
+            resolve_admin_password(Some(&cfg), None).as_deref(),
+            Some("from-the-config-file")
+        );
+    }
+
+    #[test]
+    fn config_wins_over_the_environment() {
+        // Same precedence as doctor::config::check_admin_exposure, so the
+        // diagnostic and the runtime can never disagree.
+        let cfg = config_with("CADDY_PWD", "from-config");
+        assert_eq!(
+            resolve_admin_password(Some(&cfg), Some("from-env".to_owned())).as_deref(),
+            Some("from-config")
+        );
+    }
+
+    #[test]
+    fn environment_is_used_when_the_config_has_no_entry() {
+        // The Docker path: no config file, CADDY_PWD supplied as an env var.
+        assert_eq!(
+            resolve_admin_password(None, Some("from-env".to_owned())).as_deref(),
+            Some("from-env")
+        );
+        let cfg = Config::empty();
+        assert_eq!(
+            resolve_admin_password(Some(&cfg), Some("from-env".to_owned())).as_deref(),
+            Some("from-env")
+        );
+    }
+
+    #[test]
+    fn empty_values_are_treated_as_unset() {
+        assert_eq!(resolve_admin_password(None, None), None);
+        assert_eq!(resolve_admin_password(None, Some(String::new())), None);
+        let cfg = config_with("CADDY_PWD", "");
+        // An empty config entry must not mask a real environment value.
+        assert_eq!(
+            resolve_admin_password(Some(&cfg), Some("from-env".to_owned())).as_deref(),
+            Some("from-env")
+        );
     }
 
     #[test]

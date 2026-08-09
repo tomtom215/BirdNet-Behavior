@@ -50,15 +50,41 @@ pub(super) fn check_database(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
                 "Database integrity",
                 format!("{} passes integrity check", db_path.display()),
             )),
-            Ok(false) => out.push(Check::fail(
+            // Deliberately a WARNING, not an error, even though corruption is
+            // serious. The installed unit gates startup on
+            //   ExecStartPre=... --doctor ... || [ $? -le 1 ]
+            // so an error here (exit 2) stops systemd from starting the daemon
+            // — and the daemon is what owns the recovery: `app.rs` runs
+            // `check_and_recover`, restores from the newest backup that
+            // verifies, and failing that quarantines the corrupt file and
+            // starts fresh, refusing only if it cannot move the file aside.
+            //
+            // Failing here therefore blocked the exact code path that fixes
+            // this, and `Restart=always` then burned StartLimitBurst=5 in under
+            // a minute and parked the unit in `failed` — an unattended station
+            // dead, with good backups on disk that nothing would ever restore.
+            // Measured on a Raspberry Pi 4: corrupting the header left the
+            // station down until a human ran `systemctl reset-failed`.
+            //
+            // Exit code 2 means "errors that will prevent operation". A corrupt
+            // database does not prevent operation, so it is not one.
+            Ok(false) => out.push(Check::warn(
                 "Database integrity",
-                format!("{} reports corruption", db_path.display()),
-                "run `birdnet-behavior --backup-db` then restore from the most recent backup",
+                format!(
+                    "{} reports corruption — it will be quarantined and recovered from backup at startup",
+                    db_path.display()
+                ),
+                "no action needed to restart; to inspect first, run `birdnet-behavior --check-db` \
+                 and see the backups directory beside the database",
             )),
-            Err(e) => out.push(Check::fail(
+            Err(e) => out.push(Check::warn(
                 "Database integrity",
-                format!("{} could not be opened: {e}", db_path.display()),
-                "verify the file is a valid SQLite database; restore from backup if not",
+                format!(
+                    "{} could not be opened ({e}) — startup will attempt recovery, then quarantine it and start fresh",
+                    db_path.display()
+                ),
+                "if this repeats, verify the file is a valid SQLite database and check the \
+                 directory's ownership and permissions",
             )),
         }
     } else {
@@ -108,6 +134,55 @@ mod tests {
             checks
                 .iter()
                 .any(|c| c.name.contains("Database directory") && c.status == Status::Warn)
+        );
+    }
+
+    /// The regression that killed a station on real hardware.
+    ///
+    /// A corrupt database must warn, never fail. The installed unit gates
+    /// startup on `--doctor ... || [ $? -le 1 ]`, so a failure here (exit 2)
+    /// prevents systemd from starting the daemon — and the daemon is what
+    /// quarantines the corrupt file and recovers from backup. Reported as an
+    /// error, the diagnostic blocks its own remedy.
+    #[test]
+    fn corrupt_database_warns_so_startup_can_recover_it() {
+        use std::io::{Seek, SeekFrom, Write};
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("birds.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        drop(conn);
+
+        // Scribble over the header the way a failing SD card does.
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&db_path)
+            .unwrap();
+        f.seek(SeekFrom::Start(0)).unwrap();
+        f.write_all(&[0xAB; 8192]).unwrap();
+        f.sync_all().unwrap();
+        drop(f);
+
+        let cfg = Config::parse(&format!("DB_PATH={}", db_path.display())).unwrap();
+        let checks = check_database(&cli(), Some(&cfg));
+        let integrity = checks
+            .iter()
+            .find(|c| c.name.contains("Database integrity"))
+            .expect("integrity check present");
+
+        assert_ne!(
+            integrity.status,
+            Status::Pass,
+            "corruption must still be reported: {}",
+            integrity.message
+        );
+        assert_eq!(
+            integrity.status,
+            Status::Warn,
+            "must be a warning (exit 1) so ExecStartPre lets the daemon start and recover, \
+             not an error (exit 2) which blocks it: {}",
+            integrity.message
         );
     }
 

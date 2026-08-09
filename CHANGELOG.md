@@ -7,6 +7,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+All three found by running the new on-device acceptance harness
+(`scripts/hardware-test.sh`) against a Raspberry Pi 4 on Pi OS Trixie — the
+"real Raspberry Pi hardware" gap `docs/RELEASE_PLAN.md` § 5 had carried open for
+three releases. None was reachable from CI: each needs a real systemd unit, a
+real USB microphone, or both.
+
+- **Microphone capture could never work on a bare-metal install.** The unit
+  granted audio with `DeviceAllow=/dev/snd rw`, but `DeviceAllow=` resolves a
+  path to a *device node* and `/dev/snd` is a **directory**, so the rule matched
+  nothing. With `DevicePolicy=closed` every ALSA node stayed denied and the PCM
+  open failed with *"audio open error: No such file or directory"*. `arecord`
+  still exec'd successfully — so the daemon logged *"started microphone capture"*
+  — and the supervisor then saw a source producing no samples, killed it, and
+  restarted it every 60 s forever.
+
+  Fixed by using systemd's documented subsystem form, `DeviceAllow=char-alsa rw`.
+  Verified by A/B under `systemd-run` on the affected board: the old form cannot
+  open the device, the new one records normally.
+
+  Present since **v0.6.0** (`5dbc8f1`). RTSP stations were unaffected — `ffmpeg`
+  over the network never touches `/dev/snd` — which, together with the hidden
+  error below, is why it survived six releases.
+
+- **`/admin` was served to the network on every bare-metal install, while
+  `--doctor` reported it protected.** The installer generates an admin password
+  on a fresh non-loopback install and writes `CADDY_PWD` to
+  `/etc/birdnet/birdnet.conf`; the unit it installs sets no `EnvironmentFile`.
+  The auth bootstrap read **only** the environment, so it skipped, the seed admin
+  kept its legacy hash, `admin_password_configured` returned false, and the
+  cookie middleware took its open-bypass path. `check_admin_exposure` read the
+  **config**, found the password, and passed — its doc comment asserting the two
+  "can never disagree" while they did. Measured on hardware: `CADDY_PWD` present
+  in the config, `/admin/settings` 200 unauthenticated, doctor exit 0.
+
+  Both now call one shared resolver (`helpers::resolve_admin_password`,
+  config-then-environment, empty treated as unset), so agreement is structural
+  rather than asserted. Stations that set `CADDY_PWD` as an environment variable
+  — including Docker — were never affected.
+
+- **A corrupt database bricked the station instead of self-healing.** `--doctor`
+  reported SQLite corruption as an *error* (exit 2), and the installed unit gates
+  startup on `ExecStartPre=... --doctor ... || [ $? -le 1 ]`. So systemd refused
+  to start the daemon — and the daemon is what owns the recovery: `app.rs` runs
+  `check_and_recover`, restores from the newest backup that verifies, and failing
+  that quarantines the corrupt file and starts fresh. The diagnostic blocked its
+  own remedy; `Restart=always` then spent `StartLimitBurst=5` in under a minute
+  and parked the unit in `failed`, so even repairing the database left the
+  station down until someone ran `systemctl reset-failed` on site.
+
+  Corruption is now a **warning**: still reported, and loudly, but exit 1 so the
+  daemon starts and recovers. Exit 2 means "errors that will prevent operation",
+  and a corrupt database does not prevent operation. Covered by a regression test
+  that corrupts a real database and asserts the check warns rather than fails.
+
+### Changed
+
+- **Capture-subprocess failures are now logged at `warn` instead of `debug`.**
+  `arecord`/`ffmpeg` stderr — the only place the reason a source will not start
+  is ever written down — went through `drain_capture_stderr` at `debug!`, and the
+  default filter is `info,birdnet_behavior=debug`. That module is in
+  `birdnet_core`, so it sat below the threshold: the supervisor's endless
+  "capture (re)start issued" was visible while the error explaining it was not.
+  Lines reporting a failure are promoted to `warn`; routine chatter (xruns, RTSP
+  reconnects) stays at `debug` so a busy station does not spam the journal.
+
+### Added
+
+- **`scripts/hardware-test.sh`** — an on-device acceptance harness, documented in
+  [`docs/HARDWARE_TEST.md`](docs/HARDWARE_TEST.md). It installs from the
+  published release, measures mean inference latency per 3 s chunk and peak SoC
+  temperature under load, and then deliberately breaks the station — watchdog
+  SIGSTOP, microphone hot-unplug, network loss, disk-full, SQLite and DuckDB
+  corruption, cold reboot — to establish that each documented recovery path is
+  real on the hardware rather than only in `cargo test`. Results are written as
+  a pasteable `report.md` plus machine-readable JSONL.
+
 ## [0.11.0] - 2026-08-09
 
 ### Fixed

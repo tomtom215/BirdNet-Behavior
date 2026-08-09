@@ -29,6 +29,9 @@ mod system;
 #[cfg(test)]
 pub mod test_support;
 
+/// Shared with `crate::doctor::config` so the diagnostic and the auth bootstrap
+/// resolve `CADDY_PWD` through one implementation instead of two that drifted.
+pub use auth::resolve_admin_password;
 pub use auth::{bootstrap_admin_password, purge_legacy_credential_settings};
 pub use db::{db_path_from_config, ensure_db_dir, run_backup, run_integrity_check};
 pub use settings_overlay::{overlay_db_settings, seed_db_settings_from_config};
