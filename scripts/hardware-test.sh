@@ -216,6 +216,25 @@ daemon_rss_kb() {
   [ -n "$p" ] && [ "$p" != "0" ] && awk '/^VmRSS:/ { print $2 }' "/proc/$p/status" 2>/dev/null
 }
 
+# Run a command inside the running service's mount namespace.
+#
+# The unit sets PrivateTmp=yes, so the daemon's /tmp is a private tmpfs and the
+# host's ${STREAM_DIR} is a *different directory* that the daemon never reads or
+# writes. Any check or injection involving the watch dir has to cross into that
+# namespace or it is measuring the wrong filesystem.
+in_service_ns() {
+  local pid; pid="$(daemon_pid)"
+  [ -n "$pid" ] && [ "$pid" != "0" ] || return 1
+  have nsenter || return 1
+  sudo nsenter -t "$pid" -m -- "$@"
+}
+
+# The device string the daemon is configured to open.
+configured_alsa_device() {
+  sudo sed -n 's/^[[:space:]]*ALSA_CARD[[:space:]]*=[[:space:]]*//p' "$CONFIG_FILE" 2>/dev/null \
+    | tr -d '"' | tail -1
+}
+
 # wait_for <seconds> <command...> — poll until the command succeeds.
 wait_for() {
   local deadline=$(( SECONDS + $1 )); shift
@@ -494,18 +513,45 @@ phase_capture() {
     record PASS capture.gauge "birdnet_audio_source_up = 1"
   else
     record FAIL capture.gauge "birdnet_audio_source_up = ${up:-<absent>}"
+
+    # The supervisor logs "capture (re)start issued" forever, but arecord's own
+    # stderr — the line that says *why* it failed — is emitted at debug level
+    # (`drain_capture_stderr`), so at the default log level the operator gets an
+    # infinite restart loop with no diagnosis. Reproduce the exact invocation
+    # here and put the real ALSA error in the report.
+    local dev; dev="$(configured_alsa_device)"
+    if [ -n "$dev" ]; then
+      local err
+      err="$(sudo timeout 10 arecord -D "$dev" -f S16_LE -r 48000 -c 1 -d 3 /dev/null 2>&1 | tr '\n' ' ')"
+      if [ -n "$err" ]; then
+        record FAIL capture.alsa_error "arecord on ${dev} reports: ${err:0:300}" \
+          "This is the exact device/format the daemon opens (S16_LE, 48000 Hz, 1 ch). The daemon logs this at debug only."
+      else
+        record WARN capture.alsa_error "arecord on ${dev} succeeded when run directly" \
+          "The device works standalone, so the failure is specific to the service context (sandboxing, group membership, or contention with the restart loop)."
+      fi
+      in_service_ns arecord -l > "${OUT}/arecord-in-namespace.txt" 2>&1 \
+        && record INFO capture.ns_devices "captured 'arecord -l' as the service sees it → arecord-in-namespace.txt"
+    fi
   fi
 
-  # Segments must actually appear in the tmpfs watch directory.
-  local before after
-  before="$(find "$STREAM_DIR" -type f 2>/dev/null | wc -l)"
-  info "watching ${STREAM_DIR} for new segments (60s)…"
-  sleep 60
-  after="$(find "$STREAM_DIR" -type f 2>/dev/null | wc -l)"
-  if [ "$after" -gt "$before" ] || [ "$after" -gt 0 ]; then
-    record PASS capture.segments "audio segments present in ${STREAM_DIR} (${before} → ${after})"
+  # Segments must actually appear in the tmpfs watch directory — as seen from
+  # inside the service's PrivateTmp namespace. Counting the host's copy of
+  # ${STREAM_DIR} would report zero on a perfectly healthy station.
+  local before after ns_ok=1
+  before="$(in_service_ns find "$STREAM_DIR" -type f 2>/dev/null | wc -l)" || ns_ok=0
+  if [ "$ns_ok" = "0" ] || [ -z "$before" ]; then
+    record SKIP capture.segments "cannot enter the service mount namespace (nsenter/MainPID unavailable)" \
+      "PrivateTmp=yes means the host's ${STREAM_DIR} is a different directory; checking it would be meaningless."
   else
-    record FAIL capture.segments "no segments appeared in ${STREAM_DIR} over 60s"
+    info "watching ${STREAM_DIR} inside the service namespace for new segments (60s)…"
+    sleep 60
+    after="$(in_service_ns find "$STREAM_DIR" -type f 2>/dev/null | wc -l)"
+    if [ "${after:-0}" -gt "$before" ] || [ "${after:-0}" -gt 0 ]; then
+      record PASS capture.segments "audio segments present in ${STREAM_DIR} (${before} → ${after})"
+    else
+      record FAIL capture.segments "no segments appeared in ${STREAM_DIR} over 60s (checked inside the namespace)"
+    fi
   fi
 
   # And the recording that survives — proof the segment was written through.
@@ -572,11 +618,20 @@ phase_detect() {
   fi
 
   if [ -s "$ref" ]; then
+    # Inject *inside* the service's mount namespace. The unit runs with
+    # PrivateTmp=yes, so a file dropped into the host's ${STREAM_DIR} is written
+    # to a directory the daemon cannot see — the watcher would never fire and
+    # the phase would blame the model for a delivery failure.
     local stamp target
     stamp="$(date +%Y-%m-%d-birdnet-%H:%M:%S)"
     target="${STREAM_DIR}/${stamp}.wav"
-    sudo cp "$ref" "$target" && sudo chown --reference="$STREAM_DIR" "$target" 2>/dev/null
-    record INFO detect.inject "injected the reference Eurasian Magpie recording as ${target##*/}"
+    if in_service_ns cp "$ref" "$target" 2>/dev/null; then
+      record INFO detect.inject "injected the reference recording as ${target##*/} inside the service namespace"
+    else
+      record SKIP detect.inject "could not enter the service mount namespace to deliver the recording" \
+        "PrivateTmp=yes; without nsenter the daemon cannot see anything written to the host's ${STREAM_DIR}."
+      return 0
+    fi
 
     if wait_for 180 bash -c "
       n=\$(curl -sf '${BASE}/api/v2/detections?limit=200' 2>/dev/null | grep -o 'Pica pica' | head -1)
