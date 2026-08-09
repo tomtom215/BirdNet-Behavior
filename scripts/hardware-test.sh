@@ -518,8 +518,13 @@ phase_capture() {
   fi
 
   # Prove the mic itself is not delivering digital silence.
+  #
+  # Address it as plughw:, not hw: — raw hw: demands the device natively accept
+  # S16_LE/48000/mono and many USB mics do not, so hw: fails on a perfectly good
+  # microphone. plughw: inserts ALSA's conversion plugin, which is exactly why
+  # the installer's detect_first_audio_device() emits plughw: too.
   local card wav
-  card="$(arecord -l | sed -n 's/^card \([0-9]*\).*device \([0-9]*\).*/hw:\1,\2/p' | head -1)"
+  card="$(arecord -l | sed -n 's/^card \([0-9]*\).*device \([0-9]*\).*/plughw:\1,\2/p' | head -1)"
   wav="${OUT}/mic-sample.wav"
   if [ -n "$card" ] && sudo timeout 8 arecord -D "$card" -d 5 -f S16_LE -r 48000 -c 1 "$wav" >/dev/null 2>&1; then
     local peak
@@ -536,9 +541,15 @@ phase_capture() {
       record WARN capture.signal "captured $(stat -c%s "$wav") bytes but sox is absent" \
         "Install sox for an amplitude check, or listen to ${wav}."
     fi
-  else
+  elif [ -n "$sub" ]; then
     record WARN capture.signal "could not open ${card:-the capture device} directly" \
-      "Expected while the daemon holds it exclusively — not necessarily a fault."
+      "Expected — the daemon holds it exclusively while capturing."
+  else
+    # Nothing is capturing, so the device is free. Failing to open it now is a
+    # real finding, not contention: it means the daemon could not have opened it
+    # either, which explains a source stuck down.
+    record FAIL capture.signal "no capture process is running AND ${card:-the device} cannot be opened" \
+      "$(sudo timeout 8 arecord -D "${card:-null}" -d 1 -f S16_LE -r 48000 -c 1 /dev/null 2>&1 | tail -2 | tr '\n' ' ')"
   fi
 }
 
