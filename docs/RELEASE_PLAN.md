@@ -645,6 +645,15 @@ maintainer's call.
 - **Real Raspberry Pi hardware.** Throughput, thermals and live capture from a
   physical microphone remain unmeasured. qemu-user proved the aarch64 binary
   executes and serves; it is not the board.
+
+  `scripts/hardware-test.sh` now exists to close this, and
+  [`docs/HARDWARE_TEST.md`](./HARDWARE_TEST.md) documents it: it installs from
+  the published release on a clean Pi, measures mean inference latency per 3 s
+  chunk and peak SoC temperature under load, and then deliberately breaks the
+  station — SIGSTOP, mic unplug, network loss, disk full, SQLite and DuckDB
+  corruption, cold reboot — to establish that each documented recovery path is
+  real on the hardware. Writing the harness is not running it: this item stays
+  open until a report from a physical board is attached.
 - **Long-duration soak.** The soak suite bounds memory growth over minutes, not
   days. "A full season unattended" remains the target, not a measurement.
 - **The Docker image built end to end here.** S-01 is measured at every level
