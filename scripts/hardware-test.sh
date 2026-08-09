@@ -731,17 +731,40 @@ phase_perf() {
       "Quiet site, or the confidence gate filtered everything before the histogram."
   fi
 
-  # The real-time verdict, measured directly rather than inferred from a mean.
-  local backlog_delta=$(( backlog_end - backlog_start ))
-  record INFO perf.backlog "watch-dir segments ${backlog_start} → ${backlog_end} (peak ${backlog_peak})"
-  if [ "$backlog_delta" -gt 3 ]; then
-    record FAIL perf.realtime \
-      "capture is outrunning detection — the watch-dir queue grew by ${backlog_delta} segments in ${mins} min" \
-      "Segments accumulate until STREAM_RETENTION_SECS/STREAM_MAX_MB drop them, so audio is being discarded unanalysed."
-  elif [ "$backlog_delta" -lt -3 ]; then
-    record PASS perf.realtime "detection is draining a backlog (queue fell by $(( -backlog_delta )) segments) — the board is ahead of capture"
-  else
-    record PASS perf.realtime "queue is stable (${backlog_start} → ${backlog_end}) — detection keeps pace with capture"
+  # The watch-dir count is NOT a backlog and must never be used as a verdict.
+  # `start_disk_manager` drains that directory purely by age and size — the
+  # "locked" set it honours comes from `locked_file_names(conn)`, i.e. detection
+  # clips an *operator* locked in the UI, not segments the pipeline has yet to
+  # read. So the count parks at (retention ÷ segment length) whether the
+  # pipeline analysed every segment or none of them, and a check that reads it
+  # as a queue reports success from a number that cannot move.
+  record INFO perf.backlog \
+    "watch-dir holds ${backlog_start} → ${backlog_end} segments (peak ${backlog_peak})" \
+    "Retention-bounded, not a queue: STREAM_RETENTION_SECS ÷ segment length. Informational only."
+
+  # The verdict that does hold: what fraction of captured audio reached the
+  # model. Capture runs continuously, so `mins` minutes of wall clock is `mins`
+  # minutes of audio; the pipeline analysed `dc` chunks. Anything the model
+  # never saw was dropped by the age drain, silently.
+  #
+  # chunk length is model-dependent (4.5 s for V3.0 dynamic, 3 s for fixed /
+  # V2.4), so compute with the larger — the most generous reading. If coverage
+  # is short even at 4.5 s it is shorter in reality, and the conclusion holds
+  # without needing to know which variant is loaded.
+  if [ "$dc" -gt 0 ]; then
+    local covered
+    covered="$(awk "BEGIN { printf \"%.1f\", (${dc} * 4.5) / (${mins} * 60) * 100 }")"
+    record INFO perf.coverage "at most ${covered}% of captured audio reached the model (${dc} chunks × ≤4.5 s over ${mins} min)"
+    if awk "BEGIN { exit !(${covered} < 50) }"; then
+      record FAIL perf.realtime \
+        "only ${covered}% of captured audio was analysed — the rest aged out of the watch dir unclassified" \
+        "Segments are drained by age regardless of whether the pipeline read them, so the loss is silent: no metric, no log, no gap in the detection record."
+    elif awk "BEGIN { exit !(${covered} < 90) }"; then
+      record WARN perf.realtime "only ${covered}% of captured audio was analysed"
+    else
+      record PASS perf.realtime "${covered}% of captured audio reached the model — the board keeps pace"
+    fi
+    state_set AUDIO_COVERAGE_PCT "$covered"
   fi
 
   # Thermals. The Pi 4 begins soft-throttling at 80 °C, hard at 85 °C.
