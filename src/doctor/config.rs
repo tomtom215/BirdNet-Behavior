@@ -122,16 +122,25 @@ fn admin_exposure(listen: &str, password_configured: bool) -> Check {
 /// admin password the cookie middleware synthesises the seed admin and serves
 /// `/admin` to anyone (verified: `/admin/settings` returns 200 unauthenticated).
 ///
-/// Resolution deliberately mirrors `app.rs` exactly — config `CADDY_PWD`, then
-/// the environment — so the two can never disagree. Like the runtime warning,
-/// it therefore tracks the env/config knob: a password set only through the
-/// accounts UI also protects the panel but is not visible here, which the
-/// remediation text accounts for by naming `CADDY_PWD`.
+/// Resolution is *shared* with the auth bootstrap
+/// (`helpers::resolve_admin_password`) — config `CADDY_PWD`, then the
+/// environment — so the two cannot disagree. They previously each had their own
+/// copy of the rule and a comment asserting they matched: this check read the
+/// config while the bootstrap read only the environment, so every bare-metal
+/// install (installer writes the password to the config; the unit sets no
+/// `EnvironmentFile`) served `/admin` unauthenticated while this reported it
+/// protected. Like the runtime warning it tracks the env/config knob: a
+/// password set only through the accounts UI also protects the panel but is not
+/// visible here, which the remediation text accounts for by naming
+/// `CADDY_PWD`.
 pub(super) fn check_admin_exposure(cli: &Cli, config: Option<&Config>) -> Check {
-    let password_configured = config
-        .and_then(|c| c.get("CADDY_PWD").map(str::to_owned))
-        .or_else(|| std::env::var("CADDY_PWD").ok())
-        .is_some_and(|pwd| !pwd.is_empty());
+    // Delegate to the resolver the auth bootstrap itself uses, so the
+    // diagnostic and the runtime cannot drift apart. They previously held two
+    // copies of this rule and a comment claiming they agreed — the copies
+    // differed (config-then-env here, env-only there), and the result was a
+    // station serving /admin to the network while this check reported it safe.
+    let password_configured =
+        crate::helpers::resolve_admin_password(config, std::env::var("CADDY_PWD").ok()).is_some();
     admin_exposure(&cli.listen, password_configured)
 }
 

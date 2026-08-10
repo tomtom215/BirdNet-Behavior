@@ -143,6 +143,25 @@ jobs:
               test -f /etc/systemd/system/birdnet-behavior.service
               /usr/local/bin/birdnet-behavior --version
 
+              # …and the capture backend must be PRESENT, not merely attempted.
+              #
+              # check_required_tools installs alsa-utils when arecord is
+              # missing, but treats a failure as a warning — a station should
+              # still install without it. That means a green job proves nothing
+              # about this path unless the job asserts the outcome, which is
+              # the same "a gate only proves what it executes" trap the doctor
+              # checks in this release were built to close.
+              #
+              # The provisioning above installs exactly curl, ca-certificates,
+              # iproute2 and libstdc++6, so this image has no alsa-utils of its
+              # own: arecord existing here means the installer put it there.
+              command -v arecord >/dev/null || {
+                echo "arecord is absent after install.sh — the alsa-utils path did not run."
+                echo "A microphone station would install cleanly here and then record nothing."
+                exit 1
+              }
+              echo "capture backend: $(command -v arecord)"
+
               # Run --doctor for log visibility. We deliberately do NOT gate on
               # its exit code here: BIRDNET_SKIP_MODEL means there is no model, so
               # the doctor correctly reports a model error (exit 2) — that is the

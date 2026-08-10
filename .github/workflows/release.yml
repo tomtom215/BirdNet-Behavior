@@ -161,6 +161,33 @@ jobs:
           fi
           echo "::notice::CITATION.cff matches tag: $TAG_VER"
 
+      - name: Verify openapi.json matches tag
+        # The embedded OpenAPI spec is served at /api/v2/openapi.json and is
+        # what any client generator, `redocly` build and the published API
+        # reference read. RELEASING.md has told maintainers to bump it since
+        # `ba84180`, and the 0.11.0 notes list it alongside Cargo.toml,
+        # CHANGELOG and CITATION.cff as the four that must agree — but only
+        # three were ever enforced, leaving this one carried by an instruction
+        # in a runbook. That is precisely how CITATION.cff went stale through
+        # two releases before it was gated. Same lesson, same fix.
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG_VER="${{ steps.meta.outputs.version }}"
+          SPEC=crates/birdnet-web/openapi.json
+          API_VER=$(jq -r '.info.version' "$SPEC")
+
+          echo "::group::OpenAPI spec version"
+          printf 'openapi.json info.version: %s\n' "$API_VER"
+          printf 'Tag version:               %s\n' "$TAG_VER"
+          echo "::endgroup::"
+
+          if [[ "$API_VER" != "$TAG_VER" ]]; then
+            echo "::error file=${SPEC}::openapi.json info.version ($API_VER) does not match tag ($TAG_VER). Bump it before tagging."
+            exit 1
+          fi
+          echo "::notice::openapi.json matches tag: $TAG_VER"
+
       - name: Verify CHANGELOG.md entry exists
         shell: bash
         run: |

@@ -645,6 +645,35 @@ maintainer's call.
 - **Real Raspberry Pi hardware.** Throughput, thermals and live capture from a
   physical microphone remain unmeasured. qemu-user proved the aarch64 binary
   executes and serves; it is not the board.
+
+  `scripts/hardware-test.sh` now exists to close this, and
+  [`docs/HARDWARE_TEST.md`](./HARDWARE_TEST.md) documents it: it installs from
+  the published release on a clean Pi, measures mean inference latency per 3 s
+  chunk and peak SoC temperature under load, and then deliberately breaks the
+  station — SIGSTOP, mic unplug, network loss, disk full, SQLite and DuckDB
+  corruption, cold reboot — to establish that each documented recovery path is
+  real on the hardware.
+
+  **First run, 2026-08-09, Raspberry Pi 4 Model B / Pi OS Trixie (glibc 2.41) /
+  USB mic on card 1.** It found three P1s, all listed under `[Unreleased]` in
+  `CHANGELOG.md` and all fixed:
+
+  | Finding | Why no gate caught it |
+  |---|---|
+  | `DeviceAllow=/dev/snd` is a directory, so ALSA stayed denied — **no bare-metal install has been able to record since v0.6.0** | needs a real systemd unit *and* a real microphone |
+  | `/admin` served unauthenticated while `--doctor` reported it protected (config-vs-environment split on `CADDY_PWD`) | needs the installer's config-file path, which no test exercises |
+  | A corrupt DB made `--doctor` exit 2, so `ExecStartPre` blocked the daemon that owns the recovery; `StartLimitBurst` then parked the unit | unit tests call `check_and_recover()` directly and never go through systemd |
+
+  Established green on the board: 105 s install; the behavioral extension
+  loading **offline from the embedded copy on real arm64** (S-01's fix, never
+  before proven outside a container); peak 58.4 °C with throttle register `0x0`;
+  network-loss and disk-full survival with no panic; watchdog kill-and-restart;
+  reboot autostart.
+
+  **Still open:** throughput and thermals *under real inference load*. Every run
+  so far measured zero inferences, because capture was broken by the first
+  finding. Re-run `--phase capture --phase detect --phase perf` on a board with
+  the ALSA fix to close this item.
 - **Long-duration soak.** The soak suite bounds memory growth over minutes, not
   days. "A full season unattended" remains the target, not a measurement.
 - **The Docker image built end to end here.** S-01 is measured at every level

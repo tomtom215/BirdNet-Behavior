@@ -17,8 +17,8 @@ setup_zram() {
     # Check for zramctl (util-linux) — available on Raspberry Pi OS Bullseye+
     if ! command -v zramctl &>/dev/null; then
         warn "zramctl not found — installing util-linux…"
-        apt-get install -y util-linux &>/dev/null || {
-            warn "Could not install util-linux. Skipping ZRAM setup."
+        pkg_install util-linux || {
+            warn "Could not install util-linux ($(pkg_install_hint util-linux)). Skipping ZRAM setup."
             return 0
         }
     fi

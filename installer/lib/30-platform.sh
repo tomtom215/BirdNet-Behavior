@@ -2,6 +2,100 @@
 # Privilege, architecture, and glibc preflight
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Package manager abstraction
+#
+# Raspberry Pi OS and Debian are the primary targets, but the binary is a plain
+# x86_64/aarch64 ELF and people do run it on Fedora, Arch and openSUSE. Every
+# auto-install path used to be gated on `command -v apt-get`, so on those
+# distros the installer printed an apt command that cannot run — advice that is
+# worse than silence, because it looks authoritative.
+#
+# Package names were checked against real containers rather than assumed
+# (fedora:41, archlinux, opensuse/tumbleweed): alsa-utils, qrencode and
+# util-linux carry the same name on all four. ffmpeg is the sole exception —
+# Fedora's main repositories ship it as `ffmpeg-free`, with the unencumbered
+# `ffmpeg` living in RPM Fusion, which we will not enable on an operator's box.
+# ---------------------------------------------------------------------------
+
+# apt | dnf | pacman | zypper | "" when none is recognised. Set by
+# detect_pkg_mgr, which is idempotent, so callers can just call it first.
+PKG_MGR=""
+
+detect_pkg_mgr() {
+    [ -n "${PKG_MGR}" ] && return 0
+    if command -v apt-get &>/dev/null; then
+        PKG_MGR="apt"
+    elif command -v dnf &>/dev/null; then
+        PKG_MGR="dnf"
+    elif command -v pacman &>/dev/null; then
+        PKG_MGR="pacman"
+    elif command -v zypper &>/dev/null; then
+        PKG_MGR="zypper"
+    fi
+    return 0
+}
+
+# Translate a generic package name into this distro's name for it.
+pkg_name_for() {
+    detect_pkg_mgr
+    case "$1:${PKG_MGR}" in
+        ffmpeg:dnf) echo "ffmpeg-free" ;;
+        *)          echo "$1" ;;
+    esac
+}
+
+# Install one package. Quiet on success; returns non-zero when the package
+# manager is unknown or the install failed, and every caller treats that as
+# "warn and carry on" rather than as fatal.
+pkg_install() {
+    detect_pkg_mgr
+    local pkg
+    pkg="$(pkg_name_for "$1")"
+    case "${PKG_MGR}" in
+        apt)
+            apt-get install -y "${pkg}" &>/dev/null \
+                || { apt-get update &>/dev/null && apt-get install -y "${pkg}" &>/dev/null; }
+            ;;
+        dnf)
+            dnf install -y "${pkg}" &>/dev/null
+            ;;
+        pacman)
+            # Deliberately NOT `-Syu`: a full system upgrade is not something an
+            # application installer should trigger. `-S` alone fails on a box
+            # whose package database was never synced, so refresh (`-Sy`) and
+            # retry — accepting the documented partial-upgrade caveat, which is
+            # the lesser evil against upgrading someone's whole system.
+            pacman -S --noconfirm --needed "${pkg}" &>/dev/null \
+                || { pacman -Sy --noconfirm &>/dev/null \
+                     && pacman -S --noconfirm --needed "${pkg}" &>/dev/null; }
+            ;;
+        zypper)
+            zypper --non-interactive --gpg-auto-import-keys install --no-recommends "${pkg}" &>/dev/null
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# The command an operator should run by hand when pkg_install could not.
+# Accepts one or more generic package names.
+pkg_install_hint() {
+    detect_pkg_mgr
+    local pkgs="" p
+    for p in "$@"; do
+        pkgs="${pkgs:+${pkgs} }$(pkg_name_for "${p}")"
+    done
+    case "${PKG_MGR}" in
+        apt)    echo "sudo apt-get install -y ${pkgs}" ;;
+        dnf)    echo "sudo dnf install -y ${pkgs}" ;;
+        pacman) echo "sudo pacman -S --needed ${pkgs}" ;;
+        zypper) echo "sudo zypper install ${pkgs}" ;;
+        *)      echo "install ${pkgs} with your distribution's package manager" ;;
+    esac
+}
+
 # Whether systemd is the running init, so `systemctl` calls will actually work.
 #
 # `systemctl` can be present on a system where systemd is NOT PID 1 — minimal

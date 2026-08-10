@@ -171,8 +171,22 @@ SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources @mount @debug @cpu-emulation @obsolete @reboot @swap @raw-io @clock @module
 
 # Audio access — must keep these capability sets / device mounts.
+#
+# DeviceAllow= resolves a path to a *device node*. /dev/snd is a DIRECTORY, so
+# "DeviceAllow=/dev/snd rw" matches nothing: with DevicePolicy=closed every ALSA
+# node (/dev/snd/pcmC1D0c, controlC1, …) stayed denied, and microphone capture
+# could never work on a bare-metal install. arecord still exec'd successfully —
+# so the daemon logged "started microphone capture" — and only then failed the
+# PCM open with "audio open error: No such file or directory", which the
+# supervisor saw as a stalled source and restarted forever.
+#
+# char-alsa is systemd's documented subsystem form and is what actually grants
+# the nodes. Verified on a Raspberry Pi 4 (Pi OS Trixie, USB mic on card 1) with
+# an A/B under systemd-run: "/dev/snd rw" fails to open the device, "char-alsa
+# rw" records normally. RTSP stations were unaffected — ffmpeg never touches
+# /dev/snd — which is why this survived from v0.6.0 to v0.11.0 unnoticed.
 SupplementaryGroups=audio
-DeviceAllow=/dev/snd rw
+DeviceAllow=char-alsa rw
 DevicePolicy=closed
 
 # ── Logging ──────────────────────────────────────────────────────────────

@@ -7,6 +7,206 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+Found by running the new on-device acceptance harness
+(`scripts/hardware-test.sh`) against a Raspberry Pi 4 on Pi OS Trixie — the
+"real Raspberry Pi hardware" gap `docs/RELEASE_PLAN.md` § 5 had carried open for
+three releases — except where a bullet says otherwise. None was reachable from
+CI: each needs a real systemd unit, a real USB microphone, or both.
+
+- **Microphone capture could never work on a bare-metal install.** The unit
+  granted audio with `DeviceAllow=/dev/snd rw`, but `DeviceAllow=` resolves a
+  path to a *device node* and `/dev/snd` is a **directory**, so the rule matched
+  nothing. With `DevicePolicy=closed` every ALSA node stayed denied and the PCM
+  open failed with *"audio open error: No such file or directory"*. `arecord`
+  still exec'd successfully — so the daemon logged *"started microphone capture"*
+  — and the supervisor then saw a source producing no samples, killed it, and
+  restarted it every 60 s forever.
+
+  Fixed by using systemd's documented subsystem form, `DeviceAllow=char-alsa rw`.
+  Verified by A/B under `systemd-run` on the affected board: the old form cannot
+  open the device, the new one records normally.
+
+  Present since **v0.6.0** (`5dbc8f1`). RTSP stations were unaffected — `ffmpeg`
+  over the network never touches `/dev/snd` — which, together with the hidden
+  error below, is why it survived six releases.
+
+- **`/admin` was served to the network on every bare-metal install, while
+  `--doctor` reported it protected.** The installer generates an admin password
+  on a fresh non-loopback install and writes `CADDY_PWD` to
+  `/etc/birdnet/birdnet.conf`; the unit it installs sets no `EnvironmentFile`.
+  The auth bootstrap read **only** the environment, so it skipped, the seed admin
+  kept its legacy hash, `admin_password_configured` returned false, and the
+  cookie middleware took its open-bypass path. `check_admin_exposure` read the
+  **config**, found the password, and passed — its doc comment asserting the two
+  "can never disagree" while they did. Measured on hardware: `CADDY_PWD` present
+  in the config, `/admin/settings` 200 unauthenticated, doctor exit 0.
+
+  Both now call one shared resolver (`helpers::resolve_admin_password`,
+  config-then-environment, empty treated as unset), so agreement is structural
+  rather than asserted. Stations that set `CADDY_PWD` as an environment variable
+  — including Docker — were never affected.
+
+- **A corrupt database bricked the station instead of self-healing.** `--doctor`
+  reported SQLite corruption as an *error* (exit 2), and the installed unit gates
+  startup on `ExecStartPre=... --doctor ... || [ $? -le 1 ]`. So systemd refused
+  to start the daemon — and the daemon is what owns the recovery: `app.rs` runs
+  `check_and_recover`, restores from the newest backup that verifies, and failing
+  that quarantines the corrupt file and starts fresh. The diagnostic blocked its
+  own remedy; `Restart=always` then spent `StartLimitBurst=5` in under a minute
+  and parked the unit in `failed`, so even repairing the database left the
+  station down until someone ran `systemctl reset-failed` on site.
+
+  Corruption is now a **warning**: still reported, and loudly, but exit 1 so the
+  daemon starts and recovers. Exit 2 means "errors that will prevent operation",
+  and a corrupt database does not prevent operation. Covered by a regression test
+  that corrupts a real database and asserts the check warns rather than fails.
+
+- **A nearly full disk bricked the station the same way.** Found by sweeping the
+  remaining `--doctor` checks for the class above rather than by a separate test
+  run. Less than 1 GiB free was an *error*, so `ExecStartPre` refused to start
+  the daemon — and `start_disk_manager`, the purge that reclaims space at
+  `DISK_PURGE_THRESHOLD`, runs inside that daemon. The reclaim therefore never
+  ran, `StartLimitBurst` was spent in under a minute, and the unit parked in
+  `failed`.
+
+  This one is worse than the database case because it is certain rather than
+  unlucky: a full disk is the most predictable end state of a 24/7 recorder, and
+  the purge exists precisely to absorb it. It was also mistimed — the purge
+  triggers on a *percentage*, so on a small card it fires well below 1 GiB free,
+  and the check refused startup before the mechanism that fixes it had been
+  reached. Now a warning, with the message naming the purge so an operator knows
+  the station recovers on its own.
+
+  The grading logic was extracted into a pure `grade_free_space` so every branch
+  is testable. The previous test shelled out to `df` against the host and could
+  only assert structure, never the verdict — which is exactly how a hard error
+  sat on the low-space branch through six releases.
+
+  Both remaining `Check::fail` sites were reviewed and left alone: a
+  non-writable recordings directory and a missing `ffmpeg` for a configured RTSP
+  source genuinely prevent operation and do not self-heal. A missing audio
+  device was already a warning, correctly — the capture supervisor retries it.
+
+- **The installer told operators to sign in with a username that does not
+  exist.** `install.sh` printed `username: birdnet`, wrote `CADDY_USER=birdnet`
+  into `birdnet.conf`, and four docs pages repeated it — but the only account
+  the dashboard seeds is `admin`, and the login form reads `CADDY_USER` from the
+  **process environment**, which the bare-metal unit never sets. Until the
+  `/admin` fix above, this was harmless: the panel was open, so nobody ever had
+  to sign in. Closing that hole converts it into a lockout — the operator
+  follows the installer's own output and cannot get in.
+
+  Found on hardware minutes after the auth fix was verified, by trying to sign
+  in. The installer, the generated config's comments, and the docs now say
+  `admin`, and record that `CADDY_USER` takes effect only where the environment
+  reaches the process (Docker). The docs also stop calling the panel HTTP Basic
+  Auth: `/admin*` redirects (303) to a `/login` form and issues a session
+  cookie, so `curl -u` never applied to it.
+
+- **Every auto-install path was gated on `apt-get`, so on Fedora, Arch and
+  openSUSE the installer printed advice that could not be followed.** The
+  binary is a plain ELF and runs on those distributions; only the installer
+  assumed Debian. A missing `ffmpeg` on Fedora produced "run `sudo apt-get
+  install -y ffmpeg`" — worse than saying nothing, because it looks
+  authoritative. Package handling now goes through `detect_pkg_mgr` /
+  `pkg_name_for` / `pkg_install` / `pkg_install_hint`, covering **apt, dnf,
+  pacman and zypper**, and degrading to "install X with your distribution's
+  package manager" when it recognises none.
+
+  Package names were established by installing them in real containers rather
+  than assumed: `alsa-utils`, `qrencode` and `util-linux` carry the same name
+  on all four, and `ffmpeg` is the sole exception — Fedora ships it as
+  `ffmpeg-free` in its main repositories, the unencumbered `ffmpeg` being in
+  RPM Fusion, which an application installer has no business enabling on
+  someone's machine. `pacman` refreshes with `-Sy` and never `-Syu`: upgrading
+  an operator's entire system is not an installer's decision.
+
+  The matrix is preserved as `installer/test/pkg-manager.sh` (Debian trixie,
+  Fedora 41, Arch, openSUSE Tumbleweed, plus a no-package-manager case). It
+  asserts the tool actually lands on `PATH`, not merely that a command was
+  issued. Running it caught two defects that reading could not: the
+  unknown-distro branch emitted `install ffmpeg with your distribution's
+  package manager && sudo systemctl restart …`, chaining prose into something
+  that looks runnable, and the `|| true` guards on the `ensure_capture_tool`
+  calls turn out to be load-bearing — the installer runs under `set -e`, so
+  without them a warning the operator could act on would abort the install
+  instead.
+
+- **`alsa-utils` was never installed, so a microphone station could install
+  cleanly and record nothing.** The installer ensures `ffmpeg` when the config
+  names an RTSP source, but the ALSA path — the default for a USB microphone —
+  only ran `command -v arecord … || true`. `arecord` is both the capture backend
+  the daemon spawns and what the installer's own card auto-detect reads, so
+  without it detection silently found no device, wrote no `ALSA_CARD`, and the
+  station recorded nothing while reporting a clean install. Raspberry Pi OS
+  ships `alsa-utils`, which is why this stayed invisible; a minimal Debian does
+  not. Both backends now go through one `ensure_capture_tool` helper, `arecord`
+  is installed before onboarding so auto-detect has something to read, and a
+  still-missing `arecord` at detection time says so instead of returning an
+  empty string.
+
+  The install smoke test now **asserts** `arecord` is present after
+  `install.sh`, rather than inferring it from the job passing. That distinction
+  is the whole point: a failed `alsa-utils` install is deliberately only a
+  warning, so the installer exits 0 either way and a green job proved nothing
+  about this path. Verified both directions in the job's own `ubuntu:24.04`
+  image — with the package manager reachable the assertion passes, and with it
+  broken `install.sh` still exits 0 while the assertion fails.
+
+### Changed
+
+- **`birdnet_inference_duration_seconds` no longer claims to be per-chunk.** It
+  is observed in `daemon/processor.rs` inside the `DispositionDecision::Accept`
+  arm, immediately after `insert_detection` — i.e. **once per stored detection**,
+  not once per audio chunk fed to the model. Its `HELP` text said "Per-chunk
+  inference latency", which invites exactly the wrong inference: dividing the
+  count by elapsed time reads a quiet hour as catastrophic audio loss. The
+  exposition text and the surrounding docs now say what it measures, and note
+  that no per-chunk counter is exported, so analysed-audio coverage cannot be
+  derived from the metrics endpoint.
+
+- **Capture-subprocess failures are now logged at `warn` instead of `debug`.**
+  `arecord`/`ffmpeg` stderr — the only place the reason a source will not start
+  is ever written down — went through `drain_capture_stderr` at `debug!`, and the
+  default filter is `info,birdnet_behavior=debug`. That module is in
+  `birdnet_core`, so it sat below the threshold: the supervisor's endless
+  "capture (re)start issued" was visible while the error explaining it was not.
+  Lines reporting a failure are promoted to `warn`; routine chatter (xruns, RTSP
+  reconnects) stays at `debug` so a busy station does not spam the journal.
+
+### Added
+
+- **`scripts/hardware-test.sh`** — an on-device acceptance harness, documented in
+  [`docs/HARDWARE_TEST.md`](docs/HARDWARE_TEST.md). It installs from the
+  published release, measures mean inference latency per 3 s chunk and peak SoC
+  temperature under load, and then deliberately breaks the station — watchdog
+  SIGSTOP, microphone hot-unplug, network loss, disk-full, SQLite and DuckDB
+  corruption, cold reboot — to establish that each documented recovery path is
+  real on the hardware rather than only in `cargo test`. Results are written as
+  a pasteable `report.md` plus machine-readable JSONL.
+
+  Two defects in the harness itself, both found by running it rather than
+  reading it. **Ctrl-C did not stop a run**: `trap cleanup EXIT INT TERM` with
+  a handler that returns does not end a bash script — execution resumes where
+  the signal landed, so an interrupt during the destructive suite freed the
+  ballast and then carried on into the next fault injection. Signals now clean
+  up and `exit 130`. And **`--skip` was missing**, so testing a locally
+  installed binary meant either letting the install phase overwrite it with the
+  published release, or hand-listing fourteen `--phase` flags — and the
+  `--resume` the reboot phase prints would have run the install phase anyway,
+  swapping the binary halfway through the suite. Skips are now recorded in the
+  state file, which is what makes resume honour them.
+
+  The `diskfull` phase sizes its ballast to cross **both** relevant thresholds:
+  the purge fires on a percentage (95 % by default) while doctor grades in
+  absolute bytes (under 1 GiB free), and on a 32 GB card filling to 96 % leaves
+  1.3 GiB — enough to report success without ever reaching the branch under
+  test. It also restarts the service while the disk is full, because the defect
+  it exists to catch is on the startup path: a daemon that is already running
+  never touches the `ExecStartPre` gate.
+
 ## [0.11.0] - 2026-08-09
 
 ### Fixed

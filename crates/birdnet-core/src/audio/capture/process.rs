@@ -65,6 +65,41 @@ pub fn is_tool_available(tool: &str) -> bool {
         .is_ok_and(|s| s.success())
 }
 
+/// Whether a capture-subprocess stderr line reports a failure rather than
+/// routine chatter.
+///
+/// Deliberately substring-based over the vocabulary `arecord`, `ffmpeg` and the
+/// ALSA libraries actually use: matching precisely would mean tracking three
+/// tools' message catalogues, and the cost of a false positive (one warn line)
+/// is far below the cost of a false negative (a silent, unexplained restart
+/// loop — the failure mode this exists to prevent).
+fn is_capture_failure(line: &str) -> bool {
+    const MARKERS: &[&str] = &[
+        "audio open error",
+        "open error",
+        "cannot open",
+        "cannot get",
+        // Covers ALSA's "No such file or directory", "No such device" and
+        // "No such card" without enumerating each noun.
+        "no such",
+        "permission denied",
+        "device or resource busy",
+        // ALSA reports a bad card/device index as "Invalid value for card",
+        // and a rejected format as "Invalid argument".
+        "invalid value",
+        "invalid argument",
+        // arecord's set_params failures read "Sample format non available",
+        // "Channels count non available", "Rate non available".
+        "non available",
+        "not available",
+        "unable to",
+        "failed",
+        "error:",
+    ];
+    let lower = line.to_ascii_lowercase();
+    MARKERS.iter().any(|m| lower.contains(m))
+}
+
 /// Drain a capture subprocess's stderr into the log, line by line.
 ///
 /// `arecord` / `ffmpeg` write diagnostics (ALSA xruns, RTSP reconnects, fatal
@@ -76,6 +111,9 @@ pub fn is_tool_available(tool: &str) -> bool {
 /// prevents that stall and surfaces the subprocess's own error messages for
 /// field debugging. The thread ends at EOF — i.e. when the child exits or is
 /// killed on stop/drop — so it needs no explicit join.
+///
+/// Lines matching [`is_capture_failure`] are logged at `warn`; everything else
+/// stays at `debug`.
 fn drain_capture_stderr(child: &mut Child, source: &str) {
     let Some(stderr) = child.stderr.take() else {
         return;
@@ -88,7 +126,24 @@ fn drain_capture_stderr(child: &mut Child, source: &str) {
             for line in BufReader::new(stderr).lines() {
                 match line {
                     Ok(line) if !line.trim().is_empty() => {
-                        tracing::debug!(source = %source, "capture subprocess: {line}");
+                        // Routine chatter (ALSA xruns, RTSP reconnect notices)
+                        // stays at debug so a busy station does not spam the
+                        // journal. A line that reports a *failure* is promoted
+                        // to warn, because it is the only place the reason a
+                        // source will not start is ever written down.
+                        //
+                        // This used to be debug unconditionally, and the
+                        // default filter is `info,birdnet_behavior=debug` —
+                        // this crate is `birdnet_core`, so it sat below the
+                        // threshold. The supervisor's "capture (re)start
+                        // issued" (in `birdnet_behavior`) was visible while the
+                        // arecord error explaining it was not, leaving an
+                        // operator with an infinite restart loop and no cause.
+                        if is_capture_failure(&line) {
+                            tracing::warn!(source = %source, "capture subprocess: {line}");
+                        } else {
+                            tracing::debug!(source = %source, "capture subprocess: {line}");
+                        }
                     }
                     Ok(_) => {}
                     Err(_) => break,
@@ -399,6 +454,60 @@ pub const fn required_tool(source: &CaptureSource) -> &'static str {
             }
         }
         CaptureSource::PipeWire { .. } | CaptureSource::Rtsp { .. } => "ffmpeg",
+    }
+}
+
+#[cfg(test)]
+mod capture_failure_classification {
+    use super::is_capture_failure;
+
+    /// The exact stderr a Raspberry Pi 4 emitted while the unit's
+    /// `DeviceAllow=/dev/snd` denied every ALSA node. These two lines were
+    /// written on every restart for the entire life of the station and never
+    /// reached the journal, because they were logged below the default filter.
+    #[test]
+    fn the_lines_that_were_invisible_on_real_hardware_are_warnings() {
+        assert!(is_capture_failure(
+            "ALSA lib confmisc.c:165:(snd_config_get_card) Cannot get card index for 1"
+        ));
+        assert!(is_capture_failure(
+            "arecord: main:850: audio open error: No such file or directory"
+        ));
+    }
+
+    #[test]
+    fn other_common_failures_are_warnings() {
+        for line in [
+            "arecord: main:830: audio open error: Device or resource busy",
+            "ALSA lib pcm_hw.c:1829:(_snd_pcm_hw_open) Invalid value for card",
+            "arecord: set_params:1416: Sample format non available",
+            "cannot open device /dev/snd/pcmC1D0c: Permission denied",
+            "[rtsp @ 0x1] Failed to resolve hostname camera.local",
+            "ffmpeg: Unable to open input",
+        ] {
+            assert!(is_capture_failure(line), "should be a failure: {line}");
+        }
+    }
+
+    /// Routine chatter must stay at debug — promoting an xrun storm to warn
+    /// would bury the one line that matters.
+    #[test]
+    fn routine_chatter_stays_at_debug() {
+        for line in [
+            "overrun!!! (at least 12.345 ms long)",
+            "Recording WAVE '/tmp/birdnet-stream/x.wav' : Signed 16 bit Little Endian, Rate 48000 Hz, Mono",
+            "frame=  120 fps= 25 q=-1.0 size=     512kB time=00:00:04.80",
+            "Warning: Some sources (like microphones) may produce inaudible results",
+        ] {
+            assert!(!is_capture_failure(line), "should be chatter: {line}");
+        }
+    }
+
+    #[test]
+    fn matching_is_case_insensitive() {
+        assert!(is_capture_failure(
+            "ARECORD: AUDIO OPEN ERROR: No Such File"
+        ));
     }
 }
 

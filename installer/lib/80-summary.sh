@@ -90,12 +90,12 @@ print_summary() {
     if [ -n "${GENERATED_ADMIN_PASSWORD}" ]; then
         echo
         echo -e "  ${BOLD}Admin panel login${RESET} (settings + software update — viewing is open):"
-        echo -e "      username:  ${BOLD}birdnet${RESET}"
+        echo -e "      username:  ${BOLD}admin${RESET}"
         echo -e "      password:  ${BOLD}${GENERATED_ADMIN_PASSWORD}${RESET}"
         echo    "      (auto-generated, saved as CADDY_PWD in ${CONFIG_FILE} — change it any time)"
     elif [ -n "${CADDY_PWD_VALUE}" ]; then
         echo
-        echo "  Admin panel (settings + software update): sign in as 'birdnet' with the password you set."
+        echo "  Admin panel (settings + software update): sign in as 'admin' with the password you set."
     fi
     echo
     echo "  Logs:  sudo journalctl -u birdnet-behavior -f"

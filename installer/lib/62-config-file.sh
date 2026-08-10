@@ -23,7 +23,7 @@ write_config() {
     [ -n "${RTSP_URL_VALUE}" ]  && rtsp_line="RTSP_URL=${RTSP_URL_VALUE}"
     [ -n "${LATITUDE_VALUE}" ]  && lat_line="LATITUDE=${LATITUDE_VALUE}"
     [ -n "${LONGITUDE_VALUE}" ] && lon_line="LONGITUDE=${LONGITUDE_VALUE}"
-    local caddy_user_line="# CADDY_USER=birdnet"
+    local caddy_user_line="# CADDY_USER=admin"
     local caddy_pwd_line="# CADDY_PWD=change-me-to-a-strong-password"
     [ -n "${CADDY_USER_VALUE}" ] && caddy_user_line="CADDY_USER=${CADDY_USER_VALUE}"
     [ -n "${CADDY_PWD_VALUE}" ]  && caddy_pwd_line="CADDY_PWD=${CADDY_PWD_VALUE}"
@@ -91,12 +91,20 @@ ${lon_line}
 # 127.0.0.1:8502, then apply it with:  sudo bash install.sh repair
 ${listen_line}
 
-# --- Admin authentication (CADDY_USER / CADDY_PWD) ---
+# --- Admin authentication (CADDY_PWD) ---
 # The /admin panel can change settings, trigger backups, and update the
-# software, so it requires a password (HTTP Basic Auth, enforced by the binary).
+# software, so it requires a sign-in through the dashboard's login form.
 # A fresh install sets a strong CADDY_PWD automatically; change it here any
-# time. Username defaults to "birdnet". Clearing CADDY_PWD leaves /admin OPEN to
-# anyone who can reach the dashboard.
+# time, then apply it with:  sudo bash install.sh repair
+#
+# Sign in with the username "admin" — that is the account the dashboard seeds,
+# and it is the only one that exists until you create more in the admin panel.
+# CADDY_USER below does NOT rename it: the login form reads CADDY_USER from the
+# process environment only, and this unit sets no EnvironmentFile, so on a
+# bare-metal install it has no effect. It is honoured under Docker, where the
+# environment does reach the process.
+#
+# Clearing CADDY_PWD leaves /admin OPEN to anyone who can reach the dashboard.
 ${caddy_user_line}
 ${caddy_pwd_line}
 EOF

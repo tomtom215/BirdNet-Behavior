@@ -240,6 +240,100 @@ ask_secret() {
 # Privilege, architecture, and glibc preflight
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Package manager abstraction
+#
+# Raspberry Pi OS and Debian are the primary targets, but the binary is a plain
+# x86_64/aarch64 ELF and people do run it on Fedora, Arch and openSUSE. Every
+# auto-install path used to be gated on `command -v apt-get`, so on those
+# distros the installer printed an apt command that cannot run — advice that is
+# worse than silence, because it looks authoritative.
+#
+# Package names were checked against real containers rather than assumed
+# (fedora:41, archlinux, opensuse/tumbleweed): alsa-utils, qrencode and
+# util-linux carry the same name on all four. ffmpeg is the sole exception —
+# Fedora's main repositories ship it as `ffmpeg-free`, with the unencumbered
+# `ffmpeg` living in RPM Fusion, which we will not enable on an operator's box.
+# ---------------------------------------------------------------------------
+
+# apt | dnf | pacman | zypper | "" when none is recognised. Set by
+# detect_pkg_mgr, which is idempotent, so callers can just call it first.
+PKG_MGR=""
+
+detect_pkg_mgr() {
+    [ -n "${PKG_MGR}" ] && return 0
+    if command -v apt-get &>/dev/null; then
+        PKG_MGR="apt"
+    elif command -v dnf &>/dev/null; then
+        PKG_MGR="dnf"
+    elif command -v pacman &>/dev/null; then
+        PKG_MGR="pacman"
+    elif command -v zypper &>/dev/null; then
+        PKG_MGR="zypper"
+    fi
+    return 0
+}
+
+# Translate a generic package name into this distro's name for it.
+pkg_name_for() {
+    detect_pkg_mgr
+    case "$1:${PKG_MGR}" in
+        ffmpeg:dnf) echo "ffmpeg-free" ;;
+        *)          echo "$1" ;;
+    esac
+}
+
+# Install one package. Quiet on success; returns non-zero when the package
+# manager is unknown or the install failed, and every caller treats that as
+# "warn and carry on" rather than as fatal.
+pkg_install() {
+    detect_pkg_mgr
+    local pkg
+    pkg="$(pkg_name_for "$1")"
+    case "${PKG_MGR}" in
+        apt)
+            apt-get install -y "${pkg}" &>/dev/null \
+                || { apt-get update &>/dev/null && apt-get install -y "${pkg}" &>/dev/null; }
+            ;;
+        dnf)
+            dnf install -y "${pkg}" &>/dev/null
+            ;;
+        pacman)
+            # Deliberately NOT `-Syu`: a full system upgrade is not something an
+            # application installer should trigger. `-S` alone fails on a box
+            # whose package database was never synced, so refresh (`-Sy`) and
+            # retry — accepting the documented partial-upgrade caveat, which is
+            # the lesser evil against upgrading someone's whole system.
+            pacman -S --noconfirm --needed "${pkg}" &>/dev/null \
+                || { pacman -Sy --noconfirm &>/dev/null \
+                     && pacman -S --noconfirm --needed "${pkg}" &>/dev/null; }
+            ;;
+        zypper)
+            zypper --non-interactive --gpg-auto-import-keys install --no-recommends "${pkg}" &>/dev/null
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# The command an operator should run by hand when pkg_install could not.
+# Accepts one or more generic package names.
+pkg_install_hint() {
+    detect_pkg_mgr
+    local pkgs="" p
+    for p in "$@"; do
+        pkgs="${pkgs:+${pkgs} }$(pkg_name_for "${p}")"
+    done
+    case "${PKG_MGR}" in
+        apt)    echo "sudo apt-get install -y ${pkgs}" ;;
+        dnf)    echo "sudo dnf install -y ${pkgs}" ;;
+        pacman) echo "sudo pacman -S --needed ${pkgs}" ;;
+        zypper) echo "sudo zypper install ${pkgs}" ;;
+        *)      echo "install ${pkgs} with your distribution's package manager" ;;
+    esac
+}
+
 # Whether systemd is the running init, so `systemctl` calls will actually work.
 #
 # `systemctl` can be present on a system where systemd is NOT PID 1 — minimal
@@ -503,7 +597,7 @@ check_required_tools() {
 
     if [ "${#missing[@]}" -gt 0 ]; then
         error "Missing required tool(s): ${missing[*]}"
-        fatal "Install the missing package(s) and re-run. On Debian/Pi OS: sudo apt-get install coreutils tar curl"
+        fatal "Install the missing package(s) and re-run:  $(pkg_install_hint coreutils tar curl)"
     fi
 
     # systemd is the normal service manager, but the install can still lay down
@@ -521,12 +615,22 @@ check_required_tools() {
     # Soft dependencies — note them but keep going.
     command -v getent  &>/dev/null || warn "getent not found — falling back to default data paths."
     command -v findmnt &>/dev/null || warn "findmnt not found — cannot confirm /tmp is tmpfs."
-    command -v arecord &>/dev/null || true   # only needed for ALSA auto-detect
+    # arecord(1) is not optional for a microphone station: it is the capture
+    # backend the daemon spawns, and it is also what the ALSA auto-detect below
+    # reads the card list from. Install it here — before onboarding — so the
+    # detection has something to detect. ensure_capture_backend() re-checks it
+    # once the RTSP/ALSA choice is settled; this earlier pass is what stops a
+    # missing alsa-utils from silently yielding "no capture device found".
+    if ! command -v arecord &>/dev/null; then
+        info "arecord not found — installing alsa-utils for microphone capture…"
+        pkg_install alsa-utils \
+            || warn "Could not install alsa-utils ($(pkg_install_hint alsa-utils)) — microphone auto-detect will find nothing."
+    fi
     # qrencode is optional: it lets the final summary print a scannable QR of the
     # dashboard URL so a phone can open it without anyone typing an IP. Best-effort
     # and silent — a missing QR helper must never fail or slow the install.
-    if ! command -v qrencode &>/dev/null && command -v apt-get &>/dev/null; then
-        apt-get install -y qrencode &>/dev/null || true
+    if ! command -v qrencode &>/dev/null; then
+        pkg_install qrencode || true
     fi
     success "Required tools present."
 }
@@ -561,11 +665,54 @@ check_disk_space() {
     fi
 }
 
-# RTSP capture runs through ffmpeg (so does the macOS microphone path). A
-# station configured for RTSP without ffmpeg fails the doctor preflight and the
-# service never starts, so make sure ffmpeg is present — installing it when we
-# can. Called by the install/repair flows AFTER the config is written/known
-# (an ALSA microphone on Linux uses arecord and needs no ffmpeg).
+# Guarantee one capture tool is on PATH, installing it when apt-get is
+# available. $1 = command, $2 = package, $3 = what breaks without it.
+#
+# Returns 0 if the tool ends up present, 1 if the operator has to act. Both
+# outcomes are reported; neither is fatal, because the rest of the install
+# (binary, config, unit, model) is still worth completing.
+ensure_capture_tool() {
+    local tool="$1" pkg="$2" purpose="$3"
+
+    if command -v "${tool}" &>/dev/null; then
+        success "${tool} present — ${purpose} OK."
+        return 0
+    fi
+
+    detect_pkg_mgr
+    warn "${purpose} needs ${tool}(1), which is not installed (package: $(pkg_name_for "${pkg}"))."
+    if [ -n "${PKG_MGR}" ]; then
+        info "Installing $(pkg_name_for "${pkg}")…"
+        if pkg_install "${pkg}"; then
+            success "$(pkg_name_for "${pkg}") installed."
+            return 0
+        fi
+        warn "Automatic install failed."
+    fi
+    warn "Install it, then restart the service:"
+    if [ -n "${PKG_MGR}" ]; then
+        # A real command, so the two halves can be chained and pasted as one.
+        warn "  $(pkg_install_hint "${pkg}") && sudo systemctl restart birdnet-behavior"
+    else
+        # Prose, not a command — chaining it with && would produce something
+        # that looks runnable and is not.
+        warn "  $(pkg_install_hint "${pkg}")"
+        warn "  then: sudo systemctl restart birdnet-behavior"
+    fi
+    return 1
+}
+
+# Make sure the capture backend this station will actually use is installed.
+# Called by the install/repair flows AFTER the config is written/known, so the
+# RTSP_URL / ALSA choice is settled.
+#
+# The daemon shells out to one of two tools (`audio::capture::manager`): ffmpeg
+# for an RTSP source, arecord for a local microphone. Only ffmpeg used to be
+# ensured here, on the reasoning that "an ALSA microphone needs no ffmpeg" —
+# true, but it needs arecord, and nothing installed that either. Raspberry Pi OS
+# ships alsa-utils so the gap stayed invisible; on a minimal Debian it produces
+# a station that installs cleanly, starts cleanly, and records nothing, with the
+# capture failure buried in the supervisor's restart loop.
 ensure_capture_backend() {
     local rtsp=0
     if [ -n "${RTSP_URL_VALUE}" ]; then
@@ -574,25 +721,17 @@ ensure_capture_backend() {
         && grep -qE '^[[:space:]]*RTSP_URL[[:space:]]*=[[:space:]]*[^[:space:]#]' "${CONFIG_FILE}"; then
         rtsp=1
     fi
-    [ "${rtsp}" = 1 ] || return 0
 
-    if command -v ffmpeg &>/dev/null; then
-        success "ffmpeg present — RTSP capture backend OK."
+    # The `|| true` on both calls is load-bearing, not decoration: this script
+    # runs under `set -e`, ensure_capture_tool returns non-zero when the
+    # operator has to install the tool by hand, and without the guard that
+    # would abort the whole install over a warning it has already printed.
+    if [ "${rtsp}" = 1 ]; then
+        ensure_capture_tool ffmpeg ffmpeg "RTSP capture" || true
         return 0
     fi
 
-    warn "RTSP source configured but ffmpeg is not installed (required for RTSP capture)."
-    if command -v apt-get &>/dev/null; then
-        info "Installing ffmpeg…"
-        if apt-get install -y ffmpeg &>/dev/null \
-            || { apt-get update &>/dev/null && apt-get install -y ffmpeg &>/dev/null; }; then
-            success "ffmpeg installed."
-            return 0
-        fi
-        warn "Automatic ffmpeg install failed."
-    fi
-    warn "Install ffmpeg, then restart the service:"
-    warn "  sudo apt-get install -y ffmpeg && sudo systemctl restart birdnet-behavior"
+    ensure_capture_tool arecord alsa-utils "microphone capture" || true
 }
 
 # Detect what — if anything — is already installed, into globals the rest of
@@ -967,7 +1106,7 @@ write_config() {
     [ -n "${RTSP_URL_VALUE}" ]  && rtsp_line="RTSP_URL=${RTSP_URL_VALUE}"
     [ -n "${LATITUDE_VALUE}" ]  && lat_line="LATITUDE=${LATITUDE_VALUE}"
     [ -n "${LONGITUDE_VALUE}" ] && lon_line="LONGITUDE=${LONGITUDE_VALUE}"
-    local caddy_user_line="# CADDY_USER=birdnet"
+    local caddy_user_line="# CADDY_USER=admin"
     local caddy_pwd_line="# CADDY_PWD=change-me-to-a-strong-password"
     [ -n "${CADDY_USER_VALUE}" ] && caddy_user_line="CADDY_USER=${CADDY_USER_VALUE}"
     [ -n "${CADDY_PWD_VALUE}" ]  && caddy_pwd_line="CADDY_PWD=${CADDY_PWD_VALUE}"
@@ -1035,12 +1174,20 @@ ${lon_line}
 # 127.0.0.1:8502, then apply it with:  sudo bash install.sh repair
 ${listen_line}
 
-# --- Admin authentication (CADDY_USER / CADDY_PWD) ---
+# --- Admin authentication (CADDY_PWD) ---
 # The /admin panel can change settings, trigger backups, and update the
-# software, so it requires a password (HTTP Basic Auth, enforced by the binary).
+# software, so it requires a sign-in through the dashboard's login form.
 # A fresh install sets a strong CADDY_PWD automatically; change it here any
-# time. Username defaults to "birdnet". Clearing CADDY_PWD leaves /admin OPEN to
-# anyone who can reach the dashboard.
+# time, then apply it with:  sudo bash install.sh repair
+#
+# Sign in with the username "admin" — that is the account the dashboard seeds,
+# and it is the only one that exists until you create more in the admin panel.
+# CADDY_USER below does NOT rename it: the login form reads CADDY_USER from the
+# process environment only, and this unit sets no EnvironmentFile, so on a
+# bare-metal install it has no effect. It is honoured under Docker, where the
+# environment does reach the process.
+#
+# Clearing CADDY_PWD leaves /admin OPEN to anyone who can reach the dashboard.
 ${caddy_user_line}
 ${caddy_pwd_line}
 EOF
@@ -1226,8 +1373,22 @@ SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources @mount @debug @cpu-emulation @obsolete @reboot @swap @raw-io @clock @module
 
 # Audio access — must keep these capability sets / device mounts.
+#
+# DeviceAllow= resolves a path to a *device node*. /dev/snd is a DIRECTORY, so
+# "DeviceAllow=/dev/snd rw" matches nothing: with DevicePolicy=closed every ALSA
+# node (/dev/snd/pcmC1D0c, controlC1, …) stayed denied, and microphone capture
+# could never work on a bare-metal install. arecord still exec'd successfully —
+# so the daemon logged "started microphone capture" — and only then failed the
+# PCM open with "audio open error: No such file or directory", which the
+# supervisor saw as a stalled source and restarted forever.
+#
+# char-alsa is systemd's documented subsystem form and is what actually grants
+# the nodes. Verified on a Raspberry Pi 4 (Pi OS Trixie, USB mic on card 1) with
+# an A/B under systemd-run: "/dev/snd rw" fails to open the device, "char-alsa
+# rw" records normally. RTSP stations were unaffected — ffmpeg never touches
+# /dev/snd — which is why this survived from v0.6.0 to v0.11.0 unnoticed.
 SupplementaryGroups=audio
-DeviceAllow=/dev/snd rw
+DeviceAllow=char-alsa rw
 DevicePolicy=closed
 
 # ── Logging ──────────────────────────────────────────────────────────────
@@ -1263,7 +1424,16 @@ EOF
 # Returns the first detected ALSA capture device as "plughw:<card>,<device>",
 # or an empty string if none found / arecord not available.
 detect_first_audio_device() {
-    command -v arecord &>/dev/null || return 0
+    # No arecord means no card list AND no capture backend. check_required_tools
+    # tries to install alsa-utils before we get here, so reaching this branch
+    # means that failed (or apt-get is not this distro's package manager) —
+    # say so, because a silent empty result reads as "no microphone attached"
+    # and produces a station that records nothing without ever complaining.
+    if ! command -v arecord &>/dev/null; then
+        warn "arecord not found — cannot detect a microphone. Install alsa-utils, then:"
+        warn "  sudo bash install.sh repair"
+        return 0
+    fi
     # arecord -l output looks like: card 1: Device [USB Audio Device], device 0: ...
     local first_card first_device
     first_card="$(arecord -l 2>/dev/null | awk '/^card/{print $2; exit}' | tr -d ':')"
@@ -1303,7 +1473,7 @@ ensure_admin_password() {
     [ -n "${CADDY_PWD_VALUE}" ] && return 0
     case "${LISTEN_ADDR}" in 127.0.0.1:* | localhost:*) return 0 ;; esac
 
-    CADDY_USER_VALUE="birdnet"
+    CADDY_USER_VALUE="admin"
     CADDY_PWD_VALUE="$(gen_password)"
     GENERATED_ADMIN_PASSWORD="${CADDY_PWD_VALUE}"
     info "Generated an admin password for the dashboard (shown at the end)."
@@ -1395,9 +1565,9 @@ prompt_station_settings() {
     if [ -n "${pw1}" ]; then
         pw2="$(ask_secret "  Confirm password")"
         if [ "${pw1}" = "${pw2}" ]; then
-            CADDY_USER_VALUE="birdnet"
+            CADDY_USER_VALUE="admin"
             CADDY_PWD_VALUE="${pw1}"
-            success "Admin password set (username: birdnet)."
+            success "Admin password set (username: admin)."
         else
             warn "Passwords did not match — a strong one will be generated instead."
         fi
@@ -1921,12 +2091,12 @@ print_summary() {
     if [ -n "${GENERATED_ADMIN_PASSWORD}" ]; then
         echo
         echo -e "  ${BOLD}Admin panel login${RESET} (settings + software update — viewing is open):"
-        echo -e "      username:  ${BOLD}birdnet${RESET}"
+        echo -e "      username:  ${BOLD}admin${RESET}"
         echo -e "      password:  ${BOLD}${GENERATED_ADMIN_PASSWORD}${RESET}"
         echo    "      (auto-generated, saved as CADDY_PWD in ${CONFIG_FILE} — change it any time)"
     elif [ -n "${CADDY_PWD_VALUE}" ]; then
         echo
-        echo "  Admin panel (settings + software update): sign in as 'birdnet' with the password you set."
+        echo "  Admin panel (settings + software update): sign in as 'admin' with the password you set."
     fi
     echo
     echo "  Logs:  sudo journalctl -u birdnet-behavior -f"
@@ -1953,8 +2123,8 @@ setup_zram() {
     # Check for zramctl (util-linux) — available on Raspberry Pi OS Bullseye+
     if ! command -v zramctl &>/dev/null; then
         warn "zramctl not found — installing util-linux…"
-        apt-get install -y util-linux &>/dev/null || {
-            warn "Could not install util-linux. Skipping ZRAM setup."
+        pkg_install util-linux || {
+            warn "Could not install util-linux ($(pkg_install_hint util-linux)). Skipping ZRAM setup."
             return 0
         }
     fi

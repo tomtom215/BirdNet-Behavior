@@ -186,7 +186,7 @@ async fn serve(
     // refresh it whenever the env var changes vs the stored hash). The
     // basic-auth surface stays functional throughout; this only makes
     // the cookie-auth path's user lookup line up.
-    helpers::bootstrap_admin_password(&state);
+    helpers::bootstrap_admin_password(&state, config.as_ref());
     // Upgrade path: clear plaintext credential rows a previous build's settings
     // form could write. Must run before the seed/overlay below so the purged
     // keys are gone before anything reads the table.
