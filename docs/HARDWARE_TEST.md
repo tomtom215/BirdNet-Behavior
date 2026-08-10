@@ -63,9 +63,16 @@ Useful variants:
 ./hardware-test.sh --list             # show the phase ids
 ./hardware-test.sh --safe             # skip everything destructive
 ./hardware-test.sh --phase perf       # re-run one phase
+./hardware-test.sh --skip install     # run everything except one phase
 ./hardware-test.sh --resume           # continue after the reboot phase
 BIRDNET_PERF_MINUTES=30 ./hardware-test.sh --phase perf   # longer thermal soak
 ```
+
+> **Testing a binary you installed yourself?** Use `--skip install`. The
+> install phase fetches the **published release** and would overwrite it, so
+> everything after that point would describe a different build than the one you
+> meant to test. Skipped phases are recorded as skipped in the state file, so
+> the `--resume` after the reboot does not quietly run them either.
 
 The reboot phase reboots the board. When it comes back, reconnect and run
 `./hardware-test.sh --resume` — the harness remembers which phases already
@@ -125,10 +132,16 @@ The destructive phases are genuinely destructive; each one arms its undo
 - **Disk fill.** A ballast file is sized to satisfy both thresholds at once —
   at least 96 % used *and* under 1 GiB free, since the purge fires on a
   percentage while doctor grades in absolute bytes — while never consuming the
-  last 200 MiB. It is removed by an `EXIT`/`INT`/`TERM` trap, so Ctrl-C still
-  cleans up, and the phase restarts the service afterwards if its own restart
-  test left the unit parked. If the filesystem cannot reach the target safely,
-  the phase skips.
+  last 200 MiB. It is removed by an `EXIT`/`INT`/`TERM` trap, and the phase
+  restarts the service afterwards if its own restart test left the unit parked.
+  If the filesystem cannot reach the target safely, the phase skips.
+
+- **Ctrl-C stops the run.** Worth stating because it did not always: a bash
+  trap handler that merely returns does *not* end the script — execution
+  resumes where the signal landed. Signals now get a handler that cleans up and
+  then exits 130, so Ctrl-C frees the ballast, resumes any `SIGSTOP`ped
+  process, and stops, rather than cleaning up and carrying on into the next
+  fault injection.
 - **Network drop.** A `systemd-run --on-active=75` timer restores connectivity
   before the link goes down, so a dropped SSH session recovers on its own. On a
   NetworkManager box the harness uses `nmcli networking off` rather than

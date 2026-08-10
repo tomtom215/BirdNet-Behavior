@@ -11,9 +11,15 @@
 #   ./hardware-test.sh                 # run every phase in order
 #   ./hardware-test.sh --resume        # continue after the reboot phase
 #   ./hardware-test.sh --phase perf    # run one phase (repeatable)
+#   ./hardware-test.sh --skip install  # run everything EXCEPT this (repeatable)
 #   ./hardware-test.sh --list          # show phase ids
 #   ./hardware-test.sh --safe          # skip the destructive phases
 #   ./hardware-test.sh --yes           # never prompt (skips interactive unplug)
+#
+# `--skip install` is the one to know about when testing a binary you put on
+# the box yourself: the install phase fetches the PUBLISHED release and would
+# overwrite it. Skipped phases are recorded as skipped, so the `--resume` after
+# the reboot does not quietly run them either.
 #
 # Run it as the ordinary login user (NOT root) — the station's data directory is
 # derived from $HOME, and that is the account the installer configures. sudo is
@@ -55,6 +61,7 @@ RESUME=0
 ASSUME_YES=0
 SAFE_ONLY=0
 SELECTED=()
+SKIPPED=()
 
 # Print the header comment block (line 2 up to the first non-comment line).
 usage() { awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$0"; exit 0; }
@@ -65,6 +72,7 @@ while [ $# -gt 0 ]; do
     --yes|-y)  ASSUME_YES=1 ;;
     --safe)    SAFE_ONLY=1 ;;
     --phase)   shift; SELECTED+=("${1:-}") ;;
+    --skip)    shift; SKIPPED+=("${1:-}") ;;
     --list)    printf '%s\n' "${PHASES[@]}"; exit 0 ;;
     -h|--help) usage ;;
     *) echo "unknown option: $1 (try --help)" >&2; exit 64 ;;
@@ -273,13 +281,38 @@ STOPPED_PID=""
 
 cleanup() {
   local rc=$?
-  [ -n "$BALLAST" ] && [ -f "$BALLAST" ] && { sudo rm -f "$BALLAST"; echo "cleanup: removed ballast $BALLAST"; }
+  # Idempotent: on_signal calls this and then exits, which fires it again via
+  # the EXIT trap. Clearing the globals makes the second pass a no-op instead
+  # of a second `rm` and a duplicate line in the log.
+  if [ -n "$BALLAST" ] && [ -f "$BALLAST" ]; then
+    sudo rm -f "$BALLAST"
+    echo "cleanup: removed ballast $BALLAST"
+  fi
+  BALLAST=""
   if [ -n "$STOPPED_PID" ] && kill -0 "$STOPPED_PID" 2>/dev/null; then
     sudo kill -CONT "$STOPPED_PID" 2>/dev/null && echo "cleanup: resumed SIGSTOPped pid $STOPPED_PID"
   fi
+  STOPPED_PID=""
   return $rc
 }
-trap cleanup EXIT INT TERM
+
+# Signals need their own handler, and it has to exit.
+#
+# A bash trap whose handler merely RETURNS does not stop the script: execution
+# resumes where the signal interrupted it. With one `trap cleanup EXIT INT TERM`
+# and a cleanup that returns, Ctrl-C during the destructive suite freed the
+# ballast and then carried straight on into the next fault injection — with
+# BALLAST already cleared, so the phase went on measuring a filesystem whose
+# ballast had just been pulled. An operator reaching for Ctrl-C wants the run
+# to stop; the docs promised as much. 130 is the conventional SIGINT status.
+on_signal() {
+  say ""
+  say "${C_YEL}interrupted — cleaning up and stopping.${C_OFF}"
+  cleanup
+  exit 130
+}
+trap cleanup EXIT
+trap on_signal INT TERM
 
 # ===========================================================================
 # Phases
@@ -1623,11 +1656,32 @@ main() {
     confirm "Continue without tmux?" || exit 0
   fi
 
+  # Record skips up front, before anything runs. Writing them into the state
+  # file is what makes the post-reboot `--resume` honour them: resume replays
+  # every phase not marked done, so a phase merely absent from this invocation
+  # would come back after the reboot. For `install` that would fetch the
+  # published release over the binary under test, and every later result would
+  # silently describe a different build.
+  local sp
+  for sp in ${SKIPPED[@]+"${SKIPPED[@]}"}; do
+    if ! declare -F "phase_${sp}" >/dev/null; then
+      say "${C_RED}unknown phase in --skip: ${sp} (try --list)${C_OFF}"
+      exit 64
+    fi
+    CURRENT_PHASE="$sp"
+    record SKIP "${sp}.skipped" "phase skipped by --skip"
+    state_set "PHASE_${sp}" "done"
+  done
+  CURRENT_PHASE="-"
+
   local to_run=()
   if [ ${#SELECTED[@]} -gt 0 ]; then
     to_run=("${SELECTED[@]}")
   else
     for p in "${PHASES[@]}"; do
+      # Checked before the resume logic below, which force-replays reboot and
+      # report: an explicit --skip outranks that.
+      [[ " ${SKIPPED[*]-} " == *" $p "* ]] && continue
       [ "$SAFE_ONLY" = "1" ] && [[ "$DESTRUCTIVE" == *" $p "* ]] && continue
       # On --resume, skip what already completed, but always re-enter reboot
       # (its post-boot half) and report.

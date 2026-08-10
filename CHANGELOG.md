@@ -187,6 +187,18 @@ CI: each needs a real systemd unit, a real USB microphone, or both.
   real on the hardware rather than only in `cargo test`. Results are written as
   a pasteable `report.md` plus machine-readable JSONL.
 
+  Two defects in the harness itself, both found by running it rather than
+  reading it. **Ctrl-C did not stop a run**: `trap cleanup EXIT INT TERM` with
+  a handler that returns does not end a bash script — execution resumes where
+  the signal landed, so an interrupt during the destructive suite freed the
+  ballast and then carried on into the next fault injection. Signals now clean
+  up and `exit 130`. And **`--skip` was missing**, so testing a locally
+  installed binary meant either letting the install phase overwrite it with the
+  published release, or hand-listing fourteen `--phase` flags — and the
+  `--resume` the reboot phase prints would have run the install phase anyway,
+  swapping the binary halfway through the suite. Skips are now recorded in the
+  state file, which is what makes resume honour them.
+
   The `diskfull` phase sizes its ballast to cross **both** relevant thresholds:
   the purge fires on a percentage (95 % by default) while doctor grades in
   absolute bytes (under 1 GiB free), and on a 32 GB card filling to 96 % leaves
