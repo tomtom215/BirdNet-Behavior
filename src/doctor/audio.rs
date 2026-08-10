@@ -118,7 +118,9 @@ pub(super) fn check_audio_source(cli: &Cli, config: Option<&Config>) -> Vec<Chec
 }
 
 /// ALSA devices the capture path will use, read from the same `audio_sources`
-/// table it reads, via the same [`AudioSourceStore::list`] query.
+/// table it reads, via the same
+/// [`AudioSourceStore::list`](birdnet_db::audio_sources::AudioSourceStore::list)
+/// query.
 ///
 /// Deliberately shares the query rather than restating the rule: two copies of
 /// "where does the device come from" is exactly how the config and the runtime
