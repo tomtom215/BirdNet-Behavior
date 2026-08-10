@@ -348,6 +348,21 @@ mod tests {
         });
         assert!(html.contains("is-visible"));
         assert!(html.contains("Incorrect username or password."));
+        // The recovery hint must survive template edits: without it, an
+        // operator locked out by the /admin closure has no on-screen route to
+        // the credential, only a root grep they have no reason to know about.
+        assert!(
+            html.contains("Forgotten the password?"),
+            "login page must offer a recovery route"
+        );
+        assert!(
+            html.contains("CADDY_PWD") && html.contains("/etc/birdnet/birdnet.conf"),
+            "the hint must name where the password actually lives"
+        );
+        assert!(
+            html.contains("<code>admin</code>"),
+            "the hint must name the username, which is not the one the installer used to print"
+        );
         assert!(html.contains(r#"value="/admin/overview""#));
         assert!(!html.contains("{{"));
     }

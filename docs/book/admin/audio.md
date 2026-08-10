@@ -44,11 +44,57 @@ The **Add a source** wizard walks through three steps — URL (with a locked `rt
 
 ```bash
 arecord -l
-# card 1: Device [USB Audio], device 0: USB Audio [USB Audio]
-arecord -D plughw:1,0 -d 3 /tmp/test.wav && aplay /tmp/test.wav   # test it
+# card 1: PRO [Comica_Traxshot PRO], device 0: USB Audio [USB Audio]
+#      ^ index                ^ id
+arecord -D plughw:CARD=PRO,DEV=0 -d 3 /tmp/test.wav && aplay /tmp/test.wav
 ```
 
-Set the device in `.env` (`BIRDNET_ALSA_DEVICE=plughw:1,0`) or via the CLI flag — see [Configuration](../getting-started/configuration.md).
+Set the device in `.env` (`BIRDNET_ALSA_DEVICE=…`) or via the CLI flag — see [Configuration](../getting-started/configuration.md).
+
+## Name the card, don't number it
+
+A card **index** (the `1` in `plughw:1,0`) is assigned in detection order and is
+not stable. It changes when USB devices are re-enumerated, and a reboot is free
+to do that.
+
+This is not hypothetical. During an on-device acceptance run, the same
+microphone on the same Raspberry Pi 4 was `card 1: PRO` before a cold reboot and
+`card 3: PRO` afterwards. The station came back up, served a perfectly healthy
+dashboard, and recorded nothing — the capture supervisor retried a device that
+no longer existed, indefinitely. Nothing was broken except a number.
+
+The **id** (`PRO` above) does not move. Address the card by it:
+
+```dotenv
+ALSA_CARD=plughw:CARD=PRO,DEV=0
+```
+
+`CARD` is a first-class ALSA argument, not a trick: alsa-lib's own `alsa.conf`
+declares `pcm.plughw { @args [ CARD DEV SUBDEV ] }` with `@args.CARD { type
+string }`. A fresh install now writes this form automatically when it can, and
+falls back to the index only when the id would be ambiguous — two identical
+microphones report the same id, and then only the index can tell them apart.
+
+After editing the config, apply it with `sudo bash install.sh repair`.
+
+### Pinning your own names (recommended for multi-mic stations)
+
+The id comes from the device's own firmware, so two identical microphones give
+you two cards called `PRO`. [`usb-audio-mapper`](https://github.com/tomtom215/usb-audio-mapper)
+solves this properly: it writes a udev rule keyed on vendor/product **and USB
+port path**, setting `ATTR{id}` to a name you choose.
+
+```bash
+sudo ./usb-audio-mapper.sh          # interactive; reboot when it asks
+arecord -l                          # now shows your chosen name as the id
+```
+
+Then set `ALSA_CARD=plughw:CARD=<your-name>,DEV=0`. The name survives reboots,
+re-plugging, and swapping identical devices between ports — which is the only
+way to keep several microphones straight on one station.
+
+`--doctor` validates either form and, if the configured card is missing, names
+the card that *is* present and prints the exact line to set.
 
 ## Common pitfalls
 
