@@ -38,9 +38,31 @@
   </div>
 
   <div class="audio-source__right">
+    <!--
+      hx-target="this" is load-bearing, not redundant.
+
+      The <li> above declares hx-target="this", and hx-target is INHERITED. When
+      an inherited value is "this", htmx resolves it to the element that
+      *declares* the attribute, not to the element making the request — see
+      htmx's own resolution: `Ee()` looks the value up with the inherited
+      getter, then for "this" calls `Se(el, "hx-target")`, which walks up to the
+      nearest node that actually carries hx-target. That is the <li>.
+
+      So without an hx-target of its own, this pill's 8-second poll swapped the
+      probe response — a bare status <span> — over the WHOLE row via
+      outerHTML. The microphone vanished from the admin page about eight seconds
+      after every load, leaving a lone "Down" pill and a header still claiming
+      "1 mic"; a refresh brought it back because the row is re-rendered
+      server-side. Reported from a real station, whose mic was down at the time
+      — which is precisely when an operator is on this page.
+
+      The Edit and Remove buttons below both state hx-target="closest li"
+      explicitly for the same reason. The pill was the one that did not.
+    -->
     <span class="bnb-pill {{status_class}}"
           hx-get="/admin/audio/sources/{{id}}/probe"
           hx-trigger="every 8s"
+          hx-target="this"
           hx-swap="outerHTML"
           aria-live="polite">
       <span class="bnb-dot {{status_class}}" aria-hidden="true"></span>
