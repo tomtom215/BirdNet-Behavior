@@ -84,22 +84,32 @@ fn probe_alsa_device(device: &str) -> Check {
     match Command::new("arecord").arg("-l").output() {
         Ok(out) if out.status.success() => {
             let listing = String::from_utf8_lossy(&out.stdout);
-            let card_part = extract_card_number(device);
-            let found = card_part
-                .as_deref()
-                .is_some_and(|c| listing.contains(&format!("card {c}")));
-            if found {
-                Check::pass(
+            match parse_card_ref(device) {
+                Some(card) if listing_has_card(&listing, &card) => Check::pass(
                     "ALSA device probe",
                     format!("{device} matches an entry in `arecord -l`"),
-                )
-            } else {
-                Check::warn(
+                ),
+                // An index that is absent is the failure this release exists to
+                // stop being silent, so the remedy names the stable form and
+                // the card actually present rather than "check the number".
+                Some(CardRef::Index(idx)) => Check::warn(
                     "ALSA device probe",
-                    format!("{device} was not found in `arecord -l` output"),
-                    "run `arecord -l` and check the card number; \
-                     a typical USB mic shows up as `plughw:1,0`",
-                )
+                    format!("{device} refers to card {idx}, which is not in `arecord -l`"),
+                    stable_form_hint(&listing).unwrap_or_else(|| {
+                        "run `arecord -l`: no capture card is present at all".to_string()
+                    }),
+                ),
+                Some(CardRef::Id(id)) => Check::warn(
+                    "ALSA device probe",
+                    format!("{device} names card id `{id}`, which is not in `arecord -l`"),
+                    "run `arecord -l` and compare the id (the word after `card N:`); \
+                     if you pinned it with usb-audio-mapper, check the udev rule applied"
+                        .to_string(),
+                ),
+                None => Check::skip(
+                    "ALSA device probe",
+                    format!("cannot tell which card `{device}` refers to; not verifying it"),
+                ),
             }
         }
         Ok(_) => Check::warn(
@@ -115,15 +125,122 @@ fn probe_alsa_device(device: &str) -> Check {
     }
 }
 
-fn extract_card_number(device: &str) -> Option<String> {
-    // Accepts forms like "plughw:1,0", "hw:1,0", "1,0", "1".
-    let s = device.split(':').next_back().unwrap_or(device);
-    let s = s.split(',').next().unwrap_or(s);
-    if s.chars().all(|c| c.is_ascii_digit()) && !s.is_empty() {
-        Some(s.to_string())
-    } else {
-        None
+/// How a configured ALSA device string identifies its card.
+///
+/// Two forms reach us, and they are checked against `arecord -l` differently:
+///
+/// * an **index** (`plughw:1,0`) — assigned in detection order, and not stable:
+///   the same microphone was `card 1` before a cold reboot on a Raspberry Pi 4
+///   and `card 3` after it;
+/// * an **id** (`plughw:CARD=PRO,DEV=0`) — the name ALSA gives the card, which
+///   `usb-audio-mapper` pins via a udev rule (`ATTR{id}="<name>"`).
+///
+/// The id form used to be unrecognised here, so it fell through to "not found
+/// in `arecord -l`" and warned on every startup — the diagnostic telling
+/// operators that the robust configuration was the broken one.
+#[derive(Debug, PartialEq, Eq)]
+enum CardRef {
+    Index(String),
+    Id(String),
+}
+
+/// Parse the card out of an ALSA device string.
+///
+/// Accepts `plughw:1,0`, `hw:1,0`, `1,0`, `1`, and the id form
+/// `plughw:CARD=PRO,DEV=0` / `hw:CARD=PRO`. Returns `None` for anything else
+/// (`default`, a PipeWire node name, empty), which the caller reports as
+/// unverifiable rather than as broken.
+fn parse_card_ref(device: &str) -> Option<CardRef> {
+    // Strip a leading PCM plugin name ("plughw:", "hw:") if present. Split on
+    // the FIRST colon: an id could in principle contain one, and everything
+    // after it belongs to the argument list.
+    let args = match device.split_once(':') {
+        Some((_plugin, rest)) => rest,
+        None => device,
+    };
+
+    // Named-argument form: CARD=<id>[,DEV=<n>][,SUBDEV=<n>]. alsa-lib declares
+    // CARD as `type string` in its own alsa.conf, so the value is a name.
+    for field in args.split(',') {
+        if let Some(id) = field.trim().strip_prefix("CARD=") {
+            let id = id.trim();
+            if !id.is_empty() {
+                return Some(CardRef::Id(id.to_string()));
+            }
+            return None;
+        }
     }
+
+    // Positional form: the card is the first argument.
+    let first = args.split(',').next().unwrap_or(args).trim();
+    if !first.is_empty() && first.chars().all(|c| c.is_ascii_digit()) {
+        return Some(CardRef::Index(first.to_string()));
+    }
+    None
+}
+
+/// First capture card in an `arecord -l` listing, as `(index, id, device)`.
+///
+/// A line reads `card 3: PRO [Comica_Traxshot PRO], device 0: USB Audio [...]`.
+fn first_card(listing: &str) -> Option<(String, String, String)> {
+    listing.lines().map(str::trim_start).find_map(|line| {
+        let rest = line.strip_prefix("card ")?;
+        let (index, tail) = rest.split_once(':')?;
+        let id = tail.split_whitespace().next()?;
+        // `device N:` appears after the card's description on the same line.
+        let device = tail
+            .split_once("device ")
+            .and_then(|(_, d)| d.split(':').next())
+            .map(str::trim)
+            .filter(|d| !d.is_empty() && d.chars().all(|c| c.is_ascii_digit()))
+            .unwrap_or("0");
+        Some((index.trim().to_string(), id.to_string(), device.to_string()))
+    })
+}
+
+/// Suggest a device string for a card that IS present, so a wrong `ALSA_CARD`
+/// is answered with a line to paste rather than an instruction to go and work
+/// it out. Returns `None` when the listing holds no capture card at all.
+fn stable_form_hint(listing: &str) -> Option<String> {
+    let (index, id, device) = first_card(listing)?;
+    let portable = !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if portable {
+        Some(format!(
+            "card {index} is present with id `{id}` — set ALSA_CARD=plughw:CARD={id},DEV={device} \
+             and run `sudo bash install.sh repair`. The id survives the re-enumeration that moved \
+             the index; see docs/book/admin/audio.md"
+        ))
+    } else {
+        Some(format!(
+            "card {index} is present — set ALSA_CARD=plughw:{index},{device} and run \
+             `sudo bash install.sh repair`. Its id is not usable as a name, so consider \
+             usb-audio-mapper to pin one; see docs/book/admin/audio.md"
+        ))
+    }
+}
+
+/// Does `arecord -l` output list the card this device string refers to?
+///
+/// Matching is line-anchored on purpose. The previous check asked whether the
+/// listing merely *contained* `"card 1"`, which is also true of `card 12:` — a
+/// station configured for a card that is absent could be told it was present.
+fn listing_has_card(listing: &str, card: &CardRef) -> bool {
+    listing.lines().map(str::trim_start).any(|line| {
+        let Some(rest) = line.strip_prefix("card ") else {
+            return false;
+        };
+        // "card 3: PRO [Comica_Traxshot PRO], device 0: ..."
+        let Some((index, tail)) = rest.split_once(':') else {
+            return false;
+        };
+        match card {
+            CardRef::Index(want) => index.trim() == want,
+            CardRef::Id(want) => tail.split_whitespace().next() == Some(want.as_str()),
+        }
+    })
 }
 
 fn probe_pulse_source(source: &str) -> Check {
@@ -232,7 +349,10 @@ fn parse_host_port(hp: &str, default: u16) -> (String, u16) {
 
 #[cfg(test)]
 mod tests {
-    use super::{check_audio_source, extract_card_number, parse_host_port, probe_rtsp_url};
+    use super::{
+        CardRef, check_audio_source, first_card, listing_has_card, parse_card_ref, parse_host_port,
+        probe_rtsp_url, stable_form_hint,
+    };
     use crate::cli::Cli;
     use crate::doctor::Status;
     use clap::Parser as _;
@@ -309,11 +429,135 @@ mod tests {
         assert_eq!(p2, 554);
     }
 
+    /// Captured verbatim from a Raspberry Pi 4 BEFORE a cold reboot.
+    const PI_BEFORE: &str = "\
+**** List of CAPTURE Hardware Devices ****
+card 1: PRO [Comica_Traxshot PRO], device 0: USB Audio [USB Audio]
+  Subdevices: 1/1
+  Subdevice #0: subdevice #0
+";
+
+    /// The SAME microphone on the SAME board AFTER the reboot. The index moved
+    /// from 1 to 3; the id did not move. This pair is the entire argument for
+    /// addressing a card by id, and it is real rather than constructed.
+    const PI_AFTER: &str = "\
+**** List of CAPTURE Hardware Devices ****
+card 3: PRO [Comica_Traxshot PRO], device 0: USB Audio [USB Audio]
+  Subdevices: 1/1
+  Subdevice #0: subdevice #0
+";
+
     #[test]
-    fn extract_card_number_recognises_common_forms() {
-        assert_eq!(extract_card_number("plughw:1,0").as_deref(), Some("1"));
-        assert_eq!(extract_card_number("hw:2,0").as_deref(), Some("2"));
-        assert_eq!(extract_card_number("default"), None);
-        assert_eq!(extract_card_number("USB Audio"), None);
+    fn parse_card_ref_recognises_common_forms() {
+        assert_eq!(
+            parse_card_ref("plughw:1,0"),
+            Some(CardRef::Index("1".into()))
+        );
+        assert_eq!(parse_card_ref("hw:2,0"), Some(CardRef::Index("2".into())));
+        assert_eq!(parse_card_ref("1,0"), Some(CardRef::Index("1".into())));
+        assert_eq!(parse_card_ref("1"), Some(CardRef::Index("1".into())));
+        assert_eq!(parse_card_ref("default"), None);
+        assert_eq!(parse_card_ref("USB Audio"), None);
+        assert_eq!(parse_card_ref(""), None);
+    }
+
+    #[test]
+    fn parse_card_ref_recognises_the_id_form() {
+        assert_eq!(
+            parse_card_ref("plughw:CARD=PRO,DEV=0"),
+            Some(CardRef::Id("PRO".into()))
+        );
+        assert_eq!(
+            parse_card_ref("hw:CARD=PRO"),
+            Some(CardRef::Id("PRO".into()))
+        );
+        assert_eq!(
+            parse_card_ref("plughw:CARD=Scarlett,DEV=2,SUBDEV=0"),
+            Some(CardRef::Id("Scarlett".into()))
+        );
+        // A blank name identifies nothing; better unverifiable than wrong.
+        assert_eq!(parse_card_ref("plughw:CARD=,DEV=0"), None);
+    }
+
+    #[test]
+    fn id_form_matches_the_real_listing_at_either_index() {
+        let card = parse_card_ref("plughw:CARD=PRO,DEV=0").expect("id form parses");
+        // The regression this fixes: before, the id form was unparseable, so it
+        // warned "not found in arecord -l" on every startup — against a card
+        // that was sitting right there, at whichever index.
+        assert!(listing_has_card(PI_BEFORE, &card));
+        assert!(listing_has_card(PI_AFTER, &card));
+    }
+
+    #[test]
+    fn index_form_is_exactly_as_fragile_as_the_hardware_showed() {
+        let card = parse_card_ref("plughw:1,0").expect("index form parses");
+        assert!(listing_has_card(PI_BEFORE, &card));
+        // Same mic, same board, one reboot later — and the configured card is
+        // gone. This is the field failure, reproduced.
+        assert!(!listing_has_card(PI_AFTER, &card));
+    }
+
+    #[test]
+    fn index_match_is_line_anchored_not_substring() {
+        let listing = "**** List of CAPTURE Hardware Devices ****\n\
+                       card 12: PRO [Some Device], device 0: USB Audio [USB Audio]\n";
+        let one = parse_card_ref("plughw:1,0").expect("parses");
+        // `listing.contains("card 1")` is true here, and was the old test.
+        assert!(listing.contains("card 1"));
+        assert!(!listing_has_card(listing, &one));
+        let twelve = parse_card_ref("plughw:12,0").expect("parses");
+        assert!(listing_has_card(listing, &twelve));
+    }
+
+    #[test]
+    fn id_match_does_not_fire_on_a_description_word() {
+        // "PRO" also appears inside the bracketed description; only the id
+        // token immediately after `card N:` may satisfy the check.
+        let listing = "**** List of CAPTURE Hardware Devices ****\n\
+                       card 0: Headset [PRO Gaming Headset], device 0: USB Audio [USB Audio]\n";
+        let pro = parse_card_ref("plughw:CARD=PRO,DEV=0").expect("parses");
+        assert!(listing.contains("PRO"));
+        assert!(!listing_has_card(listing, &pro));
+    }
+
+    #[test]
+    fn hint_names_the_card_that_is_actually_present() {
+        let hint = stable_form_hint(PI_AFTER).expect("a card is present");
+        assert!(
+            hint.contains("plughw:CARD=PRO,DEV=0"),
+            "hint should be pasteable, got: {hint}"
+        );
+        assert!(hint.contains("card 3"), "hint should name the index found");
+        assert_eq!(
+            stable_form_hint("**** List of CAPTURE Hardware Devices ****\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn hint_falls_back_when_the_id_is_not_a_usable_name() {
+        let listing = "**** List of CAPTURE Hardware Devices ****\n\
+                       card 1: My.Odd$Card [Weird], device 2: USB Audio [USB Audio]\n";
+        let hint = stable_form_hint(listing).expect("a card is present");
+        assert!(hint.contains("plughw:1,2"), "got: {hint}");
+        // Must not suggest the id form for an id that cannot be used as one.
+        // Checked against `plughw:CARD=` rather than the bare substring
+        // `CARD=`, which the config key `ALSA_CARD=` also contains.
+        assert!(!hint.contains("plughw:CARD="), "got: {hint}");
+        assert!(hint.contains("usb-audio-mapper"), "got: {hint}");
+    }
+
+    #[test]
+    fn first_card_reads_index_id_and_device() {
+        assert_eq!(
+            first_card(PI_AFTER),
+            Some(("3".into(), "PRO".into(), "0".into()))
+        );
+        let nonzero = "card 2: Scarlett [Focusrite Scarlett 2i2], device 2: USB Audio [x]\n";
+        assert_eq!(
+            first_card(nonzero),
+            Some(("2".into(), "Scarlett".into(), "2".into()))
+        );
     }
 }

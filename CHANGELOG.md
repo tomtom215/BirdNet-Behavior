@@ -89,6 +89,44 @@ CI: each needs a real systemd unit, a real USB microphone, or both.
   source genuinely prevent operation and do not self-heal. A missing audio
   device was already a warning, correctly — the capture supervisor retries it.
 
+- **A reboot could leave a station serving a healthy dashboard and recording
+  nothing.** The installer wrote the detected microphone into the config as an
+  ALSA card *index* (`plughw:1,0`). An index is assigned in detection order and
+  is not stable. Measured on a Raspberry Pi 4 during the acceptance run: the
+  same microphone was `card 1: PRO` before a cold reboot and `card 3: PRO`
+  after it. The config still said card 1, `arecord` failed the open with *"No
+  such file or directory"* on every attempt, and the capture supervisor retried
+  a device that no longer existed — indefinitely, while `/api/v2/health`
+  returned `healthy` and the dashboard served normally.
+
+  Detection now prefers the card's **id**, which does not move:
+  `plughw:CARD=PRO,DEV=0`. `CARD` is a first-class ALSA argument — alsa-lib's
+  own `alsa.conf` declares `pcm.plughw { @args [ CARD DEV SUBDEV ] }` with
+  `@args.CARD { type string }`, forwarded to a `type hw` slave as `card $CARD`.
+  The index remains the fallback for the case where an id cannot identify a
+  single card: two identical microphones report the same id, and then only the
+  index tells them apart.
+
+  `--doctor` now understands both forms. The id form was previously
+  unparseable, so a correctly configured station was told on every startup that
+  its device "was not found in `arecord -l`" — the diagnostic calling the
+  robust configuration broken. That id form is exactly what
+  [`usb-audio-mapper`](https://github.com/tomtom215/usb-audio-mapper) pins via
+  a udev rule (`ATTR{id}="<name>"`), which is the supported way to keep several
+  identical microphones straight; `docs/book/admin/audio.md` now says so.
+  Index matching is also line-anchored: it previously asked whether the listing
+  *contained* `"card 1"`, which is true of `card 12:` as well, so an absent
+  card could be reported present. And when the configured card really is
+  missing, the check now names the card that *is* present and prints the exact
+  `ALSA_CARD=` line to set, instead of advising the operator to go and work it
+  out.
+
+  Covered by `installer/test/alsa-device-detect.sh`, which drives the detection
+  against the two listings captured from the Pi either side of that reboot and
+  asserts they produce an identical device string — plus a counter-test
+  asserting the previous implementation did **not**, reproducing `plughw:1,0` →
+  `plughw:3,0` exactly as the hardware behaved.
+
 - **The installer told operators to sign in with a username that does not
   exist.** `install.sh` printed `username: birdnet`, wrote `CADDY_USER=birdnet`
   into `birdnet.conf`, and four docs pages repeated it — but the only account
