@@ -73,6 +73,7 @@ pub fn validate(config: &Config) -> Vec<Finding> {
     let mut out = Vec::new();
     check_coords(config, &mut out);
     check_unit_range(config, "CONFIDENCE", 0.0, 1.0, &mut out);
+    check_confidence_floor(config, &mut out);
     check_unit_range(config, "SF_THRESH", 0.0, 1.0, &mut out);
     check_unit_range(config, "PRIVACY_THRESHOLD", 0.0, 1.0, &mut out);
     check_bounded(config, "SENSITIVITY", 0.5, 1.5, &mut out);
@@ -156,6 +157,44 @@ fn check_coords(config: &Config, out: &mut Vec<Finding>) {
 
 fn check_unit_range(config: &Config, key: &str, min: f64, max: f64, out: &mut Vec<Finding>) {
     check_bounded(config, key, min, max, out);
+}
+
+/// Threshold below which `CONFIDENCE` is treated as a probable mistake.
+///
+/// Not a hard floor — an operator who genuinely wants a firehose may set one —
+/// but low enough that every ordinary configuration sits well above it.
+const CONFIDENCE_FLOOR: f64 = 0.1;
+
+/// Warn about a `CONFIDENCE` that is in range but implausibly low.
+///
+/// [`check_unit_range`] already rejects the percentage mistake (`CONFIDENCE=70`)
+/// and non-numeric junk as errors. What it cannot catch is the *decimal* slip —
+/// `0.075` for `0.75` — or a `0` copied from `SF_THRESH`, where "0 = disabled"
+/// is the documented meaning. Those parse, sit inside 0–1, validate clean,
+/// but they make the station record whatever the model's best guess was for
+/// every three-second window: the disk fills, the species list fills with
+/// noise, and nothing anywhere says why. A warning keeps the value usable
+/// while making the choice visible in `--doctor`.
+fn check_confidence_floor(config: &Config, out: &mut Vec<Finding>) {
+    let Some(Ok(v)) = parse_float(config, "CONFIDENCE") else {
+        return;
+    };
+    if !(0.0..CONFIDENCE_FLOOR).contains(&v) {
+        return;
+    }
+    out.push(Finding::warn(
+        "CONFIDENCE",
+        format!(
+            "CONFIDENCE={v} is very low — nearly every 3-second window will be \
+             recorded as a detection, filling the disk with false positives"
+        ),
+        format!(
+            "unless this is deliberate, set CONFIDENCE={} (the default); a \
+             value this small is usually a slipped decimal point, and unlike \
+             SF_THRESH a CONFIDENCE of 0 does not mean \"disabled\"",
+            super::DEFAULT_CONFIDENCE_THRESHOLD
+        ),
+    ));
 }
 
 fn check_bounded(config: &Config, key: &str, min: f64, max: f64, out: &mut Vec<Finding>) {
@@ -383,6 +422,51 @@ mod tests {
         );
     }
 
+    /// The exact values a live `--doctor` run accepted without comment before
+    /// `check_confidence_floor` existed. Each one silently turns the station
+    /// into a false-positive firehose.
+    #[test]
+    fn implausibly_low_confidence_is_warned() {
+        for v in ["0", "0.0", "0.001", "0.075", "0.07", "0,07"] {
+            let findings = validate(&cfg(&[("CONFIDENCE", v)]));
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.key == "CONFIDENCE" && f.severity == Severity::Warning),
+                "CONFIDENCE={v} should warn, got {findings:?}"
+            );
+            assert!(
+                !findings
+                    .iter()
+                    .any(|f| f.key == "CONFIDENCE" && f.severity == Severity::Error),
+                "CONFIDENCE={v} is usable — it must warn, not block startup"
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_confidence_is_not_warned() {
+        // Counter-test: the floor must not fire on real configurations,
+        // including the default itself and the boundary value.
+        for v in ["0.1", "0.25", "0.5", "0.7", "0,7", "0.95", "1.0"] {
+            let findings = validate(&cfg(&[("CONFIDENCE", v)]));
+            assert!(
+                !findings.iter().any(|f| f.key == "CONFIDENCE"),
+                "CONFIDENCE={v} is a normal setting and must pass clean, got {findings:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn absent_confidence_is_not_warned() {
+        // The common case: nothing in birdnet.conf, daemon applies the default.
+        let findings = validate(&cfg(&[("LATITUDE", "42.36"), ("LONGITUDE", "-71.06")]));
+        assert!(
+            !findings.iter().any(|f| f.key == "CONFIDENCE"),
+            "{findings:?}"
+        );
+    }
+
     #[test]
     fn confidence_above_one_is_error() {
         let c = cfg(&[("CONFIDENCE", "2.5")]);
@@ -546,12 +630,26 @@ mod tests {
             );
         }
 
-        /// CONFIDENCE in [0, 1] is always accepted.
+        /// CONFIDENCE in [0, 1] is always accepted — it may draw the
+        /// implausibly-low warning, but never an error, so a station with any
+        /// in-range threshold always starts.
         #[test]
         fn valid_confidence_never_errors(c in 0.0_f64..=1.0_f64) {
             let cfg_ = cfg(&[("CONFIDENCE", &c.to_string())]);
             let findings = validate(&cfg_);
-            prop_assert!(!findings.iter().any(|f| f.key == "CONFIDENCE"));
+            prop_assert!(
+                !findings.iter().any(|f| f.key == "CONFIDENCE" && f.severity == Severity::Error)
+            );
+        }
+
+        /// The only CONFIDENCE finding in range is the low-threshold warning,
+        /// and it fires exactly below the floor — never at or above it.
+        #[test]
+        fn confidence_warning_tracks_the_floor(c in 0.0_f64..=1.0_f64) {
+            let cfg_ = cfg(&[("CONFIDENCE", &c.to_string())]);
+            let findings = validate(&cfg_);
+            let warned = findings.iter().any(|f| f.key == "CONFIDENCE");
+            prop_assert_eq!(warned, c < CONFIDENCE_FLOOR, "c={}", c);
         }
 
         /// CONFIDENCE outside [0, 1] always errors. Restrict to a finite,

@@ -5,9 +5,82 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.12.0] - 2026-08-10
+
+### Changed
+
+- **The out-of-the-box minimum confidence is now 0.75** (was 0.70, BirdNET-Pi's
+  default). High enough that a new station's log reads as realistic instead of
+  padded with marginal IDs, low enough that quiet and distant birds are still
+  recorded. It remains a single shared constant, so the daemon, the settings
+  form and the wizard cannot disagree about it; existing stations with an
+  explicit `CONFIDENCE` are unaffected.
+
+### Added
+
+- **The setup wizard now asks how picky the station should be.** The minimum
+  confidence decides whether anything is recorded at all, and nothing in the
+  setup path mentioned it: the installer wrote it as a commented-out line and
+  the wizard never raised it, so an operator who wanted stricter or looser
+  detection had to find Settings → Detection unprompted. A new **Accuracy** step
+  offers four presets (0.90 / 0.75 / 0.60 / 0.40) pre-selected on the shared
+  default, so clicking straight through yields exactly what the daemon would
+  have enforced anyway.
+
+  The submitted value is range-checked before it is stored. An out-of-range
+  `CONFIDENCE` is a *fatal* doctor error, and `--doctor` runs from the unit's
+  `ExecStartPre` where exit 2 blocks startup — so an unvalidated write here
+  would have turned the setup form into a way to leave the station unable to
+  start.
 
 ### Fixed
+
+- **`--doctor` was silent about a confidence threshold that guarantees a
+  false-positive firehose.** Validation rejected the percentage mistake
+  (`CONFIDENCE=70`) and non-numeric junk as errors, but a *decimal* slip — `0.07`
+  for `0.7`, or a `0` copied from `SF_THRESH`, where `0` does mean "disabled" —
+  parses, sits inside 0–1, and passed clean. The station then records the
+  model's best guess for every three-second window: the disk fills, the species
+  list fills with noise, and nothing anywhere says why. Verified against a live
+  binary before and after; `0`, `0.001` and `0.07` each now warn while `0.1` and
+  above stay silent, and the value remains usable rather than blocking startup.
+
+- **`ModelConfig::default()` carried a third confidence threshold.** It
+  hard-coded `0.25` — contradicting both the daemon's enforced default and the
+  value the admin form advertises, which is precisely the drift the shared
+  constant exists to prevent. Nothing shipped broken, because the daemon always
+  names the field explicitly, but any future construction that spread
+  `..ModelConfig::default()` without it would have silently reopened the exact
+  bug. It now references the shared constant.
+
+- **A station with no coordinates silently disabled species filtering.**
+  `SpeciesFilter::filter_species` takes `Option<(lat, lon)>`; with `None` the
+  metadata model cannot run, so occurrence filtering is skipped and **every one
+  of the ~11 000 species stays a candidate**. The station keeps working and
+  reports birds that have never occurred within a thousand miles — which reads
+  as a bad model rather than as a missing setting.
+
+  Nothing said so. The config validator checked that a latitude was *in range*,
+  and warned when one of the pair was set without the other, but was silent
+  when both were absent. `--doctor` now reports it, naming the consequence
+  rather than the missing key, and pointing at the dashboard's location detect.
+
+  Resolution goes through `daemon::resolve_station_coords` — the same function
+  the detection daemon uses — rather than a third copy of the precedence rule,
+  and falls back to the `settings` table because `--doctor` runs from
+  `ExecStartPre` before the settings overlay has merged `/admin/settings` into
+  the config. Reading the config alone would have warned at exactly the
+  operators who configured their station the easy way, through the onboarding
+  wizard.
+
+  The installer was the other half of the same silence. Its summary warned
+  loudly about a missing audio source and said nothing about missing
+  coordinates, and its next-steps list called them "(Optional)" — while the
+  location prompt itself is skipped entirely on a non-interactive install
+  (`BIRDNET_NONINTERACTIVE=1`, or no TTY under `curl | sudo bash`) and on every
+  re-install over an existing config, making "no coordinates" the common state
+  rather than the rare one. It now says so, in the same place and tone as the
+  audio-source notice.
 
 Found by running the new on-device acceptance harness
 (`scripts/hardware-test.sh`) against a Raspberry Pi 4 on Pi OS Trixie — the
@@ -2773,7 +2846,8 @@ x86_64 Linux.
 - systemd installer script with ALSA microphone auto-detection and
   automatic BirdNET+ model download from Zenodo.
 
-[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.7.2...v0.9.0

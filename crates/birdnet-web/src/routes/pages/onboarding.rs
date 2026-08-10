@@ -1,12 +1,20 @@
 //! First-run onboarding wizard.
 //!
-//! A full-bleed, no-chrome five-step setup flow (Welcome → Location →
-//! Microphone → Notifications → Done) served at `/onboarding`. The wizard now
-//! persists: the Location step auto-detects coordinates (and the timezone) via
-//! the existing `/admin/settings/detect-location` endpoint and submits to
-//! `POST /onboarding/save`, which writes the chosen settings and marks
-//! onboarding complete. Audio device selection is intentionally delegated to
-//! Settings → Audio (richer ALSA/RTSP handling lives there).
+//! A full-bleed, no-chrome six-step setup flow (Welcome → Location →
+//! Microphone → Accuracy → Notifications → Done) served at `/onboarding`. The
+//! wizard persists: the Location step auto-detects coordinates (and the
+//! timezone) via the existing `/admin/settings/detect-location` endpoint and
+//! submits to `POST /onboarding/save`, which writes the chosen settings and
+//! marks onboarding complete. Audio device selection is intentionally delegated
+//! to Settings → Audio (richer ALSA/RTSP handling lives there).
+//!
+//! The Accuracy step exists because the minimum-confidence threshold decides
+//! whether anything is recorded at all, and nothing in the setup path used to
+//! mention it: an operator who wanted stricter or looser detection had to find
+//! Settings → Detection unprompted. Its cards are pre-selected on
+//! [`DEFAULT_CONFIDENCE_THRESHOLD`](birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD),
+//! so clicking straight through yields exactly what the daemon would have
+//! enforced anyway.
 //!
 //! A fresh station (no detections yet, not onboarded) is redirected here from
 //! the dashboard — see `pages::dashboard`.
@@ -44,11 +52,24 @@ struct OnboardingForm {
     timezone: String,
     #[serde(default)]
     notification_mode: String,
+    #[serde(default)]
+    confidence_threshold: String,
+}
+
+/// Whether `raw` is a confidence threshold the daemon will accept.
+///
+/// The wizard's cards can only emit `0.4`/`0.6`/`0.75`/`0.9`, so this exists
+/// for the hand-crafted POST: `birdnet_core::config::validate` treats a
+/// `CONFIDENCE` outside 0–1 as an *error*, and `--doctor` runs from the unit's
+/// `ExecStartPre` where exit 2 is fatal. An unvalidated write here would let a
+/// setup form leave the station unable to start.
+fn valid_confidence(raw: &str) -> bool {
+    raw.parse::<f64>().is_ok_and(|v| (0.0..=1.0).contains(&v))
 }
 
 /// Persist the wizard's choices and mark onboarding complete, then return to the
 /// dashboard. Only non-empty values are written; the DB settings overlay applies
-/// latitude/longitude on the next start.
+/// latitude/longitude and the confidence threshold on the next start.
 async fn onboarding_save(
     State(state): State<AppState>,
     Form(form): Form<OnboardingForm>,
@@ -73,6 +94,16 @@ async fn onboarding_save(
         }
         if !mode.is_empty() {
             items.push(("notification_mode", mode, SettingsCategory::Notifications));
+        }
+        // Only persisted when it parses inside 0–1. The wizard's own cards can
+        // only produce 0.4/0.6/0.75/0.9, but the field is a plain form value:
+        // a hand-crafted POST must not be able to seed a threshold the daemon
+        // would reject at startup (`--doctor` exits 2 on out-of-range
+        // CONFIDENCE, which `ExecStartPre` treats as fatal) — that would turn
+        // the setup wizard into a way to brick the service.
+        let conf = form.confidence_threshold.trim();
+        if valid_confidence(conf) {
+            items.push(("confidence_threshold", conf, SettingsCategory::Detection));
         }
         if !items.is_empty() {
             let _ = settings::set_many(conn, &items);
@@ -192,9 +223,11 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
     <span class="bar"></span>
     <div class="ob-pip" data-pip="3"><span class="dot">3</span><span class="nm">Microphone</span></div>
     <span class="bar"></span>
-    <div class="ob-pip" data-pip="4"><span class="dot">4</span><span class="nm">Alerts</span></div>
+    <div class="ob-pip" data-pip="4"><span class="dot">4</span><span class="nm">Accuracy</span></div>
     <span class="bar"></span>
-    <div class="ob-pip" data-pip="5"><span class="dot">5</span><span class="nm">Done</span></div>
+    <div class="ob-pip" data-pip="5"><span class="dot">5</span><span class="nm">Alerts</span></div>
+    <span class="bar"></span>
+    <div class="ob-pip" data-pip="6"><span class="dot">6</span><span class="nm">Done</span></div>
   </div>
 
   <div class="ob-stage">
@@ -274,8 +307,23 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
       <p class="bnb-meta ob-mt-16">Your audio device is set up by the installer — fine-tune it (USB, RTSP, gain) any time in <a href="/admin">Settings → Audio</a>.</p>
     </section>
 
-    <!-- Step 4 — Notifications -->
+    <!-- Step 4 — Detection threshold -->
     <section class="ob-step" data-step="4">
+      <div class="ob-eyebrow">How sure is sure</div>
+      <h1 class="ob-h">How picky should it be?</h1>
+      <p class="ob-p ob-mb-18">Every guess comes with a confidence score. Anything below your threshold is thrown away — so this is the dial between "only the birds it's certain about" and "everything it thinks it heard".</p>
+      <div class="ob-cards cols2">
+        <div class="ob-card" data-radio="conf" data-value="0.9"><div class="ob-grow"><div class="t">Strict</div><div class="s">0.90 — only the IDs it is near-certain about. Very few false positives; quiet and distant birds go unlogged.</div></div></div>
+        <div class="ob-card sel" data-radio="conf" data-value="0.75"><div class="ob-grow"><div class="t">Balanced <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s">0.75 — realistic results without over-filtering. Start here.</div></div></div>
+        <div class="ob-card" data-radio="conf" data-value="0.6"><div class="ob-grow"><div class="t">Sensitive</div><div class="s">0.60 — catches quiet and distant birds, at the cost of more misidentifications.</div></div></div>
+        <div class="ob-card" data-radio="conf" data-value="0.4"><div class="ob-grow"><div class="t">Everything</div><div class="s">0.40 — for tuning and curiosity. Expect a lot of noise.</div></div></div>
+      </div>
+      <input type="hidden" name="confidence_threshold" id="ob-conf" value="0.75">
+      <p class="bnb-meta ob-mt-16">Not permanent — change it any time in <a href="/admin">Settings → Detection</a>, and set per-species thresholds under Species.</p>
+    </section>
+
+    <!-- Step 5 — Notifications -->
+    <section class="ob-step" data-step="5">
       <div class="ob-eyebrow">Who gets told</div>
       <h1 class="ob-h">When should we ping you?</h1>
       <p class="ob-p ob-mb-18">Start simple — you can wire up channels (Telegram, email, MQTT…) any time.</p>
@@ -297,8 +345,8 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
       </details>
     </section>
 
-    <!-- Step 5 — Done -->
-    <section class="ob-step" data-step="5">
+    <!-- Step 6 — Done -->
+    <section class="ob-step" data-step="6">
       <div class="ob-two">
         <div>
           <div class="ob-eyebrow">All set</div>
@@ -307,6 +355,7 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
           <div class="bnb-card pad ob-mt-16">
             <div class="summary-row"><span class="k">Location</span><span>Boston, MA · 42.36, −71.06</span></div>
             <div class="summary-row"><span class="k">Microphone</span><span>UMC202HD · USB · 48 kHz</span></div>
+            <div class="summary-row"><span class="k">Minimum confidence</span><span id="ob-sum-conf">0.75 · Balanced</span></div>
             <div class="summary-row"><span class="k">Alerts</span><span>Rare birds only</span></div>
             <div class="summary-row"><span class="k">Dashboard</span><span class="mono">http://birdnet.local/</span></div>
           </div>
@@ -324,7 +373,7 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
 
   <div class="ob-nav">
     <button class="bnb-btn ghost ob-hidden-init" id="ob-back" type="button">← Back</button>
-    <div class="bnb-meta">Step <span id="ob-cur">1</span> of 5 · <a href="#" id="ob-skip">Skip for now</a></div>
+    <div class="bnb-meta">Step <span id="ob-cur">1</span> of 6 · <a href="#" id="ob-skip">Skip for now</a></div>
     <a class="bnb-btn primary" id="ob-next" href="#" role="button">Continue →</a>
   </div>
   </form>
@@ -332,7 +381,7 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
 
 <script>
 (function () {
-  var step = 1, total = 5;
+  var step = 1, total = 6;
   var form = document.getElementById('ob-form');
   var stepsEls = document.querySelectorAll('.ob-step');
   var pips = document.querySelectorAll('.ob-pip');
@@ -361,16 +410,27 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
   });
   skip.addEventListener('click', function (e) { e.preventDefault(); finish(); });
 
-  // Single-select radio cards; mirror the notification choice into the form.
-  var notify = document.getElementById('ob-notify');
+  // Single-select radio cards; mirror the chosen value into the form's hidden
+  // input for that group. Keyed by data-radio so a new group only needs an
+  // entry here — the confidence group was added this way.
+  var mirrors = { notify: 'ob-notify', conf: 'ob-conf' };
   document.querySelectorAll('[data-radio]').forEach(function (card) {
     card.addEventListener('click', function () {
       document.querySelectorAll('[data-radio="' + card.dataset.radio + '"]').forEach(function (c) {
         c.classList.remove('sel');
       });
       card.classList.add('sel');
-      if (card.dataset.radio === 'notify' && notify && card.dataset.value) {
-        notify.value = card.dataset.value;
+      var target = mirrors[card.dataset.radio];
+      var input = target && document.getElementById(target);
+      if (input && card.dataset.value) { input.value = card.dataset.value; }
+      // Keep the final step's summary honest about what was chosen.
+      if (card.dataset.radio === 'conf') {
+        var sum = document.getElementById('ob-sum-conf');
+        var name = card.querySelector('.t');
+        if (sum && name) {
+          sum.textContent = parseFloat(card.dataset.value).toFixed(2)
+            + ' · ' + name.textContent.trim().replace(/\s*recommended$/, '');
+        }
       }
     });
   });

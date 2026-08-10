@@ -1143,7 +1143,10 @@ ${lat_line}
 ${lon_line}
 
 # --- Detection ---
-# CONFIDENCE=0.7           # 0.0–1.0, default 0.7 (detections below this are discarded)
+# CONFIDENCE=0.75          # 0.0–1.0, default 0.75 (detections below this are discarded).
+#                          # The setup wizard asks for this on first login; note
+#                          # that unlike SF_THRESH, 0 does not mean "disabled" —
+#                          # it records every window as a detection.
 # SENSITIVITY=1.25         # 0.5–1.5, default 1.25 (V2.4 models only; V3.0 ignores it)
 # OVERLAP=0.0              # seconds of 3 s analysis window overlap
 # SF_THRESH=0.03           # species-frequency metadata-filter threshold
@@ -1633,6 +1636,27 @@ prompt_station_settings() {
 # dashboard + onboarding wizard, exactly as it does on a reboot).
 config_has_audio_source() {
     grep -qE '^[[:space:]]*(ALSA_CARD|RTSP_URL|RTSP_URLS|PIPEWIRE_DEVICE)[[:space:]]*=' \
+        "${CONFIG_FILE}" 2>/dev/null
+}
+
+# True (0) if the config has *both* an active LATITUDE and LONGITUDE.
+#
+# Same "tailor the message" role as config_has_audio_source, and the same
+# reason for existing: without coordinates the metadata model cannot run, so
+# occurrence filtering is skipped and every species in the model stays a
+# candidate. The station looks like it is working — it just reports birds from
+# the wrong continent, which reads as a bad model rather than a missing
+# setting. A non-interactive install (`BIRDNET_NONINTERACTIVE=1`, or no TTY
+# under `curl | sudo bash`) never reaches the location prompt at all, so this
+# is the common state, not the rare one.
+#
+# Both halves are required: `birdnet_core::config::validate` already warns
+# about one without the other, and one alone disables the filter just as
+# completely as neither.
+config_has_location() {
+    grep -qE '^[[:space:]]*LATITUDE[[:space:]]*=[[:space:]]*[^[:space:]]' \
+        "${CONFIG_FILE}" 2>/dev/null \
+    && grep -qE '^[[:space:]]*LONGITUDE[[:space:]]*=[[:space:]]*[^[:space:]]' \
         "${CONFIG_FILE}" 2>/dev/null
 }
 
@@ -2187,13 +2211,25 @@ print_summary() {
             echo "  to pick a microphone in the setup wizard — or set ALSA_CARD / RTSP_URL"
             echo "  in ${CONFIG_FILE} and:  sudo systemctl restart birdnet-behavior"
         fi
+        # Live and listening, but with no coordinates the species filter cannot
+        # run — so the station reports birds from the wrong continent and looks
+        # like a bad model. Silence here was the whole problem: unlike a missing
+        # microphone, this failure produces detections, just wrong ones.
+        if ! config_has_location; then
+            echo
+            echo "  No station location set. Without it every species in the model stays a"
+            echo "  candidate, so expect detections that don't belong in your area. Set it"
+            echo "  in the dashboard's setup wizard (it can auto-detect), or add LATITUDE"
+            echo "  and LONGITUDE to ${CONFIG_FILE} and:  sudo systemctl restart birdnet-behavior"
+        fi
     else
         echo -e "${BOLD}Next steps:${RESET}"
         echo "  1. Set an audio source (edit as root):  sudo nano ${CONFIG_FILE}"
         echo "       ALSA_CARD=plughw:1,0      (ALSA microphone)"
         echo "       RTSP_URL=rtsp://…         (RTSP camera)"
         echo
-        echo "  2. (Optional) Set LATITUDE and LONGITUDE for species filtering."
+        echo "  2. Set LATITUDE and LONGITUDE. Without them the species filter cannot"
+        echo "     run and you will get detections from the wrong part of the world."
         echo
         echo "  3. sudo systemctl start birdnet-behavior"
         echo "  4. Open a web browser to  http://${web_host}:${web_port}"

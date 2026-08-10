@@ -122,6 +122,145 @@ async fn save_persists_location_and_marks_complete() {
     assert_eq!(get_status(build_router(state), "/").await, StatusCode::OK);
 }
 
+/// The whole point of the step: a first-run operator is *asked* for the
+/// threshold instead of silently inheriting one they never see. Before this
+/// existed the wizard never mentioned confidence at all, so a station that
+/// wanted stricter (or looser) detection had to find Settings → Detection
+/// unprompted.
+#[tokio::test]
+async fn wizard_prompts_for_the_confidence_threshold() {
+    let resp = build_router(fresh_state())
+        .oneshot(
+            Request::builder()
+                .uri("/onboarding")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+
+    assert!(
+        html.contains(r#"name="confidence_threshold""#),
+        "the wizard must submit a confidence_threshold field"
+    );
+    let expected_default = format!(
+        r#"id="ob-conf" value="{}""#,
+        birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD
+    );
+    assert!(
+        html.contains(&expected_default),
+        "the pre-selected default must be DEFAULT_CONFIDENCE_THRESHOLD ({expected_default}) \
+         — the same value the daemon enforces and Settings → Detection advertises"
+    );
+    assert!(
+        html.contains(r#"data-value="0.75""#),
+        "the recommended card must carry the shared default"
+    );
+    for preset in ["0.9", "0.6", "0.4"] {
+        assert!(
+            html.contains(&format!(r#"data-value="{preset}""#)),
+            "missing the {preset} preset"
+        );
+    }
+    assert!(
+        html.contains("Step <span id=\"ob-cur\">1</span> of 6"),
+        "the step counter must match the number of steps actually rendered"
+    );
+    // `<section` anchors this to the step bodies — a bare `class="ob-step`
+    // also matches the `ob-stepper` container that holds the numbered pips.
+    let rendered_steps = html.matches(r#"<section class="ob-step"#).count();
+    assert_eq!(
+        rendered_steps, 6,
+        "6 step sections expected, found {rendered_steps}"
+    );
+    let pips = html.matches(r#"data-pip=""#).count();
+    assert_eq!(
+        pips, rendered_steps,
+        "the stepper must show one pip per step, else the wizard skips a dot"
+    );
+}
+
+#[tokio::test]
+async fn save_persists_the_chosen_confidence_threshold() {
+    let state = fresh_state();
+    let resp = post_form(
+        build_router(state.clone()),
+        "/onboarding/save",
+        "latitude=51.5&longitude=-0.12&confidence_threshold=0.85",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+
+    let conf = state.with_db(|c| birdnet_db::settings::get(c, "confidence_threshold").unwrap());
+    assert_eq!(
+        conf, "0.85",
+        "the wizard's choice must land in the settings table the overlay reads"
+    );
+}
+
+/// Counter-test: the field is a plain form value, and an out-of-range
+/// `CONFIDENCE` is a *fatal* doctor error (`ExecStartPre` exit 2). A crafted
+/// POST must not be able to leave the station unable to start.
+#[tokio::test]
+async fn save_rejects_a_confidence_the_daemon_would_refuse_to_start_on() {
+    for bad in ["70", "-0.5", "abc", "1.5", ""] {
+        let state = fresh_state();
+        let body = format!("confidence_threshold={bad}");
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/onboarding/save")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+
+        let stored = state.with_db(|c| birdnet_db::settings::get(c, "confidence_threshold"));
+        assert!(
+            stored.is_err(),
+            "confidence_threshold={bad:?} must not be persisted, got {stored:?}"
+        );
+        // The rejection must not derail the rest of the wizard.
+        let complete =
+            state.with_db(|c| birdnet_db::settings::get(c, "onboarding_complete").unwrap());
+        assert_eq!(complete, "true");
+    }
+}
+
+/// The in-range boundaries the daemon does accept must still be storable —
+/// the guard rejects the unusable, not the unusual.
+#[tokio::test]
+async fn save_accepts_in_range_boundary_confidences() {
+    for good in ["0", "1", "0.05", "1.0"] {
+        let state = fresh_state();
+        let body = format!("confidence_threshold={good}");
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/onboarding/save")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        let stored =
+            state.with_db(|c| birdnet_db::settings::get(c, "confidence_threshold").unwrap());
+        assert_eq!(stored, good);
+    }
+}
+
 #[tokio::test]
 async fn save_with_no_fields_still_completes_without_writing_blanks() {
     let state = fresh_state();

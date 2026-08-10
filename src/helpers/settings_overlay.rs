@@ -690,6 +690,24 @@ mod tests {
     }
 
     #[test]
+    fn wizard_written_confidence_reaches_the_daemon() {
+        // The full chain the onboarding wizard starts: it writes the
+        // `confidence_threshold` setting, the overlay maps it onto CONFIDENCE,
+        // and the daemon must then enforce *that* value rather than its
+        // default. Asserting only the mapping would leave the last hop —
+        // the one that actually decides whether a bird is recorded — untested.
+        for (written, expected) in [("0.5", 0.5_f32), ("0.85", 0.85), ("0.7", 0.7)] {
+            let merged =
+                apply_setting_overrides(None, [("confidence_threshold", written)]).unwrap();
+            let enforced = crate::daemon::resolve_confidence(Some(&merged));
+            assert!(
+                (enforced - expected).abs() < f32::EPSILON,
+                "wizard wrote {written}, daemon would enforce {enforced}"
+            );
+        }
+    }
+
+    #[test]
     fn empty_value_does_not_override() {
         let file = Config::parse("ALSA_CARD=plughw:1,0").unwrap();
         let merged = apply_setting_overrides(Some(file), [("alsa_device", "  ")]).unwrap();

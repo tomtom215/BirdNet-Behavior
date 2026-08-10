@@ -20,12 +20,18 @@ pub const DEFAULT_CONFIG_PATH: &str = "/etc/birdnet/birdnet.conf";
 
 /// Default minimum-confidence threshold for recording a detection.
 ///
-/// Matches BirdNET-Pi's `CONFIDENCE` default and is the single source of truth
-/// shared by the detection daemon (the value it enforces when no `CONFIDENCE`
-/// is configured) and the admin settings form (the value it displays), so the
-/// two can never drift apart — a drift that previously let the daemon record at
-/// 0.25 while the UI advertised 0.70.
-pub const DEFAULT_CONFIDENCE_THRESHOLD: f32 = 0.7;
+/// The single source of truth shared by the detection daemon (the value it
+/// enforces when no `CONFIDENCE` is configured), the admin settings form (the
+/// value it displays) and the first-run onboarding wizard (the preset it
+/// pre-selects), so they can never drift apart — a drift that previously let
+/// the daemon record at 0.25 while the UI advertised 0.70.
+///
+/// Set slightly above BirdNET-Pi's 0.70 so an out-of-the-box station produces a
+/// realistic log rather than one padded with marginal IDs, while staying well
+/// clear of the over-filtered range where quiet and distant birds stop being
+/// recorded at all. Operators who want either extreme change it in one place:
+/// Settings → Detection, or the wizard's Accuracy step.
+pub const DEFAULT_CONFIDENCE_THRESHOLD: f32 = 0.75;
 
 /// Default detection sensitivity, matching BirdNET-Pi's `SENSITIVITY` default.
 ///

@@ -91,10 +91,10 @@ mod tests {
             out.contains(&expected),
             "confidence field should default to the shared constant ({expected})"
         );
-        // And that shared default is BirdNET-Pi's 0.7, not the old 0.25.
+        // And that shared default is the shipped 0.75, not the old 0.25.
         assert!(
-            (birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD - 0.7).abs() < f32::EPSILON,
-            "default confidence should be 0.7"
+            (birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD - 0.75).abs() < f32::EPSILON,
+            "default confidence should be 0.75"
         );
     }
 
