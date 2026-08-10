@@ -147,6 +147,14 @@ CI: each needs a real systemd unit, a real USB microphone, or both.
   still-missing `arecord` at detection time says so instead of returning an
   empty string.
 
+  The install smoke test now **asserts** `arecord` is present after
+  `install.sh`, rather than inferring it from the job passing. That distinction
+  is the whole point: a failed `alsa-utils` install is deliberately only a
+  warning, so the installer exits 0 either way and a green job proved nothing
+  about this path. Verified both directions in the job's own `ubuntu:24.04`
+  image — with the package manager reachable the assertion passes, and with it
+  broken `install.sh` still exits 0 while the assertion fails.
+
 ### Changed
 
 - **`birdnet_inference_duration_seconds` no longer claims to be per-chunk.** It
