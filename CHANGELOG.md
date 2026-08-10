@@ -35,6 +35,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The setup wizard showed a station that did not exist.** Its Microphone step
+  was a mock-up: a hard-coded "UMC202HD · USB audio · card 1 · 48 kHz" card,
+  marked *recommended* and pre-selected, described as "detected automatically";
+  a "Built-in microphone · card 0 · 44.1 kHz"; and two more cards offering an
+  RTSP camera and folder-watching that did nothing when clicked. The final
+  summary card was the same — "Boston, MA · 42.36, −71.06", the same UMC202HD,
+  and a dashboard address of `http://birdnet.local/` that does not resolve on
+  every network.
+
+  None of it was read from the station. A first-run operator was shown hardware
+  they do not own, presented as already found — so on a station whose
+  microphone was missing or misconfigured, the wizard's answer to *"will this
+  hear anything?"* was a confident yes about a device that is not there. That
+  is the failure mode the wizard exists to prevent.
+
+  The Microphone step now renders the real rows from `audio_sources`, reusing
+  the Capture tab's own `kind_label`/`detail_for` rather than a second copy that
+  could drift, and a station with no source is told plainly that nothing will be
+  detected and pointed at where to add one. The summary rows that depend on
+  operator input are placeholders the page script fills — location from the
+  coordinates actually entered, alerts and confidence from the cards actually
+  chosen, and the dashboard address from the URL the operator actually reached
+  the page on. Verified by driving the wizard end to end in a real browser, and
+  a test pins every one of the removed mock strings so none can reappear.
+
+  Two counts went stale when the Accuracy step was added and nothing would have
+  caught either: the welcome copy still read "five steps", and
+  `tools/visual-qa/onboarding.mjs` looped to a hard-coded `step <= 5`, so its
+  screenshot set silently stopped one short — looking complete while missing
+  exactly the new step worth reviewing. The prose count is now asserted by a
+  test and the capture script reads the count from the page. Re-audited with
+  axe-core across all six steps (stricter than the CI gate, which only ever sees
+  the visible first step): no WCAG 2.1 A/AA violations outside the two rules the
+  gate defers by design, and no horizontal overflow at 390 px in either theme.
+
 - **`--doctor` was silent about a confidence threshold that guarantees a
   false-positive firehose.** Validation rejected the percentage mistake
   (`CONFIDENCE=70`) and non-numeric junk as errors, but a *decimal* slip — `0.07`

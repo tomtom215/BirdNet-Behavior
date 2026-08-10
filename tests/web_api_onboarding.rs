@@ -19,6 +19,38 @@ fn fresh_state() -> AppState {
     AppState::from_connection(conn, std::path::PathBuf::from(":memory:"))
 }
 
+/// A fresh station with a real capture source configured, the way the
+/// installer leaves one.
+fn state_with_source(label: Option<&str>, device: &str) -> AppState {
+    let conn = Connection::open_in_memory().unwrap();
+    birdnet_db::migration::migrate(&conn).unwrap();
+    let mut new = birdnet_db::audio_sources::NewAudioSource::defaults(
+        "src_test_1",
+        birdnet_db::audio_sources::SourceKind::UsbAlsa,
+        device,
+    );
+    new.label = label.map(ToString::to_string);
+    birdnet_db::audio_sources::AudioSourceStore::insert(&conn, &new).unwrap();
+    AppState::from_connection(conn, std::path::PathBuf::from(":memory:"))
+}
+
+async fn fetch_wizard(state: AppState) -> String {
+    let resp = build_router(state)
+        .oneshot(
+            Request::builder()
+                .uri("/onboarding")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    String::from_utf8(body.to_vec()).unwrap()
+}
+
 /// A station that already has a detection (so it is past first-run).
 fn state_with_detection() -> AppState {
     let conn = Connection::open_in_memory().unwrap();
@@ -182,6 +214,168 @@ async fn wizard_prompts_for_the_confidence_threshold() {
     assert_eq!(
         pips, rendered_steps,
         "the stepper must show one pip per step, else the wizard skips a dot"
+    );
+    // The welcome copy states the count in prose; it went stale when the
+    // Accuracy step was added and nothing would have caught it.
+    assert!(
+        html.contains("six steps"),
+        "the welcome text must state the real number of steps"
+    );
+    assert!(!html.contains("five steps"));
+}
+
+/// The microphone step used to be a mock-up: a hard-coded "UMC202HD · USB
+/// audio · card 1 · 48 kHz" card marked *recommended* and pre-selected, a
+/// "Built-in microphone · card 0", and two cards offering RTSP and folder
+/// watching that did nothing. A first-run operator was shown hardware they do
+/// not own, described as already detected — and on a station whose microphone
+/// was missing, the wizard's answer to "will this hear anything?" was a
+/// confident yes about a device that does not exist.
+#[tokio::test]
+async fn microphone_step_shows_the_stations_real_source() {
+    let html = fetch_wizard(state_with_source(
+        Some("Backyard feeder"),
+        "plughw:CARD=PRO,DEV=0",
+    ))
+    .await;
+
+    assert!(
+        html.contains("Backyard feeder"),
+        "the operator's own label must appear"
+    );
+    assert!(
+        html.contains("plughw:CARD=PRO,DEV=0"),
+        "the real device id must appear"
+    );
+    assert!(
+        html.contains("USB · ALSA"),
+        "the kind badge must use the same words as the Capture tab"
+    );
+    assert!(
+        html.contains("48.0 kHz"),
+        "the real capture settings must appear, not a plausible constant"
+    );
+}
+
+/// A label is operator-controlled text. Rendering must not let it collide with
+/// the template's own placeholder syntax — a chained `.replace()` would have
+/// re-scanned the inserted label and swapped it for the summary line.
+#[tokio::test]
+async fn a_label_that_looks_like_a_placeholder_renders_literally() {
+    let html = fetch_wizard(state_with_source(Some("{{mic_summary}}"), "plughw:1,0")).await;
+    assert!(
+        html.contains("{{mic_summary}}"),
+        "the operator's literal label must survive rendering"
+    );
+    assert!(
+        !html.contains("{{mic_body}}"),
+        "no placeholder may be left unsubstituted"
+    );
+    // The real summary row is still correct — the label did not displace it.
+    assert!(html.contains("plughw:1,0 · 48.0 kHz"));
+}
+
+/// An unlabelled source falls back to its device id rather than to a blank —
+/// and shows it once, not as both the heading and the detail line.
+#[tokio::test]
+async fn microphone_step_falls_back_to_the_device_id() {
+    let html = fetch_wizard(state_with_source(None, "plughw:1,0")).await;
+    let card = mic_step(&html);
+    assert!(card.contains("plughw:1,0"), "device id must be shown");
+    assert_eq!(
+        card.matches("plughw:1,0").count(),
+        1,
+        "an unlabelled source must not print its device id twice: {card}"
+    );
+
+    // With a label there are two distinct things to show, so both appear.
+    let labelled = fetch_wizard(state_with_source(Some("Backyard feeder"), "plughw:1,0")).await;
+    let card = mic_step(&labelled);
+    assert!(card.contains("Backyard feeder") && card.contains("plughw:1,0"));
+}
+
+/// A whitespace-only label is the admin form's "no label" state, not a name.
+#[tokio::test]
+async fn microphone_step_ignores_a_blank_label() {
+    let html = fetch_wizard(state_with_source(Some("   "), "plughw:2,0")).await;
+    let card = mic_step(&html);
+    assert!(
+        card.contains("plughw:2,0"),
+        "a blank label must fall back to the device id, not render an empty heading"
+    );
+    assert_eq!(card.matches("plughw:2,0").count(), 1);
+}
+
+/// The `data-step="3"` section only — so assertions about the microphone card
+/// are not satisfied by the same text appearing in the final summary.
+fn mic_step(html: &str) -> &str {
+    let start = html
+        .find(r#"<section class="ob-step" data-step="3">"#)
+        .expect("microphone step present");
+    let rest = &html[start..];
+    let end = rest.find("</section>").expect("step is closed");
+    &rest[..end]
+}
+
+/// The case that matters most: a station that will detect nothing. The old
+/// wizard claimed a USB mic had been found.
+#[tokio::test]
+async fn microphone_step_is_honest_when_nothing_is_configured() {
+    let html = fetch_wizard(fresh_state()).await;
+    assert!(
+        html.contains("No audio source configured"),
+        "a station with no capture source must be told so"
+    );
+    assert!(
+        html.contains("/station/capture"),
+        "and pointed at where to add one"
+    );
+    assert!(
+        html.contains("None configured — no birds will be detected"),
+        "the summary must not imply a working microphone"
+    );
+}
+
+/// Counter-test: every fabricated value that used to ship in the wizard,
+/// pinned so none of them can reappear. These were shown to every station
+/// regardless of its actual hardware, location or address.
+#[tokio::test]
+async fn wizard_contains_no_mock_content() {
+    for state in [
+        fresh_state(),
+        state_with_source(Some("Backyard feeder"), "plughw:1,0"),
+    ] {
+        let html = fetch_wizard(state).await;
+        for mock in [
+            "UMC202HD", // a microphone model nobody's station reported
+            "Built-in microphone",
+            "card 0 · 44.1 kHz",
+            "card 1 · 48 kHz",
+            "detected automatically",
+            "Boston, MA", // someone else's location, in the summary
+            "42.36, −71.06",
+            "birdnet.local",  // an address that does not resolve on every network
+            "Watch a folder", // an option the wizard never implemented
+        ] {
+            assert!(
+                !html.contains(mock),
+                "mock content {mock:?} is still served by the wizard"
+            );
+        }
+    }
+}
+
+/// The summary rows that depend on operator input are placeholders the page
+/// script fills, not fabricated values baked into the HTML.
+#[tokio::test]
+async fn summary_rows_start_unset_rather_than_invented() {
+    let html = fetch_wizard(fresh_state()).await;
+    assert!(html.contains(r#"id="ob-sum-loc">Not set<"#));
+    assert!(html.contains(r#"id="ob-sum-url">—<"#));
+    assert!(html.contains(r#"id="ob-sum-notify""#));
+    assert!(
+        html.contains("window.location.origin"),
+        "the dashboard address must come from the address the operator reached"
     );
 }
 

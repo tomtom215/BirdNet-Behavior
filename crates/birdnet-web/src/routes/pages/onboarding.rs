@@ -5,8 +5,20 @@
 //! wizard persists: the Location step auto-detects coordinates (and the
 //! timezone) via the existing `/admin/settings/detect-location` endpoint and
 //! submits to `POST /onboarding/save`, which writes the chosen settings and
-//! marks onboarding complete. Audio device selection is intentionally delegated
-//! to Settings → Audio (richer ALSA/RTSP handling lives there).
+//! marks onboarding complete. Audio device *selection* is intentionally
+//! delegated to Settings → Audio (richer ALSA/RTSP handling lives there); the
+//! Microphone step reports what is configured rather than offering a choice it
+//! does not implement.
+//!
+//! **Every value the page shows is real.** The Microphone step and the final
+//! summary card used to be a mock-up — a hard-coded "UMC202HD · card 1 ·
+//! 48 kHz" microphone marked *recommended*, a "Boston, MA" location, and an
+//! `http://birdnet.local/` dashboard address — shown identically to every
+//! station regardless of its hardware, whereabouts or how it was reached. The
+//! microphone rows are now rendered from `audio_sources`, and the rows that
+//! depend on operator input are placeholders the page script fills from the
+//! form, so a station with no capture source is told so instead of being
+//! congratulated on a device it does not have.
 //!
 //! The Accuracy step exists because the minimum-confidence threshold decides
 //! whether anything is recorded at all, and nothing in the setup path used to
@@ -19,13 +31,18 @@
 //! A fresh station (no detections yet, not onboarded) is redirected here from
 //! the dashboard — see `pages::dashboard`.
 
+use std::fmt::Write as _;
+
 use axum::extract::State;
 use axum::response::{Html, Redirect};
 use axum::routing::{get, post};
 use axum::{Form, Router};
 
+use birdnet_db::audio_sources::{AudioSource, AudioSourceStore, SourceKind};
 use birdnet_db::settings::{self, SettingsCategory};
 
+use crate::routes::admin::audio::{detail_for, kind_label};
+use crate::routes::pages::escape_html;
 use crate::state::AppState;
 
 /// Mount the first-run onboarding wizard routes.
@@ -35,8 +52,125 @@ pub fn router() -> Router<AppState> {
         .route("/onboarding/save", post(onboarding_save))
 }
 
-async fn onboarding_page() -> Html<String> {
-    Html(ONBOARDING_HTML.to_string())
+async fn onboarding_page(State(state): State<AppState>) -> Html<String> {
+    // `list` already excludes soft-deleted rows (`WHERE disabled_at IS NULL`).
+    let sources = state.with_db(AudioSourceStore::list).unwrap_or_else(|err| {
+        tracing::error!(error = %err, "onboarding: audio_sources list failed");
+        Vec::new()
+    });
+
+    Html(render_page(
+        &render_mic_body(&sources),
+        &escape_html(&mic_summary(&sources)),
+    ))
+}
+
+/// Substitute the two server-filled placeholders into the wizard template.
+///
+/// Deliberately a single pass rather than a `.replace()` chain. Both inserted
+/// values derive from operator-controlled text — a microphone's friendly label
+/// can contain any characters — and a chained replace re-scans what it just
+/// inserted, so a source labelled `{{mic_summary}}` would have had its label
+/// silently swapped for the summary line. Escaping does not prevent that:
+/// `escape_html` neutralises HTML, not the template's own brace syntax.
+///
+/// Each placeholder appears exactly once. If one is ever removed from the
+/// template this degrades to dropping that value rather than panicking in a
+/// request handler; the rendering tests pin the output either way.
+fn render_page(mic_body: &str, mic_summary: &str) -> String {
+    let Some((head, rest)) = ONBOARDING_HTML.split_once("{{mic_body}}") else {
+        return ONBOARDING_HTML.to_string();
+    };
+    let Some((middle, tail)) = rest.split_once("{{mic_summary}}") else {
+        return format!("{head}{mic_body}{rest}");
+    };
+    format!("{head}{mic_body}{middle}{mic_summary}{tail}")
+}
+
+/// The microphone step, rendered from the station's actual capture sources.
+///
+/// This step used to be a mock-up: a hard-coded "UMC202HD · USB audio ·
+/// card 1 · 48 kHz" card marked *recommended* and pre-selected, plus a
+/// "Built-in microphone · card 0" and two more cards offering RTSP and
+/// folder-watching. None of it was real — no station was consulted, nothing was
+/// clickable to any effect, and a first-run operator was shown hardware they do
+/// not own, described as already detected. On a station whose microphone was
+/// missing or misconfigured, the setup wizard's answer to "will this hear
+/// anything?" was a confident yes about a device that does not exist.
+///
+/// The wizard deliberately does not *change* the capture source — Settings →
+/// Audio owns that, with the ALSA/RTSP handling this step cannot reproduce — so
+/// the honest version reports rather than pretends to offer a choice. The cards
+/// are therefore not selectable: nothing here writes a setting.
+fn render_mic_body(sources: &[AudioSource]) -> String {
+    if sources.is_empty() {
+        return concat!(
+            r#"<div class="ob-cards"><div class="ob-card"><span class="ic">🔇</span>"#,
+            r#"<div class="ob-grow"><div class="t">No audio source configured</div>"#,
+            r#"<div class="s">Nothing will be detected until a microphone or RTSP stream is added. "#,
+            r#"The installer normally sets this up; if it could not find your device you can add it by hand.</div>"#,
+            r#"</div></div></div>"#,
+            r#"<p class="bnb-meta ob-mt-16"><a href="/station/capture">Add a microphone or RTSP stream →</a></p>"#,
+        )
+        .to_string();
+    }
+
+    let mut out = String::from(r#"<div class="ob-cards" id="mic-cards">"#);
+    for s in sources {
+        let icon = if matches!(s.kind, SourceKind::Rtsp) {
+            "📡"
+        } else {
+            "🎤"
+        };
+        // Unlabelled sources take the device id as their heading, so repeating
+        // it on the detail line would print `plughw:CARD=PRO,DEV=0` twice.
+        let label = friendly_label(s);
+        let detail = match label {
+            Some(_) => format!("{} · {}", s.device_id, detail_for(s)),
+            None => detail_for(s),
+        };
+        let _ = write!(
+            out,
+            concat!(
+                r#"<div class="ob-card"><span class="ic">{icon}</span><div class="ob-grow">"#,
+                r#"<div class="t">{name} <span class="bnb-pill ob-ml-6">{kind}</span></div>"#,
+                r#"<div class="s mono">{detail}</div></div></div>"#,
+            ),
+            icon = icon,
+            name = escape_html(label.unwrap_or(&s.device_id)),
+            kind = escape_html(kind_label(s.kind)),
+            detail = escape_html(&detail),
+        );
+    }
+    out.push_str("</div>");
+    out.push_str(
+        r#"<p class="bnb-meta ob-mt-16">Set up by the installer. Add, remove or fine-tune sources (USB, RTSP, gain) any time in <a href="/station/capture">Settings → Audio</a>.</p>"#,
+    );
+    out
+}
+
+/// The operator's own name for a source, when they gave it one.
+///
+/// A label of `""` or `"   "` is the admin form's "no label" state, not a name,
+/// so it is treated as absent rather than rendered as a blank heading.
+fn friendly_label(s: &AudioSource) -> Option<&str> {
+    s.label.as_deref().map(str::trim).filter(|l| !l.is_empty())
+}
+
+/// One-line description of the capture setup for the final step's summary.
+///
+/// Replaced a hard-coded "UMC202HD · USB · 48 kHz" that was shown to every
+/// station regardless of what it actually captures with.
+fn mic_summary(sources: &[AudioSource]) -> String {
+    match sources {
+        [] => "None configured — no birds will be detected".to_string(),
+        [one] => format!(
+            "{} · {}",
+            friendly_label(one).unwrap_or(&one.device_id),
+            detail_for(one)
+        ),
+        many => format!("{} sources configured", many.len()),
+    }
 }
 
 /// Fields the first-run wizard submits. All optional: clicking straight through
@@ -237,7 +371,7 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
         <div>
           <div class="ob-eyebrow">Welcome</div>
           <h1 class="ob-h">Let's teach the yard<br>to <em>listen</em>.</h1>
-          <p class="ob-p">Ninety seconds, five steps. Your Raspberry Pi will start identifying every bird it hears — no accounts, no cloud, all yours.</p>
+          <p class="ob-p">Ninety seconds, six steps. Your Raspberry Pi will start identifying every bird it hears — no accounts, no cloud, all yours.</p>
           <ul class="ob-bullets">
             <li><span class="tick">✓</span> No accounts — runs entirely on your Pi</li>
             <li><span class="tick">✓</span> Set once — sensible defaults the whole way</li>
@@ -296,15 +430,9 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
     <!-- Step 3 — Microphone -->
     <section class="ob-step" data-step="3">
       <div class="ob-eyebrow">How it hears</div>
-      <h1 class="ob-h">Pick a microphone.</h1>
-      <p class="ob-p ob-mb-18">We found a USB mic already. You can also add a network (RTSP) camera or watch a folder of recordings.</p>
-      <div class="ob-cards" id="mic-cards">
-        <div class="ob-card sel" data-radio="mic"><span class="ic">🎤</span><div class="ob-grow"><div class="t">UMC202HD · USB audio <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s">card 1 · 48 kHz · detected automatically</div></div><span class="vu"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></div>
-        <div class="ob-card" data-radio="mic"><span class="ic">🎤</span><div class="ob-grow"><div class="t">Built-in microphone</div><div class="s">card 0 · 44.1 kHz</div></div></div>
-        <div class="ob-card" data-radio="mic"><span class="ic">📡</span><div class="ob-grow"><div class="t">Add an RTSP camera</div><div class="s">rtsp://… — bird-box or feeder cam audio</div></div></div>
-        <div class="ob-card" data-radio="mic"><span class="ic">📁</span><div class="ob-grow"><div class="t">Watch a folder</div><div class="s">classify existing recordings on disk</div></div></div>
-      </div>
-      <p class="bnb-meta ob-mt-16">Your audio device is set up by the installer — fine-tune it (USB, RTSP, gain) any time in <a href="/admin">Settings → Audio</a>.</p>
+      <h1 class="ob-h">What it's listening with.</h1>
+      <p class="ob-p ob-mb-18">This is the capture source your station is actually configured to use.</p>
+      {{mic_body}}
     </section>
 
     <!-- Step 4 — Detection threshold -->
@@ -353,11 +481,11 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
           <h1 class="ob-h">You're <em>listening</em>.</h1>
           <p class="ob-p">The pipeline is warming up. Within a minute or two you'll see the first detections roll in.</p>
           <div class="bnb-card pad ob-mt-16">
-            <div class="summary-row"><span class="k">Location</span><span>Boston, MA · 42.36, −71.06</span></div>
-            <div class="summary-row"><span class="k">Microphone</span><span>UMC202HD · USB · 48 kHz</span></div>
+            <div class="summary-row"><span class="k">Location</span><span id="ob-sum-loc">Not set</span></div>
+            <div class="summary-row"><span class="k">Microphone</span><span>{{mic_summary}}</span></div>
             <div class="summary-row"><span class="k">Minimum confidence</span><span id="ob-sum-conf">0.75 · Balanced</span></div>
-            <div class="summary-row"><span class="k">Alerts</span><span>Rare birds only</span></div>
-            <div class="summary-row"><span class="k">Dashboard</span><span class="mono">http://birdnet.local/</span></div>
+            <div class="summary-row"><span class="k">Alerts</span><span id="ob-sum-notify">Rare birds only</span></div>
+            <div class="summary-row"><span class="k">Dashboard</span><span class="mono" id="ob-sum-url">—</span></div>
           </div>
         </div>
         <div>
@@ -400,6 +528,10 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
     cur.textContent = step;
     back.style.visibility = step === 1 ? 'hidden' : 'visible';
     next.textContent = step === total ? 'Finish & go to dashboard →' : 'Continue →';
+    // Auto-detect fills the coordinate inputs programmatically, which fires no
+    // `input` event — so recompute here too, or the summary would still read
+    // "Not set" for a station that just detected its location.
+    refreshSummary();
   }
   function finish() { form.requestSubmit(); }
 
@@ -423,17 +555,50 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
       var target = mirrors[card.dataset.radio];
       var input = target && document.getElementById(target);
       if (input && card.dataset.value) { input.value = card.dataset.value; }
-      // Keep the final step's summary honest about what was chosen.
-      if (card.dataset.radio === 'conf') {
-        var sum = document.getElementById('ob-sum-conf');
-        var name = card.querySelector('.t');
-        if (sum && name) {
-          sum.textContent = parseFloat(card.dataset.value).toFixed(2)
-            + ' · ' + name.textContent.trim().replace(/\s*recommended$/, '');
-        }
-      }
+      refreshSummary();
     });
   });
+
+  // Keep the final step's summary card describing THIS station rather than a
+  // mock-up. The microphone row is filled server-side from the real capture
+  // sources; the rest is whatever the operator has entered so far, so it is
+  // recomputed on every change and again on the way into the last step.
+  function cardName(sel) {
+    var c = document.querySelector(sel + '.sel .t');
+    return c ? c.textContent.trim().replace(/\s*recommended$/, '') : '';
+  }
+  function refreshSummary() {
+    var conf = document.getElementById('ob-conf');
+    var sumConf = document.getElementById('ob-sum-conf');
+    if (conf && sumConf) {
+      var name = cardName('[data-radio="conf"]');
+      var n = parseFloat(conf.value);
+      sumConf.textContent = (isNaN(n) ? conf.value : n.toFixed(2)) + (name ? ' · ' + name : '');
+    }
+    var sumNotify = document.getElementById('ob-sum-notify');
+    if (sumNotify) {
+      var nm = cardName('[data-radio="notify"]');
+      if (nm) { sumNotify.textContent = nm; }
+    }
+    var sumLoc = document.getElementById('ob-sum-loc');
+    if (sumLoc) {
+      var la = (document.getElementById('ob-lat') || {}).value;
+      var lo = (document.getElementById('ob-lon') || {}).value;
+      la = (la || '').trim(); lo = (lo || '').trim();
+      // Both halves are required — one alone disables the species filter just
+      // as completely as neither, so half a location is not a location.
+      sumLoc.textContent = (la && lo) ? (la + ', ' + lo) : 'Not set — species filtering stays off';
+    }
+    var sumUrl = document.getElementById('ob-sum-url');
+    // The address the operator actually reached this page on. The hard-coded
+    // mDNS URL this replaced does not resolve on every network.
+    if (sumUrl) { sumUrl.textContent = window.location.origin + '/'; }
+  }
+  ['ob-lat', 'ob-lon'].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) { el.addEventListener('input', refreshSummary); }
+  });
+  refreshSummary();
 
   // Auto-detect coordinates + timezone via the existing settings endpoint
   // (same-origin fetch; the endpoint itself queries ip-api.com server-side).

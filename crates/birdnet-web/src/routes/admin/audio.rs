@@ -100,7 +100,12 @@ const fn kind_css(kind: SourceKind) -> &'static str {
     }
 }
 
-const fn kind_label(kind: SourceKind) -> &'static str {
+/// Human-readable badge text for a source kind.
+///
+/// `pub(crate)` so the onboarding wizard's microphone step names the operator's
+/// real hardware with the same words the Capture tab uses, instead of carrying
+/// its own copy that could drift.
+pub(crate) const fn kind_label(kind: SourceKind) -> &'static str {
     match kind {
         SourceKind::UsbAlsa => "USB · ALSA",
         SourceKind::PipeWire => "PipeWire",
@@ -512,7 +517,12 @@ fn render_edit_form(row: &AudioSource) -> String {
     )
 }
 
-fn detail_for(s: &AudioSource) -> String {
+/// One-line technical summary of a source: rate, channels, depth, gain.
+///
+/// `pub(crate)` for the same reason as [`kind_label`] — the onboarding
+/// wizard shows the operator's real capture settings rather than a
+/// plausible-looking constant.
+pub(crate) fn detail_for(s: &AudioSource) -> String {
     let rate_khz = f64::from(s.sample_rate) / 1000.0;
     let mut out = format!(
         "{rate_khz:.1} kHz · {channels} · {bit}-bit",
