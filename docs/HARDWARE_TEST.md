@@ -102,8 +102,8 @@ Exit status is non-zero if any check failed.
 | `install` | The published one-liner completes on a clean box, and how long it takes |
 | `verify` | Binary runs, doctor's verdict, service active, health endpoint, **`--verify-extension` under `unshare -rn`**, systemd hardening actually applied |
 | `capture` | A real capture subprocess is running, segments reach the tmpfs watch dir, recordings persist, and the mic is not delivering digital silence |
-| `detect` | The reference Eurasian Magpie recording, pushed through the watch directory, produces a `Pica pica` detection on the API — real inference against the 11k-species model, on this board |
-| `perf` | **Mean inference latency per 3 s chunk**, peak SoC temperature, throttle register under load, RSS against the unit's `MemoryHigh=768M` |
+| `detect` | The reference Eurasian Magpie recording, pushed through the watch directory, produces a **new stored** `Pica pica` detection — the total must rise, so a magpie the station recorded last week cannot satisfy it. Real inference against the 11k-species model, on this board |
+| `perf` | Mean decode-to-prediction latency **per stored detection** (a measurement, not a verdict — see below), peak SoC temperature, throttle register under load, RSS against the unit's `MemoryHigh=768M` |
 | `web` | Every documented endpoint answers; the dashboard is reachable from the LAN; whether `/admin` is open without a password |
 | `watchdog` | `SIGSTOP` the daemon → systemd's watchdog kills and restarts it, and the station serves again |
 | `unplug` | Pull the mic → gauge drops to 0, daemon survives; plug it back → **recovers unattended** via capped backoff |
@@ -113,11 +113,18 @@ Exit status is non-zero if any check failed.
 | `duckdb` | Same against the derived analytics store → it rebuilds rather than refusing to start |
 | `reboot` | Cold reboot → service auto-starts, dashboard serves, **capture resumes** |
 
-### The two headline numbers
+### The headline numbers
 
-- **Mean inference latency.** A 3-second chunk must classify in well under
-  3000 ms or the station cannot keep up with a live microphone in real time.
-  The harness fails `perf.realtime` if it does not.
+- **Does the station keep up?** This comes from `pipeline`, not `perf`: it
+  counts the segments capture wrote against the files the daemon actually
+  opened, over a ten-minute window. That is a throughput measurement and it
+  works on a silent site.
+- **Mean decode-to-prediction latency** (`perf`) is reported as a measurement,
+  never as a verdict, and it is observed **once per stored detection** — not
+  once per analysed chunk. Its sample count therefore tracks how many birds
+  called, so a quiet site yields few or no observations however fast the board
+  is; the harness says so rather than inventing a number. Do not divide it by
+  elapsed time to infer coverage.
 - **Peak SoC temperature.** A Pi 4 begins soft-throttling at 80 °C. The harness
   warns above that, because a bench result at 20 °C ambient is not a July
   result in a sealed enclosure.

@@ -666,25 +666,51 @@ phase_detect() {
       return 0
     fi
 
+    # Wait for a NEW stored detection, not merely for the species to appear.
+    #
+    # This used to grep /api/v2/detections for the string "Pica pica" and pass
+    # on a hit. Any station that had ever detected a magpie — including one that
+    # ran this very phase yesterday — satisfied that instantly, whether or not
+    # the file just injected classified as anything. Measured on a Pi 4: the
+    # check passed while the stored-detection count sat unchanged at 151, and
+    # the contradiction was reported as a PASS beside a WARN rather than as the
+    # failure it was.
+    #
+    # The count rising is the load-bearing assertion: it can only happen if the
+    # daemon picked the file up, decoded it, ran the model, cleared the
+    # confidence gate and wrote a row. The species check then confirms it was
+    # OUR file rather than a bird that happened to call during the window.
+    # Same extraction as stats_total() — the field is total_detections, and a
+    # near-miss like "total" silently yields an empty string, which would make
+    # the guard below always false and turn this into a 180 s wait that always
+    # fails. Kept literal here because wait_for spawns a fresh bash that has
+    # none of this script's functions.
     if wait_for 180 bash -c "
-      n=\$(curl -sf '${BASE}/api/v2/detections?limit=200' 2>/dev/null | grep -o 'Pica pica' | head -1)
-      [ -n \"\$n\" ]"; then
-      record PASS detect.inference "Eurasian Magpie (Pica pica) surfaced on /api/v2/detections" \
-        "Real inference ran on this board against the 11k-species model."
+      n=\$(curl -sf '${BASE}/api/v2/stats' 2>/dev/null \
+           | grep -o '\"total_detections\"[[:space:]]*:[[:space:]]*[0-9]*' \
+           | grep -o '[0-9]*\$' | head -1)
+      [ -n \"\$n\" ] && [ \"\$n\" -gt ${before} ]"; then
+      after="$(stats_total)"; after="${after:-0}"
+      # Newest first (ORDER BY Date DESC, Time DESC), so the rows that could
+      # correspond to the injection are at the head of the list.
+      if curl -sf "${BASE}/api/v2/detections?limit=5" 2>/dev/null | grep -q 'Pica pica'; then
+        record PASS detect.inference \
+          "Eurasian Magpie (Pica pica) stored from the injected recording (${before} → ${after})" \
+          "Real inference ran on this board against the 11k-species model, and the row reached SQLite."
+      else
+        record FAIL detect.inference \
+          "detections rose ${before} → ${after} but no Pica pica among the newest rows" \
+          "Something was stored and it was not the reference recording — check the confidence gate and the species filter."
+      fi
     else
-      record FAIL detect.inference "reference recording produced no Pica pica detection within 180s"
+      after="$(stats_total)"; after="${after:-0}"
+      record FAIL detect.inference \
+        "the injected recording produced no new stored detection within 180s (count still ${after})" \
+        "A pre-existing Pica pica on /api/v2/detections is NOT evidence: this asserts a new row, not the presence of the species."
       snapshot_journal detect
     fi
   else
     record SKIP detect.inject "could not fetch the reference recording (offline?)"
-  fi
-
-  after="$(stats_total)"
-  after="${after:-0}"
-  if [ "$after" -gt "$before" ]; then
-    record PASS detect.persisted "detection count rose ${before} → ${after} (written to SQLite and read back over the API)"
-  else
-    record WARN detect.persisted "detection count unchanged at ${after}"
   fi
 
   local infcount
