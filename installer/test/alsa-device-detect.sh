@@ -136,34 +136,39 @@ else
 fi
 
 # ── Counter-test ────────────────────────────────────────────────────────────
-# A test that only exercises the new code cannot show the bug was real. Run the
-# same two fixtures through the PREVIOUS implementation and require that it
-# fails the property above — if it passes, this change fixes nothing.
+# A test that only exercises the new code cannot show the bug was real, so the
+# index-based implementation is kept here as a fixture and run over the same
+# listings. It must FAIL the stability property above; if it ever passes, the
+# fixtures no longer describe the defect and the test above proves nothing.
+#
+# Deliberately embedded rather than fetched from git history. The first version
+# of this read `HEAD~1:installer/lib/70-station.sh`, which broke the moment
+# another commit landed on top: HEAD~1 then already carried the fix, the
+# "previous" implementation was the new one, and the counter-test reported that
+# the change fixed nothing. A test whose meaning depends on its position in
+# history is a test that rots.
+legacy_detect() {
+    local fixture="$1" first_card first_device listing
+    listing="$(cat "${WORK}/fx/${fixture}")"
+    first_card="$(printf '%s\n' "${listing}" | awk '/^card/{print $2; exit}' | tr -d ':')"
+    first_device="$(printf '%s\n' "${listing}" \
+        | awk '/^card/{ if (match($0, /device [0-9]+/)) print substr($0, RSTART + 7, RLENGTH - 7); exit }')"
+    [ -n "${first_card}" ] && echo "plughw:${first_card},${first_device:-0}"
+}
 
-echo "=== counter-test: the previous implementation on the same fixtures ==="
-OLD="${WORK}/old-lib"
-mkdir -p "${OLD}"
-for f in 10-config.sh 20-log.sh 30-platform.sh 70-station.sh; do
-    if ! git -C "${REPO_ROOT}" show "HEAD~1:installer/lib/${f}" > "${OLD}/${f}" 2>/dev/null; then
-        echo "  SKIP  cannot read HEAD~1 copies of the installer libs"
-        OLD=""
-        break
-    fi
-done
-if [ -n "${OLD}" ]; then
-    old_before="$(run_detect "${OLD}" pi_before)"
-    old_after="$(run_detect "${OLD}" pi_after)"
-    echo "        previous: '${old_before}' (before) vs '${old_after}' (after)"
-    if [ "${old_before}" != "${old_after}" ]; then
-        pass "previous implementation DID change across the reboot — the defect was real"
-    else
-        fail "previous implementation was already stable; this change fixes nothing"
-    fi
-    if [ "${old_before}" = "plughw:1,0" ] && [ "${old_after}" = "plughw:3,0" ]; then
-        pass "and it changed exactly as observed on hardware (plughw:1,0 -> plughw:3,0)"
-    else
-        fail "previous outputs did not match what the Pi actually produced"
-    fi
+echo "=== counter-test: the index-based implementation on the same fixtures ==="
+old_before="$(legacy_detect pi_before)"
+old_after="$(legacy_detect pi_after)"
+echo "        index-based: '${old_before}' (before) vs '${old_after}' (after)"
+if [ "${old_before}" != "${old_after}" ]; then
+    pass "the index-based form DID change across the reboot — the defect is real"
+else
+    fail "the index-based form was stable here; the fixtures no longer show the defect"
+fi
+if [ "${old_before}" = "plughw:1,0" ] && [ "${old_after}" = "plughw:3,0" ]; then
+    pass "and it changed exactly as observed on hardware (plughw:1,0 -> plughw:3,0)"
+else
+    fail "index-based outputs did not match what the Pi actually produced"
 fi
 
 echo

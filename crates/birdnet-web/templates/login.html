@@ -117,6 +117,27 @@
               {{rate_limited}}>Sign in</button>
     </form>
 
+    <!--
+      Recovery hint. The admin password is generated at install time and shown
+      once; an operator upgrading from a release where /admin was open has
+      never needed it and has no reason to know where it lives. Without this,
+      the only route back is a root grep of a file they cannot be expected to
+      know about — from a screen that just told them "Incorrect password".
+
+      Naming the file discloses nothing: the path is in the public docs and the
+      README. The value is not shown, and this says nothing about whether any
+      particular username exists.
+    -->
+    <details class="login-card__hint">
+      <summary>Forgotten the password?</summary>
+      <p>
+        It is stored as <code>CADDY_PWD</code> in <code>/etc/birdnet/birdnet.conf</code>
+        on the station. From a terminal there:
+      </p>
+      <pre><code>sudo grep '^CADDY_PWD' /etc/birdnet/birdnet.conf</code></pre>
+      <p>The username is <code>admin</code>.</p>
+    </details>
+
     <div class="login-card__foot">
       <a href="/" class="bnb-help-link" aria-label="Back to dashboard">
         <span class="bnb-help-link__arrow" aria-hidden="true">←</span>

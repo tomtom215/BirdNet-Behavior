@@ -2058,6 +2058,78 @@ print_dashboard_qr() {
     qrencode -t ANSIUTF8 -m 2 "http://${host}:${port}" 2>/dev/null | sed 's/^/    /' || true
 }
 
+# Admin login. Viewing the dashboard is open; the admin panel (settings,
+# software update, system controls) requires signing in.
+#
+# This has to work on an UPGRADE, not only on a fresh install.
+# GENERATED_ADMIN_PASSWORD and CADDY_PWD_VALUE are set only during onboarding,
+# and onboarding is skipped whenever a config already exists
+# (`70-station.sh` returns early on `[ -f "${CONFIG_FILE}" ]`). So on every
+# update/repair/reinstall of an existing station both were empty and this block
+# printed NOTHING — no username, no mention that a password exists at all.
+#
+# That is a lockout, not a cosmetic gap. This release closes an `/admin` that
+# was served unauthenticated, so an operator who has never needed the password
+# since install now needs one they were shown once, months ago, in scrollback
+# that is long gone — and the only route back is a root grep of a file they
+# have no reason to know exists.
+#
+# The password itself is deliberately NOT reprinted here. It is already in the
+# operator's terminal history from install time, and an upgrade is not a reason
+# to spray it into scrollback again. The exact command to reveal it is printed
+# instead, so the recovery path is one copy-paste rather than a search.
+print_admin_login() {
+    if [ -n "${GENERATED_ADMIN_PASSWORD}" ]; then
+        echo
+        echo -e "  ${BOLD}Admin panel login${RESET} (settings + software update — viewing is open):"
+        echo -e "      username:  ${BOLD}admin${RESET}"
+        echo -e "      password:  ${BOLD}${GENERATED_ADMIN_PASSWORD}${RESET}"
+        echo    "      (auto-generated, saved as CADDY_PWD in ${CONFIG_FILE} — change it any time)"
+        echo    "      Save it now — it is not shown again."
+        return 0
+    fi
+    if [ -n "${CADDY_PWD_VALUE}" ]; then
+        echo
+        echo -e "  ${BOLD}Admin panel login${RESET} (settings + software update — viewing is open):"
+        echo -e "      username:  ${BOLD}admin${RESET}"
+        echo    "      password:  the one you just set."
+        return 0
+    fi
+
+    # Nothing was generated or entered this run — an upgrade or a repair. Read
+    # the station's own config to say something useful rather than nothing.
+    if grep -qE '^[[:space:]]*CADDY_PWD[[:space:]]*=[[:space:]]*[^[:space:]#]' \
+        "${CONFIG_FILE}" 2>/dev/null; then
+        echo
+        echo -e "  ${BOLD}Admin panel login${RESET} (settings + software update — viewing stays open):"
+        echo -e "      username:  ${BOLD}admin${RESET}"
+        echo    "      password:  already set on this station. To see it:"
+        echo -e "        ${BOLD}sudo grep '^CADDY_PWD' ${CONFIG_FILE}${RESET}"
+        echo    "      Signing in is required for the admin panel — earlier versions"
+        echo    "      served it without a password. Viewing the dashboard is unchanged."
+        return 0
+    fi
+
+    # No password at all. On a LAN-reachable station that means the admin panel
+    # is open to anyone who can load the dashboard, which the operator should
+    # hear about loudly rather than discover.
+    case "${LISTEN_ADDR}" in
+        127.0.0.1:* | localhost:*)
+            echo
+            echo "  Admin panel: no password set (CADDY_PWD). The dashboard is bound to"
+            echo "  this device only, so the panel is reachable just from here."
+            ;;
+        *)
+            loud_warn \
+                "The admin panel has NO PASSWORD and the dashboard is on your network." \
+                "Anyone who can reach it can change settings and update the software." \
+                "Fix: set CADDY_PWD in ${CONFIG_FILE}, then:" \
+                "  sudo bash install.sh repair"
+            ;;
+    esac
+    return 0
+}
+
 print_summary() {
     local ip web_host mdns_host
     ip="$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost')"
@@ -2127,18 +2199,7 @@ print_summary() {
         echo "  4. Open a web browser to  http://${web_host}:${web_port}"
     fi
 
-    # Admin login. Viewing the dashboard is open; the admin panel (settings +
-    # software update) needs these credentials.
-    if [ -n "${GENERATED_ADMIN_PASSWORD}" ]; then
-        echo
-        echo -e "  ${BOLD}Admin panel login${RESET} (settings + software update — viewing is open):"
-        echo -e "      username:  ${BOLD}admin${RESET}"
-        echo -e "      password:  ${BOLD}${GENERATED_ADMIN_PASSWORD}${RESET}"
-        echo    "      (auto-generated, saved as CADDY_PWD in ${CONFIG_FILE} — change it any time)"
-    elif [ -n "${CADDY_PWD_VALUE}" ]; then
-        echo
-        echo "  Admin panel (settings + software update): sign in as 'admin' with the password you set."
-    fi
+    print_admin_login
     echo
     echo "  Logs:  sudo journalctl -u birdnet-behavior -f"
     echo
