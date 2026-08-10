@@ -38,6 +38,32 @@ updates:
       # Remove this entry when argon2 0.6.0 ships, and take both together.
       - dependency-name: "password-hash"
         versions: ["0.6.x"]
+      # `audioadapter-buffers` must move in lock-step with `rubato`, for the
+      # same reason and with the same failure mode. rubato 4 requires
+      # `audioadapter ^4.0`, and `resample.rs` hands an
+      # `audioadapter_buffers::direct::InterleavedSlice` straight to
+      # `rubato::audioadapter::Adapter`. Taking a new major alone puts two
+      # versions of the crate in the graph, and the v5 type cannot implement
+      # the v4 trait:
+      #
+      #   error[E0277]: ... there are multiple different versions of crate
+      #   `audioadapter_buffers` in the dependency graph
+      #   note: required for `audioadapter_buffers::direct::InterleavedSlice
+      #         <&[f32]>` to implement `Adapter<f32>`
+      #
+      # That is PR #202 (4.0.0 -> 5.1.0), which failed 9 of 15 checks. The
+      # coupling was already written down at the top of `resample.rs`; nothing
+      # enforced it, so the bot proposed it anyway.
+      #
+      # Checked against the registry index on 2026-08-10: rubato's newest
+      # published version is 4.0.0, so there is no rubato that accepts
+      # audioadapter 5 — this cannot be taken at all yet, by anyone.
+      #
+      # Majors only: 4.x patch and minor updates are still wanted. Remove this
+      # entry when rubato publishes a release built on the newer audioadapter,
+      # and take both together.
+      - dependency-name: "audioadapter-buffers"
+        update-types: ["version-update:semver-major"]
     groups:
       cargo-patch-and-minor:
         update-types: ["patch", "minor"]
