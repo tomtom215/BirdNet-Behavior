@@ -15,6 +15,24 @@ Found by running the new on-device acceptance harness
 three releases — except where a bullet says otherwise. None was reachable from
 CI: each needs a real systemd unit, a real USB microphone, or both.
 
+- **A microphone vanished from the admin page about eight seconds after it
+  loaded.** The status pill polls `/admin/audio/sources/{id}/probe` every 8 s
+  with `hx-swap="outerHTML"`, but carried no `hx-target` of its own. `hx-target`
+  is inherited, the enclosing `<li>` declares `hx-target="this"`, and htmx
+  resolves an inherited `"this"` to the element that *declares* the attribute —
+  the `<li>`. So each poll swapped the probe response, a bare status `<span>`,
+  over the entire row. The header still read "1 mic" (a separate out-of-band
+  span), and a page refresh restored the row because it is re-rendered
+  server-side, which is what made it look cosmetic.
+
+  Reported from a real station whose microphone was down at the time — which is
+  exactly when an operator is on that page and least able to afford the list
+  emptying itself. The Edit and Remove buttons in the same row already stated
+  `hx-target="closest li"` explicitly; the pill was the one that did not. Both
+  the template's pill and the `/probe` replacement now set `hx-target="this"`,
+  and a test asserts it on both, since fixing only the replacement would leave
+  the first poll after every page load still wrong.
+
 - **Microphone capture could never work on a bare-metal install.** The unit
   granted audio with `DeviceAllow=/dev/snd rw`, but `DeviceAllow=` resolves a
   path to a *device node* and `/dev/snd` is a **directory**, so the rule matched

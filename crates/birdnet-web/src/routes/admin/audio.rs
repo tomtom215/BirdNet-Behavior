@@ -451,11 +451,20 @@ fn render_row(s: &AudioSource, status: Status) -> String {
         .replace("{{meta_line}}", &escape_html(&meta_for(s)))
 }
 
+/// The replacement pill returned by `/probe`, and therefore the one that keeps
+/// polling from the second swap onwards.
+///
+/// It carries `hx-target="this"` for the same reason the template's pill does:
+/// it lands back inside `<li class="audio-source" hx-target="this">`, and an
+/// inherited `"this"` resolves to the declaring `<li>`, not to the pill. Omit it
+/// here and the row survives exactly one swap before the next poll replaces the
+/// whole row with a bare status span.
 fn render_status_pill(id: &str, status: Status) -> String {
     format!(
         r#"<span class="bnb-pill {cls}"
   hx-get="/admin/audio/sources/{id}/probe"
   hx-trigger="every 8s"
+  hx-target="this"
   hx-swap="outerHTML"
   aria-live="polite">
   <span class="bnb-dot {cls}" aria-hidden="true"></span>{label}</span>"#,
@@ -761,6 +770,52 @@ mod tests {
         assert!(html.contains(r#"hx-get="/admin/audio/sources/src_a/probe""#));
         assert!(html.contains(r#"hx-trigger="every 8s""#));
         assert!(html.contains("Capturing"));
+    }
+
+    /// The poll must replace the PILL, never the row.
+    ///
+    /// `hx-target` is inherited, and the enclosing `<li>` declares
+    /// `hx-target="this"`. htmx resolves an inherited `"this"` to the element
+    /// that declares the attribute, so a pill without its own `hx-target`
+    /// swapped the probe response over the entire row — the microphone
+    /// disappeared from the admin page ~8 s after load, on a station whose mic
+    /// was down, which is exactly when an operator is looking at it.
+    #[test]
+    fn status_pill_targets_itself_not_the_enclosing_row() {
+        let pill = render_status_pill("src_a", Status::Down);
+        assert!(
+            pill.contains(r#"hx-target="this""#),
+            "the /probe replacement pill must target itself, got: {pill}"
+        );
+
+        // Same for the pill the row template ships, which is the one that runs
+        // the first poll after a page load.
+        let source = AudioSource {
+            id: "src_a".to_string(),
+            kind: SourceKind::UsbAlsa,
+            device_id: "plughw:CARD=PRO,DEV=0".to_string(),
+            label: None,
+            sample_rate: 48_000,
+            channels: Channels::Mono,
+            bit_depth: 24,
+            gain_db: 0.0,
+            rtsp_transport: RtspTransport::Auto,
+            schedule_quiet: None,
+            pipeline: PipelineFlags::default(),
+            disabled_at: None,
+            created_at: "2026-08-10".to_string(),
+            updated_at: "2026-08-10".to_string(),
+        };
+        let row = render_row(&source, Status::Down);
+        let pill_start = row
+            .find(r#"<span class="bnb-pill"#)
+            .expect("row renders a status pill");
+        let pill_end = row[pill_start..].find('>').expect("pill tag closes") + pill_start;
+        let pill_tag = &row[pill_start..pill_end];
+        assert!(
+            pill_tag.contains(r#"hx-target="this""#),
+            "the row template's pill must target itself, got: {pill_tag}"
+        );
     }
 
     #[test]
