@@ -58,8 +58,51 @@ pub(super) fn check_audio_source(cli: &Cli, config: Option<&Config>) -> Vec<Chec
         )),
     }
 
-    if let Some(dev) = alsa.as_deref() {
-        out.push(probe_alsa_device(dev));
+    // What capture will ACTUALLY use, which is not necessarily what the config
+    // says. `capture.rs` seeds the `audio_sources` table from CLI/config only
+    // while that table is EMPTY, and from then on the table is the source of
+    // truth ("so the table is the single source of truth for capture and the
+    // web surface"). An operator who edits ALSA_CARD on an established station
+    // changes nothing, and a diagnostic that reads only the config cheerfully
+    // validates a device the daemon will never open.
+    //
+    // Measured on a Raspberry Pi 4: config edited to `plughw:CARD=PRO,DEV=0`,
+    // service restarted, and the journal kept reporting
+    // `started microphone capture device=plughw:1,0` from the table — with the
+    // gauge at 0 and no recording, for an hour, while every configuration file
+    // on the box said the right thing.
+    //
+    // This is the same shape as the CADDY_PWD defect: two readers of one
+    // setting, disagreeing, with the diagnostic reading the wrong one. It is
+    // resolved the same way — by consulting what the runtime consults.
+    let db_sources = effective_alsa_devices(config);
+    match db_sources.as_deref() {
+        Some(devices) if !devices.is_empty() => {
+            for dev in devices {
+                out.push(probe_alsa_device(dev));
+            }
+            if let Some(cfg_dev) = alsa.as_deref()
+                && !devices.iter().any(|d| d == cfg_dev)
+            {
+                out.push(Check::warn(
+                    "Audio source (config vs database)",
+                    format!(
+                        "the config says `{cfg_dev}` but capture uses `{}` from the audio_sources table",
+                        devices.join("`, `")
+                    ),
+                    "the table wins once it has rows — editing the config will not change capture. \
+                     Change the device on the /admin/audio page (or clear the table to re-seed \
+                     from the config on next start)",
+                ));
+            }
+        }
+        // No rows: the config really is what capture will use, because the
+        // table gets seeded from it on the next start.
+        _ => {
+            if let Some(dev) = alsa.as_deref() {
+                out.push(probe_alsa_device(dev));
+            }
+        }
     }
     if let Some(url) = rtsp_single.as_deref() {
         out.push(probe_rtsp_url(url));
@@ -72,6 +115,41 @@ pub(super) fn check_audio_source(cli: &Cli, config: Option<&Config>) -> Vec<Chec
     }
 
     out
+}
+
+/// ALSA devices the capture path will use, read from the same `audio_sources`
+/// table it reads, via the same [`AudioSourceStore::list`] query.
+///
+/// Deliberately shares the query rather than restating the rule: two copies of
+/// "where does the device come from" is exactly how the config and the runtime
+/// drifted apart in the first place.
+///
+/// Returns `None` when the table cannot be consulted at all — no database yet,
+/// unreadable, or corrupt. That is not a finding here: `check_database` owns
+/// the database's health, and a doctor that failed because the DB was corrupt
+/// would block the startup that repairs it, which is the trap this release
+/// spent its time removing.
+fn effective_alsa_devices(config: Option<&Config>) -> Option<Vec<String>> {
+    use birdnet_db::audio_sources::{AudioSourceStore, SourceKind};
+
+    let db_path = crate::helpers::db_path_from_config(config);
+    if !db_path.exists() {
+        return None;
+    }
+    // Read-only: the diagnostic must never take a write lock on a station's
+    // live database, and ExecStartPre runs this while nothing else holds it.
+    let conn = rusqlite::Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )
+    .ok()?;
+    let rows = conn.list().ok()?;
+    Some(
+        rows.into_iter()
+            .filter(|s| s.kind == SourceKind::UsbAlsa)
+            .map(|s| s.device_id)
+            .collect(),
+    )
 }
 
 fn probe_alsa_device(device: &str) -> Check {
@@ -350,8 +428,8 @@ fn parse_host_port(hp: &str, default: u16) -> (String, u16) {
 #[cfg(test)]
 mod tests {
     use super::{
-        CardRef, check_audio_source, first_card, listing_has_card, parse_card_ref, parse_host_port,
-        probe_rtsp_url, stable_form_hint,
+        CardRef, check_audio_source, effective_alsa_devices, first_card, listing_has_card,
+        parse_card_ref, parse_host_port, probe_rtsp_url, stable_form_hint,
     };
     use crate::cli::Cli;
     use crate::doctor::Status;
@@ -546,6 +624,101 @@ card 3: PRO [Comica_Traxshot PRO], device 0: USB Audio [USB Audio]
         // `CARD=`, which the config key `ALSA_CARD=` also contains.
         assert!(!hint.contains("plughw:CARD="), "got: {hint}");
         assert!(hint.contains("usb-audio-mapper"), "got: {hint}");
+    }
+
+    /// Build a real on-disk database carrying one ALSA source, and a config
+    /// pointing `DB_PATH` at it. Nothing is mocked: the check opens this file
+    /// and runs the same `list()` query the capture path runs.
+    fn db_with_alsa_source(dir: &std::path::Path, device: &str) -> birdnet_core::config::Config {
+        use birdnet_db::audio_sources::{AudioSourceStore, NewAudioSource, SourceKind};
+        let db_path = dir.join("birds.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        conn.insert(&NewAudioSource::defaults(
+            "src_seed_1".to_string(),
+            SourceKind::UsbAlsa,
+            device.to_string(),
+        ))
+        .unwrap();
+        crate::helpers::test_support::config_with(&[("DB_PATH", db_path.to_str().unwrap())])
+    }
+
+    #[test]
+    fn effective_devices_come_from_the_table_not_the_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = db_with_alsa_source(dir.path(), "plughw:1,0");
+        assert_eq!(
+            effective_alsa_devices(Some(&config)),
+            Some(vec!["plughw:1,0".to_string()])
+        );
+    }
+
+    #[test]
+    fn no_database_yet_is_not_a_finding() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::helpers::test_support::config_with(&[(
+            "DB_PATH",
+            dir.path().join("absent.db").to_str().unwrap(),
+        )]);
+        // The config is what capture will use, because the table gets seeded
+        // from it on first start. Must not be reported as a divergence.
+        assert_eq!(effective_alsa_devices(Some(&config)), None);
+    }
+
+    #[test]
+    fn divergence_between_config_and_table_is_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        // The stale index the Pi actually carried while its config said
+        // CARD=PRO — the exact state that produced an hour of silence.
+        let db_path = dir.path().join("birds.db");
+        db_with_alsa_source(dir.path(), "plughw:1,0");
+        let config = crate::helpers::test_support::config_with(&[
+            ("DB_PATH", db_path.to_str().unwrap()),
+            ("ALSA_CARD", "plughw:CARD=PRO,DEV=0"),
+        ]);
+
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        let checks = check_audio_source(&cli, Some(&config));
+        let divergence = checks
+            .iter()
+            .find(|c| c.name == "Audio source (config vs database)")
+            .expect("the disagreement must be reported");
+        assert_eq!(divergence.status, Status::Warn);
+        assert!(
+            divergence.message.contains("plughw:CARD=PRO,DEV=0")
+                && divergence.message.contains("plughw:1,0"),
+            "both values must be named, got: {}",
+            divergence.message
+        );
+    }
+
+    #[test]
+    fn agreement_between_config_and_table_is_silent() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("birds.db");
+        {
+            use birdnet_db::audio_sources::{AudioSourceStore, NewAudioSource, SourceKind};
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+            conn.insert(&NewAudioSource::defaults(
+                "src_seed_1".to_string(),
+                SourceKind::UsbAlsa,
+                "plughw:CARD=PRO,DEV=0".to_string(),
+            ))
+            .unwrap();
+        }
+        let config = crate::helpers::test_support::config_with(&[
+            ("DB_PATH", db_path.to_str().unwrap()),
+            ("ALSA_CARD", "plughw:CARD=PRO,DEV=0"),
+        ]);
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        let checks = check_audio_source(&cli, Some(&config));
+        assert!(
+            !checks
+                .iter()
+                .any(|c| c.name == "Audio source (config vs database)"),
+            "no disagreement to report when the two agree"
+        );
     }
 
     #[test]

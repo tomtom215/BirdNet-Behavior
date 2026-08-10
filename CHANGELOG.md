@@ -127,6 +127,28 @@ CI: each needs a real systemd unit, a real USB microphone, or both.
   asserting the previous implementation did **not**, reproducing `plughw:1,0` →
   `plughw:3,0` exactly as the hardware behaved.
 
+- **`--doctor` validated a device the daemon would never open.** Capture
+  resolves its sources from the `audio_sources` table, which is seeded from
+  `ALSA_CARD` only while that table is *empty* — after that the table is the
+  source of truth, as `capture.rs` says outright. The audio check read only the
+  config. So an operator on an established station could correct `ALSA_CARD`,
+  restart, watch the diagnostic pass, and still record nothing, because the
+  daemon was opening the stale device in the table.
+
+  Measured on a Raspberry Pi 4: config set to `plughw:CARD=PRO,DEV=0`, service
+  restarted, and the journal kept reporting `started microphone capture
+  device=plughw:1,0` from the table — gauge at 0, nothing recorded, while every
+  configuration file on the box said the right thing.
+
+  This is the same shape as the `CADDY_PWD` defect above: two readers of one
+  setting, disagreeing, with the diagnostic reading the one the runtime
+  ignores. Resolved the same way — the check now consults the table through the
+  **same `AudioSourceStore::list` query** the capture path uses, probes the
+  devices that will really be opened, and when the config and the table
+  disagree, says so and names both values. A missing or corrupt database is not
+  a finding here: `check_database` owns that, and a doctor that failed on a
+  corrupt database would block the startup that repairs it.
+
 - **The installer told operators to sign in with a username that does not
   exist.** `install.sh` printed `username: birdnet`, wrote `CADDY_USER=birdnet`
   into `birdnet.conf`, and four docs pages repeated it — but the only account
