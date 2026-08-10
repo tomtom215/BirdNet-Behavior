@@ -133,7 +133,7 @@ Verdicts: ✅ EXISTS (solid) · 🟡 PARTIAL · ❌ MISSING. Evidence is `file:l
 
 | Item | Verdict | Evidence |
 |---|---|---|
-| First-run admin password | ✅ | argon2id `crates/birdnet-db/src/accounts.rs`; `src/helpers/auth.rs` bootstrap; installer auto-generates a strong password (user `birdnet`) and prints it once |
+| First-run admin password | ✅ | argon2id `crates/birdnet-db/src/accounts.rs`; `src/helpers/auth.rs` bootstrap; installer auto-generates a strong password (user `admin`) and prints it once |
 | Health/doctor page (CLI + web) | ✅ | `src/doctor/*` (audio/model/db/paths/disk/env/config/watchdog) + `/admin/doctor`; plain-language remediation per finding |
 | Doctor **self-heal** | ✅ | `--fix` creates missing configured dirs (recordings + image-cache) before reporting; safe/idempotent, never needs root (G-07) |
 | Web onboarding wizard persists | ✅ | `POST /onboarding/save` persists location/timezone/notify + `onboarding_complete`; fresh box is redirected to the wizard; auto-detect wired (G-09) |

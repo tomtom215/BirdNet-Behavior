@@ -9,11 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-All three found by running the new on-device acceptance harness
+Found by running the new on-device acceptance harness
 (`scripts/hardware-test.sh`) against a Raspberry Pi 4 on Pi OS Trixie — the
 "real Raspberry Pi hardware" gap `docs/RELEASE_PLAN.md` § 5 had carried open for
-three releases. None was reachable from CI: each needs a real systemd unit, a
-real USB microphone, or both.
+three releases — except where a bullet says otherwise. None was reachable from
+CI: each needs a real systemd unit, a real USB microphone, or both.
 
 - **Microphone capture could never work on a bare-metal install.** The unit
   granted audio with `DeviceAllow=/dev/snd rw`, but `DeviceAllow=` resolves a
@@ -89,6 +89,35 @@ real USB microphone, or both.
   source genuinely prevent operation and do not self-heal. A missing audio
   device was already a warning, correctly — the capture supervisor retries it.
 
+- **The installer told operators to sign in with a username that does not
+  exist.** `install.sh` printed `username: birdnet`, wrote `CADDY_USER=birdnet`
+  into `birdnet.conf`, and four docs pages repeated it — but the only account
+  the dashboard seeds is `admin`, and the login form reads `CADDY_USER` from the
+  **process environment**, which the bare-metal unit never sets. Until the
+  `/admin` fix above, this was harmless: the panel was open, so nobody ever had
+  to sign in. Closing that hole converts it into a lockout — the operator
+  follows the installer's own output and cannot get in.
+
+  Found on hardware minutes after the auth fix was verified, by trying to sign
+  in. The installer, the generated config's comments, and the docs now say
+  `admin`, and record that `CADDY_USER` takes effect only where the environment
+  reaches the process (Docker). The docs also stop calling the panel HTTP Basic
+  Auth: `/admin*` redirects (303) to a `/login` form and issues a session
+  cookie, so `curl -u` never applied to it.
+
+- **`alsa-utils` was never installed, so a microphone station could install
+  cleanly and record nothing.** The installer ensures `ffmpeg` when the config
+  names an RTSP source, but the ALSA path — the default for a USB microphone —
+  only ran `command -v arecord … || true`. `arecord` is both the capture backend
+  the daemon spawns and what the installer's own card auto-detect reads, so
+  without it detection silently found no device, wrote no `ALSA_CARD`, and the
+  station recorded nothing while reporting a clean install. Raspberry Pi OS
+  ships `alsa-utils`, which is why this stayed invisible; a minimal Debian does
+  not. Both backends now go through one `ensure_capture_tool` helper, `arecord`
+  is installed before onboarding so auto-detect has something to read, and a
+  still-missing `arecord` at detection time says so instead of returning an
+  empty string.
+
 ### Changed
 
 - **`birdnet_inference_duration_seconds` no longer claims to be per-chunk.** It
@@ -120,6 +149,14 @@ real USB microphone, or both.
   corruption, cold reboot — to establish that each documented recovery path is
   real on the hardware rather than only in `cargo test`. Results are written as
   a pasteable `report.md` plus machine-readable JSONL.
+
+  The `diskfull` phase sizes its ballast to cross **both** relevant thresholds:
+  the purge fires on a percentage (95 % by default) while doctor grades in
+  absolute bytes (under 1 GiB free), and on a 32 GB card filling to 96 % leaves
+  1.3 GiB — enough to report success without ever reaching the branch under
+  test. It also restarts the service while the disk is full, because the defect
+  it exists to catch is on the startup path: a daemon that is already running
+  never touches the `ExecStartPre` gate.
 
 ## [0.11.0] - 2026-08-09
 

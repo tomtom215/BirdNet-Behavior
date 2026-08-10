@@ -101,7 +101,7 @@ Exit status is non-zero if any check failed.
 | `watchdog` | `SIGSTOP` the daemon → systemd's watchdog kills and restarts it, and the station serves again |
 | `unplug` | Pull the mic → gauge drops to 0, daemon survives; plug it back → **recovers unattended** via capped backoff |
 | `netloss` | 60 s with no network → daemon stays up, loopback still serves, no panic, connectivity returns |
-| `diskfull` | Filesystem pushed past the 95 % purge threshold → disk manager reacts, daemon survives, no panic |
+| `diskfull` | Filesystem pushed past the 95 % purge threshold **and below doctor's 1 GiB floor** → `--doctor` still permits startup, the service **restarts** under that pressure, disk manager reacts, daemon survives, no panic |
 | `dbcorrupt` | 8 KiB of random bytes over the SQLite header → `--check-db` detects it, the station recovers on restart, and ends healthy |
 | `duckdb` | Same against the derived analytics store → it rebuilds rather than refusing to start |
 | `reboot` | Cold reboot → service auto-starts, dashboard serves, **capture resumes** |
@@ -122,9 +122,13 @@ Exit status is non-zero if any check failed.
 The destructive phases are genuinely destructive; each one arms its undo
 *before* it breaks anything.
 
-- **Disk fill.** A ballast file is sized to reach ~96 %, never consuming the
-  last 200 MiB, and is removed by an `EXIT`/`INT`/`TERM` trap — Ctrl-C still
-  cleans up. If the filesystem cannot reach 95 % safely, the phase skips.
+- **Disk fill.** A ballast file is sized to satisfy both thresholds at once —
+  at least 96 % used *and* under 1 GiB free, since the purge fires on a
+  percentage while doctor grades in absolute bytes — while never consuming the
+  last 200 MiB. It is removed by an `EXIT`/`INT`/`TERM` trap, so Ctrl-C still
+  cleans up, and the phase restarts the service afterwards if its own restart
+  test left the unit parked. If the filesystem cannot reach the target safely,
+  the phase skips.
 - **Network drop.** A `systemd-run --on-active=75` timer restores connectivity
   before the link goes down, so a dropped SSH session recovers on its own. On a
   NetworkManager box the harness uses `nmcli networking off` rather than

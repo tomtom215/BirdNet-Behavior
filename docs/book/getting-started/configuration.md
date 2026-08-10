@@ -42,7 +42,7 @@ The full list lives in `.env.example` and `birdnet-behavior --help`. Each row sh
 | `BIRDNET_DISK_PURGE_THRESHOLD` | `--disk-purge-threshold` | `DISK_PURGE_THRESHOLD` | `95` |
 | `BIRDNET_STREAM_RETENTION_SECS` | `--stream-retention-secs` | `STREAM_RETENTION_SECS` | `600` |
 | `BIRDNET_STREAM_MAX_MB` | `--stream-max-mb` | `STREAM_MAX_MB` | `512` |
-| `CADDY_PWD` / `CADDY_USER` | — | `CADDY_PWD` / `CADDY_USER` | auto-set on bare-metal install; user `birdnet` |
+| `CADDY_PWD` / `CADDY_USER` | — | `CADDY_PWD` / `CADDY_USER` | `CADDY_PWD` auto-set on bare-metal install; sign in as `admin` (`CADDY_USER` is environment-only — see [Remote access](../admin/remote-access.md)) |
 | `BIRDNET_CORS_ALLOWED_ORIGINS` | — | — | — (same-origin only) |
 
 > **Invalid settings fail fast.** On startup the daemon validates the

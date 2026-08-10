@@ -1155,22 +1155,32 @@ phase_diskfull() {
   read -r total_kb avail_kb used_pct <<<"$(df -P "$fs" | tail -1 | awk '{print $2, $4, $5}' | tr -d '%')"
   record INFO diskfull.fs "${fs} — ${used_pct}% used, $(( avail_kb / 1024 )) MiB free"
 
-  # Purge triggers at 95%. Leave a small margin so the OS itself keeps working.
+  # Two different thresholds have to be crossed for this phase to prove
+  # anything, and on most cards they are not the same number:
+  #
+  #   * the purge fires on a PERCENTAGE (DISK_PURGE_THRESHOLD, 95 by default);
+  #   * doctor's disk check grades in ABSOLUTE bytes, and its lowest branch —
+  #     the one that used to exit 2 and block startup — needs < 1 GiB free.
+  #
+  # Filling to 96% alone leaves ~1.3 GiB free on a 32 GB card, which never
+  # reaches that branch: the phase would report success without having
+  # exercised the startup fix at all. Take whichever target leaves less free.
   local target_pct=96
-  local want_used_kb ballast_kb
-  want_used_kb=$(( total_kb * target_pct / 100 ))
-  ballast_kb=$(( want_used_kb - (total_kb - avail_kb) ))
-  if [ "$ballast_kb" -le 0 ]; then
-    record SKIP diskfull.all "filesystem is already above ${target_pct}% — refusing to add more"; return 0
-  fi
+  local pct_free_kb cap_free_kb want_free_kb ballast_kb
+  pct_free_kb=$(( total_kb - (total_kb * target_pct / 100) ))
+  cap_free_kb=$(( 900 * 1024 ))            # 900 MiB — under doctor's 1 GiB floor
+  want_free_kb=$pct_free_kb
+  [ "$cap_free_kb" -lt "$want_free_kb" ] && want_free_kb=$cap_free_kb
   # Never consume the last 200 MiB: a truly full root can wedge journald and sshd.
-  local max_kb=$(( avail_kb - 204800 ))
-  [ "$ballast_kb" -gt "$max_kb" ] && ballast_kb=$max_kb
+  [ "$want_free_kb" -lt 204800 ] && want_free_kb=204800
+  ballast_kb=$(( avail_kb - want_free_kb ))
   if [ "$ballast_kb" -le 0 ]; then
-    record SKIP diskfull.all "not enough headroom to fill safely"; return 0
+    record SKIP diskfull.all \
+      "only $(( avail_kb / 1024 )) MiB free — already at or past the target, refusing to add more"
+    return 0
   fi
 
-  say "${C_YEL}    allocating $(( ballast_kb / 1024 )) MiB of ballast to push ${fs} to ~${target_pct}%${C_OFF}"
+  say "${C_YEL}    allocating $(( ballast_kb / 1024 )) MiB of ballast — leaving $(( want_free_kb / 1024 )) MiB free (≥${target_pct}% used, under doctor's 1 GiB floor)${C_OFF}"
   confirm "    Proceed? (the ballast is removed automatically, even on Ctrl-C)" \
     || { record SKIP diskfull.all "operator declined"; return 0; }
 
@@ -1185,6 +1195,44 @@ phase_diskfull() {
     record SKIP diskfull.trigger "could only reach ${now_pct}% — below the 95% purge threshold"
     sudo rm -f "$BALLAST"; BALLAST=""
     return 0
+  fi
+
+  local now_free_mb
+  now_free_mb="$(df -P "$fs" | tail -1 | awk '{print int($4/1024)}')"
+  record INFO diskfull.free "${now_free_mb} MiB free — doctor's low-space branch needs < 1024"
+
+  # The STARTUP path, not just the running daemon. The defect this phase exists
+  # to catch lived on restart: under 1 GiB free, `--doctor` exited 2, the unit's
+  #   ExecStartPre=... --doctor ... || [ $? -le 1 ]
+  # gate therefore failed, and systemd refused to start the daemon that owns
+  # `start_disk_manager` — the purge that would have reclaimed the space. A
+  # daemon that is already running sails through all of that untouched, so
+  # checking only `svc_active` after filling the disk cannot see the bug.
+  local doc_rc
+  "$BINARY" --config "$CONFIG_FILE" --doctor > "${OUT}/doctor-diskfull.txt" 2>&1; doc_rc=$?
+  if [ "$doc_rc" -le 1 ]; then
+    record PASS diskfull.doctor \
+      "doctor exits ${doc_rc} with ${now_free_mb} MiB free — the ExecStartPre gate lets startup through" \
+      "$(grep -i 'disk space' "${OUT}/doctor-diskfull.txt" | head -1)"
+  else
+    record FAIL diskfull.doctor \
+      "doctor exits ${doc_rc} with ${now_free_mb} MiB free — ExecStartPre will refuse to start the daemon" \
+      "Exit 2 means 'errors that will prevent operation'. The purge that fixes a full disk runs inside the process this refuses to start."
+  fi
+
+  sudo systemctl restart "$SERVICE"
+  if wait_for 120 curl -sf --max-time 5 "${BASE}/api/v2/health"; then
+    record PASS diskfull.restart "station restarts and serves with only ${now_free_mb} MiB free"
+  else
+    record FAIL diskfull.restart "station did not serve within 120s of restarting on a nearly full disk"
+    snapshot_journal diskfull-restart
+    if systemctl is-failed --quiet "$SERVICE" 2>/dev/null \
+       || journalctl -u "$SERVICE" --since '-6 min' --no-pager 2>/dev/null \
+          | grep -qi 'start request repeated too quickly'; then
+      record FAIL diskfull.startlimit \
+        "the unit burned StartLimitBurst and is parked in 'failed'" \
+        "An unattended station stays dead until someone runs 'systemctl reset-failed' on site — for the one failure mode a 24/7 recorder is guaranteed to reach."
+    fi
   fi
 
   info "waiting up to 5 minutes for the disk manager to notice and purge…"
@@ -1217,6 +1265,21 @@ phase_diskfull() {
 
   sudo rm -f "$BALLAST"; BALLAST=""
   record INFO diskfull.cleanup "ballast removed — $(df -P "$fs" | tail -1 | awk '{print $5}') used"
+
+  # Never hand the station back worse than we found it. If the restart above
+  # parked the unit, the space is back now, so clear the rate limit and start
+  # it — the same two commands an operator would otherwise have to know.
+  if ! svc_active; then
+    sudo systemctl reset-failed "$SERVICE" 2>/dev/null
+    sudo systemctl start "$SERVICE"
+    if wait_for 120 curl -sf --max-time 5 "${BASE}/api/v2/health"; then
+      record PASS diskfull.recovered "station serving again once the space was returned"
+    else
+      record FAIL diskfull.recovered "station still down after the ballast was removed" \
+        "$(systemctl status "$SERVICE" --no-pager -n 5 2>&1 | tail -4 | tr '\n' ' ')"
+    fi
+  fi
+
   snapshot_journal diskfull
 }
 

@@ -37,7 +37,7 @@ sudo nano /etc/birdnet/birdnet.conf   # set CADDY_PWD=your-new-password
 sudo systemctl restart birdnet-behavior
 ```
 
-`CADDY_USER` defaults to `birdnet`. Clearing `CADDY_PWD` leaves `/admin` open to anyone who can reach the dashboard.
+Sign in as `admin` — that is the account the dashboard seeds. `CADDY_USER` is read from the process environment only, so setting it in `birdnet.conf` does not rename it (it does work under Docker). Clearing `CADDY_PWD` leaves `/admin` open to anyone who can reach the dashboard.
 
 ## Do I need anything special for behavioral analytics?
 

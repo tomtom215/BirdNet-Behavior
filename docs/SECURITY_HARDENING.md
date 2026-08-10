@@ -58,16 +58,21 @@ to anyone who can reach the port. A fresh install auto-generates a strong admin
 password, so `/admin` is protected by default; for anything LAN- or
 internet-reachable, keep it set (and add TLS off-LAN).
 
-- **Built-in HTTP Basic Auth.** A fresh install sets `CADDY_PWD` automatically
-  (username `birdnet`) and prints it once in the post-install summary, storing
-  it in `/etc/birdnet/birdnet.conf`. Change it any time via `CADDY_PWD` (and
-  optionally `CADDY_USER`, which defaults to `birdnet`) in the config or
+- **Built-in admin sign-in.** A fresh install sets `CADDY_PWD` automatically
+  and prints it once in the post-install summary, storing it in
+  `/etc/birdnet/birdnet.conf`. Sign in as **`admin`** — the account the
+  dashboard seeds. `/admin*` without a session redirects to a `/login` form
+  that issues a session cookie; this is not HTTP Basic Auth, so `curl -u` does
+  not apply. Change the password any time via `CADDY_PWD` in the config or the
   environment:
 
   ```dotenv
-  CADDY_USER=birder
   CADDY_PWD=a-long-random-password
   ```
+
+  `CADDY_USER` is consulted from the **process environment only** (Docker), not
+  from `birdnet.conf` — the systemd unit sets no `EnvironmentFile`, so on a
+  bare-metal install the sign-in name stays `admin`.
 
   This is compatible with the BirdNET-Pi `CADDY_PWD` convention. It is **still
   plain HTTP** — only rely on it behind TLS or on a trusted LAN. **Clearing

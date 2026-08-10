@@ -60,16 +60,19 @@ server {
 
 > **WebSocket matters here.** The live dashboard feed, the spectrogram, and kiosk mode all use WebSockets (`/api/v2/ws/detections` and `/api/v2/ws/spectrogram`). Make sure your proxy forwards the `Upgrade`/`Connection` headers (shown above) or those features will silently stall.
 
-## Built-in HTTP Basic Auth
+## Built-in admin sign-in
 
-The binary enforces HTTP Basic Auth on the **`/admin` panel** itself — no proxy required — using the BirdNET-Pi `CADDY_PWD` convention. **Viewing the dashboard and the read-only `/api/v2/*` endpoints stay open; only `/admin*` (settings, audio config, software update, system controls, backups, migration) prompts for a password.**
+The binary gates the **`/admin` panel** itself — no proxy required — using the BirdNET-Pi `CADDY_PWD` convention for the password. **Viewing the dashboard and the read-only `/api/v2/*` endpoints stay open; only `/admin*` (settings, audio config, software update, system controls, backups, migration) requires signing in.**
 
-A fresh install **auto-generates a strong password** (username `birdnet`), prints it once in the post-install summary, and stores it as `CADDY_PWD` in `birdnet.conf`. Change it any time via `birdnet.conf` or the environment (so it works under Docker too):
+Requesting `/admin*` without a session redirects (303) to a sign-in form at `/login`, which issues a session cookie. It is **not** HTTP Basic Auth, so `curl -u user:pass` will not work — post the form, or sign in through the browser.
+
+A fresh install **auto-generates a strong password**, prints it once in the post-install summary, and stores it as `CADDY_PWD` in `birdnet.conf`. Sign in with the username **`admin`** — the account the dashboard seeds, and the only one that exists until you add more in the admin panel.
 
 ```dotenv
-CADDY_USER=birder      # optional — defaults to "birdnet"
 CADDY_PWD=a-long-random-password
 ```
+
+`CADDY_USER` is read from the **process environment only**. Under Docker, where compose passes it through, it renames the sign-in; on a bare-metal install the systemd unit sets no `EnvironmentFile`, so a `CADDY_USER` line in `birdnet.conf` has no effect and the sign-in name stays `admin`.
 
 After editing the config, restart the service (`sudo systemctl restart birdnet-behavior`). This is **still plain HTTP** — only rely on it behind TLS, or on a trusted LAN. **Clearing `CADDY_PWD` leaves `/admin` open** to anyone who can reach the dashboard; if the server binds to a non-loopback address (e.g. the default `0.0.0.0`) with no `CADDY_PWD` set, it logs a prominent warning at startup. The live-detection WebSocket and `/api/v2/health` are exempt from this auth (a browser can't attach Basic-auth headers to a WebSocket handshake), and are read-only and outside `/admin` in any case — restrict those at the network layer if you need to.
 

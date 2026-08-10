@@ -5,7 +5,16 @@
 # Returns the first detected ALSA capture device as "plughw:<card>,<device>",
 # or an empty string if none found / arecord not available.
 detect_first_audio_device() {
-    command -v arecord &>/dev/null || return 0
+    # No arecord means no card list AND no capture backend. check_required_tools
+    # tries to install alsa-utils before we get here, so reaching this branch
+    # means that failed (or apt-get is not this distro's package manager) —
+    # say so, because a silent empty result reads as "no microphone attached"
+    # and produces a station that records nothing without ever complaining.
+    if ! command -v arecord &>/dev/null; then
+        warn "arecord not found — cannot detect a microphone. Install alsa-utils, then:"
+        warn "  sudo bash install.sh repair"
+        return 0
+    fi
     # arecord -l output looks like: card 1: Device [USB Audio Device], device 0: ...
     local first_card first_device
     first_card="$(arecord -l 2>/dev/null | awk '/^card/{print $2; exit}' | tr -d ':')"
@@ -45,7 +54,7 @@ ensure_admin_password() {
     [ -n "${CADDY_PWD_VALUE}" ] && return 0
     case "${LISTEN_ADDR}" in 127.0.0.1:* | localhost:*) return 0 ;; esac
 
-    CADDY_USER_VALUE="birdnet"
+    CADDY_USER_VALUE="admin"
     CADDY_PWD_VALUE="$(gen_password)"
     GENERATED_ADMIN_PASSWORD="${CADDY_PWD_VALUE}"
     info "Generated an admin password for the dashboard (shown at the end)."
@@ -137,9 +146,9 @@ prompt_station_settings() {
     if [ -n "${pw1}" ]; then
         pw2="$(ask_secret "  Confirm password")"
         if [ "${pw1}" = "${pw2}" ]; then
-            CADDY_USER_VALUE="birdnet"
+            CADDY_USER_VALUE="admin"
             CADDY_PWD_VALUE="${pw1}"
-            success "Admin password set (username: birdnet)."
+            success "Admin password set (username: admin)."
         else
             warn "Passwords did not match — a strong one will be generated instead."
         fi
