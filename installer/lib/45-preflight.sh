@@ -21,7 +21,7 @@ check_required_tools() {
 
     if [ "${#missing[@]}" -gt 0 ]; then
         error "Missing required tool(s): ${missing[*]}"
-        fatal "Install the missing package(s) and re-run. On Debian/Pi OS: sudo apt-get install coreutils tar curl"
+        fatal "Install the missing package(s) and re-run:  $(pkg_install_hint coreutils tar curl)"
     fi
 
     # systemd is the normal service manager, but the install can still lay down
@@ -45,17 +45,16 @@ check_required_tools() {
     # detection has something to detect. ensure_capture_backend() re-checks it
     # once the RTSP/ALSA choice is settled; this earlier pass is what stops a
     # missing alsa-utils from silently yielding "no capture device found".
-    if ! command -v arecord &>/dev/null && command -v apt-get &>/dev/null; then
+    if ! command -v arecord &>/dev/null; then
         info "arecord not found — installing alsa-utils for microphone capture…"
-        apt-get install -y alsa-utils &>/dev/null \
-            || { apt-get update &>/dev/null && apt-get install -y alsa-utils &>/dev/null; } \
-            || warn "Could not install alsa-utils — microphone auto-detect will find nothing."
+        pkg_install alsa-utils \
+            || warn "Could not install alsa-utils ($(pkg_install_hint alsa-utils)) — microphone auto-detect will find nothing."
     fi
     # qrencode is optional: it lets the final summary print a scannable QR of the
     # dashboard URL so a phone can open it without anyone typing an IP. Best-effort
     # and silent — a missing QR helper must never fail or slow the install.
-    if ! command -v qrencode &>/dev/null && command -v apt-get &>/dev/null; then
-        apt-get install -y qrencode &>/dev/null || true
+    if ! command -v qrencode &>/dev/null; then
+        pkg_install qrencode || true
     fi
     success "Required tools present."
 }
@@ -104,18 +103,26 @@ ensure_capture_tool() {
         return 0
     fi
 
-    warn "${purpose} needs ${tool}(1), which is not installed (package: ${pkg})."
-    if command -v apt-get &>/dev/null; then
-        info "Installing ${pkg}…"
-        if apt-get install -y "${pkg}" &>/dev/null \
-            || { apt-get update &>/dev/null && apt-get install -y "${pkg}" &>/dev/null; }; then
-            success "${pkg} installed."
+    detect_pkg_mgr
+    warn "${purpose} needs ${tool}(1), which is not installed (package: $(pkg_name_for "${pkg}"))."
+    if [ -n "${PKG_MGR}" ]; then
+        info "Installing $(pkg_name_for "${pkg}")…"
+        if pkg_install "${pkg}"; then
+            success "$(pkg_name_for "${pkg}") installed."
             return 0
         fi
-        warn "Automatic ${pkg} install failed."
+        warn "Automatic install failed."
     fi
     warn "Install it, then restart the service:"
-    warn "  sudo apt-get install -y ${pkg} && sudo systemctl restart birdnet-behavior"
+    if [ -n "${PKG_MGR}" ]; then
+        # A real command, so the two halves can be chained and pasted as one.
+        warn "  $(pkg_install_hint "${pkg}") && sudo systemctl restart birdnet-behavior"
+    else
+        # Prose, not a command — chaining it with && would produce something
+        # that looks runnable and is not.
+        warn "  $(pkg_install_hint "${pkg}")"
+        warn "  then: sudo systemctl restart birdnet-behavior"
+    fi
     return 1
 }
 
@@ -139,6 +146,10 @@ ensure_capture_backend() {
         rtsp=1
     fi
 
+    # The `|| true` on both calls is load-bearing, not decoration: this script
+    # runs under `set -e`, ensure_capture_tool returns non-zero when the
+    # operator has to install the tool by hand, and without the guard that
+    # would abort the whole install over a warning it has already printed.
     if [ "${rtsp}" = 1 ]; then
         ensure_capture_tool ffmpeg ffmpeg "RTSP capture" || true
         return 0

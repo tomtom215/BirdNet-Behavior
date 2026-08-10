@@ -105,6 +105,35 @@ CI: each needs a real systemd unit, a real USB microphone, or both.
   Auth: `/admin*` redirects (303) to a `/login` form and issues a session
   cookie, so `curl -u` never applied to it.
 
+- **Every auto-install path was gated on `apt-get`, so on Fedora, Arch and
+  openSUSE the installer printed advice that could not be followed.** The
+  binary is a plain ELF and runs on those distributions; only the installer
+  assumed Debian. A missing `ffmpeg` on Fedora produced "run `sudo apt-get
+  install -y ffmpeg`" — worse than saying nothing, because it looks
+  authoritative. Package handling now goes through `detect_pkg_mgr` /
+  `pkg_name_for` / `pkg_install` / `pkg_install_hint`, covering **apt, dnf,
+  pacman and zypper**, and degrading to "install X with your distribution's
+  package manager" when it recognises none.
+
+  Package names were established by installing them in real containers rather
+  than assumed: `alsa-utils`, `qrencode` and `util-linux` carry the same name
+  on all four, and `ffmpeg` is the sole exception — Fedora ships it as
+  `ffmpeg-free` in its main repositories, the unencumbered `ffmpeg` being in
+  RPM Fusion, which an application installer has no business enabling on
+  someone's machine. `pacman` refreshes with `-Sy` and never `-Syu`: upgrading
+  an operator's entire system is not an installer's decision.
+
+  The matrix is preserved as `installer/test/pkg-manager.sh` (Debian trixie,
+  Fedora 41, Arch, openSUSE Tumbleweed, plus a no-package-manager case). It
+  asserts the tool actually lands on `PATH`, not merely that a command was
+  issued. Running it caught two defects that reading could not: the
+  unknown-distro branch emitted `install ffmpeg with your distribution's
+  package manager && sudo systemctl restart …`, chaining prose into something
+  that looks runnable, and the `|| true` guards on the `ensure_capture_tool`
+  calls turn out to be load-bearing — the installer runs under `set -e`, so
+  without them a warning the operator could act on would abort the install
+  instead.
+
 - **`alsa-utils` was never installed, so a microphone station could install
   cleanly and record nothing.** The installer ensures `ffmpeg` when the config
   names an RTSP source, but the ALSA path — the default for a USB microphone —

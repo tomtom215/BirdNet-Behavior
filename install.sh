@@ -240,6 +240,100 @@ ask_secret() {
 # Privilege, architecture, and glibc preflight
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Package manager abstraction
+#
+# Raspberry Pi OS and Debian are the primary targets, but the binary is a plain
+# x86_64/aarch64 ELF and people do run it on Fedora, Arch and openSUSE. Every
+# auto-install path used to be gated on `command -v apt-get`, so on those
+# distros the installer printed an apt command that cannot run — advice that is
+# worse than silence, because it looks authoritative.
+#
+# Package names were checked against real containers rather than assumed
+# (fedora:41, archlinux, opensuse/tumbleweed): alsa-utils, qrencode and
+# util-linux carry the same name on all four. ffmpeg is the sole exception —
+# Fedora's main repositories ship it as `ffmpeg-free`, with the unencumbered
+# `ffmpeg` living in RPM Fusion, which we will not enable on an operator's box.
+# ---------------------------------------------------------------------------
+
+# apt | dnf | pacman | zypper | "" when none is recognised. Set by
+# detect_pkg_mgr, which is idempotent, so callers can just call it first.
+PKG_MGR=""
+
+detect_pkg_mgr() {
+    [ -n "${PKG_MGR}" ] && return 0
+    if command -v apt-get &>/dev/null; then
+        PKG_MGR="apt"
+    elif command -v dnf &>/dev/null; then
+        PKG_MGR="dnf"
+    elif command -v pacman &>/dev/null; then
+        PKG_MGR="pacman"
+    elif command -v zypper &>/dev/null; then
+        PKG_MGR="zypper"
+    fi
+    return 0
+}
+
+# Translate a generic package name into this distro's name for it.
+pkg_name_for() {
+    detect_pkg_mgr
+    case "$1:${PKG_MGR}" in
+        ffmpeg:dnf) echo "ffmpeg-free" ;;
+        *)          echo "$1" ;;
+    esac
+}
+
+# Install one package. Quiet on success; returns non-zero when the package
+# manager is unknown or the install failed, and every caller treats that as
+# "warn and carry on" rather than as fatal.
+pkg_install() {
+    detect_pkg_mgr
+    local pkg
+    pkg="$(pkg_name_for "$1")"
+    case "${PKG_MGR}" in
+        apt)
+            apt-get install -y "${pkg}" &>/dev/null \
+                || { apt-get update &>/dev/null && apt-get install -y "${pkg}" &>/dev/null; }
+            ;;
+        dnf)
+            dnf install -y "${pkg}" &>/dev/null
+            ;;
+        pacman)
+            # Deliberately NOT `-Syu`: a full system upgrade is not something an
+            # application installer should trigger. `-S` alone fails on a box
+            # whose package database was never synced, so refresh (`-Sy`) and
+            # retry — accepting the documented partial-upgrade caveat, which is
+            # the lesser evil against upgrading someone's whole system.
+            pacman -S --noconfirm --needed "${pkg}" &>/dev/null \
+                || { pacman -Sy --noconfirm &>/dev/null \
+                     && pacman -S --noconfirm --needed "${pkg}" &>/dev/null; }
+            ;;
+        zypper)
+            zypper --non-interactive --gpg-auto-import-keys install --no-recommends "${pkg}" &>/dev/null
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# The command an operator should run by hand when pkg_install could not.
+# Accepts one or more generic package names.
+pkg_install_hint() {
+    detect_pkg_mgr
+    local pkgs="" p
+    for p in "$@"; do
+        pkgs="${pkgs:+${pkgs} }$(pkg_name_for "${p}")"
+    done
+    case "${PKG_MGR}" in
+        apt)    echo "sudo apt-get install -y ${pkgs}" ;;
+        dnf)    echo "sudo dnf install -y ${pkgs}" ;;
+        pacman) echo "sudo pacman -S --needed ${pkgs}" ;;
+        zypper) echo "sudo zypper install ${pkgs}" ;;
+        *)      echo "install ${pkgs} with your distribution's package manager" ;;
+    esac
+}
+
 # Whether systemd is the running init, so `systemctl` calls will actually work.
 #
 # `systemctl` can be present on a system where systemd is NOT PID 1 — minimal
@@ -503,7 +597,7 @@ check_required_tools() {
 
     if [ "${#missing[@]}" -gt 0 ]; then
         error "Missing required tool(s): ${missing[*]}"
-        fatal "Install the missing package(s) and re-run. On Debian/Pi OS: sudo apt-get install coreutils tar curl"
+        fatal "Install the missing package(s) and re-run:  $(pkg_install_hint coreutils tar curl)"
     fi
 
     # systemd is the normal service manager, but the install can still lay down
@@ -527,17 +621,16 @@ check_required_tools() {
     # detection has something to detect. ensure_capture_backend() re-checks it
     # once the RTSP/ALSA choice is settled; this earlier pass is what stops a
     # missing alsa-utils from silently yielding "no capture device found".
-    if ! command -v arecord &>/dev/null && command -v apt-get &>/dev/null; then
+    if ! command -v arecord &>/dev/null; then
         info "arecord not found — installing alsa-utils for microphone capture…"
-        apt-get install -y alsa-utils &>/dev/null \
-            || { apt-get update &>/dev/null && apt-get install -y alsa-utils &>/dev/null; } \
-            || warn "Could not install alsa-utils — microphone auto-detect will find nothing."
+        pkg_install alsa-utils \
+            || warn "Could not install alsa-utils ($(pkg_install_hint alsa-utils)) — microphone auto-detect will find nothing."
     fi
     # qrencode is optional: it lets the final summary print a scannable QR of the
     # dashboard URL so a phone can open it without anyone typing an IP. Best-effort
     # and silent — a missing QR helper must never fail or slow the install.
-    if ! command -v qrencode &>/dev/null && command -v apt-get &>/dev/null; then
-        apt-get install -y qrencode &>/dev/null || true
+    if ! command -v qrencode &>/dev/null; then
+        pkg_install qrencode || true
     fi
     success "Required tools present."
 }
@@ -586,18 +679,26 @@ ensure_capture_tool() {
         return 0
     fi
 
-    warn "${purpose} needs ${tool}(1), which is not installed (package: ${pkg})."
-    if command -v apt-get &>/dev/null; then
-        info "Installing ${pkg}…"
-        if apt-get install -y "${pkg}" &>/dev/null \
-            || { apt-get update &>/dev/null && apt-get install -y "${pkg}" &>/dev/null; }; then
-            success "${pkg} installed."
+    detect_pkg_mgr
+    warn "${purpose} needs ${tool}(1), which is not installed (package: $(pkg_name_for "${pkg}"))."
+    if [ -n "${PKG_MGR}" ]; then
+        info "Installing $(pkg_name_for "${pkg}")…"
+        if pkg_install "${pkg}"; then
+            success "$(pkg_name_for "${pkg}") installed."
             return 0
         fi
-        warn "Automatic ${pkg} install failed."
+        warn "Automatic install failed."
     fi
     warn "Install it, then restart the service:"
-    warn "  sudo apt-get install -y ${pkg} && sudo systemctl restart birdnet-behavior"
+    if [ -n "${PKG_MGR}" ]; then
+        # A real command, so the two halves can be chained and pasted as one.
+        warn "  $(pkg_install_hint "${pkg}") && sudo systemctl restart birdnet-behavior"
+    else
+        # Prose, not a command — chaining it with && would produce something
+        # that looks runnable and is not.
+        warn "  $(pkg_install_hint "${pkg}")"
+        warn "  then: sudo systemctl restart birdnet-behavior"
+    fi
     return 1
 }
 
@@ -621,6 +722,10 @@ ensure_capture_backend() {
         rtsp=1
     fi
 
+    # The `|| true` on both calls is load-bearing, not decoration: this script
+    # runs under `set -e`, ensure_capture_tool returns non-zero when the
+    # operator has to install the tool by hand, and without the guard that
+    # would abort the whole install over a warning it has already printed.
     if [ "${rtsp}" = 1 ]; then
         ensure_capture_tool ffmpeg ffmpeg "RTSP capture" || true
         return 0
@@ -2018,8 +2123,8 @@ setup_zram() {
     # Check for zramctl (util-linux) — available on Raspberry Pi OS Bullseye+
     if ! command -v zramctl &>/dev/null; then
         warn "zramctl not found — installing util-linux…"
-        apt-get install -y util-linux &>/dev/null || {
-            warn "Could not install util-linux. Skipping ZRAM setup."
+        pkg_install util-linux || {
+            warn "Could not install util-linux ($(pkg_install_hint util-linux)). Skipping ZRAM setup."
             return 0
         }
     fi
