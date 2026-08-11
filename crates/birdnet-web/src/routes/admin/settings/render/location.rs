@@ -14,6 +14,12 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let post = get_setting(s, "post_sunset_offset", "0");
     let inh_yes = if inhibit == "true" { " selected" } else { "" };
     let inh_no = if inhibit == "true" { "" } else { " selected" };
+    // The recording window itself. The page has always offered the sunrise /
+    // sunset *offsets* while the mode they modify was CLI-only — and until
+    // 0.12.0 the runtime ignored the configured mode entirely, so a station
+    // set to `solar` recorded around the clock. `fixed:` windows keep their
+    // free-text form because the spec carries the hours.
+    let schedule = get_setting(s, "recording_schedule", "all-day");
     write!(out, r#"
   <div class="card">
     <div class="section-title">Location &amp; Recording Schedule</div>
@@ -38,6 +44,17 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
       <p class="hint">Used in BirdWeather uploads and export metadata</p>
     </div>
     <div class="grid-2">
+      <div>
+        <label for="recording_schedule">Recording window</label>
+        <input id="recording_schedule" name="recording_schedule" type="text" list="bnb-schedule-presets"
+               value="{schedule}" placeholder="all-day">
+        <datalist id="bnb-schedule-presets">
+          <option value="all-day">Record continuously</option>
+          <option value="solar">Sunrise to sunset (needs coordinates)</option>
+          <option value="fixed:06:00-20:00">Fixed hours, UTC</option>
+        </datalist>
+        <p class="hint"><code>all-day</code>, <code>solar</code>, or <code>fixed:HH:MM-HH:MM</code>. Fixed hours are evaluated in <strong>UTC</strong>, not local time; solar needs no timezone. Until 0.12.0 this was settable only on the command line (BirdNET-Pi: RECORDING_SCHEDULE)</p>
+      </div>
       <div>
         <label for="night_inhibit">Night Inhibit (suppress recording in darkness)</label>
         <select id="night_inhibit" name="night_inhibit">

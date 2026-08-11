@@ -28,6 +28,7 @@ pub const SETTINGS_FORM_KEYS: &[&str] = &[
     "longitude",
     "station_name",
     "night_inhibit",
+    "recording_schedule",
     "pre_sunrise_offset",
     "post_sunset_offset",
     // Detection
@@ -48,6 +49,8 @@ pub const SETTINGS_FORM_KEYS: &[&str] = &[
     "notify_title_template",
     "notify_body_template",
     "weekly_report_schedule",
+    "heartbeat_url",
+    "deadman_hours",
     // Species
     "species_exclude",
     "species_include",
@@ -61,6 +64,7 @@ pub const SETTINGS_FORM_KEYS: &[&str] = &[
     "stream_max_mb",
     "site_name",
     "info_site",
+    "database_lang",
     // Email
     "email_smtp_host",
     "email_smtp_port",
@@ -148,6 +152,12 @@ pub struct SettingsForm {
     pub notify_body_template: Option<String>,
     /// Cron expression for the weekly summary report email (e.g. `0 8 * * MON`).
     pub weekly_report_schedule: Option<String>,
+    /// URL pinged periodically so an external monitor can tell the station is
+    /// alive (`HEARTBEAT_URL`).
+    pub heartbeat_url: Option<String>,
+    /// Hours of detection silence after which the dead-man alert fires; `0`
+    /// disables it (`DEADMAN_HOURS`).
+    pub deadman_hours: Option<String>,
     // Species
     /// Comma-separated list of species (common names) to exclude from the detections log.
     pub species_exclude: Option<String>,
@@ -177,9 +187,14 @@ pub struct SettingsForm {
     /// External species-information site to link to; `ebird` and `xeno-canto` are
     /// recognised shortcuts.
     pub info_site: Option<String>,
+    /// Language used for common names in the detection database
+    /// (`DATABASE_LANG`), e.g. `en`, `de`, `fr`.
+    pub database_lang: Option<String>,
     // Night inhibit / schedule
     /// When `true`, recording is suspended between civil sunset and civil sunrise.
     pub night_inhibit: Option<String>,
+    /// Recording window: `all-day`, `solar`, or `fixed:HH:MM-HH:MM`.
+    pub recording_schedule: Option<String>,
     /// Minutes before civil sunrise at which recording resumes (positive = earlier).
     pub pre_sunrise_offset: Option<String>,
     /// Minutes after civil sunset at which recording stops (positive = later).

@@ -145,13 +145,25 @@ print_summary() {
             echo "  to pick a microphone in the setup wizard — or set ALSA_CARD / RTSP_URL"
             echo "  in ${CONFIG_FILE} and:  sudo systemctl restart birdnet-behavior"
         fi
+        # Live and listening, but with no coordinates the species filter cannot
+        # run — so the station reports birds from the wrong continent and looks
+        # like a bad model. Silence here was the whole problem: unlike a missing
+        # microphone, this failure produces detections, just wrong ones.
+        if ! config_has_location; then
+            echo
+            echo "  No station location set. Without it every species in the model stays a"
+            echo "  candidate, so expect detections that don't belong in your area. Set it"
+            echo "  in the dashboard's setup wizard (it can auto-detect), or add LATITUDE"
+            echo "  and LONGITUDE to ${CONFIG_FILE} and:  sudo systemctl restart birdnet-behavior"
+        fi
     else
         echo -e "${BOLD}Next steps:${RESET}"
         echo "  1. Set an audio source (edit as root):  sudo nano ${CONFIG_FILE}"
         echo "       ALSA_CARD=plughw:1,0      (ALSA microphone)"
         echo "       RTSP_URL=rtsp://…         (RTSP camera)"
         echo
-        echo "  2. (Optional) Set LATITUDE and LONGITUDE for species filtering."
+        echo "  2. Set LATITUDE and LONGITUDE. Without them the species filter cannot"
+        echo "     run and you will get detections from the wrong part of the world."
         echo
         echo "  3. sudo systemctl start birdnet-behavior"
         echo "  4. Open a web browser to  http://${web_host}:${web_port}"

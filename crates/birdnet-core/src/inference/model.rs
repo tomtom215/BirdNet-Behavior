@@ -61,7 +61,15 @@ impl Default for ModelConfig {
     fn default() -> Self {
         Self {
             sensitivity: 1.0,
-            confidence_threshold: 0.25,
+            // Deliberately the same constant the daemon enforces and the admin
+            // form advertises. This used to be a hard-coded 0.25 — a third
+            // value contradicting both — so any construction that spread
+            // `..ModelConfig::default()` without naming `confidence_threshold`
+            // would silently record at 0.25 while the UI promised 0.70. The
+            // daemon always names it, so nothing shipped broken, but the trap
+            // was one forgotten field away from re-opening the exact drift
+            // [`crate::config::DEFAULT_CONFIDENCE_THRESHOLD`] exists to prevent.
+            confidence_threshold: crate::config::DEFAULT_CONFIDENCE_THRESHOLD,
             top_n: 10,
             num_threads: 2,
         }
@@ -599,9 +607,26 @@ mod tests {
     fn default_model_config() {
         let config = ModelConfig::default();
         assert!((config.sensitivity - 1.0).abs() < f32::EPSILON);
-        assert!((config.confidence_threshold - 0.25).abs() < f32::EPSILON);
+        assert!(
+            (config.confidence_threshold - crate::config::DEFAULT_CONFIDENCE_THRESHOLD).abs()
+                < f32::EPSILON,
+            "ModelConfig::default() must not introduce a third confidence \
+             threshold alongside the daemon's and the admin form's"
+        );
         assert_eq!(config.top_n, 10);
         assert_eq!(config.num_threads, 2);
+    }
+
+    #[test]
+    fn default_confidence_threshold_is_the_shipped_075() {
+        // Counter-test for the drift this default used to carry: pin the
+        // literal so a change to either the constant or this default has to
+        // be deliberate rather than silent.
+        assert!(
+            (ModelConfig::default().confidence_threshold - 0.75).abs() < f32::EPSILON,
+            "expected the shipped out-of-the-box 0.75, got {}",
+            ModelConfig::default().confidence_threshold
+        );
     }
 
     #[test]

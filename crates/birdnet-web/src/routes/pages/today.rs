@@ -82,10 +82,17 @@ async fn today_home(State(state): State<AppState>, headers: HeaderMap) -> Respon
     let firstrun = total_ever == 0;
     let enabled: Vec<_> = sources.iter().filter(|s| s.disabled_at.is_none()).collect();
 
+    // Whether the first configured source is *actually capturing*, from the
+    // supervisor's own gauge — the same signal the Capture tab's status pill
+    // reads. A source being configured says nothing about audio flowing.
+    let capturing = enabled
+        .first()
+        .and_then(|s| state.metrics().source_up(&s.id));
+
     let hero_aside = if firstrun {
-        firstrun_checklist(&enabled, disk_pct)
+        firstrun_checklist(&enabled, disk_pct, capturing)
     } else {
-        signal_card(&super::listen::source_options(&sources))
+        signal_card(&super::listen::source_options(&sources), enabled.first())
     };
     let rail_extra = if firstrun {
         r#"<div class="bnb-card pad"><div class="bnb-eyebrow td-look-eb">While you wait</div><div class="x-look"><a href="/admin/audio">Add a second microphone <span class="arr">→</span></a><a href="/admin/rules">Set up rare-bird alerts <span class="arr">→</span></a><a href="/admin/migrate">Import your BirdNET-Pi history <span class="arr">→</span></a></div></div>"#
@@ -122,7 +129,25 @@ pub(super) const FIRSTRUN_PHRASE: &str = r#"<h1 class="display td-h1">Your stati
 <p class="bnb-meta td-sub">Everything checks out — we're listening for the first call. It usually arrives within the hour, and this page comes alive the moment it does.</p>"#;
 
 /// The live-signal card (real spectrogram canvas + the source row).
-fn signal_card(source_options: &str) -> String {
+///
+/// `first` is the station's first enabled source, used for the footer's
+/// input/rate line. That line used to read a hard-coded `input · mic` and
+/// `48 kHz` for every station — so an RTSP-only station was labelled "mic",
+/// and a 16 or 44.1 kHz source was reported as 48 kHz directly beneath a live
+/// spectrogram of its own audio.
+fn signal_card(
+    source_options: &str,
+    first: Option<&&birdnet_db::audio_sources::AudioSource>,
+) -> String {
+    let (input_label, rate) = first.map_or_else(
+        || ("input · none".to_string(), "—".to_string()),
+        |s| {
+            (
+                format!("input · {}", s.kind.as_str()),
+                format!("{} kHz", s.sample_rate / 1000),
+            )
+        },
+    );
     format!(
         r#"<div class="bnb-card pad db-signal-card">
       <div class="db-signal-head">
@@ -131,8 +156,8 @@ fn signal_card(source_options: &str) -> String {
       </div>
       <canvas id="hero-pulse" height="80" class="db-pulse"></canvas>
       <div class="db-signal-foot">
-        <span class="mono bnb-meta">input · mic</span>
-        <span class="mono bnb-meta">48 kHz</span>
+        <span class="mono bnb-meta">{input_label}</span>
+        <span class="mono bnb-meta">{rate}</span>
         <span class="mono bnb-meta">BirdNET V3.0</span>
       </div>
       <div class="x-sig-row">
@@ -143,11 +168,28 @@ fn signal_card(source_options: &str) -> String {
     )
 }
 
-/// The first-run "Getting ready" checklist — every line is real data: the
-/// configured sources, the bundled model, measured disk headroom.
+/// The first-run "Getting ready" checklist.
+///
+/// This is the single card a brand-new operator reads to answer "is my station
+/// working?", so every tick has to be earned. Two of them were not:
+///
+/// * **The microphone row ticked as soon as a source was *configured*.** Being
+///   in the `audio_sources` table says nothing about audio flowing; a source
+///   whose device disappeared on reboot (the ALSA card-index bug) or whose
+///   `arecord` is dead is configured and silent. `capturing` now carries the
+///   supervisor's own gauge — the same signal the Capture tab's pill reads.
+/// * **The disk row was a hard-coded `✓`.** The percentage and the wording were
+///   real, so the card could read "Room to record ✓ — nearly full — 97% used":
+///   a green tick on a station about to run out of space, which a
+///   non-technical operator reads as "fine".
+///
+/// The model row states what is bundled, not that inference has succeeded, and
+/// is worded accordingly — the page has no runtime signal for that, and an
+/// unearned "loaded ✓" is the same defect as the other two.
 fn firstrun_checklist(
     enabled: &[&birdnet_db::audio_sources::AudioSource],
     disk_pct: Option<f64>,
+    capturing: Option<bool>,
 ) -> String {
     let (mic_mark, mic_title, mic_detail, mic_value) = enabled.first().map_or_else(
         || {
@@ -168,30 +210,69 @@ fn firstrun_checklist(
             } else {
                 String::new()
             };
-            (
-                "done",
-                "Microphone detected".to_string(),
-                format!("{} · {}{more}", first.kind.as_str(), escape_html(&label)),
-                format!("{} kHz", first.sample_rate / 1000),
-            )
+            let source = format!("{} · {}{more}", first.kind.as_str(), escape_html(&label));
+            match capturing {
+                // Configured *and* the supervisor reports it up.
+                Some(true) => (
+                    "done",
+                    "Microphone recording".to_string(),
+                    source,
+                    format!("{} kHz", first.sample_rate / 1000),
+                ),
+                // Configured but the capture subprocess is not running. This is
+                // the silent failure the card existed to rule out, so it says so
+                // and points at the page that can diagnose it.
+                Some(false) => (
+                    "fail",
+                    "Microphone not recording".to_string(),
+                    format!(
+                        "{source} — configured, but no audio is being captured. \
+                         Check it under <a href=\"/station/capture\">Station → Capture</a>"
+                    ),
+                    "down".to_string(),
+                ),
+                // No gauge yet: the supervisor has not reconciled this source.
+                // Normal for the first seconds after a start, so it waits
+                // rather than claiming either outcome.
+                None => (
+                    "wait",
+                    "Microphone starting…".to_string(),
+                    source,
+                    format!("{} kHz", first.sample_rate / 1000),
+                ),
+            }
         },
     );
-    let mic_mark_html = if mic_mark == "done" {
-        r#"<span class="mk done">✓</span>"#
-    } else {
-        r#"<span class="mk wait"><span class="bnb-dot"></span></span>"#
+    let mic_mark_html = match mic_mark {
+        "done" => r#"<span class="mk done">✓</span>"#,
+        "fail" => r#"<span class="mk down">!</span>"#,
+        _ => r#"<span class="mk wait"><span class="bnb-dot"></span></span>"#,
     };
-    let (disk_detail, disk_value) = disk_pct.map_or_else(
-        || ("checking…".to_string(), "—".to_string()),
+    // The mark tracks the same thresholds as the wording. It used to be a
+    // hard-coded `✓`, so "nearly full · 97% used" shipped with a green tick.
+    let (disk_mark_html, disk_detail, disk_value) = disk_pct.map_or_else(
+        || {
+            (
+                r#"<span class="mk wait"><span class="bnb-dot"></span></span>"#,
+                "checking…".to_string(),
+                "—".to_string(),
+            )
+        },
         |pct| {
-            let detail = if pct < 70.0 {
-                "plenty of space"
+            let (mark, detail) = if pct < 70.0 {
+                (r#"<span class="mk done">✓</span>"#, "plenty of space")
             } else if pct < 90.0 {
-                "getting full"
+                (
+                    r#"<span class="mk wait"><span class="bnb-dot"></span></span>"#,
+                    "getting full — old recordings are deleted automatically",
+                )
             } else {
-                "nearly full"
+                (
+                    r#"<span class="mk down">!</span>"#,
+                    "nearly full — recording may stop soon",
+                )
             };
-            (detail.to_string(), format!("{pct:.0}% used"))
+            (mark, detail.to_string(), format!("{pct:.0}% used"))
         },
     );
     format!(
@@ -199,8 +280,8 @@ fn firstrun_checklist(
       <div class="bnb-eyebrow td-check-eb">Getting ready</div>
       <div class="x-check">
         <div class="x-check-row">{mic_mark_html}<div class="c"><div class="t">{mic_title}</div><div class="d">{mic_detail}</div></div><span class="v">{mic_value}</span></div>
-        <div class="x-check-row"><span class="mk done">✓</span><div class="c"><div class="t">Model loaded</div><div class="d">BirdNET V3.0</div></div><span class="v">ready</span></div>
-        <div class="x-check-row"><span class="mk done">✓</span><div class="c"><div class="t">Room to record</div><div class="d">{disk_detail}</div></div><span class="v">{disk_value}</span></div>
+        <div class="x-check-row"><span class="mk done">✓</span><div class="c"><div class="t">Model bundled</div><div class="d">BirdNET V3.0 — ships with the app</div></div><span class="v">included</span></div>
+        <div class="x-check-row">{disk_mark_html}<div class="c"><div class="t">Room to record</div><div class="d">{disk_detail}</div></div><span class="v">{disk_value}</span></div>
         <div class="x-check-row"><span class="mk wait"><span class="bnb-dot live"></span></span><div class="c"><div class="t">Listening for the first call…</div><div class="d">this can take a few minutes</div></div><span class="v">—</span></div>
       </div>
     </div>"#
@@ -299,7 +380,10 @@ pub(super) fn capture_outage(conn: &rusqlite::Connection) -> Option<(u64, String
 }
 
 /// Filesystem usage of the data directory as a used percentage.
-fn disk_used_percent(state: &AppState) -> Option<f64> {
+///
+/// `pub(super)` so the header health badge grades the same number the
+/// dashboard shows, rather than a second measurement that could disagree.
+pub(super) fn disk_used_percent(state: &AppState) -> Option<f64> {
     let db_path = state.db_path().to_path_buf();
     let dir = db_path
         .parent()
@@ -364,24 +448,75 @@ fn moon_inline() -> String {
 // Pills + nudge partials
 // ---------------------------------------------------------------------------
 
+/// What the capture supervisor says about the station's audio sources.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CaptureState {
+    /// No enabled source is configured at all — nothing can ever be recorded.
+    NoSource,
+    /// At least one enabled source and the supervisor reports it up.
+    Up,
+    /// Sources are configured and none is up.
+    Down,
+    /// Sources are configured but no gauge has been published yet (the
+    /// supervisor has not reconciled them, e.g. in the first seconds after a
+    /// start, or in a web-only process). Not an outage — just not known.
+    Unknown,
+}
+
+/// Resolve [`CaptureState`] from the same per-source gauge the Capture tab's
+/// status pill reads, so the dashboard and that page cannot disagree.
+pub(super) fn live_capture_state(state: &AppState) -> CaptureState {
+    use birdnet_db::audio_sources::AudioSourceStore;
+    let sources = state.with_db(AudioSourceStore::list).unwrap_or_default();
+    if sources.is_empty() {
+        return CaptureState::NoSource;
+    }
+    let gauges: Vec<Option<bool>> = sources
+        .iter()
+        .map(|s| state.metrics().source_up(&s.id))
+        .collect();
+    if gauges.contains(&Some(true)) {
+        CaptureState::Up
+    } else if gauges.iter().all(Option::is_none) {
+        CaptureState::Unknown
+    } else {
+        CaptureState::Down
+    }
+}
+
 /// HTMX partial: the hero pill row — recording state, weather, sunrise/sunset,
 /// station identity. Every pill is backed by real data and absent otherwise.
 async fn today_pills_partial(State(state): State<AppState>) -> impl IntoResponse {
     let site_name = state.site_name().to_string();
+    // Live capture state from the supervisor's gauge, resolved before the DB
+    // work so the pill can say something true on a station that has *never*
+    // detected anything. `capture_outage` alone cannot: it measures time since
+    // the last detection, and with no detections at all it returns `None` —
+    // which the pill rendered as a confident green "recording". That is exactly
+    // the first-run state, so a station whose microphone never worked showed
+    // "recording" indefinitely and nothing ever contradicted it.
+    let capture = live_capture_state(&state);
     let html = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
             let mut out = String::with_capacity(512);
 
-            // Recording state — driven by the same freshness signal as the
-            // outage banner so the two can never disagree.
-            match capture_outage(conn) {
-                Some((_, last)) => {
+            // Recording state. The gauge is authoritative when it has an
+            // opinion; otherwise fall back to the detection-freshness signal
+            // that drives the outage banner, so the two cannot disagree.
+            match (capture, capture_outage(conn)) {
+                (CaptureState::NoSource, _) => out.push_str(
+                    r#"<span class="bnb-pill rare"><span class="bnb-dot"></span> not recording · no microphone configured</span>"#,
+                ),
+                (CaptureState::Down, _) => out.push_str(
+                    r#"<span class="bnb-pill rare"><span class="bnb-dot"></span> not recording · capture is down</span>"#,
+                ),
+                (_, Some((_, last))) => {
                     let _ = write!(
                         out,
                         r#"<span class="bnb-pill rare"><span class="bnb-dot"></span> recording stopped · last heard {last}</span>"#
                     );
                 }
-                None => out.push_str(
+                (_, None) => out.push_str(
                     r#"<span class="bnb-pill moss"><span class="bnb-dot live"></span> recording</span>"#,
                 ),
             }
@@ -978,10 +1113,119 @@ mod tests {
 
     #[test]
     fn firstrun_checklist_reflects_missing_microphone() {
-        let html = firstrun_checklist(&[], Some(38.0));
+        let html = firstrun_checklist(&[], Some(38.0), None);
         assert!(html.contains("Waiting for a microphone"));
         assert!(html.contains("38% used"));
         // Honest waiting mark, not a fake checkmark.
         assert!(html.contains("mk wait"));
+    }
+
+    fn src(id: &str) -> birdnet_db::audio_sources::AudioSource {
+        birdnet_db::audio_sources::AudioSource {
+            id: id.to_string(),
+            kind: birdnet_db::audio_sources::SourceKind::UsbAlsa,
+            device_id: "plughw:CARD=PRO,DEV=0".to_string(),
+            label: None,
+            sample_rate: 48_000,
+            channels: birdnet_db::audio_sources::Channels::Mono,
+            bit_depth: 24,
+            gain_db: 0.0,
+            rtsp_transport: birdnet_db::audio_sources::RtspTransport::Auto,
+            schedule_quiet: None,
+            pipeline: birdnet_db::audio_sources::PipelineFlags::default(),
+            disabled_at: None,
+            created_at: "2026-08-11".to_string(),
+            updated_at: "2026-08-11".to_string(),
+        }
+    }
+
+    /// A configured microphone that is not actually capturing is the silent
+    /// failure this card exists to rule out. It used to tick as "detected"
+    /// purely for being a row in the table.
+    #[test]
+    fn firstrun_checklist_flags_a_configured_but_silent_microphone() {
+        let s = src("src_1");
+        let html = firstrun_checklist(&[&s], Some(38.0), Some(false));
+        assert!(html.contains("Microphone not recording"), "{html}");
+        assert!(html.contains("mk down"), "must not show a pass mark");
+        assert!(
+            html.contains("/station/capture"),
+            "must point at where to fix it"
+        );
+    }
+
+    #[test]
+    fn firstrun_checklist_ticks_a_microphone_that_is_actually_recording() {
+        let s = src("src_1");
+        let html = firstrun_checklist(&[&s], Some(38.0), Some(true));
+        assert!(html.contains("Microphone recording"));
+        assert!(html.contains("mk done"));
+    }
+
+    #[test]
+    fn firstrun_checklist_waits_when_the_gauge_has_no_opinion_yet() {
+        // No gauge published is "not known", not "broken" — the supervisor may
+        // simply not have reconciled the source yet.
+        let s = src("src_1");
+        let html = firstrun_checklist(&[&s], Some(38.0), None);
+        assert!(html.contains("Microphone starting…"), "{html}");
+        assert!(!html.contains("mk down"));
+    }
+
+    /// The disk row was a hard-coded tick, so a station at 97 % showed
+    /// "Room to record ✓ — nearly full". A green mark reads as "fine".
+    #[test]
+    fn firstrun_checklist_does_not_tick_a_nearly_full_disk() {
+        let html = firstrun_checklist(&[], Some(97.0), None);
+        assert!(html.contains("97% used"));
+        assert!(html.contains("nearly full"), "{html}");
+        let disk_row = html
+            .split("Room to record")
+            .next()
+            .expect("row present")
+            .rsplit("<div class=\"x-check-row\">")
+            .next()
+            .expect("row start");
+        assert!(
+            !disk_row.contains("mk done"),
+            "a nearly-full disk must not carry a pass mark: {disk_row}"
+        );
+    }
+
+    #[test]
+    fn firstrun_checklist_ticks_a_healthy_disk() {
+        let html = firstrun_checklist(&[], Some(12.0), None);
+        assert!(html.contains("plenty of space"));
+        assert!(html.contains("12% used"));
+    }
+
+    /// The model row asserted runtime state ("Model loaded … ready") the page
+    /// has no signal for. It now states only what is true: the model ships.
+    #[test]
+    fn firstrun_checklist_does_not_claim_the_model_loaded() {
+        let html = firstrun_checklist(&[], Some(12.0), None);
+        assert!(!html.contains("Model loaded"), "{html}");
+        assert!(html.contains("Model bundled"));
+    }
+
+    /// The signal card's footer hard-coded `input · mic` and `48 kHz` for every
+    /// station, directly under a live spectrogram of that station's own audio.
+    #[test]
+    fn signal_card_footer_describes_the_real_source() {
+        let mut s = src("src_1");
+        s.sample_rate = 16_000;
+        s.kind = birdnet_db::audio_sources::SourceKind::Rtsp;
+        let r = &s;
+        let html = signal_card("", Some(&r));
+        assert!(html.contains("16 kHz"), "{html}");
+        assert!(!html.contains("48 kHz"));
+        assert!(!html.contains("input · mic"), "an RTSP source is not a mic");
+    }
+
+    #[test]
+    fn signal_card_footer_is_blank_without_a_source() {
+        let html = signal_card("", None);
+        assert!(html.contains("input · none"));
+        assert!(!html.contains("48 kHz"));
     }
 }

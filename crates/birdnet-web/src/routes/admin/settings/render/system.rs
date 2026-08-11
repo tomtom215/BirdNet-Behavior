@@ -19,6 +19,9 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let streammax = get_setting(s, "stream_max_mb", "512");
     let site = get_setting(s, "site_name", "");
     let isite = get_setting(s, "info_site", "ebird");
+    // Command-line only until 0.12.0, so a non-English station could not pick
+    // its own language from the UI at all.
+    let lang = get_setting(s, "database_lang", "en");
     let is_ebird = if isite == "ebird" { " selected" } else { "" };
     let is_aab = if isite == "allaboutbirds" {
         " selected"
@@ -45,6 +48,15 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         </select>
         <p class="hint">Species detail page links to external info (BirdNET-Pi: INFO_SITE)</p>
       </div>
+    </div>
+    <div class="grid-2">
+      <div>
+        <label for="database_lang">Common-name language</label>
+        <input id="database_lang" name="database_lang" type="text" value="{lang}"
+               placeholder="en" maxlength="8" class="bnb-w-num">
+        <p class="hint">Two-letter code for the language species common names are shown in, e.g. <code>en</code>, <code>de</code>, <code>fr</code>. Scientific names are unaffected (BirdNET-Pi: DATABASE_LANG)</p>
+      </div>
+      <div></div>
     </div>
     <div class="grid-2">
       <div>

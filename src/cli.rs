@@ -567,21 +567,21 @@ pub struct Cli {
     /// Requires `--mqtt-host` to be set.  Harmless if HA is not running.
     #[arg(long, env = "BIRDNET_MQTT_HA_DISCOVERY")]
     pub mqtt_ha_discovery: bool,
-
-    /// Enable audio quality pre-filtering before ML inference.
-    ///
-    /// When enabled, audio chunks are assessed for SNR, spectral flatness,
-    /// and rain/wind interference before being passed to the ML model.
-    /// Chunks below the quality threshold are discarded, reducing false
-    /// positives in noisy environments at the cost of some sensitivity.
-    #[arg(long, env = "BIRDNET_QUALITY_FILTER")]
-    pub quality_filter: bool,
-
-    /// Minimum SNR (dB) for audio quality pre-filtering (default: 3.0).
-    ///
-    /// Only used when --quality-filter is set.
-    #[arg(long, default_value = "3.0", env = "BIRDNET_QUALITY_MIN_SNR")]
-    pub quality_min_snr_db: f32,
+    // `--quality-filter` and `--quality-min-snr` used to be declared here.
+    // They promised that "audio chunks are assessed for SNR, spectral flatness,
+    // and rain/wind interference before being passed to the ML model" — and
+    // nothing read either field. Not from the config, not from the CLI: the
+    // whole feature was advertised in `--help`, in the generated CLI reference
+    // and in the docs, and did nothing at all.
+    //
+    // The implementation is not missing — `birdnet_core::audio::quality` is
+    // ~1300 lines of SNR, spectral flatness, rain/wind assessment and
+    // noise-floor tracking, with benchmarks. It was simply never called by the
+    // detection pipeline. Wiring it changes which chunks reach inference, so it
+    // belongs in its own change with hardware validation behind it, not in a
+    // release-prep pass. The flags are gone until then, because a switch that
+    // silently does nothing is worse than no switch: an operator in a noisy
+    // garden would set it and believe their false positives were being filtered.
 }
 
 impl Cli {

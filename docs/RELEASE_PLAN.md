@@ -670,10 +670,97 @@ maintainer's call.
   network-loss and disk-full survival with no panic; watchdog kill-and-restart;
   reboot autostart.
 
-  **Still open:** throughput and thermals *under real inference load*. Every run
-  so far measured zero inferences, because capture was broken by the first
-  finding. Re-run `--phase capture --phase detect --phase perf` on a board with
-  the ALSA fix to close this item.
+  **Second run, 2026-08-10, same board, with the ALSA fix applied and a
+  CI-built aarch64 binary (hash-matched to the artifact).** The full suite ran
+  minus `install`. It closed the four phases that previously had only
+  code-reading evidence, and found four more defects:
+
+  | Established on the board | Evidence |
+  |---|---|
+  | Live capture from the physical mic | `arecord` running, segments reaching tmpfs, 148 recordings on disk |
+  | The station keeps up with the microphone | `pipeline`: **102.5 % segment pickup, 0 decode failures** over 10 min |
+  | Thermals under load | peak **74.0 °C**, throttle register `0x0`, RSS 654 MiB against the 768 MiB `MemoryHigh` |
+  | `/admin` is gated | `web.adminauth` — 303, where it served **200 unauthenticated** before |
+  | A full disk no longer blocks startup | `diskfull.doctor` exits **1** at 899 MiB free; the service restarts and serves at 99 % disk |
+  | A corrupt DB recovers unattended | `dbcorrupt` detect → recover → healthy, with **`dbcorrupt.gate` and `dbcorrupt.startlimit` both absent** — they only fire when `ExecStartPre` blocked startup |
+  | Cold reboot brings capture back | `reboot.capture` **PASS**, after failing on the first attempt of this run |
+
+  `reboot.capture` failing is what produced the largest finding of the release:
+  an ALSA card *index* is not an identifier. The same microphone was `card 1`
+  before the reboot and `card 3` after it, so the station came back serving a
+  healthy dashboard and recording nothing, retrying a device that no longer
+  existed. Fixed by addressing the card by id (`plughw:CARD=<id>,DEV=0`), and
+  re-verified on the same board: `reboot.capture` now passes.
+
+  **Still open after this run:**
+
+  - **The upgrade path has never been executed.** No one has run
+    `install.sh update` from a released 0.11.0 station to this build. Every
+    existing operator takes that path, and it carries the unit rewrite, two
+    `--doctor` exit-code changes, `/admin` closing, and the new admin-login
+    summary. It is the largest untested surface in the release.
+  - **Mean inference latency is still unmeasured.** `perf` observed zero
+    inferences in a quiet ten minutes, which is expected — the histogram is
+    observed once per *stored detection*, so its sample count tracks bird
+    activity rather than throughput. The keep-up question is answered by
+    `pipeline` instead. A latency figure needs a busy site or a longer window.
+  - **`detect.persisted` is unexplained.** The injected reference recording
+    produced no new stored detection while `pipeline` stored five that same
+    hour. The harness now fails rather than passing on a stale magpie, but the
+    underlying question — most likely the species filter rejecting `Pica pica`
+    for this station's coordinates, which would be correct behaviour and a
+    wrong harness assumption — is unanswered.
+  - **Thermal headroom is thin.** 72.5 °C at rest and 74.0 °C peak leaves 6 °C
+    below the Pi 4's 80 °C soft-throttle point, indoors, with no enclosure. A
+    sealed box in summer will throttle. Measured, not bounded.
+  - **The multi-distro package layer is container-tested only** (Debian,
+    Fedora, Arch, openSUSE), all amd64. No real non-Debian box, no aarch64.
+  - **0.75 is a judgement, not a measurement.** The out-of-the-box minimum
+    confidence was raised from BirdNET-Pi's 0.70 on the reasoning that a new
+    station's log should read as realistic rather than padded with marginal
+    IDs. What has *not* been done is measuring precision and recall at 0.70 vs
+    0.75 against a labelled recording from a real station — so the figure is
+    defensible, not established. The plumbing around it is verified: the
+    daemon, the settings form and the wizard all read one constant, and a live
+    binary was probed across the range (`0`, `0.001`, `0.07` warn; `0.1`
+    upward silent; `70`, `-0.5`, `abc` fail with exit 2).
+  - **UI-vs-CLI parity is closed except MQTT, and one built feature is still
+    unwired.** A field-by-field audit of the 71 CLI fields against the 49
+    settings-form keys found four genuine gaps (recording window, heartbeat
+    URL, dead-man hours, database language), all now on the settings page and
+    each covered by a chain test; two dead flags (`--quality-filter`,
+    `--quality-min-snr`), now removed; and one real bug — `RECORDING_SCHEDULE`
+    ignored by the runtime — now fixed. Everything else in the difference is
+    deliberate: action flags (`--doctor`, `--fix`, `--check-db`), install-time
+    paths (`--model`, `--labels`, `--watch-dir`), and `--twilight-offset`,
+    which the form's separate pre-sunrise / post-sunset fields supersede.
+
+    Two items are carried forward rather than done:
+
+    * **MQTT / Home Assistant discovery — 8 flags, no UI at all.** The command
+      palette advertises "mqtt" as a searchable term and there is nowhere to
+      send the operator. Deferred by decision, not oversight.
+    * **`birdnet_core::audio::quality` is built and never called.** ~1300
+      lines of SNR, spectral flatness, rain/wind assessment and noise-floor
+      tracking, with benchmarks, that no pipeline invokes. Wiring it changes
+      which chunks reach inference, so it needs its own change and a hardware
+      run to judge the effect on detection rates.
+  - **The status surfaces now grade real signals, but only one of the
+    unhappy paths has been seen on hardware.** The dashboard checklist, the
+    hero pill, the Today rail line and the header badge all read the capture
+    supervisor's per-source gauge instead of assuming success, and were
+    exercised against a live server in every state the gauge can report. What
+    has *not* been reproduced on the board is the transition itself: unplug the
+    microphone on a running Pi and watch the badge go from *Healthy* to *Mic
+    down* within its 30 s poll, then come back. The hardware harness already
+    unplugs the mic (`mic` phase), so this is one assertion away.
+  - **The new Accuracy step and the location notice have not run on the
+    board.** Both are covered by tests — nine integration tests over the served
+    wizard and the save handler, and `installer/test/location-notice.sh` over
+    the summary branch — but neither has been seen by an operator on a real
+    first-run install. The next hardware pass should install non-interactively
+    (the path that skips the location prompt entirely) and confirm the summary
+    says so.
 - **Long-duration soak.** The soak suite bounds memory growth over minutes, not
   days. "A full season unattended" remains the target, not a measurement.
 - **The Docker image built end to end here.** S-01 is measured at every level

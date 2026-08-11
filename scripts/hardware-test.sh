@@ -217,6 +217,35 @@ soc_temp_c() {
 
 throttled_hex() { have vcgencmd && vcgencmd get_throttled 2>/dev/null | sed 's/throttled=//'; }
 
+# Whole-machine CPU utilisation as an integer percentage, measured over
+# `$1` seconds (default 1) from /proc/stat.
+#
+# The harness recorded loadavg and never a utilisation figure, so "how much CPU
+# headroom does this board have while running a station?" — and "is the CPU
+# number the dashboard shows even real?" — were both unanswerable from a run.
+# Loadavg is not a substitute: it counts runnable tasks, not busy time, and on
+# a 4-core Pi a load of 1.0 could be 25 % busy or one task blocked on I/O.
+cpu_util_pct() {
+  local secs="${1:-1}" a b at bt ai bi
+  # shellcheck disable=SC2034  # fields are positional; only the sums are used
+  read -r _ u1 n1 s1 i1 w1 q1 sq1 st1 _ < /proc/stat
+  at=$(( u1 + n1 + s1 + i1 + w1 + q1 + sq1 + st1 )); ai=$(( i1 + w1 ))
+  sleep "$secs"
+  read -r _ u2 n2 s2 i2 w2 q2 sq2 st2 _ < /proc/stat
+  bt=$(( u2 + n2 + s2 + i2 + w2 + q2 + sq2 + st2 )); bi=$(( i2 + w2 ))
+  a=$(( bt - at )); b=$(( bi - ai ))
+  [ "$a" -gt 0 ] && echo $(( (100 * (a - b)) / a )) || echo 0
+}
+
+# The CPU percentage the dashboard's Vitals panel is showing, or empty when the
+# page cannot be read. Parsed from the Station page's CPU vital.
+ui_cpu_pct() {
+  curl -sf --max-time 10 "${BASE}/station" 2>/dev/null \
+    | tr '\n' ' ' \
+    | sed -n 's/.*>CPU<\/div>[^0-9]*<div class="v">\([0-9]\+\)%.*/\1/p' \
+    | head -1
+}
+
 daemon_pid() { systemctl show -p MainPID --value "$SERVICE" 2>/dev/null; }
 
 daemon_rss_kb() {
@@ -840,20 +869,63 @@ phase_perf() {
   local mins="${BIRDNET_PERF_MINUTES:-10}"
   info "sampling for ${mins} minutes of live capture…"
   local samples="${OUT}/perf-samples.csv"
-  echo "elapsed_s,temp_c,rss_kb,inference_count,load1,stream_backlog" > "$samples"
+  echo "elapsed_s,temp_c,rss_kb,inference_count,load1,stream_backlog,cpu_pct" > "$samples"
 
   local deadline=$(( SECONDS + mins * 60 )) peak_temp=0 backlog_peak="$backlog_start"
+  local cpu_peak=0 cpu_sum=0 cpu_n=0
   while [ $SECONDS -lt $deadline ]; do
-    local t r c l b
+    local t r c l b cpu
     t="$(soc_temp_c)"; r="$(daemon_rss_kb)"
     c="$(metric_value birdnet_inference_duration_seconds_count)"
     l="$(awk '{print $1}' /proc/loadavg)"
     b="$(in_service_ns find "$STREAM_DIR" -type f 2>/dev/null | wc -l)"; b="${b:-0}"
-    echo "${SECONDS},${t},${r:-},${c%.*},${l},${b}" >> "$samples"
+    cpu="$(cpu_util_pct 1)"
+    echo "${SECONDS},${t},${r:-},${c%.*},${l},${b},${cpu}" >> "$samples"
     awk "BEGIN { exit !(${t:-0} > ${peak_temp}) }" && peak_temp="$t"
     [ "$b" -gt "$backlog_peak" ] && backlog_peak="$b"
-    sleep 30
+    [ "$cpu" -gt "$cpu_peak" ] && cpu_peak="$cpu"
+    cpu_sum=$(( cpu_sum + cpu )); cpu_n=$(( cpu_n + 1 ))
+    sleep 29
   done
+
+  # CPU headroom. The station keeping up (the backlog check below) says the
+  # board is fast enough *today*; this says by how much, which is what decides
+  # whether a warmer day or a busier dawn chorus will tip it over.
+  if [ "$cpu_n" -gt 0 ]; then
+    local cpu_mean=$(( cpu_sum / cpu_n ))
+    record INFO perf.cpu "CPU ${cpu_mean}% mean · ${cpu_peak}% peak over ${cpu_n} samples"
+    if [ "$cpu_peak" -ge 95 ]; then
+      record WARN perf.cpu_headroom "CPU peaked at ${cpu_peak}% — effectively no headroom" \
+        "The board is saturated. Expect the backlog to grow on a busy morning."
+    else
+      record PASS perf.cpu_headroom "CPU peak ${cpu_peak}% leaves headroom"
+    fi
+  fi
+
+  # Is the CPU figure the dashboard shows actually real? Reported as looking
+  # wrong on a Pi; it could not be reproduced off-hardware, where the reading
+  # agrees with /proc/stat exactly. This settles it on the board itself rather
+  # than by argument. Both numbers are whole-machine percentages sampled
+  # seconds apart, so they track but will not match to the digit — the check is
+  # deliberately loose, and only fails when the UI is plainly not measuring
+  # (flat zero while the machine is busy, or wildly out).
+  local ui_cpu truth_cpu
+  truth_cpu="$(cpu_util_pct 1)"
+  ui_cpu="$(ui_cpu_pct)"
+  if [ -z "$ui_cpu" ]; then
+    record SKIP perf.cpu_ui "could not read the CPU vital from ${BASE}/station"
+  else
+    local delta=$(( ui_cpu - truth_cpu )); [ "$delta" -lt 0 ] && delta=$(( -delta ))
+    if [ "$ui_cpu" -eq 0 ] && [ "$truth_cpu" -ge 15 ]; then
+      record FAIL perf.cpu_ui "dashboard shows CPU 0% while /proc/stat says ${truth_cpu}%" \
+        "The CPU vital is not measuring anything on this hardware."
+    elif [ "$delta" -le 35 ]; then
+      record PASS perf.cpu_ui "dashboard CPU ${ui_cpu}% tracks /proc/stat ${truth_cpu}%"
+    else
+      record WARN perf.cpu_ui "dashboard CPU ${ui_cpu}% vs /proc/stat ${truth_cpu}%" \
+        "Sampled seconds apart, so some drift is expected; a persistent gap this large is not."
+    fi
+  fi
   local backlog_end; backlog_end="$(in_service_ns find "$STREAM_DIR" -type f 2>/dev/null | wc -l)"
   backlog_end="${backlog_end:-0}"
 

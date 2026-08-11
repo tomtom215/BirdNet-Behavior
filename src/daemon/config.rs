@@ -119,7 +119,7 @@ pub(super) fn build_species_filter_config(
 ///
 /// Returns `(latitude, longitude)`, each `None` when unresolvable.
 #[must_use]
-pub(super) fn resolve_station_coords(
+pub fn resolve_station_coords(
     cli: &Cli,
     config: Option<&birdnet_core::config::Config>,
 ) -> (Option<f64>, Option<f64>) {
@@ -130,6 +130,40 @@ pub(super) fn resolve_station_coords(
         .longitude
         .or_else(|| config.and_then(|c| c.get_parsed::<f64>("LONGITUDE").ok()));
     (lat, lon)
+}
+
+/// Resolve the minimum-confidence threshold the daemon will enforce.
+///
+/// `CONFIDENCE` from the config — which the settings overlay has already
+/// layered `/admin/settings` onto — otherwise
+/// [`DEFAULT_CONFIDENCE_THRESHOLD`](birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD) —
+/// the same value the admin form advertises and the onboarding wizard
+/// pre-selects.
+///
+/// A `CONFIDENCE` that does not parse falls back to the default rather than to
+/// zero: an unusable value must not silently turn the station into a
+/// false-positive firehose. Out-of-range and non-numeric values are separately
+/// reported as errors by `birdnet_core::config::validate`, which `--doctor`
+/// runs from `ExecStartPre` — so in practice the daemon never starts on one.
+///
+/// Extracted from `start_detection_daemon` so the precedence rule and the
+/// default are observable in a unit test rather than only through a live run.
+#[must_use]
+pub fn resolve_confidence(config: Option<&birdnet_core::config::Config>) -> f32 {
+    config
+        .and_then(|c| c.get_parsed::<f32>("CONFIDENCE").ok())
+        .unwrap_or(birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD)
+}
+
+/// Resolve the detection sensitivity the daemon will apply.
+///
+/// Same precedence and fallback rule as [`resolve_confidence`], against
+/// `SENSITIVITY` / [`DEFAULT_SENSITIVITY`](birdnet_core::config::DEFAULT_SENSITIVITY).
+#[must_use]
+pub(super) fn resolve_sensitivity(config: Option<&birdnet_core::config::Config>) -> f32 {
+    config
+        .and_then(|c| c.get_parsed::<f32>("SENSITIVITY").ok())
+        .unwrap_or(birdnet_core::config::DEFAULT_SENSITIVITY)
 }
 
 /// Build the [`ExtractionConfig`] for the detection-clip extractor.
@@ -667,5 +701,72 @@ mod tests {
             species_lists_log_counts(&lists(&["Pica pica", "Turdus merula"], &["Corvus corax"])),
             Some((2, 1))
         );
+    }
+
+    // ── minimum-confidence resolution ───────────────────────────────────
+    //
+    // The threshold decides whether anything is recorded at all, and three
+    // places have to agree on it: the daemon (enforces), the admin form
+    // (displays), and the onboarding wizard (offers). These pin the daemon's
+    // half of that contract.
+
+    #[test]
+    fn confidence_defaults_to_the_shared_constant_when_unset() {
+        // The overwhelmingly common install: birdnet.conf carries no
+        // CONFIDENCE line (the generated file has it commented out).
+        let cfg = config_with(&[("LATITUDE", "42.36")]);
+        assert!(
+            (resolve_confidence(Some(&cfg)) - birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD)
+                .abs()
+                < f32::EPSILON
+        );
+        // …and with no config file at all.
+        assert!(
+            (resolve_confidence(None) - birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD).abs()
+                < f32::EPSILON
+        );
+    }
+
+    #[test]
+    fn confidence_default_is_075_not_the_old_025() {
+        // Counter-test for the drift the shared constant was introduced to
+        // kill: the daemon recorded at 0.25 while the UI advertised 0.70.
+        let got = resolve_confidence(None);
+        assert!(
+            (got - 0.75).abs() < f32::EPSILON,
+            "daemon default must be the shipped 0.75, got {got}"
+        );
+    }
+
+    #[test]
+    fn configured_confidence_wins_over_the_default() {
+        let cfg = config_with(&[("CONFIDENCE", "0.85")]);
+        assert!((resolve_confidence(Some(&cfg)) - 0.85).abs() < f32::EPSILON);
+    }
+
+    // The wizard→overlay→daemon chain is pinned in `helpers::settings_overlay`,
+    // where `apply_setting_overrides` is in scope: see
+    // `wizard_written_confidence_reaches_the_daemon`.
+
+    #[test]
+    fn unparseable_confidence_falls_back_to_the_default_not_zero() {
+        // `--doctor` blocks startup on this, but if it is ever reached the
+        // fallback must not be a firehose.
+        let cfg = config_with(&[("CONFIDENCE", "not-a-number")]);
+        assert!(
+            (resolve_confidence(Some(&cfg)) - birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD)
+                .abs()
+                < f32::EPSILON
+        );
+    }
+
+    #[test]
+    fn sensitivity_defaults_and_overrides_follow_the_same_rule() {
+        assert!(
+            (resolve_sensitivity(None) - birdnet_core::config::DEFAULT_SENSITIVITY).abs()
+                < f32::EPSILON
+        );
+        let cfg = config_with(&[("SENSITIVITY", "1.4")]);
+        assert!((resolve_sensitivity(Some(&cfg)) - 1.4).abs() < f32::EPSILON);
     }
 }

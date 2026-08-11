@@ -26,9 +26,29 @@ fn vmrss_kb() -> Option<u64> {
         .and_then(|kb| kb.parse().ok())
 }
 
-/// Count of open file descriptors (Linux only; `None` elsewhere).
-fn open_fd_count() -> Option<usize> {
-    Some(std::fs::read_dir("/proc/self/fd").ok()?.count())
+/// Count of open file descriptors pointing **inside `dir`** (Linux only;
+/// `None` elsewhere).
+///
+/// Deliberately scoped to one directory rather than counting `/proc/self/fd`
+/// wholesale. These soak tests are threads in a single test binary and run
+/// concurrently, so a process-wide count answers "how many files does this
+/// *process* have open", which a sibling test opening its own database changes
+/// underneath you. That produced a spurious "open fds grew from 4 to 13 —
+/// possible leak" failure in a full workspace run while the same test passed
+/// alone and passed on re-run: a flaky assertion, not a leak.
+///
+/// Scoping to the test's own temp directory measures what the assertion
+/// actually means — did *this* cycle leave its own files open — and is immune
+/// to what other tests are doing.
+fn open_fd_count(dir: &std::path::Path) -> Option<usize> {
+    let entries = std::fs::read_dir("/proc/self/fd").ok()?;
+    Some(
+        entries
+            .filter_map(Result::ok)
+            .filter_map(|e| std::fs::read_link(e.path()).ok())
+            .filter(|target| target.starts_with(dir))
+            .count(),
+    )
 }
 
 /// Total on-disk size of a SQLite database including its `-wal` / `-shm`
@@ -80,7 +100,7 @@ async fn soak_insertions_stay_bounded() {
     let state = AppState::from_connection(conn, db_path.clone());
 
     let rss_before = vmrss_kb();
-    let fd_before = open_fd_count();
+    let fd_before = open_fd_count(dir.path());
     let start = std::time::Instant::now();
 
     for i in 0..n {
@@ -154,7 +174,7 @@ async fn soak_insertions_stay_bounded() {
     }
 
     // No file-descriptor leak — the loop opens nothing new.
-    if let (Some(before), Some(after)) = (fd_before, open_fd_count()) {
+    if let (Some(before), Some(after)) = (fd_before, open_fd_count(dir.path())) {
         assert!(
             after <= before + 8,
             "open fds grew from {before} to {after} over {n} inserts — possible descriptor leak"
@@ -212,7 +232,7 @@ fn soak_recovers_from_db_corruption_at_restart() {
     let db_path = dir.path().join("station.db");
     let backup_dir = dir.path().join("backups");
 
-    let fd_before = open_fd_count();
+    let fd_before = open_fd_count(dir.path());
 
     // 1. Normal operation: record a batch, then take a hot backup (as the
     //    scheduled maintenance task does before VACUUM).
@@ -254,7 +274,7 @@ fn soak_recovers_from_db_corruption_at_restart() {
     }
 
     // No descriptor leak across the corrupt → recover → resume cycle.
-    if let (Some(before), Some(after)) = (fd_before, open_fd_count()) {
+    if let (Some(before), Some(after)) = (fd_before, open_fd_count(dir.path())) {
         assert!(
             after <= before + 8,
             "open fds grew from {before} to {after} across the recovery cycle — possible leak"

@@ -5,9 +5,258 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.12.0] - 2026-08-10
 
 ### Fixed
+
+- **`RECORDING_SCHEDULE` in `birdnet.conf` was ignored: a station set to
+  `solar` recorded around the clock.** `capture::schedule` read
+  `cli.recording_schedule` directly, and that flag carries a clap
+  `default_value` of `all-day` — so the default always won and the configured
+  schedule never applied. A `fixed:HH:MM-HH:MM` window was dropped just as
+  silently.
+
+  Nothing contradicted it. `birdnet_core::config::validate` validates the key,
+  and `--doctor`'s clock check reads it from the config to warn that a fixed
+  window is evaluated in UTC — so the diagnostic reported on a schedule the
+  runtime never used, the same shape as the `CADDY_PWD` and `ALSA_CARD` splits
+  fixed earlier in this release. Its sibling `resolve_twilight_offsets` had
+  always gone through `resolve::setting`; this one line had not, and every
+  existing test set the CLI field by hand, exercising only the path that
+  worked.
+
+  Measured before the fix: `RECORDING_SCHEDULE=solar` yielded
+  `night_inhibit=false, fixed_window=None` — 24/7 recording, on a station whose
+  operator had asked for the dawn window and whose disk and CPU paid for it.
+
+### Removed
+
+- **`--quality-filter` and `--quality-min-snr`, which did nothing at all.**
+  They promised that "audio chunks are assessed for SNR, spectral flatness, and
+  rain/wind interference before being passed to the ML model". No code read
+  either field — not from the config, not from the CLI. The feature was
+  advertised in `--help`, in the generated CLI reference and in the tuning
+  guide, and was inert.
+
+  The implementation is not missing: `birdnet_core::audio::quality` is ~1300
+  lines of SNR, spectral flatness, rain/wind assessment and noise-floor
+  tracking, with benchmarks — it was simply never called by the detection
+  pipeline. Wiring it changes which chunks reach inference, so it belongs in
+  its own change with hardware validation behind it rather than a release-prep
+  pass. The flags are gone until then, because a switch that silently does
+  nothing is worse than no switch: an operator in a noisy garden would set it
+  and believe their false positives were being filtered.
+
+### Added
+
+- **Four settings that were command-line-only are now on the settings page.**
+  An operator without a terminal — which is most of them — could not reach any
+  of these:
+
+  | Setting | Why it matters |
+  |---|---|
+  | **Recording window** (`RECORDING_SCHEDULE`) | all-day / solar / fixed hours; the page offered the sunrise and sunset *offsets* while the mode they modify was unreachable |
+  | **Heartbeat URL** (`HEARTBEAT_URL`) | lets an outside monitor alert you when the station stops reporting |
+  | **Dead-man alert** (`DEADMAN_HOURS`) | notifies you after N hours of silence — the symptom of a microphone that died quietly |
+  | **Common-name language** (`DATABASE_LANG`) | a non-English station could not pick its own language from the UI |
+
+  Each goes through the existing wiring guard, and a test walks the whole chain
+  per key — the settings row the form writes, through the overlay, to the
+  config key the consumer actually reads — with a further test proving that
+  choosing *Solar* on the settings page really does stop overnight recording.
+  Both fail against the pre-fix code.
+
+  MQTT and Home Assistant discovery (8 flags) remain command-line-only and are
+  deliberately deferred; `docs/RELEASE_PLAN.md` § 5 records the rest of the
+  audit.
+
+### Changed
+
+- **The hardware harness now measures CPU, and checks the dashboard's CPU
+  figure against the kernel's.** Reported as looking broken on a Pi. It could
+  not be reproduced: measured against `/proc/stat` over the same window the
+  reading agrees exactly — 2 % against 2 % idle, 100 % against 100 % with every
+  core pinned. But the report pointed at a real gap. `scripts/hardware-test.sh`
+  recorded load average and never a utilisation figure, so no run on real
+  hardware had ever established that the CPU monitor worked at all; and the
+  unit tests only asserted `0.0 ≤ cpu ≤ 100.0`, which a sampler stuck at zero
+  satisfies.
+
+  The `perf` phase now samples CPU utilisation into `perf-samples.csv`, reports
+  mean and peak, warns when the peak leaves no headroom, and compares the
+  figure the Station page displays with `/proc/stat` — failing outright if the
+  dashboard shows 0 % on a busy board. A unit test now pins the machine's cores
+  and requires the reading to move, which the old range assertions could not.
+
+- **The out-of-the-box minimum confidence is now 0.75** (was 0.70, BirdNET-Pi's
+  default). High enough that a new station's log reads as realistic instead of
+  padded with marginal IDs, low enough that quiet and distant birds are still
+  recorded. It remains a single shared constant, so the daemon, the settings
+  form and the wizard cannot disagree about it; existing stations with an
+  explicit `CONFIDENCE` are unaffected.
+
+### Added
+
+- **The setup wizard now asks how picky the station should be.** The minimum
+  confidence decides whether anything is recorded at all, and nothing in the
+  setup path mentioned it: the installer wrote it as a commented-out line and
+  the wizard never raised it, so an operator who wanted stricter or looser
+  detection had to find Settings → Detection unprompted. A new **Accuracy** step
+  offers four presets (0.90 / 0.75 / 0.60 / 0.40) pre-selected on the shared
+  default, so clicking straight through yields exactly what the daemon would
+  have enforced anyway.
+
+  The submitted value is range-checked before it is stored. An out-of-range
+  `CONFIDENCE` is a *fatal* doctor error, and `--doctor` runs from the unit's
+  `ExecStartPre` where exit 2 blocks startup — so an unvalidated write here
+  would have turned the setup form into a way to leave the station unable to
+  start.
+
+### Fixed
+
+- **The setup wizard showed a station that did not exist.** Its Microphone step
+  was a mock-up: a hard-coded "UMC202HD · USB audio · card 1 · 48 kHz" card,
+  marked *recommended* and pre-selected, described as "detected automatically";
+  a "Built-in microphone · card 0 · 44.1 kHz"; and two more cards offering an
+  RTSP camera and folder-watching that did nothing when clicked. The final
+  summary card was the same — "Boston, MA · 42.36, −71.06", the same UMC202HD,
+  and a dashboard address of `http://birdnet.local/` that does not resolve on
+  every network.
+
+  None of it was read from the station. A first-run operator was shown hardware
+  they do not own, presented as already found — so on a station whose
+  microphone was missing or misconfigured, the wizard's answer to *"will this
+  hear anything?"* was a confident yes about a device that is not there. That
+  is the failure mode the wizard exists to prevent.
+
+  The Microphone step now renders the real rows from `audio_sources`, reusing
+  the Capture tab's own `kind_label`/`detail_for` rather than a second copy that
+  could drift, and a station with no source is told plainly that nothing will be
+  detected and pointed at where to add one. The summary rows that depend on
+  operator input are placeholders the page script fills — location from the
+  coordinates actually entered, alerts and confidence from the cards actually
+  chosen, and the dashboard address from the URL the operator actually reached
+  the page on. Verified by driving the wizard end to end in a real browser, and
+  a test pins every one of the removed mock strings so none can reappear.
+
+  Two counts went stale when the Accuracy step was added and nothing would have
+  caught either: the welcome copy still read "five steps", and
+  `tools/visual-qa/onboarding.mjs` looped to a hard-coded `step <= 5`, so its
+  screenshot set silently stopped one short — looking complete while missing
+  exactly the new step worth reviewing. The prose count is now asserted by a
+  test and the capture script reads the count from the page. Re-audited with
+  axe-core across all six steps (stricter than the CI gate, which only ever sees
+  the visible first step): no WCAG 2.1 A/AA violations outside the two rules the
+  gate defers by design, and no horizontal overflow at 390 px in either theme.
+
+- **Green ticks and a green "Healthy" badge on a station that was not working.**
+  Walking the first-run journey end to end turned up four places that reported
+  success without checking anything:
+
+  * The dashboard's **"Getting ready"** card — the one thing a brand-new
+    operator reads — ticked *Microphone detected* as soon as a source existed in
+    the database, which says nothing about audio flowing. A source whose device
+    vanished on reboot, or whose `arecord` had died, ticked green. It now reads
+    the supervisor's own per-source gauge (the signal the Capture tab already
+    used) and reports *Microphone not recording* with a link to the page that
+    can fix it.
+  * The same card's **"Room to record"** row was a hard-coded `✓`. The
+    percentage and the wording were real, so it could render "Room to record ✓ —
+    nearly full — 97% used": a pass tick on a station about to stop recording.
+  * **"Model loaded … ready"** asserted runtime state the page has no signal
+    for. It now says only what is true — the model ships with the app.
+  * The **"recording"** pill is driven by time since the last detection, which
+    is `None` on a station that has never detected anything — so it rendered a
+    confident green *recording* forever on exactly the first-run station whose
+    microphone never worked. It now consults the capture gauge first.
+
+  The **header health badge** was the same problem at the top of every page:
+  "Healthy" meant nothing more than "SQLite is not corrupt", so a station with a
+  dead microphone and a 99 %-full disk showed green on every screen. It now
+  grades database, capture and disk — the three things that stop detections —
+  and names the problem (*Mic down*, *No microphone*, *Disk full*) with the
+  reason on hover. The `data-health` token keeps its `ok`/`warn`/`err`
+  vocabulary, and the disk threshold is shared with the dashboard so the two
+  surfaces cannot disagree about the same disk.
+
+- **The setup wizard's alerts choice governed nothing.** The Alerts step wrote
+  `notification_mode` — a key no code anywhere read. An operator picked "Quiet"
+  or "Everything" on their first day and it changed nothing, because the
+  notification filter reads `notify_trigger` (bridged onto `APPRISE_TRIGGER`).
+  Worse, its four options (`quiet`/`rare`/`daily`/`everything`) matched none of
+  the three values the runtime understands, and `TriggerMode::parse` maps
+  anything unrecognised to *every detection* — the chattiest mode, the opposite
+  of a quiet choice.
+
+  The step now offers exactly the three real modes, writes the key the runtime
+  reads, and rejects anything else rather than silently selecting "chatty". It
+  also says plainly that nothing is sent until a channel is configured, and
+  links to where — replacing a "Pick channels now" disclosure that opened
+  twelve non-interactive pills.
+
+  The guard that exists to prevent exactly this (`SETTING_SPECS` must classify
+  every settings key, enforced by a test) only ever covered the admin *form*, so
+  the wizard wrote outside it. It now covers the wizard's keys too, and a test
+  pins the declared list against what a full submit actually persists.
+
+- **The timezone the wizard detected was stored and never used.** It cannot be
+  applied from the app — the timezone is a system setting and the service does
+  not run as root — but it is not cosmetic either: capture names each recording
+  from the system's local time, and those filenames become every detection's
+  `Date` and `Time`. A Pi left on UTC in a UTC+2 country files its dawn chorus
+  two hours early, rolls "today" over at the wrong moment, and deletes by the
+  wrong day. Raspberry Pi OS images default to UTC, so this is a common state.
+  `--doctor` now compares the host's timezone with the detected one and hands
+  over the exact `timedatectl set-timezone` command. Verified on a real
+  container: a station configured for `Europe/Berlin` on a `Etc/UTC` host warns
+  with that command.
+
+- **`--doctor` was silent about a confidence threshold that guarantees a
+  false-positive firehose.** Validation rejected the percentage mistake
+  (`CONFIDENCE=70`) and non-numeric junk as errors, but a *decimal* slip — `0.07`
+  for `0.7`, or a `0` copied from `SF_THRESH`, where `0` does mean "disabled" —
+  parses, sits inside 0–1, and passed clean. The station then records the
+  model's best guess for every three-second window: the disk fills, the species
+  list fills with noise, and nothing anywhere says why. Verified against a live
+  binary before and after; `0`, `0.001` and `0.07` each now warn while `0.1` and
+  above stay silent, and the value remains usable rather than blocking startup.
+
+- **`ModelConfig::default()` carried a third confidence threshold.** It
+  hard-coded `0.25` — contradicting both the daemon's enforced default and the
+  value the admin form advertises, which is precisely the drift the shared
+  constant exists to prevent. Nothing shipped broken, because the daemon always
+  names the field explicitly, but any future construction that spread
+  `..ModelConfig::default()` without it would have silently reopened the exact
+  bug. It now references the shared constant.
+
+- **A station with no coordinates silently disabled species filtering.**
+  `SpeciesFilter::filter_species` takes `Option<(lat, lon)>`; with `None` the
+  metadata model cannot run, so occurrence filtering is skipped and **every one
+  of the ~11 000 species stays a candidate**. The station keeps working and
+  reports birds that have never occurred within a thousand miles — which reads
+  as a bad model rather than as a missing setting.
+
+  Nothing said so. The config validator checked that a latitude was *in range*,
+  and warned when one of the pair was set without the other, but was silent
+  when both were absent. `--doctor` now reports it, naming the consequence
+  rather than the missing key, and pointing at the dashboard's location detect.
+
+  Resolution goes through `daemon::resolve_station_coords` — the same function
+  the detection daemon uses — rather than a third copy of the precedence rule,
+  and falls back to the `settings` table because `--doctor` runs from
+  `ExecStartPre` before the settings overlay has merged `/admin/settings` into
+  the config. Reading the config alone would have warned at exactly the
+  operators who configured their station the easy way, through the onboarding
+  wizard.
+
+  The installer was the other half of the same silence. Its summary warned
+  loudly about a missing audio source and said nothing about missing
+  coordinates, and its next-steps list called them "(Optional)" — while the
+  location prompt itself is skipped entirely on a non-interactive install
+  (`BIRDNET_NONINTERACTIVE=1`, or no TTY under `curl | sudo bash`) and on every
+  re-install over an existing config, making "no coordinates" the common state
+  rather than the rare one. It now says so, in the same place and tone as the
+  audio-source notice.
 
 Found by running the new on-device acceptance harness
 (`scripts/hardware-test.sh`) against a Raspberry Pi 4 on Pi OS Trixie — the
@@ -2773,7 +3022,8 @@ x86_64 Linux.
 - systemd installer script with ALSA microphone auto-detection and
   automatic BirdNET+ model download from Zenodo.
 
-[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.7.2...v0.9.0

@@ -26,11 +26,19 @@ use crate::integrations::{AppriseHandle, EmailHandle, HeartbeatHandle, MqttHandl
 use config::{
     build_extraction_config, build_model_config, build_pipeline_config,
     build_species_filter_config, resolve_f32_with_default, resolve_required_paths,
-    resolve_station_coords, species_lists_log_counts, species_thresholds_log_count,
+    resolve_sensitivity, species_lists_log_counts, species_thresholds_log_count,
 };
 use processor::event_processor;
 
 mod config;
+
+/// Shared with `crate::doctor::config` and `crate::helpers::settings_overlay`
+/// so the diagnostic, the settings bridge and the detection daemon resolve
+/// these through one function each rather than their own copies. The doc on
+/// `resolve_station_coords` records what a second copy cost the last time one
+/// of these rules was duplicated: a diagnostic that read the setting the
+/// runtime ignores reports on a station that does not exist.
+pub use config::{resolve_confidence, resolve_station_coords};
 mod disposition;
 mod processor;
 mod webhook;
@@ -98,13 +106,8 @@ pub fn start_detection_daemon(
         );
     }
 
-    let sensitivity = config
-        .and_then(|c| c.get_parsed::<f32>("SENSITIVITY").ok())
-        .unwrap_or(birdnet_core::config::DEFAULT_SENSITIVITY);
-
-    let confidence = config
-        .and_then(|c| c.get_parsed::<f32>("CONFIDENCE").ok())
-        .unwrap_or(birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD);
+    let sensitivity = resolve_sensitivity(config);
+    let confidence = resolve_confidence(config);
 
     let metadata_model_path = cli
         .metadata_model

@@ -6,6 +6,89 @@ use birdnet_core::config::validate::{self as cfg_validate, Severity as ConfigSev
 use super::Check;
 use crate::cli::Cli;
 
+/// Warn when the station has no coordinates, because the effect is invisible
+/// and severe.
+///
+/// `SpeciesFilter::filter_species` takes `Option<(lat, lon)>`. With `None` the
+/// metadata model cannot run at all, so **occurrence filtering is skipped and
+/// every one of the ~11 000 species stays a candidate**. The station keeps
+/// working, keeps detecting, and reports species that have never occurred
+/// within a thousand miles — which reads as a bad model rather than as a
+/// missing setting.
+///
+/// Nothing said so. The existing config validation checks that a latitude is
+/// *within range*, and warns when one of the pair is set without the other, but
+/// is silent when both are absent. The onboarding wizard asks for location on
+/// its second step and can auto-detect it, so a station onboarded through the
+/// dashboard is fine; one installed non-interactively, or by an operator who
+/// pressed Enter past the installer's prompt, is not — and never hears about it
+/// again.
+///
+/// Resolution goes through [`crate::daemon::resolve_station_coords`],
+/// the same function the detection daemon uses, rather than a third copy of the
+/// precedence rule. That function's own doc records what a second copy cost
+/// last time: the daemon read `cli.latitude` alone, so a normally-configured
+/// station handed it `None` and the species filter was silently inert.
+///
+/// The settings table is consulted as a fallback because `--doctor` runs from
+/// `ExecStartPre`, before the settings overlay has layered `/admin/settings`
+/// onto the config — so a station configured entirely through the dashboard has
+/// its coordinates only in SQLite at the moment this runs. Reading the config
+/// alone would nag exactly the operators who did it the easy way.
+pub(super) fn check_station_location(cli: &Cli, config: Option<&Config>) -> Check {
+    let (lat, lon) = crate::daemon::resolve_station_coords(cli, config);
+    if let (Some(lat), Some(lon)) = (lat, lon) {
+        return Check::pass(
+            "Station location",
+            format!("{lat:.4}, {lon:.4} — species filtering by occurrence is active"),
+        );
+    }
+    if let Some((lat, lon)) = location_from_settings(config) {
+        return Check::pass(
+            "Station location",
+            format!(
+                "{lat:.4}, {lon:.4} (from the dashboard settings) — species filtering is active"
+            ),
+        );
+    }
+    Check::warn(
+        "Station location",
+        "no latitude/longitude set — every species in the model stays a candidate",
+        "the occurrence filter cannot run without coordinates, so detections will \
+         include birds that do not occur near you. Set it on the dashboard \
+         (Settings → Location has a detect button), or put LATITUDE / LONGITUDE \
+         in the config and restart",
+    )
+}
+
+/// Coordinates as stored by the dashboard, read directly from SQLite.
+///
+/// Returns `None` on any failure — absent database, missing table, unparseable
+/// value. A diagnostic must not turn a database problem into a location
+/// finding: `check_database` owns the database's health.
+fn location_from_settings(config: Option<&Config>) -> Option<(f64, f64)> {
+    let db_path = crate::helpers::db_path_from_config(config);
+    if !db_path.exists() {
+        return None;
+    }
+    let conn = rusqlite::Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )
+    .ok()?;
+    let lat = birdnet_db::settings::get(&conn, "latitude")
+        .ok()?
+        .trim()
+        .parse::<f64>()
+        .ok()?;
+    let lon = birdnet_db::settings::get(&conn, "longitude")
+        .ok()?
+        .trim()
+        .parse::<f64>()
+        .ok()?;
+    Some((lat, lon))
+}
+
 pub(super) fn check_config_file(cli: &Cli, config: Option<&Config>) -> Check {
     if config.is_some() {
         return Check::pass(
@@ -206,6 +289,86 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         Config::parse(&content).unwrap()
+    }
+
+    #[test]
+    fn location_warns_when_unset_because_the_filter_goes_inert() {
+        let cfg = config_from(&[("ALSA_CARD", "hw:1")]);
+        let check = check_station_location(&cli(), Some(&cfg));
+        assert_eq!(check.status, Status::Warn);
+        assert!(
+            check.message.contains("candidate"),
+            "must name the consequence, not just the missing key: {}",
+            check.message
+        );
+    }
+
+    #[test]
+    fn location_passes_from_the_config_file() {
+        let cfg = config_from(&[
+            ("ALSA_CARD", "hw:1"),
+            ("LATITUDE", "42.3601"),
+            ("LONGITUDE", "-71.0589"),
+        ]);
+        let check = check_station_location(&cli(), Some(&cfg));
+        assert_eq!(check.status, Status::Pass);
+        assert!(check.message.contains("42.3601"));
+    }
+
+    /// A station configured entirely through the dashboard keeps its
+    /// coordinates in the settings table, and `--doctor` runs from
+    /// `ExecStartPre` before the overlay merges them into the config. Reading
+    /// the config alone would warn at exactly the operators who used the
+    /// easiest, most-documented path.
+    #[test]
+    fn location_passes_from_the_dashboard_settings_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("birds.db");
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+            birdnet_db::settings::ensure_settings_table(&conn).unwrap();
+            birdnet_db::settings::set(
+                &conn,
+                "latitude",
+                "51.5074",
+                birdnet_db::settings::SettingsCategory::Location,
+            )
+            .unwrap();
+            birdnet_db::settings::set(
+                &conn,
+                "longitude",
+                "-0.1278",
+                birdnet_db::settings::SettingsCategory::Location,
+            )
+            .unwrap();
+        }
+        let cfg = config_from(&[
+            ("ALSA_CARD", "hw:1"),
+            ("DB_PATH", db_path.to_str().unwrap()),
+        ]);
+        let check = check_station_location(&cli(), Some(&cfg));
+        assert_eq!(
+            check.status,
+            Status::Pass,
+            "dashboard-configured station must not be warned at: {}",
+            check.message
+        );
+        assert!(check.message.contains("51.5074"));
+    }
+
+    #[test]
+    fn location_absent_database_is_not_a_finding_of_its_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config_from(&[
+            ("ALSA_CARD", "hw:1"),
+            ("DB_PATH", dir.path().join("absent.db").to_str().unwrap()),
+        ]);
+        // Still a location warning, but from the missing coordinates — never a
+        // database error. check_database owns the database's health.
+        let check = check_station_location(&cli(), Some(&cfg));
+        assert_eq!(check.status, Status::Warn);
+        assert!(check.message.contains("latitude"));
     }
 
     #[test]

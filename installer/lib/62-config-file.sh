@@ -58,9 +58,17 @@ ${rtsp_line}
 # --- Location (used for species frequency filtering and BirdWeather) ---
 ${lat_line}
 ${lon_line}
+# RECORDING_SCHEDULE=all-day   # all-day | solar | fixed:HH:MM-HH:MM
+#                              # solar records sunrise-to-sunset and needs the
+#                              # coordinates above. Fixed hours are evaluated in
+#                              # UTC, not local time. Also settable in the web UI
+#                              # under Settings -> Location & Recording Schedule.
 
 # --- Detection ---
-# CONFIDENCE=0.7           # 0.0–1.0, default 0.7 (detections below this are discarded)
+# CONFIDENCE=0.75          # 0.0–1.0, default 0.75 (detections below this are discarded).
+#                          # The setup wizard asks for this on first login; note
+#                          # that unlike SF_THRESH, 0 does not mean "disabled" —
+#                          # it records every window as a detection.
 # SENSITIVITY=1.25         # 0.5–1.5, default 1.25 (V2.4 models only; V3.0 ignores it)
 # OVERLAP=0.0              # seconds of 3 s analysis window overlap
 # SF_THRESH=0.03           # species-frequency metadata-filter threshold

@@ -11,6 +11,27 @@ config_has_audio_source() {
         "${CONFIG_FILE}" 2>/dev/null
 }
 
+# True (0) if the config has *both* an active LATITUDE and LONGITUDE.
+#
+# Same "tailor the message" role as config_has_audio_source, and the same
+# reason for existing: without coordinates the metadata model cannot run, so
+# occurrence filtering is skipped and every species in the model stays a
+# candidate. The station looks like it is working — it just reports birds from
+# the wrong continent, which reads as a bad model rather than a missing
+# setting. A non-interactive install (`BIRDNET_NONINTERACTIVE=1`, or no TTY
+# under `curl | sudo bash`) never reaches the location prompt at all, so this
+# is the common state, not the rare one.
+#
+# Both halves are required: `birdnet_core::config::validate` already warns
+# about one without the other, and one alone disables the filter just as
+# completely as neither.
+config_has_location() {
+    grep -qE '^[[:space:]]*LATITUDE[[:space:]]*=[[:space:]]*[^[:space:]]' \
+        "${CONFIG_FILE}" 2>/dev/null \
+    && grep -qE '^[[:space:]]*LONGITUDE[[:space:]]*=[[:space:]]*[^[:space:]]' \
+        "${CONFIG_FILE}" 2>/dev/null
+}
+
 maybe_start_service() {
     # No systemd here (container / chroot / staged install): the unit is on disk
     # but there is nothing to start it. install_service already told the operator

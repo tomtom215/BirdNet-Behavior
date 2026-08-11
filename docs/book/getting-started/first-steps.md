@@ -25,9 +25,15 @@ The UI has six homes — the tabs along the top (and the phone bottom bar):
 
 ## First-run wizard
 
-If you'd like a guided setup, open **`/onboarding`** for a five-step wizard — location, microphone, and alert preferences — that gets a new station listening in about ninety seconds.
+If you'd like a guided setup, open **`/onboarding`** for a six-step wizard — location, microphone, detection accuracy, and alert preferences — that gets a new station listening in about ninety seconds. A fresh station is sent here automatically the first time you open the dashboard.
 
 ![The first-run onboarding wizard](../images/onboarding.png)
+
+The **Microphone** step reports the capture source your station is actually configured with, read from its own settings — it does not change it (Settings → Audio owns that, with the full ALSA/RTSP handling). If nothing is configured, it says so plainly, because a station with no source detects nothing.
+
+The **Accuracy** step sets the minimum confidence a detection needs before it is recorded. It defaults to **0.75**, deliberately a little above BirdNET-Pi's 0.70: high enough that the log reads as realistic rather than padded with marginal IDs, low enough that quiet and distant birds still get recorded. Change it there, or later under **Settings → Detection** (where per-species thresholds also live).
+
+![The wizard's detection-accuracy step](../images/onboarding-accuracy.png)
 
 ## Health check
 

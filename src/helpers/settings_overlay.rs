@@ -142,6 +142,33 @@ const SETTING_SPECS: &[(&str, Wiring, SettingsCategory)] = &[
         Wiring::Bridged("STATION_NAME"),
         SettingsCategory::Location,
     ),
+    // The recording window itself, not just its offsets. `capture::schedule`
+    // read the CLI field directly until 0.12.0, so this key existed, was
+    // validated, and was ignored — a station set to `solar` recorded all day.
+    (
+        "recording_schedule",
+        Wiring::Bridged("RECORDING_SCHEDULE"),
+        SettingsCategory::Location,
+    ),
+    // Written by the onboarding wizard's location auto-detect. Not bridged:
+    // the station's clock is a *system* setting, and nothing in this process
+    // runs as root or can change it. It is recorded so `--doctor` can compare
+    // it against the host's actual timezone and hand the operator the one
+    // command that fixes a mismatch — which matters because the system clock
+    // is what names recording files, and those filenames become each
+    // detection's Date and Time.
+    (
+        "timezone",
+        Wiring::OwnedBy("crate::doctor::clock (system-timezone comparison)"),
+        SettingsCategory::Location,
+    ),
+    // The first-run redirect's own flag: `pages::today` reads it straight from
+    // the settings table to decide whether to bounce to `/onboarding`.
+    (
+        "onboarding_complete",
+        Wiring::OwnedBy("birdnet_web::routes::pages::today (first-run redirect)"),
+        SettingsCategory::System,
+    ),
     (
         "night_inhibit",
         Wiring::Bridged("NIGHT_INHIBIT"),
@@ -227,6 +254,21 @@ const SETTING_SPECS: &[(&str, Wiring, SettingsCategory)] = &[
         "weekly_report_schedule",
         Wiring::Bridged("WEEKLY_REPORT_SCHEDULE"),
         SettingsCategory::Notifications,
+    ),
+    (
+        "heartbeat_url",
+        Wiring::Bridged("HEARTBEAT_URL"),
+        SettingsCategory::Notifications,
+    ),
+    (
+        "deadman_hours",
+        Wiring::Bridged("DEADMAN_HOURS"),
+        SettingsCategory::Notifications,
+    ),
+    (
+        "database_lang",
+        Wiring::Bridged("DATABASE_LANG"),
+        SettingsCategory::System,
     ),
     // ── Species filtering (consumed in `crate::daemon`) ────────────────────
     //
@@ -544,7 +586,11 @@ mod tests {
     /// (so a Docker station configured purely through `BIRDNET_*` keeps working)
     /// but have no editable control. Anything else in [`SETTING_SPECS`] that is
     /// not a form key is a mistake — most likely a renamed field.
-    const NON_FORM_BRIDGE_KEYS: &[&str] = &["alsa_devices"];
+    ///
+    /// The onboarding wizard's keys live here too: it persists settings the
+    /// admin form does not expose (the first-run completion flag, the detected
+    /// timezone), and they are legitimate rather than orphaned.
+    const NON_FORM_BRIDGE_KEYS: &[&str] = &["alsa_devices", "timezone", "onboarding_complete"];
 
     #[test]
     fn settings_form_keys_are_all_classified() {
@@ -565,6 +611,33 @@ mod tests {
             "settings-form keys with no wiring classification: {unclassified:?}\n\
              Add each to SETTING_SPECS as Wiring::Bridged(config key) or \
              Wiring::OwnedBy(subsystem), or remove the form field."
+        );
+    }
+
+    /// The same guard, for the *other* place settings get written.
+    ///
+    /// The admin form has been guarded since twenty of its fields turned out to
+    /// be inert, but the first-run wizard writes its own keys and was never
+    /// covered — so it shipped `notification_mode`, a four-way choice of how
+    /// often to be alerted that no code anywhere read. A non-technical operator
+    /// picked one on their first day and it governed nothing.
+    #[test]
+    fn onboarding_wizard_keys_are_all_classified() {
+        use birdnet_web::routes::pages::onboarding::ONBOARDING_SETTING_KEYS;
+
+        let classified: BTreeSet<&str> = SETTING_SPECS.iter().map(|(ui, _, _)| *ui).collect();
+        let unclassified: Vec<&str> = ONBOARDING_SETTING_KEYS
+            .iter()
+            .copied()
+            .filter(|key| !classified.contains(key))
+            .collect();
+
+        assert!(
+            unclassified.is_empty(),
+            "onboarding-wizard keys with no wiring classification: {unclassified:?}\n\
+             The setup wizard must not persist a setting nothing reads. Add each \
+             to SETTING_SPECS as Wiring::Bridged(config key) or \
+             Wiring::OwnedBy(subsystem), or stop writing it."
         );
     }
 
@@ -687,6 +760,70 @@ mod tests {
         assert_eq!(merged.get("CONFIDENCE"), Some("0.8"));
         // Untouched file values are preserved.
         assert_eq!(merged.get("SENSITIVITY"), Some("1.0"));
+    }
+
+    #[test]
+    fn wizard_written_confidence_reaches_the_daemon() {
+        // The full chain the onboarding wizard starts: it writes the
+        // `confidence_threshold` setting, the overlay maps it onto CONFIDENCE,
+        // and the daemon must then enforce *that* value rather than its
+        // default. Asserting only the mapping would leave the last hop —
+        // the one that actually decides whether a bird is recorded — untested.
+        for (written, expected) in [("0.5", 0.5_f32), ("0.85", 0.85), ("0.7", 0.7)] {
+            let merged =
+                apply_setting_overrides(None, [("confidence_threshold", written)]).unwrap();
+            let enforced = crate::daemon::resolve_confidence(Some(&merged));
+            assert!(
+                (enforced - expected).abs() < f32::EPSILON,
+                "wizard wrote {written}, daemon would enforce {enforced}"
+            );
+        }
+    }
+
+    /// Parity keys added in 0.12.0. Each was command-line-only, so an operator
+    /// without a terminal could not reach it at all — and `recording_schedule`
+    /// was worse than unreachable: the runtime ignored the config key outright,
+    /// so a station set to `solar` recorded around the clock.
+    ///
+    /// This asserts the whole chain per key: the settings row the form writes,
+    /// through the overlay, to the config key the consumer actually reads.
+    #[test]
+    fn parity_settings_reach_their_config_keys() {
+        for (ui_key, value, config_key) in [
+            ("recording_schedule", "solar", "RECORDING_SCHEDULE"),
+            ("heartbeat_url", "https://hc-ping.com/abc", "HEARTBEAT_URL"),
+            ("deadman_hours", "6", "DEADMAN_HOURS"),
+            ("database_lang", "de", "DATABASE_LANG"),
+        ] {
+            let merged = apply_setting_overrides(None, [(ui_key, value)])
+                .unwrap_or_else(|| panic!("{ui_key} produced no config"));
+            assert_eq!(
+                merged.get(config_key),
+                Some(value),
+                "{ui_key} must land on {config_key}"
+            );
+        }
+    }
+
+    /// And the schedule's last hop, which is the one that was broken: the
+    /// capture supervisor must build a solar window from the overlaid config.
+    #[test]
+    fn a_settings_page_schedule_reaches_the_capture_supervisor() {
+        let merged = apply_setting_overrides(
+            None,
+            [
+                ("recording_schedule", "solar"),
+                ("latitude", "52.5"),
+                ("longitude", "13.4"),
+            ],
+        )
+        .expect("overlay applies");
+        let cli = crate::helpers::test_support::default_cli();
+        let sc = crate::capture::schedule_config_for_test(&cli, Some(&merged));
+        assert!(
+            sc.night_inhibit,
+            "choosing Solar on the settings page must actually stop overnight recording"
+        );
     }
 
     #[test]

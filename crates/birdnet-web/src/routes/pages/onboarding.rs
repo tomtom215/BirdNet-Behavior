@@ -1,24 +1,71 @@
 //! First-run onboarding wizard.
 //!
-//! A full-bleed, no-chrome five-step setup flow (Welcome → Location →
-//! Microphone → Notifications → Done) served at `/onboarding`. The wizard now
-//! persists: the Location step auto-detects coordinates (and the timezone) via
-//! the existing `/admin/settings/detect-location` endpoint and submits to
-//! `POST /onboarding/save`, which writes the chosen settings and marks
-//! onboarding complete. Audio device selection is intentionally delegated to
-//! Settings → Audio (richer ALSA/RTSP handling lives there).
+//! A full-bleed, no-chrome six-step setup flow (Welcome → Location →
+//! Microphone → Accuracy → Notifications → Done) served at `/onboarding`. The
+//! wizard persists: the Location step auto-detects coordinates (and the
+//! timezone) via the existing `/admin/settings/detect-location` endpoint and
+//! submits to `POST /onboarding/save`, which writes the chosen settings and
+//! marks onboarding complete. Audio device *selection* is intentionally
+//! delegated to Settings → Audio (richer ALSA/RTSP handling lives there); the
+//! Microphone step reports what is configured rather than offering a choice it
+//! does not implement.
+//!
+//! **Every value the page shows is real.** The Microphone step and the final
+//! summary card used to be a mock-up — a hard-coded "UMC202HD · card 1 ·
+//! 48 kHz" microphone marked *recommended*, a "Boston, MA" location, and an
+//! `http://birdnet.local/` dashboard address — shown identically to every
+//! station regardless of its hardware, whereabouts or how it was reached. The
+//! microphone rows are now rendered from `audio_sources`, and the rows that
+//! depend on operator input are placeholders the page script fills from the
+//! form, so a station with no capture source is told so instead of being
+//! congratulated on a device it does not have.
+//!
+//! The Accuracy step exists because the minimum-confidence threshold decides
+//! whether anything is recorded at all, and nothing in the setup path used to
+//! mention it: an operator who wanted stricter or looser detection had to find
+//! Settings → Detection unprompted. Its cards are pre-selected on
+//! [`DEFAULT_CONFIDENCE_THRESHOLD`](birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD),
+//! so clicking straight through yields exactly what the daemon would have
+//! enforced anyway.
 //!
 //! A fresh station (no detections yet, not onboarded) is redirected here from
 //! the dashboard — see `pages::dashboard`.
+
+use std::fmt::Write as _;
 
 use axum::extract::State;
 use axum::response::{Html, Redirect};
 use axum::routing::{get, post};
 use axum::{Form, Router};
 
+use birdnet_db::audio_sources::{AudioSource, AudioSourceStore, SourceKind};
 use birdnet_db::settings::{self, SettingsCategory};
 
+use crate::routes::admin::audio::{detail_for, kind_label};
+use crate::routes::pages::escape_html;
 use crate::state::AppState;
+
+/// Every settings key `POST /onboarding/save` can persist.
+///
+/// The admin settings form has had a guard for this since twenty of its fields
+/// turned out to be editable, persisted, and connected to nothing: the binary
+/// classifies each key in `SETTINGS_FORM_KEYS` and a test fails on any that is
+/// unclassified. The wizard wrote *outside* that list, so it was never
+/// covered — and did the same thing, shipping a notification choice
+/// (`notification_mode`) that nothing anywhere read.
+///
+/// This list closes the gap: the same test now classifies these keys too, so a
+/// new wizard field cannot ship inert either.
+///
+/// Kept in sync with the wizard form (`OnboardingForm`) by a test in this module.
+pub const ONBOARDING_SETTING_KEYS: &[&str] = &[
+    "latitude",
+    "longitude",
+    "timezone",
+    "notify_trigger",
+    "confidence_threshold",
+    "onboarding_complete",
+];
 
 /// Mount the first-run onboarding wizard routes.
 pub fn router() -> Router<AppState> {
@@ -27,8 +74,125 @@ pub fn router() -> Router<AppState> {
         .route("/onboarding/save", post(onboarding_save))
 }
 
-async fn onboarding_page() -> Html<String> {
-    Html(ONBOARDING_HTML.to_string())
+async fn onboarding_page(State(state): State<AppState>) -> Html<String> {
+    // `list` already excludes soft-deleted rows (`WHERE disabled_at IS NULL`).
+    let sources = state.with_db(AudioSourceStore::list).unwrap_or_else(|err| {
+        tracing::error!(error = %err, "onboarding: audio_sources list failed");
+        Vec::new()
+    });
+
+    Html(render_page(
+        &render_mic_body(&sources),
+        &escape_html(&mic_summary(&sources)),
+    ))
+}
+
+/// Substitute the two server-filled placeholders into the wizard template.
+///
+/// Deliberately a single pass rather than a `.replace()` chain. Both inserted
+/// values derive from operator-controlled text — a microphone's friendly label
+/// can contain any characters — and a chained replace re-scans what it just
+/// inserted, so a source labelled `{{mic_summary}}` would have had its label
+/// silently swapped for the summary line. Escaping does not prevent that:
+/// `escape_html` neutralises HTML, not the template's own brace syntax.
+///
+/// Each placeholder appears exactly once. If one is ever removed from the
+/// template this degrades to dropping that value rather than panicking in a
+/// request handler; the rendering tests pin the output either way.
+fn render_page(mic_body: &str, mic_summary: &str) -> String {
+    let Some((head, rest)) = ONBOARDING_HTML.split_once("{{mic_body}}") else {
+        return ONBOARDING_HTML.to_string();
+    };
+    let Some((middle, tail)) = rest.split_once("{{mic_summary}}") else {
+        return format!("{head}{mic_body}{rest}");
+    };
+    format!("{head}{mic_body}{middle}{mic_summary}{tail}")
+}
+
+/// The microphone step, rendered from the station's actual capture sources.
+///
+/// This step used to be a mock-up: a hard-coded "UMC202HD · USB audio ·
+/// card 1 · 48 kHz" card marked *recommended* and pre-selected, plus a
+/// "Built-in microphone · card 0" and two more cards offering RTSP and
+/// folder-watching. None of it was real — no station was consulted, nothing was
+/// clickable to any effect, and a first-run operator was shown hardware they do
+/// not own, described as already detected. On a station whose microphone was
+/// missing or misconfigured, the setup wizard's answer to "will this hear
+/// anything?" was a confident yes about a device that does not exist.
+///
+/// The wizard deliberately does not *change* the capture source — Settings →
+/// Audio owns that, with the ALSA/RTSP handling this step cannot reproduce — so
+/// the honest version reports rather than pretends to offer a choice. The cards
+/// are therefore not selectable: nothing here writes a setting.
+fn render_mic_body(sources: &[AudioSource]) -> String {
+    if sources.is_empty() {
+        return concat!(
+            r#"<div class="ob-cards"><div class="ob-card"><span class="ic">🔇</span>"#,
+            r#"<div class="ob-grow"><div class="t">No audio source configured</div>"#,
+            r#"<div class="s">Nothing will be detected until a microphone or RTSP stream is added. "#,
+            r#"The installer normally sets this up; if it could not find your device you can add it by hand.</div>"#,
+            r#"</div></div></div>"#,
+            r#"<p class="bnb-meta ob-mt-16"><a href="/station/capture">Add a microphone or RTSP stream →</a></p>"#,
+        )
+        .to_string();
+    }
+
+    let mut out = String::from(r#"<div class="ob-cards" id="mic-cards">"#);
+    for s in sources {
+        let icon = if matches!(s.kind, SourceKind::Rtsp) {
+            "📡"
+        } else {
+            "🎤"
+        };
+        // Unlabelled sources take the device id as their heading, so repeating
+        // it on the detail line would print `plughw:CARD=PRO,DEV=0` twice.
+        let label = friendly_label(s);
+        let detail = match label {
+            Some(_) => format!("{} · {}", s.device_id, detail_for(s)),
+            None => detail_for(s),
+        };
+        let _ = write!(
+            out,
+            concat!(
+                r#"<div class="ob-card"><span class="ic">{icon}</span><div class="ob-grow">"#,
+                r#"<div class="t">{name} <span class="bnb-pill ob-ml-6">{kind}</span></div>"#,
+                r#"<div class="s mono">{detail}</div></div></div>"#,
+            ),
+            icon = icon,
+            name = escape_html(label.unwrap_or(&s.device_id)),
+            kind = escape_html(kind_label(s.kind)),
+            detail = escape_html(&detail),
+        );
+    }
+    out.push_str("</div>");
+    out.push_str(
+        r#"<p class="bnb-meta ob-mt-16">Set up by the installer. Add, remove or fine-tune sources (USB, RTSP, gain) any time in <a href="/station/capture">Settings → Audio</a>.</p>"#,
+    );
+    out
+}
+
+/// The operator's own name for a source, when they gave it one.
+///
+/// A label of `""` or `"   "` is the admin form's "no label" state, not a name,
+/// so it is treated as absent rather than rendered as a blank heading.
+fn friendly_label(s: &AudioSource) -> Option<&str> {
+    s.label.as_deref().map(str::trim).filter(|l| !l.is_empty())
+}
+
+/// One-line description of the capture setup for the final step's summary.
+///
+/// Replaced a hard-coded "UMC202HD · USB · 48 kHz" that was shown to every
+/// station regardless of what it actually captures with.
+fn mic_summary(sources: &[AudioSource]) -> String {
+    match sources {
+        [] => "None configured — no birds will be detected".to_string(),
+        [one] => format!(
+            "{} · {}",
+            friendly_label(one).unwrap_or(&one.device_id),
+            detail_for(one)
+        ),
+        many => format!("{} sources configured", many.len()),
+    }
 }
 
 /// Fields the first-run wizard submits. All optional: clicking straight through
@@ -44,11 +208,36 @@ struct OnboardingForm {
     timezone: String,
     #[serde(default)]
     notification_mode: String,
+    #[serde(default)]
+    confidence_threshold: String,
+}
+
+/// Whether `raw` is a confidence threshold the daemon will accept.
+///
+/// The wizard's cards can only emit `0.4`/`0.6`/`0.75`/`0.9`, so this exists
+/// for the hand-crafted POST: `birdnet_core::config::validate` treats a
+/// `CONFIDENCE` outside 0–1 as an *error*, and `--doctor` runs from the unit's
+/// `ExecStartPre` where exit 2 is fatal. An unvalidated write here would let a
+/// setup form leave the station unable to start.
+fn valid_confidence(raw: &str) -> bool {
+    raw.parse::<f64>().is_ok_and(|v| (0.0..=1.0).contains(&v))
+}
+
+/// Whether `raw` is a notification trigger the runtime understands.
+///
+/// `TriggerMode::parse` maps anything it does not recognise to
+/// `EachDetection` — an alert on every single detection. So an unvalidated
+/// write here would turn a typo, or a stale value from an older wizard, into
+/// the chattiest possible setting: the exact opposite of what an operator
+/// choosing a quieter mode asked for. Kept in step with
+/// `birdnet_integrations::notification::TriggerMode::parse`.
+fn valid_trigger(raw: &str) -> bool {
+    matches!(raw, "each" | "new-species" | "new-species-daily")
 }
 
 /// Persist the wizard's choices and mark onboarding complete, then return to the
 /// dashboard. Only non-empty values are written; the DB settings overlay applies
-/// latitude/longitude on the next start.
+/// latitude/longitude and the confidence threshold on the next start.
 async fn onboarding_save(
     State(state): State<AppState>,
     Form(form): Form<OnboardingForm>,
@@ -71,8 +260,26 @@ async fn onboarding_save(
         if !tz.is_empty() {
             items.push(("timezone", tz, SettingsCategory::Location));
         }
-        if !mode.is_empty() {
-            items.push(("notification_mode", mode, SettingsCategory::Notifications));
+        // `notify_trigger` — the key the notification filter actually reads
+        // (bridged onto `APPRISE_TRIGGER`). The wizard used to write
+        // `notification_mode`, which nothing anywhere consumed: the operator
+        // picked "Quiet" or "Everything", it was persisted, and it governed
+        // nothing. Only the three values `TriggerMode::parse` understands are
+        // accepted, because an unknown value silently parses as "every
+        // detection" — the chattiest mode, and the opposite of what someone
+        // choosing a quieter one intends.
+        if valid_trigger(mode) {
+            items.push(("notify_trigger", mode, SettingsCategory::Notifications));
+        }
+        // Only persisted when it parses inside 0–1. The wizard's own cards can
+        // only produce 0.4/0.6/0.75/0.9, but the field is a plain form value:
+        // a hand-crafted POST must not be able to seed a threshold the daemon
+        // would reject at startup (`--doctor` exits 2 on out-of-range
+        // CONFIDENCE, which `ExecStartPre` treats as fatal) — that would turn
+        // the setup wizard into a way to brick the service.
+        let conf = form.confidence_threshold.trim();
+        if valid_confidence(conf) {
+            items.push(("confidence_threshold", conf, SettingsCategory::Detection));
         }
         if !items.is_empty() {
             let _ = settings::set_many(conn, &items);
@@ -192,9 +399,11 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
     <span class="bar"></span>
     <div class="ob-pip" data-pip="3"><span class="dot">3</span><span class="nm">Microphone</span></div>
     <span class="bar"></span>
-    <div class="ob-pip" data-pip="4"><span class="dot">4</span><span class="nm">Alerts</span></div>
+    <div class="ob-pip" data-pip="4"><span class="dot">4</span><span class="nm">Accuracy</span></div>
     <span class="bar"></span>
-    <div class="ob-pip" data-pip="5"><span class="dot">5</span><span class="nm">Done</span></div>
+    <div class="ob-pip" data-pip="5"><span class="dot">5</span><span class="nm">Alerts</span></div>
+    <span class="bar"></span>
+    <div class="ob-pip" data-pip="6"><span class="dot">6</span><span class="nm">Done</span></div>
   </div>
 
   <div class="ob-stage">
@@ -204,7 +413,7 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
         <div>
           <div class="ob-eyebrow">Welcome</div>
           <h1 class="ob-h">Let's teach the yard<br>to <em>listen</em>.</h1>
-          <p class="ob-p">Ninety seconds, five steps. Your Raspberry Pi will start identifying every bird it hears — no accounts, no cloud, all yours.</p>
+          <p class="ob-p">Ninety seconds, six steps. Your Raspberry Pi will start identifying every bird it hears — no accounts, no cloud, all yours.</p>
           <ul class="ob-bullets">
             <li><span class="tick">✓</span> No accounts — runs entirely on your Pi</li>
             <li><span class="tick">✓</span> Set once — sensible defaults the whole way</li>
@@ -263,52 +472,53 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
     <!-- Step 3 — Microphone -->
     <section class="ob-step" data-step="3">
       <div class="ob-eyebrow">How it hears</div>
-      <h1 class="ob-h">Pick a microphone.</h1>
-      <p class="ob-p ob-mb-18">We found a USB mic already. You can also add a network (RTSP) camera or watch a folder of recordings.</p>
-      <div class="ob-cards" id="mic-cards">
-        <div class="ob-card sel" data-radio="mic"><span class="ic">🎤</span><div class="ob-grow"><div class="t">UMC202HD · USB audio <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s">card 1 · 48 kHz · detected automatically</div></div><span class="vu"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></div>
-        <div class="ob-card" data-radio="mic"><span class="ic">🎤</span><div class="ob-grow"><div class="t">Built-in microphone</div><div class="s">card 0 · 44.1 kHz</div></div></div>
-        <div class="ob-card" data-radio="mic"><span class="ic">📡</span><div class="ob-grow"><div class="t">Add an RTSP camera</div><div class="s">rtsp://… — bird-box or feeder cam audio</div></div></div>
-        <div class="ob-card" data-radio="mic"><span class="ic">📁</span><div class="ob-grow"><div class="t">Watch a folder</div><div class="s">classify existing recordings on disk</div></div></div>
-      </div>
-      <p class="bnb-meta ob-mt-16">Your audio device is set up by the installer — fine-tune it (USB, RTSP, gain) any time in <a href="/admin">Settings → Audio</a>.</p>
+      <h1 class="ob-h">What it's listening with.</h1>
+      <p class="ob-p ob-mb-18">This is the capture source your station is actually configured to use.</p>
+      {{mic_body}}
     </section>
 
-    <!-- Step 4 — Notifications -->
+    <!-- Step 4 — Detection threshold -->
     <section class="ob-step" data-step="4">
+      <div class="ob-eyebrow">How sure is sure</div>
+      <h1 class="ob-h">How picky should it be?</h1>
+      <p class="ob-p ob-mb-18">Every guess comes with a confidence score. Anything below your threshold is thrown away — so this is the dial between "only the birds it's certain about" and "everything it thinks it heard".</p>
+      <div class="ob-cards cols2">
+        <div class="ob-card" data-radio="conf" data-value="0.9"><div class="ob-grow"><div class="t">Strict</div><div class="s">0.90 — only the IDs it is near-certain about. Very few false positives; quiet and distant birds go unlogged.</div></div></div>
+        <div class="ob-card sel" data-radio="conf" data-value="0.75"><div class="ob-grow"><div class="t">Balanced <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s">0.75 — realistic results without over-filtering. Start here.</div></div></div>
+        <div class="ob-card" data-radio="conf" data-value="0.6"><div class="ob-grow"><div class="t">Sensitive</div><div class="s">0.60 — catches quiet and distant birds, at the cost of more misidentifications.</div></div></div>
+        <div class="ob-card" data-radio="conf" data-value="0.4"><div class="ob-grow"><div class="t">Everything</div><div class="s">0.40 — for tuning and curiosity. Expect a lot of noise.</div></div></div>
+      </div>
+      <input type="hidden" name="confidence_threshold" id="ob-conf" value="0.75">
+      <p class="bnb-meta ob-mt-16">Not permanent — change it any time in <a href="/admin">Settings → Detection</a>, and set per-species thresholds under Species.</p>
+    </section>
+
+    <!-- Step 5 — Notifications -->
+    <section class="ob-step" data-step="5">
       <div class="ob-eyebrow">Who gets told</div>
       <h1 class="ob-h">When should we ping you?</h1>
-      <p class="ob-p ob-mb-18">Start simple — you can wire up channels (Telegram, email, MQTT…) any time.</p>
-      <div class="ob-cards cols2">
-        <div class="ob-card" data-radio="notify" data-value="quiet"><div class="ob-grow"><div class="t">Quiet</div><div class="s">Never notify — just log everything</div></div></div>
-        <div class="ob-card sel" data-radio="notify" data-value="rare"><div class="ob-grow"><div class="t">Rare only <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s">Only first-of-station / unusual birds</div></div></div>
-        <div class="ob-card" data-radio="notify" data-value="daily"><div class="ob-grow"><div class="t">Daily digest</div><div class="s">One summary each evening</div></div></div>
-        <div class="ob-card" data-radio="notify" data-value="everything"><div class="ob-grow"><div class="t">Everything</div><div class="s">Every detection (chatty!)</div></div></div>
+      <p class="ob-p ob-mb-18">This sets <em>how often</em> alerts go out. Nothing is sent until you add somewhere to send it — you can do that whenever you like.</p>
+      <div class="ob-cards">
+        <div class="ob-card sel" data-radio="notify" data-value="new-species"><div class="ob-grow"><div class="t">New species this week <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s">Only birds you have barely heard lately — the interesting ones.</div></div></div>
+        <div class="ob-card" data-radio="notify" data-value="new-species-daily"><div class="ob-grow"><div class="t">First of each species, daily</div><div class="s">One alert per species per day. A good middle ground.</div></div></div>
+        <div class="ob-card" data-radio="notify" data-value="each"><div class="ob-grow"><div class="t">Every detection</div><div class="s">One alert every single time. Chatty — hundreds a day at a busy feeder.</div></div></div>
       </div>
-      <input type="hidden" name="notification_mode" id="ob-notify" value="rare">
-      <details class="ob-mt-16">
-        <summary class="bnb-meta ob-summary">Pick channels now <span class="bnb-pill">optional</span></summary>
-        <div class="chips">
-          <span class="bnb-pill">Telegram</span><span class="bnb-pill">Email</span><span class="bnb-pill">MQTT</span>
-          <span class="bnb-pill">Webhook</span><span class="bnb-pill">Slack</span><span class="bnb-pill">Discord</span>
-          <span class="bnb-pill">Pushover</span><span class="bnb-pill">ntfy</span><span class="bnb-pill">Apprise</span>
-          <span class="bnb-pill">BirdWeather</span><span class="bnb-pill">Home Assistant</span><span class="bnb-pill">SMS</span>
-        </div>
-      </details>
+      <input type="hidden" name="notification_mode" id="ob-notify" value="new-species">
+      <p class="bnb-meta ob-mt-16">Add a channel — Telegram, email, MQTT, ntfy, webhooks and more — under <a href="/admin/settings">Settings → Notifications</a>. Until then this setting is simply waiting.</p>
     </section>
 
-    <!-- Step 5 — Done -->
-    <section class="ob-step" data-step="5">
+    <!-- Step 6 — Done -->
+    <section class="ob-step" data-step="6">
       <div class="ob-two">
         <div>
           <div class="ob-eyebrow">All set</div>
           <h1 class="ob-h">You're <em>listening</em>.</h1>
           <p class="ob-p">The pipeline is warming up. Within a minute or two you'll see the first detections roll in.</p>
           <div class="bnb-card pad ob-mt-16">
-            <div class="summary-row"><span class="k">Location</span><span>Boston, MA · 42.36, −71.06</span></div>
-            <div class="summary-row"><span class="k">Microphone</span><span>UMC202HD · USB · 48 kHz</span></div>
-            <div class="summary-row"><span class="k">Alerts</span><span>Rare birds only</span></div>
-            <div class="summary-row"><span class="k">Dashboard</span><span class="mono">http://birdnet.local/</span></div>
+            <div class="summary-row"><span class="k">Location</span><span id="ob-sum-loc">Not set</span></div>
+            <div class="summary-row"><span class="k">Microphone</span><span>{{mic_summary}}</span></div>
+            <div class="summary-row"><span class="k">Minimum confidence</span><span id="ob-sum-conf">0.75 · Balanced</span></div>
+            <div class="summary-row"><span class="k">Alerts</span><span id="ob-sum-notify">Rare birds only</span></div>
+            <div class="summary-row"><span class="k">Dashboard</span><span class="mono" id="ob-sum-url">—</span></div>
           </div>
         </div>
         <div>
@@ -324,7 +534,7 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
 
   <div class="ob-nav">
     <button class="bnb-btn ghost ob-hidden-init" id="ob-back" type="button">← Back</button>
-    <div class="bnb-meta">Step <span id="ob-cur">1</span> of 5 · <a href="#" id="ob-skip">Skip for now</a></div>
+    <div class="bnb-meta">Step <span id="ob-cur">1</span> of 6 · <a href="#" id="ob-skip">Skip for now</a></div>
     <a class="bnb-btn primary" id="ob-next" href="#" role="button">Continue →</a>
   </div>
   </form>
@@ -332,7 +542,7 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
 
 <script>
 (function () {
-  var step = 1, total = 5;
+  var step = 1, total = 6;
   var form = document.getElementById('ob-form');
   var stepsEls = document.querySelectorAll('.ob-step');
   var pips = document.querySelectorAll('.ob-pip');
@@ -351,6 +561,10 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
     cur.textContent = step;
     back.style.visibility = step === 1 ? 'hidden' : 'visible';
     next.textContent = step === total ? 'Finish & go to dashboard →' : 'Continue →';
+    // Auto-detect fills the coordinate inputs programmatically, which fires no
+    // `input` event — so recompute here too, or the summary would still read
+    // "Not set" for a station that just detected its location.
+    refreshSummary();
   }
   function finish() { form.requestSubmit(); }
 
@@ -361,19 +575,63 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
   });
   skip.addEventListener('click', function (e) { e.preventDefault(); finish(); });
 
-  // Single-select radio cards; mirror the notification choice into the form.
-  var notify = document.getElementById('ob-notify');
+  // Single-select radio cards; mirror the chosen value into the form's hidden
+  // input for that group. Keyed by data-radio so a new group only needs an
+  // entry here — the confidence group was added this way.
+  var mirrors = { notify: 'ob-notify', conf: 'ob-conf' };
   document.querySelectorAll('[data-radio]').forEach(function (card) {
     card.addEventListener('click', function () {
       document.querySelectorAll('[data-radio="' + card.dataset.radio + '"]').forEach(function (c) {
         c.classList.remove('sel');
       });
       card.classList.add('sel');
-      if (card.dataset.radio === 'notify' && notify && card.dataset.value) {
-        notify.value = card.dataset.value;
-      }
+      var target = mirrors[card.dataset.radio];
+      var input = target && document.getElementById(target);
+      if (input && card.dataset.value) { input.value = card.dataset.value; }
+      refreshSummary();
     });
   });
+
+  // Keep the final step's summary card describing THIS station rather than a
+  // mock-up. The microphone row is filled server-side from the real capture
+  // sources; the rest is whatever the operator has entered so far, so it is
+  // recomputed on every change and again on the way into the last step.
+  function cardName(sel) {
+    var c = document.querySelector(sel + '.sel .t');
+    return c ? c.textContent.trim().replace(/\s*recommended$/, '') : '';
+  }
+  function refreshSummary() {
+    var conf = document.getElementById('ob-conf');
+    var sumConf = document.getElementById('ob-sum-conf');
+    if (conf && sumConf) {
+      var name = cardName('[data-radio="conf"]');
+      var n = parseFloat(conf.value);
+      sumConf.textContent = (isNaN(n) ? conf.value : n.toFixed(2)) + (name ? ' · ' + name : '');
+    }
+    var sumNotify = document.getElementById('ob-sum-notify');
+    if (sumNotify) {
+      var nm = cardName('[data-radio="notify"]');
+      if (nm) { sumNotify.textContent = nm; }
+    }
+    var sumLoc = document.getElementById('ob-sum-loc');
+    if (sumLoc) {
+      var la = (document.getElementById('ob-lat') || {}).value;
+      var lo = (document.getElementById('ob-lon') || {}).value;
+      la = (la || '').trim(); lo = (lo || '').trim();
+      // Both halves are required — one alone disables the species filter just
+      // as completely as neither, so half a location is not a location.
+      sumLoc.textContent = (la && lo) ? (la + ', ' + lo) : 'Not set — species filtering stays off';
+    }
+    var sumUrl = document.getElementById('ob-sum-url');
+    // The address the operator actually reached this page on. The hard-coded
+    // mDNS URL this replaced does not resolve on every network.
+    if (sumUrl) { sumUrl.textContent = window.location.origin + '/'; }
+  }
+  ['ob-lat', 'ob-lon'].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (el) { el.addEventListener('input', refreshSummary); }
+  });
+  refreshSummary();
 
   // Auto-detect coordinates + timezone via the existing settings endpoint
   // (same-origin fetch; the endpoint itself queries ip-api.com server-side).
