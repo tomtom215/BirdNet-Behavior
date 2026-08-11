@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The hardware harness now measures CPU, and checks the dashboard's CPU
+  figure against the kernel's.** Reported as looking broken on a Pi. It could
+  not be reproduced: measured against `/proc/stat` over the same window the
+  reading agrees exactly — 2 % against 2 % idle, 100 % against 100 % with every
+  core pinned. But the report pointed at a real gap. `scripts/hardware-test.sh`
+  recorded load average and never a utilisation figure, so no run on real
+  hardware had ever established that the CPU monitor worked at all; and the
+  unit tests only asserted `0.0 ≤ cpu ≤ 100.0`, which a sampler stuck at zero
+  satisfies.
+
+  The `perf` phase now samples CPU utilisation into `perf-samples.csv`, reports
+  mean and peak, warns when the peak leaves no headroom, and compares the
+  figure the Station page displays with `/proc/stat` — failing outright if the
+  dashboard shows 0 % on a busy board. A unit test now pins the machine's cores
+  and requires the reading to move, which the old range assertions could not.
+
 - **The out-of-the-box minimum confidence is now 0.75** (was 0.70, BirdNET-Pi's
   default). High enough that a new station's log reads as realistic instead of
   padded with marginal IDs, low enough that quiet and distant birds are still
