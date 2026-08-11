@@ -29,6 +29,11 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let title_tmpl = get_setting(s, "notify_title_template", "");
     let body_tmpl = get_setting(s, "notify_body_template", "");
     let weekly = get_setting(s, "weekly_report_schedule", "monday");
+    // Both were command-line only until 0.12.0, which put the two ways to find
+    // out that a station has gone quiet out of reach of anyone not on a
+    // terminal — the operators least likely to notice by other means.
+    let hb = get_setting(s, "heartbeat_url", "");
+    let deadman = get_setting(s, "deadman_hours", "24");
     let weekly_opts = render_weekly_options(weekly);
     write!(out, r#"
   <div class="card">
@@ -113,6 +118,20 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
           {weekly_opts}
         </select>
         <p class="hint">Day to send weekly summary via Apprise. "Disabled" to turn off.</p>
+      </div>
+    </div>
+    <div class="grid-2">
+      <div>
+        <label for="heartbeat_url">Heartbeat URL</label>
+        <input id="heartbeat_url" name="heartbeat_url" type="url" value="{hb}"
+               placeholder="https://hc-ping.com/…">
+        <p class="hint">Pinged periodically so an outside monitor (Healthchecks.io, Uptime Kuma, …) can alert you when the station stops reporting. Leave blank to disable (BirdNET-Pi: HEARTBEAT_URL)</p>
+      </div>
+      <div>
+        <label for="deadman_hours">Dead-man alert after (hours of no detections)</label>
+        <input id="deadman_hours" name="deadman_hours" type="number" value="{deadman}"
+               min="0" max="720" class="bnb-w-num">
+        <p class="hint">Notifies you when nothing has been detected for this long — the symptom of a mic that died quietly. <b>0 disables it.</b> Long winter nights are normal, so keep this comfortably above your quietest stretch (BirdNET-Pi: DEADMAN_HOURS)</p>
       </div>
     </div>
   </div>"#).unwrap_or_default();

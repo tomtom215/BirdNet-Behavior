@@ -25,7 +25,27 @@ pub(super) fn parse_schedule_config(
     let location = resolve_location(cli, config);
     let (pre_sunrise_offset_min, post_sunset_offset_min) = resolve_twilight_offsets(cli, config);
 
-    let schedule_str = cli.recording_schedule.trim().to_lowercase();
+    // Resolved from the config, not read off the CLI. `--recording-schedule`
+    // carries a clap `default_value` of "all-day", so reading `cli` directly
+    // meant the default always won and **`RECORDING_SCHEDULE` in
+    // `birdnet.conf` was ignored outright**: a station configured for `solar`
+    // recorded around the clock, and a `fixed:HH:MM-HH:MM` window never
+    // applied. Nothing contradicted it — `birdnet_core::config::validate`
+    // validates the key, and `--doctor`'s clock check reads it from the config
+    // to warn that a fixed window is evaluated in UTC, so the diagnostic
+    // reported on a schedule the runtime never used.
+    //
+    // Its sibling `resolve_twilight_offsets` below has always gone through
+    // `resolve::setting`; this line was the one that did not.
+    let schedule_str = resolve::setting_str(
+        cli,
+        "recording_schedule",
+        &cli.recording_schedule,
+        config,
+        "RECORDING_SCHEDULE",
+    )
+    .trim()
+    .to_lowercase();
 
     if schedule_str == "solar" {
         return ScheduleConfig {
@@ -199,7 +219,7 @@ mod tests {
         parse_schedule_config, resolve_location, secs_look_synced,
     };
     use crate::cli::Cli;
-    use crate::helpers::test_support::{cli_with_explicit, config_with};
+    use crate::helpers::test_support::{cli_with_explicit, config_with, default_cli};
     use birdnet_scheduler::traits::RecordingGate;
     use clap::Parser;
     use proptest::prelude::*;
@@ -525,6 +545,78 @@ mod tests {
                 }
             }
         }
+    }
+
+    // ── RECORDING_SCHEDULE reaches the runtime ──────────────────────────
+    //
+    // The station recorded around the clock whatever `birdnet.conf` said,
+    // because this resolver read `cli.recording_schedule` — which carries a
+    // clap default of "all-day", so the default always won. Every existing
+    // test set `cli.recording_schedule` by hand, exercising only the CLI path,
+    // which is why nothing caught it.
+
+    #[test]
+    fn config_schedule_solar_is_honoured() {
+        let cli = default_cli();
+        let cfg = config_with(&[
+            ("RECORDING_SCHEDULE", "solar"),
+            ("LATITUDE", "52.5"),
+            ("LONGITUDE", "13.4"),
+        ]);
+        let sc = parse_schedule_config(&cli, Some(&cfg));
+        assert!(
+            sc.night_inhibit,
+            "a solar schedule in the config must inhibit overnight recording"
+        );
+        assert!(sc.location.is_some(), "solar needs the station coordinates");
+    }
+
+    #[test]
+    fn config_schedule_fixed_window_is_honoured() {
+        let cli = default_cli();
+        let cfg = config_with(&[("RECORDING_SCHEDULE", "fixed:06:00-20:00")]);
+        let sc = parse_schedule_config(&cli, Some(&cfg));
+        assert!(
+            sc.fixed_window.is_some(),
+            "a fixed window in the config must be applied, not silently dropped"
+        );
+    }
+
+    /// Counter-test: the old behaviour, pinned. Reading the CLI field directly
+    /// yields "all-day" for both configs above — the exact silent 24/7
+    /// recording this fix removes.
+    #[test]
+    fn reading_the_cli_field_directly_would_ignore_the_config() {
+        let cli = default_cli();
+        assert_eq!(
+            cli.recording_schedule, "all-day",
+            "the clap default is what used to win over any configured schedule"
+        );
+    }
+
+    #[test]
+    fn an_explicit_cli_flag_still_beats_the_config() {
+        let mut cli = cli_with_explicit(&["recording_schedule"]);
+        cli.recording_schedule = "all-day".to_owned();
+        let cfg = config_with(&[
+            ("RECORDING_SCHEDULE", "solar"),
+            ("LATITUDE", "52.5"),
+            ("LONGITUDE", "13.4"),
+        ]);
+        let sc = parse_schedule_config(&cli, Some(&cfg));
+        assert!(
+            !sc.night_inhibit,
+            "an operator passing --recording-schedule must override the config"
+        );
+    }
+
+    #[test]
+    fn a_blank_config_schedule_falls_through_to_the_default() {
+        let cli = default_cli();
+        let cfg = config_with(&[("RECORDING_SCHEDULE", "   ")]);
+        let sc = parse_schedule_config(&cli, Some(&cfg));
+        assert!(sc.fixed_window.is_none());
+        assert!(!sc.night_inhibit, "blank must mean unset, not malformed");
     }
 
     proptest! {

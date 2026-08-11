@@ -29,8 +29,16 @@ const CLOCK_SYNCED_FLOOR_SECS: u64 = 1_577_836_800;
 /// Run the clock + timezone checks.
 pub(super) fn check_clock(config: Option<&Config>) -> Vec<Check> {
     let mut out = vec![clock_check_for(now_unix_secs())];
+    // The settings-table fallback matters for the same reason it does for the
+    // station location: `--doctor` runs from `ExecStartPre`, before the
+    // settings overlay merges `/admin/settings` onto the config. Reading the
+    // file alone would stay silent for exactly the operators who set their
+    // recording window the easy way — and the window is now settable there.
     if let Some(check) = config
         .and_then(|c| c.get("RECORDING_SCHEDULE"))
+        .map(ToOwned::to_owned)
+        .or_else(|| setting_from_db(config, "recording_schedule"))
+        .as_deref()
         .and_then(schedule_timezone_check)
     {
         out.push(check);
@@ -105,6 +113,15 @@ fn system_timezone() -> Option<String> {
 /// Read read-only and best-effort: a missing database or table simply means no
 /// comparison to make. `check_database` owns the database's health.
 fn detected_timezone(config: Option<&Config>) -> Option<String> {
+    setting_from_db(config, "timezone")
+}
+
+/// One non-empty value from the `settings` table, read-only and best-effort.
+///
+/// A missing database or table simply means there is nothing to compare
+/// against; `check_database` owns the database's health, and a diagnostic must
+/// not turn a storage problem into a finding about something else.
+fn setting_from_db(config: Option<&Config>, key: &str) -> Option<String> {
     let db_path = crate::helpers::db_path_from_config(config);
     if !db_path.exists() {
         return None;
@@ -114,9 +131,9 @@ fn detected_timezone(config: Option<&Config>) -> Option<String> {
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
     )
     .ok()?;
-    let tz = birdnet_db::settings::get(&conn, "timezone").ok()?;
-    let tz = tz.trim();
-    (!tz.is_empty()).then(|| tz.to_string())
+    let value = birdnet_db::settings::get(&conn, key).ok()?;
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
 }
 
 fn now_unix_secs() -> u64 {

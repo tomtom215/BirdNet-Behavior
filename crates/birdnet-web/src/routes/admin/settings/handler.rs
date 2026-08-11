@@ -323,6 +323,11 @@ fn build_settings_items(
         SettingsCategory::Location
     );
     push!(
+        form.recording_schedule,
+        "recording_schedule",
+        SettingsCategory::Location
+    );
+    push!(
         form.pre_sunrise_offset,
         "pre_sunrise_offset",
         SettingsCategory::Location
@@ -402,6 +407,16 @@ fn build_settings_items(
         "weekly_report_schedule",
         SettingsCategory::Notifications
     );
+    push!(
+        form.heartbeat_url,
+        "heartbeat_url",
+        SettingsCategory::Notifications
+    );
+    push!(
+        form.deadman_hours,
+        "deadman_hours",
+        SettingsCategory::Notifications
+    );
     // Species
     push!(
         form.species_exclude,
@@ -451,6 +466,11 @@ fn build_settings_items(
     );
     push!(form.site_name, "site_name", SettingsCategory::System);
     push!(form.info_site, "info_site", SettingsCategory::System);
+    push!(
+        form.database_lang,
+        "database_lang",
+        SettingsCategory::System
+    );
     // Auth: no rows. See the note on `SettingsForm` — the admin credential is
     // an Argon2id hash in the accounts table, not a settings value.
     // Email
@@ -520,6 +540,10 @@ mod tests {
             latitude: None,
             longitude: None,
             station_name: None,
+            recording_schedule: None,
+            heartbeat_url: None,
+            deadman_hours: None,
+            database_lang: None,
             confidence_threshold: None,
             sensitivity: None,
             overlap: None,

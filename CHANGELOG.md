@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.12.0] - 2026-08-10
 
+### Fixed
+
+- **`RECORDING_SCHEDULE` in `birdnet.conf` was ignored: a station set to
+  `solar` recorded around the clock.** `capture::schedule` read
+  `cli.recording_schedule` directly, and that flag carries a clap
+  `default_value` of `all-day` — so the default always won and the configured
+  schedule never applied. A `fixed:HH:MM-HH:MM` window was dropped just as
+  silently.
+
+  Nothing contradicted it. `birdnet_core::config::validate` validates the key,
+  and `--doctor`'s clock check reads it from the config to warn that a fixed
+  window is evaluated in UTC — so the diagnostic reported on a schedule the
+  runtime never used, the same shape as the `CADDY_PWD` and `ALSA_CARD` splits
+  fixed earlier in this release. Its sibling `resolve_twilight_offsets` had
+  always gone through `resolve::setting`; this one line had not, and every
+  existing test set the CLI field by hand, exercising only the path that
+  worked.
+
+  Measured before the fix: `RECORDING_SCHEDULE=solar` yielded
+  `night_inhibit=false, fixed_window=None` — 24/7 recording, on a station whose
+  operator had asked for the dawn window and whose disk and CPU paid for it.
+
+### Removed
+
+- **`--quality-filter` and `--quality-min-snr`, which did nothing at all.**
+  They promised that "audio chunks are assessed for SNR, spectral flatness, and
+  rain/wind interference before being passed to the ML model". No code read
+  either field — not from the config, not from the CLI. The feature was
+  advertised in `--help`, in the generated CLI reference and in the tuning
+  guide, and was inert.
+
+  The implementation is not missing: `birdnet_core::audio::quality` is ~1300
+  lines of SNR, spectral flatness, rain/wind assessment and noise-floor
+  tracking, with benchmarks — it was simply never called by the detection
+  pipeline. Wiring it changes which chunks reach inference, so it belongs in
+  its own change with hardware validation behind it rather than a release-prep
+  pass. The flags are gone until then, because a switch that silently does
+  nothing is worse than no switch: an operator in a noisy garden would set it
+  and believe their false positives were being filtered.
+
+### Added
+
+- **Four settings that were command-line-only are now on the settings page.**
+  An operator without a terminal — which is most of them — could not reach any
+  of these:
+
+  | Setting | Why it matters |
+  |---|---|
+  | **Recording window** (`RECORDING_SCHEDULE`) | all-day / solar / fixed hours; the page offered the sunrise and sunset *offsets* while the mode they modify was unreachable |
+  | **Heartbeat URL** (`HEARTBEAT_URL`) | lets an outside monitor alert you when the station stops reporting |
+  | **Dead-man alert** (`DEADMAN_HOURS`) | notifies you after N hours of silence — the symptom of a microphone that died quietly |
+  | **Common-name language** (`DATABASE_LANG`) | a non-English station could not pick its own language from the UI |
+
+  Each goes through the existing wiring guard, and a test walks the whole chain
+  per key — the settings row the form writes, through the overlay, to the
+  config key the consumer actually reads — with a further test proving that
+  choosing *Solar* on the settings page really does stop overnight recording.
+  Both fail against the pre-fix code.
+
+  MQTT and Home Assistant discovery (8 flags) remain command-line-only and are
+  deliberately deferred; `docs/RELEASE_PLAN.md` § 5 records the rest of the
+  audit.
+
 ### Changed
 
 - **The hardware harness now measures CPU, and checks the dashboard's CPU

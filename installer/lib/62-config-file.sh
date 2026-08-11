@@ -58,6 +58,11 @@ ${rtsp_line}
 # --- Location (used for species frequency filtering and BirdWeather) ---
 ${lat_line}
 ${lon_line}
+# RECORDING_SCHEDULE=all-day   # all-day | solar | fixed:HH:MM-HH:MM
+#                              # solar records sunrise-to-sunset and needs the
+#                              # coordinates above. Fixed hours are evaluated in
+#                              # UTC, not local time. Also settable in the web UI
+#                              # under Settings -> Location & Recording Schedule.
 
 # --- Detection ---
 # CONFIDENCE=0.75          # 0.0–1.0, default 0.75 (detections below this are discarded).

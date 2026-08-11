@@ -8,7 +8,7 @@ Out of the box BirdNet-Behavior is tuned to be sensible. But every station is di
 
 | Symptom | What's happening | Turn this way |
 |---|---|---|
-| **Too many wrong birds** (false positives) | The model is logging low-quality guesses | *Raise* confidence / sensitivity *down* / enable the quality filter |
+| **Too many wrong birds** (false positives) | The model is logging low-quality guesses | *Raise* confidence / sensitivity *down* / add a per-species threshold |
 | **Missing birds you can hear** (false negatives) | The bar is too high, or the signal is poor | *Lower* confidence / sensitivity *up* / check mic levels first |
 
 If you're getting both at once, it's almost always an **audio** problem (wind, clipping, a bad mic position) — fix that first on the [Audio page](../admin/audio.md) before touching detection settings.

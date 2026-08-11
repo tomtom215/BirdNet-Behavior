@@ -724,6 +724,27 @@ maintainer's call.
     daemon, the settings form and the wizard all read one constant, and a live
     binary was probed across the range (`0`, `0.001`, `0.07` warn; `0.1`
     upward silent; `70`, `-0.5`, `abc` fail with exit 2).
+  - **UI-vs-CLI parity is closed except MQTT, and one built feature is still
+    unwired.** A field-by-field audit of the 71 CLI fields against the 49
+    settings-form keys found four genuine gaps (recording window, heartbeat
+    URL, dead-man hours, database language), all now on the settings page and
+    each covered by a chain test; two dead flags (`--quality-filter`,
+    `--quality-min-snr`), now removed; and one real bug — `RECORDING_SCHEDULE`
+    ignored by the runtime — now fixed. Everything else in the difference is
+    deliberate: action flags (`--doctor`, `--fix`, `--check-db`), install-time
+    paths (`--model`, `--labels`, `--watch-dir`), and `--twilight-offset`,
+    which the form's separate pre-sunrise / post-sunset fields supersede.
+
+    Two items are carried forward rather than done:
+
+    * **MQTT / Home Assistant discovery — 8 flags, no UI at all.** The command
+      palette advertises "mqtt" as a searchable term and there is nowhere to
+      send the operator. Deferred by decision, not oversight.
+    * **`birdnet_core::audio::quality` is built and never called.** ~1300
+      lines of SNR, spectral flatness, rain/wind assessment and noise-floor
+      tracking, with benchmarks, that no pipeline invokes. Wiring it changes
+      which chunks reach inference, so it needs its own change and a hardware
+      run to judge the effect on detection rates.
   - **The status surfaces now grade real signals, but only one of the
     unhappy paths has been seen on hardware.** The dashboard checklist, the
     hero pill, the Today rail line and the header badge all read the capture

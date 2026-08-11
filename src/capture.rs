@@ -29,6 +29,20 @@ use crate::cli::Cli;
 
 mod runloop;
 mod schedule;
+
+/// The resolved recording window for a given CLI + config pair.
+///
+/// Exposed for the settings-bridge test that proves a schedule chosen on
+/// `/admin/settings` actually reaches the capture supervisor — the hop that was
+/// broken until 0.12.0, when this resolver read the CLI default and ignored the
+/// configured value.
+#[cfg(test)]
+pub fn schedule_config_for_test(
+    cli: &crate::cli::Cli,
+    config: Option<&birdnet_core::config::Config>,
+) -> birdnet_scheduler::ScheduleConfig {
+    schedule::parse_schedule_config(cli, config)
+}
 mod sources;
 mod supervisor;
 mod uptime;
