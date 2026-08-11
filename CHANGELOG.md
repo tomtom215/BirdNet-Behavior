@@ -70,6 +70,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the visible first step): no WCAG 2.1 A/AA violations outside the two rules the
   gate defers by design, and no horizontal overflow at 390 px in either theme.
 
+- **Green ticks and a green "Healthy" badge on a station that was not working.**
+  Walking the first-run journey end to end turned up four places that reported
+  success without checking anything:
+
+  * The dashboard's **"Getting ready"** card — the one thing a brand-new
+    operator reads — ticked *Microphone detected* as soon as a source existed in
+    the database, which says nothing about audio flowing. A source whose device
+    vanished on reboot, or whose `arecord` had died, ticked green. It now reads
+    the supervisor's own per-source gauge (the signal the Capture tab already
+    used) and reports *Microphone not recording* with a link to the page that
+    can fix it.
+  * The same card's **"Room to record"** row was a hard-coded `✓`. The
+    percentage and the wording were real, so it could render "Room to record ✓ —
+    nearly full — 97% used": a pass tick on a station about to stop recording.
+  * **"Model loaded … ready"** asserted runtime state the page has no signal
+    for. It now says only what is true — the model ships with the app.
+  * The **"recording"** pill is driven by time since the last detection, which
+    is `None` on a station that has never detected anything — so it rendered a
+    confident green *recording* forever on exactly the first-run station whose
+    microphone never worked. It now consults the capture gauge first.
+
+  The **header health badge** was the same problem at the top of every page:
+  "Healthy" meant nothing more than "SQLite is not corrupt", so a station with a
+  dead microphone and a 99 %-full disk showed green on every screen. It now
+  grades database, capture and disk — the three things that stop detections —
+  and names the problem (*Mic down*, *No microphone*, *Disk full*) with the
+  reason on hover. The `data-health` token keeps its `ok`/`warn`/`err`
+  vocabulary, and the disk threshold is shared with the dashboard so the two
+  surfaces cannot disagree about the same disk.
+
+- **The setup wizard's alerts choice governed nothing.** The Alerts step wrote
+  `notification_mode` — a key no code anywhere read. An operator picked "Quiet"
+  or "Everything" on their first day and it changed nothing, because the
+  notification filter reads `notify_trigger` (bridged onto `APPRISE_TRIGGER`).
+  Worse, its four options (`quiet`/`rare`/`daily`/`everything`) matched none of
+  the three values the runtime understands, and `TriggerMode::parse` maps
+  anything unrecognised to *every detection* — the chattiest mode, the opposite
+  of a quiet choice.
+
+  The step now offers exactly the three real modes, writes the key the runtime
+  reads, and rejects anything else rather than silently selecting "chatty". It
+  also says plainly that nothing is sent until a channel is configured, and
+  links to where — replacing a "Pick channels now" disclosure that opened
+  twelve non-interactive pills.
+
+  The guard that exists to prevent exactly this (`SETTING_SPECS` must classify
+  every settings key, enforced by a test) only ever covered the admin *form*, so
+  the wizard wrote outside it. It now covers the wizard's keys too, and a test
+  pins the declared list against what a full submit actually persists.
+
+- **The timezone the wizard detected was stored and never used.** It cannot be
+  applied from the app — the timezone is a system setting and the service does
+  not run as root — but it is not cosmetic either: capture names each recording
+  from the system's local time, and those filenames become every detection's
+  `Date` and `Time`. A Pi left on UTC in a UTC+2 country files its dawn chorus
+  two hours early, rolls "today" over at the wrong moment, and deletes by the
+  wrong day. Raspberry Pi OS images default to UTC, so this is a common state.
+  `--doctor` now compares the host's timezone with the detected one and hands
+  over the exact `timedatectl set-timezone` command. Verified on a real
+  container: a station configured for `Europe/Berlin` on a `Etc/UTC` host warns
+  with that command.
+
 - **`--doctor` was silent about a confidence threshold that guarantees a
   false-positive firehose.** Validation rejected the percentage mistake
   (`CONFIDENCE=70`) and non-numeric junk as errors, but a *decimal* slip — `0.07`

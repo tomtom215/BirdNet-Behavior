@@ -200,11 +200,13 @@ async fn htmx_top_species_partial_returns_list() {
     assert!(html.contains("bnb-avatar"));
 }
 
+/// The badge is the answer a non-technical operator gets to "is my station
+/// working?", on every page, refreshed every 30 s. It used to mean only
+/// "SQLite is not corrupt", so it read green with a dead microphone. These pin
+/// both halves of the new contract.
 #[tokio::test]
-async fn htmx_health_badge_returns_healthy() {
-    let app = app();
-
-    let response = app
+async fn htmx_health_badge_flags_a_station_with_no_microphone() {
+    let response = app()
         .oneshot(
             Request::builder()
                 .uri("/pages/health-badge")
@@ -213,16 +215,51 @@ async fn htmx_health_badge_returns_healthy() {
         )
         .await
         .unwrap();
-
     assert_eq!(response.status(), StatusCode::OK);
-
     let body = axum::body::to_bytes(response.into_body(), 1024)
         .await
         .unwrap();
     let html = String::from_utf8_lossy(&body);
 
-    assert!(html.contains("Healthy"));
-    assert!(html.contains("ok"));
+    // The fixture station has detections but no configured capture source, so
+    // "Healthy" would be a false reassurance.
+    assert!(html.contains("No microphone"), "{html}");
+    assert!(html.contains(r#"data-health="warn""#), "{html}");
+    assert!(!html.contains("Healthy"));
+}
+
+#[tokio::test]
+async fn htmx_health_badge_returns_healthy_for_a_capturing_station() {
+    let state = test_state();
+    let new_source = birdnet_db::audio_sources::NewAudioSource::defaults(
+        "src_ok",
+        birdnet_db::audio_sources::SourceKind::UsbAlsa,
+        "plughw:CARD=PRO,DEV=0",
+    );
+    state.with_db(|c| {
+        birdnet_db::audio_sources::AudioSourceStore::insert(c, &new_source).unwrap();
+    });
+    // The supervisor publishes this gauge; the badge reads the same one the
+    // Capture tab's status pill does.
+    state.metrics().set_source_up("src_ok", true);
+
+    let response = build_router(state)
+        .oneshot(
+            Request::builder()
+                .uri("/pages/health-badge")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(html.contains("Healthy"), "{html}");
+    assert!(html.contains(r#"data-health="ok""#));
 }
 
 #[tokio::test]

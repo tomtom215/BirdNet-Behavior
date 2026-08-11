@@ -45,6 +45,28 @@ use crate::routes::admin::audio::{detail_for, kind_label};
 use crate::routes::pages::escape_html;
 use crate::state::AppState;
 
+/// Every settings key `POST /onboarding/save` can persist.
+///
+/// The admin settings form has had a guard for this since twenty of its fields
+/// turned out to be editable, persisted, and connected to nothing: the binary
+/// classifies each key in `SETTINGS_FORM_KEYS` and a test fails on any that is
+/// unclassified. The wizard wrote *outside* that list, so it was never
+/// covered — and did the same thing, shipping a notification choice
+/// (`notification_mode`) that nothing anywhere read.
+///
+/// This list closes the gap: the same test now classifies these keys too, so a
+/// new wizard field cannot ship inert either.
+///
+/// Kept in sync with the wizard form (`OnboardingForm`) by a test in this module.
+pub const ONBOARDING_SETTING_KEYS: &[&str] = &[
+    "latitude",
+    "longitude",
+    "timezone",
+    "notify_trigger",
+    "confidence_threshold",
+    "onboarding_complete",
+];
+
 /// Mount the first-run onboarding wizard routes.
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -201,6 +223,18 @@ fn valid_confidence(raw: &str) -> bool {
     raw.parse::<f64>().is_ok_and(|v| (0.0..=1.0).contains(&v))
 }
 
+/// Whether `raw` is a notification trigger the runtime understands.
+///
+/// `TriggerMode::parse` maps anything it does not recognise to
+/// `EachDetection` — an alert on every single detection. So an unvalidated
+/// write here would turn a typo, or a stale value from an older wizard, into
+/// the chattiest possible setting: the exact opposite of what an operator
+/// choosing a quieter mode asked for. Kept in step with
+/// `birdnet_integrations::notification::TriggerMode::parse`.
+fn valid_trigger(raw: &str) -> bool {
+    matches!(raw, "each" | "new-species" | "new-species-daily")
+}
+
 /// Persist the wizard's choices and mark onboarding complete, then return to the
 /// dashboard. Only non-empty values are written; the DB settings overlay applies
 /// latitude/longitude and the confidence threshold on the next start.
@@ -226,8 +260,16 @@ async fn onboarding_save(
         if !tz.is_empty() {
             items.push(("timezone", tz, SettingsCategory::Location));
         }
-        if !mode.is_empty() {
-            items.push(("notification_mode", mode, SettingsCategory::Notifications));
+        // `notify_trigger` — the key the notification filter actually reads
+        // (bridged onto `APPRISE_TRIGGER`). The wizard used to write
+        // `notification_mode`, which nothing anywhere consumed: the operator
+        // picked "Quiet" or "Everything", it was persisted, and it governed
+        // nothing. Only the three values `TriggerMode::parse` understands are
+        // accepted, because an unknown value silently parses as "every
+        // detection" — the chattiest mode, and the opposite of what someone
+        // choosing a quieter one intends.
+        if valid_trigger(mode) {
+            items.push(("notify_trigger", mode, SettingsCategory::Notifications));
         }
         // Only persisted when it parses inside 0–1. The wizard's own cards can
         // only produce 0.4/0.6/0.75/0.9, but the field is a plain form value:
@@ -454,23 +496,14 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
     <section class="ob-step" data-step="5">
       <div class="ob-eyebrow">Who gets told</div>
       <h1 class="ob-h">When should we ping you?</h1>
-      <p class="ob-p ob-mb-18">Start simple — you can wire up channels (Telegram, email, MQTT…) any time.</p>
-      <div class="ob-cards cols2">
-        <div class="ob-card" data-radio="notify" data-value="quiet"><div class="ob-grow"><div class="t">Quiet</div><div class="s">Never notify — just log everything</div></div></div>
-        <div class="ob-card sel" data-radio="notify" data-value="rare"><div class="ob-grow"><div class="t">Rare only <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s">Only first-of-station / unusual birds</div></div></div>
-        <div class="ob-card" data-radio="notify" data-value="daily"><div class="ob-grow"><div class="t">Daily digest</div><div class="s">One summary each evening</div></div></div>
-        <div class="ob-card" data-radio="notify" data-value="everything"><div class="ob-grow"><div class="t">Everything</div><div class="s">Every detection (chatty!)</div></div></div>
+      <p class="ob-p ob-mb-18">This sets <em>how often</em> alerts go out. Nothing is sent until you add somewhere to send it — you can do that whenever you like.</p>
+      <div class="ob-cards">
+        <div class="ob-card sel" data-radio="notify" data-value="new-species"><div class="ob-grow"><div class="t">New species this week <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s">Only birds you have barely heard lately — the interesting ones.</div></div></div>
+        <div class="ob-card" data-radio="notify" data-value="new-species-daily"><div class="ob-grow"><div class="t">First of each species, daily</div><div class="s">One alert per species per day. A good middle ground.</div></div></div>
+        <div class="ob-card" data-radio="notify" data-value="each"><div class="ob-grow"><div class="t">Every detection</div><div class="s">One alert every single time. Chatty — hundreds a day at a busy feeder.</div></div></div>
       </div>
-      <input type="hidden" name="notification_mode" id="ob-notify" value="rare">
-      <details class="ob-mt-16">
-        <summary class="bnb-meta ob-summary">Pick channels now <span class="bnb-pill">optional</span></summary>
-        <div class="chips">
-          <span class="bnb-pill">Telegram</span><span class="bnb-pill">Email</span><span class="bnb-pill">MQTT</span>
-          <span class="bnb-pill">Webhook</span><span class="bnb-pill">Slack</span><span class="bnb-pill">Discord</span>
-          <span class="bnb-pill">Pushover</span><span class="bnb-pill">ntfy</span><span class="bnb-pill">Apprise</span>
-          <span class="bnb-pill">BirdWeather</span><span class="bnb-pill">Home Assistant</span><span class="bnb-pill">SMS</span>
-        </div>
-      </details>
+      <input type="hidden" name="notification_mode" id="ob-notify" value="new-species">
+      <p class="bnb-meta ob-mt-16">Add a channel — Telegram, email, MQTT, ntfy, webhooks and more — under <a href="/admin/settings">Settings → Notifications</a>. Until then this setting is simply waiting.</p>
     </section>
 
     <!-- Step 6 — Done -->

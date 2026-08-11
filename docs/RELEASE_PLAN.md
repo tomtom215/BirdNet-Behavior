@@ -724,6 +724,15 @@ maintainer's call.
     daemon, the settings form and the wizard all read one constant, and a live
     binary was probed across the range (`0`, `0.001`, `0.07` warn; `0.1`
     upward silent; `70`, `-0.5`, `abc` fail with exit 2).
+  - **The status surfaces now grade real signals, but only one of the
+    unhappy paths has been seen on hardware.** The dashboard checklist, the
+    hero pill, the Today rail line and the header badge all read the capture
+    supervisor's per-source gauge instead of assuming success, and were
+    exercised against a live server in every state the gauge can report. What
+    has *not* been reproduced on the board is the transition itself: unplug the
+    microphone on a running Pi and watch the badge go from *Healthy* to *Mic
+    down* within its 30 s poll, then come back. The hardware harness already
+    unplugs the mic (`mic` phase), so this is one assertion away.
   - **The new Accuracy step and the location notice have not run on the
     board.** Both are covered by tests — nine integration tests over the served
     wizard and the save handler, and `installer/test/location-notice.sh` over

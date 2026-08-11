@@ -354,8 +354,9 @@ async fn wizard_contains_no_mock_content() {
             "detected automatically",
             "Boston, MA", // someone else's location, in the summary
             "42.36, −71.06",
-            "birdnet.local",  // an address that does not resolve on every network
-            "Watch a folder", // an option the wizard never implemented
+            "Pick channels now", // twelve pills that read as selectable and were not
+            "birdnet.local",     // an address that does not resolve on every network
+            "Watch a folder",    // an option the wizard never implemented
         ] {
             assert!(
                 !html.contains(mock),
@@ -376,6 +377,125 @@ async fn summary_rows_start_unset_rather_than_invented() {
     assert!(
         html.contains("window.location.origin"),
         "the dashboard address must come from the address the operator reached"
+    );
+}
+
+/// `ONBOARDING_SETTING_KEYS` is what the wiring guard in the binary checks, so
+/// it has to be the truth about what the wizard writes — a key the handler
+/// persists but the list omits would slip past the guard exactly the way
+/// `notification_mode` did. Submitting a fully-populated form and comparing the
+/// keys that actually land in the settings table keeps the two honest.
+#[tokio::test]
+async fn declared_onboarding_keys_match_what_a_full_submit_writes() {
+    let state = fresh_state();
+    let resp = post_form(
+        build_router(state.clone()),
+        "/onboarding/save",
+        "latitude=51.5&longitude=-0.12&timezone=Europe/London\
+         &notification_mode=new-species&confidence_threshold=0.75",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+
+    let mut written: Vec<String> = state.with_db(|c| {
+        let mut stmt = c.prepare("SELECT key FROM settings").unwrap();
+        stmt.query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    });
+    written.sort();
+
+    let mut declared: Vec<String> = birdnet_web::routes::pages::onboarding::ONBOARDING_SETTING_KEYS
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    declared.sort();
+
+    assert_eq!(
+        written, declared,
+        "ONBOARDING_SETTING_KEYS must list exactly the keys the wizard persists — \
+         the wiring guard in the binary trusts it"
+    );
+}
+
+/// The Alerts step used to write `notification_mode`, a key no code anywhere
+/// read: an operator picked "Quiet" or "Everything" on their first day and it
+/// governed nothing. The live key is `notify_trigger`, bridged onto
+/// `APPRISE_TRIGGER` and consumed by the notification filter.
+#[tokio::test]
+async fn save_persists_the_alerts_choice_to_the_key_the_runtime_reads() {
+    for mode in ["each", "new-species", "new-species-daily"] {
+        let state = fresh_state();
+        let body = format!("notification_mode={mode}");
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/onboarding/save")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+
+        let stored = state.with_db(|c| birdnet_db::settings::get(c, "notify_trigger").unwrap());
+        assert_eq!(stored, mode);
+        // The dead key must not come back.
+        assert!(
+            state
+                .with_db(|c| birdnet_db::settings::get(c, "notification_mode"))
+                .is_err(),
+            "notification_mode is read by nothing and must not be written"
+        );
+    }
+}
+
+/// `TriggerMode::parse` maps anything unrecognised to "every detection" — the
+/// chattiest mode. So an unvalidated value is not merely ignored, it silently
+/// selects the opposite of a quieter choice.
+#[tokio::test]
+async fn save_rejects_an_unknown_alerts_value_rather_than_defaulting_to_chatty() {
+    for bad in ["rare", "quiet", "daily", "everything", "", "EACH"] {
+        let state = fresh_state();
+        let body = format!("notification_mode={bad}");
+        let resp = build_router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/onboarding/save")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        assert!(
+            state
+                .with_db(|c| birdnet_db::settings::get(c, "notify_trigger"))
+                .is_err(),
+            "{bad:?} is not a trigger the runtime understands and must not be stored"
+        );
+    }
+}
+
+/// The step's cards must offer exactly the values the runtime accepts — the old
+/// four (`quiet`/`rare`/`daily`/`everything`) matched none of them.
+#[tokio::test]
+async fn alerts_step_offers_only_real_trigger_modes() {
+    let html = fetch_wizard(fresh_state()).await;
+    for real in ["new-species", "new-species-daily", "each"] {
+        assert!(
+            html.contains(&format!(r#"data-radio="notify" data-value="{real}""#)),
+            "missing the {real} card"
+        );
+    }
+    assert!(
+        html.contains(r#"id="ob-notify" value="new-species""#),
+        "the recommended mode must be pre-selected"
     );
 }
 
