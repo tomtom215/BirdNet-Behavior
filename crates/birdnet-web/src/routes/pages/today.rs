@@ -319,7 +319,7 @@ fn first_run_needs_onboarding(state: &AppState) -> bool {
 ///
 /// Local, because every other value on this axis is: the day strip's bars come
 /// from `hourly_activity`, which buckets the local `Time` column, and the "now"
-/// marker is [`now_hour_local`]. Returning the solver's raw UTC minutes here
+/// marker is [`super::now_hour_local`]. Returning the solver's raw UTC minutes here
 /// drew sunrise two hours early on a CEST station and mislabelled the pills
 /// with it.
 fn solar_times_today(conn: &rusqlite::Connection) -> Option<(f64, f64)> {
