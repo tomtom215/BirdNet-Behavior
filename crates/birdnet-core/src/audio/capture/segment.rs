@@ -514,7 +514,7 @@ mod tests {
             u32::from_le_bytes([bytes[40], bytes[41], bytes[42], bytes[43]]),
             11,
             "Drop must patch the header too — a panicking reader thread \
-             must not leave a mis-sized WAV behind"
+             must not leave a wrongly-sized WAV behind"
         );
     }
 

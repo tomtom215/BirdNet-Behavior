@@ -80,7 +80,7 @@ const RING_MIN_BYTES: usize = 64 * 1024;
 
 /// Ceiling on ring capacity. A Raspberry Pi's RAM is the scarce resource on the
 /// target hardware and this memory is resident for the life of the process, so
-/// a mis-parsed sample rate must not be able to reserve an arbitrary slab.
+/// a sample rate read wrongly must not be able to reserve an arbitrary slab.
 const RING_MAX_BYTES: usize = 4 * 1024 * 1024;
 
 /// Ring capacity for `spec`, clamped to a sane band.

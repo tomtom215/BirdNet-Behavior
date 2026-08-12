@@ -97,8 +97,8 @@ impl CaptureSource {
 pub struct LocalOffset(Arc<AtomicI64>);
 
 /// Widest real-world UTC offset, in seconds (UTC+14, Line Islands). Values
-/// outside ±this are clamped: a garbage offset would silently mis-stamp every
-/// recording, and no plausible source of one is worth honouring.
+/// outside ±this are clamped: a garbage offset would put the wrong time on
+/// every recording, and no plausible source of one is worth honouring.
 const MAX_UTC_OFFSET_SECS: i64 = 14 * 3600;
 
 impl LocalOffset {
