@@ -229,7 +229,7 @@ async fn fetch_clips(
                 .collect::<HashSet<String>>();
             // First-ever date per species → the "first today" / "rare" badge,
             // the same first-seen signal the Today feed-row uses.
-            let first_seen = birdnet_db::sqlite::species_first_seen(conn).unwrap_or_default();
+            let first_seen = birdnet_db::sqlite::species_first_detection(conn).unwrap_or_default();
             ClipsData {
                 rows,
                 total,
@@ -344,19 +344,21 @@ fn render_clip_row(html: &mut String, d: &DetectionRow, page: &ClipsData, today:
         .map(|s| format!(r#"<span class="rc-dur">{}</span>"#, fmt_clip_duration(s)))
         .unwrap_or_default();
 
-    // "first today" / "rare" badge, keyed on the species' first-ever date — the
-    // same first-seen signal the Today feed-row shows (the species' first record
-    // is today, or this clip sits on the species' first-ever historical date).
+    // "first ever" / "rare" badge — the same exact-instant signal the Today
+    // feed-row shows: this clip *is* the species' first-ever detection, either
+    // today or on a past day being browsed. Keyed on the first-ever instant,
+    // not the first-ever date, so a species heard many times on its first day
+    // marks only the recording that actually came first.
     let badge = page
         .first_seen
         .get(&d.sci_name)
         .map_or(String::new(), |fs| {
-            if fs == today {
-                r#" <span class="bnb-pill moss rc-badge">first today</span>"#.to_string()
-            } else if fs == &d.date {
-                r#" <span class="bnb-pill rare rc-badge">rare</span>"#.to_string()
-            } else {
+            if *fs != format!("{} {}", d.date, d.time) {
                 String::new()
+            } else if d.date == today {
+                r#" <span class="bnb-pill moss rc-badge">first ever</span>"#.to_string()
+            } else {
+                r#" <span class="bnb-pill rare rc-badge">rare</span>"#.to_string()
             }
         });
 
@@ -704,12 +706,14 @@ mod tests {
     }
 
     #[test]
-    fn clip_row_renders_first_today_and_rare_badges() {
+    fn clip_row_badges_only_the_first_ever_recording() {
         let sci = "Turdus migratorius".to_string(); // clip_row()'s species
+        // clip_row() is 2026-06-13 06:12:00.
+        let this_row = "2026-06-13 06:12:00".to_string();
 
-        // Species first heard *today* → "first today".
+        // This clip *is* the species' first-ever, and it is today → "first ever".
         let mut first = HashMap::new();
-        first.insert(sci.clone(), "2026-06-13".to_string());
+        first.insert(sci.clone(), this_row.clone());
         let mut a = String::new();
         render_clip_row(
             &mut a,
@@ -717,11 +721,29 @@ mod tests {
             &data_with(vec![], 0, first, HashSet::new()),
             "2026-06-13",
         );
-        assert!(a.contains(r#"<span class="bnb-pill moss rc-badge">first today</span>"#));
+        assert!(a.contains(r#"<span class="bnb-pill moss rc-badge">first ever</span>"#));
 
-        // First-ever date == this row's (past) date → "rare".
+        // The regression this replaces: the species' first-ever was earlier the
+        // SAME day, so the old date-only comparison badged this clip too — and
+        // every other clip of that species that day. A station that heard 133
+        // blackcaps on their arrival day marked all 133 as the first.
+        let mut same_day = HashMap::new();
+        same_day.insert(sci.clone(), "2026-06-13 05:01:00".to_string());
+        let mut dup = String::new();
+        render_clip_row(
+            &mut dup,
+            &clip_row(Some(9.0)),
+            &data_with(vec![], 0, same_day, HashSet::new()),
+            "2026-06-13",
+        );
+        assert!(
+            !dup.contains("rc-badge"),
+            "a later clip on the first-ever day must not claim to be the first: {dup}"
+        );
+
+        // The first-ever clip, browsed on a later day → "rare".
         let mut rare = HashMap::new();
-        rare.insert(sci.clone(), "2026-06-13".to_string());
+        rare.insert(sci.clone(), this_row);
         let mut b = String::new();
         render_clip_row(
             &mut b,
@@ -733,7 +755,7 @@ mod tests {
 
         // First heard on an earlier date → no badge.
         let mut old = HashMap::new();
-        old.insert(sci, "2025-01-01".to_string());
+        old.insert(sci, "2025-01-01 07:00:00".to_string());
         let mut c = String::new();
         render_clip_row(
             &mut c,
