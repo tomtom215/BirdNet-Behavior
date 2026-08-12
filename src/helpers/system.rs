@@ -245,9 +245,20 @@ pub fn start_live_spectrogram(
         let on_frame = move |frame: SpectrogramFrame| {
             // Translate the core `SpectrogramFrame` into the
             // wire-shaped `WsSpectrogramEvent` the broadcast carries.
+            //
+            // The capture filename is the only place the source attribution
+            // exists by this point — the producer watches one directory that
+            // every source writes into — so the label is derived from it with
+            // the same parser the detection path already uses for the
+            // `birdnet_audio_source_up{source}` gauge, rather than a second
+            // copy of the filename schema.
+            let source = crate::daemon::disposition::derive_source_label(std::path::Path::new(
+                &frame.filename,
+            ));
             let event = WsSpectrogramEvent {
                 event: "spectrogram",
                 filename: frame.filename,
+                source,
                 n_mels: frame.n_mels,
                 n_frames: frame.n_frames,
                 data: frame.data,

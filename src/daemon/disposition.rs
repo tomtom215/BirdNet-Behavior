@@ -152,7 +152,7 @@ pub(super) fn decide_disposition(
 /// useful: stations with one source going dark while another stays up
 /// show that immediately in Prometheus.
 #[must_use]
-pub(super) fn derive_source_label(source_file: &std::path::Path) -> String {
+pub fn derive_source_label(source_file: &std::path::Path) -> String {
     let name = source_file
         .file_name()
         .and_then(|n| n.to_str())
@@ -268,6 +268,19 @@ mod tests {
         assert_eq!(derive_source_label(p), "RTSP_1");
         let p2 = std::path::Path::new("/tmp/2026-05-19-birdnet-RTSP_42-12:34:56.flac");
         assert_eq!(derive_source_label(p2), "RTSP_42");
+    }
+
+    #[test]
+    fn source_label_reads_the_installer_seeded_source_id() {
+        // The shape a bare-metal station actually produces: `seed_sources_from_config`
+        // names ALSA rows `src_seed_N`, and capture writes
+        // `%Y-%m-%d-birdnet-src_seed_1-%H:%M:%S.wav` through `arecord --use-strftime`.
+        // The live spectrogram attributes its frames with this, and the label has
+        // to equal the `audio_sources.id` the source picker offers or the picker
+        // filters every frame away.
+        let p =
+            std::path::Path::new("/tmp/birdnet-stream/2026-08-12-birdnet-src_seed_1-11:30:16.wav");
+        assert_eq!(derive_source_label(p), "src_seed_1");
     }
 
     #[test]

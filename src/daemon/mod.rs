@@ -39,7 +39,7 @@ mod config;
 /// of these rules was duplicated: a diagnostic that read the setting the
 /// runtime ignores reports on a station that does not exist.
 pub use config::{resolve_confidence, resolve_station_coords};
-mod disposition;
+pub mod disposition;
 mod processor;
 mod webhook;
 

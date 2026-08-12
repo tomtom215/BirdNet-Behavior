@@ -246,14 +246,39 @@
   }
   setLive(false); drawIdle(); setTimeout(idleLoop, 1000);
 
+  // ── Per-source audio playback ─────────────────────────────────────────────
+  var sel = document.getElementById('rc-source');
+
+  // The broadcast carries every source's frames to every client, so the picker
+  // only means something if the client drops the ones it did not ask for.
+  // Until frames carried a `source` this was impossible: choosing a microphone
+  // changed nothing, and a two-source station interleaved both inputs into one
+  // spectrogram that looked like a single noisy feed.
+  //
+  // An empty selection is the "— default audio source —" row, which is not a
+  // filter — it draws whatever arrives, matching the audio side, where an empty
+  // value streams /stream with no source_id.
+  function frameIsSelected(m) {
+    var want = sel ? sel.value : '';
+    return !want || m.source === want;
+  }
+
   try {
     var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     var ws = new WebSocket(proto + '//' + location.host + '/api/v2/ws/spectrogram');
-    ws.onmessage = function (ev) { try { var m = JSON.parse(ev.data); if (m.event === 'spectrogram') drawFrame(m); } catch (_) {} };
+    ws.onmessage = function (ev) {
+      try {
+        var m = JSON.parse(ev.data);
+        if (m.event === 'spectrogram' && frameIsSelected(m)) drawFrame(m);
+      } catch (_) {}
+    };
   } catch (_) {}
 
-  // ── Per-source audio playback ─────────────────────────────────────────────
-  var sel = document.getElementById('rc-source');
+  // Switching source mid-stream: clear immediately rather than leaving the
+  // previous source's trace on screen until the next frame arrives (up to a
+  // full segment away), which read as the picker having done nothing.
+  if (sel) sel.addEventListener('change', function () { setLive(false); drawIdle(); });
+
   var audio = document.getElementById('rc-audio');
   var btn = document.getElementById('rc-listen-btn');
   var glyph = document.getElementById('rc-listen-glyph');
