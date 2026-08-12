@@ -292,53 +292,19 @@ pub(crate) fn unix_secs() -> i64 {
 
 /// The system's UTC offset in seconds, east-positive (CEST → `7200`).
 ///
-/// Detections are timestamped in **local** time — capture writes segment files
-/// through `arecord --use-strftime`, whose `%H:%M:%S` is local — so every
-/// hour-of-day and date this module derives has to be local too, or the two
-/// disagree by the offset. They did: the day strip plotted local-hour bars
-/// against a UTC "now" line and UTC sunrise/sunset markers, which on a CEST
-/// station drew "now" two hours behind the detections beside it.
+/// Detections are timestamped in **local** time — capture names its segment
+/// files with local `%H:%M:%S` — so every hour-of-day and date this module
+/// derives has to be local too, or the two disagree by the offset. They did:
+/// the day strip plotted local-hour bars against a UTC "now" line and UTC
+/// sunrise/sunset markers, which on a CEST station drew "now" two hours behind
+/// the detections beside it.
 ///
-/// The workspace carries no date/time crate and forbids `unsafe`, so neither
-/// `localtime_r` nor a tz-database parser is reachable from here. SQLite's
-/// `localtime` modifier consults the same zoneinfo everything else on the box
-/// does, so the offset is read from an in-memory connection — that keeps this
-/// a leaf function instead of threading a `Connection` through two dozen
-/// callers of [`today_date_string`].
-///
-/// Cached for a minute. The value only moves at a DST boundary, and opening a
-/// connection on every page render to learn something that changes twice a
-/// year would be absurd; the resulting staleness is at most 60s, twice a year.
+/// Delegates to [`birdnet_db::clock::local_utc_offset_secs`], which is now the
+/// single home of that rule: capture needs the very same offset to *write* the
+/// filenames this module reads back, and a second copy would let the writer and
+/// the reader drift apart.
 pub(crate) fn local_utc_offset_secs() -> i64 {
-    use std::sync::atomic::{AtomicI64, Ordering};
-
-    /// Last computed offset. Seeded to 0 (UTC), which is also the fallback if
-    /// SQLite cannot answer — the pre-existing behaviour, never worse.
-    static OFFSET_SECS: AtomicI64 = AtomicI64::new(0);
-    /// When `OFFSET_SECS` was computed. `i64::MIN` forces a first read.
-    static COMPUTED_AT: AtomicI64 = AtomicI64::new(i64::MIN);
-
-    let now = unix_secs();
-    if now.saturating_sub(COMPUTED_AT.load(Ordering::Relaxed)) < 60 {
-        return OFFSET_SECS.load(Ordering::Relaxed);
-    }
-    let offset =
-        query_local_utc_offset_secs().unwrap_or_else(|| OFFSET_SECS.load(Ordering::Relaxed));
-    OFFSET_SECS.store(offset, Ordering::Relaxed);
-    COMPUTED_AT.store(now, Ordering::Relaxed);
-    offset
-}
-
-/// Ask SQLite for the current UTC offset. `None` if the query fails, so the
-/// caller can fall back rather than pretend the station is in UTC.
-fn query_local_utc_offset_secs() -> Option<i64> {
-    let conn = rusqlite::Connection::open_in_memory().ok()?;
-    conn.query_row(
-        "SELECT CAST(ROUND((julianday('now','localtime') - julianday('now')) * 86400.0) AS INTEGER)",
-        [],
-        |row| row.get::<_, i64>(0),
-    )
-    .ok()
+    birdnet_db::clock::local_utc_offset_secs()
 }
 
 /// Current hour-of-day in **local** time as a fraction (09:43 → `9.72`).

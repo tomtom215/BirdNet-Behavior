@@ -8,7 +8,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use birdnet_core::audio::capture::{CaptureManager, CaptureStatusHandle};
+use birdnet_core::audio::capture::{CaptureManager, CaptureStatusHandle, LocalOffset};
 use birdnet_scheduler::{DailySchedule, ScheduleConfig};
 use birdnet_web::metrics::SharedMetrics;
 
@@ -36,6 +36,7 @@ pub(super) fn run_supervisor(
     schedule_config: &ScheduleConfig,
     metrics: &SharedMetrics,
     status: &CaptureStatusHandle,
+    local_offset: &LocalOffset,
     stop: &AtomicBool,
 ) {
     tracing::info!("capture supervisor started");
@@ -43,6 +44,14 @@ pub(super) fn run_supervisor(
     // the very first tick.
     let mut clock_synced = true;
     while !stop.load(Ordering::Relaxed) {
+        // Republish the station's UTC offset for the segment writer, which
+        // stamps it into every filename. Doing it here — rather than once at
+        // startup — is what makes a station keep naming files correctly across
+        // a daylight-saving change it never restarts for. The lookup is cached
+        // for a minute inside `birdnet_db::clock`, so this costs a relaxed
+        // atomic load on all but one tick a minute.
+        local_offset.set(birdnet_db::clock::local_utc_offset_secs());
+
         let secs = now_unix_secs();
         let synced = schedule::secs_look_synced(secs);
         if synced != clock_synced {

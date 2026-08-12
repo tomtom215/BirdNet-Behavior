@@ -68,6 +68,12 @@ pub(super) fn check_optional_tools(cli: &Cli, config: Option<&Config>) -> Vec<Ch
     // microphone on macOS (which captures through ffmpeg's avfoundation input
     // rather than ALSA's arecord). A configured source with no ffmpeg means no
     // detections, so this is a hard error rather than a warning.
+    //
+    // A Linux microphone never needs ffmpeg for *capture*, whatever its gain:
+    // the gain used to route capture through `ffmpeg -f alsa`, which this
+    // predicate did not account for (so a gain-configured station with no
+    // ffmpeg was reported healthy and then failed to spawn). The gain is now
+    // applied in-process, so the predicate and the runtime agree again.
     let rtsp = cli.rtsp_url.is_some()
         || !cli.rtsp_urls.is_empty()
         || config.is_some_and(|c| c.get("RTSP_URL").is_some_and(|v| !v.is_empty()));

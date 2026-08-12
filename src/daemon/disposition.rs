@@ -283,6 +283,42 @@ mod tests {
         assert_eq!(derive_source_label(p), "src_seed_1");
     }
 
+    /// The identity round-trip the source picker depends on, closed against the
+    /// **real** formatter rather than a hand-typed string.
+    ///
+    /// Capture registers a source — its health gauge, its live-audio tap, and
+    /// the `-birdnet-<id>-` field of every filename it writes — under
+    /// `CaptureSource::label()`. The detection side recovers a label from the
+    /// filename with `derive_source_label`. If those two ever disagree, the
+    /// per-source picker filters every frame away and the station silently
+    /// stops attributing detections, which is precisely the failure the live
+    /// spectrogram hit in 0.12.0.
+    #[test]
+    fn source_label_round_trips_through_a_real_capture_filename() {
+        use birdnet_core::audio::capture::{AudioFormat, CaptureSource, recording_filename_at};
+        use birdnet_core::civil::civil_from_unix_secs;
+
+        // 2026-08-12 11:30:16 local.
+        let at = civil_from_unix_secs(1_786_534_216);
+
+        for stream_id in [Some("src_seed_1"), Some("RTSP_1"), None] {
+            let source = CaptureSource::Microphone {
+                device: "plughw:CARD=PRO,DEV=0".into(),
+                sample_rate: 48_000,
+                channels: 1,
+                stream_id: stream_id.map(ToOwned::to_owned),
+            };
+            let name = recording_filename_at(stream_id, AudioFormat::Wav, at);
+            let path = std::path::PathBuf::from("/tmp/birdnet-stream").join(&name);
+            assert_eq!(
+                derive_source_label(&path),
+                source.label(),
+                "capture writes {name} for a source it labels {}",
+                source.label()
+            );
+        }
+    }
+
     #[test]
     fn source_label_falls_back_to_local_on_unparseable_filename() {
         // Filename that doesn't match the canonical schema.

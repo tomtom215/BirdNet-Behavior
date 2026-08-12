@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Live audio now comes from capture itself instead of a second microphone
+  open, so it works on a single-microphone station at all.** An ALSA `plughw:`
+  device is exclusive: on the Raspberry Pi 4 under test,
+  `ffmpeg -f alsa -i plughw:CARD=PRO,DEV=0` returns `Device or resource busy`
+  for as long as `arecord` is recording — which, on a station doing its job, is
+  always. `GET /stream` did exactly that second open, so Listen → Live could
+  never play on the commonest build there is.
+
+  `arecord` no longer segments for us. It streams raw PCM into the process and a
+  reader thread drives two consumers: the rotating WAV writer that used to be
+  `arecord --max-file-time --use-strftime`, and a bounded live tap that
+  `/stream` subscribes to. The tap is **lossy on overflow** and never blocks, so
+  a stalled listener cannot backpressure recording — losing live-monitoring
+  audio is a click in someone's headphones; losing recorded audio is a detection
+  that never happens. Filenames are byte-identical to the ones `arecord`
+  produced, including their **local** civil time, which the supervisor now
+  refreshes every tick so a station keeps naming files correctly across a
+  daylight-saving change it never restarts for.
+
+  `/stream` for a source that is not recording — paused by the schedule or by a
+  quiet window, or down — now answers `503` with that explanation, instead of
+  holding a connection open producing nothing.
+
+  RTSP and PipeWire sources are unchanged: a second RTSP session is normal and
+  PulseAudio permits concurrent opens, so neither has the problem this solves.
+  macOS microphone capture is also unchanged (ffmpeg/avfoundation), because
+  there is no macOS runner in CI and no macOS hardware behind this change.
+
+- **Per-source capture gain no longer needs ffmpeg, and no longer lies about
+  it.** `arecord` has no gain control, so a gain-configured microphone used to
+  be captured by `ffmpeg -f alsa` and its `volume` filter — but
+  `required_tool()` still reported `arecord` for that source, so a station with
+  gain set and no ffmpeg installed passed the availability check and then failed
+  to spawn. The gain is now applied to the samples in-process (clipping, as the
+  ffmpeg filter did) and that second capture backend is gone.
+
 ### Fixed
 
 - **The dashboard's day strip drew "now" and sunrise/sunset on a UTC axis while

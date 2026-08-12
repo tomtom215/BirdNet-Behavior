@@ -99,18 +99,14 @@ pub(super) trait Source {
 /// per-detection there: RTSP streams keep their `stream_id`
 /// (`rtsp` / `RTSP_1` / …), and every local microphone collapses to
 /// `local`.
+///
+/// Delegates to [`CaptureSource::label`], which is now the single definition of
+/// that identity — `birdnet-core` needs the very same string to key each
+/// source's live-audio tap, and a second copy here would let the gauge, the
+/// filenames and the tap key drift apart.
 #[must_use]
 pub(super) fn source_gauge_label(source: &CaptureSource) -> String {
-    match source {
-        CaptureSource::Rtsp { stream_id, .. } => stream_id.clone(),
-        // A lone local mic has no id and collapses to `local`; when several
-        // local mics are configured each carries its own id (`MIC_1`, …) so the
-        // per-source health gauge can tell them apart — matching the label
-        // `derive_source_label` recovers from the recording filename.
-        CaptureSource::Microphone { stream_id, .. } | CaptureSource::PipeWire { stream_id, .. } => {
-            stream_id.clone().unwrap_or_else(|| "local".to_owned())
-        }
-    }
+    source.label()
 }
 
 /// Backoff delay before the next restart attempt, given the number of
