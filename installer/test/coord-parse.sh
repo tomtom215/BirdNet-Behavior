@@ -36,8 +36,12 @@ fail() { printf '  FAIL  %s\n' "$*"; FAILED=1; }
 # Load the real parser out of the real source module, so this test cannot pass
 # against a copy that has drifted from what ships.
 LIB="${REPO_ROOT}/installer/lib/70-station.sh"
-# shellcheck disable=SC1090  # sourcing an extracted function body by design
+# Both extractions need the directive: `disable` applies to the next line only,
+# and the process substitutions are non-constant sources by design — the point
+# is to exercise the functions as they ship, not a copy of them.
+# shellcheck disable=SC1090
 source <(sed -n '/^parse_coords()/,/^}/p' "${LIB}")
+# shellcheck disable=SC1090
 source <(sed -n '/^valid_coord()/,/^}/p' "${LIB}")
 
 # check <input> <expected> <description>
