@@ -37,6 +37,14 @@
 #      `crates/birdnet-core/src/testdata/tiny_v24_test.onnx`. Originally a
 #      single src/daemon.rs; split into src/daemon/{mod,config,disposition,
 #      webhook,processor}.rs for readability, so the gate globs the dir.
+#   6. crates/birdnet-core/src/civil.rs — not an outward ratchet so much as
+#      following the code: the Hinnant civil-date arithmetic used to live in
+#      src/capture/schedule.rs (already in this matrix) and moved down here
+#      when the capture tee began formatting the same calendar into segment
+#      filenames. Without this row that move would have silently dropped it
+#      out of mutation coverage, and the stakes went *up* with the move —
+#      a wrong day here is a wrong `Date` on every detection, because the
+#      recording filename is the timestamp.
 #
 # Each file is its own matrix job so a survivor in one doesn't tank the
 # whole pipeline. Per-file threshold: 0 missed on every file — we follow
@@ -58,6 +66,7 @@ on:
       - "crates/birdnet-core/src/config/**"
       - "crates/birdnet-core/src/inference/**"
       - "crates/birdnet-core/src/audio/extraction/**"
+      - "crates/birdnet-core/src/civil.rs"
       - "crates/birdnet-core/tests/**"
       - "crates/birdnet-db/src/sqlite/queries/detections.rs"
       - "src/daemon/**"
@@ -69,6 +78,7 @@ on:
       - "crates/birdnet-core/src/config/**"
       - "crates/birdnet-core/src/inference/**"
       - "crates/birdnet-core/src/audio/extraction/**"
+      - "crates/birdnet-core/src/civil.rs"
       - "crates/birdnet-core/tests/**"
       - "crates/birdnet-db/src/sqlite/queries/detections.rs"
       - "src/daemon/**"
@@ -152,6 +162,17 @@ jobs:
             # the real ffmpeg (gated on its presence; the CI image installs
             # it). 0 missed at introduction: 26 mutants, 23 caught, 3
             # unviable.
+            max_missed: 0
+          - label: civil.rs
+            slug: civil.rs
+            file: crates/birdnet-core/src/civil.rs
+            # Added when the capture tee started formatting segment filenames:
+            # the Hinnant civil-date arithmetic moved down here out of
+            # src/capture/schedule.rs (which now delegates), and without this
+            # row that move would have quietly dropped it out of the mutation
+            # matrix. It is also load-bearing in a new way — a wrong day here
+            # is a wrong `Date` on every detection, because the filename *is*
+            # the timestamp. 0 missed: 82 caught, 1 unviable.
             max_missed: 0
           - label: sqlite/queries/detections.rs
             slug: sqlite-queries-detections.rs

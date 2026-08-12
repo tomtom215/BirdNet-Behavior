@@ -494,20 +494,27 @@ async fn wait_for_first_audio(mut subscription: LiveSubscription) -> Option<Live
     })
 }
 
-/// Pump a live tap into ffmpeg's stdin.
+/// Pump a live tap into `sink` — ffmpeg's stdin in production.
 ///
-/// Two tasks, because the tap read blocks and ffmpeg's stdin is async:
+/// Two tasks, because the tap read blocks and the sink is async:
 ///
 /// * a blocking task that reads the ring and hands chunks over a shallow
 ///   channel;
-/// * an async task that writes them to the child.
+/// * an async task that writes them to the sink.
 ///
 /// Everything unwinds from the far end: the client disconnects, the response
 /// body's task drops the ffmpeg child (`kill_on_drop`), the stdin write fails,
 /// the channel closes, and the blocking reader's send fails and it returns.
 /// Nothing here can slow capture down — falling behind costs this listener
 /// bytes at the tap and costs the recorder nothing.
-fn spawn_tap_pump(live: LiveFeed, mut stdin: tokio::process::ChildStdin) {
+///
+/// Generic over the sink so the pump can be tested against an in-memory pipe;
+/// it is the one piece of this endpoint that would otherwise only ever run with
+/// a real ffmpeg on the far end.
+fn spawn_tap_pump<W>(live: LiveFeed, mut sink: W)
+where
+    W: tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
     let LiveFeed {
         mut subscription,
         first_chunk,
@@ -541,11 +548,13 @@ fn spawn_tap_pump(live: LiveFeed, mut stdin: tokio::process::ChildStdin) {
     });
 
     tokio::spawn(async move {
-        if stdin.write_all(&first_chunk).await.is_err() {
+        // The chunk the liveness probe already consumed goes first — dropping
+        // it would clip the start of every stream.
+        if sink.write_all(&first_chunk).await.is_err() {
             return;
         }
         while let Some(chunk) = rx.recv().await {
-            if stdin.write_all(&chunk).await.is_err() {
+            if sink.write_all(&chunk).await.is_err() {
                 break;
             }
         }
@@ -852,6 +861,100 @@ mod tests {
             .expect("audio was available");
         assert_eq!(feed.first_chunk, b"first-audio");
         assert_eq!(feed.subscription.spec().sample_rate, 48_000);
+    }
+
+    /// The pump must deliver the probe's chunk *and* everything after it.
+    ///
+    /// Dropping the first chunk would clip the start of every stream, and it is
+    /// the easy mistake here: the liveness probe has already consumed it from
+    /// the ring, so it exists only in the `LiveFeed` the pump is handed.
+    #[tokio::test]
+    async fn the_pump_delivers_the_probed_chunk_and_then_the_stream() {
+        use birdnet_core::audio::capture::{LiveTap, PcmSpec};
+        use tokio::io::AsyncReadExt;
+
+        let tap = Arc::new(LiveTap::new(PcmSpec {
+            sample_rate: 48_000,
+            channels: 1,
+        }));
+        let sub = tap.subscribe();
+        tap.push(b"FIRST");
+        let feed = wait_for_first_audio(sub).await.expect("audio available");
+
+        // Stand in for ffmpeg's stdin.
+        let (sink, mut ffmpeg_side) = tokio::io::duplex(4096);
+        spawn_tap_pump(feed, sink);
+
+        // Keep producing so the pump has more to forward after the probe.
+        let writer = Arc::clone(&tap);
+        let feeding = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let stop = Arc::clone(&feeding);
+        let producer = std::thread::spawn(move || {
+            while stop.load(std::sync::atomic::Ordering::Relaxed) {
+                writer.push(b"MORE");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        });
+
+        let mut seen = Vec::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while seen.len() < 9 && tokio::time::Instant::now() < deadline {
+            let mut buf = [0u8; 256];
+            match tokio::time::timeout(Duration::from_millis(200), ffmpeg_side.read(&mut buf)).await
+            {
+                Ok(Ok(0)) | Err(_) => {}
+                Ok(Ok(n)) => seen.extend_from_slice(&buf[..n]),
+                Ok(Err(e)) => panic!("read from the pump failed: {e}"),
+            }
+        }
+        feeding.store(false, std::sync::atomic::Ordering::Relaxed);
+        producer.join().expect("producer thread");
+
+        assert!(
+            seen.starts_with(b"FIRST"),
+            "the chunk the liveness probe consumed must be forwarded first, \
+             got {:?}",
+            String::from_utf8_lossy(&seen)
+        );
+        assert!(
+            seen.len() > 5,
+            "the pump must keep forwarding after the first chunk, got {:?}",
+            String::from_utf8_lossy(&seen)
+        );
+    }
+
+    /// When the sink goes away — ffmpeg killed because the client disconnected
+    /// — the pump must unwind rather than spin forever holding a blocking-pool
+    /// thread and a stream permit.
+    #[tokio::test]
+    async fn the_pump_stops_when_its_sink_closes() {
+        use birdnet_core::audio::capture::{LiveTap, PcmSpec};
+
+        let tap = Arc::new(LiveTap::new(PcmSpec {
+            sample_rate: 48_000,
+            channels: 1,
+        }));
+        let sub = tap.subscribe();
+        tap.push(b"x");
+        let feed = wait_for_first_audio(sub).await.expect("audio available");
+
+        let (sink, ffmpeg_side) = tokio::io::duplex(64);
+        spawn_tap_pump(feed, sink);
+        drop(ffmpeg_side); // the listener is gone
+
+        // Keep the tap producing; the pump must still wind down. If it did not,
+        // the subscription would be held forever — observable here as the tap
+        // never dropping back to a single strong reference.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while Arc::strong_count(&tap) > 1 && tokio::time::Instant::now() < deadline {
+            tap.push(&[0u8; 1024]);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            Arc::strong_count(&tap),
+            1,
+            "the pump must release its subscription once the sink is gone"
+        );
     }
 
     /// A silent tap — capture paused by the schedule, or the source down —

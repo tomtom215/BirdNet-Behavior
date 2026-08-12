@@ -179,6 +179,35 @@ mod tests {
         );
     }
 
+    /// The last day of a 400-year era — the one date the `- doe / 146_096`
+    /// correction term exists for.
+    ///
+    /// Hinnant's algorithm counts days from 0000-03-01, so an era runs
+    /// 1600-03-01 → 2000-02-29 and the next 2000-03-01 → 2400-02-29. Only on
+    /// that final day is `doe / 146_096` non-zero, so *every* other timestamp
+    /// gives the same answer whether the term is subtracted or added. Without
+    /// this case, 2000-02-29 silently reads as 2000-03-01 — a whole day of
+    /// recordings filed under the wrong date, once every four centuries, and
+    /// nothing else in the suite would notice.
+    #[test]
+    fn the_last_day_of_an_era_is_not_the_first_day_of_the_next() {
+        // 2000-02-29 00:00:00 UTC and midday.
+        for (ts, hour) in [(951_782_400_i64, 0), (951_825_600, 12)] {
+            let t = at(ts);
+            assert_eq!(
+                (t.year, t.month, t.day, t.hour),
+                (2000, 2, 29, hour),
+                "the era's last day must not roll into the next era"
+            );
+        }
+        // The day either side, to pin that this is a boundary and not an
+        // off-by-one that shifted the whole calendar.
+        let before = at(951_782_400 - 86_400);
+        assert_eq!((before.year, before.month, before.day), (2000, 2, 28));
+        let after = at(951_782_400 + 86_400);
+        assert_eq!((after.year, after.month, after.day), (2000, 3, 1));
+    }
+
     #[test]
     fn time_of_day_components_are_independent() {
         // 23:59:59 is the boundary a `/ 60` vs `% 60` mix-up destroys.
