@@ -1501,6 +1501,64 @@ valid_coord() {
         'BEGIN { if (v ~ /^[-+]?([0-9]+\.?[0-9]*|\.[0-9]+)$/ && v+0 >= lo && v+0 <= hi) exit 0; exit 1 }'
 }
 
+# Read whatever the operator typed at the coordinate prompt and print either
+# "lat lon" or a bare "lat", or nothing at all if it is not coordinates.
+#
+# The prompt used to accept exactly one shape — a lone dotted decimal — which
+# was at odds with the tip printed directly above it: right-clicking on
+# OpenStreetMap hands you a *pair*, "49.4521, 8.6724", and pasting that was
+# rejected. It was also at odds with the rest of the product, since the web
+# settings form accepts a decimal comma. Both now parse:
+#
+#   49.4521             a lone latitude; the longitude is asked for next
+#   49.4521, 8.6724     the pair OpenStreetMap gives you
+#   49,4521             decimal comma
+#   49,4521 8,6724      decimal commas, space separated
+#   49,4521,8,6724      decimal commas, comma separated
+#
+# The one real ambiguity is a single comma: is "49,45" the decimal 49.45 or the
+# pair (49, 45)? It resolves on range wherever it can — in "49,4521" the tail
+# 4521 is not a valid longitude, so the comma has to be a decimal point. Where
+# both readings are valid the pair wins, matching the OpenStreetMap flow the
+# tip sends people to; the caller echoes the result back so a wrong guess is
+# visible and correctable rather than silently written to the config.
+parse_coords() {
+    awk -v s="$1" '
+        function strip(x) { sub(/,$/, "", x); return x }
+        function norm(x)  { gsub(/,/, ".", x); return x }
+        function ok(x, lo, hi) {
+            return x ~ /^[-+]?([0-9]+\.?[0-9]*|\.[0-9]+)$/ && x + 0 >= lo && x + 0 <= hi
+        }
+        BEGIN {
+            gsub(/^[ \t]+|[ \t]+$/, "", s)
+            n = split(s, tok, /[ \t]+/)
+
+            if (n == 2) {
+                a = norm(strip(tok[1])); b = norm(tok[2])
+                if (ok(a, -90, 90) && ok(b, -180, 180)) print a " " b
+                exit
+            }
+            if (n != 1) exit
+
+            t = tok[1]
+            if (index(t, ",") == 0) {            # a plain dotted decimal
+                if (ok(t, -90, 90)) print t
+                exit
+            }
+            m = split(t, p, ",")
+            if (m == 2) {
+                if (ok(p[1], -90, 90) && ok(p[2], -180, 180)) { print p[1] " " p[2]; exit }
+                c = p[1] "." p[2]                # so the comma was a decimal point
+                if (ok(c, -90, 90)) print c
+                exit
+            }
+            if (m == 4) {                        # "49,4521,8,6724"
+                a = p[1] "." p[2]; b = p[3] "." p[4]
+                if (ok(a, -90, 90) && ok(b, -180, 180)) print a " " b
+            }
+        }'
+}
+
 # Generate a strong, shell/URL-friendly random password.
 gen_password() {
     if command -v openssl &>/dev/null; then
@@ -1590,20 +1648,50 @@ prompt_station_settings() {
     fi
 
     # ---- Station location ----
+    #
+    # This loops, like the audio-source prompt above it. It used to warn once
+    # and fall through, which meant unreadable input was discarded into a
+    # single [WARN] line that scrolled away behind the 541 MB model download —
+    # the operator answered the question, the station recorded no location, and
+    # nothing said so again until the species filter silently stayed off.
     printf '\n  Station location (solar schedule, species filter, BirdWeather)\n' >/dev/tty
     printf '  Tip: right-click your spot on https://openstreetmap.org and read off the coordinates.\n' >/dev/tty
-    local lat lon
-    lat="$(ask "  Latitude  (e.g. 42.3601, Enter to skip)" "")"
-    if [ -n "${lat}" ]; then
-        lon="$(ask "  Longitude (e.g. -71.0589)" "")"
-        if valid_coord "${lat}" -90 90 && valid_coord "${lon}" -180 180; then
-            LATITUDE_VALUE="${lat}"
-            LONGITUDE_VALUE="${lon}"
-            success "Location: ${lat}, ${lon}"
-        else
-            warn "Coordinates '${lat}, ${lon}' look invalid — skipping; set LATITUDE/LONGITUDE in ${CONFIG_FILE} later."
+    printf '  Paste both at once (49.4521, 8.6724) or enter them one at a time.\n' >/dev/tty
+    printf '  A decimal comma (49,4521) is fine.\n' >/dev/tty
+    local coord_in lon_in coords
+    while :; do
+        coord_in="$(ask "  Latitude — or both coordinates (Enter to skip)" "")"
+        if [ -z "${coord_in}" ]; then
+            warn "No location set — species filtering stays off until you set one."
+            warn "  Add LATITUDE/LONGITUDE to ${CONFIG_FILE}, or use the dashboard's setup wizard."
+            break
         fi
-    fi
+        coords="$(parse_coords "${coord_in}")"
+        if [ -z "${coords}" ]; then
+            warn "  Could not read '${coord_in}' as coordinates — try again, or press Enter to skip."
+            continue
+        fi
+        # A lone latitude: collect its other half, then re-parse the two
+        # together so the pair goes through exactly one validation path.
+        case "${coords}" in
+            *' '*) : ;;
+            *)
+                lon_in="$(ask "  Longitude (e.g. 8.6724)" "")"
+                coords="$(parse_coords "${coords} ${lon_in}")"
+                ;;
+        esac
+        case "${coords}" in
+            *' '*)
+                LATITUDE_VALUE="${coords%% *}"
+                LONGITUDE_VALUE="${coords##* }"
+                success "Location: ${LATITUDE_VALUE}, ${LONGITUDE_VALUE}"
+                break
+                ;;
+            *)
+                warn "  A latitude on its own does not locate the station — try again, or press Enter to skip."
+                ;;
+        esac
+    done
 
     # ---- Web dashboard ----
     printf '\n  Web dashboard\n' >/dev/tty

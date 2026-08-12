@@ -227,6 +227,9 @@ fn filter_test_body(
             index: 0,
             scientific_name: sci_name.clone(),
             common_name: com_name.clone(),
+            // Rebuilt from stored detection rows, which carry no taxonomy;
+            // `matches_species` only ever reads the two names.
+            class: None,
         };
         let in_exclude = exclude.iter().any(|e| matches_species(e, &label));
         let in_include = include.iter().any(|i| matches_species(i, &label));

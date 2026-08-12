@@ -190,10 +190,25 @@ fn all_pages() -> Vec<Entry> {
         ),
         make(
             "⌗",
-            "Station",
+            "Settings",
             "manage my station",
             "/station",
-            &["system", "admin", "pi", "cpu", "disk", "tools"],
+            // "station" stays a keyword deliberately: the section was called
+            // that until now, the URL still is, and the docs and prior release
+            // notes refer to it. Renaming the label should not make the page
+            // unfindable by the name half the material still uses.
+            &[
+                "station",
+                "settings",
+                "configure",
+                "config",
+                "system",
+                "admin",
+                "pi",
+                "cpu",
+                "disk",
+                "tools",
+            ],
         ),
         // The long tail: views inside the homes + utility pages, reachable
         // here and through contextual links (no top-level tab).
@@ -593,7 +608,7 @@ mod tests {
             "Patterns",
             "Recordings",
             "Reports",
-            "Station",
+            "Settings",
         ] {
             assert!(labels.contains(&must), "missing {must} in cmdk pages index");
         }

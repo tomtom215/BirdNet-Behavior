@@ -196,7 +196,7 @@ fn firstrun_checklist(
             (
                 "wait",
                 "Waiting for a microphone".to_string(),
-                r#"add one under <a href="/admin/audio">Station → Capture</a>"#.to_string(),
+                r#"add one under <a href="/admin/audio">Settings → Capture</a>"#.to_string(),
                 "—".to_string(),
             )
         },
@@ -227,7 +227,7 @@ fn firstrun_checklist(
                     "Microphone not recording".to_string(),
                     format!(
                         "{source} — configured, but no audio is being captured. \
-                         Check it under <a href=\"/station/capture\">Station → Capture</a>"
+                         Check it under <a href=\"/station/capture\">Settings → Capture</a>"
                     ),
                     "down".to_string(),
                 ),
@@ -313,9 +313,15 @@ fn first_run_needs_onboarding(state: &AppState) -> bool {
 // Shared context helpers (solar, weather, freshness)
 // ---------------------------------------------------------------------------
 
-/// Today's sunrise/sunset as fractional hours (UTC, matching the day strip's
-/// "now" axis), from the configured station location. `None` when no location
-/// is set or the sun never rises/sets at this latitude today.
+/// Today's sunrise/sunset as fractional hours in **local** time, from the
+/// configured station location. `None` when no location is set or the sun never
+/// rises/sets at this latitude today.
+///
+/// Local, because every other value on this axis is: the day strip's bars come
+/// from `hourly_activity`, which buckets the local `Time` column, and the "now"
+/// marker is [`now_hour_local`]. Returning the solver's raw UTC minutes here
+/// drew sunrise two hours early on a CEST station and mislabelled the pills
+/// with it.
 fn solar_times_today(conn: &rusqlite::Connection) -> Option<(f64, f64)> {
     let lat: f64 = birdnet_db::settings::get_or(conn, "latitude", "")
         .ok()?
@@ -333,20 +339,20 @@ fn solar_times_today(conn: &rusqlite::Connection) -> Option<(f64, f64)> {
     let month: u32 = date.get(5..7)?.parse().ok()?;
     let day: u32 = date.get(8..10)?.parse().ok()?;
     let solar = birdnet_scheduler::SolarDay::for_date(location, year, month, day).ok()?;
-    let sunrise = f64::from(solar.sunrise_utc_min?) / 60.0;
-    let sunset = f64::from(solar.sunset_utc_min?) / 60.0;
+    #[allow(clippy::cast_precision_loss)]
+    let offset_h = super::local_utc_offset_secs() as f64 / 3600.0;
+    let sunrise = wrap_hour(f64::from(solar.sunrise_utc_min?) / 60.0 + offset_h);
+    let sunset = wrap_hour(f64::from(solar.sunset_utc_min?) / 60.0 + offset_h);
     Some((sunrise, sunset))
 }
 
-/// Current hour-of-day (UTC) as a fraction — the same axis the day strip and
-/// solar times use.
-fn now_hour_utc() -> f64 {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |x| x.as_secs());
-    #[allow(clippy::cast_precision_loss)]
-    let h = (secs % 86_400) as f64 / 3600.0;
-    h
+/// Fold an hour-of-day into `[0, 24)` after a UTC→local shift.
+///
+/// A station far enough east or west pushes sunrise past midnight; without this
+/// the value leaves the axis the strip draws and the marker vanishes off one
+/// end rather than wrapping to the other.
+fn wrap_hour(h: f64) -> f64 {
+    h.rem_euclid(24.0)
 }
 
 /// Capture-outage check: the station has detected before, the silence exceeds
@@ -358,7 +364,7 @@ pub(super) fn capture_outage(conn: &rusqlite::Connection) -> Option<(u64, String
         .flatten()?;
     let threshold = match solar_times_today(conn) {
         Some((sunrise, sunset)) => {
-            let now = now_hour_utc();
+            let now = super::now_hour_local();
             if now < sunrise || now > sunset {
                 return None; // overnight silence is normal
             }
@@ -603,7 +609,7 @@ async fn today_nudge_partial(State(state): State<AppState>) -> impl IntoResponse
             if let Some((silent, last)) = capture_outage(conn) {
                 let dur = fmt_duration(silent);
                 return format!(
-                    r#"<div class="x-nudge" data-screen-label="Outage banner"><span class="ico">⚠</span><div class="txt"><b>No detections for {dur}.</b> The last one was at <span class="mono">{last}</span> — the microphone may be unplugged or the recorder stopped.</div><a class="bnb-btn primary" href="/station">Open Station →</a></div>"#
+                    r#"<div class="x-nudge" data-screen-label="Outage banner"><span class="ico">⚠</span><div class="txt"><b>No detections for {dur}.</b> The last one was at <span class="mono">{last}</span> — the microphone may be unplugged or the recorder stopped.</div><a class="bnb-btn primary" href="/station">Open Settings →</a></div>"#
                 );
             }
             String::new()
@@ -911,7 +917,7 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
         r#"<div class="x-daystats" id="td-daystats" hx-swap-oob="true"><div><div class="v">{peak_hour:02}:00</div><div class="l">peak hour</div></div><div><div class="v x-dawn-v">{dawn}</div><div class="l">in dawn chorus</div></div><div><div class="v">{total_fmt}</div><div class="l">total today</div></div></div>"#,
         total_fmt = super::group_thousands(total),
     );
-    let strip = super::viz::day_strip(&hourly, &temps, solar, now_hour_utc());
+    let strip = super::viz::day_strip(&hourly, &temps, solar, super::now_hour_local());
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/html")],

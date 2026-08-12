@@ -43,8 +43,11 @@ pub const TABS: &[SubTab] = &[
         question: "keep it safe",
     },
     SubTab {
+        // "General", not "Settings": the section itself is now called Settings,
+        // and a Settings → Settings breadcrumb tells the reader nothing. The
+        // route key stays `settings` so `/station/settings` keeps working.
         key: "settings",
-        label: "Settings",
+        label: "General",
         question: "my preferences",
     },
     SubTab {
@@ -96,7 +99,7 @@ async fn station_page(State(state): State<AppState>, headers: HeaderMap) -> Html
         station_subtabs("health"),
         crate::routes::pages::station_health::content(&state).await
     );
-    crate::routes::pages::render_page_for_request("Station", &content, "station", &headers)
+    crate::routes::pages::render_page_for_request("Settings", &content, "station", &headers)
 }
 
 #[cfg(test)]

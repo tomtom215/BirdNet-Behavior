@@ -16,6 +16,18 @@ pub struct SpeciesLabel {
     pub scientific_name: String,
     /// Common name (e.g., "Eurasian Blackbird").
     pub common_name: String,
+    /// Taxonomic class from the V3 CSV's `class` column (e.g. `"Aves"`,
+    /// `"Insecta"`), or `None` for the V2.4 text format, which has no such
+    /// column.
+    ///
+    /// The Global 11K model is not a bird-only classifier — it carries insects
+    /// and amphibians too, and for some of them the `com_name` column simply
+    /// repeats the scientific name. An operator seeing *Tettigonia
+    /// viridissima* in a feed of blue tits and great tits has no way to tell
+    /// whether that is a bird they have never heard of, or a bush-cricket. The
+    /// CSV answers that in a column the parser used to drop on the floor;
+    /// keeping it lets a caller label or filter non-birds rather than guess.
+    pub class: Option<String>,
 }
 
 /// A collection of species labels.
@@ -126,6 +138,8 @@ impl LabelSet {
                 index: labels.len(),
                 scientific_name: sci.to_string(),
                 common_name: com.to_string(),
+                // The V2.4 text format carries no taxonomy.
+                class: None,
             });
         }
 
@@ -172,6 +186,9 @@ impl LabelSet {
             .position(|h| *h == "com_name")
             .ok_or_else(|| LabelError::Format("CSV missing 'com_name' column".into()))?;
 
+        // Optional — the V3.0 Zenodo export has it, other exports may not.
+        let class_col = headers.iter().position(|h| *h == "class");
+
         let mut labels = Vec::new();
 
         for line in lines {
@@ -192,10 +209,19 @@ impl LabelSet {
                 .filter(|s| !s.is_empty())
                 .ok_or_else(|| LabelError::Format(format!("missing com_name in row: {line}")))?;
 
+            // Optional: absent from some exports, and never worth failing a
+            // whole 11k-row label file over.
+            let class = class_col
+                .and_then(|c| fields.get(c))
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string);
+
             labels.push(SpeciesLabel {
                 index: labels.len(),
                 scientific_name: sci.to_string(),
                 common_name: com.to_string(),
+                class,
             });
         }
 
@@ -215,6 +241,7 @@ impl LabelSet {
                 index,
                 scientific_name,
                 common_name,
+                class: None,
             })
             .collect();
         Self { labels }
@@ -358,6 +385,36 @@ mod tests {
         let csv_with_bom = "\u{feff}sci_name;com_name\nPica pica;Eurasian Magpie\n";
         let labels = LabelSet::parse_csv(csv_with_bom).unwrap();
         assert_eq!(labels.get(0).unwrap().scientific_name, "Pica pica");
+    }
+
+    #[test]
+    fn csv_retains_the_taxonomic_class() {
+        // The exact header shipped in BirdNET+ V3.0-preview3 Global 11K, as
+        // read off a running station.
+        let csv = "idx;id;sci_name;com_name;class;order\n\
+                   0;3;Abeillia abeillei;Emerald-chinned Hummingbird;Aves;Apodiformes\n\
+                   1;9;Tettigonia viridissima;Tettigonia viridissima;Insecta;Orthoptera\n";
+        let labels = LabelSet::parse_csv(csv).unwrap();
+
+        assert_eq!(labels.get(0).unwrap().class.as_deref(), Some("Aves"));
+
+        // The case that prompted this: an 11K-model detection whose common name
+        // is just the scientific name back again. Nothing in the label itself
+        // says "not a bird" — only the class does.
+        let cricket = labels.get(1).unwrap();
+        assert_eq!(cricket.common_name, cricket.scientific_name);
+        assert_eq!(cricket.class.as_deref(), Some("Insecta"));
+    }
+
+    #[test]
+    fn class_is_absent_rather_than_fatal_when_the_column_is_missing() {
+        // Older/other exports carry no `class`, and the V2.4 text format has no
+        // columns at all. Both must still load.
+        let csv = LabelSet::parse_csv("sci_name;com_name\nPica pica;Eurasian Magpie\n").unwrap();
+        assert!(csv.get(0).unwrap().class.is_none());
+
+        let txt = LabelSet::parse("Turdus merula_Eurasian Blackbird\n").unwrap();
+        assert!(txt.get(0).unwrap().class.is_none());
     }
 
     #[test]
