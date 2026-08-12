@@ -14,7 +14,7 @@
 
 The web UI is organized into **six homes** — the tabs across the top (and the
 phone bottom bar): **Today**, **Species**, **Patterns**, **Recordings**,
-**Reports**, and **Station**.
+**Reports**, and **Settings**.
 
 - [Today](./guide/today.md)
 - [Species & the Life List](./guide/species.md)

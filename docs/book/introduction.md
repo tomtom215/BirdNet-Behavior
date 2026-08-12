@@ -44,7 +44,7 @@ phone bottom bar:
 | **Patterns** | when & where? |
 | **Recordings** | let me hear them |
 | **Reports** | the recap |
-| **Station** | manage my station |
+| **Settings** | manage my station |
 
 Every screen is designed to serve two people at once: the **hobbyist** who wants a delightful at-a-glance view, and the **researcher** who needs methodological rigor. Each page leads with a plain-English headline, then layers the dense numbers and charts beneath. The whole UI supports light and dark themes (with automatic OS-preference detection) and reflows cleanly from a wall-mounted kiosk down to a phone.
 
