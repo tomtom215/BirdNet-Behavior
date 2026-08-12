@@ -78,6 +78,25 @@ pub(super) fn check_optional_tools(cli: &Cli, config: Option<&Config>) -> Vec<Ch
                 || c.get("PIPEWIRE_DEVICE").is_some_and(|v| !v.is_empty())
         });
     let needs_ffmpeg_capture = rtsp || (cfg!(target_os = "macos") && mic);
+
+    // Live audio (`GET /stream`) shells out to ffmpeg for *every* source kind,
+    // including the plain ALSA path — but the installer only ensures ffmpeg for
+    // RTSP capture, and this check only ran under the same condition. The
+    // result on the commonest station of all (Linux + USB microphone): the
+    // Listen → Live tab returns 500 on every request, and `--doctor` reports
+    // the station entirely healthy. Capture and detection are genuinely fine
+    // there, so this is a warning about a broken feature rather than a failed
+    // station — the hard error below still covers the cases where capture
+    // itself cannot run without ffmpeg.
+    if !needs_ffmpeg_capture && mic && !tool_exists("ffmpeg") {
+        out.push(Check::warn(
+            "Live audio (ffmpeg)",
+            "live audio streaming needs ffmpeg, which is not installed — capture \
+             and detection are unaffected, but Listen → Live will not play",
+            "install ffmpeg (`sudo apt install ffmpeg`), then reload the dashboard",
+        ));
+    }
+
     if needs_ffmpeg_capture {
         if tool_exists("ffmpeg") {
             out.push(Check::pass(

@@ -242,6 +242,24 @@ async fn livestream(State(state): State<AppState>, Query(params): Query<StreamPa
 
     let mut child = match child {
         Ok(c) => c,
+        // `NotFound` here means ffmpeg is not on PATH, which is a missing
+        // dependency rather than a server fault — and on a microphone station
+        // it is the *expected* state, because the installer only ensures
+        // ffmpeg for RTSP capture while this endpoint needs it for every
+        // source kind. Saying so is the difference between an operator running
+        // one apt command and an operator filing a bug against an opaque 500.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            tracing::error!(
+                error = %e,
+                "live audio stream needs ffmpeg, which is not installed"
+            );
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "live audio needs ffmpeg, which is not installed on this station — \
+                 install it (e.g. `sudo apt install ffmpeg`) and reload this page",
+            )
+                .into_response();
+        }
         Err(e) => {
             tracing::error!(error = %e, "failed to spawn ffmpeg for livestream");
             return (

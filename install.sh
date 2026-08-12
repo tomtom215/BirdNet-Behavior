@@ -732,6 +732,19 @@ ensure_capture_backend() {
     fi
 
     ensure_capture_tool arecord alsa-utils "microphone capture" || true
+
+    # A microphone station needs ffmpeg too — not to capture, but to *listen*.
+    # `GET /stream`, behind the dashboard's Listen -> Live tab, shells out to
+    # ffmpeg for every source kind including plain ALSA. Ensuring it only for
+    # RTSP left the commonest station of all (Linux + USB mic) with a tab that
+    # returned 500 on every request, an ENOENT buried in the journal, and a
+    # `--doctor` that reported the station perfectly healthy because its own
+    # ffmpeg check was gated on the same RTSP-only condition.
+    #
+    # Kept non-fatal: unlike the capture tool above, a station without this
+    # still records and detects exactly as it should, so a failed package
+    # install must not abort the run — it costs live listening, nothing more.
+    ensure_capture_tool ffmpeg ffmpeg "live audio streaming (Listen -> Live)" || true
 }
 
 # Detect what — if anything — is already installed, into globals the rest of
