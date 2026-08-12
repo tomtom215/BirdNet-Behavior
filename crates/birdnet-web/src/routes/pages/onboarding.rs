@@ -74,16 +74,60 @@ pub fn router() -> Router<AppState> {
         .route("/onboarding/save", post(onboarding_save))
 }
 
+/// The settings the wizard must show as they already are, rather than as it
+/// wishes they were.
+///
+/// Every one of these was hardcoded in the markup. For the two text fields that
+/// made the page merely uninformative — a station configured at install time
+/// rendered blank boxes, so setup looked like it had lost the operator's
+/// answers. For the two hidden fields it was worse: because they are never
+/// empty, they slip past `onboarding_save`'s skip-if-blank guard and are
+/// written on every completion. An operator who had set `CONFIDENCE=0.6` and
+/// then clicked through the wizard had it silently reset to 0.75.
+#[derive(Default)]
+struct Prefill {
+    latitude: String,
+    longitude: String,
+    confidence: String,
+    notify_trigger: String,
+}
+
+impl Prefill {
+    /// Read the current values, falling back to the wizard's recommended
+    /// defaults only where the station genuinely has no setting yet.
+    fn load(conn: &rusqlite::Connection) -> Self {
+        let get = |key: &str, default: &str| {
+            settings::get_or(conn, key, default).unwrap_or_else(|_| default.to_owned())
+        };
+        Self {
+            latitude: get("latitude", ""),
+            longitude: get("longitude", ""),
+            confidence: get(
+                "confidence_threshold",
+                &format!("{:.2}", birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD),
+            ),
+            notify_trigger: get("notify_trigger", DEFAULT_NOTIFY_TRIGGER),
+        }
+    }
+}
+
+/// The wizard's recommended notification trigger, used only when the station
+/// has none set.
+const DEFAULT_NOTIFY_TRIGGER: &str = "new-species";
+
 async fn onboarding_page(State(state): State<AppState>) -> Html<String> {
     // `list` already excludes soft-deleted rows (`WHERE disabled_at IS NULL`).
-    let sources = state.with_db(AudioSourceStore::list).unwrap_or_else(|err| {
-        tracing::error!(error = %err, "onboarding: audio_sources list failed");
-        Vec::new()
-    });
+    let (sources, prefill) = state
+        .with_db(|conn| AudioSourceStore::list(conn).map(|s| (s, Prefill::load(conn))))
+        .unwrap_or_else(|err| {
+            tracing::error!(error = %err, "onboarding: audio_sources list failed");
+            (Vec::new(), Prefill::default())
+        });
 
     Html(render_page(
         &render_mic_body(&sources),
         &escape_html(&mic_summary(&sources)),
+        &prefill,
     ))
 }
 
@@ -99,14 +143,18 @@ async fn onboarding_page(State(state): State<AppState>) -> Html<String> {
 /// Each placeholder appears exactly once. If one is ever removed from the
 /// template this degrades to dropping that value rather than panicking in a
 /// request handler; the rendering tests pin the output either way.
-fn render_page(mic_body: &str, mic_summary: &str) -> String {
-    let Some((head, rest)) = ONBOARDING_HTML.split_once("{{mic_body}}") else {
-        return ONBOARDING_HTML.to_string();
-    };
-    let Some((middle, tail)) = rest.split_once("{{mic_summary}}") else {
-        return format!("{head}{mic_body}{rest}");
-    };
-    format!("{head}{mic_body}{middle}{mic_summary}{tail}")
+fn render_page(mic_body: &str, mic_summary: &str, prefill: &Prefill) -> String {
+    // Substituted in one pass each. `mic_body` is already-rendered markup and
+    // `mic_summary` is pre-escaped by the caller; the `prefill` values come
+    // from the database and land inside HTML attributes, so they are escaped
+    // here rather than trusted.
+    ONBOARDING_HTML
+        .replace("{{mic_body}}", mic_body)
+        .replace("{{mic_summary}}", mic_summary)
+        .replace("{{latitude}}", &escape_html(&prefill.latitude))
+        .replace("{{longitude}}", &escape_html(&prefill.longitude))
+        .replace("{{confidence}}", &escape_html(&prefill.confidence))
+        .replace("{{notify_trigger}}", &escape_html(&prefill.notify_trigger))
 }
 
 /// The microphone step, rendered from the station's actual capture sources.
@@ -166,7 +214,7 @@ fn render_mic_body(sources: &[AudioSource]) -> String {
     }
     out.push_str("</div>");
     out.push_str(
-        r#"<p class="bnb-meta ob-mt-16">Set up by the installer. Add, remove or fine-tune sources (USB, RTSP, gain) any time in <a href="/station/capture">Settings → Audio</a>.</p>"#,
+        r#"<p class="bnb-meta ob-mt-16">Set up by the installer. Add, remove or fine-tune sources (USB, RTSP, gain) any time in <a href="/station/capture">Settings → Capture</a>.</p>"#,
     );
     out
 }
@@ -448,8 +496,8 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
             <button class="bnb-btn" type="button" id="ob-detect">⌖ Auto-detect my location</button>
           </div>
           <div class="ob-latlon">
-            <div class="ob-field"><label for="ob-lat">Latitude</label><input id="ob-lat" name="latitude" type="text" placeholder="e.g. 42.3601" inputmode="decimal"></div>
-            <div class="ob-field"><label for="ob-lon">Longitude</label><input id="ob-lon" name="longitude" type="text" placeholder="e.g. -71.0589" inputmode="decimal"></div>
+            <div class="ob-field"><label for="ob-lat">Latitude</label><input id="ob-lat" name="latitude" type="text" placeholder="e.g. 42.3601" inputmode="decimal" value="{{latitude}}"></div>
+            <div class="ob-field"><label for="ob-lon">Longitude</label><input id="ob-lon" name="longitude" type="text" placeholder="e.g. -71.0589" inputmode="decimal" value="{{longitude}}"></div>
           </div>
           <input type="hidden" name="timezone" id="ob-tz">
           <div class="bnb-pill ob-mt-6" id="ob-loc-pill">Auto-detect, or type your coordinates — you can change this any time in Settings.</div>
@@ -484,11 +532,11 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
       <p class="ob-p ob-mb-18">Every guess comes with a confidence score. Anything below your threshold is thrown away — so this is the dial between "only the birds it's certain about" and "everything it thinks it heard".</p>
       <div class="ob-cards cols2">
         <div class="ob-card" data-radio="conf" data-value="0.9"><div class="ob-grow"><div class="t">Strict</div><div class="s">0.90 — only the IDs it is near-certain about. Very few false positives; quiet and distant birds go unlogged.</div></div></div>
-        <div class="ob-card sel" data-radio="conf" data-value="0.75"><div class="ob-grow"><div class="t">Balanced <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s">0.75 — realistic results without over-filtering. Start here.</div></div></div>
+        <div class="ob-card" data-radio="conf" data-value="0.75"><div class="ob-grow"><div class="t">Balanced <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s">0.75 — realistic results without over-filtering. Start here.</div></div></div>
         <div class="ob-card" data-radio="conf" data-value="0.6"><div class="ob-grow"><div class="t">Sensitive</div><div class="s">0.60 — catches quiet and distant birds, at the cost of more misidentifications.</div></div></div>
         <div class="ob-card" data-radio="conf" data-value="0.4"><div class="ob-grow"><div class="t">Everything</div><div class="s">0.40 — for tuning and curiosity. Expect a lot of noise.</div></div></div>
       </div>
-      <input type="hidden" name="confidence_threshold" id="ob-conf" value="0.75">
+      <input type="hidden" name="confidence_threshold" id="ob-conf" value="{{confidence}}">
       <p class="bnb-meta ob-mt-16">Not permanent — change it any time in <a href="/admin">Settings → Detection</a>, and set per-species thresholds under Species.</p>
     </section>
 
@@ -498,11 +546,11 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
       <h1 class="ob-h">When should we ping you?</h1>
       <p class="ob-p ob-mb-18">This sets <em>how often</em> alerts go out. Nothing is sent until you add somewhere to send it — you can do that whenever you like.</p>
       <div class="ob-cards">
-        <div class="ob-card sel" data-radio="notify" data-value="new-species"><div class="ob-grow"><div class="t">New species this week <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s">Only birds you have barely heard lately — the interesting ones.</div></div></div>
+        <div class="ob-card" data-radio="notify" data-value="new-species"><div class="ob-grow"><div class="t">New species this week <span class="bnb-pill moss ob-ml-6">recommended</span></div><div class="s">Only birds you have barely heard lately — the interesting ones.</div></div></div>
         <div class="ob-card" data-radio="notify" data-value="new-species-daily"><div class="ob-grow"><div class="t">First of each species, daily</div><div class="s">One alert per species per day. A good middle ground.</div></div></div>
         <div class="ob-card" data-radio="notify" data-value="each"><div class="ob-grow"><div class="t">Every detection</div><div class="s">One alert every single time. Chatty — hundreds a day at a busy feeder.</div></div></div>
       </div>
-      <input type="hidden" name="notification_mode" id="ob-notify" value="new-species">
+      <input type="hidden" name="notification_mode" id="ob-notify" value="{{notify_trigger}}">
       <p class="bnb-meta ob-mt-16">Add a channel — Telegram, email, MQTT, ntfy, webhooks and more — under <a href="/admin/settings">Settings → Notifications</a>. Until then this setting is simply waiting.</p>
     </section>
 
@@ -579,6 +627,27 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
   // input for that group. Keyed by data-radio so a new group only needs an
   // entry here — the confidence group was added this way.
   var mirrors = { notify: 'ob-notify', conf: 'ob-conf' };
+
+  // Select the card matching what the station already has. The `sel` class
+  // used to be baked into the "Balanced 0.75" and "New species this week"
+  // cards, which told an operator with a different setting that they had
+  // chosen the default — and, because the mirrored hidden input carried that
+  // same hardcoded value, completing setup then wrote it over theirs. The
+  // hidden inputs are now rendered server-side from the settings table and are
+  // the single source of truth; the cards follow them.
+  //
+  // A stored value with no matching card (a threshold hand-set to 0.55, say)
+  // deliberately leaves every card unselected rather than highlighting a wrong
+  // one. The hidden input still holds the real value, so finishing the wizard
+  // preserves it.
+  Object.keys(mirrors).forEach(function (group) {
+    var input = document.getElementById(mirrors[group]);
+    if (!input) { return; }
+    document.querySelectorAll('[data-radio="' + group + '"]').forEach(function (c) {
+      if (c.dataset.value === input.value) { c.classList.add('sel'); }
+    });
+  });
+
   document.querySelectorAll('[data-radio]').forEach(function (card) {
     card.addEventListener('click', function () {
       document.querySelectorAll('[data-radio="' + card.dataset.radio + '"]').forEach(function (c) {

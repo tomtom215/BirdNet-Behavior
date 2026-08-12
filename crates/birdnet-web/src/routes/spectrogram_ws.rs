@@ -26,6 +26,16 @@ pub struct WsSpectrogramEvent {
     pub event: &'static str,
     /// Source filename.
     pub filename: String,
+    /// Which capture source produced this frame (`"src_seed_1"`, `"cam1"`, or
+    /// `"local"` for a filename carrying no source segment).
+    ///
+    /// Without this the frame was unattributable: the Listen view offers a
+    /// source picker, but every client received every source's frames and had
+    /// no way to tell them apart, so choosing a microphone changed nothing on
+    /// a multi-source station and silently mixed two inputs into one
+    /// spectrogram. The producer derives it from the capture filename, which
+    /// is the only place the attribution exists at that point.
+    pub source: String,
     /// Number of mel bands (rows).
     pub n_mels: usize,
     /// Number of time frames (columns).
@@ -179,6 +189,7 @@ mod tests {
         let event = WsSpectrogramEvent {
             event: "spectrogram",
             filename: "test.wav".into(),
+            source: "src_seed_1".into(),
             n_mels: 128,
             n_frames: 64,
             data: vec![0.0; 128 * 64],
@@ -196,6 +207,7 @@ mod tests {
         let event = WsSpectrogramEvent {
             event: "spectrogram",
             filename: "bird_clip.wav".into(),
+            source: "src_seed_1".into(),
             n_mels: 4,
             n_frames: 2,
             data: vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
@@ -213,6 +225,7 @@ mod tests {
         let event = WsSpectrogramEvent {
             event: "spectrogram",
             filename: "recording.wav".into(),
+            source: "src_seed_1".into(),
             n_mels: 128,
             n_frames: 32,
             data: vec![0.5; 128 * 32],

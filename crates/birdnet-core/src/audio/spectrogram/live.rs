@@ -8,8 +8,9 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use crate::file_settle::{FILE_SETTLE, PendingFiles, file_size};
 use notify::{EventKind, RecursiveMode, Watcher};
 
 use super::{MelConfig, mel_spectrogram};
@@ -178,6 +179,8 @@ where
         "live spectrogram daemon started"
     );
 
+    let mut pending = PendingFiles::new();
+
     loop {
         // Check for stop signal.
         match stop_rx.try_recv() {
@@ -188,16 +191,36 @@ where
             Err(mpsc::TryRecvError::Empty) => {}
         }
 
-        // Check for new files (non-blocking with timeout).
+        // Take whatever the watcher has seen, then sweep for files that have
+        // finished being written. The 500 ms timeout doubles as the sweep tick,
+        // so a file still settles after its last watcher event.
         match rx.recv_timeout(Duration::from_millis(500)) {
             Ok(path) => {
-                if !path.is_file() || !is_audio_file(&path) {
-                    continue;
+                if is_audio_file(&path) {
+                    pending.note(path, Instant::now());
                 }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                tracing::warn!("live spectrogram watcher channel closed");
+                break;
+            }
+        }
 
-                // Small delay to ensure the file is fully written.
-                std::thread::sleep(Duration::from_millis(100));
-
+        // Decode only clips whose size has been stable for FILE_SETTLE.
+        //
+        // This used to decode on the creation event after `sleep(100ms)`,
+        // under a comment claiming that ensured the file was fully written.
+        // It does not: `arecord --max-file-time 15` creates the segment and
+        // then writes into it for fifteen seconds, so every decode landed
+        // about a second in and failed with "unexpected end of file". On a
+        // healthy station that meant the live spectrogram produced nothing at
+        // all, one warning per segment, forever.
+        for path in pending.drain_settled(Instant::now(), FILE_SETTLE, file_size) {
+            if !path.is_file() {
+                continue;
+            }
+            {
                 match process_file(&path, config) {
                     Ok(frame) => {
                         tracing::debug!(
@@ -217,8 +240,6 @@ where
                     }
                 }
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
 

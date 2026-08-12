@@ -14,7 +14,7 @@ page (and the phone bottom bar).
 | `/patterns` | **Patterns** | when-active heatmap · dawn chorus · migration · co-occurrence · trends · behavioral analytics, one tab each |
 | `/recordings` | **Recordings** | the Clips browser (`?view=clips`) and the live audio + spectrogram (`?view=live`) |
 | `/reports` | **Reports** | weekly recap · year in review · history |
-| `/station` | **Station** | health (public) + the gated admin task groups |
+| `/station` | **Settings** | health (public) + the gated admin task groups |
 
 Tabs within a home are selected by a query parameter, e.g.
 `/patterns?tab=dawn`, `/reports?tab=history`, `/species?view=lifelist`,
@@ -59,9 +59,9 @@ Older addresses and BirdNET-Pi muscle-memory still work — each one
 
 The `/admin*` routes are the **only** password-gated part of the UI — they
 require sign-in (a session cookie) when an admin password is set; a fresh
-bare-metal install sets one automatically. The Station home's **Health** tab is
+bare-metal install sets one automatically. The Settings home's **Health** tab is
 public (the operator-grade vital-signs surface that replaced the read-only
-`/system` page, which now redirects to it); the other Station task groups link
+`/system` page, which now redirects to it); the other Settings task groups link
 into these gated pages. Every home above and the JSON/WebSocket API below are
 open. See [Remote Access & Security](../admin/remote-access.md).
 

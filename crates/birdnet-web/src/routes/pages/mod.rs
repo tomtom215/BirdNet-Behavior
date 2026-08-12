@@ -283,14 +283,84 @@ pub(crate) fn simple_url_encode(s: &str) -> String {
     encoded
 }
 
-/// Get today's date as YYYY-MM-DD string (no external crate needed).
-pub(crate) fn today_date_string() -> String {
-    let now = std::time::SystemTime::now();
-    let secs = now
+/// Seconds since the Unix epoch, saturating to 0 before it.
+pub(crate) fn unix_secs() -> i64 {
+    std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let (y, m, d) = days_to_date(secs / 86400);
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0))
+}
+
+/// The system's UTC offset in seconds, east-positive (CEST → `7200`).
+///
+/// Detections are timestamped in **local** time — capture writes segment files
+/// through `arecord --use-strftime`, whose `%H:%M:%S` is local — so every
+/// hour-of-day and date this module derives has to be local too, or the two
+/// disagree by the offset. They did: the day strip plotted local-hour bars
+/// against a UTC "now" line and UTC sunrise/sunset markers, which on a CEST
+/// station drew "now" two hours behind the detections beside it.
+///
+/// The workspace carries no date/time crate and forbids `unsafe`, so neither
+/// `localtime_r` nor a tz-database parser is reachable from here. SQLite's
+/// `localtime` modifier consults the same zoneinfo everything else on the box
+/// does, so the offset is read from an in-memory connection — that keeps this
+/// a leaf function instead of threading a `Connection` through two dozen
+/// callers of [`today_date_string`].
+///
+/// Cached for a minute. The value only moves at a DST boundary, and opening a
+/// connection on every page render to learn something that changes twice a
+/// year would be absurd; the resulting staleness is at most 60s, twice a year.
+pub(crate) fn local_utc_offset_secs() -> i64 {
+    use std::sync::atomic::{AtomicI64, Ordering};
+
+    /// Last computed offset. Seeded to 0 (UTC), which is also the fallback if
+    /// SQLite cannot answer — the pre-existing behaviour, never worse.
+    static OFFSET_SECS: AtomicI64 = AtomicI64::new(0);
+    /// When `OFFSET_SECS` was computed. `i64::MIN` forces a first read.
+    static COMPUTED_AT: AtomicI64 = AtomicI64::new(i64::MIN);
+
+    let now = unix_secs();
+    if now.saturating_sub(COMPUTED_AT.load(Ordering::Relaxed)) < 60 {
+        return OFFSET_SECS.load(Ordering::Relaxed);
+    }
+    let offset =
+        query_local_utc_offset_secs().unwrap_or_else(|| OFFSET_SECS.load(Ordering::Relaxed));
+    OFFSET_SECS.store(offset, Ordering::Relaxed);
+    COMPUTED_AT.store(now, Ordering::Relaxed);
+    offset
+}
+
+/// Ask SQLite for the current UTC offset. `None` if the query fails, so the
+/// caller can fall back rather than pretend the station is in UTC.
+fn query_local_utc_offset_secs() -> Option<i64> {
+    let conn = rusqlite::Connection::open_in_memory().ok()?;
+    conn.query_row(
+        "SELECT CAST(ROUND((julianday('now','localtime') - julianday('now')) * 86400.0) AS INTEGER)",
+        [],
+        |row| row.get::<_, i64>(0),
+    )
+    .ok()
+}
+
+/// Current hour-of-day in **local** time as a fraction (09:43 → `9.72`).
+///
+/// This is the axis the day strip's bars live on, because they are bucketed
+/// from the local `Time` column.
+pub(crate) fn now_hour_local() -> f64 {
+    #[allow(clippy::cast_precision_loss)]
+    let h = (unix_secs() + local_utc_offset_secs()).rem_euclid(86_400) as f64 / 3600.0;
+    h
+}
+
+/// Get today's **local** date as a YYYY-MM-DD string (no external crate needed).
+///
+/// Local, not UTC: detections are stored with a local `Date`, so a UTC "today"
+/// selected the wrong day for however many hours the station sits ahead of UTC
+/// (on CEST, every detection between 00:00 and 02:00 local landed on a date the
+/// page never asked for).
+pub(crate) fn today_date_string() -> String {
+    let secs = (unix_secs() + local_utc_offset_secs()).max(0);
+    #[allow(clippy::cast_sign_loss)]
+    let (y, m, d) = days_to_date(secs as u64 / 86400);
     format!("{y}-{m:02}-{d:02}")
 }
 

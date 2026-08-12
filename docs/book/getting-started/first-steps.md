@@ -21,7 +21,7 @@ The UI has six homes — the tabs along the top (and the phone bottom bar):
 3. **Patterns** (`/patterns`) — the analytics: when birds are active, the dawn chorus, migration, who sings together, trends. See [Patterns](../guide/patterns.md).
 4. **Recordings** (`/recordings`) — play back captured clips and listen to live audio.
 5. **Reports** (`/reports`) — the weekly recap, year in review and history calendar. See [Reports](../guide/reports.md).
-6. **Station** (`/station`) — health at a glance, plus all settings and admin. Start with **Settings** (`/admin/settings`) for optional fine-tuning: confidence threshold, per-species overrides, email, quarantine rules.
+6. **Settings** (`/station`) — health at a glance, plus all configuration and admin. Start with **General** (`/station/settings`) for optional fine-tuning: confidence threshold, per-species overrides, email, quarantine rules.
 
 ## First-run wizard
 

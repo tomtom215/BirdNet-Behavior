@@ -297,9 +297,41 @@ pub fn species_sparklines(
     Ok(result)
 }
 
-/// Get the first-seen date for each species (by scientific name).
+/// First-ever detection *instant* per scientific name, as `"YYYY-MM-DD HH:MM:SS"`.
 ///
-/// Returns a map from scientific name to its first detection date.
+/// [`species_first_seen`] returns only a date, which is all the life list and
+/// the year-in-review need. The "first ever" badge needs more: with a date
+/// alone the only question answerable is "was this species new on this day?",
+/// which is true of *every* detection of it that day — so a station that heard
+/// 133 blackcaps today badged all 133 as the first. Comparing a row's own
+/// `Date`+`Time` against this value marks exactly the one detection that was.
+///
+/// `MIN(Date || ' ' || Time)` is safe here because both columns are stored
+/// zero-padded (`YYYY-MM-DD`, `HH:MM:SS`), so lexicographic order over the
+/// concatenation is chronological order.
+///
+/// # Errors
+///
+/// Returns [`DbError`] if the query fails.
+pub fn species_first_detection(
+    conn: &Connection,
+) -> Result<std::collections::HashMap<String, String>, DbError> {
+    let mut stmt = conn
+        .prepare("SELECT Sci_Name, MIN(Date || ' ' || Time) FROM detections GROUP BY Sci_Name")?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<std::collections::HashMap<String, String>, _>>()?;
+    Ok(rows)
+}
+
+/// Get the first-seen *date* for each species (by scientific name).
+///
+/// Returns a map from scientific name to its first detection date. For marking
+/// the single detection that was a species' first, use
+/// [`species_first_detection`] — a date cannot distinguish it from every other
+/// detection that same day.
 ///
 /// # Errors
 ///

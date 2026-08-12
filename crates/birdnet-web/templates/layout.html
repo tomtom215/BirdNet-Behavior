@@ -18,6 +18,14 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="apple-mobile-web-app-title" content="BirdNet">
     <link rel="apple-touch-icon" href="/static/icon-192.png">
+    <!-- The browser-tab icon. The PWA block above covers the iOS home screen
+         (apple-touch-icon) and the installed-app icon (manifest), but neither
+         is used for the tab: without an explicit rel="icon" the browser falls
+         back to requesting /favicon.ico, which this server does not route, so
+         every tab rendered blank. Reuses the existing PNGs rather than adding
+         an .ico — every browser this dashboard supports accepts PNG here. -->
+    <link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="/static/icon-512.png">
     <meta name="bnb-build" content="{{version}}">
     <!--
       All webfonts are self-hosted and embedded in the binary (see app.css

@@ -35,7 +35,7 @@ pub(super) async fn detections_partial(
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
             let detections = birdnet_db::sqlite::recent_detections(conn, 20)?;
-            let first_seen = birdnet_db::sqlite::species_first_seen(conn).unwrap_or_default();
+            let first_seen = birdnet_db::sqlite::species_first_detection(conn).unwrap_or_default();
             Ok::<_, birdnet_db::sqlite::DbError>((detections, first_seen))
         })
     })
@@ -77,13 +77,23 @@ fn render_feed_row(
     let time_enc = simple_url_encode(&d.time);
     let time_short = d.time.get(0..5).unwrap_or(&d.time);
 
+    // Marks the one detection that *was* the species' first ever — not every
+    // detection of a species whose first was recent. `first_seen` used to hold
+    // a date, so `fs == today` was true for all 133 of today's blackcap rows
+    // and badged every one of them; it now holds the first-ever instant, and
+    // this compares the row's own.
     let badge = first_seen.get(&d.sci_name).map_or(String::new(), |fs| {
-        if fs == today {
-            r#" <span class="bnb-pill moss dp-badge">first today</span>"#.to_string()
-        } else if fs == &d.date {
-            r#" <span class="bnb-pill rare dp-badge">rare</span>"#.to_string()
-        } else {
+        if *fs != format!("{} {}", d.date, d.time) {
             String::new()
+        } else if d.date == today {
+            // "first ever" rather than "first today": now that exactly one row
+            // can carry it, "today" only reintroduced the ambiguity between
+            // "first time ever, and that was today" and "first one so far
+            // today". This badge has always meant the former.
+            r#" <span class="bnb-pill moss dp-badge">first ever</span>"#.to_string()
+        } else {
+            // Same fact, seen while browsing a past day.
+            r#" <span class="bnb-pill rare dp-badge">rare</span>"#.to_string()
         }
     });
 
@@ -137,7 +147,7 @@ pub(super) async fn best_detections_partial(
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
             let best = birdnet_db::sqlite::best_detections_for_date(conn, &today_for_query, 5)?;
-            let first_seen = birdnet_db::sqlite::species_first_seen(conn).unwrap_or_default();
+            let first_seen = birdnet_db::sqlite::species_first_detection(conn).unwrap_or_default();
             Ok::<_, birdnet_db::sqlite::DbError>((best, first_seen))
         })
     })
@@ -177,13 +187,14 @@ fn render_best_row(
 ) {
     let enc = simple_url_encode(&d.com_name);
     let time_short = d.time.get(0..5).unwrap_or(&d.time);
+    // Same exact-instant rule as the feed row above.
     let tag = first_seen.get(&d.sci_name).map_or("", |fs| {
-        if fs == today {
-            r#" · <span class="x-tag-first">first today</span>"#
-        } else if fs == &d.date {
-            r#" · <span class="x-tag-rare">rare</span>"#
-        } else {
+        if *fs != format!("{} {}", d.date, d.time) {
             ""
+        } else if d.date == today {
+            r#" · <span class="x-tag-first">first ever</span>"#
+        } else {
+            r#" · <span class="x-tag-rare">rare</span>"#
         }
     });
     let play = d

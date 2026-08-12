@@ -6,5 +6,6 @@
 pub mod audio;
 pub mod config;
 pub mod detection;
+mod file_settle;
 pub mod i18n;
 pub mod inference;

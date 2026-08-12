@@ -54,7 +54,7 @@ pub fn router() -> Router<AppState> {
 
 /// Render assembled `content` through the main shell with Station active.
 fn page(content: &str, headers: &HeaderMap) -> Html<String> {
-    render_page_for_request("Station", content, "station", headers)
+    render_page_for_request("Settings", content, "station", headers)
 }
 
 // ───────────────────────────────────────────────────────────────────────────

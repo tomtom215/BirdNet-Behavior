@@ -5,6 +5,79 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The dashboard's day strip drew "now" and sunrise/sunset on a UTC axis while
+  its bars were local.** Detections are timestamped by `arecord --use-strftime`,
+  which is local, and `hourly_activity` buckets that `Time` column — but the
+  marker came from a raw `epoch % 86400` and the solar times from
+  `sunrise_utc_min`. On a CEST station the marker sat two hours behind the
+  detections beside it and the hero pills read "sunrise 4:10" for an 06:10
+  sunrise. `today_date_string()` was UTC for the same reason, so for the first
+  hours of each local day the Today page queried the wrong date entirely.
+  The offset now comes from SQLite's `localtime` (no date/time crate in the
+  workspace, and `unsafe` is forbidden), cached for a minute.
+
+- **The setup wizard could not display any setting the station already had, and
+  silently overwrote two of them.** Latitude and longitude had no `value=`
+  attribute and the confidence/notification fields were hardcoded in the markup,
+  so a station configured at install time rendered a blank wizard. Because the
+  hardcoded fields are never empty they slipped past `onboarding_save`'s
+  skip-if-blank guard and were written on every completion: an operator who had
+  set `CONFIDENCE=0.6` had it reset to 0.75 by clicking through setup.
+
+- **The installer discarded typed coordinates without saying so.** The prompt
+  told the operator to read coordinates off OpenStreetMap — which hands over a
+  *pair*, `49.4521, 8.6724` — then offered a single-value field whose validator
+  rejected exactly that, warned once, and continued. A decimal comma
+  (`49,4521`) was rejected too, though the web settings form accepts it. The
+  prompt now parses both shapes and re-prompts on bad input, like the
+  audio-source prompt above it.
+
+- **"first today" was shown on every detection of a species, not the first
+  one.** The badge compared a species' first-ever *date* to today, which is true
+  of all of that day's detections — a station that heard 133 blackcaps on their
+  arrival day badged all 133. Now keyed on the first-ever instant, so exactly
+  one detection can carry it, and renamed "first ever" since only one row can
+  hold it.
+
+- **The live spectrogram decoded every clip while it was still recording.** The
+  producer decoded on the watcher's create event after a fixed `sleep(100ms)`,
+  against segments `arecord` writes for fifteen seconds — so every frame failed
+  with "unexpected end of file" and the dashboard showed "idle" on a healthy
+  station. The detection daemon already had the right rule and its own docs
+  named this exact error; it was private to that module, so it is now shared in
+  `crate::file_settle`.
+
+- **Live audio needed ffmpeg that no microphone station ever installed.**
+  `GET /stream` shells out to ffmpeg for every source kind including plain ALSA,
+  but the installer ensured it only for RTSP capture and `--doctor`'s check was
+  gated on the same condition — so a Linux station with a USB microphone
+  returned 500 on every request while reporting itself entirely healthy.
+
+- **The browser tab had no icon.** The PWA manifest and `apple-touch-icon` were
+  present, but with no `rel="icon"` the browser fell back to `/favicon.ico`,
+  which is not routed.
+
+### Changed
+
+- **"Station" in the navigation is now "Settings"**, and its inner Settings tab
+  is "General". The section is what operators go looking for when they want to
+  configure the station; `/station` URLs are unchanged and "station" remains a
+  command-palette keyword.
+
+- **Live spectrogram frames now carry a `source`.** The broadcast sends every
+  source's frames to every client and they previously carried no attribution, so
+  the Listen source picker could not filter and a multi-source station drew both
+  inputs into one spectrogram.
+
+- **`LabelSet` retains the `class` column** from the BirdNET+ V3.0 CSV, so
+  non-bird taxa (the model is a 11K global classifier, not birds-only) can be
+  distinguished from birds rather than appearing as a scientific name with no
+  common name.
+
 ## [0.12.0] - 2026-08-10
 
 ### Fixed

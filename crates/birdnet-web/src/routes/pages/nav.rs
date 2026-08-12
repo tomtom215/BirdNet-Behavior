@@ -75,8 +75,13 @@ pub const PRIMARY: &[Primary] = &[
         glyph: "¶",
     },
     Primary {
+        // The path stays `/station` — it is bookmarked, linked from a couple of
+        // dozen places, and renaming a URL buys nothing. Only the label moves.
+        // "Station" described the *thing being configured*; people looking to
+        // configure it went hunting for "Settings", which was the name of a tab
+        // one level down and invisible from here.
         path: "/station",
-        label: "Station",
+        label: "Settings",
         key: "station",
         glyph: "⌗",
     },
@@ -143,7 +148,7 @@ mod tests {
                 ("/patterns", "Patterns"),
                 ("/recordings", "Recordings"),
                 ("/reports", "Reports"),
-                ("/station", "Station"),
+                ("/station", "Settings"),
             ]
         );
     }

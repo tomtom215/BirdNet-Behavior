@@ -584,6 +584,7 @@ mod tests {
             index: 0,
             scientific_name: "Turdus merula".into(),
             common_name: "Eurasian Blackbird".into(),
+            class: None,
         };
         assert!(matches_species("Eurasian Blackbird", &label));
         assert!(matches_species("turdus merula", &label));
