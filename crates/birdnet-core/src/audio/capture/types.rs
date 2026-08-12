@@ -182,11 +182,16 @@ pub struct RecordingConfig {
     pub segment_duration_secs: u32,
     /// Audio format for output files.
     pub format: AudioFormat,
-    /// Software capture gain in decibels, applied via ffmpeg's `volume` audio
-    /// filter. `0.0` is unity gain (no boost/cut) and keeps local-microphone
-    /// capture on the lighter-weight `arecord` path; a non-zero value routes
-    /// microphone capture through ffmpeg so the gain can actually be applied.
+    /// Software capture gain in decibels. `0.0` is unity gain (no boost/cut).
     /// Mirrors the per-source `gain_db` the admin UI exposes for each source.
+    ///
+    /// *Where* it is applied depends on the backend, but the result is the same
+    /// either way: a teed local microphone scales the samples in this process
+    /// (`arecord` has no gain control of its own), and the ffmpeg-driven
+    /// sources get the `volume` audio filter. Microphone capture used to switch
+    /// backend on this value — unity gain took `arecord`, anything else took
+    /// `ffmpeg -f alsa` — which made a station's capture tool depend on a
+    /// number in the admin UI while the availability check did not know it.
     pub gain_db: f32,
     /// The station's live UTC offset, used to stamp segment filenames with
     /// local civil time. See [`LocalOffset`] for why it is shared rather than

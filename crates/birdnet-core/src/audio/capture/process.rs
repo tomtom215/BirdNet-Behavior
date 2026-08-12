@@ -193,11 +193,12 @@ fn drain_capture_stderr(child: &mut Child, source: &str) {
 }
 
 /// The smallest absolute gain (in dB) we bother applying. Below this the gain
-/// is treated as "off": local microphone capture stays on the lighter-weight
-/// `arecord` path and the ffmpeg sources omit the `volume` filter entirely.
-/// `0.05` dB is well below audible and matches the threshold the admin UI uses
-/// to decide whether to *show* a gain badge, so "looks like no gain in the UI"
-/// and "no gain applied at capture" always agree.
+/// is treated as "off": the capture tee forwards samples untouched — which is
+/// what keeps the unity-gain path byte-exact — and the ffmpeg sources omit the
+/// `volume` filter entirely. `0.05` dB is well below audible and matches the
+/// threshold the admin UI uses to decide whether to *show* a gain badge, so
+/// "looks like no gain in the UI" and "no gain applied at capture" always
+/// agree.
 const GAIN_EPSILON_DB: f32 = 0.05;
 
 /// Whether a configured `gain_db` is large enough to apply.
