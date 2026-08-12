@@ -45,6 +45,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to spawn. The gain is now applied to the samples in-process (clipping, as the
   ffmpeg filter did) and that second capture backend is gone.
 
+- **"Station" in the navigation is now "Settings"**, and its inner Settings tab
+  is "General". The section is what operators go looking for when they want to
+  configure the station; `/station` URLs are unchanged and "station" remains a
+  command-palette keyword.
+
+- **Live spectrogram frames now carry a `source`.** The broadcast sends every
+  source's frames to every client and they previously carried no attribution, so
+  the Listen source picker could not filter and a multi-source station drew both
+  inputs into one spectrogram.
+
+- **`LabelSet` retains the `class` column** from the BirdNET+ V3.0 CSV, so
+  non-bird taxa (the model is a 11K global classifier, not birds-only) can be
+  distinguished from birds rather than appearing as a scientific name with no
+  common name.
+
 ### Fixed
 
 - **The dashboard's day strip drew "now" and sunrise/sunset on a UTC axis while
@@ -98,23 +113,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The browser tab had no icon.** The PWA manifest and `apple-touch-icon` were
   present, but with no `rel="icon"` the browser fell back to `/favicon.ico`,
   which is not routed.
-
-### Changed
-
-- **"Station" in the navigation is now "Settings"**, and its inner Settings tab
-  is "General". The section is what operators go looking for when they want to
-  configure the station; `/station` URLs are unchanged and "station" remains a
-  command-palette keyword.
-
-- **Live spectrogram frames now carry a `source`.** The broadcast sends every
-  source's frames to every client and they previously carried no attribution, so
-  the Listen source picker could not filter and a multi-source station drew both
-  inputs into one spectrogram.
-
-- **`LabelSet` retains the `class` column** from the BirdNET+ V3.0 CSV, so
-  non-bird taxa (the model is a 11K global classifier, not birds-only) can be
-  distinguished from birds rather than appearing as a scientific name with no
-  common name.
 
 ## [0.12.0] - 2026-08-10
 
