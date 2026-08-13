@@ -86,6 +86,10 @@ jobs:
       - name: Accessibility gate (axe-core, WCAG 2.1 A/AA)
         working-directory: tools/visual-qa
         run: node axe.mjs
+      - name: Interaction gate (controls do not undo their own work)
+        working-directory: tools/visual-qa
+        run: node interactions.mjs
+
       - name: Visual-QA sweep (overflow / console / broken images)
         working-directory: tools/visual-qa
         env:
