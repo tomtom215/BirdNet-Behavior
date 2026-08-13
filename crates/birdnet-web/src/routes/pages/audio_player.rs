@@ -176,17 +176,26 @@ function fmt(s) {
   return m + ':' + (sec < 10 ? '0' : '') + sec;
 }
 
+function showPaused() {
+  playIcon.classList.remove('ap-hidden');
+  pauseIcon.classList.add('ap-hidden');
+  cancelAnimationFrame(animFrame);
+}
+
 function togglePlayback() {
   if (audio.paused) {
-    audio.play();
-    playIcon.classList.add('ap-hidden');
-    pauseIcon.classList.remove('ap-hidden');
-    animate();
+    // Swap the icons only once playback has actually begun. Flipping them
+    // synchronously claimed the clip was playing when it may never start - a
+    // rejected play() (autoplay policy, a decode error, a clip deleted under
+    // us) left a pause icon over silence, and the rejection went unhandled.
+    audio.play().then(function () {
+      playIcon.classList.add('ap-hidden');
+      pauseIcon.classList.remove('ap-hidden');
+      animate();
+    }).catch(showPaused);
   } else {
     audio.pause();
-    playIcon.classList.remove('ap-hidden');
-    pauseIcon.classList.add('ap-hidden');
-    cancelAnimationFrame(animFrame);
+    showPaused();
   }
 }
 

@@ -6,6 +6,27 @@ use axum::response::{Html, IntoResponse};
 
 use crate::state::AppState;
 
+/// Set while a restore is unpacking, so a second upload cannot run concurrently.
+///
+/// A restore streams an archive over the live database and recordings directory.
+/// Two of them interleaving would corrupt both, and the UI makes that easy to
+/// trigger: the upload is multi-gigabyte and silent while it runs, which is
+/// exactly the condition that gets a button clicked twice. htmx does not dedupe
+/// in-flight requests unless told to (`hx-sync`), and a UI guard cannot bind a
+/// client that simply POSTs twice, so the invariant is enforced here as well.
+static RESTORE_IN_PROGRESS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Clears [`RESTORE_IN_PROGRESS`] however the handler leaves — including an
+/// early return on a malformed upload, which is most of its exit paths.
+struct RestoreGuard;
+
+impl Drop for RestoreGuard {
+    fn drop(&mut self) {
+        RESTORE_IN_PROGRESS.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 pub(super) async fn full_backup(State(state): State<AppState>) -> axum::response::Response {
     let db_path = state.db_path().to_path_buf();
     let rec_dir = state.recording_dir();
@@ -122,6 +143,23 @@ pub(super) async fn restore_backup(
 ) -> Html<String> {
     use tokio::io::AsyncWriteExt as _;
 
+    if RESTORE_IN_PROGRESS
+        .compare_exchange(
+            false,
+            true,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        )
+        .is_err()
+    {
+        tracing::warn!("refused a second restore while one was already running");
+        return Html(
+            r#"<p class="ctl-err">A restore is already running. Wait for it to finish before starting another.</p>"#
+                .to_string(),
+        );
+    }
+    let _restore_guard = RestoreGuard;
+
     // Stream the uploaded archive straight to a temp file. A full backup
     // (database + recordings) routinely runs to many GB — far past axum's 2 MiB
     // default body limit — and the previous code buffered the whole thing in
@@ -229,5 +267,33 @@ pub(super) async fn restore_backup(
         Ok(Ok(msg)) => Html(format!(r#"<p class="ctl-ok">{msg}</p>"#)),
         Ok(Err(e)) => Html(format!(r#"<p class="ctl-err">Restore failed: {e}</p>"#)),
         Err(e) => Html(format!(r#"<p class="ctl-err">Internal error: {e}</p>"#)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RESTORE_IN_PROGRESS, RestoreGuard};
+    use std::sync::atomic::Ordering;
+
+    fn claim() -> bool {
+        RESTORE_IN_PROGRESS
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    }
+
+    /// The invariant the handler relies on: one restore at a time, and the slot
+    /// is released however the handler leaves — including the early returns on a
+    /// malformed upload, which is what a `Drop` guard buys over a manual reset.
+    #[test]
+    fn a_second_restore_cannot_start_while_one_is_running() {
+        assert!(claim(), "the first restore claims the slot");
+        let guard = RestoreGuard;
+        assert!(
+            !claim(),
+            "a concurrent restore must be refused, not run over the live database"
+        );
+        drop(guard);
+        assert!(claim(), "the slot is released when the handler returns");
+        RESTORE_IN_PROGRESS.store(false, Ordering::SeqCst);
     }
 }

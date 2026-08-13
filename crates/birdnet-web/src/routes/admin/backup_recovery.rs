@@ -320,7 +320,9 @@ fn render_body(f: &DataFacts) -> String {
     <form hx-post="/admin/system/restore"
           hx-encoding="multipart/form-data"
           hx-target="#bkr-restore-result"
-          hx-swap="innerHTML">
+          hx-swap="innerHTML"
+          hx-disabled-elt="find button[type=submit]"
+          hx-sync="this:drop">
       <label for="bkr-restore-file">Backup archive</label>
       <input id="bkr-restore-file" type="file" name="backup" accept=".gz,.tgz,application/gzip" required class="bkr-file">
       <button type="submit" class="bnb-btn danger bkr-mt-xs"
@@ -473,6 +475,7 @@ fn render_body(f: &DataFacts) -> String {
     <div><div class="bkr-row-title">Clear all detections</div><div class="bnb-meta">empties the detections and notification tables; keeps settings</div></div>
     <button class="bnb-btn danger"
             hx-post="/admin/system/clear-detections"
+              hx-disabled-elt="this"
             hx-target="#bkr-danger-result"
             hx-swap="innerHTML"
             data-confirm-action="hx-post"
@@ -486,6 +489,7 @@ fn render_body(f: &DataFacts) -> String {
     <div><div class="bkr-row-title">Clear extracted audio</div><div class="bnb-meta">deletes the saved WAV clips; detection records stay</div></div>
     <button class="bnb-btn danger"
             hx-post="/admin/system/clear-extracted"
+              hx-disabled-elt="this"
             hx-target="#bkr-danger-result"
             hx-swap="innerHTML"
             data-confirm-action="hx-post"

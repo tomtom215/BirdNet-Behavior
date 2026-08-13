@@ -75,9 +75,25 @@
     if (player) player.pause();
     if (playBtn) playBtn.classList.remove('playing');
   }
+  // True between calling play() and playback actually beginning. `paused` goes
+  // false the instant play() is called, so without this a second click on a
+  // clip that is still loading pauses the clip the operator is waiting for —
+  // the same trap that made Listen -> Live look broken in 0.13.0. Short for a
+  // local clip, but not zero, and a cold cache or a busy Pi widens it.
+  var starting = false;
+  function beginPlayback(onPlaying) {
+    starting = true;
+    player.play().then(function () {
+      starting = false;
+      onPlaying();
+    }).catch(function () {
+      starting = false;
+      onEnded();
+    });
+  }
   function toggle() {
-    if (!player) return;
-    if (player.paused) { player.play().then(function () { setGlyphs('⏸'); if (playBtn) playBtn.classList.add('playing'); }).catch(function () {}); }
+    if (!player || starting) return;
+    if (player.paused) { beginPlayback(function () { setGlyphs('⏸'); if (playBtn) playBtn.classList.add('playing'); }); }
     else { player.pause(); setGlyphs('▶'); if (playBtn) playBtn.classList.remove('playing'); }
   }
 
@@ -100,6 +116,7 @@
     var btn = e.target.closest('[data-play-src]');
     if (!btn) return;
     e.preventDefault();
+    if (starting) return;   // still loading: ignore rather than cancel it
     if (btn === playBtn && player && !player.paused) { player.pause(); setGlyphs('▶'); btn.classList.remove('playing'); return; }
     stop();
     if (!player) {
@@ -111,11 +128,11 @@
     }
     playBtn = btn;
     player.src = btn.getAttribute('data-play-src');
-    player.play().then(function () {
+    beginPlayback(function () {
       btn.classList.add('playing');
       refreshDocks(btn);
       setGlyphs('⏸');
-    }).catch(function () { onEnded(); });
+    });
   });
 
   // ── Select mode + bulk bar ────────────────────────────────────────────────
@@ -166,9 +183,30 @@
                '&sci_name=' + encodeURIComponent(parts[2]);
     return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body });
   }
+  // Guards the same trap the live-audio button had: a bulk action over many
+  // clips takes long enough on a Pi that the page looks inert, and a second
+  // click used to fire the whole batch again. `fetch` also resolves for 4xx/5xx
+  // — without checking `ok`, a batch that failed outright still reloaded the
+  // page and presented as success.
+  var bulkBusy = false;
   function bulk(url) {
+    if (bulkBusy) return;
     var rows = selectedRows(); if (!rows.length) return;
-    Promise.all(rows.map(function (r) { return post(url, keyOf(r)); })).then(function () { window.location.reload(); });
+    bulkBusy = true;
+    Promise.all(rows.map(function (r) { return post(url, keyOf(r)); }))
+      .then(function (responses) {
+        var failed = responses.filter(function (r) { return !r.ok; }).length;
+        if (failed) {
+          bulkBusy = false;
+          window.alert(failed + ' of ' + responses.length + ' clips could not be updated. Nothing else was changed.');
+          return;
+        }
+        window.location.reload();
+      })
+      .catch(function () {
+        bulkBusy = false;
+        window.alert('That action could not be completed — check the station is still reachable.');
+      });
   }
   var bl = document.getElementById('rc-bulk-lock');
   if (bl) bl.addEventListener('click', function () { bulk('/pages/recordings-lock'); });
@@ -284,19 +322,66 @@
   var glyph = document.getElementById('rc-listen-glyph');
   var label = document.getElementById('rc-listen-label');
   function srcFor(v) { return (!v) ? '/stream' : '/stream?source_id=' + encodeURIComponent(v); }
+
+  // `play()` sets `audio.paused` to false synchronously, but its promise only
+  // resolves once the browser has buffered enough to start — around a second on
+  // a Pi, since ffmpeg has to fill a frame before the first MP3 bytes leave the
+  // station. Without a guard the button still reads "Listen (audio)" for that
+  // whole window, and the natural response to apparent silence — clicking again
+  // — lands in the stop branch and kills the stream that was about to start.
+  // Clicking through that cycle is indistinguishable from live audio being
+  // broken, which is exactly how it was reported.
+  var connecting = false;
+  var connectTimer = null;
+  function clearConnectTimer() {
+    if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
+  }
+  function showIdle() {
+    connecting = false; clearConnectTimer();
+    if (glyph) glyph.textContent = '▶';
+    if (label) label.textContent = 'Listen (audio)';
+  }
+  function showPlaying() {
+    connecting = false; clearConnectTimer();
+    if (glyph) glyph.textContent = '■';
+    if (label) label.textContent = 'Stop';
+  }
+  function showFailed(text) {
+    connecting = false; clearConnectTimer();
+    audio.pause();
+    audio.removeAttribute('src');
+    if (glyph) glyph.textContent = '▶';
+    if (label) label.textContent = text;
+  }
+  function start() {
+    connecting = true;
+    if (label) label.textContent = 'Connecting…';
+    audio.src = srcFor(sel ? sel.value : '');
+    // A stream that connects but never buffers enough to start fires `stalled`,
+    // not `error`, so play() can stay pending indefinitely. Ignoring clicks
+    // while that is true would leave the button permanently dead; give up and
+    // hand control back instead.
+    clearConnectTimer();
+    connectTimer = setTimeout(function () {
+      if (connecting) showFailed('Stream did not start — retry');
+    }, 20000);
+    audio.play().then(showPlaying).catch(function () { showFailed('Audio blocked — retry'); });
+  }
+  function stop() { audio.pause(); audio.removeAttribute('src'); showIdle(); }
+
   if (sel && audio) sel.addEventListener('change', function () {
-    if (!audio.paused) { audio.src = srcFor(sel.value); audio.play().catch(function () {}); }
+    if (!audio.paused) start();
   });
   if (btn && audio) btn.addEventListener('click', function () {
-    if (audio.paused) {
-      audio.src = srcFor(sel ? sel.value : '');
-      audio.play().then(function () { if (glyph) glyph.textContent = '■'; if (label) label.textContent = 'Stop'; })
-        .catch(function () { if (label) label.textContent = 'Audio blocked — retry'; });
-    } else {
-      audio.pause(); audio.removeAttribute('src');
-      if (glyph) glyph.textContent = '▶'; if (label) label.textContent = 'Listen (audio)';
-    }
+    if (connecting) return;   // mid-connect: ignore the click rather than cancel
+    if (audio.paused) start(); else stop();
   });
-  if (audio) audio.addEventListener('ended', function () { if (glyph) glyph.textContent = '▶'; if (label) label.textContent = 'Listen (audio)'; });
+  if (audio) audio.addEventListener('ended', showIdle);
+  // A stream that dies — ffmpeg gone, source stopped mid-listen — must not
+  // strand the button on "Connecting…" with no way back to a usable state.
+  if (audio) audio.addEventListener('error', function () {
+    if (audio.paused && !connecting) return;
+    showFailed('Stream unavailable — retry');
+  });
 })();
 </script>
