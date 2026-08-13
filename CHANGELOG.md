@@ -7,6 +7,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-08-13
+
+### Fixed
+
+- **Listen → Live appeared to do nothing, because the button cancelled the
+  stream you were waiting for.** `audio.play()` sets `paused` to false
+  synchronously but resolves only once the browser has buffered enough to start
+  — around a second, since ffmpeg must fill a frame before the first MP3 bytes
+  leave the station. The button kept reading "Listen (audio)" for that whole
+  window, so the natural response to apparent silence — clicking again — landed
+  in the stop branch and killed the stream that was about to start. Clicking
+  through that cycle is indistinguishable from live audio being broken, and that
+  is how it was reported on 0.13.0.
+
+  The button now shows **Connecting…** and ignores clicks until `play()`
+  settles, and an `error` on the element reports "Stream unavailable — retry"
+  rather than stranding it mid-connect. `-flush_packets 1` on the encoder halves
+  time-to-first-audio (measured through the shipped invocation: 1.13 s → 0.59 s),
+  shrinking the window in which the trap could spring at all.
+
+  Nothing was wrong on the server: the tap, the source resolution, the segment
+  writer and the MP3 encoding were all delivering correctly throughout.
+
+- **A failed live stream now says why.** ffmpeg's stderr was sent to
+  `/dev/null`, so every failure — `Device or resource busy`, an unknown filter,
+  a missing codec — reached the operator identically: a `200` response carrying
+  no audio and an empty journal. It now runs with `-loglevel error` and its
+  stderr is drained to the log, and a stream that ends having delivered zero
+  bytes says so. Diagnosing the bug above took three refuted hypotheses for want
+  of this one log line.
+
+- **The same trap in both clip players.** The detail-page player swapped to its
+  pause icon before `play()` resolved and never handled a rejection, so a clip
+  that could not start (autoplay policy, decode error, a clip deleted under it)
+  showed a pause icon over silence with an unhandled promise rejection. The
+  Recordings row player had the cancelling variant: a second click on a clip
+  still loading paused the clip being waited for. Both windows are short for a
+  local file — but not zero, and a cold cache or a busy Pi widens them.
+
+- **Listen → Live could strand itself on "Connecting…".** A stream that connects
+  but never buffers enough to start fires `stalled`, not `error`, so `play()`
+  can stay pending indefinitely — and ignoring clicks while that is true would
+  have left the button permanently dead. It now gives up after 20 s and hands
+  control back.
+
+- **Bulk clip actions could fire twice and could report success after failing.**
+  The lock/delete batch had no in-flight guard, so a second click during a slow
+  batch re-sent the whole thing; and because `fetch` resolves for 4xx/5xx, a
+  batch that failed outright still reloaded the page as if it had worked. The
+  batch is now single-flight and checks each response, reporting how many clips
+  could not be updated.
+
+- **Two concurrent restores can no longer run over the live database.** A
+  restore unpacks an archive over `birds.db` and the recordings directory, takes
+  minutes, and shows nothing while it runs — the same conditions that get a
+  button clicked twice. htmx does not dedupe in-flight requests unless told to,
+  and nothing on the server refused the second one. The endpoint now rejects a
+  concurrent restore outright (a UI guard cannot bind a client that simply POSTs
+  twice), and the form and the destructive "clear" controls disable themselves
+  while their request is in flight.
+
+### Added
+
+- **An interaction gate in CI** (`tools/visual-qa/interactions.mjs`). Every bug
+  above is one the existing suite could not have caught: the server was correct,
+  the pages rendered, axe was clean and every screenshot looked right — the
+  defects lived entirely in what the *second* click did, and nothing anywhere
+  drove a control twice. The gate drives controls the way an impatient operator
+  does and asserts they neither cancel nor duplicate their own in-flight work.
+  Verified against the shipped 0.13.0 build, where it reproduces the reported
+  bug (`pause()` during connect) and catches the bulk batch firing twice.
+
+### Changed
+
+- `/stream` no longer sets `Transfer-Encoding` by hand. It is a hop-by-hop
+  framing header the HTTP layer owns: hyper already chunks a streaming body and
+  emits the header itself — verified on the wire, where setting it changed
+  nothing but header order — and HTTP/2 forbids it, so a station behind an h2
+  reverse proxy would have the response rejected for carrying it.
+
 ## [0.13.0] - 2026-08-13
 
 ### Changed
