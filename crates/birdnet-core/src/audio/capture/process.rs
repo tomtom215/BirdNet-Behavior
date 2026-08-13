@@ -630,9 +630,12 @@ mod capture_failure_classification {
             "overrun!!! (at least 12.345 ms long)",
             "Recording WAVE '/tmp/birdnet-stream/x.wav' : Signed 16 bit Little Endian, Rate 48000 Hz, Mono",
             // What `arecord -t raw` (the teed microphone producer) announces on
-            // every start. Promoting this to `warn` would put a line in the
-            // journal every time a source restarts, for no reason.
-            "Recording raw data 'stdout' : Signed 16 bit Little Endian, Rate 48000 Hz, Mono",
+            // every start — captured verbatim from `arecord` 1.2.9. It really
+            // does say `'stdin'` while writing to stdout; that is arecord's own
+            // quirk, not a transcription slip. Promoting this to `warn` would
+            // put a line in the journal every time a source restarts, for no
+            // reason.
+            "Recording raw data 'stdin' : Signed 16 bit Little Endian, Rate 48000 Hz, Mono",
             "frame=  120 fps= 25 q=-1.0 size=     512kB time=00:00:04.80",
             "Warning: Some sources (like microphones) may produce inaudible results",
         ] {
@@ -809,6 +812,82 @@ mod tests {
         );
         drop(writer_end);
         drop(process);
+    }
+
+    /// End-to-end against the **real** `arecord`, when one is installed: the
+    /// command this module builds must actually produce a decodable WAV.
+    ///
+    /// Uses ALSA's `null` capture device, so it needs no sound hardware — which
+    /// is what makes the one hop that is otherwise pure assertion (spawn →
+    /// stdout pipe → tee thread → segment writer) observable at all. `null` is
+    /// **unclocked**: it yields samples as fast as they are read rather than at
+    /// the sample rate, so this asserts on *content* only, never on timing,
+    /// rate, or file size.
+    ///
+    /// Skipped when `arecord` is absent, which includes CI.
+    #[test]
+    fn arecord_really_produces_a_decodable_segment() {
+        if !is_tool_available("arecord") {
+            return;
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        // One very long segment, so the unclocked `null` device writes into a
+        // single file instead of spinning through thousands of rotations.
+        let config = RecordingConfig {
+            source: CaptureSource::Microphone {
+                device: "null".into(),
+                sample_rate: 48_000,
+                channels: 1,
+                stream_id: Some("src_seed_1".into()),
+            },
+            output_dir: dir.path().to_path_buf(),
+            segment_duration_secs: 3600,
+            format: AudioFormat::Wav,
+            gain_db: 0.0,
+            local_offset: LocalOffset::utc(),
+            live_audio: None,
+        };
+
+        let mut process = start_microphone_capture(&config).expect("arecord starts on `null`");
+        // Stop the moment a segment has real audio in it — `null` free-runs, so
+        // every extra millisecond is megabytes.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut segment = None;
+        while std::time::Instant::now() < deadline {
+            if let Some(entry) = std::fs::read_dir(dir.path())
+                .ok()
+                .and_then(|mut d| d.find_map(std::result::Result::ok))
+                && entry.metadata().is_ok_and(|m| m.len() > 100_000)
+            {
+                segment = Some(entry.path());
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        process.stop().expect("stop");
+        let segment = segment.expect("arecord must produce a segment through the tee");
+
+        // The name is the one every downstream consumer parses.
+        let name = segment.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            crate::detection::types::RecordingFile::parse(&name).is_some(),
+            "the real pipeline produced an unparseable filename: {name}"
+        );
+        assert!(name.contains("-birdnet-src_seed_1-"), "bad name: {name}");
+
+        // And the bytes are a WAV the station can read — the whole point.
+        let bytes = std::fs::read(&segment).expect("read segment");
+        assert_eq!(&bytes[0..4], b"RIFF", "no RIFF header was written");
+        assert_eq!(&bytes[8..12], b"WAVE");
+        let declared = u32::from_le_bytes([bytes[40], bytes[41], bytes[42], bytes[43]]) as usize;
+        assert_eq!(
+            declared,
+            bytes.len() - 44,
+            "the patched header must describe the PCM that is actually present"
+        );
+        let audio = crate::audio::decode::decode_file(&segment).expect("station decoder reads it");
+        assert_eq!(audio.sample_rate, 48_000);
+        assert!(!audio.samples.is_empty());
     }
 
     // ---- the arecord producer command -------------------------------------
