@@ -246,9 +246,16 @@ async fn serve(
     // The capture supervisor publishes per-source health into this shared
     // handle; the web layer reads it for Station Health. One clone goes into
     // the (about-to-be-shared) AppState, the original into the supervisor
-    // thread below. Must be the last builder call before the state is cloned.
+    // thread below.
     let capture_status = birdnet_core::audio::capture::new_capture_status();
     let state = state.with_capture_status(capture_status.clone());
+
+    // Teed capture sources publish their live PCM here, and `/stream` reads it
+    // instead of opening the audio device a second time — which an ALSA
+    // microphone refuses with `Device or resource busy` while it is being
+    // recorded. Must be the last builder call before the state is cloned.
+    let live_audio = birdnet_core::audio::capture::new_live_audio_hub();
+    let state = state.with_live_audio(std::sync::Arc::clone(&live_audio));
 
     // Captured before `state` is moved into the web server below; used by the
     // per-species recording-cap maintenance task.
@@ -311,6 +318,7 @@ async fn serve(
         Some(&state),
         state.metrics(),
         capture_status,
+        Some(&live_audio),
     );
 
     let daemon_handle = if cli.web_only {

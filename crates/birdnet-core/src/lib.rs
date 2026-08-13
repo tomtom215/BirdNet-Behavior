@@ -4,6 +4,7 @@
 //! parsing for the BirdNET-Pi bird classification system.
 
 pub mod audio;
+pub mod civil;
 pub mod config;
 pub mod detection;
 mod file_settle;

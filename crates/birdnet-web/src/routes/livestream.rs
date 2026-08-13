@@ -13,9 +13,12 @@ use axum::extract::{Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router, routing::get};
+use birdnet_core::audio::capture::LiveSubscription;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::{Arc, LazyLock};
+use std::time::Duration;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
@@ -25,6 +28,28 @@ use crate::state::AppState;
 
 /// Sample rate used for the live audio stream output (Hz).
 const STREAM_SAMPLE_RATE: u32 = 44_100;
+
+/// Bytes read from a live tap per pump iteration (~85 ms of 48 kHz mono audio).
+/// Small enough that the stream stays responsive, large enough that the pump
+/// isn't syscall-bound on a Raspberry Pi.
+const TAP_CHUNK_BYTES: usize = 8 * 1024;
+
+/// How long to wait for a live tap's first audio before concluding the source
+/// is not currently recording.
+///
+/// A running capture pushes every ALSA period — tens of milliseconds — so
+/// anything approaching this bound means the source is paused by the recording
+/// schedule or is down. Waiting rather than checking a timestamp also covers
+/// the moment right after capture starts, when the tap exists but the first
+/// period has not landed yet.
+const TAP_FIRST_AUDIO_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Buffered chunks between the blocking tap reader and the async ffmpeg feeder.
+///
+/// Deliberately shallow. If ffmpeg cannot keep up, the right outcome is for the
+/// *listener* to fall behind and lose bytes at the tap — which is bounded and
+/// lossy by design — not for chunks to pile up in an ever-growing queue.
+const TAP_PUMP_QUEUE: usize = 4;
 
 /// Maximum number of concurrent live `/stream` connections.
 ///
@@ -133,14 +158,22 @@ async fn list_languages(State(state): State<AppState>) -> Json<Value> {
 
 /// Stream live audio as MP3 via HTTP chunked transfer.
 ///
-/// Uses `ffmpeg` to capture from ALSA, PulseAudio/PipeWire, or RTSP and encode
-/// to MP3, streaming stdout directly as the HTTP response body.
+/// `ffmpeg` encodes the stream; where its *input* comes from depends on whether
+/// capture is already holding the source open:
+///
+/// * **A teed source** (a local ALSA microphone) publishes its PCM in-process,
+///   and ffmpeg is fed from that over a pipe. It has to be: the device is
+///   exclusive, so opening it a second time returns `Device or resource busy`
+///   for as long as the station is recording. See [`resolve_live_feed`].
+/// * **Anything else** (RTSP, `PipeWire`, or a station running web-only) is
+///   opened by ffmpeg directly, exactly as before.
 ///
 /// Supports optional frequency shifting via `?freq_shift_hz=<N>` query param
 /// (positive = shift up, negative = shift down). Uses the same
 /// `asetrate`+`aresample` technique as the extraction pipeline.
 ///
-/// If no audio source is configured, returns `503 Service Unavailable`.
+/// If no audio source is configured, returns `503 Service Unavailable`; so does
+/// a teed source that is not currently recording.
 ///
 /// When `?source_id=` is supplied, the row's `kind` + `device_id` from the
 /// `audio_sources` table drives the ffmpeg backend selection — the
@@ -155,15 +188,15 @@ async fn livestream(State(state): State<AppState>, Query(params): Query<StreamPa
     // Resolve the audio source. Two paths:
     //   1. `?source_id=` → DB lookup by id; honour the row's kind explicitly.
     //   2. (no param) → the first enabled `audio_sources` row, else 503.
-    let (source, kind_hint) = match params.source_id.as_deref() {
+    let resolved = match params.source_id.as_deref() {
         Some(id) if !id.is_empty() => match resolve_by_source_id(&state, id) {
-            Some(pair) => pair,
+            Some(resolved) => resolved,
             None => {
                 return (StatusCode::NOT_FOUND, "no such audio source").into_response();
             }
         },
         _ => match resolve_default_source(&state) {
-            Some(pair) => pair,
+            Some(resolved) => resolved,
             None => {
                 return (
                     StatusCode::SERVICE_UNAVAILABLE,
@@ -173,6 +206,11 @@ async fn livestream(State(state): State<AppState>, Query(params): Query<StreamPa
             }
         },
     };
+    let ResolvedSource {
+        id: source_id,
+        device: source,
+        kind: kind_hint,
+    } = resolved;
 
     // Honour the audio_sources kind when present; otherwise fall back to
     // the URL-prefix heuristic that the single-string path has always used.
@@ -203,20 +241,22 @@ async fn livestream(State(state): State<AppState>, Query(params): Query<StreamPa
             .into_response();
     };
 
+    let live = match resolve_live_feed(&state, &source_id).await {
+        Ok(live) => live,
+        Err(response) => return response,
+    };
+
     // Build the audio filter chain: optional freq shift + format conversion.
     let audio_filter = freq_shift_filter(STREAM_SAMPLE_RATE, params.freq_shift_hz);
 
     let mut cmd = tokio::process::Command::new("ffmpeg");
 
-    if is_rtsp {
-        cmd.args(["-rtsp_transport", "tcp", "-i", &source, "-vn"]);
-    } else if is_pulse {
-        let pulse_src = source.trim_start_matches("pulse://");
-        cmd.args(["-f", "pulse", "-i", pulse_src]);
-    } else {
-        // ALSA source (default)
-        cmd.args(["-f", "alsa", "-i", &source]);
-    }
+    cmd.args(stream_input_args(
+        live.as_ref().map(|l| l.subscription.spec()),
+        is_rtsp,
+        is_pulse,
+        &source,
+    ));
 
     if let Some(ref filter) = audio_filter {
         cmd.args(["-af", filter.as_str()]);
@@ -235,6 +275,11 @@ async fn livestream(State(state): State<AppState>, Query(params): Query<StreamPa
     ]);
 
     let child = cmd
+        .stdin(if live.is_some() {
+            std::process::Stdio::piped()
+        } else {
+            std::process::Stdio::null()
+        })
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true)
@@ -279,9 +324,24 @@ async fn livestream(State(state): State<AppState>, Query(params): Query<StreamPa
             .into_response();
     };
 
+    let from_capture_tap = live.is_some();
+    if let Some(live) = live {
+        let Some(stdin) = child.stdin.take() else {
+            tracing::error!("ffmpeg process has no stdin handle");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to feed the audio stream",
+            )
+                .into_response();
+        };
+        spawn_tap_pump(live, stdin);
+    }
+
     tracing::info!(
-        source = %source,
+        source = %source_id,
+        device = %source,
         freq_shift_hz = params.freq_shift_hz,
+        from_capture_tap,
         "starting live audio stream"
     );
 
@@ -324,19 +384,205 @@ async fn livestream(State(state): State<AppState>, Query(params): Query<StreamPa
     (StatusCode::OK, headers, body).into_response()
 }
 
-/// Resolve a `?source_id=` query value to a `(source-string, kind-hint)`
-/// pair by looking up the configured `audio_sources` row.
+/// Decide whether this source is served from capture's in-process tap.
 ///
-/// * Returns `None` when the row is missing, disabled, or the DB read
-///   itself fails. Callers treat all three as "404 no such source".
-/// * The `kind-hint` is the `SourceKind` from the DB, used to bypass the
-///   legacy URL-prefix heuristic so a PipeWire row whose `device_id` is
-///   literally `default` (operator typed `default`) still picks the
-///   PulseAudio ffmpeg backend rather than ALSA.
-fn resolve_by_source_id(
+/// For a local microphone it is, and it **must** be: the ALSA device is
+/// exclusive, so opening it again returns `Device or resource busy` for as long
+/// as the station is recording — which is always. There is deliberately no
+/// fallback to opening the device when a tap exists, even while capture is
+/// paused: grabbing a device the supervisor is about to resume on would turn one
+/// silent stream into a restart loop.
+///
+/// * `Ok(Some(feed))` — stream from the tap, starting with `feed`'s first chunk.
+/// * `Ok(None)` — no tap for this source (RTSP, `PipeWire`, or web-only mode);
+///   the caller opens the source itself, exactly as before.
+/// * `Err(response)` — there is a tap but it is silent, so the source is not
+///   recording. Answering `503` is the honest result; the alternative is a
+///   connection that stays open forever delivering nothing.
+async fn resolve_live_feed(
     state: &AppState,
-    id: &str,
-) -> Option<(String, Option<birdnet_db::audio_sources::SourceKind>)> {
+    source_id: &str,
+) -> Result<Option<LiveFeed>, Response> {
+    let Some(tap) = state.live_audio().and_then(|hub| hub.lookup(source_id)) else {
+        return Ok(None);
+    };
+    if let Some(feed) = wait_for_first_audio(tap.subscribe()).await {
+        return Ok(Some(feed));
+    }
+    tracing::info!(
+        source = source_id,
+        "live audio requested for a source that is not recording"
+    );
+    Err((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "this source is not recording right now — live audio follows capture, \
+         so check the recording schedule, any quiet window, and Station Health",
+    )
+        .into_response())
+}
+
+/// The ffmpeg **input** arguments for a live stream.
+///
+/// This is the decision the whole in-process tee exists to change, so it is a
+/// pure function that can be pinned by a test rather than an `if` buried in a
+/// handler. When `tap` is `Some`, ffmpeg reads raw PCM from `pipe:0` and never
+/// names the device at all; that is what makes live audio possible while
+/// capture holds an exclusive ALSA microphone open. When it is `None` — an RTSP
+/// camera, a PulseAudio/PipeWire source, or a station whose capture is not
+/// teeing — the historical behaviour is unchanged.
+fn stream_input_args(
+    tap: Option<birdnet_core::audio::capture::PcmSpec>,
+    is_rtsp: bool,
+    is_pulse: bool,
+    device: &str,
+) -> Vec<String> {
+    let own = |args: [&str; 4]| args.iter().map(|s| (*s).to_string()).collect();
+    if let Some(spec) = tap {
+        return vec![
+            "-f".to_string(),
+            "s16le".to_string(),
+            "-ar".to_string(),
+            spec.sample_rate.to_string(),
+            "-ac".to_string(),
+            spec.channels.to_string(),
+            "-i".to_string(),
+            "pipe:0".to_string(),
+        ];
+    }
+    if is_rtsp {
+        return vec![
+            "-rtsp_transport".to_string(),
+            "tcp".to_string(),
+            "-i".to_string(),
+            device.to_string(),
+            "-vn".to_string(),
+        ];
+    }
+    if is_pulse {
+        return own(["-f", "pulse", "-i", device.trim_start_matches("pulse://")]);
+    }
+    own(["-f", "alsa", "-i", device])
+}
+
+/// A live tap that has already proved it is producing audio, plus the first
+/// chunk read from it (which must not be dropped on the floor).
+struct LiveFeed {
+    subscription: LiveSubscription,
+    first_chunk: Vec<u8>,
+}
+
+/// Wait for a subscription's first audio, so the handler can answer "is this
+/// source actually recording?" before committing to a 200.
+///
+/// Returns `None` when nothing arrives within [`TAP_FIRST_AUDIO_TIMEOUT`].
+/// Runs on the blocking pool because the read parks on a condvar — cheap and
+/// bounded, and far more truthful than inspecting a "last audio" timestamp,
+/// which cannot distinguish "paused" from "started a moment ago".
+async fn wait_for_first_audio(mut subscription: LiveSubscription) -> Option<LiveFeed> {
+    tokio::task::spawn_blocking(move || {
+        let mut buf = vec![0u8; TAP_CHUNK_BYTES];
+        let n = subscription.read(&mut buf, TAP_FIRST_AUDIO_TIMEOUT);
+        buf.truncate(n);
+        (subscription, buf)
+    })
+    .await
+    .ok()
+    .filter(|(_, first)| !first.is_empty())
+    .map(|(subscription, first_chunk)| LiveFeed {
+        subscription,
+        first_chunk,
+    })
+}
+
+/// Pump a live tap into `sink` — ffmpeg's stdin in production.
+///
+/// Two tasks, because the tap read blocks and the sink is async:
+///
+/// * a blocking task that reads the ring and hands chunks over a shallow
+///   channel;
+/// * an async task that writes them to the sink.
+///
+/// Everything unwinds from the far end: the client disconnects, the response
+/// body's task drops the ffmpeg child (`kill_on_drop`), the stdin write fails,
+/// the channel closes, and the blocking reader's send fails and it returns.
+/// Nothing here can slow capture down — falling behind costs this listener
+/// bytes at the tap and costs the recorder nothing.
+///
+/// Generic over the sink so the pump can be tested against an in-memory pipe;
+/// it is the one piece of this endpoint that would otherwise only ever run with
+/// a real ffmpeg on the far end.
+fn spawn_tap_pump<W>(live: LiveFeed, mut sink: W)
+where
+    W: tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let LiveFeed {
+        mut subscription,
+        first_chunk,
+    } = live;
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(TAP_PUMP_QUEUE);
+
+    tokio::task::spawn_blocking(move || {
+        let mut buf = vec![0u8; TAP_CHUNK_BYTES];
+        loop {
+            let n = subscription.read(&mut buf, Duration::from_millis(500));
+            if n == 0 {
+                // The source went quiet (paused, or between periods). Keep the
+                // connection open and check whether the listener is still there
+                // by looping — `blocking_send` below is what notices departure.
+                if tx.is_closed() {
+                    break;
+                }
+                continue;
+            }
+            if tx.blocking_send(buf[..n].to_vec()).is_err() {
+                break; // listener gone
+            }
+        }
+        let dropped = subscription.dropped_bytes();
+        if dropped > 0 {
+            tracing::debug!(
+                dropped_bytes = dropped,
+                "live listener fell behind the capture tap"
+            );
+        }
+    });
+
+    tokio::spawn(async move {
+        // The chunk the liveness probe already consumed goes first — dropping
+        // it would clip the start of every stream.
+        if sink.write_all(&first_chunk).await.is_err() {
+            return;
+        }
+        while let Some(chunk) = rx.recv().await {
+            if sink.write_all(&chunk).await.is_err() {
+                break;
+            }
+        }
+    });
+}
+
+/// An `audio_sources` row resolved for streaming.
+struct ResolvedSource {
+    /// The row id. Also the capture-source label, so it is the key a live tap
+    /// is registered under — that identity is why the id is carried here and
+    /// not discarded as it used to be.
+    id: String,
+    /// The row's `device_id`: an ALSA device, a PulseAudio source, or an RTSP
+    /// URL, depending on `kind`.
+    device: String,
+    /// The `SourceKind` from the DB, used to bypass the legacy URL-prefix
+    /// heuristic so a PipeWire row whose `device_id` is literally `default`
+    /// (operator typed `default`) still picks the PulseAudio ffmpeg backend
+    /// rather than ALSA.
+    kind: Option<birdnet_db::audio_sources::SourceKind>,
+}
+
+/// Resolve a `?source_id=` query value by looking up the configured
+/// `audio_sources` row.
+///
+/// Returns `None` when the row is missing, disabled, or the DB read itself
+/// fails. Callers treat all three as "404 no such source".
+fn resolve_by_source_id(state: &AppState, id: &str) -> Option<ResolvedSource> {
     use birdnet_db::audio_sources::AudioSourceStore;
     let sources = state.with_db(|conn| AudioSourceStore::list(conn).ok())?;
     pick_by_id(&sources, id)
@@ -345,14 +591,11 @@ fn resolve_by_source_id(
 /// Resolve the default audio source when no `?source_id=` is supplied.
 ///
 /// DB-only: the first non-disabled `audio_sources` row (in `created_at ASC`
-/// order) wins, with its `SourceKind` returned as the kind hint. Returns
-/// `None` when the table is empty or unreadable, in which case the caller
-/// responds with `503 Service Unavailable`. (The legacy single-string
-/// `state.audio_source()` fallback was retired in O-13 — sources are managed
-/// exclusively through the `audio_sources` table now.)
-fn resolve_default_source(
-    state: &AppState,
-) -> Option<(String, Option<birdnet_db::audio_sources::SourceKind>)> {
+/// order) wins. Returns `None` when the table is empty or unreadable, in which
+/// case the caller responds with `503 Service Unavailable`. (The legacy
+/// single-string `state.audio_source()` fallback was retired in O-13 — sources
+/// are managed exclusively through the `audio_sources` table now.)
+fn resolve_default_source(state: &AppState) -> Option<ResolvedSource> {
     use birdnet_db::audio_sources::AudioSourceStore;
     let sources = state
         .with_db(|conn| AudioSourceStore::list(conn).ok())
@@ -366,26 +609,32 @@ fn resolve_default_source(
 fn pick_by_id(
     sources: &[birdnet_db::audio_sources::AudioSource],
     id: &str,
-) -> Option<(String, Option<birdnet_db::audio_sources::SourceKind>)> {
-    sources.iter().find_map(|s| {
-        if s.id == id && s.disabled_at.is_none() {
-            Some((s.device_id.clone(), Some(s.kind)))
-        } else {
-            None
-        }
-    })
+) -> Option<ResolvedSource> {
+    sources
+        .iter()
+        .find(|s| s.id == id && s.disabled_at.is_none())
+        .map(resolved)
 }
 
-/// Pure helper: return the first non-disabled source's `(device_id, kind)`
-/// pair. `AudioSourceStore::list` already filters disabled rows out, but
-/// we re-check here so the helper is safe with arbitrary slices in tests.
+/// Pure helper: return the first non-disabled source.
+/// `AudioSourceStore::list` already filters disabled rows out, but we re-check
+/// here so the helper is safe with arbitrary slices in tests.
 fn pick_first_enabled(
     sources: &[birdnet_db::audio_sources::AudioSource],
-) -> Option<(String, Option<birdnet_db::audio_sources::SourceKind>)> {
+) -> Option<ResolvedSource> {
     sources
         .iter()
         .find(|s| s.disabled_at.is_none())
-        .map(|s| (s.device_id.clone(), Some(s.kind)))
+        .map(resolved)
+}
+
+/// Project an `audio_sources` row onto the fields streaming needs.
+fn resolved(source: &birdnet_db::audio_sources::AudioSource) -> ResolvedSource {
+    ResolvedSource {
+        id: source.id.clone(),
+        device: source.device_id.clone(),
+        kind: Some(source.kind),
+    }
 }
 
 #[cfg(test)]
@@ -443,9 +692,12 @@ mod tests {
             sample("src_usb_1", SourceKind::UsbAlsa, "plughw:1,0", false),
             sample("src_rtsp_1", SourceKind::Rtsp, "rtsp://cam/feed", false),
         ];
-        let (dev, kind) = pick_by_id(&sources, "src_rtsp_1").expect("rtsp row found");
-        assert_eq!(dev, "rtsp://cam/feed");
-        assert!(matches!(kind, Some(SourceKind::Rtsp)));
+        let picked = pick_by_id(&sources, "src_rtsp_1").expect("rtsp row found");
+        assert_eq!(picked.device, "rtsp://cam/feed");
+        assert!(matches!(picked.kind, Some(SourceKind::Rtsp)));
+        // The row id is what a live tap is registered under, so it has to
+        // survive resolution — it used to be dropped here.
+        assert_eq!(picked.id, "src_rtsp_1");
     }
 
     #[test]
@@ -469,9 +721,264 @@ mod tests {
             sample("src_active", SourceKind::PipeWire, "default", false),
             sample("src_other", SourceKind::Rtsp, "rtsp://cam/feed", false),
         ];
-        let (dev, kind) = pick_first_enabled(&sources).expect("an enabled row exists");
-        assert_eq!(dev, "default");
-        assert!(matches!(kind, Some(SourceKind::PipeWire)));
+        let picked = pick_first_enabled(&sources).expect("an enabled row exists");
+        assert_eq!(picked.device, "default");
+        assert_eq!(picked.id, "src_active");
+        assert!(matches!(picked.kind, Some(SourceKind::PipeWire)));
+    }
+
+    // ---- ffmpeg input selection (the point of the whole change) ------------
+
+    /// The counter-test for the tee: the *same* microphone source resolves to a
+    /// device open without a tap, and to a pipe with one.
+    ///
+    /// The device open is what the Pi under test proved fails —
+    /// `ffmpeg -f alsa -i plughw:CARD=PRO,DEV=0` returns `Device or resource
+    /// busy` for as long as capture holds the microphone, which on a running
+    /// station is always. A regression that stopped consulting the tap would
+    /// silently reinstate that, and this is what would catch it.
+    #[test]
+    fn a_teed_microphone_is_streamed_from_the_pipe_never_the_device() {
+        use birdnet_core::audio::capture::PcmSpec;
+        const DEVICE: &str = "plughw:CARD=PRO,DEV=0";
+
+        // Without a tap: the old behaviour — open the device.
+        let without = stream_input_args(None, false, false, DEVICE);
+        assert_eq!(without, vec!["-f", "alsa", "-i", DEVICE]);
+
+        // With a tap: ffmpeg is handed PCM and never names the device.
+        let with = stream_input_args(
+            Some(PcmSpec {
+                sample_rate: 48_000,
+                channels: 1,
+            }),
+            false,
+            false,
+            DEVICE,
+        );
+        assert_eq!(
+            with,
+            vec!["-f", "s16le", "-ar", "48000", "-ac", "1", "-i", "pipe:0"]
+        );
+        assert!(
+            !with.iter().any(|a| a.contains("plughw") || a == "alsa"),
+            "a teed source must not put the capture device on ffmpeg's command \
+             line at all: {with:?}"
+        );
+    }
+
+    #[test]
+    fn stream_input_args_honour_the_tap_format() {
+        use birdnet_core::audio::capture::PcmSpec;
+        let args = stream_input_args(
+            Some(PcmSpec {
+                sample_rate: 44_100,
+                channels: 2,
+            }),
+            false,
+            false,
+            "plughw:1,0",
+        );
+        // A decoder configured with the wrong rate plays the stream at the
+        // wrong pitch, so these have to come from the tap, not from a constant.
+        assert_eq!(args[3], "44100");
+        assert_eq!(args[5], "2");
+    }
+
+    #[test]
+    fn untapped_sources_keep_their_existing_inputs() {
+        // RTSP and PulseAudio are deliberately not teed — a second RTSP session
+        // is normal, and PulseAudio permits concurrent opens — so their command
+        // lines must be exactly what they were.
+        assert_eq!(
+            stream_input_args(None, true, false, "rtsp://cam/feed"),
+            vec!["-rtsp_transport", "tcp", "-i", "rtsp://cam/feed", "-vn"]
+        );
+        assert_eq!(
+            stream_input_args(None, false, true, "pulse://mic"),
+            vec!["-f", "pulse", "-i", "mic"]
+        );
+        assert_eq!(
+            stream_input_args(None, false, true, "default"),
+            vec!["-f", "pulse", "-i", "default"]
+        );
+    }
+
+    // ---- live tap plumbing --------------------------------------------------
+
+    /// The tap key must be the `audio_sources` row id, because that is what
+    /// `CaptureSource::label` registers the tap under. Getting this wrong would
+    /// silently fall through to opening the device — the exact `EBUSY` this
+    /// change exists to remove.
+    #[test]
+    fn the_tap_key_is_the_audio_sources_row_id() {
+        use birdnet_core::audio::capture::{CaptureSource, PcmSpec, new_live_audio_hub};
+
+        let sources = vec![sample(
+            "src_seed_1",
+            SourceKind::UsbAlsa,
+            "plughw:1,0",
+            false,
+        )];
+        let picked = pick_by_id(&sources, "src_seed_1").expect("row found");
+
+        // What capture registers the tap under, for the same row.
+        let capture_source = CaptureSource::Microphone {
+            device: picked.device.clone(),
+            sample_rate: 48_000,
+            channels: 1,
+            stream_id: Some(picked.id.clone()),
+        };
+        let hub = new_live_audio_hub();
+        hub.tap(
+            &capture_source.label(),
+            PcmSpec {
+                sample_rate: 48_000,
+                channels: 1,
+            },
+        );
+
+        assert!(
+            hub.lookup(&picked.id).is_some(),
+            "the streaming resolver and the capture side must agree on the key"
+        );
+    }
+
+    /// A tap that is producing audio yields a feed carrying the first chunk —
+    /// which must not be swallowed by the liveness probe.
+    #[tokio::test]
+    async fn wait_for_first_audio_returns_the_bytes_it_probed_with() {
+        use birdnet_core::audio::capture::{LiveTap, PcmSpec};
+
+        let tap = Arc::new(LiveTap::new(PcmSpec {
+            sample_rate: 48_000,
+            channels: 1,
+        }));
+        let sub = tap.subscribe();
+        tap.push(b"first-audio");
+        let feed = wait_for_first_audio(sub)
+            .await
+            .expect("audio was available");
+        assert_eq!(feed.first_chunk, b"first-audio");
+        assert_eq!(feed.subscription.spec().sample_rate, 48_000);
+    }
+
+    /// The pump must deliver the probe's chunk *and* everything after it.
+    ///
+    /// Dropping the first chunk would clip the start of every stream, and it is
+    /// the easy mistake here: the liveness probe has already consumed it from
+    /// the ring, so it exists only in the `LiveFeed` the pump is handed.
+    #[tokio::test]
+    async fn the_pump_delivers_the_probed_chunk_and_then_the_stream() {
+        use birdnet_core::audio::capture::{LiveTap, PcmSpec};
+        use tokio::io::AsyncReadExt;
+
+        let tap = Arc::new(LiveTap::new(PcmSpec {
+            sample_rate: 48_000,
+            channels: 1,
+        }));
+        let sub = tap.subscribe();
+        tap.push(b"FIRST");
+        let feed = wait_for_first_audio(sub).await.expect("audio available");
+
+        // Stand in for ffmpeg's stdin.
+        let (sink, mut ffmpeg_side) = tokio::io::duplex(4096);
+        spawn_tap_pump(feed, sink);
+
+        // Keep producing so the pump has more to forward after the probe.
+        let writer = Arc::clone(&tap);
+        let feeding = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let stop = Arc::clone(&feeding);
+        let producer = std::thread::spawn(move || {
+            while stop.load(std::sync::atomic::Ordering::Relaxed) {
+                writer.push(b"MORE");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        });
+
+        let mut seen = Vec::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while seen.len() < 9 && tokio::time::Instant::now() < deadline {
+            let mut buf = [0u8; 256];
+            match tokio::time::timeout(Duration::from_millis(200), ffmpeg_side.read(&mut buf)).await
+            {
+                Ok(Ok(0)) | Err(_) => {}
+                Ok(Ok(n)) => seen.extend_from_slice(&buf[..n]),
+                Ok(Err(e)) => panic!("read from the pump failed: {e}"),
+            }
+        }
+        feeding.store(false, std::sync::atomic::Ordering::Relaxed);
+        producer.join().expect("producer thread");
+
+        assert!(
+            seen.starts_with(b"FIRST"),
+            "the chunk the liveness probe consumed must be forwarded first, \
+             got {:?}",
+            String::from_utf8_lossy(&seen)
+        );
+        assert!(
+            seen.len() > 5,
+            "the pump must keep forwarding after the first chunk, got {:?}",
+            String::from_utf8_lossy(&seen)
+        );
+    }
+
+    /// When the sink goes away — ffmpeg killed because the client disconnected
+    /// — the pump must unwind rather than spin forever holding a blocking-pool
+    /// thread and a stream permit.
+    #[tokio::test]
+    async fn the_pump_stops_when_its_sink_closes() {
+        use birdnet_core::audio::capture::{LiveTap, PcmSpec};
+
+        let tap = Arc::new(LiveTap::new(PcmSpec {
+            sample_rate: 48_000,
+            channels: 1,
+        }));
+        let sub = tap.subscribe();
+        tap.push(b"x");
+        let feed = wait_for_first_audio(sub).await.expect("audio available");
+
+        let (sink, ffmpeg_side) = tokio::io::duplex(64);
+        spawn_tap_pump(feed, sink);
+        drop(ffmpeg_side); // the listener is gone
+
+        // Keep the tap producing; the pump must still wind down. If it did not,
+        // the subscription would be held forever — observable here as the tap
+        // never dropping back to a single strong reference.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while Arc::strong_count(&tap) > 1 && tokio::time::Instant::now() < deadline {
+            tap.push(&[0u8; 1024]);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            Arc::strong_count(&tap),
+            1,
+            "the pump must release its subscription once the sink is gone"
+        );
+    }
+
+    /// A silent tap — capture paused by the schedule, or the source down —
+    /// resolves to `None`, so the handler answers 503 instead of holding a
+    /// connection open forever producing nothing.
+    #[tokio::test]
+    async fn wait_for_first_audio_gives_up_on_a_silent_source() {
+        use birdnet_core::audio::capture::{LiveTap, PcmSpec};
+
+        let tap = Arc::new(LiveTap::new(PcmSpec {
+            sample_rate: 48_000,
+            channels: 1,
+        }));
+        let sub = tap.subscribe();
+        // Nothing is ever pushed. Probe with the real (2 s) timeout would make
+        // this test slow, so drive the subscription directly with a short one
+        // and assert the same emptiness the helper keys off.
+        let mut sub = sub;
+        let mut buf = [0u8; 64];
+        assert_eq!(sub.read(&mut buf, Duration::from_millis(50)), 0);
+        assert!(
+            TAP_FIRST_AUDIO_TIMEOUT >= Duration::from_secs(1),
+            "the real probe must be generous enough to clear a period boundary"
+        );
     }
 
     #[test]

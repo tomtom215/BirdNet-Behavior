@@ -1,0 +1,658 @@
+//! The in-process capture tee: one device open, two consumers.
+//!
+//! # The problem
+//!
+//! An ALSA `plughw:` microphone is an **exclusive** device. While `arecord`
+//! holds it, a second opener is refused: on the Raspberry Pi 4 under test,
+//! `ffmpeg -f alsa -i plughw:CARD=PRO,DEV=0` fails with `Device or resource
+//! busy` for as long as capture is running. The live `/stream` endpoint did
+//! exactly that second open, so on a single-microphone station — which is what
+//! almost every build is — live audio could not work, and neither could
+//! anything else that wanted to listen to the microphone.
+//!
+//! # The shape of the fix
+//!
+//! Open the device once and split the stream in-process:
+//!
+//! ```text
+//!   arecord -t raw ──stdout──▶ [tee thread] ──▶ SegmentWriter  (rotating WAVs)
+//!                                          └──▶ LiveTap        (bounded, lossy)
+//! ```
+//!
+//! `arecord` stops segmenting for us — it just streams headerless PCM — and
+//! [`super::segment::SegmentWriter`] takes over writing the files, with names
+//! byte-identical to the ones `--use-strftime` produced. `/stream` subscribes to
+//! the [`super::live::LiveTap`] instead of touching the device.
+//!
+//! # Recording is the priority, always
+//!
+//! The tap is bounded and lossy ([`super::live`]), so no listener can ever
+//! backpressure the reader. The reader drains the producer's stdout on its own
+//! thread, which is also what keeps the pipe from filling — a full pipe would
+//! block `arecord` in `write(2)` while leaving it *alive*, the same silent-deaf
+//! failure the stderr drainer exists to prevent.
+//!
+//! If the segment writer fails (a full disk, a vanished mount), the tee thread
+//! stops. That is deliberate: [`super::process::CaptureProcess::is_running`]
+//! reports the source as down, and the supervisor restarts it with backoff and
+//! lights up the health gauge — rather than the station continuing to look
+//! healthy while writing nothing.
+
+use std::io::Read;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::JoinHandle;
+
+use super::live::{BYTES_PER_SAMPLE, LiveTap};
+use super::segment::SegmentWriter;
+
+/// Size of the reader's staging buffer.
+///
+/// Not a latency knob: a pipe `read` returns as soon as the producer has
+/// written anything, so live latency tracks `arecord`'s period size, not this.
+/// It only bounds the syscall rate and the size of an individual disk write.
+const READ_BUFFER_BYTES: usize = 16 * 1024;
+
+/// Software capture gain applied to interleaved S16LE PCM.
+///
+/// `arecord` has no gain control, which is why a gain-configured microphone
+/// used to be routed through `ffmpeg -f alsa` and its `volume` filter instead.
+/// Now that the samples pass through this process anyway, applying the gain
+/// here removes that whole second capture backend — along with the mismatch it
+/// carried, where [`super::process::required_tool`] still reported `arecord`
+/// for a source that actually needed `ffmpeg`.
+///
+/// Gain is applied **once**, upstream of the split, so what a listener hears on
+/// `/stream` is exactly what the detector will classify.
+#[derive(Debug)]
+struct Gain {
+    /// Linear amplitude multiplier, `10^(dB/20)`.
+    factor: f32,
+    /// A sample split across two reads: pipes are byte streams and give no
+    /// alignment guarantee, so the odd byte waits here for its partner.
+    carry: Option<u8>,
+    /// Scaled output, reused between chunks to keep the reader allocation-free.
+    out: Vec<u8>,
+}
+
+impl Gain {
+    fn new(gain_db: f32) -> Self {
+        Self {
+            factor: 10f32.powf(gain_db / 20.0),
+            carry: None,
+            out: Vec::with_capacity(READ_BUFFER_BYTES + BYTES_PER_SAMPLE),
+        }
+    }
+
+    /// Scale one 16-bit sample, saturating at the format's limits exactly as
+    /// ffmpeg's `volume` filter does for s16 — a boost loud enough to clip
+    /// clips, rather than wrapping into a loud burst of noise.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "the value is clamped into i16's range immediately before the cast"
+    )]
+    fn scale(&self, sample: i16) -> i16 {
+        let scaled = f32::from(sample) * self.factor;
+        scaled
+            .clamp(f32::from(i16::MIN), f32::from(i16::MAX))
+            .round() as i16
+    }
+
+    /// Return `input` scaled. The result may be one byte longer or shorter than
+    /// the input, as a straddling sample is completed or deferred.
+    fn apply(&mut self, input: &[u8]) -> &[u8] {
+        self.out.clear();
+        let mut rest = input;
+        if let Some(low) = self.carry.take() {
+            let Some((&high, tail)) = rest.split_first() else {
+                // Still only half a sample — keep waiting.
+                self.carry = Some(low);
+                return &self.out;
+            };
+            self.out
+                .extend_from_slice(&self.scale(i16::from_le_bytes([low, high])).to_le_bytes());
+            rest = tail;
+        }
+        let aligned = rest.len() - rest.len() % BYTES_PER_SAMPLE;
+        for pair in rest[..aligned].chunks_exact(BYTES_PER_SAMPLE) {
+            self.out.extend_from_slice(
+                &self
+                    .scale(i16::from_le_bytes([pair[0], pair[1]]))
+                    .to_le_bytes(),
+            );
+        }
+        if let Some(&odd) = rest[aligned..].first() {
+            self.carry = Some(odd);
+        }
+        &self.out
+    }
+}
+
+/// A running capture tee: the reader thread plus its stop latch.
+#[derive(Debug)]
+pub struct Tee {
+    stop: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl Tee {
+    /// Whether the reader thread is still running.
+    ///
+    /// A tee that has exited means the source is not recording, whatever the
+    /// producer process is doing — the supervisor treats it as death.
+    pub fn is_alive(&self) -> bool {
+        self.handle.as_ref().is_some_and(|h| !h.is_finished())
+    }
+
+    /// Ask the reader to stop and wait for it.
+    ///
+    /// The caller must kill the producer **first**: the reader spends its life
+    /// blocked in `read`, and it is the resulting EOF — not this latch — that
+    /// wakes it. The latch only covers the window between two reads.
+    pub fn stop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.handle.take()
+            && handle.join().is_err()
+        {
+            tracing::warn!("capture tee thread panicked");
+        }
+    }
+}
+
+impl Drop for Tee {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+/// Start a tee reading PCM from `source`.
+///
+/// `gain_db` is applied in-process; a value below the audible threshold skips
+/// the sample loop entirely and the bytes are forwarded untouched, which is
+/// what makes "the segments concatenate back to exactly what the device
+/// produced" true on the unity-gain path.
+///
+/// # Errors
+///
+/// Returns the `io::Error` from spawning the reader thread.
+pub fn spawn<R>(
+    label: String,
+    source: R,
+    writer: SegmentWriter,
+    tap: Option<Arc<LiveTap>>,
+    gain_db: f32,
+) -> std::io::Result<Tee>
+where
+    R: Read + Send + 'static,
+{
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_for_thread = Arc::clone(&stop);
+    let handle = std::thread::Builder::new()
+        .name("capture-tee".to_owned())
+        .spawn(move || {
+            run(
+                &label,
+                source,
+                writer,
+                tap.as_deref(),
+                gain_db,
+                &stop_for_thread,
+            );
+        })?;
+    Ok(Tee {
+        stop,
+        handle: Some(handle),
+    })
+}
+
+/// The reader loop: drain `source`, fan each chunk out to both consumers.
+fn run<R: Read>(
+    label: &str,
+    mut source: R,
+    mut writer: SegmentWriter,
+    tap: Option<&LiveTap>,
+    gain_db: f32,
+    stop: &AtomicBool,
+) {
+    let mut gain = super::process::gain_is_active(gain_db).then(|| Gain::new(gain_db));
+    let mut buf = vec![0u8; READ_BUFFER_BYTES];
+    let mut bytes_seen: u64 = 0;
+
+    while !stop.load(Ordering::Relaxed) {
+        let read = match source.read(&mut buf) {
+            Ok(0) => {
+                tracing::debug!(source = label, bytes = bytes_seen, "capture stream ended");
+                break;
+            }
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => {
+                tracing::warn!(source = label, error = %e, "capture stream read failed");
+                break;
+            }
+        };
+        bytes_seen += read as u64;
+
+        let payload: &[u8] = gain
+            .as_mut()
+            .map_or_else(|| &buf[..read], |g| g.apply(&buf[..read]));
+        if payload.is_empty() {
+            continue;
+        }
+
+        // The tap first: it cannot block or fail, so live audio is never held
+        // up by a slow filesystem, and a disk error still reaches the listener
+        // as silence rather than a stalled connection.
+        if let Some(tap) = tap {
+            tap.push(payload);
+        }
+        if let Err(e) = writer.write(payload) {
+            // Stopping is the point — see the module docs. A source that
+            // cannot write must look down, not healthy-but-silent.
+            tracing::error!(
+                source = label,
+                error = %e,
+                "capture segment write failed; stopping this source so the \
+                 supervisor restarts it"
+            );
+            break;
+        }
+    }
+    writer.finish();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::capture::live::PcmSpec;
+    use crate::audio::capture::segment::SegmentClock;
+    use crate::audio::capture::types::{AudioFormat, LocalOffset};
+    use std::io::Write;
+    use std::path::PathBuf;
+    use std::sync::atomic::AtomicI64;
+    use std::time::{Duration, Instant};
+
+    /// 10 bytes/second, 2 bytes/frame — small enough that segment counts are
+    /// obvious in assertions.
+    const TINY: PcmSpec = PcmSpec {
+        sample_rate: 5,
+        channels: 1,
+    };
+
+    /// 2026-08-12 12:03:15 UTC.
+    const T0: i64 = 1_786_536_195;
+
+    struct Fixture {
+        dir: tempfile::TempDir,
+        clock: Arc<AtomicI64>,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            Self {
+                dir: tempfile::tempdir().expect("tempdir"),
+                clock: Arc::new(AtomicI64::new(T0)),
+            }
+        }
+
+        fn writer(&self, secs: u32) -> SegmentWriter {
+            SegmentWriter::new(
+                self.dir.path().to_path_buf(),
+                Some("src_seed_1".to_owned()),
+                AudioFormat::Wav,
+                TINY,
+                secs,
+                LocalOffset::utc(),
+                SegmentClock::Ticking(Arc::clone(&self.clock)),
+            )
+        }
+
+        fn segments(&self) -> Vec<PathBuf> {
+            let mut files: Vec<PathBuf> = std::fs::read_dir(self.dir.path())
+                .expect("read_dir")
+                .flatten()
+                .map(|e| e.path())
+                .collect();
+            files.sort();
+            files
+        }
+
+        /// Every segment's PCM payload, concatenated in filename order.
+        fn recorded_pcm(&self) -> Vec<u8> {
+            let mut out = Vec::new();
+            for path in self.segments() {
+                let bytes = std::fs::read(&path).expect("read segment");
+                out.extend_from_slice(&bytes[44..]);
+            }
+            out
+        }
+
+        /// Block until `f` holds or the deadline passes.
+        fn wait_for(what: &str, mut f: impl FnMut() -> bool) {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while Instant::now() < deadline {
+                if f() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            panic!("timed out waiting for {what}");
+        }
+    }
+
+    // ---- gain (pure) -------------------------------------------------------
+
+    #[test]
+    fn unity_gain_is_never_constructed() {
+        // The reader skips the sample loop entirely below the epsilon, which is
+        // what keeps the unity-gain path byte-exact.
+        assert!(!super::super::process::gain_is_active(0.0));
+        assert!(super::super::process::gain_is_active(6.0));
+    }
+
+    #[test]
+    fn gain_scales_samples_by_the_decibel_factor() {
+        let mut g = Gain::new(6.0206); // ×2
+        let input: Vec<u8> = [100i16, -100, 0, 1000]
+            .iter()
+            .flat_map(|s| s.to_le_bytes())
+            .collect();
+        let out = g.apply(&input).to_vec();
+        let got: Vec<i16> = out
+            .chunks_exact(2)
+            .map(|c| i16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        assert_eq!(got, vec![200, -200, 0, 2000]);
+    }
+
+    #[test]
+    fn gain_clips_rather_than_wrapping() {
+        // A wrapping cast would turn a loud boost into a burst of full-scale
+        // noise of the *opposite* sign — audibly catastrophic.
+        let mut g = Gain::new(40.0); // ×100
+        let input: Vec<u8> = [20_000i16, -20_000]
+            .iter()
+            .flat_map(|s| s.to_le_bytes())
+            .collect();
+        let out = g.apply(&input).to_vec();
+        let got: Vec<i16> = out
+            .chunks_exact(2)
+            .map(|c| i16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        assert_eq!(got, vec![i16::MAX, i16::MIN]);
+    }
+
+    #[test]
+    fn gain_cuts_as_well_as_boosts() {
+        let mut g = Gain::new(-6.0206); // ×0.5
+        let input: Vec<u8> = 1000i16.to_le_bytes().to_vec();
+        let out = g.apply(&input).to_vec();
+        assert_eq!(i16::from_le_bytes([out[0], out[1]]), 500);
+    }
+
+    /// A pipe is a byte stream: a read can end mid-sample. The deferred byte
+    /// must be scaled with its partner, not dropped and not scaled alone.
+    #[test]
+    fn gain_carries_a_sample_split_across_two_reads() {
+        let mut g = Gain::new(6.0206); // ×2
+        let whole = 1000i16.to_le_bytes();
+        // First read delivers only the low byte.
+        assert!(
+            g.apply(&whole[..1]).is_empty(),
+            "half a sample emits nothing"
+        );
+        // Second read completes it.
+        let out = g.apply(&whole[1..]).to_vec();
+        assert_eq!(out.len(), 2);
+        assert_eq!(i16::from_le_bytes([out[0], out[1]]), 2000);
+    }
+
+    #[test]
+    fn gain_handles_an_empty_read_while_carrying() {
+        let mut g = Gain::new(6.0206);
+        let whole = 1000i16.to_le_bytes();
+        assert!(g.apply(&whole[..1]).is_empty());
+        assert!(g.apply(&[]).is_empty(), "the carry survives an empty read");
+        let out = g.apply(&whole[1..]).to_vec();
+        assert_eq!(i16::from_le_bytes([out[0], out[1]]), 2000);
+    }
+
+    // ---- the tee itself ----------------------------------------------------
+
+    #[test]
+    fn tee_writes_everything_the_producer_emitted() {
+        let fx = Fixture::new();
+        let stream: Vec<u8> = (0..=200u8).collect();
+        let mut tee = spawn(
+            "src_seed_1".to_owned(),
+            std::io::Cursor::new(stream.clone()),
+            fx.writer(3),
+            None,
+            0.0,
+        )
+        .expect("spawn tee");
+        Fixture::wait_for("the tee to drain the producer", || !tee.is_alive());
+        tee.stop();
+        assert_eq!(
+            fx.recorded_pcm(),
+            stream,
+            "every byte the producer emitted must reach a segment"
+        );
+    }
+
+    #[test]
+    fn tee_reports_dead_once_the_producer_ends() {
+        let fx = Fixture::new();
+        let mut tee = spawn(
+            "src_seed_1".to_owned(),
+            std::io::Cursor::new(vec![0u8; 8]),
+            fx.writer(3),
+            None,
+            0.0,
+        )
+        .expect("spawn tee");
+        Fixture::wait_for("the tee thread to exit", || !tee.is_alive());
+        tee.stop();
+    }
+
+    #[test]
+    fn tee_feeds_the_live_tap_with_the_same_audio_it_records() {
+        let fx = Fixture::new();
+        let tap = Arc::new(LiveTap::new(TINY));
+        let mut sub = tap.subscribe();
+        let (reader, mut writer_end) = std::io::pipe().expect("pipe");
+        let mut tee = spawn(
+            "src_seed_1".to_owned(),
+            reader,
+            fx.writer(3),
+            Some(Arc::clone(&tap)),
+            0.0,
+        )
+        .expect("spawn tee");
+
+        writer_end.write_all(b"live-audio!").expect("produce");
+        let mut heard = Vec::new();
+        Fixture::wait_for("the tap to receive the audio", || {
+            let mut buf = [0u8; 64];
+            let n = sub.read(&mut buf, Duration::from_millis(50));
+            heard.extend_from_slice(&buf[..n]);
+            heard.len() >= 11
+        });
+        assert_eq!(heard, b"live-audio!");
+
+        drop(writer_end);
+        Fixture::wait_for("the tee to finish", || !tee.is_alive());
+        tee.stop();
+        assert_eq!(fx.recorded_pcm(), b"live-audio!");
+    }
+
+    /// The guarantee the whole design exists for: a listener that stops reading
+    /// must not stop the recorder. Subscribe, never read, push far more than
+    /// the ring can hold, and assert the segments still land intact.
+    #[test]
+    fn a_stalled_listener_cannot_stall_recording() {
+        let fx = Fixture::new();
+        let tap = Arc::new(LiveTap::new(TINY));
+        // Subscribe and then abandon it — the subscriber never calls read().
+        let stalled = tap.subscribe();
+        let (reader, mut writer_end) = std::io::pipe().expect("pipe");
+        let mut tee = spawn(
+            "src_seed_1".to_owned(),
+            reader,
+            fx.writer(3),
+            Some(Arc::clone(&tap)),
+            0.0,
+        )
+        .expect("spawn tee");
+
+        // Far more than the ring's capacity (floored at 64 KiB).
+        let stream: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+        writer_end.write_all(&stream).expect("produce");
+        drop(writer_end);
+        Fixture::wait_for("the tee to finish", || !tee.is_alive());
+        tee.stop();
+
+        assert_eq!(
+            fx.recorded_pcm(),
+            stream,
+            "a listener that never reads must not cost the recording a byte"
+        );
+        assert!(
+            fx.segments().len() > 1,
+            "the stream should have rotated several times"
+        );
+        // The stalled subscriber is the one that lost data, as designed.
+        drop(stalled);
+    }
+
+    #[test]
+    fn tee_applies_gain_to_both_consumers() {
+        let fx = Fixture::new();
+        let tap = Arc::new(LiveTap::new(TINY));
+        let mut sub = tap.subscribe();
+        let (reader, mut writer_end) = std::io::pipe().expect("pipe");
+        let mut tee = spawn(
+            "src_seed_1".to_owned(),
+            reader,
+            fx.writer(30),
+            Some(Arc::clone(&tap)),
+            6.0206, // ×2
+        )
+        .expect("spawn tee");
+
+        let input: Vec<u8> = [1000i16, -1000]
+            .iter()
+            .flat_map(|s| s.to_le_bytes())
+            .collect();
+        writer_end.write_all(&input).expect("produce");
+
+        let mut heard = Vec::new();
+        Fixture::wait_for("the tap to receive the boosted audio", || {
+            let mut buf = [0u8; 16];
+            let n = sub.read(&mut buf, Duration::from_millis(50));
+            heard.extend_from_slice(&buf[..n]);
+            heard.len() >= 4
+        });
+        drop(writer_end);
+        Fixture::wait_for("the tee to finish", || !tee.is_alive());
+        tee.stop();
+
+        let expected: Vec<u8> = [2000i16, -2000]
+            .iter()
+            .flat_map(|s| s.to_le_bytes())
+            .collect();
+        assert_eq!(heard, expected, "live audio carries the configured gain");
+        assert_eq!(
+            fx.recorded_pcm(),
+            expected,
+            "…and so does what the detector will classify"
+        );
+    }
+
+    /// The counter-test for the whole design, at the level this sandbox can
+    /// reach: **three** consumers of one device open — the recorder and two
+    /// independent listeners — all receive the full stream.
+    ///
+    /// Before the tee there was exactly one consumer possible, because the
+    /// second opener of an ALSA `plughw:` device gets `EBUSY`; a `/stream`
+    /// listener and the recorder could not coexist at all. (The `EBUSY` half of
+    /// that statement is hardware behaviour and is not reproduced here — there
+    /// is no ALSA device on this runner. What is proven here is that the
+    /// replacement genuinely serves several consumers from one stream.)
+    #[test]
+    fn one_device_open_feeds_the_recorder_and_several_listeners() {
+        let fx = Fixture::new();
+        let tap = Arc::new(LiveTap::new(TINY));
+        let mut listener_a = tap.subscribe();
+        let mut listener_b = tap.subscribe();
+        let (reader, mut writer_end) = std::io::pipe().expect("pipe");
+        let mut tee = spawn(
+            "src_seed_1".to_owned(),
+            reader,
+            fx.writer(3),
+            Some(Arc::clone(&tap)),
+            0.0,
+        )
+        .expect("spawn tee");
+
+        let stream: Vec<u8> = (0..=120u8).collect();
+        writer_end.write_all(&stream).expect("produce");
+
+        let mut heard_a = Vec::new();
+        let mut heard_b = Vec::new();
+        Fixture::wait_for("both listeners to hear the whole stream", || {
+            let mut buf = [0u8; 256];
+            let n = listener_a.read(&mut buf, Duration::from_millis(50));
+            heard_a.extend_from_slice(&buf[..n]);
+            let n = listener_b.read(&mut buf, Duration::from_millis(50));
+            heard_b.extend_from_slice(&buf[..n]);
+            heard_a.len() >= stream.len() && heard_b.len() >= stream.len()
+        });
+
+        drop(writer_end);
+        Fixture::wait_for("the tee to finish", || !tee.is_alive());
+        tee.stop();
+
+        assert_eq!(heard_a, stream, "listener A heard the whole stream");
+        assert_eq!(heard_b, stream, "listener B heard the whole stream");
+        assert_eq!(
+            fx.recorded_pcm(),
+            stream,
+            "…and the recorder still got every byte"
+        );
+    }
+
+    /// Rotation must be driven by the sample count, so the recorded stream is
+    /// contiguous across a boundary rather than losing whatever arrived while a
+    /// file was being swapped.
+    #[test]
+    fn rotation_loses_nothing_at_the_boundary() {
+        let fx = Fixture::new();
+        let (reader, mut writer_end) = std::io::pipe().expect("pipe");
+        let mut tee = spawn(
+            "src_seed_1".to_owned(),
+            reader,
+            fx.writer(3), // 30 bytes per segment
+            None,
+            0.0,
+        )
+        .expect("spawn tee");
+
+        // Write in 7-byte chunks so no write aligns with the 30-byte boundary,
+        // advancing the clock so each segment gets its own filename.
+        let stream: Vec<u8> = (0..=209u8).collect();
+        for chunk in stream.chunks(7) {
+            writer_end.write_all(chunk).expect("produce");
+        }
+        drop(writer_end);
+        Fixture::wait_for("the tee to finish", || !tee.is_alive());
+        tee.stop();
+
+        assert_eq!(fx.recorded_pcm(), stream);
+        assert_eq!(
+            fx.recorded_pcm().len(),
+            210,
+            "byte count across rotations must be exact"
+        );
+    }
+}

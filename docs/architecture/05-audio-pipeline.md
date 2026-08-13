@@ -18,7 +18,9 @@
 ## Pipeline Overview
 
 ```
-Microphone / RTSP → arecord / ffmpeg → WAV files in StreamData/
+Microphone → arecord -t raw → in-process tee ┬→ WAV files in StreamData/
+                                             └→ live tap → GET /stream
+RTSP / PipeWire → ffmpeg -f segment ─────────→ WAV files in StreamData/
                                             │
                     notify watches ─────────┘
                                             │
@@ -112,8 +114,11 @@ Implemented in `crates/birdnet-core/src/audio/capture/`.
 
 Audio capture uses subprocess management rather than direct ALSA bindings:
 
-- **Microphone** — `arecord` subprocess with configured format / rate
-- **PulseAudio / PipeWire** — `parec` subprocess
+- **Microphone (Linux)** — `arecord -t raw` streams headerless PCM to this
+  process, which splits it (see [The capture tee](#the-capture-tee) below)
+- **Microphone (macOS)** — `ffmpeg` avfoundation input with its own `segment`
+  muxer
+- **PulseAudio / PipeWire** — `ffmpeg -f pulse` with the `segment` muxer
 - **RTSP streams** — `ffmpeg` subprocess with reconnection logic
 - **Gap detection** — monitor for missing files and alert on prolonged silence
 - **Disk management** — rotate old recordings, enforce space limits
@@ -121,6 +126,44 @@ Audio capture uses subprocess management rather than direct ALSA bindings:
 
 This avoids a `cpal` dependency and leverages battle-tested system tools
 that are already present on every supported platform.
+
+### The capture tee
+
+An ALSA `plughw:` microphone is an **exclusive** device: while capture holds it,
+a second opener gets `Device or resource busy`. Live audio (`GET /stream`) used
+to be that second opener, so on a single-microphone station — which is what
+almost every build is — it could never work.
+
+`arecord` therefore no longer segments for us. It streams raw PCM to a pipe and
+a reader thread (`capture/tee.rs`) drives two consumers:
+
+| Consumer | Module | Behaviour |
+|----------|--------|-----------|
+| Segment writer | `capture/segment.rs` | Rotating WAV files, names byte-identical to `arecord --use-strftime` |
+| Live tap | `capture/live.rs` | Bounded ring buffer, **lossy on overflow** |
+
+The tap is lossy by design: `LiveTap::push` never blocks and never fails, so a
+stalled listener cannot backpressure capture. A subscriber that falls further
+behind than the ring is deep is fast-forwarded and the skipped bytes counted.
+Losing live-monitoring audio is a click in someone's headphones; losing recorded
+audio is a detection that never happens.
+
+Two consequences beyond live audio:
+
+- **Software gain is applied in-process.** `arecord` has no gain control, so a
+  gain-configured microphone used to be captured by `ffmpeg -f alsa` and its
+  `volume` filter instead. That second backend is gone, along with the mismatch
+  it carried — `required_tool` reported `arecord` for a source that actually
+  needed `ffmpeg`, so a station with gain and no ffmpeg passed the availability
+  check and then failed to spawn.
+- **Filenames are now produced by this crate.** They carry **local** civil time,
+  as `arecord --use-strftime` did, from `birdnet_db::clock::local_utc_offset_secs`
+  refreshed by the supervisor on every tick (so a station keeps naming files
+  correctly across a daylight-saving change it never restarts for).
+
+RTSP and PipeWire are deliberately **not** teed: a second RTSP session to a
+camera is normal, and PulseAudio permits concurrent opens, so neither has the
+exclusivity problem this solves.
 
 ## Detection Pipeline
 

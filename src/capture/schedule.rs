@@ -180,36 +180,14 @@ pub(super) const fn secs_look_synced(secs: u64) -> bool {
 /// Convert a Unix timestamp (seconds since 1970-01-01 UTC) into
 /// `(year, month, day, minutes_since_midnight)`.
 ///
-/// Pure (no clock access) so the date arithmetic can be property-tested
-/// directly. Implements Howard Hinnant's `civil_from_days`:
-/// <http://howardhinnant.github.io/date_algorithms.html>.
+/// Delegates to [`birdnet_core::civil::civil_from_unix_secs`]. The arithmetic
+/// moved into `birdnet-core` when the capture tee started formatting the same
+/// calendar into segment filenames: the schedule gate and the filenames have to
+/// agree about what day it is, and a private copy here is exactly how they
+/// would come not to.
 pub(super) fn civil_from_unix_secs(secs: u64) -> (u32, u32, u32, u32) {
-    let days = secs / 86400;
-    let time_of_day = secs % 86400;
-    #[allow(clippy::cast_possible_truncation)]
-    let minutes = (time_of_day / 60) as u32;
-
-    #[allow(
-        clippy::cast_possible_wrap,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss
-    )]
-    let z = days as i64 + 719_468;
-    // `z` is always >= 0 here — a u64 timestamp cannot predate the epoch — so
-    // Hinnant's proleptic negative-era branch is unreachable; divide directly.
-    let era = z / 146_097;
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let doe = (z - era * 146_097) as u32;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let y = i64::from(yoe) + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    (y as u32, m, d, minutes)
+    let t = birdnet_core::civil::civil_from_unix_secs(i64::try_from(secs).unwrap_or(i64::MAX));
+    (t.year, t.month, t.day, t.minute_of_day())
 }
 
 #[cfg(test)]

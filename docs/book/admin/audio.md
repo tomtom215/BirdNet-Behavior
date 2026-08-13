@@ -96,6 +96,28 @@ way to keep several microphones straight on one station.
 `--doctor` validates either form and, if the configured card is missing, names
 the card that *is* present and prints the exact line to set.
 
+## Listening live
+
+The **Listen → Live** tab plays whatever the station is recording *right now*.
+It does not open the microphone itself — an ALSA capture device only allows one
+opener, so anything that tried would be refused with `Device or resource busy`
+for as long as recording was in progress, which on a working station is always.
+Instead, capture publishes the audio it is already writing to disk, and the live
+stream is a second reader of that.
+
+Two things follow from this that are worth knowing:
+
+- **Live audio is exactly what the detector hears**, including any per-source
+  gain you have set. If the live stream sounds clipped, so does the audio being
+  classified.
+- **Live audio follows capture.** If a source is paused — outside the recording
+  schedule, or inside its quiet window — or is down, the Live tab reports that
+  the source is not recording rather than playing silence. Station Health will
+  say why.
+
+Live audio still needs `ffmpeg` installed: the station uses it to encode the
+stream as MP3 for the browser. `--doctor` warns if it is missing.
+
 ## Common pitfalls
 
 - USB hubs can drop audio under load — prefer a direct port on the Pi.

@@ -5,7 +5,7 @@
 
 #[cfg(feature = "analytics")]
 use birdnet_behavioral::connection::AnalyticsDb;
-use birdnet_core::audio::capture::CaptureStatusHandle;
+use birdnet_core::audio::capture::{CaptureStatusHandle, LiveAudioHubHandle};
 use birdnet_core::i18n::I18nManager;
 
 use crate::analytics_cache::AnalyticsCache;
@@ -101,6 +101,11 @@ struct AppStateInner {
     /// thread for the Station Health page. `None` when no supervisor is running
     /// (web-only mode, or tooling); the page then falls back to DB activity.
     capture_status: Option<CaptureStatusHandle>,
+    /// Live PCM taps published by teed capture sources, so `/stream` can serve
+    /// live audio without opening the (exclusive) capture device a second time.
+    /// `None` in web-only mode and tooling, where `/stream` falls back to
+    /// opening the device itself.
+    live_audio: Option<LiveAudioHubHandle>,
 }
 
 /// Unwrap the `Arc<AppStateInner>`, aborting if shared (called during setup only).
@@ -173,6 +178,7 @@ impl AppState {
                 detection_daemon_running: Arc::new(AtomicBool::new(false)),
                 analytics_cache: Arc::new(AnalyticsCache::default()),
                 capture_status: None,
+                live_audio: None,
             }),
         })
     }
@@ -274,6 +280,7 @@ impl AppState {
                 detection_daemon_running: Arc::new(AtomicBool::new(false)),
                 analytics_cache: Arc::new(AnalyticsCache::default()),
                 capture_status: None,
+                live_audio: None,
             }),
         })
     }
@@ -305,6 +312,7 @@ impl AppState {
                 detection_daemon_running: Arc::new(AtomicBool::new(false)),
                 analytics_cache: Arc::new(AnalyticsCache::default()),
                 capture_status: None,
+                live_audio: None,
             }),
         }
     }
@@ -384,6 +392,20 @@ impl AppState {
         let inner = unwrap_inner(self.inner, "with_capture_status");
         Self {
             inner: rebuild_inner(inner, |s| s.capture_status = Some(status)),
+        }
+    }
+
+    /// Attach the live-audio tap registry that teed capture sources publish
+    /// into, so `/stream` can serve them.
+    ///
+    /// Without this, `/stream` opens the audio device itself — which is
+    /// precisely what fails with `Device or resource busy` while a microphone
+    /// is being recorded.
+    #[must_use]
+    pub fn with_live_audio(self, hub: LiveAudioHubHandle) -> Self {
+        let inner = unwrap_inner(self.inner, "with_live_audio");
+        Self {
+            inner: rebuild_inner(inner, |s| s.live_audio = Some(hub)),
         }
     }
 
@@ -531,6 +553,12 @@ impl AppState {
     #[must_use]
     pub fn capture_status(&self) -> Option<CaptureStatusHandle> {
         self.inner.capture_status.clone()
+    }
+
+    /// The live-audio tap registry, if capture is publishing into one.
+    #[must_use]
+    pub fn live_audio(&self) -> Option<LiveAudioHubHandle> {
+        self.inner.live_audio.clone()
     }
 
     /// The shared short-TTL cache for heavy-analytics fragments.

@@ -135,7 +135,7 @@ impl Drop for CaptureManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::capture::types::{AudioFormat, CaptureSource, RtspTransport};
+    use crate::audio::capture::types::{AudioFormat, CaptureSource, LocalOffset, RtspTransport};
     use std::path::PathBuf;
 
     fn microphone_config() -> RecordingConfig {
@@ -150,6 +150,8 @@ mod tests {
             segment_duration_secs: 15,
             format: AudioFormat::Wav,
             gain_db: 0.0,
+            local_offset: LocalOffset::utc(),
+            live_audio: None,
         }
     }
 
@@ -184,6 +186,8 @@ mod tests {
             segment_duration_secs: 15,
             format: AudioFormat::Wav,
             gain_db: 0.0,
+            local_offset: LocalOffset::utc(),
+            live_audio: None,
         };
         let mut mgr = CaptureManager::new(config);
         assert!(mgr.start().is_err());
@@ -205,6 +209,8 @@ mod tests {
             segment_duration_secs: 15,
             format: AudioFormat::Wav,
             gain_db: 0.0,
+            local_offset: LocalOffset::utc(),
+            live_audio: None,
         };
         let mgr = CaptureManager::new(config);
 

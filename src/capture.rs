@@ -20,7 +20,8 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use birdnet_core::audio::capture::{
-    AudioFormat, CaptureError, CaptureManager, CaptureStatusHandle, RecordingConfig,
+    AudioFormat, CaptureError, CaptureManager, CaptureStatusHandle, LiveAudioHubHandle,
+    LocalOffset, RecordingConfig,
 };
 use birdnet_scheduler::ScheduleConfig;
 use birdnet_web::metrics::SharedMetrics;
@@ -150,6 +151,7 @@ pub fn start_capture_manager(
     state: Option<&birdnet_web::state::AppState>,
     metrics: SharedMetrics,
     status: CaptureStatusHandle,
+    live_audio: Option<&LiveAudioHubHandle>,
 ) -> Option<CaptureHandle> {
     // O-13: seed an empty audio_sources table from CLI/config first, so the
     // table is the single source of truth for capture and the web surface.
@@ -215,6 +217,19 @@ pub fn start_capture_manager(
         "SEGMENT_DURATION",
     );
     let stall_after = stall_threshold(segment_duration);
+
+    // Segment filenames carry **local** civil time, because that is what
+    // `arecord --use-strftime` wrote and what `RecordingFile::parse` turns into
+    // each detection's `Date`/`Time`. The in-process segment writer needs the
+    // station's UTC offset to reproduce those names, so it is seeded here and
+    // refreshed by the supervisor on every tick — a snapshot would be an hour
+    // wrong for months after the next daylight-saving change.
+    let local_offset = LocalOffset::new(birdnet_db::clock::local_utc_offset_secs());
+    tracing::info!(
+        utc_offset_secs = local_offset.get(),
+        "capture will stamp segment filenames in local time"
+    );
+
     let supervised: Vec<(
         CaptureManager,
         String,
@@ -241,6 +256,8 @@ pub fn start_capture_manager(
                 segment_duration_secs: segment_duration,
                 format: AudioFormat::Wav,
                 gain_db,
+                local_offset: local_offset.clone(),
+                live_audio: live_audio.cloned(),
             };
             (
                 CaptureManager::new(recording_config),
@@ -264,6 +281,7 @@ pub fn start_capture_manager(
             &schedule_config,
             &metrics,
             &status,
+            &local_offset,
             &stop_for_thread,
         );
     });
