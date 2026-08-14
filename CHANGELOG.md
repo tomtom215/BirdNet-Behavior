@@ -11,6 +11,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A re-imported BirdNET-Pi database silently doubled itself.** Every
+  duplicate-suppression path rests on `idx_detections_unique`, and `File_Name`
+  is part of that key and nullable — and SQLite considers NULLs distinct in a
+  UNIQUE index. A row with no filename conflicted with nothing, so
+  `INSERT OR IGNORE` ignored nothing.
+
+  The CSV/TSV path made it easy to hit: an empty `File_Name` field, `\N`, the
+  literal `NULL`, or a row with fewer than twelve columns all yield SQL NULL.
+  Re-importing the same export doubled those rows and reported "imported N,
+  skipped 0" as success. Anyone who re-ran an import after a failure — the only
+  recovery available, since batches commit as they go — doubled their history
+  and had every dashboard, rate and analytic computed over it.
+
+  Migration 23 makes the key NULL-insensitive via `COALESCE(File_Name, '')`,
+  and **repairs databases that already carry duplicates** by collapsing each
+  group to its earliest row. `File_Name` itself stays nullable, because NULL is
+  meaningful there — it distinguishes "never had a clip" from "reclaimed"
+  (migration 22), and `locks.rs` filters on it.
+
+  Regression tests now cover the SQLite path, the CSV path (using the shipped
+  fixture's own rows, which are exactly the NULL-`File_Name` kind), the
+  migration's repair of pre-existing duplicates, and — new — the operator's
+  actual HTTP journey: upload, poll progress to completion, upload again, and
+  assert the row count did not move. Verified against the pre-fix index, where
+  it fails with 6 rows where 4 were expected.
+
+  Found while auditing the weekly report: its fixture seeded two detections of
+  one species at the same second with no clip, which the corrected key rightly
+  calls one detection. That is inflation of exactly the kind this bug produced,
+  living in a test.
+
 - **Listen → Live appeared to do nothing, because the button cancelled the
   stream you were waiting for.** `audio.play()` sets `paused` to false
   synchronously but resolves only once the browser has buffered enough to start
@@ -78,6 +109,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does and asserts they neither cancel nor duplicate their own in-flight work.
   Verified against the shipped 0.13.0 build, where it reproduces the reported
   bug (`pause()` during connect) and catches the bulk batch firing twice.
+
+  The visual-QA fixture no longer rate-limits itself. It is deliberately
+  hammered — 152 page captures back to back, plus the new gate driving controls
+  as fast as Chromium will go — and the station's 30 req/s limiter throttled the
+  harness rather than the product, surfacing as an intermittent `429` on a font
+  and a red build. **The station's own limiter is unchanged**: measured, a cold
+  dashboard load is 24 requests, the heaviest page 34, and two rapid loads 48 —
+  all inside the 60-burst default with no `429`, so there was nothing to loosen
+  for real clients. A test now pins that the shipped router keeps the strict
+  default, since the opt-out is what makes losing it possible.
 
 ### Changed
 
