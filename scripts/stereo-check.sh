@@ -30,8 +30,15 @@
 #
 #   ./stereo-check.sh --file ~/BirdSongs/StreamData/2026-08-14-birdnet-06:12:00.wav
 #
-# (That only works if the source is configured Stereo; a Mono source writes
-# single-channel files and the second channel is already gone.)
+# ...or let it choose: --scan looks through the most recent segments, keeps the
+# stereo ones, and analyses whichever has the loudest three seconds in it, which
+# is the closest thing to "a segment with a bird in it" without asking a human:
+#
+#   ./stereo-check.sh --scan ~/BirdSongs/StreamData
+#
+# Both file modes only work if the source is configured Stereo. A Mono source
+# writes single-channel segments, and the extracted detection clips are always
+# mono whatever the source is — the second channel is gone by then.
 #
 # The comparison runs on the loudest 3-second window, not on the whole
 # recording. BirdNET analyses 3-second chunks, so that window is what actually
@@ -45,21 +52,31 @@ command -v python3 >/dev/null || { echo "python3 not found." >&2; exit 2; }
 WAV=""
 TMP_WAV=""
 ERR="$(mktemp -t stereo-check-XXXXXX.err)"
+LIST="$(mktemp -t stereo-check-XXXXXX.lst)"
 # `return 0` is load-bearing: a trap's exit status becomes the script's, so
 # ending on a failed `[ -n "$TMP_WAV" ]` turned every deliberate `exit 2` into
 # a 1 and made "device busy" indistinguishable from "wrong usage".
 cleanup() {
-  rm -f "$ERR"
+  rm -f "$ERR" "$LIST"
   [ -n "$TMP_WAV" ] && rm -f "$TMP_WAV"
   return 0
 }
 trap cleanup EXIT
+
+SCAN_DIR=""
+SCAN_COUNT=40
 
 if [ "${1:-}" = "--file" ]; then
   WAV="${2:-}"
   [ -n "$WAV" ] || { echo "--file needs a path." >&2; exit 2; }
   [ -r "$WAV" ] || { echo "cannot read $WAV" >&2; exit 2; }
   echo "Analysing ${WAV} ..."
+elif [ "${1:-}" = "--scan" ]; then
+  SCAN_DIR="${2:-}"
+  [ -n "$SCAN_DIR" ] || { echo "--scan needs a directory." >&2; exit 2; }
+  [ -d "$SCAN_DIR" ] || { echo "not a directory: $SCAN_DIR" >&2; exit 2; }
+  [ -n "${3:-}" ] && SCAN_COUNT="$3"
+  echo "Scanning the ${SCAN_COUNT} most recent segments in ${SCAN_DIR} ..."
 else
   DEVICE="${1:-plughw:1,0}"
   SECONDS_TO_RECORD="${2:-10}"
@@ -89,13 +106,81 @@ else
   fi
 fi
 
-python3 - "$WAV" <<'PY'
+# One invocation either way: the analyser takes a single path, or `--scan` and a
+# NUL-separated list to choose from.
+PY_ARGS=("$WAV")
+if [ -n "$SCAN_DIR" ]; then
+  # NUL-separated so names with spaces or colons survive — BirdNET-Pi-style
+  # segment filenames contain colons.
+  find "$SCAN_DIR" -maxdepth 1 -type f -name '*.wav' -printf '%T@ %p\0' 2>/dev/null \
+    | sort -zrn | head -zn "$SCAN_COUNT" | sed -z 's/^[^ ]* //' > "$LIST" || true
+  if [ ! -s "$LIST" ]; then
+    echo "No .wav files found in $SCAN_DIR" >&2
+    exit 2
+  fi
+  PY_ARGS=(--scan "$LIST")
+fi
+
+python3 - "${PY_ARGS[@]}" <<'PY'
 import array, math, sys, wave
 
 CHUNK_SECS = 3.0   # what BirdNET analyses at a time
 HOP_SECS = 0.5
 
-with wave.open(sys.argv[1], "rb") as w:
+def peak_and_channels(path):
+    """Peak absolute sample and channel count, or None if unreadable.
+
+    `max`/`min` on an `array` run at C speed, so a whole directory can be
+    triaged without the per-sample Python loop the full analysis needs.
+    """
+    try:
+        with wave.open(path, "rb") as w:
+            if w.getsampwidth() != 2:
+                return None
+            ch = w.getnchannels()
+            data = array.array("h")
+            data.frombytes(w.readframes(w.getnframes()))
+    except (wave.Error, OSError, EOFError):
+        return None
+    if not data:
+        return None
+    return max(max(data), -min(data)), ch
+
+
+if sys.argv[1] == "--scan":
+    with open(sys.argv[2], "rb") as fh:
+        paths = [p.decode("utf-8", "replace") for p in fh.read().split(b"\0") if p]
+    stereo, mono = [], 0
+    for path in paths:
+        got = peak_and_channels(path)
+        if got is None:
+            continue
+        peak, ch = got
+        if ch == 2:
+            stereo.append((peak, path))
+        else:
+            mono += 1
+    if not stereo:
+        print(f"\nLooked at {len(paths)} segment(s): none are stereo"
+              f"{f' ({mono} are mono)' if mono else ''}.")
+        print()
+        print("So this station is already recording a single channel, and the")
+        print("second one is gone before anything is written to disk. Averaging")
+        print("cannot be costing you signal in these files.")
+        print()
+        print("To find out what the capsules themselves are doing, record fresh:")
+        print("    sudo systemctl stop birdnet-behavior")
+        print("    ./stereo-check.sh plughw:1,0 10")
+        print("    sudo systemctl start birdnet-behavior")
+        sys.exit(0)
+    stereo.sort(reverse=True)
+    chosen = stereo[0][1]
+    print(f"\n{len(stereo)} stereo segment(s) found; loudest is:\n  {chosen}")
+    target = chosen
+else:
+    target = sys.argv[1]
+
+with wave.open(target, "rb") as w:
     channels = w.getnchannels()
     if channels != 2:
         print(f"\nThis file has {channels} channel(s), not 2.")
