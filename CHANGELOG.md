@@ -49,6 +49,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is now a gate that executes all sixteen against a real DuckDB and requires
   rows back, plus gates for the cold-start bind and the unplaceable row.
 
+- **Ten of the eleven `phenology` query builders emitted SQL DuckDB refuses to
+  run.** `birdnet_behavioral::phenology` is a public API documenting a
+  SQLite/DuckDB compatibility matrix, but it emitted `strftime('%Y', Date)` —
+  SQLite's `strftime(format, value)` argument order — against DuckDB, which
+  takes `strftime(value, format)`. Every query using it failed to bind with
+  "Could not choose a best candidate function". `phenology_timing_sql` also used
+  `julianday`, which DuckDB does not have, and two builders assembled their
+  `WHERE` clause by giving each condition its own `WHERE `/`AND ` prefix, so an
+  absent species filter left a dangling `AND` straight after `FROM` — a parser
+  error.
+
+  The builders now emit DuckDB SQL, read `detections_ts` so `detection_date`
+  arrives typed (and unplaceable rows are excluded rather than grouped under a
+  NULL year), and assemble the `WHERE` clause from a list of conditions, which
+  makes the dangling-`AND` shape unrepresentable. The compatibility matrix has
+  been replaced with the truth: these target DuckDB.
+
+  No dashboard was affected — nothing calls these, and the web phenology card is
+  SQLite-backed — but the tests asserted only on generated *text*
+  (`sql.contains("month")`), which a query no engine will run passes just as
+  well as one that works. `tests/phenology_execute.rs` now executes all eleven
+  against a real store; it fails on ten of them against the previous code.
+
+- **The embedded-extension check ignored the platform.** A DuckDB extension is
+  locked to a platform as well as a version, and the two fail identically at
+  `LOAD`, but `embedded_extension_mismatch()` compared only the version — so
+  `linux_amd64` bytes embedded in an `aarch64` build agreed on `v1.5.5`, passed
+  the check, and then failed to load on the Pi with nothing having warned. Both
+  properties are now compared (the engine's own platform comes from
+  `pragma_platform()`, which uses the same identifiers the extension registry
+  publishes under) and the report names which one disagrees. A platform that
+  cannot be read on either side is not treated as a mismatch, so missing
+  information cannot manufacture a false alarm. `release.yml` already selected
+  the extension per target, so this gap was reachable from local and cross
+  builds — which is exactly what a maintainer tests an air-gapped station with.
+
 ### Added
 
 - `GET /api/v2/analytics/status` reports the analytics **store**, not just the
@@ -56,8 +92,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on a station whose dashboards are empty — they describe intent, and stay true
   through every way this actually fails. The new `store` object carries
   `extension_loaded`, the DuckDB row count, `unplaceable_detections` (rows no
-  dashboard can place in time) and the embedded extension's version, platform
-  and any engine mismatch. It is `null` on a slim build, so "no analytics here"
+  dashboard can place in time), the engine's own DuckDB version and platform,
+  and the embedded extension's version, platform and any mismatch — including
+  which property disagrees. It is `null` on a slim build, so "no analytics here"
   stays distinguishable from "analytics present but broken".
 
 ### Changed

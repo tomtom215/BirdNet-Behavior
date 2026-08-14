@@ -240,5 +240,23 @@ async fn analytics_status_reports_the_store_not_just_the_build_flags() {
         store["extension_loaded"].is_boolean(),
         "extension state must be reported: {store}"
     );
-    assert!(store.get("embedded_extension").is_some());
+    // The engine's own identity, so a reported mismatch can be read without
+    // knowing how the binary was built.
+    assert!(
+        store["engine_platform"].is_string(),
+        "engine platform must be reported: {store}"
+    );
+    assert!(store["engine_duckdb_version"].is_string());
+
+    let embedded = &store["embedded_extension"];
+    assert!(embedded.is_object());
+    // A correctly built binary reports no mismatch. When it does report one it
+    // must name which property is wrong: an extension is locked to a platform
+    // as well as a version, and the two fail identically at LOAD.
+    if let Some(mismatch) = embedded.get("mismatch").filter(|m| !m.is_null()) {
+        assert!(
+            mismatch["property"].is_string(),
+            "a mismatch must say which property disagrees: {mismatch}"
+        );
+    }
 }

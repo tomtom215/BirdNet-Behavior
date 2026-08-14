@@ -1,13 +1,31 @@
 //! SQL query builders for phenological timing analysis.
 //!
-//! Generates standard SQL (compatible with both `SQLite` and `DuckDB`) that
-//! extracts first and last detection dates per species per year, computes
-//! day-of-year values, and derives multi-year migration windows.
+//! Generates `DuckDB` SQL that extracts first and last detection dates per
+//! species per year, computes day-of-year values, and derives multi-year
+//! migration windows.
 //!
-//! All queries operate directly on the `detections` table with columns
-//! `Com_Name`, `Sci_Name`, `Date` (TEXT `YYYY-MM-DD`), and `Time`.
+//! Queries read the `detections_ts` view rather than the `detections` table, so
+//! `detection_date` arrives already typed as a `DATE`. `Date` itself is
+//! free-form `TEXT NOT NULL`, and a station's history can hold rows that name
+//! no point in time; the view's `TRY_CAST` turns those into NULL, and every
+//! query here excludes them explicitly rather than grouping them under a NULL
+//! year.
 
 use crate::phenology::types::PhenologyParams;
+
+/// Calendar year of a detection, as an INTEGER.
+///
+/// Note the argument order: `DuckDB` is `strftime(value, format)`, the reverse
+/// of `SQLite`'s `strftime(format, value)`. These builders carried the SQLite
+/// order against the engine this crate actually talks to, so every query using
+/// it failed to bind with "Could not choose a best candidate function for the
+/// function call `strftime(STRING_LITERAL, VARCHAR)`" — invisible to tests that
+/// only asserted on the generated text.
+const YEAR_EXPR: &str = "CAST(strftime(detection_date, '%Y') AS INTEGER)";
+
+/// Rows that name a real point in time. Everything here buckets by date, so a
+/// row the view could not parse has no bucket to belong to.
+const PLACEABLE: &str = "detection_date IS NOT NULL";
 
 // ---------------------------------------------------------------------------
 // Phenology timing SQL builders
@@ -20,32 +38,27 @@ use crate::phenology::types::PhenologyParams;
 /// - `first_doy`, `last_doy` (day-of-year 1–366)
 /// - `presence_days` (approximate number of days between first and last)
 /// - `detection_count`
-///
-/// Compatible with both `SQLite` 3.x and `DuckDB` 1.x.
 pub fn phenology_timing_sql(params: &PhenologyParams) -> String {
-    let species_filter = species_where_clause(params.species.as_deref(), "WHERE");
-    let year_conditions = year_conditions(params.year_start, params.year_end);
+    let where_sql = where_clause(&[
+        Some(PLACEABLE.to_string()),
+        params.species.as_deref().map(species_condition),
+        year_conditions(params.year_start, params.year_end),
+    ]);
     let having_clause = format!("HAVING COUNT(*) >= {}", params.min_detections);
-    let and_year = if year_conditions.is_empty() {
-        String::new()
-    } else {
-        format!("AND {year_conditions}")
-    };
 
     format!(
         "SELECT
             Com_Name                                        AS species,
-            CAST(strftime('%Y', Date) AS INTEGER)           AS year,
-            MIN(Date)                                       AS first_detection,
-            MAX(Date)                                       AS last_detection,
+            {YEAR_EXPR}                                     AS year,
+            CAST(MIN(detection_date) AS VARCHAR)            AS first_detection,
+            CAST(MAX(detection_date) AS VARCHAR)            AS last_detection,
             COUNT(*)                                        AS detection_count,
-            CAST(strftime('%j', MIN(Date)) AS INTEGER)      AS first_doy,
-            CAST(strftime('%j', MAX(Date)) AS INTEGER)      AS last_doy,
-            CAST(julianday(MAX(Date)) - julianday(MIN(Date)) AS INTEGER) + 1
+            CAST(strftime(MIN(detection_date), '%j') AS INTEGER) AS first_doy,
+            CAST(strftime(MAX(detection_date), '%j') AS INTEGER) AS last_doy,
+            date_diff('day', MIN(detection_date), MAX(detection_date)) + 1
                                                             AS presence_days
-        FROM detections
-        {species_filter}
-        {and_year}
+        FROM detections_ts
+        {where_sql}
         GROUP BY Com_Name, year
         {having_clause}
         ORDER BY year DESC, Com_Name
@@ -62,20 +75,20 @@ pub fn phenology_timing_sql(params: &PhenologyParams) -> String {
 ///
 /// Requires at least `min_years` years of observations per species.
 /// Uses `DuckDB` `percentile_cont` window functions.
-///
-/// **Note:** This query requires `DuckDB`.  For SQLite-only deployments
-/// use [`phenology_timing_sql`] and compute percentiles client-side.
 pub fn migration_window_sql(min_years: u32, params: &PhenologyParams) -> String {
-    let species_filter = species_where_clause(params.species.as_deref(), "WHERE");
+    let species_filter = where_clause(&[
+        Some(PLACEABLE.to_string()),
+        params.species.as_deref().map(species_condition),
+    ]);
 
     format!(
         "WITH yearly AS (
             SELECT
                 Com_Name                                        AS species,
-                CAST(strftime('%Y', Date) AS INTEGER)           AS year,
-                CAST(strftime('%j', MIN(Date)) AS INTEGER)      AS first_doy,
-                CAST(strftime('%j', MAX(Date)) AS INTEGER)      AS last_doy
-            FROM detections
+                {YEAR_EXPR}                                     AS year,
+                CAST(strftime(MIN(detection_date), '%j') AS INTEGER) AS first_doy,
+                CAST(strftime(MAX(detection_date), '%j') AS INTEGER) AS last_doy
+            FROM detections_ts
             {species_filter}
             GROUP BY Com_Name, year
             HAVING COUNT(*) >= {min_det}
@@ -110,13 +123,16 @@ pub fn migration_window_sql(min_years: u32, params: &PhenologyParams) -> String 
 ///
 /// Useful for "life list" or "year first" summaries.
 pub fn first_detection_sql(params: &PhenologyParams) -> String {
-    let species_filter = species_where_clause(params.species.as_deref(), "WHERE");
+    let species_filter = where_clause(&[
+        Some(PLACEABLE.to_string()),
+        params.species.as_deref().map(species_condition),
+    ]);
     format!(
         "SELECT
-            Com_Name    AS species,
-            MIN(Date)   AS first_ever_date,
-            COUNT(*)    AS total_detections
-        FROM detections
+            Com_Name                                AS species,
+            CAST(MIN(detection_date) AS VARCHAR)    AS first_ever_date,
+            COUNT(*)                                AS total_detections
+        FROM detections_ts
         {species_filter}
         GROUP BY Com_Name
         ORDER BY first_ever_date
@@ -130,16 +146,19 @@ pub fn first_detection_sql(params: &PhenologyParams) -> String {
 /// Returns detection counts per species per year, plus year-over-year
 /// change percentage (`yoy_change_pct`).  Useful for trend analysis.
 ///
-/// **Note:** Uses `DuckDB` `LAG` window function; not compatible with `SQLite`.
+/// Uses the `LAG` window function.
 pub fn interannual_trend_sql(params: &PhenologyParams) -> String {
-    let species_filter = species_where_clause(params.species.as_deref(), "WHERE");
+    let species_filter = where_clause(&[
+        Some(PLACEABLE.to_string()),
+        params.species.as_deref().map(species_condition),
+    ]);
     format!(
         "WITH yearly AS (
             SELECT
                 Com_Name                                AS species,
-                CAST(strftime('%Y', Date) AS INTEGER)   AS year,
+                {YEAR_EXPR}                             AS year,
                 COUNT(*)                                AS detection_count
-            FROM detections
+            FROM detections_ts
             {species_filter}
             GROUP BY Com_Name, year
             HAVING COUNT(*) >= {min_det}
@@ -172,22 +191,45 @@ pub fn interannual_trend_sql(params: &PhenologyParams) -> String {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/// Construct a `WHERE` or bare condition for optional species filtering.
-fn species_where_clause(species: Option<&str>, prefix: &str) -> String {
-    species.map_or_else(String::new, |s| {
-        format!("{prefix} Com_Name = '{}'", s.replace('\'', "''"))
-    })
+/// Assemble the present conditions into a `WHERE` clause.
+///
+/// Conditions are collected as `Option`s and joined here rather than each being
+/// rendered with its own `"WHERE "` or `"AND "` prefix. The prefix approach is
+/// what produced
+///
+/// ```text
+/// Parser Error: syntax error at or near "AND"
+/// ```
+///
+/// from `phenology_timing_sql`: with no species filter the species clause was
+/// the empty string, so a year range that rendered itself as `AND …` followed
+/// `FROM detections` directly. Deciding the keyword from how many conditions
+/// there actually are makes that unrepresentable.
+fn where_clause(conditions: &[Option<String>]) -> String {
+    let present: Vec<&str> = conditions
+        .iter()
+        .filter_map(|c| c.as_deref())
+        .filter(|c| !c.is_empty())
+        .collect();
+    if present.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", present.join(" AND "))
+    }
+}
+
+/// Species equality condition, single-quote escaped.
+fn species_condition(species: &str) -> String {
+    format!("Com_Name = '{}'", species.replace('\'', "''"))
 }
 
 /// Construct the year range condition (without `WHERE`/`AND` prefix).
-fn year_conditions(start: Option<u32>, end: Option<u32>) -> String {
+fn year_conditions(start: Option<u32>, end: Option<u32>) -> Option<String> {
     match (start, end) {
-        (Some(s), Some(e)) => {
-            format!("CAST(strftime('%Y', Date) AS INTEGER) BETWEEN {s} AND {e}")
-        }
-        (Some(s), None) => format!("CAST(strftime('%Y', Date) AS INTEGER) >= {s}"),
-        (None, Some(e)) => format!("CAST(strftime('%Y', Date) AS INTEGER) <= {e}"),
-        (None, None) => String::new(),
+        (Some(s), Some(e)) => Some(format!("{YEAR_EXPR} BETWEEN {s} AND {e}")),
+        (Some(s), None) => Some(format!("{YEAR_EXPR} >= {s}")),
+        (None, Some(e)) => Some(format!("{YEAR_EXPR} <= {e}")),
+        (None, None) => None,
     }
 }
 
@@ -213,7 +255,11 @@ mod tests {
             ..PhenologyParams::default()
         };
         let sql = phenology_timing_sql(&params);
-        assert!(sql.contains("WHERE Com_Name = 'Eurasian Blackbird'"));
+        assert!(sql.contains("Com_Name = 'Eurasian Blackbird'"));
+        // The species condition is ANDed onto the placeable-rows condition
+        // rather than each carrying its own keyword, so exactly one WHERE is
+        // emitted however many filters are set.
+        assert_eq!(sql.matches("WHERE").count(), 1, "{sql}");
     }
 
     #[test]
@@ -252,7 +298,7 @@ mod tests {
         let params = PhenologyParams::default();
         let sql = first_detection_sql(&params);
         assert!(sql.contains("first_ever_date"));
-        assert!(sql.contains("MIN(Date)"));
+        assert!(sql.contains("MIN(detection_date)"));
     }
 
     #[test]

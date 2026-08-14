@@ -17,6 +17,45 @@
 
 use crate::phenology::types::AbundanceParams;
 
+/// Calendar year of a detection, as an INTEGER.
+///
+/// Note the argument order: `DuckDB` is `strftime(value, format)`, the reverse
+/// of `SQLite`'s `strftime(format, value)`. These builders carried the SQLite
+/// order against the engine this crate actually talks to, so every query using
+/// it failed to bind — invisible to tests that only asserted on generated text.
+const YEAR_EXPR: &str = "CAST(strftime(detection_date, '%Y') AS INTEGER)";
+
+/// Week of year (Monday-based), as an INTEGER — `%W`, as before.
+const WEEK_EXPR: &str = "CAST(strftime(detection_date, '%W') AS INTEGER)";
+
+/// Rows that name a real point in time. Every query here buckets by week or
+/// month, so a row the view could not parse has no bucket to belong to.
+const PLACEABLE: &str = "detection_date IS NOT NULL";
+
+/// Assemble the present conditions into a `WHERE` clause.
+///
+/// Joined from a list rather than each condition carrying its own `WHERE `/
+/// `AND ` prefix — the prefix approach is what left
+/// `effort_corrected_abundance_sql` emitting `AND d Com_Name IS NOT NULL`
+/// straight after `FROM detections d`, a parser error in a shipped public API.
+fn where_clause(conditions: &[Option<String>]) -> String {
+    let present: Vec<&str> = conditions
+        .iter()
+        .filter_map(|c| c.as_deref())
+        .filter(|c| !c.is_empty())
+        .collect();
+    if present.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", present.join(" AND "))
+    }
+}
+
+/// Species equality condition on `column`, single-quote escaped.
+fn species_condition(species: &str, column: &str) -> String {
+    format!("{column} = '{}'", species.replace('\'', "''"))
+}
+
 // ---------------------------------------------------------------------------
 // Weekly abundance
 // ---------------------------------------------------------------------------
@@ -26,10 +65,15 @@ use crate::phenology::types::AbundanceParams;
 /// Returns one row per (species, year, `iso_week`) with:
 /// - `detection_count` — raw count for the week
 /// - `relative_abundance` — count divided by the peak week count
-///
-/// Compatible with both `SQLite` 3.x and `DuckDB` 1.x.
 pub fn weekly_abundance_sql(params: &AbundanceParams) -> String {
-    let species_filter = species_clause(params.species.as_deref(), "WHERE");
+    let where_sql = where_clause(&[
+        Some(PLACEABLE.to_string()),
+        params
+            .species
+            .as_deref()
+            .map(|s| species_condition(s, "Com_Name")),
+        Some(format!("{YEAR_EXPR} = {}", params.year)),
+    ]);
     let min_clause = if params.min_weekly_count > 1 {
         format!("HAVING COUNT(*) >= {}", params.min_weekly_count)
     } else {
@@ -40,12 +84,11 @@ pub fn weekly_abundance_sql(params: &AbundanceParams) -> String {
         "WITH weekly_counts AS (
             SELECT
                 Com_Name                                        AS species,
-                CAST(strftime('%Y', Date) AS INTEGER)           AS year,
-                CAST(strftime('%W', Date) AS INTEGER)           AS iso_week,
+                {YEAR_EXPR}                                     AS year,
+                {WEEK_EXPR}                                     AS iso_week,
                 COUNT(*)                                        AS detection_count
-            FROM detections
-            {species_filter}
-            AND CAST(strftime('%Y', Date) AS INTEGER) = {year}
+            FROM detections_ts
+            {where_sql}
             GROUP BY species, year, iso_week
             {min_clause}
         ),
@@ -69,8 +112,7 @@ pub fn weekly_abundance_sql(params: &AbundanceParams) -> String {
         FROM weekly_counts wc
         JOIN weekly_peaks wp
             ON wc.species = wp.species AND wc.year = wp.year
-        ORDER BY wc.species, wc.iso_week",
-        year = params.year,
+        ORDER BY wc.species, wc.iso_week"
     )
 }
 
@@ -80,17 +122,23 @@ pub fn weekly_abundance_sql(params: &AbundanceParams) -> String {
 /// the cumulative share of total detections.  Useful for identifying
 /// the core breeding/migration window.
 pub fn peak_weeks_sql(params: &AbundanceParams, top_n: u32) -> String {
-    let species_filter = species_clause(params.species.as_deref(), "WHERE");
+    let where_sql = where_clause(&[
+        Some(PLACEABLE.to_string()),
+        params
+            .species
+            .as_deref()
+            .map(|s| species_condition(s, "Com_Name")),
+        Some(format!("{YEAR_EXPR} = {}", params.year)),
+    ]);
 
     format!(
         "WITH weekly AS (
             SELECT
                 Com_Name                                        AS species,
-                CAST(strftime('%W', Date) AS INTEGER)           AS iso_week,
+                {WEEK_EXPR}                                     AS iso_week,
                 COUNT(*)                                        AS detection_count
-            FROM detections
-            {species_filter}
-            AND CAST(strftime('%Y', Date) AS INTEGER) = {year}
+            FROM detections_ts
+            {where_sql}
             GROUP BY species, iso_week
         ),
         totals AS (
@@ -109,9 +157,7 @@ pub fn peak_weeks_sql(params: &AbundanceParams, top_n: u32) -> String {
         FROM weekly w
         JOIN totals t ON w.species = t.species
         ORDER BY w.species, w.detection_count DESC
-        LIMIT {top_n}",
-        year = params.year,
-        top_n = top_n,
+        LIMIT {top_n}"
     )
 }
 
@@ -120,21 +166,26 @@ pub fn peak_weeks_sql(params: &AbundanceParams, top_n: u32) -> String {
 /// Returns one row per (species, year, month) ordered chronologically.
 /// Useful for phenological bar charts and seasonal summaries.
 pub fn monthly_totals_sql(params: &AbundanceParams) -> String {
-    let species_filter = species_clause(params.species.as_deref(), "WHERE");
+    let where_sql = where_clause(&[
+        Some(PLACEABLE.to_string()),
+        params
+            .species
+            .as_deref()
+            .map(|s| species_condition(s, "Com_Name")),
+        Some(format!("{YEAR_EXPR} = {}", params.year)),
+    ]);
 
     format!(
         "SELECT
             Com_Name                                        AS species,
-            CAST(strftime('%Y', Date) AS INTEGER)           AS year,
-            CAST(strftime('%m', Date) AS INTEGER)           AS month,
+            {YEAR_EXPR}                                     AS year,
+            CAST(strftime(detection_date, '%m') AS INTEGER) AS month,
             COUNT(*)                                        AS detection_count,
             AVG(Confidence)                                 AS mean_confidence
-        FROM detections
-        {species_filter}
-        AND CAST(strftime('%Y', Date) AS INTEGER) = {year}
+        FROM detections_ts
+        {where_sql}
         GROUP BY species, year, month
-        ORDER BY species, month",
-        year = params.year,
+        ORDER BY species, month"
     )
 }
 
@@ -145,11 +196,11 @@ pub fn monthly_totals_sql(params: &AbundanceParams) -> String {
 pub fn weekly_richness_sql(year: u32) -> String {
     format!(
         "SELECT
-            CAST(strftime('%W', Date) AS INTEGER)   AS iso_week,
+            {WEEK_EXPR}                             AS iso_week,
             COUNT(DISTINCT Com_Name)                AS species_count,
             COUNT(*)                                AS total_detections
-        FROM detections
-        WHERE CAST(strftime('%Y', Date) AS INTEGER) = {year}
+        FROM detections_ts
+        WHERE {PLACEABLE} AND {YEAR_EXPR} = {year}
         GROUP BY iso_week
         ORDER BY iso_week"
     )
@@ -165,25 +216,38 @@ pub fn weekly_richness_sql(year: u32) -> String {
 /// **Requires:** A `recordings` table with columns `date` (TEXT
 /// `YYYY-MM-DD`) and `duration_hours` (REAL).
 pub fn effort_corrected_abundance_sql(params: &AbundanceParams) -> String {
-    let species_filter = species_clause(params.species.as_deref(), "AND d");
+    // `recordings.date` is a caller-supplied TEXT column, so it is cast here
+    // rather than read from the view.
+    let effort_week = "CAST(strftime(TRY_CAST(date AS DATE), '%W') AS INTEGER)";
+    let effort_year = "CAST(strftime(TRY_CAST(date AS DATE), '%Y') AS INTEGER)";
+    let where_sql = where_clause(&[
+        Some("d.detection_date IS NOT NULL".to_string()),
+        params
+            .species
+            .as_deref()
+            .map(|s| species_condition(s, "d.Com_Name")),
+        Some(format!(
+            "CAST(strftime(d.detection_date, '%Y') AS INTEGER) = {}",
+            params.year
+        )),
+    ]);
 
     format!(
         "WITH effort AS (
             SELECT
-                CAST(strftime('%W', date) AS INTEGER)   AS iso_week,
+                {effort_week}                           AS iso_week,
                 SUM(duration_hours)                     AS hours
             FROM recordings
-            WHERE CAST(strftime('%Y', date) AS INTEGER) = {year}
+            WHERE {effort_year} = {year}
             GROUP BY iso_week
         ),
         weekly AS (
             SELECT
                 d.Com_Name                                      AS species,
-                CAST(strftime('%W', d.Date) AS INTEGER)         AS iso_week,
+                CAST(strftime(d.detection_date, '%W') AS INTEGER) AS iso_week,
                 COUNT(*)                                        AS raw_count
-            FROM detections d
-            {species_filter}.Com_Name IS NOT NULL
-            AND CAST(strftime('%Y', d.Date) AS INTEGER) = {year}
+            FROM detections_ts d
+            {where_sql}
             GROUP BY species, iso_week
         )
         SELECT
@@ -199,17 +263,6 @@ pub fn effort_corrected_abundance_sql(params: &AbundanceParams) -> String {
         LEFT JOIN effort e ON w.iso_week = e.iso_week
         ORDER BY w.species, w.iso_week",
         year = params.year,
-    )
-}
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-fn species_clause(species: Option<&str>, prefix: &str) -> String {
-    species.map_or_else(
-        || format!("{prefix} Com_Name IS NOT NULL"),
-        |s| format!("{prefix} Com_Name = '{}'", s.replace('\'', "''")),
     )
 }
 

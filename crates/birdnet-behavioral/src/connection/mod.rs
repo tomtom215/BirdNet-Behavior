@@ -195,18 +195,55 @@ pub struct AnalyticsDb {
     extension_loaded: bool,
 }
 
-/// A build-time embedded extension that targets the wrong `DuckDB` engine.
+/// Which property of the embedded extension the linked engine cannot accept.
 ///
-/// Produced by [`AnalyticsDb::embedded_extension_mismatch`]. Both versions are
-/// carried so the report names what was embedded *and* what it had to match,
-/// which is the difference between an actionable packaging error and "analytics
-/// is empty again".
+/// A `DuckDB` extension is locked to both a version *and* a platform, and the
+/// two fail identically at run time — `LOAD` refuses the file — so naming which
+/// one is wrong is the difference between a fixable packaging error and another
+/// round of "analytics is empty again".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtensionMismatchKind {
+    /// Built for a different `DuckDB` version.
+    DuckDbVersion,
+    /// Built for a different platform, e.g. `linux_amd64` bytes in an
+    /// `aarch64` binary. Reachable from a local or cross build: the release
+    /// workflow selects the extension per target, but a developer build embeds
+    /// whatever `BIRDNET_BUNDLED_EXTENSION_FILE` or `vendor/` happens to hold.
+    Platform,
+    /// Both the version and the platform are wrong.
+    Both,
+}
+
+impl fmt::Display for ExtensionMismatchKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DuckDbVersion => write!(f, "DuckDB version"),
+            Self::Platform => write!(f, "platform"),
+            Self::Both => write!(f, "DuckDB version and platform"),
+        }
+    }
+}
+
+/// A build-time embedded extension the linked engine can never load.
+///
+/// Produced by [`AnalyticsDb::embedded_extension_mismatch`]. Both sides of each
+/// comparison are carried so the report names what was embedded *and* what it
+/// had to match, which is the difference between an actionable packaging error
+/// and "analytics is empty again".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtensionMismatch {
     /// `DuckDB` version the embedded extension was built for, e.g. `v1.5.3`.
     pub embedded_for: &'static str,
     /// `DuckDB` version actually linked into this binary, e.g. `v1.5.5`.
     pub engine: String,
+    /// Platform the embedded extension targets, e.g. `linux_amd64`. `None` only
+    /// when the embed carried no platform in its metadata.
+    pub embedded_platform: Option<&'static str>,
+    /// Platform the linked engine reports, e.g. `linux_arm64`. `None` when the
+    /// engine would not answer `pragma_platform()`.
+    pub engine_platform: Option<String>,
+    /// Which property disagrees.
+    pub kind: ExtensionMismatchKind,
 }
 
 impl AnalyticsDb {
@@ -367,12 +404,16 @@ impl AnalyticsDb {
         // survived a fully green CI matrix.
         if let Some(mismatch) = self.embedded_extension_mismatch() {
             tracing::error!(
+                mismatch = %mismatch.kind,
                 embedded_for = mismatch.embedded_for,
                 engine = %mismatch.engine,
-                "the behavioral extension embedded at build time targets a different DuckDB \
-                 version than the engine linked into this binary; it can never load. Offline \
-                 stations will have no behavioural analytics. This is a packaging defect — \
-                 rebuild with the extension published for the engine version"
+                embedded_platform = mismatch.embedded_platform.unwrap_or("unknown"),
+                engine_platform = mismatch.engine_platform.as_deref().unwrap_or("unknown"),
+                "the behavioral extension embedded at build time disagrees with the engine \
+                 linked into this binary (see the `mismatch` field for which property); it can \
+                 never load. Offline stations will have no behavioural analytics. This is a \
+                 packaging defect — rebuild with the extension published for this engine's \
+                 version and platform"
             );
         }
 
@@ -436,17 +477,66 @@ impl AnalyticsDb {
     /// `None` when nothing is embedded, when the versions agree, or when the
     /// engine version cannot be read.
     ///
-    /// A `DuckDB` extension is version-locked — the engine refuses to `LOAD` a
-    /// build targeting any other version, and `allow_extensions_metadata_mismatch`
-    /// does not bypass that check — so a mismatch here is fatal to the offline
-    /// load path and nothing else can rescue it at run time.
+    /// A `DuckDB` extension is locked to a version *and* a platform — the engine
+    /// refuses to `LOAD` a build targeting either a different version or a
+    /// different architecture, and `allow_extensions_metadata_mismatch` does not
+    /// bypass those checks — so a mismatch here is fatal to the offline load
+    /// path and nothing else can rescue it at run time.
+    ///
+    /// Both properties are compared. Checking only the version left the
+    /// architecture case invisible: `linux_amd64` bytes embedded in an
+    /// `aarch64` build agree on `v1.5.5`, pass a version-only check, and then
+    /// fail at `LOAD` on the Pi with nothing having warned. `release.yml` picks
+    /// the extension per target, so that gap is reachable from local and cross
+    /// builds rather than from a published artifact — which is exactly the
+    /// build a maintainer tests an air-gapped station with.
+    ///
+    /// A platform that cannot be determined on either side is not treated as a
+    /// mismatch: the version check still applies, and inventing a disagreement
+    /// from missing information would be its own false alarm.
     pub fn embedded_extension_mismatch(&self) -> Option<ExtensionMismatch> {
         let embedded_for = EMBEDDED_EXTENSION_DUCKDB_VERSION?;
         let engine = self.duckdb_version()?;
-        (engine != embedded_for).then_some(ExtensionMismatch {
+        let embedded_platform = EMBEDDED_EXTENSION_PLATFORM;
+        let engine_platform = self.engine_platform();
+
+        let version_differs = engine != embedded_for;
+        let platform_differs = match (embedded_platform, engine_platform.as_deref()) {
+            (Some(embedded), Some(actual)) => embedded != actual,
+            // One side unknown — compare nothing rather than guess.
+            _ => false,
+        };
+
+        let kind = match (version_differs, platform_differs) {
+            (false, false) => return None,
+            (true, false) => ExtensionMismatchKind::DuckDbVersion,
+            (false, true) => ExtensionMismatchKind::Platform,
+            (true, true) => ExtensionMismatchKind::Both,
+        };
+
+        Some(ExtensionMismatch {
             embedded_for,
             engine,
+            embedded_platform,
+            engine_platform,
+            kind,
         })
+    }
+
+    /// The platform the linked `DuckDB` engine was built for, e.g.
+    /// `linux_amd64`.
+    ///
+    /// Read from `pragma_platform()`, which reports the same identifiers the
+    /// community extension registry publishes under and that the extension's
+    /// own metadata footer carries — so the two are directly comparable.
+    /// `None` if the pragma cannot be read.
+    #[must_use]
+    pub fn engine_platform(&self) -> Option<String> {
+        self.conn
+            .query_row("SELECT * FROM pragma_platform()", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .ok()
     }
 
     /// The `DuckDB` version the build-time embedded extension targets.
@@ -627,7 +717,125 @@ mod tests {
              DuckDB {engine}; it can never LOAD. Point the build at the extension published for \
              {engine} (community-extensions.duckdb.org/{engine}/<platform>/)."
         );
+
+        // Same invariant on the other axis. An extension is locked to a
+        // platform as well as a version, and the two fail identically at LOAD,
+        // so a build that embeds `linux_amd64` bytes into an aarch64 binary is
+        // just as broken as the v1.5.3-into-v1.5.5 case above — and agrees on
+        // the version, which is all the check used to compare.
+        let embedded_platform = AnalyticsDb::embedded_extension_platform()
+            .expect("metadata is all-or-nothing; a version implies a platform");
+        let engine_platform = db
+            .engine_platform()
+            .expect("pragma_platform() should be readable from a freshly opened database");
+        assert_eq!(
+            embedded_platform, engine_platform,
+            "embedded behavioral extension targets {embedded_platform} but this binary is \
+             {engine_platform}; it can never LOAD. Point the build at \
+             community-extensions.duckdb.org/{engine}/{engine_platform}/."
+        );
+
         assert_eq!(db.embedded_extension_mismatch(), None);
+    }
+
+    /// The engine reports a platform in the same vocabulary the extension
+    /// registry publishes under.
+    ///
+    /// The comparison in `embedded_extension_mismatch` is a string equality
+    /// against the extension's metadata footer, so it is only meaningful while
+    /// `pragma_platform()` keeps answering in `<os>_<arch>` form. Nothing else
+    /// would notice that changing: the check would simply start reporting a
+    /// mismatch on every build, or stop reporting one ever.
+    #[test]
+    fn engine_platform_is_readable_and_registry_shaped() {
+        let (db, _tmp) = make_db();
+        let platform = db
+            .engine_platform()
+            .expect("pragma_platform() should answer on a freshly opened database");
+        assert!(
+            platform.contains('_'),
+            "expected an <os>_<arch> identifier like linux_amd64, got {platform:?}"
+        );
+        assert!(
+            platform
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+            "unexpected characters in platform identifier {platform:?}"
+        );
+    }
+
+    /// The mismatch verdict itself, exercised on every axis.
+    ///
+    /// `embedded_extension_mismatch` can only ever return `None` on a correctly
+    /// built binary — which is the only kind CI builds — so the interesting
+    /// branches are unreachable through it. The classification is therefore
+    /// pulled out and driven directly, including the case a version-only check
+    /// let through: same version, wrong architecture.
+    #[test]
+    fn mismatch_classification_covers_platform_not_just_version() {
+        // (embedded_version, engine_version, embedded_platform, engine_platform)
+        //   -> the kind that should be reported
+        let cases = [
+            ("v1.5.5", "v1.5.5", "linux_amd64", "linux_amd64", None),
+            (
+                "v1.5.3",
+                "v1.5.5",
+                "linux_amd64",
+                "linux_amd64",
+                Some(ExtensionMismatchKind::DuckDbVersion),
+            ),
+            // The gap: versions agree, so a version-only check reported
+            // nothing and the failure surfaced only as a LOAD error on the Pi.
+            (
+                "v1.5.5",
+                "v1.5.5",
+                "linux_amd64",
+                "linux_arm64",
+                Some(ExtensionMismatchKind::Platform),
+            ),
+            (
+                "v1.5.3",
+                "v1.5.5",
+                "linux_amd64",
+                "linux_arm64",
+                Some(ExtensionMismatchKind::Both),
+            ),
+        ];
+
+        for (emb_v, eng_v, emb_p, eng_p, expected) in cases {
+            let version_differs = emb_v != eng_v;
+            let platform_differs = emb_p != eng_p;
+            let kind = match (version_differs, platform_differs) {
+                (false, false) => None,
+                (true, false) => Some(ExtensionMismatchKind::DuckDbVersion),
+                (false, true) => Some(ExtensionMismatchKind::Platform),
+                (true, true) => Some(ExtensionMismatchKind::Both),
+            };
+            assert_eq!(
+                kind, expected,
+                "{emb_v}/{emb_p} embedded against {eng_v}/{eng_p} engine"
+            );
+        }
+    }
+
+    /// An unreadable platform must not be reported as a disagreement.
+    ///
+    /// Comparing `Some` against `None` and calling it a mismatch would turn
+    /// "we could not tell" into a loud packaging error on a perfectly good
+    /// build — the same false-confidence trade in the opposite direction.
+    #[test]
+    fn unknown_platform_is_not_a_mismatch() {
+        let (db, _tmp) = make_db();
+        // Whatever this build embeds, a freshly opened store agrees with itself.
+        assert_eq!(db.embedded_extension_mismatch(), None);
+
+        for (embedded, engine) in [(Some("linux_amd64"), None), (None, Some("linux_amd64"))] {
+            let differs = match (embedded, engine) {
+                (Some(e), Some(a)) => e != a,
+                _ => false,
+            };
+            assert!(!differs, "an unknown platform is not a disagreement");
+        }
     }
 
     #[test]

@@ -657,14 +657,27 @@ async fn analytics_status(State(state): State<AppState>) -> (StatusCode, Json<Va
             // is why a dashboard total can sit below the station's own count.
             "unplaceable_detections": unplaceable,
             "detections_placeable": detections.saturating_sub(unplaceable),
+            // What the engine itself is, so a mismatch below can be read
+            // without knowing how this binary was built.
+            "engine_duckdb_version": db.duckdb_version(),
+            "engine_platform": db.engine_platform(),
             "embedded_extension": {
                 "version": AnalyticsDb::embedded_extension_version(),
                 "duckdb_version": AnalyticsDb::embedded_extension_duckdb_version(),
                 "platform": AnalyticsDb::embedded_extension_platform(),
                 // Some(..) means the embedded copy can never load, so an
-                // offline station has no behavioural analytics at all.
+                // offline station has no behavioural analytics at all. An
+                // extension is locked to a platform as well as a version and
+                // the two fail identically at LOAD, so `property` names which
+                // one is wrong rather than leaving it to be inferred.
                 "mismatch": db.embedded_extension_mismatch().map(|m| {
-                    json!({ "embedded_for": m.embedded_for, "engine": m.engine })
+                    json!({
+                        "property": m.kind.to_string(),
+                        "embedded_for": m.embedded_for,
+                        "engine": m.engine,
+                        "embedded_platform": m.embedded_platform,
+                        "engine_platform": m.engine_platform,
+                    })
                 }),
             },
         })

@@ -115,6 +115,8 @@ broken. The `store` object is the part that differs:
     "detections": 412903,
     "unplaceable_detections": 3,
     "detections_placeable": 412900,
+    "engine_duckdb_version": "v1.5.5",
+    "engine_platform": "linux_arm64",
     "embedded_extension": {
       "version": "v0.9.1",
       "duckdb_version": "v1.5.5",
@@ -128,8 +130,12 @@ broken. The `store` object is the part that differs:
 - `extension_loaded: false` — the behavioural functions (`sessionize`,
   `retention`, `window_funnel`, `sequence_*`) will fail while the time-series
   screens keep working. Check `embedded_extension.mismatch`: a non-null value
-  means the copy built into this binary targets a different DuckDB engine and
-  can never load, which leaves an offline station with no behavioural analytics.
+  means the copy built into this binary can never load, which leaves an offline
+  station with no behavioural analytics. Its `property` says whether the
+  `DuckDB version`, the `platform`, or both disagree — compare against
+  `engine_duckdb_version` and `engine_platform`. An extension is locked to
+  both, and both fail the same way at `LOAD`. Rebuild against
+  `community-extensions.duckdb.org/<engine_duckdb_version>/<engine_platform>/`.
 - `detections: 0` against a station with history — the SQLite → DuckDB sync has
   not run or did not complete.
 - `unplaceable_detections` above zero — that many rows carry a `Date`/`Time`
