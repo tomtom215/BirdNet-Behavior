@@ -12,6 +12,9 @@ use axum::{Json, Router, routing::get};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+#[cfg(feature = "analytics")]
+use birdnet_behavioral::connection::AnalyticsDb;
+
 use crate::state::AppState;
 
 /// Analytics routes.
@@ -623,6 +626,73 @@ async fn next_species(
 }
 
 /// Analytics status endpoint -- reports what capabilities are available.
+///
+/// Reports the *store*, not just the build flags. `analytics_compiled` and
+/// `analytics_configured` describe intent — whether the binary has DuckDB in it
+/// and whether a database was wired up — and both stay `true` through every way
+/// the dashboards actually fail: an extension that never loaded, an OLAP copy
+/// that never synced, or rows no query can place in time. A station reporting
+/// "the analytics dashboards are broken" could not be told apart from a healthy
+/// one here, which is why that report arrived with no detail attached. The
+/// fields below are the ones that differ.
+#[cfg(feature = "analytics")]
+async fn analytics_status(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
+    let compiled = cfg!(feature = "analytics");
+    let configured = state.has_analytics();
+
+    // Each of these is a way the dashboards go empty while the rest of the app
+    // stays healthy, so each is reported separately rather than collapsed into
+    // one "ok" flag.
+    let store = state.with_analytics(|db| {
+        let detections = db.detection_count().unwrap_or_default();
+        let unplaceable = db.unplaceable_detection_count().unwrap_or_default();
+        json!({
+            // The behavioural functions (sessionize, retention, window_funnel,
+            // sequence_*) need this; the extension is optional to *open* the
+            // database, so a false here is invisible until a query runs.
+            "extension_loaded": db.extension_loaded(),
+            "detections": detections,
+            // Rows whose Date/Time name no point in time: present in the total,
+            // absent from every time-bucketed analytic. A non-zero value here
+            // is why a dashboard total can sit below the station's own count.
+            "unplaceable_detections": unplaceable,
+            "detections_placeable": detections.saturating_sub(unplaceable),
+            "embedded_extension": {
+                "version": AnalyticsDb::embedded_extension_version(),
+                "duckdb_version": AnalyticsDb::embedded_extension_duckdb_version(),
+                "platform": AnalyticsDb::embedded_extension_platform(),
+                // Some(..) means the embedded copy can never load, so an
+                // offline station has no behavioural analytics at all.
+                "mismatch": db.embedded_extension_mismatch().map(|m| {
+                    json!({ "embedded_for": m.embedded_for, "engine": m.engine })
+                }),
+            },
+        })
+    });
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "analytics_compiled": compiled,
+            "analytics_configured": configured,
+            "store": store,
+            "endpoints": {
+                "sessions": "/analytics/sessions?species=...&gap=30&limit=100",
+                "retention": "/analytics/retention?min_detections=5",
+                "funnel": "/analytics/funnel?species=Robin,Blackbird&window=120&hour_start=4&hour_end=8",
+                "next_species": "/analytics/next-species?after=European+Robin&window=60&limit=10",
+                "patterns": "/analytics/patterns?species=Robin,Blackbird,Wren&max_gap=60&hour_start=4&hour_end=8",
+            },
+        })),
+    )
+}
+
+/// Analytics status endpoint -- reports what capabilities are available.
+///
+/// Slim build: there is no store to report on, so `store` is null rather than
+/// absent — a caller can tell "built without analytics" from "analytics present
+/// but broken" without special-casing a missing key.
+#[cfg(not(feature = "analytics"))]
 async fn analytics_status(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
     let compiled = cfg!(feature = "analytics");
     let configured = state.has_analytics();
@@ -632,6 +702,7 @@ async fn analytics_status(State(state): State<AppState>) -> (StatusCode, Json<Va
         Json(json!({
             "analytics_compiled": compiled,
             "analytics_configured": configured,
+            "store": Value::Null,
             "endpoints": {
                 "sessions": "/analytics/sessions?species=...&gap=30&limit=100",
                 "retention": "/analytics/retention?min_detections=5",

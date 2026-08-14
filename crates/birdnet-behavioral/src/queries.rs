@@ -25,13 +25,47 @@ use crate::types::{FunnelParams, PatternParams, RetentionParams, SessionizeParam
 /// SQL to create the timestamp view for behavioral queries.
 ///
 /// This view adds a proper TIMESTAMP column from the Date and Time text fields.
+///
+/// `TRY_CAST`, not `CAST`, and the distinction is load-bearing. `Date` and
+/// `Time` are free-form `TEXT NOT NULL` in SQLite: the column type forbids only
+/// NULL, and the BirdNET-Pi importer turns a NULL `Date` into `""` and copies
+/// malformed values through verbatim, so a real station's history can hold rows
+/// that name no point in time. Under `CAST`, a single such row did not degrade
+/// the analytics — it *aborted* them. DuckDB raises
+///
+///   Conversion Error: invalid timestamp field format: " "
+///
+/// for the entire query, so one bad row anywhere in a multi-year history
+/// emptied every behavioural and time-series dashboard at once, while the rest
+/// of the app — served from SQLite, which never parses these columns — looked
+/// perfectly healthy. `COUNT(*)` over this view kept working throughout
+/// (DuckDB does not evaluate projected columns it does not need), which is why
+/// the health endpoint stayed green and the failure presented as "the analytics
+/// dashboards are broken" with nothing anywhere reporting an error.
+///
+/// `TRY_CAST` yields NULL for those rows instead. Every aggregate here is
+/// time-bucketed, and SQL grouping and comparison both drop NULLs, so an
+/// unplaceable row falls out of the results rather than taking the query with
+/// it. Coercing to an epoch default was rejected: it would invent detections on
+/// 1970-01-01. Rows excluded this way are counted by
+/// [`COUNT_UNPLACEABLE_DETECTIONS`] so the loss is reported rather than silent.
 pub const CREATE_DETECTIONS_TS_VIEW: &str = "
 CREATE OR REPLACE VIEW detections_ts AS
 SELECT *,
-    CAST(Date || ' ' || Time AS TIMESTAMP) AS detection_timestamp,
-    CAST(Date AS DATE) AS detection_date
+    TRY_CAST(Date || ' ' || Time AS TIMESTAMP) AS detection_timestamp,
+    TRY_CAST(Date AS DATE) AS detection_date
 FROM detections;
 ";
+
+/// Number of synced rows whose `Date`/`Time` cannot be parsed as a timestamp.
+///
+/// These are exactly the rows [`CREATE_DETECTIONS_TS_VIEW`] gives a NULL
+/// `detection_timestamp`, so they are absent from every time-bucketed
+/// analytic. Counting them is what keeps that exclusion honest: a station can
+/// be told how many of its detections no dashboard can place, instead of
+/// quietly reporting totals that do not add up.
+pub const COUNT_UNPLACEABLE_DETECTIONS: &str =
+    "SELECT COUNT(*) FROM detections_ts WHERE detection_timestamp IS NULL";
 
 /// SQL to load the behavioral extension (offline-safe).
 ///

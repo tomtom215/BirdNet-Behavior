@@ -73,6 +73,46 @@ impl From<DuckDbError> for AnalyticsError {
 /// can raise it via the `BIRDNET_DUCKDB_MEMORY_LIMIT` environment variable.
 const DEFAULT_DUCKDB_MEMORY_LIMIT: &str = "256MB";
 
+/// Load `DuckDB`'s ICU extension so date arithmetic binds on the *first* query.
+///
+/// Every analytics dashboard filters on a look-back window, which reaches
+/// DuckDB as `detection_date >= CURRENT_DATE - INTERVAL n DAYS`. That operator
+/// lives in ICU. ICU ships statically inside the bundled `libduckdb` — it is
+/// reported `installed` from the moment a connection opens — but it is not
+/// *loaded*, and DuckDB only autoloads it when a query needs it. The autoload
+/// happens while binding the query that triggered it, which is too late for
+/// that query: it fails with
+///
+/// ```text
+/// Binder Error: No function matches the given name and argument types
+/// 'age(DATE, INTERVAL)'
+/// ```
+///
+/// and every identical query afterwards succeeds. Measured on a freshly opened
+/// store: attempt 1 fails, attempts 2-4 pass, and `duckdb_extensions()` shows
+/// `icu` flipping from `loaded=false` to `loaded=true` across the failure.
+///
+/// One failed query per process start would be survivable on its own. It was
+/// not, because the web layer maps a query error to a rendered "Analytics
+/// temporarily unavailable" fragment and *caches that fragment for ten
+/// minutes* — so a station's first visit after every restart poisoned the cache
+/// and the dashboards stayed blank, with nothing logged as an error and the
+/// health endpoint green. Loading ICU here, before any query runs, is what
+/// makes the first one behave like the second.
+///
+/// Deliberately non-fatal: a build whose `libduckdb` lacks ICU should still
+/// open its analytics store and serve everything that does not need date
+/// arithmetic, rather than refuse to start.
+fn load_icu(conn: &Connection) {
+    if let Err(e) = conn.execute_batch("LOAD icu;") {
+        tracing::warn!(
+            error = %e,
+            "could not load DuckDB's ICU extension; date-range analytics queries \
+             may fail on their first use after start-up"
+        );
+    }
+}
+
 /// Resolve the `DuckDB` memory limit from an optional configured value,
 /// falling back to [`DEFAULT_DUCKDB_MEMORY_LIMIT`] when unset or malformed.
 ///
@@ -192,6 +232,8 @@ impl AnalyticsDb {
         let memory_limit =
             resolve_memory_limit(std::env::var("BIRDNET_DUCKDB_MEMORY_LIMIT").ok().as_deref());
         conn.execute_batch(&format!("SET memory_limit='{memory_limit}';"))?;
+
+        load_icu(&conn);
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS detections (
@@ -488,6 +530,55 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let db = AnalyticsDb::open(&dir.path().join("analytics.duckdb")).unwrap();
         (db, dir)
+    }
+
+    /// A freshly opened store must answer a date-range query on the **first**
+    /// attempt.
+    ///
+    /// The count is irrelevant; that the query binds at all is the whole point.
+    /// `CURRENT_DATE - INTERVAL n DAYS` needs DuckDB's ICU extension, which is
+    /// statically present but not loaded, and DuckDB autoloads it only while
+    /// binding the query that first needs it — too late for that query. Every
+    /// analytics dashboard issues exactly this shape as its opening move after
+    /// a restart, and the web layer caches the resulting error fragment for ten
+    /// minutes, so "only the first one fails" meant "they are all blank for the
+    /// next ten minutes".
+    ///
+    /// Run it twice: a regression here passes on the second call, so a test
+    /// that only checked once would report success against the broken build.
+    #[test]
+    fn first_date_range_query_on_a_fresh_store_binds() {
+        let (db, _tmp) = make_db();
+        let sql = "SELECT COUNT(*) FROM detections_ts \
+                   WHERE detection_date >= CURRENT_DATE - INTERVAL 60 DAYS";
+
+        db.conn
+            .query_row(sql, [], |r| r.get::<_, i64>(0))
+            .expect("the first date-range query after opening the store must bind");
+
+        // Second call: proves the assertion above was about the first call, not
+        // about the query being unsupported outright.
+        db.conn
+            .query_row(sql, [], |r| r.get::<_, i64>(0))
+            .expect("and so must the second");
+    }
+
+    /// ICU is loaded eagerly, not left for DuckDB to autoload mid-bind.
+    #[test]
+    fn icu_is_loaded_when_the_store_opens() {
+        let (db, _tmp) = make_db();
+        let loaded: bool = db
+            .conn
+            .query_row(
+                "SELECT loaded FROM duckdb_extensions() WHERE extension_name = 'icu'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("duckdb_extensions() lists icu");
+        assert!(
+            loaded,
+            "ICU must be loaded before the first query, not autoloaded by it"
+        );
     }
 
     #[test]

@@ -276,6 +276,26 @@ impl AnalyticsDb {
         Ok(u64::try_from(count).unwrap_or(0))
     }
 
+    /// Count synced detections whose `Date`/`Time` names no point in time.
+    ///
+    /// These rows are present in the OLAP copy and in `SELECT COUNT(*)`, but
+    /// carry a NULL `detection_timestamp` (see
+    /// [`CREATE_DETECTIONS_TS_VIEW`](crate::queries::CREATE_DETECTIONS_TS_VIEW))
+    /// and so are absent from every time-bucketed analytic. A non-zero count is
+    /// the reason a dashboard total can sit below the station's raw detection
+    /// count, and is worth surfacing rather than leaving for an operator to
+    /// discover by arithmetic.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails.
+    pub fn unplaceable_detection_count(&self) -> Result<u64, AnalyticsError> {
+        let count: i64 = self
+            .conn
+            .query_row(queries::COUNT_UNPLACEABLE_DETECTIONS, [], |row| row.get(0))?;
+        Ok(u64::try_from(count).unwrap_or(0))
+    }
+
     /// Count unique species (by common name) in `DuckDB`.
     ///
     /// # Errors
@@ -300,6 +320,92 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let db = AnalyticsDb::open(&dir.path().join("analytics.duckdb")).unwrap();
         (db, dir)
+    }
+
+    /// One unparseable `Date`/`Time` must not take every analytics query down
+    /// with it.
+    ///
+    /// The BirdNET-Pi importer maps a NULL `Date` to `""` and passes malformed
+    /// values through verbatim, and `Date TEXT NOT NULL` constrains neither —
+    /// so a real station's history can carry rows no calendar can place. With a
+    /// plain `CAST` in `detections_ts` those rows did not degrade the analytics,
+    /// they *aborted* it: DuckDB raises `Conversion Error` for the whole query,
+    /// so one bad row in a multi-year history emptied every behavioural and
+    /// time-series dashboard while the rest of the app — served from SQLite —
+    /// looked perfectly healthy.
+    ///
+    /// `COUNT(*)` over the view is deliberately asserted too: it keeps working
+    /// either way, because DuckDB never evaluates the projected columns, which
+    /// is why the health checks stayed green throughout.
+    #[test]
+    fn one_unparseable_date_does_not_abort_every_analytics_query() {
+        let (db, _tmp) = make_db();
+        let sqlite_dir = TempDir::new().unwrap();
+        let sc = rusqlite::Connection::open(sqlite_dir.path().join("b.db")).unwrap();
+        sc.execute_batch(
+            "CREATE TABLE detections (Date TEXT, Time TEXT, Sci_Name TEXT, Com_Name TEXT,
+             Confidence REAL, Lat REAL, Lon REAL, Cutoff REAL, Week INTEGER,
+             Sens REAL, Overlap REAL, File_Name TEXT);
+             INSERT INTO detections VALUES ('2026-03-12','06:30:00','Turdus merula','Blackbird',0.87,NULL,NULL,NULL,NULL,NULL,NULL,NULL);
+             INSERT INTO detections VALUES ('','','Parus major','Great Tit',0.75,NULL,NULL,NULL,NULL,NULL,NULL,NULL);
+             INSERT INTO detections VALUES ('not-a-date','25:99:99','Corvus corax','Raven',0.60,NULL,NULL,NULL,NULL,NULL,NULL,NULL);
+             INSERT INTO detections VALUES ('2026-03-13','07:00:00','Parus major','Great Tit',0.75,NULL,NULL,NULL,NULL,NULL,NULL,NULL);",
+        ).unwrap();
+
+        // The bad rows sync without complaint — nothing upstream rejects them.
+        assert_eq!(db.sync_from_sqlite(&sc).unwrap(), 4);
+        assert_eq!(db.detection_count().unwrap(), 4);
+
+        // Never evaluated the cast columns, so this passed even when broken.
+        let total: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM detections_ts", [], |r| r.get(0))
+            .expect("COUNT(*) over the view");
+        assert_eq!(total, 4);
+
+        // The two queries that actually broke: both touch a cast column.
+        let by_timestamp: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM detections_ts WHERE detection_timestamp > '2000-01-01'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("filtering on detection_timestamp must not raise");
+        assert_eq!(by_timestamp, 2, "only the two placeable rows are counted");
+
+        let distinct_days: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(DISTINCT detection_date) FROM detections_ts",
+                [],
+                |r| r.get(0),
+            )
+            .expect("grouping by detection_date must not raise");
+        assert_eq!(
+            distinct_days, 2,
+            "12th and 13th; the unplaceable rows drop out"
+        );
+
+        // Unplaceable rows are excluded rather than coerced to some epoch date,
+        // which would invent detections on 1970-01-01.
+        let null_ts: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM detections_ts WHERE detection_timestamp IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .expect("counting unplaceable rows must not raise");
+        assert_eq!(null_ts, 2);
+
+        // The exclusion is reportable, not silent.
+        assert_eq!(db.unplaceable_detection_count().unwrap(), 2);
+        assert_eq!(
+            db.detection_count().unwrap() - db.unplaceable_detection_count().unwrap(),
+            2,
+            "raw count minus unplaceable is what the dashboards can actually show"
+        );
     }
 
     #[test]

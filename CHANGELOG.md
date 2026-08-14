@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The analytics dashboards were blank, and nothing anywhere said why.** Two
+  independent defects, both invisible to a green CI matrix, both only reachable
+  on a real station.
+
+  The first is the one that emptied them. Every analytics query filters on a
+  look-back window, which reaches DuckDB as
+  `detection_date >= CURRENT_DATE - INTERVAL n DAYS`. That operator lives in
+  DuckDB's ICU extension. ICU ships statically inside the bundled `libduckdb`
+  and reports itself `installed` the moment a connection opens — but it is not
+  *loaded*, and DuckDB only autoloads it when a query needs it. The autoload
+  runs while binding the query that triggered it, which is too late for that
+  query: it fails with `Binder Error: … 'age(DATE, INTERVAL)'`, and every
+  identical query afterwards succeeds. Measured on a freshly opened store:
+  attempt 1 fails, attempts 2–4 pass, and `duckdb_extensions()` shows `icu`
+  flipping to `loaded=true` across the failure.
+
+  One failed query per restart would have been survivable. It was not, because
+  the web layer maps a query error to a rendered "Analytics temporarily
+  unavailable" fragment and caches that fragment for ten minutes — so the first
+  page visit after every restart poisoned the cache and the dashboards stayed
+  blank, with nothing logged as an error and the health endpoint green. ICU is
+  now loaded when the analytics store opens, before any query runs.
+
+  The second survives dirty history rather than a cold start. `Date` and `Time`
+  are free-form `TEXT NOT NULL` — the column type forbids NULL, not nonsense —
+  and the BirdNET-Pi importer turns a NULL `Date` into `""` and copies
+  malformed values through verbatim. `detections_ts` cast them with a plain
+  `CAST`, and DuckDB raises `Conversion Error` for the *whole query*, so one
+  unplaceable row anywhere in a multi-year import took down every behavioural
+  and time-series dashboard at once. The view now uses `TRY_CAST`: such a row
+  falls out of the time-bucketed results instead of aborting them. Coercing to
+  an epoch default was rejected — it would invent detections on 1970-01-01.
+
+  Neither could have been caught by the tests that existed. The time-series
+  crate's sixteen public queries had no execution coverage at all: every test
+  built a SQL string and asserted it *contained* the right substrings, which a
+  query DuckDB refuses to bind passes exactly as well as one that works. There
+  is now a gate that executes all sixteen against a real DuckDB and requires
+  rows back, plus gates for the cold-start bind and the unplaceable row.
+
+### Added
+
+- `GET /api/v2/analytics/status` reports the analytics **store**, not just the
+  build flags. `analytics_compiled` and `analytics_configured` are both `true`
+  on a station whose dashboards are empty — they describe intent, and stay true
+  through every way this actually fails. The new `store` object carries
+  `extension_loaded`, the DuckDB row count, `unplaceable_detections` (rows no
+  dashboard can place in time) and the embedded extension's version, platform
+  and any engine mismatch. It is `null` on a slim build, so "no analytics here"
+  stays distinguishable from "analytics present but broken".
+
+### Changed
+
+- BirdNET-Pi import validation no longer claims malformed rows "will be
+  skipped". Nothing skipped them: they were imported, counted, and then absent
+  from every date- or time-based analytic. The check also missed the cases that
+  mattered — it sampled only the first 1 000 rows, never looked at `Time`, and
+  could not see a NULL `Date` at all, because `NULL NOT GLOB …` is NULL rather
+  than true. It now scans the whole table, inspects both columns, and says what
+  actually happens to the rows.
+
+- `scripts/setup-onnxruntime.sh` works against current `ort-sys` again. Its dist
+  table was renamed `dist.txt` → `dist.tsv` and had its columns reordered with a
+  header added, so the script failed with "ort-sys not found" and cold builds
+  behind a TLS-intercepting proxy — sandboxed CI, Claude Code on the web — could
+  not fetch ONNX Runtime. It now accepts either filename and identifies columns
+  by content rather than position.
+
 ## [0.13.1] - 2026-08-13
 
 ### Fixed
