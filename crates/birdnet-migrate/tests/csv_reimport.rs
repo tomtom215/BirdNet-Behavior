@@ -33,10 +33,27 @@ fn csv_reimport_does_not_duplicate() {
     let dst = NamedTempFile::new().unwrap();
     let p = ProgressHandle::new();
     let first = run_migration(csv.path(), dst.path(), false, &p).unwrap();
+    assert_eq!(
+        first.imported_rows, 2,
+        "both rows should land the first time"
+    );
+
     let second = run_migration(csv.path(), dst.path(), false, &p).unwrap();
+    assert_eq!(
+        second.imported_rows, 0,
+        "a re-import must import nothing it already holds"
+    );
+    assert_eq!(
+        second.skipped_rows, 2,
+        "and must account for them as skipped, not quietly insert them again"
+    );
 
     let conn = Connection::open(dst.path()).unwrap();
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
         .unwrap();
+    assert_eq!(
+        count, 2,
+        "re-importing the same CSV must not duplicate rows"
+    );
 }
