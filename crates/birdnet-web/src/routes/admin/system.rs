@@ -201,6 +201,7 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
     <div class="btn-row">
       <button class="btn btn-danger"
               hx-post="/admin/system/clear-detections"
+              hx-disabled-elt="this"
               hx-target="#clear-result"
               hx-swap="innerHTML"
               hx-confirm="Are you sure you want to delete ALL detections and notification logs? This cannot be undone."
@@ -214,6 +215,7 @@ async fn system_page(State(state): State<AppState>) -> Html<String> {
       </button>
       <button class="btn btn-danger"
               hx-post="/admin/system/clear-extracted"
+              hx-disabled-elt="this"
               hx-target="#clear-result"
               hx-swap="innerHTML"
               hx-confirm="Are you sure you want to delete ALL extracted audio clips? This cannot be undone."

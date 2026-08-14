@@ -21,7 +21,7 @@ authors:
 repository-code: "https://github.com/tomtom215/BirdNet-Behavior"
 url: "https://tomtom215.github.io/BirdNet-Behavior/"
 license: CC-BY-NC-SA-4.0
-version: 0.13.0
+version: 0.13.1
 date-released: "2026-08-13"
 keywords:
   - birdnet

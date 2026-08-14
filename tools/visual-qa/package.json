@@ -9,7 +9,8 @@
     "capture": "node capture.mjs",
     "probe": "node probe.mjs",
     "axe": "node axe.mjs",
-    "qa": "node qa.mjs"
+    "qa": "node qa.mjs",
+    "interactions": "node interactions.mjs"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.11.3",

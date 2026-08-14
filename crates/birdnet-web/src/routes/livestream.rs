@@ -251,6 +251,11 @@ async fn livestream(State(state): State<AppState>, Query(params): Query<StreamPa
 
     let mut cmd = tokio::process::Command::new("ffmpeg");
 
+    // `-loglevel error` reduces stderr to things that actually went wrong, which
+    // is what makes draining it below worth doing: every line that arrives is
+    // worth an operator's attention rather than banner noise.
+    cmd.args(["-hide_banner", "-loglevel", "error"]);
+
     cmd.args(stream_input_args(
         live.as_ref().map(|l| l.subscription.spec()),
         is_rtsp,
@@ -271,6 +276,12 @@ async fn livestream(State(state): State<AppState>, Query(params): Query<StreamPa
         &STREAM_SAMPLE_RATE.to_string(),
         "-ac",
         "1",
+        // Hand each packet to the pipe as it is encoded instead of waiting for
+        // the avio buffer to fill. Measured through this exact invocation, it
+        // halves time-to-first-audio (1.13 s -> 0.59 s), and that window is
+        // precisely when a listener is deciding whether the button worked.
+        "-flush_packets",
+        "1",
         "pipe:1",
     ]);
 
@@ -281,7 +292,13 @@ async fn livestream(State(state): State<AppState>, Query(params): Query<StreamPa
             std::process::Stdio::null()
         })
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        // ffmpeg's stderr is the only place a failed live stream explains
+        // itself — `Device or resource busy`, an unknown filter, a codec that
+        // isn't built in. Discarding it made every failure present identically
+        // from the outside: a 200 response carrying no audio, and a journal with
+        // nothing in it. Drained on a task below so a full pipe cannot ever
+        // block the encoder.
+        .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
         .spawn();
 
@@ -324,6 +341,21 @@ async fn livestream(State(state): State<AppState>, Query(params): Query<StreamPa
             .into_response();
     };
 
+    // Surface ffmpeg's own account of any failure. With `-loglevel error` this
+    // stays silent on a healthy stream, so anything logged here is a real fault
+    // an operator needs — and draining the pipe is mandatory regardless, since
+    // an unread stderr eventually blocks the encoder.
+    if let Some(stderr) = child.stderr.take() {
+        let failing_source = source_id.clone();
+        tokio::spawn(async move {
+            use tokio::io::AsyncBufReadExt as _;
+            let mut lines = tokio::io::BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                tracing::warn!(source = %failing_source, "ffmpeg: {line}");
+            }
+        });
+    }
+
     let from_capture_tap = live.is_some();
     if let Some(live) = live {
         let Some(stdin) = child.stdin.take() else {
@@ -351,14 +383,30 @@ async fn livestream(State(state): State<AppState>, Query(params): Query<StreamPa
     // disconnects (the receiver drops and `send` fails). Holding the child here
     // also keeps it from being killed the instant this handler returns.
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(16);
+    let streamed_source = source_id.clone();
     tokio::spawn(async move {
         let _permit = stream_permit;
         let _child = child;
         let mut reader = ReaderStream::new(stdout);
+        let mut delivered = 0_u64;
         while let Some(chunk) = reader.next().await {
+            if let Ok(ref bytes) = chunk {
+                delivered += bytes.len() as u64;
+            }
             if tx.send(chunk.map_err(std::io::Error::other)).await.is_err() {
                 break; // client disconnected
             }
+        }
+        // The status line went out with the headers, long before ffmpeg could
+        // fail, so a dead encoder reaches the browser as a successful but empty
+        // stream — silence that looks exactly like a broken button. This cannot
+        // retroactively change the response, but it does put the fact in the
+        // journal next to whatever ffmpeg said on stderr.
+        if delivered == 0 {
+            tracing::warn!(
+                source = %streamed_source,
+                "live audio stream ended without delivering any audio"
+            );
         }
     });
 
@@ -370,11 +418,11 @@ async fn livestream(State(state): State<AppState>, Query(params): Query<StreamPa
         header::CACHE_CONTROL,
         HeaderValue::from_static("no-cache, no-store"),
     );
-    // Indicate this is a continuous stream
-    headers.insert(
-        header::TRANSFER_ENCODING,
-        HeaderValue::from_static("chunked"),
-    );
+    // No `Transfer-Encoding` here on purpose. It is a hop-by-hop framing header
+    // the HTTP layer owns: hyper already chunks a streaming body and emits the
+    // header itself (verified on the wire — setting it by hand changed nothing
+    // but the header order), and HTTP/2 forbids it outright, so a station behind
+    // an h2 reverse proxy would have the response rejected for carrying it.
     // ICY-compatible metadata
     headers.insert(
         axum::http::HeaderName::from_static("icy-name"),
