@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`--channel-report`: what a stereo microphone is actually delivering.** The
+  model has one audio input, so two channels must become one before inference —
+  today by averaging, which is harmless for coincident capsules and a comb
+  filter for spaced ones. Which case a station is in depends on its microphone
+  and its acoustics, so it cannot be answered anywhere but on the station.
+
+  The report records a few seconds from the configured ALSA device and prints
+  each channel's level, the inter-channel delay (with the capsule spacing it
+  implies), and what each reduction would hand BirdNET: today's average, the
+  louder single channel, and a delay-aligned sum. It then recommends a setting.
+  Requires the service to be stopped first — an ALSA capture device is
+  exclusive — and says so when the device will not open.
+
 ### Fixed
 
 - **A detection's timestamp is now when it was heard, not when its recording
