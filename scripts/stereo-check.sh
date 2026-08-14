@@ -69,6 +69,24 @@ set -euo pipefail
 
 command -v python3 >/dev/null || { echo "python3 not found." >&2; exit 2; }
 
+# Refuse before recording rather than after. An ALSA capture device is
+# exclusive, so a running station guarantees `Device or resource busy` — and
+# discovering that from arecord's error, ten seconds in, reads like a hardware
+# fault instead of the two commands that fix it.
+SERVICE="${BIRDNET_SERVICE:-birdnet-behavior}"
+require_device_free() {
+  command -v systemctl >/dev/null || return 0
+  systemctl is-active --quiet "$SERVICE" 2>/dev/null || return 0
+  echo "The station is running, and it holds the microphone exclusively." >&2
+  echo >&2
+  echo "Run the whole thing in one go — the service comes back even if the" >&2
+  echo "check fails, because these are separated by ';' and not '&&':" >&2
+  echo >&2
+  echo "  sudo systemctl stop $SERVICE; $0 $*; sudo systemctl start $SERVICE" >&2
+  echo >&2
+  exit 2
+}
+
 WAV=""
 TMP_WAV=""
 MONO_WAV=""
@@ -110,6 +128,7 @@ elif [ "${1:-}" = "--alsa-test" ]; then
     echo "arecord not found — install alsa-utils." >&2
     exit 2
   }
+  require_device_free "$@"
   MONO_WAV="$(mktemp -t stereo-check-mono-XXXXXX.wav)"
   TMP_WAV="$(mktemp -t stereo-check-XXXXXX.wav)"
   WAV="$TMP_WAV"
@@ -201,6 +220,7 @@ else
     exit 2
   }
 
+  require_device_free "$@"
   TMP_WAV="$(mktemp -t stereo-check-XXXXXX.wav)"
   WAV="$TMP_WAV"
   echo "Recording ${SECONDS_TO_RECORD}s of stereo from ${DEVICE} ..."
