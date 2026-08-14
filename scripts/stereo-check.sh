@@ -173,6 +173,24 @@ elif [ "${1:-}" = "--scan" ]; then
   [ -n "${3:-}" ] && SCAN_COUNT="$3"
   echo "Scanning the ${SCAN_COUNT} most recent segments in ${SCAN_DIR} ..."
 else
+  # An unrecognised flag must not fall through to "that is the device name".
+  # It did, and the result was `arecord -D --alsa-test -d plughw:1,0` reported
+  # as "invalid duration argument" — which reads like a broken microphone
+  # rather than what it was: an older copy of this script that predated the
+  # option being passed to it.
+  case "${1:-}" in
+    --*)
+      echo "unknown option: $1" >&2
+      echo >&2
+      echo "This copy understands: --scan [DIR], --file PATH, --alsa-test [DEVICE] [SECS]," >&2
+      echo "or a bare ALSA device name to record from." >&2
+      echo >&2
+      echo "If you expected that option to exist, this copy is out of date. Re-fetch:" >&2
+      echo "  curl -fsSL -o stereo-check.sh https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/claude/birdnet-analytics-dashboards-1iuyqt/scripts/stereo-check.sh" >&2
+      exit 2
+      ;;
+  esac
+
   DEVICE="${1:-plughw:1,0}"
   SECONDS_TO_RECORD="${2:-10}"
   RATE="${3:-48000}"
