@@ -401,4 +401,44 @@ mod tests {
         assert_eq!(week, None);
         assert_eq!(sens, Some(23.0));
     }
+
+    /// A BirdNET-Pi row with no `File_Name` must still dedupe on re-import.
+    ///
+    /// It did not: `File_Name` is part of the destination's UNIQUE key and was
+    /// nullable, and SQLite treats NULLs as distinct, so `INSERT OR IGNORE`
+    /// had nothing to conflict with and silently doubled the row while
+    /// reporting `skipped = 0`. Migration 23 made the index NULL-insensitive.
+    #[test]
+    fn a_null_file_name_still_dedupes() {
+        let src = NamedTempFile::new().unwrap();
+        let conn = Connection::open(src.path()).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE detections (
+                Date TEXT, Time TEXT, Sci_Name TEXT, Com_Name TEXT,
+                Confidence REAL, Lat REAL, Lon REAL, Cutoff REAL,
+                Week INTEGER, Sens REAL, Overlap REAL, File_Name TEXT);
+             INSERT INTO detections
+               (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+             VALUES ('2026-01-01','06:00:00','Turdus merula','Blackbird',0.9,NULL);",
+        )
+        .unwrap();
+        drop(conn);
+
+        let dst = NamedTempFile::new().unwrap();
+        let handle = ProgressHandle::new();
+        let importer = BirdNetPiImporter;
+        importer.migrate(src.path(), dst.path(), &handle).unwrap();
+        let second = importer.migrate(src.path(), dst.path(), &handle).unwrap();
+
+        let dconn = Connection::open(dst.path()).unwrap();
+        let rows: i64 = dconn
+            .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            rows, 1,
+            "re-import must not duplicate a row whose File_Name is NULL"
+        );
+        assert_eq!(second.imported_rows, 0);
+        assert_eq!(second.skipped_rows, 1);
+    }
 }

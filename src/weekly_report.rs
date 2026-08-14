@@ -244,11 +244,18 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         birdnet_db::migration::migrate(&conn).unwrap();
         let (today, _) = week_range_strings();
-        for (sci, com) in rows {
+        // Each seeded row is a *separate* detection, so each needs its own
+        // timestamp. They previously all shared '06:00:00' and were only
+        // distinct rows because a NULL `File_Name` made the UNIQUE key treat
+        // them as unrelated — the same hole that let a re-imported BirdNET-Pi
+        // database double itself. Two hits on one species at the very same
+        // second, from no clip, are one detection recorded twice; counting them
+        // as two is exactly the inflation this report should never show.
+        for (i, (sci, com)) in rows.iter().enumerate() {
             conn.execute(
                 "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence) \
-                 VALUES (?1, '06:00:00', ?2, ?3, 0.9)",
-                rusqlite::params![today, sci, com],
+                 VALUES (?1, ?2, ?3, ?4, 0.9)",
+                rusqlite::params![today, format!("06:{:02}:00", i), sci, com],
             )
             .unwrap();
         }

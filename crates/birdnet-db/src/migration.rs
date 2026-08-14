@@ -560,6 +560,49 @@ pub const MIGRATIONS: &[Migration] = &[
         // already scan the same rows.
         up_sql: "ALTER TABLE detections ADD COLUMN Clip_Pruned_At INTEGER;",
     },
+    Migration {
+        version: 23,
+        description: "Make the detections UNIQUE key NULL-insensitive so a re-import cannot duplicate",
+        // Every duplicate-suppression path in this project — the detection
+        // pipeline's writes, and above all the BirdNET-Pi importer's
+        // `INSERT OR IGNORE` — rests entirely on `idx_detections_unique`.
+        // `File_Name` is part of that key and is nullable, and SQLite considers
+        // NULLs distinct in a UNIQUE index. A row with no filename therefore
+        // conflicts with nothing, and `INSERT OR IGNORE` ignores nothing.
+        //
+        // For an importing user that is the worst shape a bug can take. The
+        // CSV/TSV path yields NULL for an empty `File_Name` field, for `\\N`,
+        // for the literal `NULL`, and for any row that simply has fewer than
+        // twelve columns — so re-importing the same export doubled those rows,
+        // silently, and reported "imported N, skipped 0" as success. Anyone who
+        // re-ran an import after a failure (the only recovery this offers, as
+        // batches commit as they go) doubled their history and had every
+        // dashboard, rate and analytic quietly computed over it. Data you
+        // cannot trust is worse than data you do not have.
+        //
+        // `chunk_offset_secs` took `NOT NULL DEFAULT` for exactly this reason
+        // (migration 11). `File_Name` cannot: NULL is *meaningful* there —
+        // migration 22 made it the difference between "never had a clip" and
+        // "had one, reclaimed on this date", and `locks.rs` filters on
+        // `IS NOT NULL`. So the index absorbs the NULL instead of the column,
+        // via `COALESCE`, leaving every existing semantic and query untouched.
+        //
+        // The DELETE first is a repair, not just a precondition for the index:
+        // databases that already took a double import carry the duplicates
+        // now, and creating the index over them would fail. It keeps the
+        // earliest row of each group (`MIN(rowid)`), which is the
+        // first-imported one. Nothing references detections by rowid — other
+        // tables key on (Date, Time, Sci_Name) — so collapsing them orphans
+        // nothing.
+        up_sql: "DELETE FROM detections
+                   WHERE rowid NOT IN (
+                     SELECT MIN(rowid) FROM detections
+                      GROUP BY Date, Time, Sci_Name, COALESCE(File_Name, ''), chunk_offset_secs
+                   );
+                 DROP INDEX IF EXISTS idx_detections_unique;
+                 CREATE UNIQUE INDEX IF NOT EXISTS idx_detections_unique
+                     ON detections(Date, Time, Sci_Name, COALESCE(File_Name, ''), chunk_offset_secs);",
+    },
 ];
 
 /// Ensure the `schema_version` tracking table exists.
@@ -786,5 +829,68 @@ mod tests {
         assert_eq!(rows.len(), MIGRATIONS.len());
         assert_eq!(rows[0].0, 1);
         assert_eq!(rows[0].1, "Create detections table");
+    }
+
+    /// The UNIQUE key must not be defeated by a NULL `File_Name`.
+    ///
+    /// This is the invariant every duplicate-suppression path depends on,
+    /// including the BirdNET-Pi importer's `INSERT OR IGNORE`.
+    #[test]
+    fn the_detections_unique_key_ignores_a_null_file_name() {
+        let conn = memory_db();
+        migrate(&conn).unwrap();
+        let insert = "INSERT OR IGNORE INTO detections
+            (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+            VALUES ('2026-01-01','06:00:00','Turdus merula','Blackbird',0.9,NULL)";
+        conn.execute(insert, []).unwrap();
+        conn.execute(insert, []).unwrap();
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            rows, 1,
+            "two identical clip-less detections must collapse to one"
+        );
+    }
+
+    /// Migration 23 repairs databases that already carry duplicates.
+    ///
+    /// Anyone who re-ran an import before the fix has them now, so the
+    /// migration has to collapse what is already there — not merely stop new
+    /// ones. Applies every migration except the last against a table built
+    /// without the fixed index, seeds the duplicates that were previously
+    /// possible, then applies the repair.
+    #[test]
+    fn migration_23_collapses_pre_existing_duplicates() {
+        let conn = memory_db();
+        ensure_version_table(&conn).unwrap();
+        for m in &MIGRATIONS[..MIGRATIONS.len() - 1] {
+            conn.execute_batch(m.up_sql).unwrap();
+        }
+        // The pre-fix index let these coexist: identical but for NULL names.
+        let insert = "INSERT OR IGNORE INTO detections
+            (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+            VALUES ('2026-01-01','06:00:00','Turdus merula','Blackbird',0.9,NULL)";
+        conn.execute(insert, []).unwrap();
+        conn.execute(insert, []).unwrap();
+        conn.execute(insert, []).unwrap();
+        let before: i64 = conn
+            .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            before, 3,
+            "precondition: the old index permitted duplicates"
+        );
+
+        let last = &MIGRATIONS[MIGRATIONS.len() - 1];
+        conn.execute_batch(last.up_sql).unwrap();
+
+        let after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            after, 1,
+            "the repair must collapse duplicates already on disk"
+        );
     }
 }
