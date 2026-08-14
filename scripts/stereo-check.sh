@@ -30,11 +30,17 @@
 #
 #   ./stereo-check.sh --file ~/BirdSongs/StreamData/2026-08-14-birdnet-06:12:00.wav
 #
-# ...or let it choose: --scan looks through the most recent segments, keeps the
-# stereo ones, and analyses whichever has the loudest three seconds in it, which
-# is the closest thing to "a segment with a bird in it" without asking a human:
+# ...or let it choose everything: bare --scan finds the recordings directory
+# itself (from RECS_DIR in birdnet.conf, falling back to the usual locations),
+# keeps the stereo segments, and analyses whichever has the loudest three
+# seconds in it — the closest thing to "a segment with a bird in it" without
+# asking a human to listen to a day of audio:
 #
-#   ./stereo-check.sh --scan ~/BirdSongs/StreamData
+#   ./stereo-check.sh --scan
+#
+# Pass a directory to override the search:
+#
+#   ./stereo-check.sh --scan /some/where
 #
 # Both file modes only work if the source is configured Stereo. A Mono source
 # writes single-channel segments, and the extracted detection clips are always
@@ -73,7 +79,42 @@ if [ "${1:-}" = "--file" ]; then
   echo "Analysing ${WAV} ..."
 elif [ "${1:-}" = "--scan" ]; then
   SCAN_DIR="${2:-}"
-  [ -n "$SCAN_DIR" ] || { echo "--scan needs a directory." >&2; exit 2; }
+  if [ -z "$SCAN_DIR" ]; then
+    # Where the segments live is a config value, not a constant, and it differs
+    # from BirdNET-Pi's layout. Ask the config first, then try the defaults this
+    # project and its predecessor install with.
+    CONF="${BIRDNET_CONF:-/etc/birdnet/birdnet.conf}"
+    if [ -r "$CONF" ]; then
+      FROM_CONF="$(sed -n 's/^[[:space:]]*RECS_DIR[[:space:]]*=[[:space:]]*//p' "$CONF" \
+                   | tail -n1 | tr -d '"'"'"'' | sed "s#^~#$HOME#")"
+      [ -n "$FROM_CONF" ] && [ -d "$FROM_CONF" ] && SCAN_DIR="$FROM_CONF"
+    fi
+  fi
+  if [ -z "$SCAN_DIR" ]; then
+    for candidate in \
+      "$HOME/BirdNet-Behavior/recordings" \
+      /var/lib/birdnet/recs \
+      /var/lib/birdnet/recordings \
+      "$HOME/BirdSongs/StreamData" \
+      /tmp/StreamData
+    do
+      [ -d "$candidate" ] && { SCAN_DIR="$candidate"; break; }
+    done
+  fi
+  if [ -z "$SCAN_DIR" ]; then
+    echo "Could not find a recordings directory." >&2
+    echo >&2
+    echo "Looked at RECS_DIR in ${BIRDNET_CONF:-/etc/birdnet/birdnet.conf}, then:" >&2
+    echo "  $HOME/BirdNet-Behavior/recordings" >&2
+    echo "  /var/lib/birdnet/recs" >&2
+    echo "  /var/lib/birdnet/recordings" >&2
+    echo "  $HOME/BirdSongs/StreamData" >&2
+    echo "  /tmp/StreamData" >&2
+    echo >&2
+    echo "Find yours with:  grep RECS_DIR ${BIRDNET_CONF:-/etc/birdnet/birdnet.conf}" >&2
+    echo "then:             ./stereo-check.sh --scan /that/path" >&2
+    exit 2
+  fi
   [ -d "$SCAN_DIR" ] || { echo "not a directory: $SCAN_DIR" >&2; exit 2; }
   [ -n "${3:-}" ] && SCAN_COUNT="$3"
   echo "Scanning the ${SCAN_COUNT} most recent segments in ${SCAN_DIR} ..."
@@ -112,7 +153,7 @@ PY_ARGS=("$WAV")
 if [ -n "$SCAN_DIR" ]; then
   # NUL-separated so names with spaces or colons survive — BirdNET-Pi-style
   # segment filenames contain colons.
-  find "$SCAN_DIR" -maxdepth 1 -type f -name '*.wav' -printf '%T@ %p\0' 2>/dev/null \
+  find "$SCAN_DIR" -maxdepth 3 -type f -name '*.wav' -printf '%T@ %p\0' 2>/dev/null \
     | sort -zrn | head -zn "$SCAN_COUNT" | sed -z 's/^[^ ]* //' > "$LIST" || true
   if [ ! -s "$LIST" ]; then
     echo "No .wav files found in $SCAN_DIR" >&2
