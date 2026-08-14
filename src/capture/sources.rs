@@ -5,7 +5,7 @@
 //! knobs (software gain, quiet windows). The parent module owns only the
 //! thread orchestration that consumes these.
 
-use birdnet_core::audio::capture::{CaptureSource, RtspTransport};
+use birdnet_core::audio::capture::{CaptureSource, ChannelPick, RtspTransport};
 
 use crate::cli::Cli;
 
@@ -186,18 +186,48 @@ fn audio_source_to_capture_source(
     _rtsp_index: &mut usize,
 ) -> CaptureSource {
     use birdnet_db::audio_sources::{Channels, SourceKind};
-    // Mono / Left / Right all collapse to one channel — the daemon
-    // only consumes one channel today; an ffmpeg `pan` filter could
-    // pick the half for Left/Right later without changing this surface.
-    let channels: u16 = match row.channels {
-        Channels::Mono | Channels::Left | Channels::Right => 1,
-        Channels::Stereo => 2,
+    // Left and Right used to collapse into Mono here and were never
+    // distinguished again, so the Audio page offered three options that all
+    // did the same thing. They now select the channel they name: the device is
+    // opened with both, and the tee keeps the requested half, so the segments
+    // written to disk are the mono stream that half produced.
+    //
+    // That is worth having rather than cosmetic. `Stereo` keeps both channels
+    // and the decoder averages them, which for a *spaced* pair is a comb
+    // filter: measured through this project's decode path, one wavefront
+    // reaching the capsules half a period apart loses about 66 dB to
+    // cancellation, a quarter period costs 3 dB, and the notches move with the
+    // bird's direction. Picking one channel is how an operator avoids that.
+    let channel_pick = match row.channels {
+        Channels::Left => Some(ChannelPick::Left),
+        Channels::Right => Some(ChannelPick::Right),
+        Channels::Mono | Channels::Stereo => None,
     };
+    let channels: u16 = match row.channels {
+        Channels::Mono => 1,
+        // A pick needs both channels off the device; the tee reduces to one.
+        Channels::Left | Channels::Right | Channels::Stereo => 2,
+    };
+    if matches!(row.channels, Channels::Stereo) {
+        // Once per source at start-up, in the journal the operator is already
+        // reading when detections look thin. Not an error: a coincident pair
+        // averages harmlessly, and we cannot tell from here which kind is
+        // plugged in.
+        tracing::warn!(
+            source = %row.id,
+            device = %row.device_id,
+            "source is configured Stereo: both channels are averaged to mono for analysis, \
+             which on a spaced microphone pair cancels signal at frequencies where the two \
+             capsules disagree. Set the source to Left or Right to analyse one channel \
+             instead, unless the capsules are coincident"
+        );
+    }
     match row.kind {
         SourceKind::UsbAlsa => CaptureSource::Microphone {
             device: row.device_id.clone(),
             sample_rate: row.sample_rate,
             channels,
+            channel_pick,
             stream_id: Some(row.id.clone()),
         },
         SourceKind::PipeWire => CaptureSource::PipeWire {
@@ -287,6 +317,7 @@ pub(super) fn resolve_sources(
             .into_iter()
             .enumerate()
             .map(|(i, device)| CaptureSource::Microphone {
+                channel_pick: None,
                 device,
                 sample_rate: 48_000,
                 channels: 1,
@@ -646,6 +677,7 @@ mod tests {
         let cs = audio_source_to_capture_source(&r, false, &mut idx);
         match cs {
             CaptureSource::Microphone {
+                channel_pick: _,
                 device,
                 sample_rate,
                 channels,
@@ -658,6 +690,60 @@ mod tests {
             }
             other => panic!("expected Microphone, got {other:?}"),
         }
+    }
+
+    /// Left and Right must resolve to something Mono does not.
+    ///
+    /// They used to collapse into the same `channels: 1` microphone with
+    /// nothing carried forward, so the Audio page offered three settings that
+    /// produced byte-identical captures. A pick now opens the device with both
+    /// channels — you cannot select one the driver was never asked for — and
+    /// names which half the tee keeps.
+    #[test]
+    fn translator_maps_left_and_right_to_distinct_channel_picks() {
+        use birdnet_db::audio_sources::Channels;
+
+        let resolve = |channels: Channels| {
+            let mut r = row("src_usb_1", SourceKind::UsbAlsa, "plughw:1,0");
+            r.channels = channels;
+            let mut idx = 0;
+            match audio_source_to_capture_source(&r, false, &mut idx) {
+                CaptureSource::Microphone {
+                    channels,
+                    channel_pick,
+                    ..
+                } => (channels, channel_pick),
+                other => panic!("expected Microphone, got {other:?}"),
+            }
+        };
+
+        assert_eq!(resolve(Channels::Mono), (1, None), "mono opens one channel");
+        assert_eq!(
+            resolve(Channels::Left),
+            (2, Some(ChannelPick::Left)),
+            "Left must open both channels and keep the first"
+        );
+        assert_eq!(
+            resolve(Channels::Right),
+            (2, Some(ChannelPick::Right)),
+            "Right must open both channels and keep the second"
+        );
+        assert_eq!(
+            resolve(Channels::Stereo),
+            (2, None),
+            "Stereo keeps both and lets the decoder mix them"
+        );
+
+        assert_ne!(
+            resolve(Channels::Left),
+            resolve(Channels::Right),
+            "Left and Right must not resolve to the same capture"
+        );
+        assert_ne!(
+            resolve(Channels::Mono),
+            resolve(Channels::Right),
+            "Right must not be a synonym for Mono"
+        );
     }
 
     #[test]

@@ -603,6 +603,59 @@ pub const MIGRATIONS: &[Migration] = &[
                  CREATE UNIQUE INDEX IF NOT EXISTS idx_detections_unique
                      ON detections(Date, Time, Sci_Name, COALESCE(File_Name, ''), chunk_offset_secs);",
     },
+    Migration {
+        version: 24,
+        description: "Fold chunk_offset_secs into Date/Time so a chunk's timestamp is when it was heard",
+        // Every chunk of one recording used to be stamped with the *file's*
+        // start time. A 15-second segment is five 3-second chunks, so five rows
+        // landed on a single instant, differing only in `chunk_offset_secs` —
+        // a column the detections API does not even return. One continuous song
+        // therefore read as five duplicate detections in the UI, and every
+        // time-bucketed analytic (sessionisation, gap analysis, the dawn-chorus
+        // curve) saw five simultaneous detections that never happened.
+        //
+        // BirdNET-Pi has always added the offset, in its `Detection`
+        // constructor: `file_date + timedelta(seconds=self.start)`. So this
+        // table has been holding two conventions at once — imported BirdNET-Pi
+        // rows with chunk-accurate times, and natively recorded rows without.
+        // The pipeline now adds the offset at inference (matching BirdNET-Pi's
+        // placement); this brings the history that is already on disk onto the
+        // same convention, which is the only way the two stop disagreeing.
+        //
+        // Safe to target by `chunk_offset_secs > 0` alone. The column is
+        // `NOT NULL DEFAULT 0.0` (migration 11), and everything that is already
+        // correctly stamped carries 0: BirdNET-Pi imports (the importer does
+        // not write the column at all), the quarantine → approve path, and the
+        // first chunk of every recording, whose offset is genuinely zero.
+        //
+        // The `datetime(...) IS NOT NULL` guard is not defensive padding.
+        // `Date`/`Time` are free-form `TEXT NOT NULL` — the column type forbids
+        // NULL, not nonsense — and a station's history can hold values that name
+        // no point in time (a NULL `Date` arrives from the importer as ""). For
+        // those rows `datetime()` yields NULL, and without the guard this
+        // statement would write NULL into a NOT NULL column and abort the whole
+        // migration. They are left exactly as they are: unplaceable in, and
+        // unplaceable out.
+        //
+        // Both SET expressions read the pre-update row (SQLite evaluates an
+        // UPDATE's right-hand sides against the old values), so `Time` using
+        // `Date` is correct rather than order-dependent. The offset truncates to
+        // whole seconds because `Time` has no sub-second resolution to put them
+        // in — the same truncation the pipeline applies.
+        //
+        // No unique-key collision is reachable: two chunks of one file shift by
+        // different amounts, and a shifted native row keeps its non-zero
+        // `chunk_offset_secs`, so it can never land on an offset-0 imported row.
+        up_sql: "UPDATE detections
+                    SET Date = strftime('%Y-%m-%d',
+                            datetime(Date || ' ' || Time,
+                                     '+' || CAST(chunk_offset_secs AS INTEGER) || ' seconds')),
+                        Time = strftime('%H:%M:%S',
+                            datetime(Date || ' ' || Time,
+                                     '+' || CAST(chunk_offset_secs AS INTEGER) || ' seconds'))
+                  WHERE chunk_offset_secs > 0
+                    AND datetime(Date || ' ' || Time) IS NOT NULL;",
+    },
 ];
 
 /// Ensure the `schema_version` tracking table exists.
@@ -857,14 +910,19 @@ mod tests {
     ///
     /// Anyone who re-ran an import before the fix has them now, so the
     /// migration has to collapse what is already there — not merely stop new
-    /// ones. Applies every migration except the last against a table built
-    /// without the fixed index, seeds the duplicates that were previously
-    /// possible, then applies the repair.
+    /// ones. Applies every migration *before* 23 against a table built without
+    /// the fixed index, seeds the duplicates that were previously possible,
+    /// then applies the repair.
+    ///
+    /// Pinned to version 23 by number rather than "the last migration": as
+    /// written against `MIGRATIONS.len() - 1` this test silently changed
+    /// meaning the moment a 24th was added, seeding its duplicates into a table
+    /// that already had the fixed index.
     #[test]
     fn migration_23_collapses_pre_existing_duplicates() {
         let conn = memory_db();
         ensure_version_table(&conn).unwrap();
-        for m in &MIGRATIONS[..MIGRATIONS.len() - 1] {
+        for m in MIGRATIONS.iter().filter(|m| m.version < 23) {
             conn.execute_batch(m.up_sql).unwrap();
         }
         // The pre-fix index let these coexist: identical but for NULL names.
@@ -882,8 +940,11 @@ mod tests {
             "precondition: the old index permitted duplicates"
         );
 
-        let last = &MIGRATIONS[MIGRATIONS.len() - 1];
-        conn.execute_batch(last.up_sql).unwrap();
+        let m23 = MIGRATIONS
+            .iter()
+            .find(|m| m.version == 23)
+            .expect("migration 23 exists");
+        conn.execute_batch(m23.up_sql).unwrap();
 
         let after: i64 = conn
             .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
@@ -891,6 +952,166 @@ mod tests {
         assert_eq!(
             after, 1,
             "the repair must collapse duplicates already on disk"
+        );
+    }
+
+    /// Migration 24 folds the chunk offset into the timestamp of history that
+    /// is already on disk.
+    ///
+    /// Five chunks of one 15-second segment went in stamped with the file's
+    /// start second; they must come out at the five seconds they were actually
+    /// heard. The rows that must *not* move are the point of the other
+    /// assertions: an imported BirdNET-Pi row already carries a chunk-accurate
+    /// time and offset 0, and a row whose `Date`/`Time` name no point in time
+    /// cannot be shifted at all.
+    #[test]
+    fn migration_24_folds_the_chunk_offset_into_the_timestamp() {
+        let conn = memory_db();
+        ensure_version_table(&conn).unwrap();
+        for m in MIGRATIONS.iter().filter(|m| m.version < 24) {
+            conn.execute_batch(m.up_sql).unwrap();
+        }
+
+        // Five chunks of one segment, all stamped with the file's start time.
+        for offset in [0.0, 3.0, 6.0, 9.0, 12.0] {
+            conn.execute(
+                "INSERT INTO detections
+                    (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, chunk_offset_secs)
+                 VALUES ('2026-03-11','08:30:00','Turdus merula','Blackbird',0.9,'seg.wav',?1)",
+                rusqlite::params![offset],
+            )
+            .unwrap();
+        }
+        // A segment that runs across midnight: its last chunk is tomorrow.
+        conn.execute(
+            "INSERT INTO detections
+                (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, chunk_offset_secs)
+             VALUES ('2026-03-11','23:59:55','Parus major','Great Tit',0.8,'late.wav',9.0)",
+            [],
+        )
+        .unwrap();
+        // An imported BirdNET-Pi row: already correct, offset 0, must not move.
+        conn.execute(
+            "INSERT INTO detections
+                (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, chunk_offset_secs)
+             VALUES ('2026-03-11','07:00:03','Erithacus rubecula','Robin',0.7,'pi.wav',0.0)",
+            [],
+        )
+        .unwrap();
+        // A row that names no point in time. Shifting it would write NULL into
+        // a NOT NULL column and take the whole migration down.
+        conn.execute(
+            "INSERT INTO detections
+                (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, chunk_offset_secs)
+             VALUES ('','','Corvus corax','Raven',0.6,'bad.wav',6.0)",
+            [],
+        )
+        .unwrap();
+
+        let m24 = MIGRATIONS
+            .iter()
+            .find(|m| m.version == 24)
+            .expect("migration 24 exists");
+        conn.execute_batch(m24.up_sql).unwrap();
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT Date, Time FROM detections
+                  WHERE File_Name = 'seg.wav' ORDER BY chunk_offset_secs",
+            )
+            .unwrap();
+        let times: Vec<(String, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            times,
+            vec![
+                ("2026-03-11".to_string(), "08:30:00".to_string()),
+                ("2026-03-11".to_string(), "08:30:03".to_string()),
+                ("2026-03-11".to_string(), "08:30:06".to_string()),
+                ("2026-03-11".to_string(), "08:30:09".to_string()),
+                ("2026-03-11".to_string(), "08:30:12".to_string()),
+            ],
+            "the five chunks must land on the five seconds they were heard"
+        );
+
+        let late: (String, String) = conn
+            .query_row(
+                "SELECT Date, Time FROM detections WHERE File_Name = 'late.wav'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            late,
+            ("2026-03-12".to_string(), "00:00:04".to_string()),
+            "a chunk past midnight belongs to the next day"
+        );
+
+        let imported: (String, String) = conn
+            .query_row(
+                "SELECT Date, Time FROM detections WHERE File_Name = 'pi.wav'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            imported,
+            ("2026-03-11".to_string(), "07:00:03".to_string()),
+            "an already-correct imported row must not be shifted a second time"
+        );
+
+        let bad: (String, String) = conn
+            .query_row(
+                "SELECT Date, Time FROM detections WHERE File_Name = 'bad.wav'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            bad,
+            (String::new(), String::new()),
+            "an unplaceable row stays exactly as it was"
+        );
+    }
+
+    /// A second boot must not shift every timestamp again.
+    ///
+    /// This repair is the one migration in the set that is *not* idempotent —
+    /// re-running its UPDATE would add the offset a second time and walk every
+    /// chunk row forward through the day. Nothing but the version bookkeeping
+    /// stops that, so the bookkeeping is what gets asserted.
+    #[test]
+    fn migration_24_does_not_re_apply_on_a_later_boot() {
+        let conn = memory_db();
+        migrate(&conn).unwrap();
+
+        // A row written by the fixed pipeline: already stamped at the second it
+        // was heard, and still carrying the offset it came from.
+        conn.execute(
+            "INSERT INTO detections
+                (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, chunk_offset_secs)
+             VALUES ('2026-03-11','08:30:09','Turdus merula','Blackbird',0.9,'seg.wav',9.0)",
+            [],
+        )
+        .unwrap();
+
+        let applied = migrate(&conn).unwrap();
+        assert_eq!(applied, 0, "an up-to-date database applies nothing");
+
+        let after: (String, String) = conn
+            .query_row(
+                "SELECT Date, Time FROM detections WHERE File_Name = 'seg.wav'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            after,
+            ("2026-03-11".to_string(), "08:30:09".to_string()),
+            "a row already on the new convention must not be shifted again"
         );
     }
 }

@@ -306,6 +306,7 @@ mod tests {
                 device: "plughw:CARD=PRO,DEV=0".into(),
                 sample_rate: 48_000,
                 channels: 1,
+                channel_pick: None,
                 stream_id: stream_id.map(ToOwned::to_owned),
             };
             let name = recording_filename_at(stream_id, AudioFormat::Wav, at);

@@ -529,6 +529,20 @@ pub(crate) fn detail_for(s: &AudioSource) -> String {
         channels = s.channels.as_str(),
         bit = s.bit_depth,
     );
+    // Stereo is the one channel setting that can quietly cost detections, so
+    // it says so where the operator chose it. Both channels are kept and the
+    // decoder averages them to the mono BirdNET wants; for a *spaced* pair that
+    // average is a comb filter rather than a noise reduction — measured through
+    // this project's decode path, a wavefront reaching the capsules half a
+    // period apart loses about 66 dB, a quarter period costs 3 dB, and the
+    // notches move with the bird's direction. Left or Right avoids it by
+    // selecting a channel instead of mixing.
+    if matches!(s.channels, birdnet_db::audio_sources::Channels::Stereo) {
+        out.push_str(
+            " · both channels are averaged to mono; on a spaced pair that can \
+             cancel signal — pick Left or Right unless the capsules are together",
+        );
+    }
     if (s.gain_db - 0.0).abs() >= 0.05 {
         let sign = if s.gain_db >= 0.0 { "+" } else { "" };
         let _ = write!(out, " · gain {sign}{:.0} dB", s.gain_db);

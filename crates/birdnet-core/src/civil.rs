@@ -96,12 +96,196 @@ pub fn civil_from_unix_secs(secs: i64) -> CivilTime {
     }
 }
 
+/// Seconds since the Unix epoch for a civil date/time — the inverse of
+/// [`civil_from_unix_secs`].
+///
+/// Implements Hinnant's `days_from_civil`. Years before 1970 saturate to the
+/// epoch, mirroring the forward direction: nothing here deals in pre-1970
+/// audio, and a date that far out means a broken clock either way.
+#[must_use]
+pub fn unix_secs_from_civil(t: &CivilTime) -> i64 {
+    let y = i64::from(t.year) - i64::from(t.month <= 2);
+    if y < 0 {
+        return 0;
+    }
+    let era = y / 400;
+    let yoe = y - era * 400;
+    let m = i64::from(t.month);
+    let doy = (153 * (m + if m > 2 { -3 } else { 9 }) + 2) / 5 + i64::from(t.day) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    days * 86_400 + i64::from(t.hour) * 3_600 + i64::from(t.minute) * 60 + i64::from(t.second)
+}
+
+/// Parse a `YYYY-MM-DD` / `HH:MM:SS` pair into a [`CivilTime`].
+///
+/// Strict: both fields must be exactly the documented shape and all-digits
+/// apart from the separators. `None` for anything else — `Date` and `Time` are
+/// free-form `TEXT` in the database and a real station's history holds values
+/// that name no point in time, so "unparseable" has to be representable rather
+/// than guessed at.
+#[must_use]
+pub fn parse_civil(date: &str, time: &str) -> Option<CivilTime> {
+    let d: Vec<&str> = date.split('-').collect();
+    let t: Vec<&str> = time.split(':').collect();
+    if d.len() != 3 || t.len() != 3 {
+        return None;
+    }
+    if d[0].len() != 4 || d[1].len() != 2 || d[2].len() != 2 {
+        return None;
+    }
+    if t[0].len() != 2 || t[1].len() != 2 || t[2].len() != 2 {
+        return None;
+    }
+    let year: u32 = d[0].parse().ok()?;
+    let month: u32 = d[1].parse().ok()?;
+    let day: u32 = d[2].parse().ok()?;
+    let hour: u32 = t[0].parse().ok()?;
+    let minute: u32 = t[1].parse().ok()?;
+    let second: u32 = t[2].parse().ok()?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    if hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    Some(CivilTime {
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second,
+    })
+}
+
+/// Add `offset_secs` to a `YYYY-MM-DD` / `HH:MM:SS` pair, returning the same
+/// pair of strings shifted — rolling the date when the offset crosses midnight.
+///
+/// This is what turns a recording's start time into the time a *chunk within
+/// it* was actually heard. BirdNET-Pi does the same thing in its `Detection`
+/// constructor (`file_date + timedelta(seconds=self.start)`); doing it here
+/// keeps a detection's timestamp meaning the same thing in both projects, and
+/// keeps natively-recorded rows consistent with the BirdNET-Pi rows the
+/// migration importer writes.
+///
+/// `None` when the input does not parse, so a caller can keep the original
+/// rather than substitute an invented time.
+#[must_use]
+#[allow(clippy::cast_possible_truncation)]
+pub fn shift_datetime(date: &str, time: &str, offset_secs: f64) -> Option<(String, String)> {
+    if !offset_secs.is_finite() {
+        return None;
+    }
+    let civil = parse_civil(date, time)?;
+    let shifted = civil_from_unix_secs(unix_secs_from_civil(&civil) + offset_secs.trunc() as i64);
+    Some((
+        format!(
+            "{:04}-{:02}-{:02}",
+            shifted.year, shifted.month, shifted.day
+        ),
+        format!(
+            "{:02}:{:02}:{:02}",
+            shifted.hour, shifted.minute, shifted.second
+        ),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn at(secs: i64) -> CivilTime {
         civil_from_unix_secs(secs)
+    }
+
+    /// The two directions must agree, including across leap days.
+    #[test]
+    fn unix_secs_from_civil_round_trips() {
+        for secs in [
+            0_i64,
+            1_771_000_000, // 2026-02-13
+            1_772_323_200, // 2026-03-01, the day after February
+            1_709_164_800, // 2024-02-29, a leap day
+            1_735_689_599, // 2024-12-31 23:59:59
+            4_102_444_800, // 2100-01-01, a non-leap century
+        ] {
+            let civil = civil_from_unix_secs(secs);
+            assert_eq!(
+                unix_secs_from_civil(&civil),
+                secs,
+                "round trip failed for {secs} ({civil:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_civil_rejects_what_is_not_a_date() {
+        assert!(parse_civil("2026-03-11", "08:30:00").is_some());
+        // The shapes a station's history actually holds.
+        assert!(parse_civil("", "").is_none());
+        assert!(parse_civil("not-a-date", "25:99:99").is_none());
+        assert!(
+            parse_civil("2026-3-11", "08:30:00").is_none(),
+            "month must be 2 digits"
+        );
+        assert!(
+            parse_civil("2026-03-11", "8:30:00").is_none(),
+            "hour must be 2 digits"
+        );
+        assert!(parse_civil("2026-13-11", "08:30:00").is_none(), "month 13");
+        assert!(parse_civil("2026-03-11", "24:00:00").is_none(), "hour 24");
+        assert!(parse_civil("2026-03-11", "08:60:00").is_none(), "minute 60");
+    }
+
+    /// Shifting a recording's start time by a chunk offset.
+    ///
+    /// The rollover case is the reason this is date arithmetic and not string
+    /// manipulation: a segment that starts at 23:59:55 has chunks belonging to
+    /// the *next day*, and a naive `HH:MM:SS + n` would write 24:00:04 — a time
+    /// no engine will parse, on the wrong date.
+    #[test]
+    fn shift_datetime_adds_the_chunk_offset() {
+        // The five chunks of one 15-second segment.
+        let chunks: Vec<(String, String)> = [0.0, 3.0, 6.0, 9.0, 12.0]
+            .iter()
+            .map(|&o| shift_datetime("2026-03-11", "08:30:00", o).unwrap())
+            .collect();
+        assert_eq!(
+            chunks,
+            vec![
+                ("2026-03-11".into(), "08:30:00".into()),
+                ("2026-03-11".into(), "08:30:03".into()),
+                ("2026-03-11".into(), "08:30:06".into()),
+                ("2026-03-11".into(), "08:30:09".into()),
+                ("2026-03-11".into(), "08:30:12".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn shift_datetime_rolls_over_midnight() {
+        assert_eq!(
+            shift_datetime("2026-03-11", "23:59:55", 9.0).unwrap(),
+            ("2026-03-12".into(), "00:00:04".into())
+        );
+        // And across a month, a year, and a leap day.
+        assert_eq!(
+            shift_datetime("2026-12-31", "23:59:58", 3.0).unwrap(),
+            ("2027-01-01".into(), "00:00:01".into())
+        );
+        assert_eq!(
+            shift_datetime("2024-02-28", "23:59:58", 3.0).unwrap(),
+            ("2024-02-29".into(), "00:00:01".into())
+        );
+    }
+
+    #[test]
+    fn shift_datetime_keeps_unparseable_input_unparseable() {
+        // Never invent a timestamp for a row that names no point in time.
+        assert!(shift_datetime("", "", 3.0).is_none());
+        assert!(shift_datetime("not-a-date", "25:99:99", 3.0).is_none());
+        assert!(shift_datetime("2026-03-11", "08:30:00", f64::NAN).is_none());
     }
 
     #[test]

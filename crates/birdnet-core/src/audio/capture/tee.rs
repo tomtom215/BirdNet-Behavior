@@ -128,6 +128,102 @@ impl Gain {
     }
 }
 
+/// Which half of a stereo capture to keep.
+///
+/// The Audio admin page has always offered Mono / Left / Right / Stereo, but
+/// Left and Right did nothing: both collapsed to `channels: 1` at the capture
+/// source and were never distinguished again, so picking Right gave exactly
+/// what Mono gave.
+///
+/// Selecting a channel is not a cosmetic choice. `Stereo` keeps both channels,
+/// and the decoder mixes them to mono by averaging — which for a **spaced**
+/// pair is a comb filter, not a noise reduction. Measured through this
+/// project's own decode path with one wavefront reaching the capsules half a
+/// period apart, averaging drops the signal by roughly 66 dB; a quarter period
+/// costs 3 dB, and the notches move with the bird's direction. A coincident
+/// pair is unaffected. Picking one channel is the mitigation, which is what
+/// these options are for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelPick {
+    /// Keep the first channel of an interleaved stereo stream.
+    Left,
+    /// Keep the second.
+    Right,
+}
+
+impl ChannelPick {
+    /// Byte offset of this channel within an interleaved S16 stereo frame.
+    const fn byte_offset(self) -> usize {
+        match self {
+            Self::Left => 0,
+            Self::Right => BYTES_PER_SAMPLE,
+        }
+    }
+}
+
+/// Bytes in one interleaved S16 stereo frame (two channels, two bytes each).
+const STEREO_FRAME_BYTES: usize = 2 * BYTES_PER_SAMPLE;
+
+/// Reduce an interleaved stereo S16LE stream to one channel by *selecting* it.
+///
+/// Applied upstream of the split, for the same reason the gain is: what a
+/// listener hears on `/stream` is then exactly what the detector classifies,
+/// and the segments on disk are already mono, so nothing downstream — decode,
+/// spectrogram, clip extraction — needs to know a choice was made.
+///
+/// Carries a partial *frame* rather than a partial sample: a pipe can split a
+/// read anywhere, and a stereo frame is four bytes. Dropping the remainder
+/// instead would slip the channel alignment by one sample and silently swap
+/// left for right for the rest of the stream.
+#[derive(Debug)]
+struct ChannelSelector {
+    offset: usize,
+    /// Bytes of an incomplete frame awaiting the rest of their read.
+    carry: Vec<u8>,
+    /// Selected output, reused between chunks to keep the reader
+    /// allocation-free.
+    out: Vec<u8>,
+}
+
+impl ChannelSelector {
+    fn new(pick: ChannelPick) -> Self {
+        Self {
+            offset: pick.byte_offset(),
+            carry: Vec::with_capacity(STEREO_FRAME_BYTES),
+            out: Vec::with_capacity(READ_BUFFER_BYTES / 2 + STEREO_FRAME_BYTES),
+        }
+    }
+
+    /// Return the selected channel's samples from `input`. The result is about
+    /// half the input's length.
+    fn apply(&mut self, input: &[u8]) -> &[u8] {
+        self.out.clear();
+        let mut rest = input;
+
+        // Complete a frame straddling the previous read first.
+        if !self.carry.is_empty() {
+            let needed = STEREO_FRAME_BYTES - self.carry.len();
+            let take = needed.min(rest.len());
+            self.carry.extend_from_slice(&rest[..take]);
+            rest = &rest[take..];
+            if self.carry.len() < STEREO_FRAME_BYTES {
+                return &self.out; // still incomplete
+            }
+            self.out
+                .extend_from_slice(&self.carry[self.offset..self.offset + BYTES_PER_SAMPLE]);
+            self.carry.clear();
+        }
+
+        let aligned = rest.len() - rest.len() % STEREO_FRAME_BYTES;
+        for frame in rest[..aligned].chunks_exact(STEREO_FRAME_BYTES) {
+            self.out
+                .extend_from_slice(&frame[self.offset..self.offset + BYTES_PER_SAMPLE]);
+        }
+        self.carry.extend_from_slice(&rest[aligned..]);
+        &self.out
+    }
+}
+
 /// A running capture tee: the reader thread plus its stop latch.
 #[derive(Debug)]
 pub struct Tee {
@@ -172,6 +268,9 @@ impl Drop for Tee {
 /// what makes "the segments concatenate back to exactly what the device
 /// produced" true on the unity-gain path.
 ///
+/// `pick` selects one half of a stereo capture, and is applied *before* the
+/// gain so the gain only walks the samples that survive.
+///
 /// # Errors
 ///
 /// Returns the `io::Error` from spawning the reader thread.
@@ -181,6 +280,7 @@ pub fn spawn<R>(
     writer: SegmentWriter,
     tap: Option<Arc<LiveTap>>,
     gain_db: f32,
+    pick: Option<ChannelPick>,
 ) -> std::io::Result<Tee>
 where
     R: Read + Send + 'static,
@@ -196,6 +296,7 @@ where
                 writer,
                 tap.as_deref(),
                 gain_db,
+                pick,
                 &stop_for_thread,
             );
         })?;
@@ -212,9 +313,11 @@ fn run<R: Read>(
     mut writer: SegmentWriter,
     tap: Option<&LiveTap>,
     gain_db: f32,
+    pick: Option<ChannelPick>,
     stop: &AtomicBool,
 ) {
     let mut gain = super::process::gain_is_active(gain_db).then(|| Gain::new(gain_db));
+    let mut selector = pick.map(ChannelSelector::new);
     let mut buf = vec![0u8; READ_BUFFER_BYTES];
     let mut bytes_seen: u64 = 0;
 
@@ -233,9 +336,16 @@ fn run<R: Read>(
         };
         bytes_seen += read as u64;
 
-        let payload: &[u8] = gain
+        // Gain, then channel selection. Both are linear and both sit upstream
+        // of the split, so the order does not change what is written or heard;
+        // this way round each stage borrows a different object and no
+        // intermediate copy is needed. Gain's carry is a half-*sample* and the
+        // selector's is a partial *frame*, so a read that ends anywhere is
+        // reassembled correctly by whichever stage straddles it.
+        let gained: &[u8] = gain
             .as_mut()
-            .map_or_else(|| &buf[..read], |g| g.apply(&buf[..read]));
+            .map_or(&buf[..read], |g| g.apply(&buf[..read]));
+        let payload: &[u8] = selector.as_mut().map_or(gained, |s| s.apply(gained));
         if payload.is_empty() {
             continue;
         }
@@ -340,6 +450,79 @@ mod tests {
         }
     }
 
+    // ---- channel selection (pure) ------------------------------------------
+
+    /// Build interleaved stereo S16LE from per-channel sample lists.
+    fn interleave(left: &[i16], right: &[i16]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(left.len() * 4);
+        for (l, r) in left.iter().zip(right) {
+            out.extend_from_slice(&l.to_le_bytes());
+            out.extend_from_slice(&r.to_le_bytes());
+        }
+        out
+    }
+
+    fn samples(bytes: &[u8]) -> Vec<i16> {
+        bytes
+            .chunks_exact(2)
+            .map(|p| i16::from_le_bytes([p[0], p[1]]))
+            .collect()
+    }
+
+    #[test]
+    fn channel_selector_keeps_the_channel_it_names() {
+        let stereo = interleave(&[1, 2, 3, 4], &[-1, -2, -3, -4]);
+
+        let mut left = ChannelSelector::new(ChannelPick::Left);
+        assert_eq!(samples(left.apply(&stereo)), vec![1, 2, 3, 4]);
+
+        let mut right = ChannelSelector::new(ChannelPick::Right);
+        assert_eq!(samples(right.apply(&stereo)), vec![-1, -2, -3, -4]);
+    }
+
+    /// A read that ends mid-frame must not slip the channel alignment.
+    ///
+    /// A pipe splits wherever it likes. Discarding the partial frame instead of
+    /// carrying it would shift every later frame by one sample and silently
+    /// swap left for right for the rest of the capture — audible to nobody,
+    /// visible in no log, and wrong for as long as the process runs.
+    #[test]
+    fn channel_selector_carries_a_frame_split_across_reads() {
+        let stereo = interleave(&[10, 20, 30, 40], &[-10, -20, -30, -40]);
+
+        // Every split point, including the three that land mid-frame.
+        for split in 1..stereo.len() {
+            let mut sel = ChannelSelector::new(ChannelPick::Right);
+            let mut got = samples(sel.apply(&stereo[..split]));
+            got.extend(samples(sel.apply(&stereo[split..])));
+            assert_eq!(
+                got,
+                vec![-10, -20, -30, -40],
+                "right channel wrong when the stream is split at byte {split}"
+            );
+        }
+    }
+
+    /// Byte-at-a-time delivery is the pathological case of the above.
+    #[test]
+    fn channel_selector_survives_one_byte_reads() {
+        let stereo = interleave(&[7, 8, 9], &[-7, -8, -9]);
+        let mut sel = ChannelSelector::new(ChannelPick::Left);
+        let mut got = Vec::new();
+        for byte in &stereo {
+            got.extend(samples(sel.apply(std::slice::from_ref(byte))));
+        }
+        assert_eq!(got, vec![7, 8, 9]);
+    }
+
+    /// Selection halves the stream: two channels in, one out.
+    #[test]
+    fn channel_selector_halves_the_byte_count() {
+        let stereo = interleave(&[1; 64], &[2; 64]);
+        let mut sel = ChannelSelector::new(ChannelPick::Left);
+        assert_eq!(sel.apply(&stereo).len(), stereo.len() / 2);
+    }
+
     // ---- gain (pure) -------------------------------------------------------
 
     #[test]
@@ -429,6 +612,7 @@ mod tests {
             fx.writer(3),
             None,
             0.0,
+            None,
         )
         .expect("spawn tee");
         Fixture::wait_for("the tee to drain the producer", || !tee.is_alive());
@@ -449,6 +633,7 @@ mod tests {
             fx.writer(3),
             None,
             0.0,
+            None,
         )
         .expect("spawn tee");
         Fixture::wait_for("the tee thread to exit", || !tee.is_alive());
@@ -467,6 +652,7 @@ mod tests {
             fx.writer(3),
             Some(Arc::clone(&tap)),
             0.0,
+            None,
         )
         .expect("spawn tee");
 
@@ -502,6 +688,7 @@ mod tests {
             fx.writer(3),
             Some(Arc::clone(&tap)),
             0.0,
+            None,
         )
         .expect("spawn tee");
 
@@ -537,6 +724,7 @@ mod tests {
             fx.writer(30),
             Some(Arc::clone(&tap)),
             6.0206, // ×2
+            None,
         )
         .expect("spawn tee");
 
@@ -592,6 +780,7 @@ mod tests {
             fx.writer(3),
             Some(Arc::clone(&tap)),
             0.0,
+            None,
         )
         .expect("spawn tee");
 
@@ -635,6 +824,7 @@ mod tests {
             fx.writer(3), // 30 bytes per segment
             None,
             0.0,
+            None,
         )
         .expect("spawn tee");
 

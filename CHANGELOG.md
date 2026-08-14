@@ -9,6 +9,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A detection's timestamp is now when it was heard, not when its recording
+  started.** A 15-second segment is five 3-second chunks, and all five were
+  stamped with the file's start second. `chunk_offset_secs` held the difference
+  and the detections API does not return it, so one continuous song produced
+  five rows identical in every displayed field — which is exactly what "repeated
+  detections" looked like. It also put five *simultaneous* detections into
+  `detection_timestamp`, which sessionisation, gap analysis and the dawn-chorus
+  curve all group on.
+
+  BirdNET-Pi has always added the offset, in the same place (`Detection.__init__`:
+  `file_date + timedelta(seconds=self.start)`), so this table has been holding
+  two conventions at once: imported BirdNET-Pi rows with chunk-accurate times,
+  natively recorded rows without. The pipeline now adds the offset at inference,
+  rolling the date when a chunk crosses midnight, and **migration 24 repairs
+  history already on disk** from the stored offsets — so the whole table ends on
+  one convention. Rows whose `Date`/`Time` name no point in time are left
+  untouched rather than turned into an invented timestamp.
+
+  Row *counts* do not change, and were never wrong: BirdNET-Pi has no UNIQUE
+  constraint on `detections` at all and stores one row per chunk exactly as this
+  does.
+
+- **The Audio page's Left and Right channel options did nothing.** Both
+  collapsed to `channels: 1` at the capture source and were never distinguished
+  again, so all three of Mono, Left and Right produced byte-identical captures.
+  They now select the channel they name: the device is opened with both, and the
+  capture tee keeps the requested half, so the segments written to disk are
+  single-channel and nothing downstream needs to know a choice was made.
+
+  This matters because of what `Stereo` does. Both channels are kept and the
+  decoder averages them to the mono BirdNET requires — which for a **spaced**
+  pair is a comb filter, not a noise reduction. Measured through this project's
+  own decode path: one wavefront reaching the capsules half a period apart loses
+  about 66 dB to cancellation, a quarter period costs 3 dB, and the notches move
+  with the bird's direction. A coincident pair is unaffected. Selecting a
+  channel is the mitigation, and it was the one thing the UI offered that had
+  never been wired up.
+
+  Not a regression: BirdNET-Pi defaults to `CHANNELS=2` and uses
+  `librosa.load(mono=True)`, which averages identically. A stereo source now
+  says so on the Audio page and warns once in the journal at start-up.
+
 - **The analytics dashboards were blank, and nothing anywhere said why.** Two
   independent defects, both invisible to a green CI matrix, both only reachable
   on a real station.
