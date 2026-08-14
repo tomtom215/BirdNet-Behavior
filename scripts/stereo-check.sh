@@ -42,6 +42,20 @@
 #
 #   ./stereo-check.sh --scan /some/where
 #
+# And if the source is set to Mono, --alsa-test answers the question that
+# remains: arecord then asks plughw for ONE channel from a TWO-capsule mic, and
+# ALSA's plug layer decides what that means. If it picks a channel, nothing is
+# lost. If it mixes them, the cancellation happens inside ALSA, before anything
+# is written, where no part of this project can see it:
+#
+#   sudo systemctl stop birdnet-behavior
+#   ./stereo-check.sh --alsa-test plughw:1,0 10
+#   sudo systemctl start birdnet-behavior
+#
+# It records both ways back to back, so it compares levels across two
+# consecutive captures rather than sample-for-sample: play something steady
+# while it runs, and it will say "too quiet to tell" rather than guess.
+#
 # Both file modes only work if the source is configured Stereo. A Mono source
 # writes single-channel segments, and the extracted detection clips are always
 # mono whatever the source is — the second channel is gone by then.
@@ -57,6 +71,8 @@ command -v python3 >/dev/null || { echo "python3 not found." >&2; exit 2; }
 
 WAV=""
 TMP_WAV=""
+MONO_WAV=""
+ALSA_TEST=0
 ERR="$(mktemp -t stereo-check-XXXXXX.err)"
 LIST="$(mktemp -t stereo-check-XXXXXX.lst)"
 # `return 0` is load-bearing: a trap's exit status becomes the script's, so
@@ -65,6 +81,7 @@ LIST="$(mktemp -t stereo-check-XXXXXX.lst)"
 cleanup() {
   rm -f "$ERR" "$LIST"
   [ -n "$TMP_WAV" ] && rm -f "$TMP_WAV"
+  [ -n "$MONO_WAV" ] && rm -f "$MONO_WAV"
   return 0
 }
 trap cleanup EXIT
@@ -77,6 +94,43 @@ if [ "${1:-}" = "--file" ]; then
   [ -n "$WAV" ] || { echo "--file needs a path." >&2; exit 2; }
   [ -r "$WAV" ] || { echo "cannot read $WAV" >&2; exit 2; }
   echo "Analysing ${WAV} ..."
+elif [ "${1:-}" = "--alsa-test" ]; then
+  # The question this answers: a source set to Mono makes arecord ask plughw
+  # for ONE channel from a TWO-capsule microphone, and ALSA's plug layer decides
+  # what that means. If it picks channel 0, nothing is lost. If it mixes L+R,
+  # the comb filtering happens inside ALSA, before anything is written, where no
+  # part of this project can see it.
+  #
+  # Recording both ways back to back and comparing levels tells them apart:
+  # a mono capture that matches the left channel means ALSA picks, one that
+  # matches the average of the two means ALSA mixes.
+  ALSA_DEVICE="${2:-plughw:1,0}"
+  ALSA_SECS="${3:-10}"
+  command -v arecord >/dev/null || {
+    echo "arecord not found — install alsa-utils." >&2
+    exit 2
+  }
+  MONO_WAV="$(mktemp -t stereo-check-mono-XXXXXX.wav)"
+  TMP_WAV="$(mktemp -t stereo-check-XXXXXX.wav)"
+  WAV="$TMP_WAV"
+  echo "Recording ${ALSA_SECS}s at 1 channel (what a Mono source captures) ..."
+  arecord -D "$ALSA_DEVICE" -f S16_LE -c 1 -r 48000 -d "$ALSA_SECS" \
+    -t wav "$MONO_WAV" 2>"$ERR" || {
+      echo "arecord failed — is the station still running? (systemctl stop birdnet-behavior)" >&2
+      sed 's/^/  arecord: /' "$ERR" >&2 || true
+      exit 2
+    }
+  echo "Recording ${ALSA_SECS}s at 2 channels (the capsules themselves) ..."
+  arecord -D "$ALSA_DEVICE" -f S16_LE -c 2 -r 48000 -d "$ALSA_SECS" \
+    -t wav "$WAV" 2>"$ERR" || {
+      echo "arecord could not open 2 channels on ${ALSA_DEVICE}." >&2
+      echo "That means it is not presenting a stereo capture, so a Mono source" >&2
+      echo "is not mixing anything and there is nothing to worry about." >&2
+      sed 's/^/  arecord: /' "$ERR" >&2 || true
+      exit 2
+    }
+  PY_ARGS=(--alsa-test "$MONO_WAV" "$WAV")
+  ALSA_TEST=1
 elif [ "${1:-}" = "--scan" ]; then
   SCAN_DIR="${2:-}"
   if [ -z "$SCAN_DIR" ]; then
@@ -149,7 +203,9 @@ fi
 
 # One invocation either way: the analyser takes a single path, or `--scan` and a
 # NUL-separated list to choose from.
-PY_ARGS=("$WAV")
+if [ "$ALSA_TEST" -eq 0 ]; then
+  PY_ARGS=("$WAV")
+fi
 if [ -n "$SCAN_DIR" ]; then
   # NUL-separated so names with spaces or colons survive — BirdNET-Pi-style
   # segment filenames contain colons.
@@ -186,6 +242,78 @@ def peak_and_channels(path):
     if not data:
         return None
     return max(max(data), -min(data)), ch
+
+
+def mono_samples(path):
+    with wave.open(path, "rb") as w:
+        data = array.array("h")
+        data.frombytes(w.readframes(w.getnframes()))
+        return data, w.getnchannels()
+
+
+def plain_rms(xs):
+    if not xs:
+        return 0.0
+    return math.sqrt(sum(float(x) * x for x in xs) / len(xs))
+
+
+if sys.argv[1] == "--alsa-test":
+    mono, mono_ch = mono_samples(sys.argv[2])
+    stereo, st_ch = mono_samples(sys.argv[3])
+    if st_ch != 2:
+        print("\nThe 2-channel capture came back with "
+              f"{st_ch} channel(s); nothing to compare.")
+        sys.exit(0)
+    left = stereo[0::2]
+    right = stereo[1::2]
+    m = plain_rms(mono)
+    l = plain_rms(left)
+    r = plain_rms(right)
+    mixed = plain_rms(array.array("h", [(a + b) // 2 for a, b in zip(left, right)]))
+    full = 32768.0
+
+    def d(x):
+        return 20.0 * math.log10(x / full) if x > 0 else -99.0
+
+    print(f"\n1-channel capture      {m:8.1f}   {d(m):6.1f} dBFS")
+    print(f"2-channel, left        {l:8.1f}   {d(l):6.1f} dBFS")
+    print(f"2-channel, right       {r:8.1f}   {d(r):6.1f} dBFS")
+    print(f"2-channel, mixed L+R   {mixed:8.1f}   {d(mixed):6.1f} dBFS")
+    print()
+
+    # Which candidate the 1-channel capture resembles. The two captures are
+    # consecutive, not simultaneous, so this compares levels in a steady
+    # ambient rather than sample-for-sample.
+    to_left = abs(d(m) - d(l))
+    to_mixed = abs(d(m) - d(mixed))
+    spread = abs(d(l) - d(mixed))
+
+    if max(m, l, r) < full * 0.003:
+        print("VERDICT: too quiet to tell.")
+        print("  Every capture is near the noise floor. Re-run with a steady")
+        print("  sound playing — a tone or continuous noise from a phone a metre")
+        print("  away is ideal, because this compares levels across two")
+        print("  consecutive recordings and needs the room to hold still.")
+    elif spread < 1.0:
+        print("VERDICT: cannot distinguish — and it does not matter.")
+        print(f"  Taking one channel and mixing both differ by only {spread:.1f} dB here,")
+        print("  so whichever ALSA does, the result is the same. Your capsules are")
+        print("  close enough together that mixing costs nothing.")
+    elif to_left <= to_mixed:
+        print("VERDICT: ALSA picks a channel — nothing is being mixed.")
+        print(f"  The 1-channel capture sits {to_left:.1f} dB from a single channel and")
+        print(f"  {to_mixed:.1f} dB from the mix, so asking for mono gives you one capsule.")
+        print("  A Mono source on this station is not losing anything to cancellation.")
+    else:
+        print("VERDICT: ALSA is mixing both capsules.")
+        print(f"  The 1-channel capture sits {to_mixed:.1f} dB from the mix and {to_left:.1f} dB")
+        print("  from a single channel — so the averaging is happening inside ALSA,")
+        print("  before anything is written, where nothing in this project can see it.")
+        print()
+        print(f"  That costs {spread:.1f} dB against one capsule on this sound. To avoid it,")
+        print("  set the source to Left or Right (needs the build where those work)")
+        print("  so the device is opened with two channels and one is selected.")
+    sys.exit(0)
 
 
 if sys.argv[1] == "--scan":
