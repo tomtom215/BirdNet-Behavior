@@ -72,7 +72,25 @@ impl std::error::Error for ServerError {}
 /// is configured — matching the fresh-Pi "no password = open admin" contract.
 pub fn build_router(state: AppState) -> Router {
     // Rate limiter: 30 req/s sustained, 60-request burst per IP.
-    let limiter = Arc::new(RateLimiter::new(RateLimitConfig::default()));
+    build_router_with_rate_limit(state, RateLimitConfig::default())
+}
+
+/// Build the router with an explicit rate-limit configuration.
+///
+/// [`build_router`] uses the shipped default and is what the station runs. This
+/// variant exists for the visual-QA fixture (`examples/screenshot_server`),
+/// which is deliberately hammered by a machine-speed harness: the sweep loads
+/// 152 pages back to back, far above any rate a browser produces. Throttling
+/// the harness that exists to hammer this server tests nothing about the
+/// product, and turns an unlucky burst into a red build on an asset `429`.
+///
+/// Measured for contrast, so the default is not adjusted on a hunch: a cold
+/// dashboard load is 24 requests, the heaviest page (recordings) 34, and two
+/// rapid dashboard loads back to back 48 — all comfortably inside the 60-burst
+/// default, with no `429`. Real clients are nowhere near the limit, so the
+/// production numbers stay exactly as they were.
+pub fn build_router_with_rate_limit(state: AppState, rate_limit: RateLimitConfig) -> Router {
+    let limiter = Arc::new(RateLimiter::new(rate_limit));
 
     // Gate `/admin/*` behind the v2 cookie middleware. The middleware
     // handles the "no admin password configured" bypass internally
@@ -183,5 +201,67 @@ async fn shutdown_signal() {
     tokio::select! {
         () = ctrl_c => tracing::info!("received Ctrl+C"),
         () = terminate => tracing::info!("received SIGTERM"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_router, build_router_with_rate_limit};
+    use crate::state::AppState;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt as _;
+
+    fn test_state() -> AppState {
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        birdnet_db::migration::migrate(&conn).expect("migrate schema");
+        AppState::from_connection(conn, std::path::PathBuf::from(":memory:"))
+    }
+
+    async fn burst_hits_429(app: axum::Router, requests: usize) -> bool {
+        for _ in 0..requests {
+            let req = Request::builder()
+                .uri("/static/css/app.css")
+                .body(Body::empty())
+                .expect("request");
+            let resp = app.clone().oneshot(req).await.expect("response");
+            if resp.status() == StatusCode::TOO_MANY_REQUESTS {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// The shipped router must keep the strict limiter.
+    ///
+    /// `build_router_with_rate_limit` exists so the visual-QA fixture can opt
+    /// out of throttling, which makes it newly possible to hand the *station* a
+    /// permissive config and have nothing notice. The limiter's own tests cover
+    /// the token bucket; this covers the wiring, which is the part that would
+    /// silently regress.
+    #[tokio::test]
+    async fn the_shipped_router_still_rate_limits() {
+        assert!(
+            burst_hits_429(build_router(test_state()), 400).await,
+            "build_router must apply the default limiter (30 req/s, 60 burst)"
+        );
+    }
+
+    /// And the opt-out actually opts out — otherwise the fixture change is
+    /// cosmetic and the visual-QA sweep stays intermittently red.
+    #[tokio::test]
+    async fn a_permissive_config_does_not_throttle() {
+        let app = build_router_with_rate_limit(
+            test_state(),
+            crate::rate_limit::RateLimitConfig {
+                requests_per_second: 100_000.0,
+                burst_capacity: 100_000,
+                trust_x_forwarded_for: false,
+            },
+        );
+        assert!(
+            !burst_hits_429(app, 400).await,
+            "a permissive config must serve a burst the default would reject"
+        );
     }
 }

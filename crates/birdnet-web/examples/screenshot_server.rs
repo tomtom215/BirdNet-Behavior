@@ -24,7 +24,8 @@
     clippy::items_after_statements
 )]
 
-use birdnet_web::server::build_router;
+use birdnet_web::rate_limit::RateLimitConfig;
+use birdnet_web::server::build_router_with_rate_limit;
 use birdnet_web::state::AppState;
 use rusqlite::{Connection, params};
 
@@ -751,7 +752,20 @@ async fn main() {
     // these and caches the PNGs under the data dir's `spectrograms/`).
     seed_demo_audio(&state.recording_dir(), &demo_clips);
 
-    let app = build_router(state);
+    // This fixture exists to be hammered: the visual-QA sweep captures 152
+    // pages back to back and the interaction gate drives controls as fast as
+    // Chromium will go. The station's 30 req/s limiter is right for a station
+    // and wrong here — it throttles the harness rather than the product, and an
+    // unlucky burst surfaces as a `429` on a font, reported as a page issue and
+    // a red build. Loopback-bound, synthetic data, no reason to throttle.
+    let app = build_router_with_rate_limit(
+        state,
+        RateLimitConfig {
+            requests_per_second: 100_000.0,
+            burst_capacity: 100_000,
+            trust_x_forwarded_for: false,
+        },
+    );
 
     let addr = "127.0.0.1:8502";
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");

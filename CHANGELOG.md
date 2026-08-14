@@ -79,6 +79,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Verified against the shipped 0.13.0 build, where it reproduces the reported
   bug (`pause()` during connect) and catches the bulk batch firing twice.
 
+  The visual-QA fixture no longer rate-limits itself. It is deliberately
+  hammered — 152 page captures back to back, plus the new gate driving controls
+  as fast as Chromium will go — and the station's 30 req/s limiter throttled the
+  harness rather than the product, surfacing as an intermittent `429` on a font
+  and a red build. **The station's own limiter is unchanged**: measured, a cold
+  dashboard load is 24 requests, the heaviest page 34, and two rapid loads 48 —
+  all inside the 60-burst default with no `429`, so there was nothing to loosen
+  for real clients. A test now pins that the shipped router keeps the strict
+  default, since the opt-out is what makes losing it possible.
+
 ### Changed
 
 - `/stream` no longer sets `Transfer-Encoding` by hand. It is a hop-by-hop
