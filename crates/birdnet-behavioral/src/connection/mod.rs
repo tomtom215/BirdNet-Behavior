@@ -198,12 +198,29 @@ fn load_icu(conn: &Connection) {
         }
     }
 
-    if let Err(e) = conn.execute_batch("LOAD icu;") {
+    // 2) Already in the extension directory, from a previous run's stage 3.
+    if conn.execute_batch("LOAD icu;").is_ok() {
+        return;
+    }
+
+    // 3) Fetch it, once, into the extension directory.
+    //
+    // An explicit `INSTALL` is not the same thing as the autoinstall that broke
+    // v0.13.1, in the one way that matters: it writes where
+    // `redirect_extension_directory` pointed it — beside the analytics database,
+    // inside the unit's `ReadWritePaths` — rather than to `$HOME/.duckdb`. It
+    // also runs here, before any query, instead of part-way through binding one.
+    //
+    // This is the path a dev build with no embedded copy takes, and a genuine
+    // self-heal for a station whose embed is missing or unloadable. It is last
+    // because it is the only stage that needs the network.
+    if let Err(e) = conn.execute_batch("INSTALL icu; LOAD icu;") {
         tracing::warn!(
             error = %e,
             embedded = EMBEDDED_ICU.is_some(),
-            "could not load DuckDB's ICU extension. Every dashboard filters on a date window \
-             and CURRENT_DATE lives in ICU, so those queries will fail until it is available"
+            "could not load DuckDB's ICU extension, from an embedded copy, the extension \
+             directory, or the network. Every dashboard filters on a date window and \
+             CURRENT_DATE lives in ICU, so those queries will fail until it is available"
         );
     }
 }
