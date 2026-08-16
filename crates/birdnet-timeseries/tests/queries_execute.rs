@@ -14,12 +14,14 @@
 //!
 //! So the gate here is deliberately not "does the SQL look right". It executes
 //! every public query against a real DuckDB holding real rows and requires
-//! results back. The store is opened the way the application opens it —
-//! ICU loaded up front — so what is under test is the queries themselves.
+//! results back. The store is a real `AnalyticsDb`, opened exactly as the
+//! application opens it, so what is under test is the queries themselves and
+//! not a fixture's idea of how a store gets set up.
 
 #![cfg(feature = "analytics")]
 
-use duckdb::Connection;
+use birdnet_behavioral::connection::AnalyticsDb;
+use tempfile::TempDir;
 
 use birdnet_timeseries::executor::TimeSeriesDb;
 use birdnet_timeseries::types::params::{
@@ -67,21 +69,22 @@ const fn civil_from_days(z: i64) -> (i64, i64, i64) {
 /// every query filters on a look-back from `CURRENT_DATE`; a pinned fixture
 /// would drift out of range and start returning empty results that look like
 /// passes.
-fn seeded_db() -> Connection {
-    let conn = Connection::open_in_memory().expect("in-memory duckdb");
-    // Mirror `AnalyticsDb::open`: ICU carries the date arithmetic every query
-    // below depends on, and DuckDB will not load it until a query needs it —
-    // by which point that query has already failed to bind. Loading it here
-    // keeps this file testing the queries rather than re-testing the loader,
-    // which `birdnet-behavioral` gates directly.
-    conn.execute_batch("LOAD icu;").expect("load icu");
-    conn.execute_batch(
-        "CREATE TABLE detections (
-            Date VARCHAR, Time VARCHAR, Sci_Name VARCHAR, Com_Name VARCHAR,
-            Confidence DOUBLE, Lat DOUBLE, Lon DOUBLE, Cutoff DOUBLE,
-            Week INTEGER, Sens DOUBLE, Overlap DOUBLE, File_Name VARCHAR);",
-    )
-    .expect("create detections");
+fn seeded_db() -> (AnalyticsDb, TempDir) {
+    // A real `AnalyticsDb`, not an approximation of one. It loads ICU, creates
+    // `detections`, and creates the `detections_ts` view — and it is exactly
+    // what reaches these queries in production, where `birdnet-web` does
+    // `TimeSeriesDb::new(db.conn())`.
+    //
+    // This used to open a bare in-memory connection and issue `LOAD icu;`
+    // itself. That is not what `AnalyticsDb::open` does, and it only ever
+    // worked when `~/.duckdb` already held ICU: a bare `LOAD` does not
+    // autoinstall (DuckDB only does that while binding a query that needs the
+    // extension), so the gate passed or failed on whether some *other* test
+    // binary in the same `cargo test` run had populated that cache first.
+    // Moving the cache aside made it fail, which is how it was found.
+    let dir = TempDir::new().expect("temp dir");
+    let db = AnalyticsDb::open(&dir.path().join("timeseries.duckdb")).expect("open analytics db");
+    let conn = db.conn();
 
     let today: String = conn
         .query_row("SELECT CAST(CURRENT_DATE AS VARCHAR)", [], |r| r.get(0))
@@ -122,18 +125,11 @@ fn seeded_db() -> Connection {
     }
     conn.execute_batch(&sql).expect("seed detections");
 
-    // The same view the application builds (see birdnet-behavioral's
-    // CREATE_DETECTIONS_TS_VIEW): TRY_CAST so a row that names no point in time
-    // drops out of the results instead of aborting the query.
-    conn.execute_batch(
-        "CREATE OR REPLACE VIEW detections_ts AS
-         SELECT *,
-             TRY_CAST(Date || ' ' || Time AS TIMESTAMP) AS detection_timestamp,
-             TRY_CAST(Date AS DATE)                     AS detection_date
-         FROM detections;",
-    )
-    .expect("create view");
-    conn
+    // `detections_ts` is already there — `AnalyticsDb::open` creates it, and it
+    // is a view, so it sees the rows just inserted. Rebuilding a copy of it
+    // here would let the two definitions drift, which is the same class of
+    // mistake as re-implementing the ICU load above.
+    (db, dir)
 }
 
 /// Run every public query and require each to bind, execute and return rows.
@@ -143,8 +139,8 @@ fn seeded_db() -> Connection {
 /// without noticing.
 #[test]
 fn every_query_binds_executes_and_returns_rows() {
-    let conn = seeded_db();
-    let db = TimeSeriesDb::new(&conn).expect("executor");
+    let (store, _tmp) = seeded_db();
+    let db = TimeSeriesDb::new(store.conn()).expect("executor");
 
     let hourly = HourlyParams {
         lookback_days: 30,
@@ -179,7 +175,8 @@ fn every_query_binds_executes_and_returns_rows() {
     };
     // Ask DuckDB for today rather than computing it in Rust, so the fixture and
     // the query agree on the date even across a midnight boundary.
-    let today: String = conn
+    let today: String = store
+        .conn()
         .query_row("SELECT CAST(CURRENT_DATE AS VARCHAR)", [], |r| r.get(0))
         .expect("current date");
 
@@ -281,8 +278,8 @@ fn every_query_binds_executes_and_returns_rows() {
 /// caller has a worked example rather than a binder error.
 #[test]
 fn interval_lookback_expressions_bind() {
-    let conn = seeded_db();
-    let db = TimeSeriesDb::new(&conn).expect("executor");
+    let (store, _tmp) = seeded_db();
+    let db = TimeSeriesDb::new(store.conn()).expect("executor");
 
     for expr in [
         "CURRENT_DATE - INTERVAL 60 DAYS",

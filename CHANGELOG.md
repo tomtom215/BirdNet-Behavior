@@ -132,6 +132,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the first fails with `Catalog Error: … "current_date" is not in the catalog`
   and the second sees DuckDB's default (an empty string).
 
+  The time-series execution gate had caught the same disease from the same
+  cache. It opened a bare DuckDB connection and issued `LOAD icu` itself, as an
+  approximation of what the application does — and a bare `LOAD` never
+  autoinstalls (DuckDB only does that while binding a query that needs the
+  extension), so it passed only when *some other test binary in the same run*
+  had populated `~/.duckdb` first. It now opens a real `AnalyticsDb`, which is
+  literally what `birdnet-web` hands these queries, and drops its private copy
+  of the `detections_ts` view along with it.
+
   The second survives dirty history rather than a cold start. `Date` and `Time`
   are free-form `TEXT NOT NULL` — the column type forbids NULL, not nonsense —
   and the BirdNET-Pi importer turns a NULL `Date` into `""` and copies

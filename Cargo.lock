@@ -570,6 +570,7 @@ dependencies = [
 name = "birdnet-timeseries"
 version = "0.13.1"
 dependencies = [
+ "birdnet-behavioral",
  "duckdb",
  "serde",
  "tempfile",
