@@ -99,9 +99,20 @@ pub fn civil_from_unix_secs(secs: i64) -> CivilTime {
 /// Seconds since the Unix epoch for a civil date/time — the inverse of
 /// [`civil_from_unix_secs`].
 ///
-/// Implements Hinnant's `days_from_civil`. Years before 1970 saturate to the
-/// epoch, mirroring the forward direction: nothing here deals in pre-1970
-/// audio, and a date that far out means a broken clock either way.
+/// Implements Hinnant's `days_from_civil`. Unlike the forward direction, this
+/// does **not** clamp at 1970: a pre-epoch civil date returns the correct
+/// negative value (`1969-01-01` → `-31_536_000`). Round-tripping through
+/// [`civil_from_unix_secs`] still lands on the epoch for anything pre-1970,
+/// because *that* direction clamps — nothing here deals in pre-1970 audio, and
+/// a date that far out means a broken clock either way.
+///
+/// The `y < 0` guard below is arithmetic, not policy. `y` is the year shifted
+/// back one for January and February, so the only way to reach a negative is
+/// year 0 in those two months. Rust's integer division truncates toward zero,
+/// so `era = y / 400` would yield `0` where Hinnant's algorithm needs `-1`, and
+/// the result would be quietly wrong rather than obviously so. `y == 0` — year
+/// 0 from March, or year 1 in January — is a value the algorithm handles
+/// correctly and must not be caught by it.
 #[must_use]
 pub fn unix_secs_from_civil(t: &CivilTime) -> i64 {
     let y = i64::from(t.year) - i64::from(t.month <= 2);
@@ -217,6 +228,67 @@ mod tests {
                 "round trip failed for {secs} ({civil:?})"
             );
         }
+    }
+
+    /// The boundary of the `y < 0` guard, from both sides.
+    ///
+    /// `y` is the year shifted back one for January and February, so year 0 in
+    /// those months is the only way to reach a negative — and it is the one
+    /// input the era arithmetic cannot take, because Rust truncates `-1 / 400`
+    /// toward zero where Hinnant's algorithm needs `-1`. Year 0 from March is
+    /// the neighbour that must *not* be caught: `y == 0` computes correctly.
+    ///
+    /// Widening the guard to `<=` or narrowing it to `==` would swallow that
+    /// neighbour and silently return the epoch for a date the algorithm
+    /// handles. Both are mutations `cargo-mutants` generates against this line,
+    /// and neither was caught until this test existed.
+    #[test]
+    fn only_a_negative_shifted_year_saturates() {
+        let at_year_zero = |month| CivilTime {
+            year: 0,
+            month,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
+
+        // y == -1: the guard fires.
+        assert_eq!(unix_secs_from_civil(&at_year_zero(1)), 0, "0000-01-01");
+        assert_eq!(unix_secs_from_civil(&at_year_zero(2)), 0, "0000-02-01");
+
+        // y == 0: it must not. Computed, not saturated.
+        assert_eq!(
+            unix_secs_from_civil(&at_year_zero(3)),
+            -62_162_035_200,
+            "0000-03-01 is a date the era arithmetic handles"
+        );
+    }
+
+    /// A pre-epoch civil date converts to negative seconds, not to zero.
+    ///
+    /// Deliberately asymmetric with `pre_epoch_saturates_to_the_epoch` above,
+    /// which pins the *forward* direction's clamp. Only that direction clamps.
+    /// The doc comment on `unix_secs_from_civil` claimed both did, until the
+    /// mutation gate sent someone to read the code.
+    #[test]
+    fn pre_epoch_civil_dates_return_negative_seconds() {
+        let new_year_1969 = CivilTime {
+            year: 1969,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
+        assert_eq!(unix_secs_from_civil(&new_year_1969), -31_536_000);
+
+        // …but a round trip lands on the epoch, because the forward direction
+        // clamps. This is what any caller composing the two actually observes.
+        assert_eq!(
+            civil_from_unix_secs(unix_secs_from_civil(&new_year_1969)),
+            civil_from_unix_secs(0)
+        );
     }
 
     #[test]
