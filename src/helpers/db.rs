@@ -60,6 +60,70 @@ pub fn db_path_from_config(config: Option<&birdnet_core::config::Config>) -> Pat
     )
 }
 
+/// Report what the pending data-rewriting migrations would do, and exit.
+///
+/// Opens the database read-only so the report cannot itself be the thing that
+/// migrates: `migrate()` runs on the normal startup path, and an operator
+/// asking what an upgrade *would* do must not trigger it by asking.
+///
+/// # Errors
+///
+/// Returns an error if the database cannot be opened or the preview queries
+/// fail. A database that does not exist yet is not an error — there is no
+/// history to rewrite.
+pub fn run_migration_report(
+    config: Option<&birdnet_core::config::Config>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let db_path = db_path_from_config(config);
+    if !db_path.exists() {
+        println!(
+            "No database at {} yet — nothing to migrate.",
+            db_path.display()
+        );
+        return Ok(());
+    }
+
+    // Read-only, and explicitly so. `Connection::open` would create and then
+    // silently migrate on some paths; this cannot.
+    let conn = rusqlite::Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )?;
+
+    let current = birdnet_db::migration::current_version(&conn)?;
+    let previews = birdnet_db::migration::preview_pending(&conn)?;
+
+    println!("Database   {}", db_path.display());
+    println!("Schema     version {current}\n");
+
+    if previews.is_empty() {
+        println!(
+            "No pending migration rewrites existing detections.\n\n  \
+             Schema-only migrations may still be pending; those add columns and \
+             indexes\n  and leave the rows already on disk alone."
+        );
+        return Ok(());
+    }
+
+    for p in &previews {
+        println!("Migration {} — {}", p.version, p.description);
+        if p.rows.is_empty() {
+            println!("  (nothing on disk for it to change)");
+        }
+        for (label, value) in &p.rows {
+            println!("  {label:<46} {value}");
+        }
+        println!();
+    }
+    println!(
+        "This changed nothing. The rewrite runs on the next normal start, and the\n\
+         database is copied to <db>.pre-migration-<version>.backup immediately\n\
+         beforehand — restoring it is a file move. The copy needs about as much\n\
+         free space as the database itself."
+    );
+    Ok(())
+}
+
 /// Run a database integrity check and exit.
 pub fn run_integrity_check(
     config: Option<&birdnet_core::config::Config>,

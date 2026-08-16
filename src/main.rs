@@ -50,6 +50,9 @@ enum Action {
     /// `--channel-report`: record from the microphone and report what each
     /// stereo-to-mono reduction would deliver, then exit.
     ChannelReport,
+    /// `--migration-report`: describe what a pending data-rewriting migration
+    /// would change, without applying it, then exit.
+    MigrationReport,
     /// `--doctor` / `--doctor-json`: print diagnostics and exit with a
     /// status-derived code. Carries the chosen render format.
     Doctor(doctor::Format),
@@ -75,6 +78,8 @@ const fn dispatch_subcommand(cli: &Cli) -> Action {
         Action::VerifyExtension
     } else if cli.channel_report {
         Action::ChannelReport
+    } else if cli.migration_report {
+        Action::MigrationReport
     } else if cli.doctor || cli.doctor_json || cli.fix {
         // `--doctor-json` wins the format choice when both are passed so a
         // monitoring script that sets both still gets machine-readable output.
@@ -159,6 +164,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let code = channel_report::run(&cli, config.as_ref());
             std::process::exit(code);
         }
+        Action::MigrationReport => return helpers::run_migration_report(config.as_ref()),
         Action::Doctor(format) => {
             let code = doctor::run_with_format(&cli, config.as_ref(), format);
             std::process::exit(code);
@@ -211,6 +217,26 @@ mod tests {
         assert_eq!(
             dispatch_subcommand(&cli(&["--refresh-extension"])),
             Action::RefreshExtension
+        );
+    }
+
+    #[test]
+    fn migration_report_flag_selects_migration_report() {
+        assert_eq!(
+            dispatch_subcommand(&cli(&["--migration-report"])),
+            Action::MigrationReport
+        );
+    }
+
+    /// The dry-run must not be reachable only by an operator who happens not to
+    /// have passed `--doctor` as well: asking what a migration would do and
+    /// getting a diagnostic instead is the kind of surprise that gets an
+    /// upgrade run blind.
+    #[test]
+    fn migration_report_takes_precedence_over_the_doctor() {
+        assert_eq!(
+            dispatch_subcommand(&cli(&["--migration-report", "--doctor"])),
+            Action::MigrationReport
         );
     }
 

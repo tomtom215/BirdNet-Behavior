@@ -129,6 +129,31 @@ elif [ "${1:-}" = "--alsa-test" ]; then
     exit 2
   }
   require_device_free "$@"
+  # The plug layer is exactly what makes the two recordings below ambiguous: it
+  # will satisfy a 2-channel request from a 1-channel device by duplicating,
+  # and a duplicate scores perfectly on every level comparison. Ask the raw
+  # device what it actually has before recording anything through the plug.
+  RAW_DEVICE="${ALSA_DEVICE#plug}"
+  HW_PARAMS="$(arecord -D "$RAW_DEVICE" --dump-hw-params -d 1 /dev/null 2>&1 || true)"
+  HW_CHANNELS="$(printf '%s\n' "$HW_PARAMS" | sed -n 's/^CHANNELS:[[:space:]]*//p' | head -1)"
+  if [ -n "$HW_CHANNELS" ]; then
+    echo "Hardware ${RAW_DEVICE} offers CHANNELS: ${HW_CHANNELS}"
+    case "$HW_CHANNELS" in
+      1|"[1 1]")
+        echo
+        echo "That device is MONO. Whatever the microphone is, only one channel" >&2
+        echo "reaches ALSA, so there is no second capsule to lose and no source" >&2
+        echo "setting that changes it. If this is meant to be a stereo mic, the" >&2
+        echo "problem is upstream of this project: wiring, or the wrong card." >&2
+        echo >&2
+        echo "Continuing anyway — the recordings below will show one channel" >&2
+        echo "duplicated, which is what that looks like from here." >&2
+        echo
+        ;;
+    esac
+  else
+    echo "Could not read hardware params from ${RAW_DEVICE} (continuing)."
+  fi
   MONO_WAV="$(mktemp -t stereo-check-mono-XXXXXX.wav)"
   TMP_WAV="$(mktemp -t stereo-check-XXXXXX.wav)"
   WAV="$TMP_WAV"
@@ -148,7 +173,7 @@ elif [ "${1:-}" = "--alsa-test" ]; then
       sed 's/^/  arecord: /' "$ERR" >&2 || true
       exit 2
     }
-  PY_ARGS=(--alsa-test "$MONO_WAV" "$WAV")
+  PY_ARGS=(--alsa-test "$MONO_WAV" "$WAV" "$RAW_DEVICE")
   ALSA_TEST=1
 elif [ "${1:-}" = "--scan" ]; then
   SCAN_DIR="${2:-}"
@@ -298,6 +323,10 @@ def plain_rms(xs):
 if sys.argv[1] == "--alsa-test":
     mono, mono_ch = mono_samples(sys.argv[2])
     stereo, st_ch = mono_samples(sys.argv[3])
+    # The raw (non-plug) device, for pointing at the one command that settles
+    # a duplicated-channel capture. Defaulted so the analyser stays runnable on
+    # a pair of files without the shell driver.
+    RAW_DEVICE = sys.argv[4] if len(sys.argv) > 4 else "hw:1,0"
     if st_ch != 2:
         print("\nThe 2-channel capture came back with "
               f"{st_ch} channel(s); nothing to compare.")
@@ -332,6 +361,25 @@ if sys.argv[1] == "--alsa-test":
         print("  sound playing — a tone or continuous noise from a phone a metre")
         print("  away is ideal, because this compares levels across two")
         print("  consecutive recordings and needs the room to hold still.")
+    elif left == right:
+        # Checked before the level comparison, which cannot see this at all:
+        # duplicating a channel leaves the mix identical to either channel, so
+        # `spread` is 0.0 and the verdict below would read "cannot distinguish —
+        # and it does not matter". It matters a great deal. Two capsules never
+        # agree sample for sample; each carries its own self-noise. Exact
+        # equality means plughw answered a 2-channel request from a 1-channel
+        # device by copying, and the second capsule is not in the recording.
+        print("VERDICT: one capsule, duplicated — this is not a stereo capture.")
+        print("  The two channels are identical sample for sample, which two real")
+        print("  capsules never are. ALSA's plug layer duplicates when a mono")
+        print("  device is asked for two channels, so nothing above describes your")
+        print("  microphone — it describes one channel copied twice.")
+        print()
+        print("  Ask the hardware directly, with the plug layer out of the way:")
+        print(f"    arecord -D {RAW_DEVICE} --dump-hw-params")
+        print("  If its CHANNELS line says 1, the device is mono: the second")
+        print("  capsule is not reaching the software, and no source setting")
+        print("  fixes that. If it offers 2, re-run this against that device.")
     elif spread < 1.0:
         print("VERDICT: cannot distinguish — and it does not matter.")
         print(f"  Taking one channel and mixing both differ by only {spread:.1f} dB here,")

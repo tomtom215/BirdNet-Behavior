@@ -105,9 +105,18 @@ async fn fetch(app: &axum::Router, uri: &str) -> (StatusCode, String) {
 /// Every time-series dashboard partial renders real content despite the dirty
 /// rows.
 ///
-/// These partials are pure SQL over `detections_ts` and need no DuckDB
-/// extension, so they run identically on an air-gapped station and in CI —
-/// which makes them the honest gate for this defect.
+/// These partials are pure SQL over `detections_ts` — no *behavioral*
+/// extension involved — which is what makes them the honest gate for the
+/// unplaceable-row defect.
+///
+/// They do need `icu`, though. Every one of them filters on a look-back from
+/// `CURRENT_DATE`, and `CURRENT_DATE` lives in ICU. This comment used to claim
+/// they "need no DuckDB extension, so they run identically on an air-gapped
+/// station and in CI"; a no-network run of the suite falsified that — all six
+/// ICU-dependent tests in the workspace fail together, these two among them.
+/// On a station and in the release images ICU is embedded at build time, so
+/// the guarantee holds there; it is a local build with nothing embedded that
+/// quietly reaches the network instead.
 #[tokio::test]
 async fn timeseries_dashboards_render_despite_unplaceable_rows() {
     let dir = tempfile::tempdir().unwrap();
@@ -125,8 +134,16 @@ async fn timeseries_dashboards_render_despite_unplaceable_rows() {
         assert_eq!(status, StatusCode::OK, "{uri} should answer");
         assert!(
             !body.contains(TS_FALLBACK_TEXT),
-            "{uri} fell back to the error placeholder — one unplaceable row is \
-             aborting the query again:\n{body}"
+            "{uri} fell back to the error placeholder. Two causes reach this \
+             line and they are not the same problem:\n  \
+             (a) the defect this test exists for — one unplaceable row aborting \
+             the whole query;\n  \
+             (b) ICU is simply not available, so `CURRENT_DATE` will not bind \
+             and every dashboard fails alike.\n  \
+             Check the captured log for `could not load DuckDB's ICU extension`: \
+             if it is there this is (b), a build with no embedded ICU and no \
+             network, not a regression. `--verify-extension` says so \
+             directly.\n{body}"
         );
         assert!(
             !body.trim().is_empty(),

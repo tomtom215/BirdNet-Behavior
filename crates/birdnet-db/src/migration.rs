@@ -4,7 +4,9 @@
 //! Migrations are defined as SQL strings and applied in order.
 
 use rusqlite::Connection;
+use std::ffi::OsStr;
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 /// Migration errors.
 #[derive(Debug)]
@@ -658,6 +660,260 @@ pub const MIGRATIONS: &[Migration] = &[
     },
 ];
 
+/// A migration that rewrites rows that already exist, rather than only changing
+/// the schema around them.
+///
+/// The distinction is worth a type because the two are not equally recoverable.
+/// A schema change is additive: older code ignores the new column and the data
+/// it was computed from is still there. A rewrite destroys its own input — after
+/// migration 24 there is nothing on disk that says what a detection's timestamp
+/// used to be, so "undo it" is not a query anyone can write.
+///
+/// Membership here buys a migration two things: a complete copy of the database
+/// taken immediately before it runs, and a dry-run an operator can look at
+/// first.
+struct HistoryRewrite {
+    /// The migration version this describes.
+    version: u32,
+    /// A `SELECT` returning `(label, value)` text pairs describing what the
+    /// migration would do, evaluated against the database *before* it runs.
+    preview_sql: &'static str,
+}
+
+/// Every migration that rewrites existing rows. Add to this when writing one.
+const HISTORY_REWRITES: &[HistoryRewrite] = &[HistoryRewrite {
+    version: 24,
+    // Deliberately mirrors migration 24's own WHERE clauses rather than
+    // approximating them: a preview that counts a different set of rows than
+    // the migration moves is worse than no preview, because it is believed.
+    preview_sql: "SELECT 'detections whose timestamp moves' AS label,
+                         CAST(COUNT(*) AS TEXT) AS value
+                    FROM detections
+                   WHERE chunk_offset_secs > 0
+                     AND datetime(Date || ' ' || Time) IS NOT NULL
+                  UNION ALL
+                  SELECT 'left alone (already chunk-accurate, offset 0)',
+                         CAST(COUNT(*) AS TEXT)
+                    FROM detections WHERE chunk_offset_secs <= 0
+                  UNION ALL
+                  SELECT 'left alone (Date/Time name no point in time)',
+                         CAST(COUNT(*) AS TEXT)
+                    FROM detections
+                   WHERE chunk_offset_secs > 0
+                     AND datetime(Date || ' ' || Time) IS NULL
+                  UNION ALL
+                  SELECT 'largest shift, seconds',
+                         COALESCE(CAST(MAX(CAST(chunk_offset_secs AS INTEGER)) AS TEXT), '0')
+                    FROM detections
+                   WHERE chunk_offset_secs > 0
+                     AND datetime(Date || ' ' || Time) IS NOT NULL
+                  UNION ALL
+                  SELECT 'of those, rows that roll onto the next day',
+                         CAST(COUNT(*) AS TEXT)
+                    FROM detections
+                   WHERE chunk_offset_secs > 0
+                     AND datetime(Date || ' ' || Time) IS NOT NULL
+                     AND date(datetime(Date || ' ' || Time,
+                              '+' || CAST(chunk_offset_secs AS INTEGER) || ' seconds')) <> Date
+                  UNION ALL
+                  SELECT 'earliest affected detection',
+                         COALESCE(MIN(Date || ' ' || Time), '(none)')
+                    FROM detections
+                   WHERE chunk_offset_secs > 0
+                     AND datetime(Date || ' ' || Time) IS NOT NULL
+                  UNION ALL
+                  SELECT 'latest affected detection',
+                         COALESCE(MAX(Date || ' ' || Time), '(none)')
+                    FROM detections
+                   WHERE chunk_offset_secs > 0
+                     AND datetime(Date || ' ' || Time) IS NOT NULL",
+}];
+
+/// One pending history-rewriting migration, and what it would do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MigrationPreview {
+    /// The migration version.
+    pub version: u32,
+    /// The migration's description.
+    pub description: String,
+    /// `(label, value)` pairs describing the impact, in report order.
+    pub rows: Vec<(String, String)>,
+}
+
+/// Describe what the pending history-rewriting migrations would do, without
+/// applying anything.
+///
+/// Only migrations listed in `HISTORY_REWRITES` appear: a schema-only
+/// migration has nothing to preview, because it moves no data.
+///
+/// `HISTORY_REWRITES` is deliberately *not* an intra-doc link: it is private,
+/// and linking a private item from a `pub` item's docs is
+/// `rustdoc::private_intra_doc_links`, which CI denies. Leave the brackets off.
+///
+/// # Errors
+///
+/// Returns `MigrationError` if the schema version cannot be read. A preview
+/// query that fails because the tables it reads do not exist yet is *not* an
+/// error — a database too young to hold the rows a migration would rewrite has
+/// nothing to report — and yields an entry with no rows.
+pub fn preview_pending(conn: &Connection) -> Result<Vec<MigrationPreview>, MigrationError> {
+    let current = current_version(conn)?;
+    let mut out = Vec::new();
+
+    for rewrite in HISTORY_REWRITES {
+        if rewrite.version <= current {
+            continue;
+        }
+        let description = MIGRATIONS
+            .iter()
+            .find(|m| m.version == rewrite.version)
+            .map_or("(unknown migration)", |m| m.description)
+            .to_owned();
+
+        let rows = match collect_preview(conn, rewrite.preview_sql) {
+            Ok(rows) => rows,
+            // A fresh database has no `detections` table yet, so the preview
+            // has nothing to look at. That is an empty report, not a failure.
+            Err(ref e) if preview_target_missing(e) => Vec::new(),
+            Err(e) => return Err(MigrationError::Sqlite(e)),
+        };
+        out.push(MigrationPreview {
+            version: rewrite.version,
+            description,
+            rows,
+        });
+    }
+    Ok(out)
+}
+
+/// Whether a failed preview query failed only because the table it reads does
+/// not exist yet.
+///
+/// The one benign failure: a database too young to hold the rows a migration
+/// would rewrite has nothing to report. Every other failure has to propagate —
+/// "nothing to change" is the single answer an operator acts on by upgrading
+/// without looking further, so a preview that could not run must never produce
+/// it.
+///
+/// Deliberately narrow. `rusqlite` splits statement-preparation failures across
+/// two variants depending on whether `SQLite` could attribute the error to a
+/// token: a missing *table* arrives as `SqliteFailure`, while a missing
+/// *column* on a table that does exist arrives as `SqlInputError` and is not
+/// benign. Split out from the `match` arm so both sides of that line are
+/// testable without having to provoke each error shape from live `SQLite`.
+fn preview_target_missing(err: &rusqlite::Error) -> bool {
+    matches!(err, rusqlite::Error::SqliteFailure(_, Some(msg)) if msg.contains("no such table"))
+}
+
+/// Run one preview query and collect its `(label, value)` rows.
+fn collect_preview(conn: &Connection, sql: &str) -> Result<Vec<(String, String)>, rusqlite::Error> {
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Environment variable that waives the pre-migration backup.
+///
+/// The backup needs as much free space as the database itself, and a station
+/// whose disk is too full for it would otherwise be unable to start at all.
+/// Setting this is the operator saying they accept an unrecoverable rewrite.
+const SKIP_BACKUP_ENV: &str = "BIRDNET_SKIP_MIGRATION_BACKUP";
+
+/// Whether the operator has waived the pre-migration backup.
+///
+/// Unset, empty, and `"0"` all mean "take the backup": an empty value is what a
+/// shell leaves behind after `FOO=` or an unexpanded `${FOO}`, and `0` is what
+/// someone writes when they mean off. Anything else is consent.
+///
+/// Split out from the `var_os` call so the predicate is testable without
+/// mutating process-global environment state from a test, which would race with
+/// every other test in this binary.
+fn backup_waived(value: Option<&OsStr>) -> bool {
+    value.is_some_and(|v| !v.is_empty() && v != "0")
+}
+
+/// Where a backup for `version` should go, avoiding any file already there.
+///
+/// Never overwrites: a second upgrade attempt must not clobber the copy the
+/// first one made, which may be the only surviving pre-migration state.
+fn backup_target(db: &Path, version: u32) -> Option<PathBuf> {
+    let name = db.file_name()?.to_string_lossy();
+    let base = format!("{name}.pre-migration-{version}.backup");
+    let dir = db.parent().unwrap_or_else(|| Path::new("."));
+    let first = dir.join(&base);
+    if !first.exists() {
+        return Some(first);
+    }
+    (1..1000)
+        .map(|n| dir.join(format!("{base}.{n}")))
+        .find(|p| !p.exists())
+}
+
+/// Copy the database immediately before a history-rewriting migration.
+///
+/// Uses `VACUUM INTO`, not a file copy: it runs against the live connection and
+/// produces a single consistent file, where copying the `.db` alone would leave
+/// behind whatever is still in the WAL.
+///
+/// Returns the backup path, or `None` when there is nothing to back up (an
+/// in-memory database) or the operator has waived it.
+///
+/// # Errors
+///
+/// Returns `MigrationError` if the backup cannot be written. This deliberately
+/// fails the migration rather than proceeding: the rewrite destroys its own
+/// input, so "could not make it recoverable" has to mean "did not do it".
+fn backup_before_rewrite(
+    conn: &Connection,
+    version: u32,
+) -> Result<Option<PathBuf>, MigrationError> {
+    if backup_waived(std::env::var_os(SKIP_BACKUP_ENV).as_deref()) {
+        tracing::warn!(
+            version,
+            "{SKIP_BACKUP_ENV} is set — applying a history-rewriting migration with no backup. \
+             The previous timestamps will not be recoverable."
+        );
+        return Ok(None);
+    }
+
+    // An in-memory database has no file to copy and no history worth keeping.
+    let Some(path) = conn.path().filter(|p| !p.is_empty() && *p != ":memory:") else {
+        return Ok(None);
+    };
+    let db = Path::new(path).to_path_buf();
+
+    let Some(target) = backup_target(&db, version) else {
+        return Err(MigrationError::Logic(format!(
+            "could not find a free filename for the pre-migration-{version} backup next to \
+             {}; move the existing backups aside and retry",
+            db.display()
+        )));
+    };
+
+    conn.execute("VACUUM INTO ?1", [target.to_string_lossy().as_ref()])
+        .map_err(|e| {
+            MigrationError::Logic(format!(
+                "migration {version} rewrites existing detections and could not first back the \
+                 database up to {}: {e}\n\
+                 The backup needs about as much free space as the database itself. Free some \
+                 and restart. To upgrade without a backup — accepting that the previous \
+                 timestamps cannot be recovered — set {SKIP_BACKUP_ENV}=1.",
+                target.display()
+            ))
+        })?;
+
+    tracing::info!(
+        version,
+        backup = %target.display(),
+        "backed the database up before a history-rewriting migration"
+    );
+    Ok(Some(target))
+}
+
 /// Ensure the `schema_version` tracking table exists.
 fn ensure_version_table(conn: &Connection) -> Result<(), MigrationError> {
     conn.execute_batch(
@@ -691,6 +947,27 @@ pub fn current_version(conn: &Connection) -> Result<u32, MigrationError> {
     Ok(version)
 }
 
+/// Whether the database carries a schema version this binary does not know.
+///
+/// Strictly newer: a database at exactly the highest version this binary knows
+/// is the normal fully-migrated state, not a downgrade.
+///
+/// Split out from the branch it guards for the same reason as
+/// `any_migrations_applied` below: that branch only emits a log line, so
+/// nothing a test can assert on changes when `>` slips to `>=` or `==`. As a
+/// predicate the boundary is directly observable.
+const fn schema_is_newer_than_binary(db_version: u32, max_known: u32) -> bool {
+    db_version > max_known
+}
+
+/// Whether `migrate` actually applied anything, and so has something to report.
+///
+/// Split out for the same reason as `schema_is_newer_than_binary`: it guards a
+/// log-only branch, so the boundary is only observable as a predicate.
+const fn any_migrations_applied(applied: u32) -> bool {
+    applied > 0
+}
+
 /// Apply all pending migrations.
 ///
 /// Returns the number of migrations applied.
@@ -716,7 +993,7 @@ pub fn migrate(conn: &Connection) -> Result<u32, MigrationError> {
     // but it's a real failure mode that produces baffling runtime errors. Warn
     // loudly rather than error so a recovery downgrade remains possible.
     if let Some(max_known) = MIGRATIONS.iter().map(|m| m.version).max()
-        && current > max_known
+        && schema_is_newer_than_binary(current, max_known)
     {
         tracing::warn!(
             db_version = current,
@@ -747,6 +1024,18 @@ pub fn migrate(conn: &Connection) -> Result<u32, MigrationError> {
             "applying migration"
         );
 
+        // A migration that rewrites existing rows gets a copy of the database
+        // first. Outside the transaction below, and necessarily so: `VACUUM
+        // INTO` cannot run inside one. That ordering is also the correct one —
+        // the backup must capture the state before the rewrite, and a rollback
+        // of the transaction simply leaves an unused copy behind.
+        if HISTORY_REWRITES
+            .iter()
+            .any(|r| r.version == migration.version)
+        {
+            backup_before_rewrite(conn, migration.version)?;
+        }
+
         // Apply the migration's DDL and record its version atomically. SQLite
         // supports transactional DDL, so a failure (or power loss) mid-migration
         // rolls the whole step back rather than leaving the schema changed but
@@ -762,7 +1051,7 @@ pub fn migrate(conn: &Connection) -> Result<u32, MigrationError> {
         applied += 1;
     }
 
-    if applied > 0 {
+    if any_migrations_applied(applied) {
         tracing::info!(
             applied,
             new_version = current + applied,
@@ -952,6 +1241,371 @@ mod tests {
         assert_eq!(
             after, 1,
             "the repair must collapse duplicates already on disk"
+        );
+    }
+
+    /// A file-backed database migrated as far as `up_to`, holding one segment's
+    /// five chunks all stamped with the file's start second.
+    fn file_db_at_version(dir: &Path, up_to: u32) -> (PathBuf, Connection) {
+        let path = dir.join("birds.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
+        ensure_version_table(&conn).unwrap();
+        for m in MIGRATIONS.iter().filter(|m| m.version <= up_to) {
+            conn.execute_batch(m.up_sql).unwrap();
+            conn.execute(
+                "INSERT INTO schema_version (version, description) VALUES (?1, ?2)",
+                rusqlite::params![m.version, m.description],
+            )
+            .unwrap();
+        }
+        for offset in [0.0, 3.0, 6.0, 9.0, 12.0] {
+            conn.execute(
+                "INSERT INTO detections
+                    (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, chunk_offset_secs)
+                 VALUES ('2026-03-11','08:30:00','Turdus merula','Blackbird',0.9,'seg.wav',?1)",
+                rusqlite::params![offset],
+            )
+            .unwrap();
+        }
+        (path, conn)
+    }
+
+    /// Migration 24 destroys its own input, so it must leave something to go
+    /// back to.
+    ///
+    /// After it runs there is nothing on disk that records what a detection's
+    /// timestamp used to be — the offset is folded in and the old value is
+    /// gone. "Undo it" is not a query anyone can write, which makes the copy
+    /// taken beforehand the only recovery there is. This asserts the copy
+    /// exists *and* that it still holds the un-shifted timestamps, because a
+    /// backup taken after the rewrite would pass a mere existence check while
+    /// being worthless.
+    #[test]
+    fn migration_24_leaves_a_restorable_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, conn) = file_db_at_version(dir.path(), 23);
+
+        migrate(&conn).unwrap();
+
+        // The live database has moved on.
+        let shifted: Vec<String> = conn
+            .prepare("SELECT Time FROM detections ORDER BY chunk_offset_secs")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            shifted,
+            vec!["08:30:00", "08:30:03", "08:30:06", "08:30:09", "08:30:12"],
+            "migration 24 should have folded the offsets in"
+        );
+
+        let backup = path.with_file_name("birds.db.pre-migration-24.backup");
+        assert!(
+            backup.exists(),
+            "a history-rewriting migration must leave a backup at {}",
+            backup.display()
+        );
+
+        // And the backup must predate the rewrite.
+        let restored = Connection::open(&backup).unwrap();
+        let original: Vec<String> = restored
+            .prepare("SELECT Time FROM detections ORDER BY chunk_offset_secs")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            original,
+            vec!["08:30:00"; 5],
+            "the backup must hold the timestamps as they were before migration 24"
+        );
+        assert_eq!(
+            current_version(&restored).unwrap(),
+            23,
+            "the backup must be at the pre-migration schema version"
+        );
+    }
+
+    /// A second upgrade attempt must not clobber the first attempt's copy.
+    #[test]
+    fn a_second_backup_does_not_overwrite_the_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, conn) = file_db_at_version(dir.path(), 23);
+        std::fs::write(
+            path.with_file_name("birds.db.pre-migration-24.backup"),
+            b"first",
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+
+        assert_eq!(
+            std::fs::read(path.with_file_name("birds.db.pre-migration-24.backup")).unwrap(),
+            b"first",
+            "an existing backup must survive untouched"
+        );
+        assert!(
+            path.with_file_name("birds.db.pre-migration-24.backup.1")
+                .exists(),
+            "the new backup must go alongside, not on top"
+        );
+    }
+
+    /// The dry-run must describe the rewrite without performing any part of it.
+    #[test]
+    fn migration_24_preview_reports_the_shift_without_applying_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_path, conn) = file_db_at_version(dir.path(), 23);
+        // A row that runs past midnight, and one that names no point in time.
+        conn.execute(
+            "INSERT INTO detections
+                (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, chunk_offset_secs)
+             VALUES ('2026-03-11','23:59:55','Parus major','Great Tit',0.8,'late.wav',9.0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO detections
+                (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, chunk_offset_secs)
+             VALUES ('','','Corvus corax','Raven',0.6,'bad.wav',6.0)",
+            [],
+        )
+        .unwrap();
+
+        let previews = preview_pending(&conn).unwrap();
+        let p = previews
+            .iter()
+            .find(|p| p.version == 24)
+            .expect("migration 24 is pending and previewable");
+        let get = |label: &str| {
+            p.rows.iter().find(|(l, _)| l == label).map_or_else(
+                || panic!("preview has no {label:?} row: {:?}", p.rows),
+                |(_, v)| v.clone(),
+            )
+        };
+
+        // Four offset>0 chunks from the segment, plus the near-midnight row.
+        assert_eq!(get("detections whose timestamp moves"), "5");
+        assert_eq!(get("left alone (already chunk-accurate, offset 0)"), "1");
+        assert_eq!(get("left alone (Date/Time name no point in time)"), "1");
+        assert_eq!(get("largest shift, seconds"), "12");
+        assert_eq!(get("of those, rows that roll onto the next day"), "1");
+
+        // Nothing may have moved, and no backup may have been taken.
+        let times: Vec<String> = conn
+            .prepare("SELECT Time FROM detections WHERE File_Name = 'seg.wav'")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            times,
+            vec!["08:30:00"; 5],
+            "a preview must not apply the migration"
+        );
+        assert_eq!(current_version(&conn).unwrap(), 23);
+
+        // The report must name the migration it is previewing. Nothing else in
+        // this test would notice if it named a different one.
+        let expected = MIGRATIONS
+            .iter()
+            .find(|m| m.version == 24)
+            .expect("migration 24 exists")
+            .description;
+        assert_eq!(p.description, expected);
+    }
+
+    /// Once applied, the migration is no longer pending and drops out of the
+    /// preview — otherwise the report would keep offering to move rows that
+    /// have already moved.
+    #[test]
+    fn an_applied_rewrite_no_longer_appears_in_the_preview() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_path, conn) = file_db_at_version(dir.path(), 23);
+        assert!(
+            preview_pending(&conn)
+                .unwrap()
+                .iter()
+                .any(|p| p.version == 24)
+        );
+        migrate(&conn).unwrap();
+        assert!(preview_pending(&conn).unwrap().is_empty());
+    }
+
+    /// A fresh database has no `detections` table for the preview to read. That
+    /// is an empty report, not a startup failure.
+    #[test]
+    fn previewing_a_fresh_database_is_not_an_error() {
+        let conn = memory_db();
+        let previews = preview_pending(&conn).unwrap();
+        let p = previews
+            .iter()
+            .find(|p| p.version == 24)
+            .expect("24 is pending on a v0 database");
+        assert!(p.rows.is_empty(), "{:?}", p.rows);
+    }
+
+    /// A database is only "newer than this binary" strictly above the highest
+    /// version the binary knows.
+    ///
+    /// Equality is the normal fully-migrated state — the common case on every
+    /// boot — so warning there would cry downgrade at a healthy station. Both
+    /// sides of the boundary are asserted; the branch this guards only logs, so
+    /// nothing else in the suite would notice it moving.
+    #[test]
+    fn only_a_strictly_higher_schema_version_means_a_downgrade() {
+        let max_known = MIGRATIONS
+            .iter()
+            .map(|m| m.version)
+            .max()
+            .expect("there is at least one migration");
+
+        assert!(
+            !schema_is_newer_than_binary(max_known, max_known),
+            "a fully-migrated database is not a downgrade"
+        );
+        assert!(
+            !schema_is_newer_than_binary(max_known - 1, max_known),
+            "a database with migrations still pending is not a downgrade"
+        );
+        assert!(
+            schema_is_newer_than_binary(max_known + 1, max_known),
+            "a database past this binary's knowledge is a downgrade"
+        );
+    }
+
+    /// "Migrations complete" is only true when something was applied.
+    ///
+    /// Guards a log-only branch, so this predicate is the only place the
+    /// zero/non-zero boundary is observable.
+    #[test]
+    fn nothing_applied_means_nothing_to_report() {
+        assert!(!any_migrations_applied(0));
+        assert!(any_migrations_applied(1));
+        assert!(any_migrations_applied(24));
+    }
+
+    /// The error type must name which failure it is and keep the cause
+    /// reachable.
+    ///
+    /// `Display` is what an operator reads when a migration aborts, and
+    /// `source()` is what the logging layer walks to get the underlying
+    /// `SQLite` message. Neither had an assertion, so an empty `Display` and a
+    /// severed `source()` were both invisible.
+    #[test]
+    fn migration_errors_render_and_keep_their_cause() {
+        let sqlite = MigrationError::Sqlite(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(1),
+            Some("no such table: detections".to_owned()),
+        ));
+        let rendered = sqlite.to_string();
+        assert!(
+            rendered.starts_with("migration sqlite error: "),
+            "{rendered}"
+        );
+        assert!(rendered.contains("no such table: detections"), "{rendered}");
+        assert!(
+            std::error::Error::source(&sqlite).is_some(),
+            "the underlying rusqlite error must stay reachable"
+        );
+
+        let logic = MigrationError::Logic("no free backup filename".to_owned());
+        assert_eq!(
+            logic.to_string(),
+            "migration error: no free backup filename"
+        );
+        assert!(
+            std::error::Error::source(&logic).is_none(),
+            "a logic error has no underlying cause to expose"
+        );
+    }
+
+    /// Only a missing *table* is the benign preview failure.
+    ///
+    /// The discrimination this makes is the whole point: widen it and a preview
+    /// that failed for any reason reports "nothing to change", which is the one
+    /// answer an operator acts on by upgrading without looking further. Both
+    /// sides are asserted so a blanket `true` cannot pass for a classifier.
+    #[test]
+    fn only_a_missing_table_is_a_benign_preview_failure() {
+        let sqlite_failure = |msg: &str| {
+            rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(msg.to_owned()))
+        };
+
+        assert!(
+            preview_target_missing(&sqlite_failure("no such table: detections")),
+            "a database too young to have the table has nothing to preview"
+        );
+
+        // Everything else is a real failure, including the shapes live SQLite
+        // actually produces here: a locked database, and a `detections` that
+        // exists but lacks the column the preview reads (which rusqlite reports
+        // as `SqlInputError`, not `SqliteFailure`).
+        assert!(!preview_target_missing(&sqlite_failure(
+            "database is locked"
+        )));
+        assert!(!preview_target_missing(&sqlite_failure("disk I/O error")));
+        assert!(!preview_target_missing(&rusqlite::Error::SqlInputError {
+            error: rusqlite::ffi::Error::new(1),
+            msg: "no such column: chunk_offset_secs".to_owned(),
+            sql: "SELECT chunk_offset_secs FROM detections".to_owned(),
+            offset: 7,
+        }));
+        assert!(!preview_target_missing(&rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(1),
+            None
+        )));
+    }
+
+    /// A preview that cannot run must say so, not report an empty change set.
+    ///
+    /// The counterpart to `previewing_a_fresh_database_is_not_an_error`: only
+    /// the missing-table case is benign. Widening that arm to swallow every
+    /// `SQLite` error would turn a broken preview into "nothing to change",
+    /// which is the one answer an operator acts on by upgrading anyway.
+    #[test]
+    fn a_preview_that_fails_for_another_reason_is_not_reported_as_empty() {
+        let conn = memory_db();
+        // `detections` exists but lacks the column the preview reads, so the
+        // query fails with "no such column", not "no such table".
+        conn.execute_batch("CREATE TABLE detections (Date TEXT, Time TEXT);")
+            .unwrap();
+
+        let err = preview_pending(&conn).expect_err(
+            "a preview query that cannot run must propagate, not report an empty change set",
+        );
+        assert!(matches!(err, MigrationError::Sqlite(_)), "{err:?}");
+    }
+
+    /// The backup escape hatch: unset, empty and `"0"` all keep the backup.
+    ///
+    /// Tested through the pure predicate rather than by setting the real
+    /// environment variable — unit tests share one process environment and run
+    /// in parallel, so a test that set it could suppress the backup under an
+    /// unrelated test running concurrently.
+    #[test]
+    fn only_a_meaningful_value_waives_the_pre_migration_backup() {
+        assert!(!backup_waived(None), "unset must keep the backup");
+        assert!(
+            !backup_waived(Some(OsStr::new(""))),
+            "an empty value (`FOO=`, an unexpanded `${{FOO}}`) must keep the backup"
+        );
+        assert!(
+            !backup_waived(Some(OsStr::new("0"))),
+            "`0` means off, and must keep the backup"
+        );
+        assert!(
+            backup_waived(Some(OsStr::new("1"))),
+            "an explicit value is the operator waiving the backup"
+        );
+        assert!(
+            backup_waived(Some(OsStr::new("00"))),
+            "only the exact string `0` is the off switch"
         );
     }
 
