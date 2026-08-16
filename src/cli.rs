@@ -156,6 +156,21 @@ pub struct Cli {
     #[arg(long, default_value = "5")]
     pub channel_report_secs: u32,
 
+    /// Report what a pending migration would do to existing detections, and exit.
+    ///
+    /// Most migrations only change the schema around the data. A few rewrite
+    /// rows that are already on disk, and those destroy their own input — after
+    /// migration 24 folds each detection's chunk offset into its timestamp,
+    /// nothing records what that timestamp used to be. This shows how many rows
+    /// would move, by how much, how many roll onto the next day, and which are
+    /// left alone, before any of it happens.
+    ///
+    /// Opens the database read-only and changes nothing, so it is safe to run
+    /// on a live station. The rewrite itself runs on the next normal start,
+    /// which first copies the database to `<db>.pre-migration-<version>.backup`.
+    #[arg(long)]
+    pub migration_report: bool,
+
     /// Attempt safe automatic repairs, then run the diagnostic.
     ///
     /// Implies `--doctor` (use with `--doctor-json` for machine-readable
