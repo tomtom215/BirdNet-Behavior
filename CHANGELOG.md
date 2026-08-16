@@ -5,9 +5,28 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.14.0] - 2026-08-16
 
 ### Added
+
+- **`--migration-report`: what an upgrade would do to your history, before it
+  does it.** Most migrations only change the schema around the data. Migration
+  24 (below) rewrites rows already on disk and destroys its own input —
+  afterwards nothing records what a detection's timestamp used to be. This
+  opens the database read-only and prints how many detections would move, how
+  many are left alone and why, the largest shift, how many roll onto the next
+  day, and the affected date range. It changes nothing, so it is safe to run on
+  a live station.
+
+- **Every history-rewriting migration is now preceded by a backup.** Before
+  migration 24 runs, the database is copied to
+  `<db>.pre-migration-24.backup` with `VACUUM INTO`, so recovery is a file
+  move. Existing backups are never overwritten. A backup that cannot be written
+  fails the migration rather than proceeding — the rewrite cannot be undone, so
+  "could not make it recoverable" has to mean "did not do it". The error names
+  the space required and the escape hatch, `BIRDNET_SKIP_MIGRATION_BACKUP=1`,
+  for a station whose disk genuinely cannot hold a copy and whose operator
+  accepts an unrecoverable rewrite.
 
 - **`--channel-report`: what a stereo microphone is actually delivering.** The
   model has one audio input, so two channels must become one before inference —
@@ -23,6 +42,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exclusive — and says so when the device will not open.
 
 ### Fixed
+
+- **A stereo microphone delivering one duplicated channel was reported as
+  healthy.** `plughw:` satisfies a two-channel request from a one-channel
+  device by copying the channel, and the copy scores perfectly on every measure
+  `--channel-report` and `stereo-check.sh --alsa-test` take — correlation
+  1.000, zero delay, averaging costs nothing. Both tools called that a
+  well-matched coincident pair and told the operator there was nothing to fix,
+  which is the opposite of the truth: the second capsule is not reaching the
+  software at all.
+
+  Both now check whether the channels are bit-identical before anything else.
+  Two capsules never agree sample for sample — each carries its own self-noise
+  — so exact equality means one channel copied. Both also point at
+  `arecord -D hw:N,M --dump-hw-params`, which asks the hardware with the plug
+  layer out of the path; `stereo-check.sh` runs it up front and says plainly
+  when the device reports one channel.
+
+- **`--channel-report` discarded `arecord`'s diagnosis.** `Channels count non
+  available` (the device is not stereo) and `Device or resource busy` (stop the
+  station first) are opposite problems, and both rendered as the same generic
+  guess. `arecord`'s own words are now shown first. Its stderr was also piped
+  and never read, which would deadlock the report if `arecord` ever filled a
+  pipe buffer.
+
+- **The "delay-aligned sum" row was never a sum.** It averages — the measured
+  ratio for two aligned identical channels is 1.0, not 2.0. The label, the
+  field name and the documentation all said otherwise. Averaging is the right
+  behaviour, since summing would add a constant 6 dB that reads as recovered
+  signal and is not, so the report now names what it does.
+
+- **A mutation-testing gate had been passing without testing anything.** The
+  `sqlite/queries/detections.rs` matrix row kept naming a file that 0.7.2 split
+  into a directory, so the job matched no source, produced no mutants, and the
+  threshold step read the empty result as "0 missed". A run that generates no
+  mutants now fails outright on pushes, cron and manual dispatch, so the next
+  stale path announces itself instead of going quietly green. Pull requests are
+  exempt, where `--in-diff` makes an empty result legitimate.
+  `crates/birdnet-db/src/migration.rs` also joins the matrix.
 
 - **A detection's timestamp is now when it was heard, not when its recording
   started.** A 15-second segment is five 3-second chunks, and all five were
@@ -3470,7 +3527,9 @@ x86_64 Linux.
 - systemd installer script with ALSA microphone auto-detection and
   automatic BirdNET+ model download from Zenodo.
 
-[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.13.1...v0.14.0
+[0.13.1]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.10.0...v0.11.0
