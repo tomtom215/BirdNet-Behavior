@@ -81,6 +81,47 @@ cross build --release --target aarch64-unknown-linux-gnu
 - **`missing_docs` enforced** workspace-wide
 - **Clippy pedantic + nursery** enabled
 
+### Testing Conventions
+
+**A new gate must be observed failing against the code it was written for, and
+the commit message must say how.**
+
+Not "it should fail" — apply the old code, remove the fix, or mutate the
+constant, and watch it go red. A test written after the fix and only ever seen
+green proves nothing about what it would catch. This is cheap (one revert, one
+`cargo test`) and it has repeatedly caught tests that were green for reasons
+that had nothing to do with what they claimed to assert:
+
+- a gate satisfied by a cache an earlier probe had populated
+- a gate satisfied by test-execution ordering
+- a gate asserting only the rejecting side of a boundary
+- a preview query that agreed with its migration only by coincidence
+
+When a gate covers a discrimination rather than a single behaviour, write the
+counterpart too and check it stays green — otherwise a blanket alarm passes for
+a discriminator.
+
+Corollaries, each learned the same way:
+
+- **Build the smallest thing that settles the question, and run it.** A scratch
+  probe (`crates/*/tests/zz_*.rs`, or a `zz_probe_*` unit test, deleted before
+  commit) beats any amount of reasoning about what the code does. Two of the
+  facts in `--channel-report`'s own doc comments were wrong until one was run.
+- **A test that passes tells you nothing until you know why it passes.**
+- **Distrust confident prose in this repo's history, including your own.** The
+  `load_icu()` comment asserted ICU was statically linked; it was not.
+  `aligned_sum` was documented as summing; it averaged. Both misled the next
+  reader.
+- **`cmd 2>&1 | tail -N` masks the exit code.** A full workspace run has
+  reported "exit 0" with two failures inside it. Grep for `^test result:` and
+  `FAILED`, or check `PIPESTATUS`.
+- **`~/.duckdb` contaminates ICU results.** One probe populates it and every
+  ICU-related test then passes for free. `mv ~/.duckdb /tmp/duckdb-cache-backup`
+  before trusting any of them.
+- **`pull_request`-triggered gates never see un-PR'd branches.** Open a draft PR
+  early, or run the gates locally; work has sat broken on a pushed branch for
+  hours because nothing was watching it.
+
 ### Key Dependencies
 
 | Purpose | Crate |

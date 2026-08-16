@@ -20,10 +20,24 @@
 #      once its arithmetic and codec-arg mapping were extracted into pure
 #      helpers and its command-execution branches covered by ffmpeg-gated
 #      tests — 0 missed (26 mutants: 23 caught, 3 unviable).
-#   4. crates/birdnet-db/src/sqlite/queries/detections.rs — added so the
+#   4. crates/birdnet-db/src/sqlite/queries/detections/*.rs — added so the
 #      "explicit column list" + UNIQUE-on-chunk-offset contracts that
 #      PR #35 fixed can't quietly regress. The full CRUD surface is
 #      now under tests, so the gate stays at 0 missed.
+#      This row named `detections.rs` until 0.14.0. That file stopped
+#      existing in 0.7.2 (#145), which split it into a directory, and the
+#      job went on reporting success for two months while mutating nothing:
+#      no source matched, no mutants were generated, and the threshold step
+#      read the resulting empty count as "0 missed". Item 6 below warns
+#      about precisely this move dropping a file out of coverage; it had
+#      already happened here. The threshold step now fails a non-PR run that
+#      generates zero mutants, so the next stale path announces itself
+#      instead of going quietly green.
+#   7. crates/birdnet-db/src/migration.rs — the migration list and the
+#      pre-migration backup. Migration 24 rewrites rows that already exist
+#      and cannot be undone, so the predicates choosing which rows move, and
+#      the branch deciding whether a backup was taken, are where a surviving
+#      mutant costs an operator their history rather than a test run.
 #   5. src/daemon/ — the daemon orchestrator. The inline struct-literal
 #      "delete field" mutants the PR #50 carryover flagged were dissolved
 #      by extracting per-config builder helpers (`build_pipeline_config`,
@@ -68,7 +82,8 @@ on:
       - "crates/birdnet-core/src/audio/extraction/**"
       - "crates/birdnet-core/src/civil.rs"
       - "crates/birdnet-core/tests/**"
-      - "crates/birdnet-db/src/sqlite/queries/detections.rs"
+      - "crates/birdnet-db/src/sqlite/queries/detections/**"
+      - "crates/birdnet-db/src/migration.rs"
       - "src/daemon/**"
       - "src/capture/**"
       - ".github/workflows/mutation.yml"
@@ -80,7 +95,8 @@ on:
       - "crates/birdnet-core/src/audio/extraction/**"
       - "crates/birdnet-core/src/civil.rs"
       - "crates/birdnet-core/tests/**"
-      - "crates/birdnet-db/src/sqlite/queries/detections.rs"
+      - "crates/birdnet-db/src/sqlite/queries/detections/**"
+      - "crates/birdnet-db/src/migration.rs"
       - "src/daemon/**"
       - "src/capture/**"
       - ".github/workflows/mutation.yml"
@@ -174,15 +190,32 @@ jobs:
             # is a wrong `Date` on every detection, because the filename *is*
             # the timestamp. 0 missed: 82 caught, 1 unviable.
             max_missed: 0
-          - label: sqlite/queries/detections.rs
-            slug: sqlite-queries-detections.rs
-            file: crates/birdnet-db/src/sqlite/queries/detections.rs
+          - label: sqlite/queries/detections/*.rs
+            slug: sqlite-queries-detections
+            # Globbed, because this stopped being one file in 0.7.2 (#145),
+            # which split it into mod/read/write/search/locks. The matrix kept
+            # naming `detections.rs` and nothing noticed for two months: the
+            # job matched no source, produced no mutants, and the gate below
+            # read an empty count as "0 missed" and went green. The comment on
+            # civil.rs one row up warns about exactly this move dropping a file
+            # out of coverage — it happened here instead, and silently.
+            file: crates/birdnet-db/src/sqlite/queries/detections/*.rs
             package: birdnet-db
             # The detections-CRUD layer. PR #35 caught a positional-VALUES
             # / column-list-drift bug here; the explicit column list +
             # 30+ tests we have today should make every mutant
             # observable, but the gate stays at 0 missed so a future
             # regression of the same shape lights up immediately.
+            max_missed: 0
+          - label: db/migration.rs
+            slug: db-migration.rs
+            file: crates/birdnet-db/src/migration.rs
+            package: birdnet-db
+            # Added with the pre-migration backup and the `--migration-report`
+            # dry-run. Migration 24 rewrites rows that already exist and cannot
+            # be undone, so the predicates deciding *which* rows move, and the
+            # branch deciding whether a backup was taken at all, are the two
+            # places where a survived mutant costs an operator their history.
             max_missed: 0
           # ── Binary-crate shards (the birdnet-behavior binary) ───────────────
           # These mutate the binary's own modules, so every mutant relinks the
@@ -409,6 +442,11 @@ jobs:
         run: |
           if [ ! -f mutants.out/outcomes.json ]; then
             echo "summary=No outcomes.json produced." >> "$GITHUB_OUTPUT"
+            # `total` must still be emitted, and as a number: the gate below
+            # distinguishes "ran and found nothing to mutate" from "did not
+            # run", and it cannot do that if this path leaves every output
+            # unset.
+            echo "total=0" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           mutants=$(jq '[.outcomes[] | select((.scenario | type) == "object")] | length' mutants.out/outcomes.json)
@@ -474,11 +512,30 @@ jobs:
         # Per-file threshold from the matrix above.
         run: |
           missed="${{ steps.summary.outputs.missed }}"
+          total="${{ steps.summary.outputs.total }}"
           limit="${{ matrix.max_missed }}"
-          if [ -z "$missed" ]; then
-            echo "::warning::no missed-mutants count produced; treating as 0"
+
+          # A job that mutated nothing proved nothing, and must not read as a
+          # pass. This used to `exit 0` on an empty count, which is how the
+          # `detections.rs` row survived two months of pointing at a path that
+          # had been split into a directory: no source matched, no mutants were
+          # generated, the count came back empty, and the gate went green.
+          #
+          # On pull requests an empty or zero count is legitimate — `--in-diff`
+          # scopes each shard to the lines the PR touched, so a shard whose file
+          # the PR never touched correctly has nothing to do. Everywhere else
+          # (push, weekly cron, manual dispatch) the full mutant set runs, so
+          # zero means the matrix row is not pointing at any code.
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            if [ -z "$missed" ] || [ -z "$total" ] || [ "$total" -eq 0 ]; then
+              echo "::error::no mutants were generated for ${{ matrix.file }} — this gate tested nothing. The path almost certainly no longer matches any source (a file renamed or split into a directory). Fix the matrix row rather than ignoring this."
+              exit 1
+            fi
+          elif [ -z "$missed" ]; then
+            echo "::notice::no mutants on the changed lines for ${{ matrix.file }}; nothing to check on this PR"
             exit 0
           fi
+
           if [ "$missed" -gt "$limit" ]; then
             echo "::error::$missed mutants survived in ${{ matrix.file }} (limit $limit); tighten the assertions"
             exit 1
