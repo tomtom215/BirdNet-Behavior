@@ -20,7 +20,6 @@
 //! reduction would hand the model, so the choice between Mono / Left / Right /
 //! Stereo can be made from numbers rather than from a datasheet.
 
-use std::io::Read;
 use std::process::{Command, Stdio};
 
 use crate::cli::Cli;
@@ -46,10 +45,23 @@ pub struct ChannelAnalysis {
     pub right_rms: f32,
     /// RMS of the plain average — what the decoder does today.
     pub average_rms: f32,
-    /// RMS of the delay-aligned sum: shift one channel by `best_lag` so the
-    /// wavefronts coincide, then add. Coherent signal doubles; noise that is
-    /// independent between the capsules does not.
-    pub aligned_sum_rms: f32,
+    /// RMS of the delay-aligned average: shift one channel by `best_lag` so the
+    /// wavefronts coincide, *then* average. Same reduction the decoder performs,
+    /// with the comb filtering taken out, so the difference against
+    /// `average_rms` is exactly what the misalignment is costing.
+    ///
+    /// Deliberately an average and not a sum: summing would add a constant 6 dB
+    /// of level that has nothing to do with alignment and reads, in a report, as
+    /// free signal.
+    pub aligned_rms: f32,
+    /// Whether the two channels are bit-identical.
+    ///
+    /// `plughw:` answers a two-channel request from a one-channel device by
+    /// duplicating the channel, and the copy scores perfectly on every other
+    /// measure here — correlation 1.0, zero delay, no averaging loss. Two real
+    /// capsules never agree sample for sample; each carries its own self-noise.
+    /// So exact equality means one capsule, not a well-matched pair.
+    pub channels_are_identical: bool,
     /// Inter-channel delay, in samples, that best aligns the two channels.
     /// Positive means the right capsule heard the sound later than the left.
     pub best_lag_samples: i32,
@@ -121,10 +133,11 @@ impl ChannelAnalysis {
         ratio_db(self.average_rms, self.best_single_rms())
     }
 
-    /// How much a delay-aligned sum would gain over the plain average, in dB.
+    /// How much aligning before averaging would gain over averaging as-is, in
+    /// dB — i.e. what the comb filtering currently costs.
     #[must_use]
     pub fn aligned_vs_average_db(&self) -> f32 {
-        ratio_db(self.aligned_sum_rms, self.average_rms)
+        ratio_db(self.aligned_rms, self.average_rms)
     }
 }
 
@@ -191,8 +204,14 @@ fn correlation_at(first: &[f32], second: &[f32], lag: i32) -> f32 {
     dot / (energy_first.sqrt() * energy_second.sqrt())
 }
 
-/// Shift `right` by `lag` samples and add it to `left`, over the overlap.
-fn aligned_sum(left: &[f32], right: &[f32], lag: i32) -> Vec<f32> {
+/// Shift `right` by `lag` samples so the wavefronts coincide, then average it
+/// with `left` over the overlap.
+///
+/// Averaging, not summing, on purpose: this is the decoder's own reduction with
+/// the misalignment removed, so comparing it against `average_rms` isolates the
+/// comb filtering. A sum would carry a constant +6 dB that an operator would
+/// read as signal recovered.
+fn aligned_reduce(left: &[f32], right: &[f32], lag: i32) -> Vec<f32> {
     // Same convention as `correlation_at`: at lag +n the right channel trails,
     // so it is the one advanced to bring the wavefronts together.
     let (l_start, r_start) = if lag >= 0 {
@@ -239,10 +258,13 @@ pub fn analyse(left: &[f32], right: &[f32], sample_rate: u32) -> ChannelAnalysis
         left_rms: rms(left),
         right_rms: rms(right),
         average_rms: rms(&average),
-        aligned_sum_rms: rms(&aligned_sum(left, right, best_lag)),
+        aligned_rms: rms(&aligned_reduce(left, right, best_lag)),
         best_lag_samples: best_lag,
         best_correlation: best_corr,
         zero_lag_correlation: correlation_at(left, right, 0),
+        // Compared over the overlap both channels actually have, so a trailing
+        // partial frame cannot make a duplicate look like a pair.
+        channels_are_identical: !left.is_empty() && left == right,
         sample_rate,
     }
 }
@@ -271,7 +293,17 @@ pub enum RecordError {
     /// `arecord` is not installed or not on `PATH`.
     ArecordMissing,
     /// `arecord` ran but produced no audio.
-    NoAudio(String),
+    NoAudio {
+        /// The ALSA device that was asked for.
+        device: String,
+        /// What `arecord` itself wrote to stderr, verbatim and trimmed.
+        ///
+        /// Carried rather than discarded because it is usually the whole
+        /// answer: `Device or resource busy` and `Channels count non available`
+        /// are different problems with different fixes, and guessing between
+        /// them from an empty capture sends the operator the wrong way.
+        arecord_said: String,
+    },
     /// Anything else went wrong while running it.
     Failed(String),
 }
@@ -284,24 +316,43 @@ impl std::fmt::Display for RecordError {
                 "arecord not found on PATH — install alsa-utils. This says nothing \
                  about the microphone; the report never got as far as opening it"
             ),
-            Self::NoAudio(d) => write!(
-                f,
-                "arecord produced no audio from {d}.\n\n  \
-                 The likeliest cause is that the station is running: an ALSA capture \
-                 device is exclusive, so stop it first\n  (sudo systemctl stop \
-                 birdnet-behavior), run this again, then start it.\n\n  \
-                 Otherwise: check `arecord -l` for the right device name. A device \
-                 that genuinely cannot open two\n  channels is not a stereo source, \
-                 and nothing in this report applies to it"
-            ),
+            Self::NoAudio {
+                device,
+                arecord_said,
+            } => {
+                write!(f, "arecord produced no audio from {device}.")?;
+                // arecord's own words first: they name the actual fault, where
+                // everything below is only the ranked guess for when it said
+                // nothing useful.
+                if !arecord_said.is_empty() {
+                    write!(f, "\n\n  arecord said:\n")?;
+                    for line in arecord_said.lines() {
+                        writeln!(f, "    {line}")?;
+                    }
+                }
+                write!(
+                    f,
+                    "\n  The likeliest cause is that the station is running: an ALSA capture \
+                     device is exclusive, so stop it first\n  (sudo systemctl stop \
+                     birdnet-behavior), run this again, then start it.\n\n  \
+                     Otherwise: check `arecord -l` for the right device name. A device \
+                     that genuinely cannot open two\n  channels is not a stereo source, \
+                     and nothing in this report applies to it"
+                )
+            }
             Self::Failed(e) => write!(f, "{e}"),
         }
     }
 }
 
 /// Record `secs` of raw interleaved stereo S16LE from `device` via `arecord`.
+///
+/// Uses `output()` rather than draining the pipes by hand. Reading stdout to
+/// the end while stderr goes unread deadlocks the moment `arecord` writes more
+/// than a pipe buffer of complaints: it blocks on stderr, stops producing
+/// stdout, and both processes wait forever. `output()` drains both.
 fn record_stereo(device: &str, sample_rate: u32, secs: u32) -> Result<Vec<u8>, RecordError> {
-    let mut child = Command::new("arecord")
+    let out = Command::new("arecord")
         .args([
             "-D",
             device,
@@ -318,7 +369,7 @@ fn record_stereo(device: &str, sample_rate: u32, secs: u32) -> Result<Vec<u8>, R
         ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()
+        .output()
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 RecordError::ArecordMissing
@@ -327,18 +378,27 @@ fn record_stereo(device: &str, sample_rate: u32, secs: u32) -> Result<Vec<u8>, R
             }
         })?;
 
-    let mut buf = Vec::new();
-    if let Some(mut out) = child.stdout.take() {
-        out.read_to_end(&mut buf)
-            .map_err(|e| RecordError::Failed(format!("reading arecord output: {e}")))?;
+    if out.stdout.is_empty() {
+        return Err(RecordError::NoAudio {
+            device: device.to_owned(),
+            arecord_said: String::from_utf8_lossy(&out.stderr).trim().to_owned(),
+        });
     }
-    let _ = child
-        .wait()
-        .map_err(|e| RecordError::Failed(format!("waiting for arecord: {e}")))?;
-    if buf.is_empty() {
-        return Err(RecordError::NoAudio(device.to_owned()));
-    }
-    Ok(buf)
+    Ok(out.stdout)
+}
+
+/// The same device with ALSA's plug layer taken out of the path.
+///
+/// `plughw:1,0` becomes `hw:1,0`. The plug layer is what rate-converts,
+/// reformats and — the reason this matters here — duplicates a mono channel to
+/// satisfy a stereo request, so any question about what the *hardware* can
+/// actually do has to be asked of `hw:`. Anything that is not a `plughw:`
+/// device is returned unchanged.
+#[must_use]
+pub fn raw_device(device: &str) -> String {
+    device
+        .strip_prefix("plug")
+        .map_or_else(|| device.to_owned(), ToOwned::to_owned)
 }
 
 /// Render the human-readable report.
@@ -373,7 +433,9 @@ pub fn render(a: &ChannelAnalysis, device: &str, secs: u32) -> String {
     let _ = writeln!(
         s,
         "  verdict                 {}",
-        if a.capsules_look_spaced() {
+        if a.channels_are_identical {
+            "ONE CAPSULE, DUPLICATED — the channels are identical sample for sample"
+        } else if a.capsules_look_spaced() {
             "SPACED — averaging will cancel some frequencies"
         } else if a.best_correlation > 0.5 {
             "coincident (or near enough) — averaging is safe"
@@ -398,13 +460,33 @@ pub fn render(a: &ChannelAnalysis, device: &str, secs: u32) -> String {
     );
     let _ = writeln!(
         s,
-        "  delay-aligned sum        RMS {:.5}  {:+.1} dB vs averaging (not implemented yet)",
-        a.aligned_sum_rms,
+        "  delay-aligned average    RMS {:.5}  {:+.1} dB vs averaging (not implemented yet)",
+        a.aligned_rms,
         a.aligned_vs_average_db()
     );
 
     let _ = writeln!(s, "\nRecommendation");
-    if a.capsules_look_spaced() && a.average_vs_best_single_db() < -1.0 {
+    if a.channels_are_identical {
+        // Every other number in this report says "healthy coincident pair", and
+        // they are all consistent with the microphone delivering nothing at all
+        // through its second capsule. Say so before the operator reads the rows
+        // above as reassurance.
+        let _ = writeln!(
+            s,
+            "  The two channels are bit-identical, which two microphone capsules\n  \
+             never are — each has its own self-noise. This is one channel copied,\n  \
+             not a stereo pair, so nothing above says anything about your mic.\n\n  \
+             `plughw:` silently duplicates when a one-channel device is asked for\n  \
+             two, so a mono device answers a stereo request looking like this.\n  \
+             Ask the hardware directly, bypassing the plug layer:\n\n    \
+             arecord -D {} --dump-hw-params\n\n  \
+             Read the CHANNELS line. If it says 1, the device is mono and the\n  \
+             second capsule is not reaching the software — that is a wiring or\n  \
+             device-selection problem, not something averaging can lose. If it\n  \
+             offers 2, re-run this against that device and the report applies.",
+            raw_device(device)
+        );
+    } else if a.capsules_look_spaced() && a.average_vs_best_single_db() < -1.0 {
         let _ = writeln!(
             s,
             "  Set this source to {} on the Audio page. Averaging is currently\n  \
@@ -621,10 +703,144 @@ mod tests {
             "a missing tool says nothing about the mic: {missing}"
         );
 
-        let no_audio = RecordError::NoAudio("plughw:1,0".into()).to_string();
+        let no_audio = RecordError::NoAudio {
+            device: "plughw:1,0".into(),
+            arecord_said: String::new(),
+        }
+        .to_string();
         assert!(no_audio.contains("plughw:1,0"), "{no_audio}");
         // The exclusive-device case is the likeliest and must be named first.
         assert!(no_audio.contains("systemctl stop"), "{no_audio}");
+    }
+
+    /// `arecord`'s own words must reach the operator, not just our ranked guess.
+    ///
+    /// The two failures that matter here are different problems with different
+    /// fixes — `Device or resource busy` means stop the station, `Channels count
+    /// non available` means the device is not stereo at all — and an empty
+    /// capture looks identical from the outside. Reporting only the likeliest
+    /// cause sends half the operators who hit this to the wrong place, which is
+    /// exactly the question `--channel-report` exists to settle.
+    #[test]
+    fn arecords_own_diagnosis_reaches_the_operator() {
+        let not_stereo = RecordError::NoAudio {
+            device: "plughw:1,0".into(),
+            arecord_said: "arecord: set_params:1352: Channels count non available".into(),
+        }
+        .to_string();
+        assert!(
+            not_stereo.contains("Channels count non available"),
+            "arecord's diagnosis must survive to the operator: {not_stereo}"
+        );
+
+        let busy = RecordError::NoAudio {
+            device: "plughw:1,0".into(),
+            arecord_said: "arecord: main:834: audio open error: Device or resource busy".into(),
+        }
+        .to_string();
+        assert!(busy.contains("Device or resource busy"), "{busy}");
+        // The two must not render identically — that is the whole point.
+        assert_ne!(not_stereo, busy);
+    }
+
+    /// A tone plus a little independent noise, standing in for one capsule's
+    /// own self-noise. Two real capsules never agree sample for sample, however
+    /// close together they sit.
+    fn capsule(
+        n: usize,
+        freq: f32,
+        sample_rate: f32,
+        delay: usize,
+        amp: f32,
+        seed: u32,
+    ) -> Vec<f32> {
+        let mut state = seed.wrapping_mul(2_654_435_761).wrapping_add(1);
+        tone(n, freq, sample_rate, delay, amp)
+            .into_iter()
+            .map(|v| {
+                // Cheap xorshift — a deterministic dither, not a good PRNG.
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                (f32::from(u16::try_from(state & 0xffff).unwrap_or(0)) / 65535.0 - 0.5)
+                    .mul_add(0.008, v)
+            })
+            .collect()
+    }
+
+    /// The case that sends an operator away reassured while the microphone is
+    /// delivering one capsule.
+    ///
+    /// `plughw:` will satisfy a two-channel request from a one-channel device by
+    /// duplicating the channel. The result is bit-identical channels: perfect
+    /// correlation, zero delay, averaging costs nothing — every number this
+    /// report prints says "healthy coincident pair". It is not one; it is a
+    /// stereo microphone whose second capsule is not reaching the software at
+    /// all, which is precisely what an operator runs this to find out.
+    #[test]
+    fn duplicated_mono_is_not_reported_as_a_healthy_stereo_pair() {
+        let left = tone(48_000, 2000.0, 48_000.0, 0, 0.3);
+        let right = left.clone(); // what plughw hands back for a mono device
+        let a = analyse(&left, &right, 48_000);
+
+        assert!(
+            a.channels_are_identical,
+            "bit-identical channels must be recognised as a duplicate: {a:?}"
+        );
+        let out = render(&a, "plughw:1,0", 5);
+        assert!(
+            !out.contains("averaging is safe"),
+            "a duplicated mono channel must not be blessed as a coincident pair:\n{out}"
+        );
+        assert!(
+            out.contains("DUPLICATED"),
+            "the report must name the duplication:\n{out}"
+        );
+        // And it must point at the measurement that settles it, on the raw
+        // device rather than through the plug layer that caused this.
+        assert!(
+            out.contains("hw:") && out.contains("--dump-hw-params"),
+            "the report must say how to check the device's real channel count:\n{out}"
+        );
+    }
+
+    /// The counterpart, so the duplicate check is a discriminator and not a
+    /// blanket alarm on anything well-correlated.
+    #[test]
+    fn a_genuinely_coincident_pair_is_still_reported_as_safe() {
+        let left = capsule(48_000, 2000.0, 48_000.0, 0, 0.3, 1);
+        let right = capsule(48_000, 2000.0, 48_000.0, 0, 0.3, 2);
+        let a = analyse(&left, &right, 48_000);
+
+        assert!(
+            !a.channels_are_identical,
+            "two real capsules differ in their own noise: {a:?}"
+        );
+        let out = render(&a, "plughw:1,0", 5);
+        assert!(out.contains("averaging is safe"), "{out}");
+        assert!(!out.contains("DUPLICATED"), "{out}");
+    }
+
+    /// Pins what the "delay-aligned" row actually is: an average of the aligned
+    /// channels, not a sum.
+    ///
+    /// This started life named `aligned_sum` and documented as "then add;
+    /// coherent signal doubles". It never did — it averages, and the measured
+    /// ratio for two aligned identical channels is 1.0, not 2.0. Averaging is
+    /// the right choice (a sum would print a constant +6 dB of level that reads
+    /// as free gain and is nothing of the kind), so this gate holds the
+    /// behaviour still and makes any future change to it update the report text
+    /// alongside.
+    #[test]
+    fn the_aligned_reduction_averages_rather_than_sums() {
+        let left = tone(1000, 100.0, 48_000.0, 0, 0.5);
+        let right = left.clone();
+        let reduced = aligned_reduce(&left, &right, 0);
+        let ratio = rms(&reduced) / rms(&left);
+        assert!(
+            (ratio - 1.0).abs() < 0.001,
+            "aligning two identical channels must not change the level (ratio {ratio})"
+        );
     }
 
     #[test]
