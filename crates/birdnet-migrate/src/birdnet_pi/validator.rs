@@ -50,18 +50,30 @@ impl Validator for BirdNetPiValidator {
             ));
         }
 
-        // 3. Check that dates are parseable (sample the first 100 rows).
+        // 3. Check that Date/Time name a real point in time.
         let bad_dates = count_bad_dates(&conn).unwrap_or(0);
         if bad_dates > 0 {
+            // Not "will be skipped": nothing skips them. The importer copies
+            // these rows through verbatim (turning a NULL Date into ""), our
+            // own `Date TEXT NOT NULL` accepts them, and they sync to DuckDB.
+            // They are simply unplaceable in time from then on, so they are
+            // absent from the analytics dashboards while still counting toward
+            // the station's detection total. Saying so is the difference
+            // between an operator who knows why the numbers disagree and one
+            // who finds out by arithmetic.
             checks.push(ValidationCheck::fail(
                 "date_format",
-                format!("{bad_dates} rows have malformed Date values (will be skipped)"),
+                format!(
+                    "{bad_dates} rows have a Date/Time that names no point in time; \
+                     they will be imported and counted, but cannot appear in any \
+                     date- or time-based analytics"
+                ),
                 false,
             ));
         } else {
             checks.push(ValidationCheck::pass(
                 "date_format",
-                "all sampled Date values are well-formed".to_string(),
+                "every Date/Time value parses".to_string(),
             ));
         }
 
@@ -116,12 +128,31 @@ impl Validator for BirdNetPiValidator {
     }
 }
 
-/// Count rows with non-YYYY-MM-DD Date values (sample 1 000 rows).
+/// Count rows whose `Date`/`Time` name no point in time.
+///
+/// Scans the whole table rather than a leading sample. The previous
+/// `LIMIT 1000` check reported on the first thousand rows a table scan happened
+/// to return, so a multi-year database whose bad rows sat anywhere later — the
+/// normal case, since these arrive with a hardware clock reset or an
+/// interrupted write — passed validation as "all sampled Date values are
+/// well-formed". The import that follows reads every row anyway, so one extra
+/// pass buys an answer about the actual database instead of its prefix.
+///
+/// Three conditions, because each catches rows the others miss:
+///   * `Date`/`Time` NULL — the case the old check was *structurally* unable to
+///     see, since `NULL NOT GLOB …` is NULL, not true, and so never counted.
+///     It is also the most common one: the importer maps a NULL `Date` to `""`.
+///   * `Date` not `YYYY-MM-DD` — the format the OLAP copy must parse.
+///   * the concatenation failing SQLite's own datetime parser, which is the
+///     closest available proxy for the `TRY_CAST` DuckDB will apply, and the
+///     only one of the three that inspects `Time` for anything but NULL.
 fn count_bad_dates(conn: &rusqlite::Connection) -> rusqlite::Result<u64> {
     let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM (
-             SELECT Date FROM detections LIMIT 1000
-         ) WHERE Date NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'",
+        "SELECT COUNT(*) FROM detections
+          WHERE Date IS NULL
+             OR Time IS NULL
+             OR Date NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+             OR datetime(Date || ' ' || Time) IS NULL",
         params![],
         |row| row.get(0),
     )?;
@@ -168,6 +199,58 @@ mod tests {
         }
         drop(conn);
         tmp
+    }
+
+    /// The unplaceable-row check must see NULLs, a bad `Time`, and rows past
+    /// the first thousand.
+    ///
+    /// Each row here defeats the previous check for a different reason: the
+    /// NULL is invisible to `Date NOT GLOB …` (which yields NULL, not true, so
+    /// the row was never counted); the bad `Time` was never examined at all;
+    /// and the last row sits beyond the `LIMIT 1000` sample that decided the
+    /// verdict for the whole database.
+    #[test]
+    fn unplaceable_rows_are_counted_including_nulls_time_and_beyond_the_first_1000() {
+        let tmp = NamedTempFile::new().unwrap();
+        let conn = Connection::open(tmp.path()).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE detections (
+                Date TEXT, Time TEXT, Sci_Name TEXT, Com_Name TEXT,
+                Confidence REAL, Lat REAL, Lon REAL, Cutoff REAL,
+                Week INTEGER, Sens REAL, Overlap REAL, File_Name TEXT);",
+        )
+        .unwrap();
+        for i in 0..1200 {
+            conn.execute(
+                "INSERT INTO detections VALUES (?1,'06:00:00','Turdus merula',
+                 'Blackbird',0.9,51.5,-0.1,0.7,1,1.0,0.0,'rec.wav')",
+                params![format!("2026-01-{:02}", (i % 28) + 1)],
+            )
+            .unwrap();
+        }
+        conn.execute_batch(
+            "INSERT INTO detections VALUES (NULL,NULL,'Parus major','Great Tit',0.8,NULL,NULL,NULL,NULL,NULL,NULL,'b.wav');
+             INSERT INTO detections VALUES ('','','Erithacus rubecula','Robin',0.7,NULL,NULL,NULL,NULL,NULL,NULL,'c.wav');
+             INSERT INTO detections VALUES ('2026-02-01','not-a-time','Corvus corax','Raven',0.6,NULL,NULL,NULL,NULL,NULL,NULL,'d.wav');",
+        )
+        .unwrap();
+
+        assert_eq!(count_bad_dates(&conn).unwrap(), 3);
+
+        drop(conn);
+        let report = BirdNetPiValidator.validate_source(tmp.path()).unwrap();
+        let check = report
+            .checks
+            .iter()
+            .find(|c| c.name == "date_format")
+            .expect("date_format check");
+        assert!(!check.passed);
+        assert!(
+            !check.detail.contains("skipped"),
+            "nothing skips these rows; saying so sent operators looking for a \
+             filter that does not exist: {}",
+            check.detail
+        );
     }
 
     #[test]

@@ -96,12 +96,336 @@ pub fn civil_from_unix_secs(secs: i64) -> CivilTime {
     }
 }
 
+/// Seconds since the Unix epoch for a civil date/time — the inverse of
+/// [`civil_from_unix_secs`].
+///
+/// Implements Hinnant's `days_from_civil`. Unlike the forward direction, this
+/// does **not** clamp at 1970: a pre-epoch civil date returns the correct
+/// negative value (`1969-01-01` → `-31_536_000`). Round-tripping through
+/// [`civil_from_unix_secs`] still lands on the epoch for anything pre-1970,
+/// because *that* direction clamps — nothing here deals in pre-1970 audio, and
+/// a date that far out means a broken clock either way.
+///
+/// The `y < 0` guard below is arithmetic, not policy. `y` is the year shifted
+/// back one for January and February, so the only way to reach a negative is
+/// year 0 in those two months. Rust's integer division truncates toward zero,
+/// so `era = y / 400` would yield `0` where Hinnant's algorithm needs `-1`, and
+/// the result would be quietly wrong rather than obviously so. `y == 0` — year
+/// 0 from March, or year 1 in January — is a value the algorithm handles
+/// correctly and must not be caught by it.
+#[must_use]
+pub fn unix_secs_from_civil(t: &CivilTime) -> i64 {
+    let y = i64::from(t.year) - i64::from(t.month <= 2);
+    if y < 0 {
+        return 0;
+    }
+    let era = y / 400;
+    let yoe = y - era * 400;
+    let m = i64::from(t.month);
+    let doy = (153 * (m + if m > 2 { -3 } else { 9 }) + 2) / 5 + i64::from(t.day) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    days * 86_400 + i64::from(t.hour) * 3_600 + i64::from(t.minute) * 60 + i64::from(t.second)
+}
+
+/// Parse a `YYYY-MM-DD` / `HH:MM:SS` pair into a [`CivilTime`].
+///
+/// Strict: both fields must be exactly the documented shape and all-digits
+/// apart from the separators. `None` for anything else — `Date` and `Time` are
+/// free-form `TEXT` in the database and a real station's history holds values
+/// that name no point in time, so "unparseable" has to be representable rather
+/// than guessed at.
+#[must_use]
+pub fn parse_civil(date: &str, time: &str) -> Option<CivilTime> {
+    let d: Vec<&str> = date.split('-').collect();
+    let t: Vec<&str> = time.split(':').collect();
+    if d.len() != 3 || t.len() != 3 {
+        return None;
+    }
+    if d[0].len() != 4 || d[1].len() != 2 || d[2].len() != 2 {
+        return None;
+    }
+    if t[0].len() != 2 || t[1].len() != 2 || t[2].len() != 2 {
+        return None;
+    }
+    let year: u32 = d[0].parse().ok()?;
+    let month: u32 = d[1].parse().ok()?;
+    let day: u32 = d[2].parse().ok()?;
+    let hour: u32 = t[0].parse().ok()?;
+    let minute: u32 = t[1].parse().ok()?;
+    let second: u32 = t[2].parse().ok()?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    if hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    Some(CivilTime {
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second,
+    })
+}
+
+/// Add `offset_secs` to a `YYYY-MM-DD` / `HH:MM:SS` pair, returning the same
+/// pair of strings shifted — rolling the date when the offset crosses midnight.
+///
+/// This is what turns a recording's start time into the time a *chunk within
+/// it* was actually heard. BirdNET-Pi does the same thing in its `Detection`
+/// constructor (`file_date + timedelta(seconds=self.start)`); doing it here
+/// keeps a detection's timestamp meaning the same thing in both projects, and
+/// keeps natively-recorded rows consistent with the BirdNET-Pi rows the
+/// migration importer writes.
+///
+/// `None` when the input does not parse, so a caller can keep the original
+/// rather than substitute an invented time.
+#[must_use]
+#[allow(clippy::cast_possible_truncation)]
+pub fn shift_datetime(date: &str, time: &str, offset_secs: f64) -> Option<(String, String)> {
+    if !offset_secs.is_finite() {
+        return None;
+    }
+    let civil = parse_civil(date, time)?;
+    let shifted = civil_from_unix_secs(unix_secs_from_civil(&civil) + offset_secs.trunc() as i64);
+    Some((
+        format!(
+            "{:04}-{:02}-{:02}",
+            shifted.year, shifted.month, shifted.day
+        ),
+        format!(
+            "{:02}:{:02}:{:02}",
+            shifted.hour, shifted.minute, shifted.second
+        ),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn at(secs: i64) -> CivilTime {
         civil_from_unix_secs(secs)
+    }
+
+    /// The two directions must agree, including across leap days.
+    #[test]
+    fn unix_secs_from_civil_round_trips() {
+        for secs in [
+            0_i64,
+            1_771_000_000, // 2026-02-13
+            1_772_323_200, // 2026-03-01, the day after February
+            1_709_164_800, // 2024-02-29, a leap day
+            1_735_689_599, // 2024-12-31 23:59:59
+            4_102_444_800, // 2100-01-01, a non-leap century
+        ] {
+            let civil = civil_from_unix_secs(secs);
+            assert_eq!(
+                unix_secs_from_civil(&civil),
+                secs,
+                "round trip failed for {secs} ({civil:?})"
+            );
+        }
+    }
+
+    /// The boundary of the `y < 0` guard, from both sides.
+    ///
+    /// `y` is the year shifted back one for January and February, so year 0 in
+    /// those months is the only way to reach a negative — and it is the one
+    /// input the era arithmetic cannot take, because Rust truncates `-1 / 400`
+    /// toward zero where Hinnant's algorithm needs `-1`. Year 0 from March is
+    /// the neighbour that must *not* be caught: `y == 0` computes correctly.
+    ///
+    /// Widening the guard to `<=` or narrowing it to `==` would swallow that
+    /// neighbour and silently return the epoch for a date the algorithm
+    /// handles. Both are mutations `cargo-mutants` generates against this line,
+    /// and neither was caught until this test existed.
+    #[test]
+    fn only_a_negative_shifted_year_saturates() {
+        let at_year_zero = |month| CivilTime {
+            year: 0,
+            month,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
+
+        // y == -1: the guard fires.
+        assert_eq!(unix_secs_from_civil(&at_year_zero(1)), 0, "0000-01-01");
+        assert_eq!(unix_secs_from_civil(&at_year_zero(2)), 0, "0000-02-01");
+
+        // y == 0: it must not. Computed, not saturated.
+        assert_eq!(
+            unix_secs_from_civil(&at_year_zero(3)),
+            -62_162_035_200,
+            "0000-03-01 is a date the era arithmetic handles"
+        );
+    }
+
+    /// A pre-epoch civil date converts to negative seconds, not to zero.
+    ///
+    /// Deliberately asymmetric with `pre_epoch_saturates_to_the_epoch` above,
+    /// which pins the *forward* direction's clamp. Only that direction clamps.
+    /// The doc comment on `unix_secs_from_civil` claimed both did, until the
+    /// mutation gate sent someone to read the code.
+    #[test]
+    fn pre_epoch_civil_dates_return_negative_seconds() {
+        let new_year_1969 = CivilTime {
+            year: 1969,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
+        assert_eq!(unix_secs_from_civil(&new_year_1969), -31_536_000);
+
+        // …but a round trip lands on the epoch, because the forward direction
+        // clamps. This is what any caller composing the two actually observes.
+        assert_eq!(
+            civil_from_unix_secs(unix_secs_from_civil(&new_year_1969)),
+            civil_from_unix_secs(0)
+        );
+    }
+
+    /// Every field-shape check, exercised one field at a time.
+    ///
+    /// `parse_civil` is three chained `||` checks over six fields, and a test
+    /// that breaks two fields at once cannot tell those chains apart from a
+    /// single `&&`. That is not a theoretical gap: the suite had cases for a
+    /// malformed date *and* a malformed time together, and for a one-digit
+    /// hour, and `cargo-mutants` still walked several of these operators
+    /// unnoticed. Each case below leaves every other field valid, so exactly
+    /// one sub-condition is doing the rejecting.
+    #[test]
+    fn every_field_shape_is_checked_on_its_own() {
+        // Baseline: the case all the others are one mutation away from.
+        assert!(parse_civil("2026-03-11", "08:30:00").is_some());
+
+        // Split counts, one side at a time.
+        assert!(parse_civil("2026-03", "08:30:00").is_none(), "date needs 3");
+        assert!(parse_civil("2026-03-11", "08:30").is_none(), "time needs 3");
+
+        // Date field widths, one field at a time.
+        assert!(parse_civil("202-03-11", "08:30:00").is_none(), "year 4");
+        assert!(parse_civil("2026-3-11", "08:30:00").is_none(), "month 2");
+        assert!(parse_civil("2026-03-1", "08:30:00").is_none(), "day 2");
+
+        // Time field widths, one field at a time.
+        assert!(parse_civil("2026-03-11", "8:30:00").is_none(), "hour 2");
+        assert!(parse_civil("2026-03-11", "08:3:00").is_none(), "minute 2");
+        assert!(parse_civil("2026-03-11", "08:30:0").is_none(), "second 2");
+    }
+
+    /// The last valid value of each time field, and the first invalid one.
+    ///
+    /// `hour > 23`, `minute > 59` and `second > 59` are the three comparisons
+    /// most easily written one off. Asserting only that `60` is rejected
+    /// cannot distinguish `> 59` from `>= 59` or `== 59` — every one of those
+    /// rejects 60. It takes the *accepted* boundary to pin the operator, which
+    /// is why `second > 59` survived mutation until this test existed.
+    #[test]
+    fn time_field_bounds_accept_their_last_valid_value() {
+        for (time, why) in [
+            ("23:59:59", "23:59:59 is a real time"),
+            ("00:00:00", "midnight is a real time"),
+        ] {
+            assert!(
+                parse_civil("2026-03-11", time).is_some(),
+                "{why} — rejecting it means a bound is off by one"
+            );
+        }
+
+        // …and one past each, one field at a time.
+        assert!(parse_civil("2026-03-11", "24:30:00").is_none(), "hour 24");
+        assert!(parse_civil("2026-03-11", "08:60:00").is_none(), "minute 60");
+        assert!(parse_civil("2026-03-11", "08:30:60").is_none(), "second 60");
+    }
+
+    /// The calendar-range check, from both sides of each bound.
+    ///
+    /// Same reasoning as the time bounds: `1..=12` and `1..=31` are only
+    /// pinned by asserting that 1, 12 and 31 are *accepted*.
+    #[test]
+    fn month_and_day_bounds_accept_their_edges() {
+        assert!(parse_civil("2026-01-01", "08:30:00").is_some(), "month 1");
+        assert!(parse_civil("2026-12-31", "08:30:00").is_some(), "month 12");
+        assert!(parse_civil("2026-00-11", "08:30:00").is_none(), "month 0");
+        assert!(parse_civil("2026-13-11", "08:30:00").is_none(), "month 13");
+        assert!(parse_civil("2026-03-00", "08:30:00").is_none(), "day 0");
+        assert!(parse_civil("2026-03-32", "08:30:00").is_none(), "day 32");
+    }
+
+    #[test]
+    fn parse_civil_rejects_what_is_not_a_date() {
+        assert!(parse_civil("2026-03-11", "08:30:00").is_some());
+        // The shapes a station's history actually holds.
+        assert!(parse_civil("", "").is_none());
+        assert!(parse_civil("not-a-date", "25:99:99").is_none());
+        assert!(
+            parse_civil("2026-3-11", "08:30:00").is_none(),
+            "month must be 2 digits"
+        );
+        assert!(
+            parse_civil("2026-03-11", "8:30:00").is_none(),
+            "hour must be 2 digits"
+        );
+        assert!(parse_civil("2026-13-11", "08:30:00").is_none(), "month 13");
+        assert!(parse_civil("2026-03-11", "24:00:00").is_none(), "hour 24");
+        assert!(parse_civil("2026-03-11", "08:60:00").is_none(), "minute 60");
+    }
+
+    /// Shifting a recording's start time by a chunk offset.
+    ///
+    /// The rollover case is the reason this is date arithmetic and not string
+    /// manipulation: a segment that starts at 23:59:55 has chunks belonging to
+    /// the *next day*, and a naive `HH:MM:SS + n` would write 24:00:04 — a time
+    /// no engine will parse, on the wrong date.
+    #[test]
+    fn shift_datetime_adds_the_chunk_offset() {
+        // The five chunks of one 15-second segment.
+        let chunks: Vec<(String, String)> = [0.0, 3.0, 6.0, 9.0, 12.0]
+            .iter()
+            .map(|&o| shift_datetime("2026-03-11", "08:30:00", o).unwrap())
+            .collect();
+        assert_eq!(
+            chunks,
+            vec![
+                ("2026-03-11".into(), "08:30:00".into()),
+                ("2026-03-11".into(), "08:30:03".into()),
+                ("2026-03-11".into(), "08:30:06".into()),
+                ("2026-03-11".into(), "08:30:09".into()),
+                ("2026-03-11".into(), "08:30:12".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn shift_datetime_rolls_over_midnight() {
+        assert_eq!(
+            shift_datetime("2026-03-11", "23:59:55", 9.0).unwrap(),
+            ("2026-03-12".into(), "00:00:04".into())
+        );
+        // And across a month, a year, and a leap day.
+        assert_eq!(
+            shift_datetime("2026-12-31", "23:59:58", 3.0).unwrap(),
+            ("2027-01-01".into(), "00:00:01".into())
+        );
+        assert_eq!(
+            shift_datetime("2024-02-28", "23:59:58", 3.0).unwrap(),
+            ("2024-02-29".into(), "00:00:01".into())
+        );
+    }
+
+    #[test]
+    fn shift_datetime_keeps_unparseable_input_unparseable() {
+        // Never invent a timestamp for a row that names no point in time.
+        assert!(shift_datetime("", "", 3.0).is_none());
+        assert!(shift_datetime("not-a-date", "25:99:99", 3.0).is_none());
+        assert!(shift_datetime("2026-03-11", "08:30:00", f64::NAN).is_none());
     }
 
     #[test]

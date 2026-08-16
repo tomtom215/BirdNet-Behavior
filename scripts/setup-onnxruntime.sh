@@ -41,13 +41,19 @@ FEATURE_SET="none"
 # tarball. `cargo fetch` populates registry/cache/*.crate but only extracts to
 # registry/src lazily at build time, so on a fresh checkout the .crate is the
 # only available copy.
+#
+# The table's *filename* has changed across ort-sys releases (`dist.txt` in
+# 2.0.0-rc.10, `dist.tsv` by rc.13), so both are accepted, newest-first.
 CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+DIST_GLOB="build/download/dist"
 read_dist_table() {
   local f cr d dt
   # `|| true` on each glob: an empty glob makes `ls` exit non-zero, which would
-  # otherwise trip `set -e` depending on the call site.
-  f="$(ls -d "$CARGO_HOME"/registry/src/*/ort-sys-*/build/download/dist.txt 2>/dev/null \
-        | sort -V | tail -1 || true)"
+  # otherwise trip `set -e` depending on the call site. `.tsv` is listed first
+  # and wins ties because the rename went `.txt` -> `.tsv`.
+  f="$(ls -d "$CARGO_HOME"/registry/src/*/ort-sys-*/"$DIST_GLOB".tsv \
+              "$CARGO_HOME"/registry/src/*/ort-sys-*/"$DIST_GLOB".txt 2>/dev/null \
+        | head -1 || true)"
   if [ -n "$f" ] && [ -f "$f" ]; then
     cat "$f"; return 0
   fi
@@ -55,7 +61,7 @@ read_dist_table() {
   [ -n "$cr" ] && [ -f "$cr" ] || return 1
   d="$(mktemp -d)"
   tar -xzf "$cr" -C "$d" 2>/dev/null || { rm -rf "$d"; return 1; }
-  dt="$(ls -d "$d"/ort-sys-*/build/download/dist.txt 2>/dev/null | head -1 || true)"
+  dt="$(ls -d "$d"/ort-sys-*/"$DIST_GLOB".tsv "$d"/ort-sys-*/"$DIST_GLOB".txt 2>/dev/null | head -1 || true)"
   if [ -n "$dt" ] && [ -f "$dt" ]; then cat "$dt"; rm -rf "$d"; return 0; fi
   rm -rf "$d"; return 1
 }
@@ -63,12 +69,27 @@ read_dist_table() {
 DIST_TABLE="$(read_dist_table)" \
   || die "ort-sys not found under $CARGO_HOME/registry — run 'cargo fetch' first"
 
-# Row format: <feature_set>\t<target>\t<url>\t<sha256>
-ROW="$(printf '%s\n' "$DIST_TABLE" | awk -F'\t' -v fs="$FEATURE_SET" -v t="$TARGET" \
-  '$1==fs && $2==t {print; exit}')"
-[ -n "$ROW" ] || die "no prebuilt ONNX Runtime in dist.txt for '$FEATURE_SET' + '$TARGET'"
-URL="$(printf '%s' "$ROW" | cut -f3)"
-HASH="$(printf '%s' "$ROW" | cut -f4)"
+# Pick the row by *content*, not by column position: ort-sys has both reordered
+# the columns (rc.10 led with the feature set, rc.13 leads with the target) and
+# added a header row. The URL is the only field that looks like a URL and the
+# hash the only one that is 64 hex chars, so identify those two positionally-
+# blind and require the target and feature set to appear among the rest. That
+# survives another reshuffle, and the header row drops out for free (it carries
+# neither a URL nor a hash).
+ROW="$(printf '%s\n' "$DIST_TABLE" | awk -F'\t' -v want_t="$TARGET" -v want_f="$FEATURE_SET" '
+  {
+    url = ""; hash = ""; seen_t = 0; seen_f = 0
+    for (i = 1; i <= NF; i++) {
+      if ($i ~ /^https?:\/\//)          url  = $i
+      else if ($i ~ /^[0-9a-f]{64}$/)   hash = $i
+      else if ($i == want_t)            seen_t = 1
+      else if ($i == want_f)            seen_f = 1
+    }
+    if (url != "" && hash != "" && seen_t && seen_f) { print url "\t" hash; exit }
+  }')"
+[ -n "$ROW" ] || die "no prebuilt ONNX Runtime in ort-sys dist table for '$FEATURE_SET' + '$TARGET'"
+URL="$(printf '%s' "$ROW" | cut -f1)"
+HASH="$(printf '%s' "$ROW" | cut -f2)"
 [ -n "$URL" ] && [ -n "$HASH" ] || die "could not parse url/hash from dist row: $ROW"
 
 CACHE_ROOT="${ORT_CACHE_DIR:-$HOME/.cache/ort.pyke.io}"

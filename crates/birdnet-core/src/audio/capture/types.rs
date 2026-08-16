@@ -18,8 +18,13 @@ pub enum CaptureSource {
         device: String,
         /// Sample rate in Hz.
         sample_rate: u32,
-        /// Number of channels.
+        /// Number of channels to open the device with.
         channels: u16,
+        /// Which half of a stereo capture to keep, if the operator asked for
+        /// one. `Some` forces `channels` to 2 at the device — you cannot pick
+        /// a channel the driver was never asked for — and yields a mono
+        /// stream, so the segments on disk stay single-channel.
+        channel_pick: Option<super::tee::ChannelPick>,
         /// Stream identifier for filenames and metrics when more than one
         /// local microphone is configured (e.g. `MIC_1`, `MIC_2`). `None` for
         /// a lone local mic, which keeps the historical id-less filename and
@@ -519,6 +524,7 @@ mod tests {
             device: "plughw:1,0".into(),
             sample_rate: 48_000,
             channels: 1,
+            channel_pick: None,
             stream_id: None,
         };
         assert_eq!(mic.label(), "local");
@@ -527,6 +533,7 @@ mod tests {
             device: "plughw:1,0".into(),
             sample_rate: 48_000,
             channels: 1,
+            channel_pick: None,
             stream_id: Some("src_seed_1".into()),
         };
         assert_eq!(mic_id.label(), "src_seed_1");

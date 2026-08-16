@@ -875,6 +875,7 @@ mod tests {
             device: picked.device.clone(),
             sample_rate: 48_000,
             channels: 1,
+            channel_pick: None,
             stream_id: Some(picked.id.clone()),
         };
         let hub = new_live_audio_hub();

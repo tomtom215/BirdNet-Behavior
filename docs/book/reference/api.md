@@ -96,7 +96,53 @@ These power the charts on the [Analytics](../guide/analytics.md) and time-series
 | `GET /api/v2/timeseries/heatmap` · `sessions` | Hour×day heatmap, activity sessions |
 | `GET /api/v2/timeseries/status` | Whether the time-series engine is available |
 | `GET /api/v2/analytics/sessions` · `retention` · `funnel` · `next-species` · `patterns` | DuckDB behavioral analytics |
-| `GET /api/v2/analytics/status` | Whether the analytics engine is available |
+| `GET /api/v2/analytics/status` | Analytics build flags **and** the state of the store |
+
+### Diagnosing empty analytics dashboards
+
+`GET /api/v2/analytics/status` is the first thing to check when the analytics
+screens are blank. Its `analytics_compiled` and `analytics_configured` fields
+describe *intent* — that the binary has DuckDB in it and a database was wired
+up — and both stay `true` in every case where the dashboards are actually
+broken. The `store` object is the part that differs:
+
+```json
+{
+  "analytics_compiled": true,
+  "analytics_configured": true,
+  "store": {
+    "extension_loaded": true,
+    "detections": 412903,
+    "unplaceable_detections": 3,
+    "detections_placeable": 412900,
+    "engine_duckdb_version": "v1.5.5",
+    "engine_platform": "linux_arm64",
+    "embedded_extension": {
+      "version": "v0.9.1",
+      "duckdb_version": "v1.5.5",
+      "platform": "linux_arm64",
+      "mismatch": null
+    }
+  }
+}
+```
+
+- `extension_loaded: false` — the behavioural functions (`sessionize`,
+  `retention`, `window_funnel`, `sequence_*`) will fail while the time-series
+  screens keep working. Check `embedded_extension.mismatch`: a non-null value
+  means the copy built into this binary can never load, which leaves an offline
+  station with no behavioural analytics. Its `property` says whether the
+  `DuckDB version`, the `platform`, or both disagree — compare against
+  `engine_duckdb_version` and `engine_platform`. An extension is locked to
+  both, and both fail the same way at `LOAD`. Rebuild against
+  `community-extensions.duckdb.org/<engine_duckdb_version>/<engine_platform>/`.
+- `detections: 0` against a station with history — the SQLite → DuckDB sync has
+  not run or did not complete.
+- `unplaceable_detections` above zero — that many rows carry a `Date`/`Time`
+  naming no point in time (usually from a BirdNET-Pi import). They count toward
+  the station's detection total but cannot appear in any date- or time-based
+  analytic, which is why a dashboard total can sit below the raw count.
+- `store: null` — this binary was built without analytics.
 
 ## WebSocket — live detections
 

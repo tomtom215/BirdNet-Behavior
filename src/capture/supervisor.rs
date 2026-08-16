@@ -632,6 +632,7 @@ mod tests {
             device: "plughw:1,0".into(),
             sample_rate: 48_000,
             channels: 1,
+            channel_pick: None,
             stream_id: None,
         };
         assert_eq!(source_gauge_label(&src), "local");
@@ -656,6 +657,7 @@ mod tests {
             device: "plughw:2,0".into(),
             sample_rate: 48_000,
             channels: 1,
+            channel_pick: None,
             stream_id: Some("MIC_2".into()),
         };
         assert_eq!(source_gauge_label(&src), "MIC_2");

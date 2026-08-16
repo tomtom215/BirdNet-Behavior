@@ -22,6 +22,12 @@ duckdb = { workspace = true, optional = true }
 serde.workspace = true
 
 [dev-dependencies]
+# The execution gate opens a real `AnalyticsDb` rather than hand-building a
+# DuckDB connection: that is how `birdnet-web` reaches these queries
+# (`TimeSeriesDb::new(db.conn())`), and it is where ICU gets loaded and
+# `detections_ts` gets created. An approximation of it in the fixture is how
+# this gate came to depend on a pre-populated `~/.duckdb`.
+birdnet-behavioral = { path = "../birdnet-behavioral", features = ["analytics"] }
 duckdb.workspace = true
 tempfile.workspace = true
 

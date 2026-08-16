@@ -7,6 +7,222 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`--channel-report`: what a stereo microphone is actually delivering.** The
+  model has one audio input, so two channels must become one before inference —
+  today by averaging, which is harmless for coincident capsules and a comb
+  filter for spaced ones. Which case a station is in depends on its microphone
+  and its acoustics, so it cannot be answered anywhere but on the station.
+
+  The report records a few seconds from the configured ALSA device and prints
+  each channel's level, the inter-channel delay (with the capsule spacing it
+  implies), and what each reduction would hand BirdNET: today's average, the
+  louder single channel, and a delay-aligned sum. It then recommends a setting.
+  Requires the service to be stopped first — an ALSA capture device is
+  exclusive — and says so when the device will not open.
+
+### Fixed
+
+- **A detection's timestamp is now when it was heard, not when its recording
+  started.** A 15-second segment is five 3-second chunks, and all five were
+  stamped with the file's start second. `chunk_offset_secs` held the difference
+  and the detections API does not return it, so one continuous song produced
+  five rows identical in every displayed field — which is exactly what "repeated
+  detections" looked like. It also put five *simultaneous* detections into
+  `detection_timestamp`, which sessionisation, gap analysis and the dawn-chorus
+  curve all group on.
+
+  BirdNET-Pi has always added the offset, in the same place (`Detection.__init__`:
+  `file_date + timedelta(seconds=self.start)`), so this table has been holding
+  two conventions at once: imported BirdNET-Pi rows with chunk-accurate times,
+  natively recorded rows without. The pipeline now adds the offset at inference,
+  rolling the date when a chunk crosses midnight, and **migration 24 repairs
+  history already on disk** from the stored offsets — so the whole table ends on
+  one convention. Rows whose `Date`/`Time` name no point in time are left
+  untouched rather than turned into an invented timestamp.
+
+  Row *counts* do not change, and were never wrong: BirdNET-Pi has no UNIQUE
+  constraint on `detections` at all and stores one row per chunk exactly as this
+  does.
+
+- **The Audio page's Left and Right channel options did nothing.** Both
+  collapsed to `channels: 1` at the capture source and were never distinguished
+  again, so all three of Mono, Left and Right produced byte-identical captures.
+  They now select the channel they name: the device is opened with both, and the
+  capture tee keeps the requested half, so the segments written to disk are
+  single-channel and nothing downstream needs to know a choice was made.
+
+  This matters because of what `Stereo` does. Both channels are kept and the
+  decoder averages them to the mono BirdNET requires — which for a **spaced**
+  pair is a comb filter, not a noise reduction. Measured through this project's
+  own decode path: one wavefront reaching the capsules half a period apart loses
+  about 66 dB to cancellation, a quarter period costs 3 dB, and the notches move
+  with the bird's direction. A coincident pair is unaffected. Selecting a
+  channel is the mitigation, and it was the one thing the UI offered that had
+  never been wired up.
+
+  Not a regression: BirdNET-Pi defaults to `CHANNELS=2` and uses
+  `librosa.load(mono=True)`, which averages identically. A stereo source now
+  says so on the Audio page and warns once in the journal at start-up.
+
+- **The analytics dashboards were blank, and nothing anywhere said why.** Two
+  independent defects, both invisible to a green CI matrix, both only reachable
+  on a real station.
+
+  The first is the one that emptied them, and it emptied them **permanently**:
+  a station reported dashboards blank for days. Every analytics query filters on
+  a look-back window, which reaches DuckDB as
+  `detection_date >= CURRENT_DATE - INTERVAL n DAYS`, and `CURRENT_DATE` lives
+  in DuckDB's ICU extension — as does every other way to name the current local
+  date: `today()`, the `TimeZone` setting, and even `CAST(now() AS DATE)`, which
+  fails with `Unimplemented type for cast (TIMESTAMP WITH TIME ZONE -> DATE)`.
+  There is no ICU-free spelling to fall back to.
+
+  ICU is **not** statically linked into the `libduckdb` that `duckdb-rs`
+  bundles. It reports itself `installed` on a connection that has already
+  autoinstalled it, which is what an earlier reading of this — and the first
+  version of the fix — was built on. Measured properly, with autoload and
+  autoinstall off and no local cache, `duckdb_extensions()` reports `icu` as
+  `installed=false, NOT_INSTALLED`, and `LOAD icu` fails outright.
+  (`core_functions`, by contrast, genuinely does report `STATICALLY_LINKED`,
+  which is why `strftime` and `date_diff` kept working throughout.)
+
+  So DuckDB has to fetch it, and it does that by autoinstalling into
+  `$HOME/.duckdb`. The shipped systemd unit sets `ProtectHome=read-only`. The
+  station's journal:
+
+  ```text
+  Failed to create directory "/home/pi/.duckdb": Read-only file system
+  ```
+
+  Every analytics query failed from then on, and the store's `birds.duckdb`
+  never appeared. Two things attempt that write — ICU autoinstalling, and stage
+  2 of the behavioral loader (`INSTALL behavioral FROM community`) — so both are
+  fixed at the source: **DuckDB's extension directory now sits beside the
+  analytics database**, inside `DATA_DIR` and therefore inside the unit's
+  `ReadWritePaths`, instead of under `$HOME`.
+
+  On top of that, **the ICU binary is now embedded in the release binary** the
+  same way the `behavioral` extension already was, and loaded from it at open.
+  That removes the network *and* the writable `$HOME` from the path entirely, so
+  an air-gapped station gets correct local dates on its first query. Release,
+  CI and Docker builds all fetch it per target; `build.rs` refuses to embed
+  bytes whose footer it cannot parse, and now also refuses bytes built for a
+  different platform than the one being compiled for — cargo does not tell a
+  build script which DuckDB version will be linked, but it does tell it the
+  target triple, and 20 MB of unloadable ICU is worth catching at build time.
+
+  There was a timing bug underneath all of that too, and it is still fixed:
+  even where the autoinstall *could* write, DuckDB resolves ICU while binding
+  the query that first needs it, too late for that query. Attempt 1 failed,
+  attempts 2–4 passed. One failed query per restart would have been survivable,
+  except the web layer maps a query error to a rendered "Analytics temporarily
+  unavailable" fragment and caches that fragment for ten minutes — so the first
+  page visit after every restart poisoned the cache. ICU is loaded when the
+  store opens, before any query runs.
+
+  The test that was supposed to cover this went green against the broken
+  implementation, because an earlier probe on the same machine had populated
+  `~/.duckdb`; moving that cache aside was what exposed it. Its replacement
+  turns both escapes off explicitly — autoload and autoinstall disabled,
+  extension directory pointed at an empty one — so the embedded bytes are the
+  only route `CURRENT_DATE` has, and a separate gate pins the extension
+  directory to the data directory. Verified against the previous code, where
+  the first fails with `Catalog Error: … "current_date" is not in the catalog`
+  and the second sees DuckDB's default (an empty string).
+
+  The time-series execution gate had caught the same disease from the same
+  cache. It opened a bare DuckDB connection and issued `LOAD icu` itself, as an
+  approximation of what the application does — and a bare `LOAD` never
+  autoinstalls (DuckDB only does that while binding a query that needs the
+  extension), so it passed only when *some other test binary in the same run*
+  had populated `~/.duckdb` first. It now opens a real `AnalyticsDb`, which is
+  literally what `birdnet-web` hands these queries, and drops its private copy
+  of the `detections_ts` view along with it.
+
+  The second survives dirty history rather than a cold start. `Date` and `Time`
+  are free-form `TEXT NOT NULL` — the column type forbids NULL, not nonsense —
+  and the BirdNET-Pi importer turns a NULL `Date` into `""` and copies
+  malformed values through verbatim. `detections_ts` cast them with a plain
+  `CAST`, and DuckDB raises `Conversion Error` for the *whole query*, so one
+  unplaceable row anywhere in a multi-year import took down every behavioural
+  and time-series dashboard at once. The view now uses `TRY_CAST`: such a row
+  falls out of the time-bucketed results instead of aborting them. Coercing to
+  an epoch default was rejected — it would invent detections on 1970-01-01.
+
+  Neither could have been caught by the tests that existed. The time-series
+  crate's sixteen public queries had no execution coverage at all: every test
+  built a SQL string and asserted it *contained* the right substrings, which a
+  query DuckDB refuses to bind passes exactly as well as one that works. There
+  is now a gate that executes all sixteen against a real DuckDB and requires
+  rows back, plus gates for the cold-start bind and the unplaceable row.
+
+- **Ten of the eleven `phenology` query builders emitted SQL DuckDB refuses to
+  run.** `birdnet_behavioral::phenology` is a public API documenting a
+  SQLite/DuckDB compatibility matrix, but it emitted `strftime('%Y', Date)` —
+  SQLite's `strftime(format, value)` argument order — against DuckDB, which
+  takes `strftime(value, format)`. Every query using it failed to bind with
+  "Could not choose a best candidate function". `phenology_timing_sql` also used
+  `julianday`, which DuckDB does not have, and two builders assembled their
+  `WHERE` clause by giving each condition its own `WHERE `/`AND ` prefix, so an
+  absent species filter left a dangling `AND` straight after `FROM` — a parser
+  error.
+
+  The builders now emit DuckDB SQL, read `detections_ts` so `detection_date`
+  arrives typed (and unplaceable rows are excluded rather than grouped under a
+  NULL year), and assemble the `WHERE` clause from a list of conditions, which
+  makes the dangling-`AND` shape unrepresentable. The compatibility matrix has
+  been replaced with the truth: these target DuckDB.
+
+  No dashboard was affected — nothing calls these, and the web phenology card is
+  SQLite-backed — but the tests asserted only on generated *text*
+  (`sql.contains("month")`), which a query no engine will run passes just as
+  well as one that works. `tests/phenology_execute.rs` now executes all eleven
+  against a real store; it fails on ten of them against the previous code.
+
+- **The embedded-extension check ignored the platform.** A DuckDB extension is
+  locked to a platform as well as a version, and the two fail identically at
+  `LOAD`, but `embedded_extension_mismatch()` compared only the version — so
+  `linux_amd64` bytes embedded in an `aarch64` build agreed on `v1.5.5`, passed
+  the check, and then failed to load on the Pi with nothing having warned. Both
+  properties are now compared (the engine's own platform comes from
+  `pragma_platform()`, which uses the same identifiers the extension registry
+  publishes under) and the report names which one disagrees. A platform that
+  cannot be read on either side is not treated as a mismatch, so missing
+  information cannot manufacture a false alarm. `release.yml` already selected
+  the extension per target, so this gap was reachable from local and cross
+  builds — which is exactly what a maintainer tests an air-gapped station with.
+
+### Added
+
+- `GET /api/v2/analytics/status` reports the analytics **store**, not just the
+  build flags. `analytics_compiled` and `analytics_configured` are both `true`
+  on a station whose dashboards are empty — they describe intent, and stay true
+  through every way this actually fails. The new `store` object carries
+  `extension_loaded`, the DuckDB row count, `unplaceable_detections` (rows no
+  dashboard can place in time), the engine's own DuckDB version and platform,
+  and the embedded extension's version, platform and any mismatch — including
+  which property disagrees. It is `null` on a slim build, so "no analytics here"
+  stays distinguishable from "analytics present but broken".
+
+### Changed
+
+- BirdNET-Pi import validation no longer claims malformed rows "will be
+  skipped". Nothing skipped them: they were imported, counted, and then absent
+  from every date- or time-based analytic. The check also missed the cases that
+  mattered — it sampled only the first 1 000 rows, never looked at `Time`, and
+  could not see a NULL `Date` at all, because `NULL NOT GLOB …` is NULL rather
+  than true. It now scans the whole table, inspects both columns, and says what
+  actually happens to the rows.
+
+- `scripts/setup-onnxruntime.sh` works against current `ort-sys` again. Its dist
+  table was renamed `dist.txt` → `dist.tsv` and had its columns reordered with a
+  header added, so the script failed with "ort-sys not found" and cold builds
+  behind a TLS-intercepting proxy — sandboxed CI, Claude Code on the web — could
+  not fetch ONNX Runtime. It now accepts either filename and identifies columns
+  by content rather than position.
+
 ## [0.13.1] - 2026-08-13
 
 ### Fixed

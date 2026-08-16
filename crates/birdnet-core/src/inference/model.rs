@@ -308,6 +308,31 @@ impl BirdNetModel {
         // `sensitivity` only multiplies into the logit path because it is
         // semantically a pre-sigmoid scale factor; mathematically it is
         // not meaningful on values that are already probabilities.
+
+        // A detection's timestamp is the moment the *chunk* was heard, not the
+        // moment its recording began. `date`/`time` describe the file, and one
+        // 15-second segment is five 3-second chunks, so stamping all five with
+        // the file's start second collapses fifteen seconds of birdsong onto a
+        // single instant: the rows become indistinguishable in the UI (they
+        // differ only in `chunk_offset_secs`, which the API does not expose),
+        // and every time-bucketed analytic — sessionisation, gap analysis, the
+        // dawn-chorus curve — sees five simultaneous detections that never
+        // happened.
+        //
+        // BirdNET-Pi has always done this addition, in the same place: its
+        // `Detection.__init__` computes `file_date + timedelta(seconds=start)`.
+        // Doing it here rather than at the database write means notifications,
+        // MQTT, BirdWeather and the log line all agree with the stored row, and
+        // it puts natively-recorded detections on the same convention as the
+        // BirdNET-Pi rows the migration importer writes — which previously sat
+        // in the same table under a different one.
+        //
+        // Falling back to the unshifted pair keeps this total: `date`/`time`
+        // originate in a filename, and an unparseable one must not become an
+        // invented timestamp.
+        let (date, time) = crate::civil::shift_datetime(date, time, f64::from(start_secs))
+            .unwrap_or_else(|| (date.to_string(), time.to_string()));
+
         let mut detections = Vec::new();
 
         for (i, &raw) in flat_logits.iter().enumerate() {
@@ -318,8 +343,8 @@ impl BirdNetModel {
                 && let Some(label) = self.labels.get(i)
             {
                 detections.push(Detection {
-                    date: date.to_string(),
-                    time: time.to_string(),
+                    date: date.clone(),
+                    time: time.clone(),
                     scientific_name: label.scientific_name.clone(),
                     common_name: label.common_name.clone(),
                     confidence,
@@ -874,6 +899,75 @@ mod tests {
         assert!(!BirdNetModel::should_warn_label_count_mismatch(
             6522, 6522, true
         ));
+    }
+
+    /// Each chunk is stamped with the moment it was heard, not the moment its
+    /// recording began.
+    ///
+    /// A 15-second segment is five 3-second chunks. Stamping all five with the
+    /// file's start second made them identical in every field the UI shows —
+    /// `chunk_offset_secs` is the only thing that differed and the detections
+    /// API does not expose it — so one continuous song read as five duplicate
+    /// detections. It also put five simultaneous detections into
+    /// `detection_timestamp`, which every time-bucketed analytic groups on.
+    ///
+    /// BirdNET-Pi has always added the offset here (`Detection.__init__`:
+    /// `file_date + timedelta(seconds=self.start)`), so before this the same
+    /// `detections` table held imported rows on one convention and natively
+    /// recorded rows on another.
+    #[test]
+    fn predict_stamps_each_chunk_with_its_own_time() {
+        let mut m = load_tiny_v30();
+        m.set_confidence_threshold(0.0);
+        let audio = vec![0.5_f32; 96_000];
+
+        let stamps: Vec<(String, String, f32)> = [0.0_f32, 3.0, 6.0, 9.0, 12.0]
+            .iter()
+            .map(|&start| {
+                let d = m
+                    .predict(&audio, "2026-03-11", "08:30:00", start, start + 3.0, 11)
+                    .expect("predict");
+                (d[0].date.clone(), d[0].time.clone(), d[0].start)
+            })
+            .collect();
+
+        assert_eq!(
+            stamps,
+            vec![
+                ("2026-03-11".to_string(), "08:30:00".to_string(), 0.0),
+                ("2026-03-11".to_string(), "08:30:03".to_string(), 3.0),
+                ("2026-03-11".to_string(), "08:30:06".to_string(), 6.0),
+                ("2026-03-11".to_string(), "08:30:09".to_string(), 9.0),
+                ("2026-03-11".to_string(), "08:30:12".to_string(), 12.0),
+            ],
+            "five chunks of one segment must carry five distinct times"
+        );
+    }
+
+    /// A segment recorded across midnight puts its later chunks on the next day.
+    #[test]
+    fn predict_rolls_the_date_when_a_chunk_crosses_midnight() {
+        let mut m = load_tiny_v30();
+        m.set_confidence_threshold(0.0);
+        let audio = vec![0.5_f32; 96_000];
+        let d = m
+            .predict(&audio, "2026-03-11", "23:59:55", 9.0, 12.0, 11)
+            .expect("predict");
+        assert_eq!(d[0].date, "2026-03-12");
+        assert_eq!(d[0].time, "00:00:04");
+    }
+
+    /// An unparseable filename timestamp is passed through, never invented.
+    #[test]
+    fn predict_leaves_an_unparseable_timestamp_alone() {
+        let mut m = load_tiny_v30();
+        m.set_confidence_threshold(0.0);
+        let audio = vec![0.5_f32; 96_000];
+        let d = m
+            .predict(&audio, "not-a-date", "25:99:99", 6.0, 9.0, 11)
+            .expect("predict");
+        assert_eq!(d[0].date, "not-a-date");
+        assert_eq!(d[0].time, "25:99:99");
     }
 
     #[test]

@@ -73,6 +73,209 @@ impl From<DuckDbError> for AnalyticsError {
 /// can raise it via the `BIRDNET_DUCKDB_MEMORY_LIMIT` environment variable.
 const DEFAULT_DUCKDB_MEMORY_LIMIT: &str = "256MB";
 
+/// Directory `DuckDB` is pointed at for extension installs, relative to the
+/// analytics database file.
+const EXTENSION_DIR_NAME: &str = "duckdb-extensions";
+
+/// Keep `DuckDB`'s extension installs inside the data directory, out of `$HOME`.
+///
+/// By default `DuckDB` installs and caches extensions under `$HOME/.duckdb`.
+/// The shipped systemd unit sets `ProtectHome=read-only`, so that directory
+/// cannot be created — and this is not a hypothetical: it is the root cause of
+/// "analytics dashboards broken on 0.13.1", observed on a station where the
+/// journal carried
+///
+/// ```text
+/// Failed to create directory "/home/pi/.duckdb": Read-only file system
+/// ```
+///
+/// and every dashboard had been empty for days with the health endpoint green.
+/// Two separate things attempt that write: `icu` autoinstalling on the first
+/// query that mentions `CURRENT_DATE`, and stage 2 of
+/// [`AnalyticsDb::load_extension`] (`INSTALL behavioral FROM community`).
+/// Redirecting the directory fixes both at once, because the replacement sits
+/// beside the database file — which is inside `DATA_DIR`, and therefore inside
+/// the unit's `ReadWritePaths`.
+///
+/// Best-effort by design. If the directory cannot be created (a read-only data
+/// directory, an in-memory database with no parent) `DuckDB` keeps its default
+/// and the embedded-extension paths still work — they `LOAD` by absolute path
+/// and never consult this directory at all.
+fn redirect_extension_directory(conn: &Connection, db_path: &Path) {
+    let Some(parent) = db_path.parent().filter(|p| !p.as_os_str().is_empty()) else {
+        return;
+    };
+    let dir = parent.join(EXTENSION_DIR_NAME);
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        tracing::debug!(
+            path = %dir.display(),
+            error = %e,
+            "could not create a DuckDB extension directory beside the analytics database; \
+             DuckDB keeps its default ($HOME/.duckdb)"
+        );
+        return;
+    }
+    let escaped = dir.display().to_string().replace('\'', "''");
+    if let Err(e) = conn.execute_batch(&format!("SET extension_directory='{escaped}';")) {
+        tracing::debug!(error = %e, "could not redirect DuckDB's extension directory");
+    }
+}
+
+/// Load `DuckDB`'s ICU extension so date arithmetic binds on the *first* query.
+///
+/// Every analytics dashboard filters on a look-back window, which reaches
+/// DuckDB as `detection_date >= CURRENT_DATE - INTERVAL n DAYS`. That operator
+/// lives in ICU, and so does everything else that can name the current *local*
+/// date: `CURRENT_DATE`, `today()`, the `TimeZone` setting, and
+/// `CAST(now() AS DATE)` — which fails with "Unimplemented type for cast
+/// (TIMESTAMP WITH TIME ZONE -> DATE)" when ICU is absent. There is no ICU-free
+/// spelling to fall back to.
+///
+/// ICU is **not** statically linked into the bundled `libduckdb`. An earlier
+/// version of this comment claimed it was, on the strength of
+/// `duckdb_extensions()` reporting it `installed` — but that reading was taken
+/// on a connection whose autoinstall had already downloaded it. Measured with
+/// autoload and autoinstall off and no local cache, `icu` reports
+/// `installed=false, install_mode=NOT_INSTALLED`, and `LOAD icu` fails outright
+/// (`core_functions`, by contrast, genuinely does report `STATICALLY_LINKED`).
+///
+/// So DuckDB has to *fetch* it, and left alone it autoinstalls into
+/// `$HOME/.duckdb` during the bind of the first query that needs it. Both
+/// halves of that were load-bearing failures:
+///
+///  * **The write.** Under `ProtectHome=read-only` it fails, permanently — see
+///    [`redirect_extension_directory`], which is what stops that write going to
+///    `$HOME` at all.
+///  * **The timing.** Even where the write succeeds, autoload happens *while
+///    binding* the query that triggered it, too late for that query: attempt 1
+///    fails, attempts 2-4 pass. One failed query per process start would be
+///    survivable on its own, except the web layer maps a query error to a
+///    rendered "Analytics temporarily unavailable" fragment and *caches that
+///    fragment for ten minutes* — so a station's first visit after every
+///    restart poisoned the cache and the dashboards stayed blank.
+///
+/// Loading here, before any query runs, fixes the timing. Two stages, in the
+/// order that needs the least from the host:
+///
+///  1. A build-time-embedded copy staged to a temp file and loaded by path.
+///     No network, no writable `$HOME`, no extension directory — this is the
+///     path a shipped release takes.
+///  2. `LOAD icu` — DuckDB's own resolution, from the extension directory. On a
+///     dev build with no embed this is what autoinstall populates.
+///
+/// Deliberately non-fatal: a build with neither should still open its store and
+/// serve everything that does not need a date window, rather than refuse to
+/// start.
+fn load_icu(conn: &Connection) {
+    /// Staged once per process. The ICU binary is ~20 MB and the bytes never
+    /// change for the life of the process, so re-writing it on every `open` is
+    /// pure cost — on a Pi's SD card, and in a test suite that opens hundreds
+    /// of stores.
+    static ICU_STAGED: std::sync::OnceLock<Result<PathBuf, String>> = std::sync::OnceLock::new();
+
+    if let Some(bytes) = EMBEDDED_ICU {
+        match ICU_STAGED
+            .get_or_init(|| stage_extension(bytes, "icu.duckdb_extension"))
+            .clone()
+            .and_then(|path| load_by_path(conn, &path).map(|()| path))
+        {
+            Ok(path) => {
+                tracing::debug!(
+                    path = %path.display(),
+                    version = EMBEDDED_ICU_VERSION.unwrap_or("unknown"),
+                    "loaded DuckDB's ICU extension from the embedded bundle"
+                );
+                return;
+            }
+            Err(e) => tracing::warn!(
+                error = %e,
+                embedded_for = EMBEDDED_ICU_DUCKDB_VERSION.unwrap_or("unknown"),
+                embedded_platform = EMBEDDED_ICU_PLATFORM.unwrap_or("unknown"),
+                "the ICU extension embedded at build time would not load; falling back to \
+                 DuckDB's own resolution. If `embedded_for` or `embedded_platform` disagrees \
+                 with this binary's engine, that is a packaging defect"
+            ),
+        }
+    }
+
+    // 2) Already in the extension directory, from a previous run's stage 3.
+    if conn.execute_batch("LOAD icu;").is_ok() {
+        return;
+    }
+
+    // 3) Fetch it, once, into the extension directory.
+    //
+    // An explicit `INSTALL` is not the same thing as the autoinstall that broke
+    // v0.13.1, in the one way that matters: it writes where
+    // `redirect_extension_directory` pointed it — beside the analytics database,
+    // inside the unit's `ReadWritePaths` — rather than to `$HOME/.duckdb`. It
+    // also runs here, before any query, instead of part-way through binding one.
+    //
+    // This is the path a dev build with no embedded copy takes, and a genuine
+    // self-heal for a station whose embed is missing or unloadable. It is last
+    // because it is the only stage that needs the network.
+    if let Err(e) = conn.execute_batch("INSTALL icu; LOAD icu;") {
+        tracing::warn!(
+            error = %e,
+            embedded = EMBEDDED_ICU.is_some(),
+            "could not load DuckDB's ICU extension, from an embedded copy, the extension \
+             directory, or the network. Every dashboard filters on a date window and \
+             CURRENT_DATE lives in ICU, so those queries will fail until it is available"
+        );
+    }
+}
+
+/// Counter making each in-flight staging file name unique within the process.
+static STAGE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Write extension `bytes` to a temp file and return the path, atomically.
+///
+/// Shared by the ICU and `behavioral` loaders. The bytes go to a name unique to
+/// this process and call, then `rename` into the shared final path — so a
+/// reader always sees either the previous complete file or the new complete
+/// one, never a partial or missing one.
+///
+/// That is not defensive coding for its own sake. Writing in place was
+/// measurably broken: `cargo test` opens many stores in parallel threads, each
+/// staging the same 20 MB ICU binary over the same path, and `LOAD` failed on
+/// whichever thread read a file another was still writing. The service itself
+/// runs with `PrivateTmp=yes` and stages once per start, so this only ever bit
+/// the test suite — but the same shape is reachable from two processes sharing
+/// a `/tmp`, and `rename` costs nothing.
+///
+/// `rename` also replaces a symlink at the destination rather than writing
+/// through it, so a pre-planted link cannot redirect the write.
+fn stage_extension(bytes: &[u8], file_name: &str) -> Result<PathBuf, String> {
+    let dir = std::env::temp_dir().join("birdnet-behavioral-ext");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("create temp dir for embedded extension: {e}"))?;
+
+    let seq = STAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let staging = dir.join(format!("{file_name}.{}.{seq}.partial", std::process::id()));
+    std::fs::write(&staging, bytes).map_err(|e| format!("write embedded extension: {e}"))?;
+
+    let path = dir.join(file_name);
+    std::fs::rename(&staging, &path).map_err(|e| {
+        // Leave nothing behind on the failure path; a 20 MB orphan per start
+        // would fill a small `/tmp` long before anyone noticed.
+        drop(std::fs::remove_file(&staging));
+        format!("publish embedded extension: {e}")
+    })?;
+    Ok(path)
+}
+
+/// `LOAD '<path>'`, quoting the path for SQL.
+///
+/// The bytes are the upstream signed build, but `LOAD` from an ad-hoc path
+/// bypasses `DuckDB`'s signature check by design; `allow_unsigned_extensions`
+/// is set at open time (see [`AnalyticsDb::open`]) because `DuckDB` refuses to
+/// change it on an already-open connection.
+fn load_by_path(conn: &Connection, path: &Path) -> Result<(), String> {
+    let escaped = path.display().to_string().replace('\'', "''");
+    conn.execute_batch(&format!("LOAD '{escaped}';"))
+        .map_err(|e| e.to_string())
+}
+
 /// Resolve the `DuckDB` memory limit from an optional configured value,
 /// falling back to [`DEFAULT_DUCKDB_MEMORY_LIMIT`] when unset or malformed.
 ///
@@ -155,18 +358,55 @@ pub struct AnalyticsDb {
     extension_loaded: bool,
 }
 
-/// A build-time embedded extension that targets the wrong `DuckDB` engine.
+/// Which property of the embedded extension the linked engine cannot accept.
 ///
-/// Produced by [`AnalyticsDb::embedded_extension_mismatch`]. Both versions are
-/// carried so the report names what was embedded *and* what it had to match,
-/// which is the difference between an actionable packaging error and "analytics
-/// is empty again".
+/// A `DuckDB` extension is locked to both a version *and* a platform, and the
+/// two fail identically at run time — `LOAD` refuses the file — so naming which
+/// one is wrong is the difference between a fixable packaging error and another
+/// round of "analytics is empty again".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtensionMismatchKind {
+    /// Built for a different `DuckDB` version.
+    DuckDbVersion,
+    /// Built for a different platform, e.g. `linux_amd64` bytes in an
+    /// `aarch64` binary. Reachable from a local or cross build: the release
+    /// workflow selects the extension per target, but a developer build embeds
+    /// whatever `BIRDNET_BUNDLED_EXTENSION_FILE` or `vendor/` happens to hold.
+    Platform,
+    /// Both the version and the platform are wrong.
+    Both,
+}
+
+impl fmt::Display for ExtensionMismatchKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DuckDbVersion => write!(f, "DuckDB version"),
+            Self::Platform => write!(f, "platform"),
+            Self::Both => write!(f, "DuckDB version and platform"),
+        }
+    }
+}
+
+/// A build-time embedded extension the linked engine can never load.
+///
+/// Produced by [`AnalyticsDb::embedded_extension_mismatch`]. Both sides of each
+/// comparison are carried so the report names what was embedded *and* what it
+/// had to match, which is the difference between an actionable packaging error
+/// and "analytics is empty again".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtensionMismatch {
     /// `DuckDB` version the embedded extension was built for, e.g. `v1.5.3`.
     pub embedded_for: &'static str,
     /// `DuckDB` version actually linked into this binary, e.g. `v1.5.5`.
     pub engine: String,
+    /// Platform the embedded extension targets, e.g. `linux_amd64`. `None` only
+    /// when the embed carried no platform in its metadata.
+    pub embedded_platform: Option<&'static str>,
+    /// Platform the linked engine reports, e.g. `linux_arm64`. `None` when the
+    /// engine would not answer `pragma_platform()`.
+    pub engine_platform: Option<String>,
+    /// Which property disagrees.
+    pub kind: ExtensionMismatchKind,
 }
 
 impl AnalyticsDb {
@@ -192,6 +432,11 @@ impl AnalyticsDb {
         let memory_limit =
             resolve_memory_limit(std::env::var("BIRDNET_DUCKDB_MEMORY_LIMIT").ok().as_deref());
         conn.execute_batch(&format!("SET memory_limit='{memory_limit}';"))?;
+
+        // Before anything can install or load: keep extension writes inside the
+        // data directory rather than `$HOME`, which the unit mounts read-only.
+        redirect_extension_directory(&conn, path);
+        load_icu(&conn);
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS detections (
@@ -275,6 +520,45 @@ impl AnalyticsDb {
         Ok((db, OpenOutcome::Rebuilt { quarantined }))
     }
 
+    /// Run the query shape every dashboard opens with, and report whether it
+    /// binds.
+    ///
+    /// This is the ICU counterpart to [`Self::load_extension`]'s success: not
+    /// "is an extension loaded" but "can this station ask about a date window
+    /// at all". `CURRENT_DATE` lives in ICU, and when ICU cannot be resolved
+    /// the failure is a `Catalog Error` at bind time — which the web layer
+    /// turns into a cached "Analytics temporarily unavailable" fragment rather
+    /// than anything an operator can see.
+    ///
+    /// Meant to be run with networking disabled: with no network, DuckDB cannot
+    /// autoinstall ICU, so a pass means the build-time embedded copy loaded.
+    ///
+    /// # Errors
+    ///
+    /// Returns the bind or execution error, whose message names the missing
+    /// extension.
+    pub fn verify_date_window(&self) -> Result<(), AnalyticsError> {
+        let _: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM detections_ts \
+             WHERE detection_date >= CURRENT_DATE - INTERVAL 30 DAYS",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(())
+    }
+
+    /// `DuckDB` version the embedded ICU targets, if one was embedded.
+    #[must_use]
+    pub const fn embedded_icu_duckdb_version() -> Option<&'static str> {
+        EMBEDDED_ICU_DUCKDB_VERSION
+    }
+
+    /// Platform the embedded ICU targets, if one was embedded.
+    #[must_use]
+    pub const fn embedded_icu_platform() -> Option<&'static str> {
+        EMBEDDED_ICU_PLATFORM
+    }
+
     /// Cheap read that touches the detections table, so a file `DuckDB` opened
     /// lazily but cannot actually read fails here rather than on the first
     /// analytics request.
@@ -325,12 +609,16 @@ impl AnalyticsDb {
         // survived a fully green CI matrix.
         if let Some(mismatch) = self.embedded_extension_mismatch() {
             tracing::error!(
+                mismatch = %mismatch.kind,
                 embedded_for = mismatch.embedded_for,
                 engine = %mismatch.engine,
-                "the behavioral extension embedded at build time targets a different DuckDB \
-                 version than the engine linked into this binary; it can never load. Offline \
-                 stations will have no behavioural analytics. This is a packaging defect — \
-                 rebuild with the extension published for the engine version"
+                embedded_platform = mismatch.embedded_platform.unwrap_or("unknown"),
+                engine_platform = mismatch.engine_platform.as_deref().unwrap_or("unknown"),
+                "the behavioral extension embedded at build time disagrees with the engine \
+                 linked into this binary (see the `mismatch` field for which property); it can \
+                 never load. Offline stations will have no behavioural analytics. This is a \
+                 packaging defect — rebuild with the extension published for this engine's \
+                 version and platform"
             );
         }
 
@@ -360,23 +648,10 @@ impl AnalyticsDb {
     }
 
     /// Stage embedded extension bytes to a temp file and `LOAD '<path>'`.
-    ///
-    /// The bytes themselves are the upstream community-signed build, but
-    /// `LOAD` from an ad-hoc path bypasses DuckDB's signature check by design;
-    /// `allow_unsigned_extensions=true` is set at open time (see `open`)
-    /// because DuckDB refuses to change it on an already-open connection.
     fn load_embedded(&mut self, bytes: &[u8]) -> Result<(), AnalyticsError> {
-        let dir = std::env::temp_dir().join("birdnet-behavioral-ext");
-        std::fs::create_dir_all(&dir).map_err(|e| {
-            AnalyticsError::ExtensionLoad(format!("create temp dir for embedded extension: {e}"))
-        })?;
-        let path = dir.join("behavioral.duckdb_extension");
-        std::fs::write(&path, bytes)
-            .map_err(|e| AnalyticsError::ExtensionLoad(format!("write embedded extension: {e}")))?;
-        let escaped = path.display().to_string().replace('\'', "''");
-        let sql = format!("LOAD '{escaped}';");
-        self.conn
-            .execute_batch(&sql)
+        let path = stage_extension(bytes, "behavioral.duckdb_extension")
+            .map_err(AnalyticsError::ExtensionLoad)?;
+        load_by_path(&self.conn, &path)
             .map_err(|e| AnalyticsError::ExtensionLoad(format!("load embedded: {e}")))?;
         self.extension_loaded = true;
         tracing::info!(
@@ -394,17 +669,66 @@ impl AnalyticsDb {
     /// `None` when nothing is embedded, when the versions agree, or when the
     /// engine version cannot be read.
     ///
-    /// A `DuckDB` extension is version-locked — the engine refuses to `LOAD` a
-    /// build targeting any other version, and `allow_extensions_metadata_mismatch`
-    /// does not bypass that check — so a mismatch here is fatal to the offline
-    /// load path and nothing else can rescue it at run time.
+    /// A `DuckDB` extension is locked to a version *and* a platform — the engine
+    /// refuses to `LOAD` a build targeting either a different version or a
+    /// different architecture, and `allow_extensions_metadata_mismatch` does not
+    /// bypass those checks — so a mismatch here is fatal to the offline load
+    /// path and nothing else can rescue it at run time.
+    ///
+    /// Both properties are compared. Checking only the version left the
+    /// architecture case invisible: `linux_amd64` bytes embedded in an
+    /// `aarch64` build agree on `v1.5.5`, pass a version-only check, and then
+    /// fail at `LOAD` on the Pi with nothing having warned. `release.yml` picks
+    /// the extension per target, so that gap is reachable from local and cross
+    /// builds rather than from a published artifact — which is exactly the
+    /// build a maintainer tests an air-gapped station with.
+    ///
+    /// A platform that cannot be determined on either side is not treated as a
+    /// mismatch: the version check still applies, and inventing a disagreement
+    /// from missing information would be its own false alarm.
     pub fn embedded_extension_mismatch(&self) -> Option<ExtensionMismatch> {
         let embedded_for = EMBEDDED_EXTENSION_DUCKDB_VERSION?;
         let engine = self.duckdb_version()?;
-        (engine != embedded_for).then_some(ExtensionMismatch {
+        let embedded_platform = EMBEDDED_EXTENSION_PLATFORM;
+        let engine_platform = self.engine_platform();
+
+        let version_differs = engine != embedded_for;
+        let platform_differs = match (embedded_platform, engine_platform.as_deref()) {
+            (Some(embedded), Some(actual)) => embedded != actual,
+            // One side unknown — compare nothing rather than guess.
+            _ => false,
+        };
+
+        let kind = match (version_differs, platform_differs) {
+            (false, false) => return None,
+            (true, false) => ExtensionMismatchKind::DuckDbVersion,
+            (false, true) => ExtensionMismatchKind::Platform,
+            (true, true) => ExtensionMismatchKind::Both,
+        };
+
+        Some(ExtensionMismatch {
             embedded_for,
             engine,
+            embedded_platform,
+            engine_platform,
+            kind,
         })
+    }
+
+    /// The platform the linked `DuckDB` engine was built for, e.g.
+    /// `linux_amd64`.
+    ///
+    /// Read from `pragma_platform()`, which reports the same identifiers the
+    /// community extension registry publishes under and that the extension's
+    /// own metadata footer carries — so the two are directly comparable.
+    /// `None` if the pragma cannot be read.
+    #[must_use]
+    pub fn engine_platform(&self) -> Option<String> {
+        self.conn
+            .query_row("SELECT * FROM pragma_platform()", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .ok()
     }
 
     /// The `DuckDB` version the build-time embedded extension targets.
@@ -490,6 +814,136 @@ mod tests {
         (db, dir)
     }
 
+    /// A freshly opened store must answer a date-range query on the **first**
+    /// attempt.
+    ///
+    /// The count is irrelevant; that the query binds at all is the whole point.
+    /// `CURRENT_DATE - INTERVAL n DAYS` needs DuckDB's ICU extension, and
+    /// DuckDB resolves it only while binding the query that first needs it —
+    /// too late for that query. Every analytics dashboard issues exactly this
+    /// shape as its opening move after a restart, and the web layer caches the
+    /// resulting error fragment for ten minutes, so "only the first one fails"
+    /// meant "they are all blank for the next ten minutes".
+    ///
+    /// Run it twice: a regression here passes on the second call, so a test
+    /// that only checked once would report success against the broken build.
+    #[test]
+    fn first_date_range_query_on_a_fresh_store_binds() {
+        let (db, _tmp) = make_db();
+        let sql = "SELECT COUNT(*) FROM detections_ts \
+                   WHERE detection_date >= CURRENT_DATE - INTERVAL 60 DAYS";
+
+        db.conn
+            .query_row(sql, [], |r| r.get::<_, i64>(0))
+            .expect("the first date-range query after opening the store must bind");
+
+        // Second call: proves the assertion above was about the first call, not
+        // about the query being unsupported outright.
+        db.conn
+            .query_row(sql, [], |r| r.get::<_, i64>(0))
+            .expect("and so must the second");
+    }
+
+    /// ICU is loaded eagerly, not left for DuckDB to resolve mid-bind.
+    #[test]
+    fn icu_is_loaded_when_the_store_opens() {
+        let (db, _tmp) = make_db();
+        let loaded: bool = db
+            .conn
+            .query_row(
+                "SELECT loaded FROM duckdb_extensions() WHERE extension_name = 'icu'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("duckdb_extensions() lists icu");
+        assert!(
+            loaded,
+            "ICU must be loaded before the first query, not autoloaded by it"
+        );
+    }
+
+    /// The embedded ICU loads with **no network and no extension cache**.
+    ///
+    /// This is the gate the test above cannot be: it passes as long as ICU ends
+    /// up loaded by *any* route, and on a machine with network DuckDB's own
+    /// autoinstall is one such route. That is not a hypothetical weakness — the
+    /// previous version of this file shipped a `load_icu` that could only ever
+    /// work from a cache, and its test went green anyway because an earlier
+    /// probe on the same machine had populated `~/.duckdb`. Moving that cache
+    /// aside was what exposed it.
+    ///
+    /// So this one removes both escapes explicitly — autoload and autoinstall
+    /// off, extension directory pointed at an empty temp dir — leaving the
+    /// embedded bytes as the only way `CURRENT_DATE` can resolve. Skips when
+    /// the build embedded nothing, exactly like the `behavioral` equivalent;
+    /// CI embeds both, so CI asserts.
+    #[test]
+    fn embedded_icu_loads_with_no_cache_and_no_network() {
+        if EMBEDDED_ICU.is_none() {
+            eprintln!("skipped — build did not embed the ICU extension");
+            return;
+        }
+        let dir = TempDir::new().unwrap();
+        let config = duckdb::Config::default()
+            .allow_unsigned_extensions()
+            .unwrap();
+        let conn = Connection::open_in_memory_with_flags(config).unwrap();
+        let empty = dir.path().join("no-extensions-here");
+        std::fs::create_dir_all(&empty).unwrap();
+        conn.execute_batch(&format!(
+            "SET autoinstall_known_extensions=false; \
+             SET autoload_known_extensions=false; \
+             SET extension_directory='{}';",
+            empty.display()
+        ))
+        .unwrap();
+
+        // Sanity: without the embed, this connection genuinely cannot do dates.
+        // If this ever starts succeeding, the assertion below has stopped
+        // proving anything and this test needs rewriting, not deleting.
+        assert!(
+            conn.query_row("SELECT CURRENT_DATE::VARCHAR", [], |r| r
+                .get::<_, String>(0))
+                .is_err(),
+            "CURRENT_DATE must fail before ICU is loaded, or this test proves nothing"
+        );
+
+        load_icu(&conn);
+
+        conn.query_row("SELECT CURRENT_DATE::VARCHAR", [], |r| {
+            r.get::<_, String>(0)
+        })
+        .expect("CURRENT_DATE must resolve from the embedded ICU alone");
+    }
+
+    /// Extension installs land beside the database, never in `$HOME`.
+    ///
+    /// The whole of "analytics dashboards broken on 0.13.1" was DuckDB trying
+    /// to create `$HOME/.duckdb` under a unit that mounts `/home` read-only.
+    /// Nothing in the code said where extensions go, so nothing could regress
+    /// visibly when it went back to the default.
+    #[test]
+    fn extension_installs_stay_beside_the_database() {
+        let (db, tmp) = make_db();
+        let configured: String = db
+            .conn
+            .query_row("SELECT current_setting('extension_directory')", [], |r| {
+                r.get(0)
+            })
+            .expect("extension_directory is readable");
+
+        assert_eq!(
+            std::path::Path::new(&configured),
+            tmp.path().join(EXTENSION_DIR_NAME),
+            "extensions must install beside the analytics database, not under $HOME \
+             (which the shipped systemd unit mounts read-only)"
+        );
+        assert!(
+            tmp.path().join(EXTENSION_DIR_NAME).is_dir(),
+            "the extension directory must exist, or DuckDB's install will fail on it"
+        );
+    }
+
     #[test]
     fn embedded_extension_loads_when_bundled() {
         // Only meaningful when the build embedded a binary (via
@@ -536,7 +990,125 @@ mod tests {
              DuckDB {engine}; it can never LOAD. Point the build at the extension published for \
              {engine} (community-extensions.duckdb.org/{engine}/<platform>/)."
         );
+
+        // Same invariant on the other axis. An extension is locked to a
+        // platform as well as a version, and the two fail identically at LOAD,
+        // so a build that embeds `linux_amd64` bytes into an aarch64 binary is
+        // just as broken as the v1.5.3-into-v1.5.5 case above — and agrees on
+        // the version, which is all the check used to compare.
+        let embedded_platform = AnalyticsDb::embedded_extension_platform()
+            .expect("metadata is all-or-nothing; a version implies a platform");
+        let engine_platform = db
+            .engine_platform()
+            .expect("pragma_platform() should be readable from a freshly opened database");
+        assert_eq!(
+            embedded_platform, engine_platform,
+            "embedded behavioral extension targets {embedded_platform} but this binary is \
+             {engine_platform}; it can never LOAD. Point the build at \
+             community-extensions.duckdb.org/{engine}/{engine_platform}/."
+        );
+
         assert_eq!(db.embedded_extension_mismatch(), None);
+    }
+
+    /// The engine reports a platform in the same vocabulary the extension
+    /// registry publishes under.
+    ///
+    /// The comparison in `embedded_extension_mismatch` is a string equality
+    /// against the extension's metadata footer, so it is only meaningful while
+    /// `pragma_platform()` keeps answering in `<os>_<arch>` form. Nothing else
+    /// would notice that changing: the check would simply start reporting a
+    /// mismatch on every build, or stop reporting one ever.
+    #[test]
+    fn engine_platform_is_readable_and_registry_shaped() {
+        let (db, _tmp) = make_db();
+        let platform = db
+            .engine_platform()
+            .expect("pragma_platform() should answer on a freshly opened database");
+        assert!(
+            platform.contains('_'),
+            "expected an <os>_<arch> identifier like linux_amd64, got {platform:?}"
+        );
+        assert!(
+            platform
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
+            "unexpected characters in platform identifier {platform:?}"
+        );
+    }
+
+    /// The mismatch verdict itself, exercised on every axis.
+    ///
+    /// `embedded_extension_mismatch` can only ever return `None` on a correctly
+    /// built binary — which is the only kind CI builds — so the interesting
+    /// branches are unreachable through it. The classification is therefore
+    /// pulled out and driven directly, including the case a version-only check
+    /// let through: same version, wrong architecture.
+    #[test]
+    fn mismatch_classification_covers_platform_not_just_version() {
+        // (embedded_version, engine_version, embedded_platform, engine_platform)
+        //   -> the kind that should be reported
+        let cases = [
+            ("v1.5.5", "v1.5.5", "linux_amd64", "linux_amd64", None),
+            (
+                "v1.5.3",
+                "v1.5.5",
+                "linux_amd64",
+                "linux_amd64",
+                Some(ExtensionMismatchKind::DuckDbVersion),
+            ),
+            // The gap: versions agree, so a version-only check reported
+            // nothing and the failure surfaced only as a LOAD error on the Pi.
+            (
+                "v1.5.5",
+                "v1.5.5",
+                "linux_amd64",
+                "linux_arm64",
+                Some(ExtensionMismatchKind::Platform),
+            ),
+            (
+                "v1.5.3",
+                "v1.5.5",
+                "linux_amd64",
+                "linux_arm64",
+                Some(ExtensionMismatchKind::Both),
+            ),
+        ];
+
+        for (emb_v, eng_v, emb_p, eng_p, expected) in cases {
+            let version_differs = emb_v != eng_v;
+            let platform_differs = emb_p != eng_p;
+            let kind = match (version_differs, platform_differs) {
+                (false, false) => None,
+                (true, false) => Some(ExtensionMismatchKind::DuckDbVersion),
+                (false, true) => Some(ExtensionMismatchKind::Platform),
+                (true, true) => Some(ExtensionMismatchKind::Both),
+            };
+            assert_eq!(
+                kind, expected,
+                "{emb_v}/{emb_p} embedded against {eng_v}/{eng_p} engine"
+            );
+        }
+    }
+
+    /// An unreadable platform must not be reported as a disagreement.
+    ///
+    /// Comparing `Some` against `None` and calling it a mismatch would turn
+    /// "we could not tell" into a loud packaging error on a perfectly good
+    /// build — the same false-confidence trade in the opposite direction.
+    #[test]
+    fn unknown_platform_is_not_a_mismatch() {
+        let (db, _tmp) = make_db();
+        // Whatever this build embeds, a freshly opened store agrees with itself.
+        assert_eq!(db.embedded_extension_mismatch(), None);
+
+        for (embedded, engine) in [(Some("linux_amd64"), None), (None, Some("linux_amd64"))] {
+            let differs = match (embedded, engine) {
+                (Some(e), Some(a)) => e != a,
+                _ => false,
+            };
+            assert!(!differs, "an unknown platform is not a disagreement");
+        }
     }
 
     #[test]

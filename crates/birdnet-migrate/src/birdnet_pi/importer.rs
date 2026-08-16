@@ -300,6 +300,82 @@ mod tests {
         tmp
     }
 
+    /// A source row whose `Date` names no point in time is imported, not
+    /// skipped — and a NULL `Date` arrives as `""`.
+    ///
+    /// This is the front half of the mechanism that emptied the analytics
+    /// dashboards: `Option<String>::unwrap_or_default()` turns a NULL `Date`
+    /// into the empty string, our `Date TEXT NOT NULL` accepts it (the column
+    /// type forbids NULL, not nonsense), and the OLAP sync copies it onward,
+    /// where a plain `CAST` in `detections_ts` used to abort every query that
+    /// touched a timestamp. The behaviour is pinned rather than changed:
+    /// dropping a station's detections during a migration is worse than
+    /// carrying rows the dashboards cannot place, so the fix is that the OLAP
+    /// view tolerates them, the validator says so, and the count is
+    /// reportable. If this test ever has to change, that trade-off is being
+    /// revisited deliberately.
+    #[test]
+    fn rows_with_unparseable_dates_are_imported_not_skipped() {
+        let tmp = NamedTempFile::new().unwrap();
+        let conn = Connection::open(tmp.path()).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE detections (
+                Date TEXT, Time TEXT, Sci_Name TEXT, Com_Name TEXT,
+                Confidence REAL, Lat REAL, Lon REAL, Cutoff REAL,
+                Week INTEGER, Sens REAL, Overlap REAL, File_Name TEXT);
+             INSERT INTO detections VALUES ('2026-01-01','06:00:00','Turdus merula','Blackbird',0.9,NULL,NULL,NULL,NULL,NULL,NULL,'a.wav');
+             INSERT INTO detections VALUES (NULL,NULL,'Parus major','Great Tit',0.8,NULL,NULL,NULL,NULL,NULL,NULL,'b.wav');
+             INSERT INTO detections VALUES ('','','Erithacus rubecula','Robin',0.7,NULL,NULL,NULL,NULL,NULL,NULL,'c.wav');
+             INSERT INTO detections VALUES ('not-a-date','25:99:99','Corvus corax','Raven',0.6,NULL,NULL,NULL,NULL,NULL,NULL,'d.wav');",
+        )
+        .unwrap();
+        drop(conn);
+
+        let dst = NamedTempFile::new().unwrap();
+        let handle = ProgressHandle::new();
+        let summary = BirdNetPiImporter
+            .migrate(tmp.path(), dst.path(), &handle)
+            .unwrap();
+        assert_eq!(summary.source_rows, 4);
+        assert_eq!(
+            summary.imported_rows, 4,
+            "every row is imported; none is skipped for a bad Date"
+        );
+        assert_eq!(summary.skipped_rows, 0);
+
+        let dc = Connection::open(dst.path()).unwrap();
+        // A NULL Date becomes "" rather than staying NULL.
+        let blank: i64 = dc
+            .query_row(
+                "SELECT COUNT(*) FROM detections WHERE Date = '' AND Time = ''",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            blank, 2,
+            "the NULL row and the empty-string row both land as ''"
+        );
+        let still_null: i64 = dc
+            .query_row(
+                "SELECT COUNT(*) FROM detections WHERE Date IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(still_null, 0);
+
+        let unparseable: i64 = dc
+            .query_row(
+                "SELECT COUNT(*) FROM detections
+                  WHERE Date NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(unparseable, 3);
+    }
+
     #[test]
     fn imports_all_rows() {
         let src = make_source(10);

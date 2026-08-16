@@ -190,10 +190,16 @@ jobs:
           load: true
           tags: birdnet-behavior:verify
 
-      - name: Prove the behavioral extension loads with no network
+      - name: Prove the DuckDB extensions load with no network
         # `--network none` is the whole point: with no network the cached and
         # community-registry stages of the loader cannot succeed, so a pass
-        # means the *embedded* copy loaded — the air-gapped guarantee.
+        # means the *embedded* copies loaded — the air-gapped guarantee.
+        #
+        # This covers `icu` as well as `behavioral`: --verify-extension runs the
+        # date-window query every dashboard opens with, and CURRENT_DATE lives
+        # in ICU. Without an embedded ICU that query can only work by DuckDB
+        # autoinstalling into $HOME/.duckdb, which --network none forbids here
+        # and ProtectHome=read-only forbids on a real station.
         #
         # `--entrypoint` bypasses entrypoint.sh (model download, directory
         # setup) so this step can only fail for the reason it is testing.

@@ -42,6 +42,8 @@ pub use status::{
     CaptureStatus, CaptureStatusHandle, SourceState, SourceStatus, UPTIME_SEGMENTS, UptimeSegment,
     new_capture_status, publish_capture_status, read_capture_status,
 };
+/// Which half of a stereo capture to keep; see [`tee::ChannelPick`].
+pub use tee::ChannelPick;
 pub use tmpfs::{
     TmpfsConfig, TmpfsError, generate_systemd_mount_unit, is_tmpfs_mounted, mount_tmpfs,
     unmount_tmpfs,

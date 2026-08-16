@@ -128,6 +128,28 @@ jobs:
           else
             echo "::warning::could not fetch the behavioral extension; offline-load test will skip"
           fi
+      - name: Embed the ICU extension (air-gapped date-window coverage)
+        # ICU is not statically linked into the bundled libduckdb, and every
+        # dashboard query filters on a date window that needs CURRENT_DATE.
+        # With it embedded, `embedded_icu_loads_with_no_cache_and_no_network`
+        # runs its real assertion — autoload and autoinstall off, extension
+        # directory pointed at an empty dir, so the embedded bytes are the only
+        # way CURRENT_DATE can resolve — instead of skipping. Without this step
+        # that test is a no-op and an ICU embed regression ships silently, which
+        # is exactly how the previous ICU test went green against a `load_icu`
+        # that could only ever work from a pre-populated cache.
+        shell: bash
+        run: |
+          set -eu
+          url="https://extensions.duckdb.org/v1.5.5/linux_amd64/icu.duckdb_extension.gz"
+          tmp="$RUNNER_TEMP/icu.duckdb_extension"
+          if curl -fsSL --retry 3 --retry-delay 2 --max-time 180 -o "${tmp}.gz" "$url"; then
+            gunzip -f "${tmp}.gz"
+            echo "BIRDNET_BUNDLED_ICU_FILE=$tmp" >> "$GITHUB_ENV"
+            echo "embedded ICU — air-gapped date-window test will assert"
+          else
+            echo "::warning::could not fetch ICU; the air-gapped date-window test will skip"
+          fi
       - name: Run full suite with analytics (DuckDB behavioral extension)
         # Compiles AND runs the analytics code + tests that the default feature
         # set never builds. This is the gate that would have caught the v0.5.0

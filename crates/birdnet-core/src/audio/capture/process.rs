@@ -289,14 +289,24 @@ pub fn start_microphone_capture(config: &RecordingConfig) -> Result<CaptureProce
         ref device,
         sample_rate,
         channels,
+        channel_pick,
         ref stream_id,
     } = config.source
     else {
         return Err(CaptureError::Config("expected microphone source".into()));
     };
+    // Two specs, because picking a channel changes the shape mid-stream. The
+    // device must be opened with both channels — you cannot select one the
+    // driver was never asked for — while everything after the tee (segment
+    // headers, the live tap, the WAV files themselves) sees the mono stream
+    // that survives the selection.
+    let capture_spec = PcmSpec {
+        sample_rate,
+        channels: if channel_pick.is_some() { 2 } else { channels },
+    };
     let spec = PcmSpec {
         sample_rate,
-        channels,
+        channels: if channel_pick.is_some() { 1 } else { channels },
     };
 
     // Both branches are compiled on every platform (`cfg!`, not `#[cfg]`), so
@@ -304,14 +314,23 @@ pub fn start_microphone_capture(config: &RecordingConfig) -> Result<CaptureProce
     if cfg!(target_os = "macos") {
         return start_avfoundation_microphone(config, device, spec, stream_id.as_deref());
     }
-    start_teed_alsa_microphone(config, device, spec, stream_id.as_deref())
+    start_teed_alsa_microphone(
+        config,
+        device,
+        capture_spec,
+        spec,
+        channel_pick,
+        stream_id.as_deref(),
+    )
 }
 
 /// Linux microphone: `arecord` → in-process tee → {segment writer, live tap}.
 fn start_teed_alsa_microphone(
     config: &RecordingConfig,
     device: &str,
+    capture_spec: PcmSpec,
     spec: PcmSpec,
+    channel_pick: Option<tee::ChannelPick>,
     stream_id: Option<&str>,
 ) -> Result<CaptureProcess, CaptureError> {
     if !matches!(config.format, AudioFormat::Wav) {
@@ -324,7 +343,7 @@ fn start_teed_alsa_microphone(
         );
     }
 
-    let mut cmd = arecord_raw_command(device, spec);
+    let mut cmd = arecord_raw_command(device, capture_spec);
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = cmd.spawn()?;
     drain_capture_stderr(&mut child, device);
@@ -351,7 +370,7 @@ fn start_teed_alsa_microphone(
         SegmentClock::System,
     );
 
-    let tee = match tee::spawn(label, stdout, writer, tap, config.gain_db) {
+    let tee = match tee::spawn(label, stdout, writer, tap, config.gain_db, channel_pick) {
         Ok(tee) => tee,
         Err(e) => {
             // `std::process::Child` does **not** kill on drop, so bailing out
@@ -684,6 +703,7 @@ mod tests {
             device: "plughw:1,0".into(),
             sample_rate: 48_000,
             channels: 1,
+            channel_pick: None,
             stream_id: None,
         };
         let expected = if cfg!(target_os = "macos") {
@@ -716,6 +736,7 @@ mod tests {
                 device: "plughw:1,0".into(),
                 sample_rate: 48_000,
                 channels: 1,
+                channel_pick: None,
                 stream_id: None,
             },
             output_dir: PathBuf::from("/tmp"),
@@ -756,13 +777,14 @@ mod tests {
             LocalOffset::utc(),
             SegmentClock::System,
         );
-        let tee = tee::spawn("test".to_owned(), source, writer, None, 0.0).ok()?;
+        let tee = tee::spawn("test".to_owned(), source, writer, None, 0.0, None).ok()?;
         Some(CaptureProcess {
             child,
             source: CaptureSource::Microphone {
                 device: "plughw:1,0".into(),
                 sample_rate: 8_000,
                 channels: 1,
+                channel_pick: None,
                 stream_id: None,
             },
             tee: Some(tee),
@@ -838,6 +860,7 @@ mod tests {
                 device: "null".into(),
                 sample_rate: 48_000,
                 channels: 1,
+                channel_pick: None,
                 stream_id: Some("src_seed_1".into()),
             },
             output_dir: dir.path().to_path_buf(),

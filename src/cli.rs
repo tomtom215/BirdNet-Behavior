@@ -129,6 +129,33 @@ pub struct Cli {
     #[arg(long)]
     pub doctor_json: bool,
 
+    /// Report what a stereo microphone is actually delivering to the model.
+    ///
+    /// Records a few seconds from the configured ALSA device and prints, for
+    /// the same audio: the level of each channel, the inter-channel delay (and
+    /// the capsule spacing that implies), and what each way of reducing two
+    /// channels to one would hand BirdNET.
+    ///
+    /// The model takes a single channel, so two must become one somewhere. Today
+    /// that is a plain average, which is harmless for coincident capsules and a
+    /// comb filter for spaced ones — at half a period of delay it cancels almost
+    /// the entire signal. Whether a given station sits in that case depends on
+    /// its microphone and cannot be answered anywhere but on the station.
+    ///
+    /// STOP THE SERVICE FIRST. An ALSA capture device is exclusive, so this
+    /// cannot open a microphone the running station is already holding:
+    /// `sudo systemctl stop birdnet-behavior`, run the report, start it again.
+    #[arg(long)]
+    pub channel_report: bool,
+
+    /// Seconds of audio to record for `--channel-report` (default 5).
+    ///
+    /// Longer is steadier. Run it while birds are actually singing: the
+    /// cancellation is direction-dependent, so ambient noise alone can look
+    /// benign on a microphone that loses badly on real song.
+    #[arg(long, default_value = "5")]
+    pub channel_report_secs: u32,
+
     /// Attempt safe automatic repairs, then run the diagnostic.
     ///
     /// Implies `--doctor` (use with `--doctor-json` for machine-readable
@@ -180,12 +207,17 @@ pub struct Cli {
     /// extension version, and what the build-time embedded copy targets.
     /// Exits 0 when the extension loads and non-zero when it does not.
     ///
+    /// It then runs the date-window query every dashboard opens with. That
+    /// covers the other extension a station needs, `icu`, which is where
+    /// `CURRENT_DATE` lives — and which DuckDB otherwise autoinstalls into
+    /// `$HOME/.duckdb`, a path the shipped systemd unit mounts read-only.
+    ///
     /// Unlike `--refresh-extension` this needs no network and writes nothing
     /// you care about, so it is the check to run on a station whose analytics
     /// pages are empty. Run it with networking disabled to prove the *offline*
     /// guarantee specifically: with no network neither the extension cache nor
-    /// the community registry can satisfy the load, so only the embedded copy
-    /// can.
+    /// the community registry can satisfy either load, so only the embedded
+    /// copies can.
     #[arg(long)]
     pub verify_extension: bool,
 

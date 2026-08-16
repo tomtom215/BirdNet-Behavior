@@ -7,21 +7,26 @@
 //! - **Abundance indices:** How detection frequency varies through the year.
 //! - **Inter-annual trends:** Year-over-year changes in species presence.
 //!
-//! ## SQL compatibility
+//! ## SQL target
 //!
-//! | Query function                    | `SQLite` | `DuckDB` |
-//! |-----------------------------------|----------|----------|
-//! | [`timing::phenology_timing_sql`]  | ✓      | ✓      |
-//! | [`timing::first_detection_sql`]   | ✓      | ✓      |
-//! | [`timing::migration_window_sql`]  | ✗      | ✓      |
-//! | [`timing::interannual_trend_sql`] | ✗      | ✓      |
-//! | [`abundance::weekly_abundance_sql`]        | ✓  | ✓  |
-//! | [`abundance::monthly_totals_sql`]          | ✓  | ✓  |
-//! | [`abundance::weekly_richness_sql`]         | ✓  | ✓  |
-//! | [`abundance::effort_corrected_abundance_sql`] | ✗ | ✓ |
+//! Every builder here emits **`DuckDB`** SQL and reads the `detections_ts`
+//! view, which is what this crate's `AnalyticsDb` creates and what carries a
+//! properly typed `detection_date`.
 //!
-//! SQLite-compatible queries use only `strftime` and `julianday`.
-//! DuckDB-only queries use `percentile_cont` and `LAG` window functions.
+//! These builders previously advertised a compatibility matrix in which most of
+//! them ran on `SQLite` *and* `DuckDB`. That was never true of `DuckDB`, the
+//! engine this crate actually talks to: they emitted `strftime('%Y', Date)`,
+//! which is `SQLite`'s `strftime(format, value)` argument order, so `DuckDB`
+//! rejected them with "Could not choose a best candidate function for the
+//! function call `strftime(STRING_LITERAL, VARCHAR)`". `phenology_timing_sql`
+//! additionally used `julianday`, which `DuckDB` does not have. Ten of the
+//! eleven queries failed to bind. The claim survived because every test asserted
+//! on the generated *text* — `sql.contains("month")` and the like — which a
+//! query no engine will run passes just as well as one that works.
+//!
+//! `tests/phenology_execute.rs` now runs all of them against a real store.
+//! Restoring `SQLite` support would mean a second set of builders; nothing in
+//! the tree asked for one, so the dual claim was dropped rather than doubled.
 //!
 //! ## Example
 //!
@@ -34,7 +39,7 @@
 //!     ..PhenologyParams::default()
 //! };
 //! let sql = timing::phenology_timing_sql(&params);
-//! // Execute sql against SQLite or DuckDB…
+//! // Execute sql against the DuckDB analytics store…
 //! ```
 
 pub mod abundance;

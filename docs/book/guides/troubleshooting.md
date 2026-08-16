@@ -92,6 +92,56 @@ The `duckdb-behavioral` community extension is compiled for a **specific DuckDB 
 
 To fix it, rebuild and republish the extension for the bundled DuckDB version in the [duckdb-behavioral](https://github.com/tomtom215/duckdb-behavioral) repository (or pin the `duckdb` crate to the version the published extension targets) and rebuild with `--features analytics`. Confirm the bundled version with `birdnet-behavior --doctor`. See the full [TROUBLESHOOTING.md](https://github.com/tomtom215/BirdNet-Behavior/blob/main/TROUBLESHOOTING.md) entry for details.
 
+## Every analytics dashboard is empty, and the logs say nothing
+
+The Analytics and Time-series pages render but show no data, the health endpoint
+is green, and nothing in `journalctl -u birdnet-behavior` looks like an error.
+It does not recover on its own — stations have sat like this for days.
+
+Check the journal for this line:
+
+```bash
+journalctl -u birdnet-behavior --no-pager | grep -i 'duckdb": Read-only'
+# Failed to create directory "/home/pi/.duckdb": Read-only file system
+```
+
+Every dashboard query filters on a date window, which reaches DuckDB as
+`detection_date >= CURRENT_DATE - INTERVAL n DAYS`. `CURRENT_DATE` lives in
+DuckDB's ICU extension, which is **not** statically linked, so DuckDB fetches it
+— by default into `$HOME/.duckdb`. The shipped systemd unit sets
+`ProtectHome=read-only`, so that write fails and every date-ranged query fails
+with it. The web layer turns a query error into a cached "temporarily
+unavailable" fragment, which is why nothing surfaces as an error.
+
+**Fixed in versions after 0.13.1**, two ways over: DuckDB's extension directory
+now sits beside the analytics database inside the data directory, and the ICU
+binary is embedded in the release binary so no download is needed at all.
+Upgrading is the fix.
+
+To confirm a build is healthy — on the station, or in an image, with or without
+network:
+
+```bash
+birdnet-behavior --verify-extension
+```
+
+It loads both extensions and runs the date-window query the dashboards open
+with, exiting non-zero if either fails.
+
+If you are stuck on 0.13.1 and cannot upgrade yet, pointing `HOME` at the
+station's data directory restores analytics immediately. That directory is the
+one place the unit already grants write access (`ReadWritePaths=`), so DuckDB's
+`.duckdb` cache lands somewhere it is allowed to:
+
+```bash
+sudo systemctl edit birdnet-behavior
+# [Service]
+# Environment=HOME=/home/pi/BirdNet-Behavior     # your data dir; pi → your user
+sudo systemctl restart birdnet-behavior
+```
+
+That override is harmless to leave in place after upgrading, and unnecessary.
+
 ## `--doctor` reports a quarantined analytics database
 
 The startup log shows *"analytics database is unusable; quarantining it and
