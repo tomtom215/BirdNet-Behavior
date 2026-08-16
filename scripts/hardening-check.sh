@@ -80,7 +80,12 @@ if [ "${BNB_HARDENED:-0}" != "1" ]; then
   mkdir -p "$WORK/data" "$WORK/config" "$WORK/tmp"
   [ -n "$DB" ] && cp "$DB" "$WORK/data/birds.db"
 
+  # Hand the child our own mount namespace so it can prove it landed in a
+  # different one. See the guard below for why this is a token rather than a
+  # lookup the child could do for itself.
   export BNB_HARDENED=1 BNB_BIN="$BIN" BNB_WORK="$WORK" BNB_DB="$DB"
+  BNB_PARENT_MNT_NS="$(readlink /proc/self/ns/mnt 2>/dev/null || true)"
+  export BNB_PARENT_MNT_NS
   exec unshare -rm "$0"
 fi
 
@@ -101,9 +106,27 @@ CONFIG_DIR="$WORK/config"
 # development container. The body was run directly to test the guard below, the
 # bind mount landed on the host's /tmp, and every tool that needed a temp
 # directory stopped working.
-if [ "$(readlink /proc/1/ns/mnt 2>/dev/null)" = "$(readlink /proc/self/ns/mnt 2>/dev/null)" ] \
-   && [ -r /proc/1/ns/mnt ]; then
-  echo "refusing to run: this is the host mount namespace, not a private one." >&2
+#
+# The check is a token handed down by the re-exec above: the parent records the
+# mount namespace it was in, and this half refuses unless it is demonstrably in
+# a different one. Everything that cannot be positively confirmed is a refusal
+# — `BNB_HARDENED=1` set by hand carries no token, and an `unshare` that did
+# not actually unshare leaves the two equal.
+#
+# It deliberately does NOT compare against PID 1's namespace, which is what it
+# did until 0.14.0. `/proc/1/ns/mnt` is unreadable to a process whose PID 1 is
+# a sandbox supervisor rather than real init — common in CI containers and
+# nested sandboxes — and `readlink` then yields the empty string. The old
+# condition required the two namespaces to be *equal* to refuse, so an
+# unreadable PID 1 made it compare "" against a real namespace id, find them
+# different, and fail **open**: it waved the script through in the host mount
+# namespace, as root, on exactly the class of environment it existed to
+# protect. Measured, not theorised — see the commit message.
+self_ns="$(readlink /proc/self/ns/mnt 2>/dev/null || true)"
+if [ -z "$self_ns" ] \
+   || [ -z "${BNB_PARENT_MNT_NS:-}" ] \
+   || [ "$BNB_PARENT_MNT_NS" = "$self_ns" ]; then
+  echo "refusing to run: not demonstrably inside a private mount namespace." >&2
   echo "Run the script normally — it re-execs itself under 'unshare -rm'." >&2
   exit 99
 fi

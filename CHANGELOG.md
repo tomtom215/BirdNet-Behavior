@@ -251,6 +251,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the extension per target, so this gap was reachable from local and cross
   builds — which is exactly what a maintainer tests an air-gapped station with.
 
+- **`scripts/hardening-check.sh` could bind-mount over the host as root.** The
+  script re-execs itself under `unshare -rm` and carries a guard meant to abort
+  if that did not happen, because everything after it bind-mounts over `$HOME`,
+  `/usr` and `/tmp` and then deletes its working directory on exit. The guard
+  compared the caller's mount namespace against PID 1's, and refused only when
+  the two were *equal*. `/proc/1/ns/mnt` is unreadable to a process whose PID 1
+  is a sandbox supervisor rather than real init — ordinary in CI containers and
+  nested sandboxes — and `readlink` then yields the empty string, which never
+  equals a real namespace id. The guard therefore failed **open** on precisely
+  the environments it existed to protect: measured in one such container, it
+  returned "proceed" in all four cases tested, including the host mount
+  namespace as root. It is now a token handed down by the re-exec — the parent
+  records its own namespace and the child refuses unless it is demonstrably in
+  a different one — so anything that cannot be positively confirmed is a
+  refusal. This only ever affected maintainers running the script; it is not
+  installed on a station.
+
 ### Added
 
 - `GET /api/v2/analytics/status` reports the analytics **store**, not just the
