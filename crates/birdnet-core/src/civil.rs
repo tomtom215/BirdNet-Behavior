@@ -291,6 +291,74 @@ mod tests {
         );
     }
 
+    /// Every field-shape check, exercised one field at a time.
+    ///
+    /// `parse_civil` is three chained `||` checks over six fields, and a test
+    /// that breaks two fields at once cannot tell those chains apart from a
+    /// single `&&`. That is not a theoretical gap: the suite had cases for a
+    /// malformed date *and* a malformed time together, and for a one-digit
+    /// hour, and `cargo-mutants` still walked several of these operators
+    /// unnoticed. Each case below leaves every other field valid, so exactly
+    /// one sub-condition is doing the rejecting.
+    #[test]
+    fn every_field_shape_is_checked_on_its_own() {
+        // Baseline: the case all the others are one mutation away from.
+        assert!(parse_civil("2026-03-11", "08:30:00").is_some());
+
+        // Split counts, one side at a time.
+        assert!(parse_civil("2026-03", "08:30:00").is_none(), "date needs 3");
+        assert!(parse_civil("2026-03-11", "08:30").is_none(), "time needs 3");
+
+        // Date field widths, one field at a time.
+        assert!(parse_civil("202-03-11", "08:30:00").is_none(), "year 4");
+        assert!(parse_civil("2026-3-11", "08:30:00").is_none(), "month 2");
+        assert!(parse_civil("2026-03-1", "08:30:00").is_none(), "day 2");
+
+        // Time field widths, one field at a time.
+        assert!(parse_civil("2026-03-11", "8:30:00").is_none(), "hour 2");
+        assert!(parse_civil("2026-03-11", "08:3:00").is_none(), "minute 2");
+        assert!(parse_civil("2026-03-11", "08:30:0").is_none(), "second 2");
+    }
+
+    /// The last valid value of each time field, and the first invalid one.
+    ///
+    /// `hour > 23`, `minute > 59` and `second > 59` are the three comparisons
+    /// most easily written one off. Asserting only that `60` is rejected
+    /// cannot distinguish `> 59` from `>= 59` or `== 59` — every one of those
+    /// rejects 60. It takes the *accepted* boundary to pin the operator, which
+    /// is why `second > 59` survived mutation until this test existed.
+    #[test]
+    fn time_field_bounds_accept_their_last_valid_value() {
+        for (time, why) in [
+            ("23:59:59", "23:59:59 is a real time"),
+            ("00:00:00", "midnight is a real time"),
+        ] {
+            assert!(
+                parse_civil("2026-03-11", time).is_some(),
+                "{why} — rejecting it means a bound is off by one"
+            );
+        }
+
+        // …and one past each, one field at a time.
+        assert!(parse_civil("2026-03-11", "24:30:00").is_none(), "hour 24");
+        assert!(parse_civil("2026-03-11", "08:60:00").is_none(), "minute 60");
+        assert!(parse_civil("2026-03-11", "08:30:60").is_none(), "second 60");
+    }
+
+    /// The calendar-range check, from both sides of each bound.
+    ///
+    /// Same reasoning as the time bounds: `1..=12` and `1..=31` are only
+    /// pinned by asserting that 1, 12 and 31 are *accepted*.
+    #[test]
+    fn month_and_day_bounds_accept_their_edges() {
+        assert!(parse_civil("2026-01-01", "08:30:00").is_some(), "month 1");
+        assert!(parse_civil("2026-12-31", "08:30:00").is_some(), "month 12");
+        assert!(parse_civil("2026-00-11", "08:30:00").is_none(), "month 0");
+        assert!(parse_civil("2026-13-11", "08:30:00").is_none(), "month 13");
+        assert!(parse_civil("2026-03-00", "08:30:00").is_none(), "day 0");
+        assert!(parse_civil("2026-03-32", "08:30:00").is_none(), "day 32");
+    }
+
     #[test]
     fn parse_civil_rejects_what_is_not_a_date() {
         assert!(parse_civil("2026-03-11", "08:30:00").is_some());
