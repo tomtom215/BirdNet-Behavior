@@ -4,6 +4,7 @@
 //! Migrations are defined as SQL strings and applied in order.
 
 use rusqlite::Connection;
+use std::ffi::OsStr;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -742,8 +743,12 @@ pub struct MigrationPreview {
 /// Describe what the pending history-rewriting migrations would do, without
 /// applying anything.
 ///
-/// Only migrations listed in [`HISTORY_REWRITES`] appear: a schema-only
+/// Only migrations listed in `HISTORY_REWRITES` appear: a schema-only
 /// migration has nothing to preview, because it moves no data.
+///
+/// `HISTORY_REWRITES` is deliberately *not* an intra-doc link: it is private,
+/// and linking a private item from a `pub` item's docs is
+/// `rustdoc::private_intra_doc_links`, which CI denies. Leave the brackets off.
 ///
 /// # Errors
 ///
@@ -769,11 +774,7 @@ pub fn preview_pending(conn: &Connection) -> Result<Vec<MigrationPreview>, Migra
             Ok(rows) => rows,
             // A fresh database has no `detections` table yet, so the preview
             // has nothing to look at. That is an empty report, not a failure.
-            Err(rusqlite::Error::SqliteFailure(_, Some(ref msg)))
-                if msg.contains("no such table") =>
-            {
-                Vec::new()
-            }
+            Err(ref e) if preview_target_missing(e) => Vec::new(),
             Err(e) => return Err(MigrationError::Sqlite(e)),
         };
         out.push(MigrationPreview {
@@ -783,6 +784,25 @@ pub fn preview_pending(conn: &Connection) -> Result<Vec<MigrationPreview>, Migra
         });
     }
     Ok(out)
+}
+
+/// Whether a failed preview query failed only because the table it reads does
+/// not exist yet.
+///
+/// The one benign failure: a database too young to hold the rows a migration
+/// would rewrite has nothing to report. Every other failure has to propagate —
+/// "nothing to change" is the single answer an operator acts on by upgrading
+/// without looking further, so a preview that could not run must never produce
+/// it.
+///
+/// Deliberately narrow. `rusqlite` splits statement-preparation failures across
+/// two variants depending on whether `SQLite` could attribute the error to a
+/// token: a missing *table* arrives as `SqliteFailure`, while a missing
+/// *column* on a table that does exist arrives as `SqlInputError` and is not
+/// benign. Split out from the `match` arm so both sides of that line are
+/// testable without having to provoke each error shape from live `SQLite`.
+fn preview_target_missing(err: &rusqlite::Error) -> bool {
+    matches!(err, rusqlite::Error::SqliteFailure(_, Some(msg)) if msg.contains("no such table"))
 }
 
 /// Run one preview query and collect its `(label, value)` rows.
@@ -802,6 +822,19 @@ fn collect_preview(conn: &Connection, sql: &str) -> Result<Vec<(String, String)>
 /// whose disk is too full for it would otherwise be unable to start at all.
 /// Setting this is the operator saying they accept an unrecoverable rewrite.
 const SKIP_BACKUP_ENV: &str = "BIRDNET_SKIP_MIGRATION_BACKUP";
+
+/// Whether the operator has waived the pre-migration backup.
+///
+/// Unset, empty, and `"0"` all mean "take the backup": an empty value is what a
+/// shell leaves behind after `FOO=` or an unexpanded `${FOO}`, and `0` is what
+/// someone writes when they mean off. Anything else is consent.
+///
+/// Split out from the `var_os` call so the predicate is testable without
+/// mutating process-global environment state from a test, which would race with
+/// every other test in this binary.
+fn backup_waived(value: Option<&OsStr>) -> bool {
+    value.is_some_and(|v| !v.is_empty() && v != "0")
+}
 
 /// Where a backup for `version` should go, avoiding any file already there.
 ///
@@ -838,7 +871,7 @@ fn backup_before_rewrite(
     conn: &Connection,
     version: u32,
 ) -> Result<Option<PathBuf>, MigrationError> {
-    if std::env::var_os(SKIP_BACKUP_ENV).is_some_and(|v| !v.is_empty() && v != "0") {
+    if backup_waived(std::env::var_os(SKIP_BACKUP_ENV).as_deref()) {
         tracing::warn!(
             version,
             "{SKIP_BACKUP_ENV} is set — applying a history-rewriting migration with no backup. \
@@ -1355,6 +1388,15 @@ mod tests {
             "a preview must not apply the migration"
         );
         assert_eq!(current_version(&conn).unwrap(), 23);
+
+        // The report must name the migration it is previewing. Nothing else in
+        // this test would notice if it named a different one.
+        let expected = MIGRATIONS
+            .iter()
+            .find(|m| m.version == 24)
+            .expect("migration 24 exists")
+            .description;
+        assert_eq!(p.description, expected);
     }
 
     /// Once applied, the migration is no longer pending and drops out of the
@@ -1385,6 +1427,125 @@ mod tests {
             .find(|p| p.version == 24)
             .expect("24 is pending on a v0 database");
         assert!(p.rows.is_empty(), "{:?}", p.rows);
+    }
+
+    /// The error type must name which failure it is and keep the cause
+    /// reachable.
+    ///
+    /// `Display` is what an operator reads when a migration aborts, and
+    /// `source()` is what the logging layer walks to get the underlying
+    /// `SQLite` message. Neither had an assertion, so an empty `Display` and a
+    /// severed `source()` were both invisible.
+    #[test]
+    fn migration_errors_render_and_keep_their_cause() {
+        let sqlite = MigrationError::Sqlite(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(1),
+            Some("no such table: detections".to_owned()),
+        ));
+        let rendered = sqlite.to_string();
+        assert!(
+            rendered.starts_with("migration sqlite error: "),
+            "{rendered}"
+        );
+        assert!(rendered.contains("no such table: detections"), "{rendered}");
+        assert!(
+            std::error::Error::source(&sqlite).is_some(),
+            "the underlying rusqlite error must stay reachable"
+        );
+
+        let logic = MigrationError::Logic("no free backup filename".to_owned());
+        assert_eq!(
+            logic.to_string(),
+            "migration error: no free backup filename"
+        );
+        assert!(
+            std::error::Error::source(&logic).is_none(),
+            "a logic error has no underlying cause to expose"
+        );
+    }
+
+    /// Only a missing *table* is the benign preview failure.
+    ///
+    /// The discrimination this makes is the whole point: widen it and a preview
+    /// that failed for any reason reports "nothing to change", which is the one
+    /// answer an operator acts on by upgrading without looking further. Both
+    /// sides are asserted so a blanket `true` cannot pass for a classifier.
+    #[test]
+    fn only_a_missing_table_is_a_benign_preview_failure() {
+        let sqlite_failure = |msg: &str| {
+            rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(msg.to_owned()))
+        };
+
+        assert!(
+            preview_target_missing(&sqlite_failure("no such table: detections")),
+            "a database too young to have the table has nothing to preview"
+        );
+
+        // Everything else is a real failure, including the shapes live SQLite
+        // actually produces here: a locked database, and a `detections` that
+        // exists but lacks the column the preview reads (which rusqlite reports
+        // as `SqlInputError`, not `SqliteFailure`).
+        assert!(!preview_target_missing(&sqlite_failure(
+            "database is locked"
+        )));
+        assert!(!preview_target_missing(&sqlite_failure("disk I/O error")));
+        assert!(!preview_target_missing(&rusqlite::Error::SqlInputError {
+            error: rusqlite::ffi::Error::new(1),
+            msg: "no such column: chunk_offset_secs".to_owned(),
+            sql: "SELECT chunk_offset_secs FROM detections".to_owned(),
+            offset: 7,
+        }));
+        assert!(!preview_target_missing(&rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(1),
+            None
+        )));
+    }
+
+    /// A preview that cannot run must say so, not report an empty change set.
+    ///
+    /// The counterpart to `previewing_a_fresh_database_is_not_an_error`: only
+    /// the missing-table case is benign. Widening that arm to swallow every
+    /// `SQLite` error would turn a broken preview into "nothing to change",
+    /// which is the one answer an operator acts on by upgrading anyway.
+    #[test]
+    fn a_preview_that_fails_for_another_reason_is_not_reported_as_empty() {
+        let conn = memory_db();
+        // `detections` exists but lacks the column the preview reads, so the
+        // query fails with "no such column", not "no such table".
+        conn.execute_batch("CREATE TABLE detections (Date TEXT, Time TEXT);")
+            .unwrap();
+
+        let err = preview_pending(&conn).expect_err(
+            "a preview query that cannot run must propagate, not report an empty change set",
+        );
+        assert!(matches!(err, MigrationError::Sqlite(_)), "{err:?}");
+    }
+
+    /// The backup escape hatch: unset, empty and `"0"` all keep the backup.
+    ///
+    /// Tested through the pure predicate rather than by setting the real
+    /// environment variable — unit tests share one process environment and run
+    /// in parallel, so a test that set it could suppress the backup under an
+    /// unrelated test running concurrently.
+    #[test]
+    fn only_a_meaningful_value_waives_the_pre_migration_backup() {
+        assert!(!backup_waived(None), "unset must keep the backup");
+        assert!(
+            !backup_waived(Some(OsStr::new(""))),
+            "an empty value (`FOO=`, an unexpanded `${{FOO}}`) must keep the backup"
+        );
+        assert!(
+            !backup_waived(Some(OsStr::new("0"))),
+            "`0` means off, and must keep the backup"
+        );
+        assert!(
+            backup_waived(Some(OsStr::new("1"))),
+            "an explicit value is the operator waiving the backup"
+        );
+        assert!(
+            backup_waived(Some(OsStr::new("00"))),
+            "only the exact string `0` is the off switch"
+        );
     }
 
     /// Migration 24 folds the chunk offset into the timestamp of history that
