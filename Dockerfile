@@ -176,6 +176,14 @@ RUN set -eu; \
     else \
         echo "WARNING: behavioral extension NOT fetched ($url) — this image has no offline analytics; docker.yml asserts against exactly this"; \
     fi; \
+    icu_url="https://extensions.duckdb.org/${BEHAVIORAL_EXTENSION_DUCKDB_VERSION}/${BEHAVIORAL_EXTENSION_TARGET}/icu.duckdb_extension.gz"; \
+    if curl -fsSL --max-time 120 -o /tmp/icu.duckdb_extension.gz "$icu_url"; then \
+        gunzip -f /tmp/icu.duckdb_extension.gz; \
+        echo "embedding icu extension from $icu_url"; \
+        export BIRDNET_BUNDLED_ICU_FILE=/tmp/icu.duckdb_extension; \
+    else \
+        echo "WARNING: icu extension NOT fetched ($icu_url) — CURRENT_DATE lives in ICU, so every date-ranged dashboard query in this image depends on DuckDB being able to autoinstall it at run time"; \
+    fi; \
     if [ -n "${BUILD_FEATURES}" ]; then \
         cargo build --release --verbose --bin birdnet-behavior --features "${BUILD_FEATURES}"; \
     else \

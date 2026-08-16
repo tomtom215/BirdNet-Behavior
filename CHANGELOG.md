@@ -70,24 +70,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   independent defects, both invisible to a green CI matrix, both only reachable
   on a real station.
 
-  The first is the one that emptied them. Every analytics query filters on a
-  look-back window, which reaches DuckDB as
-  `detection_date >= CURRENT_DATE - INTERVAL n DAYS`. That operator lives in
-  DuckDB's ICU extension. ICU ships statically inside the bundled `libduckdb`
-  and reports itself `installed` the moment a connection opens — but it is not
-  *loaded*, and DuckDB only autoloads it when a query needs it. The autoload
-  runs while binding the query that triggered it, which is too late for that
-  query: it fails with `Binder Error: … 'age(DATE, INTERVAL)'`, and every
-  identical query afterwards succeeds. Measured on a freshly opened store:
-  attempt 1 fails, attempts 2–4 pass, and `duckdb_extensions()` shows `icu`
-  flipping to `loaded=true` across the failure.
+  The first is the one that emptied them, and it emptied them **permanently**:
+  a station reported dashboards blank for days. Every analytics query filters on
+  a look-back window, which reaches DuckDB as
+  `detection_date >= CURRENT_DATE - INTERVAL n DAYS`, and `CURRENT_DATE` lives
+  in DuckDB's ICU extension — as does every other way to name the current local
+  date: `today()`, the `TimeZone` setting, and even `CAST(now() AS DATE)`, which
+  fails with `Unimplemented type for cast (TIMESTAMP WITH TIME ZONE -> DATE)`.
+  There is no ICU-free spelling to fall back to.
 
-  One failed query per restart would have been survivable. It was not, because
-  the web layer maps a query error to a rendered "Analytics temporarily
+  ICU is **not** statically linked into the `libduckdb` that `duckdb-rs`
+  bundles. It reports itself `installed` on a connection that has already
+  autoinstalled it, which is what an earlier reading of this — and the first
+  version of the fix — was built on. Measured properly, with autoload and
+  autoinstall off and no local cache, `duckdb_extensions()` reports `icu` as
+  `installed=false, NOT_INSTALLED`, and `LOAD icu` fails outright.
+  (`core_functions`, by contrast, genuinely does report `STATICALLY_LINKED`,
+  which is why `strftime` and `date_diff` kept working throughout.)
+
+  So DuckDB has to fetch it, and it does that by autoinstalling into
+  `$HOME/.duckdb`. The shipped systemd unit sets `ProtectHome=read-only`. The
+  station's journal:
+
+  ```text
+  Failed to create directory "/home/pi/.duckdb": Read-only file system
+  ```
+
+  Every analytics query failed from then on, and the store's `birds.duckdb`
+  never appeared. Two things attempt that write — ICU autoinstalling, and stage
+  2 of the behavioral loader (`INSTALL behavioral FROM community`) — so both are
+  fixed at the source: **DuckDB's extension directory now sits beside the
+  analytics database**, inside `DATA_DIR` and therefore inside the unit's
+  `ReadWritePaths`, instead of under `$HOME`.
+
+  On top of that, **the ICU binary is now embedded in the release binary** the
+  same way the `behavioral` extension already was, and loaded from it at open.
+  That removes the network *and* the writable `$HOME` from the path entirely, so
+  an air-gapped station gets correct local dates on its first query. Release,
+  CI and Docker builds all fetch it per target; `build.rs` refuses to embed
+  bytes whose footer it cannot parse, and now also refuses bytes built for a
+  different platform than the one being compiled for — cargo does not tell a
+  build script which DuckDB version will be linked, but it does tell it the
+  target triple, and 20 MB of unloadable ICU is worth catching at build time.
+
+  There was a timing bug underneath all of that too, and it is still fixed:
+  even where the autoinstall *could* write, DuckDB resolves ICU while binding
+  the query that first needs it, too late for that query. Attempt 1 failed,
+  attempts 2–4 passed. One failed query per restart would have been survivable,
+  except the web layer maps a query error to a rendered "Analytics temporarily
   unavailable" fragment and caches that fragment for ten minutes — so the first
-  page visit after every restart poisoned the cache and the dashboards stayed
-  blank, with nothing logged as an error and the health endpoint green. ICU is
-  now loaded when the analytics store opens, before any query runs.
+  page visit after every restart poisoned the cache. ICU is loaded when the
+  store opens, before any query runs.
+
+  The test that was supposed to cover this went green against the broken
+  implementation, because an earlier probe on the same machine had populated
+  `~/.duckdb`; moving that cache aside was what exposed it. Its replacement
+  turns both escapes off explicitly — autoload and autoinstall disabled,
+  extension directory pointed at an empty one — so the embedded bytes are the
+  only route `CURRENT_DATE` has, and a separate gate pins the extension
+  directory to the data directory. Verified against the previous code, where
+  the first fails with `Catalog Error: … "current_date" is not in the catalog`
+  and the second sees DuckDB's default (an empty string).
 
   The second survives dirty history rather than a cold start. `Date` and `Time`
   are free-form `TEXT NOT NULL` — the column type forbids NULL, not nonsense —

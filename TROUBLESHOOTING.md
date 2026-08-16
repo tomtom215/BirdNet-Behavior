@@ -245,6 +245,55 @@ rebuild with `--features analytics`. As an immediate workaround on a station
 with network, `birdnet-behavior --refresh-extension` force-installs the correct
 build from the community registry.
 
+### 4.2 Every analytics dashboard is empty and nothing is logged as an error
+
+Symptom: the Analytics and Time-series pages render but carry no data, the
+health endpoint is green, `--doctor` is happy, and the journal shows no error.
+It does not recover on its own — stations have sat like this for days.
+
+This is **not** the same as 4.1. There the extension-backed cards degrade and
+say so while everything else keeps working; here *every* dashboard is empty,
+including the ones that need no extension at all.
+
+**Look for this line:**
+
+```bash
+journalctl -u birdnet-behavior --no-pager | grep -i 'duckdb": Read-only'
+# Failed to create directory "/home/pi/.duckdb": Read-only file system
+```
+
+Cause: every dashboard query filters on a look-back window, which reaches DuckDB
+as `detection_date >= CURRENT_DATE - INTERVAL n DAYS`. `CURRENT_DATE` lives in
+DuckDB's **ICU** extension — as does every other way to name the current local
+date, including `today()` and `CAST(now() AS DATE)`. ICU is not statically
+linked, so DuckDB fetches it, by default into `$HOME/.duckdb`. The shipped unit
+sets `ProtectHome=read-only`, that write fails, and every date-ranged query
+fails with it. The web layer renders a query error as a "temporarily
+unavailable" fragment and caches it, which is why nothing reaches the log.
+
+Fix: **upgrade past 0.13.1.** Two changes close it — DuckDB's extension
+directory now sits beside the analytics database inside the data directory
+(which the unit grants write access to), and the ICU binary is embedded in the
+release binary, so nothing is downloaded and `$HOME` is never touched.
+
+`--verify-extension` (see 4.1) now also runs the date-window query the
+dashboards open with, so it answers this too — including under
+`unshare -rn` / `--network none`, where a pass proves the embedded ICU is doing
+the work.
+
+Workaround if you cannot upgrade yet — point `HOME` at the data directory, the
+one place the unit already allows writes:
+
+```bash
+sudo systemctl edit birdnet-behavior
+# [Service]
+# Environment=HOME=/home/pi/BirdNet-Behavior     # your data dir; pi → your user
+sudo systemctl restart birdnet-behavior
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/api/v2/timeseries/daily
+```
+
+The override is harmless to leave in place after upgrading, and unnecessary.
+
 ---
 
 ## 5. Memory / CPU pressure on small hardware

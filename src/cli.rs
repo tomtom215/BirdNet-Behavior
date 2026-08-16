@@ -207,12 +207,17 @@ pub struct Cli {
     /// extension version, and what the build-time embedded copy targets.
     /// Exits 0 when the extension loads and non-zero when it does not.
     ///
+    /// It then runs the date-window query every dashboard opens with. That
+    /// covers the other extension a station needs, `icu`, which is where
+    /// `CURRENT_DATE` lives — and which DuckDB otherwise autoinstalls into
+    /// `$HOME/.duckdb`, a path the shipped systemd unit mounts read-only.
+    ///
     /// Unlike `--refresh-extension` this needs no network and writes nothing
     /// you care about, so it is the check to run on a station whose analytics
     /// pages are empty. Run it with networking disabled to prove the *offline*
     /// guarantee specifically: with no network neither the extension cache nor
-    /// the community registry can satisfy the load, so only the embedded copy
-    /// can.
+    /// the community registry can satisfy either load, so only the embedded
+    /// copies can.
     #[arg(long)]
     pub verify_extension: bool,
 

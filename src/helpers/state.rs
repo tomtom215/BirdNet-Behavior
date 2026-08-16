@@ -286,6 +286,30 @@ pub fn run_verify_extension(
         path = %path.display(),
         "behavioral extension loaded"
     );
+
+    // ICU is the other half of an offline-capable station, and the half that
+    // actually failed in the field: `CURRENT_DATE` lives in it, every dashboard
+    // opens with a date window, and DuckDB's own answer is to autoinstall into
+    // `$HOME/.duckdb` — which the shipped unit mounts read-only. Verifying the
+    // query shape rather than the extension's `loaded` flag is deliberate: it
+    // is the thing the dashboards actually need, and it cannot pass for the
+    // wrong reason.
+    tracing::info!(
+        embedded_icu_for_duckdb =
+            AnalyticsDb::embedded_icu_duckdb_version().unwrap_or("<none embedded>"),
+        embedded_icu_platform = AnalyticsDb::embedded_icu_platform().unwrap_or("<none embedded>"),
+        "ICU extension: build-time embedding"
+    );
+    adb.verify_date_window().map_err(|e| {
+        format!(
+            "the date-window query every dashboard opens with did not bind: {e}\n\
+             CURRENT_DATE lives in DuckDB's ICU extension. With no ICU embedded at build time, \
+             DuckDB tries to autoinstall it into $HOME/.duckdb — which fails under the shipped \
+             unit's ProtectHome=read-only, and leaves every analytics page empty."
+        )
+    })?;
+
+    tracing::info!("date-window query bound; ICU is available");
     let _ = std::fs::remove_file(&path);
     Ok(())
 }

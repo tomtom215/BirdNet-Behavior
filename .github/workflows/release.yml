@@ -400,6 +400,49 @@ jobs:
             echo "no community extension for target ${{ matrix.target }} — runtime INSTALL fallback"
           fi
 
+      - name: Fetch the ICU DuckDB extension (matching bundled DuckDB version)
+        # ICU is NOT statically linked into the libduckdb duckdb-rs bundles —
+        # measured with autoload/autoinstall off and no cache, where
+        # `duckdb_extensions()` reports it NOT_INSTALLED (`core_functions`, by
+        # contrast, reports STATICALLY_LINKED). Everything that names the
+        # current *local* date lives in it: CURRENT_DATE, today(), the TimeZone
+        # setting, even CAST(now() AS DATE). There is no ICU-free spelling.
+        #
+        # Left to itself DuckDB autoinstalls it into $HOME/.duckdb on first use.
+        # The shipped unit sets ProtectHome=read-only, so on v0.13.1 that failed
+        # with `Failed to create directory "/home/pi/.duckdb": Read-only file
+        # system` and every dashboard stayed empty for days with a green health
+        # endpoint. Embedding it removes the network and the writable $HOME from
+        # the path. This is a hard requirement for a working release, not a
+        # nice-to-have — but the download stays best-effort so a registry
+        # hiccup degrades to the old behaviour instead of failing the release.
+        id: bundled_icu
+        shell: bash
+        run: |
+          set -eu
+          ddb_ver="v1.5.5"
+          case "${{ matrix.target }}" in
+            x86_64-*linux*)   plat="linux_amd64" ;;
+            aarch64-*linux*)  plat="linux_arm64" ;;
+            aarch64-apple-*)  plat="osx_arm64" ;;
+            x86_64-apple-*)   plat="osx_amd64" ;;
+            *) plat="" ;;
+          esac
+          if [ -n "$plat" ]; then
+            url="https://extensions.duckdb.org/${ddb_ver}/${plat}/icu.duckdb_extension.gz"
+            tmp="$RUNNER_TEMP/icu.duckdb_extension"
+            if curl -fsSL --retry 3 --retry-delay 2 --max-time 180 -o "${tmp}.gz" "$url"; then
+              gunzip -f "${tmp}.gz"
+              echo "BIRDNET_BUNDLED_ICU_FILE=$tmp" >> "$GITHUB_ENV"
+              echo "embedded ICU from $url"
+            else
+              echo "::warning::could not fetch $url — this build has no embedded ICU; \
+          stations without a writable \$HOME will have no date-ranged analytics"
+            fi
+          else
+            echo "::warning::no ICU build for target ${{ matrix.target }}"
+          fi
+
       - name: Build release binary
         # `--features analytics` statically links the bundled DuckDB analytics
         # engine into the binary, so one binary per target ships everything;

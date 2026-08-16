@@ -73,44 +73,190 @@ impl From<DuckDbError> for AnalyticsError {
 /// can raise it via the `BIRDNET_DUCKDB_MEMORY_LIMIT` environment variable.
 const DEFAULT_DUCKDB_MEMORY_LIMIT: &str = "256MB";
 
+/// Directory `DuckDB` is pointed at for extension installs, relative to the
+/// analytics database file.
+const EXTENSION_DIR_NAME: &str = "duckdb-extensions";
+
+/// Keep `DuckDB`'s extension installs inside the data directory, out of `$HOME`.
+///
+/// By default `DuckDB` installs and caches extensions under `$HOME/.duckdb`.
+/// The shipped systemd unit sets `ProtectHome=read-only`, so that directory
+/// cannot be created — and this is not a hypothetical: it is the root cause of
+/// "analytics dashboards broken on 0.13.1", observed on a station where the
+/// journal carried
+///
+/// ```text
+/// Failed to create directory "/home/pi/.duckdb": Read-only file system
+/// ```
+///
+/// and every dashboard had been empty for days with the health endpoint green.
+/// Two separate things attempt that write: `icu` autoinstalling on the first
+/// query that mentions `CURRENT_DATE`, and stage 2 of
+/// [`AnalyticsDb::load_extension`] (`INSTALL behavioral FROM community`).
+/// Redirecting the directory fixes both at once, because the replacement sits
+/// beside the database file — which is inside `DATA_DIR`, and therefore inside
+/// the unit's `ReadWritePaths`.
+///
+/// Best-effort by design. If the directory cannot be created (a read-only data
+/// directory, an in-memory database with no parent) `DuckDB` keeps its default
+/// and the embedded-extension paths still work — they `LOAD` by absolute path
+/// and never consult this directory at all.
+fn redirect_extension_directory(conn: &Connection, db_path: &Path) {
+    let Some(parent) = db_path.parent().filter(|p| !p.as_os_str().is_empty()) else {
+        return;
+    };
+    let dir = parent.join(EXTENSION_DIR_NAME);
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        tracing::debug!(
+            path = %dir.display(),
+            error = %e,
+            "could not create a DuckDB extension directory beside the analytics database; \
+             DuckDB keeps its default ($HOME/.duckdb)"
+        );
+        return;
+    }
+    let escaped = dir.display().to_string().replace('\'', "''");
+    if let Err(e) = conn.execute_batch(&format!("SET extension_directory='{escaped}';")) {
+        tracing::debug!(error = %e, "could not redirect DuckDB's extension directory");
+    }
+}
+
 /// Load `DuckDB`'s ICU extension so date arithmetic binds on the *first* query.
 ///
 /// Every analytics dashboard filters on a look-back window, which reaches
 /// DuckDB as `detection_date >= CURRENT_DATE - INTERVAL n DAYS`. That operator
-/// lives in ICU. ICU ships statically inside the bundled `libduckdb` — it is
-/// reported `installed` from the moment a connection opens — but it is not
-/// *loaded*, and DuckDB only autoloads it when a query needs it. The autoload
-/// happens while binding the query that triggered it, which is too late for
-/// that query: it fails with
+/// lives in ICU, and so does everything else that can name the current *local*
+/// date: `CURRENT_DATE`, `today()`, the `TimeZone` setting, and
+/// `CAST(now() AS DATE)` — which fails with "Unimplemented type for cast
+/// (TIMESTAMP WITH TIME ZONE -> DATE)" when ICU is absent. There is no ICU-free
+/// spelling to fall back to.
 ///
-/// ```text
-/// Binder Error: No function matches the given name and argument types
-/// 'age(DATE, INTERVAL)'
-/// ```
+/// ICU is **not** statically linked into the bundled `libduckdb`. An earlier
+/// version of this comment claimed it was, on the strength of
+/// `duckdb_extensions()` reporting it `installed` — but that reading was taken
+/// on a connection whose autoinstall had already downloaded it. Measured with
+/// autoload and autoinstall off and no local cache, `icu` reports
+/// `installed=false, install_mode=NOT_INSTALLED`, and `LOAD icu` fails outright
+/// (`core_functions`, by contrast, genuinely does report `STATICALLY_LINKED`).
 ///
-/// and every identical query afterwards succeeds. Measured on a freshly opened
-/// store: attempt 1 fails, attempts 2-4 pass, and `duckdb_extensions()` shows
-/// `icu` flipping from `loaded=false` to `loaded=true` across the failure.
+/// So DuckDB has to *fetch* it, and left alone it autoinstalls into
+/// `$HOME/.duckdb` during the bind of the first query that needs it. Both
+/// halves of that were load-bearing failures:
 ///
-/// One failed query per process start would be survivable on its own. It was
-/// not, because the web layer maps a query error to a rendered "Analytics
-/// temporarily unavailable" fragment and *caches that fragment for ten
-/// minutes* — so a station's first visit after every restart poisoned the cache
-/// and the dashboards stayed blank, with nothing logged as an error and the
-/// health endpoint green. Loading ICU here, before any query runs, is what
-/// makes the first one behave like the second.
+///  * **The write.** Under `ProtectHome=read-only` it fails, permanently — see
+///    [`redirect_extension_directory`], which is what stops that write going to
+///    `$HOME` at all.
+///  * **The timing.** Even where the write succeeds, autoload happens *while
+///    binding* the query that triggered it, too late for that query: attempt 1
+///    fails, attempts 2-4 pass. One failed query per process start would be
+///    survivable on its own, except the web layer maps a query error to a
+///    rendered "Analytics temporarily unavailable" fragment and *caches that
+///    fragment for ten minutes* — so a station's first visit after every
+///    restart poisoned the cache and the dashboards stayed blank.
 ///
-/// Deliberately non-fatal: a build whose `libduckdb` lacks ICU should still
-/// open its analytics store and serve everything that does not need date
-/// arithmetic, rather than refuse to start.
+/// Loading here, before any query runs, fixes the timing. Two stages, in the
+/// order that needs the least from the host:
+///
+///  1. A build-time-embedded copy staged to a temp file and loaded by path.
+///     No network, no writable `$HOME`, no extension directory — this is the
+///     path a shipped release takes.
+///  2. `LOAD icu` — DuckDB's own resolution, from the extension directory. On a
+///     dev build with no embed this is what autoinstall populates.
+///
+/// Deliberately non-fatal: a build with neither should still open its store and
+/// serve everything that does not need a date window, rather than refuse to
+/// start.
 fn load_icu(conn: &Connection) {
+    /// Staged once per process. The ICU binary is ~20 MB and the bytes never
+    /// change for the life of the process, so re-writing it on every `open` is
+    /// pure cost — on a Pi's SD card, and in a test suite that opens hundreds
+    /// of stores.
+    static ICU_STAGED: std::sync::OnceLock<Result<PathBuf, String>> = std::sync::OnceLock::new();
+
+    if let Some(bytes) = EMBEDDED_ICU {
+        match ICU_STAGED
+            .get_or_init(|| stage_extension(bytes, "icu.duckdb_extension"))
+            .clone()
+            .and_then(|path| load_by_path(conn, &path).map(|()| path))
+        {
+            Ok(path) => {
+                tracing::debug!(
+                    path = %path.display(),
+                    version = EMBEDDED_ICU_VERSION.unwrap_or("unknown"),
+                    "loaded DuckDB's ICU extension from the embedded bundle"
+                );
+                return;
+            }
+            Err(e) => tracing::warn!(
+                error = %e,
+                embedded_for = EMBEDDED_ICU_DUCKDB_VERSION.unwrap_or("unknown"),
+                embedded_platform = EMBEDDED_ICU_PLATFORM.unwrap_or("unknown"),
+                "the ICU extension embedded at build time would not load; falling back to \
+                 DuckDB's own resolution. If `embedded_for` or `embedded_platform` disagrees \
+                 with this binary's engine, that is a packaging defect"
+            ),
+        }
+    }
+
     if let Err(e) = conn.execute_batch("LOAD icu;") {
         tracing::warn!(
             error = %e,
-            "could not load DuckDB's ICU extension; date-range analytics queries \
-             may fail on their first use after start-up"
+            embedded = EMBEDDED_ICU.is_some(),
+            "could not load DuckDB's ICU extension. Every dashboard filters on a date window \
+             and CURRENT_DATE lives in ICU, so those queries will fail until it is available"
         );
     }
+}
+
+/// Counter making each in-flight staging file name unique within the process.
+static STAGE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Write extension `bytes` to a temp file and return the path, atomically.
+///
+/// Shared by the ICU and `behavioral` loaders. The bytes go to a name unique to
+/// this process and call, then `rename` into the shared final path — so a
+/// reader always sees either the previous complete file or the new complete
+/// one, never a partial or missing one.
+///
+/// That is not defensive coding for its own sake. Writing in place was
+/// measurably broken: `cargo test` opens many stores in parallel threads, each
+/// staging the same 20 MB ICU binary over the same path, and `LOAD` failed on
+/// whichever thread read a file another was still writing. The service itself
+/// runs with `PrivateTmp=yes` and stages once per start, so this only ever bit
+/// the test suite — but the same shape is reachable from two processes sharing
+/// a `/tmp`, and `rename` costs nothing.
+///
+/// `rename` also replaces a symlink at the destination rather than writing
+/// through it, so a pre-planted link cannot redirect the write.
+fn stage_extension(bytes: &[u8], file_name: &str) -> Result<PathBuf, String> {
+    let dir = std::env::temp_dir().join("birdnet-behavioral-ext");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("create temp dir for embedded extension: {e}"))?;
+
+    let seq = STAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let staging = dir.join(format!("{file_name}.{}.{seq}.partial", std::process::id()));
+    std::fs::write(&staging, bytes).map_err(|e| format!("write embedded extension: {e}"))?;
+
+    let path = dir.join(file_name);
+    std::fs::rename(&staging, &path).map_err(|e| {
+        // Leave nothing behind on the failure path; a 20 MB orphan per start
+        // would fill a small `/tmp` long before anyone noticed.
+        drop(std::fs::remove_file(&staging));
+        format!("publish embedded extension: {e}")
+    })?;
+    Ok(path)
+}
+
+/// `LOAD '<path>'`, quoting the path for SQL.
+///
+/// The bytes are the upstream signed build, but `LOAD` from an ad-hoc path
+/// bypasses `DuckDB`'s signature check by design; `allow_unsigned_extensions`
+/// is set at open time (see [`AnalyticsDb::open`]) because `DuckDB` refuses to
+/// change it on an already-open connection.
+fn load_by_path(conn: &Connection, path: &Path) -> Result<(), String> {
+    let escaped = path.display().to_string().replace('\'', "''");
+    conn.execute_batch(&format!("LOAD '{escaped}';"))
+        .map_err(|e| e.to_string())
 }
 
 /// Resolve the `DuckDB` memory limit from an optional configured value,
@@ -270,6 +416,9 @@ impl AnalyticsDb {
             resolve_memory_limit(std::env::var("BIRDNET_DUCKDB_MEMORY_LIMIT").ok().as_deref());
         conn.execute_batch(&format!("SET memory_limit='{memory_limit}';"))?;
 
+        // Before anything can install or load: keep extension writes inside the
+        // data directory rather than `$HOME`, which the unit mounts read-only.
+        redirect_extension_directory(&conn, path);
         load_icu(&conn);
 
         conn.execute_batch(
@@ -352,6 +501,45 @@ impl AnalyticsDb {
         );
 
         Ok((db, OpenOutcome::Rebuilt { quarantined }))
+    }
+
+    /// Run the query shape every dashboard opens with, and report whether it
+    /// binds.
+    ///
+    /// This is the ICU counterpart to [`Self::load_extension`]'s success: not
+    /// "is an extension loaded" but "can this station ask about a date window
+    /// at all". `CURRENT_DATE` lives in ICU, and when ICU cannot be resolved
+    /// the failure is a `Catalog Error` at bind time — which the web layer
+    /// turns into a cached "Analytics temporarily unavailable" fragment rather
+    /// than anything an operator can see.
+    ///
+    /// Meant to be run with networking disabled: with no network, DuckDB cannot
+    /// autoinstall ICU, so a pass means the build-time embedded copy loaded.
+    ///
+    /// # Errors
+    ///
+    /// Returns the bind or execution error, whose message names the missing
+    /// extension.
+    pub fn verify_date_window(&self) -> Result<(), AnalyticsError> {
+        let _: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM detections_ts \
+             WHERE detection_date >= CURRENT_DATE - INTERVAL 30 DAYS",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(())
+    }
+
+    /// `DuckDB` version the embedded ICU targets, if one was embedded.
+    #[must_use]
+    pub const fn embedded_icu_duckdb_version() -> Option<&'static str> {
+        EMBEDDED_ICU_DUCKDB_VERSION
+    }
+
+    /// Platform the embedded ICU targets, if one was embedded.
+    #[must_use]
+    pub const fn embedded_icu_platform() -> Option<&'static str> {
+        EMBEDDED_ICU_PLATFORM
     }
 
     /// Cheap read that touches the detections table, so a file `DuckDB` opened
@@ -443,23 +631,10 @@ impl AnalyticsDb {
     }
 
     /// Stage embedded extension bytes to a temp file and `LOAD '<path>'`.
-    ///
-    /// The bytes themselves are the upstream community-signed build, but
-    /// `LOAD` from an ad-hoc path bypasses DuckDB's signature check by design;
-    /// `allow_unsigned_extensions=true` is set at open time (see `open`)
-    /// because DuckDB refuses to change it on an already-open connection.
     fn load_embedded(&mut self, bytes: &[u8]) -> Result<(), AnalyticsError> {
-        let dir = std::env::temp_dir().join("birdnet-behavioral-ext");
-        std::fs::create_dir_all(&dir).map_err(|e| {
-            AnalyticsError::ExtensionLoad(format!("create temp dir for embedded extension: {e}"))
-        })?;
-        let path = dir.join("behavioral.duckdb_extension");
-        std::fs::write(&path, bytes)
-            .map_err(|e| AnalyticsError::ExtensionLoad(format!("write embedded extension: {e}")))?;
-        let escaped = path.display().to_string().replace('\'', "''");
-        let sql = format!("LOAD '{escaped}';");
-        self.conn
-            .execute_batch(&sql)
+        let path = stage_extension(bytes, "behavioral.duckdb_extension")
+            .map_err(AnalyticsError::ExtensionLoad)?;
+        load_by_path(&self.conn, &path)
             .map_err(|e| AnalyticsError::ExtensionLoad(format!("load embedded: {e}")))?;
         self.extension_loaded = true;
         tracing::info!(
@@ -626,13 +801,12 @@ mod tests {
     /// attempt.
     ///
     /// The count is irrelevant; that the query binds at all is the whole point.
-    /// `CURRENT_DATE - INTERVAL n DAYS` needs DuckDB's ICU extension, which is
-    /// statically present but not loaded, and DuckDB autoloads it only while
-    /// binding the query that first needs it — too late for that query. Every
-    /// analytics dashboard issues exactly this shape as its opening move after
-    /// a restart, and the web layer caches the resulting error fragment for ten
-    /// minutes, so "only the first one fails" meant "they are all blank for the
-    /// next ten minutes".
+    /// `CURRENT_DATE - INTERVAL n DAYS` needs DuckDB's ICU extension, and
+    /// DuckDB resolves it only while binding the query that first needs it —
+    /// too late for that query. Every analytics dashboard issues exactly this
+    /// shape as its opening move after a restart, and the web layer caches the
+    /// resulting error fragment for ten minutes, so "only the first one fails"
+    /// meant "they are all blank for the next ten minutes".
     ///
     /// Run it twice: a regression here passes on the second call, so a test
     /// that only checked once would report success against the broken build.
@@ -653,7 +827,7 @@ mod tests {
             .expect("and so must the second");
     }
 
-    /// ICU is loaded eagerly, not left for DuckDB to autoload mid-bind.
+    /// ICU is loaded eagerly, not left for DuckDB to resolve mid-bind.
     #[test]
     fn icu_is_loaded_when_the_store_opens() {
         let (db, _tmp) = make_db();
@@ -668,6 +842,88 @@ mod tests {
         assert!(
             loaded,
             "ICU must be loaded before the first query, not autoloaded by it"
+        );
+    }
+
+    /// The embedded ICU loads with **no network and no extension cache**.
+    ///
+    /// This is the gate the test above cannot be: it passes as long as ICU ends
+    /// up loaded by *any* route, and on a machine with network DuckDB's own
+    /// autoinstall is one such route. That is not a hypothetical weakness — the
+    /// previous version of this file shipped a `load_icu` that could only ever
+    /// work from a cache, and its test went green anyway because an earlier
+    /// probe on the same machine had populated `~/.duckdb`. Moving that cache
+    /// aside was what exposed it.
+    ///
+    /// So this one removes both escapes explicitly — autoload and autoinstall
+    /// off, extension directory pointed at an empty temp dir — leaving the
+    /// embedded bytes as the only way `CURRENT_DATE` can resolve. Skips when
+    /// the build embedded nothing, exactly like the `behavioral` equivalent;
+    /// CI embeds both, so CI asserts.
+    #[test]
+    fn embedded_icu_loads_with_no_cache_and_no_network() {
+        if EMBEDDED_ICU.is_none() {
+            eprintln!("skipped — build did not embed the ICU extension");
+            return;
+        }
+        let dir = TempDir::new().unwrap();
+        let config = duckdb::Config::default()
+            .allow_unsigned_extensions()
+            .unwrap();
+        let conn = Connection::open_in_memory_with_flags(config).unwrap();
+        let empty = dir.path().join("no-extensions-here");
+        std::fs::create_dir_all(&empty).unwrap();
+        conn.execute_batch(&format!(
+            "SET autoinstall_known_extensions=false; \
+             SET autoload_known_extensions=false; \
+             SET extension_directory='{}';",
+            empty.display()
+        ))
+        .unwrap();
+
+        // Sanity: without the embed, this connection genuinely cannot do dates.
+        // If this ever starts succeeding, the assertion below has stopped
+        // proving anything and this test needs rewriting, not deleting.
+        assert!(
+            conn.query_row("SELECT CURRENT_DATE::VARCHAR", [], |r| r
+                .get::<_, String>(0))
+                .is_err(),
+            "CURRENT_DATE must fail before ICU is loaded, or this test proves nothing"
+        );
+
+        load_icu(&conn);
+
+        conn.query_row("SELECT CURRENT_DATE::VARCHAR", [], |r| {
+            r.get::<_, String>(0)
+        })
+        .expect("CURRENT_DATE must resolve from the embedded ICU alone");
+    }
+
+    /// Extension installs land beside the database, never in `$HOME`.
+    ///
+    /// The whole of "analytics dashboards broken on 0.13.1" was DuckDB trying
+    /// to create `$HOME/.duckdb` under a unit that mounts `/home` read-only.
+    /// Nothing in the code said where extensions go, so nothing could regress
+    /// visibly when it went back to the default.
+    #[test]
+    fn extension_installs_stay_beside_the_database() {
+        let (db, tmp) = make_db();
+        let configured: String = db
+            .conn
+            .query_row("SELECT current_setting('extension_directory')", [], |r| {
+                r.get(0)
+            })
+            .expect("extension_directory is readable");
+
+        assert_eq!(
+            std::path::Path::new(&configured),
+            tmp.path().join(EXTENSION_DIR_NAME),
+            "extensions must install beside the analytics database, not under $HOME \
+             (which the shipped systemd unit mounts read-only)"
+        );
+        assert!(
+            tmp.path().join(EXTENSION_DIR_NAME).is_dir(),
+            "the extension directory must exist, or DuckDB's install will fail on it"
         );
     }
 
