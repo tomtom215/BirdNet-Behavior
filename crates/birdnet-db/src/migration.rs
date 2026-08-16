@@ -947,6 +947,27 @@ pub fn current_version(conn: &Connection) -> Result<u32, MigrationError> {
     Ok(version)
 }
 
+/// Whether the database carries a schema version this binary does not know.
+///
+/// Strictly newer: a database at exactly the highest version this binary knows
+/// is the normal fully-migrated state, not a downgrade.
+///
+/// Split out from the branch it guards for the same reason as
+/// `any_migrations_applied` below: that branch only emits a log line, so
+/// nothing a test can assert on changes when `>` slips to `>=` or `==`. As a
+/// predicate the boundary is directly observable.
+const fn schema_is_newer_than_binary(db_version: u32, max_known: u32) -> bool {
+    db_version > max_known
+}
+
+/// Whether `migrate` actually applied anything, and so has something to report.
+///
+/// Split out for the same reason as `schema_is_newer_than_binary`: it guards a
+/// log-only branch, so the boundary is only observable as a predicate.
+const fn any_migrations_applied(applied: u32) -> bool {
+    applied > 0
+}
+
 /// Apply all pending migrations.
 ///
 /// Returns the number of migrations applied.
@@ -972,7 +993,7 @@ pub fn migrate(conn: &Connection) -> Result<u32, MigrationError> {
     // but it's a real failure mode that produces baffling runtime errors. Warn
     // loudly rather than error so a recovery downgrade remains possible.
     if let Some(max_known) = MIGRATIONS.iter().map(|m| m.version).max()
-        && current > max_known
+        && schema_is_newer_than_binary(current, max_known)
     {
         tracing::warn!(
             db_version = current,
@@ -1030,7 +1051,7 @@ pub fn migrate(conn: &Connection) -> Result<u32, MigrationError> {
         applied += 1;
     }
 
-    if applied > 0 {
+    if any_migrations_applied(applied) {
         tracing::info!(
             applied,
             new_version = current + applied,
@@ -1427,6 +1448,46 @@ mod tests {
             .find(|p| p.version == 24)
             .expect("24 is pending on a v0 database");
         assert!(p.rows.is_empty(), "{:?}", p.rows);
+    }
+
+    /// A database is only "newer than this binary" strictly above the highest
+    /// version the binary knows.
+    ///
+    /// Equality is the normal fully-migrated state — the common case on every
+    /// boot — so warning there would cry downgrade at a healthy station. Both
+    /// sides of the boundary are asserted; the branch this guards only logs, so
+    /// nothing else in the suite would notice it moving.
+    #[test]
+    fn only_a_strictly_higher_schema_version_means_a_downgrade() {
+        let max_known = MIGRATIONS
+            .iter()
+            .map(|m| m.version)
+            .max()
+            .expect("there is at least one migration");
+
+        assert!(
+            !schema_is_newer_than_binary(max_known, max_known),
+            "a fully-migrated database is not a downgrade"
+        );
+        assert!(
+            !schema_is_newer_than_binary(max_known - 1, max_known),
+            "a database with migrations still pending is not a downgrade"
+        );
+        assert!(
+            schema_is_newer_than_binary(max_known + 1, max_known),
+            "a database past this binary's knowledge is a downgrade"
+        );
+    }
+
+    /// "Migrations complete" is only true when something was applied.
+    ///
+    /// Guards a log-only branch, so this predicate is the only place the
+    /// zero/non-zero boundary is observable.
+    #[test]
+    fn nothing_applied_means_nothing_to_report() {
+        assert!(!any_migrations_applied(0));
+        assert!(any_migrations_applied(1));
+        assert!(any_migrations_applied(24));
     }
 
     /// The error type must name which failure it is and keep the cause
