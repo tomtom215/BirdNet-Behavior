@@ -586,7 +586,7 @@ mod tests {
     }
 
     /// Uncorrelated channels must not be dressed up as a spaced pair — that
-    /// reads as a dead capsule or a mis-wired input, and the report says so.
+    /// reads as a dead capsule or an input wired wrong, and the report says so.
     #[test]
     fn uncorrelated_channels_are_not_called_spaced() {
         let left = tone(48_000, 2000.0, 48_000.0, 0, 0.3);

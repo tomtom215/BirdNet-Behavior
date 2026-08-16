@@ -256,9 +256,9 @@ mod tests {
         };
         let sql = phenology_timing_sql(&params);
         assert!(sql.contains("Com_Name = 'Eurasian Blackbird'"));
-        // The species condition is ANDed onto the placeable-rows condition
-        // rather than each carrying its own keyword, so exactly one WHERE is
-        // emitted however many filters are set.
+        // The species condition is joined with AND onto the placeable-rows
+        // condition rather than each carrying its own keyword, so exactly one
+        // WHERE is emitted however many filters are set.
         assert_eq!(sql.matches("WHERE").count(), 1, "{sql}");
     }
 
