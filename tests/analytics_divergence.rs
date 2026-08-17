@@ -520,3 +520,106 @@ fn effort_corrected_abundance_returns_a_rate() {
          the old failure: the query had no denominator on any real station"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Column fidelity
+// ---------------------------------------------------------------------------
+
+/// A row written live and the same row rebuilt by a resync must be identical.
+///
+/// The live insert wrote six columns and left `Lat`, `Lon`, `Cutoff`, `Week`,
+/// `Sens` and `Overlap` NULL; the bulk sync writes all twelve. So "the same
+/// detection" meant different things depending on how it got into the store —
+/// and the startup drift rebuild would silently *change* those columns on any
+/// station that triggered it.
+///
+/// Nothing read the six, which is why this was latent rather than broken. It is
+/// gated rather than documented because the next analytic that wants `Week` or
+/// `Lat` would find a column populated or not depending on station history,
+/// which is the hardest kind of wrong to notice.
+#[test]
+fn a_live_row_and_a_resynced_row_carry_the_same_columns() {
+    /// The optional columns the live path used to drop.
+    type OptionalColumns = (
+        Option<f64>,
+        Option<f64>,
+        Option<f64>,
+        Option<i32>,
+        Option<f64>,
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("birds.db");
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+    }
+    let state = AppState::new_with_analytics(db_path, &dir.path().join("analytics.duckdb"))
+        .expect("analytics state opens");
+
+    // Written the way the detection processor writes one.
+    state
+        .with_analytics(|adb| {
+            adb.insert_detection(&birdnet_behavioral::connection::LiveDetection {
+                date: "2026-03-01",
+                time: "06:15:00",
+                sci_name: "Turdus merula",
+                com_name: "Eurasian Blackbird",
+                confidence: 0.9,
+                lat: Some(51.5074),
+                lon: Some(-0.1278),
+                cutoff: Some(0.7),
+                week: Some(9),
+                sens: Some(1.25),
+                overlap: Some(0.0),
+                file_name: "rec.wav",
+            })
+            .expect("live insert");
+        })
+        .expect("analytics is configured");
+
+    let columns = |state: &AppState| -> OptionalColumns {
+        state
+            .with_analytics(|adb| {
+                adb.conn()
+                    .query_row(
+                        "SELECT Lat, Lon, Cutoff, Week, Sens FROM detections \
+                         WHERE Sci_Name = 'Turdus merula'",
+                        [],
+                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                    )
+                    .expect("read back")
+            })
+            .expect("analytics is configured")
+    };
+
+    let live = columns(&state);
+    assert!(
+        live.0.is_some() && live.2.is_some() && live.3.is_some() && live.4.is_some(),
+        "the live path dropped columns the bulk path writes: {live:?}"
+    );
+
+    // Now the same detection through SQLite and a full resync.
+    state
+        .with_db(|conn| {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence,
+                                         Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name)
+                 VALUES ('2026-03-01','06:15:00','Turdus merula','Eurasian Blackbird',0.9,
+                         51.5074,-0.1278,0.7,9,1.25,0.0,'rec.wav')",
+                [],
+            )
+        })
+        .expect("sqlite insert");
+    state
+        .resync_analytics_full()
+        .expect("analytics is configured")
+        .expect("resync");
+
+    assert_eq!(
+        columns(&state),
+        live,
+        "a resync produced a different row than the live path did for the same \
+         detection — so what a column means depends on station history"
+    );
+}

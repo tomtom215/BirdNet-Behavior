@@ -174,7 +174,7 @@ A station is only useful if it keeps running when nobody is watching, and the da
 - **Data sovereignty for sensitive species.** Point uploads at a **self-hosted ingest** (`BIRDWEATHER_URL`) instead of the public community map — for rare or endangered species where a public observation map is a poaching risk — and the offline queue and ordered replay come with it.
 - **Survives power loss and a wrong clock.** WAL journalling, scheduled integrity checks, rolling backups, and corruption-quarantine-then-recover at boot keep the database intact across yanked power. With no RTC, capture *fails open* until NTP syncs so a bogus boot-time clock never silences the station. systemd watchdog supervision restarts a hung process and gives up cleanly (never a restart loop) on a permanently broken one.
 
-📖 The complete playbook — hardware, power, storage, monitoring, recovery — is the [**Field Deployment Runbook**](docs/FIELD_DEPLOYMENT.md).
+📖 The complete playbook — hardware, power, storage, monitoring, recovery — is the [**Field Deployment Runbook**](docs/FIELD_DEPLOYMENT.md) — also published in the [operator manual](https://tomtom215.github.io/BirdNet-Behavior/field/deployment.html).
 
 ---
 

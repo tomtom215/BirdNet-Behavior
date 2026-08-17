@@ -16,6 +16,8 @@ mod analytics;
 mod live;
 mod sync;
 
+pub use sync::LiveDetection;
+
 use duckdb::{Connection, Error as DuckDbError};
 use std::fmt;
 use std::path::{Path, PathBuf};

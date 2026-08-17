@@ -52,6 +52,49 @@ fn has_column(conn: &rusqlite::Connection, column: &str) -> bool {
 /// amortising the flush over a useful chunk.
 const APPEND_BATCH_ROWS: u64 = 10_000;
 
+/// A detection as written by the live path.
+///
+/// Carries the same twelve columns [`SYNC_COLS`] copies, so a row written
+/// live and the same row rebuilt by a resync are identical. They were not:
+/// the live insert wrote six columns and left `Lat`, `Lon`, `Cutoff`,
+/// `Week`, `Sens` and `Overlap` NULL, so "the same detection" meant
+/// different things depending on how it got into the store — and the drift
+/// rebuild added in this cycle would silently *change* those columns on any
+/// station that triggered it.
+///
+/// Nothing read the six today, which is why it was latent rather than
+/// broken. It is fixed rather than documented because the next analytic
+/// that wants `Week` or `Lat` would have found a column that is populated
+/// or not depending on station history, which is the hardest kind of bug to
+/// see.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LiveDetection<'a> {
+    /// Local civil date, `YYYY-MM-DD`.
+    pub date: &'a str,
+    /// Local civil time, `HH:MM:SS`.
+    pub time: &'a str,
+    /// Scientific name.
+    pub sci_name: &'a str,
+    /// Common name.
+    pub com_name: &'a str,
+    /// Model confidence.
+    pub confidence: f64,
+    /// Station latitude at the time of recording.
+    pub lat: Option<f64>,
+    /// Station longitude at the time of recording.
+    pub lon: Option<f64>,
+    /// Confidence cutoff applied at inference.
+    pub cutoff: Option<f64>,
+    /// ISO week number.
+    pub week: Option<i32>,
+    /// Sensitivity setting.
+    pub sens: Option<f64>,
+    /// Chunk overlap in seconds.
+    pub overlap: Option<f64>,
+    /// Saved clip path, or the source segment.
+    pub file_name: &'a str,
+}
+
 impl AnalyticsDb {
     /// Sync detections from a `SQLite` connection into `DuckDB`.
     ///
@@ -305,24 +348,35 @@ impl AnalyticsDb {
 
     /// Insert a single detection record directly.
     ///
-    /// Use for real-time insertion alongside `SQLite` writes.
+    /// Use for real-time insertion alongside `SQLite` writes. `import_batch_id`
+    /// and `review_verdict` are deliberately absent from [`LiveDetection`]:
+    /// a live detection is by definition this station's own and unreviewed, so
+    /// both are NULL, and offering them as parameters would invite a caller to
+    /// say otherwise.
     ///
     /// # Errors
     ///
     /// Returns an error if the insert fails.
-    pub fn insert_detection(
-        &self,
-        date: &str,
-        time: &str,
-        sci_name: &str,
-        com_name: &str,
-        confidence: f64,
-        file_name: &str,
-    ) -> Result<(), AnalyticsError> {
+    pub fn insert_detection(&self, d: &LiveDetection<'_>) -> Result<(), AnalyticsError> {
         self.conn.execute(
-            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
-             VALUES (?, ?, ?, ?, ?, ?)",
-            params![date, time, sci_name, com_name, confidence, file_name],
+            "INSERT INTO detections
+                (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon,
+                 Cutoff, Week, Sens, Overlap, File_Name)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                d.date,
+                d.time,
+                d.sci_name,
+                d.com_name,
+                d.confidence,
+                d.lat,
+                d.lon,
+                d.cutoff,
+                d.week,
+                d.sens,
+                d.overlap,
+                d.file_name
+            ],
         )?;
         Ok(())
     }
@@ -634,26 +688,51 @@ mod tests {
         );
     }
 
+    /// A minimal live detection for tests.
+    ///
+    /// The optional columns are left `None` here because these tests are about
+    /// insert/count behaviour; `a_live_row_and_a_resynced_row_carry_the_same_columns`
+    /// in `tests/analytics_divergence.rs` is what holds the twelve-column
+    /// contract.
+    fn live<'a>(
+        date: &'a str,
+        time: &'a str,
+        sci_name: &'a str,
+        com_name: &'a str,
+        confidence: f64,
+        file_name: &'a str,
+    ) -> LiveDetection<'a> {
+        LiveDetection {
+            date,
+            time,
+            sci_name,
+            com_name,
+            confidence,
+            file_name,
+            ..LiveDetection::default()
+        }
+    }
+
     #[test]
     fn insert_and_count() {
         let (db, _tmp) = make_db();
-        db.insert_detection(
+        db.insert_detection(&live(
             "2026-03-12",
             "06:30:00",
             "Turdus merula",
             "Eurasian Blackbird",
             0.87,
             "t.wav",
-        )
+        ))
         .unwrap();
-        db.insert_detection(
+        db.insert_detection(&live(
             "2026-03-12",
             "06:35:00",
             "Erithacus rubecula",
             "European Robin",
             0.92,
             "t.wav",
-        )
+        ))
         .unwrap();
         assert_eq!(db.detection_count().unwrap(), 2);
         assert_eq!(db.species_count().unwrap(), 2);
@@ -678,14 +757,14 @@ mod tests {
     #[test]
     fn sync_from_sqlite_incremental() {
         let (db, _tmp) = make_db();
-        db.insert_detection(
+        db.insert_detection(&live(
             "2026-03-12",
             "06:30:00",
             "Turdus merula",
             "Blackbird",
             0.87,
             "t.wav",
-        )
+        ))
         .unwrap();
 
         let sqlite_dir = TempDir::new().unwrap();
@@ -718,14 +797,14 @@ mod tests {
         let (db, _tmp) = make_db();
 
         // DuckDB already holds *one* of two same-second detections.
-        db.insert_detection(
+        db.insert_detection(&live(
             "2026-03-12",
             "06:30:00",
             "Turdus merula",
             "Blackbird",
             0.87,
             "t.wav",
-        )
+        ))
         .unwrap();
 
         // SQLite holds both same-second detections plus a later row.
@@ -770,14 +849,14 @@ mod tests {
         // writes *back-dated* rows into SQLite. The incremental sync skips them
         // because they predate the cutoff; the full resync must include them.
         let (db, _tmp) = make_db();
-        db.insert_detection(
+        db.insert_detection(&live(
             "2026-06-05",
             "10:00:00",
             "Parus major",
             "Great Tit",
             0.90,
             "now.wav",
-        )
+        ))
         .unwrap();
 
         let sqlite_dir = TempDir::new().unwrap();
@@ -816,14 +895,14 @@ mod tests {
         // A rebuild against an empty source truncates the OLAP copy and leaves a
         // working timestamp view (no rows, but queryable).
         let (db, _tmp) = make_db();
-        db.insert_detection(
+        db.insert_detection(&live(
             "2026-06-05",
             "10:00:00",
             "Parus major",
             "Great Tit",
             0.9,
             "x.wav",
-        )
+        ))
         .unwrap();
 
         let sqlite_dir = TempDir::new().unwrap();

@@ -49,6 +49,18 @@ phone bottom bar): **Today**, **Species**, **Patterns**, **Recordings**,
 - [Glossary](./guides/glossary.md)
 - [Troubleshooting](./guides/troubleshooting.md)
 
+# Running a Permanent Station
+
+The operational runbooks. These were repository files reachable only as raw
+GitHub links; a station meant to run unattended for a season deserves them in
+the manual.
+
+- [Field Deployment Runbook](./field/deployment.md)
+- [Security Hardening](./field/hardening.md)
+- [Hardware Validation](./field/hardware-test.md)
+- [Multi-stream Deduplication](./field/multistream.md)
+- [Running on macOS](./field/macos.md)
+
 # Reference
 
 - [Full Configuration Reference](./reference/configuration-reference.md)

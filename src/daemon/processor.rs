@@ -270,18 +270,29 @@ pub(super) fn event_processor(
         // the saved clip rather than the transient source segment.)
 
         // Also insert into DuckDB analytics (if enabled).
+        //
+        // The same twelve columns the bulk sync copies, from the same `record`
+        // that went to SQLite. This used to write six and leave Lat, Lon,
+        // Cutoff, Week, Sens and Overlap NULL, so a row written live and the
+        // same row rebuilt by a resync were different — including after the
+        // startup drift rebuild, which would silently fill them in.
         #[cfg(feature = "analytics")]
         if state.has_analytics() {
-            let insert_result = state.with_analytics(|adb| {
-                adb.insert_detection(
-                    &detection.date,
-                    &detection.time,
-                    &detection.scientific_name,
-                    &detection.common_name,
-                    f64::from(detection.confidence),
-                    &file_str,
-                )
-            });
+            let live = birdnet_behavioral::connection::LiveDetection {
+                date: record.date,
+                time: record.time,
+                sci_name: record.sci_name,
+                com_name: record.com_name,
+                confidence: record.confidence,
+                lat: record.lat,
+                lon: record.lon,
+                cutoff: record.cutoff,
+                week: record.week.and_then(|w| i32::try_from(w).ok()),
+                sens: record.sensitivity,
+                overlap: record.overlap,
+                file_name: &file_str,
+            };
+            let insert_result = state.with_analytics(|adb| adb.insert_detection(&live));
             if let Some(Err(e)) = insert_result {
                 tracing::warn!(error = %e, "failed to insert detection into DuckDB");
             }

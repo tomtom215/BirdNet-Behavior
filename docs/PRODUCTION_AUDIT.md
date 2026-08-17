@@ -12,6 +12,11 @@ bug on a desk and a corrupted season in a field. Anything that fails silently
 ranks above anything that fails loudly, because a station nobody is watching only
 ever reports what it volunteers.
 
+**Status.** Every finding below is now **fixed**, each with gates observed
+failing against the code they were written for. The narrative is kept in the
+past tense deliberately: the value of an audit is partly the record of what was
+wrong and why nothing noticed, which a rewritten-to-present document loses.
+
 **Method.** Every claim below was produced by running something — a gate, a
 probe, a query plan, or a real browser. Where a previous
 document's claim was re-checked rather than carried forward, that is stated. Two
@@ -59,25 +64,25 @@ What follows is what a year of unattended operation would expose anyway.
 |----|---------|-----|--------|
 | A-1 | Operator edits never reach the analytics store, permanently and silently | **P1** | **fixed this pass** |
 | A-2 | Five queries ask UTC for "today" while every detection is stamped in local time | **P1** | **fixed this pass** |
-| A-3 | Operational alerting is one-dimensional: only "no detections at all" ever notifies | P2 | open |
-| A-4 | Reviewer verdicts are collected and then applied to nothing | P2 | open |
-| A-5 | The `phenology` module — 925 LOC, 12 exports — has no production consumer | P2 | open |
-| A-6 | Importing another station's history reconciles neither its location nor its clock | P2 | open |
-| A-7 | The field runbook is not on the docs site, and its memory ceiling is wrong | P3 | open |
-| A-8 | Live and synced `DuckDB` rows carry different columns | P3 | latent |
+| A-3 | Operational alerting is one-dimensional: only "no detections at all" ever notifies | P2 | **fixed** |
+| A-4 | Reviewer verdicts are collected and then applied to nothing | P2 | **fixed** |
+| A-5 | The `phenology` module — 925 LOC, 12 exports — has no production consumer | P2 | **fixed** |
+| A-6 | Importing another station's history reconciles neither its location nor its clock | P2 | **fixed** |
+| A-7 | The field runbook is not on the docs site, and its memory ceiling is wrong | P3 | **fixed** |
+| A-8 | Live and synced `DuckDB` rows carry different columns | P3 | **fixed** |
 | A-9 | The dawn-chorus window scanned the whole history, so it slowed every season | P2 | **fixed this pass** |
 
 Interface findings are numbered separately in §1b:
 
-| ID | Finding | Sev |
-|----|---------|-----|
-| U-1 | The visual-QA tooling has never rendered the mobile layout — every "mobile" screenshot is desktop | P2 |
-| U-2 | `pointer: coarse` denies the phone layout to tablets-with-trackpads and narrow desktop windows | P2 |
-| U-3 | Half the Patterns tabs are off-screen on a phone with no affordance that they scroll | P2 |
-| U-4 | Chart series colours are a hash-to-hue at fixed lightness; collisions are near-certain | P2 |
-| U-5 | The streamgraph has no axes, and the caption above it describes a different chart | P3 |
-| U-6 | "Bursts of singing" lists sessions of 1 detection lasting 0s | P3 |
-| U-7 | 243/335 controls under 44 px; lock/delete/download clipped at ≤360 px | P3 |
+| ID | Finding | Sev | Status |
+|----|---------|-----|--------|
+| U-1 | The visual-QA tooling has never rendered the mobile layout — every "mobile" screenshot is desktop | P2 | **fixed** |
+| U-2 | `pointer: coarse` denies the phone layout to tablets-with-trackpads and narrow desktop windows | P2 | **fixed** |
+| U-3 | Half the Patterns tabs are off-screen on a phone with no affordance that they scroll | P2 | **fixed** |
+| U-4 | Chart series colours are a hash-to-hue at fixed lightness; collisions are near-certain | P2 | **fixed** |
+| U-5 | The streamgraph has no axes, and the caption above it describes a different chart | P3 | **fixed** |
+| U-6 | "Bursts of singing" lists sessions of 1 detection lasting 0s | P3 | **fixed** |
+| U-7 | 243/335 controls under 44 px; lock/delete/download clipped at ≤360 px | P3 | **fixed** |
 
 ---
 

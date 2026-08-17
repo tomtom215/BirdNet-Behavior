@@ -676,14 +676,23 @@ impl AppState {
         if admitted
             && let Some(row) = row
             && let Some(Err(e)) = self.with_analytics(|adb| {
-                adb.insert_detection(
-                    &row.date,
-                    &row.time,
-                    &row.sci_name,
-                    &row.com_name,
-                    row.confidence,
-                    row.file_name.as_deref().unwrap_or(""),
-                )
+                // The quarantine row carries the same provenance columns the
+                // detection would have had, so the admitted row matches what a
+                // resync would produce rather than being a six-column stub.
+                adb.insert_detection(&birdnet_behavioral::connection::LiveDetection {
+                    date: &row.date,
+                    time: &row.time,
+                    sci_name: &row.sci_name,
+                    com_name: &row.com_name,
+                    confidence: row.confidence,
+                    lat: row.lat,
+                    lon: row.lon,
+                    cutoff: None,
+                    week: row.week,
+                    sens: None,
+                    overlap: None,
+                    file_name: row.file_name.as_deref().unwrap_or(""),
+                })
             })
         {
             tracing::warn!(error = %e, "quarantined detection approved into SQLite but not into the analytics copy");
