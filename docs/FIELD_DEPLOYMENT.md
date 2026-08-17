@@ -160,8 +160,12 @@ The installer's systemd unit (`install.sh`) ships hardened by default:
   `RestrictNamespaces=yes`.
 - `SystemCallFilter=@system-service` minus the privileged / kernel
   / debug / reboot / mount / cpu-emulation / clock / module groups.
-- `MemoryMax=512M`, `TasksMax=512`, `LimitNPROC=256` — bounded
-  resource ceilings; runaway processes can't take down the host.
+- `MemoryHigh=768M`, `MemoryMax=1G`, `TasksMax=512`, `LimitNOFILE=65536`,
+  `LimitNPROC=256` — bounded resource ceilings; runaway processes can't
+  take down the host. The 1 GiB ceiling is sized for the bundled DuckDB
+  analytics engine, whose queries are memory-hungry under load; the FP32
+  model is mmap'd, so its pages are reclaimable and don't count as
+  anonymous RSS. On a 512 MB board physical RAM plus zram binds first.
 - `OOMPolicy=stop` — under memory pressure the unit stops cleanly
   instead of being killed mid-write.
 
