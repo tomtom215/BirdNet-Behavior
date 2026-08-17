@@ -264,6 +264,76 @@ impl AnalyticsDb {
         Ok(())
     }
 
+    /// Delete a detection from the OLAP copy, mirroring `SQLite`'s
+    /// `delete_detection`.
+    ///
+    /// Returns the number of rows removed.
+    ///
+    /// # Why this exists
+    ///
+    /// The incremental sync can only ever *add* rows newer than the ones it
+    /// already holds — it has no way to notice a removal. Without a mirror an
+    /// operator's deleted false positive stayed in every behavioural and
+    /// time-series dashboard permanently, because nothing else ever revisits a
+    /// row once it is synced.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the delete fails.
+    pub fn delete_detection(
+        &self,
+        date: &str,
+        time: &str,
+        sci_name: &str,
+    ) -> Result<u64, AnalyticsError> {
+        let n = self.conn.execute(
+            "DELETE FROM detections WHERE Date = ? AND Time = ? AND Sci_Name = ?",
+            params![date, time, sci_name],
+        )?;
+        Ok(n as u64)
+    }
+
+    /// Re-label a detection in the OLAP copy, mirroring `SQLite`'s
+    /// `relabel_detection`.
+    ///
+    /// Returns the number of rows updated. See [`Self::delete_detection`] for
+    /// why the mirror is needed at all.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the update fails.
+    pub fn relabel_detection(
+        &self,
+        date: &str,
+        time: &str,
+        old_sci_name: &str,
+        new_sci_name: &str,
+        new_com_name: &str,
+    ) -> Result<u64, AnalyticsError> {
+        let n = self.conn.execute(
+            "UPDATE detections SET Sci_Name = ?, Com_Name = ? \
+             WHERE Date = ? AND Time = ? AND Sci_Name = ?",
+            params![new_sci_name, new_com_name, date, time, old_sci_name],
+        )?;
+        Ok(n as u64)
+    }
+
+    /// Empty the OLAP detections copy, mirroring the admin "clear detections"
+    /// control.
+    ///
+    /// Returns the number of rows removed. See [`Self::delete_detection`] for
+    /// why the mirror is needed at all; this is the case where its absence was
+    /// most visible, since the station's own dashboard reported zero detections
+    /// while the analytics dashboards beside it still rendered a full history.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the delete fails.
+    pub fn clear_detections(&self) -> Result<u64, AnalyticsError> {
+        let n = self.conn.execute("DELETE FROM detections", params![])?;
+        Ok(n as u64)
+    }
+
     /// Count total detections in `DuckDB`.
     ///
     /// # Errors

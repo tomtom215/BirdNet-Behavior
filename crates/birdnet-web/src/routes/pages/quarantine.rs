@@ -474,10 +474,11 @@ async fn quarantine_approve(
     let filter_param = form.filter.as_deref().unwrap_or("pending").to_owned();
     let offset = form.offset.unwrap_or(0);
 
-    let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::sqlite::approve_quarantine(conn, id))
-    })
-    .await;
+    // `state.approve_quarantine`, not `with_db(approve_quarantine)`: the row is
+    // back-dated by construction, so the incremental analytics sync would skip
+    // it on every future start. Without the paired write an approved detection
+    // never reached the analytics dashboards at all.
+    let result = tokio::task::spawn_blocking(move || state.approve_quarantine(id)).await;
 
     // O-18: outcome toast.
     let toast = match &result {

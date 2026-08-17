@@ -239,6 +239,46 @@ impl AppState {
                     }
                 }
 
+                // Drift repair. The sync above is incremental, so it can only
+                // add rows newer than the ones already held — it cannot notice
+                // a row that was deleted, changed, or back-dated behind the
+                // cutoff. Every such divergence used to be permanent and
+                // silent: both stores answered every query they were asked,
+                // just with different histories.
+                //
+                // After a successful incremental sync the two row counts must
+                // agree. When they do not, something reached SQLite that this
+                // copy can never catch up to, and the only correct repair is a
+                // full rebuild. This costs two `COUNT(*)`s per start on a
+                // healthy station and self-heals one that upgraded from a
+                // release whose edits went to SQLite alone.
+                match (
+                    birdnet_db::sqlite::detection_count(&conn)
+                        .map(|n| u64::try_from(n).unwrap_or(0)),
+                    adb.detection_count(),
+                ) {
+                    (Ok(sqlite_rows), Ok(olap_rows)) if sqlite_rows != olap_rows => {
+                        tracing::warn!(
+                            sqlite_rows,
+                            olap_rows,
+                            "analytics copy disagrees with the database after sync; rebuilding it"
+                        );
+                        match adb.full_resync_from_sqlite(&conn) {
+                            Ok(rows) => tracing::info!(rows, "analytics copy rebuilt"),
+                            Err(e) => {
+                                tracing::warn!(error = %e, "analytics rebuild failed (non-fatal)");
+                            }
+                        }
+                    }
+                    (Ok(_), Ok(_)) => {}
+                    (Err(e), _) => {
+                        tracing::warn!(error = %e, "could not count SQLite detections; skipping analytics drift check");
+                    }
+                    (_, Err(e)) => {
+                        tracing::warn!(error = %e, "could not count analytics detections; skipping drift check");
+                    }
+                }
+
                 if let Err(e) = adb.load_extension() {
                     tracing::warn!(
                         error = %e,
@@ -497,6 +537,157 @@ impl AppState {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         Some(adb.full_resync_from_sqlite(&conn))
+    }
+
+    // -----------------------------------------------------------------------
+    // Detection mutations that must reach *both* stores
+    // -----------------------------------------------------------------------
+    //
+    // `SQLite` is the source of truth and `DuckDB` is a derived copy, but the
+    // copy is maintained *incrementally*: the startup sync's cutoff is the
+    // newest row already in `DuckDB`, so it can only ever add newer rows. It
+    // never removes one, never re-reads a changed one, and skips a back-dated
+    // one entirely.
+    //
+    // That made every operator edit one-way. A deleted false positive stayed in
+    // Patterns forever; a corrected identification kept its old name there; an
+    // approved quarantine detection — back-dated by construction — never
+    // arrived at all; and "clear all detections" left the analytics dashboards
+    // rendering the full history beside a dashboard reporting zero. None of it
+    // was reported, because both stores answered every query they were asked.
+    //
+    // The methods below are the paired writes. Routes call these instead of
+    // `with_db(|c| birdnet_db::sqlite::…)` so the pairing cannot be forgotten at
+    // a new call site. A failed mirror is logged and left to the startup drift
+    // check (see `new_with_analytics`) to repair rather than failing the
+    // operator's action, which has already succeeded in the source of truth.
+
+    /// Delete a detection from `SQLite` **and** the analytics copy.
+    ///
+    /// Returns whether a row was deleted from `SQLite`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DbError` if the `SQLite` delete fails. A failure to mirror the
+    /// delete into `DuckDB` is logged, not returned: the authoritative delete
+    /// has happened, and the startup drift check repairs the copy.
+    pub fn delete_detection(
+        &self,
+        date: &str,
+        time: &str,
+        sci_name: &str,
+    ) -> Result<bool, birdnet_db::sqlite::DbError> {
+        let deleted =
+            self.with_db(|conn| birdnet_db::sqlite::delete_detection(conn, date, time, sci_name))?;
+        #[cfg(feature = "analytics")]
+        if deleted
+            && let Some(Err(e)) =
+                self.with_analytics(|adb| adb.delete_detection(date, time, sci_name))
+        {
+            tracing::warn!(error = %e, "detection deleted from SQLite but not from the analytics copy");
+        }
+        Ok(deleted)
+    }
+
+    /// Re-label a detection in `SQLite` **and** the analytics copy.
+    ///
+    /// Returns whether a row was updated in `SQLite`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DbError` if the `SQLite` update fails; see
+    /// [`Self::delete_detection`] for why a mirror failure is not returned.
+    pub fn relabel_detection(
+        &self,
+        date: &str,
+        time: &str,
+        old_sci_name: &str,
+        new_sci_name: &str,
+        new_com_name: &str,
+    ) -> Result<bool, birdnet_db::sqlite::DbError> {
+        let relabelled = self.with_db(|conn| {
+            birdnet_db::sqlite::relabel_detection(
+                conn,
+                date,
+                time,
+                old_sci_name,
+                new_sci_name,
+                new_com_name,
+            )
+        })?;
+        #[cfg(feature = "analytics")]
+        if relabelled
+            && let Some(Err(e)) = self.with_analytics(|adb| {
+                adb.relabel_detection(date, time, old_sci_name, new_sci_name, new_com_name)
+            })
+        {
+            tracing::warn!(error = %e, "detection relabelled in SQLite but not in the analytics copy");
+        }
+        Ok(relabelled)
+    }
+
+    /// Admit a quarantined detection to `SQLite` **and** the analytics copy.
+    ///
+    /// Returns whether the detection was newly admitted to `SQLite`.
+    ///
+    /// The quarantined row carries its *original* timestamp, so it is
+    /// back-dated relative to whatever the analytics copy already holds. That
+    /// is why this pairing matters more than the others: the incremental sync's
+    /// `>= cutoff` filter would skip such a row on every future start, so
+    /// without the mirror an approved detection could never reach the analytics
+    /// dashboards at all.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DbError` if the `SQLite` approval fails; see
+    /// [`Self::delete_detection`] for why a mirror failure is not returned.
+    pub fn approve_quarantine(&self, id: i64) -> Result<bool, birdnet_db::sqlite::DbError> {
+        // Read the row *before* approving: `approve_quarantine` reports only
+        // whether a row moved, and the analytics insert needs its values.
+        let row = self.with_db(|conn| birdnet_db::sqlite::get_quarantine(conn, id))?;
+        let admitted = self.with_db(|conn| birdnet_db::sqlite::approve_quarantine(conn, id))?;
+        #[cfg(feature = "analytics")]
+        if admitted
+            && let Some(row) = row
+            && let Some(Err(e)) = self.with_analytics(|adb| {
+                adb.insert_detection(
+                    &row.date,
+                    &row.time,
+                    &row.sci_name,
+                    &row.com_name,
+                    row.confidence,
+                    row.file_name.as_deref().unwrap_or(""),
+                )
+            })
+        {
+            tracing::warn!(error = %e, "quarantined detection approved into SQLite but not into the analytics copy");
+        }
+        #[cfg(not(feature = "analytics"))]
+        let _ = row;
+        Ok(admitted)
+    }
+
+    /// Delete every detection from `SQLite` **and** the analytics copy.
+    ///
+    /// Returns the number of `SQLite` rows removed.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DbError` if the `SQLite` delete fails; see
+    /// [`Self::delete_detection`] for why a mirror failure is not returned.
+    pub fn clear_detections(&self) -> Result<u64, birdnet_db::sqlite::DbError> {
+        let removed = self.with_db(|conn| {
+            conn.execute("DELETE FROM detections", [])
+                .map(|n| n as u64)
+                .map_err(birdnet_db::sqlite::DbError::from)
+        })?;
+        #[cfg(feature = "analytics")]
+        if let Some(Err(e)) =
+            self.with_analytics(birdnet_behavioral::connection::AnalyticsDb::clear_detections)
+        {
+            tracing::warn!(error = %e, "detections cleared from SQLite but not from the analytics copy");
+        }
+        Ok(removed)
     }
 
     /// Whether the `DuckDB` analytics database is available.
