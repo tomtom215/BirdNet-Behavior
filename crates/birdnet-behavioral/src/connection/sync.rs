@@ -54,7 +54,7 @@ const APPEND_BATCH_ROWS: u64 = 10_000;
 
 /// A detection as written by the live path.
 ///
-/// Carries the same twelve columns [`SYNC_COLS`] copies, so a row written
+/// Carries the same twelve columns the bulk sync copies, so a row written
 /// live and the same row rebuilt by a resync are identical. They were not:
 /// the live insert wrote six columns and left `Lat`, `Lon`, `Cutoff`,
 /// `Week`, `Sens` and `Overlap` NULL, so "the same detection" meant

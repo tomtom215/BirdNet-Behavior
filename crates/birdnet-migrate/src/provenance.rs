@@ -247,7 +247,7 @@ impl ImportOptions {
 /// A pre-import verdict on whether the source and the station are the same
 /// place, on the same clock.
 ///
-/// Returned as a [`ValidationCheck`] so it lands in the same report the
+/// Returned as a [`crate::traits::ValidationCheck`] so it lands in the same report the
 /// operator already reads, rather than in a second place they have to know to
 /// look. It is never `required`: merging two sites is a legitimate thing to
 /// want, and only the operator can say whether these two coordinates are one

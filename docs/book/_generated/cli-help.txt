@@ -139,6 +139,14 @@ Options:
 
           [env: BIRDNET_DEADMAN_HOURS=]
 
+      --station-health-alerts <STATION_HEALTH_ALERTS>
+          Alert on operational faults the detection deadman cannot see.
+
+          The deadman answers "is the station detecting at all?". This answers the questions that leave it quiet: one of several microphones down while the rest keep working, a disk full enough that recordings are being purged, a CPU at its throttling temperature, or a backup / integrity check that has not completed in weeks. Each alerts once per episode with a recovery notice, like the deadman. Defaults to on; config-file key: `STATION_HEALTH_ALERTS`.
+
+          [env: BIRDNET_STATION_HEALTH_ALERTS=]
+          [possible values: true, false]
+
       --birdweather-token <BIRDWEATHER_TOKEN>
           `BirdWeather` station token for uploading detections
 
