@@ -56,7 +56,8 @@ pub fn phenology_timing_sql(params: &PhenologyParams) -> String {
             CAST(strftime(MIN(detection_date), '%j') AS INTEGER) AS first_doy,
             CAST(strftime(MAX(detection_date), '%j') AS INTEGER) AS last_doy,
             date_diff('day', MIN(detection_date), MAX(detection_date)) + 1
-                                                            AS presence_days
+                                                            AS presence_days,
+            COUNT(DISTINCT detection_date)                  AS detected_days
         FROM detections_ts
         {where_sql}
         GROUP BY Com_Name, year
@@ -75,6 +76,26 @@ pub fn phenology_timing_sql(params: &PhenologyParams) -> String {
 ///
 /// Requires at least `min_years` years of observations per species.
 /// Uses `DuckDB` `percentile_cont` window functions.
+///
+/// # Species this cannot describe, and why it now says so
+///
+/// The window is computed per **calendar year**, so it is only meaningful for a
+/// species that is absent across the New Year. For a resident or an
+/// overwintering visitor — a Fieldfare or a Brambling present October to March —
+/// `first_doy` lands in early January and `last_doy` in late December, and the
+/// query reports "arrived 1 January, departed 31 December". That is arithmetically
+/// correct and ornithologically meaningless, and nothing said so.
+///
+/// Rather than silently emitting it, the result now carries `year_crossing`:
+/// true when the species was detected in both the first and last fortnight of
+/// the year, which is exactly the condition under which the calendar-year
+/// window stops describing a migration. A caller can then present the window,
+/// suppress it, or label it — but cannot mistake it for an arrival date.
+///
+/// `presence_days` is likewise a **span**, not an occupancy: `last - first + 1`
+/// gives 365 to a species detected once in January and once in December.
+/// `detected_days` is reported alongside it so the two cannot be confused;
+/// `min_detections` narrows but does not close that gap.
 pub fn migration_window_sql(min_years: u32, params: &PhenologyParams) -> String {
     let species_filter = where_clause(&[
         Some(PLACEABLE.to_string()),
@@ -87,7 +108,14 @@ pub fn migration_window_sql(min_years: u32, params: &PhenologyParams) -> String 
                 Com_Name                                        AS species,
                 {YEAR_EXPR}                                     AS year,
                 CAST(strftime(MIN(detection_date), '%j') AS INTEGER) AS first_doy,
-                CAST(strftime(MAX(detection_date), '%j') AS INTEGER) AS last_doy
+                CAST(strftime(MAX(detection_date), '%j') AS INTEGER) AS last_doy,
+                -- Detected in both the first and last fortnight of the year:
+                -- the signature of a resident or overwintering species, for
+                -- which a calendar-year window is not a migration window.
+                MAX(CASE WHEN CAST(strftime(detection_date, '%j') AS INTEGER) <= 14
+                         THEN 1 ELSE 0 END)
+                  * MAX(CASE WHEN CAST(strftime(detection_date, '%j') AS INTEGER) >= 351
+                             THEN 1 ELSE 0 END)                 AS spans_new_year
             FROM detections_ts
             {species_filter}
             GROUP BY Com_Name, year
@@ -107,7 +135,8 @@ pub fn migration_window_sql(min_years: u32, params: &PhenologyParams) -> String 
             percentile_cont(0.50) WITHIN GROUP (ORDER BY last_doy)
                                                             AS departure_median_doy,
             percentile_cont(0.90) WITHIN GROUP (ORDER BY last_doy)
-                                                            AS departure_late_doy
+                                                            AS departure_late_doy,
+            MAX(spans_new_year) = 1                         AS year_crossing
         FROM yearly
         GROUP BY species
         HAVING COUNT(year) >= {min_years}

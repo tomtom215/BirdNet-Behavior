@@ -10,6 +10,7 @@
 mod apprise;
 mod birdweather;
 mod deadman;
+mod effort;
 mod email;
 mod heartbeat;
 mod mqtt;
@@ -24,6 +25,7 @@ mod test_support;
 pub use apprise::{AppriseHandle, create_apprise_client};
 pub use birdweather::create_birdweather_client;
 pub use deadman::{DEFAULT_DEADMAN_HOURS, spawn_detection_deadman};
+pub use effort::spawn_effort_recorder;
 pub use email::{EmailHandle, create_email_notifier};
 pub use heartbeat::{HeartbeatHandle, create_heartbeat_client};
 pub use mqtt::{MqttHandle, create_mqtt_client, get_mqtt_client_ref, publish_ha_discovery};

@@ -290,6 +290,21 @@ impl AppState {
                     }
                 }
 
+                // Recording effort: the denominator every effort-corrected
+                // analytic divides by. Small and mutable (today's row is
+                // incremented every five minutes), so it is replaced wholesale
+                // rather than synced incrementally.
+                match adb.sync_recording_effort(&conn) {
+                    Ok(rows) => {
+                        if rows > 0 {
+                            tracing::debug!(rows, "synced recording effort to DuckDB");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "recording-effort sync failed (non-fatal)");
+                    }
+                }
+
                 if let Err(e) = adb.load_extension() {
                     tracing::warn!(
                         error = %e,

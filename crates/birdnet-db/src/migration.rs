@@ -769,6 +769,40 @@ pub const MIGRATIONS: &[Migration] = &[
         CREATE VIEW IF NOT EXISTS detections_analytic AS
             SELECT * FROM detections WHERE review_verdict IS NOT 'rejected';",
     },
+    Migration {
+        version: 27,
+        description: "Record how long the station actually listened, so counts can be normalised",
+        // A detection count is not an abundance. It is a count of detections
+        // divided by nothing, and the denominator moves: a solar recording
+        // window lengthens by six hours between December and June, a week of
+        // downtime removes seven days of listening, a failed microphone halves
+        // the channels. Every one of those changes the count without changing a
+        // single bird.
+        //
+        // Comparing raw counts across seasons or across years — which is the
+        // whole point of running a station for years — therefore measures the
+        // station as much as the birds. The correction is elementary and
+        // standard (detections per unit listening effort); what was missing was
+        // anywhere to put the effort.
+        //
+        // `birdnet-behavioral` has shipped `effort_corrected_abundance_sql`
+        // since the phenology module landed, joining a `recordings` table that
+        // existed only in that module's own tests. This is the real one.
+        //
+        // Per (date, source) rather than per day: a station with three
+        // microphones where one dies has not lost a third of its listening if
+        // the other two cover the same airspace, and only the operator can say
+        // which. Storing the breakdown keeps that decision available instead of
+        // baking one interpretation into the schema.
+        up_sql: "CREATE TABLE IF NOT EXISTS recording_effort (
+            date TEXT NOT NULL,
+            source TEXT NOT NULL,
+            seconds REAL NOT NULL DEFAULT 0,
+            PRIMARY KEY (date, source)
+        );
+        CREATE INDEX IF NOT EXISTS idx_recording_effort_date
+            ON recording_effort(date);",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing

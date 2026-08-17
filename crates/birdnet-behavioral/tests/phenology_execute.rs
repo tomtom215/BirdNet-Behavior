@@ -47,11 +47,12 @@ fn seeded(year: i32) -> (AnalyticsDb, TempDir) {
         ))
         .expect("seed detections");
 
-    // The effort-corrected query joins a caller-supplied recordings table.
+    // The effort-corrected query joins the station's recording-effort table.
     db.conn()
         .execute_batch(&format!(
-            "CREATE TABLE recordings (date VARCHAR, duration_hours DOUBLE);
-             INSERT INTO recordings VALUES ('{year:04}-01-03', 4.0), ('{year:04}-06-11', 5.5);"
+            "CREATE TABLE recording_effort (date VARCHAR, source VARCHAR, seconds DOUBLE);
+             INSERT INTO recording_effort VALUES ('{year:04}-01-03', 'local', 14400.0),
+                                                 ('{year:04}-06-11', 'local', 19800.0);"
         ))
         .expect("seed recordings");
 

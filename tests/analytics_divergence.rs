@@ -436,3 +436,87 @@ fn provenance_survives_into_the_analytics_store() {
         "the imported hours are still on the source's clock"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Effort-corrected abundance
+// ---------------------------------------------------------------------------
+
+/// The effort-corrected abundance query must return an actual rate.
+///
+/// It shipped for months joining a table called `recordings` that existed only
+/// in the phenology module's own tests — so on a real station it had no
+/// denominator, silently returned NULL rates, and looked like a feature nobody
+/// needed. This drives it against the station's own `recording_effort`
+/// (migration 27) end to end: SQLite → DuckDB → query.
+///
+/// The correction is not cosmetic. A solar recording window is six hours longer
+/// in June than December; a week of downtime removes a week of listening. Both
+/// move the raw count without moving a single bird, so a between-season or
+/// between-year comparison of raw counts measures the station as much as the
+/// birds.
+#[test]
+fn effort_corrected_abundance_returns_a_rate() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("birds.db");
+    let year: i64 = {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        let today: String = conn
+            .query_row("SELECT date('now','localtime')", [], |r| r.get(0))
+            .unwrap();
+        // Ten detections on one day, against four hours of listening.
+        for i in 0..10 {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                 VALUES (?1, ?2, 'Turdus merula', 'Eurasian Blackbird', 0.9)",
+                rusqlite::params![&today, format!("06:{i:02}:00")],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO recording_effort (date, source, seconds) VALUES (?1, 'local', 14400.0)",
+            rusqlite::params![&today],
+        )
+        .unwrap();
+        today[..4].parse().unwrap()
+    };
+
+    let state = AppState::new_with_analytics(db_path, &dir.path().join("analytics.duckdb"))
+        .expect("analytics state opens");
+    state
+        .resync_analytics_full()
+        .expect("analytics is configured")
+        .expect("resync");
+
+    let params = birdnet_behavioral::phenology::AbundanceParams {
+        species: None,
+        year: u32::try_from(year).unwrap(),
+        min_weekly_count: 1,
+    };
+    let sql = birdnet_behavioral::phenology::effort_corrected_abundance_sql(&params);
+
+    let (raw, hours, rate): (i64, f64, f64) = state
+        .with_analytics(|adb| {
+            adb.conn()
+                .query_row(&sql, [], |r| {
+                    Ok((
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, f64>(3)?,
+                        r.get::<_, f64>(4)?,
+                    ))
+                })
+                .expect("the effort-corrected query must run against the real schema")
+        })
+        .expect("analytics is configured");
+
+    assert_eq!(raw, 10, "ten detections");
+    assert!(
+        (hours - 4.0).abs() < 1e-6,
+        "four hours of listening, got {hours}"
+    );
+    assert!(
+        (rate - 2.5).abs() < 1e-6,
+        "ten detections over four hours is 2.5/hour, got {rate} — a NULL here is \
+         the old failure: the query had no denominator on any real station"
+    );
+}

@@ -397,6 +397,53 @@ impl AnalyticsDb {
         Ok(n as u64)
     }
 
+    /// Copy the station's recording-effort table into the OLAP store.
+    ///
+    /// Small by construction — one row per (day, source), so a four-year
+    /// three-microphone station has about 4 400 of them — so this is a full
+    /// replace rather than an incremental sync. Effort rows are also *mutable*
+    /// (today's row is incremented every five minutes), which an
+    /// append-only incremental sync could not track.
+    ///
+    /// Without this the effort-corrected abundance query has no denominator in
+    /// the store it runs in, and silently returns NULL rates — the failure mode
+    /// that made the whole phenology module look optional.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reading from `SQLite` or writing to `DuckDB` fails.
+    pub fn sync_recording_effort(
+        &self,
+        sqlite_conn: &rusqlite::Connection,
+    ) -> Result<u64, AnalyticsError> {
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS recording_effort (
+                date VARCHAR NOT NULL,
+                source VARCHAR NOT NULL,
+                seconds DOUBLE NOT NULL
+            );",
+        )?;
+
+        let read_err =
+            |e: rusqlite::Error| AnalyticsError::InvalidData(format!("SQLite read error: {e}"));
+        let mut stmt = sqlite_conn
+            .prepare("SELECT date, source, seconds FROM recording_effort")
+            .map_err(read_err)?;
+        let rows: Vec<(String, String, f64)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map_err(read_err)?
+            .filter_map(Result::ok)
+            .collect();
+
+        self.conn.execute_batch("DELETE FROM recording_effort;")?;
+        let mut appender = self.conn.appender("recording_effort")?;
+        for (date, source, seconds) in &rows {
+            appender.append_row(params![date, source, seconds])?;
+        }
+        appender.flush()?;
+        Ok(rows.len() as u64)
+    }
+
     /// Mirror a reviewer's verdict onto the OLAP copy.
     ///
     /// `verdict` is `Some("confirmed")` / `Some("rejected")`, or `None` to

@@ -323,6 +323,12 @@ async fn serve(
             })
             .unwrap_or(true);
         integrations::spawn_station_health(state.clone(), apprise_client.clone(), health_alerts);
+
+        // Recording effort: how long the station actually listened, per source
+        // per day. A detection count divided by nothing is not an abundance,
+        // and the denominator moves with the season, with downtime and with a
+        // failed microphone — see `integrations::effort`.
+        integrations::spawn_effort_recorder(state.clone());
     }
 
     // Start background subsystems.
