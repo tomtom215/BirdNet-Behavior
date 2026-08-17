@@ -133,7 +133,7 @@ fn web_only_boots_when_the_database_directory_does_not_exist() {
     // *after* `--doctor` had reported "will be created on first run — no action
     // needed" and exited 0.
     //
-    // The realistic trigger is the storage move docs/FIELD_DEPLOYMENT.md
+    // The realistic trigger is the storage move docs/book/field/deployment.md
     // recommends — consumer SD cards fail after ~6 months of WAL churn — so the
     // path here is several levels deep, exactly like `/mnt/ssd/birdnet/data`.
     let dir = tempfile::tempdir().expect("tempdir");

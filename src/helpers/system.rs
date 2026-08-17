@@ -41,7 +41,7 @@ const DEFAULT_PURGE_THRESHOLD: u8 = 95;
 /// passes `--watch-dir`, so the manager attached to the tmpfs and the data disk
 /// — where clips actually accumulate, alongside `birds.db` — had no bound at
 /// all. `DISK_PURGE_THRESHOLD` appeared to protect the recordings (as
-/// `docs/FIELD_DEPLOYMENT.md` describes) while in fact only ever measuring the
+/// `docs/book/field/deployment.md` describes) while in fact only ever measuring the
 /// tmpfs. Left alone, a 24/7 station fills its SD card until SQLite writes
 /// start failing.
 ///

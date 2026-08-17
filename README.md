@@ -117,7 +117,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/m
 curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/install.sh | bash
 ```
 
-> On macOS it installs the `aarch64-apple-darwin` build once a release publishes one; until then it offers to `brew install` the dependencies and prints the one-time source-build steps. A Homebrew formula is planned. (See [docs/MACOS.md](docs/MACOS.md).)
+> On macOS it installs the `aarch64-apple-darwin` build once a release publishes one; until then it offers to `brew install` the dependencies and prints the one-time source-build steps. A Homebrew formula is planned. (See [docs/book/field/macos.md](docs/book/field/macos.md).)
 
 The BirdNET+ V3.0 model (~541 MB) downloads automatically on first run — sha256-verified, from the same GitHub release line as the binary, so the install needs a single network origin and is offline-capable afterwards (it falls back to Zenodo, the upstream source, if the GitHub asset is unavailable). When it's ready, open **<http://localhost:8502>** — or, from another device on your LAN, `http://<hostname>.local:8502` (or `http://<pi-ip>:8502` by IP; the installer prints both, and the dashboard binds to all interfaces by default). Viewing is open; only the `/admin` panel needs a login. The bare-metal installer auto-generates that admin password (sign in as `admin`) and prints it once in its summary — save it. To restrict the dashboard to the machine itself, set `BIRDNET_LISTEN=127.0.0.1:8502`.
 
@@ -174,7 +174,7 @@ A station is only useful if it keeps running when nobody is watching, and the da
 - **Data sovereignty for sensitive species.** Point uploads at a **self-hosted ingest** (`BIRDWEATHER_URL`) instead of the public community map — for rare or endangered species where a public observation map is a poaching risk — and the offline queue and ordered replay come with it.
 - **Survives power loss and a wrong clock.** WAL journalling, scheduled integrity checks, rolling backups, and corruption-quarantine-then-recover at boot keep the database intact across yanked power. With no RTC, capture *fails open* until NTP syncs so a bogus boot-time clock never silences the station. systemd watchdog supervision restarts a hung process and gives up cleanly (never a restart loop) on a permanently broken one.
 
-📖 The complete playbook — hardware, power, storage, monitoring, recovery — is the [**Field Deployment Runbook**](docs/FIELD_DEPLOYMENT.md) — also published in the [operator manual](https://tomtom215.github.io/BirdNet-Behavior/field/deployment.html).
+📖 The complete playbook — hardware, power, storage, monitoring, recovery — is the [**Field Deployment Runbook**](docs/book/field/deployment.md) — also published in the [operator manual](https://tomtom215.github.io/BirdNet-Behavior/field/deployment.html).
 
 ---
 

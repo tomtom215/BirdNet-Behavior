@@ -265,5 +265,5 @@ six fixes in this branch were found by exactly this sequence.
   subprocess test template
 - [`tests/inference_e2e.rs`](../../tests/inference_e2e.rs) —
   reference-parity inference test
-- [`docs/FIELD_DEPLOYMENT.md`](../FIELD_DEPLOYMENT.md) — operator
+- [`docs/book/field/deployment.md`](../book/field/deployment.md) — operator
   perspective on the same verification surface

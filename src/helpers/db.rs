@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 /// exited 0.
 ///
 /// The realistic trigger is not a fresh install (the installer pre-creates the
-/// directory) but the move `docs/FIELD_DEPLOYMENT.md` actively recommends:
+/// directory) but the move `docs/book/field/deployment.md` actively recommends:
 /// relocating storage off the SD card, which fails after ~6 months of WAL
 /// churn. `RECS_DIR=/data/recordings` works because it is auto-created;
 /// `DB_PATH=/data/birdnet/birds.db` did not.
@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn creates_every_missing_level() {
-        // The storage relocation docs/FIELD_DEPLOYMENT.md recommends lands
+        // The storage relocation docs/book/field/deployment.md recommends lands
         // several levels deep on a fresh mount.
         let tmp = tempfile::tempdir().expect("tempdir");
         let db = tmp.path().join("mnt/ssd/birdnet/data/birds.db");

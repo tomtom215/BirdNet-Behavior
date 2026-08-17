@@ -466,7 +466,7 @@ async fn run_clip_retention(db_path: &Path, recordings_dir: &Path, days: u32) {
 ///
 ///   * **Locked clips are never pruned.** `/admin/recordings` → "lock" is the
 ///     operator's one guarantee that a clip survives automatic cleanup, and
-///     `docs/FIELD_DEPLOYMENT.md` documents it as such. The disk purge honoured
+///     `docs/book/field/deployment.md` documents it as such. The disk purge honoured
 ///     it; this cap did not, so a cap silently deleted the very recordings a
 ///     researcher had marked to keep.
 ///   * **The row is stamped, never stripped.** `Clip_Pruned_At` records when
@@ -1038,7 +1038,7 @@ mod tests {
     #[tokio::test]
     async fn species_cap_never_prunes_a_locked_clip() {
         // "lock" is the operator's one guarantee that a clip survives
-        // automatic cleanup, and docs/FIELD_DEPLOYMENT.md documents it as
+        // automatic cleanup, and docs/book/field/deployment.md documents it as
         // such. The disk purge honoured it; this cap did not.
         let tmp = tempfile::tempdir().unwrap();
         let db = tmp.path().join("birds.db");

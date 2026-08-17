@@ -84,6 +84,6 @@ findings to that document.
 ## Hardening guidance
 
 If you are deploying BirdNet-Behavior in a multi-tenant or research
-setting, please also review [`docs/SECURITY_HARDENING.md`](docs/SECURITY_HARDENING.md)
+setting, please also review [`docs/book/field/hardening.md`](docs/book/field/hardening.md)
 for recommended network segmentation, authentication, and backup
 practices.
