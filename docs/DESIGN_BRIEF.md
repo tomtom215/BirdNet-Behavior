@@ -104,8 +104,8 @@ users**, with deep analytics underneath for enthusiasts.
    confirming a detection), and — as an advanced, off-by-default option — a
    **duplicate-collapse** affordance for explicitly co-located mics. The full,
    corroboration-first design rationale is in
-   [`MULTISTREAM_DEDUP.md`](MULTISTREAM_DEDUP.md); design these as one coherent
-   surface.
+   [`book/field/multistream.md`](book/field/multistream.md); design these as
+   one coherent surface.
 6. **Admin & onboarding UX.** The settings area is form-dense; make it a guided,
    reassuring experience for non-technical owners (audio source setup, location,
    notifications, backups). Polish the first-run wizard.

@@ -205,8 +205,8 @@ fatal is the only one nothing creates.
 directory. It hits:
 - **Docker** with a bind mount whose subdirectory does not exist;
 - anyone relocating the database off the SD card, which
-  `docs/FIELD_DEPLOYMENT.md:36` actively recommends ("SSD on USB — consumer SD
-  cards fail after ~6 months of WAL churn") and whose storage section teaches the
+  `docs/book/field/deployment.md:36` actively recommends ("SSD on USB — consumer
+  SD cards fail after ~6 months of WAL churn") and whose storage section teaches the
   exact `RECS_DIR=/data/recordings` pattern. `RECS_DIR` is auto-created;
   `DB_PATH` is not;
 - any manual or dev run.
@@ -647,7 +647,8 @@ maintainer's call.
   executes and serves; it is not the board.
 
   `scripts/hardware-test.sh` now exists to close this, and
-  [`docs/HARDWARE_TEST.md`](./HARDWARE_TEST.md) documents it: it installs from
+  [`docs/book/field/hardware-test.md`](./book/field/hardware-test.md) documents
+  it: it installs from
   the published release on a clean Pi, measures mean inference latency per 3 s
   chunk and peak SoC temperature under load, and then deliberately breaks the
   station — SIGSTOP, mic unplug, network loss, disk full, SQLite and DuckDB

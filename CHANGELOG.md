@@ -1141,7 +1141,8 @@ CI: each needs a real systemd unit, a real USB microphone, or both.
 ### Added
 
 - **`scripts/hardware-test.sh`** — an on-device acceptance harness, documented in
-  [`docs/HARDWARE_TEST.md`](docs/HARDWARE_TEST.md). It installs from the
+  [`docs/book/field/hardware-test.md`](docs/book/field/hardware-test.md). It
+  installs from the
   published release, measures mean inference latency per 3 s chunk and peak SoC
   temperature under load, and then deliberately breaks the station — watchdog
   SIGSTOP, microphone hot-unplug, network loss, disk-full, SQLite and DuckDB

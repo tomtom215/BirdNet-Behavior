@@ -2,6 +2,14 @@ name: Docs
 
 # Build the mdBook documentation and publish it to GitHub Pages.
 # Requires Pages to be enabled once in repo Settings → Pages → Source: GitHub Actions.
+#
+# The build job also runs on pull requests, deliberately: `mdbook build` is the
+# only thing in CI that runs the linkcheck backend. The root `book.toml` enables
+# it; `docs/book/book.toml` — the one `build.rs` loads on every `cargo build` —
+# does not, so a broken internal link is invisible to every other gate. When
+# this workflow was push-only, a link break could not be caught until it was
+# already on `main`; that happened, which is why the trigger is here.
+# Only `deploy` is restricted to `main` pushes.
 
 on:
   push:
@@ -11,17 +19,23 @@ on:
       - "docs/book-theme/**"
       - "book.toml"
       - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "docs/book/**"
+      - "docs/book-theme/**"
+      - "book.toml"
+      - ".github/workflows/docs.yml"
   workflow_dispatch:
 
+# Least privilege at the workflow level: only `deploy` needs to write Pages.
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
-# Allow one concurrent deployment; don't cancel an in-progress one.
+# Supersede an in-flight run for the same PR; never cancel a Pages deployment
+# (the deploy job carries its own `pages` group for that).
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: docs-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -39,14 +53,27 @@ jobs:
         # fails this step. With more than one backend, mdBook writes the HTML
         # into the html/ subdirectory of the build dir.
         run: mdbook build
+      # Pages packaging is deploy-only: a pull request has no Pages token and
+      # nothing to publish, so these steps would fail or waste a run.
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+        if: github.event_name != 'pull_request'
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        if: github.event_name != 'pull_request'
         with:
           path: docs/.book-build/html
 
   deploy:
     needs: build
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    # Allow one concurrent deployment; don't cancel an in-progress one.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

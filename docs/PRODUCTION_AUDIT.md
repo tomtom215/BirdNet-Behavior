@@ -428,6 +428,10 @@ Operations* part of the book (they are already Markdown; this is a `SUMMARY.md`
 edit and link fixups), and add a CI check that the unit-file limits quoted in
 prose match `65-service.sh` — the same shape as the existing installer sync-gate.
 
+> Since done: the five runbooks now live in the book itself, under
+> `docs/book/field/`, as the *Running a Permanent Station* part. The paths named
+> above are where they were when the audit ran.
+
 ---
 
 ### A-8 — Live and synced `DuckDB` rows carry different columns · P3 · latent
@@ -722,7 +726,7 @@ Stated rather than guessed at, because the alternative is prose that reads
 confident and is not:
 
 - **Behaviour on real Pi hardware over months.** Everything here ran on x86_64 in
-  a container. `docs/HARDWARE_TEST.md` exists for this and is the right
+  a container. `docs/book/field/hardware-test.md` exists for this and is the right
   instrument; it has not been run this cycle.
 - **Aggregate cost on Pi-class hardware.** A-9 measured the query shapes at
   four-year scale on x86_64 and fixed the one that was accidentally quadratic in
