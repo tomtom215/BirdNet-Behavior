@@ -206,7 +206,7 @@ fn unreviewed_and_confirmed_detections_stay_in_the_aggregates() {
 /// Clearing a verdict brings the detection back.
 ///
 /// Without this the exclusion would outlive the judgement that justified it,
-/// and a mis-click would be unrecoverable through the UI.
+/// and an accidental click would be unrecoverable through the UI.
 #[test]
 fn clearing_a_verdict_returns_the_detection_to_the_aggregates() {
     let dir = tempfile::tempdir().unwrap();
