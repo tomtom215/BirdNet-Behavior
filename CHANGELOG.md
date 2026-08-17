@@ -5,6 +5,119 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+A production-readiness pass against one question: *if this station is sealed
+into an outdoor enclosure and left for a year with nobody on site, what does it
+get wrong, and would anybody find out?* The full audit, with evidence and the
+gates that were observed failing, is `docs/PRODUCTION_AUDIT.md`.
+
+Several of these were invisible to a fully green 2 190-test suite.
+
+### Fixed
+
+- **Your edits never reached the analytics.** Deleting a detection, re-labelling
+  one, approving one out of quarantine and "clear all detections" all wrote to
+  SQLite alone. The DuckDB copy every behavioural and time-series dashboard
+  reads is synced *incrementally*, so it could only ever add newer rows — never
+  remove one, never re-read a changed one, never pick up a back-dated one. So a
+  deleted false positive kept counting in Patterns forever, a corrected
+  identification kept its old name, an approved quarantine detection could never
+  arrive at all, and "clear all detections" left the analytics rendering your
+  whole history beside a dashboard reporting zero. Nothing reported any of it:
+  both stores answered every query, just with different histories.
+
+  All four are now paired writes, and after each start the two row counts are
+  compared — when they disagree the copy is rebuilt automatically. That last
+  part repairs stations that already diverged, with no operator action.
+
+- **"Today" meant UTC's today.** Five queries compared the local-civil `Date`
+  column against `date('now')`. West of UTC the day rolls over during your
+  evening, so the RSS/iCal "today" feed returned **nothing** for the last hours
+  of every evening — 20:00 to midnight in New York. East of UTC "today" was
+  still yesterday. The species sparkline was worse than a shifted window: its
+  date axis was built from UTC dates and joined against locally-dated counts.
+
+- **The dawn chorus got slower every season.** Its 30-day window was reading the
+  station's entire history — SQLite preferred the species index for GROUP BY
+  ordering, then built the temp b-tree anyway. Measured on a synthetic four-year
+  station: 72 ms at 60 days, 1 711 ms at four years. Now a range seek: 1 613 ms
+  → 27 ms, identical results.
+
+- **A reviewer's verdict changed nothing.** `detection_reviews` has stored
+  confirmed/rejected verdicts since 0.11, and exactly one panel ever read them.
+  Every other analytic counted a rejected detection exactly as it counted a
+  confirmed one, so a season of curation left every chart unchanged. Verdicts
+  now exclude a detection from the aggregates in both stores, while the
+  record-level views still show it so you can listen again and change your mind.
+  Verdicts you have already recorded take effect on upgrade.
+
+- **Live and resynced rows carried different columns.** The real-time DuckDB
+  insert wrote six of twelve, so `Lat`, `Lon`, `Cutoff`, `Week`, `Sens` and
+  `Overlap` were populated or NULL depending on how a detection got there.
+
+- **Interface.** The phone layout was gated on `pointer: coarse` rather than
+  width, so an iPad with a keyboard, a touchscreen laptop and a narrow desktop
+  window all got the desktop nav — and the QA tooling, which sets a viewport but
+  no touch emulation, had never once rendered the real mobile layout. Half the
+  Patterns tabs sat off-screen on a phone with nothing signalling they scrolled.
+  Chart series colours were a hash mapped to hue at constant lightness, so pairs
+  landed 2–3° apart and were indistinguishable (near-certain at any realistic
+  series count). The activity streamgraph had no axes at all, and the caption
+  above it described a different chart. "Bursts of singing" listed sessions of
+  one detection lasting zero seconds. Row controls ran off the right edge at
+  360 px and below, traced to an 8 px footer overflow that was widening the
+  layout viewport and dragging the fixed tab bar with it.
+
+- The field runbook's stated memory ceiling was half the real one
+  (`MemoryMax=512M` documented, `1G` shipped).
+
+### Added
+
+- **Imports from another station stay attributable.** Importing a BirdNET-Pi
+  database used to be indistinguishable from having recorded it: no check
+  mentioned coordinates or timezones, and no column separated the two
+  afterwards. A merged database could silently hold two sites and two clocks,
+  and every location- and hour-dependent analytic read it as one — unrecoverably,
+  since nothing could tell the rows apart later.
+
+  The import now profiles the source, warns before it runs when the coordinates
+  are not this station's, offers the source station's UTC offset so both
+  histories share one clock, and tags every imported row with its origin.
+
+- **Station-health alerts.** The detection deadman answers "is the station
+  detecting at all?". This answers the faults a station keeps detecting straight
+  through: one microphone down while others record, a disk full enough that
+  recordings are being purged, a CPU at its throttling point, a backup or
+  integrity check that has not completed in weeks. One alert per episode with a
+  recovery notice, after three consecutive polls so a self-healing blip stays
+  quiet. On by default; `STATION_HEALTH_ALERTS=false` to disable.
+
+- **Recording effort, and abundance corrected by it.** A detection count is a
+  numerator over a denominator nobody was recording: a solar window is six hours
+  longer in June than December, a week of downtime removes a week of listening,
+  a failed microphone halves the channels. Each moves the count without moving a
+  single bird, so comparing raw counts across seasons or years measures the
+  station as much as the birds.
+
+  The station now records how long it actually listened, per source per day, and
+  `/analytics/abundance` returns detections per hour of listening. `/analytics/phenology`
+  exposes per-species arrival and departure, flagging the species for which a
+  calendar-year window is not a migration window — a resident would otherwise be
+  reported as arriving on 1 January.
+
+- The five operational runbooks — field deployment, security hardening, hardware
+  validation, multi-stream deduplication, macOS — are now part of the published
+  manual under **Running a Permanent Station**. They were repository files
+  reachable only as raw GitHub links.
+
+### Migrations
+
+25, 26 and 27 — import provenance, the denormalised reviewer verdict (backfilled
+from existing verdicts), and the recording-effort table. All additive; none
+rewrites existing rows, and `import_batch_id IS NULL` continues to mean "this
+station recorded it".
+
 ## [0.14.0] - 2026-08-16
 
 ### Added
