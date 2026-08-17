@@ -12,7 +12,8 @@ bug on a desk and a corrupted season in a field. Anything that fails silently
 ranks above anything that fails loudly, because a station nobody is watching only
 ever reports what it volunteers.
 
-**Method.** Every claim below was produced by running something. Where a previous
+**Method.** Every claim below was produced by running something — a gate, a
+probe, a query plan, or a real browser. Where a previous
 document's claim was re-checked rather than carried forward, that is stated. Two
 findings in this pass (**A-1**, **A-2**) were invisible to a fully green
 2190-test suite, which is the point of writing it down: a green gate proves only
@@ -65,6 +66,18 @@ What follows is what a year of unattended operation would expose anyway.
 | A-7 | The field runbook is not on the docs site, and its memory ceiling is wrong | P3 | open |
 | A-8 | Live and synced `DuckDB` rows carry different columns | P3 | latent |
 | A-9 | The dawn-chorus window scanned the whole history, so it slowed every season | P2 | **fixed this pass** |
+
+Interface findings are numbered separately in §1b:
+
+| ID | Finding | Sev |
+|----|---------|-----|
+| U-1 | The visual-QA tooling has never rendered the mobile layout — every "mobile" screenshot is desktop | P2 |
+| U-2 | `pointer: coarse` denies the phone layout to tablets-with-trackpads and narrow desktop windows | P2 |
+| U-3 | Half the Patterns tabs are off-screen on a phone with no affordance that they scroll | P2 |
+| U-4 | Chart series colours are a hash-to-hue at fixed lightness; collisions are near-certain | P2 |
+| U-5 | The streamgraph has no axes, and the caption above it describes a different chart | P3 |
+| U-6 | "Bursts of singing" lists sessions of 1 detection lasting 0s | P3 |
+| U-7 | 243/335 controls under 44 px; lock/delete/download clipped at ≤360 px | P3 |
 
 ---
 
@@ -489,6 +502,180 @@ green. The query now lives in a `CHORUS_SQL` const that both the handler and the
 `EXPLAIN` read, and with the hint removed from *that* the gate fails as it
 should. This is the second time in one session that a test passed for a reason
 unrelated to what it claimed to assert.
+
+---
+
+## 1b. Interface findings
+
+Every page was rendered in a real headless Chromium against the seeded
+`screenshot_server` fixture, at 1440×900 and at four phone widths, in both
+themes. The structural sweep — horizontal overflow, stuck loaders, broken
+images, console errors, HTTP status — came back **clean on all 17 pages × 2
+viewports × 2 themes**. The desktop interface is genuinely good: editorial
+typography, real hierarchy, a calm palette, and empty states that say something.
+
+The findings below are what that sweep cannot see.
+
+### U-1 — The project has never screenshotted its own mobile layout · **P2**
+
+The phone layout is gated on:
+
+```css
+@media (max-width: 720px) and (pointer: coarse) { … }
+```
+
+`scripts/visual_qa.mjs` and the `tools/visual-qa` suite set only a viewport
+(`{width: 375, height: 812}`). Headless Chromium with a viewport but no
+`hasTouch`/`isMobile` reports **`pointer: fine`**, so that media query never
+matches. Measured, same page, same width:
+
+| Context | `pointer: coarse` | bottom tab bar | top nav links | chrome above `<h1>` |
+|---|---|---|---|---|
+| viewport only — *what the tooling does* | `false` | `display: none` | visible | **231 px** |
+| viewport + `hasTouch` — *a real phone* | `true` | `display: grid` | hidden | **160 px** |
+
+So every "mobile" screenshot this project has ever taken — including in the
+**A11y & Visual QA CI workflow** — is the *desktop* layout squeezed into a phone
+viewport. The actual phone UI, bottom tab bar and all, has never been in front of
+the gate that exists to check it. (It is good, incidentally; that is not the
+point.)
+
+**Fix.** Add `hasTouch: true, isMobile: true` to the mobile contexts in
+`scripts/visual_qa.mjs` and `tools/visual-qa/*.mjs`. One line each, and it turns
+an inert gate into a real one.
+
+### U-2 — `pointer: coarse` denies the mobile layout to people who need it · P2
+
+The same gate has a user-facing half. `pointer: coarse` is a property of the
+*input device*, not the screen, so these all get the desktop nav in a phone-sized
+window:
+
+- an iPad with a keyboard/trackpad attached — **measured**: `pointer: coarse` is
+  `false`, tab bar `none`, top nav visible;
+- a desktop browser window dragged narrow, which is how a lot of people check a
+  dashboard on a second monitor;
+- any touchscreen laptop, which reports `fine`.
+
+A layout that exists to serve *narrow viewports* should be gated on width, with
+`pointer` at most a secondary hint.
+
+### U-3 — Half the Patterns tabs are unreachable on a phone · **P2**
+
+The Patterns sub-tab strip carries six tabs. On a 390 px phone, measured:
+
+```
+scrollWidth 696   clientWidth 342   →  354 px (51%) off-screen
+```
+
+**"Who sings together", "Trends" and "Behavior" are invisible.** The strip does
+scroll horizontally — `overflow-x` is set, so no page-level overflow, which is
+why the structural sweep passed it — but there is **no fade mask, no gradient, no
+chevron** (`maskImage`/gradient check: none), and `scrollbar-width: thin` means
+iOS and Android draw no scrollbar until a scroll is already in progress. The last
+visible tab ends cleanly at the edge with no partial peek, so nothing signals
+that more exists.
+
+Behavioral Analytics — the feature the project is named for — is one of the three
+a phone user cannot find.
+
+**Fix.** A fade mask on the scrolling edge, or a partial-item peek, or wrap to
+two rows on narrow viewports. Any of the three.
+
+### U-4 — Series colours collide, by construction · **P2**
+
+`species_color` (`routes/pages/atoms.rs:64`) is:
+
+```rust
+format!("oklch(62% 0.13 {})", species_hue(name))   // hue = FNV-1a(name) % 360
+```
+
+Lightness and chroma are constant; only hue varies, and the hue is a *hash* with
+nothing spacing it. On the fixture's own eight-species streamgraph:
+
+```
+hue  89  Northern Cardinal          2 deg apart — indistinguishable
+hue  91  American Robin
+hue 120  Mourning Dove              3 deg apart — indistinguishable
+hue 123  Tufted Titmouse
+```
+
+Both pairs are visible in the screenshots as the same olive and the same gold.
+This is not bad luck with these species. Drawing N hues uniformly from 360 with
+no spacing, the probability that *some* pair lands within 25° — about where fixed
+lightness and chroma stop being separable — is:
+
+```
+N= 6  ->  92.7%
+N= 8  ->  99.6%
+N=12  -> 100.0%
+```
+
+Constant `L = 62%` also means the palette carries no lightness variation at all,
+so it collapses in greyscale and for the common colour-vision deficiencies: two
+series that differ only in hue are two identical greys.
+
+**Diagnosis matters here.** Hashing to a stable colour is exactly right for the
+*avatar chips*, where one species is shown on its own and only stability matters.
+It is wrong for **multi-series charts**, where the colours are compared against
+each other. The fix is to keep the hash for chips and assign chart colours by
+*rank within that chart* — maximally spaced around the hue circle, alternating
+lightness — so eight series are always eight distinguishable colours.
+
+### U-5 — Charts without axes, and a caption describing a different chart · P3
+
+The Activity streamgraph renders **no axes at all** — no dates along x, no counts
+along y. A reader cannot tell what period is shown or whether a band is five
+detections or five hundred; the shape is all there is, and with near-flat data it
+is a stack of stripes.
+
+Directly above it, the section's lead paragraph reads *"Darker cells mean more
+birds heard that hour."* The streamgraph has no cells. That sentence describes
+the **Activity grid**, which is the *next* card down. So the first chart on the
+page is unexplained and the explanation that is present points at the wrong
+thing.
+
+### U-6 — "Bursts of singing" renders a table of non-bursts · P3
+
+On the Behavior tab, the sessions table defines a session as *"a run of
+detections with no gap longer than ~20 quiet minutes — one 'visit' of activity"*
+and then lists rows that are, every one of them, **1 detection lasting 0s**.
+
+Structurally correct, semantically empty: a one-detection zero-second session is
+not a burst of singing. The flagship behavioural analytic reads as broken to
+anyone who looks at it. Either filter to sessions of ≥2 detections, or say
+plainly that no multi-detection sessions have occurred yet.
+
+On the same tab, "Follow-on species — after hearing one species, which tends to
+turn up **next**" lists **Red-winged Blackbird** among the follow-ons to
+Red-winged Blackbird, at 14%. Either that is meaningful (the same bird calling
+again) and needs saying, or it should be excluded.
+
+### U-7 — Small controls, and a few clipped below 360 px · P3
+
+Under the real phone layout, **243 of 335 non-inline controls are smaller than
+44×44** — the Apple HIG and WCAG 2.5.5 (AAA) target. Most are 30×30, which does
+clear WCAG 2.5.8 (AA, 24×24), so this is a comfort finding rather than a
+conformance failure — but "comfort" on a phone held one-handed outdoors in the
+cold is the actual use case.
+
+Genuinely clipped past the right edge at narrow widths (measured on the
+Recordings page): the lock, unlock, delete and download controls at **≤360 px** —
+a very common Android width — and the Settings tab label at 320 px. These are
+functions, not decoration.
+
+### On the "too many collapsed sections" question
+
+Checked, and the premise does not hold: there are **12 `<details>` elements in
+the entire UI**, and they are used the way progressive disclosure should be —
+"See the numbers" behind a chart, an add-form behind a button, a password hint
+behind a link. Nothing a user needs is hidden behind one.
+
+The real navigational problem is the opposite. **Admin is a long flat scroll**:
+`/admin/settings` is one column of full-width sections with no in-page nav, no
+anchors and no way to jump. And entering Admin **replaces the whole app shell** —
+the Today/Species/Patterns nav disappears, swapped for a dense 12-item admin bar
+with six micro category labels, and the only route back is a breadcrumb. That
+discontinuity, not disclosure, is what makes the settings area feel hard.
 
 ---
 
