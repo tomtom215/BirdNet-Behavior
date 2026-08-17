@@ -93,7 +93,7 @@ async fn today_rss(State(state): State<AppState>, Query(q): Query<FeedQuery>) ->
             let mut stmt = conn.prepare(
                 "SELECT Com_Name, Sci_Name, Date, Time, Confidence \
                  FROM detections \
-                 WHERE Date = date('now') \
+                 WHERE Date = date('now','localtime') \
                  ORDER BY Time DESC \
                  LIMIT ?1",
             )?;

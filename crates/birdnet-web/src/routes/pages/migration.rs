@@ -648,7 +648,7 @@ async fn card_partial(
             "peaking" => conn
                 .query_row(
                     "SELECT Com_Name, COUNT(*) AS n FROM detections \
-                     WHERE Date >= date('now','-7 days') \
+                     WHERE Date >= date('now','localtime','-7 days') \
                      GROUP BY Com_Name ORDER BY n DESC LIMIT 1",
                     [],
                     |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.to_string())),

@@ -91,7 +91,7 @@ fn collect_chorus(
     let mut stmt = conn.prepare(
         "SELECT Com_Name, CAST(strftime('%H', Time) AS INTEGER) hr, COUNT(*) n \
          FROM detections \
-         WHERE Date >= date('now', ?1) \
+         WHERE Date >= date('now','localtime', ?1) \
          GROUP BY Com_Name, hr",
     )?;
     let modifier = format!("-{days} days");

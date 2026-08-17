@@ -248,7 +248,7 @@ pub fn species_sparklines(
     let mut stmt = conn.prepare(
         "SELECT Com_Name, Date, COUNT(*) as count
          FROM detections
-         WHERE Date >= date('now', '-' || ?1 || ' days')
+         WHERE Date >= date('now', 'localtime', '-' || ?1 || ' days')
          GROUP BY Com_Name, Date
          ORDER BY Com_Name, Date",
     )?;
@@ -272,9 +272,9 @@ pub fn species_sparklines(
     let mut date_set: Vec<String> = Vec::new();
     let mut date_stmt = conn.prepare(
         "WITH RECURSIVE dates(d) AS (
-             SELECT date('now', '-' || (?1 - 1) || ' days')
+             SELECT date('now', 'localtime', '-' || (?1 - 1) || ' days')
              UNION ALL
-             SELECT date(d, '+1 day') FROM dates WHERE d < date('now')
+             SELECT date(d, '+1 day') FROM dates WHERE d < date('now', 'localtime')
          ) SELECT d FROM dates",
     )?;
     let date_rows = date_stmt.query_map(params![days], |row| row.get::<_, String>(0))?;
