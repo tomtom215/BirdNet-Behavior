@@ -30,12 +30,18 @@ const MOTION = process.env.MOTION || '';
 const CONTRAST = process.env.CONTRAST || '';
 const ONLY = process.env.ONLY || '';
 
+// `touch: true` is load-bearing, not cosmetic. The phone layout is behind
+// `@media (max-width: 720px) and (pointer: coarse)`, and a Playwright context
+// given only a viewport reports `pointer: fine` — so the query never matched and
+// every "mobile" run here rendered the *desktop* layout at phone width: bottom
+// tab bar `display:none`, top nav links visible, 231px of chrome instead of
+// 160px. The gate existed and was inert. `hasTouch` is what makes it real.
 const VP_TABLE = {
   xl: { width: 1440, height: 900 },
   lg: { width: 1280, height: 860 },
   md: { width: 1024, height: 820 },
   sm: { width: 800, height: 900 },
-  mobile: { width: 390, height: 844 },
+  mobile: { width: 390, height: 844, touch: true },
   desktop: { width: 1440, height: 900 },
 };
 const VPS = (process.env.VPS || 'desktop,mobile')
@@ -129,6 +135,8 @@ async function main() {
     for (const theme of THEMES) {
       const context = await browser.newContext({
         viewport: { width: vp.width, height: vp.height },
+        hasTouch: Boolean(vp.touch),
+        isMobile: Boolean(vp.touch),
         deviceScaleFactor: 1,
         colorScheme: theme === 'dark' ? 'dark' : 'light',
         reducedMotion: MOTION === 'reduced' ? 'reduce' : 'no-preference',

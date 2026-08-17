@@ -10,7 +10,10 @@ const ONLY = process.argv[3] || '';
 
 const VIEWPORTS = [
   { name: 'desktop', width: 1440, height: 900 },
-  { name: 'mobile', width: 390, height: 844 },
+  // `touch` drives `hasTouch`/`isMobile` below. Without it Chromium reports
+  // `pointer: fine`, the phone layout's media query never matches, and this
+  // "mobile" pass silently captures the desktop layout at phone width.
+  { name: 'mobile', width: 390, height: 844, touch: true },
 ];
 const THEMES = ['light', 'dark'];
 
@@ -62,6 +65,8 @@ async function main() {
     for (const theme of THEMES) {
       const context = await browser.newContext({
         viewport: { width: vp.width, height: vp.height },
+        hasTouch: Boolean(vp.touch),
+        isMobile: Boolean(vp.touch),
         deviceScaleFactor: 1,
         colorScheme: theme === 'dark' ? 'dark' : 'light',
       });
