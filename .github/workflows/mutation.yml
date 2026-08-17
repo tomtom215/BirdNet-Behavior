@@ -240,23 +240,28 @@ jobs:
           # runs reuse it. Counts are sized to ~13 mutants/shard. The library
           # shards above need no split: no per-mutant DuckDB relink.
 
-          # src/capture/schedule.rs — 107 mutants. Schedule parsing + the
+          # src/capture/schedule.rs — 41 mutants. Schedule parsing + the
           # hand-rolled UTC clock: `utc_now`'s date arithmetic was extracted into
           # the pure `civil_from_unix_secs`, cross-checked against an independent
           # inverse oracle for every calendar day across two centuries (every
           # month length, every leap day, the 2100 century rule) plus a proptest
           # round-trip, so its arithmetic mutants die; the parse helpers and
           # `resolve_location` have per-branch/boundary tests. 0 missed.
-          - { label: "src/capture/schedule.rs [1/8]", slug: src-capture-schedule.rs-1, shard: "0/8", file: "src/capture/schedule.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
-          - { label: "src/capture/schedule.rs [2/8]", slug: src-capture-schedule.rs-2, shard: "1/8", file: "src/capture/schedule.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
-          - { label: "src/capture/schedule.rs [3/8]", slug: src-capture-schedule.rs-3, shard: "2/8", file: "src/capture/schedule.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
-          - { label: "src/capture/schedule.rs [4/8]", slug: src-capture-schedule.rs-4, shard: "3/8", file: "src/capture/schedule.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
-          - { label: "src/capture/schedule.rs [5/8]", slug: src-capture-schedule.rs-5, shard: "4/8", file: "src/capture/schedule.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
-          - { label: "src/capture/schedule.rs [6/8]", slug: src-capture-schedule.rs-6, shard: "5/8", file: "src/capture/schedule.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
-          - { label: "src/capture/schedule.rs [7/8]", slug: src-capture-schedule.rs-7, shard: "6/8", file: "src/capture/schedule.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
-          - { label: "src/capture/schedule.rs [8/8]", slug: src-capture-schedule.rs-8, shard: "7/8", file: "src/capture/schedule.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
+          #
+          # Three shards, not eight. cargo-mutants partitions a shard set into
+          # CONTIGUOUS blocks of `ceil(total / n)`, so the tail shard is empty
+          # whenever `(n - 1) * ceil(total / n) >= total`. At 41 mutants over 8
+          # shards that is 6·7 = 42 >= 41: shard 7/8 got zero mutants on every
+          # single run, which the (correct) no-vacuous-pass gate below failed —
+          # red on `main` from the v0.14.0 merge onward. Measured 8-shard split:
+          # 6 6 6 6 6 6 5 0. At n=3 it is 14 14 13, and the row matches the
+          # ~13-mutants/shard sizing this matrix documents rather than paying
+          # eight cold DuckDB+ONNX builds to test 41 mutants.
+          - { label: "src/capture/schedule.rs [1/3]", slug: src-capture-schedule.rs-1, shard: "0/3", file: "src/capture/schedule.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
+          - { label: "src/capture/schedule.rs [2/3]", slug: src-capture-schedule.rs-2, shard: "1/3", file: "src/capture/schedule.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
+          - { label: "src/capture/schedule.rs [3/3]", slug: src-capture-schedule.rs-3, shard: "2/3", file: "src/capture/schedule.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
 
-          # src/daemon/*.rs — 63 mutants across the orchestrator tree (split from
+          # src/daemon/*.rs — 100 mutants across the orchestrator tree (split from
           # a single src/daemon.rs into {mod,config,disposition,webhook,
           # processor}.rs; the glob mutates every moved function — test_support.rs
           # is cfg(test) and generates none). 0 missed is held by:
@@ -280,7 +285,7 @@ jobs:
           - { label: "src/daemon/*.rs [4/5]", slug: src-daemon-4, shard: "3/5", file: "src/daemon/*.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
           - { label: "src/daemon/*.rs [5/5]", slug: src-daemon-5, shard: "4/5", file: "src/daemon/*.rs", package: birdnet-behavior, timeout_minutes: 120, max_missed: 0 }
 
-          # src/capture/supervisor.rs — 40 mutants. The field-survival core: a
+          # src/capture/supervisor.rs — 50 mutants. The field-survival core: a
           # dead arecord/ffmpeg subprocess is restarted with capped exponential
           # backoff, the recording schedule pauses/resumes capture, and the
           # birdnet_audio_source_up gauge is driven from real process health.
@@ -478,7 +483,7 @@ jobs:
 
       - name: Comment summary on PR
         # Only unsharded rows comment: a sharded file would otherwise post one
-        # comment per shard (e.g. 8 for schedule.rs), burying the PR. Each
+        # comment per shard (e.g. 5 for src/daemon/*.rs), burying the PR. Each
         # shard's counts still land in the job's Step Summary (above) and its
         # artifact, and its pass/fail shows as its own check.
         if: github.event_name == 'pull_request' && always() && ! matrix.shard
@@ -525,11 +530,36 @@ jobs:
           # scopes each shard to the lines the PR touched, so a shard whose file
           # the PR never touched correctly has nothing to do. Everywhere else
           # (push, weekly cron, manual dispatch) the full mutant set runs, so
-          # zero means the matrix row is not pointing at any code.
+          # zero means the matrix row tested nothing.
+          #
+          # "Tested nothing" is not the same as "points at nothing", and the
+          # difference only shows up on sharded rows. cargo-mutants splits a
+          # shard set into contiguous `ceil(total / n)` blocks, so a tail shard
+          # of a real, well-matched file is legitimately empty whenever
+          # `(n - 1) * ceil(total / n) >= total` — which is what took `main`
+          # red from the v0.14.0 merge on (schedule.rs: 41 mutants, 8 shards,
+          # shard 7/8 empty every run). So ask the question the gate actually
+          # cares about: does the FILE still generate mutants? `--list` answers
+          # in ~0.2 s and builds nothing. An unmatched path still fails, which
+          # is the property this gate exists to hold — it is how the
+          # `detections.rs` row was caught after two months of pointing at a
+          # path that had been split into a directory.
           if [ "${{ github.event_name }}" != "pull_request" ]; then
             if [ -z "$missed" ] || [ -z "$total" ] || [ "$total" -eq 0 ]; then
-              echo "::error::no mutants were generated for ${{ matrix.file }} — this gate tested nothing. The path almost certainly no longer matches any source (a file renamed or split into a directory). Fix the matrix row rather than ignoring this."
-              exit 1
+              file_mutants=$(cargo mutants --list \
+                --package "${{ matrix.package }}" \
+                --file "${{ matrix.file }}" \
+                --no-shuffle 2>/dev/null | wc -l)
+              if [ "$file_mutants" -eq 0 ]; then
+                echo "::error::no mutants were generated for ${{ matrix.file }} — this gate tested nothing. The path almost certainly no longer matches any source (a file renamed or split into a directory). Fix the matrix row rather than ignoring this."
+                exit 1
+              fi
+              if [ -z "${{ matrix.shard }}" ]; then
+                echo "::error::${{ matrix.file }} generates $file_mutants mutants but this unsharded row tested none of them — the run did not do what it claims. Investigate before ignoring this."
+                exit 1
+              fi
+              echo "::notice::shard ${{ matrix.shard }} of ${{ matrix.file }} is empty: the file generates $file_mutants mutants and cargo-mutants' contiguous split left this tail shard with none. Nothing to check here; resize the shard count for this row if it stays empty."
+              exit 0
             fi
           elif [ -z "$missed" ]; then
             echo "::notice::no mutants on the changed lines for ${{ matrix.file }}; nothing to check on this PR"
