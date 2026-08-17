@@ -386,6 +386,37 @@ Once the unit is sealed and shipped, the loop is:
    gives you the web UI from anywhere without exposing a port to the
    open internet. Recommended over plain port-forward.
 
+### Station-health alerts
+
+The detection deadman answers *"is the station detecting at all?"*. Station
+health answers the questions that leave it quiet — the faults a station keeps
+detecting straight through:
+
+| Condition | Threshold |
+|---|---|
+| An audio source down while others keep recording | 15 min continuous |
+| Disk full enough that recordings are being purged | ≥ 90 % used |
+| CPU at or above the Pi throttling point | ≥ 80 °C |
+| Backup or integrity check not completed | > 21 days |
+
+Each alerts **once per episode**, with a recovery notice when it clears, through
+the same Apprise notifier as the deadman. Every condition must persist for three
+consecutive five-minute polls before it fires, so a mic that re-enumerates or a
+disk that spikes during clip extraction stays silent.
+
+A single-source station that goes fully down is deliberately *not* reported
+here — the deadman covers that, with better wording, and two notifications for
+one fault is how a channel gets muted. This check exists for what the deadman
+structurally cannot see: some sources up, some down.
+
+On by default. Disable with `--station-health-alerts false`, or
+`STATION_HEALTH_ALERTS=false` in `/etc/birdnet/birdnet.conf`.
+
+```bash
+# Confirm it started.
+journalctl -u birdnet-behavior | grep 'station-health notifier started'
+```
+
 ## 10. Update strategy
 
 Field-deployment philosophy: **don't auto-update**.

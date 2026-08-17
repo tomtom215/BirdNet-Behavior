@@ -281,6 +281,18 @@ pub struct Cli {
     #[arg(long, env = "BIRDNET_DEADMAN_HOURS")]
     pub deadman_hours: Option<u32>,
 
+    /// Alert on operational faults the detection deadman cannot see.
+    ///
+    /// The deadman answers "is the station detecting at all?". This answers the
+    /// questions that leave it quiet: one of several microphones down while the
+    /// rest keep working, a disk full enough that recordings are being purged,
+    /// a CPU at its throttling temperature, or a backup / integrity check that
+    /// has not completed in weeks. Each alerts once per episode with a recovery
+    /// notice, like the deadman. Defaults to on; config-file key:
+    /// `STATION_HEALTH_ALERTS`.
+    #[arg(long, env = "BIRDNET_STATION_HEALTH_ALERTS")]
+    pub station_health_alerts: Option<bool>,
+
     /// `BirdWeather` station token for uploading detections.
     #[arg(long, env = "BIRDNET_BIRDWEATHER_TOKEN")]
     pub birdweather_token: Option<String>,
