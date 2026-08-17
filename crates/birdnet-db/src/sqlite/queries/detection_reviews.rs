@@ -133,6 +133,15 @@ pub fn set_detection_review(
             reviewed_at = datetime('now')",
         params![date, time, sci_name, com_name, status.as_str(), notes],
     )?;
+    // Mirror onto the detection itself (migration 26). `detection_reviews` stays
+    // the record of who said what and when; this is the current verdict, in the
+    // one place every analytic can filter on cheaply and identically in both
+    // stores. Without it a verdict is recorded and applied to nothing.
+    conn.execute(
+        "UPDATE detections SET review_verdict = ?4
+          WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3",
+        params![date, time, sci_name, status.as_str()],
+    )?;
     Ok(())
 }
 
@@ -151,12 +160,38 @@ pub fn clear_detection_review(
         "DELETE FROM detection_reviews WHERE date = ?1 AND time = ?2 AND sci_name = ?3",
         params![date, time, sci_name],
     )?;
+    // Return the detection to "unreviewed" in the denormalised copy too, or the
+    // exclusion would outlive the verdict that justified it.
+    conn.execute(
+        "UPDATE detections SET review_verdict = NULL
+          WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3",
+        params![date, time, sci_name],
+    )?;
     Ok(())
 }
 
 // ---------------------------------------------------------------------------
 // Read operations
 // ---------------------------------------------------------------------------
+
+/// Count detections carrying a `rejected` verdict.
+///
+/// Read from `detections.review_verdict` — the denormalised copy the analytics
+/// filter on — rather than from `detection_reviews`, because the drift check
+/// this backs is asking whether the *two stores' filters* agree, not whether the
+/// review log does.
+///
+/// # Errors
+///
+/// Returns [`DbError`] on query failure.
+pub fn rejected_detection_count(conn: &Connection) -> Result<u64, DbError> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM detections WHERE review_verdict = 'rejected'",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(u64::try_from(n).unwrap_or(0))
+}
 
 /// Fetch the verdict for a single detection, or `None` if unreviewed.
 ///

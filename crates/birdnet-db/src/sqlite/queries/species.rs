@@ -15,7 +15,7 @@ use crate::sqlite::types::{
 /// Returns `DbError` on query failure.
 pub fn species_count(conn: &Connection) -> Result<i64, DbError> {
     let count: i64 = conn.query_row(
-        "SELECT COUNT(DISTINCT Sci_Name) FROM detections",
+        "SELECT COUNT(DISTINCT Sci_Name) FROM detections_analytic",
         [],
         |row| row.get(0),
     )?;
@@ -30,7 +30,7 @@ pub fn species_count(conn: &Connection) -> Result<i64, DbError> {
 pub fn top_species(conn: &Connection, limit: u32) -> Result<Vec<SpeciesCount>, DbError> {
     let mut stmt = conn.prepare(
         "SELECT Com_Name, Sci_Name, COUNT(*) as count, AVG(Confidence) as avg_conf
-         FROM detections GROUP BY Com_Name, Sci_Name ORDER BY count DESC LIMIT ?1",
+         FROM detections_analytic GROUP BY Com_Name, Sci_Name ORDER BY count DESC LIMIT ?1",
     )?;
     let rows = stmt
         .query_map(params![limit], |row| {
@@ -58,7 +58,7 @@ pub fn search_species(
     let pattern = format!("%{query}%");
     let mut stmt = conn.prepare(
         "SELECT Com_Name, Sci_Name, COUNT(*) as count, AVG(Confidence) as avg_conf
-         FROM detections
+         FROM detections_analytic
          WHERE Com_Name LIKE ?1 COLLATE NOCASE OR Sci_Name LIKE ?1 COLLATE NOCASE
          GROUP BY Com_Name, Sci_Name ORDER BY count DESC LIMIT ?2",
     )?;
@@ -91,7 +91,7 @@ pub fn species_summary(
                 AVG(Confidence) as avg_conf,
                 MIN(Date) as first_seen,
                 MAX(Date) as last_seen
-         FROM detections WHERE Com_Name = ?1 GROUP BY Com_Name",
+         FROM detections_analytic WHERE Com_Name = ?1 GROUP BY Com_Name",
         params![com_name],
         |row| {
             Ok(SpeciesSummary {
@@ -125,7 +125,7 @@ pub fn species_daily_counts(
 ) -> Result<Vec<DailyCount>, DbError> {
     let mut stmt = conn.prepare(
         "SELECT Date, COUNT(*) as count
-         FROM detections WHERE Com_Name = ?1
+         FROM detections_analytic WHERE Com_Name = ?1
          GROUP BY Date ORDER BY Date DESC LIMIT ?2",
     )?;
     let mut rows: Vec<DailyCount> = stmt
@@ -151,7 +151,7 @@ pub fn species_hourly_activity(
 ) -> Result<Vec<HourlyCount>, DbError> {
     let mut stmt = conn.prepare(
         "SELECT SUBSTR(Time, 1, 2) as hour, COUNT(*) as count
-         FROM detections WHERE Com_Name = ?1
+         FROM detections_analytic WHERE Com_Name = ?1
          GROUP BY hour ORDER BY hour",
     )?;
     let rows = stmt
@@ -187,7 +187,7 @@ pub fn species_hourly_activity_batch(
     let placeholders = vec!["?"; com_names.len()].join(",");
     let sql = format!(
         "SELECT Com_Name, CAST(SUBSTR(Time, 1, 2) AS INTEGER) AS hour, COUNT(*) AS cnt
-         FROM detections
+         FROM detections_analytic
          WHERE Com_Name IN ({placeholders})
          GROUP BY Com_Name, hour"
     );
@@ -224,7 +224,7 @@ pub fn recent_by_species(
     limit: u32,
 ) -> Result<Vec<DetectionRow>, DbError> {
     let sql = format!(
-        "SELECT {DETECTION_COLS} FROM detections \
+        "SELECT {DETECTION_COLS} FROM detections_analytic \
          WHERE Com_Name = ?1 ORDER BY Date DESC, Time DESC LIMIT ?2"
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -247,8 +247,8 @@ pub fn species_sparklines(
 ) -> Result<std::collections::HashMap<String, Vec<i64>>, DbError> {
     let mut stmt = conn.prepare(
         "SELECT Com_Name, Date, COUNT(*) as count
-         FROM detections
-         WHERE Date >= date('now', '-' || ?1 || ' days')
+         FROM detections_analytic
+         WHERE Date >= date('now', 'localtime', '-' || ?1 || ' days')
          GROUP BY Com_Name, Date
          ORDER BY Com_Name, Date",
     )?;
@@ -272,9 +272,9 @@ pub fn species_sparklines(
     let mut date_set: Vec<String> = Vec::new();
     let mut date_stmt = conn.prepare(
         "WITH RECURSIVE dates(d) AS (
-             SELECT date('now', '-' || (?1 - 1) || ' days')
+             SELECT date('now', 'localtime', '-' || (?1 - 1) || ' days')
              UNION ALL
-             SELECT date(d, '+1 day') FROM dates WHERE d < date('now')
+             SELECT date(d, '+1 day') FROM dates WHERE d < date('now', 'localtime')
          ) SELECT d FROM dates",
     )?;
     let date_rows = date_stmt.query_map(params![days], |row| row.get::<_, String>(0))?;
@@ -316,8 +316,9 @@ pub fn species_sparklines(
 pub fn species_first_detection(
     conn: &Connection,
 ) -> Result<std::collections::HashMap<String, String>, DbError> {
-    let mut stmt = conn
-        .prepare("SELECT Sci_Name, MIN(Date || ' ' || Time) FROM detections GROUP BY Sci_Name")?;
+    let mut stmt = conn.prepare(
+        "SELECT Sci_Name, MIN(Date || ' ' || Time) FROM detections_analytic GROUP BY Sci_Name",
+    )?;
     let rows = stmt
         .query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -339,7 +340,8 @@ pub fn species_first_detection(
 pub fn species_first_seen(
     conn: &Connection,
 ) -> Result<std::collections::HashMap<String, String>, DbError> {
-    let mut stmt = conn.prepare("SELECT Sci_Name, MIN(Date) FROM detections GROUP BY Sci_Name")?;
+    let mut stmt =
+        conn.prepare("SELECT Sci_Name, MIN(Date) FROM detections_analytic GROUP BY Sci_Name")?;
     let rows = stmt
         .query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))

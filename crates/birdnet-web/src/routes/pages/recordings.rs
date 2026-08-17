@@ -555,10 +555,10 @@ async fn delete_clip(
     State(state): State<AppState>,
     Form(form): Form<ClipAction>,
 ) -> impl IntoResponse {
+    // Paired write: the analytics copy is incremental and cannot notice a
+    // removal on its own. See `AppState::delete_detection`.
     let _ = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
-            birdnet_db::sqlite::delete_detection(conn, &form.date, &form.time, &form.sci_name)
-        })
+        state.delete_detection(&form.date, &form.time, &form.sci_name)
     })
     .await;
     // Empty body → the row's `hx-swap="outerHTML"` removes it from the list.

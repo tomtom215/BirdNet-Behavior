@@ -307,6 +307,28 @@ async fn serve(
             .or_else(|| config.as_ref()?.get_parsed::<u32>("DEADMAN_HOURS").ok())
             .unwrap_or(integrations::DEFAULT_DEADMAN_HOURS);
         integrations::spawn_detection_deadman(state.clone(), apprise_client.clone(), deadman_hours);
+
+        // Station health: the operational faults the deadman structurally
+        // cannot see, because the station keeps detecting through all of them.
+        // Same episode semantics — one alert, one recovery notice, nothing in
+        // between. On by default: an unattended station that cannot tell anyone
+        // it is degrading is the failure mode this whole subsystem exists for.
+        let health_alerts = cli
+            .station_health_alerts
+            .or_else(|| {
+                config
+                    .as_ref()?
+                    .get_parsed::<bool>("STATION_HEALTH_ALERTS")
+                    .ok()
+            })
+            .unwrap_or(true);
+        integrations::spawn_station_health(state.clone(), apprise_client.clone(), health_alerts);
+
+        // Recording effort: how long the station actually listened, per source
+        // per day. A detection count divided by nothing is not an abundance,
+        // and the denominator moves with the season, with downtime and with a
+        // failed microphone — see `integrations::effort`.
+        integrations::spawn_effort_recorder(state.clone());
     }
 
     // Start background subsystems.

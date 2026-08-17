@@ -23,6 +23,20 @@
 //! are compatible with both `SQLite` and `DuckDB` (see module-level docs for
 //! per-function compatibility notes).
 
+/// The `DuckDB` driver this crate is built against.
+///
+/// Re-exported so callers can name `Row`/`Error` without depending on the exact
+/// `duckdb` version themselves — the version is load-bearing here (the bundled
+/// engine and the community extension are locked to each other), so a second,
+/// independently-resolved copy in a downstream crate is a trap.
+///
+/// Gated: `duckdb` is an optional dependency, and the slim
+/// `--no-default-features` build exists precisely so a low-RAM board can skip
+/// the bundled libduckdb. An ungated re-export breaks that build, which is not
+/// covered by the default `cargo check`.
+#[cfg(feature = "analytics")]
+pub use duckdb;
+
 #[cfg(feature = "analytics")]
 pub mod connection;
 pub mod phenology;

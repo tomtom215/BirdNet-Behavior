@@ -15,7 +15,7 @@
 use std::fmt::Write as _;
 
 use super::{EMPTY, svg_a11y};
-use crate::routes::pages::atoms::species_color;
+use crate::routes::pages::atoms::series_color;
 use crate::routes::pages::escape_html;
 
 /// (x, y) on a circle centred at (`cx`, `cy`).
@@ -113,7 +113,7 @@ pub fn circadian_polar(series: &[(String, [f64; 24])], now_h: f64) -> String {
 
     // Per-species concentric ribbons (outer rows first so inner draw on top).
     for (i, (name, hours)) in series.iter().enumerate() {
-        let color = species_color(name);
+        let color = series_color(i, series.len());
         let baseline = ir + (i as f64 + 0.5) * band;
         let row_max = hours.iter().copied().fold(0.0_f64, f64::max).max(1.0);
 
@@ -157,11 +157,12 @@ pub fn circadian_polar(series: &[(String, [f64; 24])], now_h: f64) -> String {
     svg.push_str("</svg>");
     // Legend.
     svg.push_str(r#"<div class="viz-legend center">"#);
-    for (name, _) in series {
+    // Same rank-based colour the ribbons use, or the swatches lie.
+    for (rank, (name, _)) in series.iter().enumerate() {
         let _ = write!(
             svg,
             r#"<span class="bnb-meta viz-legend-item"><span class="viz-swatch round" data-style="background:{c}"></span>{n}</span>"#,
-            c = species_color(name),
+            c = series_color(rank, series.len()),
             n = escape_html(name),
         );
     }
@@ -267,8 +268,8 @@ pub fn chord_diagram(labels: &[String], m: &[Vec<f64>]) -> String {
         let _ = write!(
             svg,
             r#"<linearGradient id="chord-{idx}" gradientUnits="userSpaceOnUse" x1="{x1:.1}" y1="{y1:.1}" x2="{x2:.1}" y2="{y2:.1}"><stop offset="0%" stop-color="{ci}"/><stop offset="100%" stop-color="{cj}"/></linearGradient>"#,
-            ci = species_color(&labels[i]),
-            cj = species_color(&labels[j]),
+            ci = series_color(i, labels.len()),
+            cj = series_color(j, labels.len()),
         );
     }
     svg.push_str("</defs>");
@@ -290,7 +291,7 @@ pub fn chord_diagram(labels: &[String], m: &[Vec<f64>]) -> String {
         let _ = write!(
             svg,
             r#"<path class="chord-ribbon" data-species-fill="1" d="{path}" fill="url(#chord-{idx})" fill-opacity="{op:.2}" stroke="{ci}" stroke-opacity="0.5" stroke-width="0.7"><title>{a} × {b} — {pct}%</title></path>"#,
-            ci = species_color(&labels[i]),
+            ci = series_color(i, labels.len()),
             a = escape_html(&labels[i]),
             b = escape_html(&labels[j]),
             pct = (v * 100.0).round() as i64,
@@ -303,7 +304,7 @@ pub fn chord_diagram(labels: &[String], m: &[Vec<f64>]) -> String {
         let _ = write!(
             svg,
             r#"<path data-species-fill="1" d="{path}" fill="{c}" opacity="0.92"/>"#,
-            c = species_color(&labels[i]),
+            c = series_color(i, labels.len()),
         );
     }
 

@@ -658,6 +658,151 @@ pub const MIGRATIONS: &[Migration] = &[
                   WHERE chunk_offset_secs > 0
                     AND datetime(Date || ' ' || Time) IS NOT NULL;",
     },
+    Migration {
+        version: 25,
+        description: "Record where imported detections came from, so a merged history stays attributable",
+        // Until now an import was indistinguishable from a recording. The
+        // BirdNET-Pi importer copies every row through verbatim and the
+        // destination has no column that says otherwise, so after importing
+        // another station's history there is no query that separates the two.
+        //
+        // That is fine when the two stations are the same station. It is not
+        // fine otherwise, and nothing checked: the validator's four checks are
+        // table-readable, non-empty, date-format and confidence-range, none of
+        // which involves `Lat`/`Lon` or a timezone. So a merged database could
+        // silently contain detections from two sites and two clocks, and every
+        // location- and hour-dependent analytic — solar overlays, the dawn
+        // chorus, sessionisation, "first of year" — would read it as one.
+        //
+        // For a research station that is the difference between a dataset and a
+        // dataset you have to throw away, because the damage is not detectable
+        // after the fact. This is the column that makes it detectable, and it
+        // has to exist before the import that needs it.
+        //
+        // `import_batch_id IS NULL` means "this station recorded it", which is
+        // true of every row that already exists and every row recorded from here
+        // on. Nothing is rewritten and no existing query changes meaning.
+        up_sql: "CREATE TABLE IF NOT EXISTS import_batches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            imported_at TEXT NOT NULL DEFAULT (datetime('now')),
+            source_kind TEXT NOT NULL,
+            source_label TEXT,
+            source_path TEXT,
+            source_lat REAL,
+            source_lon REAL,
+            station_lat REAL,
+            station_lon REAL,
+            distance_km REAL,
+            source_utc_offset_secs INTEGER,
+            applied_shift_secs INTEGER NOT NULL DEFAULT 0,
+            row_count INTEGER NOT NULL DEFAULT 0,
+            notes TEXT
+        );
+        ALTER TABLE detections ADD COLUMN import_batch_id INTEGER REFERENCES import_batches(id);
+        CREATE INDEX IF NOT EXISTS idx_detections_import_batch
+            ON detections(import_batch_id);",
+    },
+    Migration {
+        version: 26,
+        description: "Carry the reviewer's verdict on the detection, so curation can reach the analytics",
+        // `detection_reviews` (migration 13) has stored confirmed/rejected
+        // verdicts since it landed, and exactly one surface ever read them: the
+        // quality dashboard's own "Review verdict trend" panel. Every other
+        // analytic — species counts, the life list, the heat map, the dawn
+        // chorus, phenology, every behavioural and time-series query — counted
+        // rejected detections exactly as it counted confirmed ones.
+        //
+        // So an operator could spend a season rejecting false positives and
+        // every chart would look exactly as it did before. The only way to make
+        // a rejection *mean* anything was to delete the detection instead, which
+        // discards the evidence — the opposite of what a reviewable record is
+        // for.
+        //
+        // For a research station this is the gap between "a log of what a model
+        // reported" and "a dataset whose numbers a reviewer stands behind".
+        //
+        // The verdict is denormalised onto the detection rather than joined at
+        // query time for two reasons: it makes the exclusion a single indexable
+        // predicate that reads identically in SQLite and DuckDB, and it rides
+        // the existing column-copy sync into the OLAP store for free — a join
+        // would have needed a second table mirrored and kept in step.
+        // `detection_reviews` remains the record of *who said what and when*;
+        // this column is the current verdict, maintained beside it.
+        //
+        // Backfilled from the existing table so verdicts already recorded take
+        // effect immediately rather than only for reviews made from now on.
+        //
+        // `detections_analytic` is where the verdict becomes real on the SQLite
+        // side, mirroring what `detections_ts` does in DuckDB. The split between
+        // the view and the raw table is deliberate and is the whole design:
+        //
+        // * **Aggregates** read the view. A count, a heat map, a phenology curve
+        //   or a species total is a claim about what was *there*, and a reviewer
+        //   who rejected a detection has said it was not.
+        // * **Record-level surfaces** — the Today list, detection detail,
+        //   recordings, the review queue itself — keep reading the raw table. A
+        //   reviewer has to be able to see a rejected detection in order to
+        //   listen to it again and change their mind, and a verdict that hid its
+        //   own evidence would be a trap.
+        //
+        // `IS NOT 'rejected'` rather than `<> 'rejected'`: SQLite's `<>` against
+        // NULL yields NULL, which `WHERE` treats as false, so the plain
+        // comparison would exclude every *unreviewed* detection — almost all of
+        // them — and empty the dashboards on any station with a review backlog.
+        // `IS NOT` is SQLite's null-safe inequality and keeps NULL (unreviewed)
+        // in the view. The DuckDB view uses `IS DISTINCT FROM` for the same
+        // reason.
+        up_sql: "ALTER TABLE detections ADD COLUMN review_verdict TEXT;
+        UPDATE detections
+           SET review_verdict = (
+                 SELECT r.status FROM detection_reviews r
+                  WHERE r.date = detections.Date
+                    AND r.time = detections.Time
+                    AND r.sci_name = detections.Sci_Name)
+         WHERE EXISTS (
+                 SELECT 1 FROM detection_reviews r
+                  WHERE r.date = detections.Date
+                    AND r.time = detections.Time
+                    AND r.sci_name = detections.Sci_Name);
+        CREATE INDEX IF NOT EXISTS idx_detections_review_verdict
+            ON detections(review_verdict);
+        CREATE VIEW IF NOT EXISTS detections_analytic AS
+            SELECT * FROM detections WHERE review_verdict IS NOT 'rejected';",
+    },
+    Migration {
+        version: 27,
+        description: "Record how long the station actually listened, so counts can be normalised",
+        // A detection count is not an abundance. It is a count of detections
+        // divided by nothing, and the denominator moves: a solar recording
+        // window lengthens by six hours between December and June, a week of
+        // downtime removes seven days of listening, a failed microphone halves
+        // the channels. Every one of those changes the count without changing a
+        // single bird.
+        //
+        // Comparing raw counts across seasons or across years — which is the
+        // whole point of running a station for years — therefore measures the
+        // station as much as the birds. The correction is elementary and
+        // standard (detections per unit listening effort); what was missing was
+        // anywhere to put the effort.
+        //
+        // `birdnet-behavioral` has shipped `effort_corrected_abundance_sql`
+        // since the phenology module landed, joining a `recordings` table that
+        // existed only in that module's own tests. This is the real one.
+        //
+        // Per (date, source) rather than per day: a station with three
+        // microphones where one dies has not lost a third of its listening if
+        // the other two cover the same airspace, and only the operator can say
+        // which. Storing the breakdown keeps that decision available instead of
+        // baking one interpretation into the schema.
+        up_sql: "CREATE TABLE IF NOT EXISTS recording_effort (
+            date TEXT NOT NULL,
+            source TEXT NOT NULL,
+            seconds REAL NOT NULL DEFAULT 0,
+            PRIMARY KEY (date, source)
+        );
+        CREATE INDEX IF NOT EXISTS idx_recording_effort_date
+            ON recording_effort(date);",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing

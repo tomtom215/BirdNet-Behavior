@@ -105,7 +105,7 @@ fn collect_ridges(
         "SELECT Com_Name, \
                 CAST(strftime('%W', Date) AS INTEGER) AS wk, \
                 COUNT(*) AS n \
-         FROM detections \
+         FROM detections_analytic \
          WHERE Date LIKE ?1 \
          GROUP BY Com_Name, wk",
     )?;
@@ -399,7 +399,7 @@ fn compute_diversity(state: &AppState) -> Option<String> {
             let mut stmt = conn.prepare(
                 "SELECT CAST(strftime('%W', Date) AS INTEGER) AS wk, \
                         COUNT(DISTINCT Com_Name) \
-                 FROM detections \
+                 FROM detections_analytic \
                  WHERE Date LIKE ?1 \
                  GROUP BY wk \
                  ORDER BY wk",
@@ -509,7 +509,7 @@ async fn stats_partial(State(state): State<AppState>) -> impl IntoResponse {
             // First-of-year arrivals = species with first_date in this year so far.
             let foy: i64 = conn.query_row(
                 "SELECT COUNT(*) FROM ( \
-                   SELECT Com_Name, MIN(Date) AS first FROM detections GROUP BY Com_Name \
+                   SELECT Com_Name, MIN(Date) AS first FROM detections_analytic GROUP BY Com_Name \
                  ) WHERE first LIKE ?1",
                 [format!("{year}-%")],
                 |r| r.get(0),
@@ -518,7 +518,7 @@ async fn stats_partial(State(state): State<AppState>) -> impl IntoResponse {
             let (peak_week, peak_n): (i64, i64) = conn
                 .query_row(
                     "SELECT CAST(strftime('%W', Date) AS INTEGER) wk, COUNT(DISTINCT Com_Name) n \
-                     FROM detections WHERE Date LIKE ?1 GROUP BY wk ORDER BY n DESC LIMIT 1",
+                     FROM detections_analytic WHERE Date LIKE ?1 GROUP BY wk ORDER BY n DESC LIMIT 1",
                     [format!("{year}-%")],
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )
@@ -532,10 +532,10 @@ async fn stats_partial(State(state): State<AppState>) -> impl IntoResponse {
                 .query_row(
                     "WITH first_this AS ( \
                        SELECT Com_Name, MIN(Date) d \
-                       FROM detections WHERE Date LIKE ?1 GROUP BY Com_Name \
+                       FROM detections_analytic WHERE Date LIKE ?1 GROUP BY Com_Name \
                      ), first_prior AS ( \
                        SELECT Com_Name, MIN(Date) d \
-                       FROM detections WHERE Date LIKE ?2 GROUP BY Com_Name \
+                       FROM detections_analytic WHERE Date LIKE ?2 GROUP BY Com_Name \
                      ) \
                      SELECT t.Com_Name, \
                             CAST(julianday(t.d) - julianday(?3 || substr(p.d, 5)) AS INTEGER) AS delta \
@@ -555,10 +555,10 @@ async fn stats_partial(State(state): State<AppState>) -> impl IntoResponse {
             // them yet this year.
             let still_expected: i64 = conn.query_row(
                 "WITH heard_this AS ( \
-                   SELECT DISTINCT Com_Name FROM detections WHERE Date LIKE ?1 \
+                   SELECT DISTINCT Com_Name FROM detections_analytic WHERE Date LIKE ?1 \
                  ), arrived_prior_window AS ( \
                    SELECT Com_Name, MIN(Date) d \
-                   FROM detections WHERE Date LIKE ?2 GROUP BY Com_Name \
+                   FROM detections_analytic WHERE Date LIKE ?2 GROUP BY Com_Name \
                    HAVING strftime('%j', d) >= strftime('%j', 'now') \
                       AND strftime('%j', d) <= strftime('%j', 'now', '+42 days') \
                  ) \
@@ -637,7 +637,7 @@ async fn card_partial(
             "arrived" => {
                 // most recent species whose first-ever detection is in this year
                 conn.query_row(
-                    "SELECT Com_Name, MIN(Date) FROM detections \
+                    "SELECT Com_Name, MIN(Date) FROM detections_analytic \
                      GROUP BY Com_Name HAVING MIN(Date) LIKE ?1 \
                      ORDER BY MIN(Date) DESC LIMIT 1",
                     [format!("{year}-%")],
@@ -647,8 +647,8 @@ async fn card_partial(
             }
             "peaking" => conn
                 .query_row(
-                    "SELECT Com_Name, COUNT(*) AS n FROM detections \
-                     WHERE Date >= date('now','-7 days') \
+                    "SELECT Com_Name, COUNT(*) AS n FROM detections_analytic \
+                     WHERE Date >= date('now','localtime','-7 days') \
                      GROUP BY Com_Name ORDER BY n DESC LIMIT 1",
                     [],
                     |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.to_string())),

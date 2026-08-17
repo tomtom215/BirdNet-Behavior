@@ -15,6 +15,27 @@ use crate::queries;
 const SYNC_COLS: &str = "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, \
                          Cutoff, Week, Sens, Overlap, File_Name";
 
+/// Provenance column, appended to [`SYNC_COLS`] when the source has it.
+///
+/// Detected rather than assumed. In the product `migrate()` always runs before
+/// any sync, so the column is always present — but `sync_from_sqlite` is public
+/// API on a library crate, and a caller handing it a connection whose schema
+/// predates migration 25 should get a sync without provenance rather than a
+/// hard failure that empties every analytics dashboard. The cost of asking is
+/// one `PRAGMA` per sync.
+const PROVENANCE_COL: &str = "import_batch_id";
+
+/// Reviewer-verdict column, appended when the source has it. Detected for the
+/// same reason as [`PROVENANCE_COL`].
+const VERDICT_COL: &str = "review_verdict";
+
+/// Whether `detections` in this `SQLite` database carries `column`.
+fn has_column(conn: &rusqlite::Connection, column: &str) -> bool {
+    conn.prepare("SELECT 1 FROM pragma_table_info('detections') WHERE name = ?1")
+        .and_then(|mut stmt| stmt.exists([column]))
+        .unwrap_or(false)
+}
+
 /// How many rows are appended before the appender is flushed.
 ///
 /// The sync used to read the entire `SQLite` detections table into a
@@ -30,6 +51,49 @@ const SYNC_COLS: &str = "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, \
 /// row count. 10 000 rows is a few MiB in the appender's buffer while still
 /// amortising the flush over a useful chunk.
 const APPEND_BATCH_ROWS: u64 = 10_000;
+
+/// A detection as written by the live path.
+///
+/// Carries the same twelve columns the bulk sync copies, so a row written
+/// live and the same row rebuilt by a resync are identical. They were not:
+/// the live insert wrote six columns and left `Lat`, `Lon`, `Cutoff`,
+/// `Week`, `Sens` and `Overlap` NULL, so "the same detection" meant
+/// different things depending on how it got into the store — and the drift
+/// rebuild added in this cycle would silently *change* those columns on any
+/// station that triggered it.
+///
+/// Nothing read the six today, which is why it was latent rather than
+/// broken. It is fixed rather than documented because the next analytic
+/// that wants `Week` or `Lat` would have found a column that is populated
+/// or not depending on station history, which is the hardest kind of bug to
+/// see.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LiveDetection<'a> {
+    /// Local civil date, `YYYY-MM-DD`.
+    pub date: &'a str,
+    /// Local civil time, `HH:MM:SS`.
+    pub time: &'a str,
+    /// Scientific name.
+    pub sci_name: &'a str,
+    /// Common name.
+    pub com_name: &'a str,
+    /// Model confidence.
+    pub confidence: f64,
+    /// Station latitude at the time of recording.
+    pub lat: Option<f64>,
+    /// Station longitude at the time of recording.
+    pub lon: Option<f64>,
+    /// Confidence cutoff applied at inference.
+    pub cutoff: Option<f64>,
+    /// ISO week number.
+    pub week: Option<i32>,
+    /// Sensitivity setting.
+    pub sens: Option<f64>,
+    /// Chunk overlap in seconds.
+    pub overlap: Option<f64>,
+    /// Saved clip path, or the source segment.
+    pub file_name: &'a str,
+}
 
 impl AnalyticsDb {
     /// Sync detections from a `SQLite` connection into `DuckDB`.
@@ -185,13 +249,24 @@ impl AnalyticsDb {
         // `>=` (not `>`): the caller deletes the cutoff second from DuckDB
         // first, then re-reads it whole from SQLite here, so rows that tie the
         // latest synced second aren't permanently skipped (see sync_from_sqlite).
+        let provenance = has_column(sqlite_conn, PROVENANCE_COL);
+        let verdict = has_column(sqlite_conn, VERDICT_COL);
+        let mut cols = SYNC_COLS.to_owned();
+        if provenance {
+            cols.push_str(", ");
+            cols.push_str(PROVENANCE_COL);
+        }
+        if verdict {
+            cols.push_str(", ");
+            cols.push_str(VERDICT_COL);
+        }
         let sql = if after.is_some() {
             format!(
-                "SELECT {SYNC_COLS} FROM detections \
+                "SELECT {cols} FROM detections \
                  WHERE (Date || ' ' || Time) >= ? ORDER BY Date, Time"
             )
         } else {
-            format!("SELECT {SYNC_COLS} FROM detections ORDER BY Date, Time")
+            format!("SELECT {cols} FROM detections ORDER BY Date, Time")
         };
 
         let mut stmt = sqlite_conn.prepare(&sql).map_err(read_err)?;
@@ -219,10 +294,41 @@ impl AnalyticsDb {
             let sens: Option<f64> = row.get(9).map_err(read_err)?;
             let overlap: Option<f64> = row.get(10).map_err(read_err)?;
             let file_name: Option<String> = row.get(11).map_err(read_err)?;
+            // Provenance (migration 25). NULL means "this station recorded it",
+            // which is the answer for every row on a station that has never
+            // imported anything — and the reason a merged history stays
+            // separable in the analytics rather than only in SQLite. A source
+            // predating the migration has no such column; NULL is then the
+            // truthful value for every one of its rows.
+            let import_batch_id: Option<i64> = if provenance {
+                row.get(12).map_err(read_err)?
+            } else {
+                None
+            };
+            // The reviewer's verdict (migration 26). NULL is "unreviewed",
+            // which is the honest value for a source that has no such column.
+            let review_verdict: Option<String> = if verdict {
+                row.get(if provenance { 13 } else { 12 })
+                    .map_err(read_err)?
+            } else {
+                None
+            };
 
             appender.append_row(params![
-                date, time, sci_name, com_name, confidence, lat, lon, cutoff, week, sens, overlap,
+                date,
+                time,
+                sci_name,
+                com_name,
+                confidence,
+                lat,
+                lon,
+                cutoff,
+                week,
+                sens,
+                overlap,
                 file_name,
+                import_batch_id,
+                review_verdict,
             ])?;
 
             total += 1;
@@ -242,26 +348,200 @@ impl AnalyticsDb {
 
     /// Insert a single detection record directly.
     ///
-    /// Use for real-time insertion alongside `SQLite` writes.
+    /// Use for real-time insertion alongside `SQLite` writes. `import_batch_id`
+    /// and `review_verdict` are deliberately absent from [`LiveDetection`]:
+    /// a live detection is by definition this station's own and unreviewed, so
+    /// both are NULL, and offering them as parameters would invite a caller to
+    /// say otherwise.
     ///
     /// # Errors
     ///
     /// Returns an error if the insert fails.
-    pub fn insert_detection(
+    pub fn insert_detection(&self, d: &LiveDetection<'_>) -> Result<(), AnalyticsError> {
+        self.conn.execute(
+            "INSERT INTO detections
+                (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon,
+                 Cutoff, Week, Sens, Overlap, File_Name)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                d.date,
+                d.time,
+                d.sci_name,
+                d.com_name,
+                d.confidence,
+                d.lat,
+                d.lon,
+                d.cutoff,
+                d.week,
+                d.sens,
+                d.overlap,
+                d.file_name
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Delete a detection from the OLAP copy, mirroring `SQLite`'s
+    /// `delete_detection`.
+    ///
+    /// Returns the number of rows removed.
+    ///
+    /// # Why this exists
+    ///
+    /// The incremental sync can only ever *add* rows newer than the ones it
+    /// already holds — it has no way to notice a removal. Without a mirror an
+    /// operator's deleted false positive stayed in every behavioural and
+    /// time-series dashboard permanently, because nothing else ever revisits a
+    /// row once it is synced.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the delete fails.
+    pub fn delete_detection(
         &self,
         date: &str,
         time: &str,
         sci_name: &str,
-        com_name: &str,
-        confidence: f64,
-        file_name: &str,
-    ) -> Result<(), AnalyticsError> {
-        self.conn.execute(
-            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
-             VALUES (?, ?, ?, ?, ?, ?)",
-            params![date, time, sci_name, com_name, confidence, file_name],
+    ) -> Result<u64, AnalyticsError> {
+        let n = self.conn.execute(
+            "DELETE FROM detections WHERE Date = ? AND Time = ? AND Sci_Name = ?",
+            params![date, time, sci_name],
         )?;
-        Ok(())
+        Ok(n as u64)
+    }
+
+    /// Re-label a detection in the OLAP copy, mirroring `SQLite`'s
+    /// `relabel_detection`.
+    ///
+    /// Returns the number of rows updated. See [`Self::delete_detection`] for
+    /// why the mirror is needed at all.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the update fails.
+    pub fn relabel_detection(
+        &self,
+        date: &str,
+        time: &str,
+        old_sci_name: &str,
+        new_sci_name: &str,
+        new_com_name: &str,
+    ) -> Result<u64, AnalyticsError> {
+        let n = self.conn.execute(
+            "UPDATE detections SET Sci_Name = ?, Com_Name = ? \
+             WHERE Date = ? AND Time = ? AND Sci_Name = ?",
+            params![new_sci_name, new_com_name, date, time, old_sci_name],
+        )?;
+        Ok(n as u64)
+    }
+
+    /// Empty the OLAP detections copy, mirroring the admin "clear detections"
+    /// control.
+    ///
+    /// Returns the number of rows removed. See [`Self::delete_detection`] for
+    /// why the mirror is needed at all; this is the case where its absence was
+    /// most visible, since the station's own dashboard reported zero detections
+    /// while the analytics dashboards beside it still rendered a full history.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the delete fails.
+    pub fn clear_detections(&self) -> Result<u64, AnalyticsError> {
+        let n = self.conn.execute("DELETE FROM detections", params![])?;
+        Ok(n as u64)
+    }
+
+    /// Copy the station's recording-effort table into the OLAP store.
+    ///
+    /// Small by construction — one row per (day, source), so a four-year
+    /// three-microphone station has about 4 400 of them — so this is a full
+    /// replace rather than an incremental sync. Effort rows are also *mutable*
+    /// (today's row is incremented every five minutes), which an
+    /// append-only incremental sync could not track.
+    ///
+    /// Without this the effort-corrected abundance query has no denominator in
+    /// the store it runs in, and silently returns NULL rates — the failure mode
+    /// that made the whole phenology module look optional.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reading from `SQLite` or writing to `DuckDB` fails.
+    pub fn sync_recording_effort(
+        &self,
+        sqlite_conn: &rusqlite::Connection,
+    ) -> Result<u64, AnalyticsError> {
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS recording_effort (
+                date VARCHAR NOT NULL,
+                source VARCHAR NOT NULL,
+                seconds DOUBLE NOT NULL
+            );",
+        )?;
+
+        let read_err =
+            |e: rusqlite::Error| AnalyticsError::InvalidData(format!("SQLite read error: {e}"));
+        let mut stmt = sqlite_conn
+            .prepare("SELECT date, source, seconds FROM recording_effort")
+            .map_err(read_err)?;
+        let rows: Vec<(String, String, f64)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .map_err(read_err)?
+            .filter_map(Result::ok)
+            .collect();
+
+        self.conn.execute_batch("DELETE FROM recording_effort;")?;
+        let mut appender = self.conn.appender("recording_effort")?;
+        for (date, source, seconds) in &rows {
+            appender.append_row(params![date, source, seconds])?;
+        }
+        appender.flush()?;
+        Ok(rows.len() as u64)
+    }
+
+    /// Mirror a reviewer's verdict onto the OLAP copy.
+    ///
+    /// `verdict` is `Some("confirmed")` / `Some("rejected")`, or `None` to
+    /// return the detection to unreviewed. `detections_ts` — the view every
+    /// analytic reads — filters on this column, so without the mirror a
+    /// rejection changes the SQLite aggregates and leaves every behavioural and
+    /// time-series dashboard still counting the reject.
+    ///
+    /// Returns the number of rows updated.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the update fails.
+    pub fn set_review_verdict(
+        &self,
+        date: &str,
+        time: &str,
+        sci_name: &str,
+        verdict: Option<&str>,
+    ) -> Result<u64, AnalyticsError> {
+        let n = self.conn.execute(
+            "UPDATE detections SET review_verdict = ? \
+             WHERE Date = ? AND Time = ? AND Sci_Name = ?",
+            params![verdict, date, time, sci_name],
+        )?;
+        Ok(n as u64)
+    }
+
+    /// Count detections carrying a `rejected` verdict.
+    ///
+    /// Used by the startup drift check. Row counts alone cannot see verdict
+    /// drift — a rejection changes no row count in either store — so a station
+    /// whose verdicts diverged would never self-heal without this.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails.
+    pub fn rejected_detection_count(&self) -> Result<u64, AnalyticsError> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM detections WHERE review_verdict = 'rejected'",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(u64::try_from(n).unwrap_or(0))
     }
 
     /// Count total detections in `DuckDB`.
@@ -408,26 +688,51 @@ mod tests {
         );
     }
 
+    /// A minimal live detection for tests.
+    ///
+    /// The optional columns are left `None` here because these tests are about
+    /// insert/count behaviour; `a_live_row_and_a_resynced_row_carry_the_same_columns`
+    /// in `tests/analytics_divergence.rs` is what holds the twelve-column
+    /// contract.
+    fn live<'a>(
+        date: &'a str,
+        time: &'a str,
+        sci_name: &'a str,
+        com_name: &'a str,
+        confidence: f64,
+        file_name: &'a str,
+    ) -> LiveDetection<'a> {
+        LiveDetection {
+            date,
+            time,
+            sci_name,
+            com_name,
+            confidence,
+            file_name,
+            ..LiveDetection::default()
+        }
+    }
+
     #[test]
     fn insert_and_count() {
         let (db, _tmp) = make_db();
-        db.insert_detection(
+        db.insert_detection(&live(
             "2026-03-12",
             "06:30:00",
             "Turdus merula",
             "Eurasian Blackbird",
             0.87,
             "t.wav",
-        )
+        ))
         .unwrap();
-        db.insert_detection(
+        db.insert_detection(&live(
             "2026-03-12",
             "06:35:00",
             "Erithacus rubecula",
             "European Robin",
             0.92,
             "t.wav",
-        )
+        ))
         .unwrap();
         assert_eq!(db.detection_count().unwrap(), 2);
         assert_eq!(db.species_count().unwrap(), 2);
@@ -452,14 +757,14 @@ mod tests {
     #[test]
     fn sync_from_sqlite_incremental() {
         let (db, _tmp) = make_db();
-        db.insert_detection(
+        db.insert_detection(&live(
             "2026-03-12",
             "06:30:00",
             "Turdus merula",
             "Blackbird",
             0.87,
             "t.wav",
-        )
+        ))
         .unwrap();
 
         let sqlite_dir = TempDir::new().unwrap();
@@ -492,14 +797,14 @@ mod tests {
         let (db, _tmp) = make_db();
 
         // DuckDB already holds *one* of two same-second detections.
-        db.insert_detection(
+        db.insert_detection(&live(
             "2026-03-12",
             "06:30:00",
             "Turdus merula",
             "Blackbird",
             0.87,
             "t.wav",
-        )
+        ))
         .unwrap();
 
         // SQLite holds both same-second detections plus a later row.
@@ -544,14 +849,14 @@ mod tests {
         // writes *back-dated* rows into SQLite. The incremental sync skips them
         // because they predate the cutoff; the full resync must include them.
         let (db, _tmp) = make_db();
-        db.insert_detection(
+        db.insert_detection(&live(
             "2026-06-05",
             "10:00:00",
             "Parus major",
             "Great Tit",
             0.90,
             "now.wav",
-        )
+        ))
         .unwrap();
 
         let sqlite_dir = TempDir::new().unwrap();
@@ -590,14 +895,14 @@ mod tests {
         // A rebuild against an empty source truncates the OLAP copy and leaves a
         // working timestamp view (no rows, but queryable).
         let (db, _tmp) = make_db();
-        db.insert_detection(
+        db.insert_detection(&live(
             "2026-06-05",
             "10:00:00",
             "Parus major",
             "Great Tit",
             0.9,
             "x.wav",
-        )
+        ))
         .unwrap();
 
         let sqlite_dir = TempDir::new().unwrap();

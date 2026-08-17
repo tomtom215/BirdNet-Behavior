@@ -2361,8 +2361,19 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
 .bnb-tabbar ~ main,
 body:has(.bnb-tabbar) main { padding-bottom: 84px; }
 
-/* Visible only on coarse-pointer narrow viewports. */
-@media (max-width: 720px) and (pointer: coarse) {
+/* Visible on narrow viewports.
+ *
+ * This was `(max-width: 720px) and (pointer: coarse)`. `pointer` describes the
+ * *input device*, not the screen, so the phone layout was denied to anyone on a
+ * narrow viewport with a precise pointer: an iPad with a keyboard case (which
+ * reports `fine`), a touchscreen laptop, and a desktop window dragged narrow —
+ * all got the desktop nav in a phone-sized column, with the bottom bar hidden.
+ *
+ * It also made the layout untestable. A headless browser given a viewport but
+ * no touch emulation reports `pointer: fine`, so every "mobile" screenshot the
+ * QA tooling ever took — including in CI — was the desktop layout at phone
+ * width. Width alone is the property this layout is actually about. */
+@media (max-width: 720px) {
   .bnb-tabbar {
     display: grid;
     grid-template-columns: repeat(6, 1fr);
@@ -3641,6 +3652,35 @@ main[data-home="reports"] { max-width: 1100px; padding: var(--pad-3) 24px 64px; 
   border-bottom: 0.5px solid var(--border);
   margin: 18px 0 22px;
   scrollbar-width: thin;
+  /* Fade the trailing edge when there is more to scroll to.
+   *
+   * Measured on a 390px phone: the six Patterns tabs are 696px wide in a 342px
+   * strip, so 354px — "Who sings together", "Trends" and "Behavior", half the
+   * analytics surface, including the one the project is named for — sat
+   * off-screen. The strip did scroll, but `scrollbar-width: thin` draws nothing
+   * on iOS or Android until a scroll is already in progress, the last visible
+   * tab ended cleanly at the edge with no partial peek, and there was no fade.
+   * Nothing at all signalled that more existed.
+   *
+   * `mask-image` with a scroll-driven stop is not available cross-browser, so
+   * this fades unconditionally at the trailing edge; a strip that already fits
+   * has nothing under the fade to obscure. */
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent 100%);
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent 100%);
+  /* Leave room so the last tab's label is not sitting under the fade. */
+  padding-right: 28px;
+  /* Momentum scrolling on iOS, and snap so a swipe lands on a tab boundary
+     rather than half-way through a label. */
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x proximity;
+}
+.bnb-subtab { scroll-snap-align: start; }
+@media (max-width: 720px) {
+  /* On a phone the fade is doing real work, so make it unmistakable and keep
+     the tap targets at a comfortable size (WCAG 2.5.5 asks 44px; the desktop
+     padding gives ~38). */
+  .bnb-subtabs { padding-right: 36px; }
+  .bnb-subtab { padding-top: 12px; padding-bottom: 14px; }
 }
 .bnb-subtab {
   border: 0; background: transparent;
@@ -4016,3 +4056,74 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); 
 .st-span { grid-column: 1 / -1; }
 /* A section subhead annotation (the "from doctor, re-run anytime" note). */
 .st-h3-note { font-weight: 400; font-size: 12px; color: var(--fg-3); }
+
+
+/* ── Narrow phones: the clip row's controls ran off the edge ──────────
+ *
+ * Measured under the real phone layout: at 360px — a very common Android
+ * width — the lock / delete controls sat at x 346–404 in a row ending at 325,
+ * and at 320px the download went with them. Nothing scrolled, because the
+ * list container clips; the controls were simply unreachable.
+ *
+ * The 720px block above drops the spectrogram column, which is enough down to
+ * about 390px. Below that the remaining fixed columns plus gaps (22 + 66 + 92 +
+ * 120 with four 14px gaps = 356) still exceed the available ~290, so
+ * `minmax(0, 1fr)` collapses to zero and the last column overflows instead.
+ *
+ * Under 480px the confidence figure gives up its column — it is repeated on the
+ * detail view and is the least load-bearing thing in the row — and the gaps
+ * tighten, which brings the row inside the viewport with the species name still
+ * legible. The action buttons also come up to a 44px target: 2.5.5 (AAA) asks
+ * for that, and a phone held one-handed outdoors in the cold is the actual use
+ * case. */
+@media (max-width: 480px) {
+  .rc-row {
+    grid-template-columns: 20px 58px minmax(0, 1fr) auto;
+    gap: 8px;
+    padding: 9px 8px;
+  }
+  .rc-conf { display: none; }
+  .rc-acts { flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
+  .rc-iact { min-width: 40px; min-height: 40px; }
+  /* Nothing in the row may push the page wider than the viewport. */
+  .rc-row, .rc-who, .rc-who-text { min-width: 0; }
+  .rc-who-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+
+
+/* Very narrow phones (Galaxy Fold outer, older Androids): six equal tab-bar
+ * columns leave ~53px each at 320px, which the word "Settings" overruns — the
+ * last tab was clipped past the right edge. Tighten the type and let the label
+ * ellipsise rather than escape its cell; the glyph above it carries the
+ * meaning, and the active underline still shows where you are. */
+@media (max-width: 360px) {
+  .bnb-tabbar { gap: 0; }
+  .bnb-tabbar__slot { padding-left: 2px; padding-right: 2px; min-width: 0; }
+  .bnb-tabbar__slot .label {
+    font-size: 9px;
+    letter-spacing: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+
+/* The footer's rights line was the one element wide enough to overflow a 320px
+ * page, and page overflow widens the layout viewport — which dragged the
+ * position:fixed bottom tab bar out with it (measured: documentElement
+ * scrollWidth 328 against clientWidth 320, tab bar 328 wide, last tab clipped).
+ *
+ * Worth chasing to the root rather than patching the tab bar: an 8px page
+ * overflow is invisible until something anchored to the viewport edge is
+ * quietly pushed off it. */
+@media (max-width: 360px) {
+  .bnb-footer__rights {
+    font-size: 9.5px;
+    letter-spacing: 0;
+    max-width: 100%;
+    min-width: 0;
+    text-wrap: balance;
+    overflow-wrap: anywhere;
+  }
+}

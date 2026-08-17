@@ -209,15 +209,21 @@ pub fn weekly_richness_sql(year: u32) -> String {
 /// Build SQL for effort-corrected abundance (`DuckDB` only).
 ///
 /// When recording effort data is available (e.g., from a separate
-/// `recordings` table with `date` and `duration_hours` columns), this
+/// `recording_effort` table with `date` and `seconds` columns), this
 /// query normalises detection counts per recording hour to remove
 /// effort bias.
 ///
-/// **Requires:** A `recordings` table with columns `date` (TEXT
-/// `YYYY-MM-DD`) and `duration_hours` (REAL).
+/// **Requires:** A `recording_effort` table with columns `date` (TEXT
+/// `YYYY-MM-DD`, local civil date) and `seconds` (REAL).
 pub fn effort_corrected_abundance_sql(params: &AbundanceParams) -> String {
-    // `recordings.date` is a caller-supplied TEXT column, so it is cast here
-    // rather than read from the view.
+    // `recording_effort.date` is TEXT (local civil date, matching the
+    // detections it will be divided into), so it is cast here rather than read
+    // from the view.
+    //
+    // This used to read a table called `recordings` that existed only in this
+    // module's own tests, which is a large part of why the whole module had no
+    // production consumer. It now reads `recording_effort`, populated by the
+    // station's own sampler (migration 27, `integrations::effort`).
     let effort_week = "CAST(strftime(TRY_CAST(date AS DATE), '%W') AS INTEGER)";
     let effort_year = "CAST(strftime(TRY_CAST(date AS DATE), '%Y') AS INTEGER)";
     let where_sql = where_clause(&[
@@ -236,8 +242,8 @@ pub fn effort_corrected_abundance_sql(params: &AbundanceParams) -> String {
         "WITH effort AS (
             SELECT
                 {effort_week}                           AS iso_week,
-                SUM(duration_hours)                     AS hours
-            FROM recordings
+                SUM(seconds) / 3600.0                   AS hours
+            FROM recording_effort
             WHERE {effort_year} = {year}
             GROUP BY iso_week
         ),
@@ -331,8 +337,17 @@ mod tests {
         let params = AbundanceParams::for_year(2026);
         let sql = effort_corrected_abundance_sql(&params);
         assert!(sql.contains("detections_per_hour"));
-        assert!(sql.contains("duration_hours"));
         assert!(sql.contains("effort_hours"));
+        assert!(
+            sql.contains("FROM recording_effort"),
+            "the effort join must read the station's own effort table. It read \
+             `recordings`, which existed only in this module's tests — a large \
+             part of why the module had no production consumer at all."
+        );
+        assert!(
+            !sql.contains("FROM recordings"),
+            "the fictional table must not come back"
+        );
     }
 
     #[test]

@@ -23,7 +23,7 @@ the default. Raise the threshold for genuinely sparse habitats. The same
 freshness value is exported as the `birdnet_detection_silence_seconds`
 Prometheus gauge and as `detection_silence_secs` on `/api/v2/health`, so you can
 alert on it from Grafana or any uptime monitor. See the
-[Field Deployment Runbook](https://github.com/tomtom215/BirdNet-Behavior/blob/main/docs/FIELD_DEPLOYMENT.md#9-remote-diagnostics-and-monitoring)
+[Field Deployment Runbook](../field/deployment.md#9-remote-diagnostics-and-monitoring)
 for the monitoring playbook.
 
 ## The built-in doctor

@@ -50,6 +50,35 @@ pub fn run_migration(
     strict: bool,
     progress: &ProgressHandle,
 ) -> Result<MigrationSummary, MigrateError> {
+    run_migration_with_options(
+        source_path,
+        dest_path,
+        strict,
+        progress,
+        &crate::provenance::ImportOptions::default(),
+        (None, None),
+    )
+}
+
+/// [`run_migration`] plus the reconciliation the operator chose.
+///
+/// `options` carries the clock shift and the label for the source station;
+/// `station` is this station's own `(lat, lon)` so the recorded batch can say
+/// how far apart the two sites are. Both are recorded whether or not they are
+/// set, because "we did not know" is itself worth being able to read back.
+///
+/// # Errors
+///
+/// Returns `MigrateError` if detection, validation (in strict mode), or import
+/// fails.
+pub fn run_migration_with_options(
+    source_path: &Path,
+    dest_path: &Path,
+    strict: bool,
+    progress: &ProgressHandle,
+    options: &crate::provenance::ImportOptions,
+    station: (Option<f64>, Option<f64>),
+) -> Result<MigrationSummary, MigrateError> {
     use crate::traits::{Migrator, SchemaDetector, Validator};
 
     // CSV/TSV path — if the file is not a SQLite database, try CSV import.
@@ -82,8 +111,9 @@ pub fn run_migration(
         return Err(MigrateError::ValidationFailed(failures.join("; ")));
     }
 
-    // Step 3: Import.
-    importer.migrate(source_path, dest_path, progress)
+    // Step 3: Import, carrying the operator's reconciliation choices so the
+    // merged history stays attributable to the site and clock it came from.
+    importer.migrate_with_options(source_path, dest_path, progress, options, station)
 }
 
 /// Run validation only (without importing).  Used by the web UI pre-flight check.
@@ -98,6 +128,24 @@ pub fn run_migration(
 /// Returns `MigrateError` if the source cannot be opened.
 pub fn validate_source(
     source_path: &Path,
+) -> Result<(DetectedSchema, ValidationReport, MigrationReport), MigrateError> {
+    validate_source_against_station(source_path, None, None)
+}
+
+/// [`validate_source`] with the station's own coordinates, so the report can
+/// say whether the source came from *here*.
+///
+/// Split out rather than folded in because the migrate crate has no access to
+/// the station's settings — those live in the destination database, which
+/// validation deliberately does not open. The caller supplies them.
+///
+/// # Errors
+///
+/// Returns `MigrateError` if the source cannot be opened.
+pub fn validate_source_against_station(
+    source_path: &Path,
+    station_lat: Option<f64>,
+    station_lon: Option<f64>,
 ) -> Result<(DetectedSchema, ValidationReport, MigrationReport), MigrateError> {
     use crate::traits::{SchemaDetector, Validator};
 
@@ -120,7 +168,25 @@ pub fn validate_source(
     let validator = BirdNetPiValidator;
 
     let schema = detector.detect(source_path)?;
-    let report = validator.validate_source(source_path)?;
+    let mut report = validator.validate_source(source_path)?;
+
+    // The check the four original ones never made: is this the same place?
+    // Appended here rather than inside the Validator so it stays a pure
+    // source-vs-station comparison; the validator itself never sees the
+    // destination.
+    // `passed` is recomputed the way `ValidationReport::new` does — a check
+    // that is not `required` never flips it. That matters here: the location
+    // check is advisory by design, and a station that has simply not set its
+    // coordinates yet must not find strict-mode imports blocked by a check that
+    // could not be performed.
+    let profile = crate::provenance::SourceProfile::read(source_path)?;
+    report.checks.push(crate::provenance::location_check(
+        &profile,
+        station_lat,
+        station_lon,
+    ));
+    report.passed = report.checks.iter().all(|c| c.passed || !c.required);
+
     let migration_report = generate_report(source_path)?;
     Ok((schema, report, migration_report))
 }

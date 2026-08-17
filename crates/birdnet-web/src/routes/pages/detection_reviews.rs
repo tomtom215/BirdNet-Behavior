@@ -228,18 +228,19 @@ async fn detection_review_set(
     Form(form): Form<ReviewForm>,
 ) -> impl IntoResponse {
     if let Some(status) = birdnet_db::sqlite::ReviewStatus::parse(&form.status) {
+        // `state.set_detection_review`, not `with_db(set_detection_review)`:
+        // both `detections_analytic` and `detections_ts` filter on the verdict,
+        // so one that reached only SQLite would change the species totals and
+        // leave every behavioural dashboard still counting the reject.
         let _ = tokio::task::spawn_blocking(move || {
-            state.with_db(|conn| {
-                birdnet_db::sqlite::set_detection_review(
-                    conn,
-                    &form.date,
-                    &form.time,
-                    &form.sci_name,
-                    &form.com_name,
-                    status,
-                    None,
-                )
-            })
+            state.set_detection_review(
+                &form.date,
+                &form.time,
+                &form.sci_name,
+                &form.com_name,
+                status,
+                None,
+            )
         })
         .await;
     } else {
@@ -252,10 +253,10 @@ async fn detection_review_clear(
     State(state): State<AppState>,
     Form(form): Form<ClearForm>,
 ) -> impl IntoResponse {
+    // Paired write — see `detection_review_set`. Clearing must reach both
+    // stores or the exclusion outlives the verdict that justified it.
     let _ = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
-            birdnet_db::sqlite::clear_detection_review(conn, &form.date, &form.time, &form.sci_name)
-        })
+        state.clear_detection_review(&form.date, &form.time, &form.sci_name)
     })
     .await;
     reload_queue()
@@ -274,12 +275,9 @@ async fn detection_review_inline(
             form.sci_name.clone(),
             form.com_name.clone(),
         );
+        // Paired write — see `detection_review_set`.
         let _ = tokio::task::spawn_blocking(move || {
-            state.with_db(|conn| {
-                birdnet_db::sqlite::set_detection_review(
-                    conn, &date, &time, &sci, &com, status, None,
-                )
-            })
+            state.set_detection_review(&date, &time, &sci, &com, status, None)
         })
         .await;
         Some(status.as_str())

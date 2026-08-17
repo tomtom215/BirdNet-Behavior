@@ -1013,10 +1013,11 @@ async fn delete_detection(
     let time = form.time;
     let sci_name = form.sci_name;
 
-    let _ = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::sqlite::delete_detection(conn, &date, &time, &sci_name))
-    })
-    .await;
+    // `state.delete_detection`, not `with_db(delete_detection)`: the analytics
+    // copy is incremental and can never notice a removal on its own, so the
+    // deletion has to be mirrored at the same moment.
+    let _ =
+        tokio::task::spawn_blocking(move || state.delete_detection(&date, &time, &sci_name)).await;
 
     (
         StatusCode::OK,
@@ -1030,17 +1031,15 @@ async fn relabel_detection(
     State(state): State<AppState>,
     Form(form): Form<RelabelForm>,
 ) -> impl IntoResponse {
+    // Paired write — see `delete_detection` above.
     let _ = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
-            birdnet_db::sqlite::relabel_detection(
-                conn,
-                &form.date,
-                &form.time,
-                &form.old_sci_name,
-                &form.new_sci_name,
-                &form.new_com_name,
-            )
-        })
+        state.relabel_detection(
+            &form.date,
+            &form.time,
+            &form.old_sci_name,
+            &form.new_sci_name,
+            &form.new_com_name,
+        )
     })
     .await;
 

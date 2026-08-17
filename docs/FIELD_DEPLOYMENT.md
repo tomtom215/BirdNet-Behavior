@@ -160,8 +160,12 @@ The installer's systemd unit (`install.sh`) ships hardened by default:
   `RestrictNamespaces=yes`.
 - `SystemCallFilter=@system-service` minus the privileged / kernel
   / debug / reboot / mount / cpu-emulation / clock / module groups.
-- `MemoryMax=512M`, `TasksMax=512`, `LimitNPROC=256` — bounded
-  resource ceilings; runaway processes can't take down the host.
+- `MemoryHigh=768M`, `MemoryMax=1G`, `TasksMax=512`, `LimitNOFILE=65536`,
+  `LimitNPROC=256` — bounded resource ceilings; runaway processes can't
+  take down the host. The 1 GiB ceiling is sized for the bundled DuckDB
+  analytics engine, whose queries are memory-hungry under load; the FP32
+  model is mmap'd, so its pages are reclaimable and don't count as
+  anonymous RSS. On a 512 MB board physical RAM plus zram binds first.
 - `OOMPolicy=stop` — under memory pressure the unit stops cleanly
   instead of being killed mid-write.
 
@@ -381,6 +385,37 @@ Once the unit is sealed and shipped, the loop is:
 7. **SSH tunnel via Tailscale / ZeroTier / Cloudflare Tunnel** —
    gives you the web UI from anywhere without exposing a port to the
    open internet. Recommended over plain port-forward.
+
+### Station-health alerts
+
+The detection deadman answers *"is the station detecting at all?"*. Station
+health answers the questions that leave it quiet — the faults a station keeps
+detecting straight through:
+
+| Condition | Threshold |
+|---|---|
+| An audio source down while others keep recording | 15 min continuous |
+| Disk full enough that recordings are being purged | ≥ 90 % used |
+| CPU at or above the Pi throttling point | ≥ 80 °C |
+| Backup or integrity check not completed | > 21 days |
+
+Each alerts **once per episode**, with a recovery notice when it clears, through
+the same Apprise notifier as the deadman. Every condition must persist for three
+consecutive five-minute polls before it fires, so a mic that re-enumerates or a
+disk that spikes during clip extraction stays silent.
+
+A single-source station that goes fully down is deliberately *not* reported
+here — the deadman covers that, with better wording, and two notifications for
+one fault is how a channel gets muted. This check exists for what the deadman
+structurally cannot see: some sources up, some down.
+
+On by default. Disable with `--station-health-alerts false`, or
+`STATION_HEALTH_ALERTS=false` in `/etc/birdnet/birdnet.conf`.
+
+```bash
+# Confirm it started.
+journalctl -u birdnet-behavior | grep 'station-health notifier started'
+```
 
 ## 10. Update strategy
 

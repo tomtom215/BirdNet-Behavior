@@ -91,7 +91,7 @@ when the network returns (bounded so a months-long outage can't fill the disk).
 Detection never blocks on the network. Watch the
 `birdnet_outbound_queue_depth{kind="birdweather"}` gauge and the "Queued
 Uploads" row on the [System](../admin/system.md) page; full mechanics are in the
-[Field Deployment Runbook](https://github.com/tomtom215/BirdNet-Behavior/blob/main/docs/FIELD_DEPLOYMENT.md#9-remote-diagnostics-and-monitoring).
+[Field Deployment Runbook](../field/deployment.md#9-remote-diagnostics-and-monitoring).
 
 ### Self-hosted ingest (sensitive species)
 

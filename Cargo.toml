@@ -287,6 +287,10 @@ rusqlite.workspace = true
 tower.workspace = true
 birdnet-web.workspace = true
 birdnet-db.workspace = true
+# `tests/analytics_divergence.rs` drives a real BirdNET-Pi import end to end, to
+# prove provenance and clock reconciliation survive all the way into the DuckDB
+# analytics store — the only place a researcher would actually read them.
+birdnet-migrate.workspace = true
 serde_json.workspace = true
 proptest.workspace = true
 

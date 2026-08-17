@@ -39,7 +39,7 @@ use axum::{Router, routing::get};
 
 use crate::state::AppState;
 
-use super::atoms::species_color;
+use super::atoms::series_color;
 use super::escape_html;
 
 const PAGE_HTML: &str = include_str!("../../../templates/dawn_chorus.html");
@@ -83,17 +83,58 @@ struct ChorusRibbon {
     total: i64,
 }
 
+/// The windowed chorus aggregate.
+///
+/// A `const` rather than a literal inline below so
+/// `dawn_chorus_window_uses_a_date_range_seek` can `EXPLAIN` *this* statement.
+/// A test that re-types the SQL asserts the plan of its own copy and stays
+/// green while the shipped query regresses — which is exactly what happened to
+/// the first draft of that test.
+///
+/// `INDEXED BY` is not decoration. Left to itself SQLite picks
+/// `idx_detections_species` to get `Com_Name` in order, which makes this a full
+/// scan of the station's *entire* history to answer a question about the last
+/// `days` days — and it builds the temp b-tree anyway, because `hr` is an
+/// expression, so the choice buys nothing at all.
+///
+/// Measured on x86_64 against a synthetic four-year station (1 095 361 rows,
+/// 277 MB), 30-day window:
+///
+/// ```text
+/// as shipped                    1613 ms   SCAN … idx_detections_species
+/// INDEXED BY (Date, Com_Name)     27 ms   SEARCH … (Date>?)
+/// ```
+///
+/// Identical results (2097 groups) both ways. The cost of the unhinted form
+/// scales with total history, not with the window: 72 ms at 60 days, 396 ms at
+/// one year, 1711 ms at four — so a permanent station's dawn chorus gets
+/// steadily slower every season it runs. `ANALYZE` does not change the plan;
+/// this was checked.
+///
+/// The hint is safe because migrations never alter an existing one (see
+/// `MIGRATIONS` in `birdnet-db`).
+///
+/// # Why the base table rather than `detections_analytic`
+///
+/// Every other aggregate reads the `detections_analytic` view, which applies
+/// the reviewer-verdict exclusion once and centrally. This one cannot:
+/// `INDEXED BY` is not valid against a view, and dropping the hint costs a 60x
+/// slowdown that grows with the station's history (see the numbers above). So
+/// the exclusion is spelled out inline instead — same predicate the view
+/// applies, same null-safe `IS NOT` for the same three-valued-logic reason, and
+/// `dawn_chorus_excludes_rejected_detections` holds the two in step.
+const CHORUS_SQL: &str = "SELECT Com_Name, CAST(strftime('%H', Time) AS INTEGER) hr, COUNT(*) n \
+     FROM detections INDEXED BY idx_detections_date_species \
+     WHERE Date >= date('now','localtime', ?1) \
+       AND review_verdict IS NOT 'rejected' \
+     GROUP BY Com_Name, hr";
+
 fn collect_chorus(
     conn: &rusqlite::Connection,
     days: i64,
     top_n: usize,
 ) -> rusqlite::Result<Vec<ChorusRibbon>> {
-    let mut stmt = conn.prepare(
-        "SELECT Com_Name, CAST(strftime('%H', Time) AS INTEGER) hr, COUNT(*) n \
-         FROM detections \
-         WHERE Date >= date('now', ?1) \
-         GROUP BY Com_Name, hr",
-    )?;
+    let mut stmt = conn.prepare(CHORUS_SQL)?;
     let modifier = format!("-{days} days");
     let rows = stmt.query_map([&modifier], |r| {
         Ok((
@@ -125,7 +166,10 @@ fn collect_chorus(
                 .unwrap_or(0) as u8;
             let total = *totals.get(&name).unwrap_or(&0);
             ChorusRibbon {
-                color: species_color(&name),
+                // Placeholder; replaced by rank below once the ribbons are
+                // sorted, because the colour has to be assigned by position in
+                // *this* chart. See `atoms::series_color`.
+                color: String::new(),
                 name,
                 hours,
                 peak_hour,
@@ -136,6 +180,13 @@ fn collect_chorus(
 
     ribbons.sort_by_key(|r| std::cmp::Reverse(r.total));
     ribbons.truncate(top_n);
+    // Colour by rank within the chart, not by hashing the name: several species
+    // are drawn as adjacent rings here, and the hash palette put pairs of them
+    // 2–3° apart in hue at constant lightness.
+    let shown = ribbons.len();
+    for (rank, ribbon) in ribbons.iter_mut().enumerate() {
+        ribbon.color = series_color(rank, shown);
+    }
     Ok(ribbons)
 }
 
@@ -638,5 +689,94 @@ mod tests {
         // appears once.
         let active_count = svg.matches("stroke-width=\"3\"").count();
         assert_eq!(active_count, 1, "expected exactly one active moon segment");
+    }
+
+    /// The chorus is the one aggregate that cannot read `detections_analytic`
+    /// (`INDEXED BY` is invalid on a view), so it spells the reviewer-verdict
+    /// exclusion out inline. This holds that copy in step with the view.
+    ///
+    /// Without it the chorus would be the single surface where a rejected
+    /// detection kept counting — the least likely place anyone would look for
+    /// the discrepancy, and the most likely to be believed.
+    #[test]
+    fn dawn_chorus_excludes_rejected_detections() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open");
+        birdnet_db::migration::migrate(&conn).expect("migrate");
+        for (sci, com, verdict) in [
+            ("Turdus merula", "Eurasian Blackbird", None),
+            ("Erithacus rubecula", "European Robin", Some("rejected")),
+            ("Parus major", "Great Tit", Some("confirmed")),
+        ] {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, review_verdict) \
+                 VALUES (date('now','localtime'), '06:00:00', ?1, ?2, 0.9, ?3)",
+                rusqlite::params![sci, com, verdict],
+            )
+            .expect("seed");
+        }
+
+        let names: Vec<String> = collect_chorus(&conn, 30, 10)
+            .expect("chorus")
+            .into_iter()
+            .map(|r| r.name)
+            .collect();
+
+        assert!(
+            !names.iter().any(|n| n == "European Robin"),
+            "a rejected detection is still in the dawn chorus: {names:?}"
+        );
+        assert_eq!(
+            names.len(),
+            2,
+            "unreviewed and confirmed detections must both stay: {names:?}"
+        );
+    }
+
+    /// The windowed chorus query must seek a date range, never scan the table.
+    ///
+    /// Without the `INDEXED BY` hint SQLite scans `idx_detections_species` end
+    /// to end, so the cost of a 30-day question grows with the station's whole
+    /// history — 72 ms at 60 days, 1711 ms at four years on a synthetic
+    /// 1.1 M-row station. This asserts the *plan*, not a duration, because a
+    /// timing threshold on shared CI hardware is a flaky test and the plan is
+    /// the thing that actually regressed.
+    ///
+    /// Two rows are enough: the planner makes the same wrong choice on an empty
+    /// table as on a million rows (checked both ways), because it is preferring
+    /// the species index for GROUP BY ordering rather than reasoning about
+    /// selectivity — and it still builds the temp b-tree regardless, so the
+    /// preference buys nothing.
+    #[test]
+    fn dawn_chorus_window_uses_a_date_range_seek() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open");
+        birdnet_db::migration::migrate(&conn).expect("migrate");
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence) \
+             VALUES (date('now','localtime'), '06:00:00', 'Turdus merula', 'Eurasian Blackbird', 0.9)",
+            [],
+        )
+        .expect("seed");
+
+        // `collect_chorus` still answers correctly through the hint.
+        let ribbons = collect_chorus(&conn, 30, 10).expect("chorus");
+        assert_eq!(ribbons.len(), 1, "the seeded species is in the window");
+
+        let plan: Vec<String> = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {CHORUS_SQL}"))
+            .expect("prepare")
+            .query_map(["-30 days"], |r| r.get::<_, String>(3))
+            .expect("plan")
+            .filter_map(Result::ok)
+            .collect();
+        let joined = plan.join(" | ");
+        assert!(
+            joined.contains("SEARCH") && joined.contains("idx_detections_date_species"),
+            "the chorus window no longer seeks the (Date, Com_Name) index — it \
+             is scanning the whole history again. Plan was: {joined}"
+        );
+        assert!(
+            !joined.contains("SCAN detections"),
+            "the chorus window is scanning the detections table: {joined}"
+        );
     }
 }

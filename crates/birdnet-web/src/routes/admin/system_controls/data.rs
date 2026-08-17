@@ -8,16 +8,17 @@ use crate::state::AppState;
 
 pub(super) async fn clear_detections(State(state): State<AppState>) -> Html<String> {
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
-            let det = conn.execute("DELETE FROM detections", []);
-            let notif = conn.execute("DELETE FROM notification_log", []);
-            match (det, notif) {
-                (Ok(d), Ok(n)) => Ok(format!(
-                    "Cleared {d} detections and {n} notification log entries."
-                )),
-                (Err(e), _) | (_, Err(e)) => Err(e.to_string()),
-            }
-        })
+        // `state.clear_detections`, not a bare `DELETE`: the analytics copy is
+        // derived but incremental, so clearing only SQLite left every
+        // behavioural and time-series dashboard rendering the whole history
+        // beside a dashboard reporting zero detections.
+        let det = state.clear_detections().map_err(|e| e.to_string())?;
+        let notif = state
+            .with_db(|conn| conn.execute("DELETE FROM notification_log", []))
+            .map_err(|e| e.to_string())?;
+        Ok::<String, String>(format!(
+            "Cleared {det} detections and {notif} notification log entries."
+        ))
     })
     .await;
 

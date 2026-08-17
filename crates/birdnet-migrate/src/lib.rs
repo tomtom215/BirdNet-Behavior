@@ -36,6 +36,7 @@
 pub mod birdnet_pi;
 pub mod error;
 pub mod progress;
+pub mod provenance;
 pub mod schema;
 pub mod traits;
 
@@ -45,5 +46,9 @@ pub use birdnet_pi::species_report::{
 };
 pub use error::MigrateError;
 pub use progress::{MigrationProgress, MigrationStage, ProgressHandle};
+pub use provenance::{
+    DIFFERENT_CLOCK_SECS, DIFFERENT_SITE_KM, ImportOptions, SourceProfile, haversine_km,
+    location_check,
+};
 pub use schema::DetectedSchema;
 pub use traits::{MigrationSummary, ValidationReport};

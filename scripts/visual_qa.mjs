@@ -30,9 +30,13 @@ const PAGES = [
   { path: '/admin/settings', name: 'admin-settings' },
 ];
 
+// `touch` is load-bearing: the phone layout sits behind
+// `@media (max-width: 720px) and (pointer: coarse)`, and a viewport-only context
+// reports `pointer: fine`. Without it the "mobile" screenshots are the desktop
+// layout at phone width — which is what they had always been.
 const VIEWPORTS = [
   { width: 1440, height: 900, suffix: 'desktop' },
-  { width: 375, height: 812, suffix: 'mobile' },
+  { width: 375, height: 812, suffix: 'mobile', touch: true },
 ];
 
 async function main() {
@@ -45,6 +49,8 @@ async function main() {
     for (const theme of ['dark', 'light']) {
       const context = await browser.newContext({
         viewport: { width: viewport.width, height: viewport.height },
+        hasTouch: Boolean(viewport.touch),
+        isMobile: Boolean(viewport.touch),
         deviceScaleFactor: 2,
         // Block external font loading to prevent timeout
         extraHTTPHeaders: {},

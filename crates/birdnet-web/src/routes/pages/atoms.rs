@@ -60,9 +60,67 @@ fn species_hue(name: &str) -> u32 {
 }
 
 /// Deterministic OKLCH colour for a species, usable in both themes.
+///
+/// # Use this for chips, not for charts
+///
+/// The hue is a hash, with nothing spacing it, and lightness and chroma are
+/// constant. That is exactly right for an avatar chip, where one species is
+/// shown on its own and all that matters is that it looks the same every time.
+///
+/// It is wrong wherever several species are shown **together**, because two
+/// hashes can land arbitrarily close. Measured on the fixture's own
+/// eight-species streamgraph: Northern Cardinal at hue 89 and American Robin at
+/// 91 (2° apart), Mourning Dove at 120 and Tufted Titmouse at 123 (3°) — two
+/// pairs indistinguishable on screen. Nor is that bad luck with those species:
+/// drawing N hues uniformly from 360 with no spacing, the probability that
+/// *some* pair lands within 25° — about where constant lightness and chroma
+/// stop being separable — is 92.7 % at N=6, 99.6 % at N=8 and 100 % by N=12.
+///
+/// Constant `L = 62%` compounds it: with no lightness variation the palette
+/// collapses in greyscale and for the common colour-vision deficiencies, where
+/// two series differing only in hue are two identical greys.
+///
+/// Multi-series charts use [`series_color`] instead.
 #[must_use]
 pub(crate) fn species_color(name: &str) -> String {
     format!("oklch(62% 0.13 {})", species_hue(name))
+}
+
+/// Colour for series `index` of `total` in a multi-series chart.
+///
+/// Assigned by **rank within the chart** rather than by hashing the name, which
+/// is what makes the colours separable: the hues are spread evenly around the
+/// circle, so N series are always N maximally-distant hues instead of N
+/// independent samples that may collide (see [`species_color`] for the
+/// measured collision rates).
+///
+/// Two further properties the hash could not provide:
+///
+/// * **Alternating lightness.** Consecutive series step between two lightness
+///   levels, so adjacent bands differ in *value* as well as hue. That is what
+///   keeps them distinguishable in greyscale and under deuteranopia, where hue
+///   alone conveys nothing.
+///
+/// Even spacing rather than a golden-angle walk. A first draft stepped
+/// `index * 5 % total` to push early indices apart, which silently degenerates
+/// whenever `total` shares a factor with the step: at `total == 5` every series
+/// got hue 0, i.e. one colour for the whole chart. Even spacing has no such
+/// case and is optimal anyway — for N colours on a circle, `360/N` apart is the
+/// largest achievable minimum separation.
+///
+/// The trade is that a species' colour is stable *within* a chart but not
+/// across charts with different membership. For a legend-bearing comparison
+/// that is the right way round: telling this band from that one matters more
+/// than recognising a colour from another page, and the chips (which do keep a
+/// stable colour) carry that continuity.
+#[must_use]
+pub(crate) fn series_color(index: usize, total: usize) -> String {
+    let n = total.max(1);
+    let hue = (index % n) * 360 / n;
+    // Alternate between a lighter and a darker level so adjacent series differ
+    // in value, not only in hue.
+    let lightness = if index.is_multiple_of(2) { 68 } else { 52 };
+    format!("oklch({lightness}% 0.14 {hue})")
 }
 
 /// Circular avatar chip carrying the species' banding code in its own hue.
@@ -178,6 +236,70 @@ mod tests {
         let a = species_color("Northern Cardinal");
         assert_eq!(a, species_color("Northern Cardinal"));
         assert!(a.starts_with("oklch("));
+    }
+
+    /// Chart series must be separable — the property the hash palette lacked.
+    ///
+    /// Asserts the minimum pairwise hue separation is the best achievable for
+    /// N colours (`360/N`), across every chart size the UI actually renders,
+    /// and that consecutive series differ in lightness as well as hue so the
+    /// palette survives greyscale and colour-vision deficiency.
+    #[test]
+    fn series_colours_are_maximally_separated() {
+        fn hue_of(css: &str) -> i64 {
+            css.trim_end_matches(')')
+                .rsplit(' ')
+                .next()
+                .and_then(|h| h.parse().ok())
+                .unwrap_or(-1)
+        }
+        fn lightness_of(css: &str) -> i64 {
+            css.split('(')
+                .nth(1)
+                .and_then(|r| r.split('%').next())
+                .and_then(|l| l.parse().ok())
+                .unwrap_or(-1)
+        }
+
+        for total in 2..=16_usize {
+            let hues: Vec<i64> = (0..total)
+                .map(|i| hue_of(&series_color(i, total)))
+                .collect();
+            assert!(hues.iter().all(|h| *h >= 0), "hue must parse: {hues:?}");
+
+            let mut min_sep = 360;
+            for i in 0..total {
+                for j in (i + 1)..total {
+                    let d = (hues[i] - hues[j]).abs() % 360;
+                    min_sep = min_sep.min(d.min(360 - d));
+                }
+            }
+            let ideal = 360 / i64::try_from(total).unwrap();
+            assert_eq!(
+                min_sep, ideal,
+                "at {total} series the closest pair is {min_sep}° apart; the best \
+                 achievable is {ideal}°. The hash palette this replaced put \
+                 Northern Cardinal and American Robin 2° apart."
+            );
+        }
+
+        // Adjacent series differ in value, not only in hue — what keeps the
+        // palette readable in greyscale and under deuteranopia.
+        assert_ne!(
+            lightness_of(&series_color(0, 8)),
+            lightness_of(&series_color(1, 8))
+        );
+    }
+
+    /// The degenerate case the first draft had.
+    ///
+    /// `index * 5 % total` collapsed to a single hue whenever `total` was a
+    /// multiple of 5 — a five-species chart drawn entirely in one colour.
+    #[test]
+    fn a_five_series_chart_is_not_one_colour() {
+        let colours: std::collections::BTreeSet<String> =
+            (0..5).map(|i| series_color(i, 5)).collect();
+        assert_eq!(colours.len(), 5, "every series needs its own colour");
     }
 
     #[test]
