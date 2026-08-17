@@ -326,3 +326,113 @@ async fn admin_clear_route_clears_the_olap_copy() {
         "the admin clear handler bypassed the paired write"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Provenance
+// ---------------------------------------------------------------------------
+
+/// Imported history must stay separable in the *analytics* store, not just in
+/// SQLite.
+///
+/// Tagging rows in SQLite alone would be a half-fix: every behavioural and
+/// time-series dashboard reads DuckDB, so if the column stops at the boundary
+/// then the merged history is still one undifferentiated site everywhere a
+/// researcher would actually look at it.
+#[test]
+fn provenance_survives_into_the_analytics_store() {
+    use birdnet_migrate::birdnet_pi::BirdNetPiImporter;
+    use birdnet_migrate::progress::ProgressHandle;
+    use birdnet_migrate::provenance::ImportOptions;
+
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("birds.db");
+    {
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+             VALUES ('2026-03-01','05:00:00','Erithacus rubecula','European Robin',0.8)",
+            [],
+        )
+        .unwrap();
+    }
+
+    // A BirdNET-Pi database from 343 km away, on a clock six hours behind.
+    let src = dir.path().join("other-station.db");
+    {
+        let conn = rusqlite::Connection::open(&src).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE detections (Date TEXT, Time TEXT, Sci_Name TEXT, Com_Name TEXT,
+             Confidence REAL, Lat REAL, Lon REAL, Cutoff REAL, Week INTEGER,
+             Sens REAL, Overlap REAL, File_Name TEXT);
+             INSERT INTO detections VALUES
+               ('2026-03-01','06:30:00','Turdus merula','Eurasian Blackbird',0.9,
+                48.8566,2.3522,0.7,1,1.0,0.0,'a.wav'),
+               ('2026-03-02','06:30:00','Turdus merula','Eurasian Blackbird',0.9,
+                48.8566,2.3522,0.7,1,1.0,0.0,'b.wav');",
+        )
+        .unwrap();
+    }
+
+    BirdNetPiImporter
+        .migrate_with_options(
+            &src,
+            &db_path,
+            &ProgressHandle::new(),
+            &ImportOptions {
+                shift_secs: 6 * 3600,
+                label: Some("Paris transect".into()),
+                source_utc_offset_secs: Some(-5 * 3600),
+                notes: None,
+            },
+            (Some(51.5074), Some(-0.1278)),
+        )
+        .unwrap();
+
+    let state = AppState::new_with_analytics(db_path, &dir.path().join("analytics.duckdb"))
+        .expect("analytics state opens");
+    state
+        .resync_analytics_full()
+        .expect("analytics is configured")
+        .expect("resync");
+
+    let (local, imported) = state
+        .with_analytics(|adb| {
+            let q = |sql: &str| {
+                adb.conn()
+                    .query_row(sql, [], |r| r.get::<_, i64>(0))
+                    .expect("count")
+            };
+            (
+                q("SELECT COUNT(*) FROM detections WHERE import_batch_id IS NULL"),
+                q("SELECT COUNT(*) FROM detections WHERE import_batch_id IS NOT NULL"),
+            )
+        })
+        .expect("analytics is configured");
+
+    assert_eq!(
+        (local, imported),
+        (1, 2),
+        "the analytics store cannot tell this station's recordings from another \
+         station's import, so every location- and hour-based analytic reads the \
+         merged history as one site"
+    );
+
+    // And the clock reconciliation reached the analytics copy too: 06:30 at the
+    // source, six hours behind, is 12:30 here.
+    let shifted: i64 = state
+        .with_analytics(|adb| {
+            adb.conn()
+                .query_row(
+                    "SELECT COUNT(*) FROM detections WHERE Time = '12:30:00'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .expect("count")
+        })
+        .expect("analytics is configured");
+    assert_eq!(
+        shifted, 2,
+        "the imported hours are still on the source's clock"
+    );
+}

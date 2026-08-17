@@ -29,9 +29,11 @@ fn seeded(year: i32) -> (AnalyticsDb, TempDir) {
                     ("Turdus merula", "Eurasian Blackbird"),
                     ("Erithacus rubecula", "European Robin"),
                 ] {
+                    // Trailing NULL is `import_batch_id` (migration 25): these
+                    // are the station's own recordings, not an import.
                     values.push(format!(
                         "('{y:04}-{month:02}-{day:02}','06:30:00','{sci}','{com}',0.85,\
-                          NULL,NULL,NULL,NULL,NULL,NULL,'rec.wav')"
+                          NULL,NULL,NULL,NULL,NULL,NULL,'rec.wav',NULL)"
                     ));
                 }
             }

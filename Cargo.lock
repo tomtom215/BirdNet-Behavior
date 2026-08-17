@@ -470,6 +470,7 @@ dependencies = [
  "birdnet-core",
  "birdnet-db",
  "birdnet-integrations",
+ "birdnet-migrate",
  "birdnet-scheduler",
  "birdnet-timeseries",
  "birdnet-web",

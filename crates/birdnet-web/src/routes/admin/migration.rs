@@ -90,18 +90,100 @@ pub(crate) fn migration_body(state: &AppState) -> String {
 // POST /admin/migrate/validate  (server-side path)
 // ---------------------------------------------------------------------------
 
+/// The import form's fields.
+///
+/// The shared `source_` prefix is not redundancy: these are the `name`
+/// attributes the HTML form posts, and every one of them describes the *source*
+/// station as distinct from this one — which is the whole distinction the form
+/// exists to capture. Renaming them to satisfy the lint would rename the wire
+/// format.
 #[derive(Debug, Deserialize)]
+#[allow(clippy::struct_field_names)]
 struct MigrateForm {
     source_path: String,
+    /// Operator's name for the source station, recorded with the import batch.
+    #[serde(default)]
+    source_label: Option<String>,
+    /// The source station's UTC offset in seconds, if the operator gave one.
+    /// Absent means "same clock as this station", which shifts nothing.
+    #[serde(default, deserialize_with = "empty_string_as_none")]
+    source_utc_offset_secs: Option<i64>,
+}
+
+/// Treat a blank form field as absent rather than as a parse error.
+///
+/// An HTML number input that the operator left alone posts `""`, which serde
+/// would otherwise reject — turning "I did not answer the optional question"
+/// into a 422 on the whole import.
+fn empty_string_as_none<'de, D>(d: D) -> Result<Option<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Option::<String>::deserialize(d)?;
+    Ok(raw
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.parse().ok()))
+}
+
+/// This station's configured coordinates, for the import's location check.
+///
+/// The migrate crate deliberately never opens the destination, so the station's
+/// own location has to be handed to it. Read from the settings table rather than
+/// the config file because that is where the onboarding wizard and the settings
+/// form write it, and it is what every other location-dependent surface reads.
+fn station_coords(state: &AppState) -> (Option<f64>, Option<f64>) {
+    state.with_db(|conn| {
+        let get = |key: &str| -> Option<f64> {
+            conn.query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                rusqlite::params![key],
+                |r| r.get::<_, String>(0),
+            )
+            .ok()
+            .and_then(|v| v.trim().parse::<f64>().ok())
+        };
+        (get("latitude"), get("longitude"))
+    })
+}
+
+/// The reconciliation the operator asked for on the import form.
+///
+/// `source_utc_offset_secs` is what they said the source station's clock was;
+/// the shift applied is that minus this station's own offset, so both histories
+/// end up on one clock. A blank field means "same clock", which shifts nothing.
+fn import_options(form: &MigrateForm) -> birdnet_migrate::ImportOptions {
+    let source_offset = form.source_utc_offset_secs;
+    let shift = source_offset.map_or(0, |src| {
+        let here = birdnet_db::clock::local_utc_offset_secs();
+        // A timestamp written in the source's clock reads `src - here` seconds
+        // early here, so adding that difference puts it on this station's clock.
+        here - src
+    });
+    birdnet_migrate::ImportOptions {
+        shift_secs: shift,
+        label: form
+            .source_label
+            .as_ref()
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty()),
+        source_utc_offset_secs: source_offset,
+        notes: None,
+    }
 }
 
 async fn validate_handler(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Form(form): Form<MigrateForm>,
 ) -> Result<Html<String>, StatusCode> {
     let source_path = PathBuf::from(&form.source_path);
+    // The station's own coordinates, so the report can say whether this file
+    // came from here. The migrate crate never opens the destination, so it
+    // cannot find them itself.
+    let (lat, lon) = station_coords(&state);
     let result = tokio::task::spawn_blocking(move || {
-        birdnet_migrate::birdnet_pi::validate_source(&source_path)
+        birdnet_migrate::birdnet_pi::validate_source_against_station(&source_path, lat, lon)
     })
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -176,8 +258,9 @@ async fn upload_and_run_handler(
 
     // Validate first (read-only; never modifies the temp file).
     let validate_path = tmp_path.clone();
+    let (u_lat, u_lon) = station_coords(&state);
     let val_result = tokio::task::spawn_blocking(move || {
-        birdnet_migrate::birdnet_pi::validate_source(&validate_path)
+        birdnet_migrate::birdnet_pi::validate_source_against_station(&validate_path, u_lat, u_lon)
     })
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -263,6 +346,8 @@ async fn run_handler(
     Form(form): Form<MigrateForm>,
     migration_state: MigrationState,
 ) -> Result<Html<String>, StatusCode> {
+    let options = import_options(&form);
+    let station = station_coords(&state);
     let source_path = PathBuf::from(form.source_path);
     let dest_path = state.db_path().to_path_buf();
     let progress = ProgressHandle::new();
@@ -274,8 +359,14 @@ async fn run_handler(
     }
     tokio::task::spawn_blocking(move || {
         progress.set_stage(MigrationStage::Detecting, "Detecting schema…");
-        match birdnet_migrate::birdnet_pi::run_migration(&source_path, &dest_path, false, &progress)
-        {
+        match birdnet_migrate::birdnet_pi::run_migration_with_options(
+            &source_path,
+            &dest_path,
+            false,
+            &progress,
+            &options,
+            station,
+        ) {
             Ok(s) => {
                 tracing::info!(
                     imported = s.imported_rows,

@@ -15,6 +15,23 @@ use crate::queries;
 const SYNC_COLS: &str = "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, \
                          Cutoff, Week, Sens, Overlap, File_Name";
 
+/// Provenance column, appended to [`SYNC_COLS`] when the source has it.
+///
+/// Detected rather than assumed. In the product `migrate()` always runs before
+/// any sync, so the column is always present — but `sync_from_sqlite` is public
+/// API on a library crate, and a caller handing it a connection whose schema
+/// predates migration 25 should get a sync without provenance rather than a
+/// hard failure that empties every analytics dashboard. The cost of asking is
+/// one `PRAGMA` per sync.
+const PROVENANCE_COL: &str = "import_batch_id";
+
+/// Whether `detections` in this `SQLite` database carries the provenance column.
+fn has_provenance(conn: &rusqlite::Connection) -> bool {
+    conn.prepare("SELECT 1 FROM pragma_table_info('detections') WHERE name = ?1")
+        .and_then(|mut stmt| stmt.exists([PROVENANCE_COL]))
+        .unwrap_or(false)
+}
+
 /// How many rows are appended before the appender is flushed.
 ///
 /// The sync used to read the entire `SQLite` detections table into a
@@ -185,13 +202,19 @@ impl AnalyticsDb {
         // `>=` (not `>`): the caller deletes the cutoff second from DuckDB
         // first, then re-reads it whole from SQLite here, so rows that tie the
         // latest synced second aren't permanently skipped (see sync_from_sqlite).
+        let provenance = has_provenance(sqlite_conn);
+        let cols = if provenance {
+            format!("{SYNC_COLS}, {PROVENANCE_COL}")
+        } else {
+            SYNC_COLS.to_owned()
+        };
         let sql = if after.is_some() {
             format!(
-                "SELECT {SYNC_COLS} FROM detections \
+                "SELECT {cols} FROM detections \
                  WHERE (Date || ' ' || Time) >= ? ORDER BY Date, Time"
             )
         } else {
-            format!("SELECT {SYNC_COLS} FROM detections ORDER BY Date, Time")
+            format!("SELECT {cols} FROM detections ORDER BY Date, Time")
         };
 
         let mut stmt = sqlite_conn.prepare(&sql).map_err(read_err)?;
@@ -219,10 +242,32 @@ impl AnalyticsDb {
             let sens: Option<f64> = row.get(9).map_err(read_err)?;
             let overlap: Option<f64> = row.get(10).map_err(read_err)?;
             let file_name: Option<String> = row.get(11).map_err(read_err)?;
+            // Provenance (migration 25). NULL means "this station recorded it",
+            // which is the answer for every row on a station that has never
+            // imported anything — and the reason a merged history stays
+            // separable in the analytics rather than only in SQLite. A source
+            // predating the migration has no such column; NULL is then the
+            // truthful value for every one of its rows.
+            let import_batch_id: Option<i64> = if provenance {
+                row.get(12).map_err(read_err)?
+            } else {
+                None
+            };
 
             appender.append_row(params![
-                date, time, sci_name, com_name, confidence, lat, lon, cutoff, week, sens, overlap,
+                date,
+                time,
+                sci_name,
+                com_name,
+                confidence,
+                lat,
+                lon,
+                cutoff,
+                week,
+                sens,
+                overlap,
                 file_name,
+                import_batch_id,
             ])?;
 
             total += 1;

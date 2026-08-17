@@ -152,10 +152,36 @@ pub fn migration_body(dest_db_path: &str) -> String {
              placeholder="/home/pi/BirdNET-Pi/scripts/BirdDB.txt"
              class="mb-sm">
       <p class="hint">Full path to the BirdNET-Pi BirdDB.txt or birds.db file on this machine</p>
+
+      <fieldset id="migrate-origin" class="mt">
+        <legend>Where did this recording come from?</legend>
+        <p class="hint">
+          Leave both blank if this is <strong>this station's own</strong> history — the
+          usual case. Fill them in when the file came from somewhere else:
+          BirdNET-Pi stores local wall-clock time with no timezone, so without
+          the offset the two histories end up on two different clocks and every
+          hour-of-day analytic averages them together. Every imported row is
+          tagged with its origin either way, so the two can always be told apart
+          afterwards.
+        </p>
+        <label for="migrate-source-label">Source station name <span class="bnb-meta">(optional)</span></label>
+        <input id="migrate-source-label" name="source_label" type="text"
+               placeholder="e.g. Hollow Oak, north transect" class="mb-sm">
+        <label for="migrate-source-utc">Source station's UTC offset, in seconds <span class="bnb-meta">(optional)</span></label>
+        <input id="migrate-source-utc" name="source_utc_offset_secs" type="number"
+               step="900" placeholder="e.g. -18000 for UTC-5" class="mb-sm">
+        <p class="hint">
+          Hours &times; 3600. UTC&minus;5 is <code>-18000</code>; UTC+1 is
+          <code>3600</code>. Timestamps are shifted once, at import, onto this
+          station's clock — the shift is recorded with the batch, so it stays
+          reversible.
+        </p>
+      </fieldset>
+
       <div class="actions wrap">
         <button class="btn btn-secondary"
                 hx-post="/admin/migrate/validate"
-                hx-include="#migrate-source-path"
+                hx-include="#migrate-source-path, #migrate-origin"
                 hx-target="#validate-result"
                 hx-swap="innerHTML">
           Validate Only
@@ -310,7 +336,7 @@ pub fn validation_result(
 
   <button class="btn btn-primary mt-sm"
           hx-post="/admin/migrate/run"
-          hx-include="#migrate-source-path"
+          hx-include="#migrate-source-path, #migrate-origin"
           hx-target="#migrate-status">
     Start Import
   </button>

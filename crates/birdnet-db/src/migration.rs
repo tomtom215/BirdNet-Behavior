@@ -658,6 +658,50 @@ pub const MIGRATIONS: &[Migration] = &[
                   WHERE chunk_offset_secs > 0
                     AND datetime(Date || ' ' || Time) IS NOT NULL;",
     },
+    Migration {
+        version: 25,
+        description: "Record where imported detections came from, so a merged history stays attributable",
+        // Until now an import was indistinguishable from a recording. The
+        // BirdNET-Pi importer copies every row through verbatim and the
+        // destination has no column that says otherwise, so after importing
+        // another station's history there is no query that separates the two.
+        //
+        // That is fine when the two stations are the same station. It is not
+        // fine otherwise, and nothing checked: the validator's four checks are
+        // table-readable, non-empty, date-format and confidence-range, none of
+        // which involves `Lat`/`Lon` or a timezone. So a merged database could
+        // silently contain detections from two sites and two clocks, and every
+        // location- and hour-dependent analytic — solar overlays, the dawn
+        // chorus, sessionisation, "first of year" — would read it as one.
+        //
+        // For a research station that is the difference between a dataset and a
+        // dataset you have to throw away, because the damage is not detectable
+        // after the fact. This is the column that makes it detectable, and it
+        // has to exist before the import that needs it.
+        //
+        // `import_batch_id IS NULL` means "this station recorded it", which is
+        // true of every row that already exists and every row recorded from here
+        // on. Nothing is rewritten and no existing query changes meaning.
+        up_sql: "CREATE TABLE IF NOT EXISTS import_batches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            imported_at TEXT NOT NULL DEFAULT (datetime('now')),
+            source_kind TEXT NOT NULL,
+            source_label TEXT,
+            source_path TEXT,
+            source_lat REAL,
+            source_lon REAL,
+            station_lat REAL,
+            station_lon REAL,
+            distance_km REAL,
+            source_utc_offset_secs INTEGER,
+            applied_shift_secs INTEGER NOT NULL DEFAULT 0,
+            row_count INTEGER NOT NULL DEFAULT 0,
+            notes TEXT
+        );
+        ALTER TABLE detections ADD COLUMN import_batch_id INTEGER REFERENCES import_batches(id);
+        CREATE INDEX IF NOT EXISTS idx_detections_import_batch
+            ON detections(import_batch_id);",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing

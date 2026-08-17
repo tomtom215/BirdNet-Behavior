@@ -11,6 +11,7 @@ use std::path::Path;
 
 use crate::error::MigrateError;
 use crate::progress::{MigrationProgress, MigrationStage, ProgressHandle};
+use crate::provenance::{ImportOptions, SourceProfile};
 use crate::schema::{open_source_readonly, row_count};
 use crate::traits::{MigrationSummary, Migrator};
 
@@ -36,6 +37,91 @@ struct DetectionRow {
 /// Migrates BirdNET-Pi detections into a BirdNet-Behavior database.
 #[derive(Debug, Clone, Default)]
 pub struct BirdNetPiImporter;
+
+impl BirdNetPiImporter {
+    /// Import with explicit reconciliation options.
+    ///
+    /// [`Migrator::migrate`] delegates here with [`ImportOptions::default`],
+    /// which shifts nothing and records a batch whose `applied_shift_secs` is 0.
+    ///
+    /// Two things happen here that plain `migrate` never did:
+    ///
+    /// * **The clock is reconciled.** BirdNET-Pi stores local wall-clock with no
+    ///   offset recorded, so a history from another timezone is otherwise
+    ///   re-read as this station's local time. `options.shift_secs` is applied
+    ///   once, to every imported timestamp, before the row is written — so the
+    ///   hour-of-day analytics see one clock rather than two.
+    /// * **Provenance is recorded.** Every imported row is tagged with an
+    ///   `import_batches` row carrying the source's coordinates, the station's,
+    ///   the distance between them and the shift applied. `import_batch_id IS
+    ///   NULL` continues to mean "this station recorded it", so nothing that
+    ///   already exists changes meaning.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MigrateError` on any database or I/O failure.
+    pub fn migrate_with_options(
+        &self,
+        source_path: &Path,
+        dest_path: &Path,
+        progress: &ProgressHandle,
+        options: &ImportOptions,
+        station: (Option<f64>, Option<f64>),
+    ) -> Result<MigrationSummary, MigrateError> {
+        progress.set_stage(MigrationStage::Importing, "Opening source database");
+
+        let src_conn = open_source_readonly(source_path)?;
+        let total = row_count(&src_conn, "detections")?;
+        let profile = SourceProfile::from_connection(&src_conn);
+
+        progress.update(MigrationProgress {
+            stage: MigrationStage::Importing,
+            rows_imported: 0,
+            rows_total: total,
+            message: format!("Importing {total} detections from BirdNET-Pi"),
+            error: None,
+        });
+
+        let mut dst_conn = open_or_create_destination(dest_path)?;
+        let batch_id = record_import_batch(&dst_conn, source_path, &profile, options, station);
+
+        let (imported, skipped) =
+            import_batched_tagged(&src_conn, &mut dst_conn, total, progress, options, batch_id)?;
+
+        if let Some(id) = batch_id {
+            let _ = dst_conn.execute(
+                "UPDATE import_batches SET row_count = ?1 WHERE id = ?2",
+                params![i64::try_from(imported).unwrap_or(i64::MAX), id],
+            );
+        }
+
+        progress.update(MigrationProgress {
+            stage: MigrationStage::Complete,
+            rows_imported: imported,
+            rows_total: total,
+            message: format!("Import complete: {imported} rows imported, {skipped} skipped"),
+            error: None,
+        });
+
+        tracing::info!(
+            source = %source_path.display(),
+            dest = %dest_path.display(),
+            imported,
+            skipped,
+            shift_secs = options.shift_secs,
+            batch_id,
+            "BirdNET-Pi migration complete"
+        );
+
+        Ok(MigrationSummary {
+            source_rows: total,
+            imported_rows: imported,
+            skipped_rows: skipped,
+            schema_name: "BirdNET-Pi".to_string(),
+            source_path: source_path.display().to_string(),
+        })
+    }
+}
 
 impl Migrator for BirdNetPiImporter {
     fn migrate(
@@ -96,6 +182,138 @@ fn open_or_create_destination(path: &Path) -> Result<Connection, MigrateError> {
             Some(e.to_string()),
         ))
     })
+}
+
+/// Insert the `import_batches` row this import's detections will point at.
+///
+/// Returns `None` — and imports untagged, exactly as before — when the
+/// destination predates migration 25. That is deliberate: an older database is
+/// a database whose rows are all local recordings, so "untagged" is the honest
+/// answer, and refusing to import into it would be worse than importing without
+/// provenance.
+fn record_import_batch(
+    dst: &Connection,
+    source_path: &Path,
+    profile: &SourceProfile,
+    options: &ImportOptions,
+    station: (Option<f64>, Option<f64>),
+) -> Option<i64> {
+    let (station_lat, station_lon) = station;
+    let distance = profile.distance_km_to(station_lat, station_lon);
+
+    let inserted = dst.execute(
+        "INSERT INTO import_batches
+            (source_kind, source_label, source_path, source_lat, source_lon,
+             station_lat, station_lon, distance_km, source_utc_offset_secs,
+             applied_shift_secs, row_count, notes)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,0,?11)",
+        params![
+            "birdnet-pi-sqlite",
+            options.label.as_deref(),
+            source_path.display().to_string(),
+            profile.modal_lat,
+            profile.modal_lon,
+            station_lat,
+            station_lon,
+            distance,
+            options.source_utc_offset_secs,
+            options.shift_secs,
+            options.notes.as_deref(),
+        ],
+    );
+
+    match inserted {
+        Ok(_) => Some(dst.last_insert_rowid()),
+        // No `import_batches` table: a pre-migration-25 destination. Importing
+        // untagged is the right answer there — every row in such a database is
+        // a local recording, so "untagged" is true — and refusing the import
+        // would be worse than importing without provenance.
+        Err(e) => {
+            tracing::warn!(error = %e, "import provenance not recorded (destination predates migration 25)");
+            None
+        }
+    }
+}
+
+/// Shift a `(date, time)` pair by `secs`, in place, using SQLite's own date
+/// arithmetic.
+///
+/// SQLite rather than hand-rolled arithmetic because the destination's every
+/// other date operation goes through SQLite, and a second implementation of
+/// calendar arithmetic is a second thing to get wrong at a month boundary.
+///
+/// A row whose `Date`/`Time` name no point in time is returned **unchanged**
+/// rather than dropped or zeroed. Those rows already exist in real BirdNET-Pi
+/// databases (a NULL `Date` arrives as `""`), they are already excluded from
+/// every time-bucketed analytic, and silently rewriting them to some epoch
+/// would turn "unplaceable" into "placed, wrongly".
+fn shift_timestamp(conn: &Connection, date: &str, time: &str, secs: i64) -> (String, String) {
+    if secs == 0 {
+        return (date.to_owned(), time.to_owned());
+    }
+    let shifted: Option<(String, String)> = conn
+        .query_row(
+            "SELECT strftime('%Y-%m-%d', datetime(?1 || ' ' || ?2, ?3)),
+                    strftime('%H:%M:%S', datetime(?1 || ' ' || ?2, ?3))",
+            params![date, time, format!("{secs} seconds")],
+            |r| {
+                Ok((
+                    r.get::<_, Option<String>>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                ))
+            },
+        )
+        .ok()
+        .and_then(|(d, t)| Some((d?, t?)));
+    shifted.unwrap_or_else(|| (date.to_owned(), time.to_owned()))
+}
+
+/// The batched loop, applying `options.shift_secs` and tagging with `batch_id`.
+fn import_batched_tagged(
+    src: &Connection,
+    dst: &mut Connection,
+    total: u64,
+    progress: &ProgressHandle,
+    options: &ImportOptions,
+    batch_id: Option<i64>,
+) -> Result<(u64, u64), MigrateError> {
+    let mut imported = 0_u64;
+    let mut skipped = 0_u64;
+    let mut offset = 0_u64;
+
+    loop {
+        let mut batch = fetch_batch(src, offset, BATCH_SIZE)?;
+        if batch.is_empty() {
+            break;
+        }
+        if options.shifts_time() {
+            for row in &mut batch {
+                let (d, t) = shift_timestamp(dst, &row.date, &row.time, options.shift_secs);
+                row.date = d;
+                row.time = t;
+            }
+        }
+
+        let batch_len = batch.len() as u64;
+        let (ins, sk) = insert_batch_tagged(dst, &batch, batch_id)?;
+        imported += ins;
+        skipped += sk;
+        offset += batch_len;
+
+        progress.update(MigrationProgress {
+            stage: MigrationStage::Importing,
+            rows_imported: imported,
+            rows_total: total,
+            message: format!("Imported {imported} / {total} rows"),
+            error: None,
+        });
+
+        if batch_len < BATCH_SIZE as u64 {
+            break;
+        }
+    }
+
+    Ok((imported, skipped))
 }
 
 /// Perform the batched read-from-source / write-to-dest loop.
@@ -230,6 +448,48 @@ fn fetch_batch(
 ///
 /// Uses `INSERT OR IGNORE` so duplicate rows are silently skipped.
 /// Returns `(inserted, skipped)`.
+fn insert_batch_tagged(
+    conn: &mut Connection,
+    rows: &[DetectionRow],
+    batch_id: Option<i64>,
+) -> Result<(u64, u64), MigrateError> {
+    let Some(id) = batch_id else {
+        // Pre-migration-25 destination: no column to tag with.
+        return insert_batch(conn, rows);
+    };
+    let tx = conn.transaction().map_err(MigrateError::DataTransfer)?;
+    let mut inserted = 0_u64;
+    for row in rows {
+        let changes = tx
+            .execute(
+                "INSERT OR IGNORE INTO detections
+                 (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon,
+                  Cutoff, Week, Sens, Overlap, File_Name, import_batch_id)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+                params![
+                    row.date,
+                    row.time,
+                    row.sci_name,
+                    row.com_name,
+                    row.confidence,
+                    row.lat,
+                    row.lon,
+                    row.cutoff,
+                    row.week,
+                    row.sens,
+                    row.overlap,
+                    row.file_name,
+                    id,
+                ],
+            )
+            .map_err(MigrateError::DataTransfer)?;
+        inserted += changes as u64;
+    }
+    tx.commit().map_err(MigrateError::DataTransfer)?;
+    let batch_len = rows.len() as u64;
+    Ok((inserted, batch_len.saturating_sub(inserted)))
+}
+
 fn insert_batch(conn: &mut Connection, rows: &[DetectionRow]) -> Result<(u64, u64), MigrateError> {
     let tx = conn.transaction().map_err(MigrateError::DataTransfer)?;
 
