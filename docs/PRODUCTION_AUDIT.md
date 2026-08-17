@@ -64,6 +64,7 @@ What follows is what a year of unattended operation would expose anyway.
 | A-6 | Importing another station's history reconciles neither its location nor its clock | P2 | open |
 | A-7 | The field runbook is not on the docs site, and its memory ceiling is wrong | P3 | open |
 | A-8 | Live and synced `DuckDB` rows carry different columns | P3 | latent |
+| A-9 | The dawn-chorus window scanned the whole history, so it slowed every season | P2 | **fixed this pass** |
 
 ---
 
@@ -427,6 +428,70 @@ it got here" is not a property to leave undocumented.
 
 ---
 
+### A-9 — A 30-day question that read four years of history · P2 · fixed
+
+*Answering: "what is our worst performance?"*
+
+Measured against a synthetic four-year station — 1 095 361 rows, 277 MB, the
+size a BirdNET-Pi import produces — on x86_64, 4 cores:
+
+| Query | Warm |
+|---|---|
+| Detections page (newest 50) | **< 1 ms** |
+| 7-day sparklines | **1 ms** |
+| Today feed | **< 1 ms** |
+| Heat map, day-of-week × hour | 992 ms |
+| Species list, lifetime totals | 1453 ms |
+| Dawn chorus, **30-day** window | **1292 ms** |
+| Seasonal phenology, all history | 2370 ms |
+
+Indexed lookups are excellent. The aggregates are slow, and most of them are
+*inherently* slow: a day-of-week × hour heat map over all history has to read all
+history, and the 10-minute fragment cache plus the background pre-warmer are the
+right answer for those.
+
+**The dawn chorus is not in that category, and that is the finding.** It asks a
+30-day question and was reading everything, because SQLite chose
+`idx_detections_species` (to get `Com_Name` in GROUP BY order) over the perfectly
+good `idx_detections_date_species` — then built the temp b-tree anyway, since
+`hr` is an expression, so the choice bought nothing. Its cost therefore scaled
+with total history rather than with the window:
+
+```
+history   60d (   45,943 rows) ->      72 ms
+history  365d (  273,349 rows) ->     396 ms
+history  730d (  546,625 rows) ->     810 ms
+history 1460d (1,095,361 rows) ->    1711 ms
+```
+
+A permanent station's dawn chorus got measurably slower every season it ran. On
+Pi-class hardware, multiply through.
+
+`ANALYZE` does not change the plan — checked, not assumed; the planner is not
+short of statistics, it is preferring index-order for the GROUP BY. Adding
+`INDEXED BY idx_detections_date_species` takes it to a range seek:
+
+```
+as shipped                    1613 ms   SCAN … idx_detections_species
+INDEXED BY (Date, Com_Name)     27 ms   SEARCH … (Date>?)
+```
+
+**60× faster, byte-identical results** (2097 groups both ways).
+
+**Gate.** `dawn_chorus_window_uses_a_date_range_seek` asserts the *query plan*,
+not a duration — a timing threshold on shared CI hardware is a flaky test, and
+the plan is what regressed. Two rows suffice: the planner makes the same wrong
+choice on a two-row table as on a million (verified both ways).
+
+The first draft of that gate was worthless and the revert check is what proved
+it. It re-typed the SQL into the test, so reverting the production query left it
+green. The query now lives in a `CHORUS_SQL` const that both the handler and the
+`EXPLAIN` read, and with the hint removed from *that* the gate fails as it
+should. This is the second time in one session that a test passed for a reason
+unrelated to what it claimed to assert.
+
+---
+
 ## 2. Things checked and found sound
 
 Recorded because "we verified this" is worth as much as a finding, and because
@@ -467,12 +532,13 @@ confident and is not:
 - **Behaviour on real Pi hardware over months.** Everything here ran on x86_64 in
   a container. `docs/HARDWARE_TEST.md` exists for this and is the right
   instrument; it has not been run this cycle.
-- **Query cost at multi-year scale.** The hour-of-day and day-of-week analytics
-  filter on `strftime(...)` expressions, which no index can serve, so they are
-  full scans of `detections`. The 10-minute fragment cache plus the pre-warmer
-  hides this from page loads. Not measured at 1 M+ rows on Pi-class hardware; on
-  a station that has imported a multi-year BirdNET-Pi history, that is the
-  interesting case and it is unmeasured.
+- **Aggregate cost on Pi-class hardware.** A-9 measured the query shapes at
+  four-year scale on x86_64 and fixed the one that was accidentally quadratic in
+  history. The remaining full-history aggregates (heat map ~1 s, species
+  lifetime ~1.5 s, seasonal phenology ~2.4 s) are inherently O(history) and are
+  hidden from page loads by the cache and pre-warmer — but the pre-warmer still
+  *runs* them, as background CPU competing with live inference, and that cost
+  grows every year. Not measured on a Pi.
 - **Leap-day skew in day-of-year comparisons.** DOY 60 is 29 February in a leap
   year and 1 March otherwise, so cross-year phenology carries a one-day skew
   after February. Latent while A-5 stands; a blocker for wiring it up.
