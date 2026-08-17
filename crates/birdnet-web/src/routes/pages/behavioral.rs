@@ -62,17 +62,30 @@ pub(super) async fn analytics_sessions_partial(
 
     match result {
         Ok(Ok(sessions)) => {
-            if sessions.is_empty() {
+            // A "burst of singing" made of one detection lasting 0s is not a
+            // burst. Sessionisation groups a species' detections by a 20-minute
+            // gap, so a sparse species yields singletons — structurally correct
+            // and semantically empty, and the panel rendered a table of nothing
+            // but those, which reads as broken to anyone who looks at it.
+            //
+            // Filter to real runs and say plainly when there are none, rather
+            // than showing rows that undermine the reader's trust in the rest
+            // of the page.
+            let bursts: Vec<_> = sessions.iter().filter(|s| s.detection_count > 1).collect();
+            if bursts.is_empty() {
+                let seen = sessions.len();
                 return (
                     StatusCode::OK,
                     [(header::CONTENT_TYPE, "text/html")],
-                    r#"<p class="bh-muted">No activity sessions detected yet.</p>"#.to_string(),
+                    format!(
+                        r#"<p class="bh-muted">No bursts yet. {seen} single detections have been                            grouped so far, but none is part of a run — a burst needs at least two                            detections of one species within about 20 minutes.</p>"#
+                    ),
                 );
             }
             let mut html = String::from(
                 r"<table><thead><tr><th>Species</th><th>Detections</th><th>Start</th><th>Duration</th></tr></thead><tbody>",
             );
-            for s in sessions.iter().take(20) {
+            for s in bursts.iter().take(20) {
                 let duration = format_duration(s.duration_secs);
                 let _ = write!(
                     html,
@@ -240,6 +253,13 @@ pub(super) async fn analytics_next_partial(
                 escape_html(&display),
             );
             for p in &predictions {
+                // The trigger species appears among its own follow-ons — the
+                // same bird calling again — which under a heading that reads
+                // "which tends to turn up **next**" is confusing rather than
+                // informative. Label it instead of dropping it: that it sings
+                // again is a real fact about the species, just not a
+                // *succession* fact.
+                let self_follow = p.predicted_species == display;
                 let pct = p.probability * 100.0;
                 let cls = if pct >= 50.0 {
                     "high"
@@ -250,8 +270,13 @@ pub(super) async fn analytics_next_partial(
                 };
                 let _ = write!(
                     html,
-                    r#"<tr><td>{sp}</td><td><span class="conf {cls}">{pct:.0}%</span></td><td>{f}</td></tr>"#,
+                    r#"<tr><td>{sp}{note}</td><td><span class="conf {cls}">{pct:.0}%</span></td><td>{f}</td></tr>"#,
                     sp = escape_html(&p.predicted_species),
+                    note = if self_follow {
+                        r#" <span class="bnb-meta">(calls again)</span>"#
+                    } else {
+                        ""
+                    },
                     f = p.frequency
                 );
             }

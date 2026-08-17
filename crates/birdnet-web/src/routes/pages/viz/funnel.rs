@@ -15,7 +15,7 @@
 use std::fmt::Write as _;
 
 use super::{EMPTY, svg_a11y};
-use crate::routes::pages::atoms::species_color;
+use crate::routes::pages::atoms::series_color;
 use crate::routes::pages::escape_html;
 
 /// Render a funnel of `(species, count)` steps in funnel order — the first step
@@ -61,7 +61,7 @@ pub fn sequence_funnel(steps: &[(String, u64)]) -> String {
             (frac * w).max(2.0)
         };
         let pct = *count as f64 / first.max(1) as f64 * 100.0;
-        let color = species_color(name);
+        let color = series_color(i, steps.len());
 
         // Species (left) and "count · pct%" (right) on the surface — readable
         // regardless of the bar colour below them.

@@ -15,21 +15,52 @@
 use std::fmt::Write as _;
 
 use super::{EMPTY, svg_a11y};
-use crate::routes::pages::atoms::{species_code, species_color};
+use crate::routes::pages::atoms::{series_color, species_code};
 use crate::routes::pages::escape_html;
+
+/// Shift an ISO `YYYY-MM-DD` date by `days`, returning `MM-DD` for an axis
+/// label.
+///
+/// Uses the workspace's own civil-date arithmetic rather than a date crate —
+/// this workspace carries none — and returns the input's tail unchanged if it
+/// does not parse, so a malformed date degrades to a wrong-looking label rather
+/// than a panic in a render path (`panic = "abort"`, so a handler panic is a
+/// station outage).
+fn shift_iso_date(end: &str, days: i64) -> String {
+    let parsed = birdnet_core::civil::parse_civil(end, "00:00:00");
+    let Some(t) = parsed else {
+        return end.chars().skip(5).collect();
+    };
+    let secs = birdnet_core::civil::unix_secs_from_civil(&t) + days * 86_400;
+    let c = birdnet_core::civil::civil_from_unix_secs(secs);
+    format!("{:02}-{:02}", c.month, c.day)
+}
 
 /// Centred stacked-area ("themeriver") of per-day counts. Each series is
 /// `(common_name, daily_counts)`; all vectors should share a length.
+///
+/// `end_date` is the calendar date of the **last** column, used to label the
+/// time axis. `None` omits the date labels but still draws the scale.
+///
+/// # Why this draws axes at all
+///
+/// It did not, and the omission mattered more than it looks. With no dates
+/// along x and no counts along y, a reader could not tell what period was shown
+/// or whether a band meant five detections or five hundred — only the shape was
+/// legible, and with near-flat data the shape is a stack of stripes. A chart
+/// without a scale is decoration; this is meant to be read.
 #[must_use]
-pub fn streamgraph(series: &[(String, Vec<i64>)]) -> String {
+pub fn streamgraph(series: &[(String, Vec<i64>)], end_date: Option<&str>) -> String {
     let days = series.iter().map(|(_, v)| v.len()).max().unwrap_or(0);
     if series.is_empty() || days < 2 {
         return EMPTY.to_string();
     }
 
     let w = 760.0_f64;
-    let h = 220.0_f64;
-    let mid = h / 2.0;
+    // Room under the plot for the date axis.
+    let plot_h = 220.0_f64;
+    let h = plot_h + 20.0;
+    let mid = plot_h / 2.0;
     let step = w / (days - 1) as f64;
 
     // Per-day total → vertical scale so the fattest day fills ~85% of height.
@@ -41,7 +72,7 @@ pub fn streamgraph(series: &[(String, Vec<i64>)]) -> String {
             .sum();
         max_total = max_total.max(total as f64);
     }
-    let scale = (h * 0.85) / max_total;
+    let scale = (plot_h * 0.85) / max_total;
     let val_y = |v: f64| mid - v * scale;
 
     let mut svg = format!(
@@ -52,9 +83,42 @@ pub fn streamgraph(series: &[(String, Vec<i64>)]) -> String {
         "Detections per day over time as a centred stack; each coloured band is one species and its thickness is that day's count.",
     ));
 
+    // Scale. Without these the chart said nothing about magnitude or period.
+    // A centred stack is symmetric about `mid`, so the readable quantity is the
+    // total thickness at the fattest day: mark that, and the midline.
+    let _ = write!(
+        svg,
+        r#"<line x1="0" y1="{mid:.1}" x2="{w:.0}" y2="{mid:.1}" stroke="var(--hairline)" stroke-width="0.5" stroke-dasharray="2 3"/>"#
+    );
+    let peak_top = val_y(max_total / 2.0);
+    let _ = write!(
+        svg,
+        r#"<line x1="0" y1="{peak_top:.1}" x2="{w:.0}" y2="{peak_top:.1}" stroke="var(--hairline)" stroke-width="0.5"/><text class="mono" x="4" y="{ly:.1}" font-size="9" fill="var(--fg-4)">{peak:.0}/day peak</text>"#,
+        ly = peak_top - 3.0,
+        peak = max_total,
+    );
+
+    // Time axis: first, middle and last column, so the period is unambiguous.
+    if let Some(end) = end_date {
+        for (frac, anchor) in [(0.0_f64, "start"), (0.5, "middle"), (1.0, "end")] {
+            let back = ((1.0 - frac) * (days - 1) as f64).round() as i64;
+            let label = shift_iso_date(end, -back);
+            let x = frac * w;
+            let _ = write!(
+                svg,
+                r#"<text class="mono" x="{x:.1}" y="{ty:.1}" text-anchor="{anchor}" font-size="9" fill="var(--fg-4)">{label}</text>"#,
+                ty = h - 4.0,
+            );
+        }
+    }
+
     // Stack bands from a centred baseline.
-    for (name, counts) in series {
-        let color = species_color(name);
+    //
+    // `series_color(rank, total)`, not `species_color(name)`: several species
+    // are shown together here, and the hash palette put pairs of them 2–3° apart
+    // in hue at constant lightness — indistinguishable. See `atoms`.
+    for (rank, (name, counts)) in series.iter().enumerate() {
+        let color = series_color(rank, series.len());
         let mut top = String::new();
         let mut bottom: Vec<(f64, f64)> = Vec::with_capacity(days);
         for d in 0..days {
@@ -94,11 +158,13 @@ pub fn streamgraph(series: &[(String, Vec<i64>)]) -> String {
     svg.push_str("</svg></div>");
     // Legend.
     svg.push_str(r#"<div class="viz-legend">"#);
-    for (name, _) in series {
+    // Same rank-based colour the bands use. A legend keyed differently from
+    // the chart it explains is worse than no legend.
+    for (rank, (name, _)) in series.iter().enumerate() {
         let _ = write!(
             svg,
             r#"<span class="bnb-meta viz-legend-item"><span class="viz-swatch" data-style="background:{c}"></span>{n}</span>"#,
-            c = species_color(name),
+            c = series_color(rank, series.len()),
             n = escape_html(name),
         );
     }
@@ -207,8 +273,8 @@ pub fn ridgeline(series: &[(String, Vec<i64>)]) -> String {
 
     // Per-species vertical gradients: saturated at the crest, fading to baseline.
     let mut defs = String::from("<defs>");
-    for (i, (name, _)) in series.iter().enumerate() {
-        let color = species_color(name);
+    for (i, (_name, _)) in series.iter().enumerate() {
+        let color = series_color(i, series.len());
         let baseline = top + (i + 1) as f64 * row_step;
         let _ = write!(
             defs,
@@ -258,7 +324,7 @@ pub fn ridgeline(series: &[(String, Vec<i64>)]) -> String {
     for (i, (name, vals)) in series.iter().enumerate() {
         let row_max = vals.iter().copied().max().unwrap_or(1).max(1) as f64;
         let baseline = top + (i + 1) as f64 * row_step;
-        let color = species_color(name);
+        let color = series_color(i, series.len());
         let mut path = String::new();
         for (wk, &v) in vals.iter().enumerate() {
             let x = wk_x(wk as f64);
@@ -463,17 +529,56 @@ mod tests {
 
     #[test]
     fn streamgraph_empty_and_basic() {
-        assert!(streamgraph(&[]).contains("Not enough data"));
+        assert!(streamgraph(&[], None).contains("Not enough data"));
         let series = vec![
             ("Blue Jay".to_string(), vec![1, 3, 2, 5, 4]),
             ("American Robin".to_string(), vec![0, 2, 4, 3, 1]),
         ];
-        let svg = streamgraph(&series);
+        let svg = streamgraph(&series, Some("2026-08-17"));
         assert!(svg.contains("<svg") && svg.contains("<path"));
         assert!(svg.contains("Blue Jay"));
         assert!(svg.contains("<title>Activity streamgraph</title>"));
         assert!(svg.contains("<desc>Detections per day"));
         assert!(!svg.contains("aria-label"));
+
+        // Axes. Without them the chart carried no scale at all: a reader could
+        // not tell the period shown or whether a band meant five detections or
+        // five hundred.
+        assert!(
+            svg.contains("/day peak"),
+            "the vertical scale must be labelled: {svg}"
+        );
+        assert!(
+            svg.contains("08-17"),
+            "the last column must carry its date: {svg}"
+        );
+        assert!(
+            svg.contains("08-13"),
+            "five days ending 08-17 start on 08-13: {svg}"
+        );
+    }
+
+    /// Date labels must walk back correctly across a month boundary.
+    ///
+    /// The case a naive `day - n` gets wrong, and the reason this goes through
+    /// the workspace's civil-date arithmetic rather than string maths.
+    #[test]
+    fn streamgraph_dates_cross_a_month_boundary() {
+        let series = vec![("Blue Jay".to_string(), vec![1, 2, 3, 4, 5])];
+        let svg = streamgraph(&series, Some("2026-03-02"));
+        assert!(
+            svg.contains("02-26"),
+            "five days ending 2026-03-02 start on 02-26: {svg}"
+        );
+    }
+
+    #[test]
+    fn streamgraph_survives_an_unparseable_end_date() {
+        let series = vec![("Blue Jay".to_string(), vec![1, 2])];
+        // A render-path panic is a station outage (panic = abort, no catch
+        // layer), so a malformed date must degrade rather than crash.
+        let svg = streamgraph(&series, Some("not-a-date"));
+        assert!(svg.contains("<svg"));
     }
 
     #[test]

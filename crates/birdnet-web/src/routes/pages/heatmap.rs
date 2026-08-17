@@ -64,7 +64,7 @@ const HEATMAP_CONTENT: &str = r#"<div class="page-head">
   <div>
     <div class="bnb-eyebrow hm-eyebrow"><span>Behavioral analytics</span>{{help_link}}</div>
     <h1 class="display hm-h1">When the yard is alive</h1>
-    <p class="bnb-lede hm-lede"><b>Darker cells mean more birds heard that hour.</b> Mornings light up first — the dawn chorus — with a smaller evening lift. Quiet on the left of each row is the middle of the night.</p>
+    <p class="bnb-lede hm-lede"><b>When your birds are out, and who is singing.</b> Two views of the same days: the flow of species over time, then the hours they favour.</p>
   </div>
   <div class="seg" id="range-controls">
     <button class="btn active" data-days="7">7 days</button>
@@ -76,6 +76,7 @@ const HEATMAP_CONTENT: &str = r#"<div class="page-head">
 
 <div class="bnb-card pad">
   <div class="section-header"><div><div class="bnb-eyebrow">Who's singing, over time</div><h3>Activity streamgraph</h3></div></div>
+  <p class="bnb-meta hm-chart-note">Each band is one species; its thickness is that day's detection count, stacked around a centre line. Dates run left to right.</p>
   <div id="activity-streamgraph" hx-get="/pages/activity-streamgraph?days=7" hx-trigger="load" hx-swap="innerHTML">
     <p class="bnb-meta">Loading streamgraph...</p>
   </div>
@@ -83,6 +84,7 @@ const HEATMAP_CONTENT: &str = r#"<div class="page-head">
 
 <div class="bnb-card pad">
   <div class="section-header"><div><div class="bnb-eyebrow">Hour × day-of-week</div><h3>Activity grid</h3></div></div>
+  <p class="bnb-meta hm-chart-note">Darker cells mean more birds heard that hour. Mornings light up first — the dawn chorus — with a smaller evening lift. Quiet on the left of each row is the middle of the night.</p>
   <div id="heatmap-grid" hx-get="/pages/heatmap-grid?days=7" hx-trigger="load" hx-swap="innerHTML">
     <p class="bnb-meta">Loading heatmap...</p>
   </div>
@@ -180,7 +182,15 @@ fn compute_streamgraph(state: &AppState, days: u32) -> Option<String> {
             .then_with(|| a.0.cmp(&b.0))
     });
     series.truncate(8);
-    Some(super::viz::streamgraph(&series))
+    // The sparkline series ends at today (local), which is what labels the
+    // axis. Without it the chart showed no period at all.
+    let today = state.with_db(|conn| {
+        conn.query_row("SELECT date('now','localtime')", [], |r| {
+            r.get::<_, String>(0)
+        })
+        .ok()
+    });
+    Some(super::viz::streamgraph(&series, today.as_deref()))
 }
 
 async fn streamgraph_partial(

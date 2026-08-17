@@ -39,7 +39,7 @@ use axum::{Router, routing::get};
 
 use crate::state::AppState;
 
-use super::atoms::species_color;
+use super::atoms::series_color;
 use super::escape_html;
 
 const PAGE_HTML: &str = include_str!("../../../templates/dawn_chorus.html");
@@ -166,7 +166,10 @@ fn collect_chorus(
                 .unwrap_or(0) as u8;
             let total = *totals.get(&name).unwrap_or(&0);
             ChorusRibbon {
-                color: species_color(&name),
+                // Placeholder; replaced by rank below once the ribbons are
+                // sorted, because the colour has to be assigned by position in
+                // *this* chart. See `atoms::series_color`.
+                color: String::new(),
                 name,
                 hours,
                 peak_hour,
@@ -177,6 +180,13 @@ fn collect_chorus(
 
     ribbons.sort_by_key(|r| std::cmp::Reverse(r.total));
     ribbons.truncate(top_n);
+    // Colour by rank within the chart, not by hashing the name: several species
+    // are drawn as adjacent rings here, and the hash palette put pairs of them
+    // 2–3° apart in hue at constant lightness.
+    let shown = ribbons.len();
+    for (rank, ribbon) in ribbons.iter_mut().enumerate() {
+        ribbon.color = series_color(rank, shown);
+    }
     Ok(ribbons)
 }
 
