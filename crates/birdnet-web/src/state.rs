@@ -246,21 +246,32 @@ impl AppState {
                 // silent: both stores answered every query they were asked,
                 // just with different histories.
                 //
-                // After a successful incremental sync the two row counts must
-                // agree. When they do not, something reached SQLite that this
-                // copy can never catch up to, and the only correct repair is a
-                // full rebuild. This costs two `COUNT(*)`s per start on a
-                // healthy station and self-heals one that upgraded from a
-                // release whose edits went to SQLite alone.
-                match (
-                    birdnet_db::sqlite::detection_count(&conn)
-                        .map(|n| u64::try_from(n).unwrap_or(0)),
-                    adb.detection_count(),
-                ) {
+                // After a successful incremental sync the two stores must agree.
+                // When they do not, something reached SQLite that this copy can
+                // never catch up to, and the only correct repair is a full
+                // rebuild. This costs four `COUNT(*)`s per start on a healthy
+                // station and self-heals one that upgraded from a release whose
+                // edits went to SQLite alone.
+                //
+                // Row counts *and* rejected-verdict counts. A reviewer's verdict
+                // moves no row count in either store, so counts alone could
+                // never notice a station whose curation diverged — and curation
+                // drift is the kind that quietly changes published numbers.
+                let sqlite_side = birdnet_db::sqlite::detection_count(&conn)
+                    .map(|n| u64::try_from(n).unwrap_or(0))
+                    .and_then(|rows| {
+                        birdnet_db::sqlite::rejected_detection_count(&conn).map(|r| (rows, r))
+                    });
+                let olap_side = adb
+                    .detection_count()
+                    .and_then(|rows| adb.rejected_detection_count().map(|r| (rows, r)));
+                match (sqlite_side, olap_side) {
                     (Ok(sqlite_rows), Ok(olap_rows)) if sqlite_rows != olap_rows => {
                         tracing::warn!(
-                            sqlite_rows,
-                            olap_rows,
+                            sqlite_rows = sqlite_rows.0,
+                            sqlite_rejected = sqlite_rows.1,
+                            olap_rows = olap_rows.0,
+                            olap_rejected = olap_rows.1,
                             "analytics copy disagrees with the database after sync; rebuilding it"
                         );
                         match adb.full_resync_from_sqlite(&conn) {
@@ -688,6 +699,63 @@ impl AppState {
             tracing::warn!(error = %e, "detections cleared from SQLite but not from the analytics copy");
         }
         Ok(removed)
+    }
+
+    /// Record a reviewer's verdict in `SQLite` **and** the analytics copy.
+    ///
+    /// The verdict is what makes curation mean something: `detections_analytic`
+    /// and `detections_ts` both filter on it, so a rejection that reached only
+    /// one store would change the species totals and leave every behavioural
+    /// dashboard counting the reject.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DbError` if the `SQLite` write fails; see
+    /// [`Self::delete_detection`] for why a mirror failure is not returned.
+    pub fn set_detection_review(
+        &self,
+        date: &str,
+        time: &str,
+        sci_name: &str,
+        com_name: &str,
+        status: birdnet_db::sqlite::ReviewStatus,
+        notes: Option<&str>,
+    ) -> Result<(), birdnet_db::sqlite::DbError> {
+        self.with_db(|conn| {
+            birdnet_db::sqlite::set_detection_review(
+                conn, date, time, sci_name, com_name, status, notes,
+            )
+        })?;
+        #[cfg(feature = "analytics")]
+        if let Some(Err(e)) = self.with_analytics(|adb| {
+            adb.set_review_verdict(date, time, sci_name, Some(status.as_str()))
+        }) {
+            tracing::warn!(error = %e, "review verdict recorded in SQLite but not in the analytics copy");
+        }
+        Ok(())
+    }
+
+    /// Clear a verdict in `SQLite` **and** the analytics copy.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DbError` if the `SQLite` write fails.
+    pub fn clear_detection_review(
+        &self,
+        date: &str,
+        time: &str,
+        sci_name: &str,
+    ) -> Result<(), birdnet_db::sqlite::DbError> {
+        self.with_db(|conn| {
+            birdnet_db::sqlite::clear_detection_review(conn, date, time, sci_name)
+        })?;
+        #[cfg(feature = "analytics")]
+        if let Some(Err(e)) =
+            self.with_analytics(|adb| adb.set_review_verdict(date, time, sci_name, None))
+        {
+            tracing::warn!(error = %e, "review verdict cleared in SQLite but not in the analytics copy");
+        }
+        Ok(())
     }
 
     /// Whether the `DuckDB` analytics database is available.

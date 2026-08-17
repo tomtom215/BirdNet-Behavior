@@ -54,9 +54,24 @@ CREATE OR REPLACE VIEW detections_ts AS
 SELECT *,
     TRY_CAST(Date || ' ' || Time AS TIMESTAMP) AS detection_timestamp,
     TRY_CAST(Date AS DATE) AS detection_date
-FROM detections;
+FROM detections
+WHERE review_verdict IS DISTINCT FROM 'rejected';
 ";
 
+/// Every analytic reads `detections_ts`, so the `WHERE` above is where a
+/// reviewer's verdict becomes real.
+///
+/// `IS DISTINCT FROM` rather than `<> 'rejected'`: SQL three-valued logic makes
+/// `NULL <> 'rejected'` evaluate to NULL, which a `WHERE` treats as false — so
+/// the plain comparison would have excluded every *unreviewed* detection, which
+/// is almost all of them. That would have turned "hide the rejects" into "hide
+/// everything nobody has looked at yet", and the dashboards would have gone
+/// nearly empty on any station with a review backlog.
+///
+/// Rejected rows stay in `detections` and in `detection_reviews`. Nothing is
+/// deleted: the evidence and the verdict both remain, and clearing the verdict
+/// brings the detection straight back.
+///
 /// Number of synced rows whose `Date`/`Time` cannot be parsed as a timestamp.
 ///
 /// These are exactly the rows [`CREATE_DETECTIONS_TS_VIEW`] gives a NULL

@@ -113,9 +113,20 @@ struct ChorusRibbon {
 ///
 /// The hint is safe because migrations never alter an existing one (see
 /// `MIGRATIONS` in `birdnet-db`).
+///
+/// # Why the base table rather than `detections_analytic`
+///
+/// Every other aggregate reads the `detections_analytic` view, which applies
+/// the reviewer-verdict exclusion once and centrally. This one cannot:
+/// `INDEXED BY` is not valid against a view, and dropping the hint costs a 60x
+/// slowdown that grows with the station's history (see the numbers above). So
+/// the exclusion is spelled out inline instead — same predicate the view
+/// applies, same null-safe `IS NOT` for the same three-valued-logic reason, and
+/// `dawn_chorus_excludes_rejected_detections` holds the two in step.
 const CHORUS_SQL: &str = "SELECT Com_Name, CAST(strftime('%H', Time) AS INTEGER) hr, COUNT(*) n \
      FROM detections INDEXED BY idx_detections_date_species \
      WHERE Date >= date('now','localtime', ?1) \
+       AND review_verdict IS NOT 'rejected' \
      GROUP BY Com_Name, hr";
 
 fn collect_chorus(
@@ -668,6 +679,47 @@ mod tests {
         // appears once.
         let active_count = svg.matches("stroke-width=\"3\"").count();
         assert_eq!(active_count, 1, "expected exactly one active moon segment");
+    }
+
+    /// The chorus is the one aggregate that cannot read `detections_analytic`
+    /// (`INDEXED BY` is invalid on a view), so it spells the reviewer-verdict
+    /// exclusion out inline. This holds that copy in step with the view.
+    ///
+    /// Without it the chorus would be the single surface where a rejected
+    /// detection kept counting — the least likely place anyone would look for
+    /// the discrepancy, and the most likely to be believed.
+    #[test]
+    fn dawn_chorus_excludes_rejected_detections() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open");
+        birdnet_db::migration::migrate(&conn).expect("migrate");
+        for (sci, com, verdict) in [
+            ("Turdus merula", "Eurasian Blackbird", None),
+            ("Erithacus rubecula", "European Robin", Some("rejected")),
+            ("Parus major", "Great Tit", Some("confirmed")),
+        ] {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, review_verdict) \
+                 VALUES (date('now','localtime'), '06:00:00', ?1, ?2, 0.9, ?3)",
+                rusqlite::params![sci, com, verdict],
+            )
+            .expect("seed");
+        }
+
+        let names: Vec<String> = collect_chorus(&conn, 30, 10)
+            .expect("chorus")
+            .into_iter()
+            .map(|r| r.name)
+            .collect();
+
+        assert!(
+            !names.iter().any(|n| n == "European Robin"),
+            "a rejected detection is still in the dawn chorus: {names:?}"
+        );
+        assert_eq!(
+            names.len(),
+            2,
+            "unreviewed and confirmed detections must both stay: {names:?}"
+        );
     }
 
     /// The windowed chorus query must seek a date range, never scan the table.

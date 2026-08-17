@@ -702,6 +702,73 @@ pub const MIGRATIONS: &[Migration] = &[
         CREATE INDEX IF NOT EXISTS idx_detections_import_batch
             ON detections(import_batch_id);",
     },
+    Migration {
+        version: 26,
+        description: "Carry the reviewer's verdict on the detection, so curation can reach the analytics",
+        // `detection_reviews` (migration 13) has stored confirmed/rejected
+        // verdicts since it landed, and exactly one surface ever read them: the
+        // quality dashboard's own "Review verdict trend" panel. Every other
+        // analytic — species counts, the life list, the heat map, the dawn
+        // chorus, phenology, every behavioural and time-series query — counted
+        // rejected detections exactly as it counted confirmed ones.
+        //
+        // So an operator could spend a season rejecting false positives and
+        // every chart would look exactly as it did before. The only way to make
+        // a rejection *mean* anything was to delete the detection instead, which
+        // discards the evidence — the opposite of what a reviewable record is
+        // for.
+        //
+        // For a research station this is the gap between "a log of what a model
+        // reported" and "a dataset whose numbers a reviewer stands behind".
+        //
+        // The verdict is denormalised onto the detection rather than joined at
+        // query time for two reasons: it makes the exclusion a single indexable
+        // predicate that reads identically in SQLite and DuckDB, and it rides
+        // the existing column-copy sync into the OLAP store for free — a join
+        // would have needed a second table mirrored and kept in step.
+        // `detection_reviews` remains the record of *who said what and when*;
+        // this column is the current verdict, maintained beside it.
+        //
+        // Backfilled from the existing table so verdicts already recorded take
+        // effect immediately rather than only for reviews made from now on.
+        //
+        // `detections_analytic` is where the verdict becomes real on the SQLite
+        // side, mirroring what `detections_ts` does in DuckDB. The split between
+        // the view and the raw table is deliberate and is the whole design:
+        //
+        // * **Aggregates** read the view. A count, a heat map, a phenology curve
+        //   or a species total is a claim about what was *there*, and a reviewer
+        //   who rejected a detection has said it was not.
+        // * **Record-level surfaces** — the Today list, detection detail,
+        //   recordings, the review queue itself — keep reading the raw table. A
+        //   reviewer has to be able to see a rejected detection in order to
+        //   listen to it again and change their mind, and a verdict that hid its
+        //   own evidence would be a trap.
+        //
+        // `IS NOT 'rejected'` rather than `<> 'rejected'`: SQLite's `<>` against
+        // NULL yields NULL, which `WHERE` treats as false, so the plain
+        // comparison would exclude every *unreviewed* detection — almost all of
+        // them — and empty the dashboards on any station with a review backlog.
+        // `IS NOT` is SQLite's null-safe inequality and keeps NULL (unreviewed)
+        // in the view. The DuckDB view uses `IS DISTINCT FROM` for the same
+        // reason.
+        up_sql: "ALTER TABLE detections ADD COLUMN review_verdict TEXT;
+        UPDATE detections
+           SET review_verdict = (
+                 SELECT r.status FROM detection_reviews r
+                  WHERE r.date = detections.Date
+                    AND r.time = detections.Time
+                    AND r.sci_name = detections.Sci_Name)
+         WHERE EXISTS (
+                 SELECT 1 FROM detection_reviews r
+                  WHERE r.date = detections.Date
+                    AND r.time = detections.Time
+                    AND r.sci_name = detections.Sci_Name);
+        CREATE INDEX IF NOT EXISTS idx_detections_review_verdict
+            ON detections(review_verdict);
+        CREATE VIEW IF NOT EXISTS detections_analytic AS
+            SELECT * FROM detections WHERE review_verdict IS NOT 'rejected';",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing

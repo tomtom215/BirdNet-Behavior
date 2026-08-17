@@ -41,7 +41,7 @@ pub fn weekly_heatmap(conn: &Connection, days: u32) -> Result<Vec<HeatmapCell>, 
             CAST(strftime('%w', Date) AS INTEGER) AS dow,
             CAST(SUBSTR(Time, 1, 2) AS INTEGER)   AS hour,
             COUNT(*)                               AS count
-         FROM detections
+         FROM detections_analytic
          WHERE Date >= DATE('now', '-' || ?1 || ' days')
          GROUP BY dow, hour
          ORDER BY dow, hour",
@@ -72,7 +72,7 @@ pub fn hourly_totals(conn: &Connection, days: u32) -> Result<Vec<HourTotal>, DbE
         "SELECT
             CAST(SUBSTR(Time, 1, 2) AS INTEGER) AS hour,
             COUNT(*)                             AS count
-         FROM detections
+         FROM detections_analytic
          WHERE Date >= DATE('now', '-' || ?1 || ' days')
          GROUP BY hour
          ORDER BY hour",
@@ -104,7 +104,7 @@ pub fn species_daily_heatmap(
 ) -> Result<Vec<(String, String, i64)>, DbError> {
     let mut stmt = conn.prepare(
         "SELECT Date, Com_Name, COUNT(*) AS count
-         FROM detections
+         FROM detections_analytic
          WHERE Date >= DATE('now', '-' || ?1 || ' days')
          GROUP BY Date, Com_Name
          ORDER BY Date, count DESC",

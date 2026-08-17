@@ -25,10 +25,14 @@ const SYNC_COLS: &str = "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, \
 /// one `PRAGMA` per sync.
 const PROVENANCE_COL: &str = "import_batch_id";
 
-/// Whether `detections` in this `SQLite` database carries the provenance column.
-fn has_provenance(conn: &rusqlite::Connection) -> bool {
+/// Reviewer-verdict column, appended when the source has it. Detected for the
+/// same reason as [`PROVENANCE_COL`].
+const VERDICT_COL: &str = "review_verdict";
+
+/// Whether `detections` in this `SQLite` database carries `column`.
+fn has_column(conn: &rusqlite::Connection, column: &str) -> bool {
     conn.prepare("SELECT 1 FROM pragma_table_info('detections') WHERE name = ?1")
-        .and_then(|mut stmt| stmt.exists([PROVENANCE_COL]))
+        .and_then(|mut stmt| stmt.exists([column]))
         .unwrap_or(false)
 }
 
@@ -202,12 +206,17 @@ impl AnalyticsDb {
         // `>=` (not `>`): the caller deletes the cutoff second from DuckDB
         // first, then re-reads it whole from SQLite here, so rows that tie the
         // latest synced second aren't permanently skipped (see sync_from_sqlite).
-        let provenance = has_provenance(sqlite_conn);
-        let cols = if provenance {
-            format!("{SYNC_COLS}, {PROVENANCE_COL}")
-        } else {
-            SYNC_COLS.to_owned()
-        };
+        let provenance = has_column(sqlite_conn, PROVENANCE_COL);
+        let verdict = has_column(sqlite_conn, VERDICT_COL);
+        let mut cols = SYNC_COLS.to_owned();
+        if provenance {
+            cols.push_str(", ");
+            cols.push_str(PROVENANCE_COL);
+        }
+        if verdict {
+            cols.push_str(", ");
+            cols.push_str(VERDICT_COL);
+        }
         let sql = if after.is_some() {
             format!(
                 "SELECT {cols} FROM detections \
@@ -253,6 +262,14 @@ impl AnalyticsDb {
             } else {
                 None
             };
+            // The reviewer's verdict (migration 26). NULL is "unreviewed",
+            // which is the honest value for a source that has no such column.
+            let review_verdict: Option<String> = if verdict {
+                row.get(if provenance { 13 } else { 12 })
+                    .map_err(read_err)?
+            } else {
+                None
+            };
 
             appender.append_row(params![
                 date,
@@ -268,6 +285,7 @@ impl AnalyticsDb {
                 overlap,
                 file_name,
                 import_batch_id,
+                review_verdict,
             ])?;
 
             total += 1;
@@ -377,6 +395,52 @@ impl AnalyticsDb {
     pub fn clear_detections(&self) -> Result<u64, AnalyticsError> {
         let n = self.conn.execute("DELETE FROM detections", params![])?;
         Ok(n as u64)
+    }
+
+    /// Mirror a reviewer's verdict onto the OLAP copy.
+    ///
+    /// `verdict` is `Some("confirmed")` / `Some("rejected")`, or `None` to
+    /// return the detection to unreviewed. `detections_ts` — the view every
+    /// analytic reads — filters on this column, so without the mirror a
+    /// rejection changes the SQLite aggregates and leaves every behavioural and
+    /// time-series dashboard still counting the reject.
+    ///
+    /// Returns the number of rows updated.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the update fails.
+    pub fn set_review_verdict(
+        &self,
+        date: &str,
+        time: &str,
+        sci_name: &str,
+        verdict: Option<&str>,
+    ) -> Result<u64, AnalyticsError> {
+        let n = self.conn.execute(
+            "UPDATE detections SET review_verdict = ? \
+             WHERE Date = ? AND Time = ? AND Sci_Name = ?",
+            params![verdict, date, time, sci_name],
+        )?;
+        Ok(n as u64)
+    }
+
+    /// Count detections carrying a `rejected` verdict.
+    ///
+    /// Used by the startup drift check. Row counts alone cannot see verdict
+    /// drift — a rejection changes no row count in either store — so a station
+    /// whose verdicts diverged would never self-heal without this.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails.
+    pub fn rejected_detection_count(&self) -> Result<u64, AnalyticsError> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM detections WHERE review_verdict = 'rejected'",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(u64::try_from(n).unwrap_or(0))
     }
 
     /// Count total detections in `DuckDB`.

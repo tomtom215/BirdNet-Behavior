@@ -13,7 +13,7 @@ use crate::sqlite::types::{DailyCount, HourlyCount};
 pub fn hourly_activity(conn: &Connection, date: &str) -> Result<Vec<HourlyCount>, DbError> {
     let mut stmt = conn.prepare(
         "SELECT SUBSTR(Time, 1, 2) as hour, COUNT(*) as count
-         FROM detections WHERE Date = ?1
+         FROM detections_analytic WHERE Date = ?1
          GROUP BY hour ORDER BY hour",
     )?;
     let rows = stmt
@@ -35,7 +35,7 @@ pub fn hourly_activity(conn: &Connection, date: &str) -> Result<Vec<HourlyCount>
 pub fn daily_counts(conn: &Connection, days: u32) -> Result<Vec<DailyCount>, DbError> {
     let mut stmt = conn.prepare(
         "SELECT Date, COUNT(*) as count
-         FROM detections
+         FROM detections_analytic
          WHERE Date >= DATE('now', '-' || ?1 || ' days')
          GROUP BY Date ORDER BY Date ASC",
     )?;
@@ -59,7 +59,7 @@ pub fn daily_counts(conn: &Connection, days: u32) -> Result<Vec<DailyCount>, DbE
 /// Returns `DbError` on query failure.
 pub fn latest_detection(conn: &Connection) -> Result<Option<(String, String, String)>, DbError> {
     let result = conn.query_row(
-        "SELECT Date, Time, Com_Name FROM detections ORDER BY Date DESC, Time DESC LIMIT 1",
+        "SELECT Date, Time, Com_Name FROM detections_analytic ORDER BY Date DESC, Time DESC LIMIT 1",
         [],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     );
@@ -90,7 +90,7 @@ pub fn confidence_distribution(conn: &Connection) -> Result<[i64; 6], DbError> {
                 ELSE 5
             END as bucket,
             COUNT(*) as count
-         FROM detections GROUP BY bucket ORDER BY bucket",
+         FROM detections_analytic GROUP BY bucket ORDER BY bucket",
     )?;
     let rows = stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?;
     for row in rows {
@@ -119,7 +119,7 @@ pub fn weekly_top_species(
 ) -> Result<Vec<(String, String, i64)>, DbError> {
     let mut stmt = conn.prepare(
         "SELECT Sci_Name, Com_Name, COUNT(*) as cnt
-         FROM detections
+         FROM detections_analytic
          WHERE Date >= ?1 AND Date <= ?2
          GROUP BY Sci_Name, Com_Name
          ORDER BY cnt DESC
@@ -152,12 +152,12 @@ pub fn weekly_new_species(
 ) -> Result<Vec<(String, String, String)>, DbError> {
     let mut stmt = conn.prepare(
         "SELECT d.Sci_Name, d.Com_Name, MIN(d.Date) as first_date
-         FROM detections d
+         FROM detections_analytic d
          WHERE d.Date >= ?1 AND d.Date <= ?2
          GROUP BY d.Sci_Name, d.Com_Name
          HAVING MIN(d.Date) >= ?1
          AND NOT EXISTS (
-             SELECT 1 FROM detections e
+             SELECT 1 FROM detections_analytic e
              WHERE e.Sci_Name = d.Sci_Name AND e.Date < ?1
          )
          ORDER BY first_date ASC",
@@ -181,7 +181,7 @@ pub fn weekly_detection_count(
     week_end: &str,
 ) -> Result<i64, DbError> {
     conn.query_row(
-        "SELECT COUNT(*) FROM detections WHERE Date >= ?1 AND Date <= ?2",
+        "SELECT COUNT(*) FROM detections_analytic WHERE Date >= ?1 AND Date <= ?2",
         params![week_start, week_end],
         |row| row.get(0),
     )
@@ -202,7 +202,7 @@ pub fn range_daily_counts(
 ) -> Result<Vec<DailyCount>, DbError> {
     let mut stmt = conn.prepare(
         "SELECT Date, COUNT(*) as count
-         FROM detections
+         FROM detections_analytic
          WHERE Date >= ?1 AND Date <= ?2
          GROUP BY Date ORDER BY Date ASC",
     )?;
@@ -225,7 +225,8 @@ pub fn range_daily_counts(
 ///
 /// Returns `DbError` on query failure.
 pub fn distinct_detection_dates(conn: &Connection) -> Result<Vec<String>, DbError> {
-    let mut stmt = conn.prepare("SELECT DISTINCT Date FROM detections ORDER BY Date ASC")?;
+    let mut stmt =
+        conn.prepare("SELECT DISTINCT Date FROM detections_analytic ORDER BY Date ASC")?;
     let dates = stmt
         .query_map([], |row| row.get(0))?
         .collect::<Result<Vec<String>, _>>()?;
@@ -273,7 +274,7 @@ pub fn quality_summary(conn: &Connection) -> Result<QualitySummary, DbError> {
             COUNT(DISTINCT Sci_Name) as species,
             COALESCE(MIN(Date), '') as earliest,
             COALESCE(MAX(Date), '') as latest
-         FROM detections",
+         FROM detections_analytic",
         [],
         |row| {
             Ok(QualitySummary {
@@ -308,7 +309,7 @@ pub fn low_confidence_species(
 ) -> Result<Vec<(String, String, i64, f64)>, DbError> {
     let mut stmt = conn.prepare(
         "SELECT Com_Name, Sci_Name, COUNT(*) as cnt, AVG(Confidence) as avg_conf
-         FROM detections
+         FROM detections_analytic
          GROUP BY Sci_Name, Com_Name
          HAVING avg_conf < ?1 AND cnt >= ?2
          ORDER BY avg_conf ASC
@@ -356,6 +357,10 @@ pub struct ReviewVerdictDay {
 /// # Errors
 ///
 /// Returns `DbError` on query failure.
+///
+/// Reads the raw table, not `detections_analytic`. This panel's entire job is
+/// to report how many detections were *rejected*; run against the view that
+/// hides them, its `rejected` column would be a constant zero.
 pub fn review_verdict_trend(
     conn: &Connection,
     days: u32,
@@ -424,6 +429,10 @@ pub struct ModelVsReviewRow {
 /// # Errors
 ///
 /// Returns `DbError` on query failure.
+///
+/// Reads the raw table, not `detections_analytic`, for the same reason as
+/// [`review_verdict_trend`]: a comparison of what the model said against what
+/// a reviewer said has to see the detections the reviewer threw out.
 pub fn model_vs_review_by_species(
     conn: &Connection,
     limit: u32,
@@ -482,7 +491,7 @@ pub fn model_vs_review_by_species(
 pub fn confidence_trend(conn: &Connection, days: u32) -> Result<Vec<(String, f64)>, DbError> {
     let mut stmt = conn.prepare(
         "SELECT Date, AVG(Confidence) as avg_conf
-         FROM detections
+         FROM detections_analytic
          WHERE Date >= DATE('now', '-' || ?1 || ' days')
          GROUP BY Date
          ORDER BY Date ASC",
@@ -505,7 +514,7 @@ pub fn detection_quality_by_hour(conn: &Connection) -> Result<Vec<(u8, i64, f64)
         "SELECT CAST(SUBSTR(Time, 1, 2) AS INTEGER) as hour,
                 COUNT(*) as cnt,
                 AVG(Confidence) as avg_conf
-         FROM detections
+         FROM detections_analytic
          GROUP BY hour
          ORDER BY hour ASC",
     )?;
@@ -532,7 +541,7 @@ pub fn detection_quality_by_hour(conn: &Connection) -> Result<Vec<(u8, i64, f64)
 /// Returns `DbError` on query failure.
 pub fn last_hour_count(conn: &Connection) -> Result<i64, DbError> {
     conn.query_row(
-        "SELECT COUNT(*) FROM detections
+        "SELECT COUNT(*) FROM detections_analytic
          WHERE datetime(Date || ' ' || Time) >= datetime('now', '-1 hour')",
         [],
         |row| row.get(0),
@@ -557,7 +566,7 @@ pub fn today_species_hour_heatmap(
     let mut stmt = conn.prepare(
         "WITH top_sp AS (
             SELECT Com_Name
-            FROM detections
+            FROM detections_analytic
             WHERE Date = ?1
             GROUP BY Com_Name
             ORDER BY COUNT(*) DESC
@@ -566,7 +575,7 @@ pub fn today_species_hour_heatmap(
          SELECT d.Com_Name,
                 CAST(SUBSTR(d.Time, 1, 2) AS INTEGER) AS hour,
                 COUNT(*) AS cnt
-         FROM detections d
+         FROM detections_analytic d
          INNER JOIN top_sp ON d.Com_Name = top_sp.Com_Name
          WHERE d.Date = ?1
          GROUP BY d.Com_Name, hour
@@ -596,8 +605,9 @@ pub fn latest_detection_full(
     conn: &Connection,
 ) -> Result<Option<crate::sqlite::types::DetectionRow>, DbError> {
     use crate::sqlite::types::{DETECTION_COLS, map_detection_row};
-    let sql =
-        format!("SELECT {DETECTION_COLS} FROM detections ORDER BY Date DESC, Time DESC LIMIT 1");
+    let sql = format!(
+        "SELECT {DETECTION_COLS} FROM detections_analytic ORDER BY Date DESC, Time DESC LIMIT 1"
+    );
     let result = conn.query_row(&sql, [], map_detection_row);
     match result {
         Ok(row) => Ok(Some(row)),

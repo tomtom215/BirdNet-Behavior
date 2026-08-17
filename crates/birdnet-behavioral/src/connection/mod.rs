@@ -452,7 +452,8 @@ impl AnalyticsDb {
                 Sens DOUBLE,
                 Overlap DOUBLE,
                 File_Name TEXT,
-                import_batch_id BIGINT
+                import_batch_id BIGINT,
+                review_verdict TEXT
             );",
         )?;
         // Additive for stores created before provenance existed. DuckDB has no
@@ -460,6 +461,7 @@ impl AnalyticsDb {
         // and that error is the success case — the alternative is quarantining
         // and rebuilding a perfectly good database on every start.
         let _ = conn.execute_batch("ALTER TABLE detections ADD COLUMN import_batch_id BIGINT;");
+        let _ = conn.execute_batch("ALTER TABLE detections ADD COLUMN review_verdict TEXT;");
         conn.execute_batch(queries::CREATE_DETECTIONS_TS_VIEW)?;
         Ok(Self {
             conn,

@@ -52,7 +52,7 @@ pub fn top_cooccurrence_pairs(
 ) -> Result<Vec<SpeciesPair>, DbError> {
     let mut stmt = conn.prepare(
         "WITH daily AS (
-            SELECT DISTINCT Date, Com_Name FROM detections
+            SELECT DISTINCT Date, Com_Name FROM detections_analytic
             WHERE Date >= DATE('now', '-' || ?1 || ' days')
          ),
          counts AS (
@@ -109,7 +109,7 @@ pub fn companion_species(
 ) -> Result<Vec<FollowOn>, DbError> {
     let mut stmt = conn.prepare(
         "WITH trigger_dates AS (
-            SELECT DISTINCT Date FROM detections
+            SELECT DISTINCT Date FROM detections_analytic
             WHERE Com_Name = ?1
               AND Date >= DATE('now', '-' || ?2 || ' days')
          )
@@ -118,7 +118,7 @@ pub fn companion_species(
             d.Com_Name AS companion,
             COUNT(DISTINCT d.Date) AS shared_days,
             AVG(d.Confidence) AS avg_confidence
-         FROM detections d
+         FROM detections_analytic d
          JOIN trigger_dates td ON d.Date = td.Date
          WHERE d.Com_Name != ?1
          GROUP BY d.Com_Name
@@ -166,7 +166,7 @@ pub fn temporal_cooccurrence(
                    SUBSTR(Time, 4, 2) * 60  +
                    SUBSTR(Time, 7, 2)        AS secs,
                    Com_Name
-            FROM detections
+            FROM detections_analytic
             WHERE Date >= DATE('now', '-' || ?3 || ' days')
          )
          SELECT
