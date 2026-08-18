@@ -86,7 +86,9 @@ on:
       - "crates/birdnet-db/src/migration.rs"
       - "src/daemon/**"
       - "src/capture/**"
-      - ".github/workflows/mutation.yml"
+      # The config job checks every workflow (timeouts and their
+      # `# observed` annotations), so an edit to any of them re-runs it.
+      - ".github/workflows/**"
   pull_request:
     branches: ["main", "master"]
     paths:
@@ -99,7 +101,9 @@ on:
       - "crates/birdnet-db/src/migration.rs"
       - "src/daemon/**"
       - "src/capture/**"
-      - ".github/workflows/mutation.yml"
+      # The config job checks every workflow (timeouts and their
+      # `# observed` annotations), so an edit to any of them re-runs it.
+      - ".github/workflows/**"
   schedule:
     # Mondays at 09:00 UTC.
     - cron: "0 9 * * 1"
@@ -126,7 +130,7 @@ jobs:
   config:
     name: CI config (paths, shards, timeouts)
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 15  # observed 16s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install cargo-mutants
@@ -140,8 +144,12 @@ jobs:
         # whole job is dominated by checkout and the tool install.
         #
         # GITHUB_TOKEN is not in a `run:` step's environment by default, and
-        # check 4 needs it to read run history. Without it that check reports
-        # itself broken rather than passing quietly.
+        # checks 4 and 5 need it to read run history. Without it they report
+        # themselves broken rather than passing quietly.
+        #
+        # If check 5 fails, the `# observed` annotations are stale. They are
+        # generated, not hand-written — regenerate and commit:
+        #     python3 scripts/check-ci-config.py --update-observed
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python3 scripts/check-ci-config.py

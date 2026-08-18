@@ -70,7 +70,7 @@ jobs:
   smoke:
     name: install.sh → web UI (offline, no-systemd container)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 30  # observed 2m48s
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3

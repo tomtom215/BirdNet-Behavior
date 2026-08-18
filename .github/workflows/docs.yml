@@ -40,7 +40,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 20  # observed 8s
     env:
       MDBOOK_VERSION: "0.4.52"
     steps:
@@ -67,7 +67,7 @@ jobs:
     needs: build
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 15  # observed 26s
     permissions:
       contents: read
       pages: write

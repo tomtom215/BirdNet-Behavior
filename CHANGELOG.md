@@ -16,6 +16,27 @@ Several of these were invisible to a fully green 2 190-test suite.
 
 ### Fixed
 
+- **Six of the eight `# observed` runtime notes in CI were false, by up to a
+  factor of ten.** Each `timeout-minutes:` carried the runtime its budget was
+  sized against, written by hand and never revisited, so they had quietly
+  come to describe a repository thousands of commits ago: `Clippy` claimed
+  `# observed 54s` while really taking 8m45s, `Tests` claimed 10m42s against a
+  real 21m59s, and `MSRV`, `Rustdoc`, `Build` and `Inference` were out by
+  5-10x. Nothing was wrong in a way a reader could see — which is what made
+  them worse than no note at all, since they were the evidence a reviewer would
+  use to judge whether a budget was sane.
+
+  Updating the numbers would only have restarted the same clock, so they are
+  now generated from run history and gated on drift, the way
+  `scripts/gen-cli-help.sh` already keeps the CLI docs from drifting from the
+  binary. Every job-level timeout in every workflow now carries a current note,
+  `check-ci-config.py` fails when one is more than 1.5x from the measured
+  median, and `--update-observed` rewrites them. Drift is measured against the
+  median rather than the worst run so a single cold-cache outlier cannot redden
+  an accurate note. The mutation workflow's path filter now covers every
+  workflow file, not just its own, because the check no longer only looks at
+  its own.
+
 - **A mutation row was 87% of the way into its own timeout and nothing was
   watching.** The config gate added last cycle checks that a matrix row still
   matches source, that no shard is empty by construction, and that every job
