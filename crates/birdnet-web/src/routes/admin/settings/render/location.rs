@@ -21,8 +21,8 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     // free-text form because the spec carries the hours.
     let schedule = get_setting(s, "recording_schedule", "all-day");
     write!(out, r#"
-  <div class="card">
-    <div class="section-title">Location &amp; Recording Schedule</div>
+  <section class="card" id="set-location" aria-labelledby="set-location-h">
+    <h2 class="section-title" id="set-location-h">Location &amp; Recording Schedule</h2>
     <div class="grid-2">
       <div>
         <label for="latitude">Latitude</label>
@@ -71,5 +71,5 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         <input id="post_sunset_offset" name="post_sunset_offset" type="number" value="{post}" min="0" max="120" class="bnb-w-num">
       </div>
     </div>
-  </div>"#).unwrap_or_default();
+  </section>"#).unwrap_or_default();
 }

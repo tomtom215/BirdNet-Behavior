@@ -36,8 +36,8 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let deadman = get_setting(s, "deadman_hours", "24");
     let weekly_opts = render_weekly_options(weekly);
     write!(out, r#"
-  <div class="card">
-    <div class="section-title">Notifications (Apprise)</div>
+  <section class="card" id="set-notifications" aria-labelledby="set-notifications-h">
+    <h2 class="section-title" id="set-notifications-h">Notifications (Apprise)</h2>
     <div class="grid-2">
       <div>
         <label for="apprise_url">Apprise Server URL</label>
@@ -134,7 +134,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         <p class="hint">Notifies you when nothing has been detected for this long — the symptom of a mic that died quietly. <b>0 disables it.</b> Long winter nights are normal, so keep this comfortably above your quietest stretch (BirdNET-Pi: DEADMAN_HOURS)</p>
       </div>
     </div>
-  </div>"#).unwrap_or_default();
+  </section>"#).unwrap_or_default();
 }
 
 fn render_weekly_options(selected: &str) -> String {

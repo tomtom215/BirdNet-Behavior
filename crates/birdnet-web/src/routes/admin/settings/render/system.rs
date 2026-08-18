@@ -31,8 +31,8 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let is_none = if isite == "none" { " selected" } else { "" };
     write!(out,
         r#"
-  <div class="card">
-    <div class="section-title">System &amp; Display</div>
+  <section class="card" id="set-system" aria-labelledby="set-system-h">
+    <h2 class="section-title" id="set-system-h">System &amp; Display</h2>
     <div class="grid-2">
       <div>
         <label for="site_name">Site Name</label>
@@ -106,9 +106,9 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         <p class="hint">Override Wikipedia images with custom photos (BirdNET-Pi: CUSTOM_IMAGE). Files: sci_name.jpg</p>
       </div>
     </div>
-  </div>
-  <div class="card">
-    <div class="section-title">Web Authentication</div>
+  </section>
+  <section class="card" id="set-auth" aria-labelledby="set-auth-h">
+    <h2 class="section-title" id="set-auth-h">Web Authentication</h2>
     <p class="hint">
       The admin password is not stored in this table &mdash; it lives as an Argon2id
       hash in the accounts database, seeded from the <code>CADDY_PWD</code> environment
@@ -120,6 +120,6 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
       See <a href="/help/admin/remote-access">Remote Access &amp; Security</a> for the
       full setup, including putting the station behind a reverse proxy.
     </p>
-  </div>"#
+  </section>"#
     ).unwrap_or_default();
 }

@@ -21,6 +21,59 @@ mod species;
 mod system;
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
+
+/// Every settings section on the full page, in the order it is rendered:
+/// `(anchor id, heading text)`.
+///
+/// This is the single source of truth for the on-page index. The section
+/// renderers each open with `id="set-{id}"` and an `<h2 id="set-{id}-h">`
+/// carrying the same title, and `section_index` builds the jump list from this
+/// array — so an index entry that points at nothing, or a section the index
+/// never mentions, is not representable without the two disagreeing.
+/// `settings_index_matches_rendered_sections` asserts both directions against
+/// the real rendered HTML rather than trusting that.
+pub(crate) const SECTIONS: [(&str, &str); 8] = [
+    ("audio", "Audio Capture"),
+    ("location", "Location &amp; Recording Schedule"),
+    ("detection", "Detection Settings"),
+    ("notifications", "Notifications (Apprise)"),
+    ("species", "Species Filters"),
+    ("system", "System &amp; Display"),
+    ("auth", "Web Authentication"),
+    ("email", "Email Alerts (SMTP)"),
+];
+
+/// The sticky "On this page" jump list.
+///
+/// The page carries 54 controls over roughly eleven screens. Splitting it into
+/// tabs would duplicate the Station screens, which already own task-scoped
+/// access to these same sections; collapsing the sections would break the one
+/// thing this page is uniquely for, which is having every setting present at
+/// once and findable with the browser's own search. What it lacked was
+/// orientation, so that is what this adds — and nothing is hidden to get it.
+fn section_index() -> String {
+    let mut out = String::with_capacity(1_024);
+    out.push_str(
+        r#"<nav class="set-index" aria-labelledby="set-index-h">
+    <h2 class="set-index__h" id="set-index-h">On this page</h2>
+    <div class="set-filter" hidden>
+      <label class="sr-only" for="set-filter">Filter settings</label>
+      <input type="search" id="set-filter" placeholder="Filter settings…" autocomplete="off" spellcheck="false">
+      <p class="set-filter__count" role="status" aria-live="polite"></p>
+    </div>
+    <ol class="set-index__list">"#,
+    );
+    for (id, title) in SECTIONS {
+        // `r##"…"##`: the href contains `"#`, which would close an `r#"…"#`.
+        let _ = write!(out, r##"<li><a href="#set-{id}">{title}</a></li>"##);
+    }
+    out.push_str(
+        "</ol>
+  </nav>",
+    );
+    out
+}
 
 pub(in crate::routes::admin::settings) fn get_setting<'a>(
     map: &'a HashMap<String, String>,
@@ -46,6 +99,7 @@ pub(super) fn render_settings_page(settings: &HashMap<String, String>) -> String
 /// the shell owns layout and the nav now.
 fn settings_body(settings: &HashMap<String, String>) -> String {
     let form_html = render_settings_form(settings);
+    let index = section_index();
     format!(
         r#"{SETTINGS_FORM_CSS}
 
@@ -53,9 +107,15 @@ fn settings_body(settings: &HashMap<String, String>) -> String {
     Admin Settings
   </h1>
 
+  <div class="set-layout">
+  {index}
+  <div class="set-main">
   <div id="settings-feedback"></div>
 
-  {form_html}"#
+  {form_html}
+  </div>
+  </div>
+  <script src="/static/settings-filter.js" defer></script>"#
     )
 }
 
@@ -69,8 +129,41 @@ fn settings_body(settings: &HashMap<String, String>) -> String {
 pub(crate) const SETTINGS_FORM_CSS: &str = r"<style>
       .card { background: var(--surface); border: 1px solid var(--border); border-radius: 0.75rem;
                padding: 1.5rem; margin-bottom: 1.5rem; }
-      .section-title { font-size: 1.1rem; font-weight: 600; color: var(--moss-ink);
-                        margin-bottom: 1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+      /* `.card h2` in app.css is the card *eyebrow*: 11px, uppercase, muted.
+         These section titles are real headings and were `<div>`s until they
+         became `<h2>`s, at which point that descendant rule (0,1,1) started
+         beating a bare `.section-title` class (0,1,0) and shrank every section
+         title below its own field labels. Matching its specificity and
+         resetting the properties it sets is deliberate, not incidental. */
+      .card h2.section-title { font-size: 1.1rem; font-weight: 600; color: var(--moss-ink);
+                        margin: 0 0 1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem;
+                        scroll-margin-top: 1rem; text-transform: none; letter-spacing: -0.015em;
+                        display: block; }
+      /* Two panes: a sticky index beside the sections. Below the breakpoint the
+         index becomes an ordinary block above the form, so a phone gets the
+         same jump list without losing width to it. */
+      .set-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1.25rem; align-items: start; }
+      .set-main { min-width: 0; }
+      .set-index { background: var(--surface); border: 1px solid var(--border);
+                    border-radius: 0.75rem; padding: 1rem 1.15rem; }
+      .set-index__h { font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase;
+                       color: var(--fg-3); margin: 0 0 0.6rem; font-weight: 600;
+                       border: 0; padding: 0; }
+      .set-index__list { list-style: none; margin: 0; padding: 0; display: flex;
+                          flex-wrap: wrap; gap: 0.35rem 0.9rem; }
+      .set-index__list a { color: var(--fg-2); text-decoration: none; font-size: 0.85rem;
+                            display: block; padding: 0.15rem 0; border-radius: 0.25rem; }
+      .set-index__list a:hover { color: var(--moss-ink); text-decoration: underline; }
+      .set-index__list a:focus-visible { outline: 2px solid var(--moss); outline-offset: 2px; }
+      .set-index__list a.is-filtered-out { opacity: 0.38; text-decoration: line-through; }
+      .set-filter input { margin-bottom: 0.5rem; font-size: 0.85rem; padding: 0.35rem 0.55rem; }
+      .set-filter__count { font-size: 0.72rem; color: var(--fg-3); margin: 0 0 0.6rem; min-height: 1em; }
+      @media (min-width: 900px) {
+        .set-layout { grid-template-columns: 13.5rem minmax(0, 1fr); gap: 1.75rem; }
+        .set-index { position: sticky; top: 1rem; max-height: calc(100vh - 2rem); overflow-y: auto; }
+        .set-index__list { display: block; }
+        .set-index__list li + li { margin-top: 0.15rem; }
+      }
       label { display: block; font-size: 0.85rem; color: var(--fg-3); margin-bottom: 0.25rem; }
       input, textarea, select { width: 100%; background: var(--bg); border: 1px solid var(--border);
                                   border-radius: 0.375rem; padding: 0.5rem 0.75rem; color: var(--fg);
@@ -91,7 +184,11 @@ pub(crate) const SETTINGS_FORM_CSS: &str = r"<style>
       h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 1.5rem; color: var(--fg); }
       a.btn { text-decoration: none; }
       .btn.btn-sm { font-size: 0.8rem; padding: 0.3rem 0.8rem; }
-      .hint a { color: var(--moss-ink); }
+      /* Underlined, not just tinted: axe's link-in-text-block flags a link
+         inside a paragraph that is distinguishable from the surrounding
+         text by colour alone, which is WCAG 1.4.1 — a reader who cannot
+         separate the two hues sees no link at all. */
+      .hint a { color: var(--moss-ink); text-decoration: underline; text-underline-offset: 2px; }
       .hint.flush { margin: -6px 0 8px; }
       .mt-sm { margin-top: 0.5rem; }
       .mt-md { margin-top: 1rem; }
@@ -185,6 +282,104 @@ pub(super) fn render_settings_form(settings: &HashMap<String, String>) -> String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The jump list and the sections it points at cannot drift apart.
+    ///
+    /// Checked in both directions and by count, because a one-directional
+    /// check passes while the index quietly points at an eighth section that
+    /// no longer exists, or misses a ninth that does.
+    #[test]
+    fn settings_index_matches_rendered_sections() {
+        let html = settings_body(&HashMap::new());
+        for (id, title) in SECTIONS {
+            assert!(
+                html.contains(&format!(r##"href="#set-{id}""##)),
+                "index has no link to {id}"
+            );
+            assert!(
+                html.contains(&format!(r#"<section class="card" id="set-{id}""#)),
+                "no section is anchored at {id}"
+            );
+            assert!(
+                html.contains(&format!(r#"id="set-{id}-h">{title}</h2>"#)),
+                "{id} has no <h2> reading {title:?}"
+            );
+        }
+        assert_eq!(
+            html.matches(r#"<section class="card""#).count(),
+            SECTIONS.len(),
+            "a section exists that the index does not list"
+        );
+        assert_eq!(
+            html.matches(r##"href="#set-"##).count(),
+            SECTIONS.len(),
+            "the index lists an anchor no section provides"
+        );
+    }
+
+    /// Section titles are headings, not text that merely looks like one.
+    ///
+    /// All eight were `<div class="section-title">`: styled at 1.1rem, semibold
+    /// and underlined, so they read as headings to a sighted user and as
+    /// nothing at all to a screen reader or to any "jump to next heading" key.
+    /// The page's whole visible structure was invisible to the accessibility
+    /// tree.
+    #[test]
+    fn section_titles_are_headings() {
+        let html = settings_body(&HashMap::new());
+        assert!(
+            !html.contains(r#"<div class="section-title">"#),
+            "a section title is still a div"
+        );
+        assert_eq!(
+            html.matches(r#"<h2 class="section-title"#).count(),
+            SECTIONS.len()
+        );
+    }
+
+    /// The Station tabs share these renderers, so they get the same headings —
+    /// but must not get the full page's index, which would point at seven
+    /// sections the tab does not render.
+    #[test]
+    fn station_tab_sections_carry_headings_but_no_index() {
+        let html = render_section_form(&HashMap::new(), &[Section::Audio, Section::Detection]);
+        assert!(html.contains(r#"<h2 class="section-title" id="set-audio-h">"#));
+        assert!(html.contains(r#"<h2 class="section-title" id="set-detection-h">"#));
+        assert_eq!(html.matches(r#"<section class="card""#).count(), 2);
+        assert!(
+            !html.contains("set-index"),
+            "a task tab must not carry the full-page index"
+        );
+        assert!(!html.contains(r##"href="#set-location""##));
+        assert!(
+            !html.contains("set-filter"),
+            "a task tab must not carry the full-page filter"
+        );
+    }
+
+    /// The filter must not become a dead control when scripting is off.
+    ///
+    /// It ships `hidden` and `settings-filter.js` reveals it, so a browser with
+    /// JavaScript disabled — or one that failed to fetch the script — shows a
+    /// page that behaves exactly as it did before the filter existed: every
+    /// section expanded, and nothing to click that does nothing.
+    #[test]
+    fn filter_ships_hidden_and_is_revealed_by_script() {
+        let html = settings_body(&HashMap::new());
+        assert!(
+            html.contains(r#"<div class="set-filter" hidden>"#),
+            "the filter must ship hidden"
+        );
+        assert!(html.contains(r#"<input type="search" id="set-filter""#));
+        assert!(
+            html.contains(r#"<label class="sr-only" for="set-filter">"#),
+            "the search box needs a real label, not just a placeholder"
+        );
+        assert!(html.contains(r#"src="/static/settings-filter.js""#));
+        // Nothing is hidden server-side: the filter narrows what is on screen,
+        // it is not a collapsed-by-default disclosure.
+        assert!(!html.contains(r#"id="set-audio" hidden"#));
+    }
 
     #[test]
     fn get_setting_default() {

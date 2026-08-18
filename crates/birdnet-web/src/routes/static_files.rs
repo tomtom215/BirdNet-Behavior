@@ -44,6 +44,9 @@ const THEME_GUARD_JS: &[u8] = include_bytes!("../../static/theme-guard.js");
 /// Reconnecting live-detection WebSocket client (embedded at compile time).
 const LIVE_DETECTIONS_JS: &[u8] = include_bytes!("../../static/live-detections.js");
 
+/// Type-to-filter for the admin settings page (embedded at compile time).
+const SETTINGS_FILTER_JS: &[u8] = include_bytes!("../../static/settings-filter.js");
+
 /// Self-hosted webfonts (latin + latin-ext subsets), embedded at compile time
 /// so the UI renders fully offline with no CDN dependency. `Inter Tight` (UI),
 /// `Instrument Serif` (display) and `JetBrains Mono` (numeric) cover Latin
@@ -142,6 +145,7 @@ pub fn router() -> Router<AppState> {
         .route("/static/htmx-sse.js", get(htmx_sse_js))
         .route("/static/theme-guard.js", get(theme_guard_js))
         .route("/static/live-detections.js", get(live_detections_js))
+        .route("/static/settings-filter.js", get(settings_filter_js))
         .route("/static/css/app.css", get(app_css))
         .route("/static/css/print.css", get(print_css))
         .route("/static/fonts/{file}", get(font_file))
@@ -223,6 +227,17 @@ async fn live_detections_js() -> impl IntoResponse {
             (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         LIVE_DETECTIONS_JS,
+    )
+}
+
+async fn settings_filter_js() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/javascript"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        SETTINGS_FILTER_JS,
     )
 }
 

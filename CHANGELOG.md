@@ -16,6 +16,45 @@ Several of these were invisible to a fully green 2 190-test suite.
 
 ### Fixed
 
+- **The settings page's structure was visible but not real.** All eight section
+  titles on `/admin/settings` were `<div class="section-title">` — styled at
+  1.1 rem, semibold and underlined, so they read as headings to anyone looking
+  at the screen and as ordinary text to everything else. A screen reader got no
+  document outline, "jump to next heading" did nothing, and the page's entire
+  organisation was invisible to the accessibility tree. The cards are now
+  `<section>` elements labelled by real `<h2>`s, on the standalone page and on
+  the Station tabs that share the same renderers.
+
+  Converting them surfaced a cascade collision worth recording: `.card h2` in
+  `app.css` is the card *eyebrow* (11 px, uppercase, muted) and its specificity
+  (0,1,1) beat a bare `.section-title` class (0,1,0), so the new headings
+  rendered smaller than the field labels beneath them until the settings rule
+  was raised to match.
+
+- **Links inside settings hints were distinguished by colour alone**, which
+  axe-core flags as `link-in-text-block` (WCAG 1.4.1). They are underlined now.
+  With this and the section work, `/admin/settings` reports **zero** axe
+  violations in both themes with every rule enabled, including the two the CI
+  gate defers.
+
+### Added
+
+- **An "On this page" index and a type-to-filter on the settings page.** It
+  carries 54 controls over about five screens, and it had no way to move
+  between them but scrolling. The index is a sticky jump list beside the
+  sections on desktop and a wrapped row above them on a phone; the filter
+  narrows to matching sections as you type, matching heading text, field
+  labels, hints and the underlying config keys — so `sf_thresh` finds Detection
+  Settings by the name you would read in `birdnet.conf`.
+
+  Deliberately not a collapse: the Station tabs already own task-scoped access
+  to these same sections, so this page's distinct job is holding everything at
+  once and staying findable — including by the browser's own Ctrl+F, which
+  stops matching inside a closed `<details>` in most engines. Nothing is hidden
+  server-side. The filter ships `hidden` and its script reveals it, so with
+  JavaScript off the page behaves exactly as before rather than offering a
+  control that does nothing.
+
 - **The default theme shipped text below the WCAG AA contrast floor, and the
   gate that should have caught it was configured not to look.** Measured with
   axe-core across every screen in both themes: **78 serious violations, 1 280
