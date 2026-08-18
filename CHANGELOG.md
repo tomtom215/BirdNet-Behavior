@@ -16,6 +16,19 @@ Several of these were invisible to a fully green 2 190-test suite.
 
 ### Fixed
 
+- **Arrival dates drifted by a day whenever a leap year was involved.** The
+  phenology queries derived `first_doy`/`last_doy` from a raw day-of-year, which
+  from 1 March runs one higher in a leap year — 1 May is day 122 of 2024 and day
+  121 of 2025. The multi-year percentiles behind the migration window averaged
+  the two scales together, so every arrival and departure estimate spanning a
+  leap year carried a systematic error of up to a day, and the seasonal window
+  was smeared by the same amount. It was worse than noise: a species that
+  genuinely advanced by one day between 2024 and 2025 had the shift cancelled
+  exactly and was reported as unchanged. Day numbers are now projected onto a
+  common year (1–365, with 29 February folding onto 28 February) before any
+  comparison, so one calendar date is one number in every year. The ISO dates
+  returned beside them were always exact and are unchanged.
+
 - **Your edits never reached the analytics.** Deleting a detection, re-labelling
   one, approving one out of quarantine and "clear all detections" all wrote to
   SQLite alone. The DuckDB copy every behavioural and time-series dashboard

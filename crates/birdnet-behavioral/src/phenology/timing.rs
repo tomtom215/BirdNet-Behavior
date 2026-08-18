@@ -4,6 +4,10 @@
 //! species per year, computes day-of-year values, and derives multi-year
 //! migration windows.
 //!
+//! Every day-of-year this module emits is projected onto a common (non-leap)
+//! year and so runs 1–365; `DOY_EXPR` explains why comparing raw day
+//! numbers across years is wrong.
+//!
 //! Queries read the `detections_ts` view rather than the `detections` table, so
 //! `detection_date` arrives already typed as a `DATE`. `Date` itself is
 //! free-form `TEXT NOT NULL`, and a station's history can hold rows that name
@@ -27,6 +31,48 @@ const YEAR_EXPR: &str = "CAST(strftime(detection_date, '%Y') AS INTEGER)";
 /// row the view could not parse has no bucket to belong to.
 const PLACEABLE: &str = "detection_date IS NOT NULL";
 
+/// Day-of-year of `date_expr`, projected onto a common (non-leap) year.
+///
+/// A raw day-of-year is not comparable between years. From 1 March a leap year
+/// runs one day ahead of a common one — 1 May is the 122nd day of 2024 and the
+/// 121st day of 2025 — so percentiles taken over several years of raw
+/// `first_doy` values carry a systematic error of up to a day, and the same
+/// offset is applied to the seasonal window derived from them. That is not a
+/// rounding artefact in a module whose whole purpose is estimating arrival and
+/// departure dates: a real one-day advance between a leap year and the common
+/// year after it is cancelled exactly, and a species that shifted is reported
+/// as unchanged.
+///
+/// The projection anchors on 1 March, day 60 of a common year, which removes
+/// the need to test for a leap year at all:
+///
+/// - January and February are unaffected — those days hold the same ordinal in
+///   both kinds of year.
+/// - 29 February has no common-year ordinal, so it folds back onto 28
+///   February's day 59, keeping 1 March at exactly 60 in every year.
+/// - From 1 March onwards the value is 60 plus the days elapsed since 1 March
+///   of that same year.
+///
+/// The result therefore runs 1–365, never 366. Callers converting it back to a
+/// calendar date must use a common year; the exact date is not lost, because
+/// every query returning a day-of-year returns the ISO date beside it.
+///
+/// The `CAST` to INTEGER is not cosmetic: `dayofyear` and `date_diff` return
+/// BIGINT, and the columns this feeds were INTEGER before.
+///
+/// Both queries below compute it once per row in a `dated` CTE rather than
+/// inlining it at each use. `MIN(doy)` and `MAX(doy)` within a calendar year
+/// agree with the day number of `MIN(date)` and `MAX(date)`, because the
+/// projection is non-decreasing in date — 29 February is the only day that ties
+/// with its neighbour, and it ties with the day before it.
+const DOY_EXPR: &str = "CAST(CASE
+                     WHEN month(detection_date) <= 2
+                       THEN LEAST(dayofyear(detection_date), 59)
+                     ELSE 60 + date_diff('day',
+                                         make_date(year(detection_date), 3, 1),
+                                         detection_date)
+                   END AS INTEGER)";
+
 // ---------------------------------------------------------------------------
 // Phenology timing SQL builders
 // ---------------------------------------------------------------------------
@@ -35,9 +81,14 @@ const PLACEABLE: &str = "detection_date IS NOT NULL";
 ///
 /// Returns one row per (species, year) combination containing:
 /// - `first_detection`, `last_detection` (ISO 8601 dates)
-/// - `first_doy`, `last_doy` (day-of-year 1–366)
+/// - `first_doy`, `last_doy` (day-of-year 1–365, common-year basis — see
+///   [`DOY_EXPR`]; the ISO dates beside them are the exact ones)
 /// - `presence_days` (approximate number of days between first and last)
 /// - `detection_count`
+///
+/// A single call can be restricted to one year, but the rows are designed to be
+/// compared across years, which is why the day numbers are projected onto a
+/// common year rather than reported raw.
 pub fn phenology_timing_sql(params: &PhenologyParams) -> String {
     let where_sql = where_clause(&[
         Some(PLACEABLE.to_string()),
@@ -47,19 +98,27 @@ pub fn phenology_timing_sql(params: &PhenologyParams) -> String {
     let having_clause = format!("HAVING COUNT(*) >= {}", params.min_detections);
 
     format!(
-        "SELECT
+        "WITH dated AS (
+            SELECT
+                Com_Name,
+                detection_date,
+                {YEAR_EXPR}                                 AS year,
+                {DOY_EXPR}                                  AS doy
+            FROM detections_ts
+            {where_sql}
+        )
+        SELECT
             Com_Name                                        AS species,
-            {YEAR_EXPR}                                     AS year,
+            year,
             CAST(MIN(detection_date) AS VARCHAR)            AS first_detection,
             CAST(MAX(detection_date) AS VARCHAR)            AS last_detection,
             COUNT(*)                                        AS detection_count,
-            CAST(strftime(MIN(detection_date), '%j') AS INTEGER) AS first_doy,
-            CAST(strftime(MAX(detection_date), '%j') AS INTEGER) AS last_doy,
+            MIN(doy)                                        AS first_doy,
+            MAX(doy)                                        AS last_doy,
             date_diff('day', MIN(detection_date), MAX(detection_date)) + 1
                                                             AS presence_days,
             COUNT(DISTINCT detection_date)                  AS detected_days
-        FROM detections_ts
-        {where_sql}
+        FROM dated
         GROUP BY Com_Name, year
         {having_clause}
         ORDER BY year DESC, Com_Name
@@ -76,6 +135,12 @@ pub fn phenology_timing_sql(params: &PhenologyParams) -> String {
 ///
 /// Requires at least `min_years` years of observations per species.
 /// Uses `DuckDB` `percentile_cont` window functions.
+///
+/// Because the percentiles are taken *across years*, the day numbers they run
+/// over are projected onto a common year first — see [`DOY_EXPR`] for
+/// why a raw day-of-year cannot be averaged between a leap year and a common
+/// one. All six `*_doy` outputs are therefore on the 1–365 common-year scale,
+/// and converting one back to a date means reading it in a non-leap year.
 ///
 /// # Species this cannot describe, and why it now says so
 ///
@@ -103,21 +168,31 @@ pub fn migration_window_sql(min_years: u32, params: &PhenologyParams) -> String 
     ]);
 
     format!(
-        "WITH yearly AS (
+        "WITH dated AS (
+            SELECT
+                Com_Name,
+                {YEAR_EXPR}                                     AS year,
+                {DOY_EXPR}                                      AS doy
+            FROM detections_ts
+            {species_filter}
+        ),
+        yearly AS (
             SELECT
                 Com_Name                                        AS species,
-                {YEAR_EXPR}                                     AS year,
-                CAST(strftime(MIN(detection_date), '%j') AS INTEGER) AS first_doy,
-                CAST(strftime(MAX(detection_date), '%j') AS INTEGER) AS last_doy,
+                year,
+                MIN(doy)                                        AS first_doy,
+                MAX(doy)                                        AS last_doy,
                 -- Detected in both the first and last fortnight of the year:
                 -- the signature of a resident or overwintering species, for
                 -- which a calendar-year window is not a migration window.
-                MAX(CASE WHEN CAST(strftime(detection_date, '%j') AS INTEGER) <= 14
-                         THEN 1 ELSE 0 END)
-                  * MAX(CASE WHEN CAST(strftime(detection_date, '%j') AS INTEGER) >= 351
-                             THEN 1 ELSE 0 END)                 AS spans_new_year
-            FROM detections_ts
-            {species_filter}
+                -- The bounds are common-year day numbers, so day 351 is 17
+                -- December in a leap year as in any other; against a raw
+                -- day-of-year the same constant meant a 16-day fortnight
+                -- whenever the year had a 29 February in it.
+                MAX(CASE WHEN doy <= 14 THEN 1 ELSE 0 END)
+                  * MAX(CASE WHEN doy >= 351 THEN 1 ELSE 0 END)
+                                                                AS spans_new_year
+            FROM dated
             GROUP BY Com_Name, year
             HAVING COUNT(*) >= {min_det}
         )
