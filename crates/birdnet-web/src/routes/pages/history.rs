@@ -247,6 +247,27 @@ fn render_calendar(
 }
 
 /// Map a day's count to an on-brand heat fill (moss over the neutral surface).
+///
+/// The ramp stops at [`HEAT_MAX_PCT`] rather than at full `--moss`, because the
+/// text sitting on these cells has a fixed colour while the fill moves with the
+/// data. At full strength the cell is `#508357` and the day's label reads
+/// 3.71:1 against it — the busiest days in the month were the least legible,
+/// which is exactly backwards. Measured against the light palette:
+///
+/// | mix | cell      | `--fg` on it |
+/// |-----|-----------|--------------|
+/// | 0%  | `#f8f6f4` | 16.07:1      |
+/// | 50% | `#b0b694` | 8.22:1       |
+/// | 80% | `#779569` | 5.19:1       |
+/// | 100%| `#508357` | 3.71:1 ✗     |
+///
+/// Capping at 80% keeps every cell above the 4.5:1 the label needs while
+/// leaving the ramp visibly graded. The alternative — flipping the ink to white
+/// past a threshold — was rejected because white only reaches 4.5:1 at the very
+/// top of the ramp (4.67:1 at 100%), so there is no crossover where both inks
+/// are legible and the switch would be visible as a hard band.
+const HEAT_MAX_PCT: i64 = 80;
+
 #[allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
@@ -256,7 +277,8 @@ fn heat_bg(count: i64, cmax: i64) -> String {
     if count <= 0 {
         return "var(--surface-2)".to_string();
     }
-    let pct = ((count as f64 / cmax as f64) * 92.0).round() as i64 + 8;
+    let span = f64::from(u32::try_from(HEAT_MAX_PCT - 8).unwrap_or(72));
+    let pct = ((count as f64 / cmax as f64) * span).round() as i64 + 8;
     format!("color-mix(in oklch, var(--moss) {pct}%, var(--surface-2))")
 }
 

@@ -32,7 +32,7 @@ pub fn migration_body(dest_db_path: &str) -> String {
     input[type=file] {{ padding:0.35rem 0.5rem; cursor:pointer; }}
     .btn {{ padding:0.5rem 1.5rem; border-radius:0.375rem; border:none;
             cursor:pointer; font-weight:600; font-size:0.875rem; }}
-    .btn-primary {{ background:var(--moss); color:#fff; }}
+    .btn-primary {{ background:var(--moss); color:var(--on-moss); }}
     .btn-primary:hover {{ background:var(--moss-ink); }}
     .btn-secondary {{ background:var(--border); color:var(--fg); }}
     .btn-secondary:hover {{ background:var(--border-2); }}
@@ -42,7 +42,7 @@ pub fn migration_body(dest_db_path: &str) -> String {
     .tabs {{ display:flex; gap:0.5rem; margin-bottom:1rem; }}
     .tab {{ padding:0.4rem 1rem; border-radius:0.375rem; border:1px solid var(--border);
             cursor:pointer; font-size:0.85rem; background:var(--bg); color:var(--fg-3); }}
-    .tab.active {{ background:var(--moss); color:#fff; border-color:var(--moss); }}
+    .tab.active {{ background:var(--moss); color:var(--on-moss); border-color:var(--moss); }}
     .tab-panel {{ display:none; }}
     .tab-panel.active {{ display:block; }}
     /* O-25 sweep: shapes promoted out of inline style= attributes. */

@@ -23,9 +23,16 @@ pub struct PhenologyRecord {
     pub last_detection: String,
     /// Total number of detections in this year.
     pub detection_count: u32,
-    /// Day-of-year of first detection (1–366).
+    /// Day-of-year of first detection, projected onto a common year (1–365).
+    ///
+    /// Not the raw ordinal of the date: from 1 March a leap year runs one day
+    /// ahead, so raw day numbers are not comparable between years and 29
+    /// February folds onto 28 February's day 59. `first_detection` above is the
+    /// exact date. See `phenology::timing`.
     pub first_doy: u32,
-    /// Day-of-year of last detection (1–366).
+    /// Day-of-year of last detection, projected onto a common year (1–365).
+    ///
+    /// Same basis as `first_doy`; `last_detection` is the exact date.
     pub last_doy: u32,
     /// Approximate presence duration in days.
     pub presence_days: u32,
@@ -36,6 +43,10 @@ pub struct PhenologyRecord {
 /// Derived from the 10th and 90th percentiles of first-detection
 /// day-of-year across multiple years, providing a robust arrival and
 /// departure window that is insensitive to outlier years.
+///
+/// Every `*_doy` field is on the common-year scale (1–365) that makes an
+/// across-years percentile meaningful, so reading one back as a calendar date
+/// means reading it in a non-leap year. See `phenology::timing`.
 #[derive(Debug, Clone, Serialize)]
 pub struct MigrationWindow {
     /// Species common name.

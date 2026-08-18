@@ -136,7 +136,7 @@ fn test_notifications_body(apprise_ok: bool, bw_ok: bool) -> String {
       .card { background:var(--surface); border:1px solid var(--border); border-radius:0.75rem; padding:1.5rem; margin-bottom:1.5rem; }
       .section-title { font-size:1.1rem; font-weight:600; color:var(--moss-ink); margin-bottom:1rem; border-bottom:1px solid var(--border); padding-bottom:0.5rem; }
       .btn { padding:0.5rem 1.5rem; border-radius:0.375rem; border:none; cursor:pointer; font-weight:600; font-size:0.875rem; }
-      .btn-primary { background:var(--moss); color:#fff; }
+      .btn-primary { background:var(--moss); color:var(--on-moss); }
       .btn-disabled { background:var(--border); color:var(--fg-4); cursor:not-allowed; }
       .hint { font-size:0.75rem; color:var(--fg-4); margin-bottom:1rem; }
       h1 { font-size:1.5rem; font-weight:700; margin-bottom:1.5rem; color:var(--fg); }

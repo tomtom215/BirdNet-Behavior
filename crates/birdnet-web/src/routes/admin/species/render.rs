@@ -29,7 +29,7 @@ pub(crate) fn species_lists_body(exclude: &[String], include: &[String]) -> Stri
       input {{ width:100%; background:var(--bg); border:1px solid var(--border); border-radius:0.375rem; padding:0.5rem 0.75rem; color:var(--fg); font-size:0.875rem; box-sizing:border-box; }}
       input:focus {{ outline:none; border-color:var(--moss-ink); }}
       .btn {{ padding:0.4rem 1rem; border-radius:0.375rem; border:none; cursor:pointer; font-weight:600; font-size:0.85rem; }}
-      .btn-primary {{ background:var(--moss); color:#fff; }}
+      .btn-primary {{ background:var(--moss); color:var(--on-moss); }}
       .btn-danger {{ background:var(--rare); color:#fff; }}
       .pill {{ display:inline-flex; align-items:center; gap:0.4rem; background:var(--bg); border:1px solid var(--border); border-radius:999px; padding:0.2rem 0.7rem; font-size:0.8rem; margin:0.2rem; }}
       .hint {{ font-size:0.75rem; color:var(--fg-4); margin-top:0.25rem; margin-bottom:1rem; }}
@@ -275,7 +275,7 @@ fn filter_test_body(
       .stat.pass {{ background:var(--moss-soft); color:var(--moss); }}
       .stat.block {{ background:var(--rare-soft); color:var(--rare); }}
       .hint {{ font-size:0.75rem; color:var(--fg-4); margin-bottom:1rem; }}
-      .badge-pass {{ background:var(--moss); color:#fff; padding:0.15rem 0.5rem; border-radius:999px; font-size:0.75rem; font-weight:700; }}
+      .badge-pass {{ background:var(--moss); color:var(--on-moss); padding:0.15rem 0.5rem; border-radius:999px; font-size:0.75rem; font-weight:700; }}
       .badge-block {{ background:var(--rare); color:#fff; padding:0.15rem 0.5rem; border-radius:999px; font-size:0.75rem; font-weight:700; }}
       .filter-row {{ margin-bottom:1rem; }}
       .label-muted {{ color:var(--fg-3); }}

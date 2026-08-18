@@ -180,8 +180,183 @@ fn phenology_timing_returns_usable_rows() {
     assert_eq!(last, &format!("{year}-12-27"));
     assert_eq!(*count, 48, "4 days x 12 months");
     assert_eq!(*first_doy, 3, "3 January is day 3");
-    assert!(
-        (361..=362).contains(last_doy),
-        "27 December is day 361 in a common year: {last_doy}"
+    // Pinned rather than given a range. The range was here because a raw
+    // day-of-year moved with the year's length; on the common-year basis the
+    // answer is the same number every year, and a range would hide a
+    // regression back to the raw ordinal.
+    assert_eq!(*last_doy, 361, "27 December is day 361 of a common year");
+}
+
+// ---------------------------------------------------------------------------
+// Leap-year stability of day-of-year
+// ---------------------------------------------------------------------------
+
+/// Seed detections from explicit `(date, common name)` pairs.
+///
+/// The `seeded` helper above walks whole years on fixed day numbers, which is
+/// exactly the shape that cannot express the question here: whether the *same
+/// calendar date* is given the same day-of-year in a leap year and a common
+/// one.
+fn seeded_dates(rows: &[(&str, &str)]) -> (AnalyticsDb, TempDir) {
+    let dir = TempDir::new().unwrap();
+    let db = AnalyticsDb::open(&dir.path().join("analytics.duckdb")).unwrap();
+    let values: Vec<String> = rows
+        .iter()
+        .map(|(date, com)| {
+            format!(
+                "('{date}','06:30:00','Sci name','{com}',0.85,\
+                  NULL,NULL,NULL,NULL,NULL,NULL,'rec.wav',NULL,NULL)"
+            )
+        })
+        .collect();
+    db.conn()
+        .execute_batch(&format!(
+            "INSERT INTO detections VALUES {};",
+            values.join(",")
+        ))
+        .expect("seed detections");
+    (db, dir)
+}
+
+/// Every `(species, year)` row the timing query returns, as
+/// `(species, year, first_doy, last_doy)`.
+fn timing_doys(db: &AnalyticsDb, sql: &str) -> Vec<(String, i32, i32, i32)> {
+    let mut stmt = db.conn().prepare(sql).expect("timing query binds");
+    let mut rows: Vec<(String, i32, i32, i32)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(5)?, r.get(6)?)))
+        .expect("timing query runs")
+        .map(Result::unwrap)
+        .collect();
+    rows.sort_by(|a, b| (&a.0, a.1).cmp(&(&b.0, b.1)));
+    rows
+}
+
+/// The same calendar date must get the same day-of-year in every year.
+///
+/// After 28 February a leap year runs one day ahead: 1 May is the 122nd day of
+/// 2024 and the 121st day of 2025. `first_doy` and `last_doy` are the numbers
+/// the multi-year percentiles in `migration_window_sql` are taken over, so an
+/// uncorrected day-of-year puts a systematic one-day error into every arrival
+/// and departure estimate that spans a leap year — the one thing this module
+/// exists to measure.
+///
+/// The counterpart in `real_arrival_shifts_survive_normalisation` checks that
+/// the correction has not simply flattened the signal.
+#[test]
+fn day_of_year_is_leap_year_stable() {
+    // Identical calendar dates in a leap year (2024) and a common year (2025).
+    let (db, _tmp) = seeded_dates(&[
+        ("2024-05-01", "Common Swift"),
+        ("2024-05-05", "Common Swift"),
+        ("2024-05-09", "Common Swift"),
+        ("2025-05-01", "Common Swift"),
+        ("2025-05-05", "Common Swift"),
+        ("2025-05-09", "Common Swift"),
+    ]);
+
+    let params = PhenologyParams {
+        species: Some("Common Swift".into()),
+        ..PhenologyParams::default()
+    };
+
+    let rows = timing_doys(&db, &timing::phenology_timing_sql(&params));
+    assert_eq!(rows.len(), 2, "one row per year: {rows:?}");
+    assert_eq!(
+        (rows[0].2, rows[0].3),
+        (rows[1].2, rows[1].3),
+        "1-9 May is the same day-of-year in 2024 and 2025: {rows:?}"
     );
+    assert_eq!(rows[0].2, 121, "1 May is day 121 of a common year");
+    assert_eq!(rows[1].3, 129, "9 May is day 129 of a common year");
+
+    // The percentiles over those values must land on the day itself, not
+    // between the leap-year and common-year readings of it.
+    let sql = timing::migration_window_sql(2, &params);
+    let mut stmt = db.conn().prepare(&sql).expect("window query binds");
+    let windows: Vec<(String, i64, f64, f64)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(3)?, r.get(6)?)))
+        .expect("window query runs")
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(windows.len(), 1, "one species: {windows:?}");
+    let (_, years, arrival_median, departure_median) = &windows[0];
+    assert_eq!(*years, 2);
+    assert!(
+        (arrival_median - 121.0).abs() < f64::EPSILON,
+        "median arrival smeared off 1 May: {arrival_median}"
+    );
+    assert!(
+        (departure_median - 129.0).abs() < f64::EPSILON,
+        "median departure smeared off 9 May: {departure_median}"
+    );
+}
+
+/// The counterpart: a genuine one-day shift must still read as one day.
+///
+/// A correction that collapsed every arrival onto the same number would satisfy
+/// the gate above while destroying the measurement. This species really does
+/// arrive a day later in 2025 than in 2024, and that day has to survive.
+#[test]
+fn real_arrival_shifts_survive_normalisation() {
+    let (db, _tmp) = seeded_dates(&[
+        ("2024-05-01", "European Robin"),
+        ("2024-05-05", "European Robin"),
+        ("2024-05-09", "European Robin"),
+        ("2025-05-02", "European Robin"),
+        ("2025-05-06", "European Robin"),
+        ("2025-05-10", "European Robin"),
+    ]);
+
+    let params = PhenologyParams {
+        species: Some("European Robin".into()),
+        ..PhenologyParams::default()
+    };
+    let rows = timing_doys(&db, &timing::phenology_timing_sql(&params));
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!(
+        rows[1].2 - rows[0].2,
+        1,
+        "2 May 2025 is one day later than 1 May 2024: {rows:?}"
+    );
+}
+
+/// 29 February shares 28 February's slot, and 1 March is day 60 in every year.
+///
+/// A common-year day-of-year has no 29 February to offer, so the leap day has
+/// to fold onto one of its neighbours. Folding it backwards onto 28 February
+/// keeps 1 March at 60 in leap and common years alike; that is the convention
+/// callers are entitled to rely on, so it is pinned rather than left to the
+/// shape of the expression.
+#[test]
+fn leap_day_folds_onto_28_february() {
+    let (db, _tmp) = seeded_dates(&[
+        ("2024-02-27", "Leap Folder"),
+        ("2024-02-28", "Leap Folder"),
+        ("2024-02-29", "Leap Folder"),
+        ("2024-03-01", "March Anchor"),
+        ("2024-03-05", "March Anchor"),
+        ("2024-03-09", "March Anchor"),
+        ("2025-03-01", "March Anchor"),
+        ("2025-03-05", "March Anchor"),
+        ("2025-03-09", "March Anchor"),
+    ]);
+
+    let rows = timing_doys(
+        &db,
+        &timing::phenology_timing_sql(&PhenologyParams::default()),
+    );
+    let folder = rows.iter().find(|r| r.0 == "Leap Folder").expect("seeded");
+    assert_eq!(folder.2, 58, "27 February is day 58");
+    assert_eq!(
+        folder.3, 59,
+        "29 February folds onto 28 February's day 59: {folder:?}"
+    );
+
+    for anchor in rows.iter().filter(|r| r.0 == "March Anchor") {
+        assert_eq!(
+            anchor.2, 60,
+            "1 March is day 60 in {}: {anchor:?}",
+            anchor.1
+        );
+    }
 }

@@ -26,8 +26,8 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     // shapes to the canonical period form before storage.
     write!(out,
         r#"
-  <div class="card">
-    <div class="section-title">Detection Settings</div>
+  <section class="card" id="set-detection" aria-labelledby="set-detection-h">
+    <h2 class="section-title" id="set-detection-h">Detection Settings</h2>
     <div class="grid-2">
       <div>
         <label for="confidence_threshold">Minimum Confidence (0–1)</label>
@@ -67,7 +67,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
              value="{priv_t}" placeholder="0.0" class="bnb-w-num">
       <p class="hint">Suppress detections when human voice is detected. Typical: 0.01–0.03. 0 = disabled (BirdNET-Pi: PRIVACY_THRESHOLD)</p>
     </div>
-  </div>"#
+  </section>"#
     ).unwrap_or_default();
 }
 

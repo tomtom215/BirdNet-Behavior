@@ -124,7 +124,7 @@ fn notifications_body(entries: &[NotifEntry], stats: (i64, i64, i64)) -> String 
     tr:hover td {{ background:var(--surface); }}
     .badge {{ display:inline-block; padding:0.15rem 0.5rem; border-radius:9999px;
               font-size:0.75rem; font-weight:600; }}
-    .badge-sent {{ background:var(--moss-soft); color:var(--moss); }}
+    .badge-sent {{ background:var(--moss-soft); color:var(--moss-ink); }}
     .badge-failed {{ background:var(--rare-soft); color:var(--rare); }}
     .badge-skipped {{ background:var(--dawn-soft); color:var(--dawn); }}
     .btn {{ padding:0.4rem 1rem; border-radius:0.375rem; border:none;

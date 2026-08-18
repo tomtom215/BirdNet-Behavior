@@ -42,7 +42,7 @@ jobs:
   fmt:
     name: Format (rustfmt)
     runs-on: ubuntu-24.04
-    timeout-minutes: 10  # observed 11s
+    timeout-minutes: 10  # observed 12s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain (stable + rustfmt)
@@ -56,7 +56,7 @@ jobs:
   clippy:
     name: Clippy (pedantic + nursery)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30  # observed 54s
+    timeout-minutes: 30  # observed 8m45s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain (stable + clippy)
@@ -88,7 +88,7 @@ jobs:
   test:
     name: Tests (x86_64)
     runs-on: ubuntu-24.04
-    timeout-minutes: 45  # observed 10m42s
+    timeout-minutes: 45  # observed 21m59s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Free up runner disk space
@@ -182,7 +182,7 @@ jobs:
   inference:
     name: Inference against the real model
     runs-on: ubuntu-24.04
-    timeout-minutes: 30  # observed 1m50s
+    timeout-minutes: 30  # observed 9m59s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Free up runner disk space
@@ -270,7 +270,7 @@ jobs:
   doc:
     name: Rustdoc (no broken links)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30  # observed 51s
+    timeout-minutes: 30  # observed 8m16s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain
@@ -292,7 +292,7 @@ jobs:
   build:
     name: Build (debug, all features)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30  # observed 1m17s
+    timeout-minutes: 30  # observed 8m23s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain
@@ -324,7 +324,7 @@ jobs:
   msrv:
     name: MSRV (Rust 1.95)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30  # observed 42s
+    timeout-minutes: 30  # observed 8m11s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
@@ -381,7 +381,7 @@ jobs:
   cross-aarch64:
     name: Cross-check (aarch64 / Raspberry Pi)
     runs-on: ubuntu-24.04
-    timeout-minutes: 40  # observed 10m23s
+    timeout-minutes: 40  # observed 9m50s
     # Catch Pi-breaking changes (target-specific cfg, libduckdb cross-compile,
     # pointer-width assumptions) at PR time instead of only at release tagging,
     # which is the sole place aarch64 was built before. `check` keeps it cheap

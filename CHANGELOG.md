@@ -16,6 +16,156 @@ Several of these were invisible to a fully green 2 190-test suite.
 
 ### Fixed
 
+- **The settings page's structure was visible but not real.** All eight section
+  titles on `/admin/settings` were `<div class="section-title">` — styled at
+  1.1 rem, semibold and underlined, so they read as headings to anyone looking
+  at the screen and as ordinary text to everything else. A screen reader got no
+  document outline, "jump to next heading" did nothing, and the page's entire
+  organisation was invisible to the accessibility tree. The cards are now
+  `<section>` elements labelled by real `<h2>`s, on the standalone page and on
+  the Station tabs that share the same renderers.
+
+  Converting them surfaced a cascade collision worth recording: `.card h2` in
+  `app.css` is the card *eyebrow* (11 px, uppercase, muted) and its specificity
+  (0,1,1) beat a bare `.section-title` class (0,1,0), so the new headings
+  rendered smaller than the field labels beneath them until the settings rule
+  was raised to match.
+
+- **Links inside settings hints were distinguished by colour alone**, which
+  axe-core flags as `link-in-text-block` (WCAG 1.4.1). They are underlined now.
+  With this and the section work, `/admin/settings` reports **zero** axe
+  violations in both themes with every rule enabled, including the two the CI
+  gate defers.
+
+### Added
+
+- **An "On this page" index and a type-to-filter on the settings page.** It
+  carries 54 controls over about five screens, and it had no way to move
+  between them but scrolling. The index is a sticky jump list beside the
+  sections on desktop and a wrapped row above them on a phone; the filter
+  narrows to matching sections as you type, matching heading text, field
+  labels, hints and the underlying config keys — so `sf_thresh` finds Detection
+  Settings by the name you would read in `birdnet.conf`.
+
+  Deliberately not a collapse: the Station tabs already own task-scoped access
+  to these same sections, so this page's distinct job is holding everything at
+  once and staying findable — including by the browser's own Ctrl+F, which
+  stops matching inside a closed `<details>` in most engines. Nothing is hidden
+  server-side. The filter ships `hidden` and its script reveals it, so with
+  JavaScript off the page behaves exactly as before rather than offering a
+  control that does nothing.
+
+- **The default theme shipped text below the WCAG AA contrast floor, and the
+  gate that should have caught it was configured not to look.** Measured with
+  axe-core across every screen in both themes: **78 serious violations, 1 280
+  offending elements**. The accessibility job passes because `AXE_DISABLE`
+  defaults to `color-contrast,link-in-text-block` — the two rules that were
+  failing. It was not a dark-mode problem; light was worse (42 of the 78).
+
+  The largest single cause was the `--fg-4` ink tier: 2.55:1 in light and
+  2.40:1 in dark, against a 4.5:1 requirement, on 9.9–10.5 px text. The project
+  already knew the safe values — `data-contrast="high"` sets exactly them — so
+  accessibility was available to anyone who went looking for the setting and to
+  nobody else. The default now uses them, and high-contrast moves further out.
+
+  Four more root causes, each measured rather than guessed: `--fg-3` passed
+  against the base background (4.64:1) but not against the tinted surfaces it
+  actually sits on (4.48:1); `.btn-primary` painted hardcoded white on `--moss`,
+  which is a dark green in light (4.67:1) and a bright green in dark (1.87:1),
+  so the app's primary action failed in dark mode; "enabled"/"sent" badges put
+  `--moss` on `--moss-soft` (3.75:1) where `--moss-ink` gives 8.73:1; and the
+  history calendar mixed each cell's fill toward green in proportion to the
+  day's detection count while the label colour stayed fixed, so the busiest days
+  were the least readable — 1.09:1 at the top of the ramp. The ramp now stops at
+  80 % (5.19:1) and the in-cell label no longer uses the faintest tier.
+
+  Together these take the audited violations from 78 to 47. What remains is one
+  class needing a design decision rather than a fix: species-identity colours
+  used as 9.5 px text on pastel tints, at 2.6–3.0:1.
+
+- **The six Station screens had no `<h1>`.** Each composes a sub-tab strip plus
+  a content fragment, and neither carries a page heading, so their first heading
+  was an `<h2>` and a screen reader had no page title to announce.
+
+### Changed
+
+- `.btn-primary` and friends take their ink from a new `--on-moss` token
+  instead of hardcoded white. Six admin pages had re-declared `.btn-primary`
+  inside their own inline `<style>` blocks with `color:#fff`, so the shared
+  component's token could not reach them.
+
+- **Six of the eight `# observed` runtime notes in CI were false, by up to a
+  factor of ten.** Each `timeout-minutes:` carried the runtime its budget was
+  sized against, written by hand and never revisited, so they had quietly
+  come to describe a repository thousands of commits ago: `Clippy` claimed
+  `# observed 54s` while really taking 8m45s, `Tests` claimed 10m42s against a
+  real 21m59s, and `MSRV`, `Rustdoc`, `Build` and `Inference` were out by
+  5-10x. Nothing was wrong in a way a reader could see — which is what made
+  them worse than no note at all, since they were the evidence a reviewer would
+  use to judge whether a budget was sane.
+
+  Updating the numbers would only have restarted the same clock, so they are
+  now generated from run history and gated on drift, the way
+  `scripts/gen-cli-help.sh` already keeps the CLI docs from drifting from the
+  binary. Every job-level timeout in every workflow now carries a current note,
+  `check-ci-config.py` fails when one is more than 1.5x from the measured
+  median, and `--update-observed` rewrites them. Drift is measured against the
+  median rather than the worst run so a single cold-cache outlier cannot redden
+  an accurate note. The mutation workflow's path filter now covers every
+  workflow file, not just its own, because the check no longer only looks at
+  its own.
+
+- **A mutation row was 87% of the way into its own timeout and nothing was
+  watching.** The config gate added last cycle checks that a matrix row still
+  matches source, that no shard is empty by construction, and that every job
+  declares a timeout — but never the distance to that timeout. `validate.rs`
+  had grown to 67 mutants and 39m00s against a 45-minute budget, and the only
+  reason anyone knew was reading run times by hand. It is the same trajectory
+  that took `sqlite/queries/detections` down: a job cancelled at its budget
+  renders as a grey badge rather than a red one, so the row stops gating
+  without ever going red. `validate.rs` is now split across two shards (34 and
+  33 mutants, enumerated rather than derived), and the gate reads each job's
+  recent wall-clock from the Actions API and fails any job that has used more
+  than 75% of the budget it declares. Pointed at the unsharded row it reports
+  it at 87%, alone among 56 jobs — the finding that prompted this, now found by
+  CI instead of by hand.
+
+- **"Still expected" read zero for the last six weeks of every year.** The
+  migration page's six-week look-ahead was a day-of-year `BETWEEN` against
+  `strftime('%j','now')` and `strftime('%j','now','+42 days')`. From 20
+  November the end of that window falls in the next calendar year, so its day
+  number is *smaller* than the start's — 20 November 2026 gives `'324' … '001'`
+  — and the range matches nothing at all. The tile reported a confident "0 ·
+  no overdue migrants" through the entire late-autumn arrival season, which is
+  the one stretch of the year it exists for. The window is now expressed as
+  real dates and the prior year's arrivals are re-based onto both this year and
+  next, so crossing the boundary is just the second candidate matching. The
+  same rewrite drops two smaller errors in the old form: `'now'` was UTC
+  against a locally-dated column, and day-of-year is a day out between a leap
+  year and a common one.
+
+- **The migration chart's "today" line was drawn in the wrong place.** It was
+  positioned by `(days since 1970 % 365) / 7`, which is not a week number: it
+  ignores leap days, so it had drifted a fortnight by 2026, and it counts from
+  1970 rather than from January, so on 31 December it returned week 1 and drew
+  the marker at the far left of a chart whose data ends at the far right. It
+  now uses the same `%W` week the chart's own buckets are grouped by, checked
+  against SQLite for agreement. The page's current year is read from the
+  station's local clock for the same reason.
+
+- **Arrival dates drifted by a day whenever a leap year was involved.** The
+  phenology queries derived `first_doy`/`last_doy` from a raw day-of-year, which
+  from 1 March runs one higher in a leap year — 1 May is day 122 of 2024 and day
+  121 of 2025. The multi-year percentiles behind the migration window averaged
+  the two scales together, so every arrival and departure estimate spanning a
+  leap year carried a systematic error of up to a day, and the seasonal window
+  was smeared by the same amount. It was worse than noise: a species that
+  genuinely advanced by one day between 2024 and 2025 had the shift cancelled
+  exactly and was reported as unchanged. Day numbers are now projected onto a
+  common year (1–365, with 29 February folding onto 28 February) before any
+  comparison, so one calendar date is one number in every year. The ISO dates
+  returned beside them were always exact and are unchanged.
+
 - **Your edits never reached the analytics.** Deleting a detection, re-labelling
   one, approving one out of quarantine and "clear all detections" all wrote to
   SQLite alone. The DuckDB copy every behavioural and time-series dashboard

@@ -56,7 +56,7 @@ jobs:
   validate:
     name: Validate release tag
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 20  # observed 7s
     outputs:
       version: ${{ steps.meta.outputs.version }}
       is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
@@ -211,7 +211,7 @@ jobs:
     name: CI gate — ${{ matrix.name }}
     needs: validate
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 60  # observed 11m25s
     strategy:
       fail-fast: true
       matrix:
@@ -297,7 +297,7 @@ jobs:
     name: Build ${{ matrix.target }}
     needs: [validate, ci]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+    timeout-minutes: 120  # observed 20m12s
     strategy:
       fail-fast: false
       matrix:
@@ -548,7 +548,7 @@ jobs:
     name: Package and attest
     needs: [validate, build]
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 45  # observed 27s
     permissions:
       contents: read
       id-token: write      # OIDC token for SLSA attestation
@@ -690,7 +690,7 @@ jobs:
     # `package` (build + SBOM + SLSA attestation all still run and are verified).
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 30  # observed 14s
     permissions:
       contents: write    # create release, upload assets
     steps:

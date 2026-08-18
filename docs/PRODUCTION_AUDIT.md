@@ -735,9 +735,13 @@ confident and is not:
   hidden from page loads by the cache and pre-warmer — but the pre-warmer still
   *runs* them, as background CPU competing with live inference, and that cost
   grows every year. Not measured on a Pi.
-- **Leap-day skew in day-of-year comparisons.** DOY 60 is 29 February in a leap
-  year and 1 March otherwise, so cross-year phenology carries a one-day skew
-  after February. Latent while A-5 stands; a blocker for wiring it up.
+- **Leap-day skew in day-of-year comparisons.** *Fixed.* DOY 60 is 29 February
+  in a leap year and 1 March otherwise, so cross-year phenology carried a
+  one-day skew after February. This was recorded as latent "while A-5 stands";
+  A-5 was closed and the analytics were wired up, which made it live. The day
+  numbers in `phenology/timing.rs` are now projected onto a common year before
+  any cross-year comparison, gated by execution tests over a leap/common year
+  pair in `tests/phenology_execute.rs`.
 - **Whether the DuckDB drift rebuild is fast enough at 2 M rows.** The streaming
   appender bounds memory (measured previously: 1 M rows → 541 MiB before
   streaming, bounded after), but the wall-clock cost of a rebuild during startup

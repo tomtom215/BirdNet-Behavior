@@ -11,8 +11,8 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     write!(
         out,
         r#"
-  <div class="card">
-    <div class="section-title">Species Filters</div>
+  <section class="card" id="set-species" aria-labelledby="set-species-h">
+    <h2 class="section-title" id="set-species-h">Species Filters</h2>
     <p class="hint">
       Or manage species lists interactively on the
       <a href="/admin/species">Species Lists</a> page.
@@ -29,7 +29,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
                 placeholder="e.g. European Robin, Eurasian Blackbird">{incl}</textarea>
       <p class="hint">When set, only these species are saved or notified</p>
     </div>
-  </div>"#
+  </section>"#
     )
     .unwrap_or_default();
 }

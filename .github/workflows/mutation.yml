@@ -86,7 +86,9 @@ on:
       - "crates/birdnet-db/src/migration.rs"
       - "src/daemon/**"
       - "src/capture/**"
-      - ".github/workflows/mutation.yml"
+      # The config job checks every workflow (timeouts and their
+      # `# observed` annotations), so an edit to any of them re-runs it.
+      - ".github/workflows/**"
   pull_request:
     branches: ["main", "master"]
     paths:
@@ -99,7 +101,9 @@ on:
       - "crates/birdnet-db/src/migration.rs"
       - "src/daemon/**"
       - "src/capture/**"
-      - ".github/workflows/mutation.yml"
+      # The config job checks every workflow (timeouts and their
+      # `# observed` annotations), so an edit to any of them re-runs it.
+      - ".github/workflows/**"
   schedule:
     # Mondays at 09:00 UTC.
     - cron: "0 9 * * 1"
@@ -112,6 +116,9 @@ concurrency:
 permissions:
   contents: read
   pull-requests: write
+  # Check 4 in scripts/check-ci-config.py reads each job's recent wall-clock
+  # from the Actions API to compare it against the timeout it declares.
+  actions: read
 
 jobs:
   # Config checks first: they cost about a minute and they cover the three ways
@@ -123,7 +130,7 @@ jobs:
   config:
     name: CI config (paths, shards, timeouts)
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 15  # observed 16s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install cargo-mutants
@@ -135,6 +142,16 @@ jobs:
       - name: Check the CI configuration
         # `cargo mutants --list` parses the workspace; it builds nothing, so the
         # whole job is dominated by checkout and the tool install.
+        #
+        # GITHUB_TOKEN is not in a `run:` step's environment by default, and
+        # checks 4 and 5 need it to read run history. Without it they report
+        # themselves broken rather than passing quietly.
+        #
+        # If check 5 fails, the `# observed` annotations are stale. They are
+        # generated, not hand-written — regenerate and commit:
+        #     python3 scripts/check-ci-config.py --update-observed
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python3 scripts/check-ci-config.py
 
   mutants:
@@ -164,16 +181,30 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - label: validate.rs
-            # `slug` is the same as `label` with forward slashes replaced
-            # by hyphens so it can appear in artifact names (GitHub
-            # rejects `/` in artifact names — see
-            # https://docs.github.com/en/actions/using-workflows/storing-workflow-data-as-artifacts).
-            slug: validate.rs
-            file: crates/birdnet-core/src/config/validate.rs
-            # The validator has been mutation-clean since it was added; any
-            # regression at all is a real test-coverage gap.
-            max_missed: 0
+          # `slug` is the same as `label` with forward slashes replaced
+          # by hyphens so it can appear in artifact names (GitHub
+          # rejects `/` in artifact names — see
+          # https://docs.github.com/en/actions/using-workflows/storing-workflow-data-as-artifacts).
+          #
+          # Two shards. Unsharded, the validator had reached 67 mutants and
+          # 39m00s against the 45-minute default — 87% of budget, and on the
+          # same trajectory that took the detections row down: a timeout
+          # renders as "cancelled", so the row would have stopped gating
+          # without ever going red, and nobody would have been told. Split
+          # before that rather than after, on the measured precedent of
+          # db/migration.rs below, which was split at half this level of risk.
+          # 67 over 2 is 34 33, the same slice size as the shards that run
+          # 12-16 min. Guard: (n-1)*ceil(67/2) = 34 < 67.
+          #
+          # `check_duration_headroom` in scripts/check-ci-config.py now watches
+          # for the next row on this trajectory, so the next one is found by CI
+          # rather than by reading run times by hand.
+          #
+          # The validator has been mutation-clean since it was added; any
+          # regression at all is a real test-coverage gap, so both shards keep
+          # max_missed at 0.
+          - { label: "validate.rs [1/2]", slug: validate.rs-1, shard: "0/2", file: crates/birdnet-core/src/config/validate.rs, max_missed: 0 }
+          - { label: "validate.rs [2/2]", slug: validate.rs-2, shard: "1/2", file: crates/birdnet-core/src/config/validate.rs, max_missed: 0 }
           - label: inference/model.rs
             slug: inference-model.rs
             file: crates/birdnet-core/src/inference/model.rs

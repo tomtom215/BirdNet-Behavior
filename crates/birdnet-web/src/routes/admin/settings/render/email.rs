@@ -19,8 +19,8 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let econf = get_setting(s, "email_min_confidence", "0.80");
     let ecool = get_setting(s, "email_cooldown_secs", "300");
     write!(out, r#"
-  <div class="card">
-    <div class="section-title">Email Alerts (SMTP)</div>
+  <section class="card" id="set-email" aria-labelledby="set-email-h">
+    <h2 class="section-title" id="set-email-h">Email Alerts (SMTP)</h2>
     <p class="hint">Leave SMTP host blank to disable email alerts.</p>
     <div class="grid-2">
       <div>
@@ -78,5 +78,5 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         <p class="hint">Min time between emails per species</p>
       </div>
     </div>
-  </div>"#).unwrap_or_default();
+  </section>"#).unwrap_or_default();
 }

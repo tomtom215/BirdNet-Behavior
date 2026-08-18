@@ -17,8 +17,8 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
     let fmt_ogg = if fmt == "ogg" { " selected" } else { "" };
     let freq_shift = get_setting(s, "freq_shift_hz", "0");
     write!(out, r#"
-  <div class="card">
-    <div class="section-title">Audio Capture</div>
+  <section class="card" id="set-audio" aria-labelledby="set-audio-h">
+    <h2 class="section-title" id="set-audio-h">Audio Capture</h2>
     <p class="hint flush"><a href="/recordings?view=live">▸ Listen live &amp; test your microphone →</a> — confirm the mic is picking up sound before tuning thresholds.</p>
     <div class="grid-2">
       <div>
@@ -67,5 +67,5 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         <p class="hint">Shift pitch of saved clips for accessibility (BirdNET-Pi: FREQ_SHIFT). Requires ffmpeg or sox. Typical: 1000–4000.</p>
       </div>
     </div>
-  </div>"#).unwrap_or_default();
+  </section>"#).unwrap_or_default();
 }

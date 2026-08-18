@@ -97,12 +97,13 @@
 
   --fg:          oklch(22% 0.008 70);
   --fg-2:        oklch(40% 0.008 70);
-  --fg-3:        oklch(55% 0.008 70);
-  --fg-4:        oklch(70% 0.008 70);
+  --fg-3:        oklch(53% 0.008 70);
+  --fg-4:        oklch(55% 0.012 70);
 
   --moss:        oklch(55% 0.09 150);
   --moss-soft:   oklch(92% 0.04 150);
   --moss-ink:    oklch(35% 0.09 150);
+  --on-moss:     oklch(100% 0 0);
 
   --dawn:        oklch(68% 0.12 60);
   --dawn-soft:   oklch(94% 0.05 65);
@@ -161,11 +162,12 @@
   --fg:          oklch(97% 0.004 240);
   --fg-2:        oklch(80% 0.008 240);
   --fg-3:        oklch(60% 0.010 240);
-  --fg-4:        oklch(42% 0.012 240);
+  --fg-4:        oklch(62% 0.014 240);
 
   --moss:        oklch(78% 0.18 150);
   --moss-soft:   oklch(26% 0.10 150);
   --moss-ink:    oklch(90% 0.16 150);
+  --on-moss:     oklch(18% 0.02 150);
 
   --dawn:        oklch(82% 0.18 65);
   --dawn-soft:   oklch(28% 0.10 60);
@@ -283,7 +285,7 @@ a.bnb-pill:hover { text-decoration: none; background: var(--bg-2); }
 .bnb-btn.primary:hover { background: var(--fg-2); }
 .bnb-btn.ghost { background: transparent; border-color: transparent; box-shadow: none; color: var(--fg-2); }
 .bnb-btn.ghost:hover { background: var(--surface-2); }
-.bnb-btn.moss { background: var(--moss); color: oklch(100% 0 0); border-color: transparent; }
+.bnb-btn.moss { background: var(--moss); color: var(--on-moss); border-color: transparent; }
 .bnb-btn.danger { color: var(--rare); border-color: color-mix(in oklch, var(--rare) 40%, var(--border)); }
 
 .bnb-photo {
@@ -469,7 +471,7 @@ tbody tr:hover { background: var(--surface-2); }
   box-shadow: var(--shadow-sm); cursor: pointer; transition: background .12s;
 }
 .btn:hover { background: var(--surface-2); text-decoration: none; }
-.btn-primary { background: var(--moss); color: oklch(100% 0 0); border-color: transparent; }
+.btn-primary { background: var(--moss); color: var(--on-moss); border-color: transparent; }
 .btn-primary:hover { background: var(--moss-ink); }
 .btn.active { background: var(--fg); color: var(--bg); border-color: transparent; }
 
@@ -522,7 +524,7 @@ footer a:hover { color: var(--moss-ink); }
 :focus-visible { outline: 2px solid var(--moss); outline-offset: 2px; border-radius: 2px; }
 .skip-link {
   position: absolute; top: -48px; left: 8px; z-index: 100;
-  background: var(--moss); color: oklch(100% 0 0); padding: 8px 14px; border-radius: var(--r-sm);
+  background: var(--moss); color: var(--on-moss); padding: 8px 14px; border-radius: var(--r-sm);
   transition: top .2s;
 }
 .skip-link:focus { top: 8px; }
@@ -594,7 +596,7 @@ footer a:hover { color: var(--moss-ink); }
   --border-2: oklch(58% 0.012 80);
   --hairline: oklch(82% 0.010 80);
   --fg-3:     oklch(40% 0.010 70);
-  --fg-4:     oklch(55% 0.012 70);
+  --fg-4:     oklch(46% 0.012 70);
 }
 :root[data-contrast="high"][data-theme="dark"] {
   /* Dark theme high-contrast — brighter text/borders. */
@@ -602,7 +604,7 @@ footer a:hover { color: var(--moss-ink); }
   --border-2: oklch(58% 0.022 250);
   --hairline: oklch(40% 0.016 250);
   --fg-3:     oklch(78% 0.012 240);
-  --fg-4:     oklch(62% 0.014 240);
+  --fg-4:     oklch(72% 0.014 240);
 }
 
 /* High-contrast: thicken the half-pixel hairlines that look great at standard
@@ -3103,7 +3105,7 @@ a.spp-inherit    { color: inherit; }
 .rp-day.empty { border: 0; background: transparent; cursor: default; }
 .rp-day .dn { font-family: var(--font-mono); font-size: 11px; color: var(--fg-3); }
 .rp-day .dc { position: absolute; left: 9px; bottom: 7px; font-family: var(--font-display); font-size: 17px; color: var(--fg); }
-.rp-day .dsp { position: absolute; right: 8px; bottom: 8px; font-family: var(--font-mono); font-size: 9px; color: var(--fg-4); }
+.rp-day .dsp { position: absolute; right: 8px; bottom: 8px; font-family: var(--font-mono); font-size: 9px; color: var(--fg); }
 .rp-day.sel { border-color: var(--moss); box-shadow: 0 0 0 1px var(--moss); }
 .rp-legend { display: flex; align-items: center; gap: 5px; margin-top: 12px; justify-content: flex-end; font-size: 10.5px; color: var(--fg-4); }
 .rp-legend span { width: 13px; height: 13px; border-radius: 3px; }
