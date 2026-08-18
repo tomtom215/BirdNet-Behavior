@@ -83,3 +83,7 @@ fuzz/corpus/**
 node_modules/
 package.json
 package-lock.json
+
+# Python bytecode from scripts/ (check-ci-config.py)
+__pycache__/
+*.py[cod]
