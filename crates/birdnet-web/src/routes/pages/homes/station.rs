@@ -71,6 +71,18 @@ pub fn router() -> Router<AppState> {
 /// gated tab handlers so the row is identical across the home.
 pub(crate) fn station_subtabs(active: &str) -> String {
     let mut out = String::with_capacity(1024);
+    // Every Station tab composes its content from a sub-tab strip plus a
+    // fragment, and none of those fragments carries a page heading, so the six
+    // Station screens were the only ones in the app served with no `<h1>` at
+    // all — their first heading was an `<h2 class="st-h3">`. A screen reader
+    // announcing the page had nothing to announce it as, and the heading order
+    // started at level 2. Emitted here rather than per tab so it cannot be
+    // forgotten by the next one added.
+    let label = TABS
+        .iter()
+        .find(|t| t.key == active)
+        .map_or("Station", |t| t.label);
+    let _ = write!(out, r#"<h1 class="sr-only">Station — {label}</h1>"#);
     out.push_str(r#"<nav class="bnb-subtabs" aria-label="Views" data-screen-label="Sub-tabs">"#);
     for t in TABS {
         let href = if t.key == "health" {

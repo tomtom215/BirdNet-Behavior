@@ -79,7 +79,7 @@ pub(crate) const SETTINGS_FORM_CSS: &str = r"<style>
       .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
       .btn { padding: 0.5rem 1.5rem; border-radius: 0.375rem; border: none; cursor: pointer;
                font-weight: 600; font-size: 0.875rem; }
-      .btn-primary { background: var(--moss); color: #fff; }
+      .btn-primary { background: var(--moss); color: var(--on-moss); }
       .btn-primary:hover { background: var(--moss-ink); }
       .alert-success { background: var(--moss-soft); border: 1px solid var(--moss-soft); color: var(--moss-ink);
                          border-radius: 0.375rem; padding: 0.75rem 1rem; margin-bottom: 1rem; }

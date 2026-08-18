@@ -16,6 +16,45 @@ Several of these were invisible to a fully green 2 190-test suite.
 
 ### Fixed
 
+- **The default theme shipped text below the WCAG AA contrast floor, and the
+  gate that should have caught it was configured not to look.** Measured with
+  axe-core across every screen in both themes: **78 serious violations, 1 280
+  offending elements**. The accessibility job passes because `AXE_DISABLE`
+  defaults to `color-contrast,link-in-text-block` — the two rules that were
+  failing. It was not a dark-mode problem; light was worse (42 of the 78).
+
+  The largest single cause was the `--fg-4` ink tier: 2.55:1 in light and
+  2.40:1 in dark, against a 4.5:1 requirement, on 9.9–10.5 px text. The project
+  already knew the safe values — `data-contrast="high"` sets exactly them — so
+  accessibility was available to anyone who went looking for the setting and to
+  nobody else. The default now uses them, and high-contrast moves further out.
+
+  Four more root causes, each measured rather than guessed: `--fg-3` passed
+  against the base background (4.64:1) but not against the tinted surfaces it
+  actually sits on (4.48:1); `.btn-primary` painted hardcoded white on `--moss`,
+  which is a dark green in light (4.67:1) and a bright green in dark (1.87:1),
+  so the app's primary action failed in dark mode; "enabled"/"sent" badges put
+  `--moss` on `--moss-soft` (3.75:1) where `--moss-ink` gives 8.73:1; and the
+  history calendar mixed each cell's fill toward green in proportion to the
+  day's detection count while the label colour stayed fixed, so the busiest days
+  were the least readable — 1.09:1 at the top of the ramp. The ramp now stops at
+  80 % (5.19:1) and the in-cell label no longer uses the faintest tier.
+
+  Together these take the audited violations from 78 to 47. What remains is one
+  class needing a design decision rather than a fix: species-identity colours
+  used as 9.5 px text on pastel tints, at 2.6–3.0:1.
+
+- **The six Station screens had no `<h1>`.** Each composes a sub-tab strip plus
+  a content fragment, and neither carries a page heading, so their first heading
+  was an `<h2>` and a screen reader had no page title to announce.
+
+### Changed
+
+- `.btn-primary` and friends take their ink from a new `--on-moss` token
+  instead of hardcoded white. Six admin pages had re-declared `.btn-primary`
+  inside their own inline `<style>` blocks with `color:#fff`, so the shared
+  component's token could not reach them.
+
 - **Six of the eight `# observed` runtime notes in CI were false, by up to a
   factor of ten.** Each `timeout-minutes:` carried the runtime its budget was
   sized against, written by hand and never revisited, so they had quietly

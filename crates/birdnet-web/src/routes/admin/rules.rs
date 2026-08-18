@@ -234,7 +234,7 @@ pub(crate) fn rules_body() -> String {
       .form-grid { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
       .form-grid-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:1rem; }
       .btn { padding:.5rem 1.25rem; border-radius:.375rem; border:none; cursor:pointer; font-weight:600; font-size:.875rem; }
-      .btn-primary { background:var(--moss); color:#fff; }
+      .btn-primary { background:var(--moss); color:var(--on-moss); }
       .btn-primary:hover { background:var(--moss-ink); }
       .btn-danger { background:var(--rare); color:#fff; }
       .btn-danger:hover { background:var(--rare); }
@@ -245,7 +245,7 @@ pub(crate) fn rules_body() -> String {
       td { padding:.6rem .75rem; border-bottom:1px solid var(--surface); vertical-align:middle; }
       tr:hover td { background:var(--surface)55; }
       .badge { display:inline-block; padding:.15rem .5rem; border-radius:.25rem; font-size:.75rem; font-weight:600; }
-      .badge-green { background:var(--moss-soft); color:var(--moss); }
+      .badge-green { background:var(--moss-soft); color:var(--moss-ink); }
       .badge-gray  { background:var(--surface); color:var(--fg-4); border:1px solid var(--border); }
       .badge-blue  { background:var(--surface); color:var(--moss-ink); }
       .badge-red   { background:var(--rare-soft); color:var(--rare); }

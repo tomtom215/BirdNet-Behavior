@@ -139,7 +139,7 @@ body { background:var(--bg); color:var(--fg); font-family:system-ui,sans-serif; 
 .player-header { padding:1.25rem 1.5rem 0.75rem; }
 .player-header h2 { margin:0 0 0.5rem; font-size:1.3rem; color:var(--fg); }
 .player-meta { display:flex; align-items:center; gap:0.75rem; font-size:0.85rem; color:var(--fg-3); }
-.confidence-badge { background:var(--moss); color:#fff; padding:2px 8px; border-radius:4px; font-weight:600; font-size:0.8rem; }
+.confidence-badge { background:var(--moss); color:var(--on-moss); padding:2px 8px; border-radius:4px; font-weight:600; font-size:0.8rem; }
 .spectrogram-display { position:relative; background:#000; }
 .spectrogram-display img { width:100%; display:block; image-rendering:pixelated; min-height:128px; }
 #playhead-canvas { position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; }
