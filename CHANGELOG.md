@@ -16,6 +16,29 @@ Several of these were invisible to a fully green 2 190-test suite.
 
 ### Fixed
 
+- **"Still expected" read zero for the last six weeks of every year.** The
+  migration page's six-week look-ahead was a day-of-year `BETWEEN` against
+  `strftime('%j','now')` and `strftime('%j','now','+42 days')`. From 20
+  November the end of that window falls in the next calendar year, so its day
+  number is *smaller* than the start's — 20 November 2026 gives `'324' … '001'`
+  — and the range matches nothing at all. The tile reported a confident "0 ·
+  no overdue migrants" through the entire late-autumn arrival season, which is
+  the one stretch of the year it exists for. The window is now expressed as
+  real dates and the prior year's arrivals are re-based onto both this year and
+  next, so crossing the boundary is just the second candidate matching. The
+  same rewrite drops two smaller errors in the old form: `'now'` was UTC
+  against a locally-dated column, and day-of-year is a day out between a leap
+  year and a common one.
+
+- **The migration chart's "today" line was drawn in the wrong place.** It was
+  positioned by `(days since 1970 % 365) / 7`, which is not a week number: it
+  ignores leap days, so it had drifted a fortnight by 2026, and it counts from
+  1970 rather than from January, so on 31 December it returned week 1 and drew
+  the marker at the far left of a chart whose data ends at the far right. It
+  now uses the same `%W` week the chart's own buckets are grouped by, checked
+  against SQLite for agreement. The page's current year is read from the
+  station's local clock for the same reason.
+
 - **Arrival dates drifted by a day whenever a leap year was involved.** The
   phenology queries derived `first_doy`/`last_doy` from a raw day-of-year, which
   from 1 March runs one higher in a leap year — 1 May is day 122 of 2024 and day
