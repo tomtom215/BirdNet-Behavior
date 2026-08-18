@@ -16,6 +16,21 @@ Several of these were invisible to a fully green 2 190-test suite.
 
 ### Fixed
 
+- **A mutation row was 87% of the way into its own timeout and nothing was
+  watching.** The config gate added last cycle checks that a matrix row still
+  matches source, that no shard is empty by construction, and that every job
+  declares a timeout — but never the distance to that timeout. `validate.rs`
+  had grown to 67 mutants and 39m00s against a 45-minute budget, and the only
+  reason anyone knew was reading run times by hand. It is the same trajectory
+  that took `sqlite/queries/detections` down: a job cancelled at its budget
+  renders as a grey badge rather than a red one, so the row stops gating
+  without ever going red. `validate.rs` is now split across two shards (34 and
+  33 mutants, enumerated rather than derived), and the gate reads each job's
+  recent wall-clock from the Actions API and fails any job that has used more
+  than 75% of the budget it declares. Pointed at the unsharded row it reports
+  it at 87%, alone among 56 jobs — the finding that prompted this, now found by
+  CI instead of by hand.
+
 - **"Still expected" read zero for the last six weeks of every year.** The
   migration page's six-week look-ahead was a day-of-year `BETWEEN` against
   `strftime('%j','now')` and `strftime('%j','now','+42 days')`. From 20
