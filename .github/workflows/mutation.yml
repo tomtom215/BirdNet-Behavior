@@ -114,6 +114,29 @@ permissions:
   pull-requests: write
 
 jobs:
+  # Config checks first: they cost about a minute and they cover the three ways
+  # this matrix has silently stopped testing things — a row aimed at a path that
+  # no longer exists, a shard that is empty by construction, and a job with no
+  # timeout. All three previously shipped and stayed broken for weeks, because
+  # each fails in a direction that looks fine from the outside. See
+  # scripts/check-ci-config.py for the incident behind every assertion.
+  config:
+    name: CI config (paths, shards, timeouts)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2.85.4
+        with:
+          tool: cargo-mutants
+      - name: Install PyYAML
+        run: pip install --quiet pyyaml
+      - name: Check the CI configuration
+        # `cargo mutants --list` parses the workspace; it builds nothing, so the
+        # whole job is dominated by checkout and the tool install.
+        run: python3 scripts/check-ci-config.py
+
   mutants:
     name: cargo-mutants on ${{ matrix.label }}
     runs-on: ubuntu-24.04
@@ -229,16 +252,18 @@ jobs:
           - { label: "sqlite/queries/detections/*.rs [2/4]", slug: sqlite-queries-detections-2, shard: "1/4", file: "crates/birdnet-db/src/sqlite/queries/detections/*.rs", package: birdnet-db, max_missed: 0 }
           - { label: "sqlite/queries/detections/*.rs [3/4]", slug: sqlite-queries-detections-3, shard: "2/4", file: "crates/birdnet-db/src/sqlite/queries/detections/*.rs", package: birdnet-db, max_missed: 0 }
           - { label: "sqlite/queries/detections/*.rs [4/4]", slug: sqlite-queries-detections-4, shard: "3/4", file: "crates/birdnet-db/src/sqlite/queries/detections/*.rs", package: birdnet-db, max_missed: 0 }
-          - label: db/migration.rs
-            slug: db-migration.rs
-            file: crates/birdnet-db/src/migration.rs
-            package: birdnet-db
-            # Added with the pre-migration backup and the `--migration-report`
-            # dry-run. Migration 24 rewrites rows that already exist and cannot
-            # be undone, so the predicates deciding *which* rows move, and the
-            # branch deciding whether a backup was taken at all, are the two
-            # places where a survived mutant costs an operator their history.
-            max_missed: 0
+          # Two shards. 56 mutants unsharded took 23m13s — the longest job in
+          # the matrix and the next one that would have hit the 45-minute wall
+          # as it grew, which is exactly how the detections row went unnoticed.
+          # 56 over 2 is 28 28 (measured), the same slice size as the detections
+          # shards, which run 12-16 min. Guard: (n-1)*ceil(56/2) = 28 < 56.
+          # Added with the pre-migration backup and the `--migration-report`
+          # dry-run. Migration 24 rewrites rows that already exist and cannot
+          # be undone, so the predicates deciding *which* rows move, and the
+          # branch deciding whether a backup was taken at all, are the two
+          # places where a survived mutant costs an operator their history.
+          - { label: "db/migration.rs [1/2]", slug: db-migration.rs-1, shard: "0/2", file: crates/birdnet-db/src/migration.rs, package: birdnet-db, max_missed: 0 }
+          - { label: "db/migration.rs [2/2]", slug: db-migration.rs-2, shard: "1/2", file: crates/birdnet-db/src/migration.rs, package: birdnet-db, max_missed: 0 }
           # ── Binary-crate shards (the birdnet-behavior binary) ───────────────
           # These mutate the binary's own modules, so every mutant relinks the
           # binary against the statically-bundled DuckDB. Three economics layers
@@ -566,10 +591,17 @@ jobs:
           # is the property this gate exists to hold — it is how the
           # `detections.rs` row was caught after two months of pointing at a
           # path that had been split into a directory.
+          #
+          # `matrix.package` is optional and defaults to birdnet-core (see the
+          # run step above). Passing it through bare would send `--package ""`
+          # for every row that omits it, which enumerates 0 mutants no matter
+          # what the file holds — the check would then always claim the path
+          # matched no source, and could never recognise a legitimately empty
+          # shard. Same default, same expression, in both places.
           if [ "${{ github.event_name }}" != "pull_request" ]; then
             if [ -z "$missed" ] || [ -z "$total" ] || [ "$total" -eq 0 ]; then
               file_mutants=$(cargo mutants --list \
-                --package "${{ matrix.package }}" \
+                --package "${{ matrix.package || 'birdnet-core' }}" \
                 --file "${{ matrix.file }}" \
                 --no-shuffle 2>/dev/null | wc -l)
               if [ "$file_mutants" -eq 0 ]; then
