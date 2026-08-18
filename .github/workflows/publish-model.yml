@@ -47,6 +47,7 @@ jobs:
   publish-model:
     name: Mirror model from Zenodo and publish
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     permissions:
       contents: write     # create the release + upload assets
       id-token: write     # OIDC token for SLSA attestation

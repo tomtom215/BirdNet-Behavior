@@ -28,11 +28,21 @@ env:
   CARGO_INCREMENTAL: 0
   RUST_BACKTRACE: 1
 
+# Every job below carries an explicit `timeout-minutes`. Without one GitHub
+# applies a 6-hour default, and a step that hangs rather than fails burns all
+# six before anything goes red — on a pull request that renders as "still
+# running", which is indistinguishable from a slow queue. That is not
+# hypothetical: `cross-aarch64` once sat 1h27m inside `apt-get install` having
+# built nothing, and the run had to be cancelled by hand. The budgets are the
+# warm-cache durations noted per job, rounded well up so a cold cache or a
+# slow runner never trips them; they exist to catch a hang, not to police
+# performance.
 jobs:
   # ── fmt ────────────────────────────────────────────────────────────────────
   fmt:
     name: Format (rustfmt)
     runs-on: ubuntu-24.04
+    timeout-minutes: 10  # observed 11s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain (stable + rustfmt)
@@ -46,6 +56,7 @@ jobs:
   clippy:
     name: Clippy (pedantic + nursery)
     runs-on: ubuntu-24.04
+    timeout-minutes: 30  # observed 54s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain (stable + clippy)
@@ -77,6 +88,7 @@ jobs:
   test:
     name: Tests (x86_64)
     runs-on: ubuntu-24.04
+    timeout-minutes: 45  # observed 10m42s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Free up runner disk space
@@ -170,6 +182,7 @@ jobs:
   inference:
     name: Inference against the real model
     runs-on: ubuntu-24.04
+    timeout-minutes: 30  # observed 1m50s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Free up runner disk space
@@ -257,6 +270,7 @@ jobs:
   doc:
     name: Rustdoc (no broken links)
     runs-on: ubuntu-24.04
+    timeout-minutes: 30  # observed 51s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain
@@ -278,6 +292,7 @@ jobs:
   build:
     name: Build (debug, all features)
     runs-on: ubuntu-24.04
+    timeout-minutes: 30  # observed 1m17s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain
@@ -309,6 +324,7 @@ jobs:
   msrv:
     name: MSRV (Rust 1.95)
     runs-on: ubuntu-24.04
+    timeout-minutes: 30  # observed 42s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
@@ -365,6 +381,7 @@ jobs:
   cross-aarch64:
     name: Cross-check (aarch64 / Raspberry Pi)
     runs-on: ubuntu-24.04
+    timeout-minutes: 40  # observed 10m23s
     # Catch Pi-breaking changes (target-specific cfg, libduckdb cross-compile,
     # pointer-width assumptions) at PR time instead of only at release tagging,
     # which is the sole place aarch64 was built before. `check` keeps it cheap

@@ -33,6 +33,7 @@ jobs:
   cargo-deny:
     name: cargo-deny
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain
@@ -50,6 +51,7 @@ jobs:
   cargo-audit:
     name: cargo-audit
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain
@@ -66,6 +68,7 @@ jobs:
   cargo-machete:
     name: cargo-machete (unused dependencies)
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install cargo-machete
@@ -78,6 +81,7 @@ jobs:
   typos:
     name: Spelling (typos)
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Run typos
@@ -96,6 +100,7 @@ jobs:
   shellcheck:
     name: shellcheck (bootstrap scripts)
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: install.sh is generated from installer/lib (no drift)

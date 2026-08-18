@@ -114,17 +114,48 @@ permissions:
   pull-requests: write
 
 jobs:
+  # Config checks first: they cost about a minute and they cover the three ways
+  # this matrix has silently stopped testing things — a row aimed at a path that
+  # no longer exists, a shard that is empty by construction, and a job with no
+  # timeout. All three previously shipped and stayed broken for weeks, because
+  # each fails in a direction that looks fine from the outside. See
+  # scripts/check-ci-config.py for the incident behind every assertion.
+  config:
+    name: CI config (paths, shards, timeouts)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2.85.4
+        with:
+          tool: cargo-mutants
+      - name: Install PyYAML
+        run: pip install --quiet pyyaml
+      - name: Check the CI configuration
+        # `cargo mutants --list` parses the workspace; it builds nothing, so the
+        # whole job is dominated by checkout and the tool install.
+        run: python3 scripts/check-ci-config.py
+
   mutants:
     name: cargo-mutants on ${{ matrix.label }}
     runs-on: ubuntu-24.04
     # Matrix-driven so the slow binary-crate shards get a longer budget. The
-    # library-crate shards (birdnet-core / birdnet-db) reuse a warm `target/`
-    # and finish well inside 45 min; the binary-crate shards (the binary's own
-    # src/daemon/ + src/capture/* modules) relink the statically-bundled DuckDB
-    # per mutant, so the larger files are split across several `--shard` jobs
-    # (see the matrix) and each sets `timeout_minutes: 120`. Splitting keeps the
-    # critical path near one baseline build instead of growing with the whole
-    # file's mutant count, which had been overrunning the wall.
+    # binary-crate shards (the binary's own src/daemon/ + src/capture/* modules)
+    # relink the statically-bundled DuckDB per mutant, so the larger files are
+    # split across several `--shard` jobs (see the matrix) and each sets
+    # `timeout_minutes: 120`. Splitting keeps the critical path near one
+    # baseline build instead of growing with the whole file's mutant count,
+    # which had been overrunning the wall.
+    #
+    # This used to say the library-crate rows (birdnet-core / birdnet-db) reuse
+    # a warm `target/` and "finish well inside 45 min", so they needed no split.
+    # That stopped being true: the detections glob reached 109 mutants and was
+    # cancelled at the 45-minute default on three consecutive full runs without
+    # anyone noticing, because a timeout renders as "cancelled" rather than
+    # "failed". Mutant count, not crate kind, decides whether a row fits — size
+    # a row by counting (`cargo mutants --list --package P --file F | wc -l`),
+    # not by which crate it lives in.
     timeout-minutes: ${{ matrix.timeout_minutes || 45 }}
     strategy:
       # One file's surviving mutants must not abort the rest of the matrix —
@@ -190,33 +221,49 @@ jobs:
             # is a wrong `Date` on every detection, because the filename *is*
             # the timestamp. 0 missed: 82 caught, 1 unviable.
             max_missed: 0
-          - label: sqlite/queries/detections/*.rs
-            slug: sqlite-queries-detections
-            # Globbed, because this stopped being one file in 0.7.2 (#145),
-            # which split it into mod/read/write/search/locks. The matrix kept
-            # naming `detections.rs` and nothing noticed for two months: the
-            # job matched no source, produced no mutants, and the gate below
-            # read an empty count as "0 missed" and went green. The comment on
-            # civil.rs one row up warns about exactly this move dropping a file
-            # out of coverage — it happened here instead, and silently.
-            file: crates/birdnet-db/src/sqlite/queries/detections/*.rs
-            package: birdnet-db
-            # The detections-CRUD layer. PR #35 caught a positional-VALUES
-            # / column-list-drift bug here; the explicit column list +
-            # 30+ tests we have today should make every mutant
-            # observable, but the gate stays at 0 missed so a future
-            # regression of the same shape lights up immediately.
-            max_missed: 0
-          - label: db/migration.rs
-            slug: db-migration.rs
-            file: crates/birdnet-db/src/migration.rs
-            package: birdnet-db
-            # Added with the pre-migration backup and the `--migration-report`
-            # dry-run. Migration 24 rewrites rows that already exist and cannot
-            # be undone, so the predicates deciding *which* rows move, and the
-            # branch deciding whether a backup was taken at all, are the two
-            # places where a survived mutant costs an operator their history.
-            max_missed: 0
+          # Globbed, because this stopped being one file in 0.7.2 (#145),
+          # which split it into mod/read/write/search/locks. The matrix kept
+          # naming `detections.rs` and nothing noticed for two months: the
+          # job matched no source, produced no mutants, and the gate below
+          # read an empty count as "0 missed" and went green. The comment on
+          # civil.rs one row up warns about exactly this move dropping a file
+          # out of coverage — it happened here instead, and silently.
+          #
+          # The detections-CRUD layer. PR #35 caught a positional-VALUES /
+          # column-list-drift bug here; the explicit column list + 30+ tests we
+          # have today should make every mutant observable, but the gate stays
+          # at 0 missed so a future regression of the same shape lights up
+          # immediately.
+          #
+          # Four shards, and the reason is measured rather than assumed: the
+          # glob now yields 109 mutants, and unsharded it did not fit the
+          # 45-minute default — it was cancelled at 45m on three separate full
+          # mutant runs (the v0.14.0-era push, and twice more, the second on a
+          # completely idle runner pool, which rules out contention). A
+          # timeout renders as "cancelled", which reads as benign, so this row
+          # had never once completed a full run and its gate had never
+          # actually gated. Splitting is the fix rather than a bigger budget:
+          # 109/4 is 28 28 28 25 (measured, not derived), in the same range as
+          # src/daemon/*.rs at 20/shard, which finishes comfortably. Shard
+          # counts here must also satisfy `(n-1)*ceil(total/n) < total` or the
+          # tail shard is empty by construction — see src/capture/schedule.rs
+          # below; at n=4 that is 84 < 109.
+          - { label: "sqlite/queries/detections/*.rs [1/4]", slug: sqlite-queries-detections-1, shard: "0/4", file: "crates/birdnet-db/src/sqlite/queries/detections/*.rs", package: birdnet-db, max_missed: 0 }
+          - { label: "sqlite/queries/detections/*.rs [2/4]", slug: sqlite-queries-detections-2, shard: "1/4", file: "crates/birdnet-db/src/sqlite/queries/detections/*.rs", package: birdnet-db, max_missed: 0 }
+          - { label: "sqlite/queries/detections/*.rs [3/4]", slug: sqlite-queries-detections-3, shard: "2/4", file: "crates/birdnet-db/src/sqlite/queries/detections/*.rs", package: birdnet-db, max_missed: 0 }
+          - { label: "sqlite/queries/detections/*.rs [4/4]", slug: sqlite-queries-detections-4, shard: "3/4", file: "crates/birdnet-db/src/sqlite/queries/detections/*.rs", package: birdnet-db, max_missed: 0 }
+          # Two shards. 56 mutants unsharded took 23m13s — the longest job in
+          # the matrix and the next one that would have hit the 45-minute wall
+          # as it grew, which is exactly how the detections row went unnoticed.
+          # 56 over 2 is 28 28 (measured), the same slice size as the detections
+          # shards, which run 12-16 min. Guard: (n-1)*ceil(56/2) = 28 < 56.
+          # Added with the pre-migration backup and the `--migration-report`
+          # dry-run. Migration 24 rewrites rows that already exist and cannot
+          # be undone, so the predicates deciding *which* rows move, and the
+          # branch deciding whether a backup was taken at all, are the two
+          # places where a survived mutant costs an operator their history.
+          - { label: "db/migration.rs [1/2]", slug: db-migration.rs-1, shard: "0/2", file: crates/birdnet-db/src/migration.rs, package: birdnet-db, max_missed: 0 }
+          - { label: "db/migration.rs [2/2]", slug: db-migration.rs-2, shard: "1/2", file: crates/birdnet-db/src/migration.rs, package: birdnet-db, max_missed: 0 }
           # ── Binary-crate shards (the birdnet-behavior binary) ───────────────
           # These mutate the binary's own modules, so every mutant relinks the
           # binary against the statically-bundled DuckDB. Three economics layers
@@ -544,10 +591,17 @@ jobs:
           # is the property this gate exists to hold — it is how the
           # `detections.rs` row was caught after two months of pointing at a
           # path that had been split into a directory.
+          #
+          # `matrix.package` is optional and defaults to birdnet-core (see the
+          # run step above). Passing it through bare would send `--package ""`
+          # for every row that omits it, which enumerates 0 mutants no matter
+          # what the file holds — the check would then always claim the path
+          # matched no source, and could never recognise a legitimately empty
+          # shard. Same default, same expression, in both places.
           if [ "${{ github.event_name }}" != "pull_request" ]; then
             if [ -z "$missed" ] || [ -z "$total" ] || [ "$total" -eq 0 ]; then
               file_mutants=$(cargo mutants --list \
-                --package "${{ matrix.package }}" \
+                --package "${{ matrix.package || 'birdnet-core' }}" \
                 --file "${{ matrix.file }}" \
                 --no-shuffle 2>/dev/null | wc -l)
               if [ "$file_mutants" -eq 0 ]; then
