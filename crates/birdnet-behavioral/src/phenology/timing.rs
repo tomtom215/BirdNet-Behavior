@@ -5,8 +5,10 @@
 //! migration windows.
 //!
 //! Every day-of-year this module emits is projected onto a common (non-leap)
-//! year and so runs 1–365; `DOY_EXPR` explains why comparing raw day
-//! numbers across years is wrong.
+//! year and so runs 1–365. Raw day numbers are not comparable across years —
+//! from 1 March a leap year runs one day ahead of a common one — and these
+//! queries exist to compare years, so the projection is applied before any
+//! comparison rather than left to the caller.
 //!
 //! Queries read the `detections_ts` view rather than the `detections` table, so
 //! `detection_date` arrives already typed as a `DATE`. `Date` itself is
@@ -81,8 +83,9 @@ const DOY_EXPR: &str = "CAST(CASE
 ///
 /// Returns one row per (species, year) combination containing:
 /// - `first_detection`, `last_detection` (ISO 8601 dates)
-/// - `first_doy`, `last_doy` (day-of-year 1–365, common-year basis — see
-///   [`DOY_EXPR`]; the ISO dates beside them are the exact ones)
+/// - `first_doy`, `last_doy` (day-of-year 1–365, projected onto a common year
+///   so one calendar date is one number in every year; 29 February folds onto
+///   28 February's day 59, and the ISO dates beside them stay exact)
 /// - `presence_days` (approximate number of days between first and last)
 /// - `detection_count`
 ///
@@ -137,10 +140,12 @@ pub fn phenology_timing_sql(params: &PhenologyParams) -> String {
 /// Uses `DuckDB` `percentile_cont` window functions.
 ///
 /// Because the percentiles are taken *across years*, the day numbers they run
-/// over are projected onto a common year first — see [`DOY_EXPR`] for
-/// why a raw day-of-year cannot be averaged between a leap year and a common
-/// one. All six `*_doy` outputs are therefore on the 1–365 common-year scale,
-/// and converting one back to a date means reading it in a non-leap year.
+/// over are projected onto a common year first: from 1 March a leap year runs
+/// one day ahead, so averaging raw day-of-year values between a leap year and a
+/// common one moves the answer by up to a day in a query whose whole purpose is
+/// dating arrivals. All six `*_doy` outputs are therefore on the 1–365
+/// common-year scale, and converting one back to a date means reading it in a
+/// non-leap year.
 ///
 /// # Species this cannot describe, and why it now says so
 ///
