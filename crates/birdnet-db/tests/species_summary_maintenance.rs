@@ -286,10 +286,38 @@ fn species_summary_is_maintained_by_every_delete_path() {
     // The same shape the write-path test ends with: several species, one of
     // them present in a single bucket, and one rejected detection that was
     // never counted.
-    insert(&conn, "2026-01-01", "06:15:00", "Turdus merula", "Blackbird", 0.90);
-    insert(&conn, "2026-01-01", "06:45:00", "Turdus merula", "Blackbird", 0.80);
-    insert(&conn, "2026-01-01", "18:05:00", "Turdus philomelos", "Song Thrush", 0.70);
-    insert(&conn, "2026-01-02", "06:05:00", "Parus major", "Great Tit", 0.60);
+    insert(
+        &conn,
+        "2026-01-01",
+        "06:15:00",
+        "Turdus merula",
+        "Blackbird",
+        0.90,
+    );
+    insert(
+        &conn,
+        "2026-01-01",
+        "06:45:00",
+        "Turdus merula",
+        "Blackbird",
+        0.80,
+    );
+    insert(
+        &conn,
+        "2026-01-01",
+        "18:05:00",
+        "Turdus philomelos",
+        "Song Thrush",
+        0.70,
+    );
+    insert(
+        &conn,
+        "2026-01-02",
+        "06:05:00",
+        "Parus major",
+        "Great Tit",
+        0.60,
+    );
     conn.execute(
         "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, review_verdict)
          VALUES ('2026-01-04', '09:00:00', 'Corvus corax', 'Raven', 0.51, 'r.wav', 'rejected')",
