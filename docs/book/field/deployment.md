@@ -242,9 +242,12 @@ A captured clip from the gained source should be audibly louder (or quieter for
 a negative dB cut) than at unity gain.
 
 **Quiet window (`schedule_quiet`).** Set a window that *currently* includes the
-time of day, **in UTC** — the quiet window shares the recording schedule's clock
-basis (the fixed/solar window is evaluated in UTC too). Within ~2 reconcile
-ticks (≈ a few seconds) the source's capture subprocess stops:
+time of day, **in the station's local time** — a quiet window means the
+operator's night, so it is evaluated against the local clock, as is a
+`fixed:HH:MM-HH:MM` recording window. (A **solar** schedule is not: sunrise and
+sunset are absolute instants, so that gate is evaluated in UTC and needs no
+timezone thought at all.) Within ~2 reconcile ticks (≈ a few seconds) the
+source's capture subprocess stops:
 
 ```bash
 journalctl -u birdnet-behavior -f

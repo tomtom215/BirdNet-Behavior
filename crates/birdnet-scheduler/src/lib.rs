@@ -34,6 +34,6 @@ pub mod window;
 
 pub use error::SchedulerError;
 pub use inhibit::NightInhibit;
-pub use schedule::{DailySchedule, ScheduleConfig};
+pub use schedule::{DailySchedule, ScheduleClock, ScheduleConfig};
 pub use solar::{Location, SolarDay};
 pub use window::{RecordingWindow, TimeOfDay, WindowKind};

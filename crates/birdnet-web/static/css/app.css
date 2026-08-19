@@ -3416,6 +3416,30 @@ a.bk-download    { color: var(--moss-ink); font-size: .8rem; text-decoration: no
 input.aud-edit-label  { font-size: 14.5px; padding: 6px 8px; border-radius: 6px; border: 0.5px solid var(--border-2); background: var(--bg-2); color: var(--fg); }
 input.aud-edit-device { font-size: 12px; padding: 6px 8px; border-radius: 6px; border: 0.5px solid var(--border-2); background: var(--bg-2); color: var(--fg); }
 
+/* Per-source quiet window. `.aud-edit-form` is `display: contents`, so this
+   block is a grid child of `.audio-source` alongside the id and the buttons;
+   it spans the full row because two time inputs plus their hint do not fit
+   beside the device fields at the narrow end of the range. */
+.aud-edit-quiet {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.aud-edit-quiet .hint { flex-basis: 100%; margin: 2px 0 0; }
+input.aud-edit-time {
+  font-size: 12.5px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 0.5px solid var(--border-2);
+  background: var(--bg-2);
+  color: var(--fg);
+  /* Chromium renders the native picker indicator dark-on-dark otherwise. */
+  color-scheme: light dark;
+}
+
 /* admin/mod.rs — admin shell nav + sign-out. */
 a.am-nav-active   { color: var(--moss-ink); font-weight: 500; }
 /* v3 spine: the shell nav is grouped into the six Station task clusters. The
@@ -4129,3 +4153,17 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); 
     overflow-wrap: anywhere;
   }
 }
+
+
+/* Provenance note — "some of these charts include another site's history".
+   Rendered above the Patterns sub-tabs, and only when a genuinely different
+   site was imported, so it is allowed to be prominent. */
+.prov-note {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 14px;
+  border-left: 3px solid var(--dawn, var(--border-2));
+}
+.prov-note__body { margin: 0; max-width: 68ch; }

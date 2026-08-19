@@ -39,7 +39,7 @@ pub(super) fn check_clock(config: Option<&Config>) -> Vec<Check> {
         .map(ToOwned::to_owned)
         .or_else(|| setting_from_db(config, "recording_schedule"))
         .as_deref()
-        .and_then(schedule_timezone_check)
+        .and_then(|s| schedule_timezone_check(s, birdnet_db::clock::local_utc_offset_secs()))
     {
         out.push(check);
     }
@@ -159,17 +159,28 @@ fn clock_check_for(now: u64) -> Check {
 
 /// Surface that a FIXED recording window is evaluated in UTC; `None` for
 /// solar / all-day schedules, which need no timezone (pure, for testing).
-fn schedule_timezone_check(schedule: &str) -> Option<Check> {
-    if schedule.trim().to_ascii_lowercase().starts_with("fixed:") {
-        Some(Check::warn(
-            "Recording schedule timezone",
-            format!("the fixed window {schedule:?} is evaluated in UTC, not local time"),
-            "express the hours in UTC, or use a timezone-independent solar schedule \
-             (RECORDING_SCHEDULE=solar / sunrise-to-sunset)",
-        ))
-    } else {
-        None
+fn schedule_timezone_check(schedule: &str, offset_secs: i64) -> Option<Check> {
+    if !schedule.trim().to_ascii_lowercase().starts_with("fixed:") {
+        return None;
     }
+    if offset_secs == 0 {
+        return Some(Check::pass(
+            "Recording schedule timezone",
+            format!(
+                "the fixed window {schedule:?} is evaluated in local time (this station is on UTC, so the hours are unchanged)"
+            ),
+        ));
+    }
+    let sign = if offset_secs < 0 { '-' } else { '+' };
+    let (h, m) = (offset_secs.abs() / 3600, (offset_secs.abs() % 3600) / 60);
+    Some(Check::pass(
+        "Recording schedule timezone",
+        format!(
+            "the fixed window {schedule:?} is evaluated in local time (UTC{sign}{h:02}:{m:02}). \
+             Earlier releases evaluated it in UTC — if these hours were chosen to compensate \
+             for that, set them to the local hours you actually want"
+        ),
+    ))
 }
 
 #[cfg(test)]
@@ -193,18 +204,57 @@ mod tests {
         );
     }
 
+    /// The window is local time now, and the report has to say which hours that
+    /// actually means — an operator who set UTC hours to compensate for the old
+    /// behaviour would otherwise be silently shifted.
     #[test]
-    fn fixed_schedule_warns_about_utc() {
-        let check = schedule_timezone_check("fixed:06:00-20:00").expect("fixed should warn");
-        assert_eq!(check.status, Status::Warn);
-        assert!(check.message.contains("UTC"));
+    fn fixed_schedule_reports_the_local_interpretation() {
+        let check =
+            schedule_timezone_check("fixed:06:00-20:00", 2 * 3600).expect("fixed should report");
+        assert_eq!(check.status, Status::Pass);
+        assert!(
+            check.message.contains("local time"),
+            "got {:?}",
+            check.message
+        );
+        assert!(
+            check.message.contains("UTC+02:00"),
+            "the offset must be named so the operator can check it: {:?}",
+            check.message
+        );
+        assert!(
+            check.message.contains("compensate"),
+            "an upgrading station needs to be told the interpretation changed: {:?}",
+            check.message
+        );
+    }
+
+    /// A negative offset must read as a negative offset, not as a stray minus.
+    #[test]
+    fn fixed_schedule_reports_a_western_offset() {
+        let check = schedule_timezone_check("fixed:06:00-20:00", -8 * 3600).expect("reports");
+        assert!(check.message.contains("UTC-08:00"), "{:?}", check.message);
+    }
+
+    /// On a UTC station nothing changed, and saying "compensate" there would be
+    /// advice to act on a difference that does not exist.
+    #[test]
+    fn fixed_schedule_on_a_utc_station_says_nothing_changed() {
+        let check = schedule_timezone_check("fixed:06:00-20:00", 0).expect("reports");
+        assert_eq!(check.status, Status::Pass);
+        assert!(check.message.contains("unchanged"), "{:?}", check.message);
+        assert!(!check.message.contains("compensate"));
     }
 
     #[test]
     fn solar_and_all_day_have_no_timezone_caveat() {
-        assert!(schedule_timezone_check("solar").is_none());
-        assert!(schedule_timezone_check("all-day").is_none());
-        assert!(schedule_timezone_check("sunrise-to-sunset").is_none());
+        // The offset must make no difference either: only a fixed window has a
+        // timezone question to answer.
+        for offset in [-8 * 3600, 0, 2 * 3600] {
+            assert!(schedule_timezone_check("solar", offset).is_none());
+            assert!(schedule_timezone_check("all-day", offset).is_none());
+            assert!(schedule_timezone_check("sunrise-to-sunset", offset).is_none());
+        }
     }
 
     #[test]
