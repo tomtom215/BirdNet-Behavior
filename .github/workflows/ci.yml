@@ -319,6 +319,17 @@ jobs:
           fi
       - name: Build with analytics feature
         run: cargo build --workspace --all-features
+      - name: The documented Docker quickstart actually starts the daemon
+        # `docker compose config` is client-side, so this needs no daemon and no
+        # image — it resolves the container environment the compose file would
+        # produce and starts the real binary under it.
+        #
+        # It exists because nothing else covered that path: docker.yml's only
+        # container check runs `--verify-extension` with `--entrypoint` bypassed
+        # and no environment at all, and the Rust suite never sees an
+        # environment variable. Four blank `${VAR:-}` interpolations were enough
+        # to stop `docker compose up` starting, in a loop, undetected.
+        run: ./scripts/check-compose-startup.sh target/debug/birdnet-behavior
 
   # ── msrv ───────────────────────────────────────────────────────────────────
   msrv:
