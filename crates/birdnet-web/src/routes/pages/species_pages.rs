@@ -400,6 +400,11 @@ async fn species_detail_page(
     let com_name = name.clone();
     let sci_name = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
+            // Raw `detections` on purpose. This resolves a display name, not a
+            // number: a species whose every detection has been rejected is gone
+            // from the species list and every aggregate, but a link to its page
+            // may still exist. Reading the analytic view here would render that
+            // page nameless rather than empty-but-explained.
             conn.query_row(
                 "SELECT Sci_Name FROM detections WHERE Com_Name = ?1 LIMIT 1",
                 [&com_name],
@@ -748,7 +753,7 @@ async fn species_hero_partial(
             // knows has been reclaimed.
             let sql = format!(
                 "SELECT Date, Time, Confidence, File_Name \
-                 FROM detections \
+                 FROM detections_analytic \
                  WHERE Com_Name = ?1 AND {clip} \
                  ORDER BY Confidence DESC LIMIT 1",
                 clip = birdnet_db::sqlite::CLIP_AVAILABLE,

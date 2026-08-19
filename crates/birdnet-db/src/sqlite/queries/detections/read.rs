@@ -126,7 +126,7 @@ pub fn detection_count_for_species_date(
     sci_name: &str,
 ) -> Result<i64, DbError> {
     conn.query_row(
-        "SELECT COUNT(*) FROM detections WHERE Date = ?1 AND Sci_Name = ?2",
+        "SELECT COUNT(*) FROM detections_analytic WHERE Date = ?1 AND Sci_Name = ?2",
         params![date, sci_name],
         |row| row.get(0),
     )
@@ -211,7 +211,7 @@ pub fn best_detections_for_date(
     limit: u32,
 ) -> Result<Vec<DetectionRow>, DbError> {
     let sql = format!(
-        "SELECT {DETECTION_COLS} FROM detections \
+        "SELECT {DETECTION_COLS} FROM detections_analytic \
          WHERE Date = ?1 AND {CLIP_AVAILABLE} \
          ORDER BY Confidence DESC, Time DESC LIMIT ?2"
     );
@@ -738,7 +738,7 @@ pub fn todays_source_activity(
 /// Returns `DbError` on query failure.
 pub fn detection_dates(conn: &Connection, limit: u32) -> Result<Vec<String>, DbError> {
     let mut stmt =
-        conn.prepare("SELECT DISTINCT Date FROM detections ORDER BY Date DESC LIMIT ?1")?;
+        conn.prepare("SELECT DISTINCT Date FROM detections_analytic ORDER BY Date DESC LIMIT ?1")?;
     let rows = stmt
         .query_map(params![limit], |row| row.get(0))?
         .collect::<Result<Vec<String>, _>>()?;
@@ -755,7 +755,7 @@ pub fn species_for_date(
     date: &str,
 ) -> Result<Vec<(String, String, i64)>, DbError> {
     let mut stmt = conn.prepare(
-        "SELECT Com_Name, Sci_Name, COUNT(*) as cnt FROM detections \
+        "SELECT Com_Name, Sci_Name, COUNT(*) as cnt FROM detections_analytic \
          WHERE Date = ?1 GROUP BY Com_Name, Sci_Name ORDER BY cnt DESC",
     )?;
     let rows = stmt
@@ -777,7 +777,7 @@ pub fn species_for_date(
 pub fn detections_per_day(conn: &Connection) -> Result<Vec<DayCount>, DbError> {
     let mut stmt = conn.prepare(
         "SELECT Date, COUNT(*) AS n, COUNT(DISTINCT Com_Name) AS sp \
-         FROM detections GROUP BY Date ORDER BY Date",
+         FROM detections_analytic GROUP BY Date ORDER BY Date",
     )?;
     let rows = stmt
         .query_map([], |row| {

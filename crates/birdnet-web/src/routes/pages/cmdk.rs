@@ -419,7 +419,7 @@ async fn species_hits(state: &AppState, qlc: &str, limit: usize) -> Vec<Entry> {
             let limit_i64 = i64::try_from(limit).unwrap_or(8);
             let Ok(mut stmt) = conn.prepare(
                 "SELECT Com_Name, Sci_Name, COUNT(*) AS n
-                   FROM detections
+                   FROM detections_analytic
                   WHERE LOWER(Com_Name) LIKE ?1
                      OR LOWER(Sci_Name) LIKE ?1
                   GROUP BY Com_Name, Sci_Name
@@ -465,7 +465,7 @@ async fn render_recent(out: &mut String, state: &AppState) {
         state2.with_db(|conn| {
             let Ok(mut stmt) = conn.prepare(
                 "SELECT Com_Name, Date || ' ' || Time AS at
-                   FROM detections
+                   FROM detections_analytic
                   ORDER BY Date DESC, Time DESC
                   LIMIT 4",
             ) else {

@@ -45,10 +45,22 @@ fn station(dir: &std::path::Path) -> (AppState, String) {
         ("07:15:00", "Erithacus rubecula", "European Robin"),
         ("08:15:00", "Parus major", "Great Tit"),
     ] {
+        // `File_Name` is set because `best_detections_for_date` filters on
+        // `CLIP_AVAILABLE` — a fixture without one exercises none of it and
+        // would let that surface pass the gate below by returning nothing. The
+        // confidence is above 0.85 for the same reason: `/feeds/rare.*` filters
+        // on `Confidence > 0.85`, so a fixture at exactly 0.85 makes the feed
+        // empty and every assertion about it vacuous.
         conn.execute(
-            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
-             VALUES (?1, ?2, ?3, ?4, 0.85)",
-            rusqlite::params![&today, time, sci, com],
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+             VALUES (?1, ?2, ?3, ?4, 0.92, ?5)",
+            rusqlite::params![
+                &today,
+                time,
+                sci,
+                com,
+                format!("{today}-birdnet-{time}.wav")
+            ],
         )
         .unwrap();
     }
@@ -356,4 +368,312 @@ fn the_dashboard_tile_row_counts_everything_when_nothing_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let (state, today) = station(dir.path());
     assert_eq!(dashboard_tiles(&state, &today), (3, 3, 3, 3));
+}
+
+// ---------------------------------------------------------------------------
+// Aggregates that were still counting rejections
+// ---------------------------------------------------------------------------
+
+/// Every *aggregate* must drop a rejection — not just the ones that happened to
+/// be wired first.
+///
+/// `detections_analytic` landed in migration 26, and the surfaces converted to
+/// it were the ones someone thought of at the time. This enumerates the rest by
+/// name, so "which aggregates honour a verdict?" has a single answer that is
+/// checked rather than remembered. Each is a question about *what was there*,
+/// which is exactly what a reviewer's rejection answers.
+///
+/// Record-level surfaces are deliberately absent: `recent_detections`,
+/// `todays_detections`, `recent_clips` and the detail page must keep showing a
+/// rejected detection, because the review queue holds only the last 25 verdicts
+/// and hiding it everywhere else would make an older rejection unreachable.
+#[test]
+fn every_aggregate_drops_a_rejection() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, today) = station(dir.path());
+
+    let before = state.with_db(|conn| {
+        (
+            birdnet_db::sqlite::species_for_date(conn, &today)
+                .unwrap()
+                .len(),
+            birdnet_db::sqlite::detections_per_day(conn).unwrap()[0].count,
+            birdnet_db::sqlite::detection_dates(conn, 10).unwrap().len(),
+            birdnet_db::sqlite::best_detections_for_date(conn, &today, 10)
+                .unwrap()
+                .len(),
+            birdnet_db::sqlite::detection_count_for_species_date(
+                conn,
+                &today,
+                "Erithacus rubecula",
+            )
+            .unwrap(),
+        )
+    });
+    assert_eq!(
+        before,
+        (3, 3, 1, 3, 1),
+        "fixture: three species, one day, one Robin"
+    );
+
+    reject(
+        &state,
+        &today,
+        "07:15:00",
+        "Erithacus rubecula",
+        "European Robin",
+    );
+
+    let after = state.with_db(|conn| {
+        (
+            birdnet_db::sqlite::species_for_date(conn, &today)
+                .unwrap()
+                .len(),
+            birdnet_db::sqlite::detections_per_day(conn).unwrap()[0].count,
+            birdnet_db::sqlite::detection_dates(conn, 10).unwrap().len(),
+            birdnet_db::sqlite::best_detections_for_date(conn, &today, 10)
+                .unwrap()
+                .len(),
+            birdnet_db::sqlite::detection_count_for_species_date(
+                conn,
+                &today,
+                "Erithacus rubecula",
+            )
+            .unwrap(),
+        )
+    });
+    assert_eq!(
+        after,
+        (2, 2, 1, 2, 0),
+        "species_for_date, detections_per_day, best_detections_for_date and \
+         detection_count_for_species_date must all drop the rejected Robin; \
+         detection_dates still reports the day, because two detections remain on it"
+    );
+}
+
+/// The counterpart: with nothing rejected, every one of those aggregates must
+/// still see everything. Without this, a change that simply returned less would
+/// satisfy the gate above.
+#[test]
+fn every_aggregate_counts_everything_when_nothing_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, today) = station(dir.path());
+    let counts = state.with_db(|conn| {
+        (
+            birdnet_db::sqlite::species_for_date(conn, &today)
+                .unwrap()
+                .len(),
+            birdnet_db::sqlite::detections_per_day(conn).unwrap()[0].count,
+            birdnet_db::sqlite::best_detections_for_date(conn, &today, 10)
+                .unwrap()
+                .len(),
+        )
+    });
+    assert_eq!(counts, (3, 3, 3));
+}
+
+/// A day whose every detection was rejected is no longer a day with data.
+///
+/// `detection_dates` drives the history calendar's "which days can I open?".
+/// Offering a day that then renders empty is a dead end, and the calendar's own
+/// per-day counts already come from `detections_analytic`.
+#[test]
+fn a_fully_rejected_day_leaves_the_history_calendar() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, today) = station(dir.path());
+    for (time, sci, com) in [
+        ("06:15:00", "Turdus merula", "Eurasian Blackbird"),
+        ("07:15:00", "Erithacus rubecula", "European Robin"),
+        ("08:15:00", "Parus major", "Great Tit"),
+    ] {
+        reject(&state, &today, time, sci, com);
+    }
+    let dates = state.with_db(|conn| birdnet_db::sqlite::detection_dates(conn, 10).unwrap());
+    assert!(
+        dates.is_empty(),
+        "a day with nothing left to show must not appear in the calendar; got {dates:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Published and rendered surfaces
+// ---------------------------------------------------------------------------
+
+/// Fetch a path through the real router and return `(status, body)`.
+async fn get(state: &AppState, uri: &str) -> (axum::http::StatusCode, String) {
+    use tower::ServiceExt as _;
+    let response = birdnet_web::server::build_router(state.clone())
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(uri)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 4 * 1024 * 1024)
+        .await
+        .unwrap();
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// The feeds are *published*: an RSS reader, a calendar subscription, anything
+/// pointed at the station. A rejection has to reach them, and they were the
+/// surface where it mattered most — `/feeds/rare.rss` reports a species' first
+/// detection via `MIN(Date)`, so a rejected row that happens to be the earliest
+/// announces a "new species" on a date the life list does not agree with, to an
+/// audience that never sees the correction.
+#[tokio::test]
+async fn the_published_feeds_drop_a_rejection() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, today) = station(dir.path());
+
+    for path in ["/feeds/rare.rss", "/feeds/today.rss", "/feeds/rare.ics"] {
+        let (status, body) = get(&state, path).await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{path}");
+        assert!(
+            body.contains("European Robin"),
+            "fixture: {path} should list the Robin before it is rejected"
+        );
+    }
+
+    reject(
+        &state,
+        &today,
+        "07:15:00",
+        "Erithacus rubecula",
+        "European Robin",
+    );
+
+    for path in ["/feeds/rare.rss", "/feeds/today.rss", "/feeds/rare.ics"] {
+        let (_, body) = get(&state, path).await;
+        assert!(
+            !body.contains("European Robin"),
+            "{path} still publishes a detection the reviewer rejected"
+        );
+        assert!(
+            body.contains("Eurasian Blackbird"),
+            "{path} must still publish the detections nobody rejected"
+        );
+    }
+}
+
+/// The command palette ranks species by detection count and lists the most
+/// recent — both aggregates.
+#[tokio::test]
+async fn the_command_palette_drops_a_rejection() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, today) = station(dir.path());
+    let (_, before) = get(&state, "/pages/cmdk?q=robin").await;
+    assert!(before.contains("European Robin"), "fixture");
+
+    reject(
+        &state,
+        &today,
+        "07:15:00",
+        "Erithacus rubecula",
+        "European Robin",
+    );
+
+    let (_, after) = get(&state, "/pages/cmdk?q=robin").await;
+    assert!(
+        !after.contains("European Robin"),
+        "the palette still offers a species whose only detection was rejected"
+    );
+    let (_, blackbird) = get(&state, "/pages/cmdk?q=blackbird").await;
+    assert!(
+        blackbird.contains("Eurasian Blackbird"),
+        "the palette must still find species nobody rejected"
+    );
+}
+
+/// `/api/v2/metrics` exports the raw row count *and* the rejection count, so a
+/// dashboard can show either the pipeline's throughput or the curated figure
+/// the web UI displays. Exporting only one is what let the UI's own tiles
+/// disagree; exporting neither answer is worse than exporting both.
+#[tokio::test]
+async fn metrics_exports_both_the_raw_and_the_curated_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, today) = station(dir.path());
+    reject(
+        &state,
+        &today,
+        "07:15:00",
+        "Erithacus rubecula",
+        "European Robin",
+    );
+
+    let (status, body) = get(&state, "/api/v2/metrics").await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(
+        body.contains("birdnet_detections_total 3"),
+        "the raw count is pipeline throughput and must keep counting every row"
+    );
+    assert!(
+        body.contains("birdnet_detections_rejected_total 1"),
+        "the rejection count must be exported so `total - rejected` is derivable"
+    );
+    assert!(
+        body.contains("birdnet_species_total 2"),
+        "the species gauge is an analytic and must drop the rejected species"
+    );
+}
+
+/// The Patterns page must carry the provenance slot, and the partial must
+/// render nothing on a station that imported nothing.
+///
+/// Two halves, because either alone is satisfiable without the other: a slot
+/// that is never populated says nothing, and a partial nothing embeds is
+/// unreachable. Migration 25 recorded provenance for a year and nothing read
+/// it — this is the gate that something does.
+#[tokio::test]
+async fn the_patterns_page_carries_the_provenance_slot() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, _today) = station(dir.path());
+
+    let (status, body) = get(&state, "/patterns").await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(
+        body.contains(r#"hx-get="/pages/provenance-note""#),
+        "the Patterns page must pull in the provenance note"
+    );
+
+    let (status, note) = get(&state, "/pages/provenance-note").await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(
+        note.trim().is_empty(),
+        "a station that imported nothing must see nothing: {note:?}"
+    );
+}
+
+/// …and it says so once a genuinely different site has been imported.
+#[tokio::test]
+async fn the_provenance_note_reports_an_imported_foreign_site() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, today) = station(dir.path());
+    state.with_db(|conn| {
+        conn.execute(
+            "INSERT INTO import_batches
+               (imported_at, source_kind, source_label, distance_km, applied_shift_secs, row_count)
+             VALUES (datetime('now'), 'birdnet-pi', 'Coastal site', 341.0, -21600, 1)",
+            [],
+        )
+        .expect("batch");
+        let id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, import_batch_id)
+             VALUES (?1, '05:00:00', 'Larus argentatus', 'Herring Gull', 0.9, ?2)",
+            rusqlite::params![&today, id],
+        )
+        .expect("imported detection");
+    });
+
+    let (_, note) = get(&state, "/pages/provenance-note").await;
+    assert!(note.contains("Coastal site"), "{note}");
+    assert!(note.contains("341 km"), "{note}");
+    assert!(
+        note.contains("with a clock correction applied"),
+        "the operator needs to know whether the two histories share a clock: {note}"
+    );
 }

@@ -36,19 +36,19 @@ pub async fn today_phrase_partial(State(state): State<AppState>) -> impl IntoRes
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
             let today_count: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM detections WHERE Date = ?1",
+                "SELECT COUNT(*) FROM detections_analytic WHERE Date = ?1",
                 [&today],
                 |r| r.get(0),
             )?;
             let today_species: i64 = conn.query_row(
-                "SELECT COUNT(DISTINCT Com_Name) FROM detections WHERE Date = ?1",
+                "SELECT COUNT(DISTINCT Com_Name) FROM detections_analytic WHERE Date = ?1",
                 [&today],
                 |r| r.get(0),
             )?;
             // 30-day baseline (excluding today).
             let baseline: Vec<i64> = {
                 let mut stmt = conn.prepare(
-                    "SELECT COUNT(*) FROM detections \
+                    "SELECT COUNT(*) FROM detections_analytic \
                      WHERE Date < ?1 AND Date >= date(?1, '-30 days') \
                      GROUP BY Date ORDER BY Date",
                 )?;
