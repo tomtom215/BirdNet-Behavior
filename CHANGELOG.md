@@ -10,11 +10,107 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 A production-readiness pass against one question: *if this station is sealed
 into an outdoor enclosure and left for a year with nobody on site, what does it
 get wrong, and would anybody find out?* The full audit, with evidence and the
-gates that were observed failing, is `docs/PRODUCTION_AUDIT.md`.
+gates that were observed failing, is `docs/PRODUCTION_AUDIT.md`; a second pass
+after `v0.14.0` is `docs/FIELD_READINESS_AUDIT.md`.
 
 Several of these were invisible to a fully green 2 190-test suite.
 
 ### Fixed
+
+- **`docker compose up` could not start the container.** `docker-compose.yml`
+  interpolated fifteen optional settings as `KEY: ${KEY:-}`, which puts the key
+  in the container environment as an *empty string* whether or not anyone set
+  it. clap reads an empty environment variable as a supplied value, so
+  `BIRDNET_LATITUDE=` means "the latitude is the empty string" and exits 2
+  during argument parsing. Four such variables blocked startup in sequence —
+  latitude, longitude, `--mqtt-ha-discovery`, and a panic on a blank Apprise URL
+  — and `restart: unless-stopped` made that a loop rather than a failure with a
+  visible cause. `quickstart.sh`, which fills in the first two, still died on
+  the third.
+
+  Nothing caught it: the only container check in CI runs `--verify-extension`
+  with the entrypoint bypassed and no environment at all, and the Rust suite
+  never sees an environment variable. `scripts/check-compose-startup.sh` now
+  resolves the real container environment with `docker compose config` and
+  starts the real binary under it, in the `build` job.
+
+  Blank values no longer reach the binary from three directions:
+  `docker-compose.yml` stops manufacturing them, `.env.example` ships the
+  optional keys commented out, and `docker/strip-blank-env.sh` (sourced by the
+  entrypoint) strips any that survive. `BIRDNET_IMAGE_CACHE_DIR` is exempt —
+  an explicitly empty value is the documented air-gapped opt-out.
+
+- **A blank Apprise URL aborted the daemon during startup.** `APPRISE_URL=`
+  with no `APPRISE_CONFIG_FILE` reached an `.expect` and panicked; the settings
+  page's own hint says to leave it blank to disable notifications. Release
+  builds are `panic = "abort"` and the unit pairs `Restart=always` with
+  `StartLimitBurst=5`, so a station in that state burned its five restarts in
+  fifty seconds and stayed `failed`. Blank and whitespace-only values are now
+  treated as absent.
+
+- **One time-series page silently un-applied every reviewer rejection.**
+  `birdnet-behavioral` and `birdnet-timeseries` both created a DuckDB view named
+  `detections_ts` with `CREATE OR REPLACE`, on the same connection — and only
+  the behavioural one carried the `review_verdict` filter. The last one to run
+  therefore decided what *both* crates saw for the rest of the connection's
+  life: opening a single time-series page put rejected detections back into
+  sessionize, retention, funnel, next-species and co-occurrence until the next
+  full sync. Measured on a three-detection fixture with one rejection,
+  `COUNT(*) FROM detections_ts` went from 2 to 3 across one `quiet_days` call.
+
+  `tests/analytics_divergence.rs` could not see this — both stores agreed; the
+  view changed underneath them. `tests/analytics_view_ownership.rs` now gates
+  both the texts and the behaviour, with a counterpart proving unreviewed
+  detections still survive.
+
+- **The dashboard's headline tiles disagreed with each other.** "Species",
+  "Last hour" and the 12-day sparkline excluded rejected detections; "Detections",
+  "Today" and "Species today" counted every row. Adjacent tiles contradicted each
+  other by exactly the number of rejections the operator had recorded, so the
+  more carefully someone curated, the wronger the screen got. The presentation
+  side now reads new `analytic_*` counters; `detection_count` deliberately keeps
+  counting every row, because the SQLite-vs-DuckDB reconciliation depends on it.
+
+  The gate that should have caught this was a tautology — it asserted
+  `SELECT COUNT(*) FROM detections_analytic`, i.e. the view's own `WHERE` clause
+  restated to itself, while claiming to cover "species totals, the heat map, the
+  dawn chorus, phenology". It now reads through the query layer.
+
+### Changed
+
+- **The health badge and `/api/v2/health` no longer scan the whole database.**
+  Both ran `PRAGMA quick_check`, which reads every page of the file. The badge
+  is mounted in `layout.html` with `hx-trigger="load, every 30s"`, so that was a
+  full read of the database on every page load and twice a minute per open tab,
+  forever, competing with the detection write path for the same SD card.
+
+  Measured on a seeded three-year station (2 755 374 detections, 1.29 GB, warm,
+  NVMe): `/pages/health-badge` **3.79 s → 0.0037 s**; the pragma alone cost
+  1.5–1.9 s. A Raspberry Pi reading that file from an SD card at ~45 MB/s is
+  looking at roughly 30 s — longer than the badge's own refresh interval. The
+  container `HEALTHCHECK` polls `/api/v2/health` every 30 s with
+  `curl --max-time 4`, which a station with real history could not meet.
+
+  Migration 28 stores the daily integrity check's verdict, which that job was
+  already computing and throwing away; both surfaces now read one row.
+  `/api/v2/health` still probes reachability per request, and reports
+  `database` as `"ok"`, `"unchecked"` or `"error"` rather than collapsing "not
+  yet verified" into "broken" — `"unchecked"` returns `200`, so a freshly
+  started container is not marked unhealthy for the five minutes before the
+  first maintenance tick.
+
+- **The species screens' whole-history aggregates are index-only.** The species
+  list, the life list and the per-species hour histogram each aggregate the
+  entire detection history, uncached, on every page load, so their cost grows
+  with how long the station has been useful. Migration 29 adds two covering
+  indexes. Measured on the same three-year database: species list 4.96 s →
+  1.31 s, life-list firsts 4.12 s → 0.58 s, hour histogram 4.82 s → 1.15 s.
+
+  Cost, measured rather than estimated: +130.6 MB (9.0 % of the file); inserts
+  0.20 → 0.27 ms per committed row, three orders of magnitude above what a
+  station produces. A third index would take the species list to 0.31 s for
+  18.6 % total, which is the wrong trade on an SD card. This makes the
+  aggregates cheaper, not bounded — see `docs/FIELD_READINESS_AUDIT.md` §7.
 
 - **The settings page's structure was visible but not real.** All eight section
   titles on `/admin/settings` were `<div class="section-title">` — styled at

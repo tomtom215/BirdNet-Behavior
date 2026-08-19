@@ -12,6 +12,13 @@ bug on a desk and a corrupted season in a field. Anything that fails silently
 ranks above anything that fails loudly, because a station nobody is watching only
 ever reports what it volunteers.
 
+> **Three statuses below have since moved.** A-4 is largely fixed (migration 26),
+> A-5 is partly fixed (2 of 9 builders wired), and A-6's pre-import half is done
+> while its post-import half is not. The evidence is in
+> [`FIELD_READINESS_AUDIT.md`](FIELD_READINESS_AUDIT.md) §6, which is the
+> follow-on pass. This document is left as written, in the past tense, for the
+> reason given below.
+
 **Status.** Every finding below is now **fixed**, each with gates observed
 failing against the code they were written for. The narrative is kept in the
 past tense deliberately: the value of an audit is partly the record of what was
