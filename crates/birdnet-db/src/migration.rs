@@ -869,6 +869,152 @@ pub const MIGRATIONS: &[Migration] = &[
         CREATE INDEX IF NOT EXISTS idx_detections_sci_first_cover
             ON detections(Sci_Name, Date, Time, review_verdict);",
     },
+    Migration {
+        version: 30,
+        description: "Maintain the species totals on write, so reading them stops costing the whole history",
+        // Migration 29 made the species aggregates cheaper. It did not make them
+        // *bounded*: they still read every detection ever recorded, so the cost
+        // of opening the species list grows with how long the station has been
+        // worth running. At ten years it is back where it started.
+        //
+        // `species_summary` is those aggregates kept up to date on write. It is
+        // grouped by (Com_Name, Sci_Name, hour-of-day), which is the coarsest
+        // grouping that still answers all of:
+        //
+        //   * the species list        -- SUM over a species' 24 hour buckets
+        //   * the per-species hour histogram -- that species' 24 rows, directly
+        //   * average confidence      -- confidence_sum / detections
+        //
+        // A station with 200 species holds at most 4 800 rows here, so every one
+        // of those reads is a scan of a few thousand rows instead of millions,
+        // and stays that way in year ten.
+        //
+        // ## Why triggers and not a maintenance call
+        //
+        // `detections` is written from four crates and at least eight call
+        // sites: the capture pipeline, the BirdNET-Pi importer, the CSV
+        // reimporter, quarantine release, relabelling, verdict apply/undo,
+        // single-row admin delete, and the store reset. A summary maintained by
+        // calling a Rust function would need every one of those to remember,
+        // and the ninth — written next year by someone who has never read this
+        // comment — would drift silently, which is worse than being slow.
+        //
+        // A trigger cannot be forgotten. It fires on the table, so every path
+        // that reaches the table is covered by construction, including paths
+        // that do not exist yet.
+        //
+        // ## What the triggers are maintaining
+        //
+        // The summary is a pure function of five things about a detection:
+        // Com_Name, Sci_Name, SUBSTR(Time,1,2), Confidence, and whether the
+        // review verdict is 'rejected'. Count and sum are exactly reversible, so
+        // insert adds, delete subtracts, and update withdraws the old row's
+        // contribution and admits the new one. Nothing here needs a recompute.
+        //
+        // MIN/MAX are deliberately *not* stored. They are not reversible: a
+        // delete of the earliest detection cannot be undone without rescanning
+        // the species. The life list's first-seen query stays on migration 29's
+        // covering index (0.58 s at 2.76 M rows, the cheapest of the three)
+        // rather than buy a second maintenance rule that could drift.
+        //
+        // ## The UPDATE guard
+        //
+        // The update trigger's WHEN clause names exactly that dependency set, so
+        // an update that touches none of it does no work at all. This is not a
+        // micro-optimisation: `maintenance.rs` sets `Clip_Pruned_At` in bulk and
+        // the lock/unlock handlers set `is_locked`, and an unguarded trigger
+        // would turn each of those rows into a withdraw plus an admit of the
+        // same bucket -- two index writes to reach the number it started from.
+        //
+        // ## Ordering note for whoever adds migration 31
+        //
+        // These triggers exist from here on, so a later migration that rewrites
+        // `detections` in bulk will fire them and the summary will follow along.
+        // That is the intent. A migration that rebuilds the table by
+        // create-copy-drop-rename must drop the summary triggers first and
+        // re-run the backfill after, or it will double-count the copy.
+        //
+        // `INSERT OR REPLACE` on `detections` would also drift, because
+        // `recursive_triggers` is off by default and the implied delete would
+        // not fire the delete trigger. There is none today -- every importer
+        // uses `INSERT OR IGNORE`, whose ignored rows correctly fire nothing --
+        // and `species_summary_is_maintained_by_every_write_path` fails if one
+        // appears.
+        up_sql: "CREATE TABLE IF NOT EXISTS species_summary (
+            Com_Name       TEXT    NOT NULL,
+            Sci_Name       TEXT    NOT NULL,
+            hour           TEXT    NOT NULL,
+            detections     INTEGER NOT NULL,
+            confidence_sum REAL    NOT NULL,
+            PRIMARY KEY (Com_Name, Sci_Name, hour)
+        ) WITHOUT ROWID;
+
+        DELETE FROM species_summary;
+        INSERT INTO species_summary (Com_Name, Sci_Name, hour, detections, confidence_sum)
+            SELECT Com_Name, Sci_Name, SUBSTR(Time, 1, 2), COUNT(*), SUM(Confidence)
+              FROM detections
+             WHERE review_verdict IS NOT 'rejected'
+             GROUP BY Com_Name, Sci_Name, SUBSTR(Time, 1, 2);
+
+        DROP TRIGGER IF EXISTS species_summary_ai;
+        CREATE TRIGGER species_summary_ai AFTER INSERT ON detections
+        WHEN NEW.review_verdict IS NOT 'rejected'
+        BEGIN
+            INSERT INTO species_summary (Com_Name, Sci_Name, hour, detections, confidence_sum)
+            VALUES (NEW.Com_Name, NEW.Sci_Name, SUBSTR(NEW.Time, 1, 2), 1, NEW.Confidence)
+            ON CONFLICT(Com_Name, Sci_Name, hour) DO UPDATE SET
+                detections     = species_summary.detections + 1,
+                confidence_sum = species_summary.confidence_sum + NEW.Confidence;
+        END;
+
+        DROP TRIGGER IF EXISTS species_summary_ad;
+        CREATE TRIGGER species_summary_ad AFTER DELETE ON detections
+        WHEN OLD.review_verdict IS NOT 'rejected'
+        BEGIN
+            UPDATE species_summary
+               SET detections     = detections - 1,
+                   confidence_sum = confidence_sum - OLD.Confidence
+             WHERE Com_Name = OLD.Com_Name
+               AND Sci_Name = OLD.Sci_Name
+               AND hour     = SUBSTR(OLD.Time, 1, 2);
+            DELETE FROM species_summary
+             WHERE Com_Name = OLD.Com_Name
+               AND Sci_Name = OLD.Sci_Name
+               AND hour     = SUBSTR(OLD.Time, 1, 2)
+               AND detections <= 0;
+        END;
+
+        DROP TRIGGER IF EXISTS species_summary_au;
+        CREATE TRIGGER species_summary_au AFTER UPDATE ON detections
+        WHEN OLD.Com_Name   IS NOT NEW.Com_Name
+          OR OLD.Sci_Name   IS NOT NEW.Sci_Name
+          OR OLD.Time       IS NOT NEW.Time
+          OR OLD.Confidence IS NOT NEW.Confidence
+          OR (OLD.review_verdict IS 'rejected') IS NOT (NEW.review_verdict IS 'rejected')
+        BEGIN
+            UPDATE species_summary
+               SET detections     = detections - 1,
+                   confidence_sum = confidence_sum - OLD.Confidence
+             WHERE OLD.review_verdict IS NOT 'rejected'
+               AND Com_Name = OLD.Com_Name
+               AND Sci_Name = OLD.Sci_Name
+               AND hour     = SUBSTR(OLD.Time, 1, 2);
+
+            DELETE FROM species_summary
+             WHERE OLD.review_verdict IS NOT 'rejected'
+               AND Com_Name = OLD.Com_Name
+               AND Sci_Name = OLD.Sci_Name
+               AND hour     = SUBSTR(OLD.Time, 1, 2)
+               AND detections <= 0;
+
+            INSERT INTO species_summary (Com_Name, Sci_Name, hour, detections, confidence_sum)
+            SELECT NEW.Com_Name, NEW.Sci_Name, SUBSTR(NEW.Time, 1, 2), 1, NEW.Confidence
+             WHERE NEW.review_verdict IS NOT 'rejected'
+            ON CONFLICT(Com_Name, Sci_Name, hour) DO UPDATE SET
+                detections     = species_summary.detections + 1,
+                confidence_sum = species_summary.confidence_sum + NEW.Confidence;
+        END;",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing

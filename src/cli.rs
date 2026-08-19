@@ -108,6 +108,18 @@ pub struct Cli {
     #[arg(long)]
     pub backup_db: bool,
 
+    /// Recompute the maintained species summary from the detections, and exit.
+    ///
+    /// `species_summary` holds the per-species totals the species list and the
+    /// per-species charts read, kept up to date on write so those screens do
+    /// not re-aggregate the whole detection history on every load. It is
+    /// derived data: rebuilding it cannot lose anything.
+    ///
+    /// Run this if `--doctor` reports the summary disagreeing with the
+    /// detections. Nothing else should need it.
+    #[arg(long)]
+    pub rebuild_species_summary: bool,
+
     /// Run the preflight diagnostic and exit.
     ///
     /// Validates the configuration, audio source, model file, database

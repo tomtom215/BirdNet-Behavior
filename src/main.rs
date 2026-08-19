@@ -53,6 +53,9 @@ enum Action {
     /// `--migration-report`: describe what a pending data-rewriting migration
     /// would change, without applying it, then exit.
     MigrationReport,
+    /// `--rebuild-species-summary`: recompute the maintained per-species
+    /// totals from the detections and exit.
+    RebuildSpeciesSummary,
     /// `--doctor` / `--doctor-json`: print diagnostics and exit with a
     /// status-derived code. Carries the chosen render format.
     Doctor(doctor::Format),
@@ -80,6 +83,8 @@ const fn dispatch_subcommand(cli: &Cli) -> Action {
         Action::ChannelReport
     } else if cli.migration_report {
         Action::MigrationReport
+    } else if cli.rebuild_species_summary {
+        Action::RebuildSpeciesSummary
     } else if cli.doctor || cli.doctor_json || cli.fix {
         // `--doctor-json` wins the format choice when both are passed so a
         // monitoring script that sets both still gets machine-readable output.
@@ -165,6 +170,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(code);
         }
         Action::MigrationReport => return helpers::run_migration_report(config.as_ref()),
+        Action::RebuildSpeciesSummary => {
+            return helpers::run_rebuild_species_summary(config.as_ref());
+        }
         Action::Doctor(format) => {
             let code = doctor::run_with_format(&cli, config.as_ref(), format);
             std::process::exit(code);
