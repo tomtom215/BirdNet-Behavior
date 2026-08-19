@@ -803,6 +803,72 @@ pub const MIGRATIONS: &[Migration] = &[
         CREATE INDEX IF NOT EXISTS idx_recording_effort_date
             ON recording_effort(date);",
     },
+    Migration {
+        version: 28,
+        description: "Remember whether a maintenance job passed, not just when it ran",
+        // `maintenance_runs` (migration 21) recorded *when* each job last
+        // completed and nothing about how it went, so the only way to learn
+        // whether the database was sound was to check it again.
+        //
+        // The health badge did exactly that. It sits in `layout.html`, on every
+        // page, with `hx-trigger="load, every 30s"`, and it ran a full
+        // `PRAGMA quick_check` each time. That pragma reads every page of the
+        // database file. Measured on a three-year station (2.76 M detections,
+        // 1.29 GB) on NVMe it costs 1.5-1.9 s warm; the enclosing partial took
+        // 3.8 s. A Raspberry Pi reading the same file from an SD card at
+        // ~45 MB/s is looking at ~30 s — longer than the refresh interval, so
+        // the checks would overlap, and every open browser tab adds another
+        // full read of the database twice a minute, forever, competing with the
+        // detection write path for the same card.
+        //
+        // The daily integrity check already runs; it simply threw its answer
+        // away. Storing it turns the badge into a read of one row.
+        //
+        // `ok` is nullable on purpose: NULL means "this job has no pass/fail to
+        // report" — either it predates this column or it is a job like the
+        // session prune that cannot fail meaningfully. A never-run integrity
+        // check has no row at all, which is a third state the badge must not
+        // confuse with a failure.
+        up_sql: "ALTER TABLE maintenance_runs ADD COLUMN ok INTEGER;",
+    },
+    Migration {
+        version: 29,
+        description: "Cover the whole-history aggregates the species screens run on every load",
+        // The species list, the life list and the per-species hour histogram
+        // each aggregate the *entire* detection history, uncached, on every
+        // page load. That is fine for a season and not fine for the multi-year
+        // station this project is for: the work grows linearly with how long
+        // the station has been useful.
+        //
+        // Measured on a seeded three-year station — 2 755 374 detections,
+        // 1.43 GB, warm page cache, x86_64 NVMe (a Raspberry Pi reading an SD
+        // card is several times worse across the board):
+        //
+        //   query                                 before    after
+        //   species list (GROUP BY Com,Sci)        4.96 s    1.31 s
+        //   life-list firsts (MIN per Sci_Name)    4.12 s    0.58 s
+        //   per-species hour histogram             4.82 s    1.15 s
+        //
+        // The existing indexes are single-column (`Com_Name`, `Sci_Name`), so
+        // every one of these plans scanned an index and then went back to the
+        // table for the other columns. These two are chosen to be *covering*
+        // for those aggregates — `review_verdict` is in each because every one
+        // of them reads `detections_analytic`, whose WHERE clause needs it, and
+        // a covering index that omits it stops covering.
+        //
+        // Cost, measured on the same database rather than estimated:
+        //   * +130.6 MB, 9.0 % of the file. A third index (Com,Sci,Conf,verdict)
+        //     would take the species list to 0.31 s but cost 18.6 % in total,
+        //     which is the wrong trade on an SD card for a further ~1 s.
+        //   * Inserts 0.20 ms -> 0.27 ms per committed row (4 922 -> 3 666
+        //     rows/s). A station producing a few detections a second is three
+        //     orders of magnitude below that, so the write path does not care.
+        //   * ~7 s to build on this hardware, once, during the migration.
+        up_sql: "CREATE INDEX IF NOT EXISTS idx_detections_species_hour_cover
+            ON detections(Com_Name, Time, Sci_Name, Confidence, review_verdict);
+        CREATE INDEX IF NOT EXISTS idx_detections_sci_first_cover
+            ON detections(Sci_Name, Date, Time, review_verdict);",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing

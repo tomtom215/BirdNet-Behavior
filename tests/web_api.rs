@@ -117,7 +117,86 @@ async fn health_endpoint_returns_healthy() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(json["status"], "healthy");
+    // A station whose first daily integrity check has not run yet reports
+    // `unchecked`, not `ok` and not `error`. Since migration 28 this endpoint
+    // reads the recorded verdict rather than running its own `PRAGMA
+    // quick_check` on every request — that pragma reads every page of the
+    // database file, and the container HEALTHCHECK polls here every 30 s with a
+    // 4 s curl timeout, which a three-year station could not meet.
+    //
+    // `unchecked` must keep returning 200: reporting it as degraded would leave
+    // a freshly started container `unhealthy` for the five minutes before the
+    // first maintenance tick.
+    assert_eq!(json["database"], "unchecked");
+}
+
+/// …and once the daily check has recorded a pass, it says so.
+///
+/// The counterpart to the assertion above, so "unchecked" cannot quietly become
+/// the only answer this endpoint ever gives.
+#[tokio::test]
+async fn health_endpoint_reports_a_recorded_pass() {
+    let state = test_state();
+    state.with_db(|conn| {
+        birdnet_db::sqlite::record_run_result(
+            conn,
+            birdnet_db::sqlite::JOB_INTEGRITY_CHECK,
+            1_700_000_000,
+            Some(true),
+        )
+        .unwrap();
+    });
+
+    let response = build_router(state)
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["database"], "ok");
+    assert_eq!(json["status"], "healthy");
+}
+
+/// A recorded failure must reach the endpoint as a 503, on a database that is
+/// itself intact — which is the only thing that distinguishes reading the
+/// record from re-running the check.
+#[tokio::test]
+async fn health_endpoint_reports_a_recorded_failure_as_degraded() {
+    let state = test_state();
+    state.with_db(|conn| {
+        birdnet_db::sqlite::record_run_result(
+            conn,
+            birdnet_db::sqlite::JOB_INTEGRITY_CHECK,
+            1_700_000_000,
+            Some(false),
+        )
+        .unwrap();
+    });
+
+    let response = build_router(state)
+        .oneshot(
+            Request::builder()
+                .uri("/api/v2/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["database"], "error");
+    assert_eq!(json["status"], "degraded");
 }
 
 #[tokio::test]

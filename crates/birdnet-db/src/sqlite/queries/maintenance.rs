@@ -65,12 +65,59 @@ pub fn last_run_unix(conn: &Connection, job: &str) -> Result<Option<i64>, DbErro
 ///
 /// Returns `DbError` on query failure.
 pub fn record_run(conn: &Connection, job: &str, unix_secs: i64) -> Result<(), DbError> {
+    record_run_result(conn, job, unix_secs, None)
+}
+
+/// Record that `job` completed at `unix_secs`, and whether it passed.
+///
+/// `ok` is `None` for jobs with no pass/fail to report — the session prune
+/// either ran or errored, it has no verdict — and `Some` for the ones that do.
+/// Storing the verdict is what lets a reader learn the database is sound
+/// without checking it again: [`crate::sqlite::quick_check`] reads every page
+/// of the file, which is far too expensive to put behind a badge that refreshes
+/// every 30 s on every page.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn record_run_result(
+    conn: &Connection,
+    job: &str,
+    unix_secs: i64,
+    ok: Option<bool>,
+) -> Result<(), DbError> {
     conn.execute(
-        "INSERT INTO maintenance_runs (job, last_run_unix) VALUES (?1, ?2)
-         ON CONFLICT(job) DO UPDATE SET last_run_unix = excluded.last_run_unix",
-        params![job, unix_secs],
+        "INSERT INTO maintenance_runs (job, last_run_unix, ok) VALUES (?1, ?2, ?3)
+         ON CONFLICT(job) DO UPDATE SET last_run_unix = excluded.last_run_unix,
+                                        ok            = excluded.ok",
+        params![job, unix_secs, ok],
     )?;
     Ok(())
+}
+
+/// The verdict `job` last recorded, and when.
+///
+/// Three distinct answers, and the caller must not collapse them:
+///
+/// * `None` — the job has never completed on this database. Nothing is known.
+/// * `Some((when, None))` — it ran, and reported no verdict.
+/// * `Some((when, Some(ok)))` — it ran and passed (`true`) or failed (`false`).
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn last_run_result(
+    conn: &Connection,
+    job: &str,
+) -> Result<Option<(i64, Option<bool>)>, DbError> {
+    let row = conn
+        .query_row(
+            "SELECT last_run_unix, ok FROM maintenance_runs WHERE job = ?1",
+            params![job],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<bool>>(1)?)),
+        )
+        .optional()?;
+    Ok(row)
 }
 
 #[cfg(test)]

@@ -33,7 +33,8 @@ pub use queries::detection_reviews::{
 pub use queries::heatmap::{HeatmapCell, HourTotal};
 pub use queries::maintenance::{
     BACKUP_VACUUM_INTERVAL_SECS, DAILY_INTERVAL_SECS, JOB_BACKUP_VACUUM, JOB_INTEGRITY_CHECK,
-    JOB_SESSION_PRUNE, JOB_SPECIES_CAP, last_run_unix, record_run,
+    JOB_SESSION_PRUNE, JOB_SPECIES_CAP, last_run_result, last_run_unix, record_run,
+    record_run_result,
 };
 pub use queries::{
     CLIP_AVAILABLE, ImageBlacklist, ModelVsReviewRow, QualitySummary, QuarantineFilter,

@@ -41,7 +41,8 @@ pub use images::{
 };
 pub use maintenance::{
     BACKUP_VACUUM_INTERVAL_SECS, DAILY_INTERVAL_SECS, JOB_BACKUP_VACUUM, JOB_INTEGRITY_CHECK,
-    JOB_SESSION_PRUNE, JOB_SPECIES_CAP, last_run_unix, record_run,
+    JOB_SESSION_PRUNE, JOB_SPECIES_CAP, last_run_result, last_run_unix, record_run,
+    record_run_result,
 };
 pub use quarantine::{
     QuarantineFilter, QuarantineReason, QuarantineRecord, QuarantineRow, QuarantineStats,

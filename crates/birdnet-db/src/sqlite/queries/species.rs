@@ -436,6 +436,59 @@ pub fn delete_species_threshold(conn: &Connection, sci_name: &str) -> Result<(),
 
 #[cfg(test)]
 mod tests {
+    /// The whole-history species aggregates must be served by a covering index.
+    ///
+    /// These three run on every load of the species list, the life list and a
+    /// species page, over the *entire* detection history with no time bound —
+    /// so their cost grows with how long the station has been running, which is
+    /// exactly backwards for a multi-year deployment. On a seeded three-year
+    /// station (2 755 374 detections, 1.43 GB) they took 4.96 s, 4.12 s and
+    /// 4.82 s before migration 29's covering indexes and 1.31 s, 0.58 s and
+    /// 1.15 s after.
+    ///
+    /// A timing assertion would be flaky, so this pins the mechanism instead:
+    /// SQLite must report a COVERING INDEX, which is the thing that stops the
+    /// plan going back to the table row by row. Dropping either index, or
+    /// removing a column from one, turns the plan back into a plain
+    /// `SCAN … USING INDEX` and fails here.
+    #[test]
+    fn the_whole_history_species_aggregates_are_index_only() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migration::migrate(&conn).unwrap();
+        let plan = |sql: &str| -> String {
+            let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+            let rows: Vec<String> = stmt
+                .query_map([], |r| r.get::<_, String>(3))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            rows.join(" | ")
+        };
+        for (name, sql) in [
+            (
+                "species list",
+                "SELECT Com_Name, Sci_Name, COUNT(*) c, AVG(Confidence) \
+                 FROM detections_analytic GROUP BY Com_Name, Sci_Name ORDER BY c DESC LIMIT 200",
+            ),
+            (
+                "life-list firsts",
+                "SELECT Sci_Name, MIN(Date || ' ' || Time) FROM detections_analytic \
+                 GROUP BY Sci_Name",
+            ),
+            (
+                "per-species hour histogram",
+                "SELECT Com_Name, CAST(SUBSTR(Time, 1, 2) AS INTEGER) h, COUNT(*) \
+                 FROM detections_analytic GROUP BY Com_Name, h",
+            ),
+        ] {
+            let p = plan(sql);
+            assert!(
+                p.contains("COVERING INDEX"),
+                "the {name} aggregate must be index-only; plan was: {p}"
+            );
+        }
+    }
+
     use super::*;
     use crate::sqlite::connection::open_or_create;
     use rusqlite::params;
