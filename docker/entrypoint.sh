@@ -35,6 +35,16 @@ if [ ! -r "$BNB_STRIP_LIB" ]; then
     printf '[birdnet] ERROR: %s is missing from the image\n' "$BNB_STRIP_LIB" >&2
     exit 1
 fi
+# The path is a variable so a test can point at the repo copy, which SC1090
+# flags because it cannot be resolved statically. The directive below names the
+# real location; with `-x` (set in CI) the linter follows it and checks the
+# sourced file's interaction with this one, which a bare `disable=SC1090` would
+# have thrown away.
+#
+# Note for the next editor: a comment line beginning with the linter's own name
+# is parsed as a directive, so this paragraph deliberately avoids starting one
+# that way. Doing it accidentally is how this comment got written twice.
+# shellcheck source=docker/strip-blank-env.sh
 . "$BNB_STRIP_LIB"
 strip_blank_birdnet_env
 
