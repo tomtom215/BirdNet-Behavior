@@ -195,20 +195,37 @@ fn collect_chorus(
 // ---------------------------------------------------------------------------
 
 async fn polar_partial(State(state): State<AppState>) -> impl IntoResponse {
-    let result =
-        tokio::task::spawn_blocking(move || state.with_db(|conn| collect_chorus(conn, 60, 8)))
-            .await;
+    let result = tokio::task::spawn_blocking(move || {
+        state.with_db(|conn| (collect_chorus(conn, 60, 8), super::solar_times_local(conn)))
+    })
+    .await;
 
-    let ribbons = match result {
-        Ok(Ok(r)) if !r.is_empty() => r,
+    let (ribbons, solar) = match result {
+        Ok((Ok(r), solar)) if !r.is_empty() => (r, solar),
         _ => return ok_html(super::empty_states::no_chorus()),
     };
 
-    let (sunrise, sunset) = station_sun_times(); // approx; fall back to defaults
-    ok_html(render_polar_svg(&ribbons, sunrise, sunset))
+    // `solar_times_local` reads the station's configured coordinates and returns
+    // **local** hours — the same clock the ribbons are bucketed in. Without a
+    // configured location there is no honest sun position to draw, so the
+    // markers are omitted rather than invented: the previous fallback drew a
+    // (40.0 N, -74.0 W) sun over every station on Earth.
+    let (sunrise, sunset) = match solar {
+        Some(pair) => pair,
+        None => return ok_html(render_polar_svg(&ribbons, None)),
+    };
+    ok_html(render_polar_svg(&ribbons, Some((sunrise, sunset))))
 }
 
-fn render_polar_svg(ribbons: &[ChorusRibbon], sunrise_h: f64, sunset_h: f64) -> String {
+/// Render the polar chorus clock.
+///
+/// `solar` is `Some((sunrise_h, sunset_h))` in **local** fractional hours — the
+/// same clock the ribbons are bucketed in — or `None` when the station has no
+/// configured location. `None` omits the night wedge and both sun markers
+/// rather than drawing a default position: this chart is read to decide when a
+/// species sings relative to sunrise, and a sun drawn at a coordinate the
+/// station is not at answers that question wrongly while looking authoritative.
+fn render_polar_svg(ribbons: &[ChorusRibbon], solar: Option<(f64, f64)>) -> String {
     const SIZE: f64 = 520.0;
     const CX: f64 = SIZE / 2.0;
     const CY: f64 = SIZE / 2.0;
@@ -217,29 +234,38 @@ fn render_polar_svg(ribbons: &[ChorusRibbon], sunrise_h: f64, sunset_h: f64) -> 
     let ring_step = (RING_MAX - RING_MIN) / (ribbons.len() as f64 + 1.0);
 
     let mut s = String::with_capacity(16 * 1024);
-    let sunrise_str = fmt_hour(sunrise_h);
-    let sunset_str = fmt_hour(sunset_h);
+    let sun_strs = solar.map(|(rise, set)| (fmt_hour(rise), fmt_hour(set)));
 
-    let _ = write!(
-        s,
-        r#"<svg viewBox="0 0 {SIZE} {SIZE}" width="100%" height="100%" class="dc-polar-svg" data-sunrise="{sr}" data-sunset="{ss}">"#,
-        sr = sunrise_str,
-        ss = sunset_str,
-    );
+    match sun_strs.as_ref() {
+        Some((sr, ss)) => {
+            let _ = write!(
+                s,
+                r#"<svg viewBox="0 0 {SIZE} {SIZE}" width="100%" height="100%" class="dc-polar-svg" data-sunrise="{sr}" data-sunset="{ss}">"#,
+            );
+        }
+        None => {
+            let _ = write!(
+                s,
+                r#"<svg viewBox="0 0 {SIZE} {SIZE}" width="100%" height="100%" class="dc-polar-svg">"#,
+            );
+        }
+    }
 
-    // Night wedge.
-    let a1 = hour_to_angle(sunset_h);
-    let a2 = hour_to_angle(sunrise_h + 24.0);
-    let r_outer = RING_MAX + 14.0;
-    let (x1, y1) = polar(CX, CY, a1, r_outer);
-    let (x2, y2) = polar(CX, CY, a2, r_outer);
-    let sweep = (a2 - a1).rem_euclid(2.0 * PI);
-    let large = if sweep > PI { 1 } else { 0 };
-    let _ = write!(
-        s,
-        r#"<path d="M{CX},{CY} L{x1:.2},{y1:.2} A{r:.2},{r:.2} 0 {large} 1 {x2:.2},{y2:.2} Z" fill="var(--night)" fill-opacity="0.06"/>"#,
-        r = r_outer,
-    );
+    // Night wedge — only when the sun's position is actually known.
+    if let Some((sunrise_h, sunset_h)) = solar {
+        let a1 = hour_to_angle(sunset_h);
+        let a2 = hour_to_angle(sunrise_h + 24.0);
+        let r_outer = RING_MAX + 14.0;
+        let (x1, y1) = polar(CX, CY, a1, r_outer);
+        let (x2, y2) = polar(CX, CY, a2, r_outer);
+        let sweep = (a2 - a1).rem_euclid(2.0 * PI);
+        let large = if sweep > PI { 1 } else { 0 };
+        let _ = write!(
+            s,
+            r#"<path d="M{CX},{CY} L{x1:.2},{y1:.2} A{r:.2},{r:.2} 0 {large} 1 {x2:.2},{y2:.2} Z" fill="var(--night)" fill-opacity="0.06"/>"#,
+            r = r_outer,
+        );
+    }
 
     // O-23 follow-up — 4-segment outer moon-phase arc.
     //
@@ -325,25 +351,21 @@ fn render_polar_svg(ribbons: &[ChorusRibbon], sunrise_h: f64, sunset_h: f64) -> 
         );
     }
 
-    // Sun markers.
-    write_sun_marker(
-        &mut s,
-        CX,
-        CY,
-        sunrise_h,
-        RING_MAX + 14.0,
-        "rise",
-        &sunrise_str,
-    );
-    write_sun_marker(
-        &mut s,
-        CX,
-        CY,
-        sunset_h,
-        RING_MAX + 14.0,
-        "set",
-        &sunset_str,
-    );
+    // Sun markers — omitted with the wedge when there is no configured location.
+    if let (Some((sunrise_h, sunset_h)), Some((sunrise_str, sunset_str))) =
+        (solar, sun_strs.as_ref())
+    {
+        write_sun_marker(
+            &mut s,
+            CX,
+            CY,
+            sunrise_h,
+            RING_MAX + 14.0,
+            "rise",
+            sunrise_str,
+        );
+        write_sun_marker(&mut s, CX, CY, sunset_h, RING_MAX + 14.0, "set", sunset_str);
+    }
 
     // Ribbons — outer = first ribbon (highest total).
     for (i, ribbon) in ribbons.iter().enumerate() {
@@ -543,83 +565,6 @@ fn current_hour_decimal() -> f64 {
     secs_today / 3600.0
 }
 
-/// Best-effort station sun times.
-///
-/// Reads station coordinates from the env (set once at deploy time) and
-/// computes sunrise / sunset for the current day-of-year using the
-/// classical Cooper + equation-of-time formulae.  Accurate to ~3 minutes,
-/// which is well within the resolution of an hour-of-day display.
-///
-/// Override per deployment:
-/// ```sh
-/// export BNB_STATION_LAT=42.36
-/// export BNB_STATION_LON=-71.06   # negative = west
-/// ```
-///
-/// If unset, defaults to (40.0°N, -74.0°W) — a sensible mid-Atlantic
-/// value that keeps the polar-clock readable until coordinates are wired.
-fn station_sun_times() -> (f64, f64) {
-    // Locale-tolerant: `BNB_STATION_LAT=42,3601` (EU operators) works
-    // the same as `42.3601` here.
-    let lat = std::env::var("BNB_STATION_LAT")
-        .ok()
-        .and_then(|s| birdnet_core::config::locale::parse_decimal(&s).ok())
-        .unwrap_or(40.0);
-    let lon = std::env::var("BNB_STATION_LON")
-        .ok()
-        .and_then(|s| birdnet_core::config::locale::parse_decimal(&s).ok())
-        .unwrap_or(-74.0);
-    let doy = current_day_of_year();
-    solar_sun_times(lat, lon, doy)
-}
-
-/// Compute (sunrise_hour, sunset_hour) in local-civil hours for a given
-/// latitude, longitude, and day-of-year.  Uses the standard solar-position
-/// approximation (Cooper declination + equation of time).
-///
-/// `lat_deg` positive north, `lon_deg` positive east.  Returns hours in the
-/// range [0, 24); during polar night/day returns the obvious bound.
-#[allow(clippy::cast_precision_loss)]
-fn solar_sun_times(lat_deg: f64, lon_deg: f64, day_of_year: u32) -> (f64, f64) {
-    let lat_rad = lat_deg.to_radians();
-    let doy = day_of_year as f64;
-
-    // Declination of the sun (degrees), Cooper 1969.
-    let decl_deg = 23.45 * ((360.0 / 365.0) * (284.0 + doy)).to_radians().sin();
-    let decl_rad = decl_deg.to_radians();
-
-    // Hour angle at sunrise/sunset; account for solar refraction (~-0.833°).
-    let zenith = (90.833_f64).to_radians();
-    let cos_h = (zenith.cos() - lat_rad.sin() * decl_rad.sin()) / (lat_rad.cos() * decl_rad.cos());
-    if cos_h >= 1.0 {
-        return (12.0, 12.0); // polar night
-    }
-    if cos_h <= -1.0 {
-        return (0.0, 24.0); // polar day
-    }
-    let h_deg = cos_h.acos().to_degrees();
-
-    // Equation of time (minutes), Spencer 1971 short form.
-    let b = (360.0 / 365.0 * (doy - 81.0)).to_radians();
-    let eot_min = 9.87 * (2.0 * b).sin() - 7.53 * b.cos() - 1.5 * b.sin();
-
-    // Solar noon in UTC hours: 12 − lon/15 − EOT/60.
-    let noon_utc = 12.0 - lon_deg / 15.0 - eot_min / 60.0;
-    let rise = (noon_utc - h_deg / 15.0).rem_euclid(24.0);
-    let set = (noon_utc + h_deg / 15.0).rem_euclid(24.0);
-    (rise, set)
-}
-
-fn current_day_of_year() -> u32 {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    // Approximate day-of-year via simple modulo — accurate enough for solar
-    // computation since declination varies smoothly over the year.
-    ((secs / 86_400) % 365) as u32 + 1
-}
-
 fn alpha_code(name: &str) -> String {
     let words: Vec<&str> = name.split_whitespace().collect();
     let code = match words.len() {
@@ -658,28 +603,80 @@ mod tests {
         assert_eq!(fmt_hour(0.0), "00:00");
     }
 
+    /// The sun markers come from the station's *configured* location, through
+    /// the same helper the Today page uses.
+    ///
+    /// This page used to compute them itself, and that private copy was wrong
+    /// three ways at once: it read `BNB_STATION_LAT`/`BNB_STATION_LON` only and
+    /// otherwise defaulted to a hard-coded (40.0 N, -74.0 W), so a station that
+    /// set its location in the setup wizard got a New Jersey sun; its
+    /// day-of-year was `((unix_secs / 86_400) % 365) + 1`, drifting ~1 day/year
+    /// (14 days out by 2026, wrapping to January in late December); and it
+    /// returned UTC hours while the ribbons it was drawn over are bucketed from
+    /// the local `Time` column. Its own tests asserted UTC while its doc comment
+    /// claimed "local-civil hours".
     #[test]
-    fn solar_sun_times_equator_equinox() {
-        // At the equator near equinox (~day 80), sunrise and sunset are ~6 and ~18 UTC at lon 0.
-        let (rise, set) = solar_sun_times(0.0, 0.0, 80);
-        assert!((rise - 6.0).abs() < 0.5, "rise={rise}");
-        assert!((set - 18.0).abs() < 0.5, "set={set}");
+    fn the_sun_markers_come_from_the_configured_station_location() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open");
+        birdnet_db::migration::migrate(&conn).expect("migrate");
+        // No location configured: nothing honest to draw.
+        assert!(
+            super::super::solar_times_local(&conn).is_none(),
+            "with no configured location there is no sun position to report"
+        );
+        birdnet_db::settings::set(
+            &conn,
+            "latitude",
+            "51.5074",
+            birdnet_db::settings::SettingsCategory::Location,
+        )
+        .expect("lat");
+        birdnet_db::settings::set(
+            &conn,
+            "longitude",
+            "-0.1278",
+            birdnet_db::settings::SettingsCategory::Location,
+        )
+        .expect("lon");
+        let (rise, set) =
+            super::super::solar_times_local(&conn).expect("a configured location yields times");
+        assert!(
+            (0.0..24.0).contains(&rise) && (0.0..24.0).contains(&set),
+            "hours must be folded onto the axis the chart draws: rise={rise} set={set}"
+        );
+        // London is never dark all day nor light all day; the sun rises in the
+        // morning half and sets in the afternoon half, in local hours.
+        assert!(rise < 12.0, "sunrise should be a morning hour, got {rise}");
+        assert!(set > 12.0, "sunset should be an afternoon hour, got {set}");
+    }
+
+    /// Without a location the wedge and both markers are omitted rather than
+    /// drawn at a default position. This chart is read to decide when a species
+    /// sings *relative to sunrise*; a sun drawn where the station is not
+    /// answers that wrongly while looking authoritative.
+    #[test]
+    fn no_location_draws_no_sun() {
+        let svg = render_polar_svg(&[], None);
+        assert!(!svg.contains("data-sunrise"), "no sunrise attribute");
+        assert!(!svg.contains(r#"data-sun="rise""#), "no rise marker");
+        assert!(!svg.contains("var(--night)"), "no night wedge");
+        // The rest of the clock still renders.
+        assert!(svg.contains(r#"data-moon-segment="new""#));
     }
 
     #[test]
-    fn solar_sun_times_temperate_summer() {
-        // At 42°N in late June (~day 172), days are noticeably long.
-        let (rise, set) = solar_sun_times(42.36, -71.06, 172);
-        // Day length should be >14 hours.
-        let day_len = (set - rise).rem_euclid(24.0);
-        assert!(day_len > 14.0, "day_len={day_len}");
+    fn a_known_location_draws_both_markers() {
+        let svg = render_polar_svg(&[], Some((6.0, 18.0)));
+        assert!(svg.contains(r#"data-sunrise="06:00""#), "{svg:.400}");
+        assert!(svg.contains(r#"data-sunset="18:00""#));
+        assert!(svg.contains("var(--night)"), "night wedge is drawn");
     }
 
     #[test]
     fn render_polar_svg_includes_four_moon_segments() {
         // Empty ribbons + arbitrary sunrise/sunset are enough — the
         // moon ring is independent of the chorus data.
-        let svg = render_polar_svg(&[], 6.0, 18.0);
+        let svg = render_polar_svg(&[], Some((6.0, 18.0)));
         assert!(svg.contains(r#"data-moon-segment="new""#));
         assert!(svg.contains(r#"data-moon-segment="waxing-half""#));
         assert!(svg.contains(r#"data-moon-segment="full""#));

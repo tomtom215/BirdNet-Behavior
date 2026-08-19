@@ -313,48 +313,6 @@ fn first_run_needs_onboarding(state: &AppState) -> bool {
 // Shared context helpers (solar, weather, freshness)
 // ---------------------------------------------------------------------------
 
-/// Today's sunrise/sunset as fractional hours in **local** time, from the
-/// configured station location. `None` when no location is set or the sun never
-/// rises/sets at this latitude today.
-///
-/// Local, because every other value on this axis is: the day strip's bars come
-/// from `hourly_activity`, which buckets the local `Time` column, and the "now"
-/// marker is [`super::now_hour_local`]. Returning the solver's raw UTC minutes here
-/// drew sunrise two hours early on a CEST station and mislabelled the pills
-/// with it.
-fn solar_times_today(conn: &rusqlite::Connection) -> Option<(f64, f64)> {
-    let lat: f64 = birdnet_db::settings::get_or(conn, "latitude", "")
-        .ok()?
-        .trim()
-        .parse()
-        .ok()?;
-    let lon: f64 = birdnet_db::settings::get_or(conn, "longitude", "")
-        .ok()?
-        .trim()
-        .parse()
-        .ok()?;
-    let location = birdnet_scheduler::Location::new(lat, lon).ok()?;
-    let date = today_date_string();
-    let year: u32 = date.get(0..4)?.parse().ok()?;
-    let month: u32 = date.get(5..7)?.parse().ok()?;
-    let day: u32 = date.get(8..10)?.parse().ok()?;
-    let solar = birdnet_scheduler::SolarDay::for_date(location, year, month, day).ok()?;
-    #[allow(clippy::cast_precision_loss)]
-    let offset_h = super::local_utc_offset_secs() as f64 / 3600.0;
-    let sunrise = wrap_hour(f64::from(solar.sunrise_utc_min?) / 60.0 + offset_h);
-    let sunset = wrap_hour(f64::from(solar.sunset_utc_min?) / 60.0 + offset_h);
-    Some((sunrise, sunset))
-}
-
-/// Fold an hour-of-day into `[0, 24)` after a UTC→local shift.
-///
-/// A station far enough east or west pushes sunrise past midnight; without this
-/// the value leaves the axis the strip draws and the marker vanishes off one
-/// end rather than wrapping to the other.
-fn wrap_hour(h: f64) -> f64 {
-    h.rem_euclid(24.0)
-}
-
 /// Capture-outage check: the station has detected before, the silence exceeds
 /// the threshold, and (with a location) we're inside daylight, when silence
 /// is anomalous. Returns the silence duration and the last detection's time.
@@ -362,7 +320,7 @@ pub(super) fn capture_outage(conn: &rusqlite::Connection) -> Option<(u64, String
     let silent = birdnet_db::sqlite::seconds_since_last_detection(conn)
         .ok()
         .flatten()?;
-    let threshold = match solar_times_today(conn) {
+    let threshold = match super::solar_times_local(conn) {
         Some((sunrise, sunset)) => {
             let now = super::now_hour_local();
             if now < sunrise || now > sunset {
@@ -548,7 +506,7 @@ async fn today_pills_partial(State(state): State<AppState>) -> impl IntoResponse
             }
 
             // Sunrise / sunset from the configured location.
-            if let Some((sunrise, sunset)) = solar_times_today(conn) {
+            if let Some((sunrise, sunset)) = super::solar_times_local(conn) {
                 let _ = write!(
                     out,
                     r#"<span class="bnb-pill">☀ sunrise {}</span><span class="bnb-pill">☾ sunset {}</span>"#,
@@ -860,7 +818,7 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
                 let to = format!("{today}T23:59:59Z");
                 conn.range(&from, &to).unwrap_or_default()
             };
-            let solar = solar_times_today(conn);
+            let solar = super::solar_times_local(conn);
             Ok::<_, birdnet_db::sqlite::DbError>((rows, samples, solar))
         })
     })

@@ -258,6 +258,15 @@ pub(crate) async fn not_found(
 // ---------------------------------------------------------------------------
 
 /// Minimal HTML escaping for XSS prevention.
+/// # The only HTML escaper in this crate
+///
+/// There were three, and they were not the same. This one escaped
+/// `& < > " '`; the copies in `admin/migration/render.rs` and
+/// `admin/backup_recovery.rs` escaped `& < > "` and omitted the apostrophe.
+/// Neither of those two happened to interpolate into a single-quoted attribute,
+/// so the difference was latent rather than exploitable — but "latent" is a
+/// property of today's call sites, not of the function, and nothing kept the
+/// three in step. Escaping is not a place to have three answers.
 pub(crate) fn escape_html(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -305,6 +314,65 @@ pub(crate) fn unix_secs() -> i64 {
 /// the reader drift apart.
 pub(crate) fn local_utc_offset_secs() -> i64 {
     birdnet_db::clock::local_utc_offset_secs()
+}
+
+/// Today's sunrise/sunset as fractional hours in **local** time, from the
+/// configured station location. `None` when no location is set or the sun never
+/// rises/sets at this latitude today.
+///
+/// # Why local, and why this is shared
+///
+/// Every hour-of-day axis in this app is local: the day strip's bars come from
+/// `hourly_activity`, which buckets the local `Time` column, and the "now"
+/// marker is [`now_hour_local`]. Returning the solver's raw UTC minutes drew
+/// sunrise two hours early on a CEST station and mislabelled the pills with it.
+///
+/// The Today page was fixed; the dawn-chorus polar chart kept a private copy
+/// that was wrong three ways at once, which is why this now lives here instead
+/// of there:
+///
+/// * it read the coordinates from `BNB_STATION_LAT`/`BNB_STATION_LON` only,
+///   falling back to a hard-coded (40.0 N, -74.0 W) — so a station that set its
+///   location in the setup wizard got sun markers for the New Jersey coast;
+/// * its day-of-year was `((unix_secs / 86_400) % 365) + 1`, which drifts about
+///   a day a year (14 days out by 2026, moving sunrise 18 min at Boston, 27 min
+///   at London, 40 min at Oslo) and wraps to January in late December;
+/// * it returned UTC hours while the chorus ribbons it was drawn over are
+///   bucketed from the local `Time` column.
+///
+/// [`birdnet_scheduler::SolarDay`] already had a correct, leap-aware
+/// implementation. One caller, one clock, one day-of-year.
+pub(crate) fn solar_times_local(conn: &rusqlite::Connection) -> Option<(f64, f64)> {
+    let lat: f64 = birdnet_db::settings::get_or(conn, "latitude", "")
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    let lon: f64 = birdnet_db::settings::get_or(conn, "longitude", "")
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    let location = birdnet_scheduler::Location::new(lat, lon).ok()?;
+    let date = today_date_string();
+    let year: u32 = date.get(0..4)?.parse().ok()?;
+    let month: u32 = date.get(5..7)?.parse().ok()?;
+    let day: u32 = date.get(8..10)?.parse().ok()?;
+    let solar = birdnet_scheduler::SolarDay::for_date(location, year, month, day).ok()?;
+    #[allow(clippy::cast_precision_loss)]
+    let offset_h = local_utc_offset_secs() as f64 / 3600.0;
+    let sunrise = wrap_hour(f64::from(solar.sunrise_utc_min?) / 60.0 + offset_h);
+    let sunset = wrap_hour(f64::from(solar.sunset_utc_min?) / 60.0 + offset_h);
+    Some((sunrise, sunset))
+}
+
+/// Fold an hour-of-day into `[0, 24)` after a UTC→local shift.
+///
+/// A station far enough east or west pushes sunrise past midnight; without this
+/// the value leaves the axis the strip draws and the marker vanishes off one
+/// end rather than wrapping to the other.
+pub(crate) fn wrap_hour(h: f64) -> f64 {
+    h.rem_euclid(24.0)
 }
 
 /// Current hour-of-day in **local** time as a fraction (09:43 → `9.72`).
@@ -420,6 +488,25 @@ pub(crate) fn group_thousands(n: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The canonical escaper must cover the apostrophe.
+    ///
+    /// Two of the three implementations this replaced did not, which is safe
+    /// only for as long as nobody writes `attr='{value}'`. The gate is on the
+    /// escaper rather than on the call sites, because the call sites are what
+    /// change.
+    #[test]
+    fn escape_html_covers_every_character_that_can_break_out() {
+        assert_eq!(
+            escape_html(r#"&<>"'"#),
+            "&amp;&lt;&gt;&quot;&#x27;",
+            "all five must be escaped, in one pass, ampersand first"
+        );
+        // Ampersand first, or the entities themselves get double-escaped.
+        assert_eq!(escape_html("&amp;"), "&amp;amp;");
+        // A single-quoted attribute must not be escapable.
+        assert!(!escape_html("' onerror='alert(1)").contains('\''));
+    }
 
     #[test]
     fn escape_html_basic() {

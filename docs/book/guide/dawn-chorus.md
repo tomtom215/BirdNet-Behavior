@@ -26,6 +26,10 @@ BNB_STATION_LON=-71.0589
 
 ## A note on time zones
 
-Sunrise/sunset are computed and displayed in **UTC**, the same frame the rest of the app uses for detection timestamps (it assumes the station clock is UTC, which is the recommended setup for a fixed listening post). The chorus ribbons and the sun markers therefore share one consistent clock. If your recorder writes filenames in local time, the *shape* of the chorus is still correct, but the hour labels and the sun markers will be offset by your UTC difference — run the station in UTC to keep them aligned.
+Everything on this clock is in the station's **local** time: the ribbons are bucketed from the local hour in each recording's filename, and the sunrise/sunset markers are computed for your configured coordinates and then shifted into the same local frame. Set your station's timezone with `timedatectl set-timezone` (which is what `--doctor` checks) and set your coordinates on the Settings page — the two together are what makes the sun markers land where the sun actually was.
+
+This page previously told you to run the station on UTC. That was advice for a defect, not a design: the markers were computed in UTC and drawn over local-time ribbons, so on any non-UTC station they were offset by the UTC difference, and they contradicted `--doctor`, which has always told operators to set their local timezone. The markers were additionally computed for a hard-coded (40.0 N, 74.0 W) unless two undocumented environment variables were set, on a day-of-year that drifted about a day a year. All three are fixed; run the station on its real timezone.
+
+**No coordinates set?** The ribbons still draw — they need no location — but the sun markers and the night wedge are omitted rather than guessed. A sun drawn where your station is not would answer "does this species sing before sunrise?" wrongly while looking authoritative.
 
 > Like the [migration](./phenology.md) view, this is built entirely from your own detections — no external data.
