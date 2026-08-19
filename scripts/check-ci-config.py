@@ -284,6 +284,31 @@ def _minutes(job: dict) -> float | None:
     return (dt.datetime.strptime(end, fmt) - dt.datetime.strptime(start, fmt)).total_seconds() / 60
 
 
+def superseded(run: dict) -> bool:
+    """Was this whole run killed by a newer push, rather than finishing?
+
+    A job in such a run has a `started_at` and a `completed_at` and looks
+    exactly like a job that ran that long — but the elapsed time says when
+    somebody pushed again, not what the job costs. Feeding it to either check
+    below is measuring the contributor's habits instead of the workflow.
+
+    That is not hypothetical: three pushes to one pull request in an hour put
+    two superseded runs into a five-run window and turned twelve rows red at
+    once, every one of them reading "used 45m of its 45m budget" for jobs that
+    really take 15. Any contributor who pushes twice reproduces it.
+
+    The run's own conclusion separates the two cases exactly, which was checked
+    against real runs rather than assumed:
+
+      * a job that hits its own `timeout-minutes` is recorded as a cancelled
+        *job*, but its run concludes `failure` — this is the signal check 4
+        exists to catch, and it survives;
+      * a run superseded by a newer push concludes `cancelled` — noise, and it
+        is dropped here.
+    """
+    return run.get("conclusion") == "cancelled"
+
+
 def observed_runtimes(workflow_file: str, repo: str) -> dict[str, list[float]]:
     """Every recent run's wall-clock, in minutes, per rendered job name.
 
@@ -291,6 +316,8 @@ def observed_runtimes(workflow_file: str, repo: str) -> dict[str, list[float]]:
     questions asked of it want different statistics: whether a job is about to
     be cancelled is a question about its *worst* run, and whether an `observed`
     annotation still describes it is a question about its *typical* one.
+
+    Runs superseded by a newer push are skipped — see [`superseded`].
     """
     basename = os.path.basename(workflow_file)
     runs = _api(
@@ -299,6 +326,8 @@ def observed_runtimes(workflow_file: str, repo: str) -> dict[str, list[float]]:
     )
     seen: dict[str, list[float]] = {}
     for run in runs.get("workflow_runs", []):
+        if superseded(run):
+            continue
         for job in _api(f"/repos/{repo}/actions/runs/{run['id']}/jobs?per_page=100").get("jobs", []):
             mins = _minutes(job)
             if mins is not None:
@@ -447,6 +476,13 @@ def check_headroom_arithmetic() -> None:
     check(has_drifted(642, 1357), "Tests' `# observed 10m42s` against a real 22m37s has drifted")
     check(not has_drifted(11, 13), "`# observed 11s` against a real 13s has not")
     check(not has_drifted(623, 620), "`# observed 10m23s` against a real 10m20s has not")
+    # Superseded runs, and the one kind of cancellation that must survive.
+    check(superseded({"conclusion": "cancelled"}),
+          "a run killed by a newer push is dropped")
+    check(not superseded({"conclusion": "failure"}),
+          "a run where a job hit its own timeout is kept — that is check 4's signal")
+    check(not superseded({"conclusion": "success"}), "a clean run is kept")
+    check(not superseded({}), "a run with no conclusion recorded is kept")
 
 
 def check_duration_headroom(jobs: list[tuple[str, str, str, int]],
