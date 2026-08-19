@@ -130,7 +130,7 @@ jobs:
   config:
     name: CI config (paths, shards, timeouts)
     runs-on: ubuntu-24.04
-    timeout-minutes: 15  # observed 16s
+    timeout-minutes: 15  # observed 1m01s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install cargo-mutants
@@ -203,8 +203,23 @@ jobs:
           # The validator has been mutation-clean since it was added; any
           # regression at all is a real test-coverage gap, so both shards keep
           # max_missed at 0.
-          - { label: "validate.rs [1/2]", slug: validate.rs-1, shard: "0/2", file: crates/birdnet-core/src/config/validate.rs, max_missed: 0 }
-          - { label: "validate.rs [2/2]", slug: validate.rs-2, shard: "1/2", file: crates/birdnet-core/src/config/validate.rs, max_missed: 0 }
+          # `timeout_minutes: 60`, not the default 45, and not a third shard.
+          #
+          # Shard [1/2] has run 2.0, 3.5, 5.5, 10.2 and 38.4 minutes over five
+          # recent runs — a 19x spread on an unchanged 34-mutant shard, so the
+          # cost here is dominated by the runner it lands on and the state of
+          # the build cache, not by the mutant count. Splitting again would pay
+          # a third cold baseline build to divide the part that is *not* the
+          # problem, and the 38-minute run would still have been 38 minutes.
+          #
+          # Check 4 reads the worst sample deliberately, and 38.4 of 45 is 85%
+          # — a real warning that one bad runner would push this over the wall
+          # and turn it into a grey "cancelled" badge that gates nothing. The
+          # honest answer to observed variance is a budget that fits it: 38.4
+          # of 60 is 64%, under the 75% line, while still being 8x shorter than
+          # the six-hour default a missing timeout would give a hung step.
+          - { label: "validate.rs [1/2]", slug: validate.rs-1, shard: "0/2", file: crates/birdnet-core/src/config/validate.rs, timeout_minutes: 60, max_missed: 0 }
+          - { label: "validate.rs [2/2]", slug: validate.rs-2, shard: "1/2", file: crates/birdnet-core/src/config/validate.rs, timeout_minutes: 60, max_missed: 0 }
           - label: inference/model.rs
             slug: inference-model.rs
             file: crates/birdnet-core/src/inference/model.rs
