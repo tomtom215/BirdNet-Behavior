@@ -38,7 +38,7 @@ Two things are deliberately configured elsewhere:
 
 ## Species & quarantine
 
-Rare-bird **quarantine** rules decide which detections are held for manual review instead of being logged automatically — see the [review queue](../guide/today.md#rare-bird-review-queue). You can also maintain per-species allow/exclude lists and image overrides here.
+Rare-bird **quarantine** rules decide which detections are held for manual review instead of being logged automatically — see the [review queue](../guide/reviews.md#reviews-vs-quarantine). You can also maintain per-species allow/exclude lists and image overrides here.
 
 ### Allow and exclude lists
 

@@ -319,6 +319,12 @@ jobs:
           fi
       - name: Build with analytics feature
         run: cargo build --workspace --all-features
+      - name: Every internal link in the in-app manual resolves
+        # `cargo build` renders `docs/book/**` into the tree `/help/*` serves,
+        # from the same `book.toml` GitHub Pages builds from. Checking it here
+        # means a broken link fails on any PR, not only one that happens to
+        # touch `docs/**` (which is all that triggers docs.yml).
+        run: ./scripts/check-book-links.py docs/book/_generated/html
       - name: The documented Docker quickstart actually starts the daemon
         # `docker compose config` is client-side, so this needs no daemon and no
         # image — it resolves the container environment the compose file would

@@ -3,13 +3,22 @@ name: Docs
 # Build the mdBook documentation and publish it to GitHub Pages.
 # Requires Pages to be enabled once in repo Settings → Pages → Source: GitHub Actions.
 #
-# The build job also runs on pull requests, deliberately: `mdbook build` is the
-# only thing in CI that runs the linkcheck backend. The root `book.toml` enables
-# it; `docs/book/book.toml` — the one `build.rs` loads on every `cargo build` —
-# does not, so a broken internal link is invisible to every other gate. When
-# this workflow was push-only, a link break could not be caught until it was
-# already on `main`; that happened, which is why the trigger is here.
+# The build job also runs on pull requests, deliberately: a link break could not
+# otherwise be caught until it was already on `main`, and that happened.
 # Only `deploy` is restricted to `main` pushes.
+#
+# ## One renderer, one config
+#
+# This used to install mdBook 0.4.52 with the `mdbook-linkcheck` backend, while
+# `build.rs` rendered the *same Markdown* with `mdbook-driver` 0.5 for the
+# in-app `/help/*` tree, from a second `book.toml` with a different theme. Same
+# pages, two different-looking sites, and only the published one link-checked.
+#
+# There is now one `book.toml` (repo root) and one mdBook version, pinned to
+# match the `mdbook-driver` in `Cargo.lock`. `mdbook-linkcheck` could not come
+# along — it is a 0.4-era plugin, last released in 2022 — so internal links are
+# checked by `scripts/check-book-links.py` against the rendered HTML instead,
+# which is renderer-agnostic and therefore covers both trees.
 
 on:
   push:
@@ -42,18 +51,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20  # observed 8s
     env:
-      MDBOOK_VERSION: "0.4.52"
+      # Pinned to the `mdbook-driver` version in Cargo.lock, so the published site
+      # and the in-app `/help/*` tree are byte-for-byte the same render.
+      MDBOOK_VERSION: "0.5.4"
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      - name: Install mdBook + mdbook-linkcheck
+      - name: Install mdBook
         uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2.85.4
         with:
-          tool: mdbook@${{ env.MDBOOK_VERSION }},mdbook-linkcheck
-      - name: Build the book (HTML + internal link check)
-        # book.toml enables the linkcheck backend, so a broken internal link
-        # fails this step. With more than one backend, mdBook writes the HTML
-        # into the html/ subdirectory of the build dir.
+          tool: mdbook@${{ env.MDBOOK_VERSION }}
+      - name: Build the book
+        # One backend, so mdBook writes straight into `build-dir`
+        # (`docs/.book-build`) rather than a `html/` subdirectory of it.
         run: mdbook build
+      - name: Check every internal link resolves
+        # Against the rendered HTML, not as an mdBook backend — see the header.
+        # This found five broken anchors in shipped documentation the first time
+        # it ran, which the 0.4 backend had been passing.
+        run: ./scripts/check-book-links.py docs/.book-build
       # Pages packaging is deploy-only: a pull request has no Pages token and
       # nothing to publish, so these steps would fail or waste a run.
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
@@ -61,7 +76,7 @@ jobs:
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         if: github.event_name != 'pull_request'
         with:
-          path: docs/.book-build/html
+          path: docs/.book-build
 
   deploy:
     needs: build

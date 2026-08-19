@@ -181,4 +181,4 @@ page:
 
 ## Export
 
-CSV/JSON/eBird export of the full detection history is available from the [Backups](../admin/backups.md#import--export) page (and a BirdNET-Pi-compatible CSV for tooling that expects that format).
+CSV/JSON/eBird export of the full detection history is available from the [Backups](../admin/backups.md#export) page (and a BirdNET-Pi-compatible CSV for tooling that expects that format).
