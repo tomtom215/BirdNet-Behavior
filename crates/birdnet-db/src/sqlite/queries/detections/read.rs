@@ -842,6 +842,72 @@ mod tests {
         );
     }
 
+    /// The three `analytic_*` counts must read the view, and must return the
+    /// number they computed.
+    ///
+    /// Found by mutation testing: `analytic_species_count_for_date` survived
+    /// being replaced with `Ok(-1)`. It *is* asserted — in
+    /// `tests/review_verdicts_apply.rs`, which belongs to the binary crate, so
+    /// the `package: birdnet-db` mutation row never runs it. A function whose
+    /// only coverage lives in another crate is uncovered from where the gate
+    /// stands.
+    ///
+    /// Both halves are here on purpose. Exact counts before any rejection kill
+    /// the "return a constant" mutants; the shift after a rejection is what
+    /// distinguishes reading `detections_analytic` from reading `detections` —
+    /// asserting only the first would pass for a function that ignores verdicts
+    /// entirely, which is the exact defect these three were added to fix.
+    #[test]
+    fn the_analytic_counts_exclude_a_rejection_and_report_real_numbers() {
+        let (_tmp, conn) = temp_db_with_data();
+
+        // Fixture: 4 detections. 2026-03-11 has 3 across 2 species (Blackbird
+        // twice, Robin once); 2026-03-10 has 1.
+        assert_eq!(analytic_detection_count(&conn).unwrap(), 4);
+        assert_eq!(
+            analytic_detection_count_for_date(&conn, "2026-03-11").unwrap(),
+            3
+        );
+        assert_eq!(
+            analytic_species_count_for_date(&conn, "2026-03-11").unwrap(),
+            2
+        );
+
+        // Reject the Robin: it is the only one of its species that day, so all
+        // three counts have somewhere to move.
+        conn.execute(
+            "UPDATE detections SET review_verdict = 'rejected'
+              WHERE Date = '2026-03-11' AND Com_Name = 'European Robin'",
+            [],
+        )
+        .unwrap();
+
+        assert_eq!(
+            analytic_detection_count(&conn).unwrap(),
+            3,
+            "a rejected detection is still in the all-time analytic count"
+        );
+        assert_eq!(
+            analytic_detection_count_for_date(&conn, "2026-03-11").unwrap(),
+            2,
+            "a rejected detection is still in the per-day analytic count"
+        );
+        assert_eq!(
+            analytic_species_count_for_date(&conn, "2026-03-11").unwrap(),
+            1,
+            "a species whose only detection that day was rejected is still counted"
+        );
+
+        // The counterpart: the raw counts are unmoved, so the assertions above
+        // are about the view and not about the row having been deleted.
+        assert_eq!(detection_count(&conn).unwrap(), 4);
+        assert_eq!(
+            detection_count_for_date(&conn, "2026-03-11").unwrap(),
+            3,
+            "the raw per-day count must still see the rejected detection"
+        );
+    }
+
     #[test]
     fn detections_by_date_ordered() {
         let (_tmp, conn) = temp_db_with_data();

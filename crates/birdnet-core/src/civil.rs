@@ -84,7 +84,13 @@ pub const fn days_from_civil(year: u32, month: u32, day: u32) -> i64 {
 #[must_use]
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub const fn civil_from_days(days: i64) -> (u32, u32, u32) {
-    let days = if days < 0 { 0 } else { days };
+    // `is_negative()` rather than `days < 0`, and the difference is not style.
+    // `if days < 0 { 0 } else { days }` has a mutant — `days <= 0` — that no
+    // test can ever kill, because clamping zero to zero is what the unmutated
+    // code already does. An unkillable mutant against a `max_missed: 0` gate is
+    // a permanent red with no fix available, so the comparison is replaced by
+    // the predicate it was spelling out. It also says the intent directly.
+    let days = if days.is_negative() { 0 } else { days };
     let z = days + 719_468;
     let era = z / 146_097;
     let doe = (z - era * 146_097) as u32;
@@ -306,6 +312,39 @@ mod tests {
         // …and a real date is untouched by that guard.
         assert_eq!(days_from_civil(1970, 1, 1), 0);
         assert_eq!(days_from_civil(1970, 1, 2), 1);
+    }
+
+    /// `y == 0` is on the *computing* side of the guard, not the clamping side.
+    ///
+    /// Found by mutation testing: `if y < 0` survived being changed to
+    /// `if y <= 0`, because every other gate in this file works in 1970–2170
+    /// and never produces a shifted year of zero. The test above does not catch
+    /// it either — it asserts the clamp returns `0`, and `0` is also the honest
+    /// answer for 1970-01-01, so "clamped" and "computed" are indistinguishable
+    /// there.
+    ///
+    /// Both ways of reaching `y == 0` are pinned, because they arrive by
+    /// different routes: year 0 from March (no shift) and year 1 in Jan/Feb
+    /// (shifted down by one). Neither may clamp.
+    #[test]
+    fn a_shifted_year_of_zero_still_computes_a_real_day_count() {
+        assert_eq!(
+            days_from_civil(0, 3, 1),
+            -719_468,
+            "year 0 March 1 is on the computing side of the `y < 0` guard"
+        );
+        assert_eq!(
+            days_from_civil(1, 1, 1),
+            -719_162,
+            "year 1 January 1 shifts to y == 0, which is still not negative"
+        );
+        // The counterpart, so this is a boundary and not a blanket alarm: one
+        // day earlier crosses into the shifted-negative region and clamps.
+        assert_eq!(
+            days_from_civil(0, 2, 29),
+            0,
+            "year 0 February shifts to y == -1 and must clamp"
+        );
     }
 
     /// Leap-day handling, spelled out because it is the case every copy of this
