@@ -9,6 +9,11 @@ nobody looking expose, and would anyone find out?"
 previous pass. This one does not repeat it. Where its findings have since moved,
 §6 says so — three of its statuses are now stale.
 
+> **Follow-up pass, same session.** F-6's residue, F-9, F-10, F-11 and F-13's
+> `escape_html` are now fixed, along with three defects the pass turned up that
+> are not in the original list — see §8. The findings below are left as first
+> written; §8 records what moved and what is still open.
+
 **Method.** Every claim below was produced by running something: a probe, a
 query plan, the real binary under a real environment, or a gate watched failing
 against the code it was written for. Where a hypothesis of mine turned out to be
@@ -517,3 +522,94 @@ what is true.
    are all reachable in minutes; the ones that are not — file-descriptor drift,
    `DuckDB` file growth under continuous sync, SD-card write amplification — need
    elapsed time, and are exactly the class a permanent deployment meets first.
+
+
+---
+
+## 8. Follow-up pass — what moved
+
+Written after acting on §7. The findings above are unedited; this is the delta.
+
+### Closed
+
+* **F-6 residue** — the published feeds (`/feeds/rare.rss`, `rare.ics`,
+  `today.rss`), the Today phrase and its 30-day baseline, the command palette,
+  the next-species trigger, the dawn-sequence derivation, the species page's
+  showcase clip, and five whole-history aggregates in the query layer now read
+  `detections_analytic`. `/api/v2/metrics` keeps `birdnet_detections_total` raw
+  on purpose — it is pipeline throughput, not an analytic — and exports
+  `birdnet_detections_rejected_total` beside it so both questions are
+  answerable from one scrape.
+
+  Record-level surfaces still show rejections, because the review queue holds
+  only the **last 25 verdicts**: hiding a rejection everywhere else would make
+  an older one unreachable through the UI entirely. That limit is now the
+  weakest part of the curation loop and is listed below.
+
+* **F-9** — `birdnet-db` gained the `import_batches` read API it never had, and
+  the Patterns screens carry a note naming an imported foreign site, its
+  distance and whether the clocks were reconciled. It stays silent for a
+  station's own imported history, which is the common case; a banner that cries
+  wolf on every import is one nobody reads when it matters.
+
+* **F-10** — quiet windows are settable from the audio-source form, and both
+  they and `fixed:HH:MM-HH:MM` recording windows are now evaluated in the
+  station's **local** time. Solar schedules stay on UTC and must:
+  `SolarDay` reports absolute instants. `DailySchedule::clock()` names which
+  clock each gate wants so a caller cannot confuse them. `--doctor` now reports
+  the window against the station's offset instead of warning about the old
+  behaviour, and tells an operator who set UTC hours to compensate to set them
+  back.
+
+* **F-11** — one POSIX `df`, gated against GNU, BSD and BusyBox output.
+
+* **F-13, `escape_html`** — one implementation, gated on all five characters.
+
+### Found while fixing the above
+
+* **The dawn-chorus sun markers were wrong three ways.** Wrong place (a
+  hard-coded 40.0 N, 74.0 W unless two undocumented environment variables were
+  set, while the station's real coordinates sat in the settings table), wrong
+  day (`(unix_secs / 86_400) % 365 + 1`: 14 days out in 2026, −351 days on the
+  winter solstice, moving sunrise 18–40 min depending on latitude), and wrong
+  clock (UTC hours drawn over local-hour ribbons). The Today page's equivalent
+  had been fixed; this copy had not. Both now share one helper backed by
+  `birdnet_scheduler::SolarDay`.
+
+  Its own tests asserted UTC while its doc comment claimed "local-civil hours",
+  and the guide page told operators to run their station on UTC — which
+  contradicted `--doctor`, telling them to set their local timezone. Three
+  artefacts agreeing with each other and all disagreeing with the code is worth
+  more attention than any of them individually.
+
+* **A test I wrote was racy.** The first version of the "one `df`
+  implementation" gate compared two live readings and failed in the full suite
+  by 4096 bytes — one block, written by another test between the calls. Fixed
+  to a tolerance that two genuinely different parsers could not sit inside.
+
+### Still open
+
+1. **The review queue shows only the last 25 verdicts.** Now the weakest link in
+   curation: it is the only surface that lists rejected detections, so a
+   rejection older than 25 verdicts is reachable only by a saved URL. Paginate
+   it, or give the browsing lists a "show rejected" filter that marks them.
+2. **Ten surfaces still read raw `detections`** — `share.rs` (public share
+   pages) and `today.rs`'s capture-outage probe among them. The outage probe is
+   correct to stay raw: a rejected detection still proves the microphone worked.
+   The share pages are not.
+3. **F-8 properly.** Migration 29 made the whole-history aggregates cheaper, not
+   bounded. At ten years the species list is back where it started; the answer
+   is a maintained per-species summary.
+4. **F-12** — the published site and the in-app help are still rendered by
+   different mdBook majors, and only the published one is link-checked.
+5. **F-13's remainder** — ten copies of Hinnant's civil-date arithmetic, three
+   URL escapers, two hand-rolled JSON escapers while `serde_json` is a
+   dependency.
+6. **`htmx_health_badge_returns_healthy_for_a_capturing_station` depends on the
+   host's free disk.** It asserts the badge reads "Healthy", and the badge
+   correctly grades a >90 % full filesystem as "Disk full" — so the test fails
+   on a full build machine. Observed here after a scale probe filled the volume.
+   Pre-existing, not introduced by this pass, and a latent CI flake: the disk
+   reading needs injecting rather than sampling the host.
+7. **The soak test.** Unchanged and still the largest gap: nothing here runs the
+   station for a week. Every finding in this document was reachable in minutes.
