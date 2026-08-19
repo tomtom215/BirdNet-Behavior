@@ -465,7 +465,7 @@ jobs:
           sudo docker image prune --all --force >/dev/null 2>&1 || true
           echo "Disk after:"; df -h /
 
-      - name: Cache Cargo
+      - name: Cache the mutants build tree
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           # Cache ONLY the `mutants` profile tree — the sole build dir this
@@ -473,20 +473,48 @@ jobs:
           # `target/` cache carried the legacy dev-profile artifacts (full
           # debug info + every DuckDB-linking integration-test executable
           # the old per-mutant loop built) and had grown past what a runner
-          # can even EXTRACT: the "Cache Cargo" restore step itself died on
+          # can even EXTRACT: the restore step itself died on
           # ENOSPC before mutation testing ran. The `-v2-` key generation
           # orphans those oversized caches (GitHub evicts them); the first
           # run per shard pays a one-time cold dependency build, after which
           # the no-debuginfo cache stays a fraction of the old size.
+          #
+          # Two things with different sharing rules used to live in one entry,
+          # and pooling them was actively harmful. The registry is identical
+          # for every row and worth sharing. `target/mutants/` is not: it holds
+          # compiled artifacts for one package, and the last restore-key was
+          # the bare `<os>-mutants-v2-`, so a row with no cache of its own —
+          # any row that has just been renamed or re-sharded — restored some
+          # other row's build tree. When that row builds the binary crate it is
+          # a DuckDB- and ONNX-linked tree a `birdnet-core` job cannot use, so
+          # cargo invalidated it and rebuilt from scratch, having first paid to
+          # download and extract it. Measured cost of that: eight rows at
+          # 45 minutes each, against 7-10 minutes once each had its own entry.
+          #
+          # So the build tree is keyed strictly per row now and never falls
+          # back to another one's. A renamed row starts genuinely cold, which
+          # is the honest price of renaming it and is cheaper than starting
+          # wrong.
+          path: |
+            target/mutants/
+          key: ${{ runner.os }}-mutants-tree-v1-${{ matrix.label }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mutants-tree-v1-${{ matrix.label }}-
+
+      - name: Cache the Cargo registry
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          # Shared across every row on purpose: the dependency downloads are
+          # identical whatever file a row mutates, and pooling them is what
+          # stops 26 rows each fetching the same crates from scratch. This is
+          # the half of the old combined entry that was worth sharing.
           path: |
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-            target/mutants/
-          key: ${{ runner.os }}-mutants-v2-${{ matrix.label }}-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-mutants-registry-v1-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-mutants-v2-${{ matrix.label }}-
-            ${{ runner.os }}-mutants-v2-
+            ${{ runner.os }}-mutants-registry-v1-
 
       - name: Install cargo-mutants
         uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2.85.4
