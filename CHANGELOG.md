@@ -144,6 +144,26 @@ Several of these were invisible to a fully green 2 190-test suite.
 
 ### Added
 
+- **`--rebuild-species-summary`** recomputes the per-species totals from the
+  detections. Derived data, so rebuilding cannot lose anything; `--doctor` names
+  it if it ever finds the summary and the detections disagreeing. Nothing else
+  should need it.
+
+- **A mixed-workload soak.** The existing soak tests each drove one operation
+  repeated — 20 000 inserts, or one corrupt file recovered. A station's year is
+  detections arriving interleaved with a reviewer confirming, rejecting and
+  changing their mind, relabels, deletes, the bulk clip-prune job, and restarts.
+  The new test drives 20 000 of those shuffled together, reopening the database
+  every 2 500, and checks the maintained summary against a recomputed aggregate
+  throughout. Seeded and replayable (`BIRDNET_SOAK_SEED`, `BIRDNET_SOAK_OPS`),
+  and it asserts every branch was actually taken, so a schedule that happened
+  never to reject anything cannot pass as full coverage.
+
+  It is not a substitute for running a station for a week — still the largest
+  untested thing here — but it covers what that week would stress and ten
+  seconds can reach: state surviving restarts, resources bounded across them,
+  and the summary staying the size of the species list rather than the history.
+
 - **Per-source quiet windows are settable.** `schedule_quiet` has had a column
   since the audio-sources table landed, the capture supervisor has always
   honoured it, and *nothing wrote it* — every construction site in the tree
@@ -201,8 +221,86 @@ Several of these were invisible to a fully green 2 190-test suite.
   Cost, measured rather than estimated: +130.6 MB (9.0 % of the file); inserts
   0.20 → 0.27 ms per committed row, three orders of magnitude above what a
   station produces. A third index would take the species list to 0.31 s for
-  18.6 % total, which is the wrong trade on an SD card. This makes the
-  aggregates cheaper, not bounded — see `docs/FIELD_READINESS_AUDIT.md` §7.
+  18.6 % total, which is the wrong trade on an SD card. This made the aggregates
+  cheaper, not bounded; migration 30 below makes them bounded.
+
+- **A verdict older than 25 was unreachable.** The review queue showed the last
+  25 verdicts and nothing else — and it is the only surface that lists rejected
+  detections, so a rejection that fell off the end could not be found, let alone
+  undone, except by a saved URL. It is paginated now, with a status filter and a
+  total, so every verdict a reviewer has ever recorded stays reachable.
+
+- **A share link outlived the claim it published.** `/share/<id>` read the raw
+  detections table, so a detection a reviewer had rejected kept serving a public
+  page asserting the station heard that bird — the one surface where being wrong
+  reaches an audience that never sees the correction. Share pages read
+  `detections_analytic` now, and a withdrawn detection's link returns 404.
+
+- **Ten copies of the same civil-date arithmetic, and three URL escapers.**
+  Every implementation of Howard Hinnant's days-from-civil algorithm was checked
+  against every other over 1970–2170: all thirteen agreed, zero mismatches — so
+  nothing was *broken*, but ten chances for the eleventh to be wrong were. There
+  is one in `birdnet-core::civil` now. The URL escapers differed in exactly one
+  respect (whether `/` is escaped), which is the difference between encoding a
+  path and encoding a segment; both are now named for what they do, with a gate
+  asserting the slash is the only thing between them.
+
+- **The species aggregates are now bounded by the species count, not the
+  history.** Migration 29 made them cheaper; they still read every detection
+  ever recorded, so opening the species list got slower every month the station
+  ran. Migration 30 adds `species_summary` — one row per (common name,
+  scientific name, hour of day), maintained on write — so the species list, the
+  per-species hour histogram and the distinct-species count read a few thousand
+  rows instead of millions, permanently.
+
+  Measured on a seeded three-year station (2 755 374 detections, 86 species,
+  1.47 GB, warm, x86_64 NVMe), with the histogram measured against the busiest
+  species (79 602 detections):
+
+  | query | before | after |
+  |---|---|---|
+  | species list (top 100) | 1 482 ms | **0.53 ms** |
+  | per-species hour histogram | 138 ms | **0.07 ms** |
+  | distinct species count | <1 ms | 0.34 ms |
+
+  Cost: **+1.0 MB, 0.07 %** of the file — migration 29's indexes cost +130.6 MB
+  (9.0 %) for a fraction of this, because an index scales with the detections
+  and a summary scales with the species. Inserts 0.0671 → 0.0724 ms/row
+  (+7.9 %); 1.9 s to backfill once. The distinct-species count is a wash and
+  moved anyway, so every species-level fact comes from one place.
+
+  Maintained by SQLite **triggers**, not by a function the write paths call:
+  `detections` is written from four crates and at least eight call sites, and
+  the ninth would drift silently. First-seen dates are deliberately *not*
+  summarised — MIN/MAX cannot be reversed on delete, so the life list stays on
+  migration 29's covering index rather than buy a rule that could drift.
+
+  A materialised aggregate that can drift is worse than a slow query, so
+  `--doctor` now reports whether the summary still agrees with the detections
+  (a **warning**, never an error — a stale species count is no reason to stop
+  recording birds), and `--rebuild-species-summary` recomputes it. The rebuild
+  fails loudly if drift survives it, because that would mean something is
+  writing in a way the triggers cannot see.
+
+- **Five broken links in shipped documentation**, live on `main` and passing
+  CI: three copies of `guide/today.md#rare-bird-review-queue` (a heading that
+  never existed), `remote-access.md#built-in-http-basic-auth`, and
+  `backups.md#import--export`.
+
+  They passed because the manual was being rendered *twice* — GitHub Pages by
+  the mdBook 0.4.52 CLI with the `mdbook-linkcheck` backend, and `build.rs` by
+  `mdbook-driver` 0.5 for the in-app `/help/*` tree, from a second `book.toml`
+  with a different theme, no custom CSS and no folding. Same pages, two
+  different-looking sites, and only the published one was checked at all — by a
+  backend that was not catching these.
+
+  There is one `book.toml` now, at the repository root, and one mdBook version.
+  `scripts/check-book-links.py` replaces the 2022-vintage backend by checking
+  the *rendered HTML*, which is renderer-agnostic and so covers the published
+  site and the in-app manual with one check; it runs in both `docs.yml` and
+  `ci.yml`, so a broken link fails any pull request rather than only one that
+  touches `docs/**`. The custom theme now reaches the in-app manual for the
+  first time.
 
 - **The settings page's structure was visible but not real.** All eight section
   titles on `/admin/settings` were `<div class="section-title">` — styled at
@@ -451,10 +549,22 @@ Several of these were invisible to a fully green 2 190-test suite.
 
 ### Migrations
 
-25, 26 and 27 — import provenance, the denormalised reviewer verdict (backfilled
-from existing verdicts), and the recording-effort table. All additive; none
-rewrites existing rows, and `import_batch_id IS NULL` continues to mean "this
-station recorded it".
+25 through 30 — import provenance; the denormalised reviewer verdict (backfilled
+from existing verdicts); the recording-effort table; a maintenance-run result
+column; two covering indexes for the species aggregates; and `species_summary`,
+the per-species totals maintained by triggers.
+
+All additive. None rewrites existing rows, and `import_batch_id IS NULL`
+continues to mean "this station recorded it". 29 and 30 are the only ones with a
+size cost: +130.6 MB and +1.0 MB respectively on a 1.47 GB three-year database,
+and 30 backfills from existing detections so an upgrading station gets correct
+totals immediately rather than only for detections recorded from then on.
+
+A note for whoever adds migration 31: 30's triggers exist from that point on, so
+a later migration that rewrites `detections` in bulk will fire them and the
+summary will follow along — which is the intent. One that rebuilds the table by
+create-copy-drop-rename must drop those triggers first and re-run the backfill
+after, or it will double-count the copy.
 
 ## [0.14.0] - 2026-08-16
 

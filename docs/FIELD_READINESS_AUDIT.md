@@ -589,27 +589,114 @@ Written after acting on §7. The findings above are unedited; this is the delta.
 
 ### Still open
 
-1. **The review queue shows only the last 25 verdicts.** Now the weakest link in
-   curation: it is the only surface that lists rejected detections, so a
-   rejection older than 25 verdicts is reachable only by a saved URL. Paginate
-   it, or give the browsing lists a "show rejected" filter that marks them.
-2. **Ten surfaces still read raw `detections`** — `share.rs` (public share
-   pages) and `today.rs`'s capture-outage probe among them. The outage probe is
-   correct to stay raw: a rejected detection still proves the microphone worked.
-   The share pages are not.
-3. **F-8 properly.** Migration 29 made the whole-history aggregates cheaper, not
-   bounded. At ten years the species list is back where it started; the answer
-   is a maintained per-species summary.
-4. **F-12** — the published site and the in-app help are still rendered by
-   different mdBook majors, and only the published one is link-checked.
-5. **F-13's remainder** — ten copies of Hinnant's civil-date arithmetic, three
-   URL escapers, two hand-rolled JSON escapers while `serde_json` is a
-   dependency.
-6. **`htmx_health_badge_returns_healthy_for_a_capturing_station` depends on the
-   host's free disk.** It asserts the badge reads "Healthy", and the badge
-   correctly grades a >90 % full filesystem as "Disk full" — so the test fails
-   on a full build machine. Observed here after a scale probe filled the volume.
-   Pre-existing, not introduced by this pass, and a latent CI flake: the disk
-   reading needs injecting rather than sampling the host.
-7. **The soak test.** Unchanged and still the largest gap: nothing here runs the
-   station for a week. Every finding in this document was reachable in minutes.
+1. **The soak.** Still the largest untested thing here, and now narrower than it
+   was. A mixed-workload soak drives 20 000 interleaved operations — inserts,
+   verdicts, un-verdicts, relabels, deletes, the bulk clip-prune — across seven
+   simulated restarts, and checks the maintained species summary against a
+   recomputed aggregate throughout. That covers what a week would stress and ten
+   seconds can reach.
+
+   What it does not cover is what only real time produces: descriptor drift
+   across days of continuous capture, DuckDB file growth under continuous sync,
+   SD-card write amplification, thermal behaviour in a sealed enclosure, and a
+   filesystem filling gradually rather than being filled by a test. Nothing here
+   runs the station for a week, and nothing here can.
+
+2. **Two hand-rolled JSON escapers** remain, in `doctor::render` and
+   `mqtt::discovery`, while `serde_json` is already a dependency. Checked and
+   deliberately left: both are parse-gated against hostile input — `doctor`'s
+   has a proptest, `mqtt`'s has three round-trip tests — so the case for
+   replacing them is tidiness, and the case against is churning two paths that
+   are demonstrably correct. Recorded so the next reader knows it was a decision
+   and not an oversight.
+
+3. **First-seen dates are still a whole-history aggregate.** Migration 30 bounds
+   the species list, the hour histogram and the species count; the life list's
+   `MIN(Date)` per species stays on migration 29's covering index (0.58 s at
+   2.76 M rows) because MIN/MAX cannot be maintained incrementally under delete.
+   That is a deliberate limit, not an omission: a second maintenance rule that
+   could drift is worse than a query that is merely fast.
+
+## 9. Second follow-up — what the rest of the pass closed
+
+Written after §8's list was worked through. Every numbered item in it is now
+addressed; the remaining open work is the list immediately above.
+
+* **The review queue's 25-verdict cliff** — paginated, with a status filter and
+  a total. It is the only surface that lists rejected detections, so a verdict
+  falling off the end meant a rejection nobody could find or undo.
+
+* **Share pages** — now read `detections_analytic`. A share link is a
+  publication; a rejection withdraws the claim, so the link returns 404 rather
+  than keep asserting the station heard the bird. This was the one surface where
+  being wrong reached an audience that never sees the correction.
+
+* **F-13's remainder** — one civil-date implementation
+  (`birdnet_core::civil`), and the three URL escapers reduced to two functions
+  named for the one thing that actually differed between them (whether `/` is
+  escaped — the difference between a path and a segment).
+
+  Worth recording that the thirteen civil-date implementations were checked
+  against each other over 1970–2170 first, and **all agreed, zero mismatches**.
+  Nothing was broken. The consolidation buys one place for the eleventh copy not
+  to be written, not a bug fix, and saying otherwise would overstate it.
+
+* **F-12** — one `book.toml`, one mdBook version, and a link check that runs
+  against rendered HTML in both `docs.yml` and `ci.yml`. The published site had
+  been built by mdBook 0.4.52 and the in-app manual by `mdbook-driver` 0.5 from
+  a *different config*, so the two looked different and only the published one
+  was checked.
+
+  Unifying them found that the root `book.toml` was 0.4-only: 0.5 rejects the
+  bare `fa-github` prefix that 0.4 accepted. That was invisible until `build.rs`
+  printed the whole error chain — mdBook's top-level message is "Rendering
+  failed", and the cause was three links down.
+
+  The link check then found **five dead anchors in shipped documentation**, all
+  live on `main`. They had been passing: `origin/main` at 61444f7 contains all
+  five, `guide/today.md` there contains no "rare bird review queue" heading, and
+  that commit's Docs run succeeded. `mdbook-linkcheck` was not catching a
+  fragment pointing at a heading that had never existed, despite
+  `warning-policy = "error"`.
+
+* **F-8, properly** — `species_summary` (migration 30): one row per (common
+  name, scientific name, hour), maintained by triggers on every write. The
+  species list goes 1 482 ms → 0.53 ms and the per-species hour histogram
+  138 ms → 0.07 ms on a 2.76 M-row database, for +1.0 MB (0.07 %) and +7.9 % on
+  the insert path.
+
+  The size figure is the one worth noticing: migration 29's indexes cost
+  +130.6 MB (9.0 %) for a fraction of the improvement, because an index scales
+  with the detections and a summary scales with the species. The soak run ends
+  with 9 975 detections and exactly 96 buckets — 4 species × 24 hours, saturated
+  at its theoretical maximum.
+
+* **The health-badge flake** — the test asserted "Healthy" while the badge
+  correctly grades a >90 % full filesystem as "Disk full", so it failed on a
+  full build machine. It now asserts the two signals it sets and tolerates
+  exactly one named condition, and was verified to still fail when the source
+  gauge is flipped down.
+
+### Where §8 was wrong
+
+* §8 called the soak "unchanged and still the largest gap: nothing here runs the
+  station for a week". The second clause is true; the first was not. `tests/soak.rs`
+  already covered bounded memory, descriptors and database growth over 20 000
+  inserts, analytics-sync memory bounded by batch rather than by history, and
+  recovery from a corrupt SQLite *and* a corrupt DuckDB at restart. Calling that
+  "unchanged" implied there was nothing there, and there was.
+
+* I expected one of the mutations against migration 30 — making the update
+  trigger unable to merge into an existing bucket — to slip past the scripted
+  gate, because that gate's only relabel targets a fresh species and so never
+  collides. It did not slip past. Three defects were mutated in and the scripted
+  gate caught all three, which means the mixed soak has **no demonstrated catch
+  the scripted gate misses**; its distinct value is restarts, resource bounds
+  across restarts, and the size bound. The test's own comment says exactly that
+  rather than implying more.
+
+* One assertion I wrote could not have caught the thing it claimed to. "An
+  update to a column the summary does not depend on must not perturb the
+  summary" passes just as well with the trigger's guard removed, because
+  withdraw-then-admit lands on the same number. It counts writes through
+  `total_changes()` now, which a mutation confirms it discriminates on.
