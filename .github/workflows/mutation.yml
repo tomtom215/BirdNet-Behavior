@@ -495,11 +495,23 @@ jobs:
           # back to another one's. A renamed row starts genuinely cold, which
           # is the honest price of renaming it and is cheaper than starting
           # wrong.
+          #
+          # The second restore-key is the *old* combined key, still scoped to
+          # this row's label. Without it, changing the key prefix would throw
+          # away every warm cache in the repository at once and make the first
+          # run after this commit as slow as the incident it fixes — for no
+          # reason, since an archive saved under `-v2-<this label>-` holds this
+          # row's own tree. It is safe precisely because the label is in it;
+          # the registry entry below deliberately has no such fallback, because
+          # its key carries no label and `actions/cache` restores an archive's
+          # full contents, so falling back there would drag some other row's
+          # tree in and reintroduce the bug.
           path: |
             target/mutants/
           key: ${{ runner.os }}-mutants-tree-v1-${{ matrix.label }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-mutants-tree-v1-${{ matrix.label }}-
+            ${{ runner.os }}-mutants-v2-${{ matrix.label }}-
 
       - name: Cache the Cargo registry
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
