@@ -42,6 +42,7 @@ pub(crate) mod nav;
 pub mod notification_center;
 pub mod onboarding;
 pub(crate) mod overlays;
+pub mod provenance;
 pub mod quarantine;
 pub mod recordings;
 pub(crate) mod skeletons;
@@ -115,6 +116,7 @@ pub fn router() -> Router<AppState> {
         .merge(timeseries_dash::router())
         .merge(heatmap::router())
         .merge(correlation::router())
+        .merge(provenance::router())
         .merge(quarantine::router())
         .merge(today::router())
         .merge(recordings::router())

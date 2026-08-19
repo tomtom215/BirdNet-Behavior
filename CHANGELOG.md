@@ -17,6 +17,72 @@ Several of these were invisible to a fully green 2 190-test suite.
 
 ### Fixed
 
+- **A reviewer's rejection now reaches every aggregate.** `detections_analytic`
+  landed in migration 26 and the surfaces converted to it were the ones someone
+  thought of at the time. The rest kept counting rejected detections: the
+  published RSS/JSON/ICS feeds (including `/feeds/rare.*`, whose "new species"
+  date comes from `MIN(Date)` — so a rejected row that happened to be the
+  earliest announced a first-detection date the life list disagreed with, to an
+  audience that never sees the correction), the Today phrase and its 30-day
+  baseline, the command palette, the next-species prediction's trigger species,
+  the dawn-sequence derivation, the species page's showcase clip, and five
+  whole-history aggregates in the query layer (`species_for_date`,
+  `detections_per_day`, `detection_dates`, `best_detections_for_date`,
+  `detection_count_for_species_date`).
+
+  `/api/v2/metrics` deliberately keeps `birdnet_detections_total` counting every
+  row — it is a pipeline-throughput signal, and a detection a human later
+  rejected still proves the chain ran — and now exports
+  `birdnet_detections_rejected_total` beside it, so a dashboard can show either
+  the raw rate or the curated figure the web UI displays. `birdnet_species_total`
+  is an analytic and excludes rejections.
+
+  Record-level surfaces still show rejected detections on purpose. The review
+  queue keeps only the last 25 verdicts, so hiding them everywhere else would
+  make an older rejection unreachable through the UI entirely.
+
+- **Fixed recording windows and per-source quiet windows were evaluated in
+  UTC.** `fixed:06:00-20:00` on a UTC-8 station really recorded 22:00-12:00
+  local — through the night, stopping at midday, missing the dawn chorus it was
+  configured to capture. `--doctor` warned about it; nothing fixed it.
+
+  Both are now evaluated against the station's local clock, which is what an
+  operator typing "06:00" means. **Solar schedules are unchanged and must be**:
+  `SolarDay` reports sunrise and sunset as absolute instants in UTC, so that
+  gate is asked in UTC. `DailySchedule::clock()` names which clock each gate
+  wants, so the two can no longer be confused by a caller.
+
+  `--doctor` now reports the window with the station's offset instead of warning
+  about the old behaviour — an operator who set UTC hours to compensate needs to
+  set them back, and is told so.
+
+- **The dawn-chorus sun markers were for the wrong place, the wrong day and the
+  wrong clock.** The Today page's solar helper was fixed some time ago; this
+  page kept a private copy that was wrong three ways at once. It read the
+  coordinates from `BNB_STATION_LAT`/`BNB_STATION_LON` only and otherwise fell
+  back to a hard-coded (40.0 N, 74.0 W), so a station that set its location in
+  the setup wizard got a sun computed for the New Jersey coast. Its day-of-year
+  was `((unix_secs / 86_400) % 365) + 1`, which drifts about a day a year — 14
+  days out by 2026, moving sunrise 18 min at Boston, 27 min at London and 40 min
+  at Oslo — and wraps to January in late December. And it returned UTC hours
+  while the chorus ribbons it was drawn over are bucketed from the local `Time`
+  column. Its own tests asserted UTC while its doc comment claimed "local-civil
+  hours".
+
+  Both pages now use one helper, backed by `birdnet_scheduler::SolarDay`. With
+  no configured location the markers and the night wedge are omitted rather than
+  guessed. The guide page that told operators to run their station on UTC — 
+  advice for a defect, and in direct contradiction of `--doctor` — is corrected.
+
+- **`df` was invoked with GNU-only flags on the path that keeps the disk from
+  filling.** The capture disk manager passed `--output=size,used,avail -B1`,
+  which are coreutils extensions that neither BSD `df` (macOS, a documented
+  target) nor BusyBox accepts. `disk_usage` then errored, and the disk manager
+  reads an error as "cannot tell" and skips the purge — so a station whose card
+  was filling up never reclaimed anything, silently. There were two `df`
+  implementations in the workspace and only the doctor's was POSIX; there is now
+  one, gated against GNU, BSD and BusyBox output fixtures.
+
 - **`docker compose up` could not start the container.** `docker-compose.yml`
   interpolated fifteen optional settings as `KEY: ${KEY:-}`, which puts the key
   in the container environment as an *empty string* whether or not anyone set
@@ -75,6 +141,32 @@ Several of these were invisible to a fully green 2 190-test suite.
   `SELECT COUNT(*) FROM detections_analytic`, i.e. the view's own `WHERE` clause
   restated to itself, while claiming to cover "species totals, the heat map, the
   dawn chorus, phenology". It now reads through the query layer.
+
+### Added
+
+- **Per-source quiet windows are settable.** `schedule_quiet` has had a column
+  since the audio-sources table landed, the capture supervisor has always
+  honoured it, and *nothing wrote it* — every construction site in the tree
+  passed `None`, so the only way to set one was direct SQL against the database.
+  The audio-source edit form now carries both ends, blanking both removes the
+  window, half a window is refused rather than half-saved, and a source with one
+  says so on its row (a source that goes quiet every night is otherwise
+  indistinguishable from one that has failed).
+
+- **A merged history is visible on the charts it changes.** Migration 25 tagged
+  every imported detection with its origin — coordinates, distance, the clock
+  shift applied — and nothing ever read it. `birdnet-migrate` warns *before* an
+  import that the source is 340 km away and rightly does not block, but
+  afterwards every location- and hour-dependent analytic read the union as one
+  station with nothing saying so, which is not detectable after the fact.
+
+  The Patterns screens now carry a note naming the source, its distance and
+  whether the two clocks were reconciled, plus a link to what was imported. It
+  renders nothing for a station that imported nothing, and nothing for the
+  common case of importing your own BirdNET-Pi history — a false alarm on every
+  station that ever imports is how a banner gets ignored by the time it matters.
+  `birdnet-db` gained the read API this needed (`list_import_batches`,
+  `imported_detection_count`), which did not exist at all.
 
 ### Changed
 

@@ -31,6 +31,9 @@ pub use queries::detection_reviews::{
     rejected_detection_count, set_detection_review, unreviewed_recent_detections,
 };
 pub use queries::heatmap::{HeatmapCell, HourTotal};
+pub use queries::imports::{
+    DIFFERENT_SITE_KM, ImportBatch, imported_detection_count, list_import_batches,
+};
 pub use queries::maintenance::{
     BACKUP_VACUUM_INTERVAL_SECS, DAILY_INTERVAL_SECS, JOB_BACKUP_VACUUM, JOB_INTEGRITY_CHECK,
     JOB_SESSION_PRUNE, JOB_SPECIES_CAP, last_run_result, last_run_unix, record_run,

@@ -6,6 +6,7 @@ pub mod detection_reviews;
 pub mod detections;
 pub mod heatmap;
 pub mod images;
+pub mod imports;
 pub mod maintenance;
 pub mod quarantine;
 pub mod species;
@@ -39,6 +40,7 @@ pub use images::{
     ImageBlacklist, add_image_blacklist, blacklisted_urls_for_species, is_image_blacklisted,
     list_image_blacklist, remove_image_blacklist,
 };
+pub use imports::{DIFFERENT_SITE_KM, ImportBatch, imported_detection_count, list_import_batches};
 pub use maintenance::{
     BACKUP_VACUUM_INTERVAL_SECS, DAILY_INTERVAL_SECS, JOB_BACKUP_VACUUM, JOB_INTEGRITY_CHECK,
     JOB_SESSION_PRUNE, JOB_SPECIES_CAP, last_run_result, last_run_unix, record_run,

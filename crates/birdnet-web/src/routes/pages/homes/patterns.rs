@@ -81,7 +81,15 @@ async fn patterns_page(Query(q): Query<TabParam>, headers: HeaderMap) -> Html<St
         // "when" and the unknown-key clamp.
         _ => crate::routes::pages::heatmap::content(),
     };
-    let content = format!("{}{body}", subtabs("/patterns", "tab", TABS, tab.key));
+    // The provenance note sits above the tabs, not inside one: every Patterns
+    // tab is a location- or hour-dependent reading, so a merged history changes
+    // all of them. It renders nothing unless a genuinely different site was
+    // imported.
+    let content = format!(
+        "{}{}{body}",
+        crate::routes::pages::provenance::slot(),
+        subtabs("/patterns", "tab", TABS, tab.key)
+    );
     let title = format!("Patterns · {}", tab.label);
     crate::routes::pages::render_page_for_request(&title, &content, "patterns", &headers)
 }
