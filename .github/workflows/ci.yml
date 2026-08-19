@@ -56,7 +56,7 @@ jobs:
   clippy:
     name: Clippy (pedantic + nursery)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30  # observed 4m02s
+    timeout-minutes: 30  # observed 5m37s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain (stable + clippy)
@@ -341,7 +341,7 @@ jobs:
   msrv:
     name: MSRV (Rust 1.95)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30  # observed 9m26s
+    timeout-minutes: 30  # observed 9m54s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
@@ -398,7 +398,7 @@ jobs:
   cross-aarch64:
     name: Cross-check (aarch64 / Raspberry Pi)
     runs-on: ubuntu-24.04
-    timeout-minutes: 40  # observed 11m28s
+    timeout-minutes: 40  # observed 13m00s
     # Catch Pi-breaking changes (target-specific cfg, libduckdb cross-compile,
     # pointer-width assumptions) at PR time instead of only at release tagging,
     # which is the sole place aarch64 was built before. `check` keeps it cheap
