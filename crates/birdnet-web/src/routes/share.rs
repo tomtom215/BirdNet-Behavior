@@ -405,18 +405,12 @@ fn ago_phrase(date: &str, time: &str) -> String {
         let hh = tp.next()?.parse::<i64>().ok()?;
         let mm = tp.next()?.parse::<i64>().ok()?;
         let ss = tp.next().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
-        // Civil-from-fields (Howard Hinnant) -> days since 1970-01-01.
-        let yy = if m <= 2 { y - 1 } else { y };
-        let era = if yy >= 0 { yy } else { yy - 399 } / 400;
-        let yoe = (yy - era * 400) as u64;
-        let mp = if m > 2 {
-            (m - 3) as u64
-        } else {
-            (m + 9) as u64
-        };
-        let doy = (153 * mp + 2) / 5 + (d as u64) - 1;
-        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-        let days = era * 146_097 + doe as i64 - 719_468;
+        // One shared implementation of Hinnant's `days_from_civil`, in
+        // `birdnet-core::civil`; this was one of nine copies.
+        if y < 0 || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+            return None;
+        }
+        let days = birdnet_core::civil::days_from_civil(y as u32, m as u32, d as u32);
         if days < 0 {
             return None;
         }

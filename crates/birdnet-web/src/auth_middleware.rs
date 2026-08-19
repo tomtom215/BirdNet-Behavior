@@ -262,19 +262,7 @@ fn redirect_to_login(request: &Request<Body>, original_path: &str) -> Response {
 }
 
 fn urlencode_path(s: &str) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::with_capacity(s.len());
-    for byte in s.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(byte as char);
-            }
-            _ => {
-                let _ = write!(out, "%{byte:02X}");
-            }
-        }
-    }
-    out
+    crate::urls::encode_path(s)
 }
 
 #[cfg(test)]

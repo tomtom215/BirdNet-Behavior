@@ -28,6 +28,10 @@ serde.workspace = true
 # `detections_ts` gets created. An approximation of it in the fixture is how
 # this gate came to depend on a pre-populated `~/.duckdb`.
 birdnet-behavioral = { path = "../birdnet-behavioral", features = ["analytics"] }
+# The fixture's date arithmetic comes from `birdnet-core::civil` rather than a
+# private copy: a test computing dates a different way from the code under test
+# is exactly how a date bug hides.
+birdnet-core.workspace = true
 duckdb.workspace = true
 tempfile.workspace = true
 

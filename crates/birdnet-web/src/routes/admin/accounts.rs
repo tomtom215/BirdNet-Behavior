@@ -598,14 +598,7 @@ fn parse_ymd_to_epoch(date: &str) -> Option<i64> {
     clippy::many_single_char_names
 )]
 fn ymd_to_epoch(y: i32, m: u32, d: u32) -> i64 {
-    let y = i64::from(if m <= 2 { y - 1 } else { y });
-    let era = (if y >= 0 { y } else { y - 399 }) / 400;
-    let yoe = (y - era * 400) as u64;
-    let mp = if m <= 2 { m + 9 } else { m - 3 };
-    let doy = (153 * u64::from(mp) + 2) / 5 + u64::from(d) - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe as i64 - 719_468;
-    days * 86_400
+    birdnet_core::civil::days_from_civil(y.max(0) as u32, m, d) * 86_400
 }
 
 #[allow(
@@ -614,19 +607,9 @@ fn ymd_to_epoch(y: i32, m: u32, d: u32) -> i64 {
     clippy::cast_sign_loss,
     clippy::many_single_char_names
 )]
-fn epoch_to_ymd(secs: i64) -> (i32, u32, u32) {
-    let days = secs.div_euclid(86_400);
-    let z = days + 719_468;
-    let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
-    let doe = (z - era * 146_097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = (y + i64::from(m <= 2)) as i32;
-    (year, m as u32, d as u32)
+const fn epoch_to_ymd(secs: i64) -> (i32, u32, u32) {
+    let (y, m, d) = birdnet_core::civil::civil_from_days(secs.div_euclid(86_400));
+    (y as i32, m, d)
 }
 
 fn render_audit_page(

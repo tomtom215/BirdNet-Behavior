@@ -279,19 +279,7 @@ pub(crate) fn escape_html(s: &str) -> String {
 
 /// Minimal percent-encoding for URL path segments and query values.
 pub(crate) fn simple_url_encode(s: &str) -> String {
-    use std::fmt::Write as _;
-    let mut encoded = String::with_capacity(s.len());
-    for byte in s.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                encoded.push(byte as char);
-            }
-            _ => {
-                let _ = write!(encoded, "%{byte:02X}");
-            }
-        }
-    }
-    encoded
+    crate::urls::encode_segment(s)
 }
 
 /// Seconds since the Unix epoch, saturating to 0 before it.
@@ -400,22 +388,16 @@ pub(crate) fn today_date_string() -> String {
     format!("{y}-{m:02}-{d:02}")
 }
 
-/// Convert days since Unix epoch to (year, month, day) using the Hinnant algorithm.
-#[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
+/// Convert days since Unix epoch to (year, month, day).
+///
+/// Delegates to [`birdnet_core::civil::civil_from_days`]. This was a verbatim
+/// copy of Hinnant's algorithm — one of nine in the workspace, all of which
+/// agreed when checked against each other over 200 years. The consolidation
+/// fixes nothing that was broken; it removes the tenth copy's chance to be the
+/// one that isn't.
+#[allow(clippy::cast_possible_wrap)]
 pub(crate) const fn days_to_date(days_since_epoch: u64) -> (u32, u32, u32) {
-    let z = days_since_epoch as i64 + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    #[allow(clippy::cast_sign_loss)]
-    let doe = (z - era * 146_097) as u32;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    #[allow(clippy::cast_sign_loss, clippy::cast_lossless)]
-    let y = (yoe as i64 + era * 400) as u32;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    (y, m, d)
+    birdnet_core::civil::civil_from_days(days_since_epoch as i64)
 }
 
 /// Convert a `YYYY-MM-DD` date to days since the Unix epoch (rata die) — the
@@ -452,13 +434,13 @@ pub(crate) fn date_to_epoch_days(date: &str) -> u64 {
         return 0;
     }
 
-    // Rata Die day number.
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = y / 400;
-    let yoe = y - era * 400;
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
+    // Rata Die day number. The guard above keeps this in range; the shared
+    // primitive clamps a pre-year-0 date to 0 for the same reason.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let days = birdnet_core::civil::days_from_civil(y as u32, m as u32, d as u32);
+    #[allow(clippy::cast_sign_loss)]
+    let out = days.max(0) as u64;
+    out
 }
 
 /// Count detections for today's date in `SQLite`.
