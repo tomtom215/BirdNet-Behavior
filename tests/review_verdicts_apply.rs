@@ -83,14 +83,34 @@ fn reject(state: &AppState, date: &str, time: &str, sci: &str, com: &str) {
 }
 
 /// Rows the SQLite aggregate surfaces see.
+/// Rows the aggregates see — read through the **query layer**, not the view.
+///
+/// This used to be `SELECT COUNT(*) FROM detections_analytic`, which asserts
+/// nothing: it re-states the view's own WHERE clause back to itself and passes
+/// whether or not a single analytic ever reads the view. Its message claimed to
+/// cover "species totals, the heat map, the dawn chorus, phenology"; it covered
+/// none of them, and that is how a whole tile row of the dashboard came to
+/// count rejected detections while the tiles beside it did not.
 fn analytic_rows(state: &AppState) -> i64 {
     state
-        .with_db(|conn| {
-            conn.query_row("SELECT COUNT(*) FROM detections_analytic", [], |r| {
-                r.get::<_, i64>(0)
-            })
-        })
+        .with_db(birdnet_db::sqlite::analytic_detection_count)
         .expect("count")
+}
+
+/// The four headline dashboard tiles, as the partial computes them.
+///
+/// `(all-time detections, species, today, species today)`. Deliberately the
+/// same calls `routes::pages::dashboard::stats` makes, so a tile that reverts
+/// to a raw `FROM detections` count fails here.
+fn dashboard_tiles(state: &AppState, today: &str) -> (i64, i64, i64, i64) {
+    state.with_db(|conn| {
+        (
+            birdnet_db::sqlite::analytic_detection_count(conn).unwrap_or(-1),
+            birdnet_db::sqlite::species_count(conn).unwrap_or(-1),
+            birdnet_db::sqlite::analytic_detection_count_for_date(conn, today).unwrap_or(-1),
+            birdnet_db::sqlite::analytic_species_count_for_date(conn, today).unwrap_or(-1),
+        )
+    })
 }
 
 /// Rows the record-level surfaces see.
@@ -294,4 +314,46 @@ fn verdicts_recorded_before_the_upgrade_are_backfilled() {
         0,
         "the backfill must make an already-recorded verdict count"
     );
+}
+
+/// Every tile on the dashboard's headline row must agree about the same day.
+///
+/// Three of them ("Species", "Last hour", the 12-day sparkline) have always
+/// read `detections_analytic`; three ("Detections", "Today", "Species today")
+/// counted every row including rejections. So the screen contradicted itself,
+/// by exactly the number of rejections the operator had recorded — and the
+/// contradiction grew the more carefully they curated.
+#[test]
+fn the_dashboard_tile_row_agrees_with_itself_about_a_rejection() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, today) = station(dir.path());
+    assert_eq!(
+        dashboard_tiles(&state, &today),
+        (3, 3, 3, 3),
+        "fixture: three detections of three species, all today"
+    );
+
+    reject(
+        &state,
+        &today,
+        "07:15:00",
+        "Erithacus rubecula",
+        "European Robin",
+    );
+
+    assert_eq!(
+        dashboard_tiles(&state, &today),
+        (2, 2, 2, 2),
+        "all four tiles must drop the rejected detection; a tile still reading \
+         `FROM detections` shows 3 here while the tile beside it shows 2"
+    );
+}
+
+/// The counterpart, so the gate above cannot be satisfied by tiles that simply
+/// undercount: with nothing rejected, every tile must still see all three.
+#[test]
+fn the_dashboard_tile_row_counts_everything_when_nothing_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, today) = station(dir.path());
+    assert_eq!(dashboard_tiles(&state, &today), (3, 3, 3, 3));
 }

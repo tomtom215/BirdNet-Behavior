@@ -24,7 +24,8 @@ pub use detection_reviews::{
     rejected_detection_count, set_detection_review, unreviewed_recent_detections,
 };
 pub use detections::{
-    CLIP_AVAILABLE, RecordingsFilter, TodayFilter, all_detections, best_detections_for_date,
+    CLIP_AVAILABLE, RecordingsFilter, TodayFilter, all_detections, analytic_detection_count,
+    analytic_detection_count_for_date, analytic_species_count_for_date, best_detections_for_date,
     concurrent_detections_from_other_sources, delete_detection, detection_count,
     detection_count_for_date, detection_count_for_species_date, detection_dates,
     detections_by_date, detections_by_species, detections_per_day, insert_detection,

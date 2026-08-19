@@ -32,7 +32,13 @@ use super::search::{SearchTerm, parse_search_term};
 pub const CLIP_AVAILABLE: &str =
     "File_Name IS NOT NULL AND TRIM(File_Name) <> '' AND Clip_Pruned_At IS NULL";
 
-/// Get the total number of detections.
+/// Get the total number of detection **rows**, rejected ones included.
+///
+/// This is the store's row count, not an analytic. It is what
+/// `AppState`'s SQLite-vs-`DuckDB` reconciliation compares (paired with
+/// [`crate::sqlite::rejected_detection_count`]), so it must keep counting every
+/// row. Anything that shows an operator "how many detections" wants
+/// [`analytic_detection_count`] instead.
 ///
 /// # Errors
 ///
@@ -40,6 +46,57 @@ pub const CLIP_AVAILABLE: &str =
 pub fn detection_count(conn: &Connection) -> Result<i64, DbError> {
     let count: i64 = conn.query_row("SELECT COUNT(*) FROM detections", [], |row| row.get(0))?;
     Ok(count)
+}
+
+/// Get the number of detections an operator would count — rejected ones
+/// excluded.
+///
+/// The distinction is not pedantry. The dashboard's headline tile row showed
+/// six numbers drawn from both sides of it: "Species", "Last hour" and the
+/// 12-day sparkline read `detections_analytic` and excluded rejections, while
+/// "Detections", "Today" and "Species today" counted every row. Adjacent tiles
+/// on one screen therefore disagreed about the same day, and the disagreement
+/// grew with every rejection the operator recorded.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn analytic_detection_count(conn: &Connection) -> Result<i64, DbError> {
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM detections_analytic", [], |row| {
+        row.get(0)
+    })?;
+    Ok(count)
+}
+
+/// Detections on `date` an operator would count — rejected ones excluded.
+///
+/// See [`analytic_detection_count`] for why this exists beside
+/// [`detection_count_for_date`].
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn analytic_detection_count_for_date(conn: &Connection, date: &str) -> Result<i64, DbError> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM detections_analytic WHERE Date = ?1",
+        params![date],
+        |row| row.get(0),
+    )
+    .map_err(DbError::Sqlite)
+}
+
+/// Distinct species on `date` an operator would count — rejected ones excluded.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn analytic_species_count_for_date(conn: &Connection, date: &str) -> Result<i64, DbError> {
+    conn.query_row(
+        "SELECT COUNT(DISTINCT Com_Name) FROM detections_analytic WHERE Date = ?1",
+        params![date],
+        |row| row.get(0),
+    )
+    .map_err(DbError::Sqlite)
 }
 
 /// Get the total number of detections for a specific date.

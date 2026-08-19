@@ -39,6 +39,7 @@ pub use queries::{
     CLIP_AVAILABLE, ImageBlacklist, ModelVsReviewRow, QualitySummary, QuarantineFilter,
     QuarantineReason, QuarantineRecord, QuarantineRow, QuarantineStats, RecordingsFilter,
     ReviewVerdictDay, SpeciesThreshold, TodayFilter, add_image_blacklist, all_detections,
+    analytic_detection_count, analytic_detection_count_for_date, analytic_species_count_for_date,
     approve_quarantine, best_detections_for_date, blacklisted_urls_for_species, companion_species,
     concurrent_detections_from_other_sources, confidence_distribution, confidence_trend,
     count_quarantine, daily_counts, delete_detection, delete_quarantine, delete_species_threshold,

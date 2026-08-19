@@ -393,13 +393,13 @@ pub(crate) fn date_to_epoch_days(date: &str) -> u64 {
 
 /// Count detections for today's date in `SQLite`.
 pub(crate) fn today_count(conn: &rusqlite::Connection) -> i64 {
+    // `detections_analytic`, not `detections`: this is a number shown to an
+    // operator, and a detection they rejected is one they have said was not
+    // there. Its neighbours on the dashboard tile row ("Species", "Last hour",
+    // the sparkline) have always excluded rejections, so counting every row
+    // here made adjacent tiles disagree about the same day.
     let today = today_date_string();
-    conn.query_row(
-        "SELECT COUNT(*) FROM detections WHERE Date = ?1",
-        [&today],
-        |row| row.get(0),
-    )
-    .unwrap_or(0)
+    birdnet_db::sqlite::analytic_detection_count_for_date(conn, &today).unwrap_or(0)
 }
 
 /// Format an integer with thousands separators (e.g. 9914 → "9,914").
