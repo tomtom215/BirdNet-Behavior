@@ -190,9 +190,20 @@ fn lookup(
         })
         .ok()
     };
+    // `detections_analytic`, not `detections`. A share link is a *publication*:
+    // it is the one surface in this app that shows a detection to someone who
+    // is not the operator and cannot see the review queue. Rejecting a
+    // detection is the operator withdrawing the claim, and a withdrawn claim
+    // must stop being served — `gone_page()` already renders the right thing
+    // for a link that no longer resolves.
+    //
+    // This is the one place where a *record-level* surface should still exclude
+    // rejections. Everywhere else the reasoning runs the other way: a reviewer
+    // has to be able to find what they rejected and change their mind. Nobody
+    // holding a share link is going to change their mind about anything.
     query(
         "SELECT Com_Name, Sci_Name, Date, Time, Confidence \
-         FROM detections WHERE Date = ?1 AND Time = ?2 AND Com_Name = ?3 LIMIT 1",
+         FROM detections_analytic WHERE Date = ?1 AND Time = ?2 AND Com_Name = ?3 LIMIT 1",
     )
     // O-07: rare birds shared from the quarantine queue are not in `detections`
     // until approved, so fall back to the quarantine table.
@@ -307,7 +318,10 @@ async fn lookup_basename(state: AppState, date: &str, time: &str, com: &str) -> 
     tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
             conn.query_row(
-                "SELECT File_Name FROM detections \
+                // Same rule as `lookup`: a rejected detection's audio must
+                // stop being served too, or the clip outlives the claim it was
+                // evidence for.
+                "SELECT File_Name FROM detections_analytic \
                  WHERE Date = ?1 AND Time = ?2 AND Com_Name = ?3 LIMIT 1",
                 rusqlite::params![d, t, c],
                 |row| row.get::<_, Option<String>>(0),

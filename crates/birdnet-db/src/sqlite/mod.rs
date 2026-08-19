@@ -27,8 +27,9 @@ pub use connection::{DbError, open_connection, open_or_create, quick_check};
 pub use queries::correlation::{FollowOn, SpeciesPair};
 pub use queries::detection_reviews::{
     DetectionReview, ReviewStatus, UnreviewedDetection, clear_detection_review,
-    detection_review_counts, get_detection_review, recent_detection_reviews,
-    rejected_detection_count, set_detection_review, unreviewed_recent_detections,
+    detection_review_counts, detection_review_total, detection_reviews_page, get_detection_review,
+    recent_detection_reviews, rejected_detection_count, set_detection_review,
+    unreviewed_recent_detections,
 };
 pub use queries::heatmap::{HeatmapCell, HourTotal};
 pub use queries::imports::{

@@ -677,3 +677,226 @@ async fn the_provenance_note_reports_an_imported_foreign_site() {
         "the operator needs to know whether the two histories share a clock: {note}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Reaching a rejection you recorded a long time ago
+// ---------------------------------------------------------------------------
+
+/// Every rejection must stay reachable through the UI, however many verdicts
+/// came after it.
+///
+/// This is the counterweight to the aggregates excluding rejections. Once they
+/// do, the review page's verdict list is the *only* surface in the app that
+/// lists a rejected detection — and it asked for the newest 25. A station that
+/// reviews diligently passes 25 verdicts in a week, after which an older
+/// rejection was reachable through no page at all, only by a URL the operator
+/// happened to have kept. A verdict you cannot find is one you cannot undo, and
+/// the entire design rests on rejection being reversible.
+#[tokio::test]
+async fn an_old_rejection_is_still_reachable_through_the_review_page() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, today) = station(dir.path());
+
+    // The rejection we will have to find again, recorded first.
+    reject(
+        &state,
+        &today,
+        "07:15:00",
+        "Erithacus rubecula",
+        "European Robin",
+    );
+    // Then 40 confirmations on top of it — more than the page's 25.
+    state.with_db(|conn| {
+        for i in 0..40 {
+            let time = format!("1{i:01}:{:02}:00", i % 60);
+            birdnet_db::sqlite::set_detection_review(
+                conn,
+                &today,
+                &time,
+                "Parus major",
+                "Great Tit",
+                ReviewStatus::Confirmed,
+                None,
+            )
+            .expect("confirm");
+        }
+    });
+
+    // The default view no longer shows it — that is the situation, not a bug.
+    let (_, first_page) = get(&state, "/pages/detection-reviews-queue").await;
+    assert!(
+        !first_page.contains("European Robin"),
+        "fixture: 40 newer verdicts must have pushed it off the first page"
+    );
+
+    // Filtering to rejections finds it immediately.
+    let (status, rejected) = get(&state, "/pages/detection-reviews-queue?status=rejected").await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(
+        rejected.contains("European Robin"),
+        "filtering to rejections must surface it: {rejected}"
+    );
+
+    // And paging through the unfiltered history reaches it too.
+    let (_, page_two) = get(&state, "/pages/detection-reviews-queue?offset=25").await;
+    assert!(
+        page_two.contains("European Robin"),
+        "paging back must reach it: {page_two}"
+    );
+}
+
+/// The pager must offer a page only when there is one, and say where you are.
+///
+/// A pager that offers a page which turns out to be empty is the same lie as a
+/// list that silently ends.
+#[tokio::test]
+async fn the_verdict_pager_only_offers_pages_that_exist() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, today) = station(dir.path());
+
+    // One verdict: nothing to page to.
+    reject(
+        &state,
+        &today,
+        "07:15:00",
+        "Erithacus rubecula",
+        "European Robin",
+    );
+    let (_, one) = get(&state, "/pages/detection-reviews-queue").await;
+    assert!(
+        !one.contains("Older &rarr;"),
+        "nothing older to offer: {one}"
+    );
+    assert!(!one.contains("&larr; Newer"));
+
+    // Thirty: one page more.
+    state.with_db(|conn| {
+        for i in 0..30 {
+            let time = format!("1{i:01}:{:02}:00", i % 60);
+            birdnet_db::sqlite::set_detection_review(
+                conn,
+                &today,
+                &time,
+                "Parus major",
+                "Great Tit",
+                ReviewStatus::Confirmed,
+                None,
+            )
+            .expect("confirm");
+        }
+    });
+    let (_, many) = get(&state, "/pages/detection-reviews-queue").await;
+    assert!(
+        many.contains("Older &rarr;"),
+        "31 verdicts is two pages: {many}"
+    );
+    assert!(
+        many.contains("1&ndash;25 of 31"),
+        "the pager must say where you are: {many}"
+    );
+
+    let (_, last) = get(&state, "/pages/detection-reviews-queue?offset=25").await;
+    assert!(last.contains("&larr; Newer"));
+    assert!(
+        !last.contains("Older &rarr;"),
+        "the last page offers no next: {last}"
+    );
+}
+
+/// A mistyped status is a view filter that did not match, not an error page.
+/// Answering "where is my verdict" with a 500 helps nobody.
+#[tokio::test]
+async fn an_unknown_status_filter_falls_back_to_showing_everything() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, today) = station(dir.path());
+    reject(
+        &state,
+        &today,
+        "07:15:00",
+        "Erithacus rubecula",
+        "European Robin",
+    );
+    let (status, body) = get(&state, "/pages/detection-reviews-queue?status=nonsense").await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(body.contains("European Robin"), "{body}");
+    assert!(body.contains("All verdicts"), "{body}");
+}
+
+/// A share link is a publication, and a rejection withdraws the claim.
+///
+/// This is the one record-level surface that must *stop* showing a rejected
+/// detection. Everywhere else the reasoning runs the other way — a reviewer has
+/// to be able to find what they rejected and change their mind — but nobody
+/// holding a share link is going to change their mind about anything, and the
+/// link is the only surface in the app that shows a detection to someone who
+/// cannot see the review queue.
+#[tokio::test]
+async fn a_share_link_stops_resolving_once_the_detection_is_rejected() {
+    // SAFETY-of-behaviour note: the share token is HMAC'd with a secret read
+    // from the environment, so this drives the same encoder the routes use
+    // rather than hand-building a token.
+    let dir = tempfile::tempdir().unwrap();
+    let (state, today) = station(dir.path());
+
+    // An hour of validity is plenty for a test and exercises the real encoder
+    // rather than a hand-built token.
+    let expiry = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 3600;
+    let token = birdnet_web::routes::share::encode_share_token(
+        &today,
+        "07:15:00",
+        "European Robin",
+        expiry,
+    );
+    let (status, body) = get(&state, &format!("/r/{token}")).await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::OK,
+        "fixture: the link resolves before the rejection"
+    );
+    assert!(body.contains("European Robin"), "{body}");
+
+    reject(
+        &state,
+        &today,
+        "07:15:00",
+        "Erithacus rubecula",
+        "European Robin",
+    );
+
+    let (status, body) = get(&state, &format!("/r/{token}")).await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::NOT_FOUND,
+        "a withdrawn claim must stop being served"
+    );
+    assert!(
+        !body.contains("European Robin"),
+        "the 404 page must not still name the species: {body}"
+    );
+}
+
+/// The counterpart: a link to a detection nobody rejected keeps working. A
+/// change that broke every share link would satisfy the gate above.
+#[tokio::test]
+async fn a_share_link_to_an_unreviewed_detection_keeps_working() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, today) = station(dir.path());
+    let expiry = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 3600;
+    let token = birdnet_web::routes::share::encode_share_token(
+        &today,
+        "06:15:00",
+        "Eurasian Blackbird",
+        expiry,
+    );
+    let (status, body) = get(&state, &format!("/r/{token}")).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(body.contains("Eurasian Blackbird"), "{body}");
+}

@@ -21,8 +21,9 @@ pub use analytics::{
 pub use correlation::{companion_species, temporal_cooccurrence, top_cooccurrence_pairs};
 pub use detection_reviews::{
     DetectionReview, ReviewStatus, UnreviewedDetection, clear_detection_review,
-    detection_review_counts, get_detection_review, recent_detection_reviews,
-    rejected_detection_count, set_detection_review, unreviewed_recent_detections,
+    detection_review_counts, detection_review_total, detection_reviews_page, get_detection_review,
+    recent_detection_reviews, rejected_detection_count, set_detection_review,
+    unreviewed_recent_detections,
 };
 pub use detections::{
     CLIP_AVAILABLE, RecordingsFilter, TodayFilter, all_detections, analytic_detection_count,

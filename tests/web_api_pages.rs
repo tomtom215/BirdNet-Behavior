@@ -258,8 +258,30 @@ async fn htmx_health_badge_returns_healthy_for_a_capturing_station() {
         .unwrap();
     let html = String::from_utf8_lossy(&body);
 
-    assert!(html.contains("Healthy"), "{html}");
-    assert!(html.contains(r#"data-health="ok""#));
+    // The badge grades three inputs — database, capture, disk — and this test
+    // controls only the first two. The third is the *host's* filesystem, and
+    // the badge correctly reports "Disk full" above 90 %, so asserting
+    // "Healthy" unconditionally made this fail on any full build machine. It
+    // did, here, after a scale probe filled the volume.
+    //
+    // So assert the two signals this test actually sets, and tolerate exactly
+    // one thing: a disk warning, named. Anything else — a database error, a
+    // capture problem, an ungraded badge — still fails, which is what the test
+    // is for. Widening it to "any warn" would have hidden the mic-down case
+    // this file's sibling test exists to catch.
+    let disk_warning = html.contains(r#"data-health="warn""#) && html.contains("Disk full");
+    assert!(
+        (html.contains("Healthy") && html.contains(r#"data-health="ok""#)) || disk_warning,
+        "expected a healthy badge, or a disk warning on a full build host; got {html}"
+    );
+    assert!(
+        !html.contains("Mic down") && !html.contains("No microphone"),
+        "a source publishing an up gauge must not read as down: {html}"
+    );
+    assert!(
+        !html.contains(r#"data-health="err""#),
+        "nothing here should grade as an error: {html}"
+    );
 }
 
 #[tokio::test]

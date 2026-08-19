@@ -238,6 +238,92 @@ pub fn recent_detection_reviews(
     Ok(out)
 }
 
+/// A page of recorded verdicts, newest first, optionally narrowed to one status.
+///
+/// # Why this exists beside [`recent_detection_reviews`]
+///
+/// That function takes only a limit, and the review page passed 25. Since the
+/// aggregates started excluding rejections, the "Recent verdicts" list became
+/// the *only* surface in the app that lists a rejected detection — so the 26th
+/// rejection was reachable through no page at all, only by a URL the operator
+/// had happened to keep. A verdict you cannot find is a verdict you cannot
+/// undo, and the whole design rests on rejection being reversible.
+///
+/// `status` narrows to one verdict because "show me what I rejected" is the
+/// question that actually gets asked; `None` returns both.
+///
+/// # Errors
+///
+/// Returns [`DbError`] on query failure.
+pub fn detection_reviews_page(
+    conn: &Connection,
+    status: Option<ReviewStatus>,
+    limit: u32,
+    offset: u32,
+) -> Result<Vec<DetectionReview>, DbError> {
+    // Two prepared statements rather than one with an `IS NULL OR` predicate:
+    // the latter is a filter SQLite cannot use the status index for, and this
+    // list is read on a page an operator pages through.
+    let mut stmt = match status {
+        Some(_) => conn.prepare(
+            "SELECT date, time, sci_name, com_name, status, notes, reviewed_at
+               FROM detection_reviews
+              WHERE status = ?3
+              ORDER BY reviewed_at DESC, id DESC
+              LIMIT ?1 OFFSET ?2",
+        )?,
+        None => conn.prepare(
+            "SELECT date, time, sci_name, com_name, status, notes, reviewed_at
+               FROM detection_reviews
+              ORDER BY reviewed_at DESC, id DESC
+              LIMIT ?1 OFFSET ?2",
+        )?,
+    };
+    let mut out = Vec::new();
+    match status {
+        Some(st) => {
+            for r in stmt.query_map(params![limit, offset, st.as_str()], map_review)? {
+                out.push(r?);
+            }
+        }
+        None => {
+            for r in stmt.query_map(params![limit, offset], map_review)? {
+                out.push(r?);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// How many verdicts are recorded, optionally narrowed to one status.
+///
+/// Paired with [`detection_reviews_page`] so the page can say whether there is
+/// more to show. A list that silently ends is the failure this replaces.
+///
+/// # Errors
+///
+/// Returns [`DbError`] on query failure.
+pub fn detection_review_total(
+    conn: &Connection,
+    status: Option<ReviewStatus>,
+) -> Result<i64, DbError> {
+    let n = status.map_or_else(
+        || {
+            conn.query_row("SELECT COUNT(*) FROM detection_reviews", [], |row| {
+                row.get(0)
+            })
+        },
+        |st| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM detection_reviews WHERE status = ?1",
+                params![st.as_str()],
+                |row| row.get(0),
+            )
+        },
+    )?;
+    Ok(n)
+}
+
 /// Count verdicts as `(confirmed, rejected)`.
 ///
 /// # Errors
@@ -322,6 +408,110 @@ mod tests {
             params![date, time, sci, com],
         )
         .unwrap();
+    }
+
+    /// Every recorded verdict must be reachable, not just the newest page.
+    ///
+    /// The review page asked for 25 and showed them. Once the aggregates began
+    /// excluding rejections, that list became the only surface in the app that
+    /// lists a rejected detection — so the 26th rejection was reachable through
+    /// no page at all. A verdict you cannot find is one you cannot undo.
+    #[test]
+    fn every_verdict_is_reachable_by_paging() {
+        let conn = db();
+        for i in 0..60 {
+            let time = format!("{:02}:{:02}:00", i / 60, i % 60);
+            let status = if i % 3 == 0 {
+                ReviewStatus::Rejected
+            } else {
+                ReviewStatus::Confirmed
+            };
+            set_detection_review(
+                &conn,
+                "2026-01-01",
+                &time,
+                "Turdus merula",
+                "Blackbird",
+                status,
+                None,
+            )
+            .unwrap();
+        }
+        assert_eq!(detection_review_total(&conn, None).unwrap(), 60);
+
+        // Page through in 25s and collect everything.
+        let mut seen = Vec::new();
+        for page in 0..3 {
+            let rows = detection_reviews_page(&conn, None, 25, page * 25).unwrap();
+            seen.extend(rows.into_iter().map(|r| r.time));
+        }
+        seen.sort();
+        seen.dedup();
+        assert_eq!(
+            seen.len(),
+            60,
+            "paging must reach every verdict, with no gaps or repeats"
+        );
+        // …and the page past the end is empty rather than an error.
+        assert!(
+            detection_reviews_page(&conn, None, 25, 75)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// "Show me what I rejected" is the question that actually gets asked, and
+    /// on a station with a long confirm streak the rejections are exactly the
+    /// rows an unfiltered newest-first list buries.
+    #[test]
+    fn verdicts_can_be_narrowed_to_one_status() {
+        let conn = db();
+        for i in 0..60 {
+            let time = format!("{:02}:{:02}:00", i / 60, i % 60);
+            let status = if i % 3 == 0 {
+                ReviewStatus::Rejected
+            } else {
+                ReviewStatus::Confirmed
+            };
+            set_detection_review(
+                &conn,
+                "2026-01-01",
+                &time,
+                "Turdus merula",
+                "Blackbird",
+                status,
+                None,
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            detection_review_total(&conn, Some(ReviewStatus::Rejected)).unwrap(),
+            20
+        );
+        let rejected = detection_reviews_page(&conn, Some(ReviewStatus::Rejected), 25, 0).unwrap();
+        assert_eq!(rejected.len(), 20);
+        assert!(
+            rejected.iter().all(|r| r.status == "rejected"),
+            "the filter must not leak confirmations"
+        );
+        // The counterpart, so the filter cannot degrade into "return nothing".
+        assert_eq!(
+            detection_reviews_page(&conn, Some(ReviewStatus::Confirmed), 100, 0)
+                .unwrap()
+                .len(),
+            40
+        );
+    }
+
+    #[test]
+    fn an_empty_review_table_pages_cleanly() {
+        let conn = db();
+        assert_eq!(detection_review_total(&conn, None).unwrap(), 0);
+        assert!(
+            detection_reviews_page(&conn, None, 25, 0)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

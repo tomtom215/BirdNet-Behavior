@@ -18,7 +18,7 @@
 
 use std::fmt::Write as _;
 
-use axum::extract::{Form, State};
+use axum::extract::{Form, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse};
 use axum::{Router, routing::get};
@@ -92,20 +92,63 @@ async fn detection_reviews_page(headers: HeaderMap) -> Html<String> {
     super::render_page_for_request("Detection reviews", content, "", &headers)
 }
 
-async fn detection_reviews_queue_partial(State(state): State<AppState>) -> impl IntoResponse {
+/// How the operator has narrowed the verdict list.
+///
+/// `status` is `confirmed` / `rejected` / absent (both). `offset` pages through
+/// it. Both are query parameters rather than session state so a view is a URL —
+/// which is the whole point of this change: a verdict has to be *findable*, and
+/// a link to page three of the rejections is a thing you can keep.
+#[derive(Debug, Default, Deserialize)]
+pub struct QueueQuery {
+    /// `confirmed`, `rejected`, or absent for both.
+    #[serde(default)]
+    pub status: Option<String>,
+    /// How many verdicts to skip. Clamped by the handler.
+    #[serde(default)]
+    pub offset: Option<u32>,
+}
+
+async fn detection_reviews_queue_partial(
+    State(state): State<AppState>,
+    Query(q): Query<QueueQuery>,
+) -> impl IntoResponse {
+    // An unrecognised status is treated as "both" rather than rejected: this is
+    // a view filter, and answering a mistyped URL with an error page helps
+    // nobody find their verdict.
+    let status = q
+        .status
+        .as_deref()
+        .and_then(birdnet_db::sqlite::ReviewStatus::parse);
+    let offset = q.offset.unwrap_or(0);
+
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
             let pending = birdnet_db::sqlite::unreviewed_recent_detections(conn, QUEUE_LIMIT)?;
-            let recent = birdnet_db::sqlite::recent_detection_reviews(conn, RECENT_LIMIT)?;
+            let recent =
+                birdnet_db::sqlite::detection_reviews_page(conn, status, RECENT_LIMIT, offset)?;
+            let matching = birdnet_db::sqlite::detection_review_total(conn, status)?;
             let counts = birdnet_db::sqlite::detection_review_counts(conn)?;
-            Ok::<_, birdnet_db::sqlite::DbError>((pending, recent, counts))
+            Ok::<_, birdnet_db::sqlite::DbError>((pending, recent, matching, counts))
         })
     })
     .await;
 
     match result {
-        Ok(Ok((pending, recent, (confirmed, rejected)))) => {
-            let html = render_queue(&pending, &recent, confirmed, rejected);
+        Ok(Ok((pending, recent, matching, (confirmed, rejected)))) => {
+            let html = render_queue(
+                &pending,
+                &recent,
+                confirmed,
+                rejected,
+                QueueView {
+                    status: q
+                        .status
+                        .as_deref()
+                        .and_then(birdnet_db::sqlite::ReviewStatus::parse),
+                    offset,
+                    matching,
+                },
+            );
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
         _ => (
@@ -116,11 +159,22 @@ async fn detection_reviews_queue_partial(State(state): State<AppState>) -> impl 
     }
 }
 
+/// Which slice of the verdict history is on screen.
+#[derive(Debug, Clone, Copy)]
+struct QueueView {
+    status: Option<birdnet_db::sqlite::ReviewStatus>,
+    offset: u32,
+    /// Verdicts matching `status` in total, so the page can say whether there
+    /// is more. A list that just stops is the failure this replaces.
+    matching: i64,
+}
+
 fn render_queue(
     pending: &[birdnet_db::sqlite::UnreviewedDetection],
     recent: &[birdnet_db::sqlite::DetectionReview],
     confirmed: i64,
     rejected: i64,
+    view: QueueView,
 ) -> String {
     let mut html = String::with_capacity(8192);
 
@@ -148,14 +202,29 @@ fn render_queue(
     html.push_str("</div>");
 
     html.push_str("<div class=\"bnb-card pad\">");
-    html.push_str("<h2 class=\"dr-h2\">Recent verdicts</h2>");
+    let heading = match view.status {
+        Some(birdnet_db::sqlite::ReviewStatus::Confirmed) => "Confirmed",
+        Some(birdnet_db::sqlite::ReviewStatus::Rejected) => "Rejected",
+        None => "All verdicts",
+    };
+    let _ = write!(
+        html,
+        "<h2 class=\"dr-h2\">{heading} <span class=\"bnb-meta\">({} recorded)</span></h2>",
+        view.matching
+    );
+    html.push_str(&render_status_filter(view));
     if recent.is_empty() {
-        html.push_str("<p class=\"dr-empty\">No verdicts recorded yet.</p>");
+        html.push_str(if view.offset > 0 {
+            "<p class=\"dr-empty\">Nothing further back than this.</p>"
+        } else {
+            "<p class=\"dr-empty\">No verdicts recorded yet.</p>"
+        });
     } else {
         for r in recent {
             render_verdict_row(&mut html, r);
         }
     }
+    html.push_str(&render_pager(view));
     html.push_str("</div>");
 
     html
@@ -196,6 +265,91 @@ fn render_pending_row(html: &mut String, d: &birdnet_db::sqlite::UnreviewedDetec
   <button type=\"submit\" name=\"status\" value=\"rejected\" class=\"bnb-btn ghost dr-nowrap\">&#10007; Reject</button>\
 </form>"
     );
+}
+
+/// The `All / Confirmed / Rejected` filter.
+///
+/// Plain links, not htmx buttons, so each view has a URL an operator can keep
+/// or share. "Where is the detection I rejected in March" has to be answerable,
+/// and before this it was not answerable at all past the 25th verdict.
+fn render_status_filter(view: QueueView) -> String {
+    let mut out = String::from(r#"<nav class="dr-filter" aria-label="Filter verdicts">"#);
+    for (key, label) in [
+        ("", "All"),
+        ("confirmed", "Confirmed"),
+        ("rejected", "Rejected"),
+    ] {
+        let selected = view
+            .status
+            .map_or("", birdnet_db::sqlite::ReviewStatus::as_str)
+            == key;
+        let href = if key.is_empty() {
+            "/pages/detection-reviews-queue".to_string()
+        } else {
+            format!("/pages/detection-reviews-queue?status={key}")
+        };
+        let cls = if selected {
+            "bnb-btn ghost dr-filter__btn is-selected"
+        } else {
+            "bnb-btn ghost dr-filter__btn"
+        };
+        let aria = if selected {
+            r#" aria-current="page""#
+        } else {
+            ""
+        };
+        let _ = write!(
+            out,
+            r##"<a class="{cls}" href="{href}" hx-get="{href}" hx-target="#dr-queue" hx-swap="innerHTML"{aria}>{label}</a>"##
+        );
+    }
+    out.push_str("</nav>");
+    out
+}
+
+/// Older / newer links, shown only when there is somewhere to go.
+///
+/// The count comes from `detection_review_total`, so "Older" appears exactly
+/// when more verdicts exist — a pager that offers a page which turns out to be
+/// empty is the same lie as a list that silently ends.
+fn render_pager(view: QueueView) -> String {
+    let per_page = i64::from(RECENT_LIMIT);
+    let offset = i64::from(view.offset);
+    let has_older = offset + per_page < view.matching;
+    let has_newer = offset > 0;
+    if !has_older && !has_newer {
+        return String::new();
+    }
+    let status_q = view
+        .status
+        .map(|s| format!("status={}&", s.as_str()))
+        .unwrap_or_default();
+    let mut out = String::from(r#"<nav class="dr-pager" aria-label="Verdict history pages">"#);
+    if has_newer {
+        let prev = offset.saturating_sub(per_page).max(0);
+        let href = format!("/pages/detection-reviews-queue?{status_q}offset={prev}");
+        let _ = write!(
+            out,
+            r##"<a class="bnb-btn ghost" href="{href}" hx-get="{href}" hx-target="#dr-queue" hx-swap="innerHTML">&larr; Newer</a>"##
+        );
+    }
+    let shown_to = (offset + per_page).min(view.matching);
+    let _ = write!(
+        out,
+        r#"<span class="bnb-meta">{}&ndash;{shown_to} of {}</span>"#,
+        offset + 1,
+        view.matching
+    );
+    if has_older {
+        let next = offset + per_page;
+        let href = format!("/pages/detection-reviews-queue?{status_q}offset={next}");
+        let _ = write!(
+            out,
+            r##"<a class="bnb-btn ghost" href="{href}" hx-get="{href}" hx-target="#dr-queue" hx-swap="innerHTML">Older &rarr;</a>"##
+        );
+    }
+    out.push_str("</nav>");
+    out
 }
 
 fn render_verdict_row(html: &mut String, r: &birdnet_db::sqlite::DetectionReview) {
