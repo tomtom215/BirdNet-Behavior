@@ -111,6 +111,72 @@ fn no_hidden_panel_fetches_itself_before_it_is_opened() {
     );
 }
 
+/// A panel that has deliberately not loaded must not claim to be loading.
+///
+/// # The defect this was written for
+///
+/// Deferring the fetch is only half the change. The placeholder those panels
+/// carried said "Loading…", and once the fetch stopped happening at page load
+/// that text stopped being temporary: `/correlation` rendered a permanent
+/// "Loading…" inside each collapsed section, in every theme and viewport, for
+/// as long as the reader left it closed.
+///
+/// It is not hypothetical and it was not caught here — the browser sweep caught
+/// it, on all four theme x viewport states at once, because the `.pt-disc` CSS
+/// keeps collapsed content in flow (`offsetParent` is non-null) rather than
+/// `display: none`. This gate exists so the next one is caught by
+/// `cargo test` instead of by a four-minute Playwright run.
+///
+/// The convention the other seven converted panels already follow is
+/// `class="htmx-indicator"`, which `app.css` renders `display: none` until htmx
+/// puts `.htmx-request` on the element — so the words appear exactly while a
+/// request is in flight, which is when they are true.
+#[test]
+fn a_deferred_panel_does_not_advertise_a_load_that_is_not_happening() {
+    /// The trigger that makes a panel deferred.
+    const DEFERRED: &str = r#"hx-trigger="toggle from:closest details"#;
+
+    let mut offenders: Vec<String> = Vec::new();
+    for path in markup_sources() {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let mut from = 0;
+        while let Some(rel) = text[from..].find(DEFERRED) {
+            let at = from + rel;
+            from = at + 1;
+            // The element's own content: from the end of its opening tag to
+            // the first closing tag after it. Scoping to the panel is what
+            // keeps this from flagging placeholders that belong to something
+            // else in the same disclosure — the polar clock's SVG `<text>` is
+            // filled by the page's own script, not by htmx, and is none of
+            // this gate's business.
+            let Some(gt) = text[at..].find('>').map(|r| at + r + 1) else {
+                continue;
+            };
+            let inner_end = text[gt..].find("</").map_or(text.len(), |r| gt + r);
+            let inner = &text[gt..inner_end];
+            if !inner.to_lowercase().contains("loading") {
+                continue;
+            }
+            if inner.contains("htmx-indicator") {
+                continue;
+            }
+            let line = text[..gt].matches('\n').count() + 1;
+            offenders.push(format!("{}:{line}  {}", path.display(), inner.trim()));
+        }
+    }
+    offenders.dedup();
+    assert!(
+        offenders.is_empty(),
+        "these placeholders belong to panels that do not fetch until their \
+         <details> is opened, so the words are shown to a reader for whom \
+         nothing is loading. Mark them `class=\"htmx-indicator\"` (hidden until \
+         htmx sets .htmx-request) or use a skeleton:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
 /// The counterpart: an `open` disclosure *should* still load eagerly, so the
 /// scanner must not be a blanket ban on `load` near a `<details>`.
 #[test]

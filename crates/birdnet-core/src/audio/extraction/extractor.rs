@@ -417,6 +417,44 @@ mod tests {
     /// existing tests passed unchanged. The bug pattern that emitted
     /// `start_sample > stop_sample` in PR #35 was an arithmetic-on-clamps
     /// problem of the same shape.
+    /// `claim_unused_path` head-on, both branches.
+    ///
+    /// The end-to-end gate above exercises it through `extract_detection`,
+    /// which is the behaviour that matters but leaves the two branches
+    /// entangled: a mutation that inverts the "is this name free?" test still
+    /// produces two distinct, existing files there. Asked directly, the two
+    /// answers are different values and neither can stand in for the other.
+    #[test]
+    fn a_free_name_is_taken_as_is_and_an_occupied_one_is_suffixed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let d = dir.path();
+
+        assert_eq!(
+            claim_unused_path(d, "clip.wav"),
+            d.join("clip.wav"),
+            "nothing occupies the name, so nothing should be suffixed"
+        );
+
+        std::fs::write(d.join("clip.wav"), b"x").expect("occupy");
+        assert_eq!(
+            claim_unused_path(d, "clip.wav"),
+            d.join("clip-2.wav"),
+            "the name is taken, so the next one is claimed"
+        );
+
+        std::fs::write(d.join("clip-2.wav"), b"x").expect("occupy");
+        assert_eq!(
+            claim_unused_path(d, "clip.wav"),
+            d.join("clip-3.wav"),
+            "and it keeps counting rather than stopping at one alternative"
+        );
+
+        // Extensionless names take the suffix on the end, not before a dot
+        // that isn't there.
+        std::fs::write(d.join("noext"), b"x").expect("occupy");
+        assert_eq!(claim_unused_path(d, "noext"), d.join("noext-2"));
+    }
+
     /// The gate for `claim_unused_path`.
     ///
     /// Two real detections a real hour apart, in the local hour that
@@ -454,6 +492,17 @@ mod tests {
             .extract_detection(&src, &detection)
             .expect("second pass extracts");
 
+        // The *first* clip must get the plain name. Asserting only that the
+        // two paths differ is not enough, and mutation testing proved it:
+        // deleting the `!` from `claim_unused_path`'s `if !first.exists()`
+        // sends every clip through the suffix loop, so the pair comes back as
+        // `-2` and `-3` — still distinct, still both present, still two files.
+        // The gate went green on a function that had stopped doing its job.
+        assert_eq!(
+            first.file_name().and_then(std::ffi::OsStr::to_str),
+            Some(build_extraction_filename(&detection, "wav").as_str()),
+            "the first clip of a name takes the name unsuffixed"
+        );
         assert_ne!(
             first, second,
             "the repeated local hour must not reuse the first clip's path"

@@ -80,13 +80,13 @@ const CORRELATION_CONTENT: &str = r##"<div class="page-head">
   <details class="pt-disc">
     <summary>See the numbers — the co-occurrence matrix</summary>
     <div id="cooccurrence-matrix" hx-get="/pages/cooccurrence-matrix?days=30" hx-trigger="toggle from:closest details once, intersect once" hx-swap="innerHTML">
-      <p class="bnb-meta">Loading…</p>
+      <span class="htmx-indicator bnb-meta">Loading…</span>
     </div>
   </details>
   <details class="pt-disc">
     <summary>See the numbers — strongest co-occurring pairs</summary>
     <div id="correlation-pairs" hx-get="/pages/correlation-pairs?days=30" hx-trigger="toggle from:closest details once, intersect once" hx-swap="innerHTML">
-      <p class="bnb-meta">Loading…</p>
+      <span class="htmx-indicator bnb-meta">Loading…</span>
     </div>
   </details>
 </div>

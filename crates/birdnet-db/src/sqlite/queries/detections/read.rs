@@ -866,6 +866,142 @@ mod tests {
     use crate::sqlite::queries::detections::test_support::temp_db_with_data;
     use crate::sqlite::types::DetectionRecord;
 
+    /// 2026-10-25T00:30:00Z — local 02:30 in Berlin on the first pass through
+    /// the hour daylight saving repeats. Arbitrary but *specific*: the point of
+    /// the tests below is that a caller reading it back gets this value and not
+    /// a plausible-looking placeholder.
+    const INSTANT: i64 = 1_792_888_200;
+
+    /// A helper row, distinguished only by what this file's tests need to
+    /// vary: the wall clock, the species, and the instant.
+    fn insert_at(conn: &Connection, date: &str, time: &str, sci: &str, utc: Option<i64>) {
+        let record = DetectionRecord {
+            date,
+            time,
+            sci_name: sci,
+            com_name: "Test Bird",
+            confidence: 0.9,
+            lat: None,
+            lon: None,
+            cutoff: None,
+            week: None,
+            sensitivity: None,
+            overlap: None,
+            file_name: "t.wav",
+            chunk_offset_secs: Some(0.0),
+            correlation_id: None,
+            source: None,
+            duration_secs: None,
+            detected_at_utc: utc,
+        };
+        insert_detection(conn, &record).unwrap();
+    }
+
+    /// `detected_at_utc_for` must return the instant the row actually carries.
+    ///
+    /// The quarantine-approve path mirrors a row into the analytics copy using
+    /// whatever this returns, and that row is back-dated by construction — it
+    /// is the one an incremental sync will never revisit. A wrong-but-plausible
+    /// answer here is therefore permanent, and invisible: the row is present,
+    /// every displayed field is right, and only the elapsed-time analytics
+    /// disagree.
+    ///
+    /// Mutation testing found the gap: `replace detected_at_utc_for with
+    /// Ok(Some(-1))` survived the whole integration suite, because the mutant
+    /// loop is scoped to `--lib` and this function had no unit-level caller.
+    /// Asserting a specific stored value is what kills it.
+    #[test]
+    fn detected_at_utc_for_returns_the_instant_the_row_carries() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_or_create(&dir.path().join("t.db")).unwrap();
+        insert_at(
+            &conn,
+            "2026-10-25",
+            "02:30:00",
+            "Turdus merula",
+            Some(INSTANT),
+        );
+
+        assert_eq!(
+            detected_at_utc_for(&conn, "2026-10-25", "02:30:00", "Turdus merula").unwrap(),
+            Some(INSTANT),
+            "the stored instant, not a placeholder"
+        );
+        // A detection that is not there has no instant, and that is not an
+        // error — the caller mirrors "unknown" rather than failing the approve.
+        assert_eq!(
+            detected_at_utc_for(&conn, "2026-10-25", "02:30:00", "Parus major").unwrap(),
+            None,
+            "a species that was never recorded at that second"
+        );
+        assert_eq!(
+            detected_at_utc_for(&conn, "2020-01-01", "00:00:00", "Turdus merula").unwrap(),
+            None,
+            "a second at which nothing was recorded"
+        );
+    }
+
+    /// A row whose wall clock names no point in time keeps a NULL instant, so
+    /// `detected_at_utc_for` has nothing to hand back.
+    ///
+    /// The counterpart to the test above: it must distinguish "no such row"
+    /// from "row with no instant" only in so far as both are `None` — what
+    /// matters is that neither invents a value.
+    #[test]
+    fn an_unplaceable_row_has_no_instant_to_return() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_or_create(&dir.path().join("t.db")).unwrap();
+        insert_at(&conn, "not-a-date", "25:99:99", "Turdus merula", None);
+        assert_eq!(
+            detected_at_utc_for(&conn, "not-a-date", "25:99:99", "Turdus merula").unwrap(),
+            None
+        );
+    }
+
+    /// `unstamped_detection_count` must count the rows that carry no instant.
+    ///
+    /// It is one side of the startup drift check, compared against the same
+    /// count taken from the analytics copy; a constant on either side makes the
+    /// comparison agree by construction and the check stops checking.
+    ///
+    /// Two mutants survived here — `Ok(0)` and `Ok(1)` — so the assertions come
+    /// in three states: zero, one, and two. A constant can satisfy at most one
+    /// of them.
+    #[test]
+    fn unstamped_detection_count_counts_the_rows_with_no_instant() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = open_or_create(&dir.path().join("t.db")).unwrap();
+        assert_eq!(
+            unstamped_detection_count(&conn).unwrap(),
+            0,
+            "an empty table has nothing unstamped"
+        );
+
+        // Placeable rows are stamped by migration 32's trigger, so they must
+        // not move the count.
+        insert_at(&conn, "2026-05-01", "06:00:00", "Turdus merula", None);
+        insert_at(&conn, "2026-05-01", "06:00:01", "Parus major", None);
+        assert_eq!(
+            unstamped_detection_count(&conn).unwrap(),
+            0,
+            "a real wall clock converts, so these are stamped"
+        );
+
+        insert_at(&conn, "", "", "Erithacus rubecula", None);
+        assert_eq!(
+            unstamped_detection_count(&conn).unwrap(),
+            1,
+            "one row names no point in time"
+        );
+
+        insert_at(&conn, "not-a-date", "25:99:99", "Strix aluco", None);
+        assert_eq!(
+            unstamped_detection_count(&conn).unwrap(),
+            2,
+            "and now two — a constant cannot satisfy all three states"
+        );
+    }
+
     /// The deadman freshness signal: a detection stamped two hours ago (in
     /// SQLite's own localtime lens, so no TZ skew) reads as ~7200 s of
     /// silence; an empty table reads as `None`, never zero.
