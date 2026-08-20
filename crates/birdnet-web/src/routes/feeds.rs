@@ -525,8 +525,8 @@ mod tests {
             s.contains("20:46:32"),
             "the wall clock the station recorded must be preserved: {s}"
         );
-        // UTC+5:30 (IST) — a half-hour zone, which a naive hours-only
-        // formatter renders as +0500.
+        // UTC+5:30 — India Standard Time, a half-hour zone, which a naive
+        // hours-only formatter renders as +0500.
         let s = rfc822("2026-07-28", "20:46:32", 5 * 3600 + 1800);
         assert!(s.ends_with("+0530"), "half-hour zones must survive: {s}");
         // A station genuinely on UTC still says +0000.
