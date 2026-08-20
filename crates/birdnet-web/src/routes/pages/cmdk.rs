@@ -341,50 +341,55 @@ fn all_settings() -> Vec<Entry> {
         make(
             "Detection",
             "settings",
-            "/admin/settings",
+            "/station/capture#detection",
             &["threshold", "sensitivity", "confidence"],
         ),
         make(
             "Audio",
             "sources",
-            "/admin/audio",
+            "/station/capture#audio",
             &["microphone", "mic", "rtsp", "usb", "alsa", "pipewire"],
         ),
         make(
             "Notifications",
             "channels",
-            "/admin/notifications",
+            "/station/alerts#notifications",
             &["telegram", "email", "mqtt", "slack", "webhook"],
         ),
         make(
             "Species",
             "filter",
-            "/admin/species",
+            "/station/capture#species",
             &["exclude", "include", "allow", "list"],
         ),
-        make("Rules", "alerts", "/admin/rules", &["alert", "rule"]),
+        make(
+            "Rules",
+            "alerts",
+            "/station/alerts#rules",
+            &["alert", "rule"],
+        ),
         make(
             "Quality",
             "metrics",
-            "/admin/quality",
+            "/station/data#quality",
             &["false positive", "low confidence"],
         ),
         make(
             "Accounts",
             "sessions",
-            "/admin/accounts",
+            "/station/access#accounts",
             &["users", "viewers", "sign out"],
         ),
         make(
             "Backups",
             "recovery",
-            "/admin/backups",
+            "/station/data#backups",
             &["backup", "restore", "snapshot"],
         ),
         make(
             "Migrate",
             "import",
-            "/admin/migration",
+            "/station/data#import",
             &["birdnet-pi", "import"],
         ),
         make(
@@ -393,10 +398,31 @@ fn all_settings() -> Vec<Entry> {
             "/admin/doctor",
             &["health", "self-check"],
         ),
+        // These two were in the nav of no page and matched no palette query:
+        // the only way to either was to already know its URL. An audit log
+        // nobody can find is not an audit log.
+        make(
+            "Audit log",
+            "who changed what",
+            "/admin/audit",
+            &["audit", "log", "history", "who", "changed"],
+        ),
+        make(
+            "Species images",
+            "blacklist & overrides",
+            "/admin/images",
+            &["image", "photo", "picture", "blacklist", "wikipedia"],
+        ),
+        make(
+            "System status",
+            "processes & storage",
+            "/admin/system",
+            &["status", "cpu", "memory", "disk", "service", "logs"],
+        ),
         make(
             "Display",
             "prefs",
-            "/system#display-prefs",
+            "/station/settings#display-prefs",
             &["theme", "density", "motion", "contrast"],
         ),
     ]
@@ -604,6 +630,113 @@ mod tests {
         ] {
             assert!(labels.contains(&must), "missing {must} in cmdk pages index");
         }
+    }
+
+    /// Every destination the palette offers must actually resolve.
+    ///
+    /// # Why this needs a gate rather than a reading
+    ///
+    /// The command palette is not a convenience here — it is the **stated**
+    /// fallback for everything the six-home spine does not put in the nav
+    /// (`routes::pages::nav`: "the long tail … stays reachable through the
+    /// command palette and contextual links"). So a rotted entry is not a
+    /// cosmetic miss; it is a destination with no way in.
+    ///
+    /// Two had rotted, found by walking them against a running station:
+    ///
+    /// * **Migrate** pointed at `/admin/migration`, which has never existed —
+    ///   the route is `/admin/migrate`. It 404'd.
+    /// * **Display · prefs** pointed at `/system#display-prefs`. `/system` is a
+    ///   pre-spine path that 308s to `/station`, which drops the fragment, and
+    ///   `/station` carries no `display-prefs` anchor anyway. Searching
+    ///   "theme" took you to the Health tab.
+    ///
+    /// Nothing could have noticed: the table is a list of strings, and no test
+    /// had ever asked the router whether any of them led anywhere.
+    #[tokio::test]
+    async fn every_palette_destination_resolves() {
+        // `/help/*` is a `ServeDir` over `BNB_HELP_DIR`, which the installer
+        // and the Docker image both set and a bare `cargo test` does not. Its
+        // 404 here is the documented "docs unavailable" path, not a rotted
+        // link, so asserting on it would only teach the next reader to ignore
+        // this gate.
+        const SERVED_FROM_DISK: &[&str] = &["/help"];
+
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use tower::ServiceExt as _;
+
+        let conn = rusqlite::Connection::open_in_memory().expect("open in-memory");
+        birdnet_db::migration::migrate(&conn).expect("migrate");
+        let state =
+            crate::state::AppState::from_connection(conn, std::path::PathBuf::from(":memory:"));
+        let app = crate::server::build_router(state);
+
+        let mut broken = Vec::new();
+        for entry in all_pages().into_iter().chain(all_settings()) {
+            if SERVED_FROM_DISK.contains(&entry.href.as_str()) {
+                continue;
+            }
+            // The fragment is the browser's business; the router only ever
+            // sees the path and query.
+            let (path, fragment) = entry
+                .href
+                .split_once('#')
+                .map_or((entry.href.as_str(), None), |(p, f)| (p, Some(f)));
+
+            // Follow redirects the way a browser would, so a legacy path that
+            // permanently redirects into the spine still counts as resolving.
+            let mut target = path.to_owned();
+            let mut status = StatusCode::OK;
+            let mut body = String::new();
+            for _ in 0..5 {
+                let req = Request::builder()
+                    .uri(&target)
+                    .body(Body::empty())
+                    .expect("build request");
+                let resp = app.clone().oneshot(req).await.expect("response");
+                status = resp.status();
+                if status.is_redirection() {
+                    let Some(loc) = resp
+                        .headers()
+                        .get(axum::http::header::LOCATION)
+                        .and_then(|v| v.to_str().ok())
+                        .map(ToOwned::to_owned)
+                    else {
+                        break;
+                    };
+                    target = loc;
+                    continue;
+                }
+                body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                    .await
+                    .map(|b| String::from_utf8_lossy(&b).into_owned())
+                    .unwrap_or_default();
+                break;
+            }
+
+            if status != StatusCode::OK {
+                broken.push(format!("{} → {} → {status}", entry.label, entry.href));
+                continue;
+            }
+            // A fragment that names nothing is a link that lands at the top of
+            // the page instead of at the thing the operator searched for —
+            // which on an 82 KB merged tab is indistinguishable from broken.
+            if let Some(frag) = fragment
+                && !body.contains(&format!("id=\"{frag}\""))
+            {
+                broken.push(format!(
+                    "{} → {} → no id=\"{frag}\" on {target}",
+                    entry.label, entry.href
+                ));
+            }
+        }
+        assert!(
+            broken.is_empty(),
+            "the command palette is the only way to reach some of these, and \
+             they lead nowhere:\n  {}",
+            broken.join("\n  ")
+        );
     }
 
     #[test]

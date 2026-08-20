@@ -92,7 +92,7 @@ fn parse_optional_decimal(raw: Option<&str>, default: f64) -> f64 {
 /// tab; its old URL permanently redirects there. The rule create/toggle/delete
 /// endpoints (including `POST /admin/rules`) keep their `/admin/rules...` paths.
 async fn rules_page() -> axum::response::Redirect {
-    axum::response::Redirect::permanent("/station/alerts")
+    axum::response::Redirect::permanent("/station/alerts#rules")
 }
 
 async fn rules_list_partial(State(state): State<AppState>) -> Html<String> {

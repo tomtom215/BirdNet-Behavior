@@ -36,7 +36,7 @@ pub fn router() -> Router<AppState> {
 /// The standalone `/admin/backups` page GET folded into the Station **Data**
 /// tab; its old URL permanently redirects there.
 async fn backups_page() -> axum::response::Redirect {
-    axum::response::Redirect::permanent("/station/data")
+    axum::response::Redirect::permanent("/station/data#backups")
 }
 
 // ───────────────────────────────────────────────────────────────────────────

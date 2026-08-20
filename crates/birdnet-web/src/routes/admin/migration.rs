@@ -75,7 +75,7 @@ pub fn router() -> Router<AppState> {
 /// tab; its old URL permanently redirects there. The validate/run/progress
 /// endpoints below keep their `/admin/migrate/...` paths.
 async fn migration_page() -> axum::response::Redirect {
-    axum::response::Redirect::permanent("/station/data")
+    axum::response::Redirect::permanent("/station/data#import")
 }
 
 /// Render the BirdNET-Pi import body (no document shell).

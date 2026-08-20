@@ -35,7 +35,7 @@ pub fn router() -> Router<AppState> {
 /// **Alerts** tab; its old URL permanently redirects there. The partial-poll
 /// and prune endpoints below keep their `/admin/notifications/...` paths.
 async fn notifications_page() -> axum::response::Redirect {
-    axum::response::Redirect::permanent("/station/alerts")
+    axum::response::Redirect::permanent("/station/alerts#notifications")
 }
 
 // ---------------------------------------------------------------------------
