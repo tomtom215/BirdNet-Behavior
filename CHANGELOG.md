@@ -142,6 +142,137 @@ Several of these were invisible to a fully green 2 190-test suite.
   restated to itself, while claiming to cover "species totals, the heat map, the
   dawn chorus, phenology". It now reads through the query layer.
 
+- **`RECORDING_SCHEDULE=solar` recorded nothing across most of the world.**
+  `SolarDay` reports sunrise and sunset wrapped into the *UTC* day. Away from
+  Greenwich the two ends of one local day land on different UTC days, so the
+  wrapped sunrise minute comes out *larger* than the wrapped sunset minute —
+  19:33 to 05:11 in Auckland, 09:24 to 00:30 in New York in June. `NightInhibit`
+  compared them as a plain `from <= m < until`, which is empty whenever
+  `from > until`, so the schedule allowed **zero minutes of recording per day**.
+
+  Measured against `SolarDay` directly, every day of 2026: Bangkok, Beijing,
+  Tokyo, Sydney, Auckland, Seattle, Phoenix, Anchorage and Honolulu wrap on
+  **all 365 days**; Denver on 288, Austin on 265, Chicago on 182, Toronto on 136
+  and New York on 94 — and all five of those wrap on **every day of June**.
+  London wraps on none. Roughly −75° to +75° longitude worked, and not
+  year-round.
+
+  Every pre-existing test in `birdnet-scheduler` used London (51.5074, −0.1278),
+  a longitude where the wrap never happens — which is exactly why a green suite
+  said nothing about it. `tests/solar_window_worldwide.rs` walks sixteen
+  stations across the solstices and equinoxes and was watched failing on
+  fourteen of them. `NightInhibit` is
+  wrap-aware now, its offsets wrap instead of clamping (a 30-minute pre-roll on a
+  00:05 sunrise used to lose 25 of them), and offsets wider than the clock
+  resolve to "always" rather than "never". Two tests that pinned the clamping are
+  replaced, and both replacements plus the "not the complement" counterpart were
+  confirmed to catch a mutated fix.
+
+  `--doctor` reports the resolved window in both clocks and now **fails** on a
+  schedule that allows no minutes. The failure was silent; the only signal was
+  the detection deadman, hours later, reporting the wrong cause.
+
+- **The published feeds told every calendar the wrong time.** A detection's
+  `Date`/`Time` is local wall clock with no offset. `rare.ics` appended `Z` and
+  both RSS feeds appended `+0000`, asserting Greenwich — so on a UTC−4 station a
+  20:46 detection showed as 16:46, and on UTC+8 as 04:46 the next morning, in
+  whatever calendar or reader had subscribed.
+
+  `DTSTART` is now a floating local value (RFC 5545 §3.3.5 form 1, the honest
+  reading of a row that carries no offset), `DTSTAMP` is a real UTC instant as
+  §3.8.7.2 requires rather than the detection time relabelled, `pubDate` carries
+  the station's actual offset, and content lines are folded to §3.1's 75 octets
+  on UTF-8 boundaries. A test that asserted `...061432Z` — the defect, pinned as
+  the contract — is replaced; three mutants, three catches.
+
+- **A browser-uploaded BirdNET-Pi import threw away where it came from.**
+  `upload_and_run_handler` read the station's coordinates to validate the file
+  and then called the bare `run_migration`, which is
+  `run_migration_with_options` with `ImportOptions::default()` and
+  `station = (None, None)`. So `station_lat`, `station_lon` and `distance_km`
+  were NULL on every browser import, and the Patterns note naming an imported
+  foreign site could never fire — it keys on a distance nothing computed.
+  Verified against a running station: 3 000 Perth detections uploaded to a
+  Boston station produced no warning anywhere.
+
+  The upload tab also carried no origin fields at all, so a browser user could
+  not reconcile an eight-hour clock difference even in principle; the
+  reconciling flow existed only on the tab that needs the file already on the
+  station's disk. Both halves are fixed and gated, and the note fires with the
+  right distance.
+
+- **The hour daylight saving repeats could refuse a detection outright.** Local
+  wall clock is this schema's identity, so the second pass of that hour can
+  produce a clip filename identical to the first — `hound` truncates the
+  original — and then collide on `idx_detections_unique` and be refused. Both
+  halves reproduced. Clip extraction now claims an unused path (up to
+  `MAX_CLIP_NAME_ATTEMPTS`, 50) instead of clobbering, and a refused insert is
+  counted on `birdnet_detection_write_failures_total` rather than only logged:
+  on an unattended station a `warn!` is the same as not noticing.
+
+  The raw-segment overwrite this pass first suspected turns out **not** to be
+  reachable — the stream directory drains by age at
+  `DEFAULT_STREAM_RETENTION_SECS` (600 s), well inside the repeated hour — and
+  the runbook now says so rather than implying a loss that does not happen.
+
+- **Closed disclosures fetched everything they were hiding.** htmx fires
+  `hx-trigger="load"` inside a closed `<details>`, and so does `revealed`,
+  because a zero-size element counts as revealed. Both confirmed in a real
+  browser, which is also how `toggle from:closest details once, intersect once`
+  was chosen: it defers while collapsed and still loads immediately if the
+  disclosure is `open`. Eight panels across the Patterns tabs were rendering and
+  shipping content nobody had asked to see, including 24 KB of dawn-chorus
+  table. `/patterns?tab=trends` goes from ten panel requests to five. A
+  structural gate scans every template and Rust-rendered `<details>` for an
+  eager trigger inside it, so a ninth panel cannot reintroduce this quietly.
+
+- **Two command-palette entries led nowhere, and nine landed at the top of the
+  wrong thing.** `routes::pages::nav` says the six homes are the whole top-level
+  menu and that the long tail "stays reachable through the command palette and
+  contextual links" — which makes the palette load-bearing, and nothing had ever
+  asked the router whether its entries resolved. Walking them against a running
+  station:
+
+  - **Migrate** pointed at `/admin/migration`, a route that has never existed
+    (it is `/admin/migrate`), so the entry 404'd.
+  - **Display · prefs** pointed at `/system#display-prefs`. `/system` is a
+    pre-spine path that 308s to `/station`, which drops the fragment, and
+    `/station` carries no `display-prefs` anchor anyway.
+  - **`/admin/audit` and `/admin/images`** matched no palette query and were
+    linked from none of the eleven primary pages. The only way to either was to
+    already know the URL — an audit log nobody can find is not an audit log.
+  - The other nine settings entries pointed at pre-spine `/admin/*` paths that
+    redirect correctly but land at the **top** of a merged tab. `/station/data`
+    is 82 KB of backups, import and quality in one document, so "Quality" took
+    you to a page whose quality section is somewhere below, with nothing saying
+    which part you had asked for. Same for the eight legacy `/admin/*` bookmarks
+    a veteran still has.
+
+  The five merged Station tabs carry section anchors now, every palette entry
+  and every legacy redirect names one, and Audit log / Species images / System
+  status are findable. A redirect that loses the destination is only marginally
+  better than the 404 it was written to avoid, so the anchor is part of the
+  redirect contract and `folded_pages_redirect_to_their_station_tab` asserts it.
+  `every_palette_destination_resolves` walks each static destination through the
+  real router, follows redirects the way a browser would, and checks that any
+  fragment names an `id` that exists on the page it lands on; it was watched
+  failing on all three defects above. `/help` is exempt with a comment — it is a
+  `ServeDir` over `BNB_HELP_DIR`, which the installer and the Dockerfile both set
+  and a bare `cargo test` does not, so its 404 in a fixture is the documented
+  "docs unavailable" path rather than a rotted link.
+
+- **Documentation that contradicted the code it documents.** Two doc comments
+  claimed fixed recording windows are evaluated in UTC — they have been local
+  since F-10 — and the shipped manual told operators quiet windows are UTC while
+  the UI, the code and its tests all say local. Also fixed: no prose anywhere
+  described `--channel-report`, the one command that answers whether a stereo
+  microphone is costing the station 66 dB to its own downmix.
+
+  And a `--doctor` unit test that read whatever real station database happened to
+  sit at `$HOME/BirdNet-Behavior/birds.db` rather than a fixture. It was observed
+  failing for exactly that reason, having passed minutes earlier in the same
+  tree.
+
 ### Added
 
 - **`--rebuild-species-summary`** recomputes the per-species totals from the
@@ -187,6 +318,63 @@ Several of these were invisible to a fully green 2 190-test suite.
   station that ever imports is how a banner gets ignored by the time it matters.
   `birdnet-db` gained the read API this needed (`list_import_batches`,
   `imported_detection_count`), which did not exist at all.
+
+- **The station now measures itself, not only the birds.** A microphone that
+  fails outright is caught three ways: the supervisor restarts its process,
+  `birdnet_audio_source_up` drops, and the detection deadman fires. A microphone
+  that merely goes **deaf** — water in the capsule, a spider's web across the
+  port, a connector loosened by a year of thermal cycling, a preamp drifting —
+  is caught by none of them. The process lives, the gauge reads 1, audio keeps
+  arriving, and the station goes on detecting the loud close birds while quietly
+  losing everything else. Its only symptom is fewer detections. So is the end of
+  the breeding season.
+
+  The station's own noise floor separates the two, because ambient background
+  does not stop when the birds do. Measured through this project's decode path
+  on its own 15-second magpie recording, attenuated to 2 %:
+
+  | gain | noise floor | SNR |
+  |---|---|---|
+  | 1.00 | −42.5 dBFS | 2.7 dB |
+  | 0.02 | −77.3 dBFS | 2.9 dB |
+
+  35 dB on the floor; SNR does not move, because attenuation scales signal and
+  background together. A version of this built on SNR would have looked entirely
+  reasonable and detected nothing — which is why the gate asserts the
+  discrimination rather than the plumbing.
+
+  Migration 31 adds `audio_levels`, one row per (local date, hour, source),
+  holding sums and a count so a new observation folds in without revisiting the
+  old ones, plus the minimum — which a failing capsule drags down first, and
+  which a reflexive `DO UPDATE SET x = excluded.x` would silently turn into "the
+  last sample". A sampler takes the newest segment per source every five
+  minutes, decodes ten seconds of it and folds one observation in: the same
+  sample-don't-instrument trade as `integrations::effort`, so it cannot disturb
+  capture, costs milliseconds, and loses at most one interval to a restart.
+  Newest by mtime, not by filename — those carry local wall clock, which repeats
+  for an hour every autumn.
+
+  Surfaced as a **Microphone health** panel on the Station Health tab and as
+  `birdnet_noise_floor_dbfs` / `birdnet_noise_floor_drift_db` per source on
+  `/api/v2/metrics`, drift measured against that source's *own* preceding 30-day
+  average. A source with no baseline yet reports "building a baseline" and
+  exports no drift series at all, because "never measured" and "has not moved"
+  are different answers.
+
+  **No threshold and no alert ship with this, deliberately.** A noise floor
+  moves for weather, season, a road, leaf-out. A number picked now, without a
+  season of real recordings to calibrate against, would fire on all of them and
+  teach an operator to ignore the channel — the exact failure
+  `integrations::station_health` is written to avoid. The measurement comes
+  first.
+
+  `birdnet_core::audio::quality` — 1 310 lines of SNR, spectral flatness,
+  rain/wind assessment and noise-floor tracking — had had no production consumer
+  since it was written; only the benches referenced it. The deferral recorded in
+  `src/cli.rs` is right about the half it covers: *filtering* changes which
+  chunks reach the model and wants hardware validation first. It says nothing
+  about *observing*, which changes no behaviour at all, and that is the half a
+  sealed station needs.
 
 - **Every detection now carries the instant it happened, beside the local wall
   clock it is displayed in.** `Date`/`Time` are local with no offset recorded —
