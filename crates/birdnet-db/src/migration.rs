@@ -1067,6 +1067,106 @@ pub const MIGRATIONS: &[Migration] = &[
 
         CREATE INDEX IF NOT EXISTS idx_audio_levels_date ON audio_levels(date);",
     },
+    Migration {
+        version: 32,
+        description: "Give every detection a monotonic instant beside its local wall clock",
+        // ## What this table has never been able to say
+        //
+        // `Date` and `Time` are local wall clock with no offset recorded — the
+        // shape BirdNET-Pi wrote and this fork kept, deliberately, because
+        // compatibility with a decade of existing databases is worth real
+        // money. The cost is that the column pair is not a point in time:
+        //
+        //   * one local hour repeats every autumn, so two detections an hour
+        //     apart carry identical `Date`/`Time` and `ORDER BY Date, Time` is
+        //     wrong inside it;
+        //   * one local hour never happens every spring, so any elapsed-time
+        //     arithmetic across it over-reads by an hour;
+        //   * `julianday(b) - julianday(a)` across either transition is off by
+        //     an hour in one direction or the other, which is how a
+        //     sessionisation gap threshold of 30 minutes sees a *negative*
+        //     55-minute gap and splits a session that never broke;
+        //   * an imported history from another station has to be shifted onto
+        //     this station's clock at import, permanently, because there is
+        //     nowhere to record that it was on a different one.
+        //
+        // Every one of those is the same missing column, so this adds it rather
+        // than fixing them one at a time. `Date`/`Time` are untouched and stay
+        // the display and grouping key; `detected_at_utc` is what ordering,
+        // gaps and durations move onto.
+        //
+        // ## Why the backfill is trustworthy, and where it is not
+        //
+        // SQLite's `'utc'` modifier converts a local timestamp using the host's
+        // tz database **for the date given**, not for today. Verified on this
+        // machine before relying on it: Europe/Berlin yields +1 h for a January
+        // timestamp and +2 h for a July one; Australia/Sydney yields +11 h and
+        // +10 h respectively. So history recorded under a different offset is
+        // converted with the offset that was actually in force, which is a
+        // materially better answer than stamping everything with today's.
+        //
+        // Two dates it cannot get right, because the information is not there:
+        //
+        //   * **The repeated hour.** Local 02:30 on a Berlin fall-back day is
+        //     two real instants; `strftime` returns the later one (01:30Z on
+        //     2026-10-25, the CET reading). Both passes therefore backfill to
+        //     the same instant. There is nothing in the row to do better with.
+        //   * **The hour that never happened.** Local 02:30 on a Berlin
+        //     spring-forward day does not exist; `strftime` collapses it onto
+        //     00:30Z, the same instant as local 01:30, rather than returning
+        //     NULL. Imported histories can contain such times.
+        //
+        // Both are recorded here so the next reader does not have to rediscover
+        // them, and neither is a reason to skip the backfill: an instant that is
+        // an hour out for two hours a year is strictly better than no instant
+        // at all for every hour of every year.
+        //
+        // ## Unplaceable rows, and the guard this does *not* need
+        //
+        // `Date`/`Time` are free-form `TEXT NOT NULL` — the column type forbids
+        // NULL, not nonsense — so a station's history can hold values naming no
+        // point in time (a NULL source `Date` arrives from the importer as "").
+        // Those rows keep a NULL instant and stay exactly as unplaceable as they
+        // were.
+        //
+        // Migration 24 needed an explicit `datetime(...) IS NOT NULL` guard for
+        // that, and this deliberately does not, because the situations differ:
+        // 24 wrote its result back into a `NOT NULL` column, so an unparseable
+        // row would have aborted the whole migration. `detected_at_utc` is
+        // nullable, and `strftime` already yields NULL for input it cannot
+        // parse — checked directly rather than assumed: `''`, `' '` and
+        // `'not-a-date 25:99:99'` all return NULL. A guard here would change no
+        // row's outcome, and a guard that looks protective without being
+        // protective is worse than none: the next reader budgets for it.
+        //
+        // The trigger is the `species_summary` lesson applied again: this table
+        // is written from four crates and at least eight call sites, and the
+        // ninth — written next year by someone who has never read this comment —
+        // would leave the column NULL and silently fall out of every ordering
+        // that uses it. A trigger fires on the table, so it covers paths that do
+        // not exist yet. It is guarded on `IS NULL`, so the write paths that set
+        // the value explicitly (which is all of them today, and which can do
+        // better than this for a live detection — see
+        // `sqlite::queries::detections::write`) pay one `WHEN` evaluation and
+        // nothing else.
+        up_sql: "ALTER TABLE detections ADD COLUMN detected_at_utc INTEGER;
+
+        UPDATE detections
+           SET detected_at_utc = CAST(strftime('%s', Date || ' ' || Time, 'utc') AS INTEGER);
+
+        CREATE INDEX IF NOT EXISTS idx_detections_utc
+            ON detections(detected_at_utc DESC);
+
+        DROP TRIGGER IF EXISTS detections_stamp_utc;
+        CREATE TRIGGER detections_stamp_utc AFTER INSERT ON detections
+        WHEN NEW.detected_at_utc IS NULL
+        BEGIN
+            UPDATE detections
+               SET detected_at_utc =
+                     CAST(strftime('%s', NEW.Date || ' ' || NEW.Time, 'utc') AS INTEGER)
+             WHERE rowid = NEW.rowid;
+        END;",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing

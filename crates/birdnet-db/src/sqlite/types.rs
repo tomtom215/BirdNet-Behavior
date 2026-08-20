@@ -61,6 +61,26 @@ pub struct DetectionRecord<'a> {
     /// rows and the quarantine-approve path (which re-inserts without
     /// re-extracting) write NULL. Added in migration 20.
     pub duration_secs: Option<f64>,
+    /// The instant this detection happened, in seconds since the Unix epoch.
+    ///
+    /// `Date`/`Time` are local wall clock with no offset, which is not a point
+    /// in time: one local hour repeats every autumn and one never happens every
+    /// spring. This is the monotonic companion every ordering, gap and duration
+    /// query reads instead. Added in migration 32.
+    ///
+    /// `None` means "work it out from the wall clock" — migration 32's trigger
+    /// then converts `Date`/`Time` through the host's tz database, which is
+    /// correct for the date and the best available for a row whose real instant
+    /// nobody recorded.
+    ///
+    /// A **live** caller should set it, because it can do better: it knows the
+    /// offset that was actually in force when the audio was captured, and that
+    /// is the only way to tell the two passes of the repeated autumn hour apart.
+    /// `birdnet_core::civil::unix_secs_from_local`, given
+    /// [`crate::clock::local_utc_offset_secs`], is that conversion — named in
+    /// prose rather than linked because this crate does not depend on
+    /// `birdnet-core`, and adding an edge for a doc link is not worth it.
+    pub detected_at_utc: Option<i64>,
 }
 
 /// A detection row read from the database.
@@ -346,6 +366,7 @@ mod drift_gate_tests {
             correlation_id: Some("abc123"),
             source: Some("cam1"),
             duration_secs: None,
+            detected_at_utc: None,
         };
         crate::sqlite::queries::detections::insert_detection(&conn, &record).unwrap();
 

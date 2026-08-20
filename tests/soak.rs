@@ -125,6 +125,10 @@ async fn soak_insertions_stay_bounded() {
             correlation_id: None,
             source: None,
             duration_secs: None,
+            // Left for migration 32's trigger, deliberately: this is the
+            // importer's path and the expensive one, so the throughput this
+            // test prints is the trigger-firing case rather than the cheap one.
+            detected_at_utc: None,
         };
         state
             .with_db(|conn| insert_detection(conn, &record))
@@ -205,6 +209,7 @@ fn insert_n(conn: &rusqlite::Connection, base: usize, count: usize) {
             correlation_id: None,
             source: None,
             duration_secs: None,
+            detected_at_utc: None,
         };
         insert_detection(conn, &record).expect("insert failed");
     }

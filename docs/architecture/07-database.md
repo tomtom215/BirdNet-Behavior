@@ -56,6 +56,10 @@ CREATE TABLE IF NOT EXISTS detections (
     File_Name TEXT
 );
 
+-- The instant a detection happened, beside the local wall clock it is
+-- displayed in (migration v32). See "Two clocks" below.
+ALTER TABLE detections ADD COLUMN detected_at_utc INTEGER;
+
 -- Settings key-value store (migration v4)
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY NOT NULL,
@@ -68,16 +72,58 @@ CREATE INDEX idx_detections_com_name    ON detections(Com_Name);
 CREATE INDEX idx_detections_sci_name    ON detections(Sci_Name);
 CREATE INDEX idx_detections_confidence  ON detections(Confidence);
 CREATE INDEX idx_detections_datetime    ON detections(Date, Time);
+CREATE INDEX idx_detections_utc         ON detections(detected_at_utc DESC);
 ```
+
+### Two clocks
+
+`Date`/`Time` are local wall clock with **no offset recorded** — the shape
+BirdNET-Pi wrote, kept deliberately so a decade of existing databases still
+imports. That pair is not a point in time:
+
+- one local hour repeats every autumn, so two detections an hour apart carry
+  identical `Date`/`Time` and `ORDER BY Date, Time` is arbitrary inside it;
+- one local hour never happens every spring, so elapsed-time arithmetic across
+  it over-reads by an hour;
+- an imported history from another station has nowhere to record that it was
+  kept on a different clock.
+
+`detected_at_utc` (seconds since the Unix epoch, migration v32) is the
+monotonic companion that answers those. `Date`/`Time` are untouched and remain
+the display and grouping key.
+
+**Which one a query asks is not a style choice:** elapsed time and ordering ask
+`detected_at_utc`; clock position, calendar date and anything shown to a human
+ask `Date`/`Time`. The analytics view exposes the same split as
+`detection_instant` / `detection_timestamp` — see
+[Behavioral Analytics](08-behavioral-analytics.md#two-clocks-and-which-one-each-question-asks).
+
+The column is filled three ways, in order of what the writer knows:
+
+| Writer | Value | Why |
+|--------|-------|-----|
+| the live detection path | `local − offset in force now` | it is running *now*, so it can tell the two passes of the repeated autumn hour apart |
+| migration v32's backfill | `strftime('%s', Date \|\| ' ' \|\| Time, 'utc')` | a tz-database lookup **for each row's own date**, so history recorded under a different offset converts with the offset that was actually in force |
+| the `detections_stamp_utc` trigger | the same lookup, on insert | covers any write path that forgets the column, including ones not yet written |
+
+A row whose `Date`/`Time` name no point in time (`Date`/`Time` are
+`TEXT NOT NULL`, which forbids NULL and not nonsense — the importer turns a
+NULL source date into `""`) keeps a NULL instant and drops out of ordered and
+elapsed-time results rather than being invented at the epoch.
 
 ### Migration Framework
 
-Sequential migration system tracked in a `schema_version` table. Ten
-versioned migrations are shipped in `crates/birdnet-db/src/migration.rs`
-and cover the core `detections` table, composite indexes, the settings
-key-value store, notification log, alert rules, species thresholds, and
-the rare-bird quarantine table. Migrations are idempotent and run
-automatically on startup.
+Sequential migration system tracked in a `schema_version` table. The
+versioned migrations shipped in `crates/birdnet-db/src/migration.rs` run in
+order from 1 and cover the core `detections` table, composite indexes, the
+settings key-value store, notification log, alert rules, species thresholds,
+the rare-bird quarantine table, review verdicts, import provenance, the
+species summary and its triggers, audio levels, and the monotonic detection
+instant. Migrations are idempotent and run automatically on startup.
+
+Existing migrations are never modified — a station that has already applied
+one will not apply it again, so an edit changes the schema only on
+installations that have not yet run it. Corrections ship as a new migration.
 
 ### Settings Module
 

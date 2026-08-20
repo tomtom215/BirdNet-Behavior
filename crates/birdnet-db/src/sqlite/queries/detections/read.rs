@@ -1,7 +1,7 @@
 //! Detection read queries: counts, listings, pagination, today's feed, and
 //! the multi-stream corroboration lookup.
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension as _, params};
 
 use crate::sqlite::connection::DbError;
 use crate::sqlite::types::{
@@ -152,11 +152,26 @@ pub fn detections_by_date(conn: &Connection, date: &str) -> Result<Vec<Detection
 ///
 /// The end-to-end freshness signal for the detection-deadman watchdog: it
 /// proves the whole audio -> capture -> inference -> insert chain produced a
-/// row recently, which no per-component gauge can. Detection `Date`/`Time`
-/// are naive local-time strings (they come from capture filenames stamped
-/// with the system timezone), so the elapsed math runs inside SQLite
-/// against `'now','localtime'` — the same clock lens — rather than against
-/// a Rust UTC timestamp that would skew by the TZ offset.
+/// row recently, which no per-component gauge can.
+///
+/// # Both sides are real instants
+///
+/// This used to subtract two *local wall clocks*: `julianday('now','localtime')`
+/// minus `julianday(Date || ' ' || Time)`. Inside one offset regime that is
+/// exact, and across a daylight-saving transition it is not, because local wall
+/// clock is not monotonic. On the autumn night the station reads up to an hour
+/// **fresher** than it is (a detection 61 real minutes ago looks 1 minute old,
+/// delaying the deadman); on the spring one it reads up to an hour **staler**
+/// (2 real minutes looks like 62, which a tight Grafana alert on
+/// `birdnet_detection_silence_seconds` fires on).
+///
+/// `detected_at_utc` (migration 32) and `strftime('%s','now')` are both real
+/// instants, so the subtraction is exact on every night of the year.
+///
+/// Rows with no instant are skipped rather than measured on the old arithmetic:
+/// a detection whose wall clock names no point in time cannot date the station's
+/// last activity, and the function's contract already prefers no verdict to a
+/// bogus one.
 ///
 /// Clamped at zero: a detection apparently in the future (clock stepped
 /// back after NTP sync) reads as "fresh", the fail-open choice.
@@ -165,17 +180,16 @@ pub fn detections_by_date(conn: &Connection, date: &str) -> Result<Vec<Detection
 ///
 /// Returns `DbError` on query failure.
 pub fn seconds_since_last_detection(conn: &Connection) -> Result<Option<u64>, DbError> {
-    use rusqlite::OptionalExtension as _;
     let secs: Option<f64> = conn
         .query_row(
-            "SELECT (julianday('now','localtime') - julianday(Date || ' ' || Time)) * 86400.0
-             FROM detections ORDER BY Date DESC, Time DESC LIMIT 1",
+            "SELECT CAST(strftime('%s','now') AS REAL) - detected_at_utc
+             FROM detections
+             WHERE detected_at_utc IS NOT NULL
+             ORDER BY detected_at_utc DESC LIMIT 1",
             [],
             |row| row.get(0),
         )
         .optional()?
-        // A malformed Date/Time (julianday -> NULL) folds to None too: no
-        // verdict is better than a bogus one.
         .flatten();
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     Ok(secs.map(|s| if s.is_finite() { s.max(0.0) as u64 } else { 0 }))
@@ -791,6 +805,59 @@ pub fn detections_per_day(conn: &Connection) -> Result<Vec<DayCount>, DbError> {
     Ok(rows)
 }
 
+/// The stored instant for one detection, identified the way the rest of the app
+/// identifies them.
+///
+/// Exists so a caller mirroring a row into the analytics copy can read back the
+/// instant migration 32's trigger just stamped, rather than recomputing it. The
+/// conversion is a tz-database lookup, and a second copy of that expression is
+/// a second thing to get wrong — which matters most for exactly the rows that
+/// use this path: back-dated quarantine approvals, whose wall clock may sit
+/// under a different offset from today's.
+///
+/// `Ok(None)` for a detection that does not exist, or one whose wall clock names
+/// no point in time.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn detected_at_utc_for(
+    conn: &Connection,
+    date: &str,
+    time: &str,
+    sci_name: &str,
+) -> Result<Option<i64>, DbError> {
+    let found = conn
+        .query_row(
+            "SELECT detected_at_utc FROM detections \
+             WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3 LIMIT 1",
+            rusqlite::params![date, time, sci_name],
+            |r| r.get::<_, Option<i64>>(0),
+        )
+        .optional()?;
+    Ok(found.flatten())
+}
+
+/// Count detections carrying no `detected_at_utc` (migration 32).
+///
+/// The SQLite half of the startup drift check's third signal. A row is
+/// unstamped only when its `Date`/`Time` name no point in time, so on a healthy
+/// station this is a small, stable number — and the analytics copy must report
+/// the same one. When it reports more, that copy predates the column and every
+/// query that measures elapsed time or order is quietly reading NULLs.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn unstamped_detection_count(conn: &Connection) -> Result<u64, DbError> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM detections WHERE detected_at_utc IS NULL",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(u64::try_from(n).unwrap_or(0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -832,6 +899,7 @@ mod tests {
             correlation_id: None,
             source: None,
             duration_secs: None,
+            detected_at_utc: None,
         };
         insert_detection(&conn, &record).unwrap();
 
@@ -1011,6 +1079,7 @@ mod tests {
                 correlation_id: None,
                 source: src,
                 duration_secs: None,
+                detected_at_utc: None,
             };
             insert_detection(&conn, &r).unwrap();
         };
@@ -1275,6 +1344,7 @@ mod tests {
                 correlation_id: None,
                 source: None,
                 duration_secs: None,
+                detected_at_utc: None,
             };
             insert_detection(&conn, &record).unwrap();
         };
@@ -1385,6 +1455,7 @@ mod tests {
                 correlation_id: None,
                 source: None,
                 duration_secs: None,
+                detected_at_utc: None,
             };
             insert_detection(&conn, &record).unwrap();
         };
@@ -1524,6 +1595,7 @@ mod tests {
                 correlation_id: None,
                 source,
                 duration_secs: None,
+                detected_at_utc: None,
             };
             insert_detection(&conn, &record).unwrap();
         };

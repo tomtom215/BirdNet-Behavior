@@ -82,9 +82,16 @@ fn seeded_db() -> (AnalyticsDb, TempDir) {
     let today_days = days_from_civil(parts[0], parts[1], parts[2]);
 
     // 90 days x 4 hours x 3 species, walked back from today.
+    // `detected_at_utc` is seeded, not left NULL, because every elapsed-time and
+    // ordering query under test reads `detection_instant`, which is derived from
+    // it. A fixture that omitted it would hand those queries a column of NULLs
+    // and assert against whatever they return for that — which is not what any
+    // of them do on a real station, where migration 32 stamps every placeable
+    // row. `epoch(TIMESTAMP …)` over the same wall clock treats the fixture as
+    // UTC, which is what it is.
     let mut sql = String::from(
         "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence,
-             Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name) VALUES ",
+             Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, detected_at_utc) VALUES ",
     );
     let species = [
         ("Turdus merula", "Eurasian Blackbird"),
@@ -105,7 +112,8 @@ fn seeded_db() -> (AnalyticsDb, TempDir) {
                     &mut sql,
                     format_args!(
                         "('{y:04}-{m:02}-{d:02}','{hour:02}:{min:02}:00','{sci}','{com}',\
-                          {confidence},51.5,-0.1,0.7,1,1.0,0.0,'rec.wav')",
+                          {confidence},51.5,-0.1,0.7,1,1.0,0.0,'rec.wav',\
+                          epoch(TIMESTAMP '{y:04}-{m:02}-{d:02} {hour:02}:{min:02}:00'))",
                         min = (back * 7 + i64::try_from(offset).unwrap_or(0)) % 60,
                     ),
                 );

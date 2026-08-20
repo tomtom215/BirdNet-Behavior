@@ -238,6 +238,22 @@ pub(super) fn event_processor(
             },
             source: Some(&source_label),
             duration_secs: source_duration_secs,
+            // The instant, not just the wall clock. `Date`/`Time` are local and
+            // carry no offset, so they are not a point in time — the local hour
+            // daylight saving repeats each autumn happens twice under one
+            // label. This path is the only one that can resolve that, because
+            // it is running *now* and the offset in force is known: the first
+            // pass is stamped while the offset is still +2 and the second while
+            // it is +1, so the two land an hour apart, which is what happened.
+            //
+            // Everything else — imports, the backfill — falls back to migration
+            // 32's trigger and a tz-database lookup, which is right for the date
+            // and cannot tell those two apart.
+            detected_at_utc: birdnet_core::civil::unix_secs_from_local(
+                &detection.date,
+                &detection.time,
+                birdnet_db::clock::local_utc_offset_secs(),
+            ),
         };
 
         let metrics = state.metrics();
@@ -304,6 +320,10 @@ pub(super) fn event_processor(
                 sens: record.sensitivity,
                 overlap: record.overlap,
                 file_name: &file_str,
+                // The same instant the SQLite row carries, so the two copies
+                // agree. Recomputing it here would let the two drift across a
+                // daylight-saving boundary that fell between the writes.
+                detected_at_utc: record.detected_at_utc,
             };
             let insert_result = state.with_analytics(|adb| adb.insert_detection(&live));
             if let Some(Err(e)) = insert_result {

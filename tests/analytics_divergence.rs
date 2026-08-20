@@ -199,6 +199,36 @@ fn approving_a_quarantined_detection_admits_it_to_the_olap_copy() {
         "an approved detection never reaches the analytics copy — and being \
          back-dated, no later incremental sync will pick it up either"
     );
+
+    // …and it must arrive with its instant. A quarantined row is back-dated by
+    // construction, so it is exactly the row an incremental sync will never
+    // revisit: mirrored without `detected_at_utc` it would be present in the
+    // store, correct on every displayed field, and absent from sessionize,
+    // funnel, retention and every gap query for as long as the station runs.
+    let sqlite_instant = state
+        .with_db(|conn| {
+            birdnet_db::sqlite::detected_at_utc_for(conn, &today, "05:00:00", "Strix aluco")
+        })
+        .expect("query");
+    assert!(
+        sqlite_instant.is_some(),
+        "precondition: SQLite stamped the approved row"
+    );
+    let olap_instant = state
+        .with_analytics(|adb| {
+            adb.conn()
+                .query_row(
+                    "SELECT detected_at_utc FROM detections WHERE Sci_Name = 'Strix aluco'",
+                    [],
+                    |r| r.get::<_, Option<i64>>(0),
+                )
+                .expect("read back")
+        })
+        .expect("analytics is configured");
+    assert_eq!(
+        olap_instant, sqlite_instant,
+        "the mirrored row must carry the same instant SQLite stamped"
+    );
 }
 
 /// Clearing the station's data must clear the analytics copy too.
@@ -539,13 +569,17 @@ fn effort_corrected_abundance_returns_a_rate() {
 /// which is the hardest kind of wrong to notice.
 #[test]
 fn a_live_row_and_a_resynced_row_carry_the_same_columns() {
-    /// The optional columns the live path used to drop.
+    /// The optional columns the live path used to drop, plus the instant
+    /// (migration 32) that the live path dropped in exactly the same way for
+    /// exactly the same reason: a new column added to the bulk writer and not
+    /// to the live one.
     type OptionalColumns = (
         Option<f64>,
         Option<f64>,
         Option<f64>,
         Option<i32>,
         Option<f64>,
+        Option<i64>,
     );
 
     let dir = tempfile::tempdir().unwrap();
@@ -556,6 +590,24 @@ fn a_live_row_and_a_resynced_row_carry_the_same_columns() {
     }
     let state = AppState::new_with_analytics(db_path, &dir.path().join("analytics.duckdb"))
         .expect("analytics state opens");
+
+    // The instant the SQLite side will stamp for this wall clock, asked of the
+    // host's own tz database rather than assumed — the fixture must not depend
+    // on the machine running it sitting at UTC.
+    let instant: Option<i64> = state
+        .with_db(|conn| {
+            conn.query_row(
+                "SELECT CAST(strftime('%s','2026-03-01 06:15:00','utc') AS INTEGER)",
+                [],
+                |r| r.get(0),
+            )
+        })
+        .expect("tz lookup");
+    assert!(
+        instant.is_some(),
+        "the fixture's own wall clock did not convert; the rest of this test \
+         would then pass by comparing two NULLs"
+    );
 
     // Written the way the detection processor writes one.
     state
@@ -573,6 +625,7 @@ fn a_live_row_and_a_resynced_row_carry_the_same_columns() {
                 sens: Some(1.25),
                 overlap: Some(0.0),
                 file_name: "rec.wav",
+                detected_at_utc: instant,
             })
             .expect("live insert");
         })
@@ -583,10 +636,19 @@ fn a_live_row_and_a_resynced_row_carry_the_same_columns() {
             .with_analytics(|adb| {
                 adb.conn()
                     .query_row(
-                        "SELECT Lat, Lon, Cutoff, Week, Sens FROM detections \
-                         WHERE Sci_Name = 'Turdus merula'",
+                        "SELECT Lat, Lon, Cutoff, Week, Sens, detected_at_utc \
+                         FROM detections WHERE Sci_Name = 'Turdus merula'",
                         [],
-                        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                        |r| {
+                            Ok((
+                                r.get(0)?,
+                                r.get(1)?,
+                                r.get(2)?,
+                                r.get(3)?,
+                                r.get(4)?,
+                                r.get(5)?,
+                            ))
+                        },
                     )
                     .expect("read back")
             })
@@ -595,7 +657,11 @@ fn a_live_row_and_a_resynced_row_carry_the_same_columns() {
 
     let live = columns(&state);
     assert!(
-        live.0.is_some() && live.2.is_some() && live.3.is_some() && live.4.is_some(),
+        live.0.is_some()
+            && live.2.is_some()
+            && live.3.is_some()
+            && live.4.is_some()
+            && live.5.is_some(),
         "the live path dropped columns the bulk path writes: {live:?}"
     );
 

@@ -188,6 +188,52 @@ Several of these were invisible to a fully green 2 190-test suite.
   `birdnet-db` gained the read API this needed (`list_import_batches`,
   `imported_detection_count`), which did not exist at all.
 
+- **Every detection now carries the instant it happened, beside the local wall
+  clock it is displayed in.** `Date`/`Time` are local with no offset recorded —
+  the shape BirdNET-Pi wrote, kept so a decade of existing databases still
+  imports — and that pair is not a point in time. One local hour repeats every
+  autumn and one never happens every spring, so *everything measured on it* was
+  wrong across a transition, in both directions:
+
+  - the detection deadman subtracted two wall clocks, so on the autumn night the
+    station read up to an hour **fresher** than it was (delaying the alarm) and
+    on the spring one up to an hour **staler** (firing a false one);
+  - session gaps read **zero minutes** between two detections a real hour apart
+    on the autumn night, merging two sessions that were separate, and
+    **seventy-five** between two fifteen real minutes apart on the spring one,
+    splitting one that never broke — either side of the 30-minute default;
+  - `sessionize`, `window_funnel`, `sequence_match`, `sequence_next_node` and
+    every gap query took the wall clock as their time argument;
+  - "latest detection" was `ORDER BY Date DESC, Time DESC`, i.e. lexical — so a
+    single imported row with an unparseable date (`not-a-date` sorts above every
+    real date) made itself the station's most recent detection, on the dashboard
+    and in the freshness signal.
+
+  Migration 32 adds `detected_at_utc` and backfills it through the host's tz
+  database **for each row's own date**, so history recorded under a different
+  offset converts with the offset that was actually in force rather than
+  today's. A trigger covers write paths that forget the column, including ones
+  not yet written; the live detection path sets it explicitly because it is the
+  only writer that can tell the two passes of the repeated autumn hour apart.
+
+  The analytics view names the two clocks separately — `detection_instant` and
+  `detection_timestamp` — and the rule is now written down and gated in both
+  directions: **elapsed time and ordering ask the instant; clock position,
+  calendar date and anything shown to a human ask the wall clock.** Hour-of-day
+  charts and daily buckets deliberately did *not* move.
+
+  Rows whose wall clock names no point in time keep a NULL instant and drop out
+  of ordered results rather than being invented at the epoch. Paginated list
+  queries stay on `ORDER BY Date, Time`: the covering index supports them, and
+  the only error is intra-hour ordering for one hour a year.
+
+  An upgrading station with a populated `analytics.duckdb` was a hazard in its
+  own right — the new column adds no rows and changes no verdicts, so both
+  existing drift signals agreed while every instant in the copy was NULL, which
+  would have left sessionize, funnel, retention, next-species and every gap
+  query silently returning nothing. The startup drift check gained a third
+  signal for exactly that and rebuilds the copy.
+
 ### Changed
 
 - **The health badge and `/api/v2/health` no longer scan the whole database.**
@@ -549,22 +595,42 @@ Several of these were invisible to a fully green 2 190-test suite.
 
 ### Migrations
 
-25 through 30 — import provenance; the denormalised reviewer verdict (backfilled
+25 through 32 — import provenance; the denormalised reviewer verdict (backfilled
 from existing verdicts); the recording-effort table; a maintenance-run result
-column; two covering indexes for the species aggregates; and `species_summary`,
-the per-species totals maintained by triggers.
+column; two covering indexes for the species aggregates; `species_summary`, the
+per-species totals maintained by triggers; `audio_levels`, the station's own
+input level over time; and `detected_at_utc`, the monotonic instant beside each
+detection's local wall clock.
 
 All additive. None rewrites existing rows, and `import_batch_id IS NULL`
-continues to mean "this station recorded it". 29 and 30 are the only ones with a
+continues to mean "this station recorded it". 29 and 30 are the ones with a real
 size cost: +130.6 MB and +1.0 MB respectively on a 1.47 GB three-year database,
 and 30 backfills from existing detections so an upgrading station gets correct
 totals immediately rather than only for detections recorded from then on.
 
-A note for whoever adds migration 31: 30's triggers exist from that point on, so
+32 backfills too, and its conversion is date-aware: SQLite's `'utc'` modifier
+consults the tz database *for the timestamp given*, so a station's older history
+converts with the offset that was in force then. Two dates it cannot get right,
+because the information is not in the row: the local hour that repeats each
+autumn is two real instants under one label and the backfill picks the
+standard-time reading, and the hour that never happens each spring is collapsed
+onto the adjacent one rather than rejected. An instant that is an hour out for
+two hours a year is strictly better than no instant at all for every hour of
+every year, and both limits are recorded in the migration itself.
+
+A note for whoever adds migration 33: 30's triggers exist from that point on, so
 a later migration that rewrites `detections` in bulk will fire them and the
 summary will follow along — which is the intent. One that rebuilds the table by
 create-copy-drop-rename must drop those triggers first and re-run the backfill
-after, or it will double-count the copy.
+after, or it will double-count the copy. 32's `detections_stamp_utc` trigger has
+the same property, and is guarded on `detected_at_utc IS NULL`, so a bulk rewrite
+that carries the column forward will not re-stamp it.
+
+`detected_at_utc` is deliberately **not** part of `idx_detections_unique`. The
+backfilled value depends on the host's timezone, so a station that changed zones
+between imports would find the same detection hashing to two different instants
+and its history silently doubling — which is precisely what migration 23's
+unique index exists to prevent.
 
 ## [0.14.0] - 2026-08-16
 

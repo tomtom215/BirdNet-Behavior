@@ -15,6 +15,10 @@ use crate::queries;
 const SYNC_COLS: &str = "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, \
                          Cutoff, Week, Sens, Overlap, File_Name";
 
+/// How many columns [`SYNC_COLS`] names. The optional columns are appended
+/// after these, so this is where their read indices start.
+const SYNC_COL_COUNT: usize = 12;
+
 /// Provenance column, appended to [`SYNC_COLS`] when the source has it.
 ///
 /// Detected rather than assumed. In the product `migrate()` always runs before
@@ -28,6 +32,10 @@ const PROVENANCE_COL: &str = "import_batch_id";
 /// Reviewer-verdict column, appended when the source has it. Detected for the
 /// same reason as [`PROVENANCE_COL`].
 const VERDICT_COL: &str = "review_verdict";
+
+/// Monotonic-instant column (migration 32), appended when the source has it.
+/// Detected for the same reason as [`PROVENANCE_COL`].
+const INSTANT_COL: &str = "detected_at_utc";
 
 /// Whether `detections` in this `SQLite` database carries `column`.
 fn has_column(conn: &rusqlite::Connection, column: &str) -> bool {
@@ -54,7 +62,7 @@ const APPEND_BATCH_ROWS: u64 = 10_000;
 
 /// A detection as written by the live path.
 ///
-/// Carries the same twelve columns the bulk sync copies, so a row written
+/// Carries the same columns the bulk sync copies, so a row written
 /// live and the same row rebuilt by a resync are identical. They were not:
 /// the live insert wrote six columns and left `Lat`, `Lon`, `Cutoff`,
 /// `Week`, `Sens` and `Overlap` NULL, so "the same detection" meant
@@ -93,6 +101,18 @@ pub struct LiveDetection<'a> {
     pub overlap: Option<f64>,
     /// Saved clip path, or the source segment.
     pub file_name: &'a str,
+    /// The instant the detection happened, seconds since the Unix epoch.
+    ///
+    /// Not optional the way the other analytics columns are, and not left to a
+    /// resync to fill in: `detection_instant` is derived from it, and every
+    /// analytic that measures elapsed time or order now reads that. A live row
+    /// mirrored here without it would be present in the store, correct in every
+    /// displayed field, and **absent from sessionize, funnel, retention,
+    /// next-species and every gap query** until the next full rebuild happened
+    /// to fold it in — which on a healthy station is never.
+    ///
+    /// `None` only for a row whose local wall clock names no point in time.
+    pub detected_at_utc: Option<i64>,
 }
 
 impl AnalyticsDb {
@@ -249,16 +269,31 @@ impl AnalyticsDb {
         // `>=` (not `>`): the caller deletes the cutoff second from DuckDB
         // first, then re-reads it whole from SQLite here, so rows that tie the
         // latest synced second aren't permanently skipped (see sync_from_sqlite).
-        let provenance = has_column(sqlite_conn, PROVENANCE_COL);
-        let verdict = has_column(sqlite_conn, VERDICT_COL);
+        // Optional columns, in the order they are appended to the projection —
+        // which is also the order the appender writes them, and therefore the
+        // order of the DuckDB table's trailing columns. Kept as one list so the
+        // read indices below are derived rather than hand-counted; the previous
+        // shape (`row.get(if provenance { 13 } else { 12 })`) had one more term
+        // to get wrong with every column added.
+        let optional: Vec<&str> = [PROVENANCE_COL, VERDICT_COL, INSTANT_COL]
+            .into_iter()
+            .filter(|c| has_column(sqlite_conn, c))
+            .collect();
+        let index_of = |col: &str| {
+            optional
+                .iter()
+                .position(|c| *c == col)
+                .map(|i| SYNC_COL_COUNT + i)
+        };
+        let (provenance, verdict, instant) = (
+            index_of(PROVENANCE_COL),
+            index_of(VERDICT_COL),
+            index_of(INSTANT_COL),
+        );
         let mut cols = SYNC_COLS.to_owned();
-        if provenance {
+        for col in &optional {
             cols.push_str(", ");
-            cols.push_str(PROVENANCE_COL);
-        }
-        if verdict {
-            cols.push_str(", ");
-            cols.push_str(VERDICT_COL);
+            cols.push_str(col);
         }
         let sql = if after.is_some() {
             format!(
@@ -300,18 +335,22 @@ impl AnalyticsDb {
             // separable in the analytics rather than only in SQLite. A source
             // predating the migration has no such column; NULL is then the
             // truthful value for every one of its rows.
-            let import_batch_id: Option<i64> = if provenance {
-                row.get(12).map_err(read_err)?
-            } else {
-                None
+            let import_batch_id: Option<i64> = match provenance {
+                Some(i) => row.get(i).map_err(read_err)?,
+                None => None,
             };
             // The reviewer's verdict (migration 26). NULL is "unreviewed",
             // which is the honest value for a source that has no such column.
-            let review_verdict: Option<String> = if verdict {
-                row.get(if provenance { 13 } else { 12 })
-                    .map_err(read_err)?
-            } else {
-                None
+            let review_verdict: Option<String> = match verdict {
+                Some(i) => row.get(i).map_err(read_err)?,
+                None => None,
+            };
+            // The instant (migration 32). NULL for a source predating it, and
+            // for rows whose wall clock names no point in time — the analytics
+            // view keeps those out of every ordering rather than guessing.
+            let detected_at_utc: Option<i64> = match instant {
+                Some(i) => row.get(i).map_err(read_err)?,
+                None => None,
             };
 
             appender.append_row(params![
@@ -329,6 +368,7 @@ impl AnalyticsDb {
                 file_name,
                 import_batch_id,
                 review_verdict,
+                detected_at_utc,
             ])?;
 
             total += 1;
@@ -361,8 +401,8 @@ impl AnalyticsDb {
         self.conn.execute(
             "INSERT INTO detections
                 (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon,
-                 Cutoff, Week, Sens, Overlap, File_Name)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 Cutoff, Week, Sens, Overlap, File_Name, detected_at_utc)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             params![
                 d.date,
                 d.time,
@@ -375,7 +415,8 @@ impl AnalyticsDb {
                 d.week,
                 d.sens,
                 d.overlap,
-                d.file_name
+                d.file_name,
+                d.detected_at_utc
             ],
         )?;
         Ok(())
@@ -538,6 +579,33 @@ impl AnalyticsDb {
     pub fn rejected_detection_count(&self) -> Result<u64, AnalyticsError> {
         let n: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM detections WHERE review_verdict = 'rejected'",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(u64::try_from(n).unwrap_or(0))
+    }
+
+    /// Count detections carrying no monotonic instant.
+    ///
+    /// The third signal the startup drift check needs, and the reason it needs
+    /// a third: `detected_at_utc` (migration 32) adds a *column*, not rows, so a
+    /// store synced before it exists agrees with SQLite on both the row count
+    /// and the rejected count and disagrees on every value in this one.
+    ///
+    /// Left unnoticed that is not a cosmetic difference. `detection_instant` is
+    /// NULL for those rows, and every analytic that measures elapsed time or
+    /// order now reads it — so a station upgrading with a populated analytics
+    /// store would find sessionize, funnel, retention, next-species and every
+    /// gap query silently returning nothing, with both stores answering every
+    /// query they were asked. That is precisely the failure this whole check
+    /// was written for, in a new disguise.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the query fails.
+    pub fn unstamped_detection_count(&self) -> Result<u64, AnalyticsError> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM detections WHERE detected_at_utc IS NULL",
             [],
             |row| row.get(0),
         )?;
