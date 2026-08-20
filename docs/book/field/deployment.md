@@ -380,6 +380,17 @@ Once the unit is sealed and shipped, the loop is:
    `birdnet_process_resident_memory_bytes`, `birdnet_species_total`,
    and the two field-health gauges below.
 
+   Also worth watching for an unattended station: **`birdnet_noise_floor_dbfs`**
+   and **`birdnet_noise_floor_drift_db`**, per capture source. A microphone that
+   fails outright is caught by `birdnet_audio_source_up` and by the deadman; one
+   that merely goes *deaf* — water in the capsule, a web across the port, a
+   connector loosened by a year of thermal cycling — keeps both of those green
+   and shows up only as fewer detections, which is what autumn looks like too.
+   The background does not stop when the birds do, so a sustained drop in one
+   source's noise floor against its own history points at the equipment. The
+   same figures are on the Station **Health** tab. No threshold ships with them
+   on purpose — set one from what your own site does over a few weeks.
+
    Worth an alert of its own: **`birdnet_detection_write_failures_total`**
    counts detections the model produced and the database refused. It should
    stay at zero. A non-zero value means the station heard something and could

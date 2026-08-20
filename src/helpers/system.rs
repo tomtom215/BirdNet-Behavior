@@ -212,7 +212,20 @@ fn spawn_manager(
 /// every `/api/v2/ws/spectrogram` client via the `AppState`'s
 /// `SpectrogramBroadcast`. Returns `None` when no watch directory is
 /// configured (matches the basic-station "audio only via REST upload"
-/// path, which also has no detection daemon to feed the producer).
+/// path, which also has no detection daemon to feed the producer)./// The transient capture (stream) directory, if one is configured.
+///
+/// `--watch-dir` wins over the config's `RECS_DIR`, matching every other
+/// consumer of this pair (`capture`, `start_disk_manager`,
+/// `start_live_spectrogram`, `doctor::paths`). Returning `None` rather than a
+/// default is deliberate: a caller that only wants to *observe* the directory
+/// should do nothing at all when there is none, not invent a path and watch it
+/// stay empty forever.
+pub fn stream_dir(cli: &Cli, config: Option<&birdnet_core::config::Config>) -> Option<PathBuf> {
+    cli.watch_dir
+        .clone()
+        .or_else(|| config?.get("RECS_DIR").map(PathBuf::from))
+}
+
 pub fn start_live_spectrogram(
     cli: &Cli,
     config: Option<&birdnet_core::config::Config>,

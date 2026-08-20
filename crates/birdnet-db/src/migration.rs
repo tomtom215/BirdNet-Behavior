@@ -1015,6 +1015,58 @@ pub const MIGRATIONS: &[Migration] = &[
                 confidence_sum = species_summary.confidence_sum + NEW.Confidence;
         END;",
     },
+    Migration {
+        version: 31,
+        description: "Record what the microphones sound like, so a failing one is visible before the season is",
+        // ## The failure this exists to make visible
+        //
+        // Everything else this station measures is about the birds. Nothing
+        // measures the *station*. Over a year in a sealed enclosure the most
+        // likely silent failure is not the software: it is a microphone that
+        // stops hearing — water in the capsule, a spider's web across the port,
+        // a connector working loose in a thermal cycle, a preamp drifting.
+        //
+        // Every one of those presents identically: fewer detections. Which is
+        // also what autumn looks like. The detection deadman only fires when a
+        // station goes *silent*; a microphone at half sensitivity keeps
+        // detecting the loud, close birds and quietly stops hearing everything
+        // else, and no gauge in this project can tell that from a quiet season.
+        //
+        // The measurement that separates them is the station's own noise floor.
+        // Ambient background does not go away when the birds do; if the floor
+        // drops 20 dB and stays down, the microphone is deaf, not the wood.
+        //
+        // ## Shape
+        //
+        // One row per (date, hour, source). A station with three sources
+        // accumulates 72 rows a day — 26 000 a year, a rounding error next to
+        // the detections — and the hour bucket is the finest grain any of this
+        // is read at.
+        //
+        // `samples` plus the three `*_sum` columns are kept rather than
+        // pre-averaged means, for the same reason `species_summary` keeps a
+        // `confidence_sum`: a sum and a count can absorb another observation
+        // without revisiting the ones already folded in, and a mean cannot.
+        //
+        // `noise_floor_min_dbfs` is kept beside the mean because the two answer
+        // different questions. The mean tracks the hour's typical background;
+        // the minimum is the quietest the station heard, which is the value a
+        // dying microphone drags down first and hardest.
+        up_sql: "CREATE TABLE IF NOT EXISTS audio_levels (
+            date                 TEXT    NOT NULL,
+            hour                 INTEGER NOT NULL,
+            source               TEXT    NOT NULL,
+            samples              INTEGER NOT NULL,
+            noise_floor_sum_dbfs REAL    NOT NULL,
+            noise_floor_min_dbfs REAL    NOT NULL,
+            snr_sum_db           REAL    NOT NULL,
+            flatness_sum         REAL    NOT NULL,
+            rain_samples         INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (date, hour, source)
+        ) WITHOUT ROWID;
+
+        CREATE INDEX IF NOT EXISTS idx_audio_levels_date ON audio_levels(date);",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing

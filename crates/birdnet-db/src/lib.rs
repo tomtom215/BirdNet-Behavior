@@ -6,6 +6,7 @@
 
 pub mod accounts;
 pub mod alert_rules;
+pub mod audio_levels;
 pub mod audio_sources;
 pub mod clock;
 pub mod migration;

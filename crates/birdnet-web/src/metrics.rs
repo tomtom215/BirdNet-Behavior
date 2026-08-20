@@ -458,7 +458,7 @@ fn render_histogram(out: &mut String, name: &str, h: &HistogramSnapshot) {
 }
 
 /// Escape `"` and `\` per Prometheus label value rules.
-fn escape_label(s: &str) -> String {
+pub(crate) fn escape_label(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {

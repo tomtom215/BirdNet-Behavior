@@ -61,6 +61,8 @@ struct Snapshot {
     scratch_low: bool,
     scratch_critical: bool,
     service_uptime: Option<u64>,
+    /// Per-source acoustic health. Empty until the sampler has run.
+    acoustic: Vec<birdnet_db::audio_levels::SourceDrift>,
 }
 
 /// Render the operator Health surface for the public Station Health tab.
@@ -141,6 +143,9 @@ async fn gather(state: &AppState) -> Snapshot {
                 .as_ref()
                 .is_some_and(birdnet_core::audio::capture::DiskUsage::is_critical),
             service_uptime: system_info::process_uptime_secs(),
+            acoustic: state.with_db(|conn| {
+                birdnet_db::audio_levels::drift_by_source(conn, 7, 30).unwrap_or_default()
+            }),
         }
     })
     .await
@@ -158,6 +163,7 @@ async fn gather(state: &AppState) -> Snapshot {
         scratch_low: false,
         scratch_critical: false,
         service_uptime: None,
+        acoustic: Vec::new(),
     })
 }
 
@@ -258,12 +264,13 @@ fn render(s: &Snapshot) -> String {
         "<p class=\"bnb-lede\"><b>Everything your station needs to keep listening</b> — the \
          streams, the hardware, and the pipeline behind them. This is the screen to check from \
          the field. {help}</p>{banner}<h2 class=\"st-h3\">Audio sources</h2>{sources}\
-         <h2 class=\"st-h3\">Vitals</h2>{vitals}<h2 class=\"st-h3\">Pipeline</h2>{pipeline}\
+         <h2 class=\"st-h3\">Vitals</h2>{vitals}{acoustic}<h2 class=\"st-h3\">Pipeline</h2>{pipeline}\
          <h2 class=\"st-h3\">Diagnostics</h2>{checks}",
         help = super::help::help_link(super::help::Topic::AdminSystem),
         banner = status_banner(s),
         sources = source_panel(s),
         vitals = vitals_row(&s.vitals),
+        acoustic = acoustic_panel(s),
         pipeline = pipeline_row(s),
         checks = diagnostics(s),
     )
@@ -520,6 +527,64 @@ fn pipeline_row(s: &Snapshot) -> String {
     )
 }
 
+/// What the microphones themselves sound like, and whether that has moved.
+///
+/// # Why this is on the health page and not an analytics one
+///
+/// It is not about the birds. A microphone that goes deaf — water, a web across
+/// the port, a connector loosened over a year of thermal cycling — keeps its
+/// process alive and its `audio_source_up` gauge at 1, and presents only as
+/// fewer detections. So does the end of the season. This is the one number that
+/// tells them apart, and it belongs beside the other things an operator checks
+/// from the field.
+///
+/// Silent until the sampler has produced something, because a panel of dashes
+/// on a station that has been running an hour teaches people to skip it.
+fn acoustic_panel(s: &Snapshot) -> String {
+    if s.acoustic.is_empty() {
+        return String::new();
+    }
+    let mut rows = String::new();
+    for d in &s.acoustic {
+        // Deliberately not a verdict. Without a season of real recordings there
+        // is no calibrated threshold, and a made-up one on the health page is a
+        // false alarm waiting for its first thunderstorm. The number and its
+        // own history are shown; the reading is the operator's.
+        let moved = d.moved_db().map_or_else(
+            || "<span class=\"bnb-meta\">building a baseline</span>".to_string(),
+            |m| {
+                format!(
+                    "<span class=\"mono\">{sign}{m:.1} dB</span> <span class=\"bnb-meta\">vs its own 30-day average</span>",
+                    sign = if m >= 0.0 { "+" } else { "" }
+                )
+            },
+        );
+        let _ = std::fmt::Write::write_fmt(
+            &mut rows,
+            format_args!(
+                "<div><div class=\"lab\">{name}</div>\
+                 <div class=\"v\"><span class=\"mono\">{recent:.1} dBFS</span></div>\
+                 <div class=\"bnb-meta\">{moved} · {samples} {noun}</div></div>",
+                name = escape_html(&d.source),
+                recent = d.recent_dbfs,
+                samples = d.recent_samples,
+                noun = if d.recent_samples == 1 {
+                    "sample"
+                } else {
+                    "samples"
+                },
+            ),
+        );
+    }
+    format!(
+        "<h2 class=\"st-h3\">Microphone health <span class=\"st-h3-note\">· background noise floor, last 7 days</span></h2>\
+         <div class=\"st-pipe\">{rows}</div>\
+         <p class=\"bnb-meta\">A microphone going deaf and a season going quiet both show up as fewer \
+         detections. The background noise floor does not stop when the birds do, so a large, sustained \
+         <em>drop</em> here — with nothing else changed — points at the equipment rather than the wood.</p>"
+    )
+}
+
 /// A short, honest diagnostics checklist with a link to the full doctor page.
 fn diagnostics(s: &Snapshot) -> String {
     let row = |ok: bool, title: &str, detail: &str| {
@@ -604,6 +669,7 @@ mod tests {
             scratch_low: false,
             scratch_critical: false,
             service_uptime: Some(3_600),
+            acoustic: Vec::new(),
         }
     }
 
@@ -688,6 +754,73 @@ mod tests {
         assert!(html.contains("attempt 3"));
         assert!(html.contains("next try in 12s"));
         assert!(html.contains("st-source stalled"));
+    }
+
+    /// The panel is silent before there is anything to say, and states the
+    /// number *and* its own history once there is.
+    #[test]
+    fn the_microphone_panel_waits_until_it_has_something_to_report() {
+        let mut s = snap(false, true, 1, 0);
+        assert!(
+            acoustic_panel(&s).is_empty(),
+            "a station an hour old must not show a panel of dashes"
+        );
+
+        s.acoustic = vec![birdnet_db::audio_levels::SourceDrift {
+            source: "cam1".to_owned(),
+            recent_dbfs: -52.4,
+            baseline_dbfs: Some(-51.9),
+            recent_samples: 288,
+        }];
+        let html = acoustic_panel(&s);
+        assert!(html.contains("-52.4 dBFS"), "{html}");
+        assert!(
+            html.contains("-0.5 dB"),
+            "the move against its own past: {html}"
+        );
+        assert!(html.contains("288 samples"), "{html}");
+
+        // "1 samples" on the screen an operator checks from the field is the
+        // kind of small wrongness that makes the rest look unmaintained.
+        s.acoustic[0].recent_samples = 1;
+        let html = acoustic_panel(&s);
+        assert!(html.contains("1 sample"), "{html}");
+        assert!(!html.contains("1 samples"), "{html}");
+    }
+
+    /// A source with no month of history behind it must say so rather than
+    /// report a drift of zero, which reads as "measured, and unchanged".
+    #[test]
+    fn a_source_without_a_baseline_says_so_instead_of_reporting_no_change() {
+        let mut s = snap(false, true, 1, 0);
+        s.acoustic = vec![birdnet_db::audio_levels::SourceDrift {
+            source: "local".to_owned(),
+            recent_dbfs: -48.0,
+            baseline_dbfs: None,
+            recent_samples: 12,
+        }];
+        let html = acoustic_panel(&s);
+        assert!(html.contains("building a baseline"), "{html}");
+        assert!(
+            !html.contains("0.0 dB"),
+            "must not imply it has been compared with anything: {html}"
+        );
+    }
+
+    /// A source name is operator-supplied and reaches the page; it must be
+    /// escaped like every other one.
+    #[test]
+    fn a_source_name_cannot_break_out_of_the_panel() {
+        let mut s = snap(false, true, 1, 0);
+        s.acoustic = vec![birdnet_db::audio_levels::SourceDrift {
+            source: "<img src=x>".to_owned(),
+            recent_dbfs: -50.0,
+            baseline_dbfs: Some(-50.0),
+            recent_samples: 1,
+        }];
+        let html = acoustic_panel(&s);
+        assert!(!html.contains("<img src=x>"), "{html}");
+        assert!(html.contains("&lt;img"), "{html}");
     }
 
     #[test]

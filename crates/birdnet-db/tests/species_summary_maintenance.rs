@@ -453,9 +453,20 @@ fn the_backfill_summarises_history_that_predates_it() {
     .expect("reject one");
 
     let applied = migrate(&conn).expect("migrate the rest");
+    // Everything from the summary migration onward, not "exactly one". This
+    // asserted `applied == 1` and broke the day migration 31 was added — an
+    // assertion about the *length of the migration list* standing in for one
+    // about the backfill, which is what this test is actually for. The real
+    // property is that migration 30 was among those applied and its backfill
+    // ran; that is what the two assertions below check.
+    let expected = MIGRATIONS
+        .iter()
+        .filter(|m| m.version >= SUMMARY_MIGRATION)
+        .count();
+    let expected = u32::try_from(expected).expect("migration count");
     assert_eq!(
-        applied, 1,
-        "exactly migration {SUMMARY_MIGRATION} should have been applied"
+        applied, expected,
+        "migration {SUMMARY_MIGRATION} and everything after it should have been applied"
     );
 
     assert_agrees(&conn, "backfill over pre-existing history");

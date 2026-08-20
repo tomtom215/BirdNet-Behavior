@@ -61,6 +61,24 @@ async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoResponse 
     .await
     .unwrap_or((0, 0, 0));
 
+    // The station's own acoustic health, per source: the current mean noise
+    // floor and how far it has moved from the same source's own 30-day
+    // baseline. Exported because it is the only signal that separates "the
+    // season has gone quiet" from "this microphone has gone deaf" — see
+    // `birdnet_db::audio_levels`. A source with no baseline yet exports the
+    // level and omits the drift, rather than exporting a drift of zero, which
+    // would read as "measured, and unchanged".
+    let acoustic = tokio::task::spawn_blocking({
+        let state = state.clone();
+        move || {
+            state.with_db(|conn| {
+                birdnet_db::audio_levels::drift_by_source(conn, 7, 30).unwrap_or_default()
+            })
+        }
+    })
+    .await
+    .unwrap_or_default();
+
     // Gather process metrics.
     let (rss_bytes, cpu_count) = process_metrics();
 
@@ -103,6 +121,36 @@ async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoResponse 
     out.push_str("# HELP birdnet_analytics_enabled Whether DuckDB analytics is enabled.\n");
     out.push_str("# TYPE birdnet_analytics_enabled gauge\n");
     writeln!(out, "birdnet_analytics_enabled {has_analytics}").unwrap_or_default();
+
+    if !acoustic.is_empty() {
+        out.push_str(
+            "# HELP birdnet_noise_floor_dbfs Mean measured noise floor per capture source over the last 7 days, dBFS.\n",
+        );
+        out.push_str("# TYPE birdnet_noise_floor_dbfs gauge\n");
+        for d in &acoustic {
+            writeln!(
+                out,
+                "birdnet_noise_floor_dbfs{{source=\"{}\"}} {:.2}",
+                crate::metrics::escape_label(&d.source),
+                d.recent_dbfs
+            )
+            .unwrap_or_default();
+        }
+        out.push_str(
+            "# HELP birdnet_noise_floor_drift_db Change in a source's mean noise floor against its own preceding 30-day baseline, dB. A large sustained negative value is a microphone going deaf.\n",
+        );
+        out.push_str("# TYPE birdnet_noise_floor_drift_db gauge\n");
+        for d in &acoustic {
+            if let Some(moved) = d.moved_db() {
+                writeln!(
+                    out,
+                    "birdnet_noise_floor_drift_db{{source=\"{}\"}} {moved:.2}",
+                    crate::metrics::escape_label(&d.source)
+                )
+                .unwrap_or_default();
+            }
+        }
+    }
 
     // Append the runtime counters/histograms maintained by the detection
     // daemon. Snapshot is computed under the registry's read locks so the
