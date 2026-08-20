@@ -23,6 +23,32 @@
 set -eu
 
 # ---------------------------------------------------------------------------
+# Blank settings are unset settings
+# ---------------------------------------------------------------------------
+# Must run before anything below reads a BIRDNET_* variable. `docker compose`
+# materialises every optional `${VAR:-}` as an empty string, and clap reads an
+# empty environment variable as a *supplied* value — so `BIRDNET_LATITUDE=`
+# exits 2 during argument parsing rather than meaning "no latitude". See
+# docker/strip-blank-env.sh for the full reasoning and the one exception.
+BNB_STRIP_LIB="${BNB_STRIP_LIB:-/usr/local/bin/strip-blank-env.sh}"
+if [ ! -r "$BNB_STRIP_LIB" ]; then
+    printf '[birdnet] ERROR: %s is missing from the image\n' "$BNB_STRIP_LIB" >&2
+    exit 1
+fi
+# The path is a variable so a test can point at the repo copy, which SC1090
+# flags because it cannot be resolved statically. The directive below names the
+# real location; with `-x` (set in CI) the linter follows it and checks the
+# sourced file's interaction with this one, which a bare `disable=SC1090` would
+# have thrown away.
+#
+# Note for the next editor: a comment line beginning with the linter's own name
+# is parsed as a directive, so this paragraph deliberately avoids starting one
+# that way. Doing it accidentally is how this comment got written twice.
+# shellcheck source=docker/strip-blank-env.sh
+. "$BNB_STRIP_LIB"
+strip_blank_birdnet_env
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 log()   { printf '[birdnet] %s\n' "$*"; }

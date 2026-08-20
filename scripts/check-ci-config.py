@@ -284,14 +284,75 @@ def _minutes(job: dict) -> float | None:
     return (dt.datetime.strptime(end, fmt) - dt.datetime.strptime(start, fmt)).total_seconds() / 60
 
 
-def observed_runtimes(workflow_file: str, repo: str) -> dict[str, list[float]]:
+# A cancelled job that got this close to its declared budget ran out its own
+# clock rather than being killed from outside.
+SELF_TIMEOUT_FRACTION = 0.98
+
+
+def budget_for(rendered: str, budgets: dict[str, int]) -> int | None:
+    """The declared budget for a rendered job name.
+
+    Mirrors [`lookup_observed`]'s matching, for the same reason: GitHub renders
+    a matrix job with no matrix reference in its `name:` as `Name (values)`,
+    and those rows share one `timeout-minutes:` line.
+    """
+    if rendered in budgets:
+        return budgets[rendered]
+    for name, budget in budgets.items():
+        if rendered.startswith(f"{name} ("):
+            return budget
+    return None
+
+
+def cut_short(job: dict, budget_minutes: int | None) -> bool:
+    """Was this job killed from outside, rather than finishing or timing out?
+
+    Such a job has a `started_at` and a `completed_at` and looks exactly like a
+    job that ran that long — but the elapsed time records when somebody pushed
+    again, not what the job costs. Three pushes to one pull request in an hour
+    put two superseded runs into a five-run window and turned twelve rows red
+    at once, every one reading "used 45m of its 45m budget" for jobs that
+    really take 15. Any contributor who pushes twice reproduces it.
+
+    The hard part is that GitHub records **both** cases as a cancelled job:
+    one killed by `cancel-in-progress`, and one that exhausted its own
+    `timeout-minutes` — and the second is precisely the incident check 4 exists
+    to catch, so it must survive.
+
+    The run's conclusion does not separate them, which was learned the
+    expensive way. It looked like it did: run 32185298991 concluded `failure`
+    with `civil.rs` cancelled at 45m of 45m, so "run cancelled" seemed to mean
+    "superseded". It does not — that run concluded `failure` because a
+    *different* job failed in it. Run 32300205290, where `Rustdoc` ran out its
+    own 30-minute clock and nothing else went wrong, concluded `cancelled`.
+    Filtering on the run would have thrown that away.
+
+    What does separate them is the job's own clock against its own budget. A
+    job that timed out sits at essentially 100% of it; a job killed by a newer
+    push is wherever it happened to be. So a cancelled job is dropped only when
+    it is comfortably short of its budget.
+
+    An unknown budget keeps the sample. Over-reporting is the safe direction:
+    a false alarm gets read, a hidden timeout does not.
+    """
+    if job.get("conclusion") != "cancelled" or budget_minutes is None:
+        return False
+    mins = _minutes(job)
+    return mins is not None and mins < budget_minutes * SELF_TIMEOUT_FRACTION
+
+
+def observed_runtimes(workflow_file: str, repo: str,
+                      budgets: dict[str, int] | None = None) -> dict[str, list[float]]:
     """Every recent run's wall-clock, in minutes, per rendered job name.
 
     Returned as the raw sample rather than one number, because the two
     questions asked of it want different statistics: whether a job is about to
     be cancelled is a question about its *worst* run, and whether an `observed`
     annotation still describes it is a question about its *typical* one.
+
+    Jobs killed from outside are skipped — see [`cut_short`].
     """
+    budgets = budgets or {}
     basename = os.path.basename(workflow_file)
     runs = _api(
         f"/repos/{repo}/actions/workflows/{basename}/runs"
@@ -300,6 +361,8 @@ def observed_runtimes(workflow_file: str, repo: str) -> dict[str, list[float]]:
     seen: dict[str, list[float]] = {}
     for run in runs.get("workflow_runs", []):
         for job in _api(f"/repos/{repo}/actions/runs/{run['id']}/jobs?per_page=100").get("jobs", []):
+            if cut_short(job, budget_for(job["name"], budgets)):
+                continue
             mins = _minutes(job)
             if mins is not None:
                 seen.setdefault(job["name"], []).append(mins)
@@ -447,6 +510,21 @@ def check_headroom_arithmetic() -> None:
     check(has_drifted(642, 1357), "Tests' `# observed 10m42s` against a real 22m37s has drifted")
     check(not has_drifted(11, 13), "`# observed 11s` against a real 13s has not")
     check(not has_drifted(623, 620), "`# observed 10m23s` against a real 10m20s has not")
+    # A cancelled job: killed from outside, or out of its own time?
+    def at(mins: float, conclusion: str = "cancelled") -> dict:
+        return {"conclusion": conclusion,
+                "started_at": "2026-01-01T00:00:00Z",
+                "completed_at": f"2026-01-01T{int(mins) // 60:02d}:{int(mins) % 60:02d}:00Z"}
+    check(cut_short(at(20), 45), "a job killed at 20m of a 45m budget is dropped")
+    check(not cut_short(at(45), 45),
+          "a job that ran out its own 45m clock is kept — that is check 4's signal")
+    check(not cut_short(at(30), 30), "Rustdoc at 30m of 30m is kept")
+    check(not cut_short(at(20, "success"), 45), "a job that finished is kept")
+    check(not cut_short(at(20, "failure"), 45), "a job that failed is kept")
+    check(not cut_short(at(20), None), "an unknown budget keeps the sample")
+    check(budget_for("Tests (x86_64)", {"Tests (x86_64)": 45}) == 45, "an exact budget matches")
+    check(budget_for("Build (amd64)", {"Build": 20}) == 20, "a matrix-suffixed name finds its row")
+    check(budget_for("Nope", {"Build": 20}) is None, "an unknown name has no budget")
 
 
 def check_duration_headroom(jobs: list[tuple[str, str, str, int]],
@@ -543,8 +621,9 @@ def read_runtimes(jobs: list[tuple[str, str, str, int]]) -> dict[str, dict[str, 
         return None
     runtimes: dict[str, dict[str, list[float]]] = {}
     for path in sorted({p for p, _, _, _ in jobs}):
+        budgets = {name: budget for p, _, name, budget in jobs if p == path}
         try:
-            runtimes[path] = observed_runtimes(path, repo)
+            runtimes[path] = observed_runtimes(path, repo, budgets)
         except (urllib.error.URLError, urllib.error.HTTPError, KeyError, ValueError) as e:
             skip(f"{path}: could not read run history ({e})")
     return runtimes or None

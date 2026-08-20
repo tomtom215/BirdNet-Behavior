@@ -190,9 +190,20 @@ fn lookup(
         })
         .ok()
     };
+    // `detections_analytic`, not `detections`. A share link is a *publication*:
+    // it is the one surface in this app that shows a detection to someone who
+    // is not the operator and cannot see the review queue. Rejecting a
+    // detection is the operator withdrawing the claim, and a withdrawn claim
+    // must stop being served — `gone_page()` already renders the right thing
+    // for a link that no longer resolves.
+    //
+    // This is the one place where a *record-level* surface should still exclude
+    // rejections. Everywhere else the reasoning runs the other way: a reviewer
+    // has to be able to find what they rejected and change their mind. Nobody
+    // holding a share link is going to change their mind about anything.
     query(
         "SELECT Com_Name, Sci_Name, Date, Time, Confidence \
-         FROM detections WHERE Date = ?1 AND Time = ?2 AND Com_Name = ?3 LIMIT 1",
+         FROM detections_analytic WHERE Date = ?1 AND Time = ?2 AND Com_Name = ?3 LIMIT 1",
     )
     // O-07: rare birds shared from the quarantine queue are not in `detections`
     // until approved, so fall back to the quarantine table.
@@ -307,7 +318,10 @@ async fn lookup_basename(state: AppState, date: &str, time: &str, com: &str) -> 
     tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
             conn.query_row(
-                "SELECT File_Name FROM detections \
+                // Same rule as `lookup`: a rejected detection's audio must
+                // stop being served too, or the clip outlives the claim it was
+                // evidence for.
+                "SELECT File_Name FROM detections_analytic \
                  WHERE Date = ?1 AND Time = ?2 AND Com_Name = ?3 LIMIT 1",
                 rusqlite::params![d, t, c],
                 |row| row.get::<_, Option<String>>(0),
@@ -391,18 +405,12 @@ fn ago_phrase(date: &str, time: &str) -> String {
         let hh = tp.next()?.parse::<i64>().ok()?;
         let mm = tp.next()?.parse::<i64>().ok()?;
         let ss = tp.next().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
-        // Civil-from-fields (Howard Hinnant) -> days since 1970-01-01.
-        let yy = if m <= 2 { y - 1 } else { y };
-        let era = if yy >= 0 { yy } else { yy - 399 } / 400;
-        let yoe = (yy - era * 400) as u64;
-        let mp = if m > 2 {
-            (m - 3) as u64
-        } else {
-            (m + 9) as u64
-        };
-        let doy = (153 * mp + 2) / 5 + (d as u64) - 1;
-        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-        let days = era * 146_097 + doe as i64 - 719_468;
+        // One shared implementation of Hinnant's `days_from_civil`, in
+        // `birdnet-core::civil`; this was one of nine copies.
+        if y < 0 || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+            return None;
+        }
+        let days = birdnet_core::civil::days_from_civil(y as u32, m as u32, d as u32);
         if days < 0 {
             return None;
         }

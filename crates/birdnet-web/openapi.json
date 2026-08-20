@@ -693,7 +693,7 @@
         "properties": {
           "status": { "type": "string", "enum": ["healthy", "degraded"] },
           "version": { "type": "string" },
-          "database": { "type": "string", "examples": ["ok"] },
+          "database": { "type": "string", "enum": ["ok", "unchecked", "error"], "examples": ["ok"] },
           "analytics": { "type": "boolean" },
           "detection_daemon": { "type": "string", "enum": ["running", "stopped"] },
           "detection_silence_secs": { "type": ["integer", "null"], "description": "Seconds since the most recent stored detection, or null before the first measurement." }

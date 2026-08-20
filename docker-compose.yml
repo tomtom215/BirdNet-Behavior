@@ -52,6 +52,17 @@ services:
       - path: .env
         required: false    # .env is optional; variables below are the defaults
 
+    # ── Optional settings live in .env, not here ──────────────────────────
+    # The commented keys below are read from `.env` via `env_file:` above.
+    # They are deliberately NOT written as `KEY: ${KEY:-}`: that form puts the
+    # key in the container environment as an empty string even when nobody set
+    # it, and clap reads a blank environment variable as a *supplied* value —
+    # so `BIRDNET_LATITUDE=` is "the latitude is the empty string", which fails
+    # to parse and exits 2 during argument parsing. Four such keys were enough
+    # to stop `docker compose up` starting at all. `docker/entrypoint.sh` also
+    # strips blanks as a backstop, but that only covers the daemon it execs —
+    # `docker compose exec … --doctor` gets the container's configured
+    # environment and would still have seen them.
     environment:
       # Web server — must bind to all interfaces inside the container
       BIRDNET_LISTEN: ${BIRDNET_LISTEN:-0.0.0.0:8502}
@@ -62,14 +73,14 @@ services:
       BIRDNET_IMAGE_CACHE_DIR: /data/cache
 
       # Station location (set in .env — required for solar schedule & BirdWeather)
-      BIRDNET_LATITUDE: ${BIRDNET_LATITUDE:-}
-      BIRDNET_LONGITUDE: ${BIRDNET_LONGITUDE:-}
+      # BIRDNET_LATITUDE
+      # BIRDNET_LONGITUDE
 
       # Audio source — set ONE in .env (see .env.example for details)
-      BIRDNET_ALSA_DEVICE: ${BIRDNET_ALSA_DEVICE:-}
-      BIRDNET_PIPEWIRE_DEVICE: ${BIRDNET_PIPEWIRE_DEVICE:-}
-      BIRDNET_RTSP_URL: ${BIRDNET_RTSP_URL:-}
-      BIRDNET_RTSP_URLS: ${BIRDNET_RTSP_URLS:-}
+      # BIRDNET_ALSA_DEVICE
+      # BIRDNET_PIPEWIRE_DEVICE
+      # BIRDNET_RTSP_URL
+      # BIRDNET_RTSP_URLS
 
       # Detection
       BIRDNET_OVERLAP: ${BIRDNET_OVERLAP:-0.0}
@@ -80,19 +91,19 @@ services:
       BIRDNET_SEGMENT_DURATION: ${BIRDNET_SEGMENT_DURATION:-15}
 
       # Integrations (set in .env)
-      BIRDNET_BIRDWEATHER_TOKEN: ${BIRDNET_BIRDWEATHER_TOKEN:-}
-      BIRDNET_APPRISE_URL: ${BIRDNET_APPRISE_URL:-}
-      BIRDNET_MQTT_HOST: ${BIRDNET_MQTT_HOST:-}
+      # BIRDNET_BIRDWEATHER_TOKEN
+      # BIRDNET_APPRISE_URL
+      # BIRDNET_MQTT_HOST
       BIRDNET_MQTT_PORT: ${BIRDNET_MQTT_PORT:-1883}
       BIRDNET_MQTT_TOPIC_PREFIX: ${BIRDNET_MQTT_TOPIC_PREFIX:-birdnet}
-      BIRDNET_MQTT_HA_DISCOVERY: ${BIRDNET_MQTT_HA_DISCOVERY:-}
-      BIRDNET_HEARTBEAT_URL: ${BIRDNET_HEARTBEAT_URL:-}
-      BIRDNET_SITENAME: ${BIRDNET_SITENAME:-}
+      # BIRDNET_MQTT_HA_DISCOVERY
+      # BIRDNET_HEARTBEAT_URL
+      # BIRDNET_SITENAME
 
       # Model — entrypoint downloads automatically; override to bring your own
-      BIRDNET_SKIP_MODEL_DOWNLOAD: ${BIRDNET_SKIP_MODEL_DOWNLOAD:-}
-      BIRDNET_MODEL: ${BIRDNET_MODEL:-}
-      BIRDNET_LABELS: ${BIRDNET_LABELS:-}
+      # BIRDNET_SKIP_MODEL_DOWNLOAD
+      # BIRDNET_MODEL
+      # BIRDNET_LABELS
 
     # -------------------------------------------------------------------------
     # Ports

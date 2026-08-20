@@ -24,6 +24,13 @@ Options:
       --backup-db
           Create database backup and exit
 
+      --rebuild-species-summary
+          Recompute the maintained species summary from the detections, and exit.
+
+          `species_summary` holds the per-species totals the species list and the per-species charts read, kept up to date on write so those screens do not re-aggregate the whole detection history on every load. It is derived data: rebuilding it cannot lose anything.
+
+          Run this if `--doctor` reports the summary disagreeing with the detections. Nothing else should need it.
+
       --doctor
           Run the preflight diagnostic and exit.
 

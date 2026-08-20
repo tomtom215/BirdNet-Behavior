@@ -53,7 +53,7 @@ Optionally drops audio segments dominated by **rain, wind, or broadband noise** 
 
 ### 6. Rare-bird quarantine
 
-Rather than choosing between "log everything" and "miss the rarities," send borderline rare birds to the [quarantine queue](../guide/today.md#rare-bird-review-queue) for a quick human approve/reject. This lets you run a *lower* threshold for rare species without polluting your life list.
+Rather than choosing between "log everything" and "miss the rarities," send borderline rare birds to the [quarantine queue](../guide/reviews.md#reviews-vs-quarantine) for a quick human approve/reject. This lets you run a *lower* threshold for rare species without polluting your life list.
 
 ## A recommended starting recipe
 

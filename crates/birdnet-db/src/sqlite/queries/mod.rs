@@ -6,6 +6,7 @@ pub mod detection_reviews;
 pub mod detections;
 pub mod heatmap;
 pub mod images;
+pub mod imports;
 pub mod maintenance;
 pub mod quarantine;
 pub mod species;
@@ -20,11 +21,13 @@ pub use analytics::{
 pub use correlation::{companion_species, temporal_cooccurrence, top_cooccurrence_pairs};
 pub use detection_reviews::{
     DetectionReview, ReviewStatus, UnreviewedDetection, clear_detection_review,
-    detection_review_counts, get_detection_review, recent_detection_reviews,
-    rejected_detection_count, set_detection_review, unreviewed_recent_detections,
+    detection_review_counts, detection_review_total, detection_reviews_page, get_detection_review,
+    recent_detection_reviews, rejected_detection_count, set_detection_review,
+    unreviewed_recent_detections,
 };
 pub use detections::{
-    CLIP_AVAILABLE, RecordingsFilter, TodayFilter, all_detections, best_detections_for_date,
+    CLIP_AVAILABLE, RecordingsFilter, TodayFilter, all_detections, analytic_detection_count,
+    analytic_detection_count_for_date, analytic_species_count_for_date, best_detections_for_date,
     concurrent_detections_from_other_sources, delete_detection, detection_count,
     detection_count_for_date, detection_count_for_species_date, detection_dates,
     detections_by_date, detections_by_species, detections_per_day, insert_detection,
@@ -38,9 +41,11 @@ pub use images::{
     ImageBlacklist, add_image_blacklist, blacklisted_urls_for_species, is_image_blacklisted,
     list_image_blacklist, remove_image_blacklist,
 };
+pub use imports::{DIFFERENT_SITE_KM, ImportBatch, imported_detection_count, list_import_batches};
 pub use maintenance::{
     BACKUP_VACUUM_INTERVAL_SECS, DAILY_INTERVAL_SECS, JOB_BACKUP_VACUUM, JOB_INTEGRITY_CHECK,
-    JOB_SESSION_PRUNE, JOB_SPECIES_CAP, last_run_unix, record_run,
+    JOB_SESSION_PRUNE, JOB_SPECIES_CAP, last_run_result, last_run_unix, record_run,
+    record_run_result,
 };
 pub use quarantine::{
     QuarantineFilter, QuarantineReason, QuarantineRecord, QuarantineRow, QuarantineStats,

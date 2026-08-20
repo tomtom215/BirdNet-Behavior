@@ -13,7 +13,12 @@ create-missing = false
 default-theme = "light"
 preferred-dark-theme = "navy"
 git-repository-url = "https://github.com/tomtom215/BirdNet-Behavior"
-git-repository-icon = "fa-github"
+# `fab-` (brands), not `fa-`: mdBook 0.5 validates the Font Awesome prefix and
+# rejects the bare `fa-github` that 0.4 accepted. This file was 0.4-only until
+# `build.rs` started rendering from it, which is how that was found — the
+# published site had been building on a pinned 0.4 CLI and nothing else read
+# this config.
+git-repository-icon = "fab-github"
 edit-url-template = "https://github.com/tomtom215/BirdNet-Behavior/edit/main/docs/book/{path}"
 additional-css = ["docs/book-theme/custom.css"]
 smart-punctuation = true
@@ -27,11 +32,16 @@ use-boolean-and = true
 enable = true
 level = 1
 
-# Fail the build on broken *internal* links (cross-references between book
-# pages and to in-repo files). External web links are intentionally NOT
-# followed in CI: they rot and rate-limit, which would make the docs build
-# flaky and block releases. To audit external links on demand, run locally
-# with `follow-web-links = true`.
-[output.linkcheck]
-follow-web-links = false
-warning-policy = "error"
+# Internal links are checked by `scripts/check-book-links.py`, which runs
+# against the *rendered HTML* rather than as an mdBook backend.
+#
+# `mdbook-linkcheck` used to do this and could not come with us: it is an
+# mdBook 0.4-era plugin, last released in 2022, and this book is rendered by
+# mdBook 0.5 (`mdbook-driver 0.5.4`, which `build.rs` runs on every
+# `cargo build`). Checking the rendered output instead is renderer-agnostic and
+# — because `build.rs` and GitHub Pages now share this file — covers the
+# in-app `/help/*` tree and the published site with one check.
+#
+# External web links are still deliberately not followed: they rot and
+# rate-limit, and a docs build that fails because someone else's server is down
+# blocks releases for no reason.

@@ -32,7 +32,13 @@ use super::search::{SearchTerm, parse_search_term};
 pub const CLIP_AVAILABLE: &str =
     "File_Name IS NOT NULL AND TRIM(File_Name) <> '' AND Clip_Pruned_At IS NULL";
 
-/// Get the total number of detections.
+/// Get the total number of detection **rows**, rejected ones included.
+///
+/// This is the store's row count, not an analytic. It is what
+/// `AppState`'s SQLite-vs-`DuckDB` reconciliation compares (paired with
+/// [`crate::sqlite::rejected_detection_count`]), so it must keep counting every
+/// row. Anything that shows an operator "how many detections" wants
+/// [`analytic_detection_count`] instead.
 ///
 /// # Errors
 ///
@@ -40,6 +46,57 @@ pub const CLIP_AVAILABLE: &str =
 pub fn detection_count(conn: &Connection) -> Result<i64, DbError> {
     let count: i64 = conn.query_row("SELECT COUNT(*) FROM detections", [], |row| row.get(0))?;
     Ok(count)
+}
+
+/// Get the number of detections an operator would count — rejected ones
+/// excluded.
+///
+/// The distinction is not pedantry. The dashboard's headline tile row showed
+/// six numbers drawn from both sides of it: "Species", "Last hour" and the
+/// 12-day sparkline read `detections_analytic` and excluded rejections, while
+/// "Detections", "Today" and "Species today" counted every row. Adjacent tiles
+/// on one screen therefore disagreed about the same day, and the disagreement
+/// grew with every rejection the operator recorded.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn analytic_detection_count(conn: &Connection) -> Result<i64, DbError> {
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM detections_analytic", [], |row| {
+        row.get(0)
+    })?;
+    Ok(count)
+}
+
+/// Detections on `date` an operator would count — rejected ones excluded.
+///
+/// See [`analytic_detection_count`] for why this exists beside
+/// [`detection_count_for_date`].
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn analytic_detection_count_for_date(conn: &Connection, date: &str) -> Result<i64, DbError> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM detections_analytic WHERE Date = ?1",
+        params![date],
+        |row| row.get(0),
+    )
+    .map_err(DbError::Sqlite)
+}
+
+/// Distinct species on `date` an operator would count — rejected ones excluded.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn analytic_species_count_for_date(conn: &Connection, date: &str) -> Result<i64, DbError> {
+    conn.query_row(
+        "SELECT COUNT(DISTINCT Com_Name) FROM detections_analytic WHERE Date = ?1",
+        params![date],
+        |row| row.get(0),
+    )
+    .map_err(DbError::Sqlite)
 }
 
 /// Get the total number of detections for a specific date.
@@ -69,7 +126,7 @@ pub fn detection_count_for_species_date(
     sci_name: &str,
 ) -> Result<i64, DbError> {
     conn.query_row(
-        "SELECT COUNT(*) FROM detections WHERE Date = ?1 AND Sci_Name = ?2",
+        "SELECT COUNT(*) FROM detections_analytic WHERE Date = ?1 AND Sci_Name = ?2",
         params![date, sci_name],
         |row| row.get(0),
     )
@@ -154,7 +211,7 @@ pub fn best_detections_for_date(
     limit: u32,
 ) -> Result<Vec<DetectionRow>, DbError> {
     let sql = format!(
-        "SELECT {DETECTION_COLS} FROM detections \
+        "SELECT {DETECTION_COLS} FROM detections_analytic \
          WHERE Date = ?1 AND {CLIP_AVAILABLE} \
          ORDER BY Confidence DESC, Time DESC LIMIT ?2"
     );
@@ -681,7 +738,7 @@ pub fn todays_source_activity(
 /// Returns `DbError` on query failure.
 pub fn detection_dates(conn: &Connection, limit: u32) -> Result<Vec<String>, DbError> {
     let mut stmt =
-        conn.prepare("SELECT DISTINCT Date FROM detections ORDER BY Date DESC LIMIT ?1")?;
+        conn.prepare("SELECT DISTINCT Date FROM detections_analytic ORDER BY Date DESC LIMIT ?1")?;
     let rows = stmt
         .query_map(params![limit], |row| row.get(0))?
         .collect::<Result<Vec<String>, _>>()?;
@@ -698,7 +755,7 @@ pub fn species_for_date(
     date: &str,
 ) -> Result<Vec<(String, String, i64)>, DbError> {
     let mut stmt = conn.prepare(
-        "SELECT Com_Name, Sci_Name, COUNT(*) as cnt FROM detections \
+        "SELECT Com_Name, Sci_Name, COUNT(*) as cnt FROM detections_analytic \
          WHERE Date = ?1 GROUP BY Com_Name, Sci_Name ORDER BY cnt DESC",
     )?;
     let rows = stmt
@@ -720,7 +777,7 @@ pub fn species_for_date(
 pub fn detections_per_day(conn: &Connection) -> Result<Vec<DayCount>, DbError> {
     let mut stmt = conn.prepare(
         "SELECT Date, COUNT(*) AS n, COUNT(DISTINCT Com_Name) AS sp \
-         FROM detections GROUP BY Date ORDER BY Date",
+         FROM detections_analytic GROUP BY Date ORDER BY Date",
     )?;
     let rows = stmt
         .query_map([], |row| {
@@ -782,6 +839,72 @@ mod tests {
         assert!(
             (7_100..=7_300).contains(&secs),
             "two hours of silence measured, got {secs}s"
+        );
+    }
+
+    /// The three `analytic_*` counts must read the view, and must return the
+    /// number they computed.
+    ///
+    /// Found by mutation testing: `analytic_species_count_for_date` survived
+    /// being replaced with `Ok(-1)`. It *is* asserted — in
+    /// `tests/review_verdicts_apply.rs`, which belongs to the binary crate, so
+    /// the `package: birdnet-db` mutation row never runs it. A function whose
+    /// only coverage lives in another crate is uncovered from where the gate
+    /// stands.
+    ///
+    /// Both halves are here on purpose. Exact counts before any rejection kill
+    /// the "return a constant" mutants; the shift after a rejection is what
+    /// distinguishes reading `detections_analytic` from reading `detections` —
+    /// asserting only the first would pass for a function that ignores verdicts
+    /// entirely, which is the exact defect these three were added to fix.
+    #[test]
+    fn the_analytic_counts_exclude_a_rejection_and_report_real_numbers() {
+        let (_tmp, conn) = temp_db_with_data();
+
+        // Fixture: 4 detections. 2026-03-11 has 3 across 2 species (Blackbird
+        // twice, Robin once); 2026-03-10 has 1.
+        assert_eq!(analytic_detection_count(&conn).unwrap(), 4);
+        assert_eq!(
+            analytic_detection_count_for_date(&conn, "2026-03-11").unwrap(),
+            3
+        );
+        assert_eq!(
+            analytic_species_count_for_date(&conn, "2026-03-11").unwrap(),
+            2
+        );
+
+        // Reject the Robin: it is the only one of its species that day, so all
+        // three counts have somewhere to move.
+        conn.execute(
+            "UPDATE detections SET review_verdict = 'rejected'
+              WHERE Date = '2026-03-11' AND Com_Name = 'European Robin'",
+            [],
+        )
+        .unwrap();
+
+        assert_eq!(
+            analytic_detection_count(&conn).unwrap(),
+            3,
+            "a rejected detection is still in the all-time analytic count"
+        );
+        assert_eq!(
+            analytic_detection_count_for_date(&conn, "2026-03-11").unwrap(),
+            2,
+            "a rejected detection is still in the per-day analytic count"
+        );
+        assert_eq!(
+            analytic_species_count_for_date(&conn, "2026-03-11").unwrap(),
+            1,
+            "a species whose only detection that day was rejected is still counted"
+        );
+
+        // The counterpart: the raw counts are unmoved, so the assertions above
+        // are about the view and not about the row having been deleted.
+        assert_eq!(detection_count(&conn).unwrap(), 4);
+        assert_eq!(
+            detection_count_for_date(&conn, "2026-03-11").unwrap(),
+            3,
+            "the raw per-day count must still see the rejected detection"
         );
     }
 

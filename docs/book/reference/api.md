@@ -26,7 +26,18 @@ curl http://localhost:8502/api/v2/health
 ```
 
 `status` is `"healthy"` (HTTP `200`) or `"degraded"` (HTTP `503` — the database
-integrity check failed), so monitoring can alert on the status code alone.
+is unreachable, or the last recorded integrity check failed), so monitoring can
+alert on the status code alone.
+
+`database` is `"ok"`, `"unchecked"` or `"error"`. It reports the verdict of the
+**daily maintenance integrity check**, not a check run at request time: that
+check reads every page of the database file, and this endpoint is polled by the
+container health check every 30 seconds. On a multi-year station a per-request
+check could not finish inside the health check's own timeout. `"unchecked"`
+means no verdict is on record yet — normal for the first few minutes after a
+fresh install, and reported `healthy`/`200`, because "not yet verified" is not
+"broken". A failure stays reported until it is fixed, rather than depending on
+which request happened to catch it.
 `detection_daemon` is `"running"` or `"stopped"` — `"stopped"` means web-only
 mode or an unconfigured model/labels/watch-dir, i.e. the UI is up but nothing is
 being analysed. `analytics` reports whether the DuckDB engine is active.
@@ -170,4 +181,4 @@ page:
 
 ## Export
 
-CSV/JSON/eBird export of the full detection history is available from the [Backups](../admin/backups.md#import--export) page (and a BirdNET-Pi-compatible CSV for tooling that expects that format).
+CSV/JSON/eBird export of the full detection history is available from the [Backups](../admin/backups.md#export) page (and a BirdNET-Pi-compatible CSV for tooling that expects that format).

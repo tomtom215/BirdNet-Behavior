@@ -47,6 +47,73 @@ impl CivilTime {
     }
 }
 
+/// Days since 1970-01-01 for a proleptic-Gregorian `(year, month, day)`.
+///
+/// Hinnant's `days_from_civil`. Exposed because nine files carried their own
+/// copy of this arithmetic — `146_097` appeared in ten places across
+/// `birdnet-web`, `birdnet-timeseries`' tests and the binary. Checked verbatim
+/// against each other over 200 years in both directions, all thirteen agreed,
+/// so this consolidation fixes no live defect. It removes the *next* one: a
+/// correct algorithm copied nine times is nine chances for a transcription slip
+/// nobody notices, in code that decides which day a detection belongs to.
+///
+/// Pre-year-0 dates return `0` for the same reason [`unix_secs_from_civil`]
+/// clamps: truncating division makes `era` wrong there, and nothing in this
+/// project deals in dates that far back.
+#[must_use]
+pub const fn days_from_civil(year: u32, month: u32, day: u32) -> i64 {
+    let y = year as i64 - (month <= 2) as i64;
+    if y < 0 {
+        return 0;
+    }
+    let era = y / 400;
+    let yoe = y - era * 400;
+    let m = month as i64;
+    let doy = (153 * (m + if m > 2 { -3 } else { 9 }) + 2) / 5 + day as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// The `(year, month, day)` for a count of days since 1970-01-01 — the inverse
+/// of [`days_from_civil`].
+///
+/// Hinnant's `civil_from_days`. Days before the epoch are clamped to
+/// 1970-01-01 for the same reason [`civil_from_unix_secs`] clamps: a negative
+/// value here only ever means a broken clock, and clamping keeps every
+/// formatter total instead of making each caller handle it.
+#[must_use]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub const fn civil_from_days(days: i64) -> (u32, u32, u32) {
+    // `is_negative()` rather than `days < 0`, and the difference is not style.
+    // `if days < 0 { 0 } else { days }` has a mutant — `days <= 0` — that no
+    // test can ever kill, because clamping zero to zero is what the unmutated
+    // code already does. An unkillable mutant against a `max_missed: 0` gate is
+    // a permanent red with no fix available, so the comparison is replaced by
+    // the predicate it was spelling out. It also says the intent directly.
+    let days = if days.is_negative() { 0 } else { days };
+    let z = days + 719_468;
+    let era = z / 146_097;
+    let doe = (z - era * 146_097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if month <= 2 { y + 1 } else { y };
+    (year as u32, month, day)
+}
+
+/// Format a count of days since 1970-01-01 as `YYYY-MM-DD`.
+///
+/// The shape every date column in this project stores, and the reason several
+/// of the copies this replaces existed at all.
+#[must_use]
+pub fn date_string_from_days(days: i64) -> String {
+    let (y, m, d) = civil_from_days(days);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
 /// Convert a Unix timestamp (seconds since 1970-01-01 00:00:00) into a
 /// [`CivilTime`].
 ///
@@ -204,6 +271,107 @@ pub fn shift_datetime(date: &str, time: &str, offset_secs: f64) -> Option<(Strin
 
 #[cfg(test)]
 mod tests {
+    /// The day-level primitives must agree with the second-level ones, and with
+    /// each other, across every day this project can see.
+    ///
+    /// Nine files carried their own copy of this arithmetic before it was
+    /// exposed here; they were checked verbatim against each other over 200
+    /// years and all agreed, so nothing was broken. This gate is what stops the
+    /// tenth copy — or a transcription slip in the consolidation itself — being
+    /// the one that differs. A wrong day here moves a detection to the wrong
+    /// date, which is the kind of error that is invisible on a dashboard and
+    /// fatal in a dataset.
+    #[test]
+    fn the_day_and_second_primitives_agree_over_two_centuries() {
+        // 1970-01-01 .. 2170-01-01
+        for days in 0..73_050i64 {
+            let (y, m, d) = civil_from_days(days);
+            let via_secs = civil_from_unix_secs(days * 86_400);
+            assert_eq!(
+                (y, m, d),
+                (via_secs.year, via_secs.month, via_secs.day),
+                "day {days}"
+            );
+            assert_eq!(days_from_civil(y, m, d), days, "round trip at day {days}");
+            assert_eq!(
+                date_string_from_days(days),
+                format!("{y:04}-{m:02}-{d:02}"),
+                "day {days}"
+            );
+        }
+    }
+
+    /// The clamps, which are the only place the two directions deliberately
+    /// disagree with pure Hinnant.
+    #[test]
+    fn pre_epoch_days_clamp_rather_than_wrap() {
+        assert_eq!(civil_from_days(-1), (1970, 1, 1));
+        assert_eq!(civil_from_days(i64::MIN / 2), (1970, 1, 1));
+        // Forward: year 0 in Jan/Feb is the only way to reach a negative `y`.
+        assert_eq!(days_from_civil(0, 1, 1), 0);
+        // …and a real date is untouched by that guard.
+        assert_eq!(days_from_civil(1970, 1, 1), 0);
+        assert_eq!(days_from_civil(1970, 1, 2), 1);
+    }
+
+    /// `y == 0` is on the *computing* side of the guard, not the clamping side.
+    ///
+    /// Found by mutation testing: `if y < 0` survived being changed to
+    /// `if y <= 0`, because every other gate in this file works in 1970–2170
+    /// and never produces a shifted year of zero. The test above does not catch
+    /// it either — it asserts the clamp returns `0`, and `0` is also the honest
+    /// answer for 1970-01-01, so "clamped" and "computed" are indistinguishable
+    /// there.
+    ///
+    /// Both ways of reaching `y == 0` are pinned, because they arrive by
+    /// different routes: year 0 from March (no shift) and year 1 in Jan/Feb
+    /// (shifted down by one). Neither may clamp.
+    #[test]
+    fn a_shifted_year_of_zero_still_computes_a_real_day_count() {
+        assert_eq!(
+            days_from_civil(0, 3, 1),
+            -719_468,
+            "year 0 March 1 is on the computing side of the `y < 0` guard"
+        );
+        assert_eq!(
+            days_from_civil(1, 1, 1),
+            -719_162,
+            "year 1 January 1 shifts to y == 0, which is still not negative"
+        );
+        // The counterpart, so this is a boundary and not a blanket alarm: one
+        // day earlier crosses into the shifted-negative region and clamps.
+        assert_eq!(
+            days_from_civil(0, 2, 29),
+            0,
+            "year 0 February shifts to y == -1 and must clamp"
+        );
+    }
+
+    /// Leap-day handling, spelled out because it is the case every copy of this
+    /// algorithm gets right or wrong together.
+    #[test]
+    fn leap_days_land_where_they_should() {
+        for (y, m, d) in [
+            (2024, 2, 29), // leap year
+            (2000, 2, 29), // divisible by 400
+            (2100, 3, 1),  // 2100 is NOT a leap year
+            (2026, 12, 31),
+        ] {
+            let days = days_from_civil(y, m, d);
+            assert_eq!(civil_from_days(days), (y, m, d), "{y}-{m}-{d}");
+        }
+        // 2100 has no 29 February: 28 Feb and 1 Mar are consecutive.
+        assert_eq!(
+            days_from_civil(2100, 3, 1) - days_from_civil(2100, 2, 28),
+            1
+        );
+        // 2024 does: they are two days apart.
+        assert_eq!(
+            days_from_civil(2024, 3, 1) - days_from_civil(2024, 2, 28),
+            2
+        );
+    }
+
     use super::*;
 
     fn at(secs: i64) -> CivilTime {

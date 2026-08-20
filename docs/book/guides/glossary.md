@@ -20,7 +20,7 @@ Plain-English definitions for the terms you'll meet around the dashboard.
 
 **Phenology** — the timing of seasonal events. **Migration phenology** is *when* migratory species arrive and depart through the year — the ridgeline chart on the [Migration](../guide/phenology.md) tab of Patterns.
 
-**Quarantine** — a holding queue for borderline rare-bird detections, so a human can approve or reject them before they join your life list. See the [review queue](../guide/today.md#rare-bird-review-queue).
+**Quarantine** — a holding queue for borderline rare-bird detections, so a human can approve or reject them before they join your life list. See the [review queue](../guide/reviews.md#reviews-vs-quarantine).
 
 **RTSP** — a streaming protocol many IP cameras use. BirdNet-Behavior can listen to an RTSP stream's audio as if it were a microphone.
 

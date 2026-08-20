@@ -516,3 +516,340 @@ fn soak_analytics_recovers_from_a_corrupt_duckdb_at_restart() {
         "quarantine name must be recognisable to the doctor scan: {quarantined:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Mixed-workload consistency soak
+// ---------------------------------------------------------------------------
+
+/// A station's real workload is not one operation repeated.
+///
+/// Over a year it interleaves detections arriving, a reviewer confirming and
+/// rejecting, the odd relabel, an occasional delete, the clip-prune job
+/// rewriting rows in bulk — and restarts, for updates, power cuts and watchdog
+/// kicks. The tests above each drive one of those in isolation, at volume; none
+/// of them drives *several at once*, which is the only shape in which an
+/// order-dependent defect can appear.
+///
+/// This matters most for `species_summary` (migration 30), which is a
+/// materialised aggregate maintained by triggers. Its own gate walks each
+/// mutation class in a fixed sequence, so it proves each rule individually and
+/// proves nothing about the rules interacting. A summary that is correct after
+/// insert-then-reject and correct after reject-then-insert can still be wrong
+/// after ten thousand of them shuffled together — and being wrong looks
+/// exactly like being right, because a count carries no evidence of its own
+/// provenance.
+///
+/// The operation mix is pseudo-random but **seeded and replayable**: a soak
+/// that cannot be re-run with the same schedule reports failures nobody can
+/// reproduce. The seed is printed on every run and settable with
+/// `BIRDNET_SOAK_SEED`; `BIRDNET_SOAK_OPS` raises the volume for a heavier
+/// local run.
+///
+/// What this adds over the scripted `species_summary` gate in `birdnet-db`,
+/// stated precisely because the honest answer is narrower than it looks: three
+/// trigger defects were mutated in and *both* files caught all three, so this
+/// has no demonstrated catch the scripted gate misses. Its distinct coverage is
+/// the three things that gate cannot express — the database being closed and
+/// reopened mid-workload, the resource bounds holding across those restarts,
+/// and the summary staying bounded by species x hours rather than by the
+/// history. The shuffled orderings are insurance, not a demonstrated catch.
+///
+/// It is not a substitute for actually running a station for a week. It is the
+/// part of that which can be made to happen in a few seconds and can therefore
+/// run on every commit.
+mod mixed {
+    use super::{open_fd_count, soak_serial, total_db_bytes, vmrss_kb};
+
+    /// Default operation count — enough for every branch below to be taken
+    /// hundreds of times, short enough to stay ~1 s in CI.
+    const DEFAULT_OPS: usize = 20_000;
+
+    /// How many operations between simulated restarts.
+    const OPS_PER_RESTART: usize = 2_500;
+
+    /// A tiny, explicit PRNG.
+    ///
+    /// Hand-rolled deliberately, and this is the one place in the workspace
+    /// where that is the right call: the property being bought is that the
+    /// schedule is *identical* on every machine and every future version of
+    /// this crate, which a dependency's "we reserve the right to change the
+    /// algorithm" would take away. Numerical quality is irrelevant — the
+    /// values only choose between eight branches.
+    ///
+    /// Numbers are Knuth's MMIX LCG constants.
+    struct Lcg(u64);
+
+    impl Lcg {
+        const fn next(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            // The high bits of an LCG are the ones worth using.
+            self.0 >> 33
+        }
+
+        const fn below(&mut self, n: u64) -> u64 {
+            self.next() % n
+        }
+    }
+
+    /// The species pool, small enough that buckets collide constantly — which
+    /// is the interesting case, because a bucket that only ever has one
+    /// occupant never exercises the increment path.
+    const SPECIES: [(&str, &str); 4] = [
+        ("Turdus merula", "Eurasian Blackbird"),
+        ("Erithacus rubecula", "European Robin"),
+        ("Parus major", "Great Tit"),
+        ("Corvus corax", "Common Raven"),
+    ];
+
+    /// Drive a mixed workload with restarts, checking the maintained summary
+    /// against a recomputed aggregate throughout.
+    #[test]
+    fn a_mixed_workload_with_restarts_keeps_the_species_summary_exact() {
+        let _serial = soak_serial();
+
+        let ops: usize = std::env::var("BIRDNET_SOAK_OPS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(DEFAULT_OPS);
+        let seed: u64 = std::env::var("BIRDNET_SOAK_SEED")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0x5EED_B12D_0000_0001);
+        eprintln!("soak/mixed: ops={ops} seed={seed} (set BIRDNET_SOAK_SEED to replay)");
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("mixed.db");
+        let mut conn = birdnet_db::sqlite::open_or_create(&db_path).expect("open db");
+
+        let rss_before = vmrss_kb();
+        let fd_before = open_fd_count(dir.path());
+
+        let mut rng = Lcg(seed);
+        let mut restarts = 0_usize;
+        // Every branch must actually be taken; a soak that silently never
+        // rejected anything would pass while testing a third of what it claims.
+        let mut taken = [0_usize; 8];
+
+        for op in 0..ops {
+            // Simulated restart: drop the connection and reopen the file. If
+            // anything the summary depends on lived in memory rather than on
+            // disk, this is where it would be lost.
+            if op > 0 && op % OPS_PER_RESTART == 0 {
+                drop(conn);
+                conn = birdnet_db::sqlite::open_or_create(&db_path).expect("reopen db");
+                restarts += 1;
+                assert_summary_exact(&conn, &format!("restart #{restarts} at op {op}"), seed);
+            }
+
+            let (sci, com) = SPECIES[usize::try_from(rng.below(4)).unwrap()];
+            let hour = rng.below(24);
+            let minute = rng.below(60);
+            let second = rng.below(60);
+            let day = 1 + rng.below(28);
+            let date = format!("2026-0{}-{day:02}", 1 + rng.below(9));
+            let time = format!("{hour:02}:{minute:02}:{second:02}");
+
+            let choice = rng.below(100);
+            let branch = match choice {
+                // Detections arriving dominate, as they do on a real station.
+                0..=54 => {
+                    let _ = conn.execute(
+                        "INSERT OR IGNORE INTO detections
+                             (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        rusqlite::params![
+                            date,
+                            time,
+                            sci,
+                            com,
+                            0.5 + f64::from(u32::try_from(rng.below(50)).unwrap()) / 100.0,
+                            format!("mix-{op:08}.wav")
+                        ],
+                    );
+                    0
+                }
+                // A reviewer rejecting.
+                55..=66 => {
+                    let _ = conn.execute(
+                        "UPDATE detections SET review_verdict = 'rejected'
+                          WHERE rowid = (SELECT rowid FROM detections
+                                          WHERE review_verdict IS NULL
+                                          ORDER BY rowid LIMIT 1 OFFSET ?1)",
+                        rusqlite::params![i64::try_from(rng.below(64)).unwrap()],
+                    );
+                    1
+                }
+                // A reviewer confirming — must not move any count.
+                67..=76 => {
+                    let _ = conn.execute(
+                        "UPDATE detections SET review_verdict = 'confirmed'
+                          WHERE rowid = (SELECT rowid FROM detections
+                                          WHERE review_verdict IS NULL
+                                          ORDER BY rowid LIMIT 1 OFFSET ?1)",
+                        rusqlite::params![i64::try_from(rng.below(64)).unwrap()],
+                    );
+                    2
+                }
+                // A reviewer changing their mind.
+                77..=82 => {
+                    let _ = conn.execute(
+                        "UPDATE detections SET review_verdict = NULL
+                          WHERE rowid = (SELECT rowid FROM detections
+                                          WHERE review_verdict = 'rejected'
+                                          ORDER BY rowid LIMIT 1 OFFSET ?1)",
+                        rusqlite::params![i64::try_from(rng.below(16)).unwrap()],
+                    );
+                    3
+                }
+                // A relabel: the row moves between species buckets.
+                83..=88 => {
+                    let _ = conn.execute(
+                        "UPDATE detections SET Sci_Name = ?1, Com_Name = ?2
+                          WHERE rowid = (SELECT rowid FROM detections
+                                          ORDER BY rowid LIMIT 1 OFFSET ?3)",
+                        rusqlite::params![sci, com, i64::try_from(rng.below(64)).unwrap()],
+                    );
+                    4
+                }
+                // A delete.
+                89..=93 => {
+                    let _ = conn.execute(
+                        "DELETE FROM detections
+                          WHERE rowid = (SELECT rowid FROM detections
+                                          ORDER BY rowid LIMIT 1 OFFSET ?1)",
+                        rusqlite::params![i64::try_from(rng.below(64)).unwrap()],
+                    );
+                    5
+                }
+                // The clip-prune job, in bulk. Must cost the summary nothing.
+                94..=97 => {
+                    let _ = conn.execute(
+                        "UPDATE detections SET Clip_Pruned_At = '2026-09-01T00:00:00Z'
+                          WHERE Clip_Pruned_At IS NULL AND rowid % 7 = 0",
+                        [],
+                    );
+                    6
+                }
+                // Locking, also in bulk.
+                _ => {
+                    let _ = conn.execute(
+                        "UPDATE detections SET is_locked = 1 WHERE rowid % 11 = 0",
+                        [],
+                    );
+                    7
+                }
+            };
+            taken[branch] += 1;
+
+            // Checking every operation would make this an O(ops x rows) test
+            // and it would stop being runnable. Checking periodically still
+            // localises a failure to a window of 250 operations, and the seed
+            // makes that window replayable exactly.
+            if op % 250 == 0 {
+                assert_summary_exact(&conn, &format!("op {op}"), seed);
+            }
+        }
+
+        assert_summary_exact(&conn, "the end of the run", seed);
+
+        // The mix has to have actually happened. Without this a schedule that
+        // never rejected anything would pass while testing a fraction of what
+        // this claims to cover.
+        let names = [
+            "insert",
+            "reject",
+            "confirm",
+            "un-reject",
+            "relabel",
+            "delete",
+            "clip-prune",
+            "lock",
+        ];
+        for (i, count) in taken.iter().enumerate() {
+            assert!(
+                *count > 0,
+                "the {} branch was never taken in {ops} operations (seed {seed}) — \
+                 this run did not exercise what it claims to",
+                names[i]
+            );
+        }
+        eprintln!(
+            "soak/mixed: {restarts} restarts; branch counts {}",
+            names
+                .iter()
+                .zip(&taken)
+                .map(|(n, c)| format!("{n}={c}"))
+                .collect::<Vec<_>>()
+                .join(" "),
+        );
+
+        // There must be something left to have been checking.
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
+            .expect("count");
+        let buckets: i64 = conn
+            .query_row("SELECT COUNT(*) FROM species_summary", [], |r| r.get(0))
+            .expect("buckets");
+        eprintln!("soak/mixed: {rows} detections, {buckets} summary buckets (bound: 96)");
+        assert!(
+            rows > 100,
+            "the workload left only {rows} detections behind"
+        );
+        assert!(buckets > 0, "no summary buckets survived the run");
+
+        // The summary is bounded by species x hours, not by the history: four
+        // species over 24 hours can never exceed 96 buckets, however many
+        // detections go through. That bound is the entire reason migration 30
+        // exists, and nothing else in the suite asserts it.
+        //
+        // It is not a loose bound: at the default volume the run ends with
+        // 9 975 detections and *exactly* 96 buckets — the summary is saturated
+        // at its theoretical maximum and cannot grow further no matter how long
+        // the station runs. Any change that made the key finer-grained (adding
+        // Date, say) would exceed it on the first extra day.
+        assert!(
+            buckets <= 96,
+            "summary holds {buckets} buckets for 4 species x 24 hours — it is growing \
+             with the history, which is what it exists not to do"
+        );
+
+        // And the resource bounds the other soak tests assert, across restarts.
+        if let (Some(before), Some(after)) = (rss_before, vmrss_kb()) {
+            let growth_kb = after.saturating_sub(before);
+            eprintln!("soak/mixed: RSS grew {growth_kb} KiB");
+            assert!(
+                growth_kb < 128 * 1024,
+                "RSS grew {growth_kb} KiB over {ops} mixed operations and {restarts} restarts"
+            );
+        }
+        if let (Some(before), Some(after)) = (fd_before, open_fd_count(dir.path())) {
+            assert!(
+                after <= before + 8,
+                "open fds grew from {before} to {after} over {restarts} restarts — \
+                 a reopen is leaking the previous connection's handles"
+            );
+        }
+        eprintln!(
+            "soak/mixed: db={} KiB after {ops} ops",
+            total_db_bytes(&db_path) / 1024
+        );
+    }
+
+    /// Compare the maintained summary against a recomputed aggregate.
+    ///
+    /// Goes through the same `species_summary_drift` that `--doctor` runs, so a
+    /// failure here is a failure an operator would actually be shown.
+    #[track_caller]
+    fn assert_summary_exact(conn: &rusqlite::Connection, when: &str, seed: u64) {
+        let drift =
+            birdnet_db::sqlite::queries::species::species_summary_drift(conn).expect("drift check");
+        assert!(
+            drift.is_empty(),
+            "species_summary drifted by {when} (seed {seed}): {:#?}",
+            &drift[..drift.len().min(5)]
+        );
+    }
+}

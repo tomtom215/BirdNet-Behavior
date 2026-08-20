@@ -28,7 +28,16 @@ async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoResponse 
     let uptime_secs = get_process_uptime();
 
     // Gather database metrics.
-    let (detection_count, species_count) = tokio::task::spawn_blocking({
+    //
+    // `birdnet_detections_total` counts every row, rejections included, and
+    // deliberately does not switch to `detections_analytic`: it is a *pipeline
+    // throughput* signal — "is the station still turning audio into rows?" — and
+    // a detection a human later rejected still proves the chain ran. Exporting
+    // the rejection count alongside it is what makes both questions answerable
+    // from one scrape, so a dashboard can show either the raw rate or
+    // `total - rejected` to match what the web UI displays. Picking one and
+    // hiding the other is what made the UI's own tiles disagree.
+    let (detection_count, species_count, rejected_count) = tokio::task::spawn_blocking({
         let state = state.clone();
         move || {
             state.with_db(|conn| {
@@ -36,16 +45,21 @@ async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoResponse 
                     .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
                     .unwrap_or(0);
                 let sp: i64 = conn
-                    .query_row("SELECT COUNT(DISTINCT Com_Name) FROM detections", [], |r| {
-                        r.get(0)
-                    })
+                    .query_row(
+                        "SELECT COUNT(DISTINCT Com_Name) FROM detections_analytic",
+                        [],
+                        |r| r.get(0),
+                    )
                     .unwrap_or(0);
-                (det, sp)
+                let rej =
+                    i64::try_from(birdnet_db::sqlite::rejected_detection_count(conn).unwrap_or(0))
+                        .unwrap_or(0);
+                (det, sp, rej)
             })
         }
     })
     .await
-    .unwrap_or((0, 0));
+    .unwrap_or((0, 0, 0));
 
     // Gather process metrics.
     let (rss_bytes, cpu_count) = process_metrics();
@@ -65,7 +79,15 @@ async fn prometheus_metrics(State(state): State<AppState>) -> impl IntoResponse 
     out.push_str("# TYPE birdnet_detections_total gauge\n");
     writeln!(out, "birdnet_detections_total {detection_count}").unwrap_or_default();
 
-    out.push_str("# HELP birdnet_species_total Total number of distinct species detected.\n");
+    out.push_str(
+        "# HELP birdnet_detections_rejected_total Detections a reviewer has marked rejected.\n",
+    );
+    out.push_str("# TYPE birdnet_detections_rejected_total gauge\n");
+    writeln!(out, "birdnet_detections_rejected_total {rejected_count}").unwrap_or_default();
+
+    out.push_str(
+        "# HELP birdnet_species_total Distinct species detected, excluding rejected detections.\n",
+    );
     out.push_str("# TYPE birdnet_species_total gauge\n");
     writeln!(out, "birdnet_species_total {species_count}").unwrap_or_default();
 

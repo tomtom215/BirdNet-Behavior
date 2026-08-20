@@ -204,7 +204,7 @@ pub(super) async fn analytics_next_partial(
         move || {
             s.with_db(|conn| {
                 conn.query_row(
-                    "SELECT Com_Name FROM detections ORDER BY rowid DESC LIMIT 1",
+                    "SELECT Com_Name FROM detections_analytic ORDER BY rowid DESC LIMIT 1",
                     [],
                     |row| row.get::<_, String>(0),
                 )
@@ -409,7 +409,7 @@ fn derive_dawn_sequence(conn: &rusqlite::Connection) -> Vec<String> {
                    AVG(CAST(substr(Time, 1, 2) AS REAL) * 3600
                        + CAST(substr(Time, 4, 2) AS REAL) * 60
                        + CAST(substr(Time, 7, 2) AS REAL)) AS avg_secs
-            FROM detections
+            FROM detections_analytic
             WHERE length(Time) >= 8
               AND CAST(substr(Time, 1, 2) AS INTEGER) BETWEEN 4 AND 8
             GROUP BY Com_Name

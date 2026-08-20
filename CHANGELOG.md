@@ -10,11 +10,297 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 A production-readiness pass against one question: *if this station is sealed
 into an outdoor enclosure and left for a year with nobody on site, what does it
 get wrong, and would anybody find out?* The full audit, with evidence and the
-gates that were observed failing, is `docs/PRODUCTION_AUDIT.md`.
+gates that were observed failing, is `docs/PRODUCTION_AUDIT.md`; a second pass
+after `v0.14.0` is `docs/FIELD_READINESS_AUDIT.md`.
 
 Several of these were invisible to a fully green 2 190-test suite.
 
 ### Fixed
+
+- **A reviewer's rejection now reaches every aggregate.** `detections_analytic`
+  landed in migration 26 and the surfaces converted to it were the ones someone
+  thought of at the time. The rest kept counting rejected detections: the
+  published RSS/JSON/ICS feeds (including `/feeds/rare.*`, whose "new species"
+  date comes from `MIN(Date)` — so a rejected row that happened to be the
+  earliest announced a first-detection date the life list disagreed with, to an
+  audience that never sees the correction), the Today phrase and its 30-day
+  baseline, the command palette, the next-species prediction's trigger species,
+  the dawn-sequence derivation, the species page's showcase clip, and five
+  whole-history aggregates in the query layer (`species_for_date`,
+  `detections_per_day`, `detection_dates`, `best_detections_for_date`,
+  `detection_count_for_species_date`).
+
+  `/api/v2/metrics` deliberately keeps `birdnet_detections_total` counting every
+  row — it is a pipeline-throughput signal, and a detection a human later
+  rejected still proves the chain ran — and now exports
+  `birdnet_detections_rejected_total` beside it, so a dashboard can show either
+  the raw rate or the curated figure the web UI displays. `birdnet_species_total`
+  is an analytic and excludes rejections.
+
+  Record-level surfaces still show rejected detections on purpose. The review
+  queue keeps only the last 25 verdicts, so hiding them everywhere else would
+  make an older rejection unreachable through the UI entirely.
+
+- **Fixed recording windows and per-source quiet windows were evaluated in
+  UTC.** `fixed:06:00-20:00` on a UTC-8 station really recorded 22:00-12:00
+  local — through the night, stopping at midday, missing the dawn chorus it was
+  configured to capture. `--doctor` warned about it; nothing fixed it.
+
+  Both are now evaluated against the station's local clock, which is what an
+  operator typing "06:00" means. **Solar schedules are unchanged and must be**:
+  `SolarDay` reports sunrise and sunset as absolute instants in UTC, so that
+  gate is asked in UTC. `DailySchedule::clock()` names which clock each gate
+  wants, so the two can no longer be confused by a caller.
+
+  `--doctor` now reports the window with the station's offset instead of warning
+  about the old behaviour — an operator who set UTC hours to compensate needs to
+  set them back, and is told so.
+
+- **The dawn-chorus sun markers were for the wrong place, the wrong day and the
+  wrong clock.** The Today page's solar helper was fixed some time ago; this
+  page kept a private copy that was wrong three ways at once. It read the
+  coordinates from `BNB_STATION_LAT`/`BNB_STATION_LON` only and otherwise fell
+  back to a hard-coded (40.0 N, 74.0 W), so a station that set its location in
+  the setup wizard got a sun computed for the New Jersey coast. Its day-of-year
+  was `((unix_secs / 86_400) % 365) + 1`, which drifts about a day a year — 14
+  days out by 2026, moving sunrise 18 min at Boston, 27 min at London and 40 min
+  at Oslo — and wraps to January in late December. And it returned UTC hours
+  while the chorus ribbons it was drawn over are bucketed from the local `Time`
+  column. Its own tests asserted UTC while its doc comment claimed "local-civil
+  hours".
+
+  Both pages now use one helper, backed by `birdnet_scheduler::SolarDay`. With
+  no configured location the markers and the night wedge are omitted rather than
+  guessed. The guide page that told operators to run their station on UTC — 
+  advice for a defect, and in direct contradiction of `--doctor` — is corrected.
+
+- **`df` was invoked with GNU-only flags on the path that keeps the disk from
+  filling.** The capture disk manager passed `--output=size,used,avail -B1`,
+  which are coreutils extensions that neither BSD `df` (macOS, a documented
+  target) nor BusyBox accepts. `disk_usage` then errored, and the disk manager
+  reads an error as "cannot tell" and skips the purge — so a station whose card
+  was filling up never reclaimed anything, silently. There were two `df`
+  implementations in the workspace and only the doctor's was POSIX; there is now
+  one, gated against GNU, BSD and BusyBox output fixtures.
+
+- **`docker compose up` could not start the container.** `docker-compose.yml`
+  interpolated fifteen optional settings as `KEY: ${KEY:-}`, which puts the key
+  in the container environment as an *empty string* whether or not anyone set
+  it. clap reads an empty environment variable as a supplied value, so
+  `BIRDNET_LATITUDE=` means "the latitude is the empty string" and exits 2
+  during argument parsing. Four such variables blocked startup in sequence —
+  latitude, longitude, `--mqtt-ha-discovery`, and a panic on a blank Apprise URL
+  — and `restart: unless-stopped` made that a loop rather than a failure with a
+  visible cause. `quickstart.sh`, which fills in the first two, still died on
+  the third.
+
+  Nothing caught it: the only container check in CI runs `--verify-extension`
+  with the entrypoint bypassed and no environment at all, and the Rust suite
+  never sees an environment variable. `scripts/check-compose-startup.sh` now
+  resolves the real container environment with `docker compose config` and
+  starts the real binary under it, in the `build` job.
+
+  Blank values no longer reach the binary from three directions:
+  `docker-compose.yml` stops manufacturing them, `.env.example` ships the
+  optional keys commented out, and `docker/strip-blank-env.sh` (sourced by the
+  entrypoint) strips any that survive. `BIRDNET_IMAGE_CACHE_DIR` is exempt —
+  an explicitly empty value is the documented air-gapped opt-out.
+
+- **A blank Apprise URL aborted the daemon during startup.** `APPRISE_URL=`
+  with no `APPRISE_CONFIG_FILE` reached an `.expect` and panicked; the settings
+  page's own hint says to leave it blank to disable notifications. Release
+  builds are `panic = "abort"` and the unit pairs `Restart=always` with
+  `StartLimitBurst=5`, so a station in that state burned its five restarts in
+  fifty seconds and stayed `failed`. Blank and whitespace-only values are now
+  treated as absent.
+
+- **One time-series page silently un-applied every reviewer rejection.**
+  `birdnet-behavioral` and `birdnet-timeseries` both created a DuckDB view named
+  `detections_ts` with `CREATE OR REPLACE`, on the same connection — and only
+  the behavioural one carried the `review_verdict` filter. The last one to run
+  therefore decided what *both* crates saw for the rest of the connection's
+  life: opening a single time-series page put rejected detections back into
+  sessionize, retention, funnel, next-species and co-occurrence until the next
+  full sync. Measured on a three-detection fixture with one rejection,
+  `COUNT(*) FROM detections_ts` went from 2 to 3 across one `quiet_days` call.
+
+  `tests/analytics_divergence.rs` could not see this — both stores agreed; the
+  view changed underneath them. `tests/analytics_view_ownership.rs` now gates
+  both the texts and the behaviour, with a counterpart proving unreviewed
+  detections still survive.
+
+- **The dashboard's headline tiles disagreed with each other.** "Species",
+  "Last hour" and the 12-day sparkline excluded rejected detections; "Detections",
+  "Today" and "Species today" counted every row. Adjacent tiles contradicted each
+  other by exactly the number of rejections the operator had recorded, so the
+  more carefully someone curated, the wronger the screen got. The presentation
+  side now reads new `analytic_*` counters; `detection_count` deliberately keeps
+  counting every row, because the SQLite-vs-DuckDB reconciliation depends on it.
+
+  The gate that should have caught this was a tautology — it asserted
+  `SELECT COUNT(*) FROM detections_analytic`, i.e. the view's own `WHERE` clause
+  restated to itself, while claiming to cover "species totals, the heat map, the
+  dawn chorus, phenology". It now reads through the query layer.
+
+### Added
+
+- **`--rebuild-species-summary`** recomputes the per-species totals from the
+  detections. Derived data, so rebuilding cannot lose anything; `--doctor` names
+  it if it ever finds the summary and the detections disagreeing. Nothing else
+  should need it.
+
+- **A mixed-workload soak.** The existing soak tests each drove one operation
+  repeated — 20 000 inserts, or one corrupt file recovered. A station's year is
+  detections arriving interleaved with a reviewer confirming, rejecting and
+  changing their mind, relabels, deletes, the bulk clip-prune job, and restarts.
+  The new test drives 20 000 of those shuffled together, reopening the database
+  every 2 500, and checks the maintained summary against a recomputed aggregate
+  throughout. Seeded and replayable (`BIRDNET_SOAK_SEED`, `BIRDNET_SOAK_OPS`),
+  and it asserts every branch was actually taken, so a schedule that happened
+  never to reject anything cannot pass as full coverage.
+
+  It is not a substitute for running a station for a week — still the largest
+  untested thing here — but it covers what that week would stress and ten
+  seconds can reach: state surviving restarts, resources bounded across them,
+  and the summary staying the size of the species list rather than the history.
+
+- **Per-source quiet windows are settable.** `schedule_quiet` has had a column
+  since the audio-sources table landed, the capture supervisor has always
+  honoured it, and *nothing wrote it* — every construction site in the tree
+  passed `None`, so the only way to set one was direct SQL against the database.
+  The audio-source edit form now carries both ends, blanking both removes the
+  window, half a window is refused rather than half-saved, and a source with one
+  says so on its row (a source that goes quiet every night is otherwise
+  indistinguishable from one that has failed).
+
+- **A merged history is visible on the charts it changes.** Migration 25 tagged
+  every imported detection with its origin — coordinates, distance, the clock
+  shift applied — and nothing ever read it. `birdnet-migrate` warns *before* an
+  import that the source is 340 km away and rightly does not block, but
+  afterwards every location- and hour-dependent analytic read the union as one
+  station with nothing saying so, which is not detectable after the fact.
+
+  The Patterns screens now carry a note naming the source, its distance and
+  whether the two clocks were reconciled, plus a link to what was imported. It
+  renders nothing for a station that imported nothing, and nothing for the
+  common case of importing your own BirdNET-Pi history — a false alarm on every
+  station that ever imports is how a banner gets ignored by the time it matters.
+  `birdnet-db` gained the read API this needed (`list_import_batches`,
+  `imported_detection_count`), which did not exist at all.
+
+### Changed
+
+- **The health badge and `/api/v2/health` no longer scan the whole database.**
+  Both ran `PRAGMA quick_check`, which reads every page of the file. The badge
+  is mounted in `layout.html` with `hx-trigger="load, every 30s"`, so that was a
+  full read of the database on every page load and twice a minute per open tab,
+  forever, competing with the detection write path for the same SD card.
+
+  Measured on a seeded three-year station (2 755 374 detections, 1.29 GB, warm,
+  NVMe): `/pages/health-badge` **3.79 s → 0.0037 s**; the pragma alone cost
+  1.5–1.9 s. A Raspberry Pi reading that file from an SD card at ~45 MB/s is
+  looking at roughly 30 s — longer than the badge's own refresh interval. The
+  container `HEALTHCHECK` polls `/api/v2/health` every 30 s with
+  `curl --max-time 4`, which a station with real history could not meet.
+
+  Migration 28 stores the daily integrity check's verdict, which that job was
+  already computing and throwing away; both surfaces now read one row.
+  `/api/v2/health` still probes reachability per request, and reports
+  `database` as `"ok"`, `"unchecked"` or `"error"` rather than collapsing "not
+  yet verified" into "broken" — `"unchecked"` returns `200`, so a freshly
+  started container is not marked unhealthy for the five minutes before the
+  first maintenance tick.
+
+- **The species screens' whole-history aggregates are index-only.** The species
+  list, the life list and the per-species hour histogram each aggregate the
+  entire detection history, uncached, on every page load, so their cost grows
+  with how long the station has been useful. Migration 29 adds two covering
+  indexes. Measured on the same three-year database: species list 4.96 s →
+  1.31 s, life-list firsts 4.12 s → 0.58 s, hour histogram 4.82 s → 1.15 s.
+
+  Cost, measured rather than estimated: +130.6 MB (9.0 % of the file); inserts
+  0.20 → 0.27 ms per committed row, three orders of magnitude above what a
+  station produces. A third index would take the species list to 0.31 s for
+  18.6 % total, which is the wrong trade on an SD card. This made the aggregates
+  cheaper, not bounded; migration 30 below makes them bounded.
+
+- **A verdict older than 25 was unreachable.** The review queue showed the last
+  25 verdicts and nothing else — and it is the only surface that lists rejected
+  detections, so a rejection that fell off the end could not be found, let alone
+  undone, except by a saved URL. It is paginated now, with a status filter and a
+  total, so every verdict a reviewer has ever recorded stays reachable.
+
+- **A share link outlived the claim it published.** `/share/<id>` read the raw
+  detections table, so a detection a reviewer had rejected kept serving a public
+  page asserting the station heard that bird — the one surface where being wrong
+  reaches an audience that never sees the correction. Share pages read
+  `detections_analytic` now, and a withdrawn detection's link returns 404.
+
+- **Ten copies of the same civil-date arithmetic, and three URL escapers.**
+  Every implementation of Howard Hinnant's days-from-civil algorithm was checked
+  against every other over 1970–2170: all thirteen agreed, zero mismatches — so
+  nothing was *broken*, but ten chances for the eleventh to be wrong were. There
+  is one in `birdnet-core::civil` now. The URL escapers differed in exactly one
+  respect (whether `/` is escaped), which is the difference between encoding a
+  path and encoding a segment; both are now named for what they do, with a gate
+  asserting the slash is the only thing between them.
+
+- **The species aggregates are now bounded by the species count, not the
+  history.** Migration 29 made them cheaper; they still read every detection
+  ever recorded, so opening the species list got slower every month the station
+  ran. Migration 30 adds `species_summary` — one row per (common name,
+  scientific name, hour of day), maintained on write — so the species list, the
+  per-species hour histogram and the distinct-species count read a few thousand
+  rows instead of millions, permanently.
+
+  Measured on a seeded three-year station (2 755 374 detections, 86 species,
+  1.47 GB, warm, x86_64 NVMe), with the histogram measured against the busiest
+  species (79 602 detections):
+
+  | query | before | after |
+  |---|---|---|
+  | species list (top 100) | 1 482 ms | **0.53 ms** |
+  | per-species hour histogram | 138 ms | **0.07 ms** |
+  | distinct species count | <1 ms | 0.34 ms |
+
+  Cost: **+1.0 MB, 0.07 %** of the file — migration 29's indexes cost +130.6 MB
+  (9.0 %) for a fraction of this, because an index scales with the detections
+  and a summary scales with the species. Inserts 0.0671 → 0.0724 ms/row
+  (+7.9 %); 1.9 s to backfill once. The distinct-species count is a wash and
+  moved anyway, so every species-level fact comes from one place.
+
+  Maintained by SQLite **triggers**, not by a function the write paths call:
+  `detections` is written from four crates and at least eight call sites, and
+  the ninth would drift silently. First-seen dates are deliberately *not*
+  summarised — MIN/MAX cannot be reversed on delete, so the life list stays on
+  migration 29's covering index rather than buy a rule that could drift.
+
+  A materialised aggregate that can drift is worse than a slow query, so
+  `--doctor` now reports whether the summary still agrees with the detections
+  (a **warning**, never an error — a stale species count is no reason to stop
+  recording birds), and `--rebuild-species-summary` recomputes it. The rebuild
+  fails loudly if drift survives it, because that would mean something is
+  writing in a way the triggers cannot see.
+
+- **Five broken links in shipped documentation**, live on `main` and passing
+  CI: three copies of `guide/today.md#rare-bird-review-queue` (a heading that
+  never existed), `remote-access.md#built-in-http-basic-auth`, and
+  `backups.md#import--export`.
+
+  They passed because the manual was being rendered *twice* — GitHub Pages by
+  the mdBook 0.4.52 CLI with the `mdbook-linkcheck` backend, and `build.rs` by
+  `mdbook-driver` 0.5 for the in-app `/help/*` tree, from a second `book.toml`
+  with a different theme, no custom CSS and no folding. Same pages, two
+  different-looking sites, and only the published one was checked at all — by a
+  backend that was not catching these.
+
+  There is one `book.toml` now, at the repository root, and one mdBook version.
+  `scripts/check-book-links.py` replaces the 2022-vintage backend by checking
+  the *rendered HTML*, which is renderer-agnostic and so covers the published
+  site and the in-app manual with one check; it runs in both `docs.yml` and
+  `ci.yml`, so a broken link fails any pull request rather than only one that
+  touches `docs/**`. The custom theme now reaches the in-app manual for the
+  first time.
 
 - **The settings page's structure was visible but not real.** All eight section
   titles on `/admin/settings` were `<div class="section-title">` — styled at
@@ -263,10 +549,22 @@ Several of these were invisible to a fully green 2 190-test suite.
 
 ### Migrations
 
-25, 26 and 27 — import provenance, the denormalised reviewer verdict (backfilled
-from existing verdicts), and the recording-effort table. All additive; none
-rewrites existing rows, and `import_batch_id IS NULL` continues to mean "this
-station recorded it".
+25 through 30 — import provenance; the denormalised reviewer verdict (backfilled
+from existing verdicts); the recording-effort table; a maintenance-run result
+column; two covering indexes for the species aggregates; and `species_summary`,
+the per-species totals maintained by triggers.
+
+All additive. None rewrites existing rows, and `import_batch_id IS NULL`
+continues to mean "this station recorded it". 29 and 30 are the only ones with a
+size cost: +130.6 MB and +1.0 MB respectively on a 1.47 GB three-year database,
+and 30 backfills from existing detections so an upgrading station gets correct
+totals immediately rather than only for detections recorded from then on.
+
+A note for whoever adds migration 31: 30's triggers exist from that point on, so
+a later migration that rewrites `detections` in bulk will fire them and the
+summary will follow along — which is the intent. One that rebuilds the table by
+create-copy-drop-rename must drop those triggers first and re-run the backfill
+after, or it will double-count the copy.
 
 ## [0.14.0] - 2026-08-16
 

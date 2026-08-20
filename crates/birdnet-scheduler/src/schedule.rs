@@ -2,6 +2,22 @@
 //!
 //! [`DailySchedule`] combines a [`NightInhibit`] (or a fixed window) to
 //! answer "is recording allowed right now?" using a live clock.
+//!
+//! # Two gates, two clocks
+//!
+//! [`DailySchedule::is_allowed`] takes a minute-of-day, and *which clock that
+//! minute is in depends on the gate*. Solar times are absolute instants —
+//! [`SolarDay`] reports `sunrise_utc_min` / `sunset_utc_min` — so the inhibit
+//! gate must be asked in UTC. A fixed window is an operator typing "06:00",
+//! which means six in the morning where the station stands, not six in
+//! Greenwich.
+//!
+//! Evaluating both in UTC (which is what the caller did before
+//! [`DailySchedule::clock`] existed) is right for solar and wrong for fixed by
+//! exactly the station's offset: `fixed:06:00-20:00` on a UTC-8 station
+//! recorded 22:00-12:00 local, missing the entire dawn chorus it was configured
+//! to capture. Ask [`DailySchedule::clock`] which minute-of-day to compute, and
+//! the two cannot be confused.
 
 use serde::{Deserialize, Serialize};
 
@@ -43,6 +59,22 @@ pub struct DailySchedule {
 enum ScheduleGate {
     Inhibit(NightInhibit),
     Window(RecordingWindow),
+}
+
+/// Which clock [`DailySchedule::is_allowed`]'s minute-of-day must be measured
+/// against.
+///
+/// Not cosmetic: passing the wrong one shifts the recording window by the
+/// station's UTC offset, silently, and the result still looks like a working
+/// schedule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScheduleClock {
+    /// Minutes since midnight **UTC**. Solar events are absolute instants, and
+    /// [`SolarDay`] reports them in UTC.
+    Utc,
+    /// Minutes since midnight in the station's **local** time. What an operator
+    /// means when they type a window into the config or the settings page.
+    Local,
 }
 
 impl DailySchedule {
@@ -92,7 +124,20 @@ impl DailySchedule {
         }
     }
 
-    /// Is recording allowed at `minutes_since_midnight`?
+    /// Which clock [`Self::is_allowed`] expects its argument in.
+    ///
+    /// The all-day case is a `Window` and so reports `Local`; it allows every
+    /// minute either way, so the answer cannot differ.
+    #[must_use]
+    pub const fn clock(&self) -> ScheduleClock {
+        match &self.gate {
+            ScheduleGate::Inhibit(_) => ScheduleClock::Utc,
+            ScheduleGate::Window(_) => ScheduleClock::Local,
+        }
+    }
+
+    /// Whether recording is allowed at `minutes_since_midnight`, measured
+    /// against the clock [`Self::clock`] names.
     #[must_use]
     pub fn is_allowed(&self, minutes_since_midnight: u32) -> bool {
         match &self.gate {

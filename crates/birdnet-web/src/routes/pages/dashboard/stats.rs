@@ -9,14 +9,14 @@ use crate::routes::pages::atoms::sparkline;
 use crate::routes::pages::{escape_html, group_thousands, today_count, today_date_string};
 use crate::state::AppState;
 
-/// Distinct species seen today (helper inlined — no dedicated DB fn exists).
+/// Distinct species seen today, rejected detections excluded.
+///
+/// Was an inlined `FROM detections` query. Every other number on this tile row
+/// reads `detections_analytic`, so this one contradicted its own neighbours by
+/// exactly the number of species whose only detections that day had been
+/// rejected.
 fn species_today(conn: &rusqlite::Connection, today: &str) -> i64 {
-    conn.query_row(
-        "SELECT COUNT(DISTINCT Com_Name) FROM detections WHERE Date = ?1",
-        [today],
-        |row| row.get(0),
-    )
-    .unwrap_or(0)
+    birdnet_db::sqlite::analytic_species_count_for_date(conn, today).unwrap_or(0)
 }
 
 /// HTMX partial: the four headline stat tiles (Detections / Species / Today / Last hour).
@@ -26,7 +26,7 @@ pub(super) async fn stats_partial(
     let result = tokio::task::spawn_blocking(move || {
         state.with_db(|conn| {
             let today = today_date_string();
-            let total = birdnet_db::sqlite::detection_count(conn).unwrap_or(0);
+            let total = birdnet_db::sqlite::analytic_detection_count(conn).unwrap_or(0);
             let species = birdnet_db::sqlite::species_count(conn).unwrap_or(0);
             let today_n = today_count(conn);
             let last_hour = birdnet_db::sqlite::last_hour_count(conn).unwrap_or(0);

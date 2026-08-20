@@ -14,16 +14,34 @@ pub fn create_apprise_client(
     cli: &Cli,
     config: Option<&birdnet_core::config::Config>,
 ) -> Option<AppriseHandle> {
+    // Blank is "not configured", not "configured to nothing". Every surface that
+    // can supply these produces a blank rather than an absent value when the
+    // operator declines the feature: `docker-compose.yml` interpolates
+    // `BIRDNET_APPRISE_URL: ${BIRDNET_APPRISE_URL:-}` whether or not the
+    // operator set it, `.env.example` ships the key with an empty value, clap
+    // hands an empty environment variable through as `Some("")`, and the
+    // settings page's own hint reads "leave blank to disable HTTP push
+    // notifications". Treating those as present is what let a blank URL with no
+    // config file reach an `.expect` and abort the process during startup.
+    let nonblank = |s: String| {
+        let t = s.trim();
+        (!t.is_empty()).then(|| t.to_owned())
+    };
     let apprise_url = cli
         .apprise_url
         .clone()
-        .or_else(|| config?.get("APPRISE_URL").map(String::from));
+        .or_else(|| config?.get("APPRISE_URL").map(String::from))
+        .and_then(nonblank);
 
-    let apprise_config_file = cli.apprise_config.clone().or_else(|| {
-        config?
-            .get("APPRISE_CONFIG_FILE")
-            .map(std::path::PathBuf::from)
-    });
+    let apprise_config_file = cli
+        .apprise_config
+        .clone()
+        .or_else(|| {
+            config?
+                .get("APPRISE_CONFIG_FILE")
+                .map(std::path::PathBuf::from)
+        })
+        .filter(|p| !p.as_os_str().is_empty());
 
     // Need at least one of: URL or config file.
     if apprise_url.is_none() && apprise_config_file.is_none() {
@@ -91,11 +109,13 @@ pub fn create_apprise_client(
     };
 
     let client_result = if url.is_empty() {
-        // CLI-only mode: no HTTP server configured.
+        // CLI-only mode: no HTTP server configured. The guard above already
+        // returned `None` when neither a URL nor a config file survived
+        // blank-trimming, so a blank URL here means a config file is present —
+        // but say so with a `let ... else` rather than an `.expect`, because
+        // the previous `.expect` was reachable and aborted startup.
         #[allow(clippy::redundant_clone)] // else branch also borrows apprise_config_file
-        let cfg_path = apprise_config_file
-            .clone()
-            .expect("config file required when no URL");
+        let cfg_path = apprise_config_file.clone()?;
         tracing::info!(
             path = %cfg_path.display(),
             "Apprise CLI-only notifications enabled"
@@ -212,6 +232,64 @@ mod tests {
         assert!(
             would_notify(&cli, &cfg, 0.85),
             "an explicit --notify-confidence 0.8 must win over the settings value"
+        );
+    }
+
+    /// A blank Apprise URL means "not configured", not "crash on start".
+    ///
+    /// Three surfaces produce a blank one and none of them is exotic:
+    /// `docker-compose.yml` interpolates `BIRDNET_APPRISE_URL: ${BIRDNET_APPRISE_URL:-}`
+    /// unconditionally, `.env.example` ships the key with an empty value, and
+    /// the admin settings page tells the operator in as many words to "leave
+    /// blank to disable HTTP push notifications". Before this, all three
+    /// reached `.expect("config file required when no URL")` and aborted the
+    /// process during startup — which, under the shipped unit's
+    /// `Restart=always` + `StartLimitBurst=5`, leaves an unattended station
+    /// permanently `failed` rather than merely un-notified.
+    #[test]
+    fn a_blank_apprise_url_disables_notifications_instead_of_panicking() {
+        let cli = default_cli();
+        let cfg = config_with(&[("APPRISE_URL", "")]);
+        assert!(
+            create_apprise_client(&cli, Some(&cfg)).is_none(),
+            "a blank APPRISE_URL must disable Apprise, not abort startup"
+        );
+    }
+
+    /// The same value arriving on the CLI/env side rather than the config file.
+    /// clap hands an empty environment variable through as `Some("")`, so this
+    /// is the exact shape `docker compose up` produces.
+    #[test]
+    fn a_blank_apprise_url_from_the_cli_side_also_disables_notifications() {
+        let mut cli = default_cli();
+        cli.apprise_url = Some(String::new());
+        assert!(
+            create_apprise_client(&cli, None).is_none(),
+            "a blank --apprise-url must disable Apprise, not abort startup"
+        );
+    }
+
+    /// Whitespace is blank too: an operator who typed a space into the settings
+    /// field, or a `.env` line with a trailing space, must not be a crash.
+    #[test]
+    fn a_whitespace_only_apprise_url_is_treated_as_blank() {
+        let cli = default_cli();
+        let cfg = config_with(&[("APPRISE_URL", "   ")]);
+        assert!(create_apprise_client(&cli, Some(&cfg)).is_none());
+    }
+
+    /// The counterpart, so the guard above cannot degrade into "Apprise never
+    /// builds": a blank URL alongside a real config file must still give the
+    /// CLI-only client, which is a supported configuration.
+    #[test]
+    fn a_blank_url_with_a_config_file_still_builds_the_cli_only_client() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut cli = default_cli();
+        cli.apprise_url = Some(String::new());
+        cli.apprise_config = Some(tmp.path().to_path_buf());
+        assert!(
+            create_apprise_client(&cli, None).is_some(),
+            "blank URL + config file is CLI-only mode, not 'disabled'"
         );
     }
 

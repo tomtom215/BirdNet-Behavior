@@ -1,7 +1,6 @@
 //! Disk-space check (best-effort, via `df`).
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use birdnet_core::config::Config;
 
@@ -82,33 +81,25 @@ fn grade_free_space(bytes: u64, dir: &Path) -> Check {
     }
 }
 
-/// Best-effort free-bytes query that shells out to `df` so we don't have to
-/// pull a libc crate or write unsafe FFI. Returns `None` if `df` is missing
-/// or its output cannot be parsed.
+/// Best-effort free-bytes query.
+///
+/// Delegates to [`birdnet_core::audio::capture::disk_usage`] rather than
+/// shelling out again. There were two `df` implementations in this workspace
+/// and they had drifted: this one used POSIX `-Pk`, and the capture disk
+/// manager's used `--output=size,used,avail -B1`, which are GNU coreutils
+/// extensions that BSD and `BusyBox` `df` reject. The one that ran on a macOS
+/// station was the one that mattered, and it was the broken one — so the
+/// preflight reported disk space happily while the purge that keeps the card
+/// from filling never ran.
 fn disk_free_bytes(path: &Path) -> Option<u64> {
-    let out = Command::new("df")
-        .args(["-Pk", "--"])
-        .arg(path)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
-    parse_df_available_kib(&text).map(|kib| kib * 1024)
-}
-
-fn parse_df_available_kib(df_output: &str) -> Option<u64> {
-    // POSIX `df -Pk` prints exactly two lines: a header and one data row.
-    // Columns: Filesystem  1024-blocks  Used  Available  Capacity  Mounted on
-    // We want the 4th column of the data row. Handle wrapped lines defensively.
-    let data = df_output.lines().nth(1)?;
-    data.split_whitespace().nth(3)?.parse::<u64>().ok()
+    birdnet_core::audio::capture::disk_usage(path)
+        .ok()
+        .map(|u| u.available_bytes)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{check_disk_space, grade_free_space, parse_df_available_kib};
+    use super::{check_disk_space, disk_free_bytes, grade_free_space};
     use crate::doctor::Status;
     use std::path::Path;
 
@@ -188,23 +179,37 @@ mod tests {
         assert_eq!(checks[0].name, "Disk space");
     }
 
+    /// The preflight and the purge must be looking at the same filesystem.
+    ///
+    /// They used to shell out to `df` separately, with different flags, and
+    /// only one of the two was POSIX. Output-shape parsing is gated in
+    /// `birdnet_core::audio::capture::disk` across GNU, BSD and `BusyBox`
+    /// fixtures; what this adds is that the doctor reads that same
+    /// implementation rather than a second one of its own.
+    ///
+    /// Deliberately **not** an equality assertion. The first draft of this test
+    /// compared two live `df` readings and failed in the full suite with a
+    /// 4096-byte difference — one block, written by another test between the
+    /// two calls. That is the filesystem moving, not the implementations
+    /// disagreeing, and a gate that cannot tell those apart is a flake. Two
+    /// separate parsers would differ by orders of magnitude (bytes vs KiB, or a
+    /// column misread), so a tolerance well below that and well above ordinary
+    /// churn discriminates exactly the thing this is for.
     #[test]
-    fn parse_df_available_kib_handles_wrapped_and_empty() {
-        // No data row → None (covers the early-return path).
-        assert_eq!(parse_df_available_kib(""), None);
-        // Fewer than four columns → None.
-        assert_eq!(parse_df_available_kib("Header\n/dev/sda1 100"), None);
-    }
-
-    #[test]
-    fn parse_df_available_kib_reads_fourth_column() {
-        let df = "Filesystem 1024-blocks Used Available Capacity Mounted on\n\
-                  /dev/sda1  104857600  41943040 62914560 40% /";
-        assert_eq!(parse_df_available_kib(df), Some(62_914_560));
-    }
-
-    #[test]
-    fn parse_df_available_kib_none_without_data_row() {
-        assert_eq!(parse_df_available_kib("only a header line"), None);
+    fn the_doctor_and_the_purge_read_one_implementation() {
+        let dir = std::env::temp_dir();
+        let doctor = disk_free_bytes(&dir).expect("df answers on this host");
+        let capture = birdnet_core::audio::capture::disk_usage(&dir)
+            .expect("df answers on this host")
+            .available_bytes;
+        assert!(doctor > 0 && capture > 0, "both must read the filesystem");
+        let delta = doctor.abs_diff(capture);
+        let tolerance = capture / 100;
+        assert!(
+            delta <= tolerance.max(64 * 1024 * 1024),
+            "the preflight and the disk manager disagree about free space by \
+             {delta} bytes (doctor {doctor}, capture {capture}) — that is too \
+             large to be concurrent writes and looks like a second parser"
+        );
     }
 }

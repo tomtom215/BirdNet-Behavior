@@ -419,7 +419,7 @@ async fn species_hits(state: &AppState, qlc: &str, limit: usize) -> Vec<Entry> {
             let limit_i64 = i64::try_from(limit).unwrap_or(8);
             let Ok(mut stmt) = conn.prepare(
                 "SELECT Com_Name, Sci_Name, COUNT(*) AS n
-                   FROM detections
+                   FROM detections_analytic
                   WHERE LOWER(Com_Name) LIKE ?1
                      OR LOWER(Sci_Name) LIKE ?1
                   GROUP BY Com_Name, Sci_Name
@@ -465,7 +465,7 @@ async fn render_recent(out: &mut String, state: &AppState) {
         state2.with_db(|conn| {
             let Ok(mut stmt) = conn.prepare(
                 "SELECT Com_Name, Date || ' ' || Time AS at
-                   FROM detections
+                   FROM detections_analytic
                   ORDER BY Date DESC, Time DESC
                   LIMIT 4",
             ) else {
@@ -582,16 +582,8 @@ fn shift_date(date: &str, days: i32) -> String {
     format!("{y2:04}-{m2:02}-{d2:02}")
 }
 
-#[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
-fn ymd_to_days(y: u32, m: u32, d: u32) -> i64 {
-    let y = i64::from(if m <= 2 { y - 1 } else { y });
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = (y - era * 400) as u64;
-    let m = u64::from(m);
-    let d = u64::from(d);
-    let doy = (153 * if m > 2 { m - 3 } else { m + 9 } + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe as i64 - 719_468
+const fn ymd_to_days(y: u32, m: u32, d: u32) -> i64 {
+    birdnet_core::civil::days_from_civil(y, m, d)
 }
 
 #[cfg(test)]

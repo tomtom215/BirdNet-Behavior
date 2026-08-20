@@ -149,20 +149,8 @@ fn week_range_strings() -> (String, String) {
     clippy::cast_sign_loss
 )]
 fn days_to_date_str(days: u64) -> String {
-    let z = days as i64 + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = (z - era * 146_097) as u32;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let y = i64::from(yoe) + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let y_u32 = y as u32;
-    format!("{y_u32:04}-{m:02}-{d:02}")
+    #[allow(clippy::cast_possible_wrap)]
+    birdnet_core::civil::date_string_from_days(days as i64)
 }
 
 /// Return today's ISO date string and ISO weekday (0 = Mon, 6 = Sun).
@@ -176,31 +164,13 @@ fn today_weekday() -> (String, u8) {
 
     let days = secs / 86400;
 
-    // Convert days since epoch to (year, month, day) — same algorithm as capture.rs.
-    #[allow(
-        clippy::cast_possible_wrap,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss
-    )]
-    let z = days as i64 + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let doe = (z - era * 146_097) as u32;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let y = i64::from(yoe) + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let (year, month, day) = (y as u32, m, d);
-
-    // ISO weekday: (days_since_epoch + 3) % 7, where 0=Mon.
+    // ISO weekday: (days_since_epoch + 3) % 7, where 0=Mon. 1970-01-01 was a
+    // Thursday, which is where the 3 comes from.
+    #[allow(clippy::cast_possible_truncation)]
     let weekday = ((days + 3) % 7) as u8;
 
-    let date_str = format!("{year:04}-{month:02}-{day:02}");
+    #[allow(clippy::cast_possible_wrap)]
+    let date_str = birdnet_core::civil::date_string_from_days(days as i64);
     (date_str, weekday)
 }
 

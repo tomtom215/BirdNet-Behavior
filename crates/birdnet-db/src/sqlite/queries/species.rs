@@ -10,12 +10,16 @@ use crate::sqlite::types::{
 
 /// Get the number of unique species (by scientific name).
 ///
+/// Reads `species_summary`, the per-species aggregate migration 30 maintains
+/// on write, rather than counting distinct names across the whole detection
+/// history. See [`species_summary_drift`] for how the two are kept honest.
+///
 /// # Errors
 ///
 /// Returns `DbError` on query failure.
 pub fn species_count(conn: &Connection) -> Result<i64, DbError> {
     let count: i64 = conn.query_row(
-        "SELECT COUNT(DISTINCT Sci_Name) FROM detections_analytic",
+        "SELECT COUNT(DISTINCT Sci_Name) FROM species_summary",
         [],
         |row| row.get(0),
     )?;
@@ -24,13 +28,25 @@ pub fn species_count(conn: &Connection) -> Result<i64, DbError> {
 
 /// Get top species by detection count.
 ///
+/// Reads `species_summary` (migration 30), which holds one row per
+/// (common name, scientific name, hour) and is maintained by triggers on every
+/// write to `detections`. A station with 200 species holds at most 4 800 rows
+/// here, so this aggregates thousands of rows instead of millions and keeps
+/// doing so in year ten — which the query it replaced did not.
+///
+/// Ordering breaks ties on common name. The `detections_analytic` aggregate
+/// this replaced left ties in whatever order the scan produced, so the species
+/// list could reorder between two loads that returned the same numbers.
+///
 /// # Errors
 ///
 /// Returns `DbError` on query failure.
 pub fn top_species(conn: &Connection, limit: u32) -> Result<Vec<SpeciesCount>, DbError> {
     let mut stmt = conn.prepare(
-        "SELECT Com_Name, Sci_Name, COUNT(*) as count, AVG(Confidence) as avg_conf
-         FROM detections_analytic GROUP BY Com_Name, Sci_Name ORDER BY count DESC LIMIT ?1",
+        "SELECT Com_Name, Sci_Name, SUM(detections) as count,
+                SUM(confidence_sum) / SUM(detections) as avg_conf
+         FROM species_summary GROUP BY Com_Name, Sci_Name
+         ORDER BY count DESC, Com_Name ASC LIMIT ?1",
     )?;
     let rows = stmt
         .query_map(params![limit], |row| {
@@ -47,6 +63,9 @@ pub fn top_species(conn: &Connection, limit: u32) -> Result<Vec<SpeciesCount>, D
 
 /// Search species by name (case-insensitive substring match on common or scientific name).
 ///
+/// Reads the maintained `species_summary`, like [`top_species`], and breaks
+/// ties on common name for the same reason.
+///
 /// # Errors
 ///
 /// Returns `DbError` on query failure.
@@ -57,10 +76,11 @@ pub fn search_species(
 ) -> Result<Vec<SpeciesCount>, DbError> {
     let pattern = format!("%{query}%");
     let mut stmt = conn.prepare(
-        "SELECT Com_Name, Sci_Name, COUNT(*) as count, AVG(Confidence) as avg_conf
-         FROM detections_analytic
+        "SELECT Com_Name, Sci_Name, SUM(detections) as count,
+                SUM(confidence_sum) / SUM(detections) as avg_conf
+         FROM species_summary
          WHERE Com_Name LIKE ?1 COLLATE NOCASE OR Sci_Name LIKE ?1 COLLATE NOCASE
-         GROUP BY Com_Name, Sci_Name ORDER BY count DESC LIMIT ?2",
+         GROUP BY Com_Name, Sci_Name ORDER BY count DESC, Com_Name ASC LIMIT ?2",
     )?;
     let rows = stmt
         .query_map(params![pattern, limit], |row| {
@@ -142,6 +162,12 @@ pub fn species_daily_counts(
 
 /// Get hourly activity for a specific species (across all dates).
 ///
+/// Reads `species_summary`, which is already grouped by hour-of-day, so this
+/// is a lookup of at most 24 rows rather than a scan of every detection of the
+/// species. The `hour` key is `SUBSTR(Time, 1, 2)` stored verbatim — including
+/// for a malformed imported timestamp, which lands in its own bucket exactly as
+/// the aggregate this replaced reported it.
+///
 /// # Errors
 ///
 /// Returns `DbError` on query failure.
@@ -150,8 +176,8 @@ pub fn species_hourly_activity(
     com_name: &str,
 ) -> Result<Vec<HourlyCount>, DbError> {
     let mut stmt = conn.prepare(
-        "SELECT SUBSTR(Time, 1, 2) as hour, COUNT(*) as count
-         FROM detections_analytic WHERE Com_Name = ?1
+        "SELECT hour, SUM(detections) as count
+         FROM species_summary WHERE Com_Name = ?1
          GROUP BY hour ORDER BY hour",
     )?;
     let rows = stmt
@@ -172,6 +198,11 @@ pub fn species_hourly_activity(
 /// scan per species (an N+1). Returns a map from common name to its 24-hour
 /// histogram; a species with no detections is simply absent from the map.
 ///
+/// Also reads the maintained `species_summary`. The hour is `CAST` to an
+/// integer here and out-of-range values dropped, which is what this function
+/// has always done and is why a malformed imported timestamp cannot land in the
+/// array — [`species_hourly_activity`] reports that bucket instead.
+///
 /// # Errors
 ///
 /// Returns `DbError` on query failure.
@@ -186,10 +217,10 @@ pub fn species_hourly_activity_batch(
     // One bind placeholder per species for the `IN (…)` list.
     let placeholders = vec!["?"; com_names.len()].join(",");
     let sql = format!(
-        "SELECT Com_Name, CAST(SUBSTR(Time, 1, 2) AS INTEGER) AS hour, COUNT(*) AS cnt
-         FROM detections_analytic
+        "SELECT Com_Name, CAST(hour AS INTEGER) AS h, SUM(detections) AS cnt
+         FROM species_summary
          WHERE Com_Name IN ({placeholders})
-         GROUP BY Com_Name, hour"
+         GROUP BY Com_Name, h"
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(rusqlite::params_from_iter(com_names.iter()), |row| {
@@ -351,6 +382,109 @@ pub fn species_first_seen(
 }
 
 // ---------------------------------------------------------------------------
+// The maintained summary: verifying it, and repairing it
+// ---------------------------------------------------------------------------
+
+/// One (species, hour) bucket where `species_summary` disagrees with
+/// `detections`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SummaryDrift {
+    /// Common name of the bucket that disagrees.
+    pub com_name: String,
+    /// Scientific name of the bucket that disagrees.
+    pub sci_name: String,
+    /// Hour-of-day key, as stored (`SUBSTR(Time, 1, 2)`).
+    pub hour: String,
+    /// What `species_summary` claims the count is.
+    pub summary_count: i64,
+    /// What counting `detections` directly says it is.
+    pub actual_count: i64,
+}
+
+/// Compare the maintained summary against the detections it summarises.
+///
+/// A materialised aggregate that can drift is worse than a slow query, because
+/// nothing about a wrong number looks wrong. Migration 30 maintains
+/// `species_summary` with triggers precisely so no write path can bypass it —
+/// but "no path can bypass it" is a claim, and this is how the claim is
+/// checked rather than believed.
+///
+/// This costs a full aggregate over `detections`: the same work the summary
+/// exists to avoid. It is therefore not something a page load may call. It is
+/// for `--doctor` and for the daily maintenance job, which run it once and act
+/// on the answer.
+///
+/// Returns one entry per disagreeing bucket, including buckets present on only
+/// one side. An empty vector means the two agree exactly.
+///
+/// Only counts are compared, not `confidence_sum`. The trigger maintains the
+/// sum by repeated addition and `SUM()` adds in scan order, so the two can
+/// differ in the last bits of a float for reasons that are not drift; the
+/// count is an integer and cannot.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn species_summary_drift(conn: &Connection) -> Result<Vec<SummaryDrift>, DbError> {
+    let mut stmt = conn.prepare(
+        "WITH truth AS (
+             SELECT Com_Name, Sci_Name, SUBSTR(Time, 1, 2) AS hour, COUNT(*) AS n
+               FROM detections
+              WHERE review_verdict IS NOT 'rejected'
+              GROUP BY Com_Name, Sci_Name, SUBSTR(Time, 1, 2)
+         )
+         SELECT COALESCE(s.Com_Name, t.Com_Name),
+                COALESCE(s.Sci_Name, t.Sci_Name),
+                COALESCE(s.hour, t.hour),
+                COALESCE(s.detections, 0),
+                COALESCE(t.n, 0)
+           FROM species_summary s
+           FULL OUTER JOIN truth t
+             ON s.Com_Name = t.Com_Name AND s.Sci_Name = t.Sci_Name AND s.hour = t.hour
+          WHERE COALESCE(s.detections, 0) <> COALESCE(t.n, 0)
+          ORDER BY 1, 2, 3",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(SummaryDrift {
+                com_name: row.get(0)?,
+                sci_name: row.get(1)?,
+                hour: row.get(2)?,
+                summary_count: row.get(3)?,
+                actual_count: row.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Recompute `species_summary` from `detections`, discarding what was there.
+///
+/// The repair half of [`species_summary_drift`]. It is the same statement
+/// migration 30 runs to backfill, so a rebuilt summary is indistinguishable
+/// from a freshly migrated one.
+///
+/// Returns the number of buckets written.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn rebuild_species_summary(conn: &Connection) -> Result<usize, DbError> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute("DELETE FROM species_summary", [])?;
+    let n = tx.execute(
+        "INSERT INTO species_summary (Com_Name, Sci_Name, hour, detections, confidence_sum)
+             SELECT Com_Name, Sci_Name, SUBSTR(Time, 1, 2), COUNT(*), SUM(Confidence)
+               FROM detections
+              WHERE review_verdict IS NOT 'rejected'
+              GROUP BY Com_Name, Sci_Name, SUBSTR(Time, 1, 2)",
+        [],
+    )?;
+    tx.commit()?;
+    Ok(n)
+}
+
+// ---------------------------------------------------------------------------
 // Per-species confidence thresholds
 // ---------------------------------------------------------------------------
 
@@ -436,6 +570,59 @@ pub fn delete_species_threshold(conn: &Connection, sci_name: &str) -> Result<(),
 
 #[cfg(test)]
 mod tests {
+    /// The whole-history species aggregates must be served by a covering index.
+    ///
+    /// These three run on every load of the species list, the life list and a
+    /// species page, over the *entire* detection history with no time bound —
+    /// so their cost grows with how long the station has been running, which is
+    /// exactly backwards for a multi-year deployment. On a seeded three-year
+    /// station (2 755 374 detections, 1.43 GB) they took 4.96 s, 4.12 s and
+    /// 4.82 s before migration 29's covering indexes and 1.31 s, 0.58 s and
+    /// 1.15 s after.
+    ///
+    /// A timing assertion would be flaky, so this pins the mechanism instead:
+    /// SQLite must report a COVERING INDEX, which is the thing that stops the
+    /// plan going back to the table row by row. Dropping either index, or
+    /// removing a column from one, turns the plan back into a plain
+    /// `SCAN … USING INDEX` and fails here.
+    #[test]
+    fn the_whole_history_species_aggregates_are_index_only() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migration::migrate(&conn).unwrap();
+        let plan = |sql: &str| -> String {
+            let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+            let rows: Vec<String> = stmt
+                .query_map([], |r| r.get::<_, String>(3))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            rows.join(" | ")
+        };
+        for (name, sql) in [
+            (
+                "species list",
+                "SELECT Com_Name, Sci_Name, COUNT(*) c, AVG(Confidence) \
+                 FROM detections_analytic GROUP BY Com_Name, Sci_Name ORDER BY c DESC LIMIT 200",
+            ),
+            (
+                "life-list firsts",
+                "SELECT Sci_Name, MIN(Date || ' ' || Time) FROM detections_analytic \
+                 GROUP BY Sci_Name",
+            ),
+            (
+                "per-species hour histogram",
+                "SELECT Com_Name, CAST(SUBSTR(Time, 1, 2) AS INTEGER) h, COUNT(*) \
+                 FROM detections_analytic GROUP BY Com_Name, h",
+            ),
+        ] {
+            let p = plan(sql);
+            assert!(
+                p.contains("COVERING INDEX"),
+                "the {name} aggregate must be index-only; plan was: {p}"
+            );
+        }
+    }
+
     use super::*;
     use crate::sqlite::connection::open_or_create;
     use rusqlite::params;

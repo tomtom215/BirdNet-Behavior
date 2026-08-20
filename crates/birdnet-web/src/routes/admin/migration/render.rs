@@ -5,13 +5,7 @@ use birdnet_migrate::progress::{MigrationProgress, MigrationStage};
 use birdnet_migrate::schema::DetectedSchema;
 use birdnet_migrate::traits::ValidationReport;
 
-/// Escape HTML special characters.
-pub fn escape_html(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-}
+use crate::routes::pages::escape_html;
 
 /// Render the BirdNET-Pi import body (no document shell).
 ///

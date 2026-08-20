@@ -94,7 +94,82 @@ pub(super) fn check_database(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
         ));
     }
 
+    out.push(species_summary_check(&db_path));
+
     out
+}
+
+/// Does the maintained species summary still agree with the detections?
+///
+/// Migration 30 keeps `species_summary` up to date with triggers so the species
+/// screens stop re-aggregating the whole history on every load. Triggers cannot
+/// be forgotten by a write path, which is why they were chosen — but "cannot"
+/// is a claim about SQLite and about every statement this codebase will ever
+/// run against `detections`, and a materialised aggregate that quietly
+/// disagrees with its source is worse than a slow query: a wrong number does
+/// not look wrong.
+///
+/// So the claim is checked rather than trusted. This is the one place in the
+/// product that pays the full aggregate the summary exists to avoid, which is
+/// affordable exactly because `--doctor` is not a page load.
+///
+/// A disagreement is a **warning**, not an error, for the same reason the
+/// integrity check above is: the installed unit gates startup on
+/// `--doctor ... || [ $? -le 1 ]`, and a stale species count is not a reason to
+/// refuse to record birds. `--fix-permissions`-style repair is a one-liner the
+/// remedy names.
+fn species_summary_check(db_path: &std::path::Path) -> Check {
+    if !db_path.exists() {
+        return Check::skip(
+            "Species summary",
+            "no database file yet — the summary is built by migration 30",
+        );
+    }
+    let conn = match rusqlite::Connection::open_with_flags(
+        db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ) {
+        Ok(conn) => conn,
+        Err(e) => {
+            return Check::skip(
+                "Species summary",
+                format!(
+                    "database could not be opened read-only ({e}) — integrity is reported above"
+                ),
+            );
+        }
+    };
+    match birdnet_db::sqlite::queries::species::species_summary_drift(&conn) {
+        Ok(drift) if drift.is_empty() => Check::pass(
+            "Species summary",
+            "the maintained species totals agree with the detections",
+        ),
+        Ok(drift) => {
+            // Name one, and say how many. The full list can run to every
+            // species on the station and is not what an operator needs from a
+            // health report; the first is enough to recognise the shape.
+            let first = &drift[0];
+            Check::warn(
+                "Species summary",
+                format!(
+                    "{} species/hour bucket(s) disagree with the detections \
+                     (e.g. {} at hour {}: summary says {}, detections say {}) — \
+                     the species list and per-species charts will be off by that much",
+                    drift.len(),
+                    first.com_name,
+                    first.hour,
+                    first.summary_count,
+                    first.actual_count,
+                ),
+                "run `birdnet-behavior --rebuild-species-summary` to recompute it from the \
+                 detections; the numbers are derived, so nothing is lost by rebuilding",
+            )
+        }
+        Err(e) => Check::skip(
+            "Species summary",
+            format!("could not be checked ({e}) — this database predates migration 30"),
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -201,5 +276,69 @@ mod tests {
                 .iter()
                 .any(|c| c.name.contains("Database integrity") && c.status == Status::Pass)
         );
+    }
+
+    /// The summary check must distinguish an agreeing summary from a drifted
+    /// one, and must not fail the preflight for either.
+    ///
+    /// Both arms matter. A check that only ever passes is indistinguishable
+    /// from no check; a check that only ever warns would block nothing but
+    /// would cry wolf on every healthy station, which is how a warning stops
+    /// being read. The *status* assertion is as important as the detection:
+    /// the installed unit gates startup on `--doctor ... || [ $? -le 1 ]`, so
+    /// grading this an error would stop a station from recording birds over a
+    /// stale species count.
+    #[test]
+    fn species_summary_check_warns_on_drift_and_passes_when_it_agrees() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("birds.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+             VALUES ('2026-05-01', '06:00:00', 'Turdus merula', 'Blackbird', 0.9, 'a.wav')",
+            [],
+        )
+        .unwrap();
+
+        let healthy = species_summary_check(&db_path);
+        assert_eq!(
+            healthy.status,
+            Status::Pass,
+            "a summary the triggers maintained should pass: {}",
+            healthy.message
+        );
+
+        // Corrupt it behind the triggers' back.
+        conn.execute("UPDATE species_summary SET detections = 41", [])
+            .unwrap();
+        drop(conn);
+
+        let drifted = species_summary_check(&db_path);
+        assert_eq!(
+            drifted.status,
+            Status::Warn,
+            "drift must warn, never error — an error here blocks the daemon that records birds"
+        );
+        assert!(
+            drifted.message.contains("Blackbird") && drifted.message.contains("41"),
+            "the warning should name the bucket and what it claims; got: {}",
+            drifted.message
+        );
+    }
+
+    /// A database from before migration 30 has no summary to check.
+    ///
+    /// It must skip rather than warn: a station mid-upgrade has not drifted,
+    /// and a warning it cannot act on is noise.
+    #[test]
+    fn species_summary_check_skips_when_the_table_is_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("old.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch("CREATE TABLE detections (Date TEXT);")
+            .unwrap();
+        drop(conn);
+        assert_eq!(species_summary_check(&db_path).status, Status::Skip);
     }
 }

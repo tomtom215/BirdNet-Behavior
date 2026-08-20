@@ -486,6 +486,16 @@ mod tests {
 
     /// Days since 1970-01-01 for civil `(y, m, d)` — Hinnant's
     /// `days_from_civil`, the exact inverse of `civil_from_unix_secs`.
+    ///
+    /// # Do not replace this with `birdnet_core::civil::days_from_civil`
+    ///
+    /// Every other copy of this arithmetic in the workspace was consolidated
+    /// into `birdnet-core::civil`. This one stays, deliberately: it is the
+    /// *oracle* the conversion under test is checked against, and an oracle
+    /// that calls the implementation it is verifying proves only that the
+    /// implementation equals itself. `civil_matches_oracle_every_day_for_centuries`
+    /// below walks 1970-2200 comparing the two, which is only worth anything
+    /// while they are written separately.
     fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
         let y = if m <= 2 { y - 1 } else { y };
         let era = (if y >= 0 { y } else { y - 399 }) / 400;

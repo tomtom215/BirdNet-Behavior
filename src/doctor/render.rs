@@ -196,6 +196,44 @@ mod tests {
         assert!(json.contains("\"status\":\"skip\""));
     }
 
+    /// `--doctor-json` is documented for monitoring integrations (Nagios,
+    /// Zabbix, a Prometheus textfile collector, a Home Assistant command
+    /// sensor). Every one of those parses the output, so "looks escaped" is not
+    /// the bar — it has to *parse*, for any check text the station can produce.
+    ///
+    /// The existing gate below asserts the document ends with `}`, which a
+    /// malformed document also does. This one round-trips it through a real
+    /// JSON parser with adversarial payloads.
+    #[test]
+    fn the_json_document_parses_for_hostile_check_text() {
+        let nasty = [
+            "quote\" and backslash\\",
+            "newline\nreturn\rtab\t",
+            "bell\u{7}nul-ish\u{1}vertical\u{b}",
+            "unicode: Grünspecht 🐦 日本語",
+            "}{\"]:,",
+            "",
+        ];
+        let checks: Vec<Check> = nasty
+            .iter()
+            .map(|t| Check::warn(*t, *t, (*t).to_string()))
+            .collect();
+        let json = render_json(&checks, 1);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&json).unwrap_or_else(|e| panic!("not valid JSON: {e}\n{json}"));
+
+        // …and the text survives the round trip byte for byte, so a monitoring
+        // system reads the message the operator would.
+        let arr = parsed["checks"].as_array().expect("checks array");
+        assert_eq!(arr.len(), nasty.len());
+        for (got, want) in arr.iter().zip(nasty.iter()) {
+            assert_eq!(got["name"].as_str(), Some(*want));
+            assert_eq!(got["message"].as_str(), Some(*want));
+            assert_eq!(got["remediation"].as_str(), Some(*want));
+        }
+        assert_eq!(parsed["summary"]["exit_code"].as_i64(), Some(1));
+    }
+
     #[test]
     fn json_escapes_control_characters_and_quotes() {
         let c = Check::warn("name\"X", "line1\nline2\twith\\backslash", "fix\rme");

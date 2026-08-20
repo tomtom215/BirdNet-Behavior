@@ -203,18 +203,8 @@ fn expires_at_for_ttl(ttl_ms: u64) -> String {
     clippy::many_single_char_names
 )]
 fn format_sqlite_datetime(secs: i64) -> String {
-    let days = secs.div_euclid(86_400);
     let rem = secs.rem_euclid(86_400);
-    let z = days + 719_468;
-    let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
-    let doe = (z - era * 146_097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = (y + i64::from(m <= 2)) as i32;
+    let (year, m, d) = birdnet_core::civil::civil_from_days(secs.div_euclid(86_400));
     let hh = (rem / 3600) as u32;
     let mm = ((rem % 3600) / 60) as u32;
     let ss = (rem % 60) as u32;
@@ -320,19 +310,7 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 fn urlencode_path(s: &str) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::with_capacity(s.len());
-    for byte in s.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(byte as char);
-            }
-            _ => {
-                let _ = write!(out, "%{byte:02X}");
-            }
-        }
-    }
-    out
+    crate::urls::encode_path(s)
 }
 
 #[cfg(test)]

@@ -9,10 +9,24 @@
 //!
 //! ## What this script does
 //!
-//! Loads `docs/book/book.toml`, builds the book, and writes the rendered
-//! HTML tree to `docs/book/_generated/html/`. The output path is checked
-//! into `.gitignore` so the rendered tree never lands in commits — every
-//! build rebuilds from source.
+//! Loads the **workspace root** `book.toml` — the same file GitHub Pages
+//! builds from — overrides its build directory, and writes the rendered HTML
+//! tree to `docs/book/_generated/html/`. The output path is checked into
+//! `.gitignore` so the rendered tree never lands in commits — every build
+//! rebuilds from source.
+//!
+//! ## One book.toml, not two
+//!
+//! There used to be a second config at `docs/book/book.toml` for this build.
+//! The two drifted: the published site used the `light`/`navy` themes with
+//! `docs/book-theme/custom.css` and folded sections, and the in-app copy used
+//! the `rust` theme with no custom CSS and no folding — same Markdown, two
+//! different-looking sites, and only the published one was link-checked.
+//!
+//! Overriding `build.build_dir` after load is the whole difference now, so the
+//! two renders cannot diverge in anything else. `MDBook::build_dir_for` reads
+//! that field at build time and joins it to the book root, which is what makes
+//! the override work.
 //!
 //! ## Cargo rerun hints
 //!
@@ -51,7 +65,7 @@ fn main() {
         return;
     }
 
-    let book = match mdbook_driver::MDBook::load(&book_root) {
+    let mut book = match mdbook_driver::MDBook::load(&book_root) {
         Ok(book) => book,
         Err(e) => {
             // Print the underlying error: a silent skip here once masked a
@@ -64,34 +78,47 @@ fn main() {
         }
     };
 
+    // The published site's build dir is `docs/.book-build`; the in-app tree has
+    // to land where `pages::help`'s ServeDir looks. Everything else — theme,
+    // custom CSS, folding, `create-missing` — comes from the one shared config.
+    book.config.build.build_dir = PathBuf::from("docs/book/_generated/html");
+
     if let Err(e) = book.build() {
         // Don't abort the cargo build: an operator who hits a docs issue
         // should still get a working binary. The help drawer's fallback
         // panel covers the missing-pages case.
+        // The whole chain, not just `{e}`. mdBook's top-level message here is
+        // "Rendering failed", which says nothing: the actual cause — a
+        // `git-repository-icon` prefix mdBook 0.5 rejects — was three links
+        // down, and the one-line form hid it completely.
         println!(
-            "cargo:warning=mdBook build failed: {e} — /help/* will return 404 until docs are rendered"
+            "cargo:warning=mdBook build failed: {} — /help/* will return 404 until docs are rendered",
+            e.chain()
+                .map(std::string::ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(" <- ")
         );
     }
 }
 
-/// Locate the book source directory relative to `CARGO_MANIFEST_DIR`.
-/// Defaults to `docs/book/` under the workspace root.
+/// Locate the book root — the directory holding `book.toml`, whose `src` key
+/// points at `docs/book/`.
+///
+/// That is the workspace root, not `docs/book/`: there is one config now and
+/// GitHub Pages builds from the same one.
 fn book_source_root() -> PathBuf {
     let manifest =
         std::env::var("CARGO_MANIFEST_DIR").map_or_else(|_| PathBuf::from("."), PathBuf::from);
-    let candidate = manifest.join("docs/book");
-    if candidate.exists() {
-        return candidate;
+    if manifest.join("book.toml").exists() && manifest.join("docs/book").exists() {
+        return manifest;
     }
-    // Fallback: walk up looking for `docs/book/` so a `cargo build` from a
-    // child crate still finds the right tree. Stops at filesystem root.
+    // Fallback: walk up so a `cargo build` from a child crate still finds it.
     let mut cur: &Path = &manifest;
     while let Some(parent) = cur.parent() {
-        let here = parent.join("docs/book");
-        if here.exists() {
-            return here;
+        if parent.join("book.toml").exists() && parent.join("docs/book").exists() {
+            return parent.to_path_buf();
         }
         cur = parent;
     }
-    candidate
+    manifest
 }

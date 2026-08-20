@@ -340,6 +340,23 @@ mod tests {
         conn
     }
 
+    /// The two copies of this threshold must agree.
+    ///
+    /// `birdnet-db` cannot depend on `birdnet-migrate` (the dependency runs the
+    /// other way), so `birdnet_db::sqlite::DIFFERENT_SITE_KM` is a second
+    /// literal. A second literal that drifts is how a surface comes to call a
+    /// batch "the same site" while the importer that wrote it called it a
+    /// different one — with the operator's decision recorded against the other
+    /// answer.
+    #[test]
+    fn the_different_site_threshold_matches_the_one_the_database_reports_with() {
+        assert!(
+            (DIFFERENT_SITE_KM - birdnet_db::sqlite::DIFFERENT_SITE_KM).abs() < f64::EPSILON,
+            "birdnet-migrate says {DIFFERENT_SITE_KM} km, birdnet-db says {} km",
+            birdnet_db::sqlite::DIFFERENT_SITE_KM
+        );
+    }
+
     #[test]
     fn haversine_matches_a_known_distance() {
         // London (51.5074, -0.1278) to Paris (48.8566, 2.3522): ~343 km.

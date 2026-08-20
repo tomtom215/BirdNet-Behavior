@@ -3359,6 +3359,27 @@ a.dr-row-name  { font-weight: 600; color: var(--fg); }
 .dr-vrow       { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; padding: 0.5rem 0; border-top: 0.5px solid var(--hairline); }
 .dr-vrow-main  { flex: 1 1 180px; min-width: 0; font-weight: 500; }
 .dr-vrow-meta  { color: var(--fg-3); font-weight: 400; font-size: 0.8rem; }
+
+/* Verdict history: status filter + pager. Both render as plain links so each
+   view is a URL an operator can keep — the point of the change is that a
+   rejection recorded months ago has to be findable. */
+.dr-filter { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 0.75rem; }
+.dr-filter__btn { font-size: 0.85rem; padding: 4px 10px; text-decoration: none; }
+.dr-filter__btn.is-selected {
+  border-color: var(--fg-3);
+  background: var(--bg-2);
+  font-weight: 600;
+}
+.dr-pager {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 0.75rem;
+  padding-top: 0.5rem;
+  border-top: 0.5px solid var(--hairline);
+}
+.dr-pager .bnb-btn { text-decoration: none; font-size: 0.85rem; }
 .dr-undo-btn   { white-space: nowrap; font-size: 0.8rem; }
 .dr-widget     { margin-top: 16px; }
 .dr-widget-form { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
@@ -3415,6 +3436,30 @@ a.bk-download    { color: var(--moss-ink); font-size: .8rem; text-decoration: no
 .aud-edit-right   { display: inline-flex; gap: 8px; }
 input.aud-edit-label  { font-size: 14.5px; padding: 6px 8px; border-radius: 6px; border: 0.5px solid var(--border-2); background: var(--bg-2); color: var(--fg); }
 input.aud-edit-device { font-size: 12px; padding: 6px 8px; border-radius: 6px; border: 0.5px solid var(--border-2); background: var(--bg-2); color: var(--fg); }
+
+/* Per-source quiet window. `.aud-edit-form` is `display: contents`, so this
+   block is a grid child of `.audio-source` alongside the id and the buttons;
+   it spans the full row because two time inputs plus their hint do not fit
+   beside the device fields at the narrow end of the range. */
+.aud-edit-quiet {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.aud-edit-quiet .hint { flex-basis: 100%; margin: 2px 0 0; }
+input.aud-edit-time {
+  font-size: 12.5px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 0.5px solid var(--border-2);
+  background: var(--bg-2);
+  color: var(--fg);
+  /* Chromium renders the native picker indicator dark-on-dark otherwise. */
+  color-scheme: light dark;
+}
 
 /* admin/mod.rs — admin shell nav + sign-out. */
 a.am-nav-active   { color: var(--moss-ink); font-weight: 500; }
@@ -4129,3 +4174,17 @@ table.pt-tbl td { padding: 6px 8px; border-bottom: 0.5px solid var(--hairline); 
     overflow-wrap: anywhere;
   }
 }
+
+
+/* Provenance note — "some of these charts include another site's history".
+   Rendered above the Patterns sub-tabs, and only when a genuinely different
+   site was imported, so it is allowed to be prominent. */
+.prov-note {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 14px;
+  border-left: 3px solid var(--dawn, var(--border-2));
+}
+.prov-note__body { margin: 0; max-width: 68ch; }

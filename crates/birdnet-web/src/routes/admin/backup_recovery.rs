@@ -20,6 +20,7 @@
 //! genuinely cannot do something (off-site destinations, restore-verification),
 //! the page says so rather than showing a dead switch.
 
+use crate::routes::pages::escape_html;
 use std::fmt::Write as _;
 
 use axum::Router;
@@ -210,13 +211,6 @@ fn pct_of(part: u64, total: u64) -> u32 {
     ((part as f64 / total as f64) * 100.0)
         .clamp(0.0, 100.0)
         .round() as u32
-}
-
-fn escape_html(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
 }
 
 /// A storage-breakdown tile with a usage bar. The bar fill colour is an

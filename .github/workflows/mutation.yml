@@ -130,7 +130,7 @@ jobs:
   config:
     name: CI config (paths, shards, timeouts)
     runs-on: ubuntu-24.04
-    timeout-minutes: 15  # observed 16s
+    timeout-minutes: 15  # observed 57s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install cargo-mutants
@@ -241,17 +241,70 @@ jobs:
             # it). 0 missed at introduction: 26 mutants, 23 caught, 3
             # unviable.
             max_missed: 0
-          - label: civil.rs
-            slug: civil.rs
-            file: crates/birdnet-core/src/civil.rs
-            # Added when the capture tee started formatting segment filenames:
-            # the Hinnant civil-date arithmetic moved down here out of
-            # src/capture/schedule.rs (which now delegates), and without this
-            # row that move would have quietly dropped it out of the mutation
-            # matrix. It is also load-bearing in a new way — a wrong day here
-            # is a wrong `Date` on every detection, because the filename *is*
-            # the timestamp. 0 missed: 82 caught, 1 unviable.
-            max_missed: 0
+          # Added when the capture tee started formatting segment filenames:
+          # the Hinnant civil-date arithmetic moved down here out of
+          # src/capture/schedule.rs (which now delegates), and without this
+          # row that move would have quietly dropped it out of the mutation
+          # matrix. It is also load-bearing in a new way — a wrong day here
+          # is a wrong `Date` on every detection, because the filename *is*
+          # the timestamp. 0 missed at introduction: 82 caught, 1 unviable.
+          #
+          # Three shards, sized from measurement rather than from the ~13 and
+          # ~28 mutants/shard figures the rows around this one use — those were
+          # measured on files whose mutants are far more expensive than this
+          # one's. Fitting the two costs from run history:
+          #
+          #   full run on main, 181 mutants          21.9 min
+          #   PR run, `--in-diff`, ~baseline only     4.9 min
+          #   => baseline build ~4.9 min, ~5.6 s per mutant
+          #
+          # The file has since reached 307 mutants — it became the workspace's
+          # one home for this arithmetic, absorbing ten scattered copies — and
+          # unsharded that projects to 33.7 min, which is 75% of the 45-minute
+          # budget: exactly the threshold, so it fails. Three shards put each at
+          # ~14.6 min (32%), which leaves room for the file to roughly double
+          # again before this needs revisiting. Four would buy 5 min for a
+          # fourth cold baseline build, which is not worth it.
+          #
+          # Guard against the empty-tail-shard bug this matrix has hit before:
+          # ceil(307/3) = 103, and (3-1)*103 = 206 < 307, so every shard gets
+          # work.
+          #
+          # ## Renaming a row costs one slow run — do not resize budgets from it
+          #
+          # The Cargo cache below is keyed on `matrix.label`, and its last
+          # restore-key is the bare `<os>-mutants-v2-`. A row whose label is
+          # *new* therefore has no cache of its own and restores an arbitrary
+          # other row's `target/mutants/` — which, when that row builds the
+          # binary crate, is a DuckDB- and ONNX-linked tree this job cannot
+          # use. That is worse than cold: cargo invalidates it and rebuilds
+          # anyway.
+          #
+          # Splitting `civil.rs` into three retired one label and created three
+          # that had never run. Measured across the two runs that followed:
+          #
+          #   first run, foreign cache   civil.rs [1/3]        45.4m (wall)
+          #                              civil.rs [3/3]        44.0m
+          #                              db/migration.rs [1/2] 45.4m (wall)
+          #                              detections [1..4/4]   all ~45m
+          #   next run, own cache        civil.rs [1/3]         9.5m
+          #                              civil.rs [3/3]         7.2m
+          #                              db/migration.rs [1/2]  8.1m
+          #                              detections [1..4/4]  6.9-10.0m
+          #
+          # Eight rows spent 45 minutes each learning that, and the `CI config`
+          # job reported every one as "used 45m of its 45m budget" — true, and
+          # nothing to do with the code. `validate.rs` was briefly given a
+          # 60-minute budget on the strength of one such sample; it takes three
+          # minutes with its own cache, and the override is gone again.
+          #
+          # So: expect one bad run after any re-shard or rename, and size
+          # nothing from it. The underlying fix is to stop `target/mutants/`
+          # sharing a restore-key across rows — `~/.cargo/registry/` is the
+          # only part of that cache worth pooling between them.
+          - { label: "civil.rs [1/3]", slug: civil.rs-1, shard: "0/3", file: crates/birdnet-core/src/civil.rs, max_missed: 0 }
+          - { label: "civil.rs [2/3]", slug: civil.rs-2, shard: "1/3", file: crates/birdnet-core/src/civil.rs, max_missed: 0 }
+          - { label: "civil.rs [3/3]", slug: civil.rs-3, shard: "2/3", file: crates/birdnet-core/src/civil.rs, max_missed: 0 }
           # Globbed, because this stopped being one file in 0.7.2 (#145),
           # which split it into mod/read/write/search/locks. The matrix kept
           # naming `detections.rs` and nothing noticed for two months: the
@@ -412,7 +465,7 @@ jobs:
           sudo docker image prune --all --force >/dev/null 2>&1 || true
           echo "Disk after:"; df -h /
 
-      - name: Cache Cargo
+      - name: Cache the mutants build tree
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           # Cache ONLY the `mutants` profile tree — the sole build dir this
@@ -420,20 +473,60 @@ jobs:
           # `target/` cache carried the legacy dev-profile artifacts (full
           # debug info + every DuckDB-linking integration-test executable
           # the old per-mutant loop built) and had grown past what a runner
-          # can even EXTRACT: the "Cache Cargo" restore step itself died on
+          # can even EXTRACT: the restore step itself died on
           # ENOSPC before mutation testing ran. The `-v2-` key generation
           # orphans those oversized caches (GitHub evicts them); the first
           # run per shard pays a one-time cold dependency build, after which
           # the no-debuginfo cache stays a fraction of the old size.
+          #
+          # Two things with different sharing rules used to live in one entry,
+          # and pooling them was actively harmful. The registry is identical
+          # for every row and worth sharing. `target/mutants/` is not: it holds
+          # compiled artifacts for one package, and the last restore-key was
+          # the bare `<os>-mutants-v2-`, so a row with no cache of its own —
+          # any row that has just been renamed or re-sharded — restored some
+          # other row's build tree. When that row builds the binary crate it is
+          # a DuckDB- and ONNX-linked tree a `birdnet-core` job cannot use, so
+          # cargo invalidated it and rebuilt from scratch, having first paid to
+          # download and extract it. Measured cost of that: eight rows at
+          # 45 minutes each, against 7-10 minutes once each had its own entry.
+          #
+          # So the build tree is keyed strictly per row now and never falls
+          # back to another one's. A renamed row starts genuinely cold, which
+          # is the honest price of renaming it and is cheaper than starting
+          # wrong.
+          #
+          # The second restore-key is the *old* combined key, still scoped to
+          # this row's label. Without it, changing the key prefix would throw
+          # away every warm cache in the repository at once and make the first
+          # run after this commit as slow as the incident it fixes — for no
+          # reason, since an archive saved under `-v2-<this label>-` holds this
+          # row's own tree. It is safe precisely because the label is in it;
+          # the registry entry below deliberately has no such fallback, because
+          # its key carries no label and `actions/cache` restores an archive's
+          # full contents, so falling back there would drag some other row's
+          # tree in and reintroduce the bug.
+          path: |
+            target/mutants/
+          key: ${{ runner.os }}-mutants-tree-v1-${{ matrix.label }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mutants-tree-v1-${{ matrix.label }}-
+            ${{ runner.os }}-mutants-v2-${{ matrix.label }}-
+
+      - name: Cache the Cargo registry
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          # Shared across every row on purpose: the dependency downloads are
+          # identical whatever file a row mutates, and pooling them is what
+          # stops 26 rows each fetching the same crates from scratch. This is
+          # the half of the old combined entry that was worth sharing.
           path: |
             ~/.cargo/registry/index/
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
-            target/mutants/
-          key: ${{ runner.os }}-mutants-v2-${{ matrix.label }}-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-mutants-registry-v1-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-mutants-v2-${{ matrix.label }}-
-            ${{ runner.os }}-mutants-v2-
+            ${{ runner.os }}-mutants-registry-v1-
 
       - name: Install cargo-mutants
         uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2.85.4

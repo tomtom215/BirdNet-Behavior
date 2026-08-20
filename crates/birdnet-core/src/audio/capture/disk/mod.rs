@@ -55,18 +55,64 @@ impl DiskUsage {
     }
 }
 
+/// Arguments passed to `df`, kept in one place so a gate can assert they stay
+/// POSIX.
+///
+/// `-P` selects the portable output format and `-k` fixes the block size at
+/// 1024 bytes; both are in POSIX. `--` stops option parsing so a path beginning
+/// with `-` is still a path. Nothing here may become a GNU extension again:
+/// `--output=` and `-B1` exist in neither BSD `df` nor `BusyBox`, and their
+/// absence failed silently.
+const DF_ARGS: [&str; 2] = ["-Pk", "--"];
+
+/// Parse the data row of `df -Pk` output into a [`DiskUsage`].
+///
+/// POSIX fixes this format exactly: a header line, then one row per operand of
+///
+/// ```text
+/// Filesystem  1024-blocks  Used  Available  Capacity  Mounted on
+/// ```
+///
+/// Columns 2, 3 and 4 are the ones wanted, in 1024-byte blocks. Parsing by
+/// *position* rather than by "the first three things that look like numbers"
+/// matters: a device name such as `/dev/mmcblk0p2` contains no spaces, but a
+/// mount point can (`/media/My Disk`), and a filesystem field long enough to
+/// push the row onto a second line is why the header is skipped by index rather
+/// than by matching.
+///
+/// Pure, so every shape below is testable without a filesystem that has them.
+fn parse_df_pk(stdout: &str) -> Option<DiskUsage> {
+    let row = stdout.lines().nth(1)?;
+    let mut cols = row.split_whitespace().skip(1);
+    let total_k: u64 = cols.next()?.parse().ok()?;
+    let used_k: u64 = cols.next()?.parse().ok()?;
+    let avail_k: u64 = cols.next()?.parse().ok()?;
+    Some(DiskUsage {
+        total_bytes: total_k.saturating_mul(1024),
+        used_bytes: used_k.saturating_mul(1024),
+        available_bytes: avail_k.saturating_mul(1024),
+    })
+}
+
 /// Get disk usage information for the filesystem containing `path`.
 ///
-/// Uses the `df` command to query filesystem statistics, avoiding
-/// `unsafe` code and platform-specific `libc` bindings.
+/// Shells out to `df` rather than calling `statvfs`, because this workspace
+/// sets `unsafe_code = "forbid"` and every safe wrapper for it is an FFI crate.
+///
+/// `-Pk` and nothing else: both flags are POSIX, and the previous
+/// `--output=size,used,avail -B1` were GNU coreutils extensions that exist
+/// neither in BSD `df` (so every macOS station — a documented target — failed
+/// this check) nor in `BusyBox`. The failure was quiet, too: the disk manager
+/// treats an error as "cannot tell", so a station whose card was filling up
+/// simply never purged.
 ///
 /// # Errors
 ///
-/// Returns `CaptureError` if `df` is not available or `path` doesn't exist.
+/// Returns `CaptureError` if `df` is not available, `path` doesn't exist, or
+/// the output is not the format POSIX specifies.
 pub fn disk_usage(path: &Path) -> Result<DiskUsage, CaptureError> {
     let output = Command::new("df")
-        .arg("--output=size,used,avail")
-        .arg("-B1") // bytes
+        .args(DF_ARGS)
         .arg(path)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -80,26 +126,8 @@ pub fn disk_usage(path: &Path) -> Result<DiskUsage, CaptureError> {
         )));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let data_line = stdout
-        .lines()
-        .nth(1)
-        .ok_or_else(|| CaptureError::Config("unexpected df output".into()))?;
-
-    let values: Vec<u64> = data_line
-        .split_whitespace()
-        .filter_map(|s| s.parse().ok())
-        .collect();
-
-    if values.len() < 3 {
-        return Err(CaptureError::Config("unexpected df output format".into()));
-    }
-
-    Ok(DiskUsage {
-        total_bytes: values[0],
-        used_bytes: values[1],
-        available_bytes: values[2],
-    })
+    parse_df_pk(&String::from_utf8_lossy(&output.stdout))
+        .ok_or_else(|| CaptureError::Config("unexpected df output format".into()))
 }
 
 /// Count audio files in a directory and their total size.
@@ -236,6 +264,79 @@ mod tests {
             available_bytes: 0,
         };
         assert!((u.used_percent()).abs() < 0.01);
+    }
+
+    /// The flags must stay POSIX.
+    ///
+    /// This is the half the parser tests cannot cover: `--output=size,used,avail`
+    /// and `-B1` parse nothing wrongly, they simply make `df` exit non-zero on
+    /// BSD and `BusyBox`, and `disk_usage` then returns an error that the disk
+    /// manager reads as "cannot tell" and skips the purge on. A station whose
+    /// card was filling up never reclaimed anything, and nothing said so.
+    #[test]
+    fn df_is_invoked_with_posix_flags_only() {
+        assert_eq!(DF_ARGS, ["-Pk", "--"]);
+        for arg in DF_ARGS {
+            assert!(
+                !arg.starts_with("--output") && !arg.starts_with("-B"),
+                "{arg} is a GNU coreutils extension; BSD and BusyBox `df` reject it"
+            );
+        }
+    }
+
+    /// The parser must read real `df -Pk` output from every platform this
+    /// project claims to run on.
+    ///
+    /// The previous implementation passed `--output=size,used,avail -B1`, which
+    /// are GNU coreutils extensions. BSD `df` (macOS — a documented target) and
+    /// `BusyBox` `df` (Alpine) reject them, so `disk_usage` errored, and the disk
+    /// manager reads an error as "cannot tell" and skips the purge: a station
+    /// whose card was filling up simply never reclaimed anything, silently.
+    ///
+    /// Fixtures are the literal output of `df -Pk` on each platform.
+    #[test]
+    fn parses_df_pk_from_gnu_bsd_and_busybox() {
+        // GNU coreutils (Debian / Raspberry Pi OS).
+        let gnu = "Filesystem     1024-blocks     Used Available Capacity Mounted on\n                   /dev/mmcblk0p2    61312256 12058624  46123008      21% /\n";
+        let u = parse_df_pk(gnu).expect("gnu");
+        assert_eq!(u.total_bytes, 61_312_256 * 1024);
+        assert_eq!(u.used_bytes, 12_058_624 * 1024);
+        assert_eq!(u.available_bytes, 46_123_008 * 1024);
+
+        // BSD / macOS: same columns, different spacing and device naming.
+        let bsd = "Filesystem 1024-blocks      Used Available Capacity  Mounted on\n                   /dev/disk3s1s1  971350180  22371592 546820264    4%    /\n";
+        let u = parse_df_pk(bsd).expect("bsd");
+        assert_eq!(u.total_bytes, 971_350_180 * 1024);
+        assert_eq!(u.available_bytes, 546_820_264 * 1024);
+
+        // `BusyBox` (Alpine).
+        let busybox = "Filesystem           1024-blocks      Used Available Capacity Mounted on\n                       overlay                 61312256  12058624  46123008  21% /\n";
+        let u = parse_df_pk(busybox).expect("busybox");
+        assert_eq!(u.used_bytes, 12_058_624 * 1024);
+    }
+
+    /// Columns are read by position, so a mount point containing spaces — which
+    /// is the last field — cannot shift the numbers.
+    #[test]
+    fn a_mount_point_with_spaces_does_not_shift_the_columns() {
+        let df = "Filesystem     1024-blocks     Used Available Capacity Mounted on\n                  /dev/sdb1          1000000   400000    600000      40% /media/My Field Disk\n";
+        let u = parse_df_pk(df).expect("spaces");
+        assert_eq!(u.total_bytes, 1_000_000 * 1024);
+        assert_eq!(u.used_bytes, 400_000 * 1024);
+        assert_eq!(u.available_bytes, 600_000 * 1024);
+        assert!((u.used_percent() - 40.0).abs() < 0.001);
+    }
+
+    /// Anything that is not the POSIX shape is an error, not a guess. Reading
+    /// three arbitrary numbers out of a malformed row would produce a
+    /// confident, wrong fullness figure and either purge nothing or purge
+    /// everything.
+    #[test]
+    fn malformed_df_output_is_rejected() {
+        assert!(parse_df_pk("").is_none());
+        assert!(parse_df_pk("only a header line\n").is_none());
+        assert!(parse_df_pk("Header\n/dev/sda1 100 200\n").is_none());
+        assert!(parse_df_pk("Header\n/dev/sda1 not a number here\n").is_none());
     }
 
     #[test]

@@ -138,8 +138,8 @@ async fn run_loop(
         )
         .await
         {
-            run_integrity_check(&db_path).await;
-            mark_ran(&db_path, JOB_INTEGRITY_CHECK, &mut attempted).await;
+            let verdict = run_integrity_check(&db_path).await;
+            mark_ran_with(&db_path, JOB_INTEGRITY_CHECK, &mut attempted, verdict).await;
         }
         if due(
             &db_path,
@@ -247,13 +247,30 @@ async fn due(
 /// Persist the completion time for `job`, and record it in the in-process
 /// floor so a failed write cannot cause the job to re-run every tick.
 async fn mark_ran(db_path: &Path, job: &'static str, attempted: &mut HashMap<&'static str, i64>) {
+    mark_ran_with(db_path, job, attempted, None).await;
+}
+
+/// Record that `job` ran, carrying the verdict it reached.
+///
+/// `ok` is `None` for jobs with no pass/fail to report and `Some` for the ones
+/// that do — today only the integrity check. Storing it is what lets the health
+/// badge, which is mounted on every page and refreshes every 30 s, answer "is
+/// the database sound?" by reading one row instead of running its own
+/// `PRAGMA quick_check` over every page of the file. See
+/// `birdnet_web::routes::pages::health` for the measurements.
+async fn mark_ran_with(
+    db_path: &Path,
+    job: &'static str,
+    attempted: &mut HashMap<&'static str, i64>,
+    ok: Option<bool>,
+) {
     let now = now_unix();
     attempted.insert(job, now);
 
     let owned = db_path.to_path_buf();
     let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
         let conn = birdnet_db::sqlite::open_or_create(&owned).map_err(|e| e.to_string())?;
-        birdnet_db::sqlite::record_run(&conn, job, now).map_err(|e| e.to_string())
+        birdnet_db::sqlite::record_run_result(&conn, job, now, ok).map_err(|e| e.to_string())
     })
     .await;
     match result {
@@ -268,23 +285,41 @@ async fn mark_ran(db_path: &Path, job: &'static str, attempted: &mut HashMap<&'s
     }
 }
 
-async fn run_integrity_check(db_path: &Path) {
+/// Run the daily integrity check, returning the verdict to record.
+///
+/// `None` means "no verdict": the database is not there yet, or the check
+/// could not be completed. That must not be recorded as a failure — the health
+/// badge distinguishes "failed" from "not established", and only the first is
+/// a red badge.
+async fn run_integrity_check(db_path: &Path) -> Option<bool> {
     if !db_path.exists() {
         tracing::debug!("integrity check skipped: db not present yet");
-        return;
+        return None;
     }
     let db_path = db_path.to_path_buf();
     let result =
         tokio::task::spawn_blocking(move || birdnet_db::resilience::full_integrity_check(&db_path))
             .await;
     match result {
-        Ok(Ok(true)) => tracing::info!("scheduled integrity check: PASS"),
-        Ok(Ok(false)) => tracing::error!(
-            "scheduled integrity check: FAIL — database corruption detected; \
-             run `birdnet-behavior --check-db` and restore from backup"
-        ),
-        Ok(Err(e)) => tracing::warn!(error = %e, "scheduled integrity check errored"),
-        Err(e) => tracing::warn!(error = %e, "scheduled integrity check task panicked"),
+        Ok(Ok(true)) => {
+            tracing::info!("scheduled integrity check: PASS");
+            Some(true)
+        }
+        Ok(Ok(false)) => {
+            tracing::error!(
+                "scheduled integrity check: FAIL — database corruption detected; \
+                 run `birdnet-behavior --check-db` and restore from backup"
+            );
+            Some(false)
+        }
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "scheduled integrity check errored");
+            None
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "scheduled integrity check task panicked");
+            None
+        }
     }
 }
 
@@ -934,6 +969,58 @@ mod tests {
             !due(&db, JOB_BACKUP_VACUUM, VACUUM_INTERVAL, &HashMap::new()).await,
             "a weekly job two days old must stay suppressed no matter how often we boot"
         );
+    }
+
+    /// The daily integrity check must record its verdict, not just its time.
+    ///
+    /// Since migration 28 the health badge reads that verdict instead of
+    /// running its own `PRAGMA quick_check` — which read every page of the
+    /// database on every page load and twice a minute per open tab. If this
+    /// loop keeps throwing the answer away, the badge can never report a
+    /// corrupt database at all: it would show "not checked yet" forever, which
+    /// is a worse failure than the cost it replaced.
+    #[tokio::test]
+    async fn the_integrity_check_records_its_verdict() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        rusqlite::Connection::open(&db)
+            .map(|c| birdnet_db::migration::migrate(&c).unwrap())
+            .unwrap();
+        let mut attempted = HashMap::new();
+
+        let verdict = run_integrity_check(&db).await;
+        assert_eq!(verdict, Some(true), "an intact database passes");
+        mark_ran_with(&db, JOB_INTEGRITY_CHECK, &mut attempted, verdict).await;
+
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        assert_eq!(
+            birdnet_db::sqlite::last_run_result(&conn, JOB_INTEGRITY_CHECK).unwrap(),
+            Some((
+                birdnet_db::sqlite::last_run_unix(&conn, JOB_INTEGRITY_CHECK)
+                    .unwrap()
+                    .unwrap(),
+                Some(true)
+            )),
+            "the pass must be on record, not discarded"
+        );
+    }
+
+    /// The counterpart: a job with nothing to report must record no verdict, so
+    /// "ran and passed" and "ran, no verdict" stay distinguishable.
+    #[tokio::test]
+    async fn a_job_without_a_verdict_records_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        rusqlite::Connection::open(&db)
+            .map(|c| birdnet_db::migration::migrate(&c).unwrap())
+            .unwrap();
+        let mut attempted = HashMap::new();
+        mark_ran(&db, JOB_SESSION_PRUNE, &mut attempted).await;
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        let (_, ok) = birdnet_db::sqlite::last_run_result(&conn, JOB_SESSION_PRUNE)
+            .unwrap()
+            .expect("recorded");
+        assert_eq!(ok, None);
     }
 
     #[tokio::test]

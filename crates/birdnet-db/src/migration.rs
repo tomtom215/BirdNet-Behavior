@@ -803,6 +803,218 @@ pub const MIGRATIONS: &[Migration] = &[
         CREATE INDEX IF NOT EXISTS idx_recording_effort_date
             ON recording_effort(date);",
     },
+    Migration {
+        version: 28,
+        description: "Remember whether a maintenance job passed, not just when it ran",
+        // `maintenance_runs` (migration 21) recorded *when* each job last
+        // completed and nothing about how it went, so the only way to learn
+        // whether the database was sound was to check it again.
+        //
+        // The health badge did exactly that. It sits in `layout.html`, on every
+        // page, with `hx-trigger="load, every 30s"`, and it ran a full
+        // `PRAGMA quick_check` each time. That pragma reads every page of the
+        // database file. Measured on a three-year station (2.76 M detections,
+        // 1.29 GB) on NVMe it costs 1.5-1.9 s warm; the enclosing partial took
+        // 3.8 s. A Raspberry Pi reading the same file from an SD card at
+        // ~45 MB/s is looking at ~30 s — longer than the refresh interval, so
+        // the checks would overlap, and every open browser tab adds another
+        // full read of the database twice a minute, forever, competing with the
+        // detection write path for the same card.
+        //
+        // The daily integrity check already runs; it simply threw its answer
+        // away. Storing it turns the badge into a read of one row.
+        //
+        // `ok` is nullable on purpose: NULL means "this job has no pass/fail to
+        // report" — either it predates this column or it is a job like the
+        // session prune that cannot fail meaningfully. A never-run integrity
+        // check has no row at all, which is a third state the badge must not
+        // confuse with a failure.
+        up_sql: "ALTER TABLE maintenance_runs ADD COLUMN ok INTEGER;",
+    },
+    Migration {
+        version: 29,
+        description: "Cover the whole-history aggregates the species screens run on every load",
+        // The species list, the life list and the per-species hour histogram
+        // each aggregate the *entire* detection history, uncached, on every
+        // page load. That is fine for a season and not fine for the multi-year
+        // station this project is for: the work grows linearly with how long
+        // the station has been useful.
+        //
+        // Measured on a seeded three-year station — 2 755 374 detections,
+        // 1.43 GB, warm page cache, x86_64 NVMe (a Raspberry Pi reading an SD
+        // card is several times worse across the board):
+        //
+        //   query                                 before    after
+        //   species list (GROUP BY Com,Sci)        4.96 s    1.31 s
+        //   life-list firsts (MIN per Sci_Name)    4.12 s    0.58 s
+        //   per-species hour histogram             4.82 s    1.15 s
+        //
+        // The existing indexes are single-column (`Com_Name`, `Sci_Name`), so
+        // every one of these plans scanned an index and then went back to the
+        // table for the other columns. These two are chosen to be *covering*
+        // for those aggregates — `review_verdict` is in each because every one
+        // of them reads `detections_analytic`, whose WHERE clause needs it, and
+        // a covering index that omits it stops covering.
+        //
+        // Cost, measured on the same database rather than estimated:
+        //   * +130.6 MB, 9.0 % of the file. A third index (Com,Sci,Conf,verdict)
+        //     would take the species list to 0.31 s but cost 18.6 % in total,
+        //     which is the wrong trade on an SD card for a further ~1 s.
+        //   * Inserts 0.20 ms -> 0.27 ms per committed row (4 922 -> 3 666
+        //     rows/s). A station producing a few detections a second is three
+        //     orders of magnitude below that, so the write path does not care.
+        //   * ~7 s to build on this hardware, once, during the migration.
+        up_sql: "CREATE INDEX IF NOT EXISTS idx_detections_species_hour_cover
+            ON detections(Com_Name, Time, Sci_Name, Confidence, review_verdict);
+        CREATE INDEX IF NOT EXISTS idx_detections_sci_first_cover
+            ON detections(Sci_Name, Date, Time, review_verdict);",
+    },
+    Migration {
+        version: 30,
+        description: "Maintain the species totals on write, so reading them stops costing the whole history",
+        // Migration 29 made the species aggregates cheaper. It did not make them
+        // *bounded*: they still read every detection ever recorded, so the cost
+        // of opening the species list grows with how long the station has been
+        // worth running. At ten years it is back where it started.
+        //
+        // `species_summary` is those aggregates kept up to date on write. It is
+        // grouped by (Com_Name, Sci_Name, hour-of-day), which is the coarsest
+        // grouping that still answers all of:
+        //
+        //   * the species list        -- SUM over a species' 24 hour buckets
+        //   * the per-species hour histogram -- that species' 24 rows, directly
+        //   * average confidence      -- confidence_sum / detections
+        //
+        // A station with 200 species holds at most 4 800 rows here, so every one
+        // of those reads is a scan of a few thousand rows instead of millions,
+        // and stays that way in year ten.
+        //
+        // ## Why triggers and not a maintenance call
+        //
+        // `detections` is written from four crates and at least eight call
+        // sites: the capture pipeline, the BirdNET-Pi importer, the CSV
+        // reimporter, quarantine release, relabelling, verdict apply/undo,
+        // single-row admin delete, and the store reset. A summary maintained by
+        // calling a Rust function would need every one of those to remember,
+        // and the ninth — written next year by someone who has never read this
+        // comment — would drift silently, which is worse than being slow.
+        //
+        // A trigger cannot be forgotten. It fires on the table, so every path
+        // that reaches the table is covered by construction, including paths
+        // that do not exist yet.
+        //
+        // ## What the triggers are maintaining
+        //
+        // The summary is a pure function of five things about a detection:
+        // Com_Name, Sci_Name, SUBSTR(Time,1,2), Confidence, and whether the
+        // review verdict is 'rejected'. Count and sum are exactly reversible, so
+        // insert adds, delete subtracts, and update withdraws the old row's
+        // contribution and admits the new one. Nothing here needs a recompute.
+        //
+        // MIN/MAX are deliberately *not* stored. They are not reversible: a
+        // delete of the earliest detection cannot be undone without rescanning
+        // the species. The life list's first-seen query stays on migration 29's
+        // covering index (0.58 s at 2.76 M rows, the cheapest of the three)
+        // rather than buy a second maintenance rule that could drift.
+        //
+        // ## The UPDATE guard
+        //
+        // The update trigger's WHEN clause names exactly that dependency set, so
+        // an update that touches none of it does no work at all. This is not a
+        // micro-optimisation: `maintenance.rs` sets `Clip_Pruned_At` in bulk and
+        // the lock/unlock handlers set `is_locked`, and an unguarded trigger
+        // would turn each of those rows into a withdraw plus an admit of the
+        // same bucket -- two index writes to reach the number it started from.
+        //
+        // ## Ordering note for whoever adds migration 31
+        //
+        // These triggers exist from here on, so a later migration that rewrites
+        // `detections` in bulk will fire them and the summary will follow along.
+        // That is the intent. A migration that rebuilds the table by
+        // create-copy-drop-rename must drop the summary triggers first and
+        // re-run the backfill after, or it will double-count the copy.
+        //
+        // `INSERT OR REPLACE` on `detections` would also drift, because
+        // `recursive_triggers` is off by default and the implied delete would
+        // not fire the delete trigger. There is none today -- every importer
+        // uses `INSERT OR IGNORE`, whose ignored rows correctly fire nothing --
+        // and `species_summary_is_maintained_by_every_write_path` fails if one
+        // appears.
+        up_sql: "CREATE TABLE IF NOT EXISTS species_summary (
+            Com_Name       TEXT    NOT NULL,
+            Sci_Name       TEXT    NOT NULL,
+            hour           TEXT    NOT NULL,
+            detections     INTEGER NOT NULL,
+            confidence_sum REAL    NOT NULL,
+            PRIMARY KEY (Com_Name, Sci_Name, hour)
+        ) WITHOUT ROWID;
+
+        DELETE FROM species_summary;
+        INSERT INTO species_summary (Com_Name, Sci_Name, hour, detections, confidence_sum)
+            SELECT Com_Name, Sci_Name, SUBSTR(Time, 1, 2), COUNT(*), SUM(Confidence)
+              FROM detections
+             WHERE review_verdict IS NOT 'rejected'
+             GROUP BY Com_Name, Sci_Name, SUBSTR(Time, 1, 2);
+
+        DROP TRIGGER IF EXISTS species_summary_ai;
+        CREATE TRIGGER species_summary_ai AFTER INSERT ON detections
+        WHEN NEW.review_verdict IS NOT 'rejected'
+        BEGIN
+            INSERT INTO species_summary (Com_Name, Sci_Name, hour, detections, confidence_sum)
+            VALUES (NEW.Com_Name, NEW.Sci_Name, SUBSTR(NEW.Time, 1, 2), 1, NEW.Confidence)
+            ON CONFLICT(Com_Name, Sci_Name, hour) DO UPDATE SET
+                detections     = species_summary.detections + 1,
+                confidence_sum = species_summary.confidence_sum + NEW.Confidence;
+        END;
+
+        DROP TRIGGER IF EXISTS species_summary_ad;
+        CREATE TRIGGER species_summary_ad AFTER DELETE ON detections
+        WHEN OLD.review_verdict IS NOT 'rejected'
+        BEGIN
+            UPDATE species_summary
+               SET detections     = detections - 1,
+                   confidence_sum = confidence_sum - OLD.Confidence
+             WHERE Com_Name = OLD.Com_Name
+               AND Sci_Name = OLD.Sci_Name
+               AND hour     = SUBSTR(OLD.Time, 1, 2);
+            DELETE FROM species_summary
+             WHERE Com_Name = OLD.Com_Name
+               AND Sci_Name = OLD.Sci_Name
+               AND hour     = SUBSTR(OLD.Time, 1, 2)
+               AND detections <= 0;
+        END;
+
+        DROP TRIGGER IF EXISTS species_summary_au;
+        CREATE TRIGGER species_summary_au AFTER UPDATE ON detections
+        WHEN OLD.Com_Name   IS NOT NEW.Com_Name
+          OR OLD.Sci_Name   IS NOT NEW.Sci_Name
+          OR OLD.Time       IS NOT NEW.Time
+          OR OLD.Confidence IS NOT NEW.Confidence
+          OR (OLD.review_verdict IS 'rejected') IS NOT (NEW.review_verdict IS 'rejected')
+        BEGIN
+            UPDATE species_summary
+               SET detections     = detections - 1,
+                   confidence_sum = confidence_sum - OLD.Confidence
+             WHERE OLD.review_verdict IS NOT 'rejected'
+               AND Com_Name = OLD.Com_Name
+               AND Sci_Name = OLD.Sci_Name
+               AND hour     = SUBSTR(OLD.Time, 1, 2);
+
+            DELETE FROM species_summary
+             WHERE OLD.review_verdict IS NOT 'rejected'
+               AND Com_Name = OLD.Com_Name
+               AND Sci_Name = OLD.Sci_Name
+               AND hour     = SUBSTR(OLD.Time, 1, 2)
+               AND detections <= 0;
+
+            INSERT INTO species_summary (Com_Name, Sci_Name, hour, detections, confidence_sum)
+            SELECT NEW.Com_Name, NEW.Sci_Name, SUBSTR(NEW.Time, 1, 2), 1, NEW.Confidence
+             WHERE NEW.review_verdict IS NOT 'rejected'
+            ON CONFLICT(Com_Name, Sci_Name, hour) DO UPDATE SET
+                detections     = species_summary.detections + 1,
+                confidence_sum = species_summary.confidence_sum + NEW.Confidence;
+        END;",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing

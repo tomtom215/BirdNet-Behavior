@@ -8,7 +8,7 @@ http://<your-ip>:8502
 
 > Not sure of your Pi's IP? Run `hostname -I` on the Pi, or check your router's device list.
 
-The dashboard binds to all interfaces by default, so it's reachable from any device on your LAN — no extra step. Viewing needs no login; only the **Admin** panel does. The bare-metal installer prints an auto-generated admin password once in its post-install summary (username `birdnet`) — log in with that when you open `/admin`. Lost it? See [Remote Access & Security](../admin/remote-access.md#built-in-http-basic-auth) to read or reset `CADDY_PWD`. To restrict the dashboard to the Pi itself, set `BIRDNET_LISTEN=127.0.0.1:8502`.
+The dashboard binds to all interfaces by default, so it's reachable from any device on your LAN — no extra step. Viewing needs no login; only the **Admin** panel does. The bare-metal installer prints an auto-generated admin password once in its post-install summary (username `birdnet`) — log in with that when you open `/admin`. Lost it? See [Remote Access & Security](../admin/remote-access.md#built-in-admin-sign-in) to read or reset `CADDY_PWD`. To restrict the dashboard to the Pi itself, set `BIRDNET_LISTEN=127.0.0.1:8502`.
 
 If you set your latitude/longitude and an audio source, detections start appearing within a minute or two of the first bird call — no further configuration required.
 

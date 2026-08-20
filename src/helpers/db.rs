@@ -158,6 +158,65 @@ pub fn run_backup(
     Ok(())
 }
 
+/// Recompute the maintained species summary from the detections.
+///
+/// `species_summary` (migration 30) is derived data, kept up to date by
+/// triggers so the species screens do not re-aggregate the whole history on
+/// every load. Rebuilding it discards nothing: every number in it comes from
+/// `detections`, which this does not touch.
+///
+/// Read-write, deliberately — this is the repair `--doctor` names when it
+/// finds the summary disagreeing with the detections, and a repair that cannot
+/// write is not one.
+///
+/// # Errors
+///
+/// Returns an error if the database cannot be opened or the rebuild fails.
+pub fn run_rebuild_species_summary(
+    config: Option<&birdnet_core::config::Config>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let db_path = db_path_from_config(config);
+    if !db_path.exists() {
+        println!(
+            "No database at {} yet — nothing to rebuild.",
+            db_path.display()
+        );
+        return Ok(());
+    }
+
+    let conn = rusqlite::Connection::open(&db_path)?;
+    let before = birdnet_db::sqlite::queries::species::species_summary_drift(&conn)?;
+    let buckets = birdnet_db::sqlite::queries::species::rebuild_species_summary(&conn)?;
+    let after = birdnet_db::sqlite::queries::species::species_summary_drift(&conn)?;
+
+    println!("Database   {}", db_path.display());
+    println!("Rebuilt    {buckets} species/hour bucket(s)");
+    if before.is_empty() {
+        println!("Drift      none before the rebuild — the summary was already correct");
+    } else {
+        println!(
+            "Drift      {} bucket(s) disagreed before the rebuild",
+            before.len()
+        );
+    }
+
+    // A rebuild that leaves drift behind means the disagreement is not the
+    // summary's: something is writing to `detections` in a way the triggers
+    // cannot see. Say so rather than report success.
+    if after.is_empty() {
+        println!("Result     the summary now agrees with the detections");
+        Ok(())
+    } else {
+        Err(format!(
+            "the summary still disagrees with the detections in {} bucket(s) after a full \
+             rebuild — the triggers from migration 30 are missing or a write path is \
+             bypassing them; check `SELECT name FROM sqlite_master WHERE type = 'trigger'`",
+            after.len()
+        )
+        .into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{db_path_from_config, ensure_db_dir};

@@ -52,9 +52,9 @@ async fn rare_rss(State(state): State<AppState>, Query(q): Query<FeedQuery>) -> 
         state.with_db(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT d.Com_Name, d.Sci_Name, d.Date, d.Time, d.Confidence \
-                 FROM detections d \
+                 FROM detections_analytic d \
                  WHERE d.Confidence > 0.85 \
-                   AND (SELECT MIN(Date) FROM detections d2 WHERE d2.Com_Name = d.Com_Name) = d.Date \
+                   AND (SELECT MIN(Date) FROM detections_analytic d2 WHERE d2.Com_Name = d.Com_Name) = d.Date \
                  ORDER BY d.Date DESC, d.Time DESC \
                  LIMIT ?1",
             )?;
@@ -92,7 +92,7 @@ async fn today_rss(State(state): State<AppState>, Query(q): Query<FeedQuery>) ->
         state.with_db(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT Com_Name, Sci_Name, Date, Time, Confidence \
-                 FROM detections \
+                 FROM detections_analytic \
                  WHERE Date = date('now','localtime') \
                  ORDER BY Time DESC \
                  LIMIT ?1",
@@ -147,9 +147,9 @@ async fn rare_ics(State(state): State<AppState>, Query(q): Query<FeedQuery>) -> 
         state.with_db(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT d.Com_Name, d.Sci_Name, d.Date, d.Time, d.Confidence \
-                 FROM detections d \
+                 FROM detections_analytic d \
                  WHERE d.Confidence > 0.85 \
-                   AND (SELECT MIN(Date) FROM detections d2 WHERE d2.Com_Name = d.Com_Name) = d.Date \
+                   AND (SELECT MIN(Date) FROM detections_analytic d2 WHERE d2.Com_Name = d.Com_Name) = d.Date \
                  ORDER BY d.Date DESC, d.Time DESC \
                  LIMIT ?1",
             )?;

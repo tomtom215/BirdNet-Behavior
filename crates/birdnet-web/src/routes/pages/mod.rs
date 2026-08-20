@@ -42,6 +42,7 @@ pub(crate) mod nav;
 pub mod notification_center;
 pub mod onboarding;
 pub(crate) mod overlays;
+pub mod provenance;
 pub mod quarantine;
 pub mod recordings;
 pub(crate) mod skeletons;
@@ -115,6 +116,7 @@ pub fn router() -> Router<AppState> {
         .merge(timeseries_dash::router())
         .merge(heatmap::router())
         .merge(correlation::router())
+        .merge(provenance::router())
         .merge(quarantine::router())
         .merge(today::router())
         .merge(recordings::router())
@@ -258,6 +260,15 @@ pub(crate) async fn not_found(
 // ---------------------------------------------------------------------------
 
 /// Minimal HTML escaping for XSS prevention.
+/// # The only HTML escaper in this crate
+///
+/// There were three, and they were not the same. This one escaped
+/// `& < > " '`; the copies in `admin/migration/render.rs` and
+/// `admin/backup_recovery.rs` escaped `& < > "` and omitted the apostrophe.
+/// Neither of those two happened to interpolate into a single-quoted attribute,
+/// so the difference was latent rather than exploitable — but "latent" is a
+/// property of today's call sites, not of the function, and nothing kept the
+/// three in step. Escaping is not a place to have three answers.
 pub(crate) fn escape_html(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -268,19 +279,7 @@ pub(crate) fn escape_html(s: &str) -> String {
 
 /// Minimal percent-encoding for URL path segments and query values.
 pub(crate) fn simple_url_encode(s: &str) -> String {
-    use std::fmt::Write as _;
-    let mut encoded = String::with_capacity(s.len());
-    for byte in s.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                encoded.push(byte as char);
-            }
-            _ => {
-                let _ = write!(encoded, "%{byte:02X}");
-            }
-        }
-    }
-    encoded
+    crate::urls::encode_segment(s)
 }
 
 /// Seconds since the Unix epoch, saturating to 0 before it.
@@ -307,6 +306,65 @@ pub(crate) fn local_utc_offset_secs() -> i64 {
     birdnet_db::clock::local_utc_offset_secs()
 }
 
+/// Today's sunrise/sunset as fractional hours in **local** time, from the
+/// configured station location. `None` when no location is set or the sun never
+/// rises/sets at this latitude today.
+///
+/// # Why local, and why this is shared
+///
+/// Every hour-of-day axis in this app is local: the day strip's bars come from
+/// `hourly_activity`, which buckets the local `Time` column, and the "now"
+/// marker is [`now_hour_local`]. Returning the solver's raw UTC minutes drew
+/// sunrise two hours early on a CEST station and mislabelled the pills with it.
+///
+/// The Today page was fixed; the dawn-chorus polar chart kept a private copy
+/// that was wrong three ways at once, which is why this now lives here instead
+/// of there:
+///
+/// * it read the coordinates from `BNB_STATION_LAT`/`BNB_STATION_LON` only,
+///   falling back to a hard-coded (40.0 N, -74.0 W) — so a station that set its
+///   location in the setup wizard got sun markers for the New Jersey coast;
+/// * its day-of-year was `((unix_secs / 86_400) % 365) + 1`, which drifts about
+///   a day a year (14 days out by 2026, moving sunrise 18 min at Boston, 27 min
+///   at London, 40 min at Oslo) and wraps to January in late December;
+/// * it returned UTC hours while the chorus ribbons it was drawn over are
+///   bucketed from the local `Time` column.
+///
+/// [`birdnet_scheduler::SolarDay`] already had a correct, leap-aware
+/// implementation. One caller, one clock, one day-of-year.
+pub(crate) fn solar_times_local(conn: &rusqlite::Connection) -> Option<(f64, f64)> {
+    let lat: f64 = birdnet_db::settings::get_or(conn, "latitude", "")
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    let lon: f64 = birdnet_db::settings::get_or(conn, "longitude", "")
+        .ok()?
+        .trim()
+        .parse()
+        .ok()?;
+    let location = birdnet_scheduler::Location::new(lat, lon).ok()?;
+    let date = today_date_string();
+    let year: u32 = date.get(0..4)?.parse().ok()?;
+    let month: u32 = date.get(5..7)?.parse().ok()?;
+    let day: u32 = date.get(8..10)?.parse().ok()?;
+    let solar = birdnet_scheduler::SolarDay::for_date(location, year, month, day).ok()?;
+    #[allow(clippy::cast_precision_loss)]
+    let offset_h = local_utc_offset_secs() as f64 / 3600.0;
+    let sunrise = wrap_hour(f64::from(solar.sunrise_utc_min?) / 60.0 + offset_h);
+    let sunset = wrap_hour(f64::from(solar.sunset_utc_min?) / 60.0 + offset_h);
+    Some((sunrise, sunset))
+}
+
+/// Fold an hour-of-day into `[0, 24)` after a UTC→local shift.
+///
+/// A station far enough east or west pushes sunrise past midnight; without this
+/// the value leaves the axis the strip draws and the marker vanishes off one
+/// end rather than wrapping to the other.
+pub(crate) fn wrap_hour(h: f64) -> f64 {
+    h.rem_euclid(24.0)
+}
+
 /// Current hour-of-day in **local** time as a fraction (09:43 → `9.72`).
 ///
 /// This is the axis the day strip's bars live on, because they are bucketed
@@ -330,22 +388,16 @@ pub(crate) fn today_date_string() -> String {
     format!("{y}-{m:02}-{d:02}")
 }
 
-/// Convert days since Unix epoch to (year, month, day) using the Hinnant algorithm.
-#[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
+/// Convert days since Unix epoch to (year, month, day).
+///
+/// Delegates to [`birdnet_core::civil::civil_from_days`]. This was a verbatim
+/// copy of Hinnant's algorithm — one of nine in the workspace, all of which
+/// agreed when checked against each other over 200 years. The consolidation
+/// fixes nothing that was broken; it removes the tenth copy's chance to be the
+/// one that isn't.
+#[allow(clippy::cast_possible_wrap)]
 pub(crate) const fn days_to_date(days_since_epoch: u64) -> (u32, u32, u32) {
-    let z = days_since_epoch as i64 + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    #[allow(clippy::cast_sign_loss)]
-    let doe = (z - era * 146_097) as u32;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    #[allow(clippy::cast_sign_loss, clippy::cast_lossless)]
-    let y = (yoe as i64 + era * 400) as u32;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    (y, m, d)
+    birdnet_core::civil::civil_from_days(days_since_epoch as i64)
 }
 
 /// Convert a `YYYY-MM-DD` date to days since the Unix epoch (rata die) — the
@@ -382,24 +434,24 @@ pub(crate) fn date_to_epoch_days(date: &str) -> u64 {
         return 0;
     }
 
-    // Rata Die day number.
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = y / 400;
-    let yoe = y - era * 400;
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
+    // Rata Die day number. The guard above keeps this in range; the shared
+    // primitive clamps a pre-year-0 date to 0 for the same reason.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let days = birdnet_core::civil::days_from_civil(y as u32, m as u32, d as u32);
+    #[allow(clippy::cast_sign_loss)]
+    let out = days.max(0) as u64;
+    out
 }
 
 /// Count detections for today's date in `SQLite`.
 pub(crate) fn today_count(conn: &rusqlite::Connection) -> i64 {
+    // `detections_analytic`, not `detections`: this is a number shown to an
+    // operator, and a detection they rejected is one they have said was not
+    // there. Its neighbours on the dashboard tile row ("Species", "Last hour",
+    // the sparkline) have always excluded rejections, so counting every row
+    // here made adjacent tiles disagree about the same day.
     let today = today_date_string();
-    conn.query_row(
-        "SELECT COUNT(*) FROM detections WHERE Date = ?1",
-        [&today],
-        |row| row.get(0),
-    )
-    .unwrap_or(0)
+    birdnet_db::sqlite::analytic_detection_count_for_date(conn, &today).unwrap_or(0)
 }
 
 /// Format an integer with thousands separators (e.g. 9914 → "9,914").
@@ -420,6 +472,25 @@ pub(crate) fn group_thousands(n: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The canonical escaper must cover the apostrophe.
+    ///
+    /// Two of the three implementations this replaced did not, which is safe
+    /// only for as long as nobody writes `attr='{value}'`. The gate is on the
+    /// escaper rather than on the call sites, because the call sites are what
+    /// change.
+    #[test]
+    fn escape_html_covers_every_character_that_can_break_out() {
+        assert_eq!(
+            escape_html(r#"&<>"'"#),
+            "&amp;&lt;&gt;&quot;&#x27;",
+            "all five must be escaped, in one pass, ampersand first"
+        );
+        // Ampersand first, or the entities themselves get double-escaped.
+        assert_eq!(escape_html("&amp;"), "&amp;amp;");
+        // A single-quoted attribute must not be escapable.
+        assert!(!escape_html("' onerror='alert(1)").contains('\''));
+    }
 
     #[test]
     fn escape_html_basic() {

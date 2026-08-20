@@ -27,18 +27,24 @@ pub use connection::{DbError, open_connection, open_or_create, quick_check};
 pub use queries::correlation::{FollowOn, SpeciesPair};
 pub use queries::detection_reviews::{
     DetectionReview, ReviewStatus, UnreviewedDetection, clear_detection_review,
-    detection_review_counts, get_detection_review, recent_detection_reviews,
-    rejected_detection_count, set_detection_review, unreviewed_recent_detections,
+    detection_review_counts, detection_review_total, detection_reviews_page, get_detection_review,
+    recent_detection_reviews, rejected_detection_count, set_detection_review,
+    unreviewed_recent_detections,
 };
 pub use queries::heatmap::{HeatmapCell, HourTotal};
+pub use queries::imports::{
+    DIFFERENT_SITE_KM, ImportBatch, imported_detection_count, list_import_batches,
+};
 pub use queries::maintenance::{
     BACKUP_VACUUM_INTERVAL_SECS, DAILY_INTERVAL_SECS, JOB_BACKUP_VACUUM, JOB_INTEGRITY_CHECK,
-    JOB_SESSION_PRUNE, JOB_SPECIES_CAP, last_run_unix, record_run,
+    JOB_SESSION_PRUNE, JOB_SPECIES_CAP, last_run_result, last_run_unix, record_run,
+    record_run_result,
 };
 pub use queries::{
     CLIP_AVAILABLE, ImageBlacklist, ModelVsReviewRow, QualitySummary, QuarantineFilter,
     QuarantineReason, QuarantineRecord, QuarantineRow, QuarantineStats, RecordingsFilter,
     ReviewVerdictDay, SpeciesThreshold, TodayFilter, add_image_blacklist, all_detections,
+    analytic_detection_count, analytic_detection_count_for_date, analytic_species_count_for_date,
     approve_quarantine, best_detections_for_date, blacklisted_urls_for_species, companion_species,
     concurrent_detections_from_other_sources, confidence_distribution, confidence_trend,
     count_quarantine, daily_counts, delete_detection, delete_quarantine, delete_species_threshold,

@@ -282,7 +282,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # to carry over.
 COPY --from=builder /staging/ /
 
-# Entrypoint (model download + exec).
+# Entrypoint (model download + exec), plus the blank-environment scrubber it
+# sources first. Kept as its own file so `scripts/check-compose-startup.sh`
+# exercises the same code the image runs rather than a copy of it.
+COPY --chmod=0755 docker/strip-blank-env.sh /usr/local/bin/strip-blank-env.sh
 COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 
 # Persistent data layout under /data:
