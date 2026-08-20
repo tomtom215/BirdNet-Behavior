@@ -208,6 +208,12 @@ async fn upload_and_run_handler(
     use tokio::io::AsyncWriteExt as _;
 
     let mut file_name = String::from("upload.db");
+    // The upload tab posts the same origin fields the server-path tab does, so
+    // a browser user can reconcile an import's clock and name its source. They
+    // arrive as ordinary text parts, in whatever order the browser sends them,
+    // which is why the loop below no longer breaks the moment it has the file.
+    let mut source_label: Option<String> = None;
+    let mut source_utc_offset_secs: Option<i64> = None;
     // NamedTempFile reserves a unique path and auto-cleans it on drop (even on
     // an early return); we stream into that path asynchronously below.
     let tmp = tokio::task::spawn_blocking(|| tempfile::Builder::new().suffix(".db").tempfile())
@@ -223,8 +229,25 @@ async fn upload_and_run_handler(
         .await
         .map_err(|_| StatusCode::BAD_REQUEST)?
     {
-        if field.name().is_none_or(|n| n != "source_file") {
-            continue;
+        match field.name() {
+            Some("source_label") => {
+                let text = field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?;
+                let text = text.trim();
+                if !text.is_empty() {
+                    source_label = Some(text.to_owned());
+                }
+                continue;
+            }
+            Some("source_utc_offset_secs") => {
+                let text = field.text().await.map_err(|_| StatusCode::BAD_REQUEST)?;
+                // A field the operator left alone posts "": absent, not zero.
+                // Zero is a real answer ("the source ran on UTC") and must stay
+                // distinguishable from "I did not say".
+                source_utc_offset_secs = text.trim().parse().ok();
+                continue;
+            }
+            Some("source_file") => {}
+            _ => continue,
         }
         if let Some(name) = field.file_name() {
             file_name = name.to_string();
@@ -242,7 +265,6 @@ async fn upload_and_run_handler(
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         found_field = true;
-        break;
     }
 
     if !found_field {
@@ -296,6 +318,19 @@ async fn upload_and_run_handler(
         *guard = Some(progress.clone());
     }
 
+    // The same reconciliation the server-path tab offers. `u_lat`/`u_lon` were
+    // already read above to validate the file; passing them on is what lets the
+    // batch record how far away the source station was. Calling the bare
+    // `run_migration` here — which is `run_migration_with_options` with
+    // `ImportOptions::default()` and `station = (None, None)` — left
+    // `station_lat`, `station_lon` and `distance_km` NULL on every browser
+    // import, so the Patterns note that names an imported foreign site could
+    // never fire: it keys on a distance nothing had computed.
+    let options = import_options(&MigrateForm {
+        source_path: String::new(),
+        source_label,
+        source_utc_offset_secs,
+    });
     tokio::task::spawn_blocking(move || {
         let _keep_tmp = tmp; // keeps temp file alive until migration finishes
         progress.update(MigrationProgress {
@@ -305,7 +340,14 @@ async fn upload_and_run_handler(
             message: format!("Importing {file_name}…"),
             error: None,
         });
-        match birdnet_migrate::birdnet_pi::run_migration(&tmp_path, &dest_path, false, &progress) {
+        match birdnet_migrate::birdnet_pi::run_migration_with_options(
+            &tmp_path,
+            &dest_path,
+            false,
+            &progress,
+            &options,
+            (u_lat, u_lon),
+        ) {
             Ok(summary) => {
                 tracing::info!(
                     file = %file_name,

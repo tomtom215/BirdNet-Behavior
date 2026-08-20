@@ -105,7 +105,12 @@ pub fn migration_body(dest_db_path: &str) -> String {
       <li>Find your BirdNET-Pi database (usually
           <code>~/BirdNET-Pi/scripts/BirdDB.txt</code>).</li>
       <li>Upload the file <em>or</em> enter the server-side path below.</li>
-      <li>Click <strong>Validate</strong>, review the report, then <strong>Start Import</strong>.</li>
+      <li><strong>Upload File</strong> validates and imports in one step.
+          <strong>Server Path</strong> lets you click <strong>Validate</strong>
+          and review the report first.</li>
+      <li>If the file came from a <em>different</em> station, fill in the
+          &ldquo;Where did this recording come from?&rdquo; fields on either tab
+          — the timestamps cannot be reconciled afterwards.</li>
       <li>Your original BirdNET-Pi installation is untouched and safe to restart.</li>
     </ol>
     <p class="note">
@@ -132,6 +137,32 @@ pub fn migration_body(dest_db_path: &str) -> String {
                accept=".db,.txt,.sqlite,.sqlite3"
                class="mb-sm">
         <p class="hint">Accepted formats: BirdDB.txt, birds.db, *.db, *.sqlite</p>
+
+        <fieldset class="mt">
+          <legend>Where did this recording come from?</legend>
+          <p class="hint">
+            Leave both blank if this is <strong>this station's own</strong>
+            history — the usual case. Fill them in when the file came from
+            somewhere else: BirdNET-Pi stores local wall-clock time with no
+            timezone, so without the offset the two histories end up on two
+            different clocks and every hour-of-day analytic averages them
+            together. Every imported row is tagged with its origin either way,
+            so the two can always be told apart afterwards.
+          </p>
+          <label for="upload-source-label">Source station name <span class="bnb-meta">(optional)</span></label>
+          <input id="upload-source-label" name="source_label" type="text"
+                 placeholder="e.g. Hollow Oak, north transect" class="mb-sm">
+          <label for="upload-source-utc">Source station's UTC offset, in seconds <span class="bnb-meta">(optional)</span></label>
+          <input id="upload-source-utc" name="source_utc_offset_secs" type="number"
+                 step="900" placeholder="e.g. -18000 for UTC-5" class="mb-sm">
+          <p class="hint">
+            Hours &times; 3600. UTC&minus;5 is <code>-18000</code>; UTC+1 is
+            <code>3600</code>. Timestamps are shifted once, at import, onto this
+            station's clock — the shift is recorded with the batch, so it stays
+            reversible.
+          </p>
+        </fieldset>
+
         <div class="actions center">
           <button type="submit" class="btn btn-primary">Upload &amp; Import</button>
           <span id="upload-spinner" class="htmx-indicator spinner-note">Uploading…</span>

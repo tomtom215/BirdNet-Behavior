@@ -61,16 +61,19 @@ fn render_note(batches: &[birdnet_db::sqlite::ImportBatch], imported_rows: i64) 
             .as_deref()
             .filter(|s| !s.trim().is_empty())
             .unwrap_or("an unnamed source");
-        let km = b.distance_km.unwrap_or_default();
+        // Grouped like the row count on the same line: an unpunctuated
+        // "18706 km" beside a punctuated "3,000 imported detections" reads as
+        // two different kinds of number in one sentence.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let km = crate::routes::pages::group_thousands(
+            b.distance_km.unwrap_or_default().round().max(0.0) as i64,
+        );
         let clock = if b.applied_shift_secs == 0 {
             ", with no clock correction applied"
         } else {
             ", with a clock correction applied"
         };
-        format!(
-            "{} — recorded about {km:.0} km away{clock}",
-            escape_html(name)
-        )
+        format!("{} — recorded about {km} km away{clock}", escape_html(name))
     } else {
         format!("{} different sites", elsewhere.len())
     };

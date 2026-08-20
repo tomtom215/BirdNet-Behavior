@@ -186,6 +186,43 @@ backwards, analytics break.
 - For deployments with no network at all, fit a battery-backed RTC
   module (DS3231 on I²C) and load `rtc-ds1307` at boot.
 
+### Daylight saving, and the hour that happens twice
+
+Detections are stored the way BirdNET-Pi stored them: a local `Date` and a
+local `Time`, with no offset recorded alongside. That is fine for 8 759 hours
+of the year and needs one paragraph of thought for the other one.
+
+**Autumn, when the clocks go back.** One local hour repeats. A station on
+Europe/Berlin records 02:00–02:59 twice on the last Sunday in October; one on
+America/New_York records 01:00–01:59 twice on the first Sunday in November. In
+the database those two hours are indistinguishable — they carry the same local
+`Date` and `Time` — so:
+
+- Anything that reads the history as a timeline sees that hour's detections
+  interleaved rather than in order. A dawn-chorus curve is unaffected (the
+  transition is at night); a *session* or *gap* analysis spanning that hour is
+  not, and will report a gap or a burst that did not happen.
+- Two detections of the same species, at the same local second, at the same
+  rounded confidence, in both passes, collide on the detections table's
+  identity. The second is refused and **lost**. It is counted — see
+  `birdnet_detection_write_failures_total` under
+  [Remote diagnostics](#9-remote-diagnostics-and-monitoring) — so the station
+  can tell you it happened rather than leaving it to the journal. The clip is
+  kept either way, under a `-2` suffix.
+
+**Spring, when the clocks go forward.** One local hour does not exist. Nothing
+is lost; the history simply has an hour-shaped hole in it, on one night, and
+any "quietest hour" or "longest gap" statistic computed across that night will
+find it.
+
+**If any of that matters to your analysis** — a phenology study, a
+year-over-year comparison across the transition, published data — run the
+station on **UTC** (`sudo timedatectl set-timezone UTC`) and accept that every
+hour-of-day chart is then in UTC rather than in your local morning. That is the
+only configuration in which no local hour ever repeats or vanishes. `--doctor`
+reports the station's offset and how the recording window is interpreted, so
+you can check which convention a station is on without guessing.
+
 ## 7. Watchdog and process supervision
 
 This is the workhorse of unattended operation:
@@ -342,6 +379,14 @@ Once the unit is sealed and shipped, the loop is:
    `birdnet_uptime_seconds`, `birdnet_detections_total`,
    `birdnet_process_resident_memory_bytes`, `birdnet_species_total`,
    and the two field-health gauges below.
+
+   Worth an alert of its own: **`birdnet_detection_write_failures_total`**
+   counts detections the model produced and the database refused. It should
+   stay at zero. A non-zero value means the station heard something and could
+   not keep it — a full or read-only disk, a locked database, or the repeated
+   daylight-saving hour described in
+   [Time synchronisation](#6-time-synchronisation). Alert on any increase;
+   the journal line beside it names the species and timestamp.
 4. **Detection deadman** — the end-to-end "is it actually detecting?"
    check that no per-component gauge can answer. The station measures
    how long ago the last detection landed and exports it as

@@ -254,10 +254,23 @@ pub(super) fn event_processor(
             state.with_db(|conn| birdnet_db::sqlite::insert_detection(conn, &record));
         metrics.observe_db_write_seconds(db_start.elapsed().as_secs_f64());
         if let Err(e) = insert_result {
+            // Counted, not just logged. This is the only place a classified
+            // detection can be lost after the model has agreed it is real, and
+            // an unattended station that only writes it to the journal has not
+            // told anybody. The known route here is the local hour that
+            // daylight-saving repeats each autumn — `(Date, Time, Sci_Name,
+            // File_Name, chunk_offset_secs)` is this schema's identity and all
+            // of it is local wall-clock, so the second pass of that hour can
+            // collide with the first — but a full disk or a locked database
+            // arrives the same way.
+            metrics.inc_detection_write_failed();
             tracing::warn!(
                 correlation_id,
                 error = %e,
-                "failed to insert detection into database"
+                species = %detection.scientific_name,
+                date = %detection.date,
+                time = %detection.time,
+                "detection classified but refused by the database — it is lost"
             );
         } else {
             metrics.inc_detection(&detection.scientific_name, detection.start);

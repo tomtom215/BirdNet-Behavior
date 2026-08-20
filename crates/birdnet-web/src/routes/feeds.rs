@@ -218,8 +218,11 @@ fn build_rss(
         escape_xml(description),
     );
 
+    // The station's own offset, so `pubDate` names the instant the detection
+    // happened rather than relabelling local digits as Greenwich.
+    let offset_secs = birdnet_db::clock::local_utc_offset_secs();
     for d in rows {
-        let pub_date = rfc822(&d.date, &d.time);
+        let pub_date = rfc822(&d.date, &d.time, offset_secs);
         let conf_pct = (d.conf * 100.0).round() as i32;
         let link = escape_xml(&detail_url(base, &d.date, &d.time, &d.com));
         let _ = write!(
@@ -252,20 +255,29 @@ fn build_ics(rows: &[DetRow], base: &str) -> String {
     s.push_str(
         "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//BirdNet-Behavior//RareBirds 1.0//EN\r\nCALSCALE:GREGORIAN\r\nMETHOD:PUBLISH\r\nX-WR-CALNAME:BirdNet rare detections\r\nX-WR-CALDESC:First-of-station detections from your listening station.\r\n",
     );
+    let stamp = ics_dtstamp_now();
     for d in rows {
-        let dt = ics_datetime(&d.date, &d.time);
+        let dt = ics_local_datetime(&d.date, &d.time);
         let uid = ics_uid(&d.date, &d.time, &d.sci);
         let url = detail_url(base, &d.date, &d.time, &d.com);
-        let _ = write!(
-            s,
-            "BEGIN:VEVENT\r\nUID:bnb-{uid}@birdnet-behavior\r\nDTSTAMP:{dt}\r\nDTSTART:{dt}\r\nDURATION:PT3M\r\nSUMMARY:{name} (rare)\r\nDESCRIPTION:{name} — {sci} — confidence {conf}%.\\nListen: {url}\r\nURL:{url}\r\nCATEGORIES:rare-bird\r\nEND:VEVENT\r\n",
-            uid = uid,
-            dt = dt,
-            url = url,
-            name = escape_ics(&d.com),
-            sci = escape_ics(&d.sci),
-            conf = (d.conf * 100.0).round() as i32,
-        );
+        let name = escape_ics(&d.com);
+        let sci = escape_ics(&d.sci);
+        #[allow(clippy::cast_possible_truncation)]
+        let conf = (d.conf * 100.0).round() as i32;
+        for line in [
+            "BEGIN:VEVENT".to_owned(),
+            format!("UID:bnb-{uid}@birdnet-behavior"),
+            format!("DTSTAMP:{stamp}"),
+            format!("DTSTART:{dt}"),
+            "DURATION:PT3M".to_owned(),
+            format!("SUMMARY:{name} (rare)"),
+            format!("DESCRIPTION:{name} — {sci} — confidence {conf}%.\\nListen: {url}"),
+            format!("URL:{url}"),
+            "CATEGORIES:rare-bird".to_owned(),
+            "END:VEVENT".to_owned(),
+        ] {
+            fold_ics_line(&mut s, &line);
+        }
     }
     s.push_str("END:VCALENDAR\r\n");
     s
@@ -360,9 +372,21 @@ fn escape_ics(s: &str) -> String {
         .replace(';', "\\;")
 }
 
-/// Convert "2026-03-12" + "06:14:32" to RFC 822 — Mon, 12 Mar 2026 06:14:32 +0000.
-/// Treats input as UTC; fine for the use case (per-device feed, single TZ).
-fn rfc822(date: &str, time: &str) -> String {
+/// Convert a detection's local `Date` + `Time` to an RFC 822 `pubDate`.
+///
+/// `offset_secs` is the **station's** UTC offset, east-positive. It is not
+/// cosmetic: a detection's `Date`/`Time` is local wall clock, and this used to
+/// append a flat `+0000`, which asserts the station stands in Greenwich. Every
+/// reader that localises a `pubDate` then shifted every item by the station's
+/// whole offset — a 20:46 detection read as 16:46 on a UTC−4 station and as
+/// 04:46 the next morning on UTC+8.
+///
+/// RSS has no floating-time form the way iCalendar does, so the offset has to
+/// be stated. It is the station's *current* offset, which is exact for the
+/// half of the year that offset holds and an hour out for the other half —
+/// the schema stores no per-row offset to do better with. An hour is the
+/// residual; the whole offset was the bug.
+fn rfc822(date: &str, time: &str, offset_secs: i64) -> String {
     let parts: Vec<&str> = date.split('-').collect();
     if parts.len() != 3 {
         return format!("{date} {time}");
@@ -385,14 +409,86 @@ fn rfc822(date: &str, time: &str) -> String {
     ][(m - 1) as usize];
     let dow_name = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][dow as usize];
     let t = time.replace('Z', "");
-    format!("{dow_name}, {d:02} {month_name} {y} {t} +0000")
+    let sign = if offset_secs < 0 { '-' } else { '+' };
+    let (oh, om) = (offset_secs.abs() / 3600, (offset_secs.abs() % 3600) / 60);
+    format!("{dow_name}, {d:02} {month_name} {y} {t} {sign}{oh:02}{om:02}")
 }
 
-fn ics_datetime(date: &str, time: &str) -> String {
-    // 20260312T061432Z
+/// A detection's local `Date` + `Time` as an iCalendar **floating** date-time.
+///
+/// No `Z`, and no `TZID`: RFC 5545 §3.3.5 form 1, which means "this wall-clock
+/// time", not "this instant in Greenwich". That is what the station actually
+/// knows — the row carries local digits and no offset — and it renders as the
+/// time the operator saw on the dashboard.
+///
+/// It used to append `Z`, asserting UTC. On any station not on UTC that moved
+/// every event in every subscriber's calendar by the station's whole offset.
+/// The alternative fix — subtract today's offset and emit a true UTC instant —
+/// was rejected because it is an hour wrong for every detection on the far side
+/// of a daylight-saving boundary, and a value that is confidently wrong is
+/// worse here than one that is honestly imprecise.
+fn ics_local_datetime(date: &str, time: &str) -> String {
+    // 20260312T061432
     let d = date.replace('-', "");
     let t = time.replace([':', 'Z'], "");
-    format!("{d}T{t}Z")
+    format!("{d}T{t}")
+}
+
+/// Now, as an iCalendar UTC date-time.
+///
+/// `DTSTAMP` is when the calendar object was created, and RFC 5545 §3.8.7.2
+/// says it MUST be UTC. The previous code reused the *detection's* local time
+/// for it, which was the wrong property and the wrong clock at once.
+fn ics_dtstamp_now() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(0));
+    let c = birdnet_core::civil::civil_from_unix_secs(secs);
+    format!(
+        "{:04}{:02}{:02}T{:02}{:02}{:02}Z",
+        c.year, c.month, c.day, c.hour, c.minute, c.second
+    )
+}
+
+/// Fold one iCalendar content line to RFC 5545 §3.1's 75-octet limit.
+///
+/// Continuation lines begin with a single space, which a parser strips before
+/// re-joining. The split is on **octets**, not chars, but never inside a UTF-8
+/// sequence — species names carry em dashes and accented letters, and cutting
+/// one in half would corrupt the value rather than merely lengthen the line.
+fn fold_ics_line(out: &mut String, line: &str) {
+    const LIMIT: usize = 75;
+    let bytes = line.as_bytes();
+    if bytes.len() <= LIMIT {
+        out.push_str(line);
+        out.push_str("\r\n");
+        return;
+    }
+    let mut start = 0;
+    let mut first = true;
+    while start < bytes.len() {
+        // A continuation line spends one octet on its leading space.
+        let budget = if first { LIMIT } else { LIMIT - 1 };
+        let mut end = (start + budget).min(bytes.len());
+        while end > start && !line.is_char_boundary(end) {
+            end -= 1;
+        }
+        if end == start {
+            // A single character wider than the budget cannot be split; emit
+            // it whole rather than looping forever.
+            end = line[start..]
+                .char_indices()
+                .nth(1)
+                .map_or(bytes.len(), |(i, _)| start + i);
+        }
+        if !first {
+            out.push(' ');
+        }
+        out.push_str(&line[start..end]);
+        out.push_str("\r\n");
+        start = end;
+        first = false;
+    }
 }
 
 /// Zeller's congruence; 0 = Sunday … 6 = Saturday.
@@ -409,16 +505,129 @@ fn day_of_week(y: i32, m: u32, d: u32) -> u32 {
 mod tests {
     use super::*;
 
+    /// A detection's `Date`/`Time` is the station's **local** wall clock. The
+    /// feeds stamped it `+0000` / `Z` — asserting it was UTC — so every
+    /// calendar and every reader that localises a timestamp shifted every
+    /// detection by the station's whole offset: a 20:46 detection on a UTC−4
+    /// station showed as 16:46, and as 04:46 the next day on UTC+8.
+    ///
+    /// The wall-clock digits must survive unchanged; only the zone designator
+    /// is allowed to move.
     #[test]
-    fn rfc822_known_date() {
-        // 2024-01-15 was a Monday.
-        let s = rfc822("2024-01-15", "06:14:32");
-        assert!(s.starts_with("Mon, 15 Jan 2024 06:14:32"));
+    fn rfc822_carries_the_stations_offset_not_a_claim_of_utc() {
+        // UTC−4 (EDT).
+        let s = rfc822("2026-07-28", "20:46:32", -4 * 3600);
+        assert!(
+            s.ends_with("-0400"),
+            "the offset must be the station's, not +0000: {s}"
+        );
+        assert!(
+            s.contains("20:46:32"),
+            "the wall clock the station recorded must be preserved: {s}"
+        );
+        // UTC+5:30 (IST) — a half-hour zone, which a naive hours-only
+        // formatter renders as +0500.
+        let s = rfc822("2026-07-28", "20:46:32", 5 * 3600 + 1800);
+        assert!(s.ends_with("+0530"), "half-hour zones must survive: {s}");
+        // A station genuinely on UTC still says +0000.
+        assert!(rfc822("2026-07-28", "20:46:32", 0).ends_with("+0000"));
+    }
+
+    /// `DTSTART` is the *event*: the bird sang at 20:46 where the station
+    /// stands. Emitting `20:46Z` claims that was 20:46 in Greenwich.
+    ///
+    /// The fix is a **floating** value (RFC 5545 §3.3.5 form 1) rather than an
+    /// offset-corrected UTC one, because the station stores no offset with the
+    /// row: applying today's offset to a detection from the other side of a
+    /// daylight-saving boundary would be an hour wrong, and inventing a
+    /// precision the data does not have is worse than reading the wall clock
+    /// back exactly as it was written.
+    #[test]
+    fn ics_event_times_are_floating_local_not_a_claim_of_utc() {
+        let dt = ics_local_datetime("2026-03-12", "06:14:32");
+        assert_eq!(dt, "20260312T061432");
+        assert!(
+            !dt.ends_with('Z'),
+            "a Z suffix asserts UTC, which this value is not"
+        );
+    }
+
+    /// `DTSTAMP` is not the event time — RFC 5545 §3.8.7.2 says it is when the
+    /// calendar object was created, and that it MUST be UTC. Reusing the
+    /// detection's local time for it was both wrong properties at once.
+    #[test]
+    fn ics_dtstamp_is_a_real_utc_instant_not_the_detection_time() {
+        let rows = [DetRow {
+            com: "House Wren".to_owned(),
+            sci: "Troglodytes aedon".to_owned(),
+            date: "2026-07-28".to_owned(),
+            time: "20:46:32".to_owned(),
+            conf: 0.87,
+        }];
+        let ics = build_ics(&rows, "http://x");
+        let dtstamp = ics
+            .lines()
+            .find_map(|l| l.trim_end().strip_prefix("DTSTAMP:"))
+            .expect("every VEVENT carries a DTSTAMP");
+        assert!(
+            dtstamp.ends_with('Z') && dtstamp.len() == 16,
+            "DTSTAMP must be a UTC date-time: {dtstamp}"
+        );
+        assert_ne!(
+            dtstamp, "20260728T204632Z",
+            "DTSTAMP must not be the detection's local time relabelled as UTC"
+        );
+        assert!(
+            ics.contains("DTSTART:20260728T204632\r\n"),
+            "DTSTART must be the floating local wall clock: {ics}"
+        );
+    }
+
+    /// RFC 5545 §3.1: content lines are folded at 75 octets. The description
+    /// line carries a species name and a full URL and routinely runs to ~180.
+    #[test]
+    fn ics_content_lines_are_folded_to_the_spec_limit() {
+        let rows = [DetRow {
+            com: "Black-throated Blue Warbler".to_owned(),
+            sci: "Setophaga caerulescens".to_owned(),
+            date: "2026-07-28".to_owned(),
+            time: "20:46:32".to_owned(),
+            conf: 0.91,
+        }];
+        let ics = build_ics(&rows, "https://a-fairly-long-station-hostname.example.org");
+        for line in ics.split("\r\n") {
+            assert!(
+                line.len() <= 75,
+                "unfolded {}-octet line: {line}",
+                line.len()
+            );
+        }
+        // Folding is only correct if it can be undone: every continuation line
+        // must begin with a single space, which a parser strips.
+        assert!(
+            ics.contains("\r\n "),
+            "a description this long must actually have been folded"
+        );
     }
 
     #[test]
-    fn ics_datetime_format() {
-        assert_eq!(ics_datetime("2026-03-12", "06:14:32"), "20260312T061432Z");
+    fn rfc822_known_date() {
+        // 2024-01-15 was a Monday.
+        let s = rfc822("2024-01-15", "06:14:32", 0);
+        assert!(s.starts_with("Mon, 15 Jan 2024 06:14:32"));
+    }
+
+    /// Replaces `ics_datetime_format`, which asserted
+    /// `"20260312T061432Z"` — the defect itself, pinned as the contract. A
+    /// detection's `Date`/`Time` is local wall clock; the `Z` claimed it was
+    /// Greenwich. See `ics_event_times_are_floating_local_not_a_claim_of_utc`
+    /// above for the replacement, and this for the shape of the value.
+    #[test]
+    fn ics_local_datetime_format() {
+        assert_eq!(
+            ics_local_datetime("2026-03-12", "06:14:32"),
+            "20260312T061432"
+        );
     }
 
     #[test]

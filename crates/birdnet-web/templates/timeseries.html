@@ -33,7 +33,22 @@
     </div>
 </div>
 
-<!-- Everything else is the deeper dashboard, one click away -->
+<!--
+  Everything else is the deeper dashboard, one click away.
+
+  The panels inside carry `hx-trigger="toggle from:closest details once,
+  intersect once"`, not `load`. htmx fires `load` when an element enters the
+  DOM, and a closed <details> is in the DOM — verified in a real browser, along
+  with `revealed`, which also fires while closed because a zero-size element
+  counts as revealed. So `load` here meant the disclosure saved the reader's
+  eyes and cost the station every query anyway: eight panels rendered and shipped
+  for content nobody had asked to see, including 24 KB of dawn-chorus table and
+  a co-occurrence matrix that grows with the species list.
+
+  `toggle from:closest details` fires on open; `intersect once` covers the case
+  where a future edit adds `open` to the <details>, so the panel still loads
+  immediately when it is visible from the start.
+-->
 <details class="pt-disc">
   <summary>See the full analytics dashboard</summary>
 
@@ -44,7 +59,7 @@
               <span class="tsh-badge">90-day average</span>
           </h2>
           <div hx-get="/pages/ts-heatmap"
-               hx-trigger="load"
+               hx-trigger="toggle from:closest details once, intersect once"
                hx-swap="innerHTML">
               <span class="htmx-indicator">Loading heatmap…</span>
           </div>
@@ -55,7 +70,7 @@
               <span class="tsh-badge">today</span>
           </h2>
           <div hx-get="/pages/ts-peak"
-               hx-trigger="load"
+               hx-trigger="toggle from:closest details once, intersect once"
                hx-swap="innerHTML">
               <span class="htmx-indicator">Loading peak windows…</span>
           </div>
@@ -72,7 +87,7 @@
               Continuous-presence windows separated by inactivity gaps.
           </p>
           <div hx-get="/pages/ts-sessions"
-               hx-trigger="load"
+               hx-trigger="toggle from:closest details once, intersect once"
                hx-swap="innerHTML">
               <span class="htmx-indicator">Loading sessions…</span>
           </div>
@@ -86,7 +101,7 @@
               Days where detection counts deviate &gt; 2 standard deviations from the 30-day rolling mean.
           </p>
           <div hx-get="/pages/ts-anomalies"
-               hx-trigger="load"
+               hx-trigger="toggle from:closest details once, intersect once"
                hx-swap="innerHTML">
               <span class="htmx-indicator">Detecting anomalies…</span>
           </div>
@@ -119,7 +134,7 @@
               Cumulative new species discovered over time — species accumulation curve.
           </p>
           <div hx-get="/pages/life-accumulation"
-               hx-trigger="load"
+               hx-trigger="toggle from:closest details once, intersect once"
                hx-swap="innerHTML">
               <span class="htmx-indicator">Loading accumulation…</span>
           </div>
