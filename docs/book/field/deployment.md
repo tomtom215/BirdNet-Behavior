@@ -60,10 +60,27 @@ you ever start the daemon.
 
 | Workload                                  | Daily volume (typical)                                 |
 | ----------------------------------------- | ------------------------------------------------------ |
-| Detection rows in `birds.db`              | ~5–50 MB at moderate activity                          |
+| Detection rows in `birds.db`              | ~0.6 MB per 1 000 detections (see below)                |
 | Extracted detection clips (WAV)           | ~1–10 MB per clip × per-species cap                    |
 | Raw rolling recordings (tmpfs)            | 0 on disk (configured to `/tmp/birdnet-stream`)        |
 | Backups (`~/BirdNet-Behavior/backups/`)   | Up to 14 × `birds.db` size                             |
+
+**How big `birds.db` actually gets.** Measured on a synthetic three-year station
+— 3 285 000 rows (3 000 detections/day), 180 species, the shipped schema and all
+sixteen shipped indexes, `ANALYZE` run:
+
+| | |
+| --- | --- |
+| Total file | **1.83 GB** |
+| Per detection, all in | **~557 bytes** |
+| Of which: the `detections` table | 481 MB (26.3 %) |
+| Of which: **indexes** | **1 352 MB (73.7 %)** |
+
+Two things follow. Budget from the *detection rate*, not from calendar time — a
+station hearing 8 000/day reaches the same size in a bit over a year. And note
+that most of the file, and most of the write amplification on your SD card, is
+index rather than data; the backup ring multiplies whatever that number is by up
+to fourteen.
 
 **Set the disk policy explicitly:**
 
@@ -359,9 +376,33 @@ daemon is stopped):
 ```bash
 sudo systemctl stop birdnet-behavior
 ls -lt ~/BirdNet-Behavior/backups/ | head -3
+
+# Delete the write-ahead log FIRST. This step is not optional — see below.
+rm -f ~/BirdNet-Behavior/birds.db-wal ~/BirdNet-Behavior/birds.db-shm
+
 cp ~/BirdNet-Behavior/backups/birds.db.backup.<timestamp> ~/BirdNet-Behavior/birds.db
+
+# Confirm you got what you asked for before starting the daemon again.
+sqlite3 ~/BirdNet-Behavior/birds.db 'PRAGMA integrity_check; SELECT COUNT(*) FROM detections;'
 sudo systemctl start birdnet-behavior
 ```
+
+> **Why the `rm -f` comes first.** The database runs in WAL mode, so
+> `birds.db-wal` holds committed transactions that are not yet in `birds.db`.
+> Copying a backup over the main file while that log is still beside it does not
+> replace the database: on the next open SQLite replays the log and you are back
+> on the data you were trying to discard.
+>
+> This was reproduced rather than reasoned about. A backup taken after a `VACUUM`
+> (1 000 rows) was copied over a database that had since grown to 9 000 rows plus
+> a table the backup did not contain, with the log left uncheckpointed. Reopening
+> reported `integrity_check: ok` and **9 000 rows** — the restore silently did
+> nothing, and said so in green. A second run that happened to leave `birds.db-shm`
+> in place restored correctly, so it fails *intermittently*, which is worse than
+> failing every time. Deleting both sidecars removes the ambiguity.
+>
+> Restoring from the web UI (**Station → Backups**) removes them for you and runs
+> the integrity check itself; this is the manual equivalent.
 
 ## 9. Remote diagnostics and monitoring
 
