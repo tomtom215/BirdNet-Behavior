@@ -1167,6 +1167,88 @@ pub const MIGRATIONS: &[Migration] = &[
              WHERE rowid = NEW.rowid;
         END;",
     },
+    Migration {
+        version: 33,
+        description: "Retire three indexes nothing reads, and make two of the rest partial",
+        // ## What was measured
+        //
+        // A synthetic three-year station — 3 285 000 rows at 3 000 detections a
+        // day, 180 species, this schema and every index on it, `ANALYZE` run —
+        // comes to **1.83 GB, of which 73.7 % is index rather than data**.
+        // Migrations 29 and 30 benchmarked the indexes they added and were right
+        // to add them. This is the tail nobody re-measured afterwards.
+        //
+        // ## The three that are dropped
+        //
+        // Each was checked by asking what production SQL mentions the column in
+        // a `WHERE`, `ORDER BY` or `GROUP BY`, and then by asking SQLite which
+        // index it actually picks:
+        //
+        //   * `idx_detections_chunk_offset` (29.6 MB) — **no production query
+        //     names `chunk_offset_secs` at all.** The column's real job is as
+        //     part of the composite unique key (migration 24), which is a
+        //     different index.
+        //   * `idx_detections_correlation_id` (29.6 MB) — the only query on
+        //     `correlation_id` in the tree is inside a unit test, whose own
+        //     comment says the index "lets a *future* endpoint pull by
+        //     correlation_id efficiently". That endpoint has not arrived in nine
+        //     migrations. When it does, this is one `CREATE INDEX`.
+        //   * `idx_detections_source` (46.1 MB) — there is no `WHERE Source`
+        //     anywhere. The two queries that mention the column are
+        //     `todays_source_activity` (`WHERE Date = ?1 GROUP BY Source`) and a
+        //     tiebreak in the nearest-detection lookup, and `EXPLAIN QUERY PLAN`
+        //     shows both choosing `idx_detections_date` instead. It has never
+        //     been read.
+        //
+        // ## The one that was costing 268 ms a minute, forever
+        //
+        // `locked_file_names` — `WHERE is_locked = 1 AND File_Name IS NOT NULL`
+        // — is re-read by the disk manager **every 60 seconds** so that locking
+        // a clip in `/admin/recordings` takes effect without a restart. That is
+        // the right design. But `is_locked` is 0 for essentially every row, so
+        // `ANALYZE` tells the planner the column has one or two distinct values
+        // and a seek buys nothing, and the query plans as `SCAN detections`.
+        //
+        // Measured on the three-year database with forty clips locked:
+        //
+        //   * shipped index: **267.6 ms**, `SCAN detections`
+        //   * partial covering index: **0.16 ms**, `SEARCH … USING COVERING
+        //     INDEX idx_detections_locked`
+        //   * index size: **4.1 kB**, down from 29.6 MB
+        //
+        // A full scan of the whole history, 1 440 times a day, holding the
+        // connection the detection writer also needs. A partial index is the
+        // shape this query always wanted: SQLite uses one when the query's
+        // `WHERE` implies the index's, and there is nothing in it but the locked
+        // rows. `File_Name` is carried so the index covers the query outright.
+        //
+        // `idx_detections_import_batch` gets the same treatment for the same
+        // reason: `import_batch_id` is NULL for every locally recorded row, and
+        // its one query is `WHERE import_batch_id IS NOT NULL`. On a station
+        // that has never imported anything the index becomes empty rather than
+        // 29.6 MB of NULLs.
+        //
+        // ## Cost
+        //
+        // Index work only — no row is rewritten, and an index is derived data,
+        // so this is the recoverable kind of migration: re-running the `CREATE`s
+        // rebuilds it exactly. 3.8 s on the three-year fixture. Afterwards the
+        // file is **1.67 GB, 164.6 MB (9.0 %) smaller**, and five fewer B-trees
+        // are touched on every insert.
+        up_sql: "DROP INDEX IF EXISTS idx_detections_chunk_offset;
+        DROP INDEX IF EXISTS idx_detections_correlation_id;
+        DROP INDEX IF EXISTS idx_detections_source;
+
+        DROP INDEX IF EXISTS idx_detections_locked;
+        CREATE INDEX IF NOT EXISTS idx_detections_locked
+            ON detections(is_locked, File_Name) WHERE is_locked = 1;
+
+        DROP INDEX IF EXISTS idx_detections_import_batch;
+        CREATE INDEX IF NOT EXISTS idx_detections_import_batch
+            ON detections(import_batch_id) WHERE import_batch_id IS NOT NULL;
+
+        ANALYZE;",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing
