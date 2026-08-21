@@ -114,7 +114,7 @@ impl Gain {
             rest = tail;
         }
         let aligned = rest.len() - rest.len() % BYTES_PER_SAMPLE;
-        for pair in rest[..aligned].chunks_exact(BYTES_PER_SAMPLE) {
+        for pair in rest[..aligned].as_chunks::<BYTES_PER_SAMPLE>().0 {
             self.out.extend_from_slice(
                 &self
                     .scale(i16::from_le_bytes([pair[0], pair[1]]))
@@ -215,7 +215,7 @@ impl ChannelSelector {
         }
 
         let aligned = rest.len() - rest.len() % STEREO_FRAME_BYTES;
-        for frame in rest[..aligned].chunks_exact(STEREO_FRAME_BYTES) {
+        for frame in rest[..aligned].as_chunks::<STEREO_FRAME_BYTES>().0 {
             self.out
                 .extend_from_slice(&frame[self.offset..self.offset + BYTES_PER_SAMPLE]);
         }
@@ -464,7 +464,9 @@ mod tests {
 
     fn samples(bytes: &[u8]) -> Vec<i16> {
         bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|p| i16::from_le_bytes([p[0], p[1]]))
             .collect()
     }
@@ -542,7 +544,9 @@ mod tests {
             .collect();
         let out = g.apply(&input).to_vec();
         let got: Vec<i16> = out
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| i16::from_le_bytes([c[0], c[1]]))
             .collect();
         assert_eq!(got, vec![200, -200, 0, 2000]);
@@ -559,7 +563,9 @@ mod tests {
             .collect();
         let out = g.apply(&input).to_vec();
         let got: Vec<i16> = out
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| i16::from_le_bytes([c[0], c[1]]))
             .collect();
         assert_eq!(got, vec![i16::MAX, i16::MIN]);

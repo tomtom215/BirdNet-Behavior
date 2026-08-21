@@ -243,7 +243,7 @@ async fn livestream(State(state): State<AppState>, Query(params): Query<StreamPa
 
     let live = match resolve_live_feed(&state, &source_id).await {
         Ok(live) => live,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
 
     // Build the audio filter chain: optional freq shift + format conversion.
@@ -446,11 +446,13 @@ async fn livestream(State(state): State<AppState>, Query(params): Query<StreamPa
 ///   the caller opens the source itself, exactly as before.
 /// * `Err(response)` — there is a tap but it is silent, so the source is not
 ///   recording. Answering `503` is the honest result; the alternative is a
-///   connection that stays open forever delivering nothing.
+///   connection that stays open forever delivering nothing. Boxed because a
+///   `Response` is large enough that clippy flags the `Err` arm, the same
+///   trade `auth_middleware::require_admin` already makes.
 async fn resolve_live_feed(
     state: &AppState,
     source_id: &str,
-) -> Result<Option<LiveFeed>, Response> {
+) -> Result<Option<LiveFeed>, Box<Response>> {
     let Some(tap) = state.live_audio().and_then(|hub| hub.lookup(source_id)) else {
         return Ok(None);
     };
@@ -461,12 +463,14 @@ async fn resolve_live_feed(
         source = source_id,
         "live audio requested for a source that is not recording"
     );
-    Err((
-        StatusCode::SERVICE_UNAVAILABLE,
-        "this source is not recording right now — live audio follows capture, \
-         so check the recording schedule, any quiet window, and Station Health",
-    )
-        .into_response())
+    Err(Box::new(
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "this source is not recording right now — live audio follows capture, \
+             so check the recording schedule, any quiet window, and Station Health",
+        )
+            .into_response(),
+    ))
 }
 
 /// The ffmpeg **input** arguments for a live stream.

@@ -67,11 +67,19 @@ where
 {
     type Rejection = (StatusCode, &'static str);
 
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        parts.extensions.get::<Self>().cloned().ok_or((
+    // Reading an extension awaits nothing, so this returns a ready future
+    // rather than an `async fn` body with no `.await` in it. The trait
+    // declares the method `async`, which desugars to exactly this signature —
+    // spelling it out is what lets the value be produced without a state
+    // machine that never suspends.
+    fn from_request_parts(
+        parts: &mut Parts,
+        _state: &S,
+    ) -> impl std::future::Future<Output = Result<Self, Self::Rejection>> {
+        std::future::ready(parts.extensions.get::<Self>().cloned().ok_or((
             StatusCode::INTERNAL_SERVER_ERROR,
             "request user missing — middleware not wired?",
-        ))
+        )))
     }
 }
 

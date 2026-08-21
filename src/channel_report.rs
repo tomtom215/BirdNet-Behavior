@@ -275,7 +275,7 @@ pub fn deinterleave_s16le(bytes: &[u8]) -> (Vec<f32>, Vec<f32>) {
     let frames = bytes.len() / 4;
     let mut left = Vec::with_capacity(frames);
     let mut right = Vec::with_capacity(frames);
-    for f in bytes[..frames * 4].chunks_exact(4) {
+    for f in bytes[..frames * 4].as_chunks::<4>().0 {
         left.push(f32::from(i16::from_le_bytes([f[0], f[1]])) / 32768.0);
         right.push(f32::from(i16::from_le_bytes([f[2], f[3]])) / 32768.0);
     }
