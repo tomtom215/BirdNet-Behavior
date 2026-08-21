@@ -58,6 +58,21 @@ fn test_state() -> AppState {
         .unwrap();
     }
 
+    // One species heard *today*, distinct from every historical one above.
+    //
+    // The fixture used to be entirely historical, which is how
+    // `htmx_top_species_partial_returns_list` came to assert that the card
+    // headed "Today · Top species" showed a bird detected in March: the partial
+    // read the dateless `species_summary` rollup, so a fixed past date and
+    // "today" were the same answer. They are not the same answer any more, and
+    // the difference is what that test now pins.
+    conn.execute(
+        "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+         VALUES (date('now','localtime'), '05:15:00', 'Sylvia atricapilla', 'Eurasian Blackcap', 0.83)",
+        [],
+    )
+    .unwrap();
+
     AppState::from_connection(conn, std::path::PathBuf::from(":memory:"))
 }
 
@@ -193,7 +208,19 @@ async fn htmx_top_species_partial_returns_list() {
         .unwrap();
     let html = String::from_utf8_lossy(&body);
 
-    assert!(html.contains("Eurasian Blackbird"));
+    // The card is headed "Today · Top species", so it must carry the species
+    // heard today and *not* the ones the fixture recorded in March. This
+    // assertion used to read `contains("Eurasian Blackbird")` — a bird detected
+    // on 2026-03-12 — because the partial read the dateless `species_summary`
+    // rollup and answered with all-time totals under a heading that said today.
+    assert!(
+        html.contains("Eurasian Blackcap"),
+        "the Today card must show what was heard today"
+    );
+    assert!(
+        !html.contains("Eurasian Blackbird"),
+        "and must not show March's commonest species: {html}"
+    );
     // v3 spine: the rail's top-species rows use the x-top treatment
     // (banding code under the name) instead of the old list-row.
     assert!(html.contains("x-top"));
