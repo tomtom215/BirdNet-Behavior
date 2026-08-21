@@ -17,6 +17,8 @@ use super::disposition::{
     should_dispatch_notification,
 };
 use super::webhook::dispatch_webhook;
+use birdnet_db::notifications::NotifStatus;
+
 use crate::integrations::{AppriseHandle, EmailHandle, HeartbeatHandle, MqttHandle};
 
 /// Per-species confidence thresholds, re-read from the database on a short TTL.
@@ -69,6 +71,64 @@ impl ThresholdCache {
             self.refreshed = std::time::Instant::now();
         }
         &self.map
+    }
+}
+
+/// What a notification-log row says about the detection it concerns.
+///
+/// Built once per detection and cloned into each channel's task, so a channel
+/// cannot record a different species than the one it sent.
+#[derive(Clone)]
+struct NotificationSubject {
+    com_name: String,
+    sci_name: String,
+    confidence: f32,
+    date: String,
+    time: String,
+}
+
+/// Record one channel's outcome in `notification_log`.
+///
+/// # Why this exists
+///
+/// `notification_log` had **no writer in production**. `log_notification` was
+/// implemented, unit-tested, and called by nothing — its only caller anywhere in
+/// the tree was `examples/screenshot_server.rs`, the fixture that seeds the
+/// documentation screenshots. Three surfaces read the table: the Notification
+/// Center page, `/admin/notifications`, and the Station home's recent-activity
+/// tab. All three were empty on every real station, permanently, while the
+/// shipped `docs/book/images/notifications.png` showed them populated.
+///
+/// The feature is worth having rather than deleting, and specifically worth
+/// having on the deployment this project is for: "did my BirdWeather uploads
+/// actually land while I was away for a fortnight?" is not a question the
+/// journal answers well, and it is the question an unattended station raises.
+///
+/// Best-effort by construction. A logging failure must never affect the
+/// notification it is describing, and it must never propagate into the detection
+/// pipeline, so this swallows its error into a `debug` line.
+fn record_notification(
+    state: &birdnet_web::state::AppState,
+    channel: &str,
+    subject: &NotificationSubject,
+    status: NotifStatus,
+    message: Option<&str>,
+    error: Option<&str>,
+) {
+    let record = birdnet_db::notifications::NotifRecord {
+        channel,
+        species_com_name: Some(&subject.com_name),
+        species_sci_name: Some(&subject.sci_name),
+        confidence: Some(f64::from(subject.confidence)),
+        detection_date: Some(&subject.date),
+        detection_time: Some(&subject.time),
+        status,
+        message,
+        error,
+    };
+    if let Err(e) = state.with_db(|conn| birdnet_db::notifications::log_notification(conn, &record))
+    {
+        tracing::debug!(error = %e, channel, "could not record notification outcome");
     }
 }
 
@@ -452,6 +512,16 @@ pub(super) fn event_processor(
             notification_filter.should_notify(&detection.scientific_name, None);
         let dispatch_allowed = passes_filter(rule_suppressed, filter_says_notify);
 
+        // What every channel below records about this detection. Built once so a
+        // channel cannot log a different species than it sent.
+        let subject = NotificationSubject {
+            com_name: detection.common_name.clone(),
+            sci_name: detection.scientific_name.clone(),
+            confidence: detection.confidence,
+            date: detection.date.clone(),
+            time: detection.time.clone(),
+        };
+
         // Apprise push notification (with filter and template).
         if let Some(ref apprise) = apprise {
             let apprise_says_notify = apprise
@@ -462,6 +532,8 @@ pub(super) fn event_processor(
             if should_send {
                 let (title, body) = notification_template.render(&notify_ctx);
                 let client = Arc::clone(apprise);
+                let log_state = state.clone();
+                let log_subject = subject.clone();
 
                 rt_handle.spawn(async move {
                     let result = client
@@ -473,11 +545,35 @@ pub(super) fn event_processor(
                             birdnet_integrations::apprise::NotifyType::Info,
                         )
                         .await;
-                    if let Err(e) = result {
-                        tracing::warn!(error = %e, "Apprise notification failed");
+                    match result {
+                        Ok(()) => record_notification(
+                            &log_state,
+                            "apprise",
+                            &log_subject,
+                            NotifStatus::Sent,
+                            Some(&title),
+                            None,
+                        ),
+                        Err(e) => {
+                            tracing::warn!(error = %e, "Apprise notification failed");
+                            record_notification(
+                                &log_state,
+                                "apprise",
+                                &log_subject,
+                                NotifStatus::Failed,
+                                Some(&title),
+                                Some(&e.to_string()),
+                            );
+                        }
                     }
                 });
             }
+            // Deliberately no `skipped` row. On a station where Apprise is set
+            // to "new species only", every one of the day's several thousand
+            // detections would write one — a row per detection per channel,
+            // burying the sends that matter under the ones that were never going
+            // to happen, and putting four extra writes on the detection path for
+            // it. The log records delivery *attempts*.
         }
 
         // BirdWeather upload.
@@ -492,10 +588,33 @@ pub(super) fn event_processor(
             };
             let client = bw.clone();
             let queue_state = state.clone();
+            let log_state = state.clone();
+            let log_subject = subject.clone();
             rt_handle.spawn(async move {
                 let Err(e) = client.post_detection(&post).await else {
+                    record_notification(
+                        &log_state,
+                        "birdweather",
+                        &log_subject,
+                        NotifStatus::Sent,
+                        None,
+                        None,
+                    );
                     return;
                 };
+                // Recorded as `queued`, not `failed`: the payload is parked for
+                // the store-and-forward drainer, so "this did not reach
+                // BirdWeather yet" is a different fact from "this was lost", and
+                // the Notification Center is where an operator on a flaky uplink
+                // needs to be able to tell them apart.
+                record_notification(
+                    &log_state,
+                    "birdweather",
+                    &log_subject,
+                    NotifStatus::Queued,
+                    None,
+                    Some(&e.to_string()),
+                );
                 // Park the payload for the store-and-forward drainer instead
                 // of dropping it: BirdWeather is an append-only record that
                 // accepts late posts, so an upload lost to a Wi-Fi/LTE outage
@@ -541,11 +660,34 @@ pub(super) fn event_processor(
                 station_name: None,
                 detection_url: None,
             };
+            let log_state = state.clone();
+            let log_subject = subject.clone();
             rt_handle.spawn(async move {
                 match notifier.notify(&alert).await {
-                    Ok(true) => tracing::debug!(species = %alert.common_name, "email alert sent"),
+                    Ok(true) => {
+                        tracing::debug!(species = %alert.common_name, "email alert sent");
+                        record_notification(
+                            &log_state,
+                            "email",
+                            &log_subject,
+                            NotifStatus::Sent,
+                            None,
+                            None,
+                        );
+                    }
+                    // The notifier's own filter declined; not an attempt.
                     Ok(false) => {}
-                    Err(e) => tracing::warn!(error = %e, species = %alert.common_name, "email alert failed"),
+                    Err(e) => {
+                        tracing::warn!(error = %e, species = %alert.common_name, "email alert failed");
+                        record_notification(
+                            &log_state,
+                            "email",
+                            &log_subject,
+                            NotifStatus::Failed,
+                            None,
+                            Some(&e.to_string()),
+                        );
+                    }
                 }
             });
         }
@@ -588,12 +730,30 @@ pub(super) fn event_processor(
             };
             let client = Arc::clone(mqtt_client);
             let species = detection.common_name.clone();
-            rt_handle.spawn_blocking(move || {
-                if let Err(e) = client.publish_detection(&payload) {
+            let log_state = state.clone();
+            let log_subject = subject.clone();
+            rt_handle.spawn_blocking(move || match client.publish_detection(&payload) {
+                Ok(()) => record_notification(
+                    &log_state,
+                    "mqtt",
+                    &log_subject,
+                    NotifStatus::Sent,
+                    None,
+                    None,
+                ),
+                Err(e) => {
                     tracing::debug!(
                         error = %e,
                         species = %species,
                         "MQTT publish failed (broker may be offline)"
+                    );
+                    record_notification(
+                        &log_state,
+                        "mqtt",
+                        &log_subject,
+                        NotifStatus::Failed,
+                        None,
+                        Some(&e.to_string()),
                     );
                 }
             });
