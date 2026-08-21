@@ -288,7 +288,7 @@ fn finalize_restore(db_path: &std::path::Path) -> Result<(), String> {
         let sidecar = std::path::PathBuf::from(name);
         match std::fs::remove_file(&sidecar) {
             Ok(()) => {
-                tracing::info!(path = %sidecar.display(), "removed stale sidecar after restore")
+                tracing::info!(path = %sidecar.display(), "removed stale sidecar after restore");
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => {
