@@ -108,7 +108,7 @@ impl Extractor {
         // 5. Build filename with target format extension.
         let ext = self.config.target_format.extension();
         let filename = build_extraction_filename(detection, ext);
-        let output_path = output_dir.join(&filename);
+        let output_path = claim_unused_path(output_dir, &filename);
 
         // 6. Write the WAV file using hound (with optional frequency shifting).
         if self.config.freq_shift_hz != 0 || self.config.target_format.needs_conversion() {
@@ -187,6 +187,52 @@ impl Extractor {
         Ok(output_path)
     }
 }
+
+/// A path in `dir` that no clip already occupies, starting from `filename`.
+///
+/// # Why a clip must never overwrite a clip
+///
+/// [`build_extraction_filename`] names a clip from the species, the rounded
+/// confidence percent, and the detection's **local** date and time. Local
+/// wall-clock is not unique: the hour daylight-saving gives back each autumn
+/// happens twice, so the same species heard at the same local second in both
+/// passes, at the same rounded confidence, produces the same name. `hound`
+/// truncates, so the first clip was replaced by the second — and the detection
+/// row that followed then collided with the first pass's row on
+/// `idx_detections_unique` and was refused, losing the *detection* as well as
+/// the audio.
+///
+/// Suffixing sidesteps both. Nothing parses a clip filename — it is an opaque
+/// `File_Name` that `/api/v2/recordings/{name}` serves back — so `-2` before
+/// the extension costs nothing and keeps two real detections as two rows.
+///
+/// The scan is bounded: after [`MAX_CLIP_NAME_ATTEMPTS`] the original name is
+/// returned and the write overwrites, because a directory that already holds
+/// that many identical detections is a repeat far stranger than the one this
+/// guards, and failing the extraction would lose the clip outright.
+fn claim_unused_path(dir: &Path, filename: &str) -> PathBuf {
+    let first = dir.join(filename);
+    if !first.exists() {
+        return first;
+    }
+    let (stem, ext) = filename
+        .rsplit_once('.')
+        .map_or((filename, ""), |(s, e)| (s, e));
+    for n in 2..=MAX_CLIP_NAME_ATTEMPTS {
+        let candidate = if ext.is_empty() {
+            dir.join(format!("{stem}-{n}"))
+        } else {
+            dir.join(format!("{stem}-{n}.{ext}"))
+        };
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    first
+}
+
+/// How many suffixed names to try before giving up and overwriting.
+const MAX_CLIP_NAME_ATTEMPTS: u32 = 50;
 
 /// Build extraction filename following BirdNET-Pi convention.
 ///
@@ -371,6 +417,105 @@ mod tests {
     /// existing tests passed unchanged. The bug pattern that emitted
     /// `start_sample > stop_sample` in PR #35 was an arithmetic-on-clamps
     /// problem of the same shape.
+    /// `claim_unused_path` head-on, both branches.
+    ///
+    /// The end-to-end gate above exercises it through `extract_detection`,
+    /// which is the behaviour that matters but leaves the two branches
+    /// entangled: a mutation that inverts the "is this name free?" test still
+    /// produces two distinct, existing files there. Asked directly, the two
+    /// answers are different values and neither can stand in for the other.
+    #[test]
+    fn a_free_name_is_taken_as_is_and_an_occupied_one_is_suffixed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let d = dir.path();
+
+        assert_eq!(
+            claim_unused_path(d, "clip.wav"),
+            d.join("clip.wav"),
+            "nothing occupies the name, so nothing should be suffixed"
+        );
+
+        std::fs::write(d.join("clip.wav"), b"x").expect("occupy");
+        assert_eq!(
+            claim_unused_path(d, "clip.wav"),
+            d.join("clip-2.wav"),
+            "the name is taken, so the next one is claimed"
+        );
+
+        std::fs::write(d.join("clip-2.wav"), b"x").expect("occupy");
+        assert_eq!(
+            claim_unused_path(d, "clip.wav"),
+            d.join("clip-3.wav"),
+            "and it keeps counting rather than stopping at one alternative"
+        );
+
+        // Extensionless names take the suffix on the end, not before a dot
+        // that isn't there.
+        std::fs::write(d.join("noext"), b"x").expect("occupy");
+        assert_eq!(claim_unused_path(d, "noext"), d.join("noext-2"));
+    }
+
+    /// The gate for `claim_unused_path`.
+    ///
+    /// Two real detections a real hour apart, in the local hour that
+    /// daylight-saving repeats: same species, same local second, same rounded
+    /// confidence, therefore the same name. Before this, the second clip
+    /// replaced the first and the station kept one recording of two birds.
+    #[test]
+    fn a_second_clip_with_the_same_name_does_not_replace_the_first() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("2026-10-25-birdnet-02:30:00.wav");
+        write_silent_wav(&src, 5.0, 48_000);
+
+        let out = dir.path().join("clips");
+        let extractor = Extractor::new(ExtractionConfig {
+            output_dir: out.clone(),
+            target_format: AudioFormat::Wav,
+            ..ExtractionConfig::default()
+        });
+        let detection = Detection {
+            common_name: "Eurasian Blackbird".to_owned(),
+            scientific_name: "Turdus merula".to_owned(),
+            confidence: 0.83,
+            start: 0.0,
+            stop: 3.0,
+            date: "2026-10-25".to_owned(),
+            time: "02:30:00".to_owned(),
+            week: 43,
+            file_name_extr: None,
+        };
+
+        let first = extractor
+            .extract_detection(&src, &detection)
+            .expect("first pass extracts");
+        let second = extractor
+            .extract_detection(&src, &detection)
+            .expect("second pass extracts");
+
+        // The *first* clip must get the plain name. Asserting only that the
+        // two paths differ is not enough, and mutation testing proved it:
+        // deleting the `!` from `claim_unused_path`'s `if !first.exists()`
+        // sends every clip through the suffix loop, so the pair comes back as
+        // `-2` and `-3` — still distinct, still both present, still two files.
+        // The gate went green on a function that had stopped doing its job.
+        assert_eq!(
+            first.file_name().and_then(std::ffi::OsStr::to_str),
+            Some(build_extraction_filename(&detection, "wav").as_str()),
+            "the first clip of a name takes the name unsuffixed"
+        );
+        assert_ne!(
+            first, second,
+            "the repeated local hour must not reuse the first clip's path"
+        );
+        assert!(first.exists(), "the first pass's clip must survive");
+        assert!(second.exists(), "and the second pass's must exist too");
+        let clips = std::fs::read_dir(&out)
+            .expect("read clips")
+            .filter_map(Result::ok)
+            .count();
+        assert_eq!(clips, 2, "two detections, two clips");
+    }
+
     #[test]
     fn extraction_clip_length_matches_extraction_window() {
         let tmp = tempfile::tempdir().unwrap();

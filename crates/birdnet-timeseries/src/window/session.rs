@@ -5,10 +5,24 @@
 //! exceeds the threshold a new session begins.
 //!
 //! Implementation follows the `DuckDB` pattern:
-//! 1. Compute `LAG(detection_timestamp)` for each row
+//! 1. Compute `LAG(detection_instant)` for each row
 //! 2. Mark rows where the gap ≥ threshold as session boundaries
 //! 3. Assign a monotonically increasing `session_id` via cumulative SUM
 //! 4. Aggregate each session to its `[start, end]` extent and count
+//!
+//! # Which clock each step asks
+//!
+//! The gap, the ordering and the session duration are **elapsed time**, so they
+//! read `detection_instant`. The hour-of-day filter and the displayed session
+//! start/end are **local** questions, so they read `detection_timestamp`.
+//!
+//! That split is not stylistic. Local wall clock is not monotonic: the hour
+//! daylight saving repeats each autumn makes `date_diff` between two detections
+//! an hour apart return **zero**, and the hour it skips each spring makes five
+//! real minutes read as sixty-five. Against a 30-minute threshold the first
+//! merges two sessions that were separate and the second splits one that never
+//! broke — on the two nights of the year when a dawn-chorus study is most
+//! likely to be looking.
 //!
 //! Primary use cases:
 //! - Identifying periods of continuous bird activity vs. silence
@@ -98,19 +112,21 @@ impl WindowSpec for SessionSpec {
             "WITH ordered AS (
     SELECT
         detection_timestamp,
+        detection_instant,
         detection_date,
         Com_Name,
         Confidence,
-        LAG(detection_timestamp) OVER (
-            ORDER BY detection_timestamp
+        LAG(detection_instant) OVER (
+            ORDER BY detection_instant
         ) AS prev_ts,
-        date_diff('minute', prev_ts, detection_timestamp) AS gap_minutes
+        date_diff('minute', prev_ts, detection_instant) AS gap_minutes
     FROM detections_ts
     {where_sql}
 ),
 with_session_id AS (
     SELECT
         detection_timestamp,
+        detection_instant,
         detection_date,
         Com_Name,
         Confidence,
@@ -119,7 +135,7 @@ with_session_id AS (
             CASE WHEN gap_minutes >= {threshold} OR gap_minutes IS NULL
                  THEN 1 ELSE 0 END
         ) OVER (
-            ORDER BY detection_timestamp
+            ORDER BY detection_instant
             ROWS UNBOUNDED PRECEDING
         ) AS session_id
     FROM ordered
@@ -132,8 +148,8 @@ SELECT
     COUNT(*)                 AS detection_count,
     COUNT(DISTINCT Com_Name) AS species_count,
     date_diff('minute',
-        MIN(detection_timestamp),
-        MAX(detection_timestamp)
+        MIN(detection_instant),
+        MAX(detection_instant)
     )                        AS duration_minutes,
     MAX(gap_minutes)         AS max_internal_gap_minutes
 FROM with_session_id
@@ -156,9 +172,42 @@ mod tests {
     fn default_sql_has_lag_and_sum() {
         let spec = SessionSpec::default();
         let sql = spec.build_sql();
-        assert!(sql.contains("LAG(detection_timestamp)"));
+        assert!(sql.contains("LAG(detection_instant)"));
         assert!(sql.contains("SUM("));
         assert!(sql.contains("session_id"));
+    }
+
+    /// The split, asserted rather than described: the gap and the ordering ask
+    /// the instant, the displayed extent asks the wall clock.
+    ///
+    /// A session query that measured its gap on the wall clock returned zero
+    /// minutes between two detections an hour apart on the autumn transition,
+    /// and sixty-five between two five minutes apart on the spring one — either
+    /// side of a 30-minute threshold, so it merged sessions that were separate
+    /// and split one that never broke.
+    #[test]
+    fn the_gap_is_elapsed_time_and_the_reported_extent_is_local() {
+        let sql = SessionSpec::default().build_sql();
+        assert!(
+            sql.contains("date_diff('minute', prev_ts, detection_instant)"),
+            "the gap between detections is elapsed time"
+        );
+        assert!(
+            sql.contains("ORDER BY detection_instant"),
+            "order is chronological, which local wall clock is not"
+        );
+        assert!(
+            sql.contains("MIN(detection_instant)") && sql.contains("MAX(detection_instant)"),
+            "a session's duration is elapsed time"
+        );
+        assert!(
+            sql.contains("strftime(MIN(detection_timestamp)"),
+            "but the start time shown to a human is their own clock"
+        );
+        assert!(
+            !sql.contains("date_diff('minute', prev_ts, detection_timestamp)"),
+            "no duration may be left on the wall clock"
+        );
     }
 
     #[test]

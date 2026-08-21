@@ -10,7 +10,7 @@
 //! Submodules:
 //! * [`sources`] — resolve CLI/config/`audio_sources` rows into capture sources.
 //! * [`runloop`] — the supervisor loop and its per-tick schedule/clock gating.
-//! * [`schedule`] — recording-schedule parsing and the hand-rolled UTC clock.
+//! * [`schedule`] — recording-schedule parsing and the hand-rolled civil clock.
 //! * [`supervisor`] — restart/backoff/schedule decision logic (source-agnostic).
 
 use std::path::PathBuf;

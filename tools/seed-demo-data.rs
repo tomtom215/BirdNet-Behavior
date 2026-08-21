@@ -223,6 +223,9 @@ fn run(args: &Args) -> Result<usize, String> {
             source: Some("local"),
             // Demo clips are a realistic ~9 s (a 3 s detection plus padding).
             duration_secs: Some(9.0),
+            // The demo data is placed in the station's own local time, so the
+            // trigger's tz conversion is exactly right for it.
+            detected_at_utc: None,
         };
         // Each row carries a unique correlation_id and a unique file_name,
         // so the schema's UNIQUE key never trips. Failures here are real.

@@ -28,13 +28,13 @@ pub use detection_reviews::{
 pub use detections::{
     CLIP_AVAILABLE, RecordingsFilter, TodayFilter, all_detections, analytic_detection_count,
     analytic_detection_count_for_date, analytic_species_count_for_date, best_detections_for_date,
-    concurrent_detections_from_other_sources, delete_detection, detection_count,
-    detection_count_for_date, detection_count_for_species_date, detection_dates,
+    concurrent_detections_from_other_sources, delete_detection, detected_at_utc_for,
+    detection_count, detection_count_for_date, detection_count_for_species_date, detection_dates,
     detections_by_date, detections_by_species, detections_per_day, insert_detection,
     is_detection_locked, lock_detection, locked_file_names, recent_clips, recent_clips_count,
     recent_detections, recent_detections_page, relabel_detection, seconds_since_last_detection,
     species_for_date, todays_detection_count, todays_detections, todays_source_activity,
-    unlock_detection,
+    unlock_detection, unstamped_detection_count,
 };
 pub use heatmap::{hourly_totals, species_daily_heatmap, weekly_heatmap};
 pub use images::{

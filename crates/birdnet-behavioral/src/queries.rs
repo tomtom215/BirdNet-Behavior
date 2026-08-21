@@ -49,10 +49,41 @@ use crate::types::{FunnelParams, PatternParams, RetentionParams, SessionizeParam
 /// it. Coercing to an epoch default was rejected: it would invent detections on
 /// 1970-01-01. Rows excluded this way are counted by
 /// [`COUNT_UNPLACEABLE_DETECTIONS`] so the loss is reported rather than silent.
+///
+/// # Two clocks, named apart
+///
+/// `detection_timestamp` is the station's **local wall clock** and stays that
+/// way: it is what hour-of-day filters, calendar-date grouping and every
+/// displayed session time are asked in, and all three are local questions.
+/// `detection_instant` is the same detection as a **point in time**, from
+/// `detected_at_utc` (migration 32).
+///
+/// The distinction is not decorative. Local wall clock is not monotonic — one
+/// hour repeats every autumn and one never happens every spring — so anything
+/// that measures *elapsed time* or *order* on it is wrong across a transition:
+/// a 30-minute sessionisation gap sees a **negative 55-minute** gap on the
+/// autumn night and splits a session that never broke, and reads **two hours**
+/// for one real hour on the spring one. Both were live in every `sessionize`,
+/// `window_funnel`, `sequence_match` and gap query here.
+///
+/// So the rule this view exists to make expressible, and which the queries
+/// downstream follow: **elapsed time and ordering ask `detection_instant`;
+/// clock position, calendar date and anything shown to a human ask
+/// `detection_timestamp`.** Naming the two apart is the same move
+/// `DailySchedule::clock()` made for the recording gate — a caller that has to
+/// remember which clock a bare `ts` means will eventually not.
+///
+/// `to_timestamp` yields a `TIMESTAMP WITH TIME ZONE`; the cast to plain
+/// `TIMESTAMP` keeps it the same type as `detection_timestamp` so the two are
+/// interchangeable as arguments to the extension's functions. Rows with no
+/// instant — a history predating migration 32, or one whose wall clock names no
+/// point in time — yield NULL and drop out of ordered and bucketed results
+/// exactly as they already do for `detection_timestamp`.
 pub const CREATE_DETECTIONS_TS_VIEW: &str = "
 CREATE OR REPLACE VIEW detections_ts AS
 SELECT *,
     TRY_CAST(Date || ' ' || Time AS TIMESTAMP) AS detection_timestamp,
+    CAST(to_timestamp(detected_at_utc) AS TIMESTAMP) AS detection_instant,
     TRY_CAST(Date AS DATE) AS detection_date
 FROM detections
 WHERE review_verdict IS DISTINCT FROM 'rejected';
@@ -135,13 +166,14 @@ pub fn sessionize_sql(params: &SessionizeParams) -> String {
             COUNT(*) AS detection_count,
             CAST(MIN(detection_timestamp) AS VARCHAR) AS start_time,
             CAST(MAX(detection_timestamp) AS VARCHAR) AS end_time,
-            DATEDIFF('second', MIN(detection_timestamp), MAX(detection_timestamp)) AS duration_secs
+            DATEDIFF('second', MIN(detection_instant), MAX(detection_instant)) AS duration_secs
         FROM (
             SELECT
                 Com_Name AS species,
                 detection_timestamp,
-                sessionize(detection_timestamp, INTERVAL '{gap} MINUTE')
-                    OVER (PARTITION BY Sci_Name ORDER BY detection_timestamp)
+                detection_instant,
+                sessionize(detection_instant, INTERVAL '{gap} MINUTE')
+                    OVER (PARTITION BY Sci_Name ORDER BY detection_instant)
                     AS session_id
             FROM detections_ts
             {species_filter}
@@ -219,7 +251,7 @@ pub fn funnel_sql(params: &FunnelParams) -> String {
             CAST(CAST(detection_timestamp AS DATE) AS VARCHAR) AS date,
             window_funnel(
                 INTERVAL '{window} MINUTE',
-                detection_timestamp,
+                detection_instant,
                 {conditions}
             ) AS steps_completed
         FROM detections_ts
@@ -250,7 +282,7 @@ pub fn funnel_events_sql(params: &FunnelParams) -> String {
             list_transform(
                 window_funnel_events(
                     INTERVAL '{window} MINUTE',
-                    detection_timestamp,
+                    detection_instant,
                     {conditions}
                 ),
                 x -> CAST(x AS VARCHAR)
@@ -280,7 +312,7 @@ pub fn sequence_match_sql(params: &PatternParams) -> String {
     format!(
         "SELECT
             CAST(CAST(detection_timestamp AS DATE) AS VARCHAR) AS date,
-            sequence_match('{pattern}', detection_timestamp,
+            sequence_match('{pattern}', detection_instant,
                 {conditions}
             ) AS matched
         FROM detections_ts
@@ -308,7 +340,7 @@ pub fn sequence_count_sql(params: &PatternParams) -> String {
     format!(
         "SELECT
             CAST(CAST(detection_timestamp AS DATE) AS VARCHAR) AS date,
-            sequence_count('{pattern}', detection_timestamp,
+            sequence_count('{pattern}', detection_instant,
                 {conditions}
             ) AS match_count
         FROM detections_ts
@@ -340,7 +372,7 @@ pub fn sequence_match_events_sql(params: &PatternParams) -> String {
         "SELECT
             CAST(CAST(detection_timestamp AS DATE) AS VARCHAR) AS date,
             list_transform(
-                sequence_match_events('{pattern}', detection_timestamp,
+                sequence_match_events('{pattern}', detection_instant,
                     {conditions}
                 ),
                 x -> CAST(x AS VARCHAR)
@@ -371,14 +403,14 @@ pub fn next_species_sql(trigger_species: &str, window_minutes: u32, limit: u32) 
     let escaped = trigger_species.replace('\'', "''");
     format!(
         "WITH sessioned AS (
-            SELECT detection_timestamp, Com_Name,
-                   sessionize(detection_timestamp, INTERVAL '{window_minutes} MINUTE')
-                       OVER (ORDER BY detection_timestamp) AS sid
+            SELECT detection_instant, Com_Name,
+                   sessionize(detection_instant, INTERVAL '{window_minutes} MINUTE')
+                       OVER (ORDER BY detection_instant) AS sid
             FROM detections_ts
         ),
         per_session AS (
             SELECT sequence_next_node('forward', 'first_match',
-                       detection_timestamp, Com_Name,
+                       detection_instant, Com_Name,
                        Com_Name = '{escaped}', TRUE) AS predicted
             FROM sessioned
             GROUP BY sid
@@ -426,8 +458,8 @@ mod tests {
     #[test]
     fn sessionize_sql_all_species() {
         let sql = sessionize_sql(&SessionizeParams::default());
-        assert!(sql.contains("sessionize(detection_timestamp, INTERVAL '30 MINUTE')"));
-        assert!(sql.contains("OVER (PARTITION BY Sci_Name ORDER BY detection_timestamp)"));
+        assert!(sql.contains("sessionize(detection_instant, INTERVAL '30 MINUTE')"));
+        assert!(sql.contains("OVER (PARTITION BY Sci_Name ORDER BY detection_instant)"));
         // The window id is grouped from an inner query, never in a top-level
         // GROUP BY of a window expression.
         assert!(sql.contains("GROUP BY species, session_id"));
@@ -477,7 +509,7 @@ mod tests {
     #[test]
     fn sequence_match_sql_default() {
         let sql = sequence_match_sql(&PatternParams::default());
-        assert!(sql.contains("sequence_match('(?1).*(?2).*(?3)', detection_timestamp"));
+        assert!(sql.contains("sequence_match('(?1).*(?2).*(?3)', detection_instant"));
         assert!(sql.contains("Com_Name = 'European Robin'"));
         assert!(sql.contains("AS matched"));
     }
@@ -496,7 +528,7 @@ mod tests {
     #[test]
     fn sequence_count_sql_default() {
         let sql = sequence_count_sql(&PatternParams::default());
-        assert!(sql.contains("sequence_count('(?1).*(?2).*(?3)', detection_timestamp"));
+        assert!(sql.contains("sequence_count('(?1).*(?2).*(?3)', detection_instant"));
         assert!(sql.contains("Com_Name = 'European Robin'"));
         assert!(sql.contains("AS match_count"));
     }
@@ -504,7 +536,7 @@ mod tests {
     #[test]
     fn sequence_match_events_sql_default() {
         let sql = sequence_match_events_sql(&PatternParams::default());
-        assert!(sql.contains("sequence_match_events('(?1).*(?2).*(?3)', detection_timestamp"));
+        assert!(sql.contains("sequence_match_events('(?1).*(?2).*(?3)', detection_instant"));
         // The TIMESTAMP[] is cast element-wise to VARCHAR for a plain list.
         assert!(sql.contains("list_transform("));
         assert!(sql.contains("x -> CAST(x AS VARCHAR)"));
@@ -558,5 +590,112 @@ mod tests {
     fn create_view_sql_is_valid() {
         assert!(CREATE_DETECTIONS_TS_VIEW.contains("detection_timestamp"));
         assert!(CREATE_DETECTIONS_TS_VIEW.contains("TIMESTAMP"));
+    }
+
+    /// The rule the whole two-clock split exists to enforce, asserted over
+    /// every builder at once rather than one string at a time.
+    ///
+    /// **Elapsed time and ordering ask `detection_instant`; clock position,
+    /// calendar date and anything displayed ask `detection_timestamp`.**
+    ///
+    /// Local wall clock is not monotonic — one hour repeats every autumn and
+    /// one never happens every spring — so a `sessionize` interval, a
+    /// `window_funnel` window or a `sequence_match` pattern measured on it is
+    /// wrong across a transition. `tests/two_clocks.rs` pins the value that
+    /// makes this concrete: one real hour reads as 60 minutes on the instant
+    /// and 0 on the wall clock.
+    ///
+    /// A single-string assertion cannot catch a *new* builder that reaches for
+    /// the wrong column, and a new builder is exactly how this would come back.
+    /// Every construct whose argument is an elapsed duration or an order.
+    const ELAPSED: &[&str] = &[
+        "sessionize(",
+        "window_funnel(",
+        "window_funnel_events(",
+        "sequence_match(",
+        "sequence_count(",
+        "sequence_match_events(",
+        "sequence_next_node(",
+        "ORDER BY detection_",
+        "DATEDIFF(",
+    ];
+
+    #[test]
+    fn no_builder_measures_elapsed_time_on_the_wall_clock() {
+        let sessionize = sessionize_sql(&SessionizeParams::default());
+        let funnel_params = FunnelParams {
+            species_sequence: vec!["A".into(), "B".into()],
+            ..FunnelParams::default()
+        };
+        let pattern_params = PatternParams {
+            species_sequence: vec!["A".into(), "B".into(), "C".into()],
+            ..PatternParams::default()
+        };
+        let all = [
+            ("sessionize", sessionize),
+            ("funnel", funnel_sql(&funnel_params)),
+            ("funnel_events", funnel_events_sql(&funnel_params)),
+            ("sequence_match", sequence_match_sql(&pattern_params)),
+            ("sequence_count", sequence_count_sql(&pattern_params)),
+            (
+                "sequence_match_events",
+                sequence_match_events_sql(&pattern_params),
+            ),
+            ("next_species", next_species_sql("Robin", 30, 5)),
+        ];
+        for (name, sql) in &all {
+            for marker in ELAPSED {
+                let mut from = 0;
+                while let Some(rel) = sql[from..].find(marker) {
+                    let at = from + rel;
+                    // The clock named within the construct's own argument list
+                    // — bounded so a later, unrelated `detection_timestamp` in
+                    // the same query cannot satisfy the check.
+                    let window = &sql[at..(at + 200).min(sql.len())];
+                    let cut = window.find(')').map_or(window.len(), |i| i + 1);
+                    let args = &window[..cut.max(marker.len() + 30).min(window.len())];
+                    assert!(
+                        !args.contains("detection_timestamp"),
+                        "{name}: `{marker}` measures elapsed time or order and must \
+                         ask detection_instant, not the wall clock:\n  {args}"
+                    );
+                    from = at + 1;
+                }
+            }
+            // …and the counterpart: the local questions must stay local, or
+            // every hour-of-day chart and every daily bucket moves by the
+            // station's offset.
+            //
+            // Stated as a prohibition, not as "contains the right form".
+            // `funnel_sql` names the same expression twice — once in the
+            // projection and once in its `GROUP BY` — so a containment check
+            // was satisfied by the *other* occurrence and stayed green while
+            // the projection was moved onto the instant. Watched escape before
+            // this was rewritten.
+            for bad in [
+                "CAST(detection_instant AS DATE)",
+                "EXTRACT(HOUR FROM detection_instant)",
+            ] {
+                assert!(
+                    !sql.contains(bad),
+                    "{name}: `{bad}` — the hour of day a bird sang, and the day \
+                     it belongs to, are questions about the station's own clock"
+                );
+            }
+            // And they must still be asked somewhere, or a builder that simply
+            // dropped its local grouping would satisfy the prohibition above.
+            if sql.contains("AS DATE)") {
+                assert!(
+                    sql.contains("CAST(detection_timestamp AS DATE)"),
+                    "{name}: the calendar date a detection belongs to is local"
+                );
+            }
+            if sql.contains("EXTRACT(HOUR FROM") {
+                assert!(
+                    sql.contains("EXTRACT(HOUR FROM detection_timestamp)"),
+                    "{name}: hour-of-day is a local question"
+                );
+            }
+        }
     }
 }

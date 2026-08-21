@@ -282,10 +282,27 @@ mod tests {
         assert_eq!(admin_exposure("not-an-address", false).status, Status::Skip);
     }
 
+    /// Build a `Config` for a test, pinned to a database that does not exist.
+    ///
+    /// `check_station_location` falls back to the `settings` table of
+    /// [`crate::helpers::db_path_from_config`], which with no `DB_PATH` key
+    /// resolves to `$HOME/BirdNet-Behavior/birds.db`. On CI that file is
+    /// absent and the fallback is inert; on any machine that has ever run a
+    /// station — a developer's laptop, an operator running `cargo test` on the
+    /// Pi — it is the **live database**, and these tests then assert against
+    /// whatever coordinates that station happens to hold.
+    /// `location_warns_when_unset_because_the_filter_goes_inert` was observed
+    /// failing exactly that way, having passed minutes earlier in the same
+    /// working tree, because a station had been started in between.
+    ///
+    /// So every config a test builds names a `DB_PATH` under the process's
+    /// temp dir that is never created. Callers that want the fallback to find
+    /// something pass their own `DB_PATH`, which wins (last key set wins in
+    /// `Config::parse`).
     fn config_from(entries: &[(&str, &str)]) -> Config {
-        let content = entries
-            .iter()
-            .map(|(k, v)| format!("{k}={v}"))
+        let absent = std::env::temp_dir().join("bnb-doctor-config-tests-no-such.db");
+        let content = std::iter::once(format!("DB_PATH={}", absent.display()))
+            .chain(entries.iter().map(|(k, v)| format!("{k}={v}")))
             .collect::<Vec<_>>()
             .join("\n");
         Config::parse(&content).unwrap()

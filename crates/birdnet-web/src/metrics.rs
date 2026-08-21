@@ -18,6 +18,8 @@
 //! * `observe_db_write_seconds(seconds)` — same idea, separate histogram.
 //! * `set_source_up(source, up)` — `birdnet_audio_source_up{source}` gauge.
 //! * `inc_watchdog_pings()` — `birdnet_watchdog_pings_total` counter.
+//! * `inc_detection_write_failed()` — `birdnet_detection_write_failures_total`
+//!   counter: detections the pipeline produced and the database refused.
 //!
 //! All operations are lock-free (`AtomicU64`) on the counters; the
 //! per-species and per-source labelled maps live behind a `RwLock`
@@ -137,6 +139,16 @@ pub struct MetricsRegistry {
     db_write_duration: Histogram,
     audio_source_up: RwLock<HashMap<String, AtomicU64>>,
     watchdog_pings_total: AtomicU64,
+    /// Detections that were classified and then failed to store.
+    ///
+    /// The daemon logs a `warn!` and moves on, which on an unattended station
+    /// is the same as not noticing. The known way to reach it is the hour that
+    /// daylight-saving repeats each autumn: local wall-clock is this schema's
+    /// identity, so the second pass of that hour can collide with the first on
+    /// `idx_detections_unique` and be refused. Any storage fault reaches it
+    /// too. A counter makes "some detections were lost" a question the station
+    /// can answer instead of one an operator has to grep the journal for.
+    detection_write_failures_total: AtomicU64,
     outbound_queue_depth: RwLock<HashMap<String, AtomicU64>>,
     /// Seconds since the most recent stored detection, refreshed by the
     /// deadman task. `u64::MAX` = not yet measured / no detections ever.
@@ -159,6 +171,7 @@ impl MetricsRegistry {
             db_write_duration: Histogram::new(),
             audio_source_up: RwLock::new(HashMap::new()),
             watchdog_pings_total: AtomicU64::new(0),
+            detection_write_failures_total: AtomicU64::new(0),
             outbound_queue_depth: RwLock::new(HashMap::new()),
             detection_silence_secs: AtomicU64::new(u64::MAX),
         }
@@ -270,6 +283,15 @@ impl MetricsRegistry {
         self.watchdog_pings_total.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Bump the counter of detections the database refused.
+    ///
+    /// Called from the one place that can know — the event processor's insert
+    /// error arm — so the count is of *detections lost*, not of SQL errors.
+    pub fn inc_detection_write_failed(&self) {
+        self.detection_write_failures_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Sample every metric for a Prometheus scrape.
     #[must_use]
     pub fn snapshot(&self) -> MetricsSnapshot {
@@ -305,6 +327,7 @@ impl MetricsRegistry {
             outbound_queue,
             detection_silence_secs: self.detection_silence_secs(),
             watchdog_pings: self.watchdog_pings_total.load(Ordering::Relaxed),
+            detection_write_failures: self.detection_write_failures_total.load(Ordering::Relaxed),
         }
     }
 }
@@ -327,6 +350,8 @@ pub struct MetricsSnapshot {
     pub source_up: Vec<(String, u64)>,
     /// Total `WATCHDOG=1` pings sent to systemd since process start.
     pub watchdog_pings: u64,
+    /// Detections classified but refused by the database since process start.
+    pub detection_write_failures: u64,
     /// Store-and-forward backlog per channel kind.
     pub outbound_queue: Vec<(String, u64)>,
     /// Seconds since the most recent stored detection (`None` = unknown).
@@ -411,6 +436,14 @@ pub fn render_runtime_metrics(snap: &MetricsSnapshot) -> String {
     out.push_str("# TYPE birdnet_watchdog_pings_total counter\n");
     let _ = writeln!(out, "birdnet_watchdog_pings_total {}", snap.watchdog_pings);
 
+    out.push_str("# HELP birdnet_detection_write_failures_total Detections classified by the model and refused by the database since process start.\n");
+    out.push_str("# TYPE birdnet_detection_write_failures_total counter\n");
+    let _ = writeln!(
+        out,
+        "birdnet_detection_write_failures_total {}",
+        snap.detection_write_failures
+    );
+
     out
 }
 
@@ -425,7 +458,7 @@ fn render_histogram(out: &mut String, name: &str, h: &HistogramSnapshot) {
 }
 
 /// Escape `"` and `\` per Prometheus label value rules.
-fn escape_label(s: &str) -> String {
+pub(crate) fn escape_label(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
@@ -557,6 +590,31 @@ mod tests {
         assert!(text.contains("birdnet_inference_duration_seconds_sum"));
         assert!(text.contains("birdnet_inference_duration_seconds_count"));
         assert!(text.contains("birdnet_watchdog_pings_total 1"));
+    }
+
+    /// The counter exists so a station can *say* it lost detections. A
+    /// metric that is defined and never rendered is the same silence in a
+    /// different place, so assert the exposition, not just the accessor.
+    #[test]
+    fn refused_detection_writes_are_counted_and_exported() {
+        let m = MetricsRegistry::new();
+        let text = render_runtime_metrics(&m.snapshot());
+        assert!(
+            text.contains("birdnet_detection_write_failures_total 0"),
+            "a healthy station must publish the zero, or a scrape cannot tell \
+             'none lost' from 'not instrumented': {text}"
+        );
+        m.inc_detection_write_failed();
+        m.inc_detection_write_failed();
+        let text = render_runtime_metrics(&m.snapshot());
+        assert!(
+            text.contains("# TYPE birdnet_detection_write_failures_total counter"),
+            "missing TYPE line: {text}"
+        );
+        assert!(
+            text.contains("birdnet_detection_write_failures_total 2"),
+            "counter did not reach the exposition: {text}"
+        );
     }
 
     #[test]

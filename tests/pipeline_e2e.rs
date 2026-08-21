@@ -111,6 +111,14 @@ async fn detection_persists_and_surfaces_on_web_api() {
         correlation_id: Some("pipeline-e2e-0001"),
         source: None,
         duration_secs: None,
+        // Stamped the way the detection processor stamps it, because this test
+        // exists to exercise the production insertion path and that path knows
+        // the offset in force.
+        detected_at_utc: birdnet_core::civil::unix_secs_from_local(
+            &today,
+            "06:30:00",
+            birdnet_db::clock::local_utc_offset_secs(),
+        ),
     };
     state
         .with_db(|conn| insert_detection(conn, &record))
@@ -213,6 +221,11 @@ async fn full_pipeline_audio_to_web_model_gated() {
                 correlation_id: None,
                 source: None,
                 duration_secs: None,
+                detected_at_utc: birdnet_core::civil::unix_secs_from_local(
+                    &d.date,
+                    &d.time,
+                    birdnet_db::clock::local_utc_offset_secs(),
+                ),
             };
             state
                 .with_db(|conn| insert_detection(conn, &record))

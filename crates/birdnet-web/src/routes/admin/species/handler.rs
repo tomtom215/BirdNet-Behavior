@@ -20,7 +20,7 @@ use crate::state::AppState;
 /// The page folded there; the add/remove/threshold endpoints and the Filter-test
 /// sub-page keep their `/admin/species...` paths.
 pub async fn species_page() -> axum::response::Redirect {
-    axum::response::Redirect::permanent("/station/capture")
+    axum::response::Redirect::permanent("/station/capture#species")
 }
 
 /// Return the HTMX partial fragment containing the current species lists.

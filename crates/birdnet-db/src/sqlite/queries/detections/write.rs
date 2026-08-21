@@ -18,8 +18,8 @@ pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Resu
     // this write path working unchanged.
     conn.execute(
         "INSERT INTO detections \
-         (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, chunk_offset_secs, correlation_id, Source, Duration_Secs) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+         (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, chunk_offset_secs, correlation_id, Source, Duration_Secs, detected_at_utc) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
         params![
             record.date,
             record.time,
@@ -37,6 +37,12 @@ pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Resu
             record.correlation_id,
             record.source,
             record.duration_secs,
+            // NULL is not a hole: migration 32's trigger then converts the wall
+            // clock through the host's tz database, which is the right answer
+            // for any row whose real instant nobody recorded. A live caller
+            // passes `Some` because it knows the offset that was in force —
+            // see `birdnet_core::civil::unix_secs_from_local`.
+            record.detected_at_utc,
         ],
     )?;
     Ok(())
@@ -116,6 +122,7 @@ mod tests {
             correlation_id: None,
             source: None,
             duration_secs: None,
+            detected_at_utc: None,
         };
         insert_detection(&conn, &record).unwrap();
         assert_eq!(detection_count(&conn).unwrap(), 1);
@@ -145,6 +152,7 @@ mod tests {
             correlation_id: None,
             source: Some("cam1"),
             duration_secs: None,
+            detected_at_utc: None,
         };
         // A second row at a different second with no source = the historical
         // shape (e.g. an imported BirdNET-Pi row).
@@ -152,6 +160,7 @@ mod tests {
             time: "06:00:01",
             source: None,
             duration_secs: None,
+            detected_at_utc: None,
             ..tagged.clone()
         };
         insert_detection(&conn, &tagged).unwrap();
@@ -247,6 +256,7 @@ mod tests {
             correlation_id: None,
             source: None,
             duration_secs: None,
+            detected_at_utc: None,
         };
 
         insert_detection(&conn, &record).unwrap();
@@ -299,6 +309,7 @@ mod tests {
             correlation_id: None,
             source: None,
             duration_secs: None,
+            detected_at_utc: None,
         };
         insert_detection(&conn, &base).unwrap();
         let chunk2 = DetectionRecord {
@@ -336,6 +347,7 @@ mod tests {
             correlation_id: Some("e-20260519-abc123"),
             source: Some("local"),
             duration_secs: None,
+            detected_at_utc: None,
         };
         insert_detection(&conn, &record).unwrap();
         let rows = recent_detections(&conn, 10).unwrap();
@@ -386,6 +398,7 @@ mod tests {
                 correlation_id: cid,
                 source: None,
                 duration_secs: None,
+                detected_at_utc: None,
             };
             insert_detection(&conn, &r).unwrap();
         }
@@ -425,6 +438,7 @@ mod tests {
             correlation_id: None,
             source: None,
             duration_secs: Some(15.0),
+            detected_at_utc: None,
         };
         insert_detection(&conn, &record).unwrap();
         let rows = recent_detections(&conn, 10).unwrap();

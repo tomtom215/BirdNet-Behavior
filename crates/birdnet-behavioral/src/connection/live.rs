@@ -94,11 +94,22 @@ fn seed(db: &AnalyticsDb) {
             "Eurasian Wren",
         ),
     ];
-    let mut sql =
-        String::from("INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence) VALUES ");
+    // `detected_at_utc` is stamped, not left to default, because every temporal
+    // function under test now takes `detection_instant` — which is derived from
+    // it. A fixture that omitted the column would hand `sessionize`,
+    // `window_funnel` and `sequence_match` a column of NULLs and assert against
+    // whatever they return for that, which is not what any of them do in
+    // production. The seed is in UTC, so `epoch(TIMESTAMP)` over the same wall
+    // clock is the instant.
+    let mut sql = String::from(
+        "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, detected_at_utc) \
+         VALUES ",
+    );
     let values: Vec<String> = rows
         .iter()
-        .map(|(d, t, s, c)| format!("('{d}', '{t}', '{s}', '{c}', 0.9)"))
+        .map(|(d, t, s, c)| {
+            format!("('{d}', '{t}', '{s}', '{c}', 0.9, epoch(TIMESTAMP '{d} {t}'))")
+        })
         .collect();
     sql.push_str(&values.join(", "));
     sql.push(';');

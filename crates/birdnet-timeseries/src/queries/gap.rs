@@ -41,11 +41,11 @@ impl QueryPlan for IntraDay {
             "SELECT
     strftime(detection_timestamp, '%Y-%m-%d %H:%M:%S') AS gap_end,
     strftime(LAG(detection_timestamp) OVER (
-        ORDER BY detection_timestamp
+        ORDER BY detection_instant
     ), '%Y-%m-%d %H:%M:%S')          AS gap_start,
     date_diff('minute',
-        LAG(detection_timestamp) OVER (ORDER BY detection_timestamp),
-        detection_timestamp
+        LAG(detection_instant) OVER (ORDER BY detection_instant),
+        detection_instant
     )                               AS gap_minutes
 FROM detections_ts
 WHERE detection_date = '{date}'
@@ -124,11 +124,11 @@ impl QueryPlan for DailyMaxGap {
         detection_date,
         detection_timestamp,
         date_diff('minute',
-            LAG(detection_timestamp) OVER (
+            LAG(detection_instant) OVER (
                 PARTITION BY detection_date
-                ORDER BY detection_timestamp
+                ORDER BY detection_instant
             ),
-            detection_timestamp
+            detection_instant
         ) AS gap_minutes
     FROM detections_ts
     WHERE detection_date >= CURRENT_DATE - INTERVAL {days} DAYS

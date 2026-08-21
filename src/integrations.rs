@@ -7,6 +7,7 @@
 //! tests — focused; this module is a thin facade that re-exports the public
 //! surface so callers use `integrations::create_*` unchanged.
 
+mod acoustic_health;
 mod apprise;
 mod birdweather;
 mod deadman;
@@ -22,6 +23,7 @@ mod weather;
 #[cfg(test)]
 mod test_support;
 
+pub use acoustic_health::spawn_acoustic_health;
 pub use apprise::{AppriseHandle, create_apprise_client};
 pub use birdweather::create_birdweather_client;
 pub use deadman::{DEFAULT_DEADMAN_HOURS, spawn_detection_deadman};

@@ -509,7 +509,7 @@ impl BirdNetModel {
 /// sigmoid + sensitivity scaling.
 ///
 /// V3.0 fixed-shape (`[1, 96_000]`) follows the V3.0 calibration too.
-fn output_is_probability(input_shape: &[usize]) -> bool {
+const fn output_is_probability(input_shape: &[usize]) -> bool {
     match input_shape {
         // V3.0 fixed (32 kHz × 3 s = 96 000 samples) and V3.0 dynamic
         // preview both emit already-calibrated probabilities.
@@ -526,7 +526,7 @@ fn output_is_probability(input_shape: &[usize]) -> bool {
 /// Anything fully-dynamic or rank-1 → 32 kHz (assume V3.0 preview).
 /// Unknown sample counts default to 48 kHz so we don't silently downsample.
 #[must_use]
-pub fn infer_sample_rate_from_shape(input_shape: &[usize]) -> u32 {
+pub const fn infer_sample_rate_from_shape(input_shape: &[usize]) -> u32 {
     let n_samples = match input_shape {
         [_, n] | [_, _, n] if *n > 1 => *n,
         // All-dynamic or rank-1 → V3.0
@@ -545,7 +545,7 @@ pub fn infer_sample_rate_from_shape(input_shape: &[usize]) -> u32 {
 /// optimum from the chunk-length sweep documented in
 /// `docs/architecture/15-model-chunking.md`.
 #[must_use]
-pub fn recommended_chunk_samples_from_shape(input_shape: &[usize]) -> usize {
+pub const fn recommended_chunk_samples_from_shape(input_shape: &[usize]) -> usize {
     match input_shape {
         [_, n] | [_, _, n] if *n > 1 => *n,
         _ => 144_000,
@@ -559,7 +559,7 @@ pub fn recommended_chunk_samples_from_shape(input_shape: &[usize]) -> usize {
 /// (e.g. rank > 3, or rank-2 with leading dim > 1). Kept separate from
 /// `recommended_chunk_samples_from_shape` because the latter is part of the
 /// public per-model recommendation API and tolerates a wider input domain.
-fn expected_input_length(input_shape: &[usize]) -> Option<usize> {
+const fn expected_input_length(input_shape: &[usize]) -> Option<usize> {
     match input_shape {
         [_, n] | [_, _, n] if *n > 1 => Some(*n),
         [1] | [1, 1] | [1, 1, 1] => Some(144_000),

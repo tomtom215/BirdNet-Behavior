@@ -73,11 +73,11 @@ fn build_capture(state: &AppState) -> String {
     format!(
         r#"{tabs}
 <p class="bnb-lede"><b>What your station is listening to, and which birds it keeps.</b> Add microphones or camera streams, tune which species count, and set how sure the model must be.</p>
-<h2 class="st-h3">Audio sources</h2>
+<h2 class="st-h3" id="audio">Audio sources</h2>
 {sources}
-<h2 class="st-h3">Which birds count <span class="st-h3-note">· <a href="/admin/species/test">preview the filter</a> before it affects live detections</span></h2>
+<h2 class="st-h3" id="species">Which birds count <span class="st-h3-note">· <a href="/admin/species/test">preview the filter</a> before it affects live detections</span></h2>
 {species}
-<h2 class="st-h3">Capture settings <span class="st-h3-note">· the single home for the detection threshold</span></h2>
+<h2 class="st-h3" id="detection">Capture settings <span class="st-h3-note">· the single home for the detection threshold</span></h2>
 {settings_css}
 {form}"#,
         tabs = station_subtabs("capture"),
@@ -107,10 +107,10 @@ fn build_alerts(state: &AppState) -> String {
     format!(
         r#"{tabs}
 <p class="bnb-lede"><b>Get a nudge when something special happens</b> — build a rule, pick where it goes, and send yourself a test before you rely on it.</p>
-{rules}
-<h2 class="st-h3">Channels — send a test</h2>
+<div id="rules">{rules}</div>
+<h2 class="st-h3" id="channels">Channels — send a test</h2>
 {channels}
-<h2 class="st-h3">Where alerts flow</h2>
+<h2 class="st-h3" id="notifications">Where alerts flow</h2>
 {settings_css}
 {form}
 {recent}"#,
@@ -138,10 +138,10 @@ fn build_data(state: &AppState) -> String {
     format!(
         r#"{tabs}
 <p class="bnb-lede"><b>Protect your records, bring in your history, and check the data's trustworthy.</b> Backups bundle the database and recordings; import folds a BirdNET-Pi <span class="mono">birds.db</span> in with its original dates intact.</p>
-{backups}
-<h2 class="st-h3">Bring your history with you</h2>
+<div id="backups">{backups}</div>
+<h2 class="st-h3" id="import">Bring your history with you</h2>
 {import}
-{quality}"#,
+<div id="quality">{quality}</div>"#,
         tabs = station_subtabs("data"),
         backups = crate::routes::admin::backup_recovery::backups_body(state),
         import = crate::routes::admin::migration::migration_body(state),
@@ -165,12 +165,12 @@ fn build_settings(state: &AppState) -> String {
     format!(
         r#"{tabs}
 <p class="bnb-lede"><b>Your preferences — the look, the station identity, and the wall display.</b></p>
-<h2 class="st-h3">Display <span class="st-h3-note">· saved on this device only</span></h2>
+<h2 class="st-h3" id="display-prefs">Display <span class="st-h3-note">· saved on this device only</span></h2>
 {display}
-<h2 class="st-h3">Station &amp; system</h2>
+<h2 class="st-h3" id="station-system">Station &amp; system</h2>
 {settings_css}
 {form}
-<h2 class="st-h3">Wall display</h2>
+<h2 class="st-h3" id="kiosk">Wall display</h2>
 <div class="bnb-card pad">
   <div class="section-header"><div><div class="bnb-eyebrow">Kiosk mode</div><h3>A screen for the wall</h3></div><a class="bnb-btn ghost" href="/kiosk">Launch →</a></div>
   <div class="st-card-lede">A full-screen, auto-refreshing display for a dedicated screen — latest detections and the live signal. Press <span class="mono">Esc</span> to exit.</div>
@@ -201,8 +201,8 @@ fn build_access(state: &AppState, request_user: &RequestUser) -> String {
     format!(
         r#"{tabs}
 <p class="bnb-lede"><b>Who can change your station's settings.</b> Viewing the dashboard is open; only the toolbox is gated.</p>
-{accounts}
-{danger}"#,
+<div id="accounts">{accounts}</div>
+<div id="danger-zone">{danger}</div>"#,
         tabs = station_subtabs("access"),
         accounts = crate::routes::admin::accounts::accounts_body(state, request_user),
         danger = danger_zone(),

@@ -52,12 +52,8 @@ fn render_test_page_for(state: &AppState) -> String {
 fn channels_configured(state: &AppState) -> (bool, bool) {
     state.with_db(|conn| {
         ensure_settings_table(conn).ok();
-        let apprise = get_setting(conn, "apprise_url")
-            .ok()
-            .is_some_and(|v| !v.is_empty());
-        let bw = get_setting(conn, "birdweather_token")
-            .ok()
-            .is_some_and(|v| !v.is_empty());
+        let apprise = get_setting(conn, "apprise_url").is_ok_and(|v| !v.is_empty());
+        let bw = get_setting(conn, "birdweather_token").is_ok_and(|v| !v.is_empty());
         (apprise, bw)
     })
 }

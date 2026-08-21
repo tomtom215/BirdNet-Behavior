@@ -42,7 +42,10 @@ fn seeded(year: i32) -> (AnalyticsDb, TempDir) {
     }
     db.conn()
         .execute_batch(&format!(
-            "INSERT INTO detections VALUES {};",
+            "INSERT INTO detections \
+              (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, \
+               Sens, Overlap, File_Name, import_batch_id, review_verdict) \
+             VALUES {};",
             values.join(",")
         ))
         .expect("seed detections");
@@ -211,7 +214,10 @@ fn seeded_dates(rows: &[(&str, &str)]) -> (AnalyticsDb, TempDir) {
         .collect();
     db.conn()
         .execute_batch(&format!(
-            "INSERT INTO detections VALUES {};",
+            "INSERT INTO detections \
+              (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, \
+               Sens, Overlap, File_Name, import_batch_id, review_verdict) \
+             VALUES {};",
             values.join(",")
         ))
         .expect("seed detections");

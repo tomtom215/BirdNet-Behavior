@@ -59,13 +59,40 @@ With discovery enabled, the station publishes Home Assistant **MQTT discovery** 
 | `birdnet_detection_silence_seconds` | gauge | Seconds since the most recent stored detection — the end-to-end "is it actually detecting?" freshness signal (see [System Health](../admin/system.md)). Absent until the first measurement / on a station with no detections yet. |
 | `birdnet_outbound_queue_depth` | gauge | Store-and-forward uploads parked for replay after a network failure, labeled by `kind` (e.g. `birdweather`). A depth that only grows means the uplink or token has been broken for a while. |
 | `birdnet_watchdog_pings_total` | counter | Successful systemd `WATCHDOG=1` notifications sent. |
+| `birdnet_detection_write_failures_total` | counter | Detections the model produced and the database refused — a detection the station heard and could not keep. Should stay `0`; see below. |
+| `birdnet_noise_floor_dbfs` | gauge | The station's measured background noise floor per capture `source`, averaged over the last 7 days. Typical quiet outdoor background is −60 to −40 dBFS. |
+| `birdnet_noise_floor_drift_db` | gauge | How far a source's noise floor has moved against **its own** preceding 30-day average, in dB. Absent for a source with no baseline yet — "never measured" is not "unchanged". |
 
 The freshness and queue-depth gauges are the two you want alerts on for an
 unattended station:
 `birdnet_detection_silence_seconds > <your quiet period>` catches a station
 that has gone deaf even though every process looks healthy, and a steadily
 climbing `birdnet_outbound_queue_depth` catches a broken uplink before a
-season's uploads pile up. A starter Grafana dashboard lives at
+season's uploads pile up. Alert on **any** increase in
+`birdnet_detection_write_failures_total` as well: it is zero on a healthy
+station, and non-zero means a full or read-only disk, a locked database, or the
+one local hour daylight-saving repeats each autumn (see
+[Time synchronisation](../field/deployment.md#6-time-synchronisation)). A
+The two noise-floor series answer the question no other gauge here can. A
+microphone that fails outright is caught by `birdnet_audio_source_up` and by the
+detection deadman. A microphone that merely goes **deaf** — water in the capsule,
+a spider's web across the port, a connector loosened by a year of thermal cycling
+— keeps its process alive and its gauge at `1`, and shows up only as fewer
+detections. So does the end of the breeding season. The background noise floor
+does not stop when the birds do, so a large, sustained *negative*
+`birdnet_noise_floor_drift_db` on one source, with nothing else changed, points at
+the equipment.
+
+Measured on this project's own test recording, a capsule at 2 % sensitivity reads
+**35 dB lower** on the noise floor (−77.3 against −42.5 dBFS) while its SNR barely
+moves (2.9 against 2.7 dB) — attenuation scales signal and background together, so
+SNR is blind to it and the noise floor is not.
+
+No threshold is shipped, deliberately: a noise floor moves for real reasons —
+weather, season, a road, leaf-out — and a number picked without a season of real
+recordings behind it would fire on all of them. Watch the series for a few weeks,
+then set an alert from what your own site actually does. A starter Grafana
+dashboard lives at
 [`docs/grafana-dashboard.json`](https://github.com/tomtom215/BirdNet-Behavior/blob/main/docs/grafana-dashboard.json).
 
 ```yaml

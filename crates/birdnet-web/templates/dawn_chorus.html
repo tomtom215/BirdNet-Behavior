@@ -56,7 +56,7 @@
     <summary>See the numbers — per-species activity</summary>
     <div id="dawn-list"
          hx-get="/pages/dawn-list"
-         hx-trigger="load"
+         hx-trigger="toggle from:closest details once, intersect once"
          hx-swap="innerHTML">
       {{skel_ribbons}}
     </div>

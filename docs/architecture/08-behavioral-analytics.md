@@ -101,10 +101,11 @@ LOAD behavioral;
 
 SELECT
     Com_Name,
-    sessionize(detection_timestamp, INTERVAL '30 MINUTE')
-        OVER (PARTITION BY Sci_Name ORDER BY detection_timestamp)
+    sessionize(detection_instant, INTERVAL '30 MINUTE')
+        OVER (PARTITION BY Sci_Name ORDER BY detection_instant)
         AS session_id,
     COUNT(*) as detections_in_session,
+    -- the gap above is elapsed time; the extent below is what a human reads
     MIN(detection_timestamp) as session_start,
     MAX(detection_timestamp) as session_end
 FROM detections_ts
@@ -141,7 +142,7 @@ Do species follow a predictable sequence at dawn?
 ```sql
 SELECT window_funnel(
     INTERVAL '2 HOUR',
-    detection_timestamp,
+    detection_instant,
     [
         Com_Name = 'European Robin',
         Com_Name = 'Eurasian Blackbird',
@@ -161,7 +162,7 @@ After detecting a Robin, what typically follows?
 
 ```sql
 SELECT sequence_next_node(
-    detection_timestamp,
+    detection_instant,
     INTERVAL '1 HOUR',
     Com_Name = 'European Robin',
     1,
@@ -205,10 +206,41 @@ Analytics are surfaced through several HTMX pages:
 
 ```sql
 -- Timestamp view for behavioral functions
-CREATE VIEW detections_ts AS
-SELECT *, CAST(Date || ' ' || Time AS TIMESTAMP) AS detection_timestamp
-FROM detections;
+CREATE OR REPLACE VIEW detections_ts AS
+SELECT *,
+    TRY_CAST(Date || ' ' || Time AS TIMESTAMP) AS detection_timestamp,
+    CAST(to_timestamp(detected_at_utc) AS TIMESTAMP) AS detection_instant,
+    TRY_CAST(Date AS DATE) AS detection_date
+FROM detections
+WHERE review_verdict IS DISTINCT FROM 'rejected';
 ```
+
+### Two clocks, and which one each question asks
+
+The view exposes the same detection under two names, and they are **not**
+interchangeable:
+
+| Column | What it is | What asks for it |
+|--------|-----------|------------------|
+| `detection_timestamp` | the station's local wall clock | hour-of-day filters, calendar-date grouping, anything displayed |
+| `detection_instant` | a point in time, from `detected_at_utc` (migration 32) | ordering, session gaps, funnel windows, durations |
+
+Local wall clock is not monotonic. One local hour repeats every autumn and one
+never happens every spring, so a duration measured on it is an hour out across
+either transition — on the autumn night two detections a real hour apart read as
+**zero minutes** apart, and on the spring one fifteen real minutes read as
+**seventy-five**. Against the 30-minute default session gap the first merges two
+sessions that were separate and the second splits one that never broke.
+
+So: **elapsed time and ordering ask `detection_instant`; clock position,
+calendar date and anything shown to a human ask `detection_timestamp`.** Rows
+with no instant — history predating migration 32, or a wall clock naming no
+point in time — yield NULL and drop out of ordered results rather than
+appearing at the epoch.
+
+`crates/birdnet-behavioral/tests/two_clocks.rs` and
+`crates/birdnet-timeseries/tests/session_clock.rs` gate both directions of that
+rule against a real DuckDB.
 
 ---
 

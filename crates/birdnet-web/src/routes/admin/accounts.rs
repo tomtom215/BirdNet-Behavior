@@ -65,7 +65,7 @@ pub fn router() -> Router<AppState> {
 /// tab; its old URL permanently redirects there. The account/session/audit
 /// action endpoints below keep their `/admin/accounts/...` paths.
 async fn accounts_page() -> axum::response::Redirect {
-    axum::response::Redirect::permanent("/station/access")
+    axum::response::Redirect::permanent("/station/access#accounts")
 }
 
 /// Render the accounts / sessions / audit body (no document shell).

@@ -24,15 +24,53 @@ Expand any source with **▸ tune** to open its control panel:
 
 - **Input gain** (−12 → +24 dB) with a zero mark,
 - **Sample rate** (8 / 16 / 22.05 / 44.1 / 48 kHz),
-- **Channels** (mono / left / right / stereo),
+- **Channels** (mono / left / right / stereo) — see [Stereo microphones](#stereo-microphones-and-the-channels-setting) below before leaving this on mono,
 - **Bit depth** (16 / 24-bit PCM),
 - **RTSP transport** (auto / TCP / UDP) for camera sources — auto resolves to the NAT-robust TCP default; force UDP only for a camera that needs it,
-- **Quiet window** — an optional per-source `HH:MM`–`HH:MM` pause (UTC), e.g. to silence a noisy road-facing mic during rush hour without touching the others,
+- **Quiet window** — an optional per-source `HH:MM`–`HH:MM` pause in the **station's local time**, e.g. to silence a noisy road-facing mic during rush hour without touching the others. (Earlier releases evaluated it in UTC; if you set the hours to compensate for that, set them back to the local hours you actually want. The source row shows the window with a `local` suffix so you can tell which convention a station is on.)
 - **Pipeline toggles** — high-pass filter, DC-offset removal, auto-gain control, RTSP keepalive.
 
 > Per-source settings (device, gain, sample rate, transport, quiet window) are read when the capture subsystem starts, so **restart the service after changing them** for the change to take effect.
 
 > Aim for peaks near −6 dB. Gain set too high clips the loudest calls and hurts identification more than a quiet signal does.
+
+## Stereo microphones and the Channels setting
+
+The BirdNET model takes **one** channel, so a stereo microphone's two channels
+have to become one before inference. On `mono` — the default — that reduction is
+a plain average of the two.
+
+For two capsules in the same spot that is harmless. For two capsules a few
+centimetres apart it is a **comb filter**: the same wavefront reaches them at
+slightly different times, and averaging then cancels every frequency where the
+two arrive out of phase. Measured through this project's own decode path, a half
+period of delay costs about **66 dB** — the signal essentially disappears — while
+a quarter period costs 3 dB and a full period costs nothing. Which case a given
+station sits in depends on the capsule spacing *and* on where the bird is, so it
+cannot be answered from a datasheet.
+
+There is a command that answers it on your hardware, in your acoustics:
+
+```bash
+sudo systemctl stop birdnet-behavior     # an ALSA capture device is exclusive
+birdnet-behavior --channel-report        # add --channel-report-secs 15 for a steadier read
+sudo systemctl start birdnet-behavior
+```
+
+It records a few seconds, then prints each channel's level, the inter-channel
+delay and the capsule spacing that implies, and what **Mono / Left / Right**
+would each hand the model. Run it while birds are actually singing: the
+cancellation is direction-dependent, so ambient noise alone can look benign on a
+microphone that loses badly on real song.
+
+Act on the answer with the **Channels** control above — picking `left` or
+`right` takes one capsule intact instead of averaging two — and restart the
+service.
+
+> This matters most for exactly the deployments that can least afford it: a
+> sealed enclosure nobody opens for a season. A station losing 66 dB to its own
+> downmix looks completely healthy from every gauge, dashboard and alert this
+> project has.
 
 ## Adding an RTSP camera
 

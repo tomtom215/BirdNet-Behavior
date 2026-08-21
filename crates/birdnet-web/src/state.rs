@@ -253,25 +253,45 @@ impl AppState {
                 // station and self-heals one that upgraded from a release whose
                 // edits went to SQLite alone.
                 //
-                // Row counts *and* rejected-verdict counts. A reviewer's verdict
-                // moves no row count in either store, so counts alone could
-                // never notice a station whose curation diverged — and curation
-                // drift is the kind that quietly changes published numbers.
+                // Three signals, because each is invisible to the others.
+                //
+                // *Row counts* catch a store that missed rows. *Rejected-verdict
+                // counts* catch curation drift — a rejection moves no row count
+                // in either store, so counts alone could never see a station
+                // whose verdicts diverged, and curation drift is the kind that
+                // quietly changes published numbers. *Unstamped counts* catch a
+                // store that predates a column: `detected_at_utc` (migration 32)
+                // adds no rows and changes no verdict, so a copy synced before
+                // it agrees on the first two and has NULL for every value of the
+                // third — and `detection_instant`, which every elapsed-time and
+                // ordering query now reads, is derived from it. Left unnoticed,
+                // that station's sessionize, funnel, retention, next-species and
+                // gap queries all return nothing while both stores go on
+                // answering every query they are asked.
                 let sqlite_side = birdnet_db::sqlite::detection_count(&conn)
                     .map(|n| u64::try_from(n).unwrap_or(0))
                     .and_then(|rows| {
                         birdnet_db::sqlite::rejected_detection_count(&conn).map(|r| (rows, r))
+                    })
+                    .and_then(|(rows, rejected)| {
+                        birdnet_db::sqlite::unstamped_detection_count(&conn)
+                            .map(|u| (rows, rejected, u))
                     });
                 let olap_side = adb
                     .detection_count()
-                    .and_then(|rows| adb.rejected_detection_count().map(|r| (rows, r)));
+                    .and_then(|rows| adb.rejected_detection_count().map(|r| (rows, r)))
+                    .and_then(|(rows, rejected)| {
+                        adb.unstamped_detection_count().map(|u| (rows, rejected, u))
+                    });
                 match (sqlite_side, olap_side) {
                     (Ok(sqlite_rows), Ok(olap_rows)) if sqlite_rows != olap_rows => {
                         tracing::warn!(
                             sqlite_rows = sqlite_rows.0,
                             sqlite_rejected = sqlite_rows.1,
+                            sqlite_unstamped = sqlite_rows.2,
                             olap_rows = olap_rows.0,
                             olap_rejected = olap_rows.1,
+                            olap_unstamped = olap_rows.2,
                             "analytics copy disagrees with the database after sync; rebuilding it"
                         );
                         match adb.full_resync_from_sqlite(&conn) {
@@ -672,6 +692,17 @@ impl AppState {
         // whether a row moved, and the analytics insert needs its values.
         let row = self.with_db(|conn| birdnet_db::sqlite::get_quarantine(conn, id))?;
         let admitted = self.with_db(|conn| birdnet_db::sqlite::approve_quarantine(conn, id))?;
+        // Read back what migration 32's trigger stamped on the SQLite side, so
+        // the mirror carries the same instant rather than a second computation
+        // of it.
+        #[cfg(feature = "analytics")]
+        let instant = row.as_ref().and_then(|r| {
+            self.with_db(|conn| {
+                birdnet_db::sqlite::detected_at_utc_for(conn, &r.date, &r.time, &r.sci_name)
+            })
+            .ok()
+            .flatten()
+        });
         #[cfg(feature = "analytics")]
         if admitted
             && let Some(row) = row
@@ -692,6 +723,13 @@ impl AppState {
                     sens: None,
                     overlap: None,
                     file_name: row.file_name.as_deref().unwrap_or(""),
+                    // A quarantined row is back-dated: it carries the wall
+                    // clock of when it was *heard*, which may be days ago and
+                    // under a different offset. So the instant is derived from
+                    // the row's own date through the tz database — the same
+                    // conversion migration 32's trigger just made on the SQLite
+                    // side — rather than from the offset in force now.
+                    detected_at_utc: instant,
                 })
             })
         {

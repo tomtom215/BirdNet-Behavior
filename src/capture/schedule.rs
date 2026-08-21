@@ -1,4 +1,4 @@
-//! Recording-schedule parsing and the hand-rolled UTC clock.
+//! Recording-schedule parsing, and the hand-rolled civil clock the gate uses.
 //!
 //! Turns the `--recording-schedule` CLI flag (`all-day` / `solar` /
 //! `fixed:HH:MM-HH:MM`) into a [`ScheduleConfig`], converts Unix time to a
@@ -32,8 +32,8 @@ pub(super) fn parse_schedule_config(
     // recorded around the clock, and a `fixed:HH:MM-HH:MM` window never
     // applied. Nothing contradicted it — `birdnet_core::config::validate`
     // validates the key, and `--doctor`'s clock check reads it from the config
-    // to warn that a fixed window is evaluated in UTC, so the diagnostic
-    // reported on a schedule the runtime never used.
+    // to report how the window will be interpreted, so the diagnostic reported
+    // on a schedule the runtime never used.
     //
     // Its sibling `resolve_twilight_offsets` below has always gone through
     // `resolve::setting`; this line was the one that did not.

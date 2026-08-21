@@ -349,16 +349,24 @@ mod tests {
         // into the gated Station tabs permanently redirect their old `/admin/*`
         // GET to the new home — never a 404 for a veteran's bookmark. The admin
         // POST/partial/action endpoints keep their `/admin/...` paths (unchanged).
+        //
+        // The **fragment** is part of the contract, not decoration. Four of
+        // these tabs merge three or four former pages into one document —
+        // `/station/data` is 82 KB — so a bare redirect landed a bookmark for
+        // `/admin/quality` at the top of a page whose quality section is
+        // somewhere below, with nothing to say which part had been asked for.
+        // A redirect that loses the destination is only marginally better than
+        // the 404 it was written to avoid.
         for (path, target) in [
             ("/admin", "/station"),
-            ("/admin/audio", "/station/capture"),
-            ("/admin/species", "/station/capture"),
-            ("/admin/rules", "/station/alerts"),
-            ("/admin/notifications", "/station/alerts"),
-            ("/admin/backups", "/station/data"),
-            ("/admin/migrate", "/station/data"),
-            ("/admin/quality", "/station/data"),
-            ("/admin/accounts", "/station/access"),
+            ("/admin/audio", "/station/capture#audio"),
+            ("/admin/species", "/station/capture#species"),
+            ("/admin/rules", "/station/alerts#rules"),
+            ("/admin/notifications", "/station/alerts#notifications"),
+            ("/admin/backups", "/station/data#backups"),
+            ("/admin/migrate", "/station/data#import"),
+            ("/admin/quality", "/station/data#quality"),
+            ("/admin/accounts", "/station/access#accounts"),
         ] {
             let app = crate::routes::admin::router().with_state(test_state());
             let res = app

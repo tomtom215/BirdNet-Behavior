@@ -57,9 +57,20 @@ pub fn daily_counts(conn: &Connection, days: u32) -> Result<Vec<DailyCount>, DbE
 /// # Errors
 ///
 /// Returns `DbError` on query failure.
+/// `ORDER BY detected_at_utc DESC, Date DESC, Time DESC` (migration 32), not
+/// wall clock alone. "Most recent" is a chronological claim, and local wall
+/// clock is not chronological: in the hour daylight saving repeats each autumn,
+/// two detections an hour apart carry identical `Date`/`Time`, so ordering on
+/// them picks arbitrarily between the two. The wall-clock terms remain as a
+/// tiebreak and as the answer for rows whose instant is NULL — a history
+/// predating the column, or a wall clock naming no point in time. Those sort
+/// last under `DESC` rather than first, which is also an improvement: a garbage
+/// `Date` like `not-a-date` sorts *above* every real date lexically, so the
+/// "latest detection" on a station with one imported bad row was that row.
 pub fn latest_detection(conn: &Connection) -> Result<Option<(String, String, String)>, DbError> {
     let result = conn.query_row(
-        "SELECT Date, Time, Com_Name FROM detections_analytic ORDER BY Date DESC, Time DESC LIMIT 1",
+        "SELECT Date, Time, Com_Name FROM detections_analytic \
+         ORDER BY detected_at_utc DESC, Date DESC, Time DESC LIMIT 1",
         [],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     );
@@ -605,8 +616,10 @@ pub fn latest_detection_full(
     conn: &Connection,
 ) -> Result<Option<crate::sqlite::types::DetectionRow>, DbError> {
     use crate::sqlite::types::{DETECTION_COLS, map_detection_row};
+    // Chronological, not lexical — see `latest_detection`.
     let sql = format!(
-        "SELECT {DETECTION_COLS} FROM detections_analytic ORDER BY Date DESC, Time DESC LIMIT 1"
+        "SELECT {DETECTION_COLS} FROM detections_analytic \
+         ORDER BY detected_at_utc DESC, Date DESC, Time DESC LIMIT 1"
     );
     let result = conn.query_row(&sql, [], map_detection_row);
     match result {

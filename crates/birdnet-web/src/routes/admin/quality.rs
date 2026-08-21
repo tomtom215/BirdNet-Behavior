@@ -52,7 +52,7 @@ pub fn router() -> Router<AppState> {
 /// tab; its old URL permanently redirects there. The summary/trend HTMX
 /// partials below keep their `/admin/quality/...` paths.
 async fn quality_page() -> axum::response::Redirect {
-    axum::response::Redirect::permanent("/station/data")
+    axum::response::Redirect::permanent("/station/data#quality")
 }
 
 /// Load the quality metrics and render the body (no document shell).

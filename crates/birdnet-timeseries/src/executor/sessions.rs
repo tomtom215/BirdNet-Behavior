@@ -135,19 +135,21 @@ impl super::TimeSeriesDb<'_> {
             "WITH ordered AS (
     SELECT
         detection_timestamp,
+        detection_instant,
         detection_date,
         Com_Name,
         Confidence,
-        LAG(detection_timestamp) OVER (ORDER BY detection_timestamp) AS prev_ts,
-        date_diff('minute', prev_ts, detection_timestamp) AS gap_minutes
+        LAG(detection_instant) OVER (ORDER BY detection_instant) AS prev_ts,
+        date_diff('minute', prev_ts, detection_instant) AS gap_minutes
     FROM detections_ts
     WHERE detection_date >= CURRENT_DATE - INTERVAL {days} DAYS
 ),
 with_session_id AS (
     SELECT
-        detection_timestamp, detection_date, Com_Name, Confidence, gap_minutes,
+        detection_timestamp, detection_instant, detection_date, Com_Name, Confidence,
+        gap_minutes,
         SUM(CASE WHEN gap_minutes >= {threshold} OR gap_minutes IS NULL THEN 1 ELSE 0 END)
-            OVER (ORDER BY detection_timestamp ROWS UNBOUNDED PRECEDING) AS session_id
+            OVER (ORDER BY detection_instant ROWS UNBOUNDED PRECEDING) AS session_id
     FROM ordered
 )
 SELECT
@@ -156,11 +158,11 @@ SELECT
     strftime(MIN(detection_timestamp), '%Y-%m-%d %H:%M:%S'),
     strftime(MAX(detection_timestamp), '%Y-%m-%d %H:%M:%S'),
     COUNT(*), COUNT(DISTINCT Com_Name),
-    date_diff('minute', MIN(detection_timestamp), MAX(detection_timestamp)),
+    date_diff('minute', MIN(detection_instant), MAX(detection_instant)),
     MAX(gap_minutes)
 FROM with_session_id
 GROUP BY session_id, detection_date
-ORDER BY MIN(detection_timestamp)
+ORDER BY MIN(detection_instant)
 LIMIT {limit}"
         )
     }

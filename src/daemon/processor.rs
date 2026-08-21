@@ -238,6 +238,22 @@ pub(super) fn event_processor(
             },
             source: Some(&source_label),
             duration_secs: source_duration_secs,
+            // The instant, not just the wall clock. `Date`/`Time` are local and
+            // carry no offset, so they are not a point in time — the local hour
+            // daylight saving repeats each autumn happens twice under one
+            // label. This path is the only one that can resolve that, because
+            // it is running *now* and the offset in force is known: the first
+            // pass is stamped while the offset is still +2 and the second while
+            // it is +1, so the two land an hour apart, which is what happened.
+            //
+            // Everything else — imports, the backfill — falls back to migration
+            // 32's trigger and a tz-database lookup, which is right for the date
+            // and cannot tell those two apart.
+            detected_at_utc: birdnet_core::civil::unix_secs_from_local(
+                &detection.date,
+                &detection.time,
+                birdnet_db::clock::local_utc_offset_secs(),
+            ),
         };
 
         let metrics = state.metrics();
@@ -254,10 +270,23 @@ pub(super) fn event_processor(
             state.with_db(|conn| birdnet_db::sqlite::insert_detection(conn, &record));
         metrics.observe_db_write_seconds(db_start.elapsed().as_secs_f64());
         if let Err(e) = insert_result {
+            // Counted, not just logged. This is the only place a classified
+            // detection can be lost after the model has agreed it is real, and
+            // an unattended station that only writes it to the journal has not
+            // told anybody. The known route here is the local hour that
+            // daylight-saving repeats each autumn — `(Date, Time, Sci_Name,
+            // File_Name, chunk_offset_secs)` is this schema's identity and all
+            // of it is local wall-clock, so the second pass of that hour can
+            // collide with the first — but a full disk or a locked database
+            // arrives the same way.
+            metrics.inc_detection_write_failed();
             tracing::warn!(
                 correlation_id,
                 error = %e,
-                "failed to insert detection into database"
+                species = %detection.scientific_name,
+                date = %detection.date,
+                time = %detection.time,
+                "detection classified but refused by the database — it is lost"
             );
         } else {
             metrics.inc_detection(&detection.scientific_name, detection.start);
@@ -291,6 +320,10 @@ pub(super) fn event_processor(
                 sens: record.sensitivity,
                 overlap: record.overlap,
                 file_name: &file_str,
+                // The same instant the SQLite row carries, so the two copies
+                // agree. Recomputing it here would let the two drift across a
+                // daylight-saving boundary that fell between the writes.
+                detected_at_utc: record.detected_at_utc,
             };
             let insert_result = state.with_analytics(|adb| adb.insert_detection(&live));
             if let Some(Err(e)) = insert_result {

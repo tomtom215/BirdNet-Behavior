@@ -329,6 +329,17 @@ async fn serve(
         // and the denominator moves with the season, with downtime and with a
         // failed microphone — see `integrations::effort`.
         integrations::spawn_effort_recorder(state.clone());
+
+        // Acoustic health: what the microphones themselves sound like. The
+        // deadman catches a station that has gone silent; nothing caught one
+        // whose microphone had merely gone *deaf*, because that presents as
+        // fewer detections and so does the end of the season — see
+        // `integrations::acoustic_health`. Reads the same transient stream
+        // directory capture writes to, so it needs no coordination with the
+        // audio path.
+        if let Some(stream_dir) = helpers::stream_dir(&cli, config.as_ref()) {
+            integrations::spawn_acoustic_health(state.clone(), stream_dir);
+        }
     }
 
     // Start background subsystems.

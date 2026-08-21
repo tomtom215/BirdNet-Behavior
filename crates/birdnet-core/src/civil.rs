@@ -195,6 +195,35 @@ pub fn unix_secs_from_civil(t: &CivilTime) -> i64 {
     days * 86_400 + i64::from(t.hour) * 3_600 + i64::from(t.minute) * 60 + i64::from(t.second)
 }
 
+/// The instant a **local** wall-clock `date`/`time` names, given the UTC offset
+/// in force at that moment, in seconds since the Unix epoch.
+///
+/// # Why the offset is a parameter and not looked up
+///
+/// A station's `Date`/`Time` pair is local wall clock with no offset recorded,
+/// which is not a point in time: one local hour repeats every autumn and one
+/// never happens every spring. Converting it needs an offset, and *which*
+/// offset depends on what the caller knows:
+///
+/// * A detection being written **now** knows the offset in force, because the
+///   capture supervisor is maintaining it. `local − offset` is then exact, in
+///   both passes of the repeated hour: the first is written while the offset is
+///   still +2 and the second while it is +1, so the two land an hour apart —
+///   which is what actually happened.
+/// * **History** nobody was there for has no such knowledge, and is better
+///   converted through a tz database for its own date, which is what migration
+///   32's backfill does in SQL.
+///
+/// Taking the offset as an argument keeps this pure — no clock, no database,
+/// testable at any instant — and keeps the choice of offset where the knowledge
+/// is.
+///
+/// Returns `None` when `date`/`time` do not name a civil time at all.
+#[must_use]
+pub fn unix_secs_from_local(date: &str, time: &str, offset_secs: i64) -> Option<i64> {
+    parse_civil(date, time).map(|c| unix_secs_from_civil(&c) - offset_secs)
+}
+
 /// Parse a `YYYY-MM-DD` / `HH:MM:SS` pair into a [`CivilTime`].
 ///
 /// Strict: both fields must be exactly the documented shape and all-digits
@@ -748,5 +777,54 @@ mod tests {
             (prev.year, prev.month, prev.day, prev.hour),
             (2025, 1, 1, 0)
         );
+    }
+    /// The property the whole `detected_at_utc` column rests on: two passes of
+    /// the local hour daylight saving repeats have the *same* wall clock and
+    /// must produce *different* instants, because the offset in force differs.
+    ///
+    /// Europe/Berlin, 2026-10-25: at 01:00 UTC the offset moves +2 -> +1, so
+    /// local 02:30 happens once at 00:30Z and again at 01:30Z.
+    #[test]
+    fn the_repeated_hour_is_two_instants_when_the_offset_is_known() {
+        let first =
+            unix_secs_from_local("2026-10-25", "02:30:00", 2 * 3600).expect("valid civil time");
+        let second =
+            unix_secs_from_local("2026-10-25", "02:30:00", 3600).expect("valid civil time");
+        assert_eq!(
+            second - first,
+            3600,
+            "the two passes are an hour apart in real time"
+        );
+        // And they are the two real instants, not merely distinct.
+        assert_eq!(first, 1_792_888_200, "00:30Z, the CEST reading");
+        assert_eq!(second, 1_792_891_800, "01:30Z, the CET reading");
+    }
+
+    #[test]
+    fn a_utc_station_gets_its_wall_clock_back_unchanged() {
+        let t = unix_secs_from_local("2026-05-01", "06:00:00", 0).expect("valid");
+        assert_eq!(
+            civil_from_unix_secs(t).hour,
+            6,
+            "on UTC the instant and the wall clock agree"
+        );
+    }
+
+    #[test]
+    fn a_western_offset_moves_the_instant_later_not_earlier() {
+        // UTC-5: local 06:00 is 11:00Z, so the instant is *larger*.
+        let utc = unix_secs_from_local("2026-05-01", "06:00:00", 0).expect("valid");
+        let est = unix_secs_from_local("2026-05-01", "06:00:00", -5 * 3600).expect("valid");
+        assert_eq!(
+            est - utc,
+            5 * 3600,
+            "sign of the offset must not be flipped"
+        );
+    }
+
+    #[test]
+    fn a_time_that_names_nothing_has_no_instant() {
+        assert!(unix_secs_from_local("", "", 0).is_none());
+        assert!(unix_secs_from_local("not-a-date", "25:99:99", 0).is_none());
     }
 }

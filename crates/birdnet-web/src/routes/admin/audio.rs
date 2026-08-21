@@ -121,7 +121,7 @@ pub(crate) const fn kind_label(kind: SourceKind) -> &'static str {
 /// tab; its old URL permanently redirects there. The POST/probe/partial
 /// endpoints below keep their `/admin/audio/...` paths.
 async fn page() -> axum::response::Redirect {
-    axum::response::Redirect::permanent("/station/capture")
+    axum::response::Redirect::permanent("/station/capture#audio")
 }
 
 /// Render the audio-sources management body (no document shell).
