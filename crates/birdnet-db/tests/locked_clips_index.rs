@@ -9,11 +9,19 @@
 //!
 //! Through migration 32 the supporting index was a plain `detections(is_locked)`.
 //! `is_locked` is 0 for essentially every row, so `ANALYZE` tells the planner the
-//! column has one or two distinct values and a seek buys nothing, and the query
-//! plans as `SCAN detections`. Measured on a three-year, 3 285 000-row fixture
-//! with forty clips locked: **267.6 ms per run, 1 440 times a day**, holding the
-//! connection the detection writer also needs. The partial index in migration 33
-//! takes it to **0.16 ms** and shrinks the index from 29.6 MB to 4.1 kB.
+//! column has one or two distinct values and a seek buys little — and on a real
+//! history it concludes a seek buys nothing at all. Measured on a three-year,
+//! 3 285 000-row fixture with forty clips locked, the plan was
+//! `SCAN detections | USE TEMP B-TREE FOR DISTINCT` at **267.6 ms per run,
+//! 1 440 times a day**, holding the connection the detection writer also needs.
+//! The partial index in migration 33 takes it to **0.16 ms** and shrinks the
+//! index from 29.6 MB to 4.1 kB.
+//!
+//! On the small fixture these tests can build, migration 32's index is still
+//! *chosen* — the degradation to an outright scan needs the statistics a real
+//! history produces. What holds at both sizes is that the index does not cover
+//! the query, so that is the assertion this leans on; see
+//! [`the_locked_clip_read_uses_a_covering_index_not_a_scan`] for both readings.
 //!
 //! A timing assertion would be flaky, so this asserts the *plan* instead: the
 //! planner must choose the index, and it must cover the query. That is the

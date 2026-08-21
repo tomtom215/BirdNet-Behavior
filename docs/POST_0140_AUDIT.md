@@ -2,6 +2,14 @@
 
 **Date:** 2026-08-21 · **Branch:** `claude/production-readiness-audit-k7fzps` · **Base:** `9615b9c`
 
+> **Status.** D1, D2, D4, D5, D6, D7 and D8 were fixed on this branch after the
+> audit was written; each fix's gate was observed failing against the code it was
+> written for, and the commit message records how. The findings below are left as
+> written — they are the record of what the shipped 0.14.0 did. Items still open:
+> **D3** (single `Mutex<Connection>`), **D9** (import segmentation and undo),
+> **D10** (`iso_week`), **D11** (two remaining HTML escapers), **D12**
+> (`clock.rs`'s premise), **D13** (gates that pass by skipping).
+
 Everything below was verified first-hand in this session against the code on this
 commit. Where I measured, the numbers and the method are given. Where I could not
 verify, it says so. Two claims I made early and then disproved are marked
@@ -30,6 +38,8 @@ local wall clock inherited from BirdNET-Pi.
 ## 1. Defects, worst first
 
 ### D1 — "Download full backup" produces a backup that is missing data, and "Restore" can silently do nothing
+
+**[FIXED]** — `full_backup` now snapshots through `rusqlite::backup::Backup`; `restore_backup` removes the sidecars, vets the archive listing and `quick_check`s the result; both temp paths moved off `PrivateTmp`.
 
 `crates/birdnet-web/src/routes/admin/system_controls/backup.rs`
 
@@ -71,6 +81,8 @@ removes `-wal`/`-shm` correctly, and even carries a comment about the
 `with_extension("db-wal")` trap. It is not used here.
 
 ### D2 — The documented manual recovery procedure can silently restore nothing, and report "ok"
+
+**[FIXED]** — the runbook deletes `-wal`/`-shm` first and verifies the result, with the reproduction recorded beside it.
 
 `docs/book/field/deployment.md` §8 tells the operator, in the runbook they will
 read at the worst possible moment:
@@ -118,6 +130,8 @@ Pi, longer. This is the single largest structural item in the report.
 
 ### D4 — Four user-facing surfaces read a table nothing writes
 
+**[FIXED]** — all four dispatch channels now record their outcome; `NotifStatus` gained `Queued` for BirdWeather's store-and-forward case. No `skipped` rows, deliberately.
+
 `birdnet_db::notifications::log_notification` has **zero production callers**
 (`grep -rn log_notification . --include=*.rs` → its own definition and its own unit
 tests, nothing else). `NotifRecord` likewise has no use outside its module.
@@ -136,6 +150,8 @@ operator can ever reach.
 
 ### D5 — "Today · Top species" is not today
 
+**[FIXED]** — the card reads `species_for_date`. An existing integration test was asserting the bug and now pins the contract.
+
 `crates/birdnet-web/templates/today.html:110` renders eyebrow **"Today"** over
 heading **"Top species"**. It is filled by `/pages/top-species` →
 `top_species(conn, 6)`, which reads `species_summary` — a rollup keyed
@@ -148,6 +164,8 @@ card beneath reads 1444 / 1332 / 1207. The weekly report's equivalent card
 one card, not a pattern.
 
 ### D6 — `audit_log` grows forever
+
+**[FIXED]** — `JOB_LOG_RETENTION`, daily, prunes `audit_log` at 180 days and `notification_log` at 90.
 
 `AuditLog::prune()` (`crates/birdnet-db/src/accounts/audit.rs:142`) has no
 production caller; only its own test at `:277`. `notification_log`'s prune is
@@ -162,6 +180,8 @@ The two above are the ones that fell through.
 
 ### D7 — `species_summary` can drift and nothing will notice
 
+**[FIXED]** — `JOB_SUMMARY_AUDIT`, daily, checks drift and rebuilds when it finds any.
+
 `species_summary_drift` exists and is well tested, but its only caller is
 `src/helpers/db.rs:188`, reached from `--rebuild-species-summary` on the command
 line. The daily `PRAGMA integrity_check` cannot see logical drift between a table
@@ -169,6 +189,8 @@ and its trigger-maintained rollup. On a sealed station, the species list and eve
 count derived from it can go quietly wrong and stay wrong.
 
 ### D8 — 73.7 % of the database file is index
+
+**[FIXED, and larger than it looked]** — migration 33. Three indexes nothing reads are dropped and two become partial: 164.6 MB (9.0 %) off the file, and the locked-clip read that runs every 60 s goes from a 267.6 ms full scan to 0.16 ms.
 
 Measured with `dbstat` on the 3-year database (1.83 GB total):
 
