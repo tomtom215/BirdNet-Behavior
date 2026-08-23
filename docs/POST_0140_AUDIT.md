@@ -2,12 +2,15 @@
 
 **Date:** 2026-08-21 · **Branch:** `claude/production-readiness-audit-k7fzps` · **Base:** `9615b9c`
 
-> **Status.** D1–D9 were fixed on this branch after the audit was written; each
-> fix's gate was observed failing against the code it was written for, and the
-> commit message records how. The findings below are left as written — they are
-> the record of what the shipped 0.14.0 did. Items still open: **D10**
-> (`iso_week` is `%W`), **D11** (two remaining HTML escapers), **D12**
-> (`clock.rs`'s stated premise), **D13** (CI gates that pass by skipping).
+> **Status: all thirteen are fixed on this branch.** Each fix's gate was
+> observed failing against the code it was written for, and the commit message
+> records the exact failure text — including three cases where the *gate* had to
+> be corrected because it did not catch the planted defect on the first try, and
+> two where a gate written for one defect immediately found another.
+>
+> The findings below are left as written. They are the record of what the
+> shipped 0.14.0 did, not of what this branch does; the `[FIXED]` line under
+> each says what changed.
 
 Everything below was verified first-hand in this session against the code on this
 commit. Where I measured, the numbers and the method are given. Where I could not
@@ -270,6 +273,8 @@ and right now it cannot even be discarded selectively.
 
 ### D10 — `iso_week` is not the ISO week
 
+**[FIXED]** — the weekly phenology queries use `%V` with `%G`, so `iso_week` is the ISO week and every bucket is seven days. `monthly_totals_sql` keeps the calendar year deliberately. The effort join moved with it — and the gate caught that `effort_corrected_abundance_sql` spells its week expression out inline rather than using the shared constant, so the first edit had left the two sides disagreeing.
+
 `crates/birdnet-behavioral/src/phenology/abundance.rs:29` —
 `WEEK_EXPR = strftime(detection_date, '%W')`, aliased throughout as `iso_week`.
 
@@ -295,6 +300,8 @@ the successor, and it is mislabelled rather than wrong.
 
 ### D11 — Three HTML escapers, two divergent, in code that says there is one
 
+**[FIXED]** — both copies now call `routes::pages::escape_html`, and `tests/one_html_escaper.rs` scans the crate's source so a third cannot appear silently. Its first run found one false positive (markup containing the text `&lt;60%`, which tightened the detector) and one genuine second escaper — `feeds.rs::escape_xml`, allowlisted by name because XML wants `&apos;` where HTML wants `&#x27;`.
+
 `routes/pages/mod.rs:272`'s doc comment reads: *"There were three, and they were
 not the same… Escaping is not a place to have three answers."* Two remain, and both
 omit the apostrophe the consolidated one added:
@@ -307,6 +314,8 @@ latent, not exploitable — which is exactly the status the comment claims to ha
 retired. Confident prose in this repo, again.
 
 ### D12 — `clock.rs`'s stated premise is false for the shipping binary
+
+**[FIXED]** — the note now gives the reason that actually holds (the offset must come from the same source as the detection queries' own `localtime` comparisons) and records what the old claim got wrong. `tests/clock_premise.rs` reads `Cargo.lock` so the corrected paragraph is checkable, and tells whoever removes chrono to fix the comment first.
 
 `crates/birdnet-db/src/clock.rs`'s module doc: *"The workspace carries no
 `chrono`/`time` dependency and forbids `unsafe`, so neither `localtime_r` nor a
@@ -324,6 +333,8 @@ build or binary weight in the shipping configuration. That changes the calculus 
 everything in §3.
 
 ### D13 — Gates that pass by skipping
+
+**[FIXED]** — `BIRDNET_REQUIRE_LIVE_EXTENSION` turns each such skip into a failure naming what was missing. CI sets it on pushes to `main`, whose green is a claim about shippability, and leaves it unset on pull requests. Set as a constant of the run rather than by the fetch step on success: a flag the fetch controls could not catch the fetch failing.
 
 * `.github/workflows/ci.yml:141` — if the `behavioral` extension cannot be fetched
   from the community CDN, CI emits `::warning::` and the offline-load test
