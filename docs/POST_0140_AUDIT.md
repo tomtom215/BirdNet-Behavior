@@ -2,13 +2,12 @@
 
 **Date:** 2026-08-21 · **Branch:** `claude/production-readiness-audit-k7fzps` · **Base:** `9615b9c`
 
-> **Status.** D1, D2, D4, D5, D6, D7 and D8 were fixed on this branch after the
-> audit was written; each fix's gate was observed failing against the code it was
-> written for, and the commit message records how. The findings below are left as
-> written — they are the record of what the shipped 0.14.0 did. Items still open:
-> **D3** (single `Mutex<Connection>`), **D9** (import segmentation and undo),
-> **D10** (`iso_week`), **D11** (two remaining HTML escapers), **D12**
-> (`clock.rs`'s premise), **D13** (gates that pass by skipping).
+> **Status.** D1–D9 were fixed on this branch after the audit was written; each
+> fix's gate was observed failing against the code it was written for, and the
+> commit message records how. The findings below are left as written — they are
+> the record of what the shipped 0.14.0 did. Items still open: **D10**
+> (`iso_week` is `%W`), **D11** (two remaining HTML escapers), **D12**
+> (`clock.rs`'s stated premise), **D13** (CI gates that pass by skipping).
 
 Everything below was verified first-hand in this session against the code on this
 commit. Where I measured, the numbers and the method are given. Where I could not
@@ -108,6 +107,8 @@ Fix is one line in the doc (`rm -f birds.db-wal birds.db-shm` before the `cp`) a
 one call in the code (`resilience::restore_from_backup`).
 
 ### D3 — One `Mutex<Connection>` serialises the entire application
+
+**[FIXED]** — `AppState` now holds one writer plus a pool of four **read-only** connections (`db_pool::ReaderPool`). `with_db` is unchanged and still means "writer"; the twenty-seven unambiguously read-only call sites across six modules moved to `with_read_db`. Read-only is what makes the split safe to do by hand: a write on a read path fails immediately. An in-memory database has no pool and falls back to the writer, which is why the new gates build file-backed states on purpose.
 
 `crates/birdnet-web/src/state.rs:53` — `db: Mutex<Connection>`; `:512` — `with_db`.
 
@@ -230,6 +231,8 @@ The indexing work in migrations 29/30 was clearly benchmarked and is good. This 
 the accumulated tail nobody re-measured afterwards.
 
 ### D9 — Importing another station's history is a one-way merge
+
+**[FIXED, in three parts]** — (1) an import can be removed: `delete_import_batch` takes out the batch's detections and its record in one transaction, mirrored into the DuckDB copy, with a Remove button on `/admin/migrate`. (2) A kept import can be excluded from every analytic: migration 34 puts the rule in `detections_analytic`, and `detections_ts` carries the same rule as a literal, so the two engines cannot disagree; default is include, so no existing station's numbers move. (3) The clock is converted per row from the source's offset onto this host's clock *for that row's date*, instead of one flat shift — measured wrong on three of six representative timestamps before. The source half is still a single constant, and the import form now says so.
 
 This is the direct answer to *"what happens if someone uploads historical
 BirdNET-Pi data from a different station location?"*, traced end to end.
