@@ -2,13 +2,44 @@
 //!
 //! # Why this lives in the database crate
 //!
-//! The workspace carries no `chrono`/`time` dependency and forbids `unsafe`, so
-//! neither `localtime_r` nor a tz-database parser is reachable. SQLite's
-//! `localtime` modifier consults the same zoneinfo everything else on the box
-//! does — including the `date('now','localtime')` comparisons the detection
-//! queries already make — so asking SQLite is both the cheapest way to learn the
-//! offset and the only way to be sure the answer *agrees* with how detections
-//! are stored. This crate owns SQLite, so this is where that rule lives.
+//! Because the answer has to agree with how detections are stored. SQLite's
+//! `localtime` modifier consults the same zoneinfo as the
+//! `date('now','localtime')` comparisons the detection queries already make, so
+//! asking SQLite is the only way to be certain the offset this returns and the
+//! dates those queries compute come from one source. This crate owns SQLite, so
+//! this is where that rule lives.
+//!
+//! A second copy of the rule would let the two disagree, and the way that
+//! failure presents — timestamps quietly two hours out on a CEST station — is
+//! exactly the bug class this project keeps paying for.
+//!
+//! ## What this comment used to claim, and why it was wrong
+//!
+//! It said: *"The workspace carries no `chrono`/`time` dependency and forbids
+//! `unsafe`, so neither `localtime_r` nor a tz-database parser is reachable."*
+//! The `unsafe` half is true. The dependency half is not, for the binary that
+//! actually ships:
+//!
+//! ```text
+//! $ cargo tree -e normal | grep -c 'chrono v'        # 3
+//! $ cargo tree -e normal --no-default-features | ... # 0
+//! ```
+//!
+//! `chrono` arrives through `duckdb → arrow → arrow-arith`, and brings
+//! `iana-time-zone` with it. The `analytics` feature is on by default and every
+//! release binary is built with it, so a full tz-database reader is already
+//! compiled and linked into the thing on the Pi. Only the slim
+//! `--no-default-features` build is without it.
+//!
+//! That does not make this module wrong — the agreement argument above is the
+//! real reason and it stands on its own. It makes the *cost* argument wrong:
+//! reaching for a date/time crate here would add no build time and no binary
+//! weight to the shipping configuration, so "we cannot" was never the
+//! constraint. Anyone weighing that trade later should weigh it on the merits,
+//! not on a dependency count that was already paid.
+//!
+//! (`crates/birdnet-db/tests/clock_premise.rs` keeps the numbers above honest:
+//! it reads `Cargo.lock` rather than trusting this paragraph.)
 //!
 //! # Who needs it
 //!
@@ -19,10 +50,6 @@
 //! * **capture**, whose segment filenames carry local civil time (`arecord
 //!   --use-strftime` called `strftime` on `localtime()`, and the in-process
 //!   segment writer that replaced it has to produce the same names).
-//!
-//! A second copy of this rule would let those two disagree, and the way that
-//! failure presents — timestamps quietly two hours out on a CEST station — is
-//! exactly the bug class this project keeps paying for.
 
 use std::sync::atomic::{AtomicI64, Ordering};
 

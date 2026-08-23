@@ -14,6 +14,7 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use tokio_util::io::ReaderStream;
 
+use crate::routes::pages::escape_html;
 use crate::state::AppState;
 
 /// Mount backup management routes.
@@ -83,14 +84,6 @@ fn is_safe_backup_name(name: &str) -> bool {
     is_backup_file_name(name)
 }
 
-/// Basic HTML escape for untrusted strings rendered into HTML.
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-}
-
 // ---------------------------------------------------------------------------
 // GET /admin/system/backups — list backup files
 // ---------------------------------------------------------------------------
@@ -144,7 +137,7 @@ fn render_backup_list(entries: &[BackupEntry]) -> String {
             use std::fmt::Write as _;
             let mut buf = String::new();
             for e in entries {
-                let name_esc = html_escape(&e.name);
+                let name_esc = escape_html(&e.name);
                 let size_str = format_bytes(e.size);
                 let date_str = format_unix_ts(e.modified_secs);
                 let _ = write!(
@@ -357,11 +350,28 @@ mod tests {
         assert!(epoch.starts_with("1970-01-01"), "got: {epoch}");
     }
 
+    /// A backup filename is operator-supplied and lands in this page's markup.
+    /// The escaping itself is gated on `escape_html` (see
+    /// `routes::pages::mod`); what this pins is that the *render* still routes
+    /// through it — dropping the call would leave that gate passing and this
+    /// page injectable.
     #[test]
-    fn html_escape_xss() {
-        let escaped = html_escape("<script>alert(1)</script>");
-        assert!(!escaped.contains('<'));
-        assert!(escaped.contains("&lt;"));
+    fn a_backup_name_is_escaped_before_it_reaches_the_page() {
+        let html = render_backup_list(&[BackupEntry {
+            name: "<script>alert(1)</script>'\"".to_string(),
+            size: 1,
+            modified_secs: 0,
+        }]);
+        assert!(!html.contains("<script>"), "unescaped tag: {html}");
+        assert!(
+            !html.contains("alert(1)</script>"),
+            "unescaped close: {html}"
+        );
+        assert!(html.contains("&lt;script&gt;"));
+        assert!(
+            html.contains("&#x27;"),
+            "the apostrophe must be escaped too"
+        );
     }
 
     #[test]

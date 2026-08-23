@@ -25,8 +25,50 @@ use crate::phenology::types::AbundanceParams;
 /// it failed to bind — invisible to tests that only asserted on generated text.
 const YEAR_EXPR: &str = "CAST(strftime(detection_date, '%Y') AS INTEGER)";
 
-/// Week of year (Monday-based), as an INTEGER — `%W`, as before.
-const WEEK_EXPR: &str = "CAST(strftime(detection_date, '%W') AS INTEGER)";
+/// ISO-8601 week of year (1–53), as an INTEGER.
+///
+/// # Why `%V` and not `%W`
+///
+/// The alias on every query below has said `iso_week` since this module was
+/// written, and the expression behind it was `%W` — the Monday-based week
+/// number, which is **not** the ISO week. Probed against the real bundled
+/// engines rather than assumed (SQLite 3.53.2 and DuckDB agree exactly):
+///
+/// ```text
+///                %W    %V (ISO)   %Y     %G (ISO year)
+/// 2024-12-30     53       01      2024      2025
+/// 2024-12-31     53       01      2024      2025
+/// 2025-01-01     00       01      2025      2025
+/// 2025-01-05     00       01      2025      2025
+/// 2025-01-06     01       02      2025      2025
+/// ```
+///
+/// Two consequences for a chart whose entire purpose is comparing week-of-year
+/// *across years*:
+///
+/// * `%W` has a **week 00** that is one to six days long, and often a **week
+///   53** that is another stub. Both were drawn at full height beside complete
+///   seven-day weeks, so the first and last bars of every year meant something
+///   different from all the others.
+/// * The same real week was **split across two years' charts**: 30–31 December
+///   filed under `%Y=2024, %W=53`, and 1–5 January under `%Y=2025, %W=00`.
+///
+/// Every ISO week is exactly seven days, and week *N* sits within three days of
+/// the same seasonal position each year, which is the property a phenology
+/// comparison needs.
+const WEEK_EXPR: &str = "CAST(strftime(detection_date, '%V') AS INTEGER)";
+
+/// ISO-8601 week-numbering year, as an INTEGER.
+///
+/// Must travel with [`WEEK_EXPR`]: an ISO week belongs to the ISO year, and
+/// filtering ISO weeks by the *calendar* year is what produces the split
+/// described above from the other direction — 2024-12-30 would arrive as
+/// "2024, week 01" and collide with 2025-01-01's own week 01.
+///
+/// Deliberately **not** used by [`monthly_totals_sql`], which buckets by
+/// calendar month and therefore wants the calendar year: a December row belongs
+/// to December, whatever ISO says about its week.
+const ISO_YEAR_EXPR: &str = "CAST(strftime(detection_date, '%G') AS INTEGER)";
 
 /// Rows that name a real point in time. Every query here buckets by week or
 /// month, so a row the view could not parse has no bucket to belong to.
@@ -72,7 +114,7 @@ pub fn weekly_abundance_sql(params: &AbundanceParams) -> String {
             .species
             .as_deref()
             .map(|s| species_condition(s, "Com_Name")),
-        Some(format!("{YEAR_EXPR} = {}", params.year)),
+        Some(format!("{ISO_YEAR_EXPR} = {}", params.year)),
     ]);
     let min_clause = if params.min_weekly_count > 1 {
         format!("HAVING COUNT(*) >= {}", params.min_weekly_count)
@@ -84,7 +126,7 @@ pub fn weekly_abundance_sql(params: &AbundanceParams) -> String {
         "WITH weekly_counts AS (
             SELECT
                 Com_Name                                        AS species,
-                {YEAR_EXPR}                                     AS year,
+                {ISO_YEAR_EXPR}                                     AS year,
                 {WEEK_EXPR}                                     AS iso_week,
                 COUNT(*)                                        AS detection_count
             FROM detections_ts
@@ -128,7 +170,7 @@ pub fn peak_weeks_sql(params: &AbundanceParams, top_n: u32) -> String {
             .species
             .as_deref()
             .map(|s| species_condition(s, "Com_Name")),
-        Some(format!("{YEAR_EXPR} = {}", params.year)),
+        Some(format!("{ISO_YEAR_EXPR} = {}", params.year)),
     ]);
 
     format!(
@@ -200,7 +242,7 @@ pub fn weekly_richness_sql(year: u32) -> String {
             COUNT(DISTINCT Com_Name)                AS species_count,
             COUNT(*)                                AS total_detections
         FROM detections_ts
-        WHERE {PLACEABLE} AND {YEAR_EXPR} = {year}
+        WHERE {PLACEABLE} AND {ISO_YEAR_EXPR} = {year}
         GROUP BY iso_week
         ORDER BY iso_week"
     )
@@ -224,16 +266,26 @@ pub fn effort_corrected_abundance_sql(params: &AbundanceParams) -> String {
     // module's own tests, which is a large part of why the whole module had no
     // production consumer. It now reads `recording_effort`, populated by the
     // station's own sampler (migration 27, `integrations::effort`).
-    let effort_week = "CAST(strftime(TRY_CAST(date AS DATE), '%W') AS INTEGER)";
-    let effort_year = "CAST(strftime(TRY_CAST(date AS DATE), '%Y') AS INTEGER)";
+    // ISO week and ISO year, matching `WEEK_EXPR` / `ISO_YEAR_EXPR` on the
+    // detections side. The join below is `w.iso_week = e.iso_week`, so the two
+    // sides have to agree on what a week *is*; a mismatch would divide one
+    // week's detections by a different week's listening hours and the error
+    // would be largest at the year boundary, where the buckets differ most.
+    let effort_week = "CAST(strftime(TRY_CAST(date AS DATE), '%V') AS INTEGER)";
+    let effort_year = "CAST(strftime(TRY_CAST(date AS DATE), '%G') AS INTEGER)";
     let where_sql = where_clause(&[
         Some("d.detection_date IS NOT NULL".to_string()),
         params
             .species
             .as_deref()
             .map(|s| species_condition(s, "d.Com_Name")),
+        // ISO year, to match the ISO week this query buckets by. Spelled out
+        // rather than using `ISO_YEAR_EXPR` because this query aliases the
+        // detections table as `d` — which is also how the `%W` this replaced
+        // escaped the earlier switch to `%V`, being a literal rather than the
+        // shared constant.
         Some(format!(
-            "CAST(strftime(d.detection_date, '%Y') AS INTEGER) = {}",
+            "CAST(strftime(d.detection_date, '%G') AS INTEGER) = {}",
             params.year
         )),
     ]);
@@ -250,7 +302,7 @@ pub fn effort_corrected_abundance_sql(params: &AbundanceParams) -> String {
         weekly AS (
             SELECT
                 d.Com_Name                                      AS species,
-                CAST(strftime(d.detection_date, '%W') AS INTEGER) AS iso_week,
+                CAST(strftime(d.detection_date, '%V') AS INTEGER) AS iso_week,
                 COUNT(*)                                        AS raw_count
             FROM detections_ts d
             {where_sql}
