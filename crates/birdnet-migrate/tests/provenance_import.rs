@@ -142,7 +142,11 @@ fn a_clock_offset_is_applied_to_every_imported_timestamp() {
             &dst,
             &ProgressHandle::new(),
             &ImportOptions {
-                shift_secs: 6 * 3600,
+                // The source's offset, not a flat shift: the importer converts
+                // each row from it onto this host's clock for that row's own
+                // date. A `shift_secs` beside it would be a second, contrary
+                // instruction — this fixture used to set both, and they agreed
+                // only in the zone it was written in.
                 source_utc_offset_secs: Some(-5 * 3600),
                 ..Default::default()
             },
@@ -158,10 +162,30 @@ fn a_clock_offset_is_applied_to_every_imported_timestamp() {
         .unwrap()
         .filter_map(Result::ok)
         .collect();
+
+    // Computed for this host rather than hard-coded: 06:30 at a source on UTC−5
+    // is 11:30 UTC, and where that lands locally depends on the runner's zone
+    // and on the offset in force on that date. `source_at` seeds 2026-03-01..03.
+    let expected: Vec<String> = ["2026-03-01", "2026-03-02", "2026-03-03"]
+        .iter()
+        .map(|d| {
+            conn.query_row(
+                "SELECT strftime('%H:%M:%S',
+                                 datetime(strftime('%s', ?1 || ' 06:30:00') + 5*3600,
+                                          'unixepoch', 'localtime'))",
+                [d],
+                |r| r.get::<_, String>(0),
+            )
+            .unwrap()
+        })
+        .collect();
+    assert_ne!(
+        expected[0], "06:30:00",
+        "this assertion is only meaningful when the conversion moves the clock"
+    );
     assert_eq!(
-        times,
-        vec!["12:30:00", "12:30:00", "12:30:00"],
-        "06:30 at the source, +6h, must be 12:30 in this station's clock"
+        times, expected,
+        "each row must be converted from the source's offset onto this clock"
     );
 
     let applied: i64 = conn
@@ -170,9 +194,20 @@ fn a_clock_offset_is_applied_to_every_imported_timestamp() {
         })
         .unwrap();
     assert_eq!(
-        applied,
-        6 * 3600,
-        "the shift is recorded, so it is reversible"
+        applied, 0,
+        "no flat shift is applied any more — the source offset is what is recorded"
+    );
+    let recorded: Option<i64> = conn
+        .query_row(
+            "SELECT source_utc_offset_secs FROM import_batches",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        recorded,
+        Some(-5 * 3600),
+        "the offset the conversion used is recorded, so the import stays explainable"
     );
 }
 

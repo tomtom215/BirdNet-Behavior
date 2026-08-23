@@ -157,9 +157,17 @@ pub fn migration_body(dest_db_path: &str) -> String {
                  step="900" placeholder="e.g. -18000 for UTC-5" class="mb-sm">
           <p class="hint">
             Hours &times; 3600. UTC&minus;5 is <code>-18000</code>; UTC+1 is
-            <code>3600</code>. Timestamps are shifted once, at import, onto this
-            station's clock — the shift is recorded with the batch, so it stays
-            reversible.
+            <code>3600</code>. Each timestamp is converted individually onto this
+            station's clock, using the offset this station had on that date — so
+            an imported winter morning and an imported summer morning land
+            correctly even though they were an hour apart in real terms.
+            <br>
+            Give the source's <em>standard</em> offset. If that station observed
+            daylight saving, its summer detections carry an offset this single
+            number cannot describe and will land an hour out; separating them
+            needs the source's time zone, which BirdNET-Pi does not record. The
+            number you enter is stored with the import, and the whole import can
+            be removed below.
           </p>
         </fieldset>
 
@@ -197,9 +205,17 @@ pub fn migration_body(dest_db_path: &str) -> String {
                step="900" placeholder="e.g. -18000 for UTC-5" class="mb-sm">
         <p class="hint">
           Hours &times; 3600. UTC&minus;5 is <code>-18000</code>; UTC+1 is
-          <code>3600</code>. Timestamps are shifted once, at import, onto this
-          station's clock — the shift is recorded with the batch, so it stays
-          reversible.
+          <code>3600</code>. Each timestamp is converted individually onto this
+          station's clock, using the offset this station had on that date — so
+          an imported winter morning and an imported summer morning land
+          correctly even though they were an hour apart in real terms.
+          <br>
+          Give the source's <em>standard</em> offset. If that station observed
+          daylight saving, its summer detections carry an offset this single
+          number cannot describe and will land an hour out; separating them
+          needs the source's time zone, which BirdNET-Pi does not record. The
+          number you enter is stored with the import, and the whole import can
+          be removed below.
         </p>
       </fieldset>
 

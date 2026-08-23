@@ -268,6 +268,74 @@ fn shift_timestamp(conn: &Connection, date: &str, time: &str, secs: i64) -> (Str
     shifted.unwrap_or_else(|| (date.to_owned(), time.to_owned()))
 }
 
+/// Convert one source-local timestamp onto *this* station's clock.
+///
+/// # Why this replaced a flat shift
+///
+/// The importer used to add a single number of seconds to every row, computed
+/// once as `destination_offset_now − source_offset`. Both halves of that are
+/// frozen at import time, and a history is years long, so the result is an hour
+/// out for however much of it fell under a different daylight-saving regime.
+///
+/// This converts instead: the source wall clock minus the source's offset is the
+/// real UTC instant, and SQLite's `'localtime'` modifier renders that instant in
+/// the host's zone **for that instant** — so the destination half is exact on
+/// both sides of every transition. Verified against a `Europe/Berlin` host
+/// importing a UTC+0 source, six representative timestamps:
+///
+/// ```text
+/// source (UTC+0)        flat shift            per-row            truth
+/// 2024-01-15 06:00:00   2024-01-15 08:00 ✗    2024-01-15 07:00   07:00
+/// 2024-07-15 06:00:00   2024-07-15 08:00      2024-07-15 08:00   08:00
+/// 2024-03-31 00:30:00   2024-03-31 02:30 ✗    2024-03-31 01:30   01:30
+/// 2024-03-31 01:30:00   2024-03-31 03:30      2024-03-31 03:30   03:30
+/// 2024-10-27 00:30:00   2024-10-27 02:30      2024-10-27 02:30   02:30
+/// 2024-10-27 01:30:00   2024-10-27 03:30 ✗    2024-10-27 02:30   02:30
+/// ```
+///
+/// Three of six wrong before, none after. (Migration 32's comment established
+/// separately that SQLite's tz modifiers do resolve per-date rather than to
+/// today's offset: Europe/Berlin gives +1 h for a January timestamp and +2 h for
+/// a July one.)
+///
+/// # What it still cannot do
+///
+/// `src_offset_secs` is one number for the whole history, so if the *source*
+/// station observed daylight saving, its summer rows carry a real offset this
+/// number does not describe and land an hour out. That half needs the source's
+/// IANA zone and a time-zone database. The improvement here is that the
+/// destination half stopped contributing its own, independent hour of error.
+///
+/// A row whose `Date`/`Time` name no point in time — BirdNET-Pi's columns are
+/// free-form `TEXT` — is returned unchanged rather than dropped, which is what
+/// the flat shift did too.
+fn to_local_here(
+    conn: &Connection,
+    date: &str,
+    time: &str,
+    src_offset_secs: i64,
+) -> (String, String) {
+    // `strftime('%s', …)` reads its argument as UTC, so subtracting the source's
+    // offset turns "wall clock at the source" into the real instant.
+    let converted: Option<(String, String)> = conn
+        .query_row(
+            "SELECT strftime('%Y-%m-%d', datetime(strftime('%s', ?1 || ' ' || ?2) - ?3,
+                                                  'unixepoch', 'localtime')),
+                    strftime('%H:%M:%S', datetime(strftime('%s', ?1 || ' ' || ?2) - ?3,
+                                                  'unixepoch', 'localtime'))",
+            params![date, time, src_offset_secs],
+            |r| {
+                Ok((
+                    r.get::<_, Option<String>>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                ))
+            },
+        )
+        .ok()
+        .and_then(|(d, t)| Some((d?, t?)));
+    converted.unwrap_or_else(|| (date.to_owned(), time.to_owned()))
+}
+
 /// The batched loop, applying `options.shift_secs` and tagging with `batch_id`.
 fn import_batched_tagged(
     src: &Connection,
@@ -288,7 +356,12 @@ fn import_batched_tagged(
         }
         if options.shifts_time() {
             for row in &mut batch {
-                let (d, t) = shift_timestamp(dst, &row.date, &row.time, options.shift_secs);
+                // The source's offset wins when it is given: it drives a real
+                // per-row conversion, where `shift_secs` can only add a constant.
+                let (d, t) = options.source_utc_offset_secs.map_or_else(
+                    || shift_timestamp(dst, &row.date, &row.time, options.shift_secs),
+                    |src| to_local_here(dst, &row.date, &row.time, src),
+                );
                 row.date = d;
                 row.time = t;
             }

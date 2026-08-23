@@ -217,20 +217,49 @@ pub fn haversine_km(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
 /// How an import should be reconciled with the station receiving it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ImportOptions {
-    /// Seconds to add to every imported timestamp.
+    /// Seconds to add to every imported timestamp, as a flat offset.
     ///
-    /// BirdNET-Pi stores local wall-clock with no offset, so a history recorded
-    /// at UTC−5 and imported into a UTC+1 station is six hours out and nothing
-    /// in the data says so. This is the correction, applied once at import:
-    /// `source_utc_offset − destination_utc_offset`, in seconds.
+    /// **Superseded by [`Self::source_utc_offset_secs`], and kept only for a
+    /// caller that genuinely wants a constant nudge.** A flat shift cannot be
+    /// right across daylight saving, because it freezes one instant's offset and
+    /// applies it to a multi-year history. Measured, on a `Europe/Berlin` host
+    /// importing a UTC+0 source, against six representative timestamps:
     ///
-    /// Zero means "these two stations keep the same clock", which is the common
-    /// case and the safe default — it changes nothing.
+    /// | source (UTC+0) | flat shift | truth |
+    /// |---|---|---|
+    /// | 2024-01-15 06:00 | 08:00 ✗ | 07:00 |
+    /// | 2024-07-15 06:00 | 08:00 | 08:00 |
+    /// | 2024-03-31 00:30 | 02:30 ✗ | 01:30 |
+    /// | 2024-10-27 01:30 | 03:30 ✗ | 02:30 |
+    ///
+    /// Three of six an hour out. Set [`Self::source_utc_offset_secs`] instead
+    /// and leave this at zero; when both are set the offset wins.
     pub shift_secs: i64,
     /// Operator's name for the source station, recorded with the batch.
     pub label: Option<String>,
-    /// The source station's UTC offset, as stated by the operator, recorded so
-    /// the shift can be explained (and undone) later.
+    /// The source station's UTC offset in seconds, east-positive, as stated by
+    /// the operator.
+    ///
+    /// This is the operative field. BirdNET-Pi stores local wall clock with no
+    /// offset, so a history recorded at UTC−5 and read by a UTC+1 station is six
+    /// hours out and nothing in the data says so. Given this, the importer
+    /// converts each timestamp individually — source local → the real UTC
+    /// instant → *this* host's local time for that instant — so the destination
+    /// half of the conversion is exactly right on both sides of every daylight
+    /// saving transition the destination observes.
+    ///
+    /// # What it still cannot do
+    ///
+    /// The **source** half stays a constant, because a constant is all the
+    /// operator gives us. If the source station observed daylight saving, its
+    /// summer timestamps carry a different real offset than this number claims,
+    /// and roughly half such a history lands an hour out. Fixing that needs the
+    /// source's IANA zone and a time-zone database, neither of which this
+    /// workspace has; the honest interim is that the number is recorded with the
+    /// batch and the limitation is stated on the import form.
+    ///
+    /// `None` means "the same clock as this station", which is the common case
+    /// and changes nothing.
     pub source_utc_offset_secs: Option<i64>,
     /// Free-text note stored with the batch.
     pub notes: Option<String>,
@@ -240,7 +269,7 @@ impl ImportOptions {
     /// Whether this import rewrites timestamps.
     #[must_use]
     pub const fn shifts_time(&self) -> bool {
-        self.shift_secs != 0
+        self.source_utc_offset_secs.is_some() || self.shift_secs != 0
     }
 }
 

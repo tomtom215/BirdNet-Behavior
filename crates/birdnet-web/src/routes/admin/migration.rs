@@ -325,14 +325,15 @@ fn station_coords(state: &AppState) -> (Option<f64>, Option<f64>) {
 /// end up on one clock. A blank field means "same clock", which shifts nothing.
 fn import_options(form: &MigrateForm) -> birdnet_migrate::ImportOptions {
     let source_offset = form.source_utc_offset_secs;
-    let shift = source_offset.map_or(0, |src| {
-        let here = birdnet_db::clock::local_utc_offset_secs();
-        // A timestamp written in the source's clock reads `src - here` seconds
-        // early here, so adding that difference puts it on this station's clock.
-        here - src
-    });
     birdnet_migrate::ImportOptions {
-        shift_secs: shift,
+        // Zero: the importer converts per row from `source_utc_offset_secs`
+        // instead. This used to be `here - src`, with `here` read from
+        // `local_utc_offset_secs()` — *today's* offset — and applied flat to a
+        // multi-year history, so it was an hour out for however much of that
+        // history fell under a different daylight-saving regime. Measured on a
+        // Europe/Berlin host importing a UTC+0 source: wrong on three of six
+        // representative timestamps. See `to_local_here` in the migrate crate.
+        shift_secs: 0,
         label: form
             .source_label
             .as_ref()
