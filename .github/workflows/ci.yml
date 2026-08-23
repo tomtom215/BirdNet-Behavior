@@ -89,6 +89,23 @@ jobs:
     name: Tests (x86_64)
     runs-on: ubuntu-24.04
     timeout-minutes: 45  # observed 21m06s
+    env:
+      # Whether the extension-gated tests are allowed to skip.
+      #
+      # Both extensions below are fetched from a CDN best-effort, and when the
+      # fetch failed this job used to emit `::warning::` and carry on — turning
+      # the gate that protects the feature this project is named for into
+      # nothing, while the tick stayed green. Nothing in a green tick separates
+      # "the extension loads offline" from "we never checked".
+      #
+      # On `main` it is now checked or the job fails. On a pull request an
+      # upstream outage is not the contributor's problem, so skipping is still
+      # permitted — and still visible, because the skip prints a line naming
+      # what was missing rather than a silent `return`.
+      #
+      # Set here rather than by the fetch step on success: a flag the fetch
+      # controls could not catch the fetch failing, which is the whole defect.
+      BIRDNET_REQUIRE_LIVE_EXTENSION: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && '1' || '' }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Free up runner disk space
@@ -126,8 +143,9 @@ jobs:
         # binary). With it embedded, the `--all-features` build below carries the
         # extension bytes, so `embedded_extension_loads_when_bundled` runs its
         # real assertion — proving `LOAD behavioral` works with NO network —
-        # instead of skipping. Best-effort: if the CDN is unreachable the test
-        # skips exactly as before, so this never adds flakiness.
+        # instead of skipping. On a pull request an unreachable CDN still lets
+        # the test skip; on `main` it fails the job, because a green tick there
+        # is a claim that the offline path was checked.
         shell: bash
         run: |
           set -eu
@@ -137,6 +155,9 @@ jobs:
             gunzip -f "${tmp}.gz"
             echo "BIRDNET_BUNDLED_EXTENSION_FILE=$tmp" >> "$GITHUB_ENV"
             echo "embedded behavioral extension — offline-load test will assert"
+          elif [ -n "${BIRDNET_REQUIRE_LIVE_EXTENSION:-}" ]; then
+            echo "::error::could not fetch the behavioral extension, and this run does not permit skipping the tests that need it — re-run, or check community-extensions.duckdb.org"
+            exit 1
           else
             echo "::warning::could not fetch the behavioral extension; offline-load test will skip"
           fi
@@ -159,6 +180,9 @@ jobs:
             gunzip -f "${tmp}.gz"
             echo "BIRDNET_BUNDLED_ICU_FILE=$tmp" >> "$GITHUB_ENV"
             echo "embedded ICU — air-gapped date-window test will assert"
+          elif [ -n "${BIRDNET_REQUIRE_LIVE_EXTENSION:-}" ]; then
+            echo "::error::could not fetch ICU, and this run does not permit skipping the tests that need it — re-run, or check extensions.duckdb.org"
+            exit 1
           else
             echo "::warning::could not fetch ICU; the air-gapped date-window test will skip"
           fi

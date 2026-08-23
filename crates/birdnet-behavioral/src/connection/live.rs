@@ -27,7 +27,10 @@ fn loaded_db() -> Option<(AnalyticsDb, TempDir)> {
             Some((db, dir))
         }
         Err(e) => {
-            eprintln!("[live] SKIP: behavioral extension unavailable: {e}");
+            // Not a bare `return None`. On a run that forbids skipping — CI on
+            // `main` — this fails, so a CDN outage cannot turn every live
+            // signature check into a green tick that checked nothing.
+            crate::gating::skip_or_fail("the behavioral extension", &e.to_string());
             None
         }
     }

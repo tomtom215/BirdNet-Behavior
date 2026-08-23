@@ -892,7 +892,10 @@ mod tests {
     #[test]
     fn embedded_icu_loads_with_no_cache_and_no_network() {
         if EMBEDDED_ICU.is_none() {
-            eprintln!("skipped — build did not embed the ICU extension");
+            crate::gating::skip_or_fail(
+                "an embedded ICU extension",
+                "the build embedded none (BIRDNET_BUNDLED_ICU_FILE unset)",
+            );
             return;
         }
         let dir = TempDir::new().unwrap();
@@ -962,7 +965,10 @@ mod tests {
         // `BIRDNET_BUNDLED_EXTENSION_FILE` or `vendor/`). Skips quietly
         // otherwise so the test is safe to run on un-bundled dev builds.
         let Some(bytes) = EMBEDDED_EXTENSION else {
-            eprintln!("skipped — build did not embed an extension binary");
+            crate::gating::skip_or_fail(
+                "an embedded behavioral extension",
+                "the build embedded none (BIRDNET_BUNDLED_EXTENSION_FILE unset)",
+            );
             return;
         };
         let (mut db, _tmp) = make_db();
