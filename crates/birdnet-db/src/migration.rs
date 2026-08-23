@@ -1249,6 +1249,96 @@ pub const MIGRATIONS: &[Migration] = &[
 
         ANALYZE;",
     },
+    Migration {
+        version: 34,
+        description: "Let an operator keep an imported history without merging it into the analytics",
+        // ## The gap this closes
+        //
+        // Migration 25 gave every imported detection an `import_batch_id`, and
+        // `provenance.rs` warns before an import that merging two sites damages
+        // a dataset in a way that "is not detectable after the fact". The column
+        // was then read by exactly nothing: no analytic filtered on it, so the
+        // life list, first-of-year, species richness, phenology, the heat map,
+        // co-occurrence and the dawn chorus all read the union of two sites as
+        // one station. Removing the import is now possible; keeping it *and*
+        // keeping the analytics honest was not.
+        //
+        // ## Why the view rather than the queries
+        //
+        // `detections_analytic` is already the one place a reviewer's verdict
+        // becomes real for every SQLite-side analytic — that is what migration 26
+        // established. Provenance belongs in the same choke point for the same
+        // reason: forty query sites cannot be kept in step by hand, and the one
+        // that is forgotten is the one that quietly publishes another site's
+        // records as this station's.
+        //
+        // ## The cost, measured
+        //
+        // A settings lookup inside a view over three million rows looks alarming
+        // and is not: SQLite recognises the subquery as invariant and evaluates
+        // it once per statement, which `EXPLAIN QUERY PLAN` reports as
+        // `SCALAR SUBQUERY`. On the three-year fixture (3 285 000 rows), five
+        // runs of the History calendar aggregate:
+        //
+        //     old view (rejected filter only)   median 942.5 ms  (923.5 – 1004.5)
+        //     new view, setting off             median 964.2 ms  (935.5 – 1042.5)
+        //     new view, setting absent          median 980.8 ms  (948.1 – 1083.1)
+        //
+        // The ranges overlap, so the overhead is at or below run-to-run variance
+        // rather than measurably zero — which is the honest way to put it. With
+        // the setting *on* the same query is faster, because it reads fewer rows.
+        //
+        // `import_batch_id IS NULL` is written first so a station that has never
+        // imported anything short-circuits before the subquery is considered at
+        // all.
+        //
+        // ## The covering indexes have to carry the new column
+        //
+        // Migration 29 made the three whole-history species aggregates — the
+        // species list, the life-list firsts and the per-species hour histogram
+        // — index-only, taking them from ~4.9 s to ~1.3 s on a three-year
+        // station. Adding `import_batch_id` to the view's `WHERE` puts a column
+        // in the plan that those indexes do not carry, and an index-only scan
+        // becomes a scan plus a table lookup per row. Caught by migration 29's
+        // own gate, `the_whole_history_species_aggregates_are_index_only`, which
+        // is exactly what it was written for:
+        //
+        //     the species list aggregate must be index-only; plan was:
+        //     SCAN detections USING INDEX idx_detections_species_hour_cover | …
+        //
+        // So both covering indexes gain the column. Measured on the three-year
+        // fixture: `idx_detections_species_hour_cover` 197.6 -> 201.0 MB and
+        // `idx_detections_sci_first_cover` 155.0 -> 158.2 MB — **+6.6 MB in
+        // total**, because `import_batch_id` is NULL for every locally recorded
+        // row and SQLite spends no payload bytes on a NULL. All three plans go
+        // back to `COVERING INDEX`. 11.7 s to rebuild both, once.
+        //
+        // ## Default
+        //
+        // Absent means included. Merging two sites is a legitimate thing to want
+        // — only the operator knows whether these are one site with a moved GPS
+        // fix or two a county apart — so an upgrade changes no number on any
+        // existing station. The DuckDB copy carries the same rule; see
+        // `birdnet_behavioral::queries::detections_ts_view_sql`.
+        up_sql: "DROP VIEW IF EXISTS detections_analytic;
+        CREATE VIEW detections_analytic AS
+            SELECT * FROM detections
+             WHERE review_verdict IS NOT 'rejected'
+               AND (import_batch_id IS NULL
+                    OR NOT EXISTS (SELECT 1 FROM settings
+                                    WHERE key = 'analytics_exclude_imports'
+                                      AND value = 'true'));
+
+        DROP INDEX IF EXISTS idx_detections_species_hour_cover;
+        CREATE INDEX IF NOT EXISTS idx_detections_species_hour_cover
+            ON detections(Com_Name, Time, Sci_Name, Confidence, review_verdict, import_batch_id);
+
+        DROP INDEX IF EXISTS idx_detections_sci_first_cover;
+        CREATE INDEX IF NOT EXISTS idx_detections_sci_first_cover
+            ON detections(Sci_Name, Date, Time, review_verdict, import_batch_id);
+
+        ANALYZE;",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing

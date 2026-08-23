@@ -257,7 +257,10 @@ document.getElementById('migrate-tabs').addEventListener('click', function(e) {{
 /// `import_batches.row_count`: the recorded number is what was written once, and
 /// what a confirmation has to state is how much is about to disappear.
 #[must_use]
-pub fn import_batches(batches: &[(birdnet_db::sqlite::ImportBatch, i64)]) -> String {
+pub fn import_batches(
+    batches: &[(birdnet_db::sqlite::ImportBatch, i64)],
+    exclude_imports: bool,
+) -> String {
     use std::fmt::Write as _;
 
     if batches.is_empty() {
@@ -265,7 +268,32 @@ pub fn import_batches(batches: &[(birdnet_db::sqlite::ImportBatch, i64)]) -> Str
             .to_string();
     }
 
-    let mut out = String::from(r#"<ul class="bnb-list import-batches">"#);
+    let mut out = String::new();
+    // The toggle sits above the list because it governs all of them, and
+    // because an operator who has just decided *not* to remove an import needs
+    // the other answer in the same glance.
+    let _ = write!(
+        out,
+        r##"<form class="provenance-toggle" hx-post="/admin/migrate/batches/provenance"
+      hx-target="#import-batches" hx-swap="innerHTML">
+  <label>
+    <input type="checkbox" name="exclude" value="true" {checked}
+           hx-post="/admin/migrate/batches/provenance"
+           hx-target="#import-batches" hx-swap="innerHTML">
+    Keep imported detections out of the analytics
+  </label>
+  <p class="hint">
+    Off (the default) counts imported detections as this station's own
+    everywhere — life list, first-of-year, species richness, phenology, the heat
+    map, co-occurrence, the dawn chorus. On, they stay in the database and in the
+    recordings browser but stop contributing to any of those. Applies to both
+    the detection database and the analytics copy, so the two cannot disagree.
+  </p>
+</form>"##,
+        checked = if exclude_imports { "checked" } else { "" },
+    );
+
+    out.push_str(r#"<ul class="bnb-list import-batches">"#);
     for (b, rows) in batches {
         let label = b
             .source_label
