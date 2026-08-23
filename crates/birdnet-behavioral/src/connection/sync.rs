@@ -451,6 +451,30 @@ impl AnalyticsDb {
         Ok(n as u64)
     }
 
+    /// Remove every row an import brought in, mirroring `SQLite`'s
+    /// `delete_import_batch`.
+    ///
+    /// Returns the number of rows removed. Without this mirror an undone import
+    /// would vanish from the species lists and the heat map — which read
+    /// `SQLite` — and stay in sessionize, funnel, retention, next-species,
+    /// phenology and every time-series query, which read this copy. Two stores
+    /// answering with two different histories is the failure `sync_from_sqlite`
+    /// exists to prevent, and an incremental sync cannot notice a removal.
+    ///
+    /// `import_batch_id` is NULL for every locally recorded detection, so this
+    /// cannot reach one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the delete fails.
+    pub fn delete_import_batch(&self, batch_id: i64) -> Result<u64, AnalyticsError> {
+        let n = self.conn.execute(
+            "DELETE FROM detections WHERE import_batch_id = ?",
+            params![batch_id],
+        )?;
+        Ok(n as u64)
+    }
+
     /// Re-label a detection in the OLAP copy, mirroring `SQLite`'s
     /// `relabel_detection`.
     ///

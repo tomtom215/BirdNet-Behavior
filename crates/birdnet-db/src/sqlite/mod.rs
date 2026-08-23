@@ -33,7 +33,8 @@ pub use queries::detection_reviews::{
 };
 pub use queries::heatmap::{HeatmapCell, HourTotal};
 pub use queries::imports::{
-    DIFFERENT_SITE_KM, ImportBatch, imported_detection_count, list_import_batches,
+    DIFFERENT_SITE_KM, ImportBatch, delete_import_batch, import_batch_row_count,
+    imported_detection_count, list_import_batches,
 };
 pub use queries::maintenance::{
     AUDIT_RETENTION_DAYS, BACKUP_VACUUM_INTERVAL_SECS, DAILY_INTERVAL_SECS, JOB_BACKUP_VACUUM,

@@ -19,7 +19,7 @@
 //!
 //! These queries are what let a surface say so.
 
-use rusqlite::Connection;
+use rusqlite::{Connection, params};
 
 use crate::sqlite::connection::DbError;
 
@@ -116,6 +116,79 @@ pub fn imported_detection_count(conn: &Connection) -> Result<i64, DbError> {
     conn.query_row(
         "SELECT COUNT(*) FROM detections WHERE import_batch_id IS NOT NULL",
         [],
+        |row| row.get(0),
+    )
+    .map_err(DbError::Sqlite)
+}
+
+/// Remove an import batch and every detection it brought in.
+///
+/// # Why an import has to be reversible
+///
+/// Until this existed, importing another station's history was a one-way door.
+/// `provenance.rs` profiles the source, compares its modal coordinate to this
+/// station's and warns past [`DIFFERENT_SITE_KM`] — and then the operator's only
+/// options were to accept the merge forever or to wipe the whole database. Its
+/// own module doc states the reason that matters: the damage is not detectable
+/// after the fact, so a dataset that merged two sites cannot be repaired, only
+/// discarded. That argument is only bearable if "discarded" means *this import*
+/// rather than *everything*.
+///
+/// # What is removed, and what is deliberately not
+///
+/// Every `detections` row tagged with `batch_id`, then the `import_batches` row
+/// itself. The `species_summary` triggers fire on the delete, so the maintained
+/// rollup follows without a rebuild — checked rather than assumed, in
+/// `import_undo.rs`.
+///
+/// Rows recorded *locally* are never touched: the `WHERE` is on
+/// `import_batch_id`, which is NULL for every detection this station heard
+/// itself. That is the whole safety property, and the reason the column was
+/// added in migration 25 rather than the import being tracked in a side table.
+///
+/// `detection_reviews` rows are left alone. They key on
+/// `(date, time, sci_name)`, so a verdict on an imported detection outlives the
+/// row it judged — which is right if the same history is imported again, and
+/// harmless otherwise: nothing reads a review whose detection is absent.
+///
+/// The `DuckDB` analytics copy is a separate store and is **not** reached from
+/// here; the caller mirrors the delete with
+/// `AnalyticsDb::delete_import_batch`, exactly as it already does for a single
+/// deleted detection.
+///
+/// # Errors
+///
+/// Returns `DbError` if the transaction cannot be opened or either delete
+/// fails. The whole removal is one transaction, so a failure leaves the import
+/// intact rather than half-removed.
+pub fn delete_import_batch(conn: &Connection, batch_id: i64) -> Result<u64, DbError> {
+    let tx = conn.unchecked_transaction()?;
+    let rows = tx.execute(
+        "DELETE FROM detections WHERE import_batch_id = ?1",
+        params![batch_id],
+    )?;
+    tx.execute(
+        "DELETE FROM import_batches WHERE id = ?1",
+        params![batch_id],
+    )?;
+    tx.commit()?;
+    Ok(u64::try_from(rows).unwrap_or(0))
+}
+
+/// How many detections a batch currently accounts for.
+///
+/// Counted live rather than read from `import_batches.row_count`, for the same
+/// reason as [`imported_detection_count`]: the recorded count is what was
+/// written once, and the question a confirmation dialog has to answer is how
+/// much is about to disappear.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn import_batch_row_count(conn: &Connection, batch_id: i64) -> Result<i64, DbError> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM detections WHERE import_batch_id = ?1",
+        params![batch_id],
         |row| row.get(0),
     )
     .map_err(DbError::Sqlite)

@@ -218,6 +218,23 @@ pub fn migration_body(dest_db_path: &str) -> String {
 
   <div id="migrate-status"></div>
 
+  <div class="bnb-card pad mt">
+    <div class="section-header">
+      <div>
+        <div class="bnb-eyebrow">Provenance</div>
+        <h3>Imported histories</h3>
+      </div>
+    </div>
+    <p class="hint">
+      Every detection an import brings in is tagged with the batch that brought
+      it. Removing a batch removes exactly those rows — nothing this station
+      heard itself is touched — so merging another site's history is a decision
+      you can take back rather than one you live with.
+    </p>
+    <div id="import-batches" hx-get="/admin/migrate/batches"
+         hx-trigger="load, importsChanged from:body" hx-swap="innerHTML"></div>
+  </div>
+
 <script>
 function switchTab(name) {{
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
@@ -232,6 +249,72 @@ document.getElementById('migrate-tabs').addEventListener('click', function(e) {{
 }});
 </script>"##
     )
+}
+
+/// The imported-history list, with a remove action per batch.
+///
+/// `rows` is counted live from `detections` rather than read from
+/// `import_batches.row_count`: the recorded number is what was written once, and
+/// what a confirmation has to state is how much is about to disappear.
+#[must_use]
+pub fn import_batches(batches: &[(birdnet_db::sqlite::ImportBatch, i64)]) -> String {
+    use std::fmt::Write as _;
+
+    if batches.is_empty() {
+        return r#"<p class="bnb-meta">No histories have been imported into this station.</p>"#
+            .to_string();
+    }
+
+    let mut out = String::from(r#"<ul class="bnb-list import-batches">"#);
+    for (b, rows) in batches {
+        let label = b
+            .source_label
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or("unlabelled source");
+        // A different site is the case this whole feature exists for, so it is
+        // stated on the row rather than left to the operator to work out from a
+        // number.
+        let site = match b.distance_km {
+            Some(km) if km >= birdnet_db::sqlite::DIFFERENT_SITE_KM => {
+                format!(r#" <span class="bnb-pill rare">{km:.1} km away</span>"#)
+            }
+            Some(km) => format!(r#" <span class="bnb-pill moss">{km:.1} km — same site</span>"#),
+            None => r#" <span class="bnb-pill">no coordinates</span>"#.to_string(),
+        };
+        let shift = if b.applied_shift_secs == 0 {
+            "no clock shift".to_string()
+        } else {
+            #[allow(clippy::cast_precision_loss)]
+            let hours = b.applied_shift_secs as f64 / 3600.0;
+            format!("shifted {hours:+.2} h onto this station's clock")
+        };
+        let _ = write!(
+            out,
+            r##"<li class="import-batch">
+  <div class="ib-main">
+    <div class="ib-title">{label}{site}</div>
+    <div class="bnb-meta">{rows} detection{plural} · imported {when} · {shift}</div>
+  </div>
+  <button class="btn btn-danger"
+          hx-post="/admin/migrate/batches/delete"
+          hx-vals='{{"batch_id": {id}}}'
+          hx-target="#import-batches"
+          hx-swap="innerHTML"
+          data-confirm-body="Remove {rows} imported detection{plural} from &quot;{label}&quot;? Detections this station recorded itself are not affected. There is no undo."
+          data-confirm-action="hx-post">
+    Remove
+  </button>
+</li>"##,
+            label = escape_html(label),
+            rows = rows,
+            plural = if *rows == 1 { "" } else { "s" },
+            when = escape_html(&b.imported_at),
+            id = b.id,
+        );
+    }
+    out.push_str("</ul>");
+    out
 }
 
 /// Render the validation result partial.

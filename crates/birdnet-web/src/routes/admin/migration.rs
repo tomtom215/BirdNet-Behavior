@@ -69,6 +69,107 @@ pub fn router() -> Router<AppState> {
                 move || progress_handler(ms)
             }),
         )
+        .route("/admin/migrate/batches", get(batches_handler))
+        .route(
+            "/admin/migrate/batches/delete",
+            axum::routing::post(delete_batch_handler),
+        )
+}
+
+/// The imported-history list.
+async fn batches_handler(State(state): State<AppState>) -> Html<String> {
+    let batches = tokio::task::spawn_blocking(move || {
+        state.with_read_db(|conn| {
+            birdnet_db::sqlite::list_import_batches(conn)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|b| {
+                    let rows = birdnet_db::sqlite::import_batch_row_count(conn, b.id).unwrap_or(0);
+                    (b, rows)
+                })
+                .collect::<Vec<_>>()
+        })
+    })
+    .await
+    .unwrap_or_default();
+    Html(render::import_batches(&batches))
+}
+
+/// Which import to remove.
+#[derive(Debug, Deserialize)]
+struct DeleteBatchForm {
+    batch_id: i64,
+}
+
+/// Remove an import batch and every detection it brought in.
+///
+/// # Why this endpoint exists
+///
+/// Importing another station's history used to be a one-way door. The
+/// pre-import warning is good — `provenance.rs` profiles the source, compares
+/// its modal coordinate to this station's, and flags anything past 5 km — but
+/// afterwards the operator's only options were to keep the merge forever or to
+/// delete every detection they had. The page even told them the shift "stays
+/// reversible", which was true of the *record* and not of the data.
+///
+/// Both stores are updated. `SQLite` is the one the species lists and heat map
+/// read; the `DuckDB` copy is the one sessionize, funnel, retention,
+/// next-species, phenology and every time-series query read, and an incremental
+/// sync cannot notice a removal — so leaving it out would undo the import on
+/// half the application and not the other half.
+async fn delete_batch_handler(
+    State(state): State<AppState>,
+    Form(form): Form<DeleteBatchForm>,
+) -> Html<String> {
+    let batch_id = form.batch_id;
+    let list_state = state.clone();
+
+    let removed = tokio::task::spawn_blocking(move || {
+        let sqlite_rows =
+            state.with_db(|conn| birdnet_db::sqlite::delete_import_batch(conn, batch_id));
+
+        // Mirror into the analytics copy whatever happened to SQLite — including
+        // a partial result, because the two disagreeing is worse than either
+        // being wrong alone.
+        #[cfg(feature = "analytics")]
+        if let Some(result) = state.with_analytics(|adb| adb.delete_import_batch(batch_id))
+            && let Err(e) = result
+        {
+            tracing::warn!(
+                error = %e,
+                batch_id,
+                "removed an import from SQLite but not from the analytics copy; \
+                 the two stores now disagree until the next full resync"
+            );
+        }
+
+        sqlite_rows
+    })
+    .await;
+
+    match removed {
+        Ok(Ok(rows)) => tracing::info!(batch_id, rows, "import batch removed"),
+        Ok(Err(e)) => tracing::warn!(error = %e, batch_id, "import batch removal failed"),
+        Err(e) => tracing::warn!(error = %e, batch_id, "import batch removal task panicked"),
+    }
+
+    // Re-render from the database rather than from what we think we deleted, so
+    // a partial failure shows as what is actually left.
+    let batches = tokio::task::spawn_blocking(move || {
+        list_state.with_read_db(|conn| {
+            birdnet_db::sqlite::list_import_batches(conn)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|b| {
+                    let rows = birdnet_db::sqlite::import_batch_row_count(conn, b.id).unwrap_or(0);
+                    (b, rows)
+                })
+                .collect::<Vec<_>>()
+        })
+    })
+    .await
+    .unwrap_or_default();
+    Html(render::import_batches(&batches))
 }
 
 /// The standalone `/admin/migrate` page GET folded into the Station **Data**
