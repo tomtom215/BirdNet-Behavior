@@ -98,6 +98,52 @@ pub fn open_or_create(path: &Path) -> Result<Connection, DbError> {
     Ok(conn)
 }
 
+/// PRAGMAs for a read-only connection.
+///
+/// Deliberately not [`PRAGMAS`]. `journal_mode` is a property of the database
+/// file, not of the connection, and setting it needs write access — a read-only
+/// connection either errors or silently reports the existing mode, so asking is
+/// noise at best. `synchronous` governs writes and has nothing to say here.
+/// What is left matters: `busy_timeout` so a checkpoint does not turn a read
+/// into an instant failure, `cache_size` matched to the writer's so a reader's
+/// memory is not a surprise, and `foreign_keys` for parity in case a read path
+/// ever consults them.
+const READ_PRAGMAS: &str = "PRAGMA busy_timeout=5000;
+ PRAGMA cache_size=-2000;
+ PRAGMA foreign_keys=ON;";
+
+/// Open an existing database **read-only**.
+///
+/// # What this is for
+///
+/// WAL lets any number of readers run concurrently with one writer. A process
+/// holding a single connection gets none of that, because the connection itself
+/// is the bottleneck — which is what `birdnet-web`'s reader pool exists to fix.
+///
+/// Read-only is not a formality here. It is the only thing that makes the split
+/// safe to introduce incrementally: a write accidentally routed down the read
+/// path fails immediately and loudly with `attempt to write a readonly
+/// database`, in the first test that exercises it, rather than working by luck
+/// until two of them interleave.
+///
+/// # Errors
+///
+/// Returns [`DbError::NotFound`] if the path does not exist — a read-only
+/// connection cannot create the file, so a missing one is a caller error rather
+/// than something to paper over. Returns [`DbError::Sqlite`] if the file cannot
+/// be opened.
+pub fn open_readonly(path: &Path) -> Result<Connection, DbError> {
+    if !path.exists() {
+        return Err(DbError::NotFound(path.display().to_string()));
+    }
+    let conn = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )?;
+    conn.execute_batch(READ_PRAGMAS)?;
+    Ok(conn)
+}
+
 /// Run a quick integrity check.
 ///
 /// # Errors

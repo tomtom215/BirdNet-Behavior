@@ -26,7 +26,7 @@ async fn life_accumulation_partial(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let first_seen = birdnet_db::sqlite::species_first_seen(conn).unwrap_or_default();
             let mut monthly: std::collections::BTreeMap<String, u32> =
                 std::collections::BTreeMap::new();

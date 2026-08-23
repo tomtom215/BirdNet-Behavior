@@ -33,7 +33,7 @@ pub(super) async fn detections_partial(
 ) -> impl axum::response::IntoResponse {
     let today = today_date_string();
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let detections = birdnet_db::sqlite::recent_detections(conn, 20)?;
             let first_seen = birdnet_db::sqlite::species_first_detection(conn).unwrap_or_default();
             Ok::<_, birdnet_db::sqlite::DbError>((detections, first_seen))
@@ -145,7 +145,7 @@ pub(super) async fn best_detections_partial(
     let today = today_date_string();
     let today_for_query = today.clone();
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let best = birdnet_db::sqlite::best_detections_for_date(conn, &today_for_query, 5)?;
             let first_seen = birdnet_db::sqlite::species_first_detection(conn).unwrap_or_default();
             Ok::<_, birdnet_db::sqlite::DbError>((best, first_seen))
@@ -265,7 +265,7 @@ pub(super) async fn top_species_partial(
 ) -> impl axum::response::IntoResponse {
     let today = today_date_string();
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let species = todays_top_species(conn, &today, TOP_SPECIES_ROWS)?;
             let sparklines = birdnet_db::sqlite::species_sparklines(conn, 14).unwrap_or_default();
             Ok::<_, birdnet_db::sqlite::DbError>((species, sparklines))
@@ -329,7 +329,7 @@ pub(super) async fn species_list_partial(
     let has_search = !search_trimmed.is_empty();
 
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let species = if has_search {
                 birdnet_db::sqlite::search_species(conn, &search_trimmed, 500)?
             } else {
@@ -392,7 +392,7 @@ pub(super) async fn hourly_chart_partial(
 ) -> impl axum::response::IntoResponse {
     let today = today_date_string();
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::sqlite::hourly_activity(conn, &today))
+        state.with_read_db(|conn| birdnet_db::sqlite::hourly_activity(conn, &today))
     })
     .await;
     match result {
@@ -413,7 +413,7 @@ pub(super) async fn daily_chart_partial(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::sqlite::daily_counts(conn, 7))
+        state.with_read_db(|conn| birdnet_db::sqlite::daily_counts(conn, 7))
     })
     .await;
     match result {
@@ -434,7 +434,7 @@ pub(super) async fn confidence_chart_partial(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(birdnet_db::sqlite::confidence_distribution)
+        state.with_read_db(birdnet_db::sqlite::confidence_distribution)
     })
     .await;
     match result {
@@ -459,7 +459,7 @@ pub(super) async fn most_recent_partial(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(birdnet_db::sqlite::latest_detection_full)
+        state.with_read_db(birdnet_db::sqlite::latest_detection_full)
     })
     .await;
 

@@ -74,14 +74,14 @@ impl DbHealth {
 /// a failure stays reported until it is fixed instead of depending on which
 /// request happened to catch it.
 pub(crate) fn db_health(state: &AppState) -> DbHealth {
-    let reachable = state.with_db(|conn| {
+    let reachable = state.with_read_db(|conn| {
         conn.query_row("SELECT 1", [], |row| row.get::<_, i64>(0))
             .is_ok()
     });
     if !reachable {
         return DbHealth::Error;
     }
-    match state.with_db(|conn| {
+    match state.with_read_db(|conn| {
         birdnet_db::sqlite::last_run_result(conn, birdnet_db::sqlite::JOB_INTEGRITY_CHECK)
     }) {
         Ok(Some((_, Some(false)))) => DbHealth::Error,
@@ -177,7 +177,7 @@ async fn disk_info(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
 
 async fn stats(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let detections = birdnet_db::sqlite::detection_count(conn).unwrap_or(0);
             let species = birdnet_db::sqlite::species_count(conn).unwrap_or(0);
             let latest = birdnet_db::sqlite::latest_detection(conn).ok().flatten();

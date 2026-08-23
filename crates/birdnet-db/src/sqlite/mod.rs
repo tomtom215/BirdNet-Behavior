@@ -7,7 +7,7 @@
 //!
 //! | Sub-module              | Contents                                                    |
 //! |-------------------------|-------------------------------------------------------------|
-//! | `connection`            | `DbError`, `open_connection`, `open_or_create`, `quick_check` |
+//! | `connection`            | `DbError`, `open_connection`, `open_or_create`, `open_readonly`, `quick_check` |
 //! | `types`                 | `DetectionRecord`, `DetectionRow`, `SpeciesCount`, …       |
 //! | `queries::detections`   | Insert, count, paginate, filter detection rows             |
 //! | `queries::species`      | Per-species aggregates, summaries, and activity            |
@@ -23,7 +23,7 @@ pub mod types;
 
 // Flat re-exports so existing call-sites (`birdnet_db::sqlite::foo`) continue
 // to compile without modification.
-pub use connection::{DbError, open_connection, open_or_create, quick_check};
+pub use connection::{DbError, open_connection, open_or_create, open_readonly, quick_check};
 pub use queries::correlation::{FollowOn, SpeciesPair};
 pub use queries::detection_reviews::{
     DetectionReview, ReviewStatus, UnreviewedDetection, clear_detection_review,

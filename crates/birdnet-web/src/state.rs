@@ -9,6 +9,7 @@ use birdnet_core::audio::capture::{CaptureStatusHandle, LiveAudioHubHandle};
 use birdnet_core::i18n::I18nManager;
 
 use crate::analytics_cache::AnalyticsCache;
+use crate::db_pool::ReaderPool;
 use birdnet_integrations::species_images::ImageCache;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
@@ -49,8 +50,19 @@ pub struct AppState {
 /// Inner state (wrapped in Arc for sharing).
 #[derive(Debug)]
 struct AppStateInner {
-    /// `SQLite` connection protected by a mutex for thread safety.
+    /// The single `SQLite` **writer**, protected by a mutex.
+    ///
+    /// WAL permits exactly one writer, so serialising writes in-process is the
+    /// rule being honoured rather than a limitation — and it is honoured here,
+    /// where the contention is legible, instead of as `SQLITE_BUSY` from a
+    /// second connection.
     db: Mutex<Connection>,
+    /// Read-only connections, for everything that only reads.
+    ///
+    /// `None` for a database that cannot be opened twice — `:memory:`, which is
+    /// what most tests use — and reads then take the writer, exactly as they did
+    /// before this existed. See [`crate::db_pool`].
+    readers: Option<ReaderPool>,
     /// Path to the `SQLite` database file (for diagnostics).
     db_path: PathBuf,
     /// Directory containing extracted audio recording clips.
@@ -159,6 +171,7 @@ impl AppState {
 
         Ok(Self {
             inner: Arc::new(AppStateInner {
+                readers: ReaderPool::open(&db_path),
                 db: Mutex::new(conn),
                 db_path,
                 recording_dir,
@@ -348,6 +361,7 @@ impl AppState {
 
         Ok(Self {
             inner: Arc::new(AppStateInner {
+                readers: ReaderPool::open(&db_path),
                 db: Mutex::new(conn),
                 db_path,
                 recording_dir,
@@ -379,6 +393,7 @@ impl AppState {
             .join("recordings");
         Self {
             inner: Arc::new(AppStateInner {
+                readers: ReaderPool::open(&db_path),
                 db: Mutex::new(conn),
                 db_path,
                 recording_dir,
@@ -519,6 +534,45 @@ impl AppState {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         f(&conn)
+    }
+
+    /// Execute a **read-only** closure against a pooled reader.
+    ///
+    /// # When to use this instead of [`Self::with_db`]
+    ///
+    /// Whenever the closure only reads. `with_db` takes the single writer lock,
+    /// which the detection-event processor also needs: a page whose query runs
+    /// for a second holds that lock for a second, and a detection arriving in
+    /// the meantime waits. Measured on a synthetic three-year station, the
+    /// Reports History calendar held it for 1 271 ms and the Life List for
+    /// 375 ms. Both of those are pure reads.
+    ///
+    /// Falls back to the writer when there is no pool — an in-memory database,
+    /// which is what most tests use — so the closure is always run and the
+    /// difference is throughput, never behaviour.
+    ///
+    /// # A write here will fail, on purpose
+    ///
+    /// Pooled connections are opened `SQLITE_OPEN_READ_ONLY`, so a write routed
+    /// down this path returns `attempt to write a readonly database` rather than
+    /// working by luck. That is what makes moving call sites across one at a
+    /// time safe: the mistake is loud, immediate, and caught by the first test
+    /// that exercises the path.
+    pub fn with_read_db<F, T>(&self, f: F) -> T
+    where
+        F: FnOnce(&Connection) -> T,
+    {
+        match self.inner.readers.as_ref() {
+            Some(pool) => pool.with(f),
+            None => self.with_db(f),
+        }
+    }
+
+    /// How many pooled readers this state holds. `0` when reads share the
+    /// writer. Diagnostics and tests.
+    #[must_use]
+    pub fn reader_count(&self) -> usize {
+        self.inner.readers.as_ref().map_or(0, ReaderPool::len)
     }
 
     /// Execute a closure with a reference to the `DuckDB` analytics database.
