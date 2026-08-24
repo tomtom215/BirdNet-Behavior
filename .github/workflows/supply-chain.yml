@@ -33,7 +33,7 @@ jobs:
   cargo-deny:
     name: cargo-deny
     runs-on: ubuntu-24.04
-    timeout-minutes: 20  # observed 1m07s
+    timeout-minutes: 20  # observed 1m01s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain
@@ -51,7 +51,7 @@ jobs:
   cargo-audit:
     name: cargo-audit
     runs-on: ubuntu-24.04
-    timeout-minutes: 20  # observed 3m17s
+    timeout-minutes: 20  # observed 3m11s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install Rust toolchain
@@ -68,7 +68,7 @@ jobs:
   cargo-machete:
     name: cargo-machete (unused dependencies)
     runs-on: ubuntu-24.04
-    timeout-minutes: 15  # observed 16s
+    timeout-minutes: 15  # observed 17s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install cargo-machete
@@ -81,7 +81,7 @@ jobs:
   typos:
     name: Spelling (typos)
     runs-on: ubuntu-24.04
-    timeout-minutes: 10  # observed 9s
+    timeout-minutes: 10  # observed 8s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Run typos
@@ -132,7 +132,7 @@ jobs:
   installer-tests:
     name: installer unit tests
     runs-on: ubuntu-24.04
-    timeout-minutes: 10  # observed 7s
+    timeout-minutes: 10  # observed 9s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Run the installer test suite
