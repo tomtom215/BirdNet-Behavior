@@ -114,3 +114,26 @@ jobs:
           ignore_paths: installer/lib
         env:
           SHELLCHECK_OPTS: "-x"
+
+  # ── installer unit tests ─────────────────────────────────────────────────
+  # installer/test/ held five test scripts and nothing ran any of them — no
+  # workflow, no script, no Makefile. Four still passed when run by hand, so
+  # nothing had rotted, but a test nobody runs stops being true silently and
+  # nothing announces it. This job runs them.
+  #
+  # run-ci.sh also fails when a file in installer/test/ is neither in its
+  # run-list nor in its excluded-list-with-a-reason, so adding a sixth test and
+  # forgetting to wire it up is a red build rather than a repeat of the same
+  # omission one level up.
+  #
+  # Hermetic: bash + coreutils, no network, no docker, no root. (The
+  # docker-based pkg-manager matrix is excluded by name and by reason — it
+  # pulls four distro images from four mirror networks.)
+  installer-tests:
+    name: installer unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10  # observed <5s locally
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Run the installer test suite
+        run: bash installer/test/run-ci.sh

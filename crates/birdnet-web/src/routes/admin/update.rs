@@ -73,9 +73,24 @@ async fn apply_update() -> Result<Json<serde_json::Value>, (StatusCode, String)>
     let download_url = info.download_url.clone();
     let latest_version = info.latest_version.clone();
     // Verified against the release's published SHA256SUMS before the swap; the
-    // staged binary is also smoke-tested. `None` (older release) falls back to
-    // the smoke test alone.
-    let expected_sha256 = info.sha256.clone();
+    // staged binary is also smoke-tested. `None` means the release could not be
+    // checked at all, which `apply_update` refuses — but it refuses with a
+    // generic message, and the specific reason (no SHA256SUMS asset, a 503, a
+    // missing line) is only known here. Report it rather than letting the
+    // operator guess why their update will not install.
+    let Some(expected_sha256) = info.sha256.clone() else {
+        let reason = info
+            .sha256_error
+            .unwrap_or_else(|| "no sha256 was published for this asset".into());
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            format!(
+                "refusing to install {}: the download cannot be verified ({reason}). \
+                 No binary was fetched and the running version is untouched.",
+                info.latest_version
+            ),
+        ));
+    };
 
     let current_binary = std::env::current_exe().map_err(|e| {
         (
@@ -85,7 +100,7 @@ async fn apply_update() -> Result<Json<serde_json::Value>, (StatusCode, String)>
     })?;
 
     tokio::task::spawn_blocking(move || {
-        auto_update::apply_update(&download_url, &current_binary, expected_sha256.as_deref())
+        auto_update::apply_update(&download_url, &current_binary, Some(&expected_sha256))
     })
     .await
     .map_err(|e| {
