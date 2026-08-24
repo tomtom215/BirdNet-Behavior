@@ -2,7 +2,12 @@
 
 **Date:** 2026-08-21 · **Branch:** `claude/production-readiness-audit-k7fzps` · **Base:** `9615b9c`
 
-> **Status: all thirteen are fixed on this branch.** Each fix's gate was
+> **Status: all twenty-five are fixed on this branch.** D1–D13 came from
+> reading the Rust; D14–D25 (§4, added 2026-08-24) came from asking what was
+> still not field-ready and looking at the supply chain, the failure modes
+> nothing had ever provoked, and `install.sh`.
+>
+> **Status of the original thirteen: all fixed.** Each fix's gate was
 > observed failing against the code it was written for, and the commit message
 > records the exact failure text — including three cases where the *gate* had to
 > be corrected because it did not catch the planted defect on the first try, and
@@ -508,3 +513,128 @@ when you build the big one on purpose.
 
 Per `CLAUDE.md`: every gate written for these must be observed failing against the
 code it was written for, and the commit must say how.
+
+---
+
+## 4. Second pass (2026-08-24): the deployment surface, not the code
+
+The thirteen findings above came from reading the Rust. This pass came from the
+question "what is still not field-ready", and deliberately looked where D1–D13
+had not: the supply chain, the failure modes nothing had ever provoked, and the
+2715 lines of `install.sh`.
+
+All of it is fixed on this branch, each gate observed failing first.
+
+### D14–D16 — "could not verify" took the same branch as "verified"
+
+Three places treated an absent integrity check as an acceptable degradation —
+the same shape as D13, which had just been closed in CI.
+
+| # | Where | What it did |
+|---|---|---|
+| D14 | `auto_update::apply_update` | `expected_sha256 == None` logged *"integrity not verified (relying on the staged-binary smoke test)"* and installed the binary. `check_for_update` produced that `None` from a fetch collapsing every failure into it with no reason attached. |
+| D15 | `installer/lib/50-binary.sh` | A failed `SHA256SUMS` download warned *"continuing without checksum verification"* and installed anyway. |
+| D16 | `installer/lib/55-model.sh` | `verify_model_sha256` returned `0` — the value a *verified* file returns — when `sha256sum` was missing. |
+
+The `SHA256SUMS` request is the cheapest thing on the wire for an on-path
+attacker to drop, so under D14 and D15 whoever could serve a malicious binary
+also decided whether verification happened. The fallback both leaned on,
+`<binary> --version`, proves a file executes; it says nothing about whose.
+
+**[FIXED]** `require_checksum` refuses as the first statement of
+`apply_update`, before the URL check and before any network I/O; new
+`UpdateError::Unverifiable`, distinct from `Integrity` (checked and failed);
+`fetch_expected_sha256` returns `Result` so the reason reaches
+`UpdateInfo::sha256_error` and the admin handler. Both shell paths are now
+`fatal`.
+
+**D17, found while gating D15 and not previously known.** Verification ran
+`sha256sum -c SHA256SUMS --ignore-missing --status --strict`, which answers
+"did anything both listed *and present* mismatch?" — not "did our archive
+verify?". Probed against GNU coreutils 9.4: with the archive absent from
+`SHA256SUMS` and another listed file present and matching, it exits **0**, and
+the installer printed "Checksum verified against SHA256SUMS". Now narrowed to
+the single line naming this archive, with the `*` and any directory prefix
+normalised (probed: an unnormalised `release/<archive>` line exits 1).
+
+### D18–D20 — the failure modes nothing had ever provoked
+
+No test in this repository had ever killed a process mid-write, filled a disk,
+or stepped a clock backwards. Each had handlers, doctor checks and comments
+describing what would happen; none had an observation.
+
+| # | Gate | What it defends |
+|---|---|---|
+| D18 | `tests/unclean_shutdown.rs` | SIGKILLs a real child mid-insert, five times, and requires `species_summary` to reconstruct exactly. A torn rollup would drift the dashboard's counts on every power cut with both tables staying well-formed and no integrity check noticing. |
+| D19 | `tests/out_of_space.rs` | A genuine `ENOSPC` (a symlink to `/dev/full`, errno 28 from the kernel, no root and no mount needed) against `backup_database`'s untested claim that a part-finished backup no longer "sorts newest, so it became the first thing recovery reached for". Plus `SQLITE_FULL` on the real insert path. |
+| D20 | `tests/clock_steps_backwards.rs` | A backwards NTP correction re-records ground already covered, and `(Date, Time, Sci_Name, File_Name, chunk_offset_secs)` is `idx_detections_unique`. Requires the collision to be reported, never to overwrite, and never to move the rollup. |
+
+Two things were suspected and disproved rather than asserted. `journal_mode=MEMORY`
+was assumed to corrupt on a kill; twelve kills produced twelve intact databases,
+so D18's counterparts inject damage deterministically instead. Negative session
+durations were assumed to follow a backwards clock; `SessionSpec` orders by
+`Time` within a date, not by arrival, so there is nothing there to gate.
+
+D18's comparison query was also caught giving the right answer for the wrong
+reason — `CAST(strftime('%H', Time) AS INTEGER)` agreed with the TEXT `hour`
+column only through SQLite's affinity coercion. It now uses `SUBSTR(Time, 1, 2)`
+and the `review_verdict` filter, copied from migration 24's triggers.
+
+### D21–D25 — `install.sh`
+
+2715 generated lines, the product for most operators, one CI gate
+(`build.sh --check`, which only proves the file matches its sources). Every
+module read.
+
+| # | What | Measured |
+|---|---|---|
+| D21 | `producer \| grep -q` / `\| head -N` under `set -euo pipefail`: the consumer quits early, the producer takes SIGPIPE, pipefail promotes 141, and `set -e` aborts **with no message on any stream** — or an `if` reads false despite matching. | `gen_password`'s no-openssl fallback: **200 aborts in 200 runs**. `ldd --version \| head -1` in an assignment: **3 in 200**. `find … \| head -1`: deterministic with several matches. `producer \| grep -q`: **1 wrong answer in 300** at 5000 lines. |
+| D22 | `StartLimitBurst=5` / `StartLimitIntervalSec=300` marks the unit failed after five restarts in five minutes and stops trying — justified as leaving it down "for operator review (visible in the web UI's health page once the service comes back)", which is circular: the web UI *is* this service. | Five restarts at `RestartSec=10` is under a minute. |
+| D23 | The zram unit's `ExecStop` began `swapoff -a` — every swap on the machine. Raspberry Pi OS enables `dphys-swapfile` by default. It then piped device paths into `rmmod`, which takes a module name. | `swapoff --help`: "-a, --all  disable all swaps from /proc/swaps". |
+| D24 | `do_install` stopped the running service *before* `install_binary`, so every `fatal` in between — including D15's new refusal — took a working station off the air for a binary that was never installed. Introduced by the D14–D16 commit and caught here. | — |
+| D25 | The macOS config wrote `LATITUDE=0.0` / `LONGITUDE=0.0`. Not "unset": Null Island, which the metadata model filters the species list for, and which `config_has_location` reports as configured. | — |
+
+**[FIXED]** `awk 'NR==1'` for `head -1` and capture-then-here-string for
+`producer | grep -q`, everywhere in `installer/lib`, `uninstall.sh` and
+`quickstart.sh`; `StartLimitIntervalSec=0` with `RestartSteps`/
+`RestartMaxDelaySec` backing off 10 s → 5 min, plus
+`RequiresMountsFor=${DATA_DIR}`; `ExecStop` swaps off `/dev/zram*` only and
+unloads by name; the service stop moved inside `install_binary` immediately
+before the swap, with an EXIT trap restoring it on any unsuccessful exit;
+macOS coordinates commented out as the Linux config already does.
+
+**Also:** `installer/test/` held five test scripts and **nothing ran any of
+them** — no workflow, no script, no Makefile. Four still passed when run by
+hand. `installer/test/run-ci.sh` now runs the hermetic ones in CI and fails
+when a file there is neither in its run-list nor excluded with a reason.
+
+### Checked and cleared
+
+Not everything suspected turned out to be real, and the ones that did not are
+recorded so they are not re-suspected:
+
+* **The `ExecStartPre` doctor gate.** Every `Status::Fail` in `src/doctor/` is a
+  permanent configuration error, not a transient — an unreachable RTSP host is
+  a `Warn`. The gate is sound.
+* **Polar night.** Suspected of producing a zero-minute solar window and a
+  station that refuses to start. Probed at Tromsø, Utqiagvik, Longyearbyen and
+  Rovaniemi: the scheduler returns **1440** for polar night (record everything),
+  not 0. The `minutes == 0` branch is a backstop for a fixed wrap bug, not a
+  reachable geography.
+* **`printf | grep -q`** in `uninstall.sh`'s protected-path guard: 0 failures in
+  3000 runs, as the single small write always completes. Changed anyway, because
+  a delete guard is not where a theoretical race is worth keeping.
+
+### What this pass still does not cover
+
+Unchanged from the top of this document, and worth repeating because three
+commits of green tests do not move it:
+
+* **No Raspberry Pi.** Every measurement here is x86_64 on this container.
+* **aarch64 is `cargo check` only.** No ARM test has ever executed in this repo.
+* **No real audio hardware**, so no test has ever lost a USB microphone
+  mid-stream or seen a card index change across a re-enumeration.
+* **No multi-day soak**, and `tests/soak.rs` remains a DB-insert proxy that
+  exercises neither capture, inference, nor the web server.
+* **No web server under concurrent load.** The reader pool is gated; the server
+  in front of it is not.
