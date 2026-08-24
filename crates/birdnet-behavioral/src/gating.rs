@@ -49,7 +49,7 @@ pub fn skips_allowed() -> bool {
 /// `what` names the missing prerequisite; `why` is whatever the attempt to
 /// obtain it reported. Both end up in the failure message, because "a test
 /// skipped" is not an actionable report and "the behavioral extension could not
-/// be loaded: <error>" is.
+/// be loaded: `<error>`" is.
 ///
 /// # Panics
 ///

@@ -94,7 +94,7 @@ impl Drop for Lease<'_> {
 }
 
 impl ReaderPool {
-    /// Open [`READER_COUNT`] read-only connections to `path`.
+    /// Open `READER_COUNT` read-only connections to `path`.
     ///
     /// Returns `None` when the pool cannot be built — the database is
     /// in-memory, the file does not exist yet, or the platform refused a
@@ -163,7 +163,7 @@ impl ReaderPool {
     /// # Panics
     ///
     /// Only if `f` panics, which propagates after the connection has been
-    /// returned to the pool by the [`Lease`] guard. The pool's own locking
+    /// returned to the pool by the `Lease` guard. The pool's own locking
     /// recovers from poisoning rather than unwrapping.
     pub fn with<T>(&self, f: impl FnOnce(&Connection) -> T) -> T {
         let mut idle = self.idle.lock().unwrap_or_else(PoisonError::into_inner);
