@@ -24,9 +24,31 @@
 //!
 //! `/dev/full` returns `ENOSPC` on every write and reads as zeroes, and a
 //! symlink pointing at it is a destination SQLite will open as a new database
-//! and then fail to write. That is a genuine `errno 28` from the kernel, not a
-//! simulated error — verified by probe, which returned
+//! and then fail to write. Probed as root in this container, that is a genuine
+//! `errno 28` from the kernel, not a simulated error:
 //! `SqliteFailure(DiskFull, "database or disk is full")`.
+//!
+//! It is not `ENOSPC` everywhere, and assuming it was is what made the first
+//! version of this test fail in CI. Three observations, all first-hand:
+//!
+//! ```text
+//! as root, this container        sqlite error: database or disk is full
+//! as uid 65534, this container   sqlite error: database or disk is full
+//! GitHub runner                  sqlite error: attempt to write a readonly database
+//! ```
+//!
+//! The first guess was that the runner's non-root user could not create
+//! SQLite's auxiliary journal beside a `/dev` path. Running the same test
+//! binary under `setpriv --reuid=65534` here disproved it — still `ENOSPC`. So
+//! the runner's cause is **not established**; the likeliest remaining
+//! explanation is that its environment does not present a writable `/dev/full`
+//! at all, but that is a guess and is labelled as one.
+//!
+//! What is established is that the scenario is the same in every case — a
+//! backup destination that cannot be written — and so is the invariant this
+//! file exists to check. Only the errno differs, so the assertion is on the
+//! invariant, and the reported error is printed so a fourth mode arrives in
+//! the log rather than silently widening what this tolerates.
 //!
 //! It needs no root and no mount, which matters: a `mount -t tmpfs` harness
 //! would be skipped on any CI runner without `CAP_SYS_ADMIN`, and a gate that
@@ -157,11 +179,23 @@ fn a_backup_that_runs_out_of_space_leaves_no_file_behind() {
     let paved = pave_with_full_device(&backup_dir);
 
     let err = birdnet_db::resilience::backup_database(&db, &backup_dir)
-        .expect_err("a backup onto a full device must fail");
-    let msg = err.to_string();
+        .expect_err("a backup onto an unwritable device must fail");
+    let msg = err.to_string().to_ascii_lowercase();
+
+    // How the write fails is not the same everywhere, and asserting one
+    // spelling of it was wrong — see the module doc for the three readings and
+    // for what is and is not established about why they differ. Both known
+    // modes are the case under test: a backup that cannot be written. The
+    // invariant below is what actually matters, and it is identical either
+    // way.
+    //
+    // Printed rather than silently accepted, so a *third* mode shows up in the
+    // log instead of quietly widening what this test tolerates.
+    eprintln!("[out_of_space] the failed backup reported: {msg}");
     assert!(
-        msg.contains("full"),
-        "the failure must name the disk being full, not something generic: {msg}"
+        msg.contains("full") || msg.contains("readonly") || msg.contains("read-only"),
+        "the backup should have failed because the destination could not be \
+         written, but it failed for some other reason: {msg}"
     );
 
     // Exactly one destination was consumed — the one it chose — and it was

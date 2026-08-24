@@ -854,6 +854,94 @@ mod tests {
         );
     }
 
+    // ── record_notification ────────────────────────────────────────────
+
+    /// One notification outcome must actually reach `notification_log`.
+    ///
+    /// `tests/notification_log_is_written.rs` guards the defect this function
+    /// was written for — production code calling the writer at all — by reading
+    /// source text, and it says a behavioural test "cannot catch it" because
+    /// such a test would seed the row itself. That is true of *that* defect and
+    /// not of this one: a source scan cannot tell whether the body still does
+    /// anything, so `replace record_notification with ()` survived it. Mutation
+    /// testing found exactly that, on `src/daemon/processor.rs:118`.
+    ///
+    /// This test seeds nothing. It calls the function and asks the table.
+    #[test]
+    fn record_notification_writes_a_row() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+
+        let before = state
+            .with_db(|c| birdnet_db::notifications::recent_notifications(c, 10, 0))
+            .expect("read the empty log");
+        assert!(before.is_empty(), "precondition: nothing logged yet");
+
+        let subject = NotificationSubject {
+            com_name: "Eurasian Blackbird".to_owned(),
+            sci_name: "Turdus merula".to_owned(),
+            confidence: 0.91,
+            date: "2026-03-16".to_owned(),
+            time: "06:30:00".to_owned(),
+        };
+        record_notification(
+            &state,
+            "apprise",
+            &subject,
+            NotifStatus::Sent,
+            Some("delivered"),
+            None,
+        );
+
+        let after = state
+            .with_db(|c| birdnet_db::notifications::recent_notifications(c, 10, 0))
+            .expect("read the log");
+        assert_eq!(
+            after.len(),
+            1,
+            "the notification outcome never reached notification_log — the three \
+             surfaces that read this table would stay empty on a real station"
+        );
+    }
+
+    /// The counterpart: a failure outcome is recorded too, and carries its
+    /// error. A writer that only logged successes would leave an operator
+    /// asking "did my uploads land?" with a log that answers yes and nothing
+    /// else — which is the question this table exists for.
+    #[test]
+    fn record_notification_records_a_failure_with_its_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+
+        let subject = NotificationSubject {
+            com_name: "Great Tit".to_owned(),
+            sci_name: "Parus major".to_owned(),
+            confidence: 0.77,
+            date: "2026-03-16".to_owned(),
+            time: "07:00:00".to_owned(),
+        };
+        record_notification(
+            &state,
+            "birdweather",
+            &subject,
+            NotifStatus::Failed,
+            None,
+            Some("connection refused"),
+        );
+
+        let rows = state
+            .with_db(|c| birdnet_db::notifications::recent_notifications(c, 10, 0))
+            .expect("read the log");
+        assert_eq!(rows.len(), 1, "a failed delivery must still be recorded");
+        let row = &rows[0];
+        assert_eq!(row.channel, "birdweather");
+        assert_eq!(
+            row.error.as_deref(),
+            Some("connection refused"),
+            "the reason is the whole value of the row: {row:?}"
+        );
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn event_processor_inserts_row_for_accepted_event() {
         use birdnet_core::audio::extraction::ExtractionConfig;
