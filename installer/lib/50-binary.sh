@@ -105,10 +105,21 @@ install_binary() {
     # The archive contains a single top-level directory named
     # birdnet-behavior-<version>-<target>. Locate the binary inside it.
     local extracted_binary
-    extracted_binary="$(find "${workdir}" -mindepth 2 -maxdepth 3 -type f -name "${BINARY_NAME}" | head -1)"
+    # `awk 'NR==1'`, not `head -1`: with more than one match `find` is left
+    # writing into a pipe `head` has already closed, and `set -euo pipefail`
+    # turns that into a silent exit 141 — the installer stops with no output.
+    # Verified: deterministic with 5000 matches, clean with one.
+    extracted_binary="$(find "${workdir}" -mindepth 2 -maxdepth 3 -type f -name "${BINARY_NAME}" | awk 'NR==1')"
     if [ -z "${extracted_binary}" ] || [ ! -f "${extracted_binary}" ]; then
         fatal "Could not find '${BINARY_NAME}' binary inside the downloaded archive."
     fi
+
+    # Stop the service here and not a moment earlier. Everything above can
+    # fail — an unreachable release, an unverifiable checksum, a corrupt
+    # archive — and none of it is a reason to take a working station off the
+    # air. From this line on we have a verified binary in hand and the only
+    # remaining obstacle is ETXTBSY, which is what the stop is for.
+    stop_running_service_for_swap
 
     install -m 0755 "${extracted_binary}" "${INSTALL_DIR}/${BINARY_NAME}"
     success "Binary installed to ${INSTALL_DIR}/${BINARY_NAME}"
@@ -118,7 +129,7 @@ install_binary() {
     # BNB_HELP_DIR at ${HELP_DIR} (see 65-service.sh). Older releases have no
     # help/ in the tarball — we just skip, and /help 404s as it did before.
     local extracted_help
-    extracted_help="$(find "${workdir}" -mindepth 2 -maxdepth 3 -type d -name help | head -1)"
+    extracted_help="$(find "${workdir}" -mindepth 2 -maxdepth 3 -type d -name help | awk 'NR==1')"
     if [ -n "${extracted_help}" ] && [ -d "${extracted_help}" ]; then
         rm -rf "${HELP_DIR}"
         install -d -m 0755 "$(dirname "${HELP_DIR}")"

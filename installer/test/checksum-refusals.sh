@@ -71,6 +71,9 @@ run_install_binary() {
         success() { echo "[OK] $*"; }
         warn()    { echo "[WARN] $*"; }
         fatal()   { echo "[FATAL] $*"; exit 1; }
+        # install_binary stops the service immediately before the swap (see
+        # 77-manage.sh); there is none here.
+        stop_running_service_for_swap() { echo "[STOP] service stop requested"; }
 
         eval "${stub_body}"
 
@@ -142,6 +145,15 @@ if [ -e "${sandbox}/bin/birdnet-behavior" ]; then
     fail "an unverified binary was installed to INSTALL_DIR"
 else
     pass "nothing was written to INSTALL_DIR"
+fi
+# The station stays up. Making verification fatal is only an improvement if a
+# failed update leaves the service running: do_install used to stop it before
+# install_binary was even called, so every new fatal path here would have taken
+# a working station off the air for a binary that was never installed.
+if grep -q "\[STOP\]" "${OUT}"; then
+    fail "the running service was stopped for an update that then refused to install"
+else
+    pass "the running service was never stopped"
 fi
 
 echo
@@ -224,6 +236,13 @@ if grep -q "Checksum verified against SHA256SUMS" "${OUT}"; then
     pass "and said so"
 else
     fail "no verification message on the success path"
+fi
+# The counterpart to the "never stopped" check above: on the path that *does*
+# install, the service must still be stopped first, or the swap hits ETXTBSY.
+if grep -q "\[STOP\]" "${OUT}"; then
+    pass "and stopped the running service before swapping the binary"
+else
+    fail "the binary was swapped without stopping the running service (ETXTBSY)"
 fi
 sandbox="$(cat "${OUT}.sandbox")"
 if [ -x "${sandbox}/bin/birdnet-behavior" ]; then

@@ -61,7 +61,7 @@ resolve_version() {
     tmp="$(mktemp)"
     if download "${api_url}" "${tmp}" 2>/dev/null; then
         local ver
-        ver="$(grep '"tag_name"' "${tmp}" | sed -E 's/.*"v?([^"]+)".*/\1/' | head -1)"
+        ver="$(grep '"tag_name"' "${tmp}" | sed -E 's/.*"v?([^"]+)".*/\1/' | awk 'NR==1')"
         rm -f "${tmp}"
         if [ -n "${ver}" ]; then
             echo "${ver}"

@@ -28,7 +28,9 @@ setup_zram() {
     local zram_size=$(( mem_bytes / 2 ))   # 50% of physical RAM
 
     # Load the zram kernel module
-    if ! lsmod | grep -q '^zram'; then
+    local loaded_modules
+    loaded_modules="$(lsmod 2>/dev/null || true)"
+    if ! grep -q '^zram' <<<"${loaded_modules}"; then
         modprobe zram num_devices=1 || {
             warn "Could not load zram module. Skipping ZRAM setup."
             return 0
@@ -49,7 +51,21 @@ setup_zram() {
 
     success "ZRAM swap activated: ${zram_dev} ($(( zram_size / 1024 / 1024 )) MB, lz4)"
 
-    # Persist across reboots via a systemd service unit
+    # Persist across reboots via a systemd service unit.
+    #
+    # ExecStop deserves a note. It used to begin `swapoff -a`, which is
+    # documented as "disable all swaps from /proc/swaps" — every swap on the
+    # machine, not the zram device this unit made. Raspberry Pi OS enables
+    # dphys-swapfile by default, so stopping this unit (on shutdown, on
+    # `systemctl stop zram-swap`, during an uninstall) silently switched off the
+    # operator's real swap on exactly the low-RAM boards this unit exists to
+    # help. It then piped device paths into `rmmod`, which takes a module name,
+    # so `rmmod /dev/zram0` failed on every run and `|| true` hid it.
+    #
+    # Now: only /dev/zram* are swapped off, and the module is unloaded by name.
+    # This still cannot distinguish a zram device made by another provider
+    # (zram-tools) from ours — the unit records no device id — but at shutdown
+    # that is the difference between touching zram and touching everything.
     local zram_service="/etc/systemd/system/zram-swap.service"
     cat > "${zram_service}" << EOF
 [Unit]
@@ -60,7 +76,7 @@ After=multi-user.target
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/bin/sh -c 'modprobe zram num_devices=1 && zramctl --find --size ${zram_size} --algorithm lz4 | xargs -I{} sh -c "mkswap {} && swapon --priority 100 {}"'
-ExecStop=/bin/sh -c 'swapoff -a 2>/dev/null; zramctl --list 2>/dev/null | awk "NR>1{print \$1}" | xargs -r rmmod zram 2>/dev/null || true'
+ExecStop=/bin/sh -c 'for d in /dev/zram*; do [ -b "\$d" ] && swapoff "\$d" 2>/dev/null; done; rmmod zram 2>/dev/null || true'
 
 [Install]
 WantedBy=multi-user.target

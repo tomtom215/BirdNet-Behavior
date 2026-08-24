@@ -59,7 +59,7 @@ detect_first_audio_device() {
             | awk -v id="${first_id}" '$1 == "card" && $3 == id { n++ } END { print n+0 }')"
     fi
     if [ -n "${first_id}" ] \
-        && printf '%s' "${first_id}" | grep -qE '^[A-Za-z0-9_-]+$' \
+        && grep -qE '^[A-Za-z0-9_-]+$' <<<"${first_id}" \
         && [ "${id_count}" = "1" ]; then
         echo "plughw:CARD=${first_id},DEV=${first_device:-0}"
     else
@@ -133,12 +133,35 @@ parse_coords() {
 }
 
 # Generate a strong, shell/URL-friendly random password.
+#
+# Neither branch may end in a consumer that stops reading early. The fallback
+# used to be `tr -dc … </dev/urandom | head -c 22`: /dev/urandom never ends, so
+# `head` always exits with the producer mid-write, `tr` always takes SIGPIPE,
+# and under this script's `set -o pipefail` the pipeline always returns 141.
+# The caller assigns the result (`CADDY_PWD_VALUE="$(gen_password)"`), so under
+# `set -e` that killed the installer outright, silently, at the exact step that
+# secures /admin. Measured: 200 failures in 200 runs.
+#
+# Only systems without openssl reached it, which is why it survived — Raspberry
+# Pi OS and Debian both ship openssl, and that branch ends in `cut`, which reads
+# its input to the end.
+#
+# So the randomness is now bounded at the source and consumed whole.
 gen_password() {
+    local raw=""
     if command -v openssl &>/dev/null; then
-        openssl rand -base64 18 2>/dev/null | tr -dc 'A-Za-z0-9' | cut -c1-22
-    else
-        LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 22
+        raw="$(openssl rand -base64 48 2>/dev/null | tr -dc 'A-Za-z0-9')"
     fi
+    if [ "${#raw}" -lt 22 ]; then
+        # `head -c` on a *file* is a bounded read, not a pipeline: nothing is
+        # left writing, so there is no SIGPIPE to take. 4096 random bytes yield
+        # ~990 alphanumerics, so 22 is never short.
+        raw="$(head -c 4096 /dev/urandom 2>/dev/null | LC_ALL=C tr -dc 'A-Za-z0-9')"
+    fi
+    if [ "${#raw}" -lt 22 ]; then
+        fatal "Could not generate a random admin password (no openssl, and /dev/urandom yielded ${#raw} usable characters). Set CADDY_PWD in ${CONFIG_FILE} by hand."
+    fi
+    printf '%s' "${raw:0:22}"
 }
 
 # Guarantee the /admin panel is password-protected on a fresh LAN install. The

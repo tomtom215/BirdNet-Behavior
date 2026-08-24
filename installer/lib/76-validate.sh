@@ -33,7 +33,7 @@ validate_install() {
     # 1. Binary runs.
     if [ -x "${INSTALL_DIR}/${BINARY_NAME}" ] \
         && "${INSTALL_DIR}/${BINARY_NAME}" --version &>/dev/null; then
-        _v_pass "binary executes ($("${INSTALL_DIR}/${BINARY_NAME}" --version 2>/dev/null | head -1))"
+        _v_pass "binary executes ($("${INSTALL_DIR}/${BINARY_NAME}" --version 2>/dev/null | awk 'NR==1'))"
     else
         _v_fail "binary at ${INSTALL_DIR}/${BINARY_NAME} is missing or won't run"
     fi
@@ -92,7 +92,16 @@ validate_install() {
     # 6. If the service is up, confirm the web port is actually listening.
     if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
         local port="${LISTEN_ADDR##*:}"
-        if command -v ss &>/dev/null && ss -ltn 2>/dev/null | grep -q ":${port}\b"; then
+        # Capture first, then match against a here-string. `producer | grep -q`
+        # is a trap under `set -o pipefail`: grep exits on its first match, the
+        # producer takes SIGPIPE, and the pipeline reports 141 — so a match
+        # reads as a miss. Measured at 1 in 300 with a 5000-line producer. Here
+        # that meant reporting "port not seen listening" about a port that was.
+        local listening=""
+        if command -v ss &>/dev/null; then
+            listening="$(ss -ltn 2>/dev/null || true)"
+        fi
+        if grep -q ":${port}\b" <<<"${listening}"; then
             _v_pass "service active and listening on port ${port}"
         else
             _v_warn "service active but port ${port} not seen listening yet (it may still be starting)"

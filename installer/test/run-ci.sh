@@ -30,6 +30,8 @@ CI_TESTS=(
     checksum-refusals.sh
     coord-parse.sh
     location-notice.sh
+    pipefail-sigpipe.sh
+    service-unit.sh
 )
 
 # Deliberately not run in CI. Each entry is "file|reason" and the reason is

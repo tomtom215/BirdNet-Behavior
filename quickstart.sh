@@ -126,7 +126,13 @@ else
 fi
 
 # Port check — if :8502 is already bound, the container will fail to start.
-if command -v ss >/dev/null 2>&1 && ss -tlnH "sport = :${WEB_PORT}" 2>/dev/null | grep -q .; then
+# Captured rather than piped into `grep -q`: under `set -o pipefail` a
+# consumer that quits early makes the pipeline report failure even on a match.
+_listening=""
+if command -v ss >/dev/null 2>&1; then
+    _listening="$(ss -tlnH "sport = :${WEB_PORT}" 2>/dev/null || true)"
+fi
+if [ -n "${_listening}" ]; then
     warn "Port ${WEB_PORT} is already in use on this host:"
     ss -tlnH "sport = :${WEB_PORT}" 2>/dev/null | sed 's/^/    /' >&2
     warn "You can change the host port later in .env:  BIRDNET_PORT=8080"
@@ -243,9 +249,9 @@ if yesno "Auto-detect your location from your public IP? (sends a request to ipa
     info "Querying ipapi.co…"
     geo=$(curl -fsSL --max-time 5 https://ipapi.co/json/ 2>/dev/null || true)
     if [ -n "$geo" ]; then
-        LAT=$(printf '%s' "$geo" | grep -o '"latitude":[^,}]*'  | head -1 | cut -d: -f2 | tr -d ' "')
-        LON=$(printf '%s' "$geo" | grep -o '"longitude":[^,}]*' | head -1 | cut -d: -f2 | tr -d ' "')
-        city=$(printf '%s' "$geo" | grep -o '"city":"[^"]*"' | head -1 | cut -d: -f2 | tr -d '"')
+        LAT=$(printf '%s' "$geo" | grep -o '"latitude":[^,}]*'  | awk 'NR==1' | cut -d: -f2 | tr -d ' "')
+        LON=$(printf '%s' "$geo" | grep -o '"longitude":[^,}]*' | awk 'NR==1' | cut -d: -f2 | tr -d ' "')
+        city=$(printf '%s' "$geo" | grep -o '"city":"[^"]*"' | awk 'NR==1' | cut -d: -f2 | tr -d '"')
         if [ -n "$LAT" ] && [ -n "$LON" ]; then
             info "Detected ${city:-(unknown city)}: ${LAT}, ${LON}"
             if ! yesno "Use these coordinates?" y; then
