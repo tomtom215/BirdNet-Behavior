@@ -10,6 +10,7 @@ use std::fmt;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
@@ -118,6 +119,96 @@ pub fn build_router_with_rate_limit(state: AppState, rate_limit: RateLimitConfig
         .layer(axum::middleware::from_fn(
             crate::security::security_headers_middleware,
         ))
+        // Outermost, and it has to be: `security_headers_middleware` buffers
+        // every `text/html` body and runs `String::from_utf8_lossy` over it to
+        // stamp CSP nonces. Placed *inside* that layer, this one handed it a
+        // gzip stream still labelled `text/html`, and every byte above 0x7F —
+        // starting with gzip's own `0x8b` magic — came back as U+FFFD. The
+        // wire bytes looked plausible (`1f ef bf bd 08 …`, right length,
+        // correct `Content-Encoding`) and no browser could decode a single
+        // page. Compression must see the finished body, so it goes last.
+        .layer(CompressionLayer::new().compress_when(should_compress))
+}
+
+/// Content types worth compressing, as prefixes matched against `Content-Type`.
+///
+/// An **allow**-list, not a deny-list, and deliberately so — see
+/// [`should_compress`].
+const COMPRESSIBLE_PREFIXES: &[&str] = &[
+    "text/", // html, css, plain, calendar (the .ics feeds)
+    // — but NOT text/event-stream; see the explicit refusal in should_compress.
+    "application/json",          // the whole v2 API
+    "application/javascript",    // htmx and the four small scripts
+    "application/xml",           // OpenAPI, sitemap-shaped things
+    "application/rss+xml",       // /feeds/*.rss
+    "application/atom+xml",      //
+    "application/manifest+json", // the PWA manifest
+    "image/svg+xml",             // every chart this app draws
+    "font/",                     // the self-hosted webfonts (woff2 is already
+                                 // compressed and gains nothing, but the predicate below only *permits*
+                                 // compression — gzip on an incompressible body costs a few ms once, and the
+                                 // browser caches it immutably).
+];
+
+/// Whether a response should be gzipped.
+///
+/// `tower_http`'s `DefaultPredicate` is a deny-list: everything above 32 bytes
+/// that is not gRPC, not `image/*` and not `text/event-stream`. That is the
+/// wrong shape for this server, for one reason that matters and one that does:
+///
+/// * **Range requests.** `/api/v2/recordings/{file}` serves audio with
+///   `206 Partial Content` and a `Content-Range` computed from the file. A
+///   compressing layer rewrites the body but not that header, so the response
+///   describes a byte range it no longer contains and the `<audio>` element
+///   gets a corrupt clip. `DefaultPredicate` does not exclude 206, and
+///   `audio/wav` is not `image/*`.
+/// * **Bodies that are already compressed.** Spectrogram PNGs (now genuinely
+///   deflated), the `.tar.gz` backup download, WAV audio. Gzipping those burns
+///   Pi CPU to add bytes.
+///
+/// So this permits only what is known to be text-shaped, and anything new is
+/// uncompressed until someone adds it here. `text/event-stream` — the log
+/// stream — is not in the list, which is what keeps SSE unbuffered.
+///
+/// A response that already carries `Content-Encoding` is left alone: the layer
+/// itself checks that, but stating it here is cheaper than re-deriving it.
+///
+/// Public so `tests/responses_are_compressed.rs` can assert the policy directly
+/// rather than by inferring it from whichever routes happen to be reachable in
+/// a fixture — the negative cases (audio, PNG, SSE, ranged) are the ones worth
+/// pinning, and several of them need a file on disk to reach over the wire.
+#[must_use]
+pub fn should_compress(
+    status: axum::http::StatusCode,
+    _version: axum::http::Version,
+    headers: &axum::http::HeaderMap,
+    _extensions: &axum::http::Extensions,
+) -> bool {
+    use axum::http::{StatusCode, header};
+
+    // 206 carries a Content-Range that compression would falsify.
+    if status == StatusCode::PARTIAL_CONTENT || headers.contains_key(header::CONTENT_RANGE) {
+        return false;
+    }
+
+    let Some(ctype) = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+    else {
+        return false;
+    };
+    let ctype = ctype.trim().to_ascii_lowercase();
+
+    // `text/event-stream` is inside the `text/` prefix and must not be: the
+    // live log viewer is an SSE stream, and a compressor buffers to fill its
+    // window, so every line would arrive in a clump instead of when it
+    // happened. Refused before the prefix scan rather than by shortening the
+    // prefix, because `text/` is the right rule for everything else under it.
+    if ctype.starts_with("text/event-stream") {
+        return false;
+    }
+
+    COMPRESSIBLE_PREFIXES.iter().any(|p| ctype.starts_with(p))
 }
 
 /// Build the CORS policy.

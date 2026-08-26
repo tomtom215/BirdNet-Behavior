@@ -64,67 +64,52 @@ fn write_png_chunk(
     Ok(())
 }
 
-/// Minimal zlib compression (deflate level 1) without external crates.
+/// DEFLATE level for the IDAT stream.
 ///
-/// Uses the zlib format: CMF + FLG header, then DEFLATE blocks, then Adler-32.
+/// Level 6 is zlib's default and the knee of the curve here: measured against
+/// a real 975 × 128 spectrogram's scanlines, level 6 gives 67 268 bytes and
+/// level 9 gives 66 686 — 0.9 % more compression for materially more CPU, on a
+/// Raspberry Pi, inside a request. Take the 6.
+const DEFLATE_LEVEL: u32 = 6;
+
+/// zlib-compress the filtered scanlines.
+///
+/// This used to emit **stored** (type-0) DEFLATE blocks, with the comment
+/// "not great compression but no dependency and correct output". The output was
+/// indeed correct, and the cost was 7.5×: a served `/api/v2/spectrogram/…`
+/// response measured 499 431 bytes whose IDAT re-deflated to 66 686, and
+/// `/recordings` renders twenty thumbnails, so one page load moved 3.28 MB of
+/// PNG where 0.53 MB would do. The 32 MiB render cache held ~200 thumbnails
+/// instead of ~1 200.
+///
+/// The "no dependency" half stopped being true some time ago: `flate2` and
+/// `miniz_oxide` are already resolved in `Cargo.lock` as build-dependencies of
+/// `libduckdb-sys`, so this takes a version the lockfile already vets, in a
+/// pure-Rust backend with no C and no build step.
 fn zlib_compress(data: &[u8]) -> Vec<u8> {
-    // Store-only deflate (type 0 blocks) — not great compression but
-    // no dependency and correct output.
-    const BLOCK: usize = 65535;
-    let mut out = Vec::with_capacity(data.len() + 16);
+    use std::io::Write as _;
 
-    // zlib header: CM=8 (deflate), CINFO=7 (window 32k), check bits
-    out.push(0x78); // CMF
-    out.push(0x01); // FLG (fastest compression)
-
-    let chunks = data.chunks(BLOCK);
-    let n_chunks = chunks.len();
-    for (i, chunk) in data.chunks(BLOCK).enumerate() {
-        let last = i == n_chunks - 1;
-        out.push(u8::from(last)); // BFINAL, BTYPE=00 (store)
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            clippy::cast_precision_loss,
-            clippy::cast_possible_wrap,
-            clippy::cast_lossless
-        )]
-        let len = chunk.len() as u16;
-        out.extend_from_slice(&len.to_le_bytes());
-        out.extend_from_slice(&(!len).to_le_bytes());
-        out.extend_from_slice(chunk);
-    }
-
-    // Adler-32 checksum
-    let adler = adler32(data);
-    out.extend_from_slice(&adler.to_be_bytes());
-    out
+    let mut encoder =
+        flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::new(DEFLATE_LEVEL));
+    // Writing to a `Vec` is infallible, and so is the encoder's own buffering;
+    // `expect` here documents that rather than propagating an error no caller
+    // could act on.
+    encoder
+        .write_all(data)
+        .expect("writing to a Vec cannot fail");
+    encoder.finish().expect("writing to a Vec cannot fail")
 }
 
-pub(super) fn adler32(data: &[u8]) -> u32 {
-    let mut s1: u32 = 1;
-    let mut s2: u32 = 0;
-    for &b in data {
-        s1 = (s1 + u32::from(b)) % 65521;
-        s2 = (s2 + s1) % 65521;
-    }
-    (s2 << 16) | s1
-}
-
-fn crc32(chunk_type: [u8; 4], data: &[u8]) -> u32 {
-    // Standard CRC-32 with polynomial 0xEDB88320.
-    let table = build_crc32_table();
-    let mut crc: u32 = 0xFFFF_FFFF;
-    for &b in chunk_type.iter().chain(data.iter()) {
-        crc = table[((crc ^ u32::from(b)) & 0xFF) as usize] ^ (crc >> 8);
-    }
-    crc ^ 0xFFFF_FFFF
-}
-
-fn build_crc32_table() -> [u32; 256] {
+/// CRC-32 table (polynomial `0xEDB88320`), built once per process.
+///
+/// It used to be rebuilt inside `crc32`, which is called once per PNG chunk —
+/// 2 048 iterations of table construction per image, for a table that is a
+/// constant.
+static CRC32_TABLE: std::sync::LazyLock<[u32; 256]> = std::sync::LazyLock::new(|| {
     let mut table = [0u32; 256];
-    for i in 0..256u32 {
-        let mut c = i;
+    for (i, slot) in table.iter_mut().enumerate() {
+        #[allow(clippy::cast_possible_truncation)]
+        let mut c = i as u32;
         for _ in 0..8 {
             c = if c & 1 != 0 {
                 0xEDB8_8320 ^ (c >> 1)
@@ -132,17 +117,124 @@ fn build_crc32_table() -> [u32; 256] {
                 c >> 1
             };
         }
-        table[i as usize] = c;
+        *slot = c;
     }
     table
+});
+
+fn crc32(chunk_type: [u8; 4], data: &[u8]) -> u32 {
+    let mut crc: u32 = 0xFFFF_FFFF;
+    for &b in chunk_type.iter().chain(data.iter()) {
+        crc = CRC32_TABLE[((crc ^ u32::from(b)) & 0xFF) as usize] ^ (crc >> 8);
+    }
+    crc ^ 0xFFFF_FFFF
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// A spectrogram-shaped raster: mostly dark, with a few bright bands.
+    ///
+    /// Real spectrograms compress to roughly an eighth — measured on a served
+    /// `/api/v2/spectrogram/…` response: 499 328 raw scanline bytes down to
+    /// 66 686. This fixture is deliberately in that family rather than random
+    /// noise, because a compression assertion against random data would be
+    /// asserting the impossible.
+    fn spectrogram_like(width: u32, height: u32) -> Vec<u8> {
+        let mut px = Vec::with_capacity((width * height * 4) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                let band = u8::from(y % 17 == 0 && x % 3 != 0);
+                let v = if band == 1 { 200 } else { 12 };
+                px.extend_from_slice(&[v, v / 2, v / 3, 255]);
+            }
+        }
+        px
+    }
+
+    /// Extract the concatenated IDAT payload from an encoded PNG.
+    fn idat_of(png: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut i = 8; // past the signature
+        while i + 8 <= png.len() {
+            let len = u32::from_be_bytes([png[i], png[i + 1], png[i + 2], png[i + 3]]) as usize;
+            let ty = &png[i + 4..i + 8];
+            if ty == b"IDAT" {
+                out.extend_from_slice(&png[i + 8..i + 8 + len]);
+            }
+            i += 12 + len;
+        }
+        out
+    }
+
+    /// The encoder must actually compress.
+    ///
+    /// It did not: `zlib_compress` emitted type-0 (stored) DEFLATE blocks, so
+    /// every spectrogram shipped at its raw size — 499 431 bytes for one
+    /// 975 × 128 image, and 3.28 MB for the twenty thumbnails on
+    /// `/recordings`. The bound below is deliberately loose (half) rather than
+    /// tuned to the observed eighth: the point is to catch a regression to
+    /// *stored*, not to pin a ratio that a filter change could legitimately
+    /// move.
     #[test]
-    fn adler32_empty() {
-        assert_eq!(adler32(&[]), 1);
+    fn idat_is_compressed_not_stored() {
+        let (w, h) = (320_u32, 128_u32);
+        let mut png = Vec::new();
+        write_png_rgba(&mut png, w, h, &spectrogram_like(w, h)).expect("encode");
+
+        let raw_len = ((w as usize) * 4 + 1) * h as usize;
+        let idat = idat_of(&png);
+        assert!(
+            idat.len() * 2 < raw_len,
+            "IDAT is {} bytes for {raw_len} bytes of scanlines — that is stored, \
+             not deflated",
+            idat.len()
+        );
+    }
+
+    /// …and the compressed stream must still be the exact bytes that went in.
+    ///
+    /// The counterpart to the assertion above: a truncating encoder would
+    /// satisfy "smaller" perfectly.
+    #[test]
+    fn idat_inflates_back_to_the_filtered_scanlines() {
+        use std::io::Read as _;
+
+        let (w, h) = (64_u32, 24_u32);
+        let pixels = spectrogram_like(w, h);
+        let mut png = Vec::new();
+        write_png_rgba(&mut png, w, h, &pixels).expect("encode");
+
+        let row_bytes = (w as usize) * 4;
+        let mut expected = Vec::with_capacity((row_bytes + 1) * h as usize);
+        for row in 0..h as usize {
+            expected.push(0); // None filter, as the encoder writes
+            expected.extend_from_slice(&pixels[row * row_bytes..(row + 1) * row_bytes]);
+        }
+
+        let mut got = Vec::new();
+        flate2::read::ZlibDecoder::new(&idat_of(&png)[..])
+            .read_to_end(&mut got)
+            .expect("IDAT is a valid zlib stream");
+        assert_eq!(
+            got, expected,
+            "round-trip through the encoder changed bytes"
+        );
+    }
+
+    /// The CRC of a chunk has to be right, or every decoder rejects the file.
+    /// Pinned against a known vector so a table refactor cannot quietly break
+    /// it.
+    #[test]
+    fn iend_chunk_crc_matches_the_png_specs_constant() {
+        // The IEND chunk is fixed by the spec: length 0, type "IEND",
+        // CRC 0xAE426082.
+        let mut png = Vec::new();
+        write_png_rgba(&mut png, 1, 1, &[0, 0, 0, 255]).expect("encode");
+        assert!(
+            png.ends_with(&[0, 0, 0, 0, b'I', b'E', b'N', b'D', 0xAE, 0x42, 0x60, 0x82]),
+            "IEND chunk or its CRC is wrong"
+        );
     }
 }
