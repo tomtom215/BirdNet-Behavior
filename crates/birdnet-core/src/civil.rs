@@ -334,6 +334,90 @@ pub fn shift_datetime(date: &str, time: &str, offset_secs: f64) -> Option<(Strin
 
 #[cfg(test)]
 mod tests {
+    use super::{days_in_month, is_leap_year};
+
+    /// All three Gregorian rules, in this crate's own test suite.
+    ///
+    /// `tests/leap_year_agrees_with_the_scheduler.rs` already drives this
+    /// predicate against `birdnet-scheduler`'s private copy over six centuries
+    /// — but that test lives in the workspace-root binary crate, because it is
+    /// the only one depending on both. `cargo mutants --package birdnet-core`
+    /// does not run it, so from the mutation gate's point of view these two
+    /// functions arrived with no coverage at all: **11 mutants, 11 missed**.
+    ///
+    /// CI named only four of them, because that shard tested four — the gate
+    /// splits this file three ways. Fixing the four it printed would have left
+    /// the other shards red, which is why the number to work from is the one a
+    /// local `cargo mutants --package birdnet-core --in-diff` reports, not the
+    /// one in the failing job:
+    ///
+    /// ```text
+    /// replace is_leap_year -> bool with true / with false
+    /// replace || with && / && with || in is_leap_year
+    /// delete ! in is_leap_year
+    /// replace days_in_month -> u32 with 0 / with 1
+    /// delete match arm 1 | 3 | 5 | 7 | 8 | 10 | 12
+    /// delete match arm 2
+    /// replace match guard is_leap_year(year) with true / with false
+    /// ```
+    ///
+    /// Coverage a gate cannot see is not coverage. Every case below is a year
+    /// or month where some mutant disagrees with the real function — 2000 kills
+    /// `|| → &&`, 2023 kills `&& → ||`, 1900 kills the deleted `!`, and
+    /// February in both a leap and a common year kills both guard mutants and
+    /// the deleted arm. None of them is a convenient round number.
+    #[test]
+    fn every_gregorian_leap_rule_is_pinned() {
+        // Divisible by 4 → leap. Deleting the `!` makes this false, because
+        // 2024 is *not* divisible by 100.
+        assert!(is_leap_year(2024), "2024 is a leap year");
+        assert!(is_leap_year(1996), "1996 is a leap year");
+
+        // Divisible by 100 → not leap. Deleting the `!` makes this true, which
+        // is the century mistake the rule exists to prevent.
+        assert!(!is_leap_year(1900), "1900 is not a leap year");
+        assert!(!is_leap_year(2100), "2100 is not a leap year");
+
+        // Divisible by 400 → leap after all.
+        assert!(is_leap_year(2000), "2000 is a leap year");
+        assert!(is_leap_year(2400), "2400 is a leap year");
+
+        // Not divisible by 4 → not leap.
+        assert!(!is_leap_year(2023), "2023 is not a leap year");
+        assert!(!is_leap_year(2026), "2026 is not a leap year");
+    }
+
+    /// Every month length, including the arm a mutant can delete.
+    ///
+    /// The 31-day arm is the interesting one: deleting it drops those months
+    /// through to the `_ => 30` catch-all, and a calendar renderer that thinks
+    /// January has 30 days silently loses a cell. Asserting the 30-day months
+    /// alone would not notice.
+    #[test]
+    fn every_month_length_is_pinned() {
+        for month in [1, 3, 5, 7, 8, 10, 12] {
+            assert_eq!(days_in_month(2023, month), 31, "month {month} has 31 days");
+        }
+        for month in [4, 6, 9, 11] {
+            assert_eq!(days_in_month(2023, month), 30, "month {month} has 30 days");
+        }
+
+        // February follows the predicate above, both ways.
+        assert_eq!(days_in_month(2024, 2), 29, "February 2024");
+        assert_eq!(days_in_month(2023, 2), 28, "February 2023");
+        assert_eq!(
+            days_in_month(1900, 2),
+            28,
+            "February 1900 — the century rule"
+        );
+        assert_eq!(days_in_month(2000, 2), 29, "February 2000 — the /400 rule");
+
+        // The documented total-function behaviour: an impossible month is a
+        // short month, not a panic in a page render.
+        assert_eq!(days_in_month(2023, 0), 30, "month 0 falls through");
+        assert_eq!(days_in_month(2023, 13), 30, "month 13 falls through");
+    }
+
     /// The day-level primitives must agree with the second-level ones, and with
     /// each other, across every day this project can see.
     ///
