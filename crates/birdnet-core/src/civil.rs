@@ -56,7 +56,7 @@ impl CivilTime {
 /// * `birdnet-scheduler` depends on `serde` and nothing else — deliberately, so
 ///   the solar arithmetic stays a pure-computation crate. Taking
 ///   `birdnet-core` for two `const fn`s would pull ONNX Runtime, `symphonia`
-///   and `rubato` into it. `crates/birdnet-core/tests/leap_year_agrees_with_the_scheduler.rs`
+///   and `rubato` into it. `tests/leap_year_agrees_with_the_scheduler.rs`
 ///   checks the two against each other instead, so they cannot drift.
 /// * `src/capture/schedule.rs`'s copy is the *oracle* its own conversion is
 ///   checked against; its comment says so. An oracle that calls the

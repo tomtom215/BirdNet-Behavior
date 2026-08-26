@@ -128,11 +128,16 @@ async fn post_upload_with(
 }
 
 /// Confirm the staged upload — the second half of the upload journey.
-async fn post_confirm(app: &axum::Router) -> (StatusCode, String) {
+///
+/// `token` is what the rendered button carries; `None` posts an empty body, the
+/// way an older page or a hand-rolled client would.
+async fn post_confirm_with(app: &axum::Router, token: Option<&str>) -> (StatusCode, String) {
+    let body = token.map_or_else(Body::empty, |t| Body::from(format!("token={t}")));
     let req = Request::builder()
         .method("POST")
         .uri("/admin/migrate/upload/confirm")
-        .body(Body::empty())
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(body)
         .expect("build confirm request");
     let resp = app.clone().oneshot(req).await.expect("confirm response");
     let status = resp.status();
@@ -140,6 +145,20 @@ async fn post_confirm(app: &axum::Router) -> (StatusCode, String) {
         .await
         .expect("read body");
     (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Confirm the way the rendered page does: with the token from its own report.
+async fn post_confirm(app: &axum::Router) -> (StatusCode, String) {
+    post_confirm_with(app, None).await
+}
+
+/// The `token` the confirm button in `body` carries.
+fn token_in(body: &str) -> String {
+    let at = body
+        .find(r#"hx-vals='{"token": ""#)
+        .expect("the staged report has no confirm token");
+    let rest = &body[at + r#"hx-vals='{"token": ""#.len()..];
+    rest[..rest.find('"').expect("token is closed")].to_owned()
 }
 
 /// Upload, check the report came back, then confirm — what a browser user does.
@@ -572,4 +591,74 @@ async fn an_uploaded_import_applies_the_clock_shift_the_operator_gave() {
             "no row should still carry the source station's wall clock"
         );
     }
+}
+
+/// A second upload must not be importable by whoever reviewed the first.
+///
+/// # The failure this pins
+///
+/// There is one staging slot, because there is one import slot — an import has
+/// never been able to run twice concurrently. But a slot a second upload can
+/// replace means two admins on one station can diverge: A uploads and reads a
+/// report about A's file; B uploads, replacing the staging; A clicks **Import
+/// this file** and gets B's.
+///
+/// Reviewing one file and importing another is the exact failure the whole
+/// two-step flow exists to prevent, so it would be a poor thing to introduce
+/// while fixing it. The button carries the identity of the report it was
+/// rendered with, and a mismatch is refused rather than imported.
+#[tokio::test]
+async fn confirming_with_a_stale_token_imports_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    // A's file: four rows, the local station's own history.
+    let a_path = dir.path().join("mine.db");
+    birdnet_pi_db(&a_path);
+    let a_bytes = std::fs::read(&a_path).expect("read A");
+
+    // B's file: three rows, from 18 700 km away.
+    let b_path = dir.path().join("perth.db");
+    foreign_birdnet_pi_db(&b_path);
+    let b_bytes = std::fs::read(&b_path).expect("read B");
+
+    let dst_path = dir.path().join("station.db");
+    let conn = Connection::open(&dst_path).expect("open dest");
+    birdnet_db::migration::migrate(&conn).expect("migrate dest");
+    drop(conn);
+    let state = AppState::new(dst_path.clone()).expect("state");
+    let app = build_router(state);
+
+    // A uploads and reads the report.
+    let (status, a_report) = post_upload(&app, &a_bytes).await;
+    assert_eq!(status, StatusCode::OK);
+    let a_token = token_in(&a_report);
+
+    // B uploads, replacing the staging.
+    let (status, b_report) = post_upload(&app, &b_bytes).await;
+    assert_eq!(status, StatusCode::OK);
+    let b_token = token_in(&b_report);
+    assert_ne!(a_token, b_token, "each staging must have its own token");
+
+    // A confirms, from the page A is still looking at.
+    let (status, body) = post_confirm_with(&app, Some(&a_token)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains("no longer staged"),
+        "A's stale confirm was accepted: {body}"
+    );
+    assert_eq!(
+        detection_count(&dst_path),
+        0,
+        "A confirmed a report about their own file and imported B's"
+    );
+
+    // B's staging is untouched, so B can still confirm it.
+    let (status, _) = post_confirm_with(&app, Some(&b_token)).await;
+    assert_eq!(status, StatusCode::OK);
+    await_import_finished(&app).await;
+    assert_eq!(
+        detection_count(&dst_path),
+        3,
+        "refusing A's stale token discarded B's staging instead of keeping it"
+    );
 }

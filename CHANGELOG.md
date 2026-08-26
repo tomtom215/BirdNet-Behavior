@@ -88,7 +88,10 @@ bytes on the wire and in the packages that are and are not in an image.
   200 ms a minute, forever.
 
 - **The migration Upload tab computed the "this file is from somewhere else"
-  warning and threw it away.** It ran the same validation the Server Path tab
+  warning and threw it away.** *(Behaviour change: `POST /admin/migrate/upload`
+  no longer imports. It stages and returns the report; the new
+  `POST /admin/migrate/upload/confirm` imports. Anything scripted against the
+  old one-step endpoint needs the second call.)* It ran the same validation the Server Path tab
   runs, refused the file only on a *required* failure, and then never read the
   report again — while `location_check` is deliberately never required, which is
   precisely what stopped it reaching the operator. Upload now stages the

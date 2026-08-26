@@ -377,15 +377,17 @@ fn start_button(preview: UploadPreview<'_>) -> String {
     Start Import
   </button>"##
             .to_string(),
-        UploadPreview::Staged { file_name } => format!(
+        UploadPreview::Staged { file_name, token } => format!(
             r##"<p class="hint">Nothing has been imported yet. <strong>{}</strong> is
      held on this station until you confirm.</p>
   <button class="btn btn-primary mt-sm"
           hx-post="/admin/migrate/upload/confirm"
+          hx-vals='{{"token": "{}"}}'
           hx-target="#migrate-status">
     Import this file
   </button>"##,
-            escape_html(file_name)
+            escape_html(file_name),
+            token
         ),
     }
 }
@@ -408,6 +410,17 @@ pub enum UploadPreview<'a> {
         /// The name the browser sent, echoed so the operator can see which file
         /// this report is about.
         file_name: &'a str,
+        /// Identifies *this* staging, so confirming imports the file the report
+        /// describes and not a later one.
+        ///
+        /// There is one staging slot, because there is one import slot — an
+        /// import has never been able to run twice concurrently. But a slot that
+        /// a second upload can replace means two admins on one station could
+        /// have the first confirm the second's file, having reviewed a report
+        /// about their own. Reviewing one file and importing another is the
+        /// exact failure this whole two-step flow exists to prevent, so the
+        /// button carries the identity of what it previewed.
+        token: u64,
     },
 }
 

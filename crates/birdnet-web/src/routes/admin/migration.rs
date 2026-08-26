@@ -57,7 +57,18 @@ type MigrationState = Arc<Mutex<Option<ProgressHandle>>>;
 /// One slot, because one import can run at a time anyway (the progress handle
 /// above is also a single slot). A newer upload replaces an unconfirmed older
 /// one, and its temp file is dropped with it.
+///
+/// The replacement is why each staging carries a [`Staged::token`]: with one
+/// slot and two admins, the first could otherwise confirm the second's file
+/// after reading a report about their own — reviewing one file and importing
+/// another, which is the exact failure this two-step flow exists to prevent.
+/// The confirm button carries the token of the report it was rendered with, and
+/// a mismatch is refused rather than imported.
 type StagedUpload = Arc<Mutex<Option<Staged>>>;
+
+/// Source of [`Staged::token`]. Monotonic, not secret: the route is already
+/// behind admin RBAC, so this identifies a staging rather than authorising one.
+static STAGING_TOKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// A validated upload waiting for confirmation.
 struct Staged {
@@ -70,6 +81,8 @@ struct Staged {
     options: birdnet_migrate::ImportOptions,
     /// Row count from the detected schema, so the progress bar has a total.
     rows_hint: u64,
+    /// Identifies this staging. See [`StagedUpload`].
+    token: u64,
 }
 
 /// Upper bound on an uploaded BirdNET-Pi database. axum's default request-body
@@ -106,7 +119,7 @@ pub fn router() -> Router<AppState> {
             axum::routing::post({
                 let ms = Arc::clone(&migration_state);
                 let su = Arc::clone(&staged_upload);
-                move |state| upload_confirm_handler(state, ms, su)
+                move |state, form| upload_confirm_handler(state, ms, su, form)
             }),
         )
         .route(
@@ -550,6 +563,7 @@ async fn upload_handler(
 
     // Hold the validated file and show the operator the report, rather than
     // importing behind their back. See [`StagedUpload`].
+    let token = STAGING_TOKEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     {
         let mut guard = staged
             .lock()
@@ -559,6 +573,7 @@ async fn upload_handler(
             file_name: file_name.clone(),
             options,
             rows_hint: schema.row_count(),
+            token,
         });
     }
 
@@ -566,6 +581,7 @@ async fn upload_handler(
         Ok((schema, report, migration_report)),
         UploadPreview::Staged {
             file_name: &file_name,
+            token,
         },
     )))
 }
@@ -574,25 +590,46 @@ async fn upload_handler(
 // POST /admin/migrate/upload/confirm  (run the staged upload)
 // ---------------------------------------------------------------------------
 
+/// What the confirm button posts: the identity of the report it was rendered
+/// with. See [`StagedUpload`].
+#[derive(serde::Deserialize)]
+struct ConfirmForm {
+    token: Option<u64>,
+}
+
 /// Import the file the operator uploaded and then confirmed.
 ///
 /// Takes the staged upload out of its slot, so a double-submit cannot start two
-/// imports of the same file.
+/// imports of the same file — and only if its token matches the report the
+/// button came from, so a second upload arriving in between is not imported by
+/// someone who reviewed the first.
 #[allow(clippy::unused_async)] // required by axum Handler trait
 async fn upload_confirm_handler(
     State(state): State<AppState>,
     migration_state: MigrationState,
     staged: StagedUpload,
+    Form(form): Form<ConfirmForm>,
 ) -> Result<Html<String>, StatusCode> {
+    let staged_now = {
+        let mut guard = staged
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Peek before taking: a token that does not match belongs to a report
+        // the operator never saw, and taking it would discard a staging its own
+        // owner is still entitled to confirm.
+        match guard.as_ref() {
+            Some(s) if form.token.is_none_or(|t| t == s.token) => guard.take(),
+            _ => None,
+        }
+    };
+
     let Some(Staged {
         tmp,
         file_name,
         options,
         rows_hint,
-    }) = staged
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .take()
+        token: _,
+    }) = staged_now
     else {
         return Ok(Html(render::upload_error(
             "That upload is no longer staged — it was already imported, or \
