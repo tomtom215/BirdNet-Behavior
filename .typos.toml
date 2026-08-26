@@ -38,6 +38,17 @@ extend-ignore-identifiers-re = [
     # "PNGs" (plural of PNG) is split into "PN"+"Gs" and "PN" is read as a
     # typo for "ON". Ignore the whole token, not "PN" (which is a real typo).
     "PNGs",
+    # `flate2`, the DEFLATE crate. Same shape as PNGs: typos splits the token
+    # at the digit, and the leading "flate" is read as a typo for "flat".
+    #
+    # In Rust and TOML the name is parsed as one identifier and passes, so this
+    # only ever fires in prose — which is why a crate the workspace has linked
+    # for a long time first tripped the checker the day it was written about.
+    #
+    # Ignored as the whole token rather than allow-listing "flate" in
+    # [default.extend-words], which is global: a real "flate" for "flat"
+    # anywhere in the repository is still caught.
+    "flate2",
 ]
 
 # Literal text spans to ignore (matched anywhere, not just identifiers).
