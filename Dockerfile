@@ -11,7 +11,9 @@
 #
 # Build arguments:
 #   RUST_VERSION      Rust toolchain version (default: 1.95 — MSRV)
-#   DEBIAN_CODENAME   Debian base image codename (default: bookworm)
+#   DEBIAN_CODENAME   Debian base image codename (default: trixie — keep this
+#                     line in step with the ARG below; it said `bookworm` for
+#                     as long as the ARG said `trixie`)
 #   BUILD_FEATURES    Comma-separated Cargo features (default: "analytics")
 #                     DuckDB behavioral analytics is built in by default, to
 #                     match the release binaries. Pass BUILD_FEATURES="" for a
@@ -259,17 +261,52 @@ ENV BIRDNET_LISTEN=0.0.0.0:8502 \
 
 # Install runtime packages and create a non-root user in a single layer so
 # the image stays small and layer metadata is tidy.
+#
+# ## Why the capture tools are here, and why the image was broken without them
+#
+# The daemon does NOT capture audio in-process. It shells out — `arecord` for
+# every ALSA microphone, `ffmpeg` for RTSP / PipeWire / Listen->Live, and
+# `ffmpeg` or `sox` for clip conversion. `libasound2t64` is only the shared
+# library; `arecord` lives in `alsa-utils`, and neither `ffmpeg` nor `sox` is
+# in a Debian base image.
+#
+# So this stage used to build a container that starts, serves the whole
+# dashboard, passes its own HEALTHCHECK (which asks only whether SQLite opens)
+# — and records nothing, while `docker-compose.alsa.yml` ships alongside it as
+# the documented USB-microphone path and `docs/book/getting-started/docker.md`
+# documents `BIRDNET_RTSP_URL`.
+#
+# `install.sh` (lines 716-754) already carries this exact lesson for the
+# bare-metal path: "Only ffmpeg used to be ensured here, on the reasoning that
+# 'an ALSA microphone needs no ffmpeg' — [Raspberry Pi OS] ships alsa-utils so
+# the gap stayed invisible; on a minimal Debian it produces [the failure]."
+# `debian:*-slim` is a minimal Debian.
+#
+# `procps` is here for `kill(1)`: the admin Restart button SIGTERMs its own pid
+# and lets the supervisor bring it back, and the call site discards the exit
+# status, so without `kill` the button silently does nothing.
+#
+# These packages cost image size — `ffmpeg` in particular pulls a large
+# codec/AV dependency tree. That is the price of the image being able to do the
+# thing the image is for. Two gates hold the line now:
+# `tests/container_can_run_what_the_daemon_spawns.rs` cross-checks this list
+# against every `Command::new` in the workspace, and `docker.yml` resolves each
+# binary inside the built image.
 # hadolint ignore=DL3008
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
+        alsa-utils \
         ca-certificates \
         curl \
+        ffmpeg \
         libasound2t64 \
         libgcc-s1 \
         libstdc++6 \
+        procps \
+        sox \
         tini \
     && groupadd --system --gid 10001 birdnet \
     && useradd  --system --uid 10001 --gid birdnet \

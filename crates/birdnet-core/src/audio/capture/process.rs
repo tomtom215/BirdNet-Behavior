@@ -93,13 +93,58 @@ pub(crate) fn is_audio_file(path: &Path) -> bool {
 }
 
 /// Check if a required capture tool is available on the system.
+///
+/// Walks `PATH` rather than spawning `which`, for two reasons.
+///
+/// **`which` is not guaranteed to exist.** It is not a POSIX utility, and
+/// Debian has been removing it: `debianutils` deprecated it and no longer
+/// ships it in the current release, so on a minimal Debian — which is exactly
+/// what the runtime container image is — the fork can fail with `ENOENT`. That
+/// failure is not "the tool is missing", it is "the tool that answers the
+/// question is missing", and the two were indistinguishable here:
+/// [`super::manager::CaptureManager::start`] gates on this function, so a
+/// container with a perfectly good `arecord` would have refused to record with
+/// `arecord not found in PATH`.
+///
+/// **There was already a correct copy.** `src/doctor.rs`'s `tool_exists`
+/// walks `PATH` and always has, so the two answers to one question could
+/// disagree — the doctor reporting a tool present while capture refused to
+/// start. This is now the shared implementation and the doctor delegates here.
+///
+/// The executable bit is checked (on Unix), which is what `which` did and a
+/// bare `is_file()` does not: a non-executable file on `PATH` is not a tool.
+#[must_use]
 pub fn is_tool_available(tool: &str) -> bool {
-    Command::new("which")
-        .arg(tool)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+    // An explicit path is not a PATH lookup — answer for that path directly.
+    if tool.contains('/') {
+        return is_executable(std::path::Path::new(tool));
+    }
+    let Ok(path) = std::env::var("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|dir| is_executable(&dir.join(tool)))
+}
+
+/// Whether `path` is a regular file the current user could execute.
+///
+/// On non-Unix targets the permission bits are not available, so existence as
+/// a file is the best available answer.
+fn is_executable(path: &std::path::Path) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !meta.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        meta.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 /// Whether a capture-subprocess stderr line reports a failure rather than

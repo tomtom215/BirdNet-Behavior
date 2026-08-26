@@ -209,6 +209,43 @@ jobs:
             --entrypoint /usr/local/bin/birdnet-behavior \
             birdnet-behavior:verify --verify-extension
 
+      - name: Prove the image can run every tool the daemon spawns
+        # The daemon does not capture audio in-process: it spawns `arecord` for
+        # ALSA microphones, `ffmpeg` for RTSP / PipeWire / Listen->Live, and
+        # `ffmpeg`/`sox` for clip conversion. `docker-compose.alsa.yml` ships as
+        # the supported USB-microphone path, so an image without `arecord`
+        # starts, serves the whole dashboard, passes its own HEALTHCHECK — and
+        # records nothing.
+        #
+        # `tests/container_can_run_what_the_daemon_spawns.rs` gates the same
+        # invariant statically, against the Dockerfile's package list, so a
+        # contributor sees it without a Docker daemon. This is the one that
+        # proves the packages actually resolve to binaries in the built image,
+        # on both architectures.
+        #
+        # `command -v`, not `which`: `which` is not POSIX and Debian's
+        # debianutils no longer ships it, which is precisely the trap the Rust
+        # side stopped falling into.
+        run: |
+          set -euo pipefail
+          docker run --rm --network none \
+            --entrypoint /bin/sh birdnet-behavior:verify -c '
+              set -eu
+              missing=""
+              for tool in arecord ffmpeg sox kill df tar getconf; do
+                if command -v "$tool" >/dev/null 2>&1; then
+                  echo "ok      $tool -> $(command -v "$tool")"
+                else
+                  echo "MISSING $tool"
+                  missing="$missing $tool"
+                fi
+              done
+              if [ -n "$missing" ]; then
+                echo "::error::the runtime image cannot run:$missing"
+                exit 1
+              fi
+            '
+
       - name: Export digest
         if: env.PUSH == 'true'
         run: |
