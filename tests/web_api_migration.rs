@@ -10,6 +10,17 @@
 //! plumbing; a second one over the same database is what a real person does
 //! after a timeout, a browser refresh, or simple uncertainty about whether it
 //! worked — and it must leave the data exactly as the first one did.
+//!
+//! # The upload is two steps now
+//!
+//! `POST /admin/migrate/upload` used to validate and immediately import,
+//! discarding every non-required check on the way — including the one that says
+//! "this file was recorded 18 700 km from here". It now stages the file and
+//! renders the same report the Server Path tab shows, and
+//! `POST /admin/migrate/upload/confirm` is what actually imports. Every test
+//! below therefore goes through both, and
+//! [`uploading_shows_the_report_before_importing_anything`] is the one that
+//! pins the gap between them.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -116,6 +127,40 @@ async fn post_upload_with(
     (status, String::from_utf8_lossy(&bytes).into_owned())
 }
 
+/// Confirm the staged upload — the second half of the upload journey.
+async fn post_confirm(app: &axum::Router) -> (StatusCode, String) {
+    let req = Request::builder()
+        .method("POST")
+        .uri("/admin/migrate/upload/confirm")
+        .body(Body::empty())
+        .expect("build confirm request");
+    let resp = app.clone().oneshot(req).await.expect("confirm response");
+    let status = resp.status();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Upload, check the report came back, then confirm — what a browser user does.
+async fn upload_and_confirm(app: &axum::Router, db_bytes: &[u8]) -> (StatusCode, String) {
+    upload_and_confirm_with(app, db_bytes, &[]).await
+}
+
+async fn upload_and_confirm_with(
+    app: &axum::Router,
+    db_bytes: &[u8],
+    fields: &[(&str, &str)],
+) -> (StatusCode, String) {
+    let (status, body) = post_upload_with(app, db_bytes, fields).await;
+    assert_eq!(status, StatusCode::OK, "upload rejected: {body}");
+    assert!(
+        body.contains("Start Import") || body.contains("Import this file"),
+        "the upload did not return a report with a confirm button: {body}"
+    );
+    post_confirm(app).await
+}
+
 /// Poll `/admin/migrate/progress` the way the page does, until the import
 /// reaches a terminal stage.
 ///
@@ -163,9 +208,9 @@ async fn uploading_a_birdnet_pi_database_imports_it_once_and_only_once() {
     let state = AppState::new(dst_path.clone()).expect("state");
     let app = build_router(state);
 
-    // ---- the operator uploads their database -----------------------------
-    let (status, body) = post_upload(&app, &db_bytes).await;
-    assert_eq!(status, StatusCode::OK, "upload rejected: {body}");
+    // ---- the operator uploads their database, reviews it, and confirms ----
+    let (status, body) = upload_and_confirm(&app, &db_bytes).await;
+    assert_eq!(status, StatusCode::OK, "confirm rejected: {body}");
     let progress = await_import_finished(&app).await;
     assert!(
         !progress.contains("Failed") && !progress.contains("err"),
@@ -178,8 +223,8 @@ async fn uploading_a_birdnet_pi_database_imports_it_once_and_only_once() {
     );
 
     // ---- and then, unsure it worked, uploads it again ---------------------
-    let (status, body) = post_upload(&app, &db_bytes).await;
-    assert_eq!(status, StatusCode::OK, "second upload rejected: {body}");
+    let (status, body) = upload_and_confirm(&app, &db_bytes).await;
+    assert_eq!(status, StatusCode::OK, "second confirm rejected: {body}");
     await_import_finished(&app).await;
     assert_eq!(
         detection_count(&dst_path),
@@ -248,6 +293,129 @@ fn only_import_batch(
     .expect("an import batch was recorded")
 }
 
+/// The upload tab must show the report **before** importing anything.
+///
+/// # The defect this pins
+///
+/// `upload_and_run_handler` ran `validate_source_against_station`, refused the
+/// file only if a **required** check failed, and then never read the report
+/// again — the binding was literally
+/// `let (schema, report, _migration_report) = …`. It then started the import.
+///
+/// `provenance::location_check` is deliberately never `required`; its own
+/// comment says why: "merging two sites is a legitimate thing to want … the job
+/// is to make that a decision instead of an accident." Being non-required is
+/// exactly what meant it could not reach an operator on this tab. So uploading
+/// 18 700 km of someone else's history showed no distance warning, no species
+/// preview, no duplicate count and no confirmation step — while
+/// `docs/book/guides/migration.md` step 4 described the Server-Path preview as
+/// if it were both tabs.
+///
+/// Two assertions, and the second is the one that matters: the report has to
+/// come back, *and* nothing may be in the database until the operator says so.
+#[tokio::test]
+async fn uploading_shows_the_report_before_importing_anything() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src_path = dir.path().join("perth.db");
+    foreign_birdnet_pi_db(&src_path);
+    let db_bytes = std::fs::read(&src_path).expect("read source db");
+
+    let dst_path = dir.path().join("station.db");
+    let conn = Connection::open(&dst_path).expect("open dest");
+    birdnet_db::migration::migrate(&conn).expect("migrate dest");
+    for (key, value) in [("latitude", "42.36"), ("longitude", "-71.06")] {
+        birdnet_db::settings::set(
+            &conn,
+            key,
+            value,
+            birdnet_db::settings::SettingsCategory::Location,
+        )
+        .expect("set station coordinate");
+    }
+    drop(conn);
+
+    let state = AppState::new(dst_path.clone()).expect("state");
+    let app = build_router(state);
+
+    let (status, body) = post_upload(&app, &db_bytes).await;
+    assert_eq!(status, StatusCode::OK, "upload rejected: {body}");
+
+    // The report reached the operator.
+    assert!(
+        body.contains("source_location"),
+        "the location check is missing from the upload report: {body}"
+    );
+    assert!(
+        body.contains("check-warn") || body.contains("⚠"),
+        "an 18 700 km source produced no warning: {body}"
+    );
+    assert!(
+        body.contains("Australian Magpie"),
+        "the species preview is missing from the upload report"
+    );
+    assert!(
+        body.contains("Import this file"),
+        "the upload report offers no way to proceed"
+    );
+
+    // …and nothing has been imported.
+    assert_eq!(
+        detection_count(&dst_path),
+        0,
+        "the upload imported before the operator confirmed"
+    );
+    let batches: i64 = Connection::open(&dst_path)
+        .expect("open destination")
+        .query_row("SELECT COUNT(*) FROM import_batches", [], |r| r.get(0))
+        .expect("count batches");
+    assert_eq!(batches, 0, "a batch was recorded before confirmation");
+
+    // Confirming is what imports.
+    let (status, body) = post_confirm(&app).await;
+    assert_eq!(status, StatusCode::OK, "confirm rejected: {body}");
+    await_import_finished(&app).await;
+    assert_eq!(detection_count(&dst_path), 3, "confirming did not import");
+}
+
+/// A second confirm must not import the same file twice.
+///
+/// The staged slot is taken, not read, so a double-submitted button — an
+/// impatient operator, a browser retry — cannot start two imports.
+#[tokio::test]
+async fn confirming_twice_imports_once() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let src_path = dir.path().join("birds-pi.db");
+    birdnet_pi_db(&src_path);
+    let db_bytes = std::fs::read(&src_path).expect("read source db");
+
+    let dst_path = dir.path().join("station.db");
+    let conn = Connection::open(&dst_path).expect("open dest");
+    birdnet_db::migration::migrate(&conn).expect("migrate dest");
+    drop(conn);
+    let state = AppState::new(dst_path.clone()).expect("state");
+    let app = build_router(state);
+
+    let (status, _) = post_upload(&app, &db_bytes).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = post_confirm(&app).await;
+    assert_eq!(status, StatusCode::OK);
+    await_import_finished(&app).await;
+    assert_eq!(detection_count(&dst_path), 4);
+
+    // The second confirm has nothing staged and must say so rather than act.
+    let (status, body) = post_confirm(&app).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains("no longer staged"),
+        "a second confirm did not report an empty stage: {body}"
+    );
+    assert_eq!(
+        detection_count(&dst_path),
+        4,
+        "a second confirm re-imported the file"
+    );
+}
+
 /// Uploading another station's history must record **where it came from**.
 ///
 /// The station's own coordinates were already being read on this path — to
@@ -293,8 +461,8 @@ async fn uploading_another_stations_history_records_where_it_came_from() {
     let state = AppState::new(dst_path.clone()).expect("state");
     let app = build_router(state);
 
-    let (status, body) = post_upload(&app, &db_bytes).await;
-    assert_eq!(status, StatusCode::OK, "upload rejected: {body}");
+    let (status, body) = upload_and_confirm(&app, &db_bytes).await;
+    assert_eq!(status, StatusCode::OK, "confirm rejected: {body}");
     let progress = await_import_finished(&app).await;
     assert!(!progress.contains("Failed"), "import failed: {progress}");
     assert_eq!(detection_count(&dst_path), 3);
@@ -344,7 +512,7 @@ async fn an_uploaded_import_applies_the_clock_shift_the_operator_gave() {
     // operator gave, and `applied_shift_secs` stays 0. See `to_local_here`.
     let here = birdnet_db::clock::local_utc_offset_secs();
     let moves_the_clock = here != 8 * 3600;
-    let (status, body) = post_upload_with(
+    let (status, body) = upload_and_confirm_with(
         &app,
         &db_bytes,
         &[
@@ -353,7 +521,7 @@ async fn an_uploaded_import_applies_the_clock_shift_the_operator_gave() {
         ],
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "upload rejected: {body}");
+    assert_eq!(status, StatusCode::OK, "confirm rejected: {body}");
     let progress = await_import_finished(&app).await;
     assert!(!progress.contains("Failed"), "import failed: {progress}");
 
