@@ -55,45 +55,71 @@ const TODAY = `${T.getUTCFullYear()}-${String(T.getUTCMonth() + 1).padStart(2, '
 const enc = encodeURIComponent;
 
 export const ROUTES = [
+  // ── The six homes of the v3 spine, by their real URLs ──────────────────
+  //
+  // This table used to be written in pre-spine URLs — `/heatmap`, `/weekly`,
+  // `/system`, `/admin/audio`, … — which still resolve because
+  // `routes::redirects` 308s them and Playwright follows redirects. The homes
+  // were therefore being screenshotted under names that did not describe them
+  // (`admin-audio` wrote a picture of the Station Capture tab), and the
+  // coverage was a property of the redirect table rather than of this one:
+  // retarget one redirect and a home would silently stop being gated with no
+  // row changing.
+  //
+  // `crates/birdnet-web/tests/qa_routes_cover_the_navigation.rs` now fails if a
+  // home or a Station tab is missing from here. The redirects have their own
+  // Rust test (`routes::redirects`), so they do not need a browser to prove.
   ['dashboard', '/'],
-  ['onboarding', '/onboarding'],
-  ['today', '/today'],
   ['species', '/species'],
-  ['species-detail', `/species/detail?name=${enc('European Robin')}`],
-  ['detection-detail', `/detections/detail?date=${TODAY}&time=05:14:08&name=${enc('Eurasian Magpie')}`],
-  ['detection-reviews', '/detection-reviews'],
-  ['heatmap', '/heatmap'],
-  ['migration', '/migration'],
-  ['correlation', '/correlation'],
-  ['analytics', '/analytics'],
-  ['dawn-chorus', '/analytics/dawn-chorus'],
-  ['timeseries', '/timeseries'],
-  ['life-list', '/life-list'],
+  ['species-lifelist', '/species?view=lifelist'],
+  ['species-photos', '/species?view=photos'],
+  ['patterns', '/patterns'],
+  ['patterns-dawn', '/patterns?tab=dawn'],
+  ['patterns-migration', '/patterns?tab=migration'],
+  ['patterns-together', '/patterns?tab=together'],
+  ['patterns-trends', '/patterns?tab=trends'],
+  ['patterns-behavior', '/patterns?tab=behavior'],
   ['recordings', '/recordings'],
-  ['gallery', '/gallery'],
-  ['weekly', '/weekly'],
-  ['year-in-review', '/year-in-review'],
-  ['history', '/history'],
+  ['recordings-live', '/recordings?view=live'],
+  ['reports', '/reports'],
+  ['reports-year', '/reports?tab=year'],
+  ['reports-history', '/reports?tab=history'],
   ['reports-day', '/reports/day'],
+
+  // ── Station: the public health tab plus the five gated management tabs ──
+  ['station', '/station'],
+  ['station-capture', '/station/capture'],
+  ['station-alerts', '/station/alerts'],
+  ['station-data', '/station/data'],
+  ['station-settings', '/station/settings'],
+  ['station-access', '/station/access'],
+
+  // ── Screens that belong to no home ─────────────────────────────────────
+  //
+  // `/login` is the only page an unauthenticated visitor can reach on a
+  // station with a password, and it was in neither this table nor any
+  // redirect — so no gate had ever loaded it.
+  ['login', '/login'],
+  ['onboarding', '/onboarding'],
+  ['detection-detail', `/detections/detail?date=${TODAY}&time=05:14:08&name=${enc('Eurasian Magpie')}`],
+  ['species-detail', `/species/detail?name=${enc('European Robin')}`],
+  ['detection-reviews', '/detection-reviews'],
   ['notifications', '/notifications'],
   ['quarantine', '/quarantine'],
-  ['system', '/system'],
   ['kiosk', '/kiosk'],
-  ['live', '/live'],
+
+  // ── Admin pages that have not folded into a Station tab yet ────────────
   ['admin', '/admin'],
   ['admin-settings', '/admin/settings'],
-  ['admin-audio', '/admin/audio'],
-  ['admin-backups', '/admin/backups'],
-  ['admin-species', '/admin/species'],
-  ['admin-quality', '/admin/quality'],
-  ['admin-rules', '/admin/rules'],
-  ['admin-notifications', '/admin/notifications'],
   ['admin-system', '/admin/system'],
   ['admin-doctor', '/admin/doctor'],
   ['admin-images', '/admin/images'],
-  ['admin-migrate', '/admin/migrate'],
+  ['admin-audit', '/admin/audit'],
+  ['admin-overview', '/admin/overview'],
+
   ['notfound', '/this-route-does-not-exist'],
 ];
+
 
 // Routes that are *expected* to return 404 — negative tests for the error
 // page. Their own 404 status and the browser's "Failed to load resource …
