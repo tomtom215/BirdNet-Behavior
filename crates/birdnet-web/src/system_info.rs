@@ -52,28 +52,104 @@ impl SystemSnapshot {
     }
 }
 
+/// The minimum gap sysinfo requires between two CPU refreshes for the delta
+/// between them to mean anything.
+const MIN_CPU_DELTA: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// How long a sampled snapshot is reused before the `System` is refreshed again.
+///
+/// Small enough that the System page is live, large enough that a page with
+/// several system-reading fragments refreshes once rather than once per
+/// fragment.
+const SNAPSHOT_TTL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// The process-wide sampler: one live `System` handle plus its last snapshot.
+///
+/// Keeping the handle alive is the whole point — see [`sample`].
+struct Sampler {
+    sys: System,
+    taken_at: std::time::Instant,
+    snapshot: SystemSnapshot,
+}
+
+static SAMPLER: std::sync::LazyLock<std::sync::Mutex<Option<Sampler>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+
 /// Sample current system metrics.
 ///
-/// Note: CPU usage requires two samples to be meaningful (the first sample
-/// returns 0 % on most platforms).  For a live dashboard, call this function
-/// on a background task with a regular interval.
+/// # Why this does not sleep any more
+///
+/// It used to. The body was:
+///
+/// ```text
+/// sys.refresh_cpu_usage();
+/// std::thread::sleep(Duration::from_millis(200));   // <-- in the request
+/// sys.refresh_cpu_usage();
+/// ```
+///
+/// because sysinfo reports CPU usage as the delta between two refreshes *of the
+/// same `System` value*, and a freshly constructed one has no previous refresh
+/// to subtract. Constructing a new `System` per call therefore forced a sleep
+/// per call. Measured against the seeded fixture, that made `/station` take
+/// **238 ms** serially where `/patterns` took 4 ms — 60× the next slowest page,
+/// all of it sleep. `/pages/station-health-line`, which the Today page polls
+/// `every 60s`, paid it too: on a kiosk left on that page, 200 ms of a blocking
+/// thread once a minute, forever, to render one temperature and one percentage.
+///
+/// The function's own doc comment already said what to do — "for a live
+/// dashboard, call this function on a background task with a regular interval"
+/// — and six call sites did the opposite.
+///
+/// Keeping one `System` alive fixes it without a background task: the delta is
+/// then "since the previous caller", which for a page polled once a minute is a
+/// *better* window than a 200 ms instantaneous slice. Only the very first call
+/// in a process has no predecessor, and only that call waits.
 ///
 /// # Panics
 ///
-/// Does not panic.  Returns a zeroed snapshot on any internal error.
+/// Does not panic. Returns a zeroed snapshot on any internal error, and
+/// recovers from a poisoned lock rather than propagating it — a wedged system
+/// readout must not take the health page down.
 pub fn sample() -> SystemSnapshot {
-    // sysinfo 0.39 renamed `RefreshKind::new()` to `RefreshKind::nothing()`
-    // because the previous name was misleading (the value was actually empty,
-    // not "default everything"). The builder pattern is otherwise unchanged.
+    let mut guard = SAMPLER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    if let Some(sampler) = guard.as_mut() {
+        if sampler.taken_at.elapsed() < SNAPSHOT_TTL {
+            return sampler.snapshot.clone();
+        }
+        sampler.snapshot = refresh_into_snapshot(&mut sampler.sys);
+        sampler.taken_at = std::time::Instant::now();
+        return sampler.snapshot.clone();
+    }
+
+    // First call in this process. sysinfo 0.39 renamed `RefreshKind::new()` to
+    // `RefreshKind::nothing()` because the previous name was misleading (the
+    // value was actually empty, not "default everything").
     let mut sys = System::new_with_specifics(
         RefreshKind::nothing()
             .with_cpu(CpuRefreshKind::everything())
             .with_memory(MemoryRefreshKind::everything()),
     );
-
-    // Two-pass CPU measurement (sleep briefly for delta)
     sys.refresh_cpu_usage();
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    // The one remaining sleep, once per process, so the first reader gets a real
+    // number instead of 0 %.
+    std::thread::sleep(MIN_CPU_DELTA);
+    let snapshot = refresh_into_snapshot(&mut sys);
+    *guard = Some(Sampler {
+        sys,
+        taken_at: std::time::Instant::now(),
+        snapshot: snapshot.clone(),
+    });
+    snapshot
+}
+
+/// Refresh `sys` and read a snapshot out of it.
+///
+/// Split out so the first-call and steady-state paths in [`sample`] cannot
+/// drift in what they read.
+fn refresh_into_snapshot(sys: &mut System) -> SystemSnapshot {
     sys.refresh_cpu_usage();
     sys.refresh_memory();
 
@@ -114,6 +190,22 @@ pub fn sample() -> SystemSnapshot {
         uptime_secs,
         cpu_temp_celsius,
     }
+}
+
+/// The CPU temperature in degrees Celsius, on its own.
+///
+/// Two callers want only this — the Today rail's station line
+/// (`routes::pages::health`) and the station-health integration — and both used
+/// to reach it through [`sample`], paying that function's 200 ms CPU-delta
+/// sleep and a full CPU + memory refresh for what is, on the deployment target,
+/// a single `read_to_string` of a sysfs file. Nothing about a temperature needs
+/// two samples.
+///
+/// Returns `None` where no sensor is exposed, which is normal in containers and
+/// on several cloud VMs.
+#[must_use]
+pub fn cpu_temperature() -> Option<f32> {
+    sample_cpu_temperature()
 }
 
 /// Try to read CPU temperature from sysinfo components.
@@ -263,6 +355,74 @@ mod tests {
         if let Some(t) = sample_cpu_temperature() {
             assert!(t > -40.0 && t < 150.0, "implausible CPU temperature: {t}");
         }
+    }
+
+    /// Sampling must not sleep in the request path.
+    ///
+    /// `sample()` used to construct a fresh `System` per call and
+    /// `thread::sleep(200ms)` between its two CPU refreshes, so every reader of
+    /// this module — `/station`, `/admin/system`, `/admin/overview`, and the
+    /// Today rail's 60-second poll — paid 200 ms of a blocking thread. Measured
+    /// on the seeded fixture, `/station` served in 238 ms against 4 ms for
+    /// `/patterns`.
+    ///
+    /// The bound is deliberately generous. Five calls at the old cost is 1 s;
+    /// 300 ms leaves room for the one first-call sleep (which the warm-up below
+    /// absorbs) and for a slow CI box, while still being an order of magnitude
+    /// under a regression to per-call sleeping.
+    #[test]
+    fn repeated_sampling_does_not_sleep() {
+        let _warm = sample(); // absorbs the once-per-process delta wait
+
+        let started = std::time::Instant::now();
+        for _ in 0..5 {
+            let _ = sample();
+        }
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < std::time::Duration::from_millis(300),
+            "five samples took {elapsed:?} — that is a sleep per call, not a \
+             live System handle"
+        );
+    }
+
+    /// The counterpart. "Fast" is trivially satisfiable by returning zeros, so
+    /// the snapshot has to still describe the machine.
+    #[test]
+    fn a_fast_sample_is_still_a_real_one() {
+        let snap = sample();
+        assert!(snap.cpu_count > 0, "no CPUs reported");
+        assert!(snap.total_memory_bytes > 0, "no memory reported");
+        assert!(!snap.cpu_cores.is_empty(), "no per-core readings");
+        assert!(
+            (0.0..=100.0).contains(&snap.memory_usage_pct),
+            "memory {}% is not a percentage",
+            snap.memory_usage_pct
+        );
+        assert!(
+            (0.0..=100.0).contains(&snap.cpu_usage_pct),
+            "cpu {}% is not a percentage",
+            snap.cpu_usage_pct
+        );
+    }
+
+    /// Reading only the temperature must not go through the CPU sampler at all.
+    ///
+    /// Two call sites want exactly this, and both used to reach it through
+    /// `sample()`. This runs *before* any warm-up in its own process would
+    /// help — a `cargo test` process may schedule it first — so a regression to
+    /// `sample().cpu_temp_celsius` shows up here as the full first-call wait.
+    #[test]
+    fn cpu_temperature_alone_never_waits() {
+        let started = std::time::Instant::now();
+        let _ = cpu_temperature();
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < MIN_CPU_DELTA,
+            "reading a temperature took {elapsed:?} — it went through the CPU \
+             delta sampler"
+        );
     }
 
     #[test]
