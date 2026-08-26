@@ -102,6 +102,18 @@ bytes on the wire and in the packages that are and are not in an image.
   full documents rendered outside the shared layout, and the service worker
   precaches the same URLs.
 
+- **Seven documents showed a blank browser tab and logged a 404.** A document
+  with no `rel="icon"` requests `/favicon.ico` unprompted, and the server did not
+  route it. `templates/layout.html` names its icons and says why; the seven full
+  documents rendered outside it — login, onboarding, kiosk, the share page and
+  its 404, the standalone audio player, the admin shell, the log viewer — never
+  got the same treatment. The fallback is routed now, which covers all seven and
+  the next one.
+
+  Found the first time `/login` was in the visual-QA route table, which it had
+  never been: `login__light__desktop: console=["Failed to load resource: … 404"]`.
+  After the fix, 152 screenshots and 0 pages with issues.
+
 ### Changed — what the gates now see
 
 - **The visual-QA route table is written in the current URLs.** It listed

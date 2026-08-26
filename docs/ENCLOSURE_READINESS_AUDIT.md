@@ -29,12 +29,12 @@ guessing. Five conclusions I reached early and then disproved are marked
 | What | Result |
 |---|---|
 | `cargo build --workspace --all-targets` | exit 0, **12 m 25 s** cold (4-core / 15 GB x86_64 container, empty `target/`) |
-| `cargo test --workspace` | exit 0, **2 516 passed, 0 failed, 7 ignored** (checked by summing `^test result:` lines, not by trusting the exit code) |
+| `cargo test --workspace` | exit 0, **2 516 passed, 0 failed, 7 ignored** at `7c6bf77`; **2 542 / 0** with this branch's fixes and their gates (checked by summing `^test result:` lines, not by trusting the exit code) |
 | `cargo fmt --check --all` | exit 0 |
 | `cargo clippy --workspace --all-targets` | exit 0, no warnings |
 | Live server | `examples/screenshot_server` (9 900 seeded detections, 20 demo clips) on `127.0.0.1:8502` |
 | Page weight / compression | `curl` with and without `Accept-Encoding` |
-| Accessibility | `@axe-core/playwright` 4.11 + the repo's own route table, both themes, with and without the two rules the shipped gate disables |
+| Accessibility | `@axe-core/playwright` 4.11 + the repo's own route table, both themes, with and without the two rules the shipped gate disables. After the fixes: **0 violations**, and the visual-QA sweep is **152 screenshots, 0 pages with issues** |
 | Concurrency | 16 concurrent clients × 64 requests per route, Python `ThreadPoolExecutor` |
 | Query cost at scale | synthetic 2 000 000-row `detections` (643 MB) with the shipped DDL, all shipped indexes and `ANALYZE`, stdlib `sqlite3` |
 | PNG encoder cost | a real `/api/v2/spectrogram/…` response, IDAT inflated and re-deflated with `zlib` |
@@ -47,10 +47,12 @@ guessing. Five conclusions I reached early and then disproved are marked
 > **Status.** Ten of the fifteen are fixed on this branch: E-1, E-2, E-3, E-4,
 > E-5, E-6, E-9, E-12 and two thirds of E-15. Each fix's gate was observed
 > failing against the code it was written for, and the commit message records
-> the exact failure text. Two of those gates found a further defect while being
-> written — a `which` fork that Debian is retiring, and a compression layer
-> whose *ordering* silently corrupted every HTML page — and both are described
-> where they were found.
+> the exact failure text.
+>
+> Three further defects surfaced *while* the fixes were being written — a
+> `which` fork Debian is retiring, a compression layer whose ordering silently
+> corrupted every HTML page, and seven documents with a blank browser tab. They
+> are in §1b, with the gate that caught each.
 >
 > The findings below are left as written. They are the record of what `7c6bf77`
 > did; the `[FIXED]` line under each says what changed.
@@ -599,6 +601,69 @@ N, or as many as fit in X GB, whichever is smaller".
 
   So `FIELD_READINESS_AUDIT.md` F-13's remaining tail is two copies, not six.
   The other two need a drift check rather than a merge.
+
+---
+
+## 1b. Found by the fixes, not by the audit
+
+Three defects surfaced while the fixes above were being written, and each one
+says something about the gate that caught it.
+
+### E-16 — Seven documents showed a blank tab and logged a 404 · **P3** · fixed
+
+`/login` had been in neither the QA route table nor any redirect, so no gate had
+ever loaded it. The first sweep after E-5 put it in the table reported:
+
+```
+=== 1 pages with issues ===
+  login__light__desktop: console=["Failed to load resource: the server
+  responded with a status of 404 (Not Found)"]
+```
+
+A document with no `rel="icon"` requests `/favicon.ico` unprompted, and this
+server did not route it. `templates/layout.html` names its icons explicitly and
+carries a comment saying exactly why ("every tab rendered blank") — and the
+**seven** full documents rendered outside that layout never got the same
+treatment: `/login`, `/onboarding`, `/kiosk`, the share page and its 404, the
+standalone audio player, the admin shell and the log viewer.
+
+Routing the fallback fixes all seven and the eighth someone writes next year.
+After it: 152 screenshots, **0 pages with issues**, and axe clean across the
+same table in both themes.
+
+A coverage hole paying for itself inside one run is the best argument for
+closing the rest.
+
+### The `which` fork — `is_tool_available` could refuse to record on the very image it was fixed for
+
+Classifying every `Command::new` for E-1's gate turned up a tool nobody had
+thought about. `is_tool_available` forked `which`, which is not POSIX and which
+Debian's `debianutils` no longer ships. On a minimal Debian — which is what the
+runtime image is — that fork can fail with `ENOENT`, and the failure is not "the
+tool is missing", it is "the tool that answers the question is missing".
+`CaptureManager::start` gates on this function, so a container with a perfectly
+good `arecord` would have refused to record with `arecord not found in PATH`.
+
+`src/doctor.rs` had its own `PATH`-walking copy, so the doctor could report a
+tool present on a host where capture refused to start. One question, one answer
+now — and the surviving implementation checks the execute bit, which `which` did
+and the `is_file()` copy did not.
+
+### The compression layer's *ordering* silently corrupted every HTML page
+
+Covered under E-2, but worth naming here because of how nearly it shipped. Placed
+inside `security_headers_middleware` — which buffers every `text/html` body and
+runs `String::from_utf8_lossy` over it to stamp CSP nonces — the gzip stream came
+back with every byte above `0x7F` replaced by U+FFFD, starting with gzip's own
+`0x8b` magic:
+
+```
+1f ef bf bd 08 00 00 00      (gzip must start 1f 8b 08)
+```
+
+Correct `Content-Encoding`, plausible `Content-Length`, and not one page
+decodable in any browser. **The first version of the test checked only the
+header and passed.** It now inflates the body.
 
 ---
 
