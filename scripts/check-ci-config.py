@@ -62,6 +62,7 @@ import statistics
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from math import ceil
 
@@ -88,9 +89,12 @@ MAX_TIMEOUT_MINUTES = 120
 # both rows that needed splitting by the time anyone looked.
 HEADROOM_THRESHOLD = 0.75
 
-# Recent completed runs sampled per workflow. The *worst* run in the sample is
-# what gets compared: a cold cache or a contended pool is exactly the condition
-# that tips a job over its budget, so it is signal, not noise.
+# Recent completed runs sampled per workflow, on the default branch only (see
+# `observed_runtimes`). The *worst* run in the sample is what gets compared: a
+# cold cache or a contended pool is exactly the condition that tips a job over
+# its budget, so it is signal, not noise — but only when it is main's cold
+# cache. A pull request's own runs are a different distribution and were
+# drowning this sample.
 RUNS_SAMPLED = 5
 
 failures: list[str] = []
@@ -276,6 +280,30 @@ def _api(path: str) -> dict:
         return json.load(resp)
 
 
+_DEFAULT_BRANCH: dict[str, str] = {}
+
+
+def default_branch(repo: str) -> str:
+    """The repository's default branch, looked up once."""
+    if repo not in _DEFAULT_BRANCH:
+        _DEFAULT_BRANCH[repo] = _api(f"/repos/{repo}").get("default_branch") or "main"
+    return _DEFAULT_BRANCH[repo]
+
+
+def runs_query(basename: str, repo: str, branch: str, sampled: int = RUNS_SAMPLED) -> str:
+    """The API path for a workflow's recent completed runs on one branch.
+
+    Split out from [`observed_runtimes`] so the `branch=` scoping is testable
+    without a network call — it is the whole point of the function and it was
+    absent for long enough to cost real time (see the note there).
+    """
+    return (
+        f"/repos/{repo}/actions/workflows/{basename}/runs"
+        f"?status=completed&branch={urllib.parse.quote(branch, safe='')}"
+        f"&per_page={sampled}"
+    )
+
+
 def _minutes(job: dict) -> float | None:
     start, end = job.get("started_at"), job.get("completed_at")
     if not start or not end or job.get("conclusion") == "skipped":
@@ -350,14 +378,27 @@ def observed_runtimes(workflow_file: str, repo: str,
     be cancelled is a question about its *worst* run, and whether an `observed`
     annotation still describes it is a question about its *typical* one.
 
+    Sampled from the **default branch only**. Without that filter this asked
+    for the last N runs of the workflow on *any* ref, which on a repository
+    with an active pull request means almost entirely that PR's runs — and a
+    branch's runs are not representative of the same job on main. A new branch
+    compiles cold on its first runs and hits a warm `rust-cache` afterwards, so
+    the same job was sampled at 8m52s and at 58s within one hour, and no
+    annotation could be true of both. Every regenerated value was stale again
+    within minutes, and `--update-observed` run from a branch wrote main's
+    config full of that branch's numbers.
+
+    This narrows check 4's sample too, which is a deliberate trade: cold-cache
+    runs are the ones that tip a job over its budget (see `RUNS_SAMPLED`), and
+    main still has those — after a cache eviction, and on every merge commit
+    that invalidates it. What it loses is unrepresentative branch noise; what
+    it keeps is the branch whose timeouts actually matter.
+
     Jobs killed from outside are skipped — see [`cut_short`].
     """
     budgets = budgets or {}
     basename = os.path.basename(workflow_file)
-    runs = _api(
-        f"/repos/{repo}/actions/workflows/{basename}/runs"
-        f"?status=completed&per_page={RUNS_SAMPLED}"
-    )
+    runs = _api(runs_query(basename, repo, default_branch(repo)))
     seen: dict[str, list[float]] = {}
     for run in runs.get("workflow_runs", []):
         for job in _api(f"/repos/{repo}/actions/runs/{run['id']}/jobs?per_page=100").get("jobs", []):
@@ -496,6 +537,17 @@ def check_headroom_arithmetic() -> None:
     check(not exceeds_headroom(16.0, 45), "a healthy 16m shard is not")
     # Name matching, which decides whether a budget is compared at all.
     observed = {"Tests (x86_64)": [12.0], "Build (amd64)": [9.0], "Build (arm64)": [31.0]}
+    # The branch scoping is the point of `runs_query`, and it was absent long
+    # enough to make every regenerated annotation stale within minutes.
+    q = runs_query("ci.yml", "o/r", "main", sampled=5)
+    check("branch=main" in q, "runs_query scopes the sample to a branch")
+    check(q.startswith("/repos/o/r/actions/workflows/ci.yml/runs?"),
+          "runs_query addresses the right workflow")
+    check("status=completed" in q and "per_page=5" in q,
+          "runs_query keeps the completed filter and the sample size")
+    check("branch=feature%2Fx" in runs_query("ci.yml", "o/r", "feature/x"),
+          "a branch name with a slash is percent-encoded")
+
     check(lookup_observed("Tests (x86_64)", observed) == [12.0], "an exact job name matches")
     check(sorted(lookup_observed("Build", observed)) == [9.0, 31.0],
           "a matrix-suffixed name pools its rows")
