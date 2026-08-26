@@ -9,14 +9,21 @@
 #   docker compose -f docker-compose.yml -f docker-compose.alsa.yml up -d
 #
 # Before running, set BIRDNET_ALSA_DEVICE in your .env file:
-#   BIRDNET_ALSA_DEVICE=plughw:1,0
+#   BIRDNET_ALSA_DEVICE=plughw:CARD=PRO,DEV=0
 #
 # Find the right device name with:
 #   arecord -l
-#   # Look for: card 1: <Your USB Mic> [USB Audio Device], device 0: ...
-#   # The device string is: plughw:<card>,<device>   →  e.g. plughw:1,0
+#   # Look for: card 1: PRO [Comica_Traxshot PRO], device 0: USB Audio [...]
+#   #                ^ index  ^ id
 #
-# Tip: run `arecord -D plughw:1,0 -d 3 /tmp/test.wav && aplay /tmp/test.wav`
+# Use the **id**, not the index. `plughw:1,0` addresses card *number* 1, and
+# card numbers are assigned in detection order — a reboot, a re-plug or a second
+# sound device renumbers them. `plughw:CARD=PRO,DEV=0` addresses the same card by
+# name and survives all three. Nothing re-resolves a device string once capture
+# has started: the supervisor retries the old name forever with backoff, so a
+# renumbered microphone stays down until a human intervenes.
+#
+# Tip: run `arecord -D plughw:CARD=PRO,DEV=0 -d 3 /tmp/test.wav && aplay /tmp/test.wav`
 #      on the host to verify the device works before starting the container.
 #
 # =============================================================================

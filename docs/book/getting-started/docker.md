@@ -25,13 +25,23 @@ BIRDNET_LATITUDE=42.3601
 BIRDNET_LONGITUDE=-71.0589
 
 # Audio source — set exactly ONE
-BIRDNET_ALSA_DEVICE=plughw:1,0          # USB/ALSA mic  (use `arecord -l` to find it)
+BIRDNET_ALSA_DEVICE=plughw:CARD=PRO,DEV=0   # USB/ALSA mic — see the note below
 # BIRDNET_RTSP_URL=rtsp://cam.lan:554/stream
 # BIRDNET_PIPEWIRE_DEVICE=default
 
 # Image tag — pin a release like 0.7.2, or leave as latest (analytics is built in)
 BIRDNET_IMAGE_TAG=latest
 ```
+
+> **Name the card, do not number it.** Run `arecord -l` on the *host* and read
+> the word after `card N:` — that is the card's **id**, and
+> `plughw:CARD=<id>,DEV=0` addresses it by that id. A card **index** (the `1` in
+> `plughw:1,0`) is assigned in detection order, so a reboot, a re-plug, or a
+> second sound device can renumber it, and nothing in this station re-resolves a
+> device string once capture has started: the supervisor retries the old name
+> forever and the microphone stays down until someone intervenes. See
+> [Audio & Microphones](../admin/audio.md#name-the-card-dont-number-it) for the full
+> explanation and for how to pin a name with a udev rule.
 
 ## 3. Start the stack
 
@@ -78,7 +88,7 @@ docker run -d \
   --group-add audio \
   -e BIRDNET_LATITUDE=42.3601 \
   -e BIRDNET_LONGITUDE=-71.0589 \
-  -e BIRDNET_ALSA_DEVICE=plughw:1,0 \
+  -e BIRDNET_ALSA_DEVICE=plughw:CARD=PRO,DEV=0 \
   -e BIRDNET_LISTEN=0.0.0.0:8502 \
   ghcr.io/tomtom215/birdnet-behavior:latest
 docker logs -f birdnet-behavior         # watch the model download

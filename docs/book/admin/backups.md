@@ -42,7 +42,9 @@ Retention is **not time-based**. There is no "keep 30 days" setting. Two limits 
 - the disk manager purges the **oldest** recordings once the disk crosses `DISK_PURGE_THRESHOLD` (default 95%);
 - `MAX_FILES_SPECIES` keeps at most N clips per species, pruned on the daily maintenance tick.
 
-Recordings you have **locked** (`/admin/recordings` → "lock") are never purged by either, and locking takes effect on the next cycle — no restart needed. When a clip is pruned its detection row survives: your counts, species lists and analytics are unaffected, only the audio is removed.
+Recordings you have **locked** are never purged by either, and locking takes effect on the next cycle — no restart needed. When a clip is pruned its detection row survives: your counts, species lists and analytics are unaffected, only the audio is removed.
+
+To lock a clip, open [Recordings](../guide/recordings.md) and use the 🔒 **Lock** action on a row — or select several and use the bulk **Lock** button above the grid. Locked rows show an unlock action in the same place.
 
 ## Danger zone
 
