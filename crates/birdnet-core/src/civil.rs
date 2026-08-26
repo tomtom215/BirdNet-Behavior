@@ -47,6 +47,40 @@ impl CivilTime {
     }
 }
 
+/// Whether `year` is a Gregorian leap year.
+///
+/// Exposed because the predicate was written out by hand in three more places
+/// and `days_in_month` needs it here. Two of those copies stay, and both for a
+/// reason worth recording:
+///
+/// * `birdnet-scheduler` depends on `serde` and nothing else — deliberately, so
+///   the solar arithmetic stays a pure-computation crate. Taking
+///   `birdnet-core` for two `const fn`s would pull ONNX Runtime, `symphonia`
+///   and `rubato` into it. `crates/birdnet-core/tests/leap_year_agrees_with_the_scheduler.rs`
+///   checks the two against each other instead, so they cannot drift.
+/// * `src/capture/schedule.rs`'s copy is the *oracle* its own conversion is
+///   checked against; its comment says so. An oracle that calls the
+///   implementation under test proves nothing.
+#[must_use]
+pub const fn is_leap_year(year: u32) -> bool {
+    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
+}
+
+/// Days in `month` of `year`, `1..=12`.
+///
+/// An out-of-range month returns `30`, matching the caller this replaced: these
+/// are calendar-rendering helpers, and a total function keeps a bad month a
+/// short month rather than a panic in a page render.
+#[must_use]
+pub const fn days_in_month(year: u32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 30,
+    }
+}
+
 /// Days since 1970-01-01 for a proleptic-Gregorian `(year, month, day)`.
 ///
 /// Hinnant's `days_from_civil`. Exposed because nine files carried their own
