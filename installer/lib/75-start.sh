@@ -45,6 +45,9 @@ maybe_start_service() {
     # startup, and the SQLite/DuckDB data + config were left untouched.
     if [ "${SERVICE_WAS_RUNNING}" = "1" ]; then
         info "Restarting service on the upgraded binary…"
+        # Cleared first: restore_service_if_we_stopped_it is armed as an EXIT
+        # trap and must not start it a second time.
+        SERVICE_WAS_RUNNING=0
         systemctl start birdnet-behavior.service
         success "Service restarted (schema migrations applied on startup)."
         return

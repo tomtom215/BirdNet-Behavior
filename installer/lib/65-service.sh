@@ -29,7 +29,7 @@ resolve_listen_addr() {
     if [ -f "${SERVICE_FILE}" ]; then
         local from_unit
         from_unit="$(grep -oE -- '--listen [^ ]+' "${SERVICE_FILE}" 2>/dev/null \
-            | head -1 | awk '{print $2}' || true)"
+            | awk 'NR==1 {print $2}' || true)"
         if [ -n "${from_unit}" ] && [ "${from_unit}" != "${LISTEN_ADDR}" ]; then
             LISTEN_ADDR="${from_unit}"
             info "Preserving dashboard bind address from the existing unit: ${LISTEN_ADDR}"
@@ -49,11 +49,30 @@ Documentation=https://github.com/${REPO}
 # avoidable restart loop on slow-booting hardware (USB enumeration on Pi).
 After=network-online.target sound.target time-sync.target
 Wants=network-online.target
-# Don't enter a tight restart loop. If 5 restarts happen inside 5 min the
-# unit is marked failed and stays down for operator review (visible in
-# the web UI's health page once the service comes back).
-StartLimitBurst=5
-StartLimitIntervalSec=300
+# Wait for the filesystem holding the database, recordings, and model. A no-op
+# when the data dir is on the root filesystem (the usual case); load-bearing
+# when it is an external USB disk, where systemd would otherwise start the
+# service against an empty mount point and the doctor preflight below would
+# fail on an unwritable recordings directory.
+RequiresMountsFor=${DATA_DIR}
+# No permanent give-up. This used to be StartLimitBurst=5 /
+# StartLimitIntervalSec=300, which marks the unit failed after five restarts in
+# five minutes and then stops trying — "for operator review (visible in the web
+# UI's health page once the service comes back)", which is circular: the web UI
+# *is* this service. An unattended box in a field would stay down until someone
+# walked to it.
+#
+# Five restarts at RestartSec=10 is under a minute, so any cause that clears in
+# a minute or two hit it: an external data disk that mounts late, a port still
+# held by the previous process, a card that needs a second read. All recover on
+# their own; none of them recovered from a unit systemd had given up on.
+#
+# So the rate limit is off and the tight-loop concern — which was real — is
+# handled by backing off instead: 10 s, then longer, up to 5 minutes between
+# attempts. A permanently broken install retries quietly every five minutes
+# forever (the journal rate limits below cap the noise) and comes back by
+# itself the moment its cause is fixed.
+StartLimitIntervalSec=0
 
 [Service]
 # Type=notify pairs with sd_notify in src/sd_notify.rs:
@@ -98,6 +117,11 @@ ExecStart=${INSTALL_DIR}/${BINARY_NAME} --config ${CONFIG_FILE} --listen ${LISTE
 # Restart=always covers panics, OOM kills, and any non-zero exit.
 Restart=always
 RestartSec=10
+# Exponential backoff between 10 s and 5 minutes (systemd >= 254; older
+# versions log "Unknown key name" and fall back to a constant RestartSec=10,
+# which is the previous behaviour, so this is safe to ship everywhere).
+RestartSteps=10
+RestartMaxDelaySec=300
 # Generous startup budget so a first-run model download / DB migration
 # doesn't trip the watchdog while it is still legitimately working.
 TimeoutStartSec=900

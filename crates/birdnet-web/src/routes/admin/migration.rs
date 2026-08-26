@@ -22,6 +22,8 @@ use birdnet_migrate::progress::{MigrationProgress, MigrationStage, ProgressHandl
 
 use crate::routes::pages::toast::{self, Toast};
 
+use birdnet_behavioral::queries::EXCLUDE_IMPORTS_SETTING;
+
 use crate::state::AppState;
 
 /// Shared migration state (one active job at a time).
@@ -69,6 +71,174 @@ pub fn router() -> Router<AppState> {
                 move || progress_handler(ms)
             }),
         )
+        .route("/admin/migrate/batches", get(batches_handler))
+        .route(
+            "/admin/migrate/batches/provenance",
+            axum::routing::post(provenance_handler),
+        )
+        .route(
+            "/admin/migrate/batches/delete",
+            axum::routing::post(delete_batch_handler),
+        )
+}
+
+/// The imported-history list.
+async fn batches_handler(State(state): State<AppState>) -> Html<String> {
+    Html(render_batches(state).await)
+}
+
+/// The imported-history list plus the provenance toggle, read fresh.
+///
+/// Both handlers render from the database rather than from what they think they
+/// just changed, so a partial failure shows what is actually there.
+async fn render_batches(state: AppState) -> String {
+    let (batches, exclude) = tokio::task::spawn_blocking(move || {
+        state.with_read_db(|conn| {
+            let batches = birdnet_db::sqlite::list_import_batches(conn)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|b| {
+                    let rows = birdnet_db::sqlite::import_batch_row_count(conn, b.id).unwrap_or(0);
+                    (b, rows)
+                })
+                .collect::<Vec<_>>();
+            let exclude = birdnet_db::settings::get_or(conn, EXCLUDE_IMPORTS_SETTING, "false")
+                .is_ok_and(|v| v == "true");
+            (batches, exclude)
+        })
+    })
+    .await
+    .unwrap_or_default();
+    render::import_batches(&batches, exclude)
+}
+
+/// Which import to remove.
+#[derive(Debug, Deserialize)]
+struct DeleteBatchForm {
+    batch_id: i64,
+}
+
+/// Remove an import batch and every detection it brought in.
+///
+/// # Why this endpoint exists
+///
+/// Importing another station's history used to be a one-way door. The
+/// pre-import warning is good — `provenance.rs` profiles the source, compares
+/// its modal coordinate to this station's, and flags anything past 5 km — but
+/// afterwards the operator's only options were to keep the merge forever or to
+/// delete every detection they had. The page even told them the shift "stays
+/// reversible", which was true of the *record* and not of the data.
+///
+/// Both stores are updated. `SQLite` is the one the species lists and heat map
+/// read; the `DuckDB` copy is the one sessionize, funnel, retention,
+/// next-species, phenology and every time-series query read, and an incremental
+/// sync cannot notice a removal — so leaving it out would undo the import on
+/// half the application and not the other half.
+async fn delete_batch_handler(
+    State(state): State<AppState>,
+    Form(form): Form<DeleteBatchForm>,
+) -> Html<String> {
+    let batch_id = form.batch_id;
+    let list_state = state.clone();
+
+    let removed = tokio::task::spawn_blocking(move || {
+        let sqlite_rows =
+            state.with_db(|conn| birdnet_db::sqlite::delete_import_batch(conn, batch_id));
+
+        // Mirror into the analytics copy whatever happened to SQLite — including
+        // a partial result, because the two disagreeing is worse than either
+        // being wrong alone.
+        #[cfg(feature = "analytics")]
+        if let Some(result) = state.with_analytics(|adb| adb.delete_import_batch(batch_id))
+            && let Err(e) = result
+        {
+            tracing::warn!(
+                error = %e,
+                batch_id,
+                "removed an import from SQLite but not from the analytics copy; \
+                 the two stores now disagree until the next full resync"
+            );
+        }
+
+        sqlite_rows
+    })
+    .await;
+
+    match removed {
+        Ok(Ok(rows)) => tracing::info!(batch_id, rows, "import batch removed"),
+        Ok(Err(e)) => tracing::warn!(error = %e, batch_id, "import batch removal failed"),
+        Err(e) => tracing::warn!(error = %e, batch_id, "import batch removal task panicked"),
+    }
+
+    Html(render_batches(list_state).await)
+}
+
+/// Whether imported detections should count as this station's data.
+#[derive(Debug, Deserialize)]
+struct ProvenanceForm {
+    /// Present and `"true"` when the checkbox is ticked; an unticked checkbox
+    /// posts nothing at all, which is why this is an `Option` rather than a
+    /// `bool` with a serde default that would read "absent" as an error.
+    #[serde(default)]
+    exclude: Option<String>,
+}
+
+/// Turn the analytics provenance filter on or off.
+///
+/// # What this governs
+///
+/// Migration 25 tagged every imported detection with its batch, and until
+/// migration 34 no analytic read the tag: the life list, first-of-year, species
+/// richness, phenology, the heat map, co-occurrence and the dawn chorus all
+/// counted another site's records as this station's. `provenance.rs` warns about
+/// exactly that before an import and says the damage "is not detectable after
+/// the fact" — this is the control that lets an operator keep the history and
+/// keep the numbers separate.
+///
+/// # Both engines, in one action
+///
+/// SQLite reads the flag through `detections_analytic`'s subquery, so it takes
+/// effect on the next query with nothing to rebuild. The `DuckDB` copy has no
+/// settings table, so its view carries the rule as a literal and is recreated
+/// here. Doing only one of the two would leave the species lists and the
+/// behavioural dashboards answering with different histories, which is worse
+/// than merging everything because the disagreement is invisible.
+async fn provenance_handler(
+    State(state): State<AppState>,
+    Form(form): Form<ProvenanceForm>,
+) -> Html<String> {
+    let exclude = form.exclude.as_deref() == Some("true");
+    let write_state = state.clone();
+
+    let _ = tokio::task::spawn_blocking(move || {
+        if let Err(e) = write_state.with_db(|conn| {
+            birdnet_db::settings::set(
+                conn,
+                EXCLUDE_IMPORTS_SETTING,
+                if exclude { "true" } else { "false" },
+                birdnet_db::settings::SettingsCategory::System,
+            )
+        }) {
+            tracing::warn!(error = %e, "could not save the analytics provenance setting");
+            return;
+        }
+
+        #[cfg(feature = "analytics")]
+        if let Some(Err(e)) = write_state.with_analytics(|adb| adb.set_exclude_imports(exclude)) {
+            tracing::warn!(
+                error = %e,
+                "saved the analytics provenance setting but could not rebuild the \
+                 analytics view; the two stores disagree until the next sync"
+            );
+        }
+        tracing::info!(
+            exclude_imports = exclude,
+            "analytics provenance filter changed"
+        );
+    })
+    .await;
+
+    Html(render_batches(state).await)
 }
 
 /// The standalone `/admin/migrate` page GET folded into the Station **Data**
@@ -155,14 +325,15 @@ fn station_coords(state: &AppState) -> (Option<f64>, Option<f64>) {
 /// end up on one clock. A blank field means "same clock", which shifts nothing.
 fn import_options(form: &MigrateForm) -> birdnet_migrate::ImportOptions {
     let source_offset = form.source_utc_offset_secs;
-    let shift = source_offset.map_or(0, |src| {
-        let here = birdnet_db::clock::local_utc_offset_secs();
-        // A timestamp written in the source's clock reads `src - here` seconds
-        // early here, so adding that difference puts it on this station's clock.
-        here - src
-    });
     birdnet_migrate::ImportOptions {
-        shift_secs: shift,
+        // Zero: the importer converts per row from `source_utc_offset_secs`
+        // instead. This used to be `here - src`, with `here` read from
+        // `local_utc_offset_secs()` — *today's* offset — and applied flat to a
+        // multi-year history, so it was an hour out for however much of that
+        // history fell under a different daylight-saving regime. Measured on a
+        // Europe/Berlin host importing a UTC+0 source: wrong on three of six
+        // representative timestamps. See `to_local_here` in the migrate crate.
+        shift_secs: 0,
         label: form
             .source_label
             .as_ref()

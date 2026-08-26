@@ -338,11 +338,12 @@ async fn an_uploaded_import_applies_the_clock_shift_the_operator_gave() {
     let state = AppState::new(dst_path.clone()).expect("state");
     let app = build_router(state);
 
-    // Perth is UTC+8. The runner's own offset is whatever it is; the shift the
-    // importer applies is `here - source`, so assert against that rather than
-    // against a fixed number of hours.
+    // Perth is UTC+8. The importer no longer applies a flat shift — it converts
+    // each timestamp individually from the source's offset onto this host's
+    // clock *for that date* — so what the batch records is the source offset the
+    // operator gave, and `applied_shift_secs` stays 0. See `to_local_here`.
     let here = birdnet_db::clock::local_utc_offset_secs();
-    let expected_shift = here - 8 * 3600;
+    let moves_the_clock = here != 8 * 3600;
     let (status, body) = post_upload_with(
         &app,
         &db_bytes,
@@ -359,8 +360,23 @@ async fn an_uploaded_import_applies_the_clock_shift_the_operator_gave() {
     let (_, _, _, shift, _) = only_import_batch(&dst_path);
     assert_eq!(
         shift,
-        Some(expected_shift),
-        "the batch must record the shift it applied, so the import stays reversible"
+        Some(0),
+        "no flat shift is applied any more; the source offset is what is recorded"
+    );
+
+    let recorded_offset: Option<i64> = Connection::open(&dst_path)
+        .expect("open destination")
+        .query_row(
+            "SELECT source_utc_offset_secs FROM import_batches ORDER BY id DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .expect("read offset");
+    assert_eq!(
+        recorded_offset,
+        Some(8 * 3600),
+        "the batch must record the offset the conversion used, so the import \
+         stays explainable"
     );
 
     let conn = Connection::open(&dst_path).expect("open destination");
@@ -374,8 +390,8 @@ async fn an_uploaded_import_applies_the_clock_shift_the_operator_gave() {
     assert_eq!(label.as_deref(), Some("Hollow Oak, Perth"));
 
     // 06:12 in Perth is not 06:12 here, unless the runner happens to be on
-    // UTC+8 — in which case the shift is zero and there is nothing to check.
-    if expected_shift != 0 {
+    // UTC+8 — in which case nothing moves and there is nothing to check.
+    if moves_the_clock {
         let unshifted: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM detections WHERE Time = '06:12:00'",

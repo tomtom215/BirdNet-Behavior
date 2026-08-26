@@ -43,7 +43,7 @@ use std::time::Duration;
 
 use birdnet_db::sqlite::{
     BACKUP_VACUUM_INTERVAL_SECS, DAILY_INTERVAL_SECS, JOB_BACKUP_VACUUM, JOB_INTEGRITY_CHECK,
-    JOB_SESSION_PRUNE, JOB_SPECIES_CAP,
+    JOB_LOG_RETENTION, JOB_SESSION_PRUNE, JOB_SPECIES_CAP, JOB_SUMMARY_AUDIT,
 };
 
 /// Daily integrity-check cadence.
@@ -164,10 +164,152 @@ async fn run_loop(
             run_clip_retention(&db_path, &recordings_dir, clip_retention_days).await;
             mark_ran(&db_path, JOB_SPECIES_CAP, &mut attempted).await;
         }
+        if due(
+            &db_path,
+            JOB_LOG_RETENTION,
+            INTEGRITY_CHECK_INTERVAL,
+            &attempted,
+        )
+        .await
+        {
+            run_log_retention(&db_path).await;
+            mark_ran(&db_path, JOB_LOG_RETENTION, &mut attempted).await;
+        }
+        if due(
+            &db_path,
+            JOB_SUMMARY_AUDIT,
+            INTEGRITY_CHECK_INTERVAL,
+            &attempted,
+        )
+        .await
+        {
+            run_summary_audit(&db_path).await;
+            mark_ran(&db_path, JOB_SUMMARY_AUDIT, &mut attempted).await;
+        }
         if due(&db_path, JOB_BACKUP_VACUUM, VACUUM_INTERVAL, &attempted).await {
             run_backup_and_vacuum(&db_path, &backup_dir).await;
             mark_ran(&db_path, JOB_BACKUP_VACUUM, &mut attempted).await;
         }
+    }
+}
+
+/// Prune the two append-only operational logs.
+///
+/// # Why this is a scheduled job and was not
+///
+/// `sessions` was pruned here from the start; `audit_log` and `notification_log`
+/// were not, and both grow with use rather than with time:
+///
+/// * `AuditLog::prune` had **no production caller at all** — its only caller in
+///   the tree was its own unit test. Every login, settings change and rule edit
+///   appended a row that nothing ever removed.
+/// * `prune_old_notifications` had exactly one caller, and it was the
+///   `/admin/notifications` page handler. That prunes when an operator opens a
+///   page, which is the one thing a sealed field station never does.
+///
+/// Both are best-effort and neither failure is fatal: a station that cannot
+/// prune its logs should keep recording birds.
+async fn run_log_retention(db_path: &Path) {
+    if !db_path.exists() {
+        tracing::debug!("log retention skipped: db not present yet");
+        return;
+    }
+    let db_path = db_path.to_path_buf();
+    let result = tokio::task::spawn_blocking(move || -> Result<(usize, u64), String> {
+        use birdnet_db::accounts::AuditLog as _;
+        let conn = birdnet_db::sqlite::open_or_create(&db_path).map_err(|e| e.to_string())?;
+        let audit = conn
+            .prune(birdnet_db::sqlite::AUDIT_RETENTION_DAYS)
+            .map_err(|e| e.to_string())?;
+        let notifications = birdnet_db::notifications::prune_old_notifications(
+            &conn,
+            birdnet_db::sqlite::NOTIFICATION_RETENTION_DAYS,
+        )
+        .map_err(|e| e.to_string())?;
+        Ok((audit, notifications))
+    })
+    .await;
+
+    match result {
+        Ok(Ok((0, 0))) => tracing::debug!("log retention: nothing past the cutoff"),
+        Ok(Ok((audit, notifications))) => tracing::info!(
+            audit_rows = audit,
+            notification_rows = notifications,
+            "log retention pruned expired rows"
+        ),
+        Ok(Err(e)) => tracing::warn!(error = %e, "log retention failed"),
+        Err(e) => tracing::warn!(error = %e, "log retention task panicked"),
+    }
+}
+
+/// Check the maintained `species_summary` against the detections it summarises,
+/// and repair it if they disagree.
+///
+/// # Why a daily job rather than trusting the triggers
+///
+/// `species_summary` (migration 30) is kept up to date by three triggers, and
+/// every species count, species list and per-species hour histogram in the app
+/// reads it rather than the detections table. That is what makes those pages
+/// cheap, and it is also what makes a disagreement invisible: the daily
+/// `PRAGMA integrity_check` verifies that the *file* is well-formed and has
+/// nothing to say about whether a summary row still matches the rows it
+/// summarises.
+///
+/// `species_summary_drift` was written to answer exactly that question and has
+/// only ever been reachable from `--rebuild-species-summary` on the command
+/// line — which is to say, from nowhere, on the deployment this project is for.
+/// A restore from backup, an interrupted bulk operation, or a future write path
+/// that forgets the triggers all land the same way: counts that are quietly
+/// wrong and stay wrong.
+///
+/// The repair is `rebuild_species_summary`, the same statement migration 30 used
+/// to populate the table, so a drifted station converges on the migration's own
+/// answer rather than on a second implementation of it. It runs only when drift
+/// is actually found, so the daily cost is the check.
+async fn run_summary_audit(db_path: &Path) {
+    if !db_path.exists() {
+        tracing::debug!("summary audit skipped: db not present yet");
+        return;
+    }
+    let db_path = db_path.to_path_buf();
+    let result = tokio::task::spawn_blocking(move || -> Result<(usize, usize, usize), String> {
+        use birdnet_db::sqlite::queries::species::{
+            rebuild_species_summary, species_summary_drift,
+        };
+        let conn = birdnet_db::sqlite::open_or_create(&db_path).map_err(|e| e.to_string())?;
+        let before = species_summary_drift(&conn)
+            .map_err(|e| e.to_string())?
+            .len();
+        if before == 0 {
+            return Ok((0, 0, 0));
+        }
+        let buckets = rebuild_species_summary(&conn).map_err(|e| e.to_string())?;
+        let after = species_summary_drift(&conn)
+            .map_err(|e| e.to_string())?
+            .len();
+        Ok((before, buckets, after))
+    })
+    .await;
+
+    match result {
+        Ok(Ok((0, _, _))) => {
+            tracing::debug!("summary audit: species_summary agrees with detections");
+        }
+        Ok(Ok((before, buckets, 0))) => tracing::warn!(
+            drifted_buckets = before,
+            rebuilt_buckets = buckets,
+            "species_summary had drifted from the detections table and was rebuilt"
+        ),
+        // A rebuild that does not converge means the disagreement is not the
+        // rollup's — say so loudly rather than reporting a successful repair.
+        Ok(Ok((before, buckets, after))) => tracing::error!(
+            drifted_buckets = before,
+            rebuilt_buckets = buckets,
+            still_drifted = after,
+            "species_summary still disagrees with the detections table after a rebuild"
+        ),
+        Ok(Err(e)) => tracing::warn!(error = %e, "summary audit failed"),
+        Err(e) => tracing::warn!(error = %e, "summary audit task panicked"),
     }
 }
 
@@ -901,6 +1043,151 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM detections", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 5, "detection rows are kept for stats; only files pruned");
+    }
+
+    // ── Log retention and summary drift (audit) ────────────────────────────
+
+    /// Seed a database with one ancient and one recent row in each of the two
+    /// append-only logs, then hand back its path.
+    fn station_with_old_logs(dir: &Path) -> PathBuf {
+        let db = dir.join("birds.db");
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO audit_log (at, user_id, action)
+                 VALUES (datetime('now','-365 days'), NULL, 'ancient');
+             INSERT INTO audit_log (at, user_id, action)
+                 VALUES (datetime('now','-1 days'), NULL, 'recent');
+             INSERT INTO notification_log (channel, status, sent_at)
+                 VALUES ('apprise', 'sent', datetime('now','-365 days'));
+             INSERT INTO notification_log (channel, status, sent_at)
+                 VALUES ('apprise', 'sent', datetime('now','-1 days'));",
+        )
+        .unwrap();
+        db
+    }
+
+    fn count(db: &Path, table: &str) -> i64 {
+        let conn = rusqlite::Connection::open(db).unwrap();
+        conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap()
+    }
+
+    /// Both append-only logs must be pruned by the scheduler, because on the
+    /// deployment this project is for there is nothing else to prune them.
+    ///
+    /// Observed failing with `run_log_retention`'s body reduced to a no-op — the
+    /// state this shipped in, where `AuditLog::prune` had no production caller
+    /// and `prune_old_notifications` had only the admin page handler:
+    ///
+    ///     assertion `left == right` failed: the 365-day-old audit row must be gone
+    ///       left: 2   right: 1
+    #[tokio::test]
+    async fn log_retention_drops_expired_rows_from_both_logs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = station_with_old_logs(tmp.path());
+
+        run_log_retention(&db).await;
+
+        assert_eq!(
+            count(&db, "audit_log"),
+            1,
+            "the 365-day-old audit row must be gone"
+        );
+        assert_eq!(
+            count(&db, "notification_log"),
+            1,
+            "the 365-day-old notification row must be gone"
+        );
+    }
+
+    /// The counterpart, so the gate above is a discrimination and not an
+    /// indiscriminate `DELETE`: rows inside the retention window survive, and a
+    /// second pass removes nothing further.
+    #[tokio::test]
+    async fn log_retention_keeps_rows_inside_the_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = station_with_old_logs(tmp.path());
+
+        run_log_retention(&db).await;
+        run_log_retention(&db).await;
+
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        let action: String = conn
+            .query_row("SELECT action FROM audit_log", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(action, "recent", "the recent row is the one that survived");
+        assert_eq!(count(&db, "notification_log"), 1);
+    }
+
+    /// A `species_summary` that disagrees with the detections it summarises must
+    /// be found and repaired without an operator running a CLI flag.
+    ///
+    /// Observed failing with `run_summary_audit`'s body reduced to a no-op — the
+    /// state this shipped in, where `species_summary_drift` was reachable only
+    /// from `--rebuild-species-summary`:
+    ///
+    ///     assertion `left == right` failed: the drifted rollup must be repaired
+    ///       left: 99   right: 1
+    #[tokio::test]
+    async fn the_summary_audit_finds_and_repairs_drift() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                     VALUES ('2026-06-15', '06:00:00', 'Erithacus rubecula', 'European Robin', 0.9)",
+                [],
+            )
+            .unwrap();
+            // Corrupt the rollup behind the triggers' back, which is what a
+            // restore from a stale backup or a future write path that forgets
+            // them looks like from here.
+            conn.execute("UPDATE species_summary SET detections = 99", [])
+                .unwrap();
+            let drift = birdnet_db::sqlite::queries::species::species_summary_drift(&conn).unwrap();
+            assert_eq!(drift.len(), 1, "the fixture really is drifted");
+        }
+
+        run_summary_audit(&db).await;
+
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT detections FROM species_summary", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1, "the drifted rollup must be repaired");
+        assert!(
+            birdnet_db::sqlite::queries::species::species_summary_drift(&conn)
+                .unwrap()
+                .is_empty(),
+            "and the check must agree afterwards"
+        );
+    }
+
+    /// The counterpart: an already-correct rollup is left exactly as it is, so a
+    /// green check is not simply a rebuild that runs unconditionally.
+    #[tokio::test]
+    async fn the_summary_audit_leaves_a_correct_rollup_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                     VALUES ('2026-06-15', '06:00:00', 'Erithacus rubecula', 'European Robin', 0.9)",
+                [],
+            )
+            .unwrap();
+        }
+        run_summary_audit(&db).await;
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        let n: i64 = conn
+            .query_row("SELECT detections FROM species_summary", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
     }
 
     // ── Restart-durable scheduling (F1) ────────────────────────────────────

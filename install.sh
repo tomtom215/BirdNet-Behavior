@@ -447,7 +447,14 @@ detect_glibc_version() {
     local v
     v="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')"
     if [ -z "${v}" ]; then
-        v="$(ldd --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | tail -1)"
+        # `awk 'NR==1'` rather than `head -1`: awk reads its input to the end,
+        # so the producer is never left writing into a closed pipe. `ldd
+        # --version` prints five lines and `head -1` quits after one, which
+        # under `set -o pipefail` made this assignment return 141 and `set -e`
+        # abort the installer with no message at all — measured at 3 failures
+        # in 200 runs. Only systems where `getconf GNU_LIBC_VERSION` is empty
+        # reach this line, which is why it was never seen on Debian.
+        v="$(ldd --version 2>/dev/null | awk 'NR==1' | grep -oE '[0-9]+\.[0-9]+' | tail -1)"
     fi
     echo "${v}"
 }
@@ -470,7 +477,7 @@ check_glibc() {
     fi
 
     # current >= required  iff  the lower of the two (sort -V) is the requirement.
-    if [ "$(printf '%s\n%s\n' "${REQUIRED_GLIBC}" "${current}" | sort -V | head -1)" = "${REQUIRED_GLIBC}" ]; then
+    if [ "$(printf '%s\n%s\n' "${REQUIRED_GLIBC}" "${current}" | sort -V | awk 'NR==1')" = "${REQUIRED_GLIBC}" ]; then
         success "glibc ${current} (>= ${REQUIRED_GLIBC}) — OK"
         return 0
     fi
@@ -562,7 +569,7 @@ resolve_version() {
     tmp="$(mktemp)"
     if download "${api_url}" "${tmp}" 2>/dev/null; then
         local ver
-        ver="$(grep '"tag_name"' "${tmp}" | sed -E 's/.*"v?([^"]+)".*/\1/' | head -1)"
+        ver="$(grep '"tag_name"' "${tmp}" | sed -E 's/.*"v?([^"]+)".*/\1/' | awk 'NR==1')"
         rm -f "${tmp}"
         if [ -n "${ver}" ]; then
             echo "${ver}"
@@ -837,16 +844,51 @@ install_binary() {
         fi
 
         info "Downloading SHA256SUMS for verification…"
-        if download "${sums_url}" "${workdir}/SHA256SUMS" 2>/dev/null; then
-            # sha256sum -c expects files referenced in SHA256SUMS to be present
-            # in the working directory, so verify from inside workdir.
-            if (cd "${workdir}" && sha256sum -c SHA256SUMS --ignore-missing --status --strict) 2>/dev/null; then
-                success "Checksum verified against SHA256SUMS"
-            else
-                fatal "Checksum mismatch for ${archive} against published SHA256SUMS. Aborting install."
-            fi
+        # A failed SHA256SUMS fetch used to warn and install anyway. That put
+        # the choice of whether verification happened in the hands of whoever
+        # controlled the network — and anyone able to substitute a 100 MB
+        # binary can certainly drop one small request for the file that would
+        # expose it. "Could not check" is not a weaker form of "checked out".
+        if ! download "${sums_url}" "${workdir}/SHA256SUMS"; then
+            fatal "SHA256SUMS could not be downloaded from ${sums_url}, so the archive cannot be verified. Refusing to install an unverified binary. Retry, or fetch the release and its SHA256SUMS by hand, check them with 'sha256sum -c', and install with BIRDNET_BINARY_TARBALL=/path/to/${archive}."
+        fi
+
+        # Verify *this* archive, by name.
+        #
+        # The previous command was `sha256sum -c SHA256SUMS --ignore-missing
+        # --status --strict`, which answers a different question: "did anything
+        # both listed and present fail?" With GNU coreutils 9.4 that exits 0
+        # when our archive was never checked at all, as long as some other
+        # listed file was present and matched — so "Checksum verified" could be
+        # printed without our archive being verified. Nothing in the current
+        # workdir makes that reachable, but the command has to assert what the
+        # message claims, not something adjacent that happens to coincide.
+        #
+        # Narrow to the single line naming this archive first. Any directory
+        # prefix and the binary-mode '*' are stripped and the line rewritten
+        # with the bare name, because `sha256sum -c` looks up the path exactly
+        # as written and would otherwise report a missing file for a
+        # `release/${archive}`-style entry.
+        local sums_line
+        sums_line="$(awk -v want="${archive}" '
+            { name = $2; sub(/^\*/, "", name); sub(/^.*\//, "", name)
+              if (name == want) printf "%s  %s\n", $1, name }
+        ' "${workdir}/SHA256SUMS")"
+
+        if [ -z "${sums_line}" ]; then
+            fatal "The published SHA256SUMS for v${version} has no entry for ${archive}, so it cannot be verified. Refusing to install. This usually means the release is incomplete for ${arch}, or the detected architecture is wrong."
+        fi
+        if [ "$(printf '%s\n' "${sums_line}" | wc -l)" -ne 1 ]; then
+            fatal "The published SHA256SUMS for v${version} lists ${archive} more than once. Refusing to guess which digest is authoritative."
+        fi
+
+        printf '%s\n' "${sums_line}" >"${workdir}/SHA256SUMS.archive"
+        # `--strict` also rejects a malformed digest, so a truncated or
+        # HTML-error-page SHA256SUMS fails here rather than appearing to pass.
+        if (cd "${workdir}" && sha256sum -c SHA256SUMS.archive --status --strict); then
+            success "Checksum verified against SHA256SUMS (${archive})"
         else
-            warn "SHA256SUMS could not be downloaded — continuing without checksum verification."
+            fatal "Checksum mismatch for ${archive} against published SHA256SUMS. The download is corrupt or tampered. Aborting install; nothing was written to ${INSTALL_DIR}."
         fi
     fi
 
@@ -858,10 +900,21 @@ install_binary() {
     # The archive contains a single top-level directory named
     # birdnet-behavior-<version>-<target>. Locate the binary inside it.
     local extracted_binary
-    extracted_binary="$(find "${workdir}" -mindepth 2 -maxdepth 3 -type f -name "${BINARY_NAME}" | head -1)"
+    # `awk 'NR==1'`, not `head -1`: with more than one match `find` is left
+    # writing into a pipe `head` has already closed, and `set -euo pipefail`
+    # turns that into a silent exit 141 — the installer stops with no output.
+    # Verified: deterministic with 5000 matches, clean with one.
+    extracted_binary="$(find "${workdir}" -mindepth 2 -maxdepth 3 -type f -name "${BINARY_NAME}" | awk 'NR==1')"
     if [ -z "${extracted_binary}" ] || [ ! -f "${extracted_binary}" ]; then
         fatal "Could not find '${BINARY_NAME}' binary inside the downloaded archive."
     fi
+
+    # Stop the service here and not a moment earlier. Everything above can
+    # fail — an unreachable release, an unverifiable checksum, a corrupt
+    # archive — and none of it is a reason to take a working station off the
+    # air. From this line on we have a verified binary in hand and the only
+    # remaining obstacle is ETXTBSY, which is what the stop is for.
+    stop_running_service_for_swap
 
     install -m 0755 "${extracted_binary}" "${INSTALL_DIR}/${BINARY_NAME}"
     success "Binary installed to ${INSTALL_DIR}/${BINARY_NAME}"
@@ -871,7 +924,7 @@ install_binary() {
     # BNB_HELP_DIR at ${HELP_DIR} (see 65-service.sh). Older releases have no
     # help/ in the tarball — we just skip, and /help 404s as it did before.
     local extracted_help
-    extracted_help="$(find "${workdir}" -mindepth 2 -maxdepth 3 -type d -name help | head -1)"
+    extracted_help="$(find "${workdir}" -mindepth 2 -maxdepth 3 -type d -name help | awk 'NR==1')"
     if [ -n "${extracted_help}" ] && [ -d "${extracted_help}" ]; then
         rm -rf "${HELP_DIR}"
         install -d -m 0755 "$(dirname "${HELP_DIR}")"
@@ -902,14 +955,20 @@ install_binary() {
 # ---------------------------------------------------------------------------
 
 # Verify that FILE has the expected sha256. Returns 0 on a match, 1 on a
-# mismatch. If sha256sum is somehow unavailable (it is part of coreutils, which
-# preflight requires) we warn and treat the file as unverifiable rather than
-# blocking the install — consistent with install_binary's checksum handling.
+# mismatch.
+#
+# A missing sha256sum is fatal, not a pass. It used to `return 0` — the same
+# value a verified file returns — so the one tool that could detect a tampered
+# 541 MB model being absent counted as the model being fine. preflight()
+# already refuses to run without sha256sum, so this is a backstop rather than
+# a path an operator reaches; a backstop that returns success is not one.
 verify_model_sha256() {
     local file="$1" expected="$2"
     if ! command -v sha256sum &>/dev/null; then
-        warn "sha256sum not found — cannot verify $(basename "${file}") integrity."
-        return 0
+        # `${file##*/}` rather than basename: the one situation this branch
+        # fires in is a broken PATH, and the abort message must not itself
+        # depend on an external tool to render.
+        fatal "sha256sum is not available, so ${file##*/} cannot be verified. Refusing to install an unverified model. Install coreutils and re-run."
     fi
     local actual
     actual="$(sha256sum "${file}" | awk '{print $1}')"
@@ -1252,7 +1311,7 @@ resolve_listen_addr() {
     if [ -f "${SERVICE_FILE}" ]; then
         local from_unit
         from_unit="$(grep -oE -- '--listen [^ ]+' "${SERVICE_FILE}" 2>/dev/null \
-            | head -1 | awk '{print $2}' || true)"
+            | awk 'NR==1 {print $2}' || true)"
         if [ -n "${from_unit}" ] && [ "${from_unit}" != "${LISTEN_ADDR}" ]; then
             LISTEN_ADDR="${from_unit}"
             info "Preserving dashboard bind address from the existing unit: ${LISTEN_ADDR}"
@@ -1272,11 +1331,30 @@ Documentation=https://github.com/${REPO}
 # avoidable restart loop on slow-booting hardware (USB enumeration on Pi).
 After=network-online.target sound.target time-sync.target
 Wants=network-online.target
-# Don't enter a tight restart loop. If 5 restarts happen inside 5 min the
-# unit is marked failed and stays down for operator review (visible in
-# the web UI's health page once the service comes back).
-StartLimitBurst=5
-StartLimitIntervalSec=300
+# Wait for the filesystem holding the database, recordings, and model. A no-op
+# when the data dir is on the root filesystem (the usual case); load-bearing
+# when it is an external USB disk, where systemd would otherwise start the
+# service against an empty mount point and the doctor preflight below would
+# fail on an unwritable recordings directory.
+RequiresMountsFor=${DATA_DIR}
+# No permanent give-up. This used to be StartLimitBurst=5 /
+# StartLimitIntervalSec=300, which marks the unit failed after five restarts in
+# five minutes and then stops trying — "for operator review (visible in the web
+# UI's health page once the service comes back)", which is circular: the web UI
+# *is* this service. An unattended box in a field would stay down until someone
+# walked to it.
+#
+# Five restarts at RestartSec=10 is under a minute, so any cause that clears in
+# a minute or two hit it: an external data disk that mounts late, a port still
+# held by the previous process, a card that needs a second read. All recover on
+# their own; none of them recovered from a unit systemd had given up on.
+#
+# So the rate limit is off and the tight-loop concern — which was real — is
+# handled by backing off instead: 10 s, then longer, up to 5 minutes between
+# attempts. A permanently broken install retries quietly every five minutes
+# forever (the journal rate limits below cap the noise) and comes back by
+# itself the moment its cause is fixed.
+StartLimitIntervalSec=0
 
 [Service]
 # Type=notify pairs with sd_notify in src/sd_notify.rs:
@@ -1321,6 +1399,11 @@ ExecStart=${INSTALL_DIR}/${BINARY_NAME} --config ${CONFIG_FILE} --listen ${LISTE
 # Restart=always covers panics, OOM kills, and any non-zero exit.
 Restart=always
 RestartSec=10
+# Exponential backoff between 10 s and 5 minutes (systemd >= 254; older
+# versions log "Unknown key name" and fall back to a constant RestartSec=10,
+# which is the previous behaviour, so this is safe to ship everywhere).
+RestartSteps=10
+RestartMaxDelaySec=300
 # Generous startup budget so a first-run model download / DB migration
 # doesn't trip the watchdog while it is still legitimately working.
 TimeoutStartSec=900
@@ -1499,7 +1582,7 @@ detect_first_audio_device() {
             | awk -v id="${first_id}" '$1 == "card" && $3 == id { n++ } END { print n+0 }')"
     fi
     if [ -n "${first_id}" ] \
-        && printf '%s' "${first_id}" | grep -qE '^[A-Za-z0-9_-]+$' \
+        && grep -qE '^[A-Za-z0-9_-]+$' <<<"${first_id}" \
         && [ "${id_count}" = "1" ]; then
         echo "plughw:CARD=${first_id},DEV=${first_device:-0}"
     else
@@ -1573,12 +1656,35 @@ parse_coords() {
 }
 
 # Generate a strong, shell/URL-friendly random password.
+#
+# Neither branch may end in a consumer that stops reading early. The fallback
+# used to be `tr -dc … </dev/urandom | head -c 22`: /dev/urandom never ends, so
+# `head` always exits with the producer mid-write, `tr` always takes SIGPIPE,
+# and under this script's `set -o pipefail` the pipeline always returns 141.
+# The caller assigns the result (`CADDY_PWD_VALUE="$(gen_password)"`), so under
+# `set -e` that killed the installer outright, silently, at the exact step that
+# secures /admin. Measured: 200 failures in 200 runs.
+#
+# Only systems without openssl reached it, which is why it survived — Raspberry
+# Pi OS and Debian both ship openssl, and that branch ends in `cut`, which reads
+# its input to the end.
+#
+# So the randomness is now bounded at the source and consumed whole.
 gen_password() {
+    local raw=""
     if command -v openssl &>/dev/null; then
-        openssl rand -base64 18 2>/dev/null | tr -dc 'A-Za-z0-9' | cut -c1-22
-    else
-        LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 22
+        raw="$(openssl rand -base64 48 2>/dev/null | tr -dc 'A-Za-z0-9')"
     fi
+    if [ "${#raw}" -lt 22 ]; then
+        # `head -c` on a *file* is a bounded read, not a pipeline: nothing is
+        # left writing, so there is no SIGPIPE to take. 4096 random bytes yield
+        # ~990 alphanumerics, so 22 is never short.
+        raw="$(head -c 4096 /dev/urandom 2>/dev/null | LC_ALL=C tr -dc 'A-Za-z0-9')"
+    fi
+    if [ "${#raw}" -lt 22 ]; then
+        fatal "Could not generate a random admin password (no openssl, and /dev/urandom yielded ${#raw} usable characters). Set CADDY_PWD in ${CONFIG_FILE} by hand."
+    fi
+    printf '%s' "${raw:0:22}"
 }
 
 # Guarantee the /admin panel is password-protected on a fresh LAN install. The
@@ -1779,6 +1885,9 @@ maybe_start_service() {
     # startup, and the SQLite/DuckDB data + config were left untouched.
     if [ "${SERVICE_WAS_RUNNING}" = "1" ]; then
         info "Restarting service on the upgraded binary…"
+        # Cleared first: restore_service_if_we_stopped_it is armed as an EXIT
+        # trap and must not start it a second time.
+        SERVICE_WAS_RUNNING=0
         systemctl start birdnet-behavior.service
         success "Service restarted (schema migrations applied on startup)."
         return
@@ -1847,7 +1956,7 @@ validate_install() {
     # 1. Binary runs.
     if [ -x "${INSTALL_DIR}/${BINARY_NAME}" ] \
         && "${INSTALL_DIR}/${BINARY_NAME}" --version &>/dev/null; then
-        _v_pass "binary executes ($("${INSTALL_DIR}/${BINARY_NAME}" --version 2>/dev/null | head -1))"
+        _v_pass "binary executes ($("${INSTALL_DIR}/${BINARY_NAME}" --version 2>/dev/null | awk 'NR==1'))"
     else
         _v_fail "binary at ${INSTALL_DIR}/${BINARY_NAME} is missing or won't run"
     fi
@@ -1906,7 +2015,16 @@ validate_install() {
     # 6. If the service is up, confirm the web port is actually listening.
     if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
         local port="${LISTEN_ADDR##*:}"
-        if command -v ss &>/dev/null && ss -ltn 2>/dev/null | grep -q ":${port}\b"; then
+        # Capture first, then match against a here-string. `producer | grep -q`
+        # is a trap under `set -o pipefail`: grep exits on its first match, the
+        # producer takes SIGPIPE, and the pipeline reports 141 — so a match
+        # reads as a miss. Measured at 1 in 300 with a 5000-line producer. Here
+        # that meant reporting "port not seen listening" about a port that was.
+        local listening=""
+        if command -v ss &>/dev/null; then
+            listening="$(ss -ltn 2>/dev/null || true)"
+        fi
+        if grep -q ":${port}\b" <<<"${listening}"; then
             _v_pass "service active and listening on port ${port}"
         else
             _v_warn "service active but port ${port} not seen listening yet (it may still be starting)"
@@ -1928,14 +2046,36 @@ validate_install() {
 # interactive menu shown when an existing install is detected.
 # ---------------------------------------------------------------------------
 
+# Put a service we stopped back, if the run is ending without having restarted
+# it. Installed as an EXIT trap by stop_running_service_for_swap.
+#
+# Every `fatal` between the stop and maybe_start_service used to leave a working
+# station switched off: a failed model download, an unwritable directory, and —
+# since verification became mandatory — an unreachable SHA256SUMS. An update
+# that cannot proceed must leave the station exactly as it found it, running.
+restore_service_if_we_stopped_it() {
+    local rc=$?
+    if [ "${SERVICE_WAS_RUNNING:-0}" = "1" ] && has_systemd; then
+        if [ "${rc}" -ne 0 ]; then
+            warn "The run is ending unsuccessfully; restarting the service that was stopped for the swap."
+        fi
+        systemctl start "${SERVICE_NAME}" 2>/dev/null \
+            || warn "Could not restart ${SERVICE_NAME} — start it with: sudo systemctl start birdnet-behavior"
+        SERVICE_WAS_RUNNING=0
+    fi
+    return "${rc}"
+}
+
 # Stop a running service before swapping the binary. You cannot overwrite a
 # running executable in place (ETXTBSY), and a plain `systemctl start` on an
 # already-running unit would not load the new binary. Records that it was
-# running so the service is restarted afterwards.
+# running so the service is restarted afterwards — and arms the EXIT trap so
+# that happens even when the run does not reach maybe_start_service.
 stop_running_service_for_swap() {
     has_systemd || return 0
     if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
         SERVICE_WAS_RUNNING=1
+        trap restore_service_if_we_stopped_it EXIT
         info "Stopping the running service to swap the binary safely…"
         systemctl stop "${SERVICE_NAME}" || true
     fi
@@ -1964,8 +2104,10 @@ do_install() {
 
     info "Arch: ${arch}, Version: ${version}"
 
-    stop_running_service_for_swap
-
+    # NOTE: the running service is *not* stopped here. install_binary stops it
+    # itself, immediately before the swap, so a download or checksum failure
+    # never takes a working station off the air for a binary that was never
+    # installed.
     install_binary "${version}" "${arch}"
     create_directories
     setup_tmpfs_streaming
@@ -2004,10 +2146,9 @@ do_repair() {
         arch="$(detect_arch)"
         check_glibc
         version="$(resolve_version)"
-        stop_running_service_for_swap
         install_binary "${version}" "${arch}"
     else
-        success "Binary present ($("${INSTALL_DIR}/${BINARY_NAME}" --version 2>/dev/null | head -1))."
+        success "Binary present ($("${INSTALL_DIR}/${BINARY_NAME}" --version 2>/dev/null | awk 'NR==1'))."
     fi
 
     create_directories
@@ -2136,8 +2277,16 @@ verify_uninstall() {
         warn "service unit still present: ${SERVICE_FILE}"
         problems=1
     fi
-    if command -v systemctl >/dev/null 2>&1 \
-        && systemctl list-unit-files 2>/dev/null | grep -q "^${SERVICE_NAME}"; then
+    # Captured, not piped into `grep -q`: `systemctl list-unit-files` prints
+    # hundreds of lines, grep quits at the first match, and `set -o pipefail`
+    # then reports the whole pipeline failed — so "the unit is still listed"
+    # read as "it is gone" and this warning was skipped. Measured at 1 in 300
+    # with a 5000-line producer.
+    local unit_files=""
+    if command -v systemctl >/dev/null 2>&1; then
+        unit_files="$(systemctl list-unit-files 2>/dev/null || true)"
+    fi
+    if grep -q "^${SERVICE_NAME}" <<<"${unit_files}"; then
         warn "systemd still lists ${SERVICE_NAME} — try: sudo systemctl daemon-reload"
         problems=1
     fi
@@ -2378,7 +2527,9 @@ setup_zram() {
     local zram_size=$(( mem_bytes / 2 ))   # 50% of physical RAM
 
     # Load the zram kernel module
-    if ! lsmod | grep -q '^zram'; then
+    local loaded_modules
+    loaded_modules="$(lsmod 2>/dev/null || true)"
+    if ! grep -q '^zram' <<<"${loaded_modules}"; then
         modprobe zram num_devices=1 || {
             warn "Could not load zram module. Skipping ZRAM setup."
             return 0
@@ -2399,7 +2550,21 @@ setup_zram() {
 
     success "ZRAM swap activated: ${zram_dev} ($(( zram_size / 1024 / 1024 )) MB, lz4)"
 
-    # Persist across reboots via a systemd service unit
+    # Persist across reboots via a systemd service unit.
+    #
+    # ExecStop deserves a note. It used to begin `swapoff -a`, which is
+    # documented as "disable all swaps from /proc/swaps" — every swap on the
+    # machine, not the zram device this unit made. Raspberry Pi OS enables
+    # dphys-swapfile by default, so stopping this unit (on shutdown, on
+    # `systemctl stop zram-swap`, during an uninstall) silently switched off the
+    # operator's real swap on exactly the low-RAM boards this unit exists to
+    # help. It then piped device paths into `rmmod`, which takes a module name,
+    # so `rmmod /dev/zram0` failed on every run and `|| true` hid it.
+    #
+    # Now: only /dev/zram* are swapped off, and the module is unloaded by name.
+    # This still cannot distinguish a zram device made by another provider
+    # (zram-tools) from ours — the unit records no device id — but at shutdown
+    # that is the difference between touching zram and touching everything.
     local zram_service="/etc/systemd/system/zram-swap.service"
     cat > "${zram_service}" << EOF
 [Unit]
@@ -2410,7 +2575,7 @@ After=multi-user.target
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/bin/sh -c 'modprobe zram num_devices=1 && zramctl --find --size ${zram_size} --algorithm lz4 | xargs -I{} sh -c "mkswap {} && swapon --priority 100 {}"'
-ExecStop=/bin/sh -c 'swapoff -a 2>/dev/null; zramctl --list 2>/dev/null | awk "NR>1{print \$1}" | xargs -r rmmod zram 2>/dev/null || true'
+ExecStop=/bin/sh -c 'for d in /dev/zram*; do [ -b "\$d" ] && swapoff "\$d" 2>/dev/null; done; rmmod zram 2>/dev/null || true'
 
 [Install]
 WantedBy=multi-user.target
@@ -2458,10 +2623,17 @@ macos_setup_config_and_agent() { # $1=binary path
     mkdir -p "${MAC_DATA_DIR}" "${HOME}/Library/Logs" "$(dirname "${MAC_PLIST}")"
     if [ ! -f "${MAC_DATA_DIR}/birdnet.conf" ]; then
         cat > "${MAC_DATA_DIR}/birdnet.conf" <<CONF
-# BirdNet-Behavior config (macOS). Edit LATITUDE/LONGITUDE and set a mic device.
+# BirdNet-Behavior config (macOS). Set your coordinates and a mic device.
+#
+# LATITUDE/LONGITUDE are left commented deliberately. They used to be written
+# as 0.0/0.0, which is not "unset" — it is Null Island in the Gulf of Guinea,
+# and the metadata model would filter this station's species list for that
+# spot. An unset location skips occurrence filtering entirely, which is honest;
+# a wrong one produces a confident species list for the wrong continent, and
+# `config_has_location` would report the station as configured.
 SITENAME=My Backyard
-LATITUDE=0.0
-LONGITUDE=0.0
+# LATITUDE=51.5074
+# LONGITUDE=-0.1278
 DB_PATH=${MAC_DATA_DIR}/birds.db
 RECS_DIR=${MAC_DATA_DIR}/recordings
 IMAGE_CACHE_DIR=${MAC_DATA_DIR}/image_cache

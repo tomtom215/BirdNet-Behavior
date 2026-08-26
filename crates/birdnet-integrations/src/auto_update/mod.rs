@@ -89,6 +89,15 @@ pub enum UpdateError {
     /// published `SHA256SUMS` — the download is corrupt or tampered, so the
     /// swap is refused and the running binary is left untouched.
     Integrity(String),
+    /// No usable checksum was available, so the update **could not be
+    /// checked** — distinct from [`Self::Integrity`], which means it was
+    /// checked and failed.
+    ///
+    /// Refusing here is the point. "We could not verify this" and "this
+    /// verified" must never take the same branch: a release that publishes no
+    /// `SHA256SUMS`, a `SHA256SUMS` fetch an on-path attacker can drop, and a
+    /// malformed digest all end up here, and none of them installs anything.
+    Unverifiable(String),
     /// The freshly downloaded binary failed its pre-swap smoke test
     /// (`<binary> --version`), so it is discarded rather than installed over a
     /// working binary (wrong architecture, truncated download, missing runtime).
@@ -104,6 +113,7 @@ impl fmt::Display for UpdateError {
             Self::Parse(msg) => write!(f, "update parse error: {msg}"),
             Self::Io(e) => write!(f, "update I/O error: {e}"),
             Self::Integrity(msg) => write!(f, "update integrity error: {msg}"),
+            Self::Unverifiable(msg) => write!(f, "update could not be verified: {msg}"),
             Self::SmokeTest(msg) => write!(f, "update smoke-test failed: {msg}"),
             Self::NotAvailable => write!(f, "no update available"),
         }
@@ -139,11 +149,20 @@ pub struct UpdateInfo {
     /// Direct download URL for the release asset.
     pub download_url: String,
     /// Expected lowercase hex SHA-256 of the download asset, parsed from the
-    /// release's `SHA256SUMS`. `None` when the release ships no checksum file
-    /// or no line matches the chosen asset (older releases); `apply_update`
-    /// then falls back to the smoke test alone.
+    /// release's `SHA256SUMS`.
+    ///
+    /// `None` means the update **cannot be applied**: `apply_update` refuses
+    /// an unverifiable download rather than falling back to the smoke test.
+    /// [`Self::sha256_error`] carries why.
     #[serde(default)]
     pub sha256: Option<String>,
+    /// Why [`Self::sha256`] is `None`, when it is.
+    ///
+    /// Populated only on the failure path, so `Some(_)` here and `Some(_)`
+    /// there are mutually exclusive. Kept out of the happy path so the field
+    /// reads as an explanation rather than a status.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256_error: Option<String>,
     /// Release notes / body from the GitHub release.
     pub release_notes: String,
     /// Whether the latest version is newer than the current version.
@@ -200,17 +219,27 @@ pub fn check_for_update(current_version: &str) -> Result<UpdateInfo, UpdateError
     let download_url = find_asset_url(&body)
         .unwrap_or_else(|| body["tarball_url"].as_str().unwrap_or("").to_string());
 
-    // Best-effort: look up the asset's published SHA-256 from the release's
-    // `SHA256SUMS`. A miss (older release, source tarball fallback, network
-    // hiccup) leaves `sha256` as `None` — `apply_update` still smoke-tests the
-    // staged binary before swapping, so this never blocks a legitimate update.
-    let sha256 = asset_filename_from_url(&download_url).and_then(|fname| {
-        find_sha256sums_url(&body)
-            .and_then(|sums_url| fetch_expected_sha256(&client, &sums_url, &fname))
-    });
-    if sha256.is_none() {
-        tracing::debug!("no SHA256SUMS entry found for the update asset; will rely on smoke test");
-    }
+    // Look up the asset's published SHA-256 from the release's `SHA256SUMS`.
+    // A miss is not a degraded mode: `apply_update` refuses to install an
+    // unverifiable download, so the failure is carried forward as a reason the
+    // operator can act on rather than discarded.
+    let sums = asset_filename_from_url(&download_url)
+        .ok_or_else(|| format!("cannot derive an asset filename from {download_url:?}"))
+        .and_then(|fname| {
+            let sums_url = find_sha256sums_url(&body)
+                .ok_or_else(|| "the release publishes no SHA256SUMS asset".to_string())?;
+            fetch_expected_sha256(&client, &sums_url, &fname)
+        });
+    let (sha256, sha256_error) = match sums {
+        Ok(hex) => (Some(hex), None),
+        Err(reason) => {
+            tracing::warn!(
+                reason = %reason,
+                "no verified sha256 for the update asset; an update cannot be applied"
+            );
+            (None, Some(reason))
+        }
+    };
 
     let update_available = match is_newer(current_version, tag) {
         Ok(newer) => newer,
@@ -233,6 +262,7 @@ pub fn check_for_update(current_version: &str) -> Result<UpdateInfo, UpdateError
         latest_version: tag.to_string(),
         download_url,
         sha256,
+        sha256_error,
         release_notes,
         update_available,
     })
@@ -246,8 +276,10 @@ pub fn check_for_update(current_version: &str) -> Result<UpdateInfo, UpdateError
 /// ELF binary are still supported transparently.
 ///
 /// Steps:
+/// 0. Require a well-formed `expected_sha256` — an update that cannot be
+///    checked is refused before any network I/O happens.
 /// 1. Download the asset bytes.
-/// 2. Verify the download against `expected_sha256` (when supplied) **before**
+/// 2. Verify the download against `expected_sha256` **before**
 ///    anything is written — a mismatch aborts with the running binary untouched.
 /// 3. If the asset is a tar.gz, extract it and locate the binary inside.
 /// 4. Set executable permissions on the new binary.
@@ -257,22 +289,35 @@ pub fn check_for_update(current_version: &str) -> Result<UpdateInfo, UpdateError
 /// 7. Rename the new binary into place.
 ///
 /// `expected_sha256` is the lowercase hex digest from the release's
-/// `SHA256SUMS` (see [`UpdateInfo::sha256`]). Pass `None` only when no checksum
-/// is available; the smoke test still guards against a broken binary. This is
-/// an integrity check, not a signature check — release archives additionally
-/// carry SLSA build provenance for out-of-band authenticity verification.
+/// `SHA256SUMS` (see [`UpdateInfo::sha256`]). It is **required**: `None` is
+/// accepted by the signature only so the refusal has one enforced choke point
+/// instead of being spread across callers, and it always fails. The smoke test
+/// is a compatibility check (does this binary run on this host), never a
+/// substitute for verification. This is an integrity check, not a signature
+/// check — release archives additionally carry SLSA build provenance for
+/// out-of-band authenticity verification.
 ///
 /// # Errors
 ///
-/// Returns `UpdateError::Network` on download failures, `UpdateError::Integrity`
-/// on a checksum mismatch, `UpdateError::SmokeTest` if the new binary will not
-/// run, `UpdateError::Io` on filesystem errors, and `UpdateError::Parse` if the
-/// archive layout is unexpected or the embedded binary cannot be located.
+/// Returns `UpdateError::Unverifiable` when no well-formed checksum was
+/// supplied, `UpdateError::Network` on download failures,
+/// `UpdateError::Integrity` on a checksum mismatch, `UpdateError::SmokeTest` if
+/// the new binary will not run, `UpdateError::Io` on filesystem errors, and
+/// `UpdateError::Parse` if the archive layout is unexpected or the embedded
+/// binary cannot be located.
 pub fn apply_update(
     asset_url: &str,
     current_binary: &Path,
     expected_sha256: Option<&str>,
 ) -> Result<(), UpdateError> {
+    // Refuse an unverifiable update before anything else happens — before the
+    // URL check, before a single byte is fetched. This is deliberately the
+    // first statement in the function: a checksum that is absent or malformed
+    // is a decision that needs no network, and making it here means no code
+    // path exists in which bytes are downloaded and *then* found to be
+    // uncheckable. See `require_checksum`.
+    let expected_sha256 = require_checksum(expected_sha256)?;
+
     // Defense-in-depth: the downloaded bytes are written next to the running
     // binary and (after checksum + smoke test) installed as the executable, so
     // refuse any asset URL that isn't HTTPS on a GitHub release host before
@@ -317,16 +362,11 @@ pub fn apply_update(
         read_body_capped(resp, declared_len, MAX_ASSET_BYTES).map_err(UpdateError::Network)?;
 
     // 2. Verify integrity *before* writing anything to disk, so a corrupt or
-    //    tampered download never lands next to the running binary.
-    if let Some(expected) = expected_sha256 {
-        verify_integrity(&bytes, expected)?;
-        tracing::info!("update asset sha256 verified");
-    } else {
-        tracing::warn!(
-            "no sha256 checksum available for the update asset; \
-             integrity not verified (relying on the staged-binary smoke test)"
-        );
-    }
+    //    tampered download never lands next to the running binary. There is no
+    //    "no checksum" branch here any more: `require_checksum` above made that
+    //    state unreachable.
+    verify_integrity(&bytes, expected_sha256)?;
+    tracing::info!("update asset sha256 verified");
 
     {
         let mut f = fs::File::create(&download_path)?;
@@ -534,24 +574,35 @@ fn find_sha256sums_url(release: &serde_json::Value) -> Option<String> {
 }
 
 /// Fetch the `SHA256SUMS` file and return the expected digest for `filename`.
-/// Best-effort: any network/parse failure yields `None`.
+///
+/// Returns `Err(reason)` rather than `None` on every failure. The reason is
+/// the whole point: since [`require_checksum`] now refuses to install without
+/// a digest, "no checksum" blocks the update, and an operator staring at a
+/// blocked update needs to know whether their release is malformed or GitHub
+/// returned a 503. Collapsing all of it to `None` was what made the old
+/// silent downgrade look reasonable.
 fn fetch_expected_sha256(
     client: &reqwest::blocking::Client,
     sums_url: &str,
     filename: &str,
-) -> Option<String> {
+) -> Result<String, String> {
     // Pin the checksum source to a GitHub host too: a checksum fetched from an
     // attacker-controlled URL could be made to match a malicious binary. (The
     // binary download is independently pinned in `apply_update`.)
-    validate_release_url(sums_url).ok()?;
-    let resp = client.get(sums_url).send().ok()?;
+    validate_release_url(sums_url).map_err(|e| e.to_string())?;
+    let resp = client
+        .get(sums_url)
+        .send()
+        .map_err(|e| format!("SHA256SUMS request failed: {e}"))?;
     if !resp.status().is_success() {
-        return None;
+        return Err(format!("SHA256SUMS returned status {}", resp.status()));
     }
     let declared_len = resp.content_length();
-    let raw = read_body_capped(resp, declared_len, MAX_SUMS_BYTES).ok()?;
-    let text = String::from_utf8(raw).ok()?;
+    let raw = read_body_capped(resp, declared_len, MAX_SUMS_BYTES)
+        .map_err(|e| format!("SHA256SUMS body: {e}"))?;
+    let text = String::from_utf8(raw).map_err(|_| "SHA256SUMS is not valid UTF-8".to_string())?;
     parse_sha256sums(&text, filename)
+        .ok_or_else(|| format!("SHA256SUMS has no line for {filename:?}"))
 }
 
 /// Parse a `sha256sum`-format file and return the lowercase hex digest whose
@@ -588,6 +639,49 @@ fn sha256_hex(bytes: &[u8]) -> String {
         let _ = write!(hex, "{byte:02x}");
     }
     hex
+}
+
+/// Require a usable checksum, or refuse the update.
+///
+/// This is the fail-closed choke point. The previous behaviour was to log
+/// `"no sha256 checksum available … integrity not verified"` and install the
+/// binary regardless, which turned three separate failures into a silent
+/// downgrade to no verification at all:
+///
+/// * the release genuinely publishes no `SHA256SUMS`;
+/// * `SHA256SUMS` exists but the fetch failed — and an on-path attacker who
+///   can serve a binary can also drop that one small request, so the
+///   *attacker* chose whether verification happened;
+/// * a `SHA256SUMS` line was malformed, so the digest parsed to nothing.
+///
+/// None of those is "verified", and the smoke test the old comment fell back
+/// on (`<binary> --version`) proves the file executes, not that it is ours.
+///
+/// The digest is also checked for shape here rather than at comparison time,
+/// because a truncated or non-hex digest is a bug in the *source* of the
+/// checksum, and reporting it before the download says so plainly instead of
+/// surfacing as a mismatch 75 MB later.
+///
+/// # Errors
+///
+/// Returns `UpdateError::Unverifiable` when `supplied` is `None`, empty, or
+/// not exactly 64 hexadecimal digits.
+fn require_checksum(supplied: Option<&str>) -> Result<&str, UpdateError> {
+    let Some(hex) = supplied.map(str::trim).filter(|h| !h.is_empty()) else {
+        return Err(UpdateError::Unverifiable(
+            "the release publishes no sha256 for this asset (or SHA256SUMS \
+             could not be fetched), so the download cannot be checked against \
+             anything; refusing to install it over the running binary"
+                .into(),
+        ));
+    };
+    if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(UpdateError::Unverifiable(format!(
+            "expected a 64-character hex sha256, got {} character(s): {hex:?}",
+            hex.len()
+        )));
+    }
+    Ok(hex)
 }
 
 /// Verify `bytes` hashes to `expected_hex` (case-insensitive).

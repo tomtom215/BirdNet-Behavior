@@ -23,6 +23,7 @@ use tokio::sync::broadcast;
 use tokio_stream::Stream;
 use tokio_stream::wrappers::ReceiverStream;
 
+use crate::routes::pages::escape_html;
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -183,19 +184,12 @@ fn log_line_to_event(line: &LogLine) -> Event {
           <span class="log-msg">{msg}</span>
         </div>"#,
         level_class = level_class,
-        level = html_escape(&line.level),
-        target = html_escape(&line.target),
-        msg = html_escape(&line.message),
+        level = escape_html(&line.level),
+        target = escape_html(&line.target),
+        msg = escape_html(&line.message),
     );
 
     Event::default().event("log").data(html)
-}
-
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
 }
 
 // ---------------------------------------------------------------------------
@@ -359,10 +353,25 @@ mod tests {
         assert!(recent[2].message.contains("line 9"));
     }
 
+    /// A log line carries whatever reached the logger — a species name from a
+    /// model, an HTTP header, an MQTT payload — straight into this page's
+    /// markup over SSE. The escaping is gated on `escape_html`; what this pins
+    /// is that the event builder still routes through it.
     #[test]
-    fn html_escape_xss() {
-        assert_eq!(html_escape("<script>"), "&lt;script&gt;");
-        assert_eq!(html_escape("a & b"), "a &amp; b");
+    fn a_log_line_is_escaped_before_it_reaches_the_stream() {
+        let line = LogLine {
+            level: "ERROR".into(),
+            target: "birdnet".into(),
+            message: "<img src=x onerror='alert(1)'> & \"quoted\"".into(),
+            timestamp_ms: 0,
+        };
+        let html = format!("{:?}", log_line_to_event(&line));
+        assert!(!html.contains("<img"), "unescaped tag: {html}");
+        assert!(html.contains("&lt;img"), "escaped tag missing: {html}");
+        assert!(
+            html.contains("&#x27;"),
+            "the apostrophe must be escaped too"
+        );
     }
 
     #[test]

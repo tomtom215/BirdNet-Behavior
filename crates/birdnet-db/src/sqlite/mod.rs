@@ -7,7 +7,7 @@
 //!
 //! | Sub-module              | Contents                                                    |
 //! |-------------------------|-------------------------------------------------------------|
-//! | `connection`            | `DbError`, `open_connection`, `open_or_create`, `quick_check` |
+//! | `connection`            | `DbError`, `open_connection`, `open_or_create`, `open_readonly`, `quick_check` |
 //! | `types`                 | `DetectionRecord`, `DetectionRow`, `SpeciesCount`, …       |
 //! | `queries::detections`   | Insert, count, paginate, filter detection rows             |
 //! | `queries::species`      | Per-species aggregates, summaries, and activity            |
@@ -23,7 +23,7 @@ pub mod types;
 
 // Flat re-exports so existing call-sites (`birdnet_db::sqlite::foo`) continue
 // to compile without modification.
-pub use connection::{DbError, open_connection, open_or_create, quick_check};
+pub use connection::{DbError, open_connection, open_or_create, open_readonly, quick_check};
 pub use queries::correlation::{FollowOn, SpeciesPair};
 pub use queries::detection_reviews::{
     DetectionReview, ReviewStatus, UnreviewedDetection, clear_detection_review,
@@ -33,12 +33,13 @@ pub use queries::detection_reviews::{
 };
 pub use queries::heatmap::{HeatmapCell, HourTotal};
 pub use queries::imports::{
-    DIFFERENT_SITE_KM, ImportBatch, imported_detection_count, list_import_batches,
+    DIFFERENT_SITE_KM, ImportBatch, delete_import_batch, import_batch_row_count,
+    imported_detection_count, list_import_batches,
 };
 pub use queries::maintenance::{
-    BACKUP_VACUUM_INTERVAL_SECS, DAILY_INTERVAL_SECS, JOB_BACKUP_VACUUM, JOB_INTEGRITY_CHECK,
-    JOB_SESSION_PRUNE, JOB_SPECIES_CAP, last_run_result, last_run_unix, record_run,
-    record_run_result,
+    AUDIT_RETENTION_DAYS, BACKUP_VACUUM_INTERVAL_SECS, DAILY_INTERVAL_SECS, JOB_BACKUP_VACUUM,
+    JOB_INTEGRITY_CHECK, JOB_LOG_RETENTION, JOB_SESSION_PRUNE, JOB_SPECIES_CAP, JOB_SUMMARY_AUDIT,
+    NOTIFICATION_RETENTION_DAYS, last_run_result, last_run_unix, record_run, record_run_result,
 };
 pub use queries::{
     CLIP_AVAILABLE, ImageBlacklist, ModelVsReviewRow, QualitySummary, QuarantineFilter,

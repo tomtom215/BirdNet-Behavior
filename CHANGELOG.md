@@ -820,6 +820,86 @@ between imports would find the same detection hashing to two different instants
 and its history silently doubling — which is precisely what migration 23's
 unique index exists to prevent.
 
+### Fixed — the deployment surface
+
+A third pass, asking what was still not field-ready and looking where the two
+above had not: the supply chain, the failure modes nothing had ever provoked,
+and the 2 715 lines of `install.sh`. Evidence and the observed-failing gates are
+`docs/POST_0140_AUDIT.md` §4 (D14–D25).
+
+- **"Could not verify" no longer takes the same branch as "verified".** Three
+  places treated a missing integrity check as an acceptable degradation. The
+  binary auto-updater logged *"integrity not verified (relying on the
+  staged-binary smoke test)"* and installed anyway; the installer warned
+  *"SHA256SUMS could not be downloaded — continuing without checksum
+  verification"* and installed anyway; and the model checker returned success
+  when `sha256sum` was absent — the same value a verified file returns.
+
+  The `SHA256SUMS` request is the cheapest thing on the wire for an on-path
+  attacker to drop, so whoever could substitute a binary also decided whether
+  it would be checked. The fallback all three leaned on, `<binary> --version`,
+  proves a file executes, not whose it is. All three now refuse, the updater
+  before any network I/O and with the reason carried through to the operator.
+
+- **The archive checksum now checks the archive.** Verification ran
+  `sha256sum -c SHA256SUMS --ignore-missing`, which answers "did anything both
+  listed *and present* mismatch?" — with the archive absent from `SHA256SUMS`
+  and another listed file matching, that exits 0, and the installer printed
+  "Checksum verified against SHA256SUMS".
+
+- **A missing `openssl` no longer kills the installer.** The fallback admin-
+  password generator piped `/dev/urandom` into `head -c 22`; the producer never
+  ends, so it always took SIGPIPE, and under `set -euo pipefail` the installer
+  exited — silently, with no output on any stream — at the step that secures
+  `/admin`. Measured at 200 failures in 200 runs. The same shape appeared in
+  eight other places, including two that reported the wrong answer rather than
+  aborting; all are fixed and a lint keeps them out.
+
+- **A station that fails to start now keeps trying.** The unit carried
+  `StartLimitBurst=5` / `StartLimitIntervalSec=300`, so five restarts inside
+  five minutes — under a minute at `RestartSec=10` — marked it failed and
+  stopped it permanently, leaving an unattended box down until someone walked
+  to it. Every self-clearing cause reached it: a late-mounting external data
+  disk, a port the previous process still held. The rate limit is off, with
+  10 s → 5 min backoff in its place and `RequiresMountsFor=` so the data
+  filesystem is waited for.
+
+- **Stopping ZRAM no longer disables the system's swap.** The generated
+  `zram-swap.service` ran `swapoff -a` on stop — every swap on the machine, and
+  Raspberry Pi OS enables `dphys-swapfile` by default. It also passed device
+  paths to `rmmod`, which takes a module name, so the unload failed on every
+  run behind a `|| true`.
+
+- **A failed update leaves the station running.** The installer stopped the
+  service before downloading the new binary, so any failure in between — now
+  including a refusal to install an unverified download — took a working
+  station off the air for a binary that was never installed.
+
+- **macOS no longer writes coordinates of 0.0, 0.0.** Not "unset": Null Island,
+  which the metadata model filters the species list for, and which the
+  installer's own check reports as a configured location.
+
+### Added — gates for the failure modes a field station meets
+
+- **An unclean shutdown is now tested by causing one.** `tests/unclean_shutdown.rs`
+  SIGKILLs a real process mid-insert and requires `species_summary` to
+  reconstruct exactly — a torn rollup would drift every count on the dashboard
+  a little further on each power cut, with both tables staying well-formed and
+  no integrity check ever reporting it.
+
+- **A full disk is now tested with a full disk.** `tests/out_of_space.rs` uses
+  a real `ENOSPC` from the kernel, and covers the claim that a part-finished
+  backup no longer survives to become the newest one recovery reaches for.
+
+- **A backwards clock is now tested.** `tests/clock_steps_backwards.rs` covers
+  the re-recorded window an NTP correction produces: the collision is reported
+  rather than silently dropped, never overwrites the original observation, and
+  never moves the rollup.
+
+- **The installer's own tests run.** `installer/test/` held five test scripts
+  that nothing executed — no workflow, no script, no Makefile. They run in CI
+  now, and adding one without wiring it up is a red build.
+
 ## [0.14.0] - 2026-08-16
 
 ### Added

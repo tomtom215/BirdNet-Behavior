@@ -33,7 +33,7 @@ pub(super) async fn detections_partial(
 ) -> impl axum::response::IntoResponse {
     let today = today_date_string();
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let detections = birdnet_db::sqlite::recent_detections(conn, 20)?;
             let first_seen = birdnet_db::sqlite::species_first_detection(conn).unwrap_or_default();
             Ok::<_, birdnet_db::sqlite::DbError>((detections, first_seen))
@@ -145,7 +145,7 @@ pub(super) async fn best_detections_partial(
     let today = today_date_string();
     let today_for_query = today.clone();
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let best = birdnet_db::sqlite::best_detections_for_date(conn, &today_for_query, 5)?;
             let first_seen = birdnet_db::sqlite::species_first_detection(conn).unwrap_or_default();
             Ok::<_, birdnet_db::sqlite::DbError>((best, first_seen))
@@ -225,12 +225,48 @@ fn render_best_row(
 // Top species partial
 // ---------------------------------------------------------------------------
 
+/// How many species the Today card shows.
+const TOP_SPECIES_ROWS: usize = 6;
+
+/// The species heard **on `date`**, commonest first.
+///
+/// # Why this is not `top_species`
+///
+/// The card this fills is headed `Today · Top species`
+/// (`templates/today.html:110`) and it was filled by
+/// `birdnet_db::sqlite::top_species`, which reads the maintained
+/// `species_summary` rollup. That rollup is keyed `(Com_Name, Sci_Name, hour)` —
+/// it has **no date dimension at all**, so it cannot answer a question about
+/// today, and what the card showed was the station's all-time totals under a
+/// heading that said otherwise.
+///
+/// It is visible in the shipped documentation screenshot: the header above reads
+/// "30 detections · 12 species" and the card beneath it reads 1444 / 1332 / 1207.
+///
+/// `species_for_date` is date-scoped and lands on `idx_detections_date`, so this
+/// is also cheaper than what it replaces: measured on a three-year, 3.285 M-row
+/// database, the date-scoped group-by is ~1 ms.
+///
+/// The equivalent card in the weekly report was already correct
+/// (`weekly_report.rs` uses `weekly_top_species`), so this was one card rather
+/// than a pattern.
+fn todays_top_species(
+    conn: &rusqlite::Connection,
+    date: &str,
+    limit: usize,
+) -> Result<Vec<(String, String, i64)>, birdnet_db::sqlite::DbError> {
+    let mut rows = birdnet_db::sqlite::species_for_date(conn, date)?;
+    rows.truncate(limit);
+    Ok(rows)
+}
+
 pub(super) async fn top_species_partial(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
+    let today = today_date_string();
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
-            let species = birdnet_db::sqlite::top_species(conn, 6)?;
+        state.with_read_db(|conn| {
+            let species = todays_top_species(conn, &today, TOP_SPECIES_ROWS)?;
             let sparklines = birdnet_db::sqlite::species_sparklines(conn, 14).unwrap_or_default();
             Ok::<_, birdnet_db::sqlite::DbError>((species, sparklines))
         })
@@ -243,15 +279,15 @@ pub(super) async fn top_species_partial(
                 return (
                     StatusCode::OK,
                     [(header::CONTENT_TYPE, "text/html")],
-                    r#"<p class="bnb-meta">No species detected yet.</p>"#.to_string(),
+                    r#"<p class="bnb-meta">Nothing heard yet today.</p>"#.to_string(),
                 );
             }
             let mut html = String::new();
-            for s in &species {
-                let enc = simple_url_encode(&s.com_name);
-                let color = crate::routes::pages::atoms::species_color(&s.com_name);
+            for (com_name, _sci_name, count) in &species {
+                let enc = simple_url_encode(com_name);
+                let color = crate::routes::pages::atoms::species_color(com_name);
                 let spark = sparklines
-                    .get(&s.com_name)
+                    .get(com_name)
                     .map(|data| sparkline(data, 56.0, 16.0, Some(&color)))
                     .unwrap_or_default();
                 // Banding code under the name (not the scientific name) — the
@@ -259,10 +295,10 @@ pub(super) async fn top_species_partial(
                 let _ = write!(
                     html,
                     r#"<a class="x-top" href="/species/detail?name={enc}">{avatar}<div class="nm"><div class="t">{n}</div><div class="sc">{code}</div></div><span class="ct">{c}</span>{spark}</a>"#,
-                    avatar = avatar(&s.com_name, ""),
-                    n = escape_html(&s.com_name),
-                    code = crate::routes::pages::atoms::species_code(&s.com_name),
-                    c = s.count,
+                    avatar = avatar(com_name, ""),
+                    n = escape_html(com_name),
+                    code = crate::routes::pages::atoms::species_code(com_name),
+                    c = count,
                 );
             }
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
@@ -293,7 +329,7 @@ pub(super) async fn species_list_partial(
     let has_search = !search_trimmed.is_empty();
 
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let species = if has_search {
                 birdnet_db::sqlite::search_species(conn, &search_trimmed, 500)?
             } else {
@@ -356,7 +392,7 @@ pub(super) async fn hourly_chart_partial(
 ) -> impl axum::response::IntoResponse {
     let today = today_date_string();
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::sqlite::hourly_activity(conn, &today))
+        state.with_read_db(|conn| birdnet_db::sqlite::hourly_activity(conn, &today))
     })
     .await;
     match result {
@@ -377,7 +413,7 @@ pub(super) async fn daily_chart_partial(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| birdnet_db::sqlite::daily_counts(conn, 7))
+        state.with_read_db(|conn| birdnet_db::sqlite::daily_counts(conn, 7))
     })
     .await;
     match result {
@@ -398,7 +434,7 @@ pub(super) async fn confidence_chart_partial(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(birdnet_db::sqlite::confidence_distribution)
+        state.with_read_db(birdnet_db::sqlite::confidence_distribution)
     })
     .await;
     match result {
@@ -423,7 +459,7 @@ pub(super) async fn most_recent_partial(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(birdnet_db::sqlite::latest_detection_full)
+        state.with_read_db(birdnet_db::sqlite::latest_detection_full)
     })
     .await;
 
@@ -479,4 +515,106 @@ pub(super) async fn most_recent_partial(
          </div>",
     );
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TOP_SPECIES_ROWS, todays_top_species};
+
+    /// A station with history: yesterday was busy with one species, today with
+    /// another. The Today card must not answer with yesterday's.
+    fn two_day_station() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        let insert = |date: &str, time: &str, com: &str, sci: &str| {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                 VALUES (?1, ?2, ?3, ?4, 0.9)",
+                rusqlite::params![date, time, sci, com],
+            )
+            .unwrap();
+        };
+        for i in 0..40 {
+            insert(
+                "2026-06-14",
+                &format!("07:{:02}:00", i % 60),
+                "Yesterday Bird",
+                "Aves hesterna",
+            );
+        }
+        for i in 0..3 {
+            insert(
+                "2026-06-15",
+                &format!("06:{i:02}:00"),
+                "Today Bird",
+                "Aves hodierna",
+            );
+        }
+        conn
+    }
+
+    /// Observed failing against the shipped implementation — restoring the body
+    /// to `birdnet_db::sqlite::top_species(conn, 6)`, which reads the dateless
+    /// `species_summary` rollup, yields
+    /// `the Today card must lead with today's commonest species: "Yesterday Bird"`.
+    #[test]
+    fn the_today_card_shows_today_not_all_time() {
+        let conn = two_day_station();
+        let rows = todays_top_species(&conn, "2026-06-15", TOP_SPECIES_ROWS).unwrap();
+
+        assert_eq!(rows.len(), 1, "only one species was heard today");
+        assert_eq!(
+            rows[0].0, "Today Bird",
+            "the Today card must lead with today's commonest species"
+        );
+        assert_eq!(rows[0].2, 3, "and with today's count, not the all-time one");
+    }
+
+    /// The counterpart, so the gate above discriminates rather than merely
+    /// alarming: asked about yesterday, the same function answers with yesterday.
+    #[test]
+    fn the_same_query_answers_correctly_for_another_day() {
+        let conn = two_day_station();
+        let rows = todays_top_species(&conn, "2026-06-14", TOP_SPECIES_ROWS).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "Yesterday Bird");
+        assert_eq!(rows[0].2, 40);
+    }
+
+    /// A day with nothing on it is empty, not "the all-time list" — which is what
+    /// a dateless rollup would return for a station that has simply not heard
+    /// anything yet this morning.
+    #[test]
+    fn a_quiet_day_is_empty() {
+        let conn = two_day_station();
+        assert!(
+            todays_top_species(&conn, "2026-06-16", TOP_SPECIES_ROWS)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn the_card_is_capped_at_its_row_count() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        for i in 0..(TOP_SPECIES_ROWS + 4) {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                 VALUES ('2026-06-15', ?1, ?2, ?3, 0.9)",
+                rusqlite::params![
+                    format!("06:{i:02}:00"),
+                    format!("Genus sp{i}"),
+                    format!("Bird {i}")
+                ],
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            todays_top_species(&conn, "2026-06-15", TOP_SPECIES_ROWS)
+                .unwrap()
+                .len(),
+            TOP_SPECIES_ROWS
+        );
+    }
 }

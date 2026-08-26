@@ -16,14 +16,20 @@
 # ---------------------------------------------------------------------------
 
 # Verify that FILE has the expected sha256. Returns 0 on a match, 1 on a
-# mismatch. If sha256sum is somehow unavailable (it is part of coreutils, which
-# preflight requires) we warn and treat the file as unverifiable rather than
-# blocking the install — consistent with install_binary's checksum handling.
+# mismatch.
+#
+# A missing sha256sum is fatal, not a pass. It used to `return 0` — the same
+# value a verified file returns — so the one tool that could detect a tampered
+# 541 MB model being absent counted as the model being fine. preflight()
+# already refuses to run without sha256sum, so this is a backstop rather than
+# a path an operator reaches; a backstop that returns success is not one.
 verify_model_sha256() {
     local file="$1" expected="$2"
     if ! command -v sha256sum &>/dev/null; then
-        warn "sha256sum not found — cannot verify $(basename "${file}") integrity."
-        return 0
+        # `${file##*/}` rather than basename: the one situation this branch
+        # fires in is a broken PATH, and the abort message must not itself
+        # depend on an external tool to render.
+        fatal "sha256sum is not available, so ${file##*/} cannot be verified. Refusing to install an unverified model. Install coreutils and re-run."
     fi
     local actual
     actual="$(sha256sum "${file}" | awk '{print $1}')"

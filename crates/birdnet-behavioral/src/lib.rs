@@ -39,6 +39,7 @@ pub use duckdb;
 
 #[cfg(feature = "analytics")]
 pub mod connection;
+pub mod gating;
 pub mod phenology;
 pub mod queries;
 pub mod types;

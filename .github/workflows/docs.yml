@@ -49,7 +49,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20  # observed 11s
+    timeout-minutes: 20  # observed 12s
     env:
       # Pinned to the `mdbook-driver` version in Cargo.lock, so the published site
       # and the in-app `/help/*` tree are byte-for-byte the same render.
@@ -82,7 +82,7 @@ jobs:
     needs: build
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 15  # observed 26s
+    timeout-minutes: 15  # observed 13s
     permissions:
       contents: read
       pages: write

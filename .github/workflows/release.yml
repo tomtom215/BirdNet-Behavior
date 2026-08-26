@@ -211,7 +211,7 @@ jobs:
     name: CI gate — ${{ matrix.name }}
     needs: validate
     runs-on: ubuntu-24.04
-    timeout-minutes: 60  # observed 11m25s
+    timeout-minutes: 60  # observed 14m03s
     strategy:
       fail-fast: true
       matrix:
@@ -297,7 +297,7 @@ jobs:
     name: Build ${{ matrix.target }}
     needs: [validate, ci]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120  # observed 20m12s
+    timeout-minutes: 120  # observed 20m31s
     strategy:
       fail-fast: false
       matrix:
@@ -548,7 +548,7 @@ jobs:
     name: Package and attest
     needs: [validate, build]
     runs-on: ubuntu-24.04
-    timeout-minutes: 45  # observed 27s
+    timeout-minutes: 45  # observed 30s
     permissions:
       contents: read
       id-token: write      # OIDC token for SLSA attestation

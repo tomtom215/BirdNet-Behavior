@@ -157,9 +157,17 @@ pub fn migration_body(dest_db_path: &str) -> String {
                  step="900" placeholder="e.g. -18000 for UTC-5" class="mb-sm">
           <p class="hint">
             Hours &times; 3600. UTC&minus;5 is <code>-18000</code>; UTC+1 is
-            <code>3600</code>. Timestamps are shifted once, at import, onto this
-            station's clock — the shift is recorded with the batch, so it stays
-            reversible.
+            <code>3600</code>. Each timestamp is converted individually onto this
+            station's clock, using the offset this station had on that date — so
+            an imported winter morning and an imported summer morning land
+            correctly even though they were an hour apart in real terms.
+            <br>
+            Give the source's <em>standard</em> offset. If that station observed
+            daylight saving, its summer detections carry an offset this single
+            number cannot describe and will land an hour out; separating them
+            needs the source's time zone, which BirdNET-Pi does not record. The
+            number you enter is stored with the import, and the whole import can
+            be removed below.
           </p>
         </fieldset>
 
@@ -197,9 +205,17 @@ pub fn migration_body(dest_db_path: &str) -> String {
                step="900" placeholder="e.g. -18000 for UTC-5" class="mb-sm">
         <p class="hint">
           Hours &times; 3600. UTC&minus;5 is <code>-18000</code>; UTC+1 is
-          <code>3600</code>. Timestamps are shifted once, at import, onto this
-          station's clock — the shift is recorded with the batch, so it stays
-          reversible.
+          <code>3600</code>. Each timestamp is converted individually onto this
+          station's clock, using the offset this station had on that date — so
+          an imported winter morning and an imported summer morning land
+          correctly even though they were an hour apart in real terms.
+          <br>
+          Give the source's <em>standard</em> offset. If that station observed
+          daylight saving, its summer detections carry an offset this single
+          number cannot describe and will land an hour out; separating them
+          needs the source's time zone, which BirdNET-Pi does not record. The
+          number you enter is stored with the import, and the whole import can
+          be removed below.
         </p>
       </fieldset>
 
@@ -218,6 +234,23 @@ pub fn migration_body(dest_db_path: &str) -> String {
 
   <div id="migrate-status"></div>
 
+  <div class="bnb-card pad mt">
+    <div class="section-header">
+      <div>
+        <div class="bnb-eyebrow">Provenance</div>
+        <h3>Imported histories</h3>
+      </div>
+    </div>
+    <p class="hint">
+      Every detection an import brings in is tagged with the batch that brought
+      it. Removing a batch removes exactly those rows — nothing this station
+      heard itself is touched — so merging another site's history is a decision
+      you can take back rather than one you live with.
+    </p>
+    <div id="import-batches" hx-get="/admin/migrate/batches"
+         hx-trigger="load, importsChanged from:body" hx-swap="innerHTML"></div>
+  </div>
+
 <script>
 function switchTab(name) {{
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
@@ -232,6 +265,100 @@ document.getElementById('migrate-tabs').addEventListener('click', function(e) {{
 }});
 </script>"##
     )
+}
+
+/// The imported-history list, with a remove action per batch.
+///
+/// `rows` is counted live from `detections` rather than read from
+/// `import_batches.row_count`: the recorded number is what was written once, and
+/// what a confirmation has to state is how much is about to disappear.
+#[must_use]
+pub fn import_batches(
+    batches: &[(birdnet_db::sqlite::ImportBatch, i64)],
+    exclude_imports: bool,
+) -> String {
+    use std::fmt::Write as _;
+
+    if batches.is_empty() {
+        return r#"<p class="bnb-meta">No histories have been imported into this station.</p>"#
+            .to_string();
+    }
+
+    let mut out = String::new();
+    // The toggle sits above the list because it governs all of them, and
+    // because an operator who has just decided *not* to remove an import needs
+    // the other answer in the same glance.
+    let _ = write!(
+        out,
+        r##"<form class="provenance-toggle" hx-post="/admin/migrate/batches/provenance"
+      hx-target="#import-batches" hx-swap="innerHTML">
+  <label>
+    <input type="checkbox" name="exclude" value="true" {checked}
+           hx-post="/admin/migrate/batches/provenance"
+           hx-target="#import-batches" hx-swap="innerHTML">
+    Keep imported detections out of the analytics
+  </label>
+  <p class="hint">
+    Off (the default) counts imported detections as this station's own
+    everywhere — life list, first-of-year, species richness, phenology, the heat
+    map, co-occurrence, the dawn chorus. On, they stay in the database and in the
+    recordings browser but stop contributing to any of those. Applies to both
+    the detection database and the analytics copy, so the two cannot disagree.
+  </p>
+</form>"##,
+        checked = if exclude_imports { "checked" } else { "" },
+    );
+
+    out.push_str(r#"<ul class="bnb-list import-batches">"#);
+    for (b, rows) in batches {
+        let label = b
+            .source_label
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or("unlabelled source");
+        // A different site is the case this whole feature exists for, so it is
+        // stated on the row rather than left to the operator to work out from a
+        // number.
+        let site = match b.distance_km {
+            Some(km) if km >= birdnet_db::sqlite::DIFFERENT_SITE_KM => {
+                format!(r#" <span class="bnb-pill rare">{km:.1} km away</span>"#)
+            }
+            Some(km) => format!(r#" <span class="bnb-pill moss">{km:.1} km — same site</span>"#),
+            None => r#" <span class="bnb-pill">no coordinates</span>"#.to_string(),
+        };
+        let shift = if b.applied_shift_secs == 0 {
+            "no clock shift".to_string()
+        } else {
+            #[allow(clippy::cast_precision_loss)]
+            let hours = b.applied_shift_secs as f64 / 3600.0;
+            format!("shifted {hours:+.2} h onto this station's clock")
+        };
+        let _ = write!(
+            out,
+            r##"<li class="import-batch">
+  <div class="ib-main">
+    <div class="ib-title">{label}{site}</div>
+    <div class="bnb-meta">{rows} detection{plural} · imported {when} · {shift}</div>
+  </div>
+  <button class="btn btn-danger"
+          hx-post="/admin/migrate/batches/delete"
+          hx-vals='{{"batch_id": {id}}}'
+          hx-target="#import-batches"
+          hx-swap="innerHTML"
+          data-confirm-body="Remove {rows} imported detection{plural} from &quot;{label}&quot;? Detections this station recorded itself are not affected. There is no undo."
+          data-confirm-action="hx-post">
+    Remove
+  </button>
+</li>"##,
+            label = escape_html(label),
+            rows = rows,
+            plural = if *rows == 1 { "" } else { "s" },
+            when = escape_html(&b.imported_at),
+            id = b.id,
+        );
+    }
+    out.push_str("</ul>");
+    out
 }
 
 /// Render the validation result partial.

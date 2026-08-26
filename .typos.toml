@@ -50,6 +50,15 @@ extend-ignore-re = [
     # a commit are normal here (CHANGELOG, RELEASING, the release plan), so
     # match the shape rather than allow-listing each SHA as it appears.
     '`[0-9a-f]{7,40}`',
+    # `installer/test/service-unit.sh` misspells a systemd directive on purpose:
+    # its counterpart section proves `systemd-analyze verify` reports an unknown
+    # key name — and reports it while still exiting 0, which is why that test
+    # greps the output instead of trusting the status. The typo is the fixture.
+    #
+    # Matched as the whole compound token rather than allow-listing "Privilages"
+    # in [default.extend-words], which is global: a real misspelling of
+    # "Privileges" anywhere else in the repository is still caught.
+    'NoNewPrivilages',
 ]
 
 [default.extend-words]

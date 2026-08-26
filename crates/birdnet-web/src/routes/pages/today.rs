@@ -67,7 +67,7 @@ async fn today_home(State(state): State<AppState>, headers: HeaderMap) -> Respon
 
     let state_for_query = state.clone();
     let (total_ever, sources, disk_pct) = tokio::task::spawn_blocking(move || {
-        let (total, sources) = state_for_query.with_db(|conn| {
+        let (total, sources) = state_for_query.with_read_db(|conn| {
             use birdnet_db::audio_sources::AudioSourceStore;
             let total = birdnet_db::sqlite::detection_count(conn).unwrap_or(0);
             let sources = AudioSourceStore::list(conn).unwrap_or_default();
@@ -298,7 +298,7 @@ fn firstrun_checklist(
 /// `settings` table at startup — see `helpers::seed_db_settings_from_config`)
 /// from being re-prompted for setup it already completed during installation.
 fn first_run_needs_onboarding(state: &AppState) -> bool {
-    state.with_db(|conn| {
+    state.with_read_db(|conn| {
         let onboarded = birdnet_db::settings::get_or(conn, "onboarding_complete", "false")
             .map_or(true, |v| v == "true");
         let has_detections = birdnet_db::sqlite::detection_count(conn).map_or(true, |n| n > 0);
@@ -431,7 +431,9 @@ pub(super) enum CaptureState {
 /// status pill reads, so the dashboard and that page cannot disagree.
 pub(super) fn live_capture_state(state: &AppState) -> CaptureState {
     use birdnet_db::audio_sources::AudioSourceStore;
-    let sources = state.with_db(AudioSourceStore::list).unwrap_or_default();
+    let sources = state
+        .with_read_db(AudioSourceStore::list)
+        .unwrap_or_default();
     if sources.is_empty() {
         return CaptureState::NoSource;
     }
@@ -461,7 +463,7 @@ async fn today_pills_partial(State(state): State<AppState>) -> impl IntoResponse
     // "recording" indefinitely and nothing ever contradicted it.
     let capture = live_capture_state(&state);
     let html = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let mut out = String::with_capacity(512);
 
             // Recording state. The gauge is authoritative when it has an
@@ -552,7 +554,7 @@ async fn today_pills_partial(State(state): State<AppState>) -> impl IntoResponse
 /// quiet, otherwise nothing at all ("absent entirely when nothing waits").
 async fn today_nudge_partial(State(state): State<AppState>) -> impl IntoResponse {
     let html = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let pending = birdnet_db::sqlite::quarantine_pending_count(conn).unwrap_or(0);
             if pending > 0 {
                 let (noun, verb, obj) = if pending == 1 {
@@ -665,7 +667,7 @@ async fn today_count_partial(
     let search = params.search.clone();
 
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             birdnet_db::sqlite::todays_detection_count(
                 conn,
                 &today,
@@ -708,7 +710,7 @@ async fn today_partial(
     let filter = TodayFilter::from_token(params.filter.as_deref());
 
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let rows = birdnet_db::sqlite::todays_detections(
                 conn,
                 &today,
@@ -800,7 +802,7 @@ async fn today_partial(
 async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoResponse {
     let today = today_date_string();
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let rows = birdnet_db::sqlite::todays_detections(
                 conn,
                 &today,

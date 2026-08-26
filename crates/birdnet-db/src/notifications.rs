@@ -46,6 +46,14 @@ pub enum NotifStatus {
     Failed,
     /// Skipped (e.g. confidence below threshold, duplicate suppression).
     Skipped,
+    /// Accepted by this station but not yet delivered: the payload is parked in
+    /// the store-and-forward queue for replay.
+    ///
+    /// Distinct from [`Self::Failed`] on purpose. A field station on flaky LTE
+    /// produces these in bursts, and "not there yet" is a different fact from
+    /// "lost" — an operator looking at a wall of red needs to know which one
+    /// they are looking at before they go and climb a hill.
+    Queued,
 }
 
 impl NotifStatus {
@@ -54,6 +62,7 @@ impl NotifStatus {
             Self::Sent => "sent",
             Self::Failed => "failed",
             Self::Skipped => "skipped",
+            Self::Queued => "queued",
         }
     }
 }

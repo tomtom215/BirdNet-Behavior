@@ -410,7 +410,12 @@ fn provenance_survives_into_the_analytics_store() {
             &db_path,
             &ProgressHandle::new(),
             &ImportOptions {
-                shift_secs: 6 * 3600,
+                // `shift_secs` is left at zero deliberately: since the importer
+                // converts per row, `source_utc_offset_secs` is the operative
+                // field and a flat shift beside it would be a second, contrary
+                // instruction. (This fixture used to set both, which only
+                // agreed because the runner happened to be in one zone.)
+                shift_secs: 0,
                 label: Some("Paris transect".into()),
                 source_utc_offset_secs: Some(-5 * 3600),
                 notes: None,
@@ -448,14 +453,34 @@ fn provenance_survives_into_the_analytics_store() {
          merged history as one site"
     );
 
-    // And the clock reconciliation reached the analytics copy too: 06:30 at the
-    // source, six hours behind, is 12:30 here.
+    // And the clock reconciliation reached the analytics copy too. The expected
+    // wall clock is computed for this host rather than hard-coded: 06:30 at a
+    // source on UTC−5 is 11:30 UTC, and where that lands locally depends on the
+    // runner's zone *and* on the offset in force on that date. A literal here
+    // would pass only in the zone it was written in — and would go stale at the
+    // next daylight-saving boundary even there.
+    let expected: String = rusqlite::Connection::open_in_memory()
+        .expect("open")
+        .query_row(
+            "SELECT strftime('%H:%M:%S',
+                             datetime(strftime('%s', '2026-03-01 06:30:00') + 5*3600,
+                                      'unixepoch', 'localtime'))",
+            [],
+            |r| r.get(0),
+        )
+        .expect("expected time");
+    assert_ne!(
+        expected, "06:30:00",
+        "this assertion is only meaningful when the conversion moves the clock; \
+         a host on UTC−5 would make it vacuous"
+    );
+
     let shifted: i64 = state
         .with_analytics(|adb| {
             adb.conn()
                 .query_row(
-                    "SELECT COUNT(*) FROM detections WHERE Time = '12:30:00'",
-                    [],
+                    "SELECT COUNT(*) FROM detections WHERE Time = ?1",
+                    [&expected],
                     |r| r.get::<_, i64>(0),
                 )
                 .expect("count")
@@ -463,7 +488,7 @@ fn provenance_survives_into_the_analytics_store() {
         .expect("analytics is configured");
     assert_eq!(
         shifted, 2,
-        "the imported hours are still on the source's clock"
+        "the imported hours are still on the source's clock (expected {expected})"
     );
 }
 

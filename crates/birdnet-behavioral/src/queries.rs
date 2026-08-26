@@ -89,6 +89,52 @@ FROM detections
 WHERE review_verdict IS DISTINCT FROM 'rejected';
 ";
 
+/// [`CREATE_DETECTIONS_TS_VIEW`], with imported detections optionally excluded.
+///
+/// # Why this is a literal rather than a lookup
+///
+/// The SQLite side answers the same question with a subquery against its
+/// `settings` table (migration 34), which SQLite hoists to one evaluation per
+/// statement. `DuckDB` has no `settings` table — that store belongs to SQLite —
+/// so the flag is baked into the view text and the view is recreated when it
+/// changes. The view is already recreated on every open and every sync, so this
+/// adds one more moment rather than a new mechanism.
+///
+/// The two engines **must** carry the same rule. The species lists and heat map
+/// read SQLite; sessionize, funnel, retention, next-species, phenology and every
+/// time-series query read this copy. A station whose analytics excluded an
+/// import on one half and included it on the other would be worse off than one
+/// that merged everything, because the disagreement is invisible.
+///
+/// `import_batch_id IS NULL` is written first so a station that never imported
+/// anything short-circuits immediately.
+#[must_use]
+pub fn detections_ts_view_sql(exclude_imports: bool) -> String {
+    if !exclude_imports {
+        return CREATE_DETECTIONS_TS_VIEW.to_string();
+    }
+    "
+CREATE OR REPLACE VIEW detections_ts AS
+SELECT *,
+    TRY_CAST(Date || ' ' || Time AS TIMESTAMP) AS detection_timestamp,
+    CAST(to_timestamp(detected_at_utc) AS TIMESTAMP) AS detection_instant,
+    TRY_CAST(Date AS DATE) AS detection_date
+FROM detections
+WHERE review_verdict IS DISTINCT FROM 'rejected'
+  AND import_batch_id IS NULL;
+"
+    .to_string()
+}
+
+/// The settings key both engines read to decide whether imported detections
+/// count as this station's data.
+///
+/// Absent or anything other than `"true"` means included, so an upgrade changes
+/// no number on an existing station: merging two sites is a legitimate thing to
+/// want, and only the operator knows whether these are one site with a moved GPS
+/// fix or two a county apart.
+pub const EXCLUDE_IMPORTS_SETTING: &str = "analytics_exclude_imports";
+
 /// Every analytic reads `detections_ts`, so the `WHERE` above is where a
 /// reviewer's verdict becomes real.
 ///

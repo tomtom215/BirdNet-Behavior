@@ -30,10 +30,17 @@ macos_setup_config_and_agent() { # $1=binary path
     mkdir -p "${MAC_DATA_DIR}" "${HOME}/Library/Logs" "$(dirname "${MAC_PLIST}")"
     if [ ! -f "${MAC_DATA_DIR}/birdnet.conf" ]; then
         cat > "${MAC_DATA_DIR}/birdnet.conf" <<CONF
-# BirdNet-Behavior config (macOS). Edit LATITUDE/LONGITUDE and set a mic device.
+# BirdNet-Behavior config (macOS). Set your coordinates and a mic device.
+#
+# LATITUDE/LONGITUDE are left commented deliberately. They used to be written
+# as 0.0/0.0, which is not "unset" — it is Null Island in the Gulf of Guinea,
+# and the metadata model would filter this station's species list for that
+# spot. An unset location skips occurrence filtering entirely, which is honest;
+# a wrong one produces a confident species list for the wrong continent, and
+# `config_has_location` would report the station as configured.
 SITENAME=My Backyard
-LATITUDE=0.0
-LONGITUDE=0.0
+# LATITUDE=51.5074
+# LONGITUDE=-0.1278
 DB_PATH=${MAC_DATA_DIR}/birds.db
 RECS_DIR=${MAC_DATA_DIR}/recordings
 IMAGE_CACHE_DIR=${MAC_DATA_DIR}/image_cache

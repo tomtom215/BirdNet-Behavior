@@ -3,14 +3,36 @@
 # interactive menu shown when an existing install is detected.
 # ---------------------------------------------------------------------------
 
+# Put a service we stopped back, if the run is ending without having restarted
+# it. Installed as an EXIT trap by stop_running_service_for_swap.
+#
+# Every `fatal` between the stop and maybe_start_service used to leave a working
+# station switched off: a failed model download, an unwritable directory, and —
+# since verification became mandatory — an unreachable SHA256SUMS. An update
+# that cannot proceed must leave the station exactly as it found it, running.
+restore_service_if_we_stopped_it() {
+    local rc=$?
+    if [ "${SERVICE_WAS_RUNNING:-0}" = "1" ] && has_systemd; then
+        if [ "${rc}" -ne 0 ]; then
+            warn "The run is ending unsuccessfully; restarting the service that was stopped for the swap."
+        fi
+        systemctl start "${SERVICE_NAME}" 2>/dev/null \
+            || warn "Could not restart ${SERVICE_NAME} — start it with: sudo systemctl start birdnet-behavior"
+        SERVICE_WAS_RUNNING=0
+    fi
+    return "${rc}"
+}
+
 # Stop a running service before swapping the binary. You cannot overwrite a
 # running executable in place (ETXTBSY), and a plain `systemctl start` on an
 # already-running unit would not load the new binary. Records that it was
-# running so the service is restarted afterwards.
+# running so the service is restarted afterwards — and arms the EXIT trap so
+# that happens even when the run does not reach maybe_start_service.
 stop_running_service_for_swap() {
     has_systemd || return 0
     if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
         SERVICE_WAS_RUNNING=1
+        trap restore_service_if_we_stopped_it EXIT
         info "Stopping the running service to swap the binary safely…"
         systemctl stop "${SERVICE_NAME}" || true
     fi
@@ -39,8 +61,10 @@ do_install() {
 
     info "Arch: ${arch}, Version: ${version}"
 
-    stop_running_service_for_swap
-
+    # NOTE: the running service is *not* stopped here. install_binary stops it
+    # itself, immediately before the swap, so a download or checksum failure
+    # never takes a working station off the air for a binary that was never
+    # installed.
     install_binary "${version}" "${arch}"
     create_directories
     setup_tmpfs_streaming
@@ -79,10 +103,9 @@ do_repair() {
         arch="$(detect_arch)"
         check_glibc
         version="$(resolve_version)"
-        stop_running_service_for_swap
         install_binary "${version}" "${arch}"
     else
-        success "Binary present ($("${INSTALL_DIR}/${BINARY_NAME}" --version 2>/dev/null | head -1))."
+        success "Binary present ($("${INSTALL_DIR}/${BINARY_NAME}" --version 2>/dev/null | awk 'NR==1'))."
     fi
 
     create_directories
@@ -211,8 +234,16 @@ verify_uninstall() {
         warn "service unit still present: ${SERVICE_FILE}"
         problems=1
     fi
-    if command -v systemctl >/dev/null 2>&1 \
-        && systemctl list-unit-files 2>/dev/null | grep -q "^${SERVICE_NAME}"; then
+    # Captured, not piped into `grep -q`: `systemctl list-unit-files` prints
+    # hundreds of lines, grep quits at the first match, and `set -o pipefail`
+    # then reports the whole pipeline failed — so "the unit is still listed"
+    # read as "it is gone" and this warning was skipped. Measured at 1 in 300
+    # with a 5000-line producer.
+    local unit_files=""
+    if command -v systemctl >/dev/null 2>&1; then
+        unit_files="$(systemctl list-unit-files 2>/dev/null || true)"
+    fi
+    if grep -q "^${SERVICE_NAME}" <<<"${unit_files}"; then
         warn "systemd still lists ${SERVICE_NAME} — try: sudo systemctl daemon-reload"
         problems=1
     fi

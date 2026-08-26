@@ -77,9 +77,10 @@ pub struct CalendarParams {
 /// initial day-detail panel; month navigation and day selection then swap the
 /// two partials below.
 pub(super) async fn content(state: AppState) -> String {
-    let days =
-        tokio::task::spawn_blocking(move || state.with_db(birdnet_db::sqlite::detections_per_day))
-            .await;
+    let days = tokio::task::spawn_blocking(move || {
+        state.with_read_db(birdnet_db::sqlite::detections_per_day)
+    })
+    .await;
     let days = match days {
         Ok(Ok(d)) => d,
         _ => Vec::new(),
@@ -123,9 +124,10 @@ async fn history_calendar_partial(
     State(state): State<AppState>,
     Query(params): Query<CalendarParams>,
 ) -> impl IntoResponse {
-    let result =
-        tokio::task::spawn_blocking(move || state.with_db(birdnet_db::sqlite::detections_per_day))
-            .await;
+    let result = tokio::task::spawn_blocking(move || {
+        state.with_read_db(birdnet_db::sqlite::detections_per_day)
+    })
+    .await;
     let Ok(Ok(days)) = result else {
         return axum::response::Html("<p class='error'>Failed to load calendar.</p>".to_string());
     };
@@ -297,7 +299,7 @@ async fn history_chart_partial(
 
     let date2 = date.clone();
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let hours = birdnet_db::sqlite::hourly_activity(conn, &date)?;
             let total = birdnet_db::sqlite::detection_count_for_date(conn, &date)?;
             let species = birdnet_db::sqlite::species_for_date(conn, &date)?;
@@ -330,7 +332,7 @@ async fn day_page(
 
     let date2 = date.clone();
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(|conn| {
+        state.with_read_db(|conn| {
             let hours = birdnet_db::sqlite::hourly_activity(conn, &date)?;
             let total = birdnet_db::sqlite::detection_count_for_date(conn, &date)?;
             let species = birdnet_db::sqlite::species_for_date(conn, &date)?;
@@ -355,7 +357,7 @@ async fn day_page(
 /// HTMX partial: a flat list of dates with detections (legacy date browser).
 async fn history_dates_partial(State(state): State<AppState>) -> impl IntoResponse {
     let result = tokio::task::spawn_blocking(move || {
-        state.with_db(birdnet_db::sqlite::distinct_detection_dates)
+        state.with_read_db(birdnet_db::sqlite::distinct_detection_dates)
     })
     .await;
 

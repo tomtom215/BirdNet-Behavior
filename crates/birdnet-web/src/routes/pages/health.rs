@@ -33,7 +33,7 @@ async fn station_health_line_partial(
         // anything — it reported a green "recording" indefinitely, which on a
         // first-run station with a dead microphone is precisely wrong.
         let capture = super::today::live_capture_state(&state);
-        let recording = state.with_db(|conn| {
+        let recording = state.with_read_db(|conn| {
             crate::routes::pages::today::capture_outage(conn).map(|(_, last)| last)
         });
         let recording_pill = match (capture, recording) {
@@ -151,7 +151,7 @@ async fn health_badge_partial(State(state): State<AppState>) -> impl axum::respo
 /// read one row instead of re-deriving it.
 fn recorded_db_health(state: &AppState) -> Option<bool> {
     state
-        .with_db(|conn| {
+        .with_read_db(|conn| {
             birdnet_db::sqlite::last_run_result(conn, birdnet_db::sqlite::JOB_INTEGRITY_CHECK)
         })
         .ok()

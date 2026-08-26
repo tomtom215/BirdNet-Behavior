@@ -22,6 +22,24 @@ pub const JOB_SESSION_PRUNE: &str = "session_prune";
 pub const JOB_SPECIES_CAP: &str = "species_cap";
 /// Job key for the weekly backup + VACUUM pass.
 pub const JOB_BACKUP_VACUUM: &str = "backup_vacuum";
+/// Job key for the daily prune of the append-only operational logs.
+pub const JOB_LOG_RETENTION: &str = "log_retention";
+/// Job key for the daily `species_summary` drift check.
+pub const JOB_SUMMARY_AUDIT: &str = "summary_audit";
+
+/// How long an `audit_log` row is kept.
+///
+/// 180 days is what O-15 documented as the retention default; until this
+/// constant had a scheduler behind it, `AuditLog::prune` had no production
+/// caller at all and the table grew for the life of the station.
+pub const AUDIT_RETENTION_DAYS: u32 = 180;
+
+/// How long a `notification_log` row is kept.
+///
+/// 90 days, matching the number `/admin/notifications` already passes — which
+/// was the *only* thing that pruned this table, so on a headless station (the
+/// deployment this project is for) it never ran at all.
+pub const NOTIFICATION_RETENTION_DAYS: u32 = 90;
 
 /// Period of the daily jobs (integrity check, session prune, species cap).
 ///

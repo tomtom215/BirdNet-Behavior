@@ -160,8 +160,7 @@ impl AnalyticsDb {
         let count = self.stream_sqlite_into(sqlite_conn, "detections", cutoff.as_deref())?;
 
         if count > 0 {
-            self.conn
-                .execute_batch(queries::CREATE_DETECTIONS_TS_VIEW)?;
+            self.refresh_view_from(sqlite_conn)?;
             tracing::info!(rows = count, "synced detections from SQLite to DuckDB");
         }
 
@@ -226,8 +225,7 @@ impl AnalyticsDb {
 
         // Refresh the view unconditionally so it exists even after a rebuild
         // that loaded zero rows.
-        self.conn
-            .execute_batch(queries::CREATE_DETECTIONS_TS_VIEW)?;
+        self.refresh_view_from(sqlite_conn)?;
         tracing::info!(
             rows = count,
             "rebuilt DuckDB detections from SQLite (full resync)"
@@ -447,6 +445,74 @@ impl AnalyticsDb {
         let n = self.conn.execute(
             "DELETE FROM detections WHERE Date = ? AND Time = ? AND Sci_Name = ?",
             params![date, time, sci_name],
+        )?;
+        Ok(n as u64)
+    }
+
+    /// Rebuild `detections_ts` to match the provenance rule `SQLite` is
+    /// currently applying.
+    ///
+    /// Read from the SQLite connection rather than from a parameter because
+    /// SQLite is where the setting lives, and because the alternative — passing
+    /// a flag down every sync path — is how the two stores drift apart. A store
+    /// that has just been synced from a database is exactly the moment to
+    /// re-read the rule that database is using.
+    ///
+    /// A settings table that cannot be read yields "include", which is the
+    /// documented default and the behaviour every station had before the setting
+    /// existed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the view cannot be recreated.
+    pub fn refresh_view_from(
+        &self,
+        sqlite_conn: &rusqlite::Connection,
+    ) -> Result<(), AnalyticsError> {
+        let exclude = sqlite_conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                rusqlite::params![queries::EXCLUDE_IMPORTS_SETTING],
+                |r| r.get::<_, String>(0),
+            )
+            .is_ok_and(|v| v == "true");
+        self.set_exclude_imports(exclude)
+    }
+
+    /// Rebuild `detections_ts` with imported detections included or excluded.
+    ///
+    /// Called when the operator flips the setting, so the change takes effect
+    /// without waiting for the next sync or restart.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the view cannot be recreated.
+    pub fn set_exclude_imports(&self, exclude: bool) -> Result<(), AnalyticsError> {
+        self.conn
+            .execute_batch(&queries::detections_ts_view_sql(exclude))?;
+        Ok(())
+    }
+
+    /// Remove every row an import brought in, mirroring `SQLite`'s
+    /// `delete_import_batch`.
+    ///
+    /// Returns the number of rows removed. Without this mirror an undone import
+    /// would vanish from the species lists and the heat map — which read
+    /// `SQLite` — and stay in sessionize, funnel, retention, next-species,
+    /// phenology and every time-series query, which read this copy. Two stores
+    /// answering with two different histories is the failure `sync_from_sqlite`
+    /// exists to prevent, and an incremental sync cannot notice a removal.
+    ///
+    /// `import_batch_id` is NULL for every locally recorded detection, so this
+    /// cannot reach one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the delete fails.
+    pub fn delete_import_batch(&self, batch_id: i64) -> Result<u64, AnalyticsError> {
+        let n = self.conn.execute(
+            "DELETE FROM detections WHERE import_batch_id = ?",
+            params![batch_id],
         )?;
         Ok(n as u64)
     }
