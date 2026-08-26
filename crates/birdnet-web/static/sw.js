@@ -22,11 +22,15 @@ const BUILD = (function () {
 const STATIC_CACHE = `bnb-static-${BUILD}`;
 const DASH_CACHE   = `bnb-dash-${BUILD}`;
 
+// The stylesheets carry the build query the pages link them with, so this
+// precache warms the exact URL a page will request. Without it the worker
+// cached a *different* URL from the one the document used, and — because
+// `Cache.addAll` fetches through the ordinary HTTP cache, which honours
+// `immutable` — the entry it warmed could be a year old.
 const PRECACHE = [
   '/',
-  '/today',
-  '/static/css/app.css',
-  '/static/css/print.css',
+  `/static/css/app.css?v=${BUILD}`,
+  `/static/css/print.css?v=${BUILD}`,
   '/static/htmx.min.js',
   '/static/htmx-sse.js',
   '/static/live-detections.js',

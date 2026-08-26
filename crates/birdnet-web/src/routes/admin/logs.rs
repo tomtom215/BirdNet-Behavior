@@ -197,12 +197,12 @@ fn log_line_to_event(line: &LogLine) -> Event {
 // ---------------------------------------------------------------------------
 
 async fn log_page(_: State<AppState>) -> Html<String> {
-    Html(LOG_PAGE_HTML.to_string())
+    Html(crate::routes::pages::with_asset_version(LOG_PAGE_HTML))
 }
 
 const LOG_PAGE_HTML: &str = r#"<!DOCTYPE html>
 <html lang="en">
-<head><script src="/static/theme-guard.js"></script><link rel="stylesheet" href="/static/css/app.css">
+<head><script src="/static/theme-guard.js"></script><link rel="stylesheet" href="/static/css/app.css?v={{version}}">
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1.0">
   <title>Live Logs — BirdNet-Behavior Admin</title>

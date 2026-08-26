@@ -108,6 +108,8 @@ async fn player_page(
 </div>"#
     );
 
+    // Versioned stylesheet URL — see `pages::with_asset_version`.
+    let css_v = env!("CARGO_PKG_VERSION");
     let html = format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -115,7 +117,7 @@ async fn player_page(
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{species_safe} — {site_name}</title>
-  <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="stylesheet" href="/static/css/app.css?v={css_v}">
   <style>{PLAYER_CSS}</style>
 </head>
 <body>

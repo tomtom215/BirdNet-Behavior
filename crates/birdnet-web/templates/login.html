@@ -20,7 +20,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>Sign in · BirdNet-Behavior</title>
-  <link rel="stylesheet" href="/static/css/app.css">
+  <!-- ?v= — see the note in layout.html; `immutable` at a bare URL means an
+       updated station serves last year's stylesheet. -->
+  <link rel="stylesheet" href="/static/css/app.css?v={{version}}">
 </head>
 <body class="login-page" data-screen-label="Sign in">
 <a href="#main-content" class="skip-link">Skip to content</a>

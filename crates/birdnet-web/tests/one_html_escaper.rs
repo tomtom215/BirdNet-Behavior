@@ -122,7 +122,18 @@ fn escaper_fns(text: &str) -> Vec<(String, usize)> {
         // flagged `render_low_confidence_species`, whose markup contains the
         // text "avg confidence &lt;60%". A gate that cries wolf gets an
         // allowlist entry per false positive until it means nothing.
-        let window = lines[i..lines.len().min(i + 12)].join("\n");
+        // The window stops at the next `fn`, not after a fixed 12 lines. It used
+        // to run on regardless, so a short function sitting immediately above
+        // `escape_html` was reported as an escaper because the window reached
+        // into `escape_html`'s body. That is a false positive produced by
+        // *adjacency*, which is the worst kind: it accuses whichever function
+        // happens to be written above the real one.
+        let end = lines[i + 1..]
+            .iter()
+            .position(|l| l.contains("fn "))
+            .map_or(lines.len(), |off| i + 1 + off)
+            .min(lines.len().min(i + 12));
+        let window = lines[i..end.max(i + 1)].join("\n");
         let names_a_literal_lt = window.contains("'<'") || window.contains("\"<\"");
         if window.contains("&lt;") && names_a_literal_lt {
             found.push(((*name).to_string(), i + 1));

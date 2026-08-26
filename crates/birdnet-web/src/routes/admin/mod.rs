@@ -111,6 +111,8 @@ fn admin_shell_with(title: &str, active: &str, breadcrumb: &str, body: &str) -> 
     let cmdk_partial = crate::routes::pages::CMDK_HTML;
     // Help drawer dialog (O-20): admin pages reference Topic links too.
     let help_drawer = crate::routes::pages::HELP_DRAWER_HTML;
+    // Versioned stylesheet URL — see `pages::with_asset_version`.
+    let css_v = env!("CARGO_PKG_VERSION");
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -119,7 +121,7 @@ fn admin_shell_with(title: &str, active: &str, breadcrumb: &str, body: &str) -> 
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>{title} — BirdNet-Behavior Admin</title>
 <script src="/static/theme-guard.js"></script>
-<link rel="stylesheet" href="/static/css/app.css">
+<link rel="stylesheet" href="/static/css/app.css?v={css_v}">
 <script src="/static/htmx.min.js"></script>
 <style>
   body {{ background:var(--bg); color:var(--fg); font-family:var(--font-ui); margin:0; }}

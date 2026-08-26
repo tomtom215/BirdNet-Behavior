@@ -155,6 +155,8 @@ fn render_page(mic_body: &str, mic_summary: &str, prefill: &Prefill) -> String {
         .replace("{{longitude}}", &escape_html(&prefill.longitude))
         .replace("{{confidence}}", &escape_html(&prefill.confidence))
         .replace("{{notify_trigger}}", &escape_html(&prefill.notify_trigger))
+        // Versioned stylesheet URL — see `pages::with_asset_version`.
+        .replace("{{version}}", env!("CARGO_PKG_VERSION"))
 }
 
 /// The microphone step, rendered from the station's actual capture sources.
@@ -350,7 +352,7 @@ const ONBOARDING_HTML: &str = r##"<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BirdNet-Behavior · Set up your station</title>
-<link rel="stylesheet" href="/static/css/app.css">
+<link rel="stylesheet" href="/static/css/app.css?v={{version}}">
 <script src="/static/theme-guard.js"></script>
 <style>
   body { margin:0; background:var(--bg); color:var(--fg); min-height:100vh; }

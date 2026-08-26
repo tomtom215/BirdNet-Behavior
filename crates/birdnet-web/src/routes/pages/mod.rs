@@ -269,6 +269,25 @@ pub(crate) async fn not_found(
 /// so the difference was latent rather than exploitable — but "latent" is a
 /// property of today's call sites, not of the function, and nothing kept the
 /// three in step. Escaping is not a place to have three answers.
+/// Stamp the build version into a document's `?v={{version}}` asset queries.
+///
+/// `app.css` and `print.css` are served with
+/// `Cache-Control: public, max-age=31536000, immutable`, and `immutable` tells
+/// the browser not to revalidate even on an explicit reload. At a bare URL that
+/// meant an updated station kept serving new HTML against last year's
+/// stylesheet in every browser that had visited before, for up to a year, with
+/// nothing the operator could do about it. The version query is what makes
+/// `immutable` safe: a new release is a new URL.
+///
+/// Full documents that are *not* rendered through the shared layout — the admin
+/// shell, the log viewer, onboarding, kiosk, the standalone audio player, the
+/// share page — call this themselves. `crates/birdnet-web/tests/versioned_assets.rs`
+/// fails if one of them forgets.
+#[must_use]
+pub(crate) fn with_asset_version(html: &str) -> String {
+    html.replace("{{version}}", env!("CARGO_PKG_VERSION"))
+}
+
 pub(crate) fn escape_html(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
