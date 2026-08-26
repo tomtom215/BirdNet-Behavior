@@ -15,6 +15,15 @@
 //! unless the request is constructed with `cache: 'reload'`, which it is not.
 //! So the precache warmed the same stale entry.
 //!
+//! # And the fallback the browser asks for on its own
+//!
+//! A document with no `rel="icon"` requests `/favicon.ico` unprompted. The
+//! shared layout names its icons explicitly and so was fine; the seven full
+//! documents rendered outside it were not, and every one of them logged a 404
+//! and showed a blank tab. The visual-QA sweep caught it the first time
+//! `/login` was in the route table — which is the whole argument for
+//! `qa_routes_cover_the_navigation.rs` in one line.
+//!
 //! `immutable` is the right header — for a URL that changes when the bytes do.
 //! The fix is the `?v=…` query, and this gate is what keeps a new full-document
 //! page from forgetting it. Six documents are rendered outside the shared
@@ -115,6 +124,26 @@ fn the_scan_actually_finds_the_stylesheet_links() {
         "found only {found} app.css <link> tags; the six full documents rendered \
          outside the shared layout plus the layout itself should all appear — \
          the scan is looking in the wrong place"
+    );
+}
+
+/// The fallback favicon must be routed.
+///
+/// Seven full documents are rendered outside the shared layout and none of them
+/// names an icon, so the browser asks for `/favicon.ico` and used to get a 404:
+/// a blank tab and a console error on every one, including `/login`, which is
+/// the first screen a stranger sees. Routing the fallback covers them all,
+/// including the next one someone writes.
+#[test]
+fn the_favicon_fallback_is_routed() {
+    let src = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/routes/static_files.rs"),
+    )
+    .expect("static_files.rs is readable");
+    assert!(
+        src.contains(r#".route("/favicon.ico""#),
+        "/favicon.ico is not routed; every document without an explicit \
+         rel=\"icon\" will 404 for it"
     );
 }
 
