@@ -127,25 +127,41 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           shared-key: ci-test
-      - name: Run unit tests (lib + bins)
-        run: cargo test --workspace --lib --bins
-      - name: Run integration tests (incl. real-binary boot smoke test)
-        # The tests/ suite links libonnxruntime and, via boot_smoke.rs, spawns
-        # the compiled binary in --web-only mode and curls GET / — exercising
-        # the real startup path (clap, config load, migrations, axum::serve)
-        # that the in-process router tests never touch.
-        run: cargo test --workspace --tests
-      - name: Run doc tests
-        run: cargo test --workspace --doc
       - name: Embed the behavioral extension (offline-load coverage)
         # Fetch the community-built `behavioral` extension and point build.rs at
         # it (the same mechanism release.yml uses to embed it in the shipped
-        # binary). With it embedded, the `--all-features` build below carries the
+        # binary). With it embedded, every test build below carries the
         # extension bytes, so `embedded_extension_loads_when_bundled` runs its
         # real assertion — proving `LOAD behavioral` works with NO network —
         # instead of skipping. On a pull request an unreachable CDN still lets
         # the test skip; on `main` it fails the job, because a green tick there
         # is a claim that the offline path was checked.
+        #
+        # ## This step must come BEFORE the first `cargo test`
+        #
+        # `BIRDNET_REQUIRE_LIVE_EXTENSION` is set for the whole job, but these
+        # two steps used to sit after `--lib --bins`, `--tests` and `--doc`.
+        # `connection::tests` compiles under the `analytics` feature, which a
+        # workspace build turns on via unification (birdnet-timeseries depends
+        # on birdnet-behavioral with it enabled), so those two tests ran in the
+        # very first step — with skipping forbidden and nothing yet embedded.
+        # They could only fail, and did, on every push to `main` from the merge
+        # that introduced the gate onward:
+        #
+        #     an embedded behavioral extension is unavailable (the build
+        #     embedded none (BIRDNET_BUNDLED_EXTENSION_FILE unset)), and
+        #     BIRDNET_REQUIRE_LIVE_EXTENSION is set
+        #     test result: FAILED. 87 passed; 2 failed
+        #
+        # Not a CDN outage — the `elif` below exits 1 with its own `::error::`
+        # for that, so a failed fetch never reaches a test. The job simply
+        # asked for the extension before fetching it.
+        #
+        # Fixed by order, not by relaxing the gate: the variable is untouched,
+        # skips are still forbidden on `main`, and now all four test steps see
+        # the embedded bytes rather than only `--all-features`. build.rs emits
+        # `cargo:rerun-if-env-changed` for both variables, so setting them up
+        # front also removes the mid-job rebuild the old order forced.
         shell: bash
         run: |
           set -eu
@@ -171,6 +187,10 @@ jobs:
         # that test is a no-op and an ICU embed regression ships silently, which
         # is exactly how the previous ICU test went green against a `load_icu`
         # that could only ever work from a pre-populated cache.
+        #
+        # Ordered before the test steps for the same reason as the step above —
+        # see its comment. `embedded_icu_loads_with_no_cache_and_no_network` was
+        # the second of the two failures.
         shell: bash
         run: |
           set -eu
@@ -186,6 +206,16 @@ jobs:
           else
             echo "::warning::could not fetch ICU; the air-gapped date-window test will skip"
           fi
+      - name: Run unit tests (lib + bins)
+        run: cargo test --workspace --lib --bins
+      - name: Run integration tests (incl. real-binary boot smoke test)
+        # The tests/ suite links libonnxruntime and, via boot_smoke.rs, spawns
+        # the compiled binary in --web-only mode and curls GET / — exercising
+        # the real startup path (clap, config load, migrations, axum::serve)
+        # that the in-process router tests never touch.
+        run: cargo test --workspace --tests
+      - name: Run doc tests
+        run: cargo test --workspace --doc
       - name: Run full suite with analytics (DuckDB behavioral extension)
         # Compiles AND runs the analytics code + tests that the default feature
         # set never builds. This is the gate that would have caught the v0.5.0

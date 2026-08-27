@@ -69,6 +69,7 @@ from math import ceil
 import yaml
 
 MUTATION_WORKFLOW = ".github/workflows/mutation.yml"
+CI_WORKFLOW = ".github/workflows/ci.yml"
 
 # Matrix rows may omit `package`; the workflow falls back to this.
 DEFAULT_PACKAGE = "birdnet-core"
@@ -513,6 +514,74 @@ def median_seconds(path: str, key: str, jobs: list[tuple[str, str, str, int]],
     return max(medians) if medians else None
 
 
+def check_embed_precedes_tests() -> None:
+    """The extension embed must happen before anything that tests for it.
+
+    `BIRDNET_REQUIRE_LIVE_EXTENSION` is set for the whole `test` job on pushes
+    to `main`, turning "the extension is missing, so skip" into a failure. The
+    two steps that fetch and embed the extensions used to sit *after*
+    `--lib --bins`, `--tests` and `--doc`.
+
+    `connection::tests` compiles under the `analytics` feature, and a workspace
+    build turns that on by unification, so those two tests ran in the very first
+    step — skipping forbidden, nothing embedded yet. They could only fail, and
+    main was red from the merge that introduced the gate onward:
+
+        test result: FAILED. 87 passed; 2 failed
+
+    Reproduced exactly, and both ways, before this check was written:
+
+        BIRDNET_REQUIRE_LIVE_EXTENSION=1 \
+          cargo test -p birdnet-behavioral --lib --features analytics
+        -> 87 passed; 2 failed          (the CI failure, locally)
+
+        ... plus BIRDNET_BUNDLED_{EXTENSION,ICU}_FILE pointing at the CDN files
+        -> 89 passed; 0 failed          (both tests assert, and pass)
+
+    The fix was ordering. This is what keeps it ordered: a comment saying "this
+    step must come first" is the shape of every incident this script exists for.
+    """
+    print("\nThe extension embed runs before the tests that require it")
+    spec = yaml.safe_load(open(CI_WORKFLOW))
+    steps = spec["jobs"]["test"]["steps"]
+    names = [str(st.get("name", "")) for st in steps]
+
+    def first(pred: "callable[[str], bool]", what: str) -> int | None:
+        for i, n in enumerate(names):
+            if pred(n):
+                return i
+        check(False, f"the test job still has a step that {what}")
+        return None
+
+    last_embed = None
+    for i, n in enumerate(names):
+        if n.startswith("Embed the "):
+            last_embed = i
+    if last_embed is None:
+        check(False, "the test job still has 'Embed the ...' steps")
+        return
+
+    first_test = first(lambda n: n.startswith("Run ") and "tests" in n,
+                       "runs tests")
+    if first_test is None:
+        return
+
+    check(last_embed < first_test,
+          f"every embed step (last at #{last_embed + 1} {names[last_embed]!r}) "
+          f"precedes the first test step (#{first_test + 1} "
+          f"{names[first_test]!r})")
+
+    # The counterpart. Every assertion above is satisfied by a job with no
+    # embed steps and no test steps, or by a `names` list this function failed
+    # to read — so pin that both kinds are actually present and distinct.
+    embeds = [n for n in names if n.startswith("Embed the ")]
+    tests = [n for n in names if n.startswith("Run ") and "tests" in n]
+    check(len(embeds) == 2,
+          f"both extensions are embedded (found {len(embeds)}: {embeds})")
+    check(len(tests) >= 3,
+          f"the job runs its several test steps (found {len(tests)}: {tests})")
+
+
 def check_headroom_arithmetic() -> None:
     """The pure parts of check 4 and 5, against the numbers that produced them.
 
@@ -701,6 +770,7 @@ def main(argv: list[str] | None = None) -> int:
 
     check_timeouts()
     check_mutation_matrix()
+    check_embed_precedes_tests()
     check_headroom_arithmetic()
 
     for job in unresolved:
