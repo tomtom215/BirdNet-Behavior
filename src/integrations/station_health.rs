@@ -239,7 +239,7 @@ fn disk_condition(used: f64) -> Option<Condition> {
 /// A CPU sitting at or above the throttling threshold.
 fn check_thermal(out: &mut Vec<Condition>) {
     out.extend(thermal_condition(
-        birdnet_web::system_info::sample().cpu_temp_celsius,
+        birdnet_web::system_info::cpu_temperature(),
     ));
 }
 

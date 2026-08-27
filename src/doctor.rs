@@ -196,14 +196,15 @@ fn writable(path: &Path) -> bool {
 }
 
 /// Whether an executable named `name` is on `PATH`.
+///
+/// Delegates to `birdnet_core::audio::capture::is_tool_available` rather than
+/// keeping its own `PATH` walk. This used to be a second implementation, and a
+/// second implementation of "can we run X?" is a second answer: the doctor
+/// checked `is_file()` on `PATH` while capture forked `which`, so the doctor
+/// could report `arecord` present on a host where `CaptureManager::start`
+/// refused with `arecord not found in PATH`. One question, one answer.
 fn tool_exists(name: &str) -> bool {
-    let Ok(path) = std::env::var("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path).any(|d| {
-        let candidate = d.join(name);
-        candidate.is_file()
-    })
+    birdnet_core::audio::capture::is_tool_available(name)
 }
 
 #[cfg(test)]

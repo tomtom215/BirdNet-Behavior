@@ -16,7 +16,7 @@ const KIOSK_HTML: &str = r#"<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BirdNet-Behavior · Kiosk</title>
-<link rel="stylesheet" href="/static/css/app.css">
+<link rel="stylesheet" href="/static/css/app.css?v={{version}}">
 <style>
   body { padding:4vh 5vw; overflow:hidden; }
   .kiosk-head { display:flex; align-items:center; justify-content:center; gap:12px; margin-bottom:4vh; }
@@ -68,7 +68,7 @@ const KIOSK_HTML: &str = r#"<!DOCTYPE html>
 </html>"#;
 
 pub(super) async fn kiosk_page() -> Html<String> {
-    Html(KIOSK_HTML.to_string())
+    Html(crate::routes::pages::with_asset_version(KIOSK_HTML))
 }
 
 pub(super) async fn kiosk_content_partial(

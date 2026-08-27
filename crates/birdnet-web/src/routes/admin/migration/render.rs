@@ -363,12 +363,75 @@ pub fn import_batches(
 
 /// Render the validation result partial.
 #[allow(clippy::too_many_lines)]
+/// The **Start Import** button for a given tab.
+///
+/// The two differ only in what they post: the Server Path tab re-sends the path
+/// and the origin fields, while a staged upload has both already captured on the
+/// server and needs no body at all.
+fn start_button(preview: UploadPreview<'_>) -> String {
+    match preview {
+        UploadPreview::ServerPath => r##"<button class="btn btn-primary mt-sm"
+          hx-post="/admin/migrate/run"
+          hx-include="#migrate-source-path, #migrate-origin"
+          hx-target="#migrate-status">
+    Start Import
+  </button>"##
+            .to_string(),
+        UploadPreview::Staged { file_name, token } => format!(
+            r##"<p class="hint">Nothing has been imported yet. <strong>{}</strong> is
+     held on this station until you confirm.</p>
+  <button class="btn btn-primary mt-sm"
+          hx-post="/admin/migrate/upload/confirm"
+          hx-vals='{{"token": "{}"}}'
+          hx-target="#migrate-status">
+    Import this file
+  </button>"##,
+            escape_html(file_name),
+            token
+        ),
+    }
+}
+
+/// Which tab this report is being rendered for, and therefore what the
+/// **Start Import** button has to do.
+///
+/// This replaces an `_is_upload: bool` the function never read — the dead half
+/// of a feature that only ever worked on one tab. See `StagedUpload` in the
+/// parent module for what was being discarded.
+#[derive(Debug, Clone, Copy)]
+pub enum UploadPreview<'a> {
+    /// Rendered by "Validate Only" on the Server Path tab. The import re-reads
+    /// the path and the origin fields straight from the form.
+    ServerPath,
+    /// Rendered after an upload. The file is already on disk and its origin
+    /// fields are already captured, so the button posts nothing and names the
+    /// file it is about to import.
+    Staged {
+        /// The name the browser sent, echoed so the operator can see which file
+        /// this report is about.
+        file_name: &'a str,
+        /// Identifies *this* staging, so confirming imports the file the report
+        /// describes and not a later one.
+        ///
+        /// There is one staging slot, because there is one import slot — an
+        /// import has never been able to run twice concurrently. But a slot that
+        /// a second upload can replace means two admins on one station could
+        /// have the first confirm the second's file, having reviewed a report
+        /// about their own. Reviewing one file and importing another is the
+        /// exact failure this whole two-step flow exists to prevent, so the
+        /// button carries the identity of what it previewed.
+        token: u64,
+    },
+}
+
+/// Render the validation report, ending in the button that starts the import.
+#[must_use]
 pub fn validation_result(
     result: Result<
         (DetectedSchema, ValidationReport, MigrationReport),
         birdnet_migrate::MigrateError,
     >,
-    _is_upload: bool,
+    preview: UploadPreview<'_>,
 ) -> String {
     match result {
         Ok((schema, report, migration_report)) => {
@@ -412,19 +475,25 @@ pub fn validation_result(
                 .map(|(start, end)| format!("<p><strong>Date range:</strong> {start} → {end}</p>"))
                 .unwrap_or_default();
 
-            let quality_html = if migration_report.null_date_rows > 0 {
-                format!(
+            // Both, not one or the other. This was an `if / else if`, so a file
+            // with missing dates *and* duplicates reported only the dates.
+            let mut quality_html = String::new();
+            if migration_report.null_date_rows > 0 {
+                use std::fmt::Write as _;
+                let _ = write!(
+                    quality_html,
                     r#"<p class="check-warn">⚠ {} rows have missing dates</p>"#,
                     migration_report.null_date_rows
-                )
-            } else if migration_report.duplicate_rows > 0 {
-                format!(
+                );
+            }
+            if migration_report.duplicate_rows > 0 {
+                use std::fmt::Write as _;
+                let _ = write!(
+                    quality_html,
                     r#"<p class="info-text">ℹ {} duplicate rows will be skipped</p>"#,
                     migration_report.duplicate_rows
-                )
-            } else {
-                String::new()
-            };
+                );
+            }
 
             let top_species_html: String = {
                 use std::fmt::Write as _;
@@ -459,7 +528,7 @@ pub fn validation_result(
             };
 
             format!(
-                r##"<div class="card result-card {tone}">
+                r#"<div class="card result-card {tone}">
   <div class="result-title {tone}">{label}</div>
   <p><strong>Schema:</strong> {schema_name}</p>
   <p><strong>Total detections:</strong> {rows}</p>
@@ -486,14 +555,10 @@ pub fn validation_result(
     {more_species}
   </details>
 
-  <button class="btn btn-primary mt-sm"
-          hx-post="/admin/migrate/run"
-          hx-include="#migrate-source-path, #migrate-origin"
-          hx-target="#migrate-status">
-    Start Import
-  </button>
-</div>"##,
+  {start_button}
+</div>"#,
                 unique = migration_report.unique_species,
+                start_button = start_button(preview),
             )
         }
         Err(e) => format!(

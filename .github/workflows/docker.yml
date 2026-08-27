@@ -209,6 +209,81 @@ jobs:
             --entrypoint /usr/local/bin/birdnet-behavior \
             birdnet-behavior:verify --verify-extension
 
+      - name: Prove the image can run every tool the daemon spawns
+        # The daemon does not capture audio in-process: it spawns `arecord` for
+        # ALSA microphones, `ffmpeg` for RTSP / PipeWire / Listen->Live, and
+        # `ffmpeg`/`sox` for clip conversion. `docker-compose.alsa.yml` ships as
+        # the supported USB-microphone path, so an image without `arecord`
+        # starts, serves the whole dashboard, passes its own HEALTHCHECK — and
+        # records nothing.
+        #
+        # `tests/container_can_run_what_the_daemon_spawns.rs` gates the same
+        # invariant statically, against the Dockerfile's package list, so a
+        # contributor sees it without a Docker daemon. This is the one that
+        # proves the packages actually resolve to binaries in the built image,
+        # on both architectures.
+        #
+        # A `PATH` walk, not `command -v`, and not `which`.
+        #
+        # `which` is out because it is not POSIX and Debian's debianutils no
+        # longer ships it — precisely the trap the Rust side stopped falling
+        # into.
+        #
+        # `command -v` is out because it resolves shell builtins, and the
+        # daemon does not run a shell: `Command::new("kill")` needs an
+        # executable file on `PATH`. The first version of this step used it and
+        # printed
+        #
+        #     ok      kill -> kill
+        #
+        # on both architectures — a bare name where every other tool printed an
+        # absolute path. That is `/bin/sh`'s `kill` builtin answering, so the
+        # line read as proof that `procps` was installed while proving nothing
+        # about it. A check that reports success for a reason other than the one
+        # it claims is the same defect this whole step exists to catch.
+        #
+        # Verified both ways before being trusted: `command -v` calls `shift`,
+        # `trap`, `eval`, `exec` and `readonly` present (they are builtins with
+        # no binary anywhere), and the walk below correctly rejects all five
+        # while still finding `/usr/bin/kill` and `/usr/bin/df`.
+        #
+        # The algorithm is the one `is_tool_available` uses in Rust — same
+        # question, same answer, by construction.
+        run: |
+          set -euo pipefail
+          docker run --rm --network none \
+            --entrypoint /bin/sh birdnet-behavior:verify -c '
+              set -eu
+              find_on_path() {
+                _tool=$1
+                _saved=$IFS
+                IFS=:
+                for _dir in $PATH; do
+                  [ -n "$_dir" ] || _dir=.
+                  if [ -f "$_dir/$_tool" ] && [ -x "$_dir/$_tool" ]; then
+                    IFS=$_saved
+                    printf "%s\n" "$_dir/$_tool"
+                    return 0
+                  fi
+                done
+                IFS=$_saved
+                return 1
+              }
+              missing=""
+              for tool in arecord ffmpeg sox kill df tar getconf; do
+                if path=$(find_on_path "$tool"); then
+                  echo "ok      $tool -> $path"
+                else
+                  echo "MISSING $tool (no executable file on PATH)"
+                  missing="$missing $tool"
+                fi
+              done
+              if [ -n "$missing" ]; then
+                echo "::error::the runtime image cannot run:$missing"
+                exit 1
+              fi
+            '
+
       - name: Export digest
         if: env.PUSH == 'true'
         run: |

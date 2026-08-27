@@ -45,8 +45,9 @@ No row from `ss` means the daemon never finished starting — see [Service won't
 
 ```bash
 arecord -l                                                       # list capture devices
-arecord -D plughw:1,0 -d 3 /tmp/test.wav && aplay /tmp/test.wav  # test the mic
-sudo nano /etc/birdnet/birdnet.conf                              # set ALSA_CARD=plughw:X,Y
+# Use the card *id* — the word after "card N:" — not the index:
+arecord -D plughw:CARD=PRO,DEV=0 -d 3 /tmp/test.wav && aplay /tmp/test.wav
+sudo nano /etc/birdnet/birdnet.conf                              # ALSA_CARD=plughw:CARD=<id>,DEV=0
 sudo systemctl restart birdnet-behavior
 ```
 

@@ -152,6 +152,24 @@ pub fn router() -> Router<AppState> {
         // O-24 PWA assets.
         .route("/static/manifest.webmanifest", get(manifest_webmanifest))
         .route("/static/sw.js", get(service_worker_js))
+        // `/favicon.ico` is the browser's *fallback* request: a document with
+        // no `rel="icon"` asks for it unprompted, and this server used to
+        // answer 404. `templates/layout.html` carries explicit icon links and
+        // so escaped it — but seven full documents are rendered outside that
+        // layout (login, share and its 404, onboarding, kiosk, the standalone
+        // audio player, the admin shell, the log viewer) and none of them did.
+        // Every one showed a blank tab and logged a 404 to the console.
+        //
+        // Routing the fallback fixes all seven, and the eighth someone writes
+        // next year, which adding a link tag to each would not. It serves the
+        // 192 px PNG for the reason layout.html already gives for using PNGs
+        // here: every browser this dashboard supports accepts one, and an
+        // actual `.ico` would be a second copy of the same artwork.
+        //
+        // Found by the visual-QA sweep the moment `/login` entered the route
+        // table for the first time (see `qa_routes_cover_the_navigation`):
+        //   login__light__desktop: console=["Failed to load resource: … 404 …"]
+        .route("/favicon.ico", get(favicon))
         .route("/static/icon-192.png", get(icon_192))
         .route("/static/icon-512.png", get(icon_512))
         .route("/static/icon-maskable-512.png", get(icon_maskable_512))
@@ -181,6 +199,18 @@ async fn service_worker_js() -> impl IntoResponse {
             ("Service-Worker-Allowed".parse().unwrap(), "/"),
         ],
         SERVICE_WORKER_JS,
+    )
+}
+
+/// The browser-tab icon for any document that does not name one itself.
+async fn favicon() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "image/png"),
+            (header::CACHE_CONTROL, IMMUTABLE),
+        ],
+        ICON_192,
     )
 }
 

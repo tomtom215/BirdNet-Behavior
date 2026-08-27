@@ -26,8 +26,64 @@ use birdnet_behavioral::queries::EXCLUDE_IMPORTS_SETTING;
 
 use crate::state::AppState;
 
+use render::UploadPreview;
+
 /// Shared migration state (one active job at a time).
 type MigrationState = Arc<Mutex<Option<ProgressHandle>>>;
+
+/// An uploaded file that has been validated and is waiting for the operator to
+/// say "yes, import it".
+///
+/// # Why the upload is staged instead of imported straight away
+///
+/// It used to import straight away. `upload_and_run_handler` ran the same
+/// validation the Server Path tab runs, refused the file if a **required**
+/// check failed, and then dropped the report on the floor — the binding was
+/// literally `let (schema, report, _migration_report) = …`, with `report` never
+/// read again after the required-checks test.
+///
+/// The checks that were being discarded are the ones that matter for the
+/// question this feature exists to answer. `provenance::location_check` is
+/// deliberately never `required` — its own comment explains why: "merging two
+/// sites is a legitimate thing to want … the job is to make that a decision
+/// instead of an accident." Being non-required meant that on the Upload tab it
+/// could not reach the operator at all. Neither could the duplicate count, the
+/// date range or the species preview.
+///
+/// So an operator who uploaded another station's history saw no distance
+/// warning, no preview, and no confirmation step — while the manual described
+/// the Server-Path journey as if it were both.
+///
+/// One slot, because one import can run at a time anyway (the progress handle
+/// above is also a single slot). A newer upload replaces an unconfirmed older
+/// one, and its temp file is dropped with it.
+///
+/// The replacement is why each staging carries a [`Staged::token`]: with one
+/// slot and two admins, the first could otherwise confirm the second's file
+/// after reading a report about their own — reviewing one file and importing
+/// another, which is the exact failure this two-step flow exists to prevent.
+/// The confirm button carries the token of the report it was rendered with, and
+/// a mismatch is refused rather than imported.
+type StagedUpload = Arc<Mutex<Option<Staged>>>;
+
+/// Source of [`Staged::token`]. Monotonic, not secret: the route is already
+/// behind admin RBAC, so this identifies a staging rather than authorising one.
+static STAGING_TOKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// A validated upload waiting for confirmation.
+struct Staged {
+    /// Kept alive so the file survives until the import reads it; dropping this
+    /// removes it from disk.
+    tmp: tempfile::NamedTempFile,
+    /// The name the browser sent, for the progress message and the log line.
+    file_name: String,
+    /// The reconciliation the operator asked for on the upload form.
+    options: birdnet_migrate::ImportOptions,
+    /// Row count from the detected schema, so the progress bar has a total.
+    rows_hint: u64,
+    /// Identifies this staging. See [`StagedUpload`].
+    token: u64,
+}
 
 /// Upper bound on an uploaded BirdNET-Pi database. axum's default request-body
 /// limit is a mere 2 MiB — far smaller than a real `birds.db` (tens to hundreds
@@ -40,6 +96,7 @@ const MAX_UPLOAD_BYTES: usize = 4 * 1024 * 1024 * 1024;
 /// Mount migration routes.
 pub fn router() -> Router<AppState> {
     let migration_state: MigrationState = Arc::new(Mutex::new(None));
+    let staged_upload: StagedUpload = Arc::new(Mutex::new(None));
 
     Router::new()
         .route("/admin/migrate", get(migration_page))
@@ -50,12 +107,20 @@ pub fn router() -> Router<AppState> {
         .route(
             "/admin/migrate/upload",
             axum::routing::post({
-                let ms = Arc::clone(&migration_state);
-                move |state, multipart| upload_and_run_handler(state, multipart, ms)
+                let su = Arc::clone(&staged_upload);
+                move |state, multipart| upload_handler(state, multipart, su)
             })
             // Raise the body limit for the DB upload specifically (see
             // MAX_UPLOAD_BYTES) so a real BirdNET-Pi database isn't rejected.
             .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
+        )
+        .route(
+            "/admin/migrate/upload/confirm",
+            axum::routing::post({
+                let ms = Arc::clone(&migration_state);
+                let su = Arc::clone(&staged_upload);
+                move |state, form| upload_confirm_handler(state, ms, su, form)
+            }),
         )
         .route(
             "/admin/migrate/run",
@@ -358,17 +423,20 @@ async fn validate_handler(
     })
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Html(render::validation_result(result, false)))
+    Ok(Html(render::validation_result(
+        result,
+        UploadPreview::ServerPath,
+    )))
 }
 
 // ---------------------------------------------------------------------------
 // POST /admin/migrate/upload  (multipart upload → validate + run)
 // ---------------------------------------------------------------------------
 
-async fn upload_and_run_handler(
+async fn upload_handler(
     State(state): State<AppState>,
     mut multipart: axum::extract::Multipart,
-    migration_state: MigrationState,
+    staged: StagedUpload,
 ) -> Result<Html<String>, StatusCode> {
     // Stream the uploaded multipart field straight to a temp file in chunks
     // (the Migrator later opens that file read-only). Streaming — rather than
@@ -447,8 +515,6 @@ async fn upload_and_run_handler(
         return Ok(Html(render::upload_error("Uploaded file is empty")));
     }
 
-    let dest_path = state.db_path().to_path_buf();
-
     // Validate first (read-only; never modifies the temp file).
     let validate_path = tmp_path.clone();
     let (u_lat, u_lon) = station_coords(&state);
@@ -458,7 +524,7 @@ async fn upload_and_run_handler(
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let (schema, report, _migration_report) = match val_result {
+    let (schema, report, migration_report) = match val_result {
         Ok(triple) => triple,
         Err(e) => {
             return Ok(Html(render::upload_error(&format!(
@@ -480,7 +546,101 @@ async fn upload_and_run_handler(
         ))));
     }
 
-    let rows_hint = schema.row_count();
+    // The reconciliation the operator asked for on the upload form. `u_lat` /
+    // `u_lon` were already read above to validate the file; the confirm handler
+    // passes them on, which is what lets the batch record how far away the
+    // source station was. Calling the bare `run_migration` — which is
+    // `run_migration_with_options` with `ImportOptions::default()` and
+    // `station = (None, None)` — left `station_lat`, `station_lon` and
+    // `distance_km` NULL on every browser import, so the Patterns note that
+    // names an imported foreign site could never fire: it keys on a distance
+    // nothing had computed.
+    let options = import_options(&MigrateForm {
+        source_path: String::new(),
+        source_label,
+        source_utc_offset_secs,
+    });
+
+    // Hold the validated file and show the operator the report, rather than
+    // importing behind their back. See [`StagedUpload`].
+    let token = STAGING_TOKEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    {
+        let mut guard = staged
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *guard = Some(Staged {
+            tmp,
+            file_name: file_name.clone(),
+            options,
+            rows_hint: schema.row_count(),
+            token,
+        });
+    }
+
+    Ok(Html(render::validation_result(
+        Ok((schema, report, migration_report)),
+        UploadPreview::Staged {
+            file_name: &file_name,
+            token,
+        },
+    )))
+}
+
+// ---------------------------------------------------------------------------
+// POST /admin/migrate/upload/confirm  (run the staged upload)
+// ---------------------------------------------------------------------------
+
+/// What the confirm button posts: the identity of the report it was rendered
+/// with. See [`StagedUpload`].
+#[derive(serde::Deserialize)]
+struct ConfirmForm {
+    token: Option<u64>,
+}
+
+/// Import the file the operator uploaded and then confirmed.
+///
+/// Takes the staged upload out of its slot, so a double-submit cannot start two
+/// imports of the same file — and only if its token matches the report the
+/// button came from, so a second upload arriving in between is not imported by
+/// someone who reviewed the first.
+#[allow(clippy::unused_async)] // required by axum Handler trait
+async fn upload_confirm_handler(
+    State(state): State<AppState>,
+    migration_state: MigrationState,
+    staged: StagedUpload,
+    Form(form): Form<ConfirmForm>,
+) -> Result<Html<String>, StatusCode> {
+    let staged_now = {
+        let mut guard = staged
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Peek before taking: a token that does not match belongs to a report
+        // the operator never saw, and taking it would discard a staging its own
+        // owner is still entitled to confirm.
+        match guard.as_ref() {
+            Some(s) if form.token.is_none_or(|t| t == s.token) => guard.take(),
+            _ => None,
+        }
+    };
+
+    let Some(Staged {
+        tmp,
+        file_name,
+        options,
+        rows_hint,
+        token: _,
+    }) = staged_now
+    else {
+        return Ok(Html(render::upload_error(
+            "That upload is no longer staged — it was already imported, or \
+             another upload replaced it. Upload the file again.",
+        )));
+    };
+
+    let tmp_path = tmp.path().to_path_buf();
+    let dest_path = state.db_path().to_path_buf();
+    let station = station_coords(&state);
+
     let progress = ProgressHandle::new();
     {
         let mut guard = migration_state
@@ -489,21 +649,8 @@ async fn upload_and_run_handler(
         *guard = Some(progress.clone());
     }
 
-    // The same reconciliation the server-path tab offers. `u_lat`/`u_lon` were
-    // already read above to validate the file; passing them on is what lets the
-    // batch record how far away the source station was. Calling the bare
-    // `run_migration` here — which is `run_migration_with_options` with
-    // `ImportOptions::default()` and `station = (None, None)` — left
-    // `station_lat`, `station_lon` and `distance_km` NULL on every browser
-    // import, so the Patterns note that names an imported foreign site could
-    // never fire: it keys on a distance nothing had computed.
-    let options = import_options(&MigrateForm {
-        source_path: String::new(),
-        source_label,
-        source_utc_offset_secs,
-    });
     tokio::task::spawn_blocking(move || {
-        let _keep_tmp = tmp; // keeps temp file alive until migration finishes
+        let _keep_tmp = tmp; // keeps the temp file alive until migration finishes
         progress.update(MigrationProgress {
             stage: MigrationStage::Importing,
             rows_imported: 0,
@@ -512,12 +659,7 @@ async fn upload_and_run_handler(
             error: None,
         });
         match birdnet_migrate::birdnet_pi::run_migration_with_options(
-            &tmp_path,
-            &dest_path,
-            false,
-            &progress,
-            &options,
-            (u_lat, u_lon),
+            &tmp_path, &dest_path, false, &progress, &options, station,
         ) {
             Ok(summary) => {
                 tracing::info!(

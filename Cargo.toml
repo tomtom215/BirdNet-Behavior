@@ -16,7 +16,7 @@ resolver = "2"
 exclude = ["fuzz"]
 
 [workspace.package]
-version = "0.14.0"
+version = "0.15.0"
 edition = "2024"
 rust-version = "1.95"
 license = "CC-BY-NC-SA-4.0"
@@ -76,7 +76,13 @@ duckdb = { version = "~1.10505", features = ["bundled"] }
 # Web
 axum = { version = "0.8.9", features = ["ws", "form"] }
 tower = "0.5.3"
-tower-http = { version = "0.7.0", features = ["cors", "trace", "fs"] }
+# `compression-gzip`: the station served everything uncompressed. Measured on
+# the running server, `Accept-Encoding: gzip, br` returned no `Content-Encoding`
+# at all and a cold first load moved 330 KB (57 KB page + 213 KB app.css +
+# 51 KB htmx) where 75 KB would do. gzip only, not `compression-full`: brotli
+# and zstd would each add a fresh dependency tree for a few percent over gzip,
+# on a board where CPU is the scarce thing.
+tower-http = { version = "0.7.0", features = ["cors", "trace", "fs", "compression-gzip"] }
 
 # HTTP client
 reqwest = { version = "0.13.4", features = ["blocking", "json"] }
@@ -108,6 +114,15 @@ ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "n
 # Pulled in transitively through ort's `ndarray` feature; tracked here so the
 # declared version matches what the lockfile resolves.
 ndarray = "0.17"
+
+# DEFLATE. Two consumers, both of which used to hand-roll the absence of it:
+# the spectrogram PNG writer wrote store-only (type-0) zlib blocks, so a real
+# 975x128 spectrogram shipped as 499 431 bytes where 66 686 would do; and the
+# HTTP layer served everything uncompressed. `rust_backend` is pure Rust
+# (miniz_oxide) — no C, no build step, and both crates were already resolved in
+# Cargo.lock as build-dependencies of libduckdb-sys, so this is a version the
+# lockfile already vets.
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
 
 # Cryptography — HMAC-SHA256 signing for public share-link tokens (O-07)
 hmac = "0.13"

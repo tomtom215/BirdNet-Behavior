@@ -74,7 +74,7 @@ async fn station_health_line_partial(
                 ),
             );
         }
-        if let Some(temp) = crate::system_info::sample().cpu_temp_celsius {
+        if let Some(temp) = crate::system_info::cpu_temperature() {
             let _ = std::fmt::Write::write_fmt(
                 &mut out,
                 format_args!(r#"<span class="sep">·</span><span>{temp:.0}°C</span>"#),

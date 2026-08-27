@@ -7,8 +7,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{title}} · BirdNet-Behavior</title>
     <meta name="color-scheme" content="light dark">
-    <link rel="stylesheet" href="/static/css/app.css">
-    <link rel="stylesheet" href="/static/css/print.css" media="print">
+    <!-- `?v={{version}}` is load-bearing. Both stylesheets are served with
+         `Cache-Control: public, max-age=31536000, immutable`, and `immutable`
+         tells the browser not to revalidate even on an explicit reload. At a
+         bare URL that meant an updated station kept serving new HTML against
+         last year's stylesheet in every browser that had visited before, for up
+         to a year, with no way for the operator to clear it. The version query
+         makes each release a different URL, which is what `immutable` assumes.
+         Keep this in step with the identical query on the service-worker
+         registration and on sw.js's PRECACHE list. -->
+    <link rel="stylesheet" href="/static/css/app.css?v={{version}}">
+    <link rel="stylesheet" href="/static/css/print.css?v={{version}}" media="print">
     <link rel="alternate" type="application/rss+xml" title="BirdNet · rare detections" href="/feeds/rare.rss">
     <!-- PWA (O-24): manifest, theme-color, apple-touch-icon. -->
     <link rel="manifest" href="/static/manifest.webmanifest">

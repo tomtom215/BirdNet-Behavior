@@ -244,6 +244,9 @@ async fn share_page(State(state): State<AppState>, Path(token): Path<String>) ->
         .replace([',', '.'], "");
 
     let body = TEMPLATE
+        // The stylesheet is served `immutable` for a year, so its URL has to
+        // change when the build does — see the note in templates/layout.html.
+        .replace("{{version}}", env!("CARGO_PKG_VERSION"))
         // O-18: toast live region for the share page's "Copy permalink" UX.
         .replace(
             "{{toast_region}}",
@@ -375,7 +378,11 @@ fn html_ok(body: String) -> Response {
 }
 
 fn gone_page() -> Response {
-    let html = r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Not found</title><meta name="robots" content="noindex"><link rel="stylesheet" href="/static/css/app.css"></head><body class="sh-gone"><h1 class="display sh-gone-title">This clip is gone.</h1><p class="bnb-meta sh-gone-text">The link expired or never existed. The station owner can share a fresh one.</p></body></html>"#;
+    let html = concat!(
+        r#"<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Not found</title><meta name="robots" content="noindex"><link rel="stylesheet" href="/static/css/app.css?v="#,
+        env!("CARGO_PKG_VERSION"),
+        r#""></head><body class="sh-gone"><h1 class="display sh-gone-title">This clip is gone.</h1><p class="bnb-meta sh-gone-text">The link expired or never existed. The station owner can share a fresh one.</p></body></html>"#
+    );
     (
         StatusCode::NOT_FOUND,
         [(

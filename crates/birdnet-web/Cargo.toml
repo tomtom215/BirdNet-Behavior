@@ -44,6 +44,10 @@ sysinfo.workspace = true
 tokio-util.workspace = true
 tokio-stream.workspace = true
 reqwest.workspace = true
+# Real DEFLATE for the spectrogram PNG writer (it wrote store-only zlib
+# blocks) and for the HTTP compression layer.
+flate2.workspace = true
+
 # Share-link token signing (O-07 — public rare-bird permalinks).
 hmac.workspace = true
 sha2.workspace = true

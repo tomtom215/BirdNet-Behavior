@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.15.0] - 2026-08-26
 
 A production-readiness pass against one question: *if this station is sealed
 into an outdoor enclosure and left for a year with nobody on site, what does it
@@ -14,6 +14,125 @@ gates that were observed failing, is `docs/PRODUCTION_AUDIT.md`; a second pass
 after `v0.14.0` is `docs/FIELD_READINESS_AUDIT.md`.
 
 Several of these were invisible to a fully green 2 190-test suite.
+
+A **third** pass, `docs/ENCLOSURE_READINESS_AUDIT.md`, deliberately did not
+start by reading the code — it built the thing, served it, fetched from it with
+a browser and with `curl`, timed it, and went to the source only to explain a
+number. Almost nothing it found is visible in the source; it is visible in the
+bytes on the wire and in the packages that are and are not in an image.
+
+### Fixed — what running it turned up
+
+- **The Docker image could not record.** The runtime stage installed six
+  packages and none of them was `alsa-utils`, `ffmpeg` or `sox`. The daemon does
+  not capture in-process: it spawns `arecord` for every ALSA microphone,
+  `ffmpeg` for RTSP / PipeWire / Listen→Live, and `ffmpeg`/`sox` for clip
+  conversion. So `docker compose -f docker-compose.yml -f docker-compose.alsa.yml
+  up -d` — a shipped overlay whose entire purpose is USB microphone capture —
+  produced a container that starts, serves the whole dashboard, passes its own
+  `HEALTHCHECK`, and records nothing.
+
+  `install.sh` already carried this exact lesson for the bare-metal path
+  ("…on a minimal Debian it produces [the failure]"), and `debian:trixie-slim`
+  is a minimal Debian. Two gates now hold the line: a Rust test cross-checking
+  every `Command::new` against the Dockerfile's package list, and a `docker.yml`
+  step that resolves each binary inside the built image on both architectures.
+
+  Classifying the spawns for that gate found a second defect. `is_tool_available`
+  forked `which`, which is not POSIX and which Debian's `debianutils` no longer
+  ships — so the probe could fail with `ENOENT` on this very image and
+  `CaptureManager::start` would refuse with `arecord not found in PATH` while
+  `arecord` sat on the `PATH`. It is now a `PATH` walk that checks the execute
+  bit, and the second copy in `src/doctor.rs` delegates to it instead of
+  answering the same question differently.
+
+- **Nothing was compressed.** No response carried a `Content-Encoding`, with or
+  without `Accept-Encoding`. Eight representative paths measured 596 712 bytes
+  on the wire; with gzip they are **144 832 — 4.1×**. `app.css` alone is
+  212 950 → 43 614.
+
+  The predicate is an allow-list rather than `tower-http`'s default deny-list,
+  because the default would have compressed the audio route's `206 Partial
+  Content` responses without rewriting their `Content-Range` — a corrupt clip in
+  every `<audio>` element that seeks.
+
+  Writing the gate found the defect that mattered. Placed *inside*
+  `security_headers_middleware` — which buffers `text/html` and runs
+  `String::from_utf8_lossy` to stamp CSP nonces — every gzip stream came back
+  with its `0x8b` magic byte replaced by U+FFFD. Correct header, plausible
+  length, and not one page decodable in any browser. The layer is now outermost,
+  and the gate inflates the body instead of trusting the header.
+
+- **Spectrogram PNGs were stored, not compressed.** The encoder emitted type-0
+  (stored) DEFLATE blocks, with the comment "not great compression but no
+  dependency and correct output". Measured on real served responses: a full
+  spectrogram **499 431 → 67 310** bytes, a Recordings thumbnail
+  **164 046 → 26 994**, and the twenty-thumbnail `/recordings` grid
+  **3.28 MB → 0.54 MB**. The "no dependency" half had stopped being true —
+  `flate2` and `miniz_oxide` were already resolved in `Cargo.lock`.
+
+  The CRC-32 table was also being rebuilt once per PNG chunk; it is a
+  `LazyLock` now.
+
+- **`/station` blocked for 200 ms on a `thread::sleep`.** 238 ms serially
+  against 4 ms for `/patterns` — 60× the next slowest page, all of it a sleep
+  between two CPU refreshes, because a freshly constructed `sysinfo::System` has
+  no previous refresh to subtract. The function's own doc comment said to call
+  it from a background task; six call sites did the opposite, and two of them
+  paid the sleep **only to read a CPU temperature** that comes from sysfs.
+
+  One process-wide `System` handle now makes the delta "since the previous
+  caller", which for a page polled once a minute is a better window than a
+  200 ms slice, and `cpu_temperature()` is its own function. The Today rail
+  polls that path `every 60s`, so a kiosk was holding a blocking thread for
+  200 ms a minute, forever.
+
+- **The migration Upload tab computed the "this file is from somewhere else"
+  warning and threw it away.** *(Behaviour change: `POST /admin/migrate/upload`
+  no longer imports. It stages and returns the report; the new
+  `POST /admin/migrate/upload/confirm` imports. Anything scripted against the
+  old one-step endpoint needs the second call.)* It ran the same validation the Server Path tab
+  runs, refused the file only on a *required* failure, and then never read the
+  report again — while `location_check` is deliberately never required, which is
+  precisely what stopped it reaching the operator. Upload now stages the
+  validated file and shows the full report (species preview, date range,
+  duplicate count, distance warning); a separate confirm is what imports.
+
+- **`Cache-Control: immutable` on an unversioned stylesheet URL.** `immutable`
+  tells the browser not to revalidate even on an explicit reload, so an updated
+  station served new HTML against last year's CSS in every returning browser,
+  for up to a year. Every `<link>` now carries `?v=<version>`, including the six
+  full documents rendered outside the shared layout, and the service worker
+  precaches the same URLs.
+
+- **Seven documents showed a blank browser tab and logged a 404.** A document
+  with no `rel="icon"` requests `/favicon.ico` unprompted, and the server did not
+  route it. `templates/layout.html` names its icons and says why; the seven full
+  documents rendered outside it — login, onboarding, kiosk, the share page and
+  its 404, the standalone audio player, the admin shell, the log viewer — never
+  got the same treatment. The fallback is routed now, which covers all seven and
+  the next one.
+
+  Found the first time `/login` was in the visual-QA route table, which it had
+  never been: `login__light__desktop: console=["Failed to load resource: … 404"]`.
+  After the fix, 152 screenshots and 0 pages with issues.
+
+### Changed — what the gates now see
+
+- **The visual-QA route table is written in the current URLs.** It listed
+  pre-spine paths (`/heatmap`, `/weekly`, `/system`, `/admin/audio`, …), which
+  still resolve because they 308-redirect, so the homes *were* being tested —
+  under names that did not describe them, and only for as long as the redirect
+  table stayed put. `/login`, the only screen an unauthenticated visitor can
+  reach, was in neither the table nor any redirect.
+
+- **`is_leap_year` and `days_in_month` are in `birdnet_core::civil`.** Two of
+  the four remaining hand-rolled copies now go through them. The other two stay
+  on purpose — `birdnet-scheduler` deliberately depends on `serde` and nothing
+  else, and `src/capture/schedule.rs`'s copy is the oracle its own conversion is
+  checked against — with a test that drives the scheduler's private predicate
+  through `SolarDay::for_date` and compares it against `civil`'s over every
+  February from 1800 to 2400.
 
 ### Fixed
 
@@ -4440,7 +4559,8 @@ x86_64 Linux.
 - systemd installer script with ALSA microphone auto-detection and
   automatic BirdNET+ model download from Zenodo.
 
-[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/tomtom215/BirdNet-Behavior/compare/v0.12.0...v0.13.0

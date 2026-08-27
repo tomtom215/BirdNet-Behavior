@@ -538,19 +538,16 @@ fn weekday_name(date: &str) -> &'static str {
 }
 
 /// Number of days in a given month (Gregorian, leap-year aware).
-const fn days_in_month(year: i64, month: u32) -> u32 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        2 => {
-            if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 {
-                29
-            } else {
-                28
-            }
-        }
-        // 4, 6, 9, 11 — and any out-of-range month — fall through to 30.
-        _ => 30,
-    }
+///
+/// Delegates to `birdnet_core::civil`, which is where the workspace's civil-date
+/// arithmetic lives. This used to write the leap-year predicate out by hand,
+/// which is one more place for a transcription slip in code that decides how
+/// many cells a calendar has. The `i64` year is clamped rather than cast
+/// blindly: a negative year is a broken clock, and the calendar it would draw
+/// is meaningless either way.
+fn days_in_month(year: i64, month: u32) -> u32 {
+    let year = u32::try_from(year.max(0)).unwrap_or(u32::MAX);
+    birdnet_core::civil::days_in_month(year, month)
 }
 
 /// Parse a `YYYY-MM` month string into `(year, month)`.

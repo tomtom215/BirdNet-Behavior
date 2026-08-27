@@ -66,7 +66,7 @@ fn civil_from_days(days: i64) -> (i32, u32, u32) {
 /// Day-of-year (1..=366) for an offset-from-today day number.
 fn day_of_year(year: i32, month: u32, day: u32) -> u32 {
     let cum = [0u32, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
-    let leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+    let leap = birdnet_core::civil::is_leap_year(u32::try_from(year.max(0)).unwrap_or(0));
     let mut doy = cum[(month - 1) as usize] + day;
     if leap && month > 2 {
         doy += 1;
