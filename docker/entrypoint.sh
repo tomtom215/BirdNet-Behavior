@@ -13,7 +13,9 @@
 #
 # Environment variables:
 #   BIRDNET_MODEL_DIR           Model directory (default: /data/model)
-#   BIRDNET_SKIP_MODEL_DOWNLOAD Set to "1" to skip auto-download
+#   BIRDNET_SKIP_MODEL_DOWNLOAD Set to "1" to skip auto-download (both models)
+#   BIRDNET_METADATA_MODEL      Geomodel path; set it to opt out of the fetch
+#   BIRDNET_GEOMODEL_BASE       Override the geomodel upstream origin (mirror)
 #   BIRDNET_MODEL               Path to ONNX model file (auto-set if blank)
 #   BIRDNET_LABELS              Path to labels CSV file (auto-set if blank)
 #   BIRDNET_LISTEN              Web server address (default: 0.0.0.0:8502)
@@ -101,10 +103,39 @@ ZENODO_BASE="${BIRDNET_ZENODO_BASE:-https://zenodo.org/api/records/18247420/file
 MODEL_SHA256="2a0f9efba1a98e3193ad3dfcb8323116a7de88e39545f3619a7ea46e3bb7d743"
 LABELS_SHA256="8124b0ea2d187104c5e2cd95a0f937165647e20349c8fd34d4d5ef991821f8f0"
 
+# ---------------------------------------------------------------------------
+# Geomodel (species occurrence filter) — optional
+# ---------------------------------------------------------------------------
+# Separate from the classifier and versioned separately: the classifier says
+# what it heard, the geomodel says which species plausibly occur at this
+# latitude/longitude in this week of the year. Without it every one of the
+# classifier's species stays a candidate wherever the container runs.
+#
+# The two do not score the same species list (12 012 against 11 560), so the
+# geomodel's own label file ships beside it and is what maps one onto the
+# other. Both are required or neither is used.
+#
+# Origins mirror the classifier's: our models release first, then the upstream
+# birdnet-team release it is mirrored from. Pins match installer/lib/10-config.sh.
+GEOMODEL_VERSION="v3.0.2"
+GEOMODEL_FILE="BirdNET+_Geomodel_V3.0.2_Global_12K_FP32.onnx"
+GEOMODEL_LABELS_FILE="BirdNET+_Geomodel_V3.0.2_Global_12K_Labels.txt"
+GEOMODEL_SHA256="b151f680a47de5371f39b3df129aea5946ac6baa039582274f833b42eaf992ea"
+GEOMODEL_LABELS_SHA256="c15818db07e55978d909a9bcd916cd0615b0183f789227d9516059151787c784"
+GEOMODEL_UPSTREAM_BASE="${BIRDNET_GEOMODEL_BASE:-https://github.com/birdnet-team/geomodel/releases/download/${GEOMODEL_VERSION}}"
+
 # Respect explicit overrides; otherwise use the default paths under MODEL_DIR.
 : "${BIRDNET_MODEL:=${MODEL_DIR}/${MODEL_FILE}}"
 : "${BIRDNET_LABELS:=${MODEL_DIR}/${LABELS_FILE}}"
 export BIRDNET_MODEL BIRDNET_LABELS
+
+# Deliberately NOT defaulted here. An operator who set these keeps them; one who
+# did not gets them only once both files are on disk, because a path pointing at
+# a file that never downloaded makes the daemon refuse the model on every start
+# and --doctor report FAIL on a container that merely declined an optional 14 MB
+# fetch.
+GEOMODEL_USER_SET=0
+[ -n "${BIRDNET_METADATA_MODEL:-}" ] && GEOMODEL_USER_SET=1
 
 # ---------------------------------------------------------------------------
 # sha256 verification
@@ -308,6 +339,83 @@ else
         "species labels CSV"
 
     log "Model ready."
+fi
+
+# ---------------------------------------------------------------------------
+# Geomodel auto-download driver (non-fatal)
+# ---------------------------------------------------------------------------
+# Unlike the classifier, a missing geomodel is not fatal: the container starts
+# and detects, it simply does not filter by location — which is how every
+# release before this one behaved. Refusing to start over an optional 14 MB
+# download would be the worse failure.
+
+# Fetch one geomodel file, our release first then upstream. Returns non-zero
+# instead of dying, so the caller can degrade rather than abort.
+ensure_geomodel_file() {
+    dest="$1"
+    filename="$2"
+    expected="$3"
+    desc="$4"
+
+    if [ -f "$dest" ]; then
+        log "${desc}: already cached — skipping download."
+        return 0
+    fi
+
+    for src in mirror upstream; do
+        if [ "$src" = "mirror" ]; then
+            url="${GH_BASE}/${filename}"
+            origin="GitHub release ${MODEL_RELEASE_TAG}"
+        else
+            url="${GEOMODEL_UPSTREAM_BASE}/${filename}"
+            origin="upstream birdnet-team/geomodel ${GEOMODEL_VERSION}"
+        fi
+
+        log "Fetching ${desc} from ${origin}…"
+        if ! fetch_one "$dest" "$url" "$desc"; then
+            warn "${desc}: ${origin} download failed — trying the next source."
+            continue
+        fi
+
+        if verify_sha256 "$dest" "$expected"; then
+            log "  ${desc}: sha256 verified (${origin})."
+            return 0
+        fi
+
+        warn "${desc}: sha256 mismatch from ${origin} — discarding and trying the next source."
+        rm -f "$dest" "${dest}.tmp"
+    done
+
+    rm -f "$dest" "${dest}.tmp"
+    return 1
+}
+
+if [ "${GEOMODEL_USER_SET}" = "1" ]; then
+    log "BIRDNET_METADATA_MODEL is set explicitly — leaving the geomodel alone."
+elif [ "${BIRDNET_SKIP_MODEL_DOWNLOAD:-}" = "1" ]; then
+    log "BIRDNET_SKIP_MODEL_DOWNLOAD=1 — skipping the geomodel download too."
+else
+    mkdir -p "${MODEL_DIR}"
+    geomodel_path="${MODEL_DIR}/${GEOMODEL_FILE}"
+    geolabels_path="${MODEL_DIR}/${GEOMODEL_LABELS_FILE}"
+
+    if ensure_geomodel_file "${geomodel_path}" "${GEOMODEL_FILE}" \
+        "${GEOMODEL_SHA256}" "geomodel (~14 MB)" &&
+        ensure_geomodel_file "${geolabels_path}" "${GEOMODEL_LABELS_FILE}" \
+            "${GEOMODEL_LABELS_SHA256}" "geomodel labels"; then
+        BIRDNET_METADATA_MODEL="${geomodel_path}"
+        BIRDNET_METADATA_LABELS="${geolabels_path}"
+        export BIRDNET_METADATA_MODEL BIRDNET_METADATA_LABELS
+        log "Species occurrence filtering: ON (set BIRDNET_SF_THRESH to tune; default 0.03)."
+    else
+        # The model alone is unusable — the station refuses a geomodel it cannot
+        # align — so neither is left behind to be half-configured next start.
+        rm -f "${geomodel_path}" "${geolabels_path}"
+        warn "Geomodel unavailable — species occurrence filtering is OFF."
+        warn "Every species the classifier knows stays a candidate wherever this"
+        warn "station is. Restart the container to retry, then check with:"
+        warn "  docker exec <container> birdnet-behavior --doctor"
+    fi
 fi
 
 # ---------------------------------------------------------------------------

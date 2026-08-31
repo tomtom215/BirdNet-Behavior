@@ -95,6 +95,47 @@ MODEL_GH_BASE="https://github.com/${REPO}/releases/download/${MODEL_RELEASE_TAG}
 ZENODO_RECORD="18247420"
 ZENODO_API="https://zenodo.org/api/records/${ZENODO_RECORD}/files"
 
+# ---------------------------------------------------------------------------
+# BirdNET Geomodel v3.0.2 — the species occurrence ("range") filter.
+#
+# Separate from the classifier above, and versioned separately: the classifier
+# says *what* it heard, the geomodel says which species plausibly occur at this
+# latitude/longitude in this week of the year. Without it the station keeps
+# every one of the classifier's ~11 560 species as a candidate wherever it is,
+# which is how a garden in Berlin reports birds that have never left Peru.
+#
+# The two do NOT score the same species list — the geomodel covers 12 012
+# species across birds, mammals, insects, amphibians and reptiles — so its own
+# label file ships beside it and is what maps one list onto the other. Both are
+# required; the station refuses a model it cannot align rather than reading one
+# list's index into the other.
+#
+# FP32 rather than FP16: both are genuine upstream artifacts and agree to
+# within one species in ~300 at the default threshold, but FP32 loads about
+# twice as fast (no FP16→FP32 cast nodes for the CPU execution provider) and
+# upstream marks it the recommended variant. 14 MB against the classifier's
+# 541 MB is not a size worth optimising.
+#
+# Origins mirror the classifier's: our own models release first (same host as
+# the binary), then the upstream birdnet-team release. Both are verified
+# against the sha256 pinned here before the bytes are accepted.
+#
+# Licence: the geomodel weights are CC BY-SA 4.0 (Stefan Kahl, K. Lisa Yang
+# Center for Conservation Bioacoustics) with prohibited uses covering poaching
+# and military applications — see MODEL_LICENSE.txt in the upstream release.
+# Redistribution is permitted with attribution; that is what the mirror does.
+GEOMODEL_VERSION="v3.0.2"
+GEOMODEL_FILE="BirdNET+_Geomodel_V3.0.2_Global_12K_FP32.onnx"
+GEOMODEL_LABELS_FILE="BirdNET+_Geomodel_V3.0.2_Global_12K_Labels.txt"
+GEOMODEL_SHA256="b151f680a47de5371f39b3df129aea5946ac6baa039582274f833b42eaf992ea"
+GEOMODEL_LABELS_SHA256="c15818db07e55978d909a9bcd916cd0615b0183f789227d9516059151787c784"
+
+# Primary origin: our models release (the same one the classifier comes from,
+# so a fresh install still contacts a single host).
+GEOMODEL_GH_BASE="${MODEL_GH_BASE}"
+# Fallback origin: the upstream release the mirror is taken from.
+GEOMODEL_UPSTREAM_BASE="https://github.com/birdnet-team/geomodel/releases/download/${GEOMODEL_VERSION}"
+
 # Colour codes (used only when stdout is a terminal)
 if [ -t 1 ]; then
     RED='\033[0;31m'

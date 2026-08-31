@@ -69,6 +69,7 @@ do_install() {
     create_directories
     setup_tmpfs_streaming
     download_model
+    download_geomodel        # optional: the species occurrence filter
     prompt_station_settings
     resolve_listen_addr      # finalize the bind address (env > config > unit > prompt)
     ensure_admin_password    # auto-protect /admin on a fresh LAN install
@@ -117,6 +118,10 @@ do_repair() {
         warn "Model files missing — downloading."
         download_model
     fi
+
+    # A repair run is how a station installed before the geomodel shipped picks
+    # it up: download_geomodel is a no-op when both files are already there.
+    download_geomodel
 
     write_config             # idempotent: fixes ownership/permissions, keeps content
     resolve_listen_addr      # preserve LAN bind across re-runs (env > config > unit)

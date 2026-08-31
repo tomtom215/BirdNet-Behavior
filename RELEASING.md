@@ -91,20 +91,40 @@ source) when that asset is absent or unreachable. The model is identical across
 app versions, so it is uploaded **once**, not re-pushed per patch (which also
 keeps each app release lean and provenance focused on the binaries).
 
-Publish or refresh it with the **`publish-model.yml`** workflow (Actions →
-*Publish model release* → *Run workflow*). It mirrors the files from Zenodo,
-**fails unless their sha256 matches the values pinned in
-`installer/lib/10-config.sh`** (so the published asset and the installer's
-verification hash can never drift), writes a `SHA256SUMS`, attaches a SLSA
-build-provenance attestation, and creates/updates the release idempotently
-(marked non-latest so it never shadows the app release's *Latest* badge).
+The same release also carries the **BirdNET geomodel** (~14 MB) and its label
+file — the species occurrence filter, mirrored from
+[`birdnet-team/geomodel`](https://github.com/birdnet-team/geomodel). It pairs
+with this classifier, so it rides in the same release rather than making a
+station reach a second host.
 
-Run it again only when the model file or its pinned checksums change: bump
-`MODEL_RELEASE_TAG` + `MODEL_SHA256` + `LABELS_SHA256` in
-`installer/lib/10-config.sh` (and the matching constants in
-`docker/entrypoint.sh`) first, then dispatch the workflow with the new tag.
-A fresh release line whose model release has not been published yet still
-installs cleanly — the installer simply falls back to Zenodo until it exists.
+Publish or refresh it with the **`publish-model.yml`** workflow (Actions →
+*Publish model release* → *Run workflow*). It mirrors the classifier from
+Zenodo and the geomodel from its upstream release, **fails unless every
+sha256 matches the values pinned in `installer/lib/10-config.sh`** (so the
+published assets and the installer's verification hashes can never drift),
+writes a `SHA256SUMS`, attaches a SLSA build-provenance attestation over all
+four files, and creates/updates the release idempotently (marked non-latest so
+it never shadows the app release's *Latest* badge).
+
+Run it again only when a model file or its pinned checksums change: bump
+`MODEL_RELEASE_TAG` + `MODEL_SHA256` + `LABELS_SHA256` (classifier) or
+`GEOMODEL_VERSION` + `GEOMODEL_FILE` + `GEOMODEL_SHA256` +
+`GEOMODEL_LABELS_SHA256` (geomodel) in `installer/lib/10-config.sh` — and the
+matching constants in `docker/entrypoint.sh` — first, then dispatch the
+workflow.
+
+A release line whose model release has not been published yet still installs
+cleanly. Each family has its own fallback origin and they degrade differently,
+by design:
+
+| Asset | Primary | Fallback | If both fail |
+|---|---|---|---|
+| Classifier + labels | this release | Zenodo | install **aborts** — a station without a classifier detects nothing |
+| Geomodel + labels | this release | `birdnet-team/geomodel` | install **continues** with a warning; occurrence filtering is off, and `--doctor` says so |
+
+> **Until this release carries the geomodel**, every install falls through to
+> the upstream origin on the first fetch and succeeds — it is a fallback, not a
+> failure. Re-running the workflow simply moves that fetch back onto our host.
 
 ## Rehearsing a release (dry run)
 

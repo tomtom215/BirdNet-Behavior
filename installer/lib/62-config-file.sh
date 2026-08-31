@@ -30,6 +30,17 @@ write_config() {
     # Persist the bind address so `install.sh repair`/`update` keep it (the
     # installer reads BIRDNET_LISTEN back from here on re-run).
     local listen_line="BIRDNET_LISTEN=${LISTEN_ADDR}"
+    # The geomodel is optional and its download is non-fatal, so the two
+    # settings are only written live when both files actually landed. Writing
+    # them unconditionally would point a fresh station at paths that do not
+    # exist, and `--doctor` would then report FAIL on an install that had merely
+    # declined an optional download.
+    local geo_model_line="# METADATA_MODEL_PATH="
+    local geo_labels_line="# METADATA_LABELS_PATH="
+    if [ "${GEOMODEL_INSTALLED:-0}" = "1" ]; then
+        geo_model_line="METADATA_MODEL_PATH=${MODEL_DIR}/${GEOMODEL_FILE}"
+        geo_labels_line="METADATA_LABELS_PATH=${MODEL_DIR}/${GEOMODEL_LABELS_FILE}"
+    fi
 
     info "Writing default config to ${CONFIG_FILE}…"
     cat > "${CONFIG_FILE}" <<EOF
@@ -73,21 +84,22 @@ ${lon_line}
 # OVERLAP=0.0              # seconds of 3 s analysis window overlap
 # DATABASE_LANG=en
 
-# --- Species occurrence filtering (off until a metadata model is set) ---
-# Drops species that do not occur near the station at this time of year. It is
-# INERT unless all three of these are present, and the installer ships none of
-# them: the model download fetches the classifier and its labels only.
+# --- Species occurrence filtering ---
+# Drops species that do not occur near this station at this time of year. Needs
+# all three of the following; the installer fetches the last two for you, and
+# the two settings below are live when it succeeded, commented out when it did
+# not.
 #   1. station coordinates (set above, or on the dashboard)
-#   2. METADATA_MODEL_PATH   — the metadata ("geo") ONNX model
+#   2. METADATA_MODEL_PATH   — the BirdNET geomodel (ONNX)
 #   3. METADATA_LABELS_PATH  — that model's own label file
-# The metadata model scores a different species list from the classifier, so
-# the label file is what maps one to the other; omit it only for a metadata
-# model indexed identically to the classifier, which the station verifies at
-# startup and refuses if it does not hold.
-# Run `birdnet-behavior --doctor` to see which of the three is missing.
-# METADATA_MODEL_PATH=
-# METADATA_LABELS_PATH=
-# SF_THRESH=0.03           # occurrence threshold; ignored while the filter is off
+# The geomodel scores a different species list from the classifier (12 012
+# against 11 560), so the label file is what maps one onto the other; omit it
+# only for a metadata model indexed identically to the classifier, which the
+# station verifies at startup and refuses if it does not hold.
+# Run \`birdnet-behavior --doctor\` to see which of the three is missing.
+${geo_model_line}
+${geo_labels_line}
+# SF_THRESH=0.03           # occurrence threshold; no effect while the filter is off
 
 # --- Disk management ---
 # MAX_FILES_SPECIES=0      # 0 = keep all recordings per species; set e.g. 100 to cap

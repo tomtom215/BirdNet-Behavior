@@ -28,6 +28,7 @@ CI_TESTS=(
     admin-login-summary.sh
     alsa-device-detect.sh
     checksum-refusals.sh
+    config-template.sh
     coord-parse.sh
     location-notice.sh
     pipefail-sigpipe.sh
