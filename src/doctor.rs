@@ -161,6 +161,7 @@ pub fn run_with_format(cli: &Cli, config: Option<&Config>, format: Format) -> i3
         checks.extend(config::check_config_values(cfg));
     }
     checks.push(config::check_station_location(cli, config));
+    checks.push(config::check_occurrence_filter(cli, config));
     checks.push(config::check_listen_address(cli));
     checks.push(config::check_admin_exposure(cli, config));
     checks.extend(clock::check_clock(cli, config));

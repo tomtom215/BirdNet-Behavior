@@ -88,6 +88,14 @@ pub struct DaemonConfig {
     pub process_existing: bool,
     /// Optional path to the metadata ONNX model for species filtering.
     pub metadata_model_path: Option<PathBuf>,
+    /// Optional path to the metadata model's own label file.
+    ///
+    /// The BirdNET geomodel scores a different species list from the
+    /// classifier (12 012 against the V3.0 classifier's 11 560), so its
+    /// outputs can only be read through its own labels. Leave `None` only for
+    /// a metadata model indexed identically to the classifier — a matched
+    /// BirdNET pair — which the loader verifies rather than assumes.
+    pub metadata_labels_path: Option<PathBuf>,
     /// Species filter configuration (threshold, whitelist, include/exclude).
     pub species_filter: crate::inference::species_filter::SpeciesFilterConfig,
     /// Optional callback re-read on a short TTL to refresh the operator's
@@ -191,6 +199,7 @@ mod tests {
             model: ModelConfig::default(),
             process_existing: false,
             metadata_model_path: None,
+            metadata_labels_path: None,
             species_filter: crate::inference::species_filter::SpeciesFilterConfig::default(),
             species_lists_provider: None,
             privacy_threshold: 0.0,

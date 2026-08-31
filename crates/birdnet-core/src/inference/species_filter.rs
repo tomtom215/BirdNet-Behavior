@@ -1,17 +1,32 @@
 //! Species occurrence frequency filter using a metadata ONNX model.
 //!
-//! `BirdNET` provides a metadata model that takes `(latitude, longitude, week_number)`
-//! as input and outputs a probability vector for each of ~6000 species. Species
-//! below the configurable `sf_thresh` threshold are filtered out. A whitelist,
-//! include list, and exclude list allow fine-grained control over which species
-//! are reported.
+//! `BirdNET` provides a metadata model (the "geomodel") that takes
+//! `(latitude, longitude, week_number)` as input and returns an occurrence
+//! probability for each species it knows about. Species below the configurable
+//! `sf_thresh` threshold are filtered out. A whitelist, include list, and
+//! exclude list allow fine-grained control over which species are reported.
+//!
+//! # Two vocabularies, not one
+//!
+//! The metadata model and the classifier do not score the same species list.
+//! BirdNET Geomodel v3.0 covers 12 012 species; the V3.0 Global 11K classifier
+//! emits 11 560. So an output *index* from one is meaningless to the other, and
+//! the model's own label file is the only thing that says which species a given
+//! output belongs to.
+//!
+//! [`SpeciesFilter::load_with_vocabulary`] therefore takes the metadata model's
+//! labels alongside it and matches by scientific name; when no such file is
+//! given it requires the two vocabularies to be the same width and refuses the
+//! model otherwise. Reading one list's index into the other is exactly the bug
+//! this guard exists to prevent: it is silent, and it reports one bird as
+//! another with full confidence.
 
 use std::collections::HashSet;
 use std::fmt;
 use std::path::Path;
 
 use ort::session::Session;
-use ort::value::Tensor;
+use ort::value::{Tensor, ValueType};
 
 use crate::inference::labels::{LabelSet, SpeciesLabel};
 use crate::inference::model::InferenceError;
@@ -173,6 +188,21 @@ impl CacheKey {
 /// above the threshold (plus whitelisted species) pass through.
 pub struct SpeciesFilter {
     session: Option<Session>,
+    /// The metadata model's *own* species vocabulary, when it has one.
+    ///
+    /// The BirdNET geomodel scores 12 012 species; the V3.0 classifier emits
+    /// 11 560. The two lists are neither the same length nor the same order,
+    /// so the model's output index means nothing to the classifier — only the
+    /// scientific name at that index does. `None` means the caller asserted
+    /// the two vocabularies are index-identical, which
+    /// [`SpeciesFilter::load_with_vocabulary`] verifies against the model's
+    /// declared output width before accepting it.
+    meta_labels: Option<LabelSet>,
+    /// How many species the loaded model is expected to score: the metadata
+    /// label count when there is one, otherwise the classifier's. Re-checked
+    /// against the actual output on every inference, because a model that
+    /// declares a dynamic output width cannot be checked at load.
+    expected_width: Option<usize>,
     config: SpeciesFilterConfig,
     cache_key: Option<CacheKey>,
     cache_result: Option<HashSet<String>>,
@@ -182,6 +212,10 @@ impl fmt::Debug for SpeciesFilter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SpeciesFilter")
             .field("has_model", &self.session.is_some())
+            .field(
+                "meta_species",
+                &self.meta_labels.as_ref().map(LabelSet::len),
+            )
             .field("config", &self.config)
             .field("cached", &self.cache_key.is_some())
             .finish_non_exhaustive()
@@ -193,18 +227,55 @@ impl SpeciesFilter {
     pub const fn new_passthrough(config: SpeciesFilterConfig) -> Self {
         Self {
             session: None,
+            meta_labels: None,
+            expected_width: None,
             config,
             cache_key: None,
             cache_result: None,
         }
     }
 
-    /// Create a species filter with a metadata ONNX model.
+    /// Load a metadata (occurrence / "geo") ONNX model, refusing one whose
+    /// vocabulary cannot be aligned with the classifier's.
+    ///
+    /// The model takes `(latitude, longitude, week)` and returns one
+    /// probability per species it knows about. Two vocabularies are therefore
+    /// in play, and they are not the same list:
+    ///
+    /// * `meta_labels` — the species the *metadata model* scores, in its own
+    ///   order. The BirdNET geomodel ships its own label file for exactly this
+    ///   reason: it covers 12 012 species where the V3.0 classifier emits
+    ///   11 560. Pass `Some(..)` and the outputs are resolved through it and
+    ///   matched to the classifier by **scientific name**.
+    /// * `classifier_species` — how many species the classifier emits. Pass
+    ///   `meta_labels: None` only when the model is known to be indexed
+    ///   identically to the classifier (a matched BirdNET pair, e.g. a V2.4
+    ///   `MData` model beside V2.4 labels).
+    ///
+    /// Whichever mode is asked for, the model's declared output width must
+    /// equal the number of species that mode expects, or the model is
+    /// rejected here. It used to be accepted and its outputs read positionally
+    /// against whatever the classifier happened to have, which quietly
+    /// admitted and rejected birds under other birds' names — the failure was
+    /// invisible in the logs and looked like a bad classifier.
+    ///
+    /// A model that declares a *dynamic* output width cannot be checked at
+    /// load; [`Self::filter_species`] re-checks the real width on every
+    /// inference, so such a model fails on its first prediction rather than
+    /// mislabelling one.
     ///
     /// # Errors
     ///
-    /// Returns `InferenceError` if the model file cannot be loaded.
-    pub fn load(path: &Path, config: SpeciesFilterConfig) -> Result<Self, InferenceError> {
+    /// * [`InferenceError::NotFound`] — no file at `path`.
+    /// * [`InferenceError::Model`] — the file is not a loadable ONNX model.
+    /// * [`InferenceError::Shape`] — the model has no outputs, or its output
+    ///   width disagrees with the vocabulary it was given.
+    pub fn load_with_vocabulary(
+        path: &Path,
+        meta_labels: Option<LabelSet>,
+        classifier_species: usize,
+        config: SpeciesFilterConfig,
+    ) -> Result<Self, InferenceError> {
         if !path.exists() {
             return Err(InferenceError::NotFound(path.display().to_string()));
         }
@@ -212,7 +283,7 @@ impl SpeciesFilter {
         tracing::info!(
             path = %path.display(),
             sf_thresh = config.sf_thresh,
-            "loading metadata ONNX model for species filtering"
+            "loading metadata ONNX model for species occurrence filtering"
         );
 
         let session = Session::builder()
@@ -220,10 +291,37 @@ impl SpeciesFilter {
             .commit_from_file(path)
             .map_err(|e| InferenceError::Model(e.to_string()))?;
 
-        tracing::info!("metadata model loaded successfully");
+        let expected_width = meta_labels
+            .as_ref()
+            .map_or(classifier_species, LabelSet::len);
+        let declared = declared_output_width(&session)?;
+
+        if let Some(actual) = declared
+            && actual != expected_width
+        {
+            return Err(InferenceError::Shape(vocabulary_mismatch_message(
+                actual,
+                expected_width,
+                meta_labels.is_some(),
+            )));
+        }
+
+        tracing::info!(
+            meta_species = meta_labels.as_ref().map(LabelSet::len),
+            classifier_species,
+            declared_outputs = declared,
+            matching = if meta_labels.is_some() {
+                "by scientific name, through the model's own labels"
+            } else {
+                "by index, against the classifier's labels"
+            },
+            "metadata model loaded; species occurrence filtering is active"
+        );
 
         Ok(Self {
             session: Some(session),
+            meta_labels,
+            expected_width: Some(expected_width),
             config,
             cache_key: None,
             cache_result: None,
@@ -288,14 +386,48 @@ impl SpeciesFilter {
         };
         drop(outputs);
 
-        // Collect species above threshold
+        // The model's output width is the last chance to catch a vocabulary it
+        // was never meant to score. `load_with_vocabulary` checks the declared
+        // width, but a model with a dynamic output dimension declares nothing,
+        // so the real width is only knowable here. Erroring is the point: the
+        // alternative is reading species `i` of one list as species `i` of
+        // another, which produces confident detections of the wrong birds.
+        if let Some(expected) = self.expected_width
+            && probabilities.len() != expected
+        {
+            return Err(InferenceError::Shape(vocabulary_mismatch_message(
+                probabilities.len(),
+                expected,
+                self.meta_labels.is_some(),
+            )));
+        }
+
+        // Collect species above threshold.
+        //
+        // Which list the index refers to depends on how the model was loaded.
+        // With the model's own labels the index names a species in *its*
+        // vocabulary, and only the ones the classifier can also emit are worth
+        // carrying forward — a geomodel entry the classifier has never heard of
+        // can never be detected, and letting it through would put a name in the
+        // passing set that no detection can ever match.
         let mut passing = HashSet::new();
+        let vocabulary = self.meta_labels.as_ref().unwrap_or(labels);
+        let by_name = self.meta_labels.is_some();
         for (i, &prob) in probabilities.iter().enumerate() {
-            if prob >= self.config.sf_thresh
-                && let Some(label) = labels.get(i)
-            {
-                passing.insert(label.scientific_name.clone());
+            if prob < self.config.sf_thresh {
+                continue;
             }
+            let Some(label) = vocabulary.get(i) else {
+                continue;
+            };
+            if by_name
+                && labels
+                    .find_by_scientific_name(&label.scientific_name)
+                    .is_none()
+            {
+                continue;
+            }
+            passing.insert(label.scientific_name.clone());
         }
 
         // Add whitelisted species. Resolved through the label set so an entry
@@ -391,6 +523,52 @@ impl SpeciesFilter {
         self.cache_key = None;
         self.cache_result = None;
     }
+}
+
+/// The declared width of a session's first output, when it is static.
+///
+/// Returns `None` for a dynamic (symbolic, `-1`) trailing dimension — a model
+/// that does not commit to a species count cannot be checked before it runs.
+/// The species axis is the last dimension: the geomodel's output is
+/// `[batch, species]`.
+fn declared_output_width(session: &Session) -> Result<Option<usize>, InferenceError> {
+    let output = session
+        .outputs()
+        .first()
+        .ok_or_else(|| InferenceError::Shape("metadata model has no outputs".into()))?;
+
+    match output.dtype() {
+        ValueType::Tensor { shape, .. } => Ok(shape
+            .last()
+            .copied()
+            .filter(|d| *d > 0)
+            .and_then(|d| usize::try_from(d).ok())),
+        other => Err(InferenceError::Shape(format!(
+            "expected a Tensor output from the metadata model, got {other:?}"
+        ))),
+    }
+}
+
+/// The operator-facing explanation of a metadata-model vocabulary mismatch.
+///
+/// Both counts appear because the number alone does not say which file is
+/// wrong, and the remedy differs: a model that scores its own vocabulary needs
+/// its label file supplied, while a mismatched *pair* needs one of the two
+/// files replaced. Split out from the two call sites so the wording is checked
+/// once and cannot drift between the load-time and inference-time guards.
+fn vocabulary_mismatch_message(actual: usize, expected: usize, has_meta_labels: bool) -> String {
+    let against = if has_meta_labels {
+        "the metadata label file supplied beside it"
+    } else {
+        "the classifier's label set"
+    };
+    let remedy = if has_meta_labels {
+        "the label file does not describe this model; supply the label file it shipped with"
+    } else {
+        "this model scores its own species list, so it needs its own label file \
+         (BIRDNET_METADATA_LABELS / METADATA_LABELS_PATH) to be matched by name"
+    };
+    format!("metadata model scores {actual} species but {against} has {expected}: {remedy}")
 }
 
 /// Collect all scientific names from a label set.
@@ -696,10 +874,219 @@ mod tests {
 
     #[test]
     fn load_nonexistent_model_returns_error() {
-        let result = SpeciesFilter::load(
+        let result = SpeciesFilter::load_with_vocabulary(
             Path::new("/nonexistent/metadata.onnx"),
+            None,
+            6522,
             SpeciesFilterConfig::default(),
         );
         assert!(matches!(result, Err(InferenceError::NotFound(_))));
+    }
+}
+
+// ── the metadata model's vocabulary is its own ──────────────────────────
+//
+// These gates were written against the pre-fix code and observed failing.
+// Before the fix `filter_species` mapped the metadata model's output index
+// straight onto the classifier's label index with no check that the two
+// vocabularies were the same size, let alone the same species. The tiny
+// metadata model below scores five species in an order deliberately unlike
+// the classifier's four, so index-mapping and name-mapping cannot agree:
+//
+//   meta idx | meta species        | p      | classifier idx | classifier species
+//   ---------+---------------------+--------+----------------+-------------------
+//        0   | Pica pica           | 0.9002 |       0        | Turdus merula
+//        1   | Parus major         | 0.0998 |       1        | Erithacus rubecula
+//        2   | Corvus corax        | 0.8022 |       2        | Parus major
+//        3   | Turdus merula       | 0.0474 |       3        | Homo sapiens
+//        4   | Erithacus rubecula  | 0.7006 |      --        |
+//
+// At `sf_thresh = 0.5` the correct answer is {Erithacus rubecula}; the old
+// index mapping produced {Turdus merula, Parus major}. Disjoint, so a test
+// that asserts either one cannot pass by accident on the other.
+#[cfg(test)]
+mod metadata_vocabulary_tests {
+    use super::*;
+
+    /// A 291-byte ONNX model: `Sigmoid(MatMul(input[1,3], zeros[3,5]) + B)`.
+    /// The zero weight matrix makes the output exactly `sigmoid(B)` — fixed,
+    /// independent of `(lat, lon, week)` — while keeping the real `[1, 3]`
+    /// input contract the BirdNET geomodel uses. Generated once with Python's
+    /// `onnx` library, like the tiny classifier models beside it.
+    const TINY_META_MODEL: &[u8] = include_bytes!("../testdata/tiny_meta_test.onnx");
+
+    /// The classifier's four species. Same set as `tests::test_labels`.
+    fn classifier_labels() -> LabelSet {
+        LabelSet::from_entries(vec![
+            ("Turdus merula".into(), "Eurasian Blackbird".into()),
+            ("Erithacus rubecula".into(), "European Robin".into()),
+            ("Parus major".into(), "Great Tit".into()),
+            ("Homo sapiens".into(), "Human".into()),
+        ])
+    }
+
+    /// The metadata model's own five species, in its own order.
+    fn meta_labels() -> LabelSet {
+        LabelSet::from_entries(vec![
+            ("Pica pica".into(), "Eurasian Magpie".into()),
+            ("Parus major".into(), "Great Tit".into()),
+            ("Corvus corax".into(), "Common Raven".into()),
+            ("Turdus merula".into(), "Eurasian Blackbird".into()),
+            ("Erithacus rubecula".into(), "European Robin".into()),
+        ])
+    }
+
+    fn write_model(dir: &tempfile::TempDir) -> std::path::PathBuf {
+        let p = dir.path().join("meta.onnx");
+        std::fs::write(&p, TINY_META_MODEL).unwrap();
+        p
+    }
+
+    fn config() -> SpeciesFilterConfig {
+        SpeciesFilterConfig {
+            sf_thresh: 0.5,
+            ..SpeciesFilterConfig::default()
+        }
+    }
+
+    /// The gate for the defect: a metadata model with its own vocabulary is
+    /// resolved through its own labels and matched to the classifier by
+    /// scientific name.
+    ///
+    /// Fails on the old code with `{Turdus merula, Parus major}` — the
+    /// species sitting at the passing *indices* rather than the species the
+    /// model actually scored.
+    #[test]
+    fn own_vocabulary_is_resolved_by_name_not_by_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut filter = SpeciesFilter::load_with_vocabulary(
+            &write_model(&dir),
+            Some(meta_labels()),
+            4,
+            config(),
+        )
+        .expect("a metadata model with matching labels must load");
+
+        let passing = filter
+            .filter_species(Some((42.0, -71.0)), 10, &classifier_labels())
+            .unwrap();
+
+        assert_eq!(
+            passing,
+            HashSet::from(["Erithacus rubecula".to_owned()]),
+            "only the species the metadata model scored above threshold AND the \
+             classifier can emit may pass; got {passing:?}"
+        );
+    }
+
+    /// The counterpart: species the metadata model scores but the classifier
+    /// cannot emit are dropped rather than carried through under some other
+    /// name. Without this the test above would also pass on an implementation
+    /// that simply returned every metadata name above threshold.
+    #[test]
+    fn species_outside_the_classifier_vocabulary_are_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut filter = SpeciesFilter::load_with_vocabulary(
+            &write_model(&dir),
+            Some(meta_labels()),
+            4,
+            config(),
+        )
+        .unwrap();
+
+        let passing = filter
+            .filter_species(Some((42.0, -71.0)), 10, &classifier_labels())
+            .unwrap();
+
+        assert!(
+            !passing.contains("Pica pica") && !passing.contains("Corvus corax"),
+            "Pica pica (0.90) and Corvus corax (0.80) clear the threshold but are \
+             not in the classifier's label set, so neither may appear: {passing:?}"
+        );
+    }
+
+    /// Without a metadata label file the only sound reading of the model's
+    /// outputs is "same index as the classifier", which is only true when the
+    /// two vocabularies are the same size. A five-output model against a
+    /// four-species classifier must be refused at load, not index-mapped.
+    ///
+    /// Fails on the old code: `SpeciesFilter::load` accepted any model.
+    #[test]
+    fn width_mismatch_without_labels_is_refused_at_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = SpeciesFilter::load_with_vocabulary(&write_model(&dir), None, 4, config())
+            .expect_err("a 5-output model must not be accepted for a 4-species classifier");
+
+        assert!(
+            matches!(err, InferenceError::Shape(_)),
+            "expected a shape error naming the mismatch, got {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains('5') && msg.contains('4'),
+            "the error must name both widths so an operator can see which file is \
+             wrong: {msg}"
+        );
+    }
+
+    /// The counterpart to the refusal: a metadata model whose width *does*
+    /// match the classifier keeps working without a label file, so the guard
+    /// is a discriminator rather than a blanket refusal of label-less models.
+    #[test]
+    fn matching_width_without_labels_still_loads_and_index_maps() {
+        let dir = tempfile::tempdir().unwrap();
+        // Five classifier species, so the model's five outputs line up.
+        let five = LabelSet::from_entries(
+            (0..5)
+                .map(|i| (format!("Genus species{i}"), format!("Bird {i}")))
+                .collect(),
+        );
+        let mut filter = SpeciesFilter::load_with_vocabulary(&write_model(&dir), None, 5, config())
+            .expect("matching widths must load");
+
+        let passing = filter
+            .filter_species(Some((42.0, -71.0)), 10, &five)
+            .unwrap();
+
+        // sigmoid(B) = [0.9002, 0.0998, 0.8022, 0.0474, 0.7006]; indices 0, 2, 4
+        // clear 0.5.
+        assert_eq!(
+            passing,
+            HashSet::from([
+                "Genus species0".to_owned(),
+                "Genus species2".to_owned(),
+                "Genus species4".to_owned(),
+            ]),
+            "got {passing:?}"
+        );
+    }
+
+    /// A metadata label file that does not describe the model it accompanies
+    /// is the same class of error as a mismatched classifier, and must be
+    /// caught at load rather than silently mislabelling every prediction.
+    #[test]
+    fn labels_that_do_not_match_the_model_width_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let wrong = LabelSet::from_entries(vec![("Pica pica".into(), "Eurasian Magpie".into())]);
+        let err = SpeciesFilter::load_with_vocabulary(&write_model(&dir), Some(wrong), 4, config())
+            .expect_err("1 label against a 5-output model must be refused");
+        assert!(matches!(err, InferenceError::Shape(_)), "got {err:?}");
+    }
+
+    /// `has_model` must reflect a real, aligned model — the daemon and the
+    /// diagnostics both read it to decide whether to say occurrence filtering
+    /// is on.
+    #[test]
+    fn has_model_is_true_only_for_a_loaded_aligned_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let filter = SpeciesFilter::load_with_vocabulary(
+            &write_model(&dir),
+            Some(meta_labels()),
+            4,
+            config(),
+        )
+        .unwrap();
+        assert!(filter.has_model());
+        assert!(!SpeciesFilter::new_passthrough(config()).has_model());
     }
 }

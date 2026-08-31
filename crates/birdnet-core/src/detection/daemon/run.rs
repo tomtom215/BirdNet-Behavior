@@ -104,20 +104,56 @@ pub fn run_daemon(
         pipeline_config.chunk_duration_secs = model_chunk_secs;
     }
 
-    // Load species filter (metadata model)
-    let mut species_filter = config.metadata_model_path.as_ref().map_or_else(
-        || SpeciesFilter::new_passthrough(config.species_filter.clone()),
-        |mdata_path| match SpeciesFilter::load(mdata_path, config.species_filter.clone()) {
-            Ok(sf) => sf,
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "failed to load metadata model, falling back to passthrough"
-                );
-                SpeciesFilter::new_passthrough(config.species_filter.clone())
+    // Load the species occurrence filter (the metadata / "geo" model).
+    //
+    // Every exit from this block that is not a loaded model leaves the station
+    // reporting every species the classifier knows, anywhere on Earth, in any
+    // week. That used to be reached silently — no metadata model configured
+    // logged nothing at all — and the symptom (implausible birds) reads as a
+    // bad classifier rather than as a missing file. Each branch now says so at
+    // a level an operator will actually see, and `--doctor` reports the same
+    // state before the service starts.
+    let mut species_filter = match config.metadata_model_path.as_ref() {
+        None => {
+            tracing::warn!(
+                species = model.labels().len(),
+                "no metadata model configured (METADATA_MODEL_PATH / BIRDNET_METADATA_MODEL): species occurrence filtering is OFF and every species in the model stays a candidate regardless of the station's location. Run `birdnet-behavior --doctor` for how to enable it"
+            );
+            SpeciesFilter::new_passthrough(config.species_filter.clone())
+        }
+        Some(mdata_path) => {
+            let meta_labels = match config.metadata_labels_path.as_ref() {
+                None => None,
+                Some(p) => match LabelSet::load(p) {
+                    Ok(ls) => Some(ls),
+                    Err(e) => {
+                        tracing::error!(
+                            path = %p.display(),
+                            error = %e,
+                            "metadata label file could not be read; species occurrence filtering is OFF"
+                        );
+                        return Err(DaemonError::Model(format!("metadata labels: {e}")));
+                    }
+                },
+            };
+            match SpeciesFilter::load_with_vocabulary(
+                mdata_path,
+                meta_labels,
+                model.labels().len(),
+                config.species_filter.clone(),
+            ) {
+                Ok(sf) => sf,
+                Err(e) => {
+                    tracing::error!(
+                        path = %mdata_path.display(),
+                        error = %e,
+                        "metadata model could not be used; species occurrence filtering is OFF and every species in the model stays a candidate"
+                    );
+                    SpeciesFilter::new_passthrough(config.species_filter.clone())
+                }
             }
-        },
-    );
+        }
+    };
 
     // Create privacy filter
     let privacy_filter = PrivacyFilter::new(config.privacy_threshold);
@@ -406,6 +442,7 @@ mod tests {
             model: ModelConfig::default(),
             process_existing: false,
             metadata_model_path: None,
+            metadata_labels_path: None,
             species_filter: crate::inference::species_filter::SpeciesFilterConfig::default(),
             species_lists_provider: None,
             privacy_threshold: 0.0,

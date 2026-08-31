@@ -71,8 +71,23 @@ ${lon_line}
 #                          # it records every window as a detection.
 # SENSITIVITY=1.25         # 0.5–1.5, default 1.25 (V2.4 models only; V3.0 ignores it)
 # OVERLAP=0.0              # seconds of 3 s analysis window overlap
-# SF_THRESH=0.03           # species-frequency metadata-filter threshold
 # DATABASE_LANG=en
+
+# --- Species occurrence filtering (off until a metadata model is set) ---
+# Drops species that do not occur near the station at this time of year. It is
+# INERT unless all three of these are present, and the installer ships none of
+# them: the model download fetches the classifier and its labels only.
+#   1. station coordinates (set above, or on the dashboard)
+#   2. METADATA_MODEL_PATH   — the metadata ("geo") ONNX model
+#   3. METADATA_LABELS_PATH  — that model's own label file
+# The metadata model scores a different species list from the classifier, so
+# the label file is what maps one to the other; omit it only for a metadata
+# model indexed identically to the classifier, which the station verifies at
+# startup and refuses if it does not hold.
+# Run `birdnet-behavior --doctor` to see which of the three is missing.
+# METADATA_MODEL_PATH=
+# METADATA_LABELS_PATH=
+# SF_THRESH=0.03           # occurrence threshold; ignored while the filter is off
 
 # --- Disk management ---
 # MAX_FILES_SPECIES=0      # 0 = keep all recordings per species; set e.g. 100 to cap

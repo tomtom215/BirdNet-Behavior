@@ -446,6 +446,21 @@ pub struct Cli {
     #[arg(long, env = "BIRDNET_METADATA_MODEL")]
     pub metadata_model: Option<PathBuf>,
 
+    /// Path to the metadata model's own label file.
+    ///
+    /// The metadata model and the classifier do not score the same species
+    /// list — BirdNET Geomodel v3.0 covers 12 012 species where the V3.0
+    /// Global 11K classifier emits 11 560 — so the model's output positions
+    /// mean nothing without the labels it shipped with. Supply them and the
+    /// two are matched by scientific name.
+    ///
+    /// Omit this only for a metadata model indexed identically to the
+    /// classifier (a matched BirdNET pair). The station verifies that at
+    /// startup and refuses a mismatched model rather than reporting one bird
+    /// under another bird's name.
+    #[arg(long, env = "BIRDNET_METADATA_LABELS")]
+    pub metadata_labels: Option<PathBuf>,
+
     /// Species frequency threshold for the metadata model filter (0.0-1.0).
     ///
     /// Species with occurrence probability below this threshold are filtered out.

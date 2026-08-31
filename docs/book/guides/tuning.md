@@ -42,10 +42,25 @@ The BirdNET sensitivity parameter (0.5–1.5; also `SENSITIVITY` in `birdnet.con
 
 ### 4. Species-frequency (SF) filter
 
-Uses your **location** and the **week of the year** to down-weight birds that shouldn't plausibly be present (no penguins in your back garden in July). The `SF_THRESH` (default `0.03`) sets how aggressive that prior is.
+Uses your **location** and the **week of the year** to drop birds that shouldn't plausibly be present (no penguins in your back garden in July). The `SF_THRESH` (default `0.03`) sets how aggressive that prior is.
 
-- Make sure your latitude/longitude are correct first — the SF filter is only as good as your coordinates.
-- Raise `SF_THRESH` to be stricter about out-of-range species; lower it (or 0) to disable the geographic prior entirely (useful if you *want* to catch vagrants).
+> **This filter is off unless you install a metadata model.** It needs three things, and the station ships only the first: your coordinates, a metadata ("geo") ONNX model, and that model's own label file. The model download fetches the classifier and its labels only — nothing fetches a metadata model, and `SF_THRESH` does nothing on its own. Run `birdnet-behavior --doctor` and read the **Species occurrence filter** line; it names whichever of the three is missing.
+
+To turn it on:
+
+| Setting | `birdnet.conf` | Environment | Flag |
+|---|---|---|---|
+| Metadata model | `METADATA_MODEL_PATH` | `BIRDNET_METADATA_MODEL` | `--metadata-model` |
+| Its label file | `METADATA_LABELS_PATH` | `BIRDNET_METADATA_LABELS` | `--metadata-labels` |
+
+The model takes `(latitude, longitude, week)` and returns one occurrence probability per species. **It does not score the same species list as the classifier** — BirdNET Geomodel v3.0 covers 12 012 species where the V3.0 Global 11K classifier this station ships emits 11 560 — so the label file is what maps one list onto the other. Supply it and the two are matched by scientific name.
+
+Omit the label file only for a metadata model indexed identically to the classifier (a matched BirdNET pair, e.g. a V2.4 `MData` model beside V2.4 labels). The station checks that at startup and **refuses a mismatched model** rather than reading one list's index into the other, which would report birds under other birds' names with full confidence.
+
+Once it is running:
+
+- Make sure your latitude/longitude are correct first — the filter is only as good as your coordinates.
+- Raise `SF_THRESH` to be stricter about out-of-range species; lower it (or 0) to let everything through (useful if you *want* to catch vagrants).
 
 ### 5. Quality pre-filter
 

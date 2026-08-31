@@ -114,6 +114,11 @@ pub fn start_detection_daemon(
         .clone()
         .or_else(|| config.and_then(|c| c.get("METADATA_MODEL_PATH").map(PathBuf::from)));
 
+    let metadata_labels_path = cli
+        .metadata_labels
+        .clone()
+        .or_else(|| config.and_then(|c| c.get("METADATA_LABELS_PATH").map(PathBuf::from)));
+
     let sf_thresh = resolve_f32_with_default(
         cli.sf_thresh,
         0.03,
@@ -166,6 +171,7 @@ pub fn start_detection_daemon(
         model: build_model_config(sensitivity, confidence),
         process_existing: cli.process_existing,
         metadata_model_path,
+        metadata_labels_path,
         species_filter: build_species_filter_config(sf_thresh, species_lists),
         species_lists_provider: Some(species_lists_provider),
         privacy_threshold,
