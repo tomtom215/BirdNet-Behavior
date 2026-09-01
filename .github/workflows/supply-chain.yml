@@ -68,7 +68,7 @@ jobs:
   cargo-machete:
     name: cargo-machete (unused dependencies)
     runs-on: ubuntu-24.04
-    timeout-minutes: 15  # observed 16s
+    timeout-minutes: 15  # observed 8s
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Install cargo-machete

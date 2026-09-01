@@ -22,16 +22,18 @@
 
 use std::time::{Duration, Instant};
 
-// The three tuning constants below are private, so the public docs above name
+// The three tuning constants below are private, so `Breaker` and `Gate` name
 // them in plain backticks rather than as intra-doc links: rustdoc runs with
 // `-D warnings`, and a public item linking to a private one fails the build
-// (it would resolve only under `--document-private-items`). Their values are
-// stated in the prose that names them, so nothing is lost.
+// (the link would resolve only under `--document-private-items`). Each one is
+// documented where it is defined, immediately below.
 
 /// Consecutive failures before a destination is considered down.
 ///
-/// Two rather than one: a single timeout is ordinary on a domestic uplink, and
-/// opening on it would suppress the next notification for no reason.
+/// Three rather than one: a single timeout is ordinary on a domestic uplink,
+/// and opening on it would suppress the next notification for no reason. Two
+/// in a row still happen on a congested link; three do not, and the cost of
+/// waiting for the third is one extra request.
 const TRIP_AFTER: u32 = 3;
 
 /// How long the circuit stays open on the first trip.
